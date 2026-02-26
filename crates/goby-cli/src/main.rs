@@ -34,9 +34,20 @@ fn main() {
     };
 
     match goby_core::parse_module(&source) {
-        Ok(module) => {
-            println!("parsed {} declarations from {}", module.declarations.len(), file);
-        }
+        Ok(module) => match goby_core::typecheck_module(&module) {
+            Ok(()) => {
+                println!(
+                    "parsed and typechecked {} declarations from {}",
+                    module.declarations.len(),
+                    file
+                );
+            }
+            Err(err) => {
+                let target = err.declaration.as_deref().unwrap_or("<module>");
+                eprintln!("typecheck error in {}: {}", target, err.message);
+                std::process::exit(1);
+            }
+        },
         Err(err) => {
             eprintln!("parse error at line {}: {}", err.line, err.message);
             std::process::exit(1);

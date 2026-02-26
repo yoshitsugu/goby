@@ -88,3 +88,14 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - `cargo test`
   - `cargo run -p goby-cli -- run examples/hello.gb`
   - `cargo run -p goby-cli -- run examples/basic_types.gb`
+
+## 9. Progress Since Minimal Parser
+
+- Added minimal typechecking in `crates/goby-core`:
+  - `types.rs`: basic function type parsing (`->`) and effect suffix stripping (`can ...`)
+  - `typecheck.rs`: duplicate declaration check and `main : void -> void` MVP check
+- Updated CLI flow in `crates/goby-cli`:
+  - parse -> typecheck -> success output
+- Added/updated tests:
+  - function type parsing with effect annotation
+  - example-level typecheck for `hello.gb` and `basic_types.gb`
