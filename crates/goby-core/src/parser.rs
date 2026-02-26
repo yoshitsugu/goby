@@ -120,7 +120,10 @@ mod tests {
         assert_eq!(module.declarations.len(), 1);
         let main_decl = &module.declarations[0];
         assert_eq!(main_decl.name, "main");
-        assert_eq!(main_decl.type_annotation.as_deref(), Some("void -> void can Print"));
+        assert_eq!(
+            main_decl.type_annotation.as_deref(),
+            Some("void -> void can Print")
+        );
     }
 
     #[test]

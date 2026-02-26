@@ -1,9 +1,12 @@
 //! Core language infrastructure for Goby.
 //!
-//! This crate currently provides a minimal AST and parser for MVP bootstrapping.
+//! This crate currently provides a minimal AST, parser, and typechecker for MVP bootstrapping.
 
 pub mod ast;
 pub mod parser;
+pub mod typecheck;
+pub mod types;
 
 pub use ast::{Declaration, Module};
-pub use parser::{parse_module, ParseError};
+pub use parser::{ParseError, parse_module};
+pub use typecheck::{TypecheckError, typecheck_module};
