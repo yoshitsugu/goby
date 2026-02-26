@@ -70,7 +70,7 @@ This keeps source compatibility while postponing the full effect system.
   - both tabs and spaces are accepted,
   - contiguous tabs or contiguous spaces count as indentation.
 - Runtime entrypoint:
-  - `goby run <file.gb>` uses `main` by default,
+  - `goby-cli run <file.gb>` uses `main` by default,
   - `main` type is restricted to `void -> void` in MVP.
 - Backend:
   - Wasm is the first backend target for MVP.
@@ -118,13 +118,13 @@ Exit criteria:
 
 Exit criteria:
 
-- `cargo run -p goby-cli -- examples/hello.gb` compiles to Wasm and runs `main`.
+- `cargo run -p goby-cli -- run examples/hello.gb` compiles to Wasm and runs `main`.
 - `main` must typecheck as `void -> void`.
 
 ### M4: CLI and Reliability
 
 - CLI shape:
-  - `goby run <file.gb>`
+  - `goby-cli run <file.gb>`
 - Add clear parse/type/codegen/runtime error categories.
 - Add regression tests for current examples.
 
@@ -150,7 +150,7 @@ Exit criteria:
 - `examples/basic_types.gb` parses and typechecks.
 - Effect annotations are accepted syntactically but not enforced semantically.
 - New contributors can run/verify the MVP path with:
-  - `cargo run -p goby-cli -- examples/hello.gb`
+  - `cargo run -p goby-cli -- run examples/hello.gb`
   - `cargo test`
 
 ## 8. Immediate Next Tasks

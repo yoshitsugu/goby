@@ -30,9 +30,6 @@ This file is a restart-safe snapshot for resuming work after context reset.
 
 ## 3. Known Open Decisions
 
-- CLI surface finalization:
-  - docs currently reference both `goby run <file.gb>` and direct file invocation patterns.
-  - lock one command shape for MVP implementation.
 - Indentation mixing rule details:
   - behavior when tabs and spaces are mixed in one logical block is not fully specified.
 - Wasm runtime path:
@@ -59,9 +56,8 @@ This file is a restart-safe snapshot for resuming work after context reset.
 
 1. Lock indentation mixing behavior in `doc/PLAN.md`.
 2. Lock Wasm execution approach in `MVP.md`.
-3. Implement typechecker skeleton in `crates/goby-core`.
-4. Implement initial Wasm codegen path in `crates/goby-wasm`.
-5. Replace parser-only CLI flow with typecheck + codegen + run pipeline.
+3. Implement initial Wasm codegen path in `crates/goby-wasm`.
+4. Replace current parse+typecheck CLI flow with typecheck + codegen + run pipeline.
 
 ## 7. Resume Commands
 
