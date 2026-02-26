@@ -1,4 +1,4 @@
-# Goby (Working Title)
+# Goby ꒰( ˙𐃷˙ )꒱
 
 Goby is a new programming language project with a clear, practical goal:
 build a readable functional language with a modern developer experience.
