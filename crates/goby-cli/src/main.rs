@@ -12,17 +12,18 @@ fn main() {
         }
     };
 
-    let file = if first == "run" {
-        match args.next() {
-            Some(path) => path,
-            None => {
-                eprintln!("usage: goby-cli run <file.gb>");
-                std::process::exit(2);
-            }
+    if first != "run" {
+        eprintln!("unknown command: {}", first);
+        eprintln!("usage: goby-cli run <file.gb>");
+        std::process::exit(2);
+    }
+
+    let file = match args.next() {
+        Some(path) => path,
+        None => {
+            eprintln!("usage: goby-cli run <file.gb>");
+            std::process::exit(2);
         }
-    } else {
-        // Temporary compatibility path for early MVP development.
-        first
     };
 
     let source = match std::fs::read_to_string(&file) {

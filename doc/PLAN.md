@@ -33,7 +33,7 @@ Based on `examples/*.gb`:
 - Statement terminators are newline or `;`.
 - Indentation-based blocks accept both tabs and spaces.
   - contiguous tabs or contiguous spaces are treated as indentation.
-- CLI runtime entrypoint is `main` only (`goby run <file.gb>`).
+- CLI runtime entrypoint is `main` only (`goby-cli run <file.gb>`).
 - `main` type is restricted to `void -> void` for MVP.
 - First backend target is Wasm.
 - Effects are parse-only metadata in MVP.

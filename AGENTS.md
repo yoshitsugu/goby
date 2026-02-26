@@ -62,7 +62,7 @@ Use Cargo commands from repository root:
 
 - `cargo check`
 - `cargo test`
-- `cargo run -p goby-cli -- <file.gb>`
+- `cargo run -p goby-cli -- run <file.gb>`
 - `cargo fmt`
 - `cargo clippy -- -D warnings`
 

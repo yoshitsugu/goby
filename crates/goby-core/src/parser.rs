@@ -27,6 +27,7 @@ pub fn parse_module(source: &str) -> Result<Module, ParseError> {
             });
         }
 
+        let mut annotated_name: Option<&str> = None;
         let mut type_annotation = None;
 
         if let Some((name, ty)) = split_top_level_type(line) {
@@ -36,6 +37,7 @@ pub fn parse_module(source: &str) -> Result<Module, ParseError> {
                     message: "invalid type annotation".to_string(),
                 });
             }
+            annotated_name = Some(name);
             type_annotation = Some(ty.to_string());
             i += 1;
             if i >= lines.len() {
@@ -51,6 +53,18 @@ pub fn parse_module(source: &str) -> Result<Module, ParseError> {
             line: i + 1,
             message: "expected top-level definition (`name ... = ...`)".to_string(),
         })?;
+
+        if let Some(annotated_name) = annotated_name
+            && annotated_name != name
+        {
+            return Err(ParseError {
+                line: i + 1,
+                message: format!(
+                    "type annotation name `{}` does not match definition name `{}`",
+                    annotated_name, name
+                ),
+            });
+        }
 
         let mut j = i + 1;
         while j < lines.len() {
@@ -137,5 +151,12 @@ mod tests {
         assert_eq!(module.declarations[2].name, "concatenate");
         assert_eq!(module.declarations[3].name, "print_string");
         assert_eq!(module.declarations[4].name, "a");
+    }
+
+    #[test]
+    fn rejects_mismatched_annotation_and_definition_names() {
+        let source = "foo : Int\nbar = 1\n";
+        let err = parse_module(source).expect_err("mismatched names should be rejected");
+        assert!(err.message.contains("does not match"));
     }
 }
