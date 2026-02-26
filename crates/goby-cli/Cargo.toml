@@ -1,0 +1,8 @@
+[package]
+name = "goby-cli"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+goby-core = { path = "../goby-core" }
+goby-wasm = { path = "../goby-wasm" }
