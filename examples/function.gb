@@ -1,0 +1,17 @@
+# Functions are defined with `=`
+add_ten : Int -> Int
+add_ten x = x + 10
+
+# A block returns the value of its last line
+add_ten_mul_three : Int -> Int
+add_ten_mul_three a =
+  b = a + 10
+  b * 3
+
+# Higher-order function
+add_tens : List Int -> List Int
+add_tens ns = map ns (|n| -> n * 10)
+
+# Anonymous functions can also be written as:
+add_tens_short : List Int -> List Int
+add_tens_short ns = map ns (_ * 10)
