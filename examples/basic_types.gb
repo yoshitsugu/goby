@@ -1,0 +1,22 @@
+# Int
+add : Int -> Int -> Int
+add a b = a + b
+
+add_ten_and_two : void -> Int
+add_ten_and_two =
+  a = 10
+  b = 2
+  a + b
+
+# String (UTF-8 only)
+concatenate : String -> String -> String
+concatenate a b = string.concat(a, b)
+
+print_string : void -> void can Print
+print_string =
+  a = "Hello"
+  print a
+
+# Tuple
+a : (String, Int)
+a = ("Hello", 3)
