@@ -33,8 +33,6 @@ This file is a restart-safe snapshot for resuming work after context reset.
 
 ## 3. Known Open Decisions
 
-- Indentation mixing rule details:
-  - behavior when tabs and spaces are mixed in one logical block is not fully specified.
 - Wasm runtime path:
   - define how generated Wasm is executed in MVP (`wasmtime` vs embedded runtime strategy).
 - Assignment/binding semantics:
@@ -57,10 +55,9 @@ This file is a restart-safe snapshot for resuming work after context reset.
 
 ## 6. Immediate Next Steps (Execution Order)
 
-1. Lock indentation mixing behavior in `doc/PLAN.md`.
-2. Lock Wasm execution approach in `MVP.md`.
-3. Replace current wasm-file emission in `run` with actual execution pipeline.
-4. Add expression-level lowering from Goby AST/body into Wasm function bodies.
+1. Lock Wasm execution approach in `MVP.md`.
+2. Replace current wasm-file emission in `run` with actual execution pipeline.
+3. Add expression-level lowering from Goby AST/body into Wasm function bodies.
 
 ## 7. Resume Commands
 
@@ -231,3 +228,10 @@ This file is a restart-safe snapshot for resuming work after context reset.
 - Made comment handling explicit in body analysis:
   - lines beginning with `#` are skipped intentionally
 - Added regression tests for tab-delimited print syntax and inline comment skipping.
+
+## 26. Progress Since Shared Analysis Refactor Step 6
+
+- Locked indentation mixing behavior for MVP in `doc/PLAN.md`:
+  - any leading space/tab marks an indented line
+  - mixed tabs/spaces in one block are accepted in MVP
+- Added parser regression test to ensure mixed-indentation block lines parse as one declaration body.

@@ -32,7 +32,8 @@ Based on `examples/*.gb`:
 - Type annotation style is unified to `name : Type`.
 - Statement terminators are newline or `;`.
 - Indentation-based blocks accept both tabs and spaces.
-  - contiguous tabs or contiguous spaces are treated as indentation.
+  - for MVP, any line with at least one leading space or tab is treated as an indented block line.
+  - mixing tabs and spaces in the same block is allowed in MVP (no normalization/error rule yet).
 - CLI commands:
   - `goby-cli run <file.gb>` uses `main` entrypoint only.
   - `goby-cli check <file.gb>` performs parse/typecheck without runtime entrypoint.
