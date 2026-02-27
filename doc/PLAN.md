@@ -38,7 +38,7 @@ Based on `examples/*.gb`:
   - `goby-cli run <file.gb>` uses `main` entrypoint only and executes generated Wasm via external `wasmtime`.
     - if `wasmtime` is not installed, execution is skipped with an informational message.
   - `goby-cli check <file.gb>` performs parse/typecheck without runtime entrypoint.
-- `main` type is restricted to `void -> void` for MVP.
+- `main` type is restricted to `Unit -> Unit` for MVP.
 - First backend target is Wasm.
 - Effects are parse-only metadata in MVP.
   - unknown effect names are ignored.
