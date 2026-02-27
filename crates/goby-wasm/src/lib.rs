@@ -184,11 +184,13 @@ fn parse_print_call(line: &str) -> Option<&str> {
 fn resolve_main_runtime_output(module: &Module, body: &str) -> Option<String> {
     let int_functions = collect_functions_with_result(module, "Int");
     let list_functions = collect_functions_with_result(module, "List Int");
+    let unit_functions = collect_unit_functions(module);
     let int_evaluator = IntEvaluator::root(&int_functions);
     let list_evaluator = ListIntEvaluator::root(&list_functions);
     let evaluators = RuntimeEvaluators {
         int: &int_evaluator,
         list: &list_evaluator,
+        unit: &unit_functions,
     };
     RuntimeOutputResolver::resolve(body, &evaluators)
 }
@@ -234,6 +236,54 @@ fn collect_functions_with_result<'a>(
     functions
 }
 
+fn collect_unit_functions<'a>(module: &'a Module) -> EvaluatedFunctions<'a> {
+    let declaration_names: HashSet<&str> = module
+        .declarations
+        .iter()
+        .map(|decl| decl.name.as_str())
+        .collect();
+
+    let mut functions = HashMap::new();
+    for decl in &module.declarations {
+        if decl.name == "main" {
+            continue;
+        }
+
+        let Some(annotation) = decl.type_annotation.as_deref() else {
+            continue;
+        };
+        let Some(function_type) = parse_function_type(annotation) else {
+            continue;
+        };
+        if function_type.result != "Unit" {
+            continue;
+        }
+
+        let parameter = infer_single_parameter_name(&decl.body, &declaration_names);
+        functions.insert(
+            decl.name.as_str(),
+            EvaluatedFunction {
+                body: &decl.body,
+                parameter,
+            },
+        );
+    }
+
+    functions
+}
+
+#[derive(Clone, Debug)]
+enum IntCallable {
+    Lambda(IntLambda),
+    Named(String),
+}
+
+#[derive(Clone, Debug)]
+struct IntLambda {
+    parameter: String,
+    body: String,
+}
+
 struct IntEvaluator<'a> {
     functions: &'a EvaluatedFunctions<'a>,
     depth: usize,
@@ -258,13 +308,18 @@ impl<'a> IntEvaluator<'a> {
         })
     }
 
-    fn eval_expr(&self, expr: &str, locals: &HashMap<String, i64>) -> Option<i64> {
+    fn eval_expr(
+        &self,
+        expr: &str,
+        locals: &HashMap<String, i64>,
+        callables: &HashMap<String, IntCallable>,
+    ) -> Option<i64> {
         let expr = expr.trim();
         if expr.is_empty() {
             return None;
         }
 
-        if let Some(value) = self.eval_binary_expr(expr, locals) {
+        if let Some(value) = self.eval_binary_expr(expr, locals, callables) {
             return Some(value);
         }
 
@@ -277,9 +332,14 @@ impl<'a> IntEvaluator<'a> {
         }
 
         if let Some((callee, arg_expr)) = parse_call(expr) {
-            let function = self.functions.get(callee)?;
             let nested = self.descend()?;
-            let arg = nested.eval_expr(arg_expr, locals)?;
+            let arg = nested.eval_expr(arg_expr, locals, callables)?;
+
+            if let Some(callable) = callables.get(callee) {
+                return nested.eval_callable(callable, arg, callables);
+            }
+
+            let function = self.functions.get(callee)?;
             return nested.eval_function(function, Some(arg));
         }
 
@@ -287,13 +347,18 @@ impl<'a> IntEvaluator<'a> {
         self.descend()?.eval_function(function, None)
     }
 
-    fn eval_binary_expr(&self, expr: &str, locals: &HashMap<String, i64>) -> Option<i64> {
+    fn eval_binary_expr(
+        &self,
+        expr: &str,
+        locals: &HashMap<String, i64>,
+        callables: &HashMap<String, IntCallable>,
+    ) -> Option<i64> {
         if let Some((left, right)) = expr.split_once(" + ") {
-            return self.eval_binary_operands(left, right, locals, i64::checked_add);
+            return self.eval_binary_operands(left, right, locals, callables, i64::checked_add);
         }
 
         if let Some((left, right)) = expr.split_once(" * ") {
-            return self.eval_binary_operands(left, right, locals, i64::checked_mul);
+            return self.eval_binary_operands(left, right, locals, callables, i64::checked_mul);
         }
 
         None
@@ -304,22 +369,24 @@ impl<'a> IntEvaluator<'a> {
         left: &str,
         right: &str,
         locals: &HashMap<String, i64>,
+        callables: &HashMap<String, IntCallable>,
         op: fn(i64, i64) -> Option<i64>,
     ) -> Option<i64> {
         let nested = self.descend()?;
-        let left_value = nested.eval_expr(left, locals)?;
-        let right_value = nested.eval_expr(right, locals)?;
+        let left_value = nested.eval_expr(left, locals, callables)?;
+        let right_value = nested.eval_expr(right, locals, callables)?;
         op(left_value, right_value)
     }
 
     fn eval_function(&self, function: &EvaluatedFunction<'a>, arg: Option<i64>) -> Option<i64> {
         let mut locals = HashMap::new();
+        let callables = HashMap::new();
         seed_locals_from_parameter(&mut locals, function.parameter, arg);
 
         let mut result_expr = None;
         for line in code_lines(function.body) {
             if let Some((name, expr)) = split_binding(line) {
-                let value = self.descend()?.eval_expr(expr, &locals);
+                let value = self.descend()?.eval_expr(expr, &locals, &callables);
                 assign_local(name, value, &mut locals);
                 continue;
             }
@@ -332,7 +399,33 @@ impl<'a> IntEvaluator<'a> {
         }
 
         let expr = result_expr?;
-        self.descend()?.eval_expr(expr, &locals)
+        self.descend()?.eval_expr(expr, &locals, &callables)
+    }
+
+    fn eval_callable(
+        &self,
+        callable: &IntCallable,
+        arg: i64,
+        callables: &HashMap<String, IntCallable>,
+    ) -> Option<i64> {
+        match callable {
+            IntCallable::Lambda(lambda) => self.eval_lambda(lambda, arg, callables),
+            IntCallable::Named(name) => {
+                let expr = format!("{} {}", name, arg);
+                self.eval_expr(&expr, &HashMap::new(), callables)
+            }
+        }
+    }
+
+    fn eval_lambda(
+        &self,
+        lambda: &IntLambda,
+        arg: i64,
+        callables: &HashMap<String, IntCallable>,
+    ) -> Option<i64> {
+        let mut locals = HashMap::new();
+        locals.insert(lambda.parameter.clone(), arg);
+        self.descend()?.eval_expr(&lambda.body, &locals, callables)
     }
 }
 
@@ -367,6 +460,7 @@ struct RuntimeOutputResolver {
 struct RuntimeEvaluators<'a, 'b> {
     int: &'b IntEvaluator<'a>,
     list: &'b ListIntEvaluator<'a>,
+    unit: &'b EvaluatedFunctions<'a>,
 }
 
 impl RuntimeOutputResolver {
@@ -416,11 +510,14 @@ impl RuntimeOutputResolver {
         expr: &str,
         evaluators: &RuntimeEvaluators<'_, '_>,
     ) -> Option<()> {
-        let (value_expr, callee) = parse_pipeline(expr)?;
-        if callee != BUILTIN_PRINT {
-            return None;
+        if let Some((value_expr, callee)) = parse_pipeline(expr) {
+            if callee != BUILTIN_PRINT {
+                return None;
+            }
+            return self.capture_output_from_expr(value_expr, evaluators);
         }
-        self.capture_output_from_expr(value_expr, evaluators)
+
+        self.execute_unit_call(expr, &RuntimeLocals::default(), &HashMap::new(), evaluators)
     }
 
     fn capture_output_from_expr(
@@ -438,23 +535,34 @@ impl RuntimeOutputResolver {
         expr: &str,
         evaluators: &RuntimeEvaluators<'_, '_>,
     ) -> Option<RuntimeValue> {
+        let callables = HashMap::new();
+        self.eval_value_with_context(expr, &self.locals, &callables, evaluators)
+    }
+
+    fn eval_value_with_context(
+        &self,
+        expr: &str,
+        locals: &RuntimeLocals,
+        callables: &HashMap<String, IntCallable>,
+        evaluators: &RuntimeEvaluators<'_, '_>,
+    ) -> Option<RuntimeValue> {
         if let Some((left, callee)) = parse_pipeline(expr) {
-            let left_value = self.eval_value(left, evaluators)?;
-            return self.apply_pipeline(callee, left_value, evaluators);
+            let left_value = self.eval_value_with_context(left, locals, callables, evaluators)?;
+            return self.apply_pipeline(callee, left_value, locals, callables, evaluators);
         }
 
-        if let Some(text) = eval_string_expr(expr, &self.locals.string_values) {
+        if let Some(text) = eval_string_expr(expr, &locals.string_values) {
             return Some(RuntimeValue::String(text));
         }
 
-        if let Some(value) = evaluators.int.eval_expr(expr, &self.locals.int_values) {
+        if let Some(value) = evaluators
+            .int
+            .eval_expr(expr, &locals.int_values, callables)
+        {
             return Some(RuntimeValue::Int(value));
         }
 
-        if let Some(values) = evaluators
-            .list
-            .eval_expr(expr, &self.locals.list_int_values)
-        {
+        if let Some(values) = evaluators.list.eval_expr(expr, &locals.list_int_values) {
             return Some(RuntimeValue::ListInt(values));
         }
 
@@ -465,13 +573,85 @@ impl RuntimeOutputResolver {
         &self,
         callee: &str,
         value: RuntimeValue,
+        locals: &RuntimeLocals,
+        callables: &HashMap<String, IntCallable>,
         evaluators: &RuntimeEvaluators<'_, '_>,
     ) -> Option<RuntimeValue> {
         if callee == BUILTIN_PRINT {
             return None;
         }
         let call_expr = format!("{} {}", callee, value.to_expression_text());
-        self.eval_value(&call_expr, evaluators)
+        self.eval_value_with_context(&call_expr, locals, callables, evaluators)
+    }
+
+    fn execute_unit_call(
+        &mut self,
+        expr: &str,
+        caller_locals: &RuntimeLocals,
+        caller_callables: &HashMap<String, IntCallable>,
+        evaluators: &RuntimeEvaluators<'_, '_>,
+    ) -> Option<()> {
+        let (callee, arg_expr) = match parse_call(expr) {
+            Some((callee, arg_expr)) => (callee, Some(arg_expr)),
+            None if is_identifier(expr) => (expr.trim(), None),
+            None => return None,
+        };
+
+        let function = evaluators.unit.get(callee)?;
+        let mut function_locals = RuntimeLocals::default();
+        let mut function_callables = HashMap::new();
+
+        if let Some(parameter) = function.parameter {
+            let arg_expr = arg_expr?;
+            if let Some(callable) = parse_int_callable(arg_expr) {
+                function_callables.insert(parameter.to_string(), callable);
+            } else if let Some(RuntimeValue::Int(value)) =
+                self.eval_value_with_context(arg_expr, caller_locals, caller_callables, evaluators)
+            {
+                function_locals
+                    .int_values
+                    .insert(parameter.to_string(), value);
+            } else {
+                return None;
+            }
+        }
+
+        for statement in statements(function.body) {
+            match statement {
+                Statement::Binding { name, expr } => {
+                    let value = self.eval_value_with_context(
+                        expr,
+                        &function_locals,
+                        &function_callables,
+                        evaluators,
+                    );
+                    if let Some(value) = value {
+                        function_locals.store(name, value);
+                    } else {
+                        function_locals.clear(name);
+                    }
+                }
+                Statement::Print(print_expr) => {
+                    let value = self.eval_value_with_context(
+                        print_expr,
+                        &function_locals,
+                        &function_callables,
+                        evaluators,
+                    )?;
+                    self.outputs.push(value.to_output_text());
+                }
+                Statement::Expr(inner_expr) => {
+                    self.execute_unit_call(
+                        inner_expr,
+                        &function_locals,
+                        &function_callables,
+                        evaluators,
+                    )?;
+                }
+            }
+        }
+
+        Some(())
     }
 }
 
@@ -693,9 +873,9 @@ impl<'a> ListIntEvaluator<'a> {
     }
 }
 
-struct MapLambda<'a> {
-    parameter: &'a str,
-    body: &'a str,
+struct MapLambda {
+    parameter: String,
+    body: String,
 }
 
 fn parse_map_call(expr: &str) -> Option<(&str, &str)> {
@@ -713,7 +893,29 @@ fn parse_map_call(expr: &str) -> Option<(&str, &str)> {
     Some((list_expr, lambda_expr))
 }
 
-fn parse_map_lambda(expr: &str) -> Option<MapLambda<'_>> {
+fn parse_map_lambda(expr: &str) -> Option<MapLambda> {
+    let lambda = parse_inline_lambda(expr)?;
+    Some(MapLambda {
+        parameter: lambda.parameter,
+        body: lambda.body,
+    })
+}
+
+fn apply_map_lambda(values: &[i64], lambda: &MapLambda) -> Option<Vec<i64>> {
+    let empty_functions = HashMap::new();
+    let empty_callables = HashMap::new();
+    let evaluator = IntEvaluator::root(&empty_functions);
+    let mut out = Vec::with_capacity(values.len());
+    for value in values {
+        let mut locals = HashMap::new();
+        locals.insert(lambda.parameter.to_string(), *value);
+        let mapped = evaluator.eval_expr(&lambda.body, &locals, &empty_callables)?;
+        out.push(mapped);
+    }
+    Some(out)
+}
+
+fn parse_inline_lambda(expr: &str) -> Option<IntLambda> {
     let expr = expr.trim();
     if let Some((head, body)) = expr.split_once("->") {
         let head = head.trim();
@@ -728,30 +930,33 @@ fn parse_map_lambda(expr: &str) -> Option<MapLambda<'_>> {
         if body.is_empty() {
             return None;
         }
-        return Some(MapLambda { parameter, body });
+        return Some(IntLambda {
+            parameter: parameter.to_string(),
+            body: body.to_string(),
+        });
     }
 
     if expr.contains('_') {
-        return Some(MapLambda {
-            parameter: "_",
-            body: expr,
+        return Some(IntLambda {
+            parameter: "_".to_string(),
+            body: expr.to_string(),
         });
     }
 
     None
 }
 
-fn apply_map_lambda(values: &[i64], lambda: &MapLambda<'_>) -> Option<Vec<i64>> {
-    let empty_functions = HashMap::new();
-    let evaluator = IntEvaluator::root(&empty_functions);
-    let mut out = Vec::with_capacity(values.len());
-    for value in values {
-        let mut locals = HashMap::new();
-        locals.insert(lambda.parameter.to_string(), *value);
-        let mapped = evaluator.eval_expr(lambda.body, &locals)?;
-        out.push(mapped);
+fn parse_int_callable(expr: &str) -> Option<IntCallable> {
+    if let Some(lambda) = parse_inline_lambda(expr) {
+        return Some(IntCallable::Lambda(lambda));
     }
-    Some(out)
+
+    let name = expr.trim();
+    if is_identifier(name) {
+        return Some(IntCallable::Named(name.to_string()));
+    }
+
+    None
 }
 
 fn parse_list_int_literal(expr: &str) -> Option<Vec<i64>> {
@@ -850,8 +1055,31 @@ fn collect_referenced_identifiers<'a>(expr: &'a str, out: &mut HashSet<&'a str>)
 
 fn collect_identifiers<'a>(expr: &'a str, out: &mut HashSet<&'a str>) {
     let mut start = None;
+    let mut in_string = false;
+    let mut escaped = false;
 
     for (idx, byte) in expr.as_bytes().iter().copied().enumerate() {
+        if in_string {
+            if escaped {
+                escaped = false;
+                continue;
+            }
+            if byte == b'\\' {
+                escaped = true;
+                continue;
+            }
+            if byte == b'"' {
+                in_string = false;
+            }
+            continue;
+        }
+
+        if byte == b'"' {
+            maybe_insert_identifier(expr, start.take(), idx, out);
+            in_string = true;
+            continue;
+        }
+
         let is_ident_char = byte.is_ascii_alphanumeric() || byte == b'_';
         if is_ident_char {
             if start.is_none() {
@@ -1117,6 +1345,25 @@ main =
         let module = parse_module(&source).expect("parse should work");
         let output = resolve_main_runtime_output(&module, main_body(&module))
             .expect("runtime output should resolve");
-        assert_eq!(output, "90\n[30, 40, 50]\n[60, 70]");
+        assert_eq!(output, "90\n[30, 40, 50]\n[60, 70]\nsomething\n15");
+    }
+
+    #[test]
+    fn resolves_runtime_output_for_function_argument_call() {
+        let source = r#"
+callback_after_print : (Int -> Int) -> Unit
+callback_after_print f =
+  print "something"
+  i = f 10
+  print i
+
+main : Unit -> Unit
+main =
+  callback_after_print (|n| -> n + 5)
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let output = resolve_main_runtime_output(&module, main_body(&module))
+            .expect("runtime output should resolve");
+        assert_eq!(output, "something\n15");
     }
 }

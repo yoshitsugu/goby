@@ -52,12 +52,16 @@ Based on `examples/*.gb`:
     - `90`
     - `[30, 40, 50]`
     - `[60, 70]`
+    - `something`
+    - `15`
 - Current status:
   - as of 2026-02-27, `check` passes for `examples/function.gb`.
   - as of 2026-02-27, `run` parity is implemented for the locked subset and prints:
     - `90`
     - `[30, 40, 50]`
     - `[60, 70]`
+    - `something`
+    - `15`
 
 ### 2.1 Syntax and Parsing
 
@@ -112,5 +116,6 @@ Based on `examples/*.gb`:
   - anonymous function and placeholder lambda forms
   - pipeline operator `|>`
   - `List Int` print formatting
+  - passing `Int -> Int` function values into a function and invoking them
 - Keep explicit diagnostics for forms still outside the locked `function.gb` subset.
 - Track all new syntax requests as explicit change proposals.

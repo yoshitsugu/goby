@@ -16,6 +16,13 @@ mul_tens ns = map ns (|n| -> n * 10)
 mul_tens_short : List Int -> List Int
 mul_tens_short ns = map ns (_ * 10)
 
+# You can pass a function as an argument
+callback_after_print : (Int -> Int) -> Unit
+callback_after_print f =
+  print "something"
+  i = f 10
+  print i  
+
 main : Unit -> Unit
 main =
   b = add_ten 10
@@ -28,3 +35,5 @@ main =
 
   # [60, 70]
   mul_tens_short [6, 7] |> print
+
+  callback_after_print (|n| -> n + 5)
