@@ -1,0 +1,22 @@
+main =
+  x = 5
+  print
+    case x
+      5 -> "Five!"
+      3 -> "Three!"
+      _ -> "Other"
+
+  print
+    case x * 10
+      50 -> "50"
+      _ -> "Other"
+
+  a = 10
+  b = 20
+
+  # `if` is syntactic sugar for `case`. As with `case` and `_`, an `else` branch is required.
+  print
+    if a + b == 30
+      "30"
+    else
+      "other"
