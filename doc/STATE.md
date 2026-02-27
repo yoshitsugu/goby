@@ -192,3 +192,17 @@ This file is a restart-safe snapshot for resuming work after context reset.
 - Updated `typecheck` to validate print argument string-ness using shared analysis.
 - Updated `goby-wasm` to reuse shared analysis instead of custom print parsing.
 - Added `examples/print_local.gb` for local-binding print flow.
+
+## 21. Progress Since Shared Analysis Refactor
+
+- Strengthened print analysis correctness:
+  - no longer stops at first print line
+  - validates all lines and rejects unsupported multiple-print bodies
+- Added regression test for multiple print-call rejection.
+
+## 22. Progress Since Shared Analysis Refactor Step 2
+
+- Hardened assignment detection in print analysis:
+  - `=` is treated as binding only when it is not part of `==`
+  - prevents accidental misclassification of equality-like expressions
+- Added regression test to ensure equality-like lines are not interpreted as local bindings.
