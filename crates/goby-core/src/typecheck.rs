@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use crate::{Module, resolve_print_text, types::parse_function_type};
+use crate::{Module, types::parse_function_type};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TypecheckError {
@@ -19,12 +19,6 @@ pub fn typecheck_module(module: &Module) -> Result<(), TypecheckError> {
             });
         }
 
-        if let Err(message) = resolve_print_text(&decl.body) {
-            return Err(TypecheckError {
-                declaration: Some(decl.name.clone()),
-                message,
-            });
-        }
     }
 
     if let Some(main) = module.declarations.iter().find(|d| d.name == "main") {
@@ -78,11 +72,4 @@ mod tests {
         typecheck_module(&basic_module).expect("basic_types should typecheck");
     }
 
-    #[test]
-    fn rejects_invalid_print_argument() {
-        let module =
-            parse_module("main : void -> void\nmain = print 1\n").expect("parse should work");
-        let err = typecheck_module(&module).expect_err("typecheck should fail");
-        assert_eq!(err.declaration.as_deref(), Some("main"));
-    }
 }
