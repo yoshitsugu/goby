@@ -8,3 +8,4 @@ crate-type = ["rlib"]
 
 [dependencies]
 goby-core = { path = "../goby-core" }
+wat = "1"
