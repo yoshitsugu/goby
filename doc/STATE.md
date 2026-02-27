@@ -218,7 +218,7 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - reports invalid print argument forms
 - Updated `typecheck` to validate print argument string-ness using shared analysis.
 - Updated `goby-wasm` to reuse shared analysis instead of custom print parsing.
-- Added `examples/print_local.gb` for local-binding print flow.
+- Added `examples/print/local_binding.gb` for local-binding print flow.
 
 ## 21. Progress Since Shared Analysis Refactor
 
@@ -240,7 +240,7 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - supports `string.concat(<string-expr>, <string-expr>)`
   - supports nested concat and local string bindings
 - Added new sample:
-  - `examples/print_concat.gb`
+  - `examples/print/concat.gb`
 - Added analysis tests for concat-based print resolution.
 
 ## 24. Progress Since Shared Analysis Refactor Step 4
