@@ -1,5 +1,9 @@
 use goby_core::Module;
 
+const IOVEC_OFFSET: u32 = 0;
+const NWRITTEN_OFFSET: u32 = 8;
+const TEXT_OFFSET: u32 = 16;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CodegenError {
     pub message: String,
@@ -50,13 +54,12 @@ fn parse_print_literal(body: &str) -> Option<String> {
 
 fn compile_print_module(text: &str) -> Result<Vec<u8>, CodegenError> {
     let text_bytes = text.as_bytes();
-    let text_offset = 8u32;
-    let iovec_offset = 0u32;
-    let nwritten_offset = 20u32;
 
-    let mut iovec_bytes = Vec::with_capacity(8);
-    iovec_bytes.extend_from_slice(&text_offset.to_le_bytes());
-    iovec_bytes.extend_from_slice(&(text_bytes.len() as u32).to_le_bytes());
+    let text_len = u32::try_from(text_bytes.len()).map_err(|_| CodegenError {
+        message: "print literal is too large to encode".to_string(),
+    })?;
+
+    let iovec_bytes = encode_iovec(TEXT_OFFSET, text_len);
 
     let wat_source = format!(
         r#"(module
@@ -72,9 +75,9 @@ fn compile_print_module(text: &str) -> Result<Vec<u8>, CodegenError> {
         (i32.const {iovec_offset})
         (i32.const 1)
         (i32.const {nwritten_offset})))))"#,
-        text_offset = text_offset,
-        iovec_offset = iovec_offset,
-        nwritten_offset = nwritten_offset,
+        text_offset = TEXT_OFFSET,
+        iovec_offset = IOVEC_OFFSET,
+        nwritten_offset = NWRITTEN_OFFSET,
         text_data = wat_bytes(text_bytes),
         iovec_data = wat_bytes(&iovec_bytes),
     );
@@ -91,6 +94,13 @@ fn wat_bytes(bytes: &[u8]) -> String {
         out.push_str(&format!("{:02x}", b));
     }
     out
+}
+
+fn encode_iovec(base: u32, length: u32) -> [u8; 8] {
+    let mut bytes = [0u8; 8];
+    bytes[..4].copy_from_slice(&base.to_le_bytes());
+    bytes[4..].copy_from_slice(&length.to_le_bytes());
+    bytes
 }
 
 #[cfg(test)]
@@ -112,5 +122,20 @@ mod tests {
             .expect("parse should work");
         let wasm = compile_module(&module).expect("codegen should succeed");
         assert_eq!(&wasm[..4], &[0x00, 0x61, 0x73, 0x6d]);
+    }
+
+    #[test]
+    fn emits_valid_wasm_for_long_print_literal() {
+        let long_text = "x".repeat(128);
+        let source = format!("main : void -> void\nmain = print \"{}\"\n", long_text);
+        let module = parse_module(&source).expect("parse should work");
+        let wasm = compile_module(&module).expect("codegen should succeed");
+        assert_eq!(&wasm[..4], &[0x00, 0x61, 0x73, 0x6d]);
+    }
+
+    #[test]
+    fn encodes_iovec_in_little_endian() {
+        let bytes = encode_iovec(16, 5);
+        assert_eq!(bytes, [16, 0, 0, 0, 5, 0, 0, 0]);
     }
 }

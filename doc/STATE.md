@@ -167,3 +167,18 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - otherwise falls back to minimal empty-main module
 - Added new wasm backend test for print-literal codegen.
 - Added `wat` dependency in `goby-wasm` and updated lockfile.
+
+## 18. Progress Since Wasm Lowering Refactor
+
+- Fixed memory layout safety in print-literal Wasm generation:
+  - moved static write buffers to non-overlapping offsets (`iovec`, `nwritten`, text)
+  - removed potential overlap for longer print strings
+- Added bounds-safe string-length conversion (`usize` -> `u32`) with explicit error.
+- Added regression test for long print literals.
+
+## 19. Progress Since Wasm Lowering Refactor Step 2
+
+- Improved wasm backend maintainability by removing print-lowering magic numbers:
+  - extracted static offsets into named constants (`IOVEC_OFFSET`, `NWRITTEN_OFFSET`, `TEXT_OFFSET`)
+  - extracted iovec serialization into `encode_iovec`
+- Added focused unit test for iovec little-endian encoding.
