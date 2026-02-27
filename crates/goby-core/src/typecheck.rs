@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use crate::{Module, types::parse_function_type};
+use crate::{Module, resolve_print_text, types::parse_function_type};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TypecheckError {
@@ -16,6 +16,13 @@ pub fn typecheck_module(module: &Module) -> Result<(), TypecheckError> {
             return Err(TypecheckError {
                 declaration: Some(decl.name.clone()),
                 message: "duplicate top-level declaration".to_string(),
+            });
+        }
+
+        if let Err(message) = resolve_print_text(&decl.body) {
+            return Err(TypecheckError {
+                declaration: Some(decl.name.clone()),
+                message,
             });
         }
     }
@@ -69,5 +76,13 @@ mod tests {
 
         typecheck_module(&hello_module).expect("hello should typecheck");
         typecheck_module(&basic_module).expect("basic_types should typecheck");
+    }
+
+    #[test]
+    fn rejects_invalid_print_argument() {
+        let module =
+            parse_module("main : void -> void\nmain = print 1\n").expect("parse should work");
+        let err = typecheck_module(&module).expect_err("typecheck should fail");
+        assert_eq!(err.declaration.as_deref(), Some("main"));
     }
 }
