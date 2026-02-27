@@ -62,33 +62,28 @@ This file is a restart-safe snapshot for resuming work after context reset.
 
 ## 6. Immediate Next Steps (Execution Order)
 
-1. Close `examples/function.gb` runtime parity gaps without simplifying the example:
-   - implement `map` on `List Int` for current subset,
-   - implement anonymous function forms used by the file (`|n| -> ...`, `_ * 10`),
-   - implement pipeline operator `|>`,
-   - implement `print` formatting for `List Int`.
-2. Re-introduce stricter typecheck rules after AST-based expression/type representation is in place.
+1. Re-introduce stricter typecheck rules after AST-based expression/type representation is in place.
 
 ### Function.gb Runtime Parity Checklist
 
-- [ ] Step 1: Freeze current failure boundary with tests
+- [x] Step 1: Freeze current failure boundary with tests
   - Add regression coverage that locks expected output for `examples/function.gb`:
     - `90`
     - `[30, 40, 50]`
     - `[60, 70]`
-- [ ] Step 2: Refactor runtime path to evaluate all `main` lines sequentially
+- [x] Step 2: Refactor runtime path to evaluate all `main` lines sequentially
   - Remove single-line/special-case execution paths and unify block evaluation flow.
-- [ ] Step 3: Implement pipeline operator (`|>`) in evaluator/codegen subset
+- [x] Step 3: Implement pipeline operator (`|>`) in evaluator/codegen subset
   - Support `x |> f` as `f x` for the locked MVP subset.
 - [x] Step 4: Implement lambda forms used in `function.gb`
   - Support both `|n| -> n * 10` and `_ * 10` in `map` call positions.
 - [x] Step 5: Implement runtime `map` for `List Int` subset
   - Support `List Int -> (Int -> Int) -> List Int` evaluation for current examples.
-- [ ] Step 6: Implement `print` formatting for `List Int`
+- [x] Step 6: Implement `print` formatting for `List Int`
   - Emit bracketed comma-separated output (`[30, 40, 50]` style).
-- [ ] Step 7: Align typecheck and diagnostics with runtime support
+- [x] Step 7: Align typecheck and diagnostics with runtime support
   - Update accepted forms and error messages to match the implemented subset.
-- [ ] Step 8: Final validation
+- [x] Step 8: Final validation
   - Verify with:
     - `cargo check`
     - `cargo test`
@@ -338,3 +333,21 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - named-lambda map print path reports `print List` unsupported (Step 6 still pending)
   - placeholder-lambda map print path reports `print List` unsupported
   - list-function call with spaced literal argument reports `print List` unsupported
+
+## 35. Progress Since Function Runtime Parity Step 6
+
+- Refactored `goby-wasm` runtime output resolution to evaluate `main` sequentially and collect all print outputs in order.
+- Implemented pipeline handling in runtime subset (`x |> f`) and supported `|> print` output emission for `main` statements.
+- Implemented `List Int` print formatting as bracketed comma-separated output.
+- Updated diagnostics so `print Int` / `print List` are treated as supported in the current runtime subset.
+- Replaced previous unsupported-form regression tests with parity-lock tests:
+  - pipeline print output resolution test (`[1, 2, 3]`)
+  - canonical `examples/function.gb` output lock:
+    - `90`
+    - `[30, 40, 50]`
+    - `[60, 70]`
+- Verified end-to-end validation commands:
+  - `cargo fmt --all`
+  - `cargo clippy --all-targets --all-features -- -D warnings`
+  - `cargo test --all-features`
+  - `cargo run -p goby-cli -- run examples/function.gb`

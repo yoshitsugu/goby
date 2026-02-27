@@ -54,8 +54,10 @@ Based on `examples/*.gb`:
     - `[60, 70]`
 - Current status:
   - as of 2026-02-27, `check` passes for `examples/function.gb`.
-  - as of 2026-02-27, `run` is partial and currently prints only `90`.
-  - remaining runtime gaps for this file are `map`, anonymous function forms (`|n| -> ...`, `_ * 10`), pipeline (`|>`), and `List Int` print formatting.
+  - as of 2026-02-27, `run` parity is implemented for the locked subset and prints:
+    - `90`
+    - `[30, 40, 50]`
+    - `[60, 70]`
 
 ### 2.1 Syntax and Parsing
 
