@@ -8,24 +8,10 @@ add_ten_mul_three a =
   b = a + 10
   b * 3
 
-# Higher-order function
-mul_tens : List Int -> List Int
-mul_tens ns = map ns (|n| -> n * 10)
-
-# Anonymous functions can also be written as:
-mul_tens_short : List Int -> List Int
-mul_tens_short ns = map ns (_ * 10)
-
 main : void -> void
 main =
   b = add_ten 10
   c = add_ten_mul_three b
   # 60
   print c
-
-  # [30, 40, 50]
-  mul_tens [3, 4, 5] |> print
-
-  # [60, 70]
-  mul_tens_short [6, 7] |> print
   
