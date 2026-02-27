@@ -17,7 +17,7 @@ This file is a restart-safe snapshot for resuming work after context reset.
 - First backend target is Wasm.
 - Effect system is parse-only in MVP.
 - Entry function is `main` only.
-- `main` type is `void -> void`.
+- `main` type is `Unit -> Unit`.
 - CLI commands:
   - `run`: parse + typecheck + requires `main`
   - `check`: parse + typecheck (no runtime entry requirement)
@@ -119,7 +119,7 @@ This file is a restart-safe snapshot for resuming work after context reset.
 
 - Added minimal typechecking in `crates/goby-core`:
   - `types.rs`: basic function type parsing (`->`) and effect suffix stripping (`can ...`)
-  - `typecheck.rs`: duplicate declaration check and `main : void -> void` MVP check
+  - `typecheck.rs`: duplicate declaration check and `main : Unit -> Unit` MVP check
 - Updated CLI flow in `crates/goby-cli`:
   - parse -> typecheck -> success output
 - Added/updated tests:

@@ -34,10 +34,10 @@ pub fn typecheck_module(module: &Module) -> Result<(), TypecheckError> {
             message: "main type annotation must be a function type".to_string(),
         })?;
 
-        if ty.arguments != vec!["void".to_string()] || ty.result != "void" {
+        if ty.arguments != vec!["Unit".to_string()] || ty.result != "Unit" {
             return Err(TypecheckError {
                 declaration: Some("main".to_string()),
-                message: "main type must be `void -> void` in MVP".to_string(),
+                message: "main type must be `Unit -> Unit` in MVP".to_string(),
             });
         }
     }
@@ -69,5 +69,14 @@ mod tests {
 
         typecheck_module(&hello_module).expect("hello should typecheck");
         typecheck_module(&basic_module).expect("basic_types should typecheck");
+    }
+
+    #[test]
+    fn rejects_void_main_type() {
+        let module =
+            parse_module("main : void -> void\nmain = print \"legacy\"\n").expect("should parse");
+        let err = typecheck_module(&module).expect_err("void main type should be rejected");
+        assert_eq!(err.declaration.as_deref(), Some("main"));
+        assert!(err.message.contains("Unit -> Unit"));
     }
 }

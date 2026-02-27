@@ -1036,14 +1036,14 @@ mod tests {
 
     #[test]
     fn emits_valid_wasm_header_for_main_module() {
-        let module = parse_module("main : void -> void\nmain = 0\n").expect("parse should work");
+        let module = parse_module("main : Unit -> Unit\nmain = 0\n").expect("parse should work");
         let wasm = compile_module(&module).expect("codegen should succeed");
         assert_valid_wasm_module(&wasm);
     }
 
     #[test]
     fn emits_valid_wasm_for_print_literal() {
-        let module = parse_module("main : void -> void\nmain = print \"Hello Goby!\"\n")
+        let module = parse_module("main : Unit -> Unit\nmain = print \"Hello Goby!\"\n")
             .expect("parse should work");
         let wasm = compile_module(&module).expect("codegen should succeed");
         assert_valid_wasm_module(&wasm);
@@ -1052,7 +1052,7 @@ mod tests {
     #[test]
     fn emits_valid_wasm_for_long_print_literal() {
         let long_text = "x".repeat(128);
-        let source = format!("main : void -> void\nmain = print \"{}\"\n", long_text);
+        let source = format!("main : Unit -> Unit\nmain = print \"{}\"\n", long_text);
         let module = parse_module(&source).expect("parse should work");
         let wasm = compile_module(&module).expect("codegen should succeed");
         assert_valid_wasm_module(&wasm);
@@ -1061,7 +1061,7 @@ mod tests {
     #[test]
     fn emits_valid_wasm_for_print_via_local_binding() {
         let source = r#"
-main : void -> void
+main : Unit -> Unit
 main =
   greeting = "Hello from local"
   print greeting
@@ -1080,7 +1080,7 @@ main =
     #[test]
     fn emits_valid_wasm_for_print_int_binding() {
         let source = r#"
-main : void -> void
+main : Unit -> Unit
 main =
   n = 10
   print n
@@ -1101,7 +1101,7 @@ main =
     #[test]
     fn resolves_runtime_output_for_pipeline_print() {
         let source = r#"
-main : void -> void
+main : Unit -> Unit
 main =
   [1, 2, 3] |> print
 "#;

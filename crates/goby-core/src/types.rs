@@ -35,8 +35,8 @@ mod tests {
 
     #[test]
     fn parses_function_type_with_effect_annotation() {
-        let ty = parse_function_type("void -> void can Print").expect("should parse");
-        assert_eq!(ty.arguments, vec!["void"]);
-        assert_eq!(ty.result, "void");
+        let ty = parse_function_type("Unit -> Unit can Print").expect("should parse");
+        assert_eq!(ty.arguments, vec!["Unit"]);
+        assert_eq!(ty.result, "Unit");
     }
 }

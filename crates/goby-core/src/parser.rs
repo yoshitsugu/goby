@@ -163,7 +163,7 @@ mod tests {
         assert_eq!(main_decl.name, "main");
         assert_eq!(
             main_decl.type_annotation.as_deref(),
-            Some("void -> void can Print")
+            Some("Unit -> Unit can Print")
         );
     }
 
@@ -189,7 +189,7 @@ mod tests {
 
     #[test]
     fn allows_comment_between_annotation_and_definition() {
-        let source = "main : void -> void can Print\n# comment\n\nmain = print \"ok\"\n";
+        let source = "main : Unit -> Unit can Print\n# comment\n\nmain = print \"ok\"\n";
         let declaration = parse_single_declaration(source);
         assert_eq!(declaration.name, "main");
     }
@@ -197,7 +197,7 @@ mod tests {
     #[test]
     fn allows_mixed_tabs_and_spaces_in_same_block() {
         let source =
-            "main : void -> void can Print\nmain =\n  greeting = \"hello\"\n\tprint greeting\n";
+            "main : Unit -> Unit can Print\nmain =\n  greeting = \"hello\"\n\tprint greeting\n";
         let declaration = parse_single_declaration(source);
         assert!(declaration.body.contains("greeting = \"hello\""));
         assert!(declaration.body.contains("print greeting"));

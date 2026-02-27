@@ -1,4 +1,4 @@
-main : void -> void can Print
+main : Unit -> Unit can Print
 main =
   prefix = "Hello, "
   name = "Goby!"
