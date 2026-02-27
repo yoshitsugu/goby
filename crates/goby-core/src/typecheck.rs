@@ -18,7 +18,6 @@ pub fn typecheck_module(module: &Module) -> Result<(), TypecheckError> {
                 message: "duplicate top-level declaration".to_string(),
             });
         }
-
     }
 
     if let Some(main) = module.declarations.iter().find(|d| d.name == "main") {
@@ -71,5 +70,4 @@ mod tests {
         typecheck_module(&hello_module).expect("hello should typecheck");
         typecheck_module(&basic_module).expect("basic_types should typecheck");
     }
-
 }

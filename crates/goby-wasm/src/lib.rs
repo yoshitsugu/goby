@@ -1,8 +1,19 @@
-use goby_core::{Module, resolve_print_text};
+use std::collections::HashMap;
+
+use goby_core::{Module, resolve_print_text, types::parse_function_type};
 
 const IOVEC_OFFSET: u32 = 0;
 const NWRITTEN_OFFSET: u32 = 8;
 const TEXT_OFFSET: u32 = 16;
+const ERR_MISSING_MAIN: &str = "Wasm codegen requires a `main` declaration";
+const ERR_UNSUPPORTED_PIPELINE: &str =
+    "pipeline operator (`|>`) is not yet supported in Wasm codegen";
+const ERR_UNSUPPORTED_HIGHER_ORDER: &str =
+    "higher-order calls are not yet supported in Wasm codegen";
+const ERR_UNSUPPORTED_PRINT_INT: &str = "print Int is not yet supported in Wasm codegen";
+const ERR_UNSUPPORTED_PRINT_LIST: &str = "print List is not yet supported in Wasm codegen";
+const ERR_UNSUPPORTED_PRINT_UNKNOWN: &str =
+    "print argument is unsupported for Wasm codegen (only String is supported)";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CodegenError {
@@ -12,19 +23,226 @@ pub struct CodegenError {
 pub fn compile_module(module: &Module) -> Result<Vec<u8>, CodegenError> {
     let Some(main) = module.declarations.iter().find(|d| d.name == "main") else {
         return Err(CodegenError {
-            message: "Wasm codegen requires a `main` declaration".to_string(),
+            message: ERR_MISSING_MAIN.to_string(),
         });
     };
 
-    if let Some(text) =
-        resolve_print_text(&main.body).map_err(|message| CodegenError { message })?
-    {
+    if let Some(text) = resolve_print_text(&main.body).ok().flatten() {
         return compile_print_module(&text);
+    }
+
+    if let Some(message) = find_unsupported_form(module, &main.body) {
+        return Err(CodegenError {
+            message: message.to_string(),
+        });
     }
 
     // Minimal MVP codegen target: emit a valid module that exports an empty `main`.
     // This is a temporary bridge until expression-level lowering is implemented.
     Ok(minimal_main_module())
+}
+
+fn find_unsupported_form(module: &Module, main_body: &str) -> Option<&'static str> {
+    let mut analyzer = UnsupportedFormAnalyzer::new(module);
+    if let Some(message) = analyzer.find_unsupported_print(main_body) {
+        return Some(message);
+    }
+
+    if contains_pipeline(main_body) {
+        return Some(ERR_UNSUPPORTED_PIPELINE);
+    }
+
+    for decl in &module.declarations {
+        if looks_like_higher_order_usage(&decl.body) {
+            return Some(ERR_UNSUPPORTED_HIGHER_ORDER);
+        }
+    }
+
+    None
+}
+
+struct UnsupportedFormAnalyzer<'a> {
+    locals: HashMap<String, KnownType>,
+    result_types: HashMap<&'a str, KnownType>,
+}
+
+impl<'a> UnsupportedFormAnalyzer<'a> {
+    fn new(module: &'a Module) -> Self {
+        Self {
+            locals: HashMap::new(),
+            result_types: declaration_result_types(module),
+        }
+    }
+
+    fn find_unsupported_print(&mut self, main_body: &str) -> Option<&'static str> {
+        for line in code_lines(main_body) {
+            if let Some((name, expr)) = split_binding(line) {
+                self.bind(name, expr);
+                continue;
+            }
+
+            if let Some(expr) = parse_print_call(line)
+                && let Some(message) = unsupported_print_message(self.infer_expr_type(expr))
+            {
+                return Some(message);
+            }
+        }
+
+        None
+    }
+
+    fn bind(&mut self, name: &str, expr: &str) {
+        let ty = self.infer_expr_type(expr);
+        self.locals.insert(name.to_string(), ty);
+    }
+
+    fn infer_expr_type(&self, expr: &str) -> KnownType {
+        infer_expr_type(expr, &self.locals, &self.result_types)
+    }
+}
+
+fn declaration_result_types(module: &Module) -> HashMap<&str, KnownType> {
+    let mut map = HashMap::new();
+    for decl in &module.declarations {
+        let Some(annotation) = decl.type_annotation.as_deref() else {
+            continue;
+        };
+        let Some(function_type) = parse_function_type(annotation) else {
+            continue;
+        };
+        let known_type = KnownType::from_annotation_result(&function_type.result);
+        map.insert(decl.name.as_str(), known_type);
+    }
+    map
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum KnownType {
+    String,
+    Int,
+    List,
+    Unknown,
+}
+
+impl KnownType {
+    fn from_annotation_result(result: &str) -> Self {
+        match result {
+            "Int" => Self::Int,
+            "String" => Self::String,
+            _ if result.starts_with("List") => Self::List,
+            _ => Self::Unknown,
+        }
+    }
+}
+
+fn infer_expr_type(
+    expr: &str,
+    locals: &HashMap<String, KnownType>,
+    result_types: &HashMap<&str, KnownType>,
+) -> KnownType {
+    let expr = expr.trim();
+    if expr.is_empty() {
+        return KnownType::Unknown;
+    }
+
+    if is_string_literal(expr) || expr.starts_with("string.concat(") {
+        return KnownType::String;
+    }
+
+    if is_int_literal(expr) || is_int_expression(expr) {
+        return KnownType::Int;
+    }
+
+    if is_list_literal(expr) {
+        return KnownType::List;
+    }
+
+    if let Some(local_ty) = locals.get(expr) {
+        return *local_ty;
+    }
+
+    if let Some(result_type) = result_types.get(call_head(expr)) {
+        return *result_type;
+    }
+
+    KnownType::Unknown
+}
+
+fn unsupported_print_message(known_type: KnownType) -> Option<&'static str> {
+    match known_type {
+        KnownType::String => None,
+        KnownType::Int => Some(ERR_UNSUPPORTED_PRINT_INT),
+        KnownType::List => Some(ERR_UNSUPPORTED_PRINT_LIST),
+        KnownType::Unknown => Some(ERR_UNSUPPORTED_PRINT_UNKNOWN),
+    }
+}
+
+fn call_head(expr: &str) -> &str {
+    expr.split(|c: char| c.is_whitespace() || c == '(')
+        .next()
+        .unwrap_or(expr)
+}
+
+fn split_binding(line: &str) -> Option<(&str, &str)> {
+    let idx = line.find('=')?;
+    let name = line[..idx].trim();
+    if !is_identifier(name) {
+        return None;
+    }
+    Some((name, line[idx + 1..].trim()))
+}
+
+fn parse_print_call(line: &str) -> Option<&str> {
+    let rest = line.strip_prefix("print")?;
+    let first = rest.chars().next()?;
+    if !first.is_whitespace() {
+        return None;
+    }
+    Some(rest.trim())
+}
+
+fn is_identifier(s: &str) -> bool {
+    let mut chars = s.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    if !first.is_ascii_alphabetic() && first != '_' {
+        return false;
+    }
+    chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+fn is_string_literal(expr: &str) -> bool {
+    expr.starts_with('"') && expr.ends_with('"') && expr.len() >= 2
+}
+
+fn is_int_literal(expr: &str) -> bool {
+    let raw = expr.strip_prefix('-').unwrap_or(expr);
+    !raw.is_empty() && raw.chars().all(|c| c.is_ascii_digit())
+}
+
+fn is_int_expression(expr: &str) -> bool {
+    expr.contains(" + ") || expr.contains(" * ")
+}
+
+fn is_list_literal(expr: &str) -> bool {
+    expr.starts_with('[') && expr.ends_with(']')
+}
+
+fn code_lines(body: &str) -> impl Iterator<Item = &str> {
+    body.lines().map(str::trim).filter(|line| {
+        let line = *line;
+        !line.is_empty() && !line.starts_with('#')
+    })
+}
+
+fn contains_pipeline(body: &str) -> bool {
+    code_lines(body).any(|line| line.contains("|>"))
+}
+
+fn looks_like_higher_order_usage(body: &str) -> bool {
+    code_lines(body)
+        .any(|line| line.contains("| ->") || line.contains("|n| ->") || line.contains("(_"))
 }
 
 fn minimal_main_module() -> Vec<u8> {
@@ -139,5 +357,53 @@ main =
     fn encodes_iovec_in_little_endian() {
         let bytes = encode_iovec(16, 5);
         assert_eq!(bytes, [16, 0, 0, 0, 5, 0, 0, 0]);
+    }
+
+    #[test]
+    fn reports_print_int_as_unsupported() {
+        let source = r#"
+main : void -> void
+main =
+  n = 10
+  print n
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let err = compile_module(&module).expect_err("codegen should fail");
+        assert_eq!(
+            err.message,
+            "print Int is not yet supported in Wasm codegen"
+        );
+    }
+
+    #[test]
+    fn reports_pipeline_as_unsupported() {
+        let source = r#"
+main : void -> void
+main =
+  [1, 2, 3] |> print
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let err = compile_module(&module).expect_err("codegen should fail");
+        assert_eq!(
+            err.message,
+            "pipeline operator (`|>`) is not yet supported in Wasm codegen"
+        );
+    }
+
+    #[test]
+    fn reports_higher_order_usage_as_unsupported() {
+        let source = r#"
+f : List Int -> List Int
+f ns = map ns (|n| -> n * 10)
+
+main : void -> void
+main = 0
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let err = compile_module(&module).expect_err("codegen should fail");
+        assert_eq!(
+            err.message,
+            "higher-order calls are not yet supported in Wasm codegen"
+        );
     }
 }
