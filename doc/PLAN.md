@@ -33,7 +33,9 @@ Based on `examples/*.gb`:
 - Statement terminators are newline or `;`.
 - Indentation-based blocks accept both tabs and spaces.
   - contiguous tabs or contiguous spaces are treated as indentation.
-- CLI runtime entrypoint is `main` only (`goby-cli run <file.gb>`).
+- CLI commands:
+  - `goby-cli run <file.gb>` uses `main` entrypoint only.
+  - `goby-cli check <file.gb>` performs parse/typecheck without runtime entrypoint.
 - `main` type is restricted to `void -> void` for MVP.
 - First backend target is Wasm.
 - Effects are parse-only metadata in MVP.
@@ -75,7 +77,7 @@ Based on `examples/*.gb`:
 
 ### 2.6 Tooling Scope (MVP)
 
-- Minimum CLI commands (for example: `goby run`, `goby check`, `goby fmt`).
+- Minimum CLI commands (for example: `goby-cli run`, `goby-cli check`, `goby fmt`).
 - Project layout and package metadata format (Cargo workspace with `goby-core`, `goby-cli`, `goby-wasm`).
 - Formatter policy and non-configurable defaults.
 

@@ -72,6 +72,9 @@ This keeps source compatibility while postponing the full effect system.
 - Runtime entrypoint:
   - `goby-cli run <file.gb>` uses `main` by default,
   - `main` type is restricted to `void -> void` in MVP.
+- CLI commands:
+  - `goby-cli run <file.gb>`: parse + typecheck + requires `main`
+  - `goby-cli check <file.gb>`: parse + typecheck only
 - Backend:
   - Wasm is the first backend target for MVP.
 - Effect system handling in MVP:
@@ -125,6 +128,7 @@ Exit criteria:
 
 - CLI shape:
   - `goby-cli run <file.gb>`
+  - `goby-cli check <file.gb>`
 - Add clear parse/type/codegen/runtime error categories.
 - Add regression tests for current examples.
 
@@ -151,6 +155,7 @@ Exit criteria:
 - Effect annotations are accepted syntactically but not enforced semantically.
 - New contributors can run/verify the MVP path with:
   - `cargo run -p goby-cli -- run examples/hello.gb`
+  - `cargo run -p goby-cli -- check examples/basic_types.gb`
   - `cargo test`
 
 ## 8. Immediate Next Tasks
