@@ -32,8 +32,9 @@ This file is a restart-safe snapshot for resuming work after context reset.
 - MVP built-ins:
   - `print`
   - `string.concat`
-- `map` is out of MVP scope.
+- `map` is in MVP parse/typecheck scope (`check`) and out of MVP runtime/codegen scope.
 - `examples/basic_types.gb` is parse/typecheck target only (not runtime entry target).
+- `examples/function.gb` is parse/typecheck target only (not runtime entry target yet).
 
 ## 3. Known Open Decisions
 
@@ -57,9 +58,9 @@ This file is a restart-safe snapshot for resuming work after context reset.
 
 ## 6. Immediate Next Steps (Execution Order)
 
-1. Add expression-level lowering from Goby AST/body into Wasm function bodies.
-2. Expand lowering coverage beyond single `print` flow (sequential statements / more expressions).
-3. Tighten runtime diagnostics around Wasm execution failures and preconditions.
+1. Extend expression-level Wasm lowering so `examples/function.gb` can run via `goby-cli run`.
+2. Add clear codegen diagnostics for currently unsupported forms (`Int`/`List` print, pipeline `|>`, and higher-order calls).
+3. Re-introduce stricter typecheck rules after AST-based expression/type representation is in place.
 
 ## 7. Resume Commands
 
@@ -244,3 +245,19 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - `run` emits `<input>.wasm`
   - attempts execution via external `wasmtime`
   - gracefully skips execution when `wasmtime` is unavailable
+
+## 28. Progress Since Shared Analysis Refactor Step 8
+
+- Realigned MVP docs for `function.gb` implementation track:
+  - clarified that `map` belongs to MVP parse/typecheck scope
+  - kept runtime/codegen support for `map` explicitly out of current MVP runtime scope
+  - locked `examples/function.gb` as a `check` acceptance target
+
+## 29. Progress Since Shared Analysis Refactor Step 9
+
+- Confirmed `examples/function.gb` with `main` now passes:
+  - `cargo run -p goby-cli -- check examples/function.gb`
+- Temporarily relaxed typecheck by removing print-string-only enforcement from `typecheck.rs`:
+  - this unblocks `function.gb` in `check` mode while AST/type work is still pending
+- Confirmed runtime is still blocked at codegen:
+  - `cargo run -p goby-cli -- run examples/function.gb` fails with current print-lowering limitation

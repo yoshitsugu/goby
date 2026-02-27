@@ -43,9 +43,16 @@ Based on `examples/*.gb`:
 - Effects are parse-only metadata in MVP.
   - unknown effect names are ignored.
 - MVP built-ins are `print` and `string.concat`.
-  - `map` is postponed.
+  - `map` is included for parse/typecheck (`check`) scope.
+  - `map` runtime/codegen support is postponed.
 - `examples/basic_types.gb` is a parse/typecheck target, not a runnable entrypoint target.
   - no `main` addition and no `--entry` option in MVP.
+- `examples/function.gb` is an MVP parse/typecheck target.
+  - `goby-cli check examples/function.gb` is the acceptance path.
+  - `goby-cli run examples/function.gb` is out of scope until function-level lowering advances.
+- Current status:
+  - `check` for `examples/function.gb` is passing.
+  - `run` still fails because Wasm codegen remains limited to the current print-lowering subset.
 
 ### 2.1 Syntax and Parsing
 
@@ -94,6 +101,6 @@ Based on `examples/*.gb`:
 ## 4. Immediate Execution Plan
 
 - Freeze a short "MVP spec subset" from current examples.
-- Add examples for not-yet-documented behavior (multiple effects, type errors).
-- Implement parser/typechecker and Wasm codegen against only this frozen subset.
+- Advance expression/function lowering for `run` coverage beyond the current print-only path.
+- Add codegen diagnostics for unsupported forms in `function.gb` (`Int`/`List` print, pipeline, and higher-order calls).
 - Track all new syntax requests as explicit change proposals.
