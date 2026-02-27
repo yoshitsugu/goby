@@ -33,7 +33,8 @@ pub fn typecheck_module(module: &Module) -> Result<(), TypecheckError> {
                 message: "main must have an explicit type annotation".to_string(),
             })?;
 
-        let ty = parse_function_type(annotation).ok_or_else(|| TypecheckError {
+        let base_annotation = strip_effect_clause(annotation);
+        let ty = parse_function_type(base_annotation).ok_or_else(|| TypecheckError {
             declaration: Some("main".to_string()),
             message: "main type annotation must be a function type".to_string(),
         })?;
@@ -67,7 +68,7 @@ fn validate_type_annotation(decl_name: &str, annotation: &str) -> Result<(), Typ
         });
     }
 
-    if base.contains("->") && parse_function_type(annotation).is_none() {
+    if base.contains("->") && parse_function_type(base).is_none() {
         return Err(TypecheckError {
             declaration: Some(decl_name.to_string()),
             message: "invalid function type annotation".to_string(),
@@ -84,18 +85,12 @@ fn uses_legacy_void(annotation: &str) -> bool {
 }
 
 fn validate_effect_clause(decl_name: &str, annotation: &str) -> Result<(), TypecheckError> {
-    if annotation.trim_end().ends_with(" can") {
-        return Err(TypecheckError {
-            declaration: Some(decl_name.to_string()),
-            message: "effect list after `can` must not be empty".to_string(),
-        });
-    }
-
-    let Some((_, effects_raw)) = annotation.split_once(" can ") else {
+    let Some(effect_idx) = find_can_keyword_index(annotation) else {
         return Ok(());
     };
 
-    if effects_raw.trim().is_empty() {
+    let effects_raw = annotation[effect_idx + 3..].trim();
+    if effects_raw.is_empty() {
         return Err(TypecheckError {
             declaration: Some(decl_name.to_string()),
             message: "effect list after `can` must not be empty".to_string(),
@@ -115,10 +110,39 @@ fn validate_effect_clause(decl_name: &str, annotation: &str) -> Result<(), Typec
 }
 
 fn strip_effect_clause(annotation: &str) -> &str {
-    match annotation.find(" can ") {
+    match find_can_keyword_index(annotation) {
         Some(idx) => &annotation[..idx],
         None => annotation,
     }
+}
+
+fn find_can_keyword_index(annotation: &str) -> Option<usize> {
+    for (idx, _) in annotation.char_indices() {
+        let rest = &annotation[idx..];
+        if !rest.starts_with("can") {
+            continue;
+        }
+
+        let has_left_whitespace = annotation[..idx]
+            .chars()
+            .last()
+            .is_some_and(char::is_whitespace);
+        if !has_left_whitespace {
+            continue;
+        }
+
+        let has_right_whitespace = annotation[idx + 3..]
+            .chars()
+            .next()
+            .is_none_or(char::is_whitespace);
+        if !has_right_whitespace {
+            continue;
+        }
+
+        return Some(idx);
+    }
+
+    None
 }
 
 fn is_identifier(s: &str) -> bool {
@@ -184,6 +208,12 @@ mod tests {
     }
 
     #[test]
+    fn accepts_tab_separated_effect_clause() {
+        let module = parse_module("x : Int can\tLog\nx = 1\n").expect("should parse");
+        typecheck_module(&module).expect("tab-separated `can` clause should be accepted");
+    }
+
+    #[test]
     fn rejects_invalid_effect_name() {
         let module = parse_module("x : Int can Log, 1Bad\nx = 1\n").expect("should parse");
         let err = typecheck_module(&module).expect_err("invalid effect name should fail");
@@ -196,5 +226,13 @@ mod tests {
         let module =
             parse_module("pair : (String, Int)\npair = (\"a\", 1)\n").expect("should parse");
         typecheck_module(&module).expect("tuple type annotation should be accepted");
+    }
+
+    #[test]
+    fn rejects_malformed_function_type_annotation() {
+        let module = parse_module("f : Int -> -> Int\nf = 1\n").expect("should parse");
+        let err = typecheck_module(&module).expect_err("malformed function type should fail");
+        assert_eq!(err.declaration.as_deref(), Some("f"));
+        assert!(err.message.contains("invalid function type annotation"));
     }
 }
