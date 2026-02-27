@@ -85,10 +85,39 @@ fn split_top_level_function_arrows(annotation: &str) -> Option<Vec<String>> {
 }
 
 pub fn strip_effect(annotation: &str) -> &str {
-    match annotation.find(" can ") {
+    match find_can_keyword_index(annotation) {
         Some(idx) => annotation[..idx].trim_end(),
         None => annotation.trim(),
     }
+}
+
+fn find_can_keyword_index(annotation: &str) -> Option<usize> {
+    for (idx, _) in annotation.char_indices() {
+        let rest = &annotation[idx..];
+        if !rest.starts_with("can") {
+            continue;
+        }
+
+        let has_left_whitespace = annotation[..idx]
+            .chars()
+            .last()
+            .is_some_and(char::is_whitespace);
+        if !has_left_whitespace {
+            continue;
+        }
+
+        let has_right_whitespace = annotation[idx + 3..]
+            .chars()
+            .next()
+            .is_none_or(char::is_whitespace);
+        if !has_right_whitespace {
+            continue;
+        }
+
+        return Some(idx);
+    }
+
+    None
 }
 
 #[cfg(test)]
@@ -98,6 +127,13 @@ mod tests {
     #[test]
     fn parses_function_type_with_effect_annotation() {
         let ty = parse_function_type("Unit -> Unit can Print").expect("should parse");
+        assert_eq!(ty.arguments, vec!["Unit"]);
+        assert_eq!(ty.result, "Unit");
+    }
+
+    #[test]
+    fn parses_function_type_with_tab_separated_effect_annotation() {
+        let ty = parse_function_type("Unit -> Unit can\tPrint").expect("should parse");
         assert_eq!(ty.arguments, vec!["Unit"]);
         assert_eq!(ty.result, "Unit");
     }
