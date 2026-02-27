@@ -53,7 +53,7 @@ This file is a restart-safe snapshot for resuming work after context reset.
 
 - `README.md`: user-facing project overview.
 - `AGENTS.md`: contributor/agent workflow and coding instructions.
-- `MVP.md`: implementation plan and acceptance criteria.
+- `doc/MVP.md`: implementation plan and acceptance criteria.
 - `doc/PLAN.md`: evolving language plan (locked + open items).
 
 ## 5. Current Example Files
