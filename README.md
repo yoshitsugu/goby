@@ -3,6 +3,12 @@
 Goby is a new programming language project with a clear, practical goal:
 build a readable functional language with a modern developer experience.
 
+## Disclaimer
+
+- This is a hobby project.
+- This is a pre-alpha version, and currently nothing works yet.
+- Development is handled mostly by AI assistance.
+
 ## Language Concept
 
 - Functional-first language design.
