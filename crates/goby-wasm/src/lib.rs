@@ -8,13 +8,11 @@ const TEXT_OFFSET: u32 = 16;
 const ERR_MISSING_MAIN: &str = "Wasm codegen requires a `main` declaration";
 const ERR_UNSUPPORTED_PIPELINE: &str =
     "pipeline operator (`|>`) is not yet supported in Wasm codegen";
-const ERR_UNSUPPORTED_HIGHER_ORDER: &str =
-    "higher-order calls are not yet supported in Wasm codegen";
 const ERR_UNSUPPORTED_PRINT_INT: &str = "print Int is not yet supported in Wasm codegen";
 const ERR_UNSUPPORTED_PRINT_LIST: &str = "print List is not yet supported in Wasm codegen";
 const ERR_UNSUPPORTED_PRINT_UNKNOWN: &str =
     "print argument is unsupported for Wasm codegen (only String is supported)";
-const MAX_INT_EVAL_DEPTH: usize = 32;
+const MAX_EVAL_DEPTH: usize = 32;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CodegenError {
@@ -36,6 +34,12 @@ pub fn compile_module(module: &Module) -> Result<Vec<u8>, CodegenError> {
         return compile_print_module(&value.to_string());
     }
 
+    if resolve_print_list_int(module, &main.body).is_some() {
+        return Err(CodegenError {
+            message: ERR_UNSUPPORTED_PRINT_LIST.to_string(),
+        });
+    }
+
     if let Some(message) = find_unsupported_form(module, &main.body) {
         return Err(CodegenError {
             message: message.to_string(),
@@ -55,12 +59,6 @@ fn find_unsupported_form(module: &Module, main_body: &str) -> Option<&'static st
 
     if contains_pipeline(main_body) {
         return Some(ERR_UNSUPPORTED_PIPELINE);
-    }
-
-    for decl in &module.declarations {
-        if looks_like_higher_order_usage(&decl.body) {
-            return Some(ERR_UNSUPPORTED_HIGHER_ORDER);
-        }
     }
 
     None
@@ -206,59 +204,63 @@ fn parse_print_call(line: &str) -> Option<&str> {
 }
 
 fn resolve_print_int(module: &Module, body: &str) -> Option<i64> {
-    let functions = IntFunctionCatalog::from_module(module);
+    let functions = collect_functions_with_result(module, "Int");
     IntPrintResolver::resolve(body, &functions)
 }
 
-type IntFunctions<'a> = HashMap<&'a str, IntFunction<'a>>;
+fn resolve_print_list_int(module: &Module, body: &str) -> Option<Vec<i64>> {
+    let list_functions = collect_functions_with_result(module, "List Int");
+    ListIntPrintResolver::resolve(body, &list_functions)
+}
 
-struct IntFunctionCatalog;
+type EvaluatedFunctions<'a> = HashMap<&'a str, EvaluatedFunction<'a>>;
 
-impl IntFunctionCatalog {
-    fn from_module(module: &Module) -> IntFunctions<'_> {
-        let declaration_names: HashSet<&str> = module
-            .declarations
-            .iter()
-            .map(|decl| decl.name.as_str())
-            .collect();
+fn collect_functions_with_result<'a>(
+    module: &'a Module,
+    expected_result_type: &str,
+) -> EvaluatedFunctions<'a> {
+    let declaration_names: HashSet<&str> = module
+        .declarations
+        .iter()
+        .map(|decl| decl.name.as_str())
+        .collect();
 
-        let mut functions = HashMap::new();
-        for decl in &module.declarations {
-            if decl.name == "main" {
-                continue;
-            }
-
-            let Some(annotation) = decl.type_annotation.as_deref() else {
-                continue;
-            };
-            let Some(function_type) = parse_function_type(annotation) else {
-                continue;
-            };
-            if function_type.result != "Int" || function_type.arguments.len() > 1 {
-                continue;
-            }
-
-            let parameter = infer_single_parameter_name(&decl.body, &declaration_names);
-            functions.insert(
-                decl.name.as_str(),
-                IntFunction {
-                    body: &decl.body,
-                    parameter,
-                },
-            );
+    let mut functions = HashMap::new();
+    for decl in &module.declarations {
+        if decl.name == "main" {
+            continue;
         }
 
-        functions
+        let Some(annotation) = decl.type_annotation.as_deref() else {
+            continue;
+        };
+        let Some(function_type) = parse_function_type(annotation) else {
+            continue;
+        };
+        if function_type.result != expected_result_type || function_type.arguments.len() > 1 {
+            continue;
+        }
+
+        let parameter = infer_single_parameter_name(&decl.body, &declaration_names);
+        functions.insert(
+            decl.name.as_str(),
+            EvaluatedFunction {
+                body: &decl.body,
+                parameter,
+            },
+        );
     }
+
+    functions
 }
 
 struct IntEvaluator<'a> {
-    functions: &'a IntFunctions<'a>,
+    functions: &'a EvaluatedFunctions<'a>,
     depth: usize,
 }
 
 impl<'a> IntEvaluator<'a> {
-    fn root(functions: &'a IntFunctions<'a>) -> Self {
+    fn root(functions: &'a EvaluatedFunctions<'a>) -> Self {
         Self {
             functions,
             depth: 0,
@@ -266,7 +268,7 @@ impl<'a> IntEvaluator<'a> {
     }
 
     fn descend(&self) -> Option<Self> {
-        if self.depth >= MAX_INT_EVAL_DEPTH {
+        if self.depth >= MAX_EVAL_DEPTH {
             return None;
         }
 
@@ -330,18 +332,15 @@ impl<'a> IntEvaluator<'a> {
         op(left_value, right_value)
     }
 
-    fn eval_function(&self, function: &IntFunction<'a>, arg: Option<i64>) -> Option<i64> {
+    fn eval_function(&self, function: &EvaluatedFunction<'a>, arg: Option<i64>) -> Option<i64> {
         let mut locals = HashMap::new();
-        if let Some(parameter) = function.parameter
-            && let Some(value) = arg
-        {
-            locals.insert(parameter.to_string(), value);
-        }
+        seed_locals_from_parameter(&mut locals, function.parameter, arg);
 
         let mut result_expr = None;
         for line in code_lines(function.body) {
             if let Some((name, expr)) = split_binding(line) {
-                assign_local_int(name, expr, &mut locals, self);
+                let value = self.descend()?.eval_expr(expr, &locals);
+                assign_local(name, value, &mut locals);
                 continue;
             }
 
@@ -354,19 +353,6 @@ impl<'a> IntEvaluator<'a> {
 
         let expr = result_expr?;
         self.descend()?.eval_expr(expr, &locals)
-    }
-}
-
-fn assign_local_int(
-    name: &str,
-    expr: &str,
-    locals: &mut HashMap<String, i64>,
-    evaluator: &IntEvaluator<'_>,
-) {
-    if let Some(value) = evaluator.eval_expr(expr, locals) {
-        locals.insert(name.to_string(), value);
-    } else {
-        locals.remove(name);
     }
 }
 
@@ -397,8 +383,219 @@ struct IntPrintResolver {
     resolved_print: Option<i64>,
 }
 
+struct ListIntPrintResolver {
+    locals: HashMap<String, Vec<i64>>,
+    resolved_print: Option<Vec<i64>>,
+}
+
+impl ListIntPrintResolver {
+    fn resolve(body: &str, functions: &EvaluatedFunctions<'_>) -> Option<Vec<i64>> {
+        let mut resolver = Self {
+            locals: HashMap::new(),
+            resolved_print: None,
+        };
+        let evaluator = ListIntEvaluator::root(functions);
+
+        for statement in statements(body) {
+            resolver.ingest_statement(statement, &evaluator)?;
+        }
+
+        resolver.resolved_print
+    }
+
+    fn ingest_statement(
+        &mut self,
+        statement: Statement<'_>,
+        evaluator: &ListIntEvaluator<'_>,
+    ) -> Option<()> {
+        match statement {
+            Statement::Binding { name, expr } => {
+                self.bind_local(name, expr, evaluator);
+                Some(())
+            }
+            Statement::Print(expr) => self.capture_print(expr, evaluator),
+            Statement::Other => Some(()),
+        }
+    }
+
+    fn bind_local(&mut self, name: &str, expr: &str, evaluator: &ListIntEvaluator<'_>) {
+        let value = evaluator.eval_expr(expr, &self.locals);
+        assign_local(name, value, &mut self.locals);
+    }
+
+    fn capture_print(&mut self, expr: &str, evaluator: &ListIntEvaluator<'_>) -> Option<()> {
+        let value = evaluator.eval_expr(expr, &self.locals)?;
+        capture_single_print(&mut self.resolved_print, value)
+    }
+}
+
+struct ListIntEvaluator<'a> {
+    functions: &'a EvaluatedFunctions<'a>,
+    depth: usize,
+}
+
+impl<'a> ListIntEvaluator<'a> {
+    fn root(functions: &'a EvaluatedFunctions<'a>) -> Self {
+        Self {
+            functions,
+            depth: 0,
+        }
+    }
+
+    fn descend(&self) -> Option<Self> {
+        if self.depth >= MAX_EVAL_DEPTH {
+            return None;
+        }
+
+        Some(Self {
+            functions: self.functions,
+            depth: self.depth + 1,
+        })
+    }
+
+    fn eval_expr(&self, expr: &str, locals: &HashMap<String, Vec<i64>>) -> Option<Vec<i64>> {
+        let expr = expr.trim();
+        if expr.is_empty() {
+            return None;
+        }
+
+        if let Some(values) = parse_list_int_literal(expr) {
+            return Some(values);
+        }
+
+        if let Some(value) = locals.get(expr) {
+            return Some(value.clone());
+        }
+
+        if let Some((list_expr, lambda_expr)) = parse_map_call(expr) {
+            let list_values = self.descend()?.eval_expr(list_expr, locals)?;
+            let lambda = parse_map_lambda(lambda_expr)?;
+            return apply_map_lambda(&list_values, &lambda);
+        }
+
+        if let Some((callee, arg_expr)) = parse_call(expr) {
+            let function = self.functions.get(callee)?;
+            let arg_values = self.descend()?.eval_expr(arg_expr, locals)?;
+            return self.descend()?.eval_function(function, Some(arg_values));
+        }
+
+        let function = self.functions.get(expr)?;
+        self.descend()?.eval_function(function, None)
+    }
+
+    fn eval_function(
+        &self,
+        function: &EvaluatedFunction<'a>,
+        arg: Option<Vec<i64>>,
+    ) -> Option<Vec<i64>> {
+        let mut locals = HashMap::new();
+        seed_locals_from_parameter(&mut locals, function.parameter, arg);
+
+        let mut result_expr = None;
+        for line in code_lines(function.body) {
+            if let Some((name, expr)) = split_binding(line) {
+                let value = self.descend()?.eval_expr(expr, &locals);
+                assign_local(name, value, &mut locals);
+                continue;
+            }
+
+            if parse_print_call(line).is_some() {
+                return None;
+            }
+
+            result_expr = Some(line);
+        }
+
+        let expr = result_expr?;
+        self.descend()?.eval_expr(expr, &locals)
+    }
+}
+
+struct MapLambda<'a> {
+    parameter: &'a str,
+    body: &'a str,
+}
+
+fn parse_map_call(expr: &str) -> Option<(&str, &str)> {
+    let rest = expr.strip_prefix("map ")?;
+    let split_idx = rest.rfind(" (")?;
+    let list_expr = rest[..split_idx].trim();
+    let lambda_group = rest[split_idx + 1..].trim();
+    if list_expr.is_empty() || !lambda_group.starts_with('(') || !lambda_group.ends_with(')') {
+        return None;
+    }
+    let lambda_expr = lambda_group[1..lambda_group.len() - 1].trim();
+    if lambda_expr.is_empty() {
+        return None;
+    }
+    Some((list_expr, lambda_expr))
+}
+
+fn parse_map_lambda(expr: &str) -> Option<MapLambda<'_>> {
+    let expr = expr.trim();
+    if let Some((head, body)) = expr.split_once("->") {
+        let head = head.trim();
+        if !head.starts_with('|') || !head.ends_with('|') {
+            return None;
+        }
+        let parameter = head[1..head.len() - 1].trim();
+        if !is_identifier(parameter) {
+            return None;
+        }
+        let body = body.trim();
+        if body.is_empty() {
+            return None;
+        }
+        return Some(MapLambda { parameter, body });
+    }
+
+    if expr.contains('_') {
+        return Some(MapLambda {
+            parameter: "_",
+            body: expr,
+        });
+    }
+
+    None
+}
+
+fn apply_map_lambda(values: &[i64], lambda: &MapLambda<'_>) -> Option<Vec<i64>> {
+    let empty_functions = HashMap::new();
+    let evaluator = IntEvaluator::root(&empty_functions);
+    let mut out = Vec::with_capacity(values.len());
+    for value in values {
+        let mut locals = HashMap::new();
+        locals.insert(lambda.parameter.to_string(), *value);
+        let mapped = evaluator.eval_expr(lambda.body, &locals)?;
+        out.push(mapped);
+    }
+    Some(out)
+}
+
+fn parse_list_int_literal(expr: &str) -> Option<Vec<i64>> {
+    if !is_list_literal(expr) {
+        return None;
+    }
+
+    let inner = &expr[1..expr.len() - 1];
+    let inner = inner.trim();
+    if inner.is_empty() {
+        return Some(Vec::new());
+    }
+
+    let mut out = Vec::new();
+    for part in inner.split(',') {
+        let item = part.trim();
+        if !is_int_literal(item) {
+            return None;
+        }
+        out.push(item.parse().ok()?);
+    }
+    Some(out)
+}
+
 impl IntPrintResolver {
-    fn resolve(body: &str, functions: &IntFunctions<'_>) -> Option<i64> {
+    fn resolve(body: &str, functions: &EvaluatedFunctions<'_>) -> Option<i64> {
         let mut resolver = Self {
             locals: HashMap::new(),
             resolved_print: None,
@@ -428,23 +625,48 @@ impl IntPrintResolver {
     }
 
     fn bind_local(&mut self, name: &str, expr: &str, evaluator: &IntEvaluator<'_>) {
-        assign_local_int(name, expr, &mut self.locals, evaluator);
+        let value = evaluator.eval_expr(expr, &self.locals);
+        assign_local(name, value, &mut self.locals);
     }
 
     fn capture_print(&mut self, expr: &str, evaluator: &IntEvaluator<'_>) -> Option<()> {
         let value = evaluator.eval_expr(expr, &self.locals)?;
-        if self.resolved_print.is_some() {
-            return None;
-        }
-        self.resolved_print = Some(value);
-        Some(())
+        capture_single_print(&mut self.resolved_print, value)
     }
 }
 
 #[derive(Clone, Copy)]
-struct IntFunction<'a> {
+struct EvaluatedFunction<'a> {
     body: &'a str,
     parameter: Option<&'a str>,
+}
+
+fn assign_local<T>(name: &str, value: Option<T>, locals: &mut HashMap<String, T>) {
+    if let Some(value) = value {
+        locals.insert(name.to_string(), value);
+    } else {
+        locals.remove(name);
+    }
+}
+
+fn seed_locals_from_parameter<T>(
+    locals: &mut HashMap<String, T>,
+    parameter: Option<&str>,
+    arg: Option<T>,
+) {
+    if let Some(parameter) = parameter
+        && let Some(value) = arg
+    {
+        locals.insert(parameter.to_string(), value);
+    }
+}
+
+fn capture_single_print<T>(resolved_print: &mut Option<T>, value: T) -> Option<()> {
+    if resolved_print.is_some() {
+        return None;
+    }
+    *resolved_print = Some(value);
+    Some(())
 }
 
 fn infer_single_parameter_name<'a>(
@@ -528,13 +750,11 @@ fn parse_call(expr: &str) -> Option<(&str, &str)> {
         }
     }
 
-    let mut parts = expr.split_whitespace();
-    let callee = parts.next()?;
-    let arg = parts.next()?;
-    if parts.next().is_some() {
-        return None;
-    }
-    if is_identifier(callee) {
+    let mut chars = expr.char_indices();
+    let end = chars.find_map(|(idx, ch)| ch.is_whitespace().then_some(idx))?;
+    let callee = expr[..end].trim();
+    let arg = expr[end..].trim();
+    if is_identifier(callee) && !arg.is_empty() {
         Some((callee, arg))
     } else {
         None
@@ -578,11 +798,6 @@ fn code_lines(body: &str) -> impl Iterator<Item = &str> {
 
 fn contains_pipeline(body: &str) -> bool {
     code_lines(body).any(|line| line.contains("|>"))
-}
-
-fn looks_like_higher_order_usage(body: &str) -> bool {
-    code_lines(body)
-        .any(|line| line.contains("| ->") || line.contains("|n| ->") || line.contains("(_"))
 }
 
 fn minimal_main_module() -> Vec<u8> {
@@ -751,19 +966,50 @@ main =
     }
 
     #[test]
-    fn reports_higher_order_usage_as_unsupported() {
+    fn reports_print_list_for_map_with_named_lambda() {
         let source = r#"
-f : List Int -> List Int
-f ns = map ns (|n| -> n * 10)
-
 main : void -> void
-main = 0
+main =
+  print map [3, 4, 5] (|n| -> n * 10)
 "#;
         let module = parse_module(source).expect("parse should work");
         let err = compile_module(&module).expect_err("codegen should fail");
         assert_eq!(
             err.message,
-            "higher-order calls are not yet supported in Wasm codegen"
+            "print List is not yet supported in Wasm codegen"
+        );
+    }
+
+    #[test]
+    fn reports_print_list_for_map_with_placeholder_lambda() {
+        let source = r#"
+main : void -> void
+main =
+  print map [6, 7] (_ * 10)
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let err = compile_module(&module).expect_err("codegen should fail");
+        assert_eq!(
+            err.message,
+            "print List is not yet supported in Wasm codegen"
+        );
+    }
+
+    #[test]
+    fn reports_print_list_for_list_function_call_with_spaces() {
+        let source = r#"
+mul_tens : List Int -> List Int
+mul_tens ns = map ns (|n| -> n * 10)
+
+main : void -> void
+main =
+  print mul_tens [3, 4, 5]
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let err = compile_module(&module).expect_err("codegen should fail");
+        assert_eq!(
+            err.message,
+            "print List is not yet supported in Wasm codegen"
         );
     }
 }
