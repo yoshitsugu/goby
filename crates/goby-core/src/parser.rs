@@ -40,6 +40,7 @@ pub fn parse_module(source: &str) -> Result<Module, ParseError> {
             annotated_name = Some(name);
             type_annotation = Some(ty.to_string());
             i += 1;
+            i = skip_blank_and_comment_lines(&lines, i);
             if i >= lines.len() {
                 return Err(ParseError {
                     line: i,
@@ -94,6 +95,18 @@ pub fn parse_module(source: &str) -> Result<Module, ParseError> {
     }
 
     Ok(Module { declarations })
+}
+
+fn skip_blank_and_comment_lines(lines: &[&str], mut index: usize) -> usize {
+    while index < lines.len() {
+        let trimmed = lines[index].trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            index += 1;
+        } else {
+            break;
+        }
+    }
+    index
 }
 
 fn split_top_level_type(line: &str) -> Option<(&str, &str)> {
@@ -158,5 +171,13 @@ mod tests {
         let source = "foo : Int\nbar = 1\n";
         let err = parse_module(source).expect_err("mismatched names should be rejected");
         assert!(err.message.contains("does not match"));
+    }
+
+    #[test]
+    fn allows_comment_between_annotation_and_definition() {
+        let source = "main : void -> void can Print\n# comment\n\nmain = print \"ok\"\n";
+        let module = parse_module(source).expect("annotation and definition should match");
+        assert_eq!(module.declarations.len(), 1);
+        assert_eq!(module.declarations[0].name, "main");
     }
 }

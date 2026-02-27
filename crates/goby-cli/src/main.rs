@@ -4,27 +4,33 @@ fn main() {
     let mut args = env::args();
     let _program = args.next();
 
-    let first = match args.next() {
+    let command = match args.next() {
         Some(arg) => arg,
         None => {
-            eprintln!("usage: goby-cli run <file.gb>");
+            eprintln!("usage: goby-cli <run|check> <file.gb>");
             std::process::exit(2);
         }
     };
 
-    if first != "run" {
-        eprintln!("unknown command: {}", first);
-        eprintln!("usage: goby-cli run <file.gb>");
+    if command != "run" && command != "check" {
+        eprintln!("unknown command: {}", command);
+        eprintln!("usage: goby-cli <run|check> <file.gb>");
         std::process::exit(2);
     }
 
     let file = match args.next() {
         Some(path) => path,
         None => {
-            eprintln!("usage: goby-cli run <file.gb>");
+            eprintln!("usage: goby-cli <run|check> <file.gb>");
             std::process::exit(2);
         }
     };
+
+    if let Some(extra) = args.next() {
+        eprintln!("unexpected argument: {}", extra);
+        eprintln!("usage: goby-cli <run|check> <file.gb>");
+        std::process::exit(2);
+    }
 
     let source = match std::fs::read_to_string(&file) {
         Ok(s) => s,
@@ -37,6 +43,11 @@ fn main() {
     match goby_core::parse_module(&source) {
         Ok(module) => match goby_core::typecheck_module(&module) {
             Ok(()) => {
+                if command == "run" && !module.declarations.iter().any(|d| d.name == "main") {
+                    eprintln!("run error: missing `main` declaration");
+                    std::process::exit(1);
+                }
+
                 println!(
                     "parsed and typechecked {} declarations from {}",
                     module.declarations.len(),

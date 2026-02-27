@@ -18,6 +18,9 @@ This file is a restart-safe snapshot for resuming work after context reset.
 - Effect system is parse-only in MVP.
 - Entry function is `main` only.
 - `main` type is `void -> void`.
+- CLI commands:
+  - `run`: parse + typecheck + requires `main`
+  - `check`: parse + typecheck (no runtime entry requirement)
 - Statement separator is newline or `;`.
 - Indentation-based blocks:
   - tabs and spaces are both accepted.
@@ -83,7 +86,7 @@ This file is a restart-safe snapshot for resuming work after context reset.
 - Verified with:
   - `cargo test`
   - `cargo run -p goby-cli -- run examples/hello.gb`
-  - `cargo run -p goby-cli -- run examples/basic_types.gb`
+  - `cargo run -p goby-cli -- check examples/basic_types.gb`
 
 ## 9. Progress Since Minimal Parser
 
@@ -95,3 +98,12 @@ This file is a restart-safe snapshot for resuming work after context reset.
 - Added/updated tests:
   - function type parsing with effect annotation
   - example-level typecheck for `hello.gb` and `basic_types.gb`
+
+## 10. Progress Since Minimal Typecheck
+
+- Updated `goby-cli` command contract:
+  - `run <file.gb>` now requires `main`
+  - `check <file.gb>` added for parse/typecheck-only workflows
+- This aligns CLI behavior with MVP intent:
+  - `hello.gb` is a run target
+  - `basic_types.gb` is a check target
