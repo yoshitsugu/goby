@@ -1,5 +1,6 @@
 use std::env;
 use std::path::Path;
+use std::process::Command as ProcessCommand;
 
 const USAGE: &str = "usage: goby-cli <run|check> <file.gb>";
 
@@ -60,6 +61,7 @@ fn run() -> Result<(), CliError> {
 
             print_parse_summary(module.declarations.len(), &cli.file);
             println!("generated wasm: {}", output);
+            maybe_execute_wasm(&output)?;
         }
         Command::Check => {
             print_parse_summary(module.declarations.len(), &cli.file);
@@ -112,6 +114,33 @@ fn print_parse_summary(declaration_count: usize, file: &str) {
     );
 }
 
+fn maybe_execute_wasm(wasm_path: &str) -> Result<(), CliError> {
+    let version_check = ProcessCommand::new("wasmtime").arg("--version").output();
+    if version_check.is_err() {
+        println!("wasmtime not found; skipped wasm execution");
+        return Ok(());
+    }
+
+    let output = ProcessCommand::new("wasmtime")
+        .arg("run")
+        .arg("--invoke")
+        .arg("main")
+        .arg(wasm_path)
+        .output()
+        .map_err(|err| CliError::Runtime(format!("failed to run wasmtime: {}", err)))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(CliError::Runtime(format!(
+            "wasmtime execution failed: {}",
+            stderr.trim()
+        )));
+    }
+
+    println!("executed wasm via wasmtime");
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -146,5 +175,10 @@ mod tests {
             CliError::Usage(message) => assert!(message.contains("unexpected argument")),
             CliError::Runtime(_) => panic!("expected usage error"),
         }
+    }
+
+    #[test]
+    fn computes_wasm_output_path() {
+        assert_eq!(output_wasm_path("examples/hello.gb"), "examples/hello.wasm");
     }
 }

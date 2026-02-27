@@ -134,3 +134,10 @@ This file is a restart-safe snapshot for resuming work after context reset.
 - Improved `goby-wasm` maintainability:
   - changed minimal wasm bytes to a named constant slice
   - simplified module byte materialization with `to_vec()`
+
+## 14. Progress Since CLI Refactor Step 2
+
+- Added minimal execution phase to `goby-cli run`:
+  - after wasm emission, attempts `wasmtime run --invoke main <file.wasm>`
+  - if `wasmtime` is unavailable, prints a skip message and exits successfully
+- Added CLI unit test for wasm output path computation
