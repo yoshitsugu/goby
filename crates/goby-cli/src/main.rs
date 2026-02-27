@@ -1,4 +1,5 @@
 use std::env;
+use std::io::ErrorKind;
 use std::path::Path;
 use std::process::Command as ProcessCommand;
 
@@ -20,6 +21,12 @@ struct CliArgs {
 enum CliError {
     Usage(String),
     Runtime(String),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ExecutionOutcome {
+    Executed,
+    SkippedNoWasmtime,
 }
 
 fn main() {
@@ -61,7 +68,12 @@ fn run() -> Result<(), CliError> {
 
             print_parse_summary(module.declarations.len(), &cli.file);
             println!("generated wasm: {}", output);
-            maybe_execute_wasm(&output)?;
+            match execute_wasm(&output)? {
+                ExecutionOutcome::Executed => println!("executed wasm via wasmtime"),
+                ExecutionOutcome::SkippedNoWasmtime => {
+                    println!("wasmtime not found; skipped wasm execution")
+                }
+            }
         }
         Command::Check => {
             print_parse_summary(module.declarations.len(), &cli.file);
@@ -114,31 +126,38 @@ fn print_parse_summary(declaration_count: usize, file: &str) {
     );
 }
 
-fn maybe_execute_wasm(wasm_path: &str) -> Result<(), CliError> {
-    let version_check = ProcessCommand::new("wasmtime").arg("--version").output();
-    if version_check.is_err() {
-        println!("wasmtime not found; skipped wasm execution");
-        return Ok(());
-    }
-
-    let output = ProcessCommand::new("wasmtime")
+fn execute_wasm(wasm_path: &str) -> Result<ExecutionOutcome, CliError> {
+    let status = match ProcessCommand::new("wasmtime")
         .arg("run")
         .arg("--invoke")
         .arg("main")
         .arg(wasm_path)
-        .output()
-        .map_err(|err| CliError::Runtime(format!("failed to run wasmtime: {}", err)))?;
+        .status()
+    {
+        Ok(status) => status,
+        Err(err) if err.kind() == ErrorKind::NotFound => {
+            return Ok(ExecutionOutcome::SkippedNoWasmtime);
+        }
+        Err(err) => {
+            return Err(CliError::Runtime(format!(
+                "failed to run wasmtime: {}",
+                err
+            )));
+        }
+    };
 
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
+    if !status.success() {
+        let exit_desc = match status.code() {
+            Some(code) => format!("exit code {}", code),
+            None => "terminated by signal".to_string(),
+        };
         return Err(CliError::Runtime(format!(
-            "wasmtime execution failed: {}",
-            stderr.trim()
+            "wasmtime execution failed ({})",
+            exit_desc
         )));
     }
 
-    println!("executed wasm via wasmtime");
-    Ok(())
+    Ok(ExecutionOutcome::Executed)
 }
 
 #[cfg(test)]
@@ -173,6 +192,25 @@ mod tests {
             .expect_err("extra argument should fail");
         match err {
             CliError::Usage(message) => assert!(message.contains("unexpected argument")),
+            CliError::Runtime(_) => panic!("expected usage error"),
+        }
+    }
+
+    #[test]
+    fn rejects_missing_command() {
+        let err = parse_args_from(to_args(&["goby-cli"])).expect_err("missing command should fail");
+        match err {
+            CliError::Usage(message) => assert!(message.contains("missing command")),
+            CliError::Runtime(_) => panic!("expected usage error"),
+        }
+    }
+
+    #[test]
+    fn rejects_missing_file() {
+        let err = parse_args_from(to_args(&["goby-cli", "run"]))
+            .expect_err("missing input file should fail");
+        match err {
+            CliError::Usage(message) => assert!(message.contains("missing input file")),
             CliError::Runtime(_) => panic!("expected usage error"),
         }
     }

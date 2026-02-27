@@ -141,3 +141,21 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - after wasm emission, attempts `wasmtime run --invoke main <file.wasm>`
   - if `wasmtime` is unavailable, prints a skip message and exits successfully
 - Added CLI unit test for wasm output path computation
+
+## 15. Progress Since CLI Refactor Step 3
+
+- Refined `wasmtime` execution behavior in `goby-cli run`:
+  - switched from `output()` to `status()` so runtime stdout/stderr is not swallowed
+  - improved failure diagnostics with explicit exit status reporting
+  - factored availability check into `is_wasmtime_available`
+- Expanded CLI arg parser tests:
+  - missing command
+  - missing file
+
+## 16. Progress Since CLI Refactor Step 4
+
+- Simplified wasm execution control flow in `goby-cli`:
+  - replaced string-sentinel error branching with explicit `ExecutionOutcome`
+  - `execute_wasm` now returns:
+    - `Executed`
+    - `SkippedNoWasmtime` (when `wasmtime` is not installed)
