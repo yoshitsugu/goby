@@ -35,7 +35,8 @@ Based on `examples/*.gb`:
   - for MVP, any line with at least one leading space or tab is treated as an indented block line.
   - mixing tabs and spaces in the same block is allowed in MVP (no normalization/error rule yet).
 - CLI commands:
-  - `goby-cli run <file.gb>` uses `main` entrypoint only.
+  - `goby-cli run <file.gb>` uses `main` entrypoint only and executes generated Wasm via external `wasmtime`.
+    - if `wasmtime` is not installed, execution is skipped with an informational message.
   - `goby-cli check <file.gb>` performs parse/typecheck without runtime entrypoint.
 - `main` type is restricted to `void -> void` for MVP.
 - First backend target is Wasm.

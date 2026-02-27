@@ -21,6 +21,10 @@ This file is a restart-safe snapshot for resuming work after context reset.
 - CLI commands:
   - `run`: parse + typecheck + requires `main`
   - `check`: parse + typecheck (no runtime entry requirement)
+- `run` Wasm execution pipeline:
+  - emit `<input>.wasm`
+  - execute via external `wasmtime run --invoke main <output.wasm>`
+  - if `wasmtime` is missing, skip execution with an informational message
 - Statement separator is newline or `;`.
 - Indentation-based blocks:
   - tabs and spaces are both accepted.
@@ -33,8 +37,6 @@ This file is a restart-safe snapshot for resuming work after context reset.
 
 ## 3. Known Open Decisions
 
-- Wasm runtime path:
-  - define how generated Wasm is executed in MVP (`wasmtime` vs embedded runtime strategy).
 - Assignment/binding semantics:
   - exact rule for block-local `a = ...` still needs a formal spec entry.
 - Operator precedence/associativity table:
@@ -55,9 +57,9 @@ This file is a restart-safe snapshot for resuming work after context reset.
 
 ## 6. Immediate Next Steps (Execution Order)
 
-1. Lock Wasm execution approach in `MVP.md`.
-2. Replace current wasm-file emission in `run` with actual execution pipeline.
-3. Add expression-level lowering from Goby AST/body into Wasm function bodies.
+1. Add expression-level lowering from Goby AST/body into Wasm function bodies.
+2. Expand lowering coverage beyond single `print` flow (sequential statements / more expressions).
+3. Tighten runtime diagnostics around Wasm execution failures and preconditions.
 
 ## 7. Resume Commands
 
@@ -235,3 +237,10 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - any leading space/tab marks an indented line
   - mixed tabs/spaces in one block are accepted in MVP
 - Added parser regression test to ensure mixed-indentation block lines parse as one declaration body.
+
+## 27. Progress Since Shared Analysis Refactor Step 7
+
+- Locked MVP Wasm execution path in docs to match current CLI behavior:
+  - `run` emits `<input>.wasm`
+  - attempts execution via external `wasmtime`
+  - gracefully skips execution when `wasmtime` is unavailable
