@@ -59,7 +59,7 @@ This file is a restart-safe snapshot for resuming work after context reset.
 ## 6. Immediate Next Steps (Execution Order)
 
 1. Extend expression-level Wasm lowering so `examples/function.gb` can run via `goby-cli run`.
-2. Add clear codegen diagnostics for currently unsupported forms (`Int`/`List` print, pipeline `|>`, and higher-order calls).
+2. Add clear codegen diagnostics for currently unsupported forms (`List` print, pipeline `|>`, and higher-order calls).
 3. Re-introduce stricter typecheck rules after AST-based expression/type representation is in place.
 
 ## 7. Resume Commands
@@ -265,7 +265,15 @@ This file is a restart-safe snapshot for resuming work after context reset.
 ## 30. Progress Since Shared Analysis Refactor Step 10
 
 - Added explicit Wasm codegen diagnostics for unsupported forms:
-  - `print Int` and `print List` are now reported as unsupported
+  - `print List` is reported as unsupported
   - pipeline operator `|>` is now reported as unsupported
   - higher-order/anonymous-function usage is now reported as unsupported
 - Added focused `goby-wasm` unit tests for each diagnostic path.
+
+## 31. Progress Since Shared Analysis Refactor Step 11
+
+- Extended Wasm print lowering with a first `Int` path:
+  - supports `print` of simple integer expressions in `main` (literal/identifier and `+`/`*` combinations)
+  - reuses existing WASI `fd_write` module emission by converting resolved int values to text
+- Updated `goby-wasm` tests:
+  - replaced the `print Int` unsupported diagnostic case with a positive codegen case for local int bindings.

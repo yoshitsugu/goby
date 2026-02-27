@@ -52,7 +52,7 @@ Based on `examples/*.gb`:
   - `goby-cli run examples/function.gb` is out of scope until function-level lowering advances.
 - Current status:
   - `check` for `examples/function.gb` is passing.
-  - `run` still fails because Wasm codegen remains limited to the current print-lowering subset.
+  - `run` still fails because Wasm codegen does not yet support pipeline/higher-order forms and list-oriented print paths used by `function.gb`.
 
 ### 2.1 Syntax and Parsing
 
@@ -102,5 +102,5 @@ Based on `examples/*.gb`:
 
 - Freeze a short "MVP spec subset" from current examples.
 - Advance expression/function lowering for `run` coverage beyond the current print-only path.
-- Add codegen diagnostics for unsupported forms in `function.gb` (`Int`/`List` print, pipeline, and higher-order calls).
+- Add codegen diagnostics for unsupported forms in `function.gb` (`List` print, pipeline, and higher-order calls).
 - Track all new syntax requests as explicit change proposals.

@@ -31,6 +31,10 @@ pub fn compile_module(module: &Module) -> Result<Vec<u8>, CodegenError> {
         return compile_print_module(&text);
     }
 
+    if let Some(value) = resolve_print_int(&main.body) {
+        return compile_print_module(&value.to_string());
+    }
+
     if let Some(message) = find_unsupported_form(module, &main.body) {
         return Err(CodegenError {
             message: message.to_string(),
@@ -75,16 +79,15 @@ impl<'a> UnsupportedFormAnalyzer<'a> {
     }
 
     fn find_unsupported_print(&mut self, main_body: &str) -> Option<&'static str> {
-        for line in code_lines(main_body) {
-            if let Some((name, expr)) = split_binding(line) {
-                self.bind(name, expr);
-                continue;
-            }
-
-            if let Some(expr) = parse_print_call(line)
-                && let Some(message) = unsupported_print_message(self.infer_expr_type(expr))
-            {
-                return Some(message);
+        for statement in statements(main_body) {
+            match statement {
+                Statement::Binding { name, expr } => self.bind(name, expr),
+                Statement::Print(expr) => {
+                    if let Some(message) = unsupported_print_message(self.infer_expr_type(expr)) {
+                        return Some(message);
+                    }
+                }
+                Statement::Other => {}
             }
         }
 
@@ -199,6 +202,101 @@ fn parse_print_call(line: &str) -> Option<&str> {
         return None;
     }
     Some(rest.trim())
+}
+
+fn resolve_print_int(body: &str) -> Option<i64> {
+    IntPrintResolver::resolve(body)
+}
+
+fn eval_int_expr(expr: &str, locals: &HashMap<String, i64>) -> Option<i64> {
+    let expr = expr.trim();
+    if expr.is_empty() {
+        return None;
+    }
+
+    if let Some((left, right)) = expr.split_once(" + ") {
+        return eval_int_expr(left, locals)?.checked_add(eval_int_expr(right, locals)?);
+    }
+
+    if let Some((left, right)) = expr.split_once(" * ") {
+        return eval_int_expr(left, locals)?.checked_mul(eval_int_expr(right, locals)?);
+    }
+
+    if is_int_literal(expr) {
+        return expr.parse().ok();
+    }
+
+    locals.get(expr).copied()
+}
+
+enum Statement<'a> {
+    Binding { name: &'a str, expr: &'a str },
+    Print(&'a str),
+    Other,
+}
+
+fn parse_statement(line: &str) -> Statement<'_> {
+    if let Some((name, expr)) = split_binding(line) {
+        return Statement::Binding { name, expr };
+    }
+
+    if let Some(expr) = parse_print_call(line) {
+        return Statement::Print(expr);
+    }
+
+    Statement::Other
+}
+
+fn statements(body: &str) -> impl Iterator<Item = Statement<'_>> {
+    code_lines(body).map(parse_statement)
+}
+
+struct IntPrintResolver {
+    locals: HashMap<String, i64>,
+    resolved_print: Option<i64>,
+}
+
+impl IntPrintResolver {
+    fn resolve(body: &str) -> Option<i64> {
+        let mut resolver = Self {
+            locals: HashMap::new(),
+            resolved_print: None,
+        };
+
+        for statement in statements(body) {
+            resolver.ingest_statement(statement)?;
+        }
+
+        resolver.resolved_print
+    }
+
+    fn ingest_statement(&mut self, statement: Statement<'_>) -> Option<()> {
+        match statement {
+            Statement::Binding { name, expr } => {
+                self.bind_local(name, expr);
+                Some(())
+            }
+            Statement::Print(expr) => self.capture_print(expr),
+            Statement::Other => Some(()),
+        }
+    }
+
+    fn bind_local(&mut self, name: &str, expr: &str) {
+        if let Some(value) = eval_int_expr(expr, &self.locals) {
+            self.locals.insert(name.to_string(), value);
+        } else {
+            self.locals.remove(name);
+        }
+    }
+
+    fn capture_print(&mut self, expr: &str) -> Option<()> {
+        let value = eval_int_expr(expr, &self.locals)?;
+        if self.resolved_print.is_some() {
+            return None;
+        }
+        self.resolved_print = Some(value);
+        Some(())
+    }
 }
 
 fn is_identifier(s: &str) -> bool {
@@ -316,11 +414,15 @@ mod tests {
 
     use super::*;
 
+    fn assert_valid_wasm_module(wasm: &[u8]) {
+        assert_eq!(&wasm[..4], &[0x00, 0x61, 0x73, 0x6d]);
+    }
+
     #[test]
     fn emits_valid_wasm_header_for_main_module() {
         let module = parse_module("main : void -> void\nmain = 0\n").expect("parse should work");
         let wasm = compile_module(&module).expect("codegen should succeed");
-        assert_eq!(&wasm[..4], &[0x00, 0x61, 0x73, 0x6d]);
+        assert_valid_wasm_module(&wasm);
     }
 
     #[test]
@@ -328,7 +430,7 @@ mod tests {
         let module = parse_module("main : void -> void\nmain = print \"Hello Goby!\"\n")
             .expect("parse should work");
         let wasm = compile_module(&module).expect("codegen should succeed");
-        assert_eq!(&wasm[..4], &[0x00, 0x61, 0x73, 0x6d]);
+        assert_valid_wasm_module(&wasm);
     }
 
     #[test]
@@ -337,7 +439,7 @@ mod tests {
         let source = format!("main : void -> void\nmain = print \"{}\"\n", long_text);
         let module = parse_module(&source).expect("parse should work");
         let wasm = compile_module(&module).expect("codegen should succeed");
-        assert_eq!(&wasm[..4], &[0x00, 0x61, 0x73, 0x6d]);
+        assert_valid_wasm_module(&wasm);
     }
 
     #[test]
@@ -350,7 +452,7 @@ main =
 "#;
         let module = parse_module(source).expect("parse should work");
         let wasm = compile_module(&module).expect("codegen should succeed");
-        assert_eq!(&wasm[..4], &[0x00, 0x61, 0x73, 0x6d]);
+        assert_valid_wasm_module(&wasm);
     }
 
     #[test]
@@ -360,7 +462,7 @@ main =
     }
 
     #[test]
-    fn reports_print_int_as_unsupported() {
+    fn emits_valid_wasm_for_print_int_binding() {
         let source = r#"
 main : void -> void
 main =
@@ -368,11 +470,8 @@ main =
   print n
 "#;
         let module = parse_module(source).expect("parse should work");
-        let err = compile_module(&module).expect_err("codegen should fail");
-        assert_eq!(
-            err.message,
-            "print Int is not yet supported in Wasm codegen"
-        );
+        let wasm = compile_module(&module).expect("codegen should succeed");
+        assert_valid_wasm_module(&wasm);
     }
 
     #[test]
