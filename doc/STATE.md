@@ -80,9 +80,9 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - Remove single-line/special-case execution paths and unify block evaluation flow.
 - [ ] Step 3: Implement pipeline operator (`|>`) in evaluator/codegen subset
   - Support `x |> f` as `f x` for the locked MVP subset.
-- [ ] Step 4: Implement lambda forms used in `function.gb`
+- [x] Step 4: Implement lambda forms used in `function.gb`
   - Support both `|n| -> n * 10` and `_ * 10` in `map` call positions.
-- [ ] Step 5: Implement runtime `map` for `List Int` subset
+- [x] Step 5: Implement runtime `map` for `List Int` subset
   - Support `List Int -> (Int -> Int) -> List Int` evaluation for current examples.
 - [ ] Step 6: Implement `print` formatting for `List Int`
   - Emit bracketed comma-separated output (`[30, 40, 50]` style).
@@ -326,3 +326,15 @@ This file is a restart-safe snapshot for resuming work after context reset.
 - Recorded concrete parity gap as of 2026-02-27:
   - `cargo run -p goby-cli -- run examples/function.gb` currently prints only `90`.
   - remaining required behaviors are `map`, anonymous function forms, pipeline, and `List Int` print output.
+
+## 34. Progress Since Function Runtime Parity Step 5
+
+- Added `List Int` runtime evaluation subset in `goby-wasm` analysis path:
+  - supports `map <list-expr> (|n| -> <int-expr>)`
+  - supports placeholder lambda shorthand in map position (`_ * 10` form)
+  - supports list-function call parsing with spaced list literals (for forms like `mul_tens [3, 4, 5]`)
+- Removed the old blanket higher-order rejection guard so supported `map` + lambda subset can be analyzed.
+- Added regression tests that lock these forms through codegen diagnostics:
+  - named-lambda map print path reports `print List` unsupported (Step 6 still pending)
+  - placeholder-lambda map print path reports `print List` unsupported
+  - list-function call with spaced literal argument reports `print List` unsupported
