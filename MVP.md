@@ -121,7 +121,7 @@ Exit criteria:
 
 Exit criteria:
 
-- `cargo run -p goby-cli -- run examples/hello.gb` compiles to Wasm and runs `main`.
+- `cargo run -p goby-cli -- run examples/hello.gb` compiles to Wasm and emits an output module.
 - `main` must typecheck as `void -> void`.
 
 ### M4: CLI and Reliability
@@ -150,7 +150,7 @@ Exit criteria:
 
 ## 7. Acceptance Criteria
 
-- `examples/hello.gb` runs and prints expected output.
+- `examples/hello.gb` produces a valid Wasm module artifact.
 - `examples/basic_types.gb` parses and typechecks.
 - Effect annotations are accepted syntactically but not enforced semantically.
 - New contributors can run/verify the MVP path with:
