@@ -1,0 +1,43 @@
+import goby/env
+
+# You can define an effect (capability) with `effect`.
+effect Log
+  log: String -> Unit
+
+# You can declare required effects with `can` in the type.
+plus_ten_with_log : Int -> Int can Log
+plus_ten_with_log i =
+  result = i + 10
+  Log.log result
+  # If it is unambiguous, you can write just `log`.
+  # This can be written as `log result`.
+  result
+
+# You can define an effect handler with `handler`.
+# You need to specify which effect the handler is for.
+handler LogHandler for Log
+  log str =
+    print str
+
+# You can combine multiple effects (algebraic effects).
+effect Env
+  from_env: String -> String
+
+handler EnvHandler for Env
+  from_env str = env.fetch_env_var(str)
+
+show_env_var : String -> Unit can Log, Env
+show_env_var name =
+  env_var = env.from_env name
+  log env_var
+
+main =
+  # You can apply a handler with `using`.
+  # If any effects remain in `main`, the compiler reports `UnHandledEffectError`.
+  # The `Print` effect is handled by default as stdout output, so no custom handler is needed.
+  using LogHandler
+    plus_ten_with_log 3
+
+  # You can list multiple handlers.
+  using LogHandler, EnvHandler
+    show_env_var "GOBY_PATH"
