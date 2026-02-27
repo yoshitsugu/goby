@@ -20,7 +20,7 @@ pub fn parse_module(source: &str) -> Result<Module, ParseError> {
             continue;
         }
 
-        if line.starts_with(' ') || line.starts_with('\t') {
+        if is_indented(line) {
             return Err(ParseError {
                 line: i + 1,
                 message: "unexpected indentation at top level".to_string(),
@@ -67,23 +67,7 @@ pub fn parse_module(source: &str) -> Result<Module, ParseError> {
             });
         }
 
-        let mut j = i + 1;
-        while j < lines.len() {
-            let next = lines[j];
-            let next_trimmed = next.trim();
-            if next_trimmed.is_empty() {
-                body.push('\n');
-                j += 1;
-                continue;
-            }
-            if next.starts_with(' ') || next.starts_with('\t') {
-                body.push('\n');
-                body.push_str(next.trim_end());
-                j += 1;
-                continue;
-            }
-            break;
-        }
+        let j = collect_indented_body(lines.as_slice(), i + 1, &mut body);
 
         declarations.push(Declaration {
             name: name.to_string(),
@@ -95,6 +79,30 @@ pub fn parse_module(source: &str) -> Result<Module, ParseError> {
     }
 
     Ok(Module { declarations })
+}
+
+fn is_indented(line: &str) -> bool {
+    line.starts_with(' ') || line.starts_with('\t')
+}
+
+fn collect_indented_body(lines: &[&str], mut index: usize, body: &mut String) -> usize {
+    while index < lines.len() {
+        let next = lines[index];
+        let next_trimmed = next.trim();
+        if next_trimmed.is_empty() {
+            body.push('\n');
+            index += 1;
+            continue;
+        }
+        if is_indented(next) {
+            body.push('\n');
+            body.push_str(next.trim_end());
+            index += 1;
+            continue;
+        }
+        break;
+    }
+    index
 }
 
 fn skip_blank_and_comment_lines(lines: &[&str], mut index: usize) -> usize {
@@ -139,6 +147,12 @@ mod tests {
         std::fs::read_to_string(path).expect("example file should exist")
     }
 
+    fn parse_single_declaration(source: &str) -> Declaration {
+        let module = parse_module(source).expect("source should parse");
+        assert_eq!(module.declarations.len(), 1);
+        module.declarations[0].clone()
+    }
+
     #[test]
     fn parses_hello_example() {
         let source = read_example("hello.gb");
@@ -176,8 +190,16 @@ mod tests {
     #[test]
     fn allows_comment_between_annotation_and_definition() {
         let source = "main : void -> void can Print\n# comment\n\nmain = print \"ok\"\n";
-        let module = parse_module(source).expect("annotation and definition should match");
-        assert_eq!(module.declarations.len(), 1);
-        assert_eq!(module.declarations[0].name, "main");
+        let declaration = parse_single_declaration(source);
+        assert_eq!(declaration.name, "main");
+    }
+
+    #[test]
+    fn allows_mixed_tabs_and_spaces_in_same_block() {
+        let source =
+            "main : void -> void can Print\nmain =\n  greeting = \"hello\"\n\tprint greeting\n";
+        let declaration = parse_single_declaration(source);
+        assert!(declaration.body.contains("greeting = \"hello\""));
+        assert!(declaration.body.contains("print greeting"));
     }
 }
