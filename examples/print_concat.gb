@@ -1,0 +1,5 @@
+main : void -> void can Print
+main =
+  prefix = "Hello, "
+  name = "Goby!"
+  print string.concat(prefix, name)
