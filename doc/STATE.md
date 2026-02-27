@@ -39,6 +39,8 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - `90`
   - `[30, 40, 50]`
   - `[60, 70]`
+  - `something`
+  - `15`
 
 ## 3. Known Open Decisions
 
@@ -346,6 +348,22 @@ This file is a restart-safe snapshot for resuming work after context reset.
     - `90`
     - `[30, 40, 50]`
     - `[60, 70]`
+
+## 36. Progress Since Function-Argument Runtime Support
+
+- Extended runtime output resolution to execute `Unit`-returning function calls in `main` expression statements.
+- Added support for passing `Int -> Int` callables as function arguments and invoking them inside function bodies (`f 10`).
+- Added callable argument forms:
+  - inline lambda (`|n| -> n + 5`)
+  - named function reference (`add_ten`)
+- Hardened parameter inference by ignoring identifiers inside string literals.
+- Updated `function.gb` runtime parity lock output:
+  - `90`
+  - `[30, 40, 50]`
+  - `[60, 70]`
+  - `something`
+  - `15`
+- Added focused regression for function-argument call runtime output.
 - Verified end-to-end validation commands:
   - `cargo fmt --all`
   - `cargo clippy --all-targets --all-features -- -D warnings`
