@@ -59,8 +59,8 @@ This file is a restart-safe snapshot for resuming work after context reset.
 
 1. Lock indentation mixing behavior in `doc/PLAN.md`.
 2. Lock Wasm execution approach in `MVP.md`.
-3. Implement initial Wasm codegen path in `crates/goby-wasm`.
-4. Replace current parse+typecheck CLI flow with typecheck + codegen + run pipeline.
+3. Replace current wasm-file emission in `run` with actual execution pipeline.
+4. Add expression-level lowering from Goby AST/body into Wasm function bodies.
 
 ## 7. Resume Commands
 
@@ -107,3 +107,30 @@ This file is a restart-safe snapshot for resuming work after context reset.
 - This aligns CLI behavior with MVP intent:
   - `hello.gb` is a run target
   - `basic_types.gb` is a check target
+
+## 11. Progress Since Initial CLI Contract Hardening
+
+- Added minimal Wasm codegen in `crates/goby-wasm`:
+  - `compile_module` emits a valid Wasm module exporting `main`
+  - returns error when `main` is missing
+- Updated `goby-cli run`:
+  - parse + typecheck + codegen
+  - writes output wasm file next to input (`<name>.wasm`)
+- Added wasm backend unit test:
+  - validates emitted module magic header
+
+## 12. Progress Since Initial Wasm Emission
+
+- Refactored `goby-cli` internals for maintainability:
+  - separated argument parsing (`parse_args`) from execution (`run`)
+  - unified error handling via `CliError` (usage vs runtime)
+  - preserved command behavior (`run` / `check`)
+
+## 13. Progress Since CLI Internal Refactor
+
+- Improved `goby-cli` testability:
+  - extracted iterator-based `parse_args_from` for unit testing
+  - added CLI argument parser unit tests (run/unknown/extra cases)
+- Improved `goby-wasm` maintainability:
+  - changed minimal wasm bytes to a named constant slice
+  - simplified module byte materialization with `to_vec()`
