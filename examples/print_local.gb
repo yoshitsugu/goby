@@ -1,0 +1,4 @@
+main : void -> void can Print
+main =
+  greeting = "Hello from local binding!"
+  print greeting

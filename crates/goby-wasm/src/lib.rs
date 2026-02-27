@@ -1,4 +1,4 @@
-use goby_core::Module;
+use goby_core::{Module, resolve_print_text};
 
 const IOVEC_OFFSET: u32 = 0;
 const NWRITTEN_OFFSET: u32 = 8;
@@ -16,7 +16,9 @@ pub fn compile_module(module: &Module) -> Result<Vec<u8>, CodegenError> {
         });
     };
 
-    if let Some(text) = parse_print_literal(&main.body) {
+    if let Some(text) =
+        resolve_print_text(&main.body).map_err(|message| CodegenError { message })?
+    {
         return compile_print_module(&text);
     }
 
@@ -37,19 +39,6 @@ fn minimal_main_module() -> Vec<u8> {
         0x0a, 0x04, 0x01, 0x02, 0x00, 0x0b,
     ];
     MINIMAL_MAIN_MODULE.to_vec()
-}
-
-fn parse_print_literal(body: &str) -> Option<String> {
-    let trimmed = body.trim();
-    let prefix = "print \"";
-    if !trimmed.starts_with(prefix) || !trimmed.ends_with('"') {
-        return None;
-    }
-    let content = &trimmed[prefix.len()..trimmed.len() - 1];
-    if content.contains('"') {
-        return None;
-    }
-    Some(content.to_string())
 }
 
 fn compile_print_module(text: &str) -> Result<Vec<u8>, CodegenError> {
@@ -129,6 +118,19 @@ mod tests {
         let long_text = "x".repeat(128);
         let source = format!("main : void -> void\nmain = print \"{}\"\n", long_text);
         let module = parse_module(&source).expect("parse should work");
+        let wasm = compile_module(&module).expect("codegen should succeed");
+        assert_eq!(&wasm[..4], &[0x00, 0x61, 0x73, 0x6d]);
+    }
+
+    #[test]
+    fn emits_valid_wasm_for_print_via_local_binding() {
+        let source = r#"
+main : void -> void
+main =
+  greeting = "Hello from local"
+  print greeting
+"#;
+        let module = parse_module(source).expect("parse should work");
         let wasm = compile_module(&module).expect("codegen should succeed");
         assert_eq!(&wasm[..4], &[0x00, 0x61, 0x73, 0x6d]);
     }

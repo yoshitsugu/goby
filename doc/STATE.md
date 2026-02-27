@@ -182,3 +182,13 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - extracted static offsets into named constants (`IOVEC_OFFSET`, `NWRITTEN_OFFSET`, `TEXT_OFFSET`)
   - extracted iovec serialization into `encode_iovec`
 - Added focused unit test for iovec little-endian encoding.
+
+## 20. Progress Since Wasm Lowering Step 3
+
+- Added shared print-body analysis in `goby-core` (`analysis.rs`):
+  - resolves `print "..."` literals
+  - resolves `print <identifier>` when identifier is a local string binding
+  - reports invalid print argument forms
+- Updated `typecheck` to validate print argument string-ness using shared analysis.
+- Updated `goby-wasm` to reuse shared analysis instead of custom print parsing.
+- Added `examples/print_local.gb` for local-binding print flow.
