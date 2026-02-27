@@ -24,7 +24,7 @@ build a readable functional language with a modern developer experience.
 - `crates/goby-core`: core language implementation (AST, parser, type checker, IR)
 - `crates/goby-cli`: command-line interface
 - `crates/goby-wasm`: Wasm backend
-- `examples/`: small sample programs
+- `examples/`: small sample programs (see `examples/README.md`)
 - `doc/PLAN.md`: language design notes, draft spec details, and open decisions
 - `doc/STATE.md`: restart-safe snapshot of current decisions and next steps
 
