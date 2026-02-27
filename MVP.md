@@ -69,14 +69,15 @@ This keeps source compatibility while postponing the full effect system.
 - Indentation:
   - both tabs and spaces are accepted,
   - contiguous tabs or contiguous spaces count as indentation.
-- Runtime entrypoint:
-  - `goby-cli run <file.gb>` uses `main` by default,
-  - `main` type is restricted to `void -> void` in MVP.
-- CLI commands:
-  - `goby-cli run <file.gb>`: parse + typecheck + requires `main`
+- Runtime/CLI:
+  - `goby-cli run <file.gb>`: parse + typecheck + requires `main` (`void -> void` in MVP)
   - `goby-cli check <file.gb>`: parse + typecheck only
 - Backend:
   - Wasm is the first backend target for MVP.
+- Wasm execution pipeline in `goby-cli run`:
+  - emit `<input>.wasm`,
+  - invoke external `wasmtime run --invoke main <output.wasm>`,
+  - if `wasmtime` is unavailable, skip execution with an informational message.
 - Effect system handling in MVP:
   - parse-only for `can ...`,
   - no effect checking,
