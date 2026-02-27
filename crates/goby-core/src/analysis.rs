@@ -11,8 +11,8 @@ pub fn resolve_print_text(body: &str) -> Result<Option<String>, String> {
         }
 
         if let Some((name, expr)) = split_binding(line) {
-            if let Some(text) = parse_string_literal(expr) {
-                locals.insert(name.to_string(), text.to_string());
+            if let Some(text) = eval_string_expr(expr, &locals) {
+                locals.insert(name.to_string(), text);
             } else {
                 locals.remove(name);
             }
@@ -20,16 +20,13 @@ pub fn resolve_print_text(body: &str) -> Result<Option<String>, String> {
         }
 
         if let Some(expr) = parse_print_call(line) {
-            let text = if let Some(text) = parse_string_literal(expr) {
-                text.to_string()
-            } else if is_identifier(expr) {
-                if let Some(text) = locals.get(expr) {
-                    text.clone()
-                } else {
-                    return Err("print argument must resolve to a String binding".to_string());
-                }
+            let text = if let Some(text) = eval_string_expr(expr, &locals) {
+                text
             } else {
-                return Err("print argument must be a String literal or identifier".to_string());
+                return Err(
+                    "print argument must resolve to String (literal, identifier, or string.concat)"
+                        .to_string(),
+                );
             };
 
             if resolved_print.is_some() {
@@ -95,6 +92,72 @@ fn is_assignment_operator(line: &str, eq_index: usize) -> bool {
     true
 }
 
+fn eval_string_expr(expr: &str, locals: &HashMap<String, String>) -> Option<String> {
+    let expr = expr.trim();
+
+    if let Some(text) = parse_string_literal(expr) {
+        return Some(text.to_string());
+    }
+
+    if is_identifier(expr) {
+        return locals.get(expr).cloned();
+    }
+
+    if let Some((left, right)) = parse_string_concat_call(expr) {
+        let left_text = eval_string_expr(left, locals)?;
+        let right_text = eval_string_expr(right, locals)?;
+        return Some(format!("{}{}", left_text, right_text));
+    }
+
+    None
+}
+
+fn parse_string_concat_call(expr: &str) -> Option<(&str, &str)> {
+    let prefix = "string.concat(";
+    if !expr.starts_with(prefix) || !expr.ends_with(')') {
+        return None;
+    }
+
+    let inner = &expr[prefix.len()..expr.len() - 1];
+    let (left, right) = split_top_level_comma(inner)?;
+    Some((left.trim(), right.trim()))
+}
+
+fn split_top_level_comma(s: &str) -> Option<(&str, &str)> {
+    let mut depth = 0usize;
+    let mut in_string = false;
+    let mut prev_escape = false;
+
+    for (idx, ch) in s.char_indices() {
+        if in_string {
+            if prev_escape {
+                prev_escape = false;
+                continue;
+            }
+            if ch == '\\' {
+                prev_escape = true;
+                continue;
+            }
+            if ch == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+
+        match ch {
+            '"' => in_string = true,
+            '(' => depth += 1,
+            ')' => depth = depth.saturating_sub(1),
+            ',' if depth == 0 => {
+                return Some((&s[..idx], &s[idx + 1..]));
+            }
+            _ => {}
+        }
+    }
+
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -139,5 +202,25 @@ print "ok"
 "#;
         let result = resolve_print_text(source).expect("analysis should work");
         assert_eq!(result.as_deref(), Some("ok"));
+    }
+
+    #[test]
+    fn resolves_print_with_string_concat_and_bindings() {
+        let source = r#"
+a = "Hello, "
+b = "Goby!"
+print string.concat(a, b)
+"#;
+        let result = resolve_print_text(source).expect("analysis should work");
+        assert_eq!(result.as_deref(), Some("Hello, Goby!"));
+    }
+
+    #[test]
+    fn resolves_nested_string_concat() {
+        let source = r#"
+print string.concat("A", string.concat("B", "C"))
+"#;
+        let result = resolve_print_text(source).expect("analysis should work");
+        assert_eq!(result.as_deref(), Some("ABC"));
     }
 }

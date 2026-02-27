@@ -206,3 +206,12 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - `=` is treated as binding only when it is not part of `==`
   - prevents accidental misclassification of equality-like expressions
 - Added regression test to ensure equality-like lines are not interpreted as local bindings.
+
+## 23. Progress Since Shared Analysis Refactor Step 3
+
+- Extended string expression resolution for print analysis:
+  - supports `string.concat(<string-expr>, <string-expr>)`
+  - supports nested concat and local string bindings
+- Added new sample:
+  - `examples/print_concat.gb`
+- Added analysis tests for concat-based print resolution.
