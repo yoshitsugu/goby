@@ -261,3 +261,11 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - this unblocks `function.gb` in `check` mode while AST/type work is still pending
 - Confirmed runtime is still blocked at codegen:
   - `cargo run -p goby-cli -- run examples/function.gb` fails with current print-lowering limitation
+
+## 30. Progress Since Shared Analysis Refactor Step 10
+
+- Added explicit Wasm codegen diagnostics for unsupported forms:
+  - `print Int` and `print List` are now reported as unsupported
+  - pipeline operator `|>` is now reported as unsupported
+  - higher-order/anonymous-function usage is now reported as unsupported
+- Added focused `goby-wasm` unit tests for each diagnostic path.
