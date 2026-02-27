@@ -43,16 +43,19 @@ Based on `examples/*.gb`:
 - Effects are parse-only metadata in MVP.
   - unknown effect names are ignored.
 - MVP built-ins are `print` and `string.concat`.
-  - `map` is included for parse/typecheck (`check`) scope.
-  - `map` runtime/codegen support is postponed.
+  - `map` is required for `examples/function.gb` run parity.
 - `examples/basic_types.gb` is a parse/typecheck target, not a runnable entrypoint target.
   - no `main` addition and no `--entry` option in MVP.
-- `examples/function.gb` is an MVP run target for the current integer-only function subset.
-  - `goby-cli run examples/function.gb` is supported for integer call/lowering flow.
-  - higher-order/pipeline/list-print runtime support remains out of scope.
+- `examples/function.gb` is a canonical MVP run target and must be preserved as-is.
+  - no simplification/downgrade of `examples/function.gb` is allowed.
+  - `goby-cli run examples/function.gb` target output is:
+    - `90`
+    - `[30, 40, 50]`
+    - `[60, 70]`
 - Current status:
-  - `check` and `run` for `examples/function.gb` are passing in the current subset.
-  - unsupported runtime forms are still diagnosed explicitly (pipeline, higher-order usage, list print).
+  - as of 2026-02-27, `check` passes for `examples/function.gb`.
+  - as of 2026-02-27, `run` is partial and currently prints only `90`.
+  - remaining runtime gaps for this file are `map`, anonymous function forms (`|n| -> ...`, `_ * 10`), pipeline (`|>`), and `List Int` print formatting.
 
 ### 2.1 Syntax and Parsing
 
@@ -101,6 +104,11 @@ Based on `examples/*.gb`:
 ## 4. Immediate Execution Plan
 
 - Freeze a short "MVP spec subset" from current examples.
-- Advance expression/function lowering for `run` coverage beyond the current print-only path.
-- Keep codegen diagnostics explicit for unsupported forms (`List` print, pipeline, and higher-order calls).
+- Treat `examples/function.gb` as fixed acceptance input and implement run parity without modifying the file.
+- Complete runtime support required by `examples/function.gb`:
+  - `map` on `List Int`
+  - anonymous function and placeholder lambda forms
+  - pipeline operator `|>`
+  - `List Int` print formatting
+- Keep explicit diagnostics for forms still outside the locked `function.gb` subset.
 - Track all new syntax requests as explicit change proposals.

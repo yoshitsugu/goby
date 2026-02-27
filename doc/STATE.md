@@ -32,9 +32,13 @@ This file is a restart-safe snapshot for resuming work after context reset.
 - MVP built-ins:
   - `print`
   - `string.concat`
-- `map` is in MVP parse/typecheck scope (`check`) and out of MVP runtime/codegen scope.
+- `map` is required runtime scope for `examples/function.gb` parity.
 - `examples/basic_types.gb` is parse/typecheck target only (not runtime entry target).
-- `examples/function.gb` is runnable for the current integer-only function subset.
+- `examples/function.gb` is a fixed canonical run target and must be preserved as-is.
+- `examples/function.gb` expected runtime output is locked:
+  - `90`
+  - `[30, 40, 50]`
+  - `[60, 70]`
 
 ## 3. Known Open Decisions
 
@@ -58,7 +62,37 @@ This file is a restart-safe snapshot for resuming work after context reset.
 
 ## 6. Immediate Next Steps (Execution Order)
 
-1. Re-introduce stricter typecheck rules after AST-based expression/type representation is in place.
+1. Close `examples/function.gb` runtime parity gaps without simplifying the example:
+   - implement `map` on `List Int` for current subset,
+   - implement anonymous function forms used by the file (`|n| -> ...`, `_ * 10`),
+   - implement pipeline operator `|>`,
+   - implement `print` formatting for `List Int`.
+2. Re-introduce stricter typecheck rules after AST-based expression/type representation is in place.
+
+### Function.gb Runtime Parity Checklist
+
+- [ ] Step 1: Freeze current failure boundary with tests
+  - Add regression coverage that locks expected output for `examples/function.gb`:
+    - `90`
+    - `[30, 40, 50]`
+    - `[60, 70]`
+- [ ] Step 2: Refactor runtime path to evaluate all `main` lines sequentially
+  - Remove single-line/special-case execution paths and unify block evaluation flow.
+- [ ] Step 3: Implement pipeline operator (`|>`) in evaluator/codegen subset
+  - Support `x |> f` as `f x` for the locked MVP subset.
+- [ ] Step 4: Implement lambda forms used in `function.gb`
+  - Support both `|n| -> n * 10` and `_ * 10` in `map` call positions.
+- [ ] Step 5: Implement runtime `map` for `List Int` subset
+  - Support `List Int -> (Int -> Int) -> List Int` evaluation for current examples.
+- [ ] Step 6: Implement `print` formatting for `List Int`
+  - Emit bracketed comma-separated output (`[30, 40, 50]` style).
+- [ ] Step 7: Align typecheck and diagnostics with runtime support
+  - Update accepted forms and error messages to match the implemented subset.
+- [ ] Step 8: Final validation
+  - Verify with:
+    - `cargo check`
+    - `cargo test`
+    - `cargo run -p goby-cli -- run examples/function.gb`
 
 ## 7. Resume Commands
 
@@ -284,3 +318,11 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - emits printable output through existing WASI `fd_write` path
 - Updated `examples/function.gb` to the runnable integer-function subset.
 - Added `goby-wasm` regression test to ensure `examples/function.gb` compiles as a valid Wasm module.
+
+## 33. Progress Since Shared Analysis Refactor Step 13
+
+- Re-locked policy that `examples/function.gb` is canonical and must not be simplified.
+- Updated planning/state docs to treat `function.gb` runtime parity as required work.
+- Recorded concrete parity gap as of 2026-02-27:
+  - `cargo run -p goby-cli -- run examples/function.gb` currently prints only `90`.
+  - remaining required behaviors are `map`, anonymous function forms, pipeline, and `List Int` print output.
