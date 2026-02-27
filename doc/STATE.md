@@ -34,7 +34,7 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - `string.concat`
 - `map` is in MVP parse/typecheck scope (`check`) and out of MVP runtime/codegen scope.
 - `examples/basic_types.gb` is parse/typecheck target only (not runtime entry target).
-- `examples/function.gb` is parse/typecheck target only (not runtime entry target yet).
+- `examples/function.gb` is runnable for the current integer-only function subset.
 
 ## 3. Known Open Decisions
 
@@ -58,9 +58,7 @@ This file is a restart-safe snapshot for resuming work after context reset.
 
 ## 6. Immediate Next Steps (Execution Order)
 
-1. Extend expression-level Wasm lowering so `examples/function.gb` can run via `goby-cli run`.
-2. Add clear codegen diagnostics for currently unsupported forms (`List` print, pipeline `|>`, and higher-order calls).
-3. Re-introduce stricter typecheck rules after AST-based expression/type representation is in place.
+1. Re-introduce stricter typecheck rules after AST-based expression/type representation is in place.
 
 ## 7. Resume Commands
 
@@ -277,3 +275,12 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - reuses existing WASI `fd_write` module emission by converting resolved int values to text
 - Updated `goby-wasm` tests:
   - replaced the `print Int` unsupported diagnostic case with a positive codegen case for local int bindings.
+
+## 32. Progress Since Shared Analysis Refactor Step 12
+
+- Extended integer expression lowering to follow simple top-level Int function calls:
+  - infers single-parameter usage from declaration bodies for MVP subset
+  - resolves `main` local bindings that call Int-returning functions
+  - emits printable output through existing WASI `fd_write` path
+- Updated `examples/function.gb` to the runnable integer-function subset.
+- Added `goby-wasm` regression test to ensure `examples/function.gb` compiles as a valid Wasm module.

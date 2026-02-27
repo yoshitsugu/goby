@@ -47,12 +47,12 @@ Based on `examples/*.gb`:
   - `map` runtime/codegen support is postponed.
 - `examples/basic_types.gb` is a parse/typecheck target, not a runnable entrypoint target.
   - no `main` addition and no `--entry` option in MVP.
-- `examples/function.gb` is an MVP parse/typecheck target.
-  - `goby-cli check examples/function.gb` is the acceptance path.
-  - `goby-cli run examples/function.gb` is out of scope until function-level lowering advances.
+- `examples/function.gb` is an MVP run target for the current integer-only function subset.
+  - `goby-cli run examples/function.gb` is supported for integer call/lowering flow.
+  - higher-order/pipeline/list-print runtime support remains out of scope.
 - Current status:
-  - `check` for `examples/function.gb` is passing.
-  - `run` still fails because Wasm codegen does not yet support pipeline/higher-order forms and list-oriented print paths used by `function.gb`.
+  - `check` and `run` for `examples/function.gb` are passing in the current subset.
+  - unsupported runtime forms are still diagnosed explicitly (pipeline, higher-order usage, list print).
 
 ### 2.1 Syntax and Parsing
 
@@ -102,5 +102,5 @@ Based on `examples/*.gb`:
 
 - Freeze a short "MVP spec subset" from current examples.
 - Advance expression/function lowering for `run` coverage beyond the current print-only path.
-- Add codegen diagnostics for unsupported forms in `function.gb` (`List` print, pipeline, and higher-order calls).
+- Keep codegen diagnostics explicit for unsupported forms (`List` print, pipeline, and higher-order calls).
 - Track all new syntax requests as explicit change proposals.

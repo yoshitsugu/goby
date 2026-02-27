@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use goby_core::{Module, resolve_print_text, types::parse_function_type};
 
@@ -14,6 +14,7 @@ const ERR_UNSUPPORTED_PRINT_INT: &str = "print Int is not yet supported in Wasm 
 const ERR_UNSUPPORTED_PRINT_LIST: &str = "print List is not yet supported in Wasm codegen";
 const ERR_UNSUPPORTED_PRINT_UNKNOWN: &str =
     "print argument is unsupported for Wasm codegen (only String is supported)";
+const MAX_INT_EVAL_DEPTH: usize = 32;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CodegenError {
@@ -31,7 +32,7 @@ pub fn compile_module(module: &Module) -> Result<Vec<u8>, CodegenError> {
         return compile_print_module(&text);
     }
 
-    if let Some(value) = resolve_print_int(&main.body) {
+    if let Some(value) = resolve_print_int(module, &main.body) {
         return compile_print_module(&value.to_string());
     }
 
@@ -204,29 +205,169 @@ fn parse_print_call(line: &str) -> Option<&str> {
     Some(rest.trim())
 }
 
-fn resolve_print_int(body: &str) -> Option<i64> {
-    IntPrintResolver::resolve(body)
+fn resolve_print_int(module: &Module, body: &str) -> Option<i64> {
+    let functions = IntFunctionCatalog::from_module(module);
+    IntPrintResolver::resolve(body, &functions)
 }
 
-fn eval_int_expr(expr: &str, locals: &HashMap<String, i64>) -> Option<i64> {
-    let expr = expr.trim();
-    if expr.is_empty() {
-        return None;
+type IntFunctions<'a> = HashMap<&'a str, IntFunction<'a>>;
+
+struct IntFunctionCatalog;
+
+impl IntFunctionCatalog {
+    fn from_module(module: &Module) -> IntFunctions<'_> {
+        let declaration_names: HashSet<&str> = module
+            .declarations
+            .iter()
+            .map(|decl| decl.name.as_str())
+            .collect();
+
+        let mut functions = HashMap::new();
+        for decl in &module.declarations {
+            if decl.name == "main" {
+                continue;
+            }
+
+            let Some(annotation) = decl.type_annotation.as_deref() else {
+                continue;
+            };
+            let Some(function_type) = parse_function_type(annotation) else {
+                continue;
+            };
+            if function_type.result != "Int" || function_type.arguments.len() > 1 {
+                continue;
+            }
+
+            let parameter = infer_single_parameter_name(&decl.body, &declaration_names);
+            functions.insert(
+                decl.name.as_str(),
+                IntFunction {
+                    body: &decl.body,
+                    parameter,
+                },
+            );
+        }
+
+        functions
+    }
+}
+
+struct IntEvaluator<'a> {
+    functions: &'a IntFunctions<'a>,
+    depth: usize,
+}
+
+impl<'a> IntEvaluator<'a> {
+    fn root(functions: &'a IntFunctions<'a>) -> Self {
+        Self {
+            functions,
+            depth: 0,
+        }
     }
 
-    if let Some((left, right)) = expr.split_once(" + ") {
-        return eval_int_expr(left, locals)?.checked_add(eval_int_expr(right, locals)?);
+    fn descend(&self) -> Option<Self> {
+        if self.depth >= MAX_INT_EVAL_DEPTH {
+            return None;
+        }
+
+        Some(Self {
+            functions: self.functions,
+            depth: self.depth + 1,
+        })
     }
 
-    if let Some((left, right)) = expr.split_once(" * ") {
-        return eval_int_expr(left, locals)?.checked_mul(eval_int_expr(right, locals)?);
+    fn eval_expr(&self, expr: &str, locals: &HashMap<String, i64>) -> Option<i64> {
+        let expr = expr.trim();
+        if expr.is_empty() {
+            return None;
+        }
+
+        if let Some(value) = self.eval_binary_expr(expr, locals) {
+            return Some(value);
+        }
+
+        if is_int_literal(expr) {
+            return expr.parse().ok();
+        }
+
+        if let Some(value) = locals.get(expr) {
+            return Some(*value);
+        }
+
+        if let Some((callee, arg_expr)) = parse_call(expr) {
+            let function = self.functions.get(callee)?;
+            let nested = self.descend()?;
+            let arg = nested.eval_expr(arg_expr, locals)?;
+            return nested.eval_function(function, Some(arg));
+        }
+
+        let function = self.functions.get(expr)?;
+        self.descend()?.eval_function(function, None)
     }
 
-    if is_int_literal(expr) {
-        return expr.parse().ok();
+    fn eval_binary_expr(&self, expr: &str, locals: &HashMap<String, i64>) -> Option<i64> {
+        if let Some((left, right)) = expr.split_once(" + ") {
+            return self.eval_binary_operands(left, right, locals, i64::checked_add);
+        }
+
+        if let Some((left, right)) = expr.split_once(" * ") {
+            return self.eval_binary_operands(left, right, locals, i64::checked_mul);
+        }
+
+        None
     }
 
-    locals.get(expr).copied()
+    fn eval_binary_operands(
+        &self,
+        left: &str,
+        right: &str,
+        locals: &HashMap<String, i64>,
+        op: fn(i64, i64) -> Option<i64>,
+    ) -> Option<i64> {
+        let nested = self.descend()?;
+        let left_value = nested.eval_expr(left, locals)?;
+        let right_value = nested.eval_expr(right, locals)?;
+        op(left_value, right_value)
+    }
+
+    fn eval_function(&self, function: &IntFunction<'a>, arg: Option<i64>) -> Option<i64> {
+        let mut locals = HashMap::new();
+        if let Some(parameter) = function.parameter
+            && let Some(value) = arg
+        {
+            locals.insert(parameter.to_string(), value);
+        }
+
+        let mut result_expr = None;
+        for line in code_lines(function.body) {
+            if let Some((name, expr)) = split_binding(line) {
+                assign_local_int(name, expr, &mut locals, self);
+                continue;
+            }
+
+            if parse_print_call(line).is_some() {
+                return None;
+            }
+
+            result_expr = Some(line);
+        }
+
+        let expr = result_expr?;
+        self.descend()?.eval_expr(expr, &locals)
+    }
+}
+
+fn assign_local_int(
+    name: &str,
+    expr: &str,
+    locals: &mut HashMap<String, i64>,
+    evaluator: &IntEvaluator<'_>,
+) {
+    if let Some(value) = evaluator.eval_expr(expr, locals) {
+        locals.insert(name.to_string(), value);
+    } else {
+        locals.remove(name);
+    }
 }
 
 enum Statement<'a> {
@@ -257,45 +398,146 @@ struct IntPrintResolver {
 }
 
 impl IntPrintResolver {
-    fn resolve(body: &str) -> Option<i64> {
+    fn resolve(body: &str, functions: &IntFunctions<'_>) -> Option<i64> {
         let mut resolver = Self {
             locals: HashMap::new(),
             resolved_print: None,
         };
+        let evaluator = IntEvaluator::root(functions);
 
         for statement in statements(body) {
-            resolver.ingest_statement(statement)?;
+            resolver.ingest_statement(statement, &evaluator)?;
         }
 
         resolver.resolved_print
     }
 
-    fn ingest_statement(&mut self, statement: Statement<'_>) -> Option<()> {
+    fn ingest_statement(
+        &mut self,
+        statement: Statement<'_>,
+        evaluator: &IntEvaluator<'_>,
+    ) -> Option<()> {
         match statement {
             Statement::Binding { name, expr } => {
-                self.bind_local(name, expr);
+                self.bind_local(name, expr, evaluator);
                 Some(())
             }
-            Statement::Print(expr) => self.capture_print(expr),
+            Statement::Print(expr) => self.capture_print(expr, evaluator),
             Statement::Other => Some(()),
         }
     }
 
-    fn bind_local(&mut self, name: &str, expr: &str) {
-        if let Some(value) = eval_int_expr(expr, &self.locals) {
-            self.locals.insert(name.to_string(), value);
-        } else {
-            self.locals.remove(name);
-        }
+    fn bind_local(&mut self, name: &str, expr: &str, evaluator: &IntEvaluator<'_>) {
+        assign_local_int(name, expr, &mut self.locals, evaluator);
     }
 
-    fn capture_print(&mut self, expr: &str) -> Option<()> {
-        let value = eval_int_expr(expr, &self.locals)?;
+    fn capture_print(&mut self, expr: &str, evaluator: &IntEvaluator<'_>) -> Option<()> {
+        let value = evaluator.eval_expr(expr, &self.locals)?;
         if self.resolved_print.is_some() {
             return None;
         }
         self.resolved_print = Some(value);
         Some(())
+    }
+}
+
+#[derive(Clone, Copy)]
+struct IntFunction<'a> {
+    body: &'a str,
+    parameter: Option<&'a str>,
+}
+
+fn infer_single_parameter_name<'a>(
+    body: &'a str,
+    declaration_names: &HashSet<&str>,
+) -> Option<&'a str> {
+    let mut assigned: HashSet<&str> = HashSet::new();
+    let mut referenced: HashSet<&str> = HashSet::new();
+
+    for line in code_lines(body) {
+        if let Some((name, expr)) = split_binding(line) {
+            assigned.insert(name);
+            collect_identifiers(expr, &mut referenced);
+            continue;
+        }
+
+        if let Some(expr) = parse_print_call(line) {
+            collect_identifiers(expr, &mut referenced);
+            continue;
+        }
+
+        collect_identifiers(line, &mut referenced);
+    }
+
+    let candidates: Vec<&str> = referenced
+        .into_iter()
+        .filter(|name| !assigned.contains(name))
+        .filter(|name| !declaration_names.contains(name))
+        .filter(|name| *name != "print")
+        .collect();
+
+    if candidates.len() == 1 {
+        Some(candidates[0])
+    } else {
+        None
+    }
+}
+
+fn collect_identifiers<'a>(expr: &'a str, out: &mut HashSet<&'a str>) {
+    let mut start = None;
+
+    for (idx, byte) in expr.as_bytes().iter().copied().enumerate() {
+        let is_ident_char = byte.is_ascii_alphanumeric() || byte == b'_';
+        if is_ident_char {
+            if start.is_none() {
+                start = Some(idx);
+            }
+            continue;
+        }
+
+        maybe_insert_identifier(expr, start.take(), idx, out);
+    }
+
+    maybe_insert_identifier(expr, start, expr.len(), out);
+}
+
+fn maybe_insert_identifier<'a>(
+    source: &'a str,
+    start: Option<usize>,
+    end: usize,
+    out: &mut HashSet<&'a str>,
+) {
+    let Some(start_idx) = start else {
+        return;
+    };
+
+    let candidate = &source[start_idx..end];
+    if is_identifier(candidate) && !is_int_literal(candidate) {
+        out.insert(candidate);
+    }
+}
+
+fn parse_call(expr: &str) -> Option<(&str, &str)> {
+    if let Some(open) = expr.find('(')
+        && expr.ends_with(')')
+    {
+        let callee = expr[..open].trim();
+        let inner = expr[open + 1..expr.len() - 1].trim();
+        if is_identifier(callee) && !inner.is_empty() {
+            return Some((callee, inner));
+        }
+    }
+
+    let mut parts = expr.split_whitespace();
+    let callee = parts.next()?;
+    let arg = parts.next()?;
+    if parts.next().is_some() {
+        return None;
+    }
+    if is_identifier(callee) {
+        Some((callee, arg))
+    } else {
+        None
     }
 }
 
@@ -410,12 +652,23 @@ fn encode_iovec(base: u32, length: u32) -> [u8; 8] {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use goby_core::parse_module;
 
     use super::*;
 
     fn assert_valid_wasm_module(wasm: &[u8]) {
         assert_eq!(&wasm[..4], &[0x00, 0x61, 0x73, 0x6d]);
+    }
+
+    fn read_example(name: &str) -> String {
+        let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        path.push("..");
+        path.push("..");
+        path.push("examples");
+        path.push(name);
+        std::fs::read_to_string(path).expect("example file should exist")
     }
 
     #[test]
@@ -470,6 +723,14 @@ main =
   print n
 "#;
         let module = parse_module(source).expect("parse should work");
+        let wasm = compile_module(&module).expect("codegen should succeed");
+        assert_valid_wasm_module(&wasm);
+    }
+
+    #[test]
+    fn emits_valid_wasm_for_function_example_int_calls() {
+        let source = read_example("function.gb");
+        let module = parse_module(&source).expect("parse should work");
         let wasm = compile_module(&module).expect("codegen should succeed");
         assert_valid_wasm_module(&wasm);
     }
