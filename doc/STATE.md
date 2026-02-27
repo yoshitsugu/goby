@@ -215,3 +215,19 @@ This file is a restart-safe snapshot for resuming work after context reset.
 - Added new sample:
   - `examples/print_concat.gb`
 - Added analysis tests for concat-based print resolution.
+
+## 24. Progress Since Shared Analysis Refactor Step 4
+
+- Refactored `analysis.rs` for maintainability:
+  - extracted local-binding update logic
+  - extracted print-argument resolution logic
+  - centralized error message constants for print analysis
+- Kept behavior equivalent while improving readability and future edit safety.
+
+## 25. Progress Since Shared Analysis Refactor Step 5
+
+- Improved print-call parsing robustness:
+  - accepts whitespace after `print` (including tabs), not only a single space
+- Made comment handling explicit in body analysis:
+  - lines beginning with `#` are skipped intentionally
+- Added regression tests for tab-delimited print syntax and inline comment skipping.

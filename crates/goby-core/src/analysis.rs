@@ -1,36 +1,30 @@
 use std::collections::HashMap;
 
+const ERR_PRINT_ARG_TYPE: &str =
+    "print argument must resolve to String (literal, identifier, or string.concat)";
+const ERR_PRINT_ARG_UNBOUND: &str = "print argument must resolve to a String binding";
+const ERR_MULTIPLE_PRINTS: &str = "multiple print calls are not yet supported in MVP";
+
 pub fn resolve_print_text(body: &str) -> Result<Option<String>, String> {
     let mut locals: HashMap<String, String> = HashMap::new();
     let mut resolved_print: Option<String> = None;
 
     for raw_line in body.lines() {
         let line = raw_line.trim();
-        if line.is_empty() {
+        if line.is_empty() || line.starts_with('#') {
             continue;
         }
 
         if let Some((name, expr)) = split_binding(line) {
-            if let Some(text) = eval_string_expr(expr, &locals) {
-                locals.insert(name.to_string(), text);
-            } else {
-                locals.remove(name);
-            }
+            update_local_binding(&mut locals, name, expr);
             continue;
         }
 
         if let Some(expr) = parse_print_call(line) {
-            let text = if let Some(text) = eval_string_expr(expr, &locals) {
-                text
-            } else {
-                return Err(
-                    "print argument must resolve to String (literal, identifier, or string.concat)"
-                        .to_string(),
-                );
-            };
+            let text = resolve_print_argument(expr, &locals)?;
 
             if resolved_print.is_some() {
-                return Err("multiple print calls are not yet supported in MVP".to_string());
+                return Err(ERR_MULTIPLE_PRINTS.to_string());
             }
             resolved_print = Some(text);
         }
@@ -54,7 +48,41 @@ fn split_binding(line: &str) -> Option<(&str, &str)> {
 }
 
 fn parse_print_call(line: &str) -> Option<&str> {
-    line.strip_prefix("print ").map(str::trim)
+    let rest = line.strip_prefix("print")?;
+    let first = rest.chars().next()?;
+    if !first.is_whitespace() {
+        return None;
+    }
+    Some(rest.trim())
+}
+
+fn update_local_binding(locals: &mut HashMap<String, String>, name: &str, expr: &str) {
+    if let Some(text) = eval_string_expr(expr, locals) {
+        locals.insert(name.to_string(), text);
+    } else {
+        locals.remove(name);
+    }
+}
+
+fn resolve_print_argument(expr: &str, locals: &HashMap<String, String>) -> Result<String, String> {
+    let expr = expr.trim();
+
+    if let Some(text) = parse_string_literal(expr) {
+        return Ok(text.to_string());
+    }
+
+    if is_identifier(expr) {
+        return locals
+            .get(expr)
+            .cloned()
+            .ok_or_else(|| ERR_PRINT_ARG_UNBOUND.to_string());
+    }
+
+    if let Some(text) = eval_string_expr(expr, locals) {
+        return Ok(text);
+    }
+
+    Err(ERR_PRINT_ARG_TYPE.to_string())
 }
 
 fn parse_string_literal(expr: &str) -> Option<&str> {
@@ -181,7 +209,7 @@ print greeting
     #[test]
     fn rejects_non_string_print_argument() {
         let err = resolve_print_text("print 1").expect_err("analysis should fail");
-        assert!(err.contains("String"));
+        assert_eq!(err, ERR_PRINT_ARG_TYPE);
     }
 
     #[test]
@@ -191,7 +219,7 @@ print "a"
 print "b"
 "#;
         let err = resolve_print_text(source).expect_err("analysis should fail");
-        assert!(err.contains("multiple print"));
+        assert_eq!(err, ERR_MULTIPLE_PRINTS);
     }
 
     #[test]
@@ -222,5 +250,24 @@ print string.concat("A", string.concat("B", "C"))
 "#;
         let result = resolve_print_text(source).expect("analysis should work");
         assert_eq!(result.as_deref(), Some("ABC"));
+    }
+
+    #[test]
+    fn resolves_print_with_tab_after_keyword() {
+        let source = "print\t\"tab ok\"";
+        let result = resolve_print_text(source).expect("analysis should work");
+        assert_eq!(result.as_deref(), Some("tab ok"));
+    }
+
+    #[test]
+    fn ignores_comment_lines_inside_body() {
+        let source = r#"
+# setup
+a = "hello"
+# output
+print a
+"#;
+        let result = resolve_print_text(source).expect("analysis should work");
+        assert_eq!(result.as_deref(), Some("hello"));
     }
 }
