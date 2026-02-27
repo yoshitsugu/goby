@@ -39,9 +39,11 @@ Based on `examples/*.gb`:
     - if `wasmtime` is not installed, execution is skipped with an informational message.
   - `goby-cli check <file.gb>` performs parse/typecheck without runtime entrypoint.
 - `main` type is restricted to `Unit -> Unit` for MVP.
+- Legacy `void` type spelling is rejected in type annotations.
 - First backend target is Wasm.
 - Effects are parse-only metadata in MVP.
   - unknown effect names are ignored.
+  - `can` clauses must be syntactically valid (non-empty list of identifiers).
 - MVP built-ins are `print` and `string.concat`.
   - `map` is required for `examples/function.gb` run parity.
 - `examples/basic_types.gb` is a parse/typecheck target, not a runnable entrypoint target.

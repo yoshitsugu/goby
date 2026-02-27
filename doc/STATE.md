@@ -369,3 +369,19 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - `cargo clippy --all-targets --all-features -- -D warnings`
   - `cargo test --all-features`
   - `cargo run -p goby-cli -- run examples/function.gb`
+
+## 37. Progress Since Typecheck Tightening Step 1
+
+- Strengthened `goby-core` typecheck validation for top-level annotations:
+  - rejects legacy `void` spelling in any type annotation and requires `Unit`
+  - validates `can` clause syntax (effect list must be non-empty identifiers)
+  - reports invalid function type annotation shape when `->` is malformed
+- Added focused typecheck regressions for:
+  - rejecting `void` in non-`main` declarations
+  - rejecting empty `can` effect list
+  - rejecting invalid effect identifiers
+  - accepting non-function annotations such as tuple types
+- Validation run:
+  - `cargo fmt`
+  - `cargo test`
+  - `cargo run -p goby-cli -- run examples/function.gb`
