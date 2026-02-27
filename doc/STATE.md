@@ -156,6 +156,14 @@ This file is a restart-safe snapshot for resuming work after context reset.
 
 - Simplified wasm execution control flow in `goby-cli`:
   - replaced string-sentinel error branching with explicit `ExecutionOutcome`
-  - `execute_wasm` now returns:
-    - `Executed`
-    - `SkippedNoWasmtime` (when `wasmtime` is not installed)
+- `execute_wasm` now returns:
+  - `Executed`
+  - `SkippedNoWasmtime` (when `wasmtime` is not installed)
+
+## 17. Progress Since Wasm Execution Refactor
+
+- Added first expression-aware Wasm lowering path in `goby-wasm`:
+  - when `main` body is `print "..."`, emits a WASI `fd_write`-based module via WAT
+  - otherwise falls back to minimal empty-main module
+- Added new wasm backend test for print-literal codegen.
+- Added `wat` dependency in `goby-wasm` and updated lockfile.
