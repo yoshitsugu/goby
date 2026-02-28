@@ -802,12 +802,38 @@ impl RuntimeOutputResolver {
                 let v = self.eval_expr_ast(value, locals, callables, evaluators, depth + 1)?;
                 self.apply_pipeline(callee, v, locals, callables, evaluators, depth + 1)
             }
+            // Record construction: evaluate each field, build RuntimeValue::Record.
+            Expr::RecordConstruct { constructor, fields } => {
+                let mut field_map = HashMap::new();
+                for (field_name, field_expr) in fields {
+                    let field_val =
+                        self.eval_expr_ast(field_expr, locals, callables, evaluators, depth + 1)?;
+                    field_map.insert(field_name.clone(), field_val);
+                }
+                Some(RuntimeValue::Record {
+                    constructor: constructor.clone(),
+                    fields: field_map,
+                })
+            }
+            // Qualified access: `receiver.member`
+            // If `receiver` is a local record variable, return the field value.
+            // If `receiver` is absent from locals (e.g. a union type name), return
+            // the member name as a string (e.g. `UserStatus.Activated` → `"Activated"`).
+            // If `receiver` is present but not a Record, fall back to None.
+            Expr::Qualified { receiver, member } => {
+                match locals.get(receiver) {
+                    Some(RuntimeValue::Record { fields, .. }) => {
+                        fields.get(member).cloned()
+                    }
+                    None => {
+                        // Treat as a type/module-qualified constructor name.
+                        Some(RuntimeValue::String(member.clone()))
+                    }
+                    Some(_) => None,
+                }
+            }
             // Lambda as top-level value — not needed in main, return None to fall back.
-            Expr::Lambda { .. }
-            | Expr::TupleLit(_)
-            | Expr::MethodCall { .. }
-            | Expr::Qualified { .. }
-            | Expr::RecordConstruct { .. } => None,
+            Expr::Lambda { .. } | Expr::TupleLit(_) | Expr::MethodCall { .. } => None,
         }
     }
 
@@ -990,21 +1016,7 @@ impl RuntimeOutputResolver {
         let arg_text = arg_val.to_expression_text();
 
         if let Some(parameter) = function.parameter {
-            match arg_val {
-                RuntimeValue::Int(n) => {
-                    function_locals.int_values.insert(parameter.to_string(), n);
-                }
-                RuntimeValue::String(s) => {
-                    function_locals
-                        .string_values
-                        .insert(parameter.to_string(), s);
-                }
-                RuntimeValue::ListInt(v) => {
-                    function_locals
-                        .list_int_values
-                        .insert(parameter.to_string(), v);
-                }
-            }
+            function_locals.store(parameter, arg_val);
         }
 
         if let Some(stmts) = function.parsed_stmts {
@@ -1035,6 +1047,7 @@ struct RuntimeLocals {
     string_values: HashMap<String, String>,
     int_values: HashMap<String, i64>,
     list_int_values: HashMap<String, Vec<i64>>,
+    record_values: HashMap<String, RuntimeValue>,
 }
 
 impl RuntimeLocals {
@@ -1050,6 +1063,9 @@ impl RuntimeLocals {
             RuntimeValue::ListInt(values) => {
                 self.list_int_values.insert(name.to_string(), values);
             }
+            record @ RuntimeValue::Record { .. } => {
+                self.record_values.insert(name.to_string(), record);
+            }
         }
     }
 
@@ -1057,6 +1073,7 @@ impl RuntimeLocals {
         self.string_values.remove(name);
         self.int_values.remove(name);
         self.list_int_values.remove(name);
+        self.record_values.remove(name);
     }
 
     fn get(&self, name: &str) -> Option<RuntimeValue> {
@@ -1069,14 +1086,22 @@ impl RuntimeLocals {
         if let Some(v) = self.list_int_values.get(name) {
             return Some(RuntimeValue::ListInt(v.clone()));
         }
+        if let Some(v) = self.record_values.get(name) {
+            return Some(v.clone());
+        }
         None
     }
 }
 
+#[derive(Clone)]
 enum RuntimeValue {
     String(String),
     Int(i64),
     ListInt(Vec<i64>),
+    Record {
+        constructor: String,
+        fields: HashMap<String, RuntimeValue>,
+    },
 }
 
 impl RuntimeValue {
@@ -1085,6 +1110,9 @@ impl RuntimeValue {
             Self::String(text) => text.clone(),
             Self::Int(value) => value.to_string(),
             Self::ListInt(values) => format_list_int(values),
+            // Print the constructor name as a placeholder; field access
+            // resolves the actual field value before printing in practice.
+            Self::Record { constructor, .. } => constructor.clone(),
         }
     }
 
@@ -1093,6 +1121,7 @@ impl RuntimeValue {
             Self::String(text) => format!("\"{}\"", text),
             Self::Int(value) => value.to_string(),
             Self::ListInt(values) => format_list_int(values),
+            Self::Record { constructor, .. } => constructor.clone(),
         }
     }
 }
