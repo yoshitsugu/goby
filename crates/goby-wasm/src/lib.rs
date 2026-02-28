@@ -512,6 +512,8 @@ impl RuntimeOutputResolver {
                 Some(())
             }
             Stmt::Expr(expr) => self.eval_ast_side_effect(expr, evaluators),
+            // `using` is parse/typecheck metadata only in this slice; skip at runtime.
+            Stmt::Using { .. } => None,
         }
     }
 
@@ -884,6 +886,8 @@ impl RuntimeOutputResolver {
                 let repr = expr.to_str_repr()?;
                 self.execute_unit_call(&repr, locals, callables, evaluators)
             }
+            // `using` is parse/typecheck metadata only in this slice; skip at runtime.
+            Stmt::Using { .. } => None,
         }
     }
 

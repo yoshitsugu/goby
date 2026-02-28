@@ -32,25 +32,22 @@ pub fn typecheck_module(module: &Module) -> Result<(), TypecheckError> {
     }
 
     if let Some(main) = module.declarations.iter().find(|d| d.name == "main") {
-        let annotation = main
-            .type_annotation
-            .as_deref()
-            .ok_or_else(|| TypecheckError {
+        // A `main` declaration without a type annotation is allowed during `check`
+        // (e.g. `effect.gb`).  The Wasm backend will enforce the annotation at
+        // compile time when `run` is invoked.
+        if let Some(annotation) = main.type_annotation.as_deref() {
+            let base_annotation = strip_effect_clause(annotation);
+            let ty = parse_function_type(base_annotation).ok_or_else(|| TypecheckError {
                 declaration: Some("main".to_string()),
-                message: "main must have an explicit type annotation".to_string(),
+                message: "main type annotation must be a function type".to_string(),
             })?;
 
-        let base_annotation = strip_effect_clause(annotation);
-        let ty = parse_function_type(base_annotation).ok_or_else(|| TypecheckError {
-            declaration: Some("main".to_string()),
-            message: "main type annotation must be a function type".to_string(),
-        })?;
-
-        if ty.arguments != vec!["Unit".to_string()] || ty.result != "Unit" {
-            return Err(TypecheckError {
-                declaration: Some("main".to_string()),
-                message: "main type must be `Unit -> Unit` in MVP".to_string(),
-            });
+            if ty.arguments != vec!["Unit".to_string()] || ty.result != "Unit" {
+                return Err(TypecheckError {
+                    declaration: Some("main".to_string()),
+                    message: "main type must be `Unit -> Unit` in MVP".to_string(),
+                });
+            }
         }
     }
 
@@ -288,12 +285,55 @@ fn build_type_env(module: &Module) -> TypeEnv {
     );
     inject_imported_symbols(module, &mut globals);
     inject_type_constructors(module, &mut globals, &mut type_aliases, &mut record_types);
+    inject_effect_symbols(module, &mut globals);
 
     TypeEnv {
         globals,
         locals: HashMap::new(),
         type_aliases,
         record_types,
+    }
+}
+
+fn inject_effect_symbols(module: &Module, globals: &mut HashMap<String, GlobalBinding>) {
+    for effect_decl in &module.effect_declarations {
+        for member in &effect_decl.members {
+            // Register as qualified key `EffectName.member`.
+            let qualified_key = format!("{}.{}", effect_decl.name, member.name);
+            let ty = if let Some(ft) = parse_function_type(&member.type_annotation) {
+                let params: Vec<Ty> = ft.arguments.iter().map(|a| ty_from_annotation(a)).collect();
+                let result = ty_from_annotation(&ft.result);
+                Ty::Fun {
+                    params,
+                    result: Box::new(result),
+                }
+            } else {
+                Ty::Unknown
+            };
+            insert_global_symbol(
+                globals,
+                qualified_key,
+                ty.clone(),
+                format!("effect `{}` member", effect_decl.name),
+            );
+            // Also register unqualified bare name for unqualified calls like `log result`.
+            insert_global_symbol(
+                globals,
+                member.name.clone(),
+                ty,
+                format!("effect `{}` member", effect_decl.name),
+            );
+        }
+    }
+    for handler_decl in &module.handler_declarations {
+        // Register handler name as Unknown so that `using HandlerName` doesn't produce
+        // an "ambiguous name" error.
+        insert_global_symbol(
+            globals,
+            handler_decl.name.clone(),
+            Ty::Unknown,
+            format!("handler `{}`", handler_decl.name),
+        );
     }
 }
 
@@ -699,12 +739,11 @@ fn check_expr(expr: &Expr, env: &TypeEnv) -> Ty {
         }
         Expr::Var(name) => env.lookup(name),
         Expr::Qualified { receiver, member } => {
-            if let Some(receiver_ty) = env.locals.get(receiver) {
-                if let Ty::Con { name, .. } = env.resolve_alias(receiver_ty, 0)
-                    && let Some(field_ty) = env.record_field_ty(&name, member)
-                {
-                    return env.resolve_alias(&field_ty, 0);
-                }
+            if let Some(receiver_ty) = env.locals.get(receiver)
+                && let Ty::Con { name, .. } = env.resolve_alias(receiver_ty, 0)
+                && let Some(field_ty) = env.record_field_ty(&name, member)
+            {
+                return env.resolve_alias(&field_ty, 0);
             }
             env.lookup(&format!("{}.{}", receiver, member))
         }
@@ -810,6 +849,11 @@ fn check_body_stmts(
             }
             Stmt::Expr(expr) => {
                 ensure_no_ambiguous_refs_in_expr(expr, &local_env, decl_name)?;
+            }
+            Stmt::Using { body, .. } => {
+                // Type-check the using body in the current environment.
+                // Handler resolution and effect-safety are out of scope for this slice.
+                check_body_stmts(body, &local_env, decl_name, None, &[])?;
             }
         }
     }
