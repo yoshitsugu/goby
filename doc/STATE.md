@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-02-28 (session 5, commit 2)
+Last updated: 2026-02-28 (session 6, commit 2)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -67,7 +67,7 @@ This file is a restart-safe snapshot for resuming work after context reset.
 1. ~~Fix `to_str_repr()` precedence loss~~ — DONE (session 2).
 2. ~~`string.concat` を 2 引数固定でパーサー・評価器を統一~~ — DONE (session 2).
 3. ~~型チェックで宣言型 vs 本体戻り型の検証を追加~~ — DONE (session 2).
-4. 将来: `to_str_repr()` 依存を撤廃し、`Expr` を直接評価する AST evaluator に移行。
+4. ~~`to_str_repr()` 依存を撤廃し、`Expr` を直接評価する AST evaluator に移行~~ — DONE (session 6, Track B Step 1).
 
 ### Function.gb Runtime Parity Checklist
 
@@ -103,291 +103,23 @@ This file is a restart-safe snapshot for resuming work after context reset.
 - Current CLI run shape:
   - `cargo run -p goby-cli -- run examples/hello.gb`
 
-## 8. Progress Since Scaffold
+## 8. Early Session History (sessions 1–4, collapsed)
 
-- Implemented minimal parser foundation in `crates/goby-core`:
-  - `ast.rs` and `parser.rs`
-  - top-level declaration parsing for current examples
-- Added parser tests:
-  - parses `examples/hello.gb`
-  - parses `examples/basic_types.gb`
-- Implemented initial CLI parse flow in `crates/goby-cli`:
-  - loads source file
-  - parses with `goby_core::parse_module`
-  - reports declaration count
-- Verified with:
-  - `cargo test`
-  - `cargo run -p goby-cli -- run examples/hello.gb`
-  - `cargo run -p goby-cli -- check examples/basic_types.gb`
+Sessions 1–4 built the project from scaffold to a working runtime:
 
-## 9. Progress Since Minimal Parser
+- **Sessions 1–2**: parser, typechecker, CLI (`run`/`check`), Wasm codegen
+  skeleton, `string.concat`, `to_str_repr()` precedence fix, declared
+  return-type validation.
+- **Session 3**: `List Int` runtime, `map`, pipeline (`|>`), lambda forms
+  (`|n| -> ...`, `_ * ...`), `List Int` print formatting, unit-returning
+  function call support with callable arguments.
+- **Session 4**: Codex review P0/P1 fixes — `MethodCall` in
+  `needs_parens_as_subexpr`, `ty_name()` recursive formatting, silent
+  binding-clear removal, `split_top_level_comma` / `parse_string_concat_call`
+  consolidated into `goby-core/src/str_util.rs`.
 
-- Added minimal typechecking in `crates/goby-core`:
-  - `types.rs`: basic function type parsing (`->`) and effect suffix stripping (`can ...`)
-  - `typecheck.rs`: duplicate declaration check and `main : Unit -> Unit` MVP check
-- Updated CLI flow in `crates/goby-cli`:
-  - parse -> typecheck -> success output
-- Added/updated tests:
-  - function type parsing with effect annotation
-  - example-level typecheck for `hello.gb` and `basic_types.gb`
-
-## 10. Progress Since Minimal Typecheck
-
-- Updated `goby-cli` command contract:
-  - `run <file.gb>` now requires `main`
-  - `check <file.gb>` added for parse/typecheck-only workflows
-- This aligns CLI behavior with MVP intent:
-  - `hello.gb` is a run target
-  - `basic_types.gb` is a check target
-
-## 11. Progress Since Initial CLI Contract Hardening
-
-- Added minimal Wasm codegen in `crates/goby-wasm`:
-  - `compile_module` emits a valid Wasm module exporting `main`
-  - returns error when `main` is missing
-- Updated `goby-cli run`:
-  - parse + typecheck + codegen
-  - writes output wasm file next to input (`<name>.wasm`)
-- Added wasm backend unit test:
-  - validates emitted module magic header
-
-## 12. Progress Since Initial Wasm Emission
-
-- Refactored `goby-cli` internals for maintainability:
-  - separated argument parsing (`parse_args`) from execution (`run`)
-  - unified error handling via `CliError` (usage vs runtime)
-  - preserved command behavior (`run` / `check`)
-
-## 13. Progress Since CLI Internal Refactor
-
-- Improved `goby-cli` testability:
-  - extracted iterator-based `parse_args_from` for unit testing
-  - added CLI argument parser unit tests (run/unknown/extra cases)
-- Improved `goby-wasm` maintainability:
-  - changed minimal wasm bytes to a named constant slice
-  - simplified module byte materialization with `to_vec()`
-
-## 14. Progress Since CLI Refactor Step 2
-
-- Added minimal execution phase to `goby-cli run`:
-  - after wasm emission, attempts `wasmtime run --invoke main <file.wasm>`
-  - if `wasmtime` is unavailable, prints a skip message and exits successfully
-- Added CLI unit test for wasm output path computation
-
-## 15. Progress Since CLI Refactor Step 3
-
-- Refined `wasmtime` execution behavior in `goby-cli run`:
-  - switched from `output()` to `status()` so runtime stdout/stderr is not swallowed
-  - improved failure diagnostics with explicit exit status reporting
-  - factored availability check into `is_wasmtime_available`
-- Expanded CLI arg parser tests:
-  - missing command
-  - missing file
-
-## 16. Progress Since CLI Refactor Step 4
-
-- Simplified wasm execution control flow in `goby-cli`:
-  - replaced string-sentinel error branching with explicit `ExecutionOutcome`
-- `execute_wasm` now returns:
-  - `Executed`
-  - `SkippedNoWasmtime` (when `wasmtime` is not installed)
-
-## 17. Progress Since Wasm Execution Refactor
-
-- Added first expression-aware Wasm lowering path in `goby-wasm`:
-  - when `main` body is `print "..."`, emits a WASI `fd_write`-based module via WAT
-  - otherwise falls back to minimal empty-main module
-- Added new wasm backend test for print-literal codegen.
-- Added `wat` dependency in `goby-wasm` and updated lockfile.
-
-## 18. Progress Since Wasm Lowering Refactor
-
-- Fixed memory layout safety in print-literal Wasm generation:
-  - moved static write buffers to non-overlapping offsets (`iovec`, `nwritten`, text)
-  - removed potential overlap for longer print strings
-- Added bounds-safe string-length conversion (`usize` -> `u32`) with explicit error.
-- Added regression test for long print literals.
-
-## 19. Progress Since Wasm Lowering Refactor Step 2
-
-- Improved wasm backend maintainability by removing print-lowering magic numbers:
-  - extracted static offsets into named constants (`IOVEC_OFFSET`, `NWRITTEN_OFFSET`, `TEXT_OFFSET`)
-  - extracted iovec serialization into `encode_iovec`
-- Added focused unit test for iovec little-endian encoding.
-
-## 20. Progress Since Wasm Lowering Step 3
-
-- Added shared print-body analysis in `goby-core` (`analysis.rs`):
-  - resolves `print "..."` literals
-  - resolves `print <identifier>` when identifier is a local string binding
-  - reports invalid print argument forms
-- Updated `typecheck` to validate print argument string-ness using shared analysis.
-- Updated `goby-wasm` to reuse shared analysis instead of custom print parsing.
-- Added `examples/print/local_binding.gb` for local-binding print flow.
-
-## 21. Progress Since Shared Analysis Refactor
-
-- Strengthened print analysis correctness:
-  - no longer stops at first print line
-  - validates all lines and rejects unsupported multiple-print bodies
-- Added regression test for multiple print-call rejection.
-
-## 22. Progress Since Shared Analysis Refactor Step 2
-
-- Hardened assignment detection in print analysis:
-  - `=` is treated as binding only when it is not part of `==`
-  - prevents accidental misclassification of equality-like expressions
-- Added regression test to ensure equality-like lines are not interpreted as local bindings.
-
-## 23. Progress Since Shared Analysis Refactor Step 3
-
-- Extended string expression resolution for print analysis:
-  - supports `string.concat(<string-expr>, <string-expr>)`
-  - supports nested concat and local string bindings
-- Added new sample:
-  - `examples/print/concat.gb`
-- Added analysis tests for concat-based print resolution.
-
-## 24. Progress Since Shared Analysis Refactor Step 4
-
-- Refactored `analysis.rs` for maintainability:
-  - extracted local-binding update logic
-  - extracted print-argument resolution logic
-  - centralized error message constants for print analysis
-- Kept behavior equivalent while improving readability and future edit safety.
-
-## 25. Progress Since Shared Analysis Refactor Step 5
-
-- Improved print-call parsing robustness:
-  - accepts whitespace after `print` (including tabs), not only a single space
-- Made comment handling explicit in body analysis:
-  - lines beginning with `#` are skipped intentionally
-- Added regression tests for tab-delimited print syntax and inline comment skipping.
-
-## 26. Progress Since Shared Analysis Refactor Step 6
-
-- Locked indentation mixing behavior for MVP in `doc/PLAN.md`:
-  - any leading space/tab marks an indented line
-  - mixed tabs/spaces in one block are accepted in MVP
-- Added parser regression test to ensure mixed-indentation block lines parse as one declaration body.
-
-## 27. Progress Since Shared Analysis Refactor Step 7
-
-- Locked MVP Wasm execution path in docs to match current CLI behavior:
-  - `run` emits `<input>.wasm`
-  - attempts execution via external `wasmtime`
-  - gracefully skips execution when `wasmtime` is unavailable
-
-## 28. Progress Since Shared Analysis Refactor Step 8
-
-- Realigned MVP docs for `function.gb` implementation track:
-  - clarified that `map` belongs to MVP parse/typecheck scope
-  - kept runtime/codegen support for `map` explicitly out of current MVP runtime scope
-  - locked `examples/function.gb` as a `check` acceptance target
-
-## 29. Progress Since Shared Analysis Refactor Step 9
-
-- Confirmed `examples/function.gb` with `main` now passes:
-  - `cargo run -p goby-cli -- check examples/function.gb`
-- Temporarily relaxed typecheck by removing print-string-only enforcement from `typecheck.rs`:
-  - this unblocks `function.gb` in `check` mode while AST/type work is still pending
-- Confirmed runtime is still blocked at codegen:
-  - `cargo run -p goby-cli -- run examples/function.gb` fails with current print-lowering limitation
-
-## 30. Progress Since Shared Analysis Refactor Step 10
-
-- Added explicit Wasm codegen diagnostics for unsupported forms:
-  - `print List` is reported as unsupported
-  - pipeline operator `|>` is now reported as unsupported
-  - higher-order/anonymous-function usage is now reported as unsupported
-- Added focused `goby-wasm` unit tests for each diagnostic path.
-
-## 31. Progress Since Shared Analysis Refactor Step 11
-
-- Extended Wasm print lowering with a first `Int` path:
-  - supports `print` of simple integer expressions in `main` (literal/identifier and `+`/`*` combinations)
-  - reuses existing WASI `fd_write` module emission by converting resolved int values to text
-- Updated `goby-wasm` tests:
-  - replaced the `print Int` unsupported diagnostic case with a positive codegen case for local int bindings.
-
-## 32. Progress Since Shared Analysis Refactor Step 12
-
-- Extended integer expression lowering to follow simple top-level Int function calls:
-  - infers single-parameter usage from declaration bodies for MVP subset
-  - resolves `main` local bindings that call Int-returning functions
-  - emits printable output through existing WASI `fd_write` path
-- Updated `examples/function.gb` to the runnable integer-function subset.
-- Added `goby-wasm` regression test to ensure `examples/function.gb` compiles as a valid Wasm module.
-
-## 33. Progress Since Shared Analysis Refactor Step 13
-
-- Re-locked policy that `examples/function.gb` is canonical and must not be simplified.
-- Updated planning/state docs to treat `function.gb` runtime parity as required work.
-- Recorded concrete parity gap as of 2026-02-27:
-  - `cargo run -p goby-cli -- run examples/function.gb` currently prints only `90`.
-  - remaining required behaviors are `map`, anonymous function forms, pipeline, and `List Int` print output.
-
-## 34. Progress Since Function Runtime Parity Step 5
-
-- Added `List Int` runtime evaluation subset in `goby-wasm` analysis path:
-  - supports `map <list-expr> (|n| -> <int-expr>)`
-  - supports placeholder lambda shorthand in map position (`_ * 10` form)
-  - supports list-function call parsing with spaced list literals (for forms like `mul_tens [3, 4, 5]`)
-- Removed the old blanket higher-order rejection guard so supported `map` + lambda subset can be analyzed.
-- Added regression tests that lock these forms through codegen diagnostics:
-  - named-lambda map print path reports `print List` unsupported (Step 6 still pending)
-  - placeholder-lambda map print path reports `print List` unsupported
-  - list-function call with spaced literal argument reports `print List` unsupported
-
-## 35. Progress Since Function Runtime Parity Step 6
-
-- Refactored `goby-wasm` runtime output resolution to evaluate `main` sequentially and collect all print outputs in order.
-- Implemented pipeline handling in runtime subset (`x |> f`) and supported `|> print` output emission for `main` statements.
-- Implemented `List Int` print formatting as bracketed comma-separated output.
-- Updated diagnostics so `print Int` / `print List` are treated as supported in the current runtime subset.
-- Replaced previous unsupported-form regression tests with parity-lock tests:
-  - pipeline print output resolution test (`[1, 2, 3]`)
-  - canonical `examples/function.gb` output lock:
-    - `90`
-    - `[30, 40, 50]`
-    - `[60, 70]`
-
-## 36. Progress Since Function-Argument Runtime Support
-
-- Extended runtime output resolution to execute `Unit`-returning function calls in `main` expression statements.
-- Added support for passing `Int -> Int` callables as function arguments and invoking them inside function bodies (`f 10`).
-- Added callable argument forms:
-  - inline lambda (`|n| -> n + 5`)
-  - named function reference (`add_ten`)
-- Hardened parameter inference by ignoring identifiers inside string literals.
-- Updated `function.gb` runtime parity lock output:
-  - `90`
-  - `[30, 40, 50]`
-  - `[60, 70]`
-  - `something`
-  - `15`
-- Added focused regression for function-argument call runtime output.
-- Verified end-to-end validation commands:
-  - `cargo fmt --all`
-  - `cargo clippy --all-targets --all-features -- -D warnings`
-  - `cargo test --all-features`
-  - `cargo run -p goby-cli -- run examples/function.gb`
-
-## 37. Progress Since Typecheck Tightening Step 1
-
-- Strengthened `goby-core` typecheck validation for top-level annotations:
-  - rejects legacy `void` spelling in any type annotation and requires `Unit`
-  - validates `can` clause syntax (effect list must be non-empty identifiers)
-  - reports invalid function type annotation shape when `->` is malformed
-- Added focused typecheck regressions for:
-  - rejecting `void` in non-`main` declarations
-  - rejecting empty `can` effect list
-  - rejecting invalid effect identifiers
-  - accepting non-function annotations such as tuple types
-- Validation run:
-  - `cargo fmt`
-  - `cargo test`
-  - `cargo run -p goby-cli -- run examples/function.gb`
+All function.gb parity steps (checklist in §6) were completed by end of
+session 3. All 73+ tests passed from session 4 onwards.
 
 ## 38. Progress Since AST Expression Parser Introduction (Phase 4a/4b)
 
@@ -572,3 +304,24 @@ Only one call site remains: the `_ =>` fallback arm in `execute_unit_ast_stmt` f
 - `cargo clippy --all-targets --all-features -- -D warnings`: clean.
 - `cargo run -p goby-cli -- run examples/hello.gb`: `Hello Goby!`
 - `cargo run -p goby-cli -- run examples/function.gb`: `90 / [30, 40, 50] / [60, 70] / something / 15`
+
+## 44. Progress Since Codex P1 Review Fixes (session 6, commit 2)
+
+Commit `26df9b2`. 89 tests pass, clippy clean.
+
+### P1-A (`goby-wasm/src/lib.rs`)
+`execute_unit_ast_stmt` now accepts `depth: usize` and propagates it to
+all `eval_expr_ast` calls inside it (instead of resetting to `0`).
+`execute_unit_call` passes `i + 1` as depth when iterating `parsed_stmts`,
+so nested unit-function calls respect `MAX_EVAL_DEPTH`.
+
+### P1-B (`goby-wasm/src/lib.rs`)
+`Expr::Call` arm in `eval_expr_ast`: added comment documenting that a
+non-`Var` callee (curried call, lambda application) is not yet supported
+by the native evaluator and returns `None` intentionally.
+
+### P1-C (`goby-wasm/src/lib.rs`)
+`apply_pipeline` now accepts `_depth: usize`. The AST path passes
+`depth + 1`; the string path passes `0`. A comment notes that `_depth`
+is not propagated into `IntEvaluator`'s own depth counter — known
+limitation until the string path is removed.
