@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-02-28 (session 3)
+Last updated: 2026-02-28 (session 4)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -475,8 +475,32 @@ Three P0 bugs identified by Codex review were fixed. All 73 tests pass.
 4. `MethodCall` missing from `needs_parens_as_subexpr()`.
 5. Function parameters not registered in `TypeEnv` (e.g. `double x = x + x` → `x` is `Unknown`).
 
+## 40. Progress Since Refactoring Phase (session 4)
+
+Two commits: refactoring cleanup + P1 item fixes. All 80 tests pass.
+
+### Refactoring commit (`51fea1a`)
+
+- Removed dead `_ if callee == "print"` branch in `check_expr` Pipeline arm.
+- Extracted `annotation_return_ty()` helper in `typecheck.rs`.
+- Collapsed nested `if let` guards with `filter()` and let-chains (clippy).
+- Propagated `None` in `execute_unit_call` string-path `Statement::Binding` (last silent-clear site).
+
+### P1 fixes commit (`866e594`)
+
+- `ast.rs`: `Expr::MethodCall` added to `needs_parens_as_subexpr()`.
+- `typecheck.rs`: `ty_name()` now returns `String` and formats `List Int` recursively.
+- `goby-wasm`: `bind_local()` propagates `None` on eval failure; no more silent binding clears anywhere.
+- `goby-core/src/str_util.rs`: new module with `split_top_level_comma` and `parse_string_concat_call`; duplicate implementations in `analysis.rs` and `goby-wasm` removed.
+
+### Remaining known gaps (P2)
+
+- Function parameters not registered in `TypeEnv` (`double x = x + x` → `x` is `Unknown`).
+- Tuple type annotation body type check skipped (`(String, Int)` → `Ty::Unknown`).
+- `str_util::split_top_level_comma` is `pub` but could be `pub(crate)`.
+
 ### Next work
 
-- Address P1 items above.
 - Migrate evaluator fully to AST path (remove `to_str_repr()` dependency).
 - Wasm codegen: emit actual Wasm bytecode for integer arithmetic (remove WAT dependency).
+- Register function parameters in `TypeEnv` to enable proper body type inference.
