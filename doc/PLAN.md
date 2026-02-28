@@ -29,6 +29,16 @@ Based on `examples/*.gb`:
 
 - Function calls support both `f x` and `f(x)`.
   - `f(x)` is used when precedence needs to be explicit.
+- Block-local binding semantics are fixed for MVP:
+  - `name = expr` is a local binding statement only when `name` is an identifier and `=` is assignment (not `==`).
+  - bindings are visible to subsequent statements in the same declaration body.
+  - re-binding the same name in the same body is allowed; the newer binding shadows the older one from that point onward.
+  - bindings are declaration-local and do not escape to other declarations.
+- Operator precedence/associativity is fixed for MVP:
+  - precedence (low -> high): pipeline `|>` < addition `+` < multiplication `*` < call/application (`f x`, `f(x)`, `receiver.method(...)`).
+  - `|>`, `+`, `*` are left-associative.
+  - for MVP parser compatibility, infix `+` and `*` require spaces on both sides.
+  - pipeline callee must be an identifier (`expr |> f`).
 - Type annotation style is unified to `name : Type`.
 - Statement terminators are newline or `;`.
 - Indentation-based blocks accept both tabs and spaces.
@@ -67,9 +77,7 @@ Based on `examples/*.gb`:
 
 ### 2.1 Syntax and Parsing
 
-- Final rule for assignment/binding inside blocks (`a = 10` semantics).
 - Comment syntax policy (currently `# ...` in examples).
-- Operator precedence and associativity table.
 
 ### 2.2 Types and Checking
 
