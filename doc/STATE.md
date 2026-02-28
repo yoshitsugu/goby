@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-02-28 (session 17, uncommitted)
+Last updated: 2026-02-28 (session 18, uncommitted)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -85,7 +85,7 @@ This file is a restart-safe snapshot for resuming work after context reset.
   (import parsing + minimal built-in module resolver + typecheck integration) and verified full checks.
 - 2026-02-28 (session 16, uncommitted): finalized import collision policy
   (ambiguous imported names error only when referenced) and synced plan/state docs.
-- 2026-02-28 (session 17, uncommitted): completed `effect.gb` slice:
+- 2026-02-28 (session 17, committed ddbf19e): completed `effect.gb` slice:
   - `effect`/`handler` top-level block parsing and AST nodes.
   - `Stmt::Using` with indentation-aware body parsing.
   - effect member registration in type env (qualified and bare keys).
@@ -94,6 +94,14 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - fixed `try_parse_call` to accept qualified callee (`Mod.fn x`, `Mod.fn(x)`).
   - added `parses_effect_gb_declarations` regression test.
   - `check` now passes for all `examples/*.gb` including `effect.gb`.
+- 2026-02-28 (session 18, uncommitted): completed `type.gb` runtime slice:
+  - added `RuntimeValue::Record { constructor, fields }` variant to Wasm evaluator.
+  - added `record_values` field to `RuntimeLocals` (stores `RuntimeValue::Record` directly).
+  - implemented `Expr::RecordConstruct` evaluation (recursive field evaluation).
+  - implemented `Expr::Qualified` evaluation (field access for records; union constructor fallback).
+  - simplified `execute_unit_call_ast` parameter binding via `locals.store`.
+  - `run examples/type.gb` now outputs `John`.
+  - all `examples/*.gb` pass `check`; `function.gb` and `type.gb` pass `run`.
 
 ## 5. Current Example Files
 
@@ -117,9 +125,8 @@ This file is a restart-safe snapshot for resuming work after context reset.
    - `cargo run -p goby-cli -- check examples/effect.gb`
    - `cargo run -p goby-cli -- check examples/type.gb`
    - `cargo run -p goby-cli -- check examples/control_flow.gb`
-3. All post-MVP `examples/*.gb` now pass `check`. Consider next direction:
-   - runtime support for `control_flow.gb` (`case`/`if`/`==` in Wasm backend), or
-   - runtime support for `type.gb` (record construction and field access in Wasm), or
+3. All post-MVP `examples/*.gb` now pass `check`. Next runtime targets:
+   - runtime support for `control_flow.gb` (`case`/`if`/`==` — needs new AST nodes + parser + Wasm eval), or
    - runtime support for `effect.gb` (handler dispatch — significant scope).
 4. After each slice, re-run:
    - `cargo check`

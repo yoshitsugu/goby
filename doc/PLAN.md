@@ -147,11 +147,13 @@ Based on `examples/*.gb`:
 
 ## 5. Example-Driven Feature Checklist
 
-Status baseline (2026-02-28, session 17):
+Status (2026-02-28, session 18):
 - `check` passes: `hello.gb`, `basic_types.gb`, `function.gb`, `generic_types.gb`,
   `print/local_binding.gb`, `print/concat.gb`, `parser/mixed_indent.gb`,
   `control_flow.gb`, `import.gb`, `type.gb`, `effect.gb`.
 - `check` fails: none.
+- `run` passes (locked output): `function.gb`.
+- `run` passes: `type.gb` (outputs `John`).
 
 ### 5.1 Core Syntax/Typing Used by Stable Examples
 
@@ -375,3 +377,58 @@ Out of scope for this slice:
 - Handler dispatch at runtime.
 - Exhaustiveness checking for effect members in handlers.
 - Effect inference.
+
+## 10. Incremental Implementation Plan (Upcoming Slice: `type.gb` runtime)
+
+Goal:
+- make `cargo run -p goby-cli -- run examples/type.gb` produce the correct output (`John`).
+
+### Phase 1: Scope lock (minimum useful subset)
+
+Support only the constructs present in `examples/type.gb`'s `main` body:
+- `User(id: "1234", name: "John", status: UserStatus.Activated)` — record construction at runtime.
+- `UserStatus.Activated` — qualified union constructor reference (evaluates to a string-like value).
+- `user.name` — record field access, evaluated as `Expr::Qualified { receiver: "user", member: "name" }`.
+- `print user.name` — print a String field value.
+
+All changes are confined to `crates/goby-wasm/src/lib.rs`.
+No parser, typechecker, or AST changes are required.
+
+### Phase 2: RuntimeValue and RuntimeLocals extension
+
+- Add `RuntimeValue::Record { constructor: String, fields: HashMap<String, RuntimeValue> }` variant.
+- Add `record_values: HashMap<String, (String, HashMap<String, RuntimeValue>)>` field to `RuntimeLocals`.
+  - `(String, HashMap<...>)` stores `(constructor_name, field_map)`.
+- Update `RuntimeLocals::store`, `clear`, `get` to handle the new variant.
+- Update `RuntimeValue::to_output_text` / `to_expression_text` to handle `Record` (return constructor name for now — not needed by `type.gb` since only a String field is printed, but must not panic).
+
+### Phase 3: eval_expr_ast extension
+
+- `Expr::Qualified { receiver, member }`:
+  - If `locals.get(receiver)` returns `RuntimeValue::Record { fields, .. }`, return `fields.get(member).cloned()`.
+  - Otherwise fall through to `None` (existing behavior for module-qualified names).
+- `Expr::RecordConstruct { constructor, fields }`:
+  - Evaluate each field value recursively via `eval_expr_ast`.
+  - Collect into a `HashMap<String, RuntimeValue>`.
+  - Return `RuntimeValue::Record { constructor: constructor.clone(), fields }`.
+- `Expr::Qualified` for union constructors (`UserStatus.Activated`):
+  - No local variable named `UserStatus` exists → `locals.get("UserStatus")` returns `None`.
+  - Fall through: return `RuntimeValue::String(member.clone())` as the constructor name value.
+  - This is sufficient for `type.gb` since the `status` field is stored but not printed.
+
+### Phase 4: Validation and docs
+
+Run:
+- `cargo run -p goby-cli -- run examples/type.gb` (expected output: `John`)
+- `cargo run -p goby-cli -- run examples/function.gb` (locked output unchanged)
+- `cargo run -p goby-cli -- check examples/effect.gb`
+- `cargo check`
+- `cargo test`
+- `cargo clippy -- -D warnings`
+
+Update `doc/PLAN.md` checklist (§ 5.3) and `doc/STATE.md`.
+
+Out of scope for this slice:
+- Record update syntax.
+- Pattern matching on record fields.
+- Printing a record value (only field access is needed for `type.gb`).
