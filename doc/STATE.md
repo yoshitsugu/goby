@@ -88,6 +88,9 @@ This file is a restart-safe snapshot for resuming work after context reset.
 - `examples/basic_types.gb`
 - `examples/function.gb`
 - `examples/generic_types.gb`
+- `examples/import.gb`
+- `examples/control_flow.gb`
+- `examples/type.gb`
 
 ## 6. Immediate Next Steps (Execution Order)
 
@@ -99,7 +102,8 @@ This file is a restart-safe snapshot for resuming work after context reset.
    - `cargo run -p goby-cli -- check examples/import.gb`
 3. Start next post-MVP vertical slice:
    - `control_flow.gb` (`case` / `if` / `==`), or
-   - `effect.gb` (`effect` / `handler` / `using`).
+   - `effect.gb` (`effect` / `handler` / `using`), or
+   - `type.gb` (`type` alias / union / record / field access; visibility is out of scope).
 4. After each slice, re-run:
    - `cargo check`
    - `cargo test`

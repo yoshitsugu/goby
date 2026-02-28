@@ -149,8 +149,9 @@ Based on `examples/*.gb`:
 
 Status baseline (2026-02-28):
 - `check` passes: `hello.gb`, `basic_types.gb`, `function.gb`, `generic_types.gb`,
-  `print/local_binding.gb`, `print/concat.gb`, `parser/mixed_indent.gb`.
-- `check` fails: `control_flow.gb`, `effect.gb`, `import.gb`.
+  `print/local_binding.gb`, `print/concat.gb`, `parser/mixed_indent.gb`,
+  `control_flow.gb`, `import.gb`.
+- `check` fails: `effect.gb`, `type.gb`.
 
 ### 5.1 Core Syntax/Typing Used by Stable Examples
 
@@ -184,6 +185,12 @@ Status baseline (2026-02-28):
 - [ ] Multiple effects in `can` with semantic checking (currently parse/type surface only)
 - [ ] `case` expressions with pattern arms and wildcard `_`
 - [ ] `if ... else ...` (or strict desugaring rule to `case`) and `==` typing rules
+- [ ] `type` declarations:
+  - alias (`type UserID = String`)
+  - union/sum (`type UserStatus = Activated | Deactivated`)
+  - record constructor syntax (`type User = User(...)`)
+  - field visibility is not part of this slice (no private/public distinction yet)
+  - qualified constructor/member references (`UserStatus.Activated`, `user.name`)
 
 ## 6. Spec Detail Notes (Need Clarification Before Implementation)
 
@@ -204,6 +211,9 @@ Status baseline (2026-02-28):
   whether records are introduced before module/effect expansion and minimal syntax shape.
 - Import system (post-slice remaining scope):
   filesystem-backed/local package resolution, dependency graph rules, and cache/build integration.
+- Type declaration system:
+  namespace and shadowing rules (type names, constructors, field names),
+  record update/access grammar, and future visibility model (out of scope for now).
 
 ## 7. Incremental Implementation Plan (Next Slice: `import.gb`)
 
@@ -255,3 +265,37 @@ Status:
   - minimal built-in resolver for `goby/string`, `goby/list`, `goby/env`,
   - typecheck integration for imported names used by `examples/import.gb`,
   - import-collision policy (error when ambiguous name is used).
+
+## 8. Incremental Implementation Plan (Upcoming Slice: `type.gb`)
+
+Goal:
+- make `cargo run -p goby-cli -- check examples/type.gb` pass with a minimal type-declaration feature set.
+
+Phase 1: Scope lock (minimum useful subset)
+- support only:
+  - `type Name = AliasType`
+  - `type Name = CtorA | CtorB`
+  - `type Name = Ctor(field1: Type, field2: Type, ...)`
+- support constructor/value references used by `examples/type.gb`:
+  - `TypeName.Ctor`
+  - `Ctor(field: value, ...)`
+  - `value.field`
+- keep runtime (`run`) support out of scope for this slice; target `check` first.
+- field visibility/private access control is explicitly out of scope in this slice.
+
+Phase 2: Parser/AST extension
+- add top-level `type` declarations to module AST.
+- parse union and record constructor forms.
+- parse named/qualified constructor expressions and member access expressions.
+
+Phase 3: Typecheck integration
+- register declared aliases/unions/records in a type definition table.
+- resolve constructor calls and field access types.
+
+Phase 4: Validation and docs
+- run:
+  - `cargo run -p goby-cli -- check examples/type.gb`
+  - `cargo check`
+  - `cargo test`
+  - `cargo clippy -- -D warnings`
+- update checklist and `doc/STATE.md` with locked decisions and residual gaps.

@@ -1,0 +1,12 @@
+# Type Alias
+type UserID = String
+
+# Union Type
+type UserStatus = Activated | Deactivated
+
+# You can define a record type with a constructor
+type User = User(id: UserID, name: String, status: UserStatus)
+
+main =
+  user = User(id: "1234", name: "John", status: UserStatus.Activated)
+  print user.name
