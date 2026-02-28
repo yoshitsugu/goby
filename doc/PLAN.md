@@ -173,8 +173,9 @@ Status baseline (2026-02-28):
 
 ### 5.3 Features Referenced by Non-MVP Examples (Post-MVP Backlog)
 
-- [ ] `import` syntax and module resolution
-  (`import goby/x`, alias `as`, selective import `(...)`)
+- [x] `import` syntax and minimal module resolution
+  (`import goby/x`, alias `as`, selective import `(...)`) for built-in modules
+  (`goby/string`, `goby/list`, `goby/env`) used by `examples/import.gb`.
 - [ ] `effect` declarations and effect member signatures
 - [ ] `handler ... for ...` syntax and handler scope semantics
 - [ ] `using` handler application syntax (single/multiple handlers)
@@ -199,6 +200,8 @@ Status baseline (2026-02-28):
   where annotations are required vs optional outside current MVP subset.
 - Tuple/record roadmap:
   whether records are introduced before module/effect expansion and minimal syntax shape.
+- Import system (post-slice remaining scope):
+  filesystem-backed/local package resolution, dependency graph rules, and cache/build integration.
 
 ## 7. Incremental Implementation Plan (Next Slice: `import.gb`)
 

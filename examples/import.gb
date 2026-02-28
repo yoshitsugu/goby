@@ -7,6 +7,7 @@ import goby/list as l
 # You can import only specific types or functions with `(` `)`.
 import goby/env ( fetch_env_var )
 
+main : Unit -> Unit can Print
 main =
   paths = fetch_env_var "GOBY_PATH"
   list_paths = string.split(paths, ",")
