@@ -37,6 +37,7 @@ pub enum BinOpKind {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Expr {
     IntLit(i64),
+    BoolLit(bool),
     StringLit(String),
     ListLit(Vec<Expr>),
     TupleLit(Vec<Expr>),
@@ -91,6 +92,7 @@ impl Expr {
     pub fn to_str_repr(&self) -> Option<String> {
         match self {
             Expr::IntLit(n) => Some(n.to_string()),
+            Expr::BoolLit(v) => Some(if *v { "True" } else { "False" }.to_string()),
             Expr::StringLit(s) => Some(format!("\"{}\"", s)),
             Expr::Var(name) => Some(name.clone()),
             Expr::ListLit(items) => {

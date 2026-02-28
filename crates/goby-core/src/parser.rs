@@ -204,11 +204,11 @@ pub fn parse_expr(src: &str) -> Option<Expr> {
     }
 
     // 11. Bool literal
-    if src == "true" {
-        return Some(Expr::Var("true".to_string()));
+    if src == "True" {
+        return Some(Expr::BoolLit(true));
     }
-    if src == "false" {
-        return Some(Expr::Var("false".to_string()));
+    if src == "False" {
+        return Some(Expr::BoolLit(false));
     }
 
     // 12. Integer literal
@@ -972,6 +972,12 @@ mod tests {
                 right: Box::new(Expr::Var("b".to_string())),
             })
         );
+    }
+
+    #[test]
+    fn parses_bool_literals() {
+        assert_eq!(parse_expr("True"), Some(Expr::BoolLit(true)));
+        assert_eq!(parse_expr("False"), Some(Expr::BoolLit(false)));
     }
 
     #[test]
