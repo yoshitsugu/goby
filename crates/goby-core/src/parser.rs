@@ -707,6 +707,59 @@ mod tests {
     }
 
     #[test]
+    fn parses_operator_precedence_mul_higher_than_add() {
+        assert_eq!(
+            parse_expr("1 + 2 * 3"),
+            Some(Expr::BinOp {
+                op: BinOpKind::Add,
+                left: Box::new(Expr::IntLit(1)),
+                right: Box::new(Expr::BinOp {
+                    op: BinOpKind::Mul,
+                    left: Box::new(Expr::IntLit(2)),
+                    right: Box::new(Expr::IntLit(3)),
+                }),
+            })
+        );
+    }
+
+    #[test]
+    fn parses_left_associative_addition() {
+        assert_eq!(
+            parse_expr("1 + 2 + 3"),
+            Some(Expr::BinOp {
+                op: BinOpKind::Add,
+                left: Box::new(Expr::BinOp {
+                    op: BinOpKind::Add,
+                    left: Box::new(Expr::IntLit(1)),
+                    right: Box::new(Expr::IntLit(2)),
+                }),
+                right: Box::new(Expr::IntLit(3)),
+            })
+        );
+    }
+
+    #[test]
+    fn parses_pipeline_as_lowest_precedence() {
+        assert_eq!(
+            parse_expr("1 + 2 |> print"),
+            Some(Expr::Pipeline {
+                value: Box::new(Expr::BinOp {
+                    op: BinOpKind::Add,
+                    left: Box::new(Expr::IntLit(1)),
+                    right: Box::new(Expr::IntLit(2)),
+                }),
+                callee: "print".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn requires_spaces_around_infix_operators_in_mvp_parser() {
+        assert_eq!(parse_expr("a+b"), None);
+        assert_eq!(parse_expr("a*2"), None);
+    }
+
+    #[test]
     fn parses_list_literal() {
         assert_eq!(
             parse_expr("[3, 4, 5]"),
@@ -820,6 +873,21 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn parses_rebinding_in_same_body() {
+        let body = "a = 1\na = a + 1\na";
+        let stmts = parse_body_stmts(body).expect("should parse");
+        assert_eq!(stmts.len(), 3);
+        assert!(matches!(&stmts[0], Stmt::Binding { name, .. } if name == "a"));
+        assert!(matches!(&stmts[1], Stmt::Binding { name, .. } if name == "a"));
+        assert!(matches!(&stmts[2], Stmt::Expr(Expr::Var(name)) if name == "a"));
+    }
+
+    #[test]
+    fn does_not_treat_equality_as_binding_statement() {
+        assert_eq!(parse_stmt("a == 1"), None);
     }
 
     #[test]
