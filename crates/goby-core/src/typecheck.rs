@@ -3,6 +3,7 @@ use std::collections::{HashMap, HashSet};
 use crate::{
     Module,
     ast::{BinOpKind, Expr, Stmt},
+    str_util::split_top_level_commas,
     types::parse_function_type,
 };
 
@@ -58,21 +59,39 @@ pub fn typecheck_module(module: &Module) -> Result<(), TypecheckError> {
             let declared_return_ty = decl.type_annotation.as_deref().map(annotation_return_ty);
 
             // Derive per-parameter types from the function type annotation.
-            let param_tys: Vec<(String, Ty)> = decl
-                .type_annotation
-                .as_deref()
-                .and_then(|ann| {
+            // Also validate that the number of declared params matches the annotation.
+            let param_tys: Vec<(String, Ty)> = {
+                let ft_opt = decl.type_annotation.as_deref().and_then(|ann| {
                     let base = strip_effect_clause(ann);
                     parse_function_type(base)
-                })
-                .map(|ft| {
+                });
+
+                if let Some(ft) = ft_opt {
+                    // A single `Unit` parameter may be omitted from the definition
+                    // (e.g. `main : Unit -> Unit; main = ...` is idiomatic in MVP).
+                    let unit_param_omitted = decl.params.is_empty()
+                        && ft.arguments.len() == 1
+                        && ft.arguments[0] == "Unit";
+
+                    if !unit_param_omitted && decl.params.len() != ft.arguments.len() {
+                        return Err(TypecheckError {
+                            declaration: Some(decl.name.clone()),
+                            message: format!(
+                                "definition has {} parameter(s) but type annotation has {}",
+                                decl.params.len(),
+                                ft.arguments.len()
+                            ),
+                        });
+                    }
                     decl.params
                         .iter()
                         .zip(ft.arguments.iter())
                         .map(|(name, ann_ty)| (name.clone(), ty_from_annotation(ann_ty)))
                         .collect()
-                })
-                .unwrap_or_default();
+                } else {
+                    Vec::new()
+                }
+            };
 
             let param_ty_refs: Vec<(&str, Ty)> = param_tys
                 .iter()
@@ -188,9 +207,12 @@ fn ty_from_annotation(s: &str) -> Ty {
         }
         _ if s.starts_with('(') && s.ends_with(')') => {
             let inner = &s[1..s.len() - 1];
-            let parts = split_annotation_commas(inner);
+            let parts = split_top_level_commas(inner);
             if parts.len() >= 2 {
                 Ty::Tuple(parts.iter().map(|p| ty_from_annotation(p)).collect())
+            } else if parts.len() == 1 {
+                // Grouped type like `(Int -> Int)` — unwrap the parens.
+                ty_from_annotation(parts[0])
             } else {
                 Ty::Unknown
             }
@@ -199,25 +221,6 @@ fn ty_from_annotation(s: &str) -> Ty {
     }
 }
 
-/// Split an annotation string at top-level commas (respects nested parentheses).
-fn split_annotation_commas(s: &str) -> Vec<&str> {
-    let mut parts = Vec::new();
-    let mut depth = 0usize;
-    let mut start = 0usize;
-    for (idx, ch) in s.char_indices() {
-        match ch {
-            '(' => depth += 1,
-            ')' => depth = depth.saturating_sub(1),
-            ',' if depth == 0 => {
-                parts.push(s[start..idx].trim());
-                start = idx + 1;
-            }
-            _ => {}
-        }
-    }
-    parts.push(s[start..].trim());
-    parts
-}
 
 // ---------------------------------------------------------------------------
 // Expression type inference
@@ -566,6 +569,28 @@ mod tests {
     }
 
     #[test]
+    fn grouped_type_annotation_is_unwrapped() {
+        // `n : (Int)` is a grouped type, equivalent to `n : Int`.
+        // The body `42` is Int, so this should pass.
+        let module = parse_module("n : (Int)\nn = 42\n").expect("should parse");
+        typecheck_module(&module).expect("grouped type annotation should be accepted");
+    }
+
+    #[test]
+    fn grouped_type_annotation_mismatch_is_rejected() {
+        // `n : (Int)` but body is String — should be rejected.
+        let module = parse_module("n : (Int)\nn = \"oops\"\n").expect("should parse");
+        let err =
+            typecheck_module(&module).expect_err("grouped type mismatch should be rejected");
+        assert_eq!(err.declaration.as_deref(), Some("n"));
+        assert!(
+            err.message.contains("does not match"),
+            "unexpected message: {}",
+            err.message
+        );
+    }
+
+    #[test]
     fn rejects_malformed_function_type_annotation() {
         let module = parse_module("f : Int -> -> Int\nf = 1\n").expect("should parse");
         let err = typecheck_module(&module).expect_err("malformed function type should fail");
@@ -696,6 +721,28 @@ mod tests {
         // `id : Int -> Int; id x = x` — param x is Int, return is Int — should pass.
         let module = parse_module("id : Int -> Int\nid x = x\n").expect("should parse");
         typecheck_module(&module).expect("identity function should typecheck");
+    }
+
+    #[test]
+    fn rejects_param_count_mismatch_fewer_params() {
+        // Annotation has 2 params but definition only has 1 — should be rejected.
+        let module =
+            parse_module("add : Int -> Int -> Int\nadd a = a\n").expect("should parse");
+        let err =
+            typecheck_module(&module).expect_err("param count mismatch should be rejected");
+        assert_eq!(err.declaration.as_deref(), Some("add"));
+        assert!(
+            err.message.contains("parameter"),
+            "unexpected message: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn accepts_unit_param_omitted_in_definition() {
+        // `main : Unit -> Unit; main = ...` — Unit param may be omitted in MVP.
+        let module = parse_module("main : Unit -> Unit\nmain = print \"hi\"\n").expect("should parse");
+        typecheck_module(&module).expect("Unit param omission should be accepted");
     }
 
     #[test]

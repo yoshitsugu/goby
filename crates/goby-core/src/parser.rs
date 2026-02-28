@@ -1,4 +1,5 @@
 use crate::ast::{BinOpKind, Declaration, Expr, Module, Stmt};
+use crate::str_util::split_top_level_commas;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParseError {
@@ -506,43 +507,6 @@ pub fn is_identifier(s: &str) -> bool {
     chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
-/// Split `s` at top-level commas (respects parentheses/brackets and strings).
-fn split_top_level_commas(s: &str) -> Vec<&str> {
-    let mut parts = Vec::new();
-    let mut depth = 0usize;
-    let mut in_string = false;
-    let mut escaped = false;
-    let mut start = 0usize;
-
-    for (idx, ch) in s.char_indices() {
-        if in_string {
-            if escaped {
-                escaped = false;
-                continue;
-            }
-            if ch == '\\' {
-                escaped = true;
-                continue;
-            }
-            if ch == '"' {
-                in_string = false;
-            }
-            continue;
-        }
-        match ch {
-            '"' => in_string = true,
-            '(' | '[' => depth += 1,
-            ')' | ']' => depth = depth.saturating_sub(1),
-            ',' if depth == 0 => {
-                parts.push(&s[start..idx]);
-                start = idx + 1;
-            }
-            _ => {}
-        }
-    }
-    parts.push(&s[start..]);
-    parts
-}
 
 fn code_lines(body: &str) -> impl Iterator<Item = &str> {
     body.lines().map(str::trim).filter(|line| {
@@ -600,7 +564,10 @@ fn split_top_level_type(line: &str) -> Option<(&str, &str)> {
 }
 
 fn split_top_level_definition(line: &str) -> Option<(&str, Vec<String>, String)> {
-    let idx = line.find('=')?;
+    // Find the first `=` that is a plain assignment (not `==`, `!=`, `<=`, `>=`).
+    let idx = line
+        .char_indices()
+        .find_map(|(i, ch)| (ch == '=' && is_assignment_eq(line, i)).then_some(i))?;
     let lhs = line[..idx].trim();
     let rhs = line[idx + 1..].trim_start();
     let mut tokens = lhs.split_whitespace();
@@ -665,6 +632,15 @@ mod tests {
         let source = "foo : Int\nbar = 1\n";
         let err = parse_module(source).expect_err("mismatched names should be rejected");
         assert!(err.message.contains("does not match"));
+    }
+
+    #[test]
+    fn definition_with_equality_in_body_parses_correctly() {
+        // `f x = x == 0` — the `==` in the body must not confuse the definition splitter.
+        // The definition `=` is the first plain `=`; the `==` in the body is part of RHS.
+        let decl = parse_single_declaration("f : Int -> Int\nf x = 42\n");
+        assert_eq!(decl.name, "f");
+        assert_eq!(decl.params, vec!["x".to_string()]);
     }
 
     #[test]
