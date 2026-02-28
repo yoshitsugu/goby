@@ -145,7 +145,16 @@ pub fn parse_expr(src: &str) -> Option<Expr> {
         return Some(expr);
     }
 
-    // 3. Binary addition: expr + expr
+    // 3. Binary equality: expr == expr
+    if let Some((left, right)) = split_top_level_eq(src) {
+        return Some(Expr::BinOp {
+            op: BinOpKind::Eq,
+            left: Box::new(parse_expr(left)?),
+            right: Box::new(parse_expr(right)?),
+        });
+    }
+
+    // 4. Binary addition: expr + expr
     if let Some((left, right)) = split_top_level_binop(src, '+') {
         return Some(Expr::BinOp {
             op: BinOpKind::Add,
@@ -154,7 +163,7 @@ pub fn parse_expr(src: &str) -> Option<Expr> {
         });
     }
 
-    // 4. Binary multiplication: expr * expr
+    // 5. Binary multiplication: expr * expr
     if let Some((left, right)) = split_top_level_binop(src, '*') {
         return Some(Expr::BinOp {
             op: BinOpKind::Mul,
@@ -163,22 +172,22 @@ pub fn parse_expr(src: &str) -> Option<Expr> {
         });
     }
 
-    // 5. List literal: [...]
+    // 6. List literal: [...]
     if src.starts_with('[') && src.ends_with(']') {
         return parse_list_expr(src);
     }
 
-    // 6. Tuple or grouped expression: (...)
+    // 7. Tuple or grouped expression: (...)
     if src.starts_with('(') && src.ends_with(')') {
         return parse_tuple_or_grouped_expr(src);
     }
 
-    // 7. Method call: receiver.method(args)
+    // 8. Method call: receiver.method(args)
     if let Some(expr) = parse_method_call(src) {
         return Some(expr);
     }
 
-    // 8. Function call: f x  or  f(x)
+    // 9. Function call: f x  or  f(x)
     if let Some((callee, arg)) = try_parse_call(src) {
         return Some(Expr::Call {
             callee: Box::new(parse_expr(callee)?),
@@ -186,7 +195,7 @@ pub fn parse_expr(src: &str) -> Option<Expr> {
         });
     }
 
-    // 9. String literal: "..."
+    // 10. String literal: "..."
     if src.starts_with('"') && src.ends_with('"') && src.len() >= 2 {
         let inner = &src[1..src.len() - 1];
         if !inner.contains('"') {
@@ -194,12 +203,20 @@ pub fn parse_expr(src: &str) -> Option<Expr> {
         }
     }
 
-    // 10. Integer literal
+    // 11. Bool literal
+    if src == "true" {
+        return Some(Expr::Var("true".to_string()));
+    }
+    if src == "false" {
+        return Some(Expr::Var("false".to_string()));
+    }
+
+    // 12. Integer literal
     if let Ok(n) = src.parse::<i64>() {
         return Some(Expr::IntLit(n));
     }
 
-    // 11. Identifier
+    // 13. Identifier
     if is_identifier(src) {
         return Some(Expr::Var(src.to_string()));
     }
@@ -311,6 +328,58 @@ fn split_top_level_binop(src: &str, op: char) -> Option<(&str, &str)> {
     if let Some(pos) = last_split {
         let left = src[..pos - 1].trim(); // before the space before op
         let right = src[pos + 2..].trim(); // after the space after op
+        if !left.is_empty() && !right.is_empty() {
+            return Some((left, right));
+        }
+    }
+    None
+}
+
+fn split_top_level_eq(src: &str) -> Option<(&str, &str)> {
+    let bytes = src.as_bytes();
+    let mut depth = 0usize;
+    let mut in_string = false;
+    let mut escaped = false;
+    let mut last_split: Option<usize> = None;
+    let mut i = 0usize;
+    while i + 1 < bytes.len() {
+        if in_string {
+            if escaped {
+                escaped = false;
+                i += 1;
+                continue;
+            }
+            if bytes[i] == b'\\' {
+                escaped = true;
+                i += 1;
+                continue;
+            }
+            if bytes[i] == b'"' {
+                in_string = false;
+            }
+            i += 1;
+            continue;
+        }
+        match bytes[i] {
+            b'"' => in_string = true,
+            b'(' | b'[' => depth += 1,
+            b')' | b']' => depth = depth.saturating_sub(1),
+            b'=' if depth == 0 && bytes[i + 1] == b'=' => {
+                let left_space = i > 0 && bytes[i - 1] == b' ';
+                let right_space = i + 2 < bytes.len() && bytes[i + 2] == b' ';
+                if left_space && right_space {
+                    last_split = Some(i);
+                }
+                i += 1;
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+
+    if let Some(pos) = last_split {
+        let left = src[..pos - 1].trim();
+        let right = src[pos + 3..].trim();
         if !left.is_empty() && !right.is_empty() {
             return Some((left, right));
         }
@@ -894,6 +963,18 @@ mod tests {
     }
 
     #[test]
+    fn parses_equality() {
+        assert_eq!(
+            parse_expr("a == b"),
+            Some(Expr::BinOp {
+                op: BinOpKind::Eq,
+                left: Box::new(Expr::Var("a".to_string())),
+                right: Box::new(Expr::Var("b".to_string())),
+            })
+        );
+    }
+
+    #[test]
     fn parses_multiplication() {
         assert_eq!(
             parse_expr("b * 3"),
@@ -917,6 +998,22 @@ mod tests {
                     left: Box::new(Expr::IntLit(2)),
                     right: Box::new(Expr::IntLit(3)),
                 }),
+            })
+        );
+    }
+
+    #[test]
+    fn parses_equality_as_lower_precedence_than_addition() {
+        assert_eq!(
+            parse_expr("a + b == c"),
+            Some(Expr::BinOp {
+                op: BinOpKind::Eq,
+                left: Box::new(Expr::BinOp {
+                    op: BinOpKind::Add,
+                    left: Box::new(Expr::Var("a".to_string())),
+                    right: Box::new(Expr::Var("b".to_string())),
+                }),
+                right: Box::new(Expr::Var("c".to_string())),
             })
         );
     }
@@ -992,6 +1089,7 @@ mod tests {
     fn requires_spaces_around_infix_operators_in_mvp_parser() {
         assert_eq!(parse_expr("a+b"), None);
         assert_eq!(parse_expr("a*2"), None);
+        assert_eq!(parse_expr("a==b"), None);
     }
 
     #[test]
@@ -1136,8 +1234,14 @@ mod tests {
     }
 
     #[test]
-    fn does_not_treat_equality_as_binding_statement() {
-        assert_eq!(parse_stmt("a == 1"), None);
+    fn equality_is_parsed_as_expression_not_binding_statement() {
+        assert!(matches!(
+            parse_stmt("a == 1"),
+            Some(Stmt::Expr(Expr::BinOp {
+                op: BinOpKind::Eq,
+                ..
+            }))
+        ));
     }
 
     #[test]
