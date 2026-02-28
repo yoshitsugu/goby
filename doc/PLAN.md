@@ -78,13 +78,18 @@ Based on `examples/*.gb`:
     - `something`
     - `15`
 - Current status:
-  - as of 2026-02-27, `check` passes for `examples/function.gb`.
-  - as of 2026-02-27, `run` parity is implemented for the locked subset and prints:
+  - as of 2026-02-28, `check` passes for `examples/function.gb`.
+  - as of 2026-02-28, `run` parity is implemented for the locked subset and prints:
     - `90`
     - `[30, 40, 50]`
     - `[60, 70]`
     - `something`
     - `15`
+  - as of 2026-02-28, workspace validation is green:
+    - `cargo check`
+    - `cargo test`
+    - `cargo clippy -- -D warnings`
+  - MVP implementation for the locked subset is complete.
 
 ### 2.1 Syntax and Parsing
 
@@ -134,15 +139,8 @@ Based on `examples/*.gb`:
 - Interoperability/FFI strategy.
 - Governance model, RFC process, compatibility policy.
 
-## 4. Immediate Execution Plan
+## 4. Next Phase Plan
 
-- Freeze a short "MVP spec subset" from current examples.
-- Treat `examples/function.gb` as fixed acceptance input and implement run parity without modifying the file.
-- Complete runtime support required by `examples/function.gb`:
-  - `map` on `List Int`
-  - anonymous function and placeholder lambda forms
-  - pipeline operator `|>`
-  - `List Int` print formatting
-  - passing `Int -> Int` function values into a function and invoking them
-- Keep explicit diagnostics for forms still outside the locked `function.gb` subset.
+- Keep regression checks green for the locked MVP subset.
+- Treat remaining design items as post-MVP evolution work.
 - Track all new syntax requests as explicit change proposals.
