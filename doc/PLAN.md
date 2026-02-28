@@ -199,3 +199,47 @@ Status baseline (2026-02-28):
   where annotations are required vs optional outside current MVP subset.
 - Tuple/record roadmap:
   whether records are introduced before module/effect expansion and minimal syntax shape.
+
+## 7. Incremental Implementation Plan (Next Slice: `import.gb`)
+
+Goal:
+- make `cargo run -p goby-cli -- check examples/import.gb` pass with a minimal, explicit import model.
+
+Phase 1: Scope lock (minimum useful subset)
+- support only:
+  - `import goby/x`
+  - `import goby/x as alias`
+  - `import goby/x (name1, name2)`
+- keep `run` behavior unchanged in this slice; focus on parser/typecheck path.
+- keep `main` requirements unchanged.
+
+Phase 2: Parser/AST extension
+- add import declarations to module AST.
+- parse the three import forms above.
+- preserve backward compatibility for all existing non-import examples.
+
+Phase 3: Minimal module resolver
+- introduce a fixed built-in module table for:
+  - `goby/string`
+  - `goby/list`
+  - `goby/env`
+- implement alias binding and selective import symbol exposure.
+- add diagnostics for unknown module and unknown imported symbol.
+
+Phase 4: Typecheck integration
+- inject imported symbols into type environment.
+- verify imported and qualified calls used by `examples/import.gb`.
+- keep diagnostics explicit and declaration-oriented.
+
+Phase 5: Validation and docs
+- run:
+  - `cargo run -p goby-cli -- check examples/import.gb`
+  - `cargo check`
+  - `cargo test`
+  - `cargo clippy -- -D warnings`
+- update this plan checklist and `doc/STATE.md` with decisions and remaining gaps.
+
+Out of scope for this slice:
+- filesystem-backed package resolution
+- remote dependencies
+- effect/control-flow feature integration changes

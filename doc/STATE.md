@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-02-28 (session 13, uncommitted)
+Last updated: 2026-02-28 (session 14, uncommitted)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -76,6 +76,7 @@ This file is a restart-safe snapshot for resuming work after context reset.
 - 2026-02-28 (session 11, uncommitted): implemented Haskell-style generic type-application parsing in `goby-core` type parsing/typecheck and added regression tests.
 - 2026-02-28 (session 12, uncommitted): revalidated acceptance path and full workspace checks; marked locked MVP implementation as complete.
 - 2026-02-28 (session 13, uncommitted): re-audited all `examples/` files and added an example-driven feature checklist + spec-detail memo to `doc/PLAN.md`.
+- 2026-02-28 (session 14, uncommitted): added an incremental implementation plan for the next `import.gb` slice in `doc/PLAN.md`.
 
 ## 5. Current Example Files
 
@@ -90,11 +91,13 @@ This file is a restart-safe snapshot for resuming work after context reset.
    - `cargo run -p goby-cli -- check examples/function.gb`
    - `cargo run -p goby-cli -- run examples/function.gb`
    - locked output contract for `function.gb`.
-2. Use the example-driven checklist in `doc/PLAN.md` as the implementation backlog source.
-3. Start with one post-MVP vertical slice from failing examples:
-   - `import.gb` (module/import syntax and resolution), or
-   - `control_flow.gb` (`case`/`if`/`==`), or
-   - `effect.gb` (effects/handlers/using semantics).
+2. Execute `doc/PLAN.md` section 7 (`import.gb` slice), phase by phase.
+3. Target completion criterion for the slice:
+   - `cargo run -p goby-cli -- check examples/import.gb` succeeds.
+4. After slice completion, re-run:
+   - `cargo check`
+   - `cargo test`
+   - `cargo clippy -- -D warnings`
 
 ## 7. Resume Commands
 
