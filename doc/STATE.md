@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-02-28 (session 4)
+Last updated: 2026-02-28 (session 5)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -495,12 +495,35 @@ Two commits: refactoring cleanup + P1 item fixes. All 80 tests pass.
 
 ### Remaining known gaps (P2)
 
-- Function parameters not registered in `TypeEnv` (`double x = x + x` → `x` is `Unknown`).
-- Tuple type annotation body type check skipped (`(String, Int)` → `Ty::Unknown`).
-- `str_util::split_top_level_comma` is `pub` but could be `pub(crate)`.
+All P2 gaps from session 4 have been resolved in session 5 (Track A commit `2abe600`).
 
 ### Next work
 
 - Migrate evaluator fully to AST path (remove `to_str_repr()` dependency).
 - Wasm codegen: emit actual Wasm bytecode for integer arithmetic (remove WAT dependency).
-- Register function parameters in `TypeEnv` to enable proper body type inference.
+
+## 41. Progress Since Track A (session 5)
+
+Track A: all three items completed in commit `2abe600`. 84 tests pass, clippy clean.
+
+### A1: Register function parameters in TypeEnv
+
+- Added `params: Vec<String>` field to `Declaration` in `ast.rs`.
+- `split_top_level_definition` in `parser.rs` now returns parameter names (tokens between function name and `=`).
+- `typecheck_module` derives per-parameter types from the function type annotation and passes them to `check_body_stmts`.
+- `check_body_stmts` receives `param_tys: &[(&str, Ty)]` and pre-populates `local_env.locals`.
+- Effect: `greet : String -> Int; greet name = name` now correctly identifies `name : String` vs declared return `Int` and rejects it.
+- 2 regression tests added (`rejects_function_body_type_mismatch_via_param`, `accepts_function_body_with_param_matching_return_type`).
+
+### A2: Tuple type annotation body type check
+
+- `ty_from_annotation` now parses `(A, B, ...)` into `Ty::Tuple([Ty::A, Ty::B, ...])`.
+- Added `split_annotation_commas` helper in `typecheck.rs`.
+- `ty_name` for `Ty::Tuple` now returns `"(A, B)"` instead of plain `"Tuple"`.
+- Effect: `pair : (String, Int); pair = 42` is now correctly rejected.
+- 2 regression tests added (`rejects_tuple_annotation_body_mismatch`, `accepts_matching_tuple_annotation_body`).
+
+### A3: Tighten split_top_level_comma visibility
+
+- `str_util::split_top_level_comma` changed from `pub` to `pub(crate)`.
+- `parse_string_concat_call` remains `pub` as it is used by `goby-wasm`.
