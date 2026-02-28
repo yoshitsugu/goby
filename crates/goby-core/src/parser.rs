@@ -1,4 +1,7 @@
-use crate::ast::{BinOpKind, Declaration, Expr, ImportDecl, ImportKind, Module, Stmt};
+use crate::ast::{
+    BinOpKind, Declaration, Expr, ImportDecl, ImportKind, Module, RecordField, Stmt,
+    TypeDeclaration,
+};
 use crate::str_util::split_top_level_commas;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -11,6 +14,7 @@ pub fn parse_module(source: &str) -> Result<Module, ParseError> {
     let lines: Vec<&str> = source.lines().collect();
     let mut i = 0;
     let mut imports = Vec::new();
+    let mut type_declarations = Vec::new();
     let mut declarations = Vec::new();
 
     while i < lines.len() {
@@ -35,6 +39,16 @@ pub fn parse_module(source: &str) -> Result<Module, ParseError> {
                 message: "invalid import declaration".to_string(),
             })?;
             imports.push(import);
+            i += 1;
+            continue;
+        }
+
+        if trimmed.starts_with("type ") {
+            let ty_decl = parse_type_declaration_line(trimmed).ok_or_else(|| ParseError {
+                line: i + 1,
+                message: "invalid type declaration".to_string(),
+            })?;
+            type_declarations.push(ty_decl);
             i += 1;
             continue;
         }
@@ -97,6 +111,7 @@ pub fn parse_module(source: &str) -> Result<Module, ParseError> {
 
     Ok(Module {
         imports,
+        type_declarations,
         declarations,
     })
 }
@@ -659,6 +674,142 @@ fn parse_import_line(line: &str) -> Option<ImportDecl> {
     })
 }
 
+fn parse_type_declaration_line(line: &str) -> Option<TypeDeclaration> {
+    let rest = line.strip_prefix("type ")?.trim();
+    let (name, rhs) = rest.split_once('=')?;
+    let name = name.trim();
+    let rhs = rhs.trim();
+    if !is_identifier(name) || rhs.is_empty() {
+        return None;
+    }
+
+    if let Some(parts) = split_top_level_pipes(rhs) {
+        let constructors: Option<Vec<String>> = parts
+            .into_iter()
+            .map(str::trim)
+            .map(|ctor| is_identifier(ctor).then(|| ctor.to_string()))
+            .collect();
+        let constructors = constructors?;
+        if constructors.is_empty() {
+            return None;
+        }
+        return Some(TypeDeclaration::Union {
+            name: name.to_string(),
+            constructors,
+        });
+    }
+
+    if let Some((constructor, inner)) = split_record_constructor_shape(rhs) {
+        if !is_identifier(constructor) {
+            return None;
+        }
+        let fields = if inner.is_empty() {
+            Vec::new()
+        } else {
+            let parts = split_top_level_commas(inner);
+            let parsed_fields: Option<Vec<RecordField>> = parts
+                .iter()
+                .map(|part| parse_record_field(part.trim()))
+                .collect();
+            parsed_fields?
+        };
+        return Some(TypeDeclaration::Record {
+            name: name.to_string(),
+            constructor: constructor.to_string(),
+            fields,
+        });
+    }
+
+    Some(TypeDeclaration::Alias {
+        name: name.to_string(),
+        target: rhs.to_string(),
+    })
+}
+
+fn parse_record_field(field_src: &str) -> Option<RecordField> {
+    let (name, ty) = field_src.split_once(':')?;
+    let name = name.trim();
+    let ty = ty.trim();
+    if !is_identifier(name) || ty.is_empty() {
+        return None;
+    }
+    Some(RecordField {
+        name: name.to_string(),
+        ty: ty.to_string(),
+    })
+}
+
+/// Split a top-level union RHS (`A | B | C`) into segments.
+/// Pipes inside parentheses or strings are ignored.
+fn split_top_level_pipes(src: &str) -> Option<Vec<&str>> {
+    let bytes = src.as_bytes();
+    let mut depth = 0usize;
+    let mut in_string = false;
+    let mut escaped = false;
+    let mut start = 0usize;
+    let mut parts = Vec::new();
+    let mut saw_pipe = false;
+    let mut i = 0usize;
+    while i < bytes.len() {
+        if in_string {
+            if escaped {
+                escaped = false;
+                i += 1;
+                continue;
+            }
+            if bytes[i] == b'\\' {
+                escaped = true;
+                i += 1;
+                continue;
+            }
+            if bytes[i] == b'"' {
+                in_string = false;
+            }
+            i += 1;
+            continue;
+        }
+        match bytes[i] {
+            b'"' => in_string = true,
+            b'(' | b'[' => depth += 1,
+            b')' | b']' => depth = depth.saturating_sub(1),
+            b'|' if depth == 0 => {
+                saw_pipe = true;
+                parts.push(src[start..i].trim());
+                start = i + 1;
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    if !saw_pipe {
+        return None;
+    }
+    parts.push(src[start..].trim());
+    if parts.iter().any(|p| p.is_empty()) {
+        return None;
+    }
+    Some(parts)
+}
+
+/// Parse record-constructor shape `Ctor(field: Ty, ...)`.
+/// Requires `(` to appear immediately after constructor name to avoid
+/// misclassifying type applications like `List (TypeY a b)` as records.
+fn split_record_constructor_shape(rhs: &str) -> Option<(&str, &str)> {
+    if !rhs.ends_with(')') {
+        return None;
+    }
+    let open_idx = rhs.find('(')?;
+    let constructor = rhs[..open_idx].trim();
+    if constructor.is_empty() || !is_identifier(constructor) {
+        return None;
+    }
+    if open_idx != constructor.len() {
+        return None;
+    }
+    let inner = rhs[open_idx + 1..rhs.len() - 1].trim();
+    Some((constructor, inner))
+}
+
 fn is_module_path(s: &str) -> bool {
     if s.is_empty() || s.starts_with('/') || s.ends_with('/') || s.contains("//") {
         return false;
@@ -777,7 +928,7 @@ fn split_top_level_definition(line: &str) -> Option<(&str, Vec<String>, String)>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ast::{BinOpKind, Expr, ImportKind, Stmt};
+    use crate::ast::{BinOpKind, Expr, ImportKind, Stmt, TypeDeclaration};
     use std::path::PathBuf;
 
     fn read_example(name: &str) -> String {
@@ -801,6 +952,7 @@ mod tests {
         let module = parse_module(&source).expect("hello.gb should parse");
 
         assert!(module.imports.is_empty());
+        assert!(module.type_declarations.is_empty());
         assert_eq!(module.declarations.len(), 1);
         let main_decl = &module.declarations[0];
         assert_eq!(main_decl.name, "main");
@@ -816,6 +968,7 @@ mod tests {
         let module = parse_module(&source).expect("basic_types.gb should parse");
 
         assert!(module.imports.is_empty());
+        assert!(module.type_declarations.is_empty());
         assert_eq!(module.declarations.len(), 5);
         assert_eq!(module.declarations[0].name, "add");
         assert_eq!(module.declarations[1].name, "add_ten_and_two");
@@ -830,6 +983,7 @@ mod tests {
         let module = parse_module(&source).expect("generic_types.gb should parse");
 
         assert!(module.imports.is_empty());
+        assert!(module.type_declarations.is_empty());
         assert_eq!(module.declarations.len(), 3);
         assert_eq!(module.declarations[0].name, "id");
         assert_eq!(module.declarations[1].name, "project");
@@ -849,6 +1003,7 @@ mod tests {
         let module = parse_module(&source).expect("import.gb should parse");
 
         assert_eq!(module.imports.len(), 3);
+        assert!(module.type_declarations.is_empty());
         assert_eq!(module.imports[0].module_path, "goby/string");
         assert_eq!(module.imports[0].kind, ImportKind::Plain);
         assert_eq!(module.imports[1].module_path, "goby/list");
@@ -866,6 +1021,78 @@ mod tests {
         let source = "import goby/env ()\nmain = 1\n";
         let err = parse_module(source).expect_err("invalid import should fail");
         assert!(err.message.contains("invalid import declaration"));
+    }
+
+    #[test]
+    fn parses_type_example_alias_union_and_record() {
+        let source = read_example("type.gb");
+        let module = parse_module(&source).expect("type.gb should parse");
+
+        assert!(module.imports.is_empty());
+        assert_eq!(module.type_declarations.len(), 3);
+        assert_eq!(
+            module.type_declarations[0],
+            TypeDeclaration::Alias {
+                name: "UserID".to_string(),
+                target: "String".to_string(),
+            }
+        );
+        assert_eq!(
+            module.type_declarations[1],
+            TypeDeclaration::Union {
+                name: "UserStatus".to_string(),
+                constructors: vec!["Activated".to_string(), "Deactivated".to_string()],
+            }
+        );
+        assert_eq!(
+            module.type_declarations[2],
+            TypeDeclaration::Record {
+                name: "User".to_string(),
+                constructor: "User".to_string(),
+                fields: vec![
+                    crate::ast::RecordField {
+                        name: "id".to_string(),
+                        ty: "UserID".to_string(),
+                    },
+                    crate::ast::RecordField {
+                        name: "name".to_string(),
+                        ty: "String".to_string(),
+                    },
+                    crate::ast::RecordField {
+                        name: "status".to_string(),
+                        ty: "UserStatus".to_string(),
+                    },
+                ],
+            }
+        );
+    }
+
+    #[test]
+    fn parses_type_alias_with_parenthesized_application_as_alias() {
+        let source = "type Wrapped = List (TypeY a b)\nmain = 1\n";
+        let module = parse_module(source).expect("type alias should parse");
+        assert_eq!(module.type_declarations.len(), 1);
+        assert_eq!(
+            module.type_declarations[0],
+            TypeDeclaration::Alias {
+                name: "Wrapped".to_string(),
+                target: "List (TypeY a b)".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn does_not_treat_nested_pipe_in_alias_as_union() {
+        let source = "type Wrapped = Maybe (A | B)\nmain = 1\n";
+        let module = parse_module(source).expect("type alias with nested pipe should parse");
+        assert_eq!(module.type_declarations.len(), 1);
+        assert_eq!(
+            module.type_declarations[0],
+            TypeDeclaration::Alias {
+                name: "Wrapped".to_string(),
+                target: "Maybe (A | B)".to_string(),
+            }
+        );
     }
 
     #[test]
