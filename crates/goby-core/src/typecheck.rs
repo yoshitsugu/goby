@@ -603,9 +603,9 @@ mod tests {
     // -----------------------------------------------------------------------
 
     #[test]
-    fn infers_int_literal_type() {
-        let module = parse_module("x : Int\nx = 42\n").expect("should parse");
-        typecheck_module(&module).expect("int literal body should typecheck");
+    fn accepts_list_int_annotation_matching_list_literal_body() {
+        let module = parse_module("xs : List Int\nxs = [1, 2]\n").expect("should parse");
+        typecheck_module(&module).expect("list literal body should typecheck");
     }
 
     #[test]
