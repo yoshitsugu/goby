@@ -124,8 +124,14 @@ enum Ty {
 }
 
 struct TypeEnv {
-    globals: HashMap<String, Ty>,
+    globals: HashMap<String, GlobalBinding>,
     locals: HashMap<String, Ty>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum GlobalBinding {
+    Resolved { ty: Ty, source: String },
+    Ambiguous { sources: Vec<String> },
 }
 
 impl TypeEnv {
@@ -133,10 +139,22 @@ impl TypeEnv {
         if let Some(ty) = self.locals.get(name) {
             return ty.clone();
         }
-        if let Some(ty) = self.globals.get(name) {
-            return ty.clone();
+        if let Some(binding) = self.globals.get(name) {
+            return match binding {
+                GlobalBinding::Resolved { ty, .. } => ty.clone(),
+                GlobalBinding::Ambiguous { .. } => Ty::Unknown,
+            };
         }
         Ty::Unknown
+    }
+
+    fn ambiguous_sources(&self, name: &str) -> Option<&[String]> {
+        let binding = self.globals.get(name)?;
+        if let GlobalBinding::Ambiguous { sources } = binding {
+            Some(sources)
+        } else {
+            None
+        }
     }
 
     fn with_local(&self, name: &str, ty: Ty) -> TypeEnv {
@@ -169,27 +187,36 @@ fn build_type_env(module: &Module) -> TypeEnv {
             if let Some(ft) = parse_function_type(base) {
                 let params: Vec<Ty> = ft.arguments.iter().map(|a| ty_from_annotation(a)).collect();
                 let result = ty_from_annotation(&ft.result);
-                globals.insert(
+                insert_global_symbol(
+                    &mut globals,
                     decl.name.clone(),
                     Ty::Fun {
                         params,
                         result: Box::new(result),
                     },
+                    format!("declaration `{}`", decl.name),
                 );
             } else {
                 // Non-function annotation (e.g. tuple, plain type)
-                globals.insert(decl.name.clone(), ty_from_annotation(base.trim()));
+                insert_global_symbol(
+                    &mut globals,
+                    decl.name.clone(),
+                    ty_from_annotation(base.trim()),
+                    format!("declaration `{}`", decl.name),
+                );
             }
         }
     }
     // Register built-in functions so that call-site type inference can use them.
     // `print` accepts any value and returns Unit.
-    globals.insert(
+    insert_global_symbol(
+        &mut globals,
         "print".to_string(),
         Ty::Fun {
             params: vec![Ty::Unknown],
             result: Box::new(Ty::Unit),
         },
+        "builtin `print`".to_string(),
     );
     inject_imported_symbols(module, &mut globals);
 
@@ -223,7 +250,7 @@ fn validate_imports(module: &Module) -> Result<(), TypecheckError> {
     Ok(())
 }
 
-fn inject_imported_symbols(module: &Module, globals: &mut HashMap<String, Ty>) {
+fn inject_imported_symbols(module: &Module, globals: &mut HashMap<String, GlobalBinding>) {
     for import in &module.imports {
         let Some(exports) = builtin_module_exports(&import.module_path) else {
             continue;
@@ -236,21 +263,70 @@ fn inject_imported_symbols(module: &Module, globals: &mut HashMap<String, Ty>) {
                     .next()
                     .expect("module path should have at least one segment");
                 for (name, ty) in exports {
-                    globals.insert(format!("{}.{}", qualifier, name), ty.clone());
+                    insert_global_symbol(
+                        globals,
+                        format!("{}.{}", qualifier, name),
+                        ty.clone(),
+                        format!("import `{}`", import.module_path),
+                    );
                 }
             }
             ImportKind::Alias(alias) => {
                 for (name, ty) in exports {
-                    globals.insert(format!("{}.{}", alias, name), ty.clone());
+                    insert_global_symbol(
+                        globals,
+                        format!("{}.{}", alias, name),
+                        ty.clone(),
+                        format!("import `{}` as `{}`", import.module_path, alias),
+                    );
                 }
             }
             ImportKind::Selective(names) => {
                 for name in names {
                     if let Some(ty) = exports.get(name.as_str()) {
-                        globals.insert(name.clone(), ty.clone());
+                        insert_global_symbol(
+                            globals,
+                            name.clone(),
+                            ty.clone(),
+                            format!("import `{}` ({})", import.module_path, name),
+                        );
                     }
                 }
             }
+        }
+    }
+}
+
+fn insert_global_symbol(
+    globals: &mut HashMap<String, GlobalBinding>,
+    symbol: String,
+    ty: Ty,
+    source: String,
+) {
+    let existing = globals.get(&symbol).cloned();
+    match existing {
+        None => {
+            globals.insert(symbol, GlobalBinding::Resolved { ty, source });
+        }
+        Some(GlobalBinding::Resolved {
+            source: existing_source,
+            ..
+        }) => {
+            if existing_source == source {
+                return;
+            }
+            globals.insert(
+                symbol,
+                GlobalBinding::Ambiguous {
+                    sources: vec![existing_source, source],
+                },
+            );
+        }
+        Some(GlobalBinding::Ambiguous { mut sources }) => {
+            if !sources.contains(&source) {
+                sources.push(source);
+            }
+            globals.insert(symbol, GlobalBinding::Ambiguous { sources });
         }
     }
 }
@@ -439,11 +515,12 @@ fn check_body_stmts(
     for stmt in stmts {
         match stmt {
             Stmt::Binding { name, value } => {
+                ensure_no_ambiguous_refs_in_expr(value, &local_env, decl_name)?;
                 let ty = check_expr(value, &local_env);
                 local_env.locals.insert(name.clone(), ty);
             }
-            Stmt::Expr(_expr) => {
-                // Expressions as statements are allowed; no checks enforced yet.
+            Stmt::Expr(expr) => {
+                ensure_no_ambiguous_refs_in_expr(expr, &local_env, decl_name)?;
             }
         }
     }
@@ -478,6 +555,68 @@ fn check_body_stmts(
         }
     }
 
+    Ok(())
+}
+
+fn ensure_no_ambiguous_refs_in_expr(
+    expr: &Expr,
+    env: &TypeEnv,
+    decl_name: &str,
+) -> Result<(), TypecheckError> {
+    match expr {
+        Expr::IntLit(_) | Expr::StringLit(_) => Ok(()),
+        Expr::ListLit(items) | Expr::TupleLit(items) => {
+            for item in items {
+                ensure_no_ambiguous_refs_in_expr(item, env, decl_name)?;
+            }
+            Ok(())
+        }
+        Expr::Var(name) => ensure_name_not_ambiguous(name, env, decl_name),
+        Expr::BinOp { left, right, .. } => {
+            ensure_no_ambiguous_refs_in_expr(left, env, decl_name)?;
+            ensure_no_ambiguous_refs_in_expr(right, env, decl_name)
+        }
+        Expr::Call { callee, arg } => {
+            ensure_no_ambiguous_refs_in_expr(callee, env, decl_name)?;
+            ensure_no_ambiguous_refs_in_expr(arg, env, decl_name)
+        }
+        Expr::MethodCall {
+            receiver,
+            method,
+            args,
+        } => {
+            let qualified = format!("{}.{}", receiver, method);
+            ensure_name_not_ambiguous(&qualified, env, decl_name)?;
+            for arg in args {
+                ensure_no_ambiguous_refs_in_expr(arg, env, decl_name)?;
+            }
+            Ok(())
+        }
+        Expr::Pipeline { value, callee } => {
+            ensure_no_ambiguous_refs_in_expr(value, env, decl_name)?;
+            ensure_name_not_ambiguous(callee, env, decl_name)
+        }
+        Expr::Lambda { param, body } => {
+            let child_env = env.with_local(param, Ty::Unknown);
+            ensure_no_ambiguous_refs_in_expr(body, &child_env, decl_name)
+        }
+    }
+}
+
+fn ensure_name_not_ambiguous(name: &str, env: &TypeEnv, decl_name: &str) -> Result<(), TypecheckError> {
+    if env.locals.contains_key(name) {
+        return Ok(());
+    }
+    if let Some(sources) = env.ambiguous_sources(name) {
+        return Err(TypecheckError {
+            declaration: Some(decl_name.to_string()),
+            message: format!(
+                "name `{}` is ambiguous due to import collision: {}",
+                name,
+                sources.join(", ")
+            ),
+        });
+    }
     Ok(())
 }
 
@@ -835,6 +974,36 @@ mod tests {
         let module = parse_module(source).expect("should parse");
         let err = typecheck_module(&module).expect_err("unknown imported symbol should fail");
         assert!(err.message.contains("unknown symbol"));
+    }
+
+    #[test]
+    fn rejects_used_name_when_import_collides_with_declaration() {
+        let source = "\
+import goby/env ( fetch_env_var )
+fetch_env_var : String -> String
+fetch_env_var name = name
+main : Unit -> Unit
+main =
+  fetch_env_var \"GOBY_PATH\"
+";
+        let module = parse_module(source).expect("should parse");
+        let err = typecheck_module(&module).expect_err("used ambiguous name should fail");
+        assert!(err.message.contains("ambiguous"));
+        assert!(err.message.contains("fetch_env_var"));
+    }
+
+    #[test]
+    fn allows_unused_name_when_import_collides_with_declaration() {
+        let source = "\
+import goby/env ( fetch_env_var )
+fetch_env_var : String -> String
+fetch_env_var name = name
+main : Unit -> Unit can Print
+main =
+  print \"ok\"
+";
+        let module = parse_module(source).expect("should parse");
+        typecheck_module(&module).expect("unused ambiguous name should be tolerated");
     }
 
     #[test]
