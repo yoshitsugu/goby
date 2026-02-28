@@ -1,6 +1,20 @@
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Module {
+    pub imports: Vec<ImportDecl>,
     pub declarations: Vec<Declaration>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImportDecl {
+    pub module_path: String,
+    pub kind: ImportKind,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ImportKind {
+    Plain,
+    Alias(String),
+    Selective(Vec<String>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
