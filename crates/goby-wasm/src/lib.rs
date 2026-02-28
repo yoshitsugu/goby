@@ -678,24 +678,23 @@ impl RuntimeOutputResolver {
             }
             Stmt::Expr(expr) => {
                 // print <arg>
-                if let Expr::Call { callee, arg } = expr {
-                    if matches!(callee.as_ref(), Expr::Var(n) if n == BUILTIN_PRINT) {
-                        let repr = arg.to_str_repr()?;
-                        let value =
-                            self.eval_value_with_context(&repr, locals, callables, evaluators)?;
-                        self.outputs.push(value.to_output_text());
-                        return Some(());
-                    }
+                if let Expr::Call { callee, arg } = expr
+                    && matches!(callee.as_ref(), Expr::Var(n) if n == BUILTIN_PRINT)
+                {
+                    let repr = arg.to_str_repr()?;
+                    let value =
+                        self.eval_value_with_context(&repr, locals, callables, evaluators)?;
+                    self.outputs.push(value.to_output_text());
+                    return Some(());
                 }
                 // value |> print
-                if let Expr::Pipeline { value, callee } = expr {
-                    if callee == BUILTIN_PRINT {
-                        let repr = value.to_str_repr()?;
-                        let v =
-                            self.eval_value_with_context(&repr, locals, callables, evaluators)?;
-                        self.outputs.push(v.to_output_text());
-                        return Some(());
-                    }
+                if let Expr::Pipeline { value, callee } = expr
+                    && callee == BUILTIN_PRINT
+                {
+                    let repr = value.to_str_repr()?;
+                    let v = self.eval_value_with_context(&repr, locals, callables, evaluators)?;
+                    self.outputs.push(v.to_output_text());
+                    return Some(());
                 }
                 // Other expression statements: delegate to string-based unit call path.
                 let repr = expr.to_str_repr()?;
@@ -749,17 +748,15 @@ impl RuntimeOutputResolver {
             for statement in statements(function.body) {
                 match statement {
                     Statement::Binding { name, expr } => {
+                        // Propagate None on eval failure rather than silently
+                        // clearing the binding and continuing.
                         let value = self.eval_value_with_context(
                             expr,
                             &function_locals,
                             &function_callables,
                             evaluators,
-                        );
-                        if let Some(value) = value {
-                            function_locals.store(name, value);
-                        } else {
-                            function_locals.clear(name);
-                        }
+                        )?;
+                        function_locals.store(name, value);
                     }
                     Statement::Print(print_expr) => {
                         let value = self.eval_value_with_context(

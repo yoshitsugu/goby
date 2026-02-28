@@ -268,8 +268,8 @@ print string.concat("A", string.concat("B", "C"))
     fn rejects_string_concat_with_three_arguments() {
         // Three-argument concat is not supported; analysis should report an error.
         let source = r#"print string.concat("a", "b", "c")"#;
-        let err = resolve_print_text(source)
-            .expect_err("three-argument string.concat must be rejected");
+        let err =
+            resolve_print_text(source).expect_err("three-argument string.concat must be rejected");
         assert!(
             !err.is_empty(),
             "expected a non-empty error message, got: {:?}",
