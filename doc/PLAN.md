@@ -92,7 +92,8 @@ Based on `examples/*.gb`:
 
 ### 2.2 Types and Checking
 
-- Declaration-side generic parameter syntax (for example, `id : a -> a` with explicit binders) is postponed.
+- TODO (Deferred): declaration-side generic parameter binders
+  (for example, `id : a -> a` with explicit binders).
 - Type annotation placement rules (required vs optional locations).
 - Tuple and record roadmap (records in MVP or not).
 - Type error diagnostics quality bar is fixed for MVP:
