@@ -1,7 +1,7 @@
 /// Split `s` at the first top-level comma (i.e. not inside parentheses or
 /// string literals).  Returns `(left, right)` where `right` includes
 /// everything after the comma.  Returns `None` if no top-level comma exists.
-pub fn split_top_level_comma(s: &str) -> Option<(&str, &str)> {
+pub(crate) fn split_top_level_comma(s: &str) -> Option<(&str, &str)> {
     let mut depth = 0usize;
     let mut in_string = false;
     let mut prev_escape = false;

@@ -7,6 +7,8 @@ pub struct Module {
 pub struct Declaration {
     pub name: String,
     pub type_annotation: Option<String>,
+    /// Parameter names extracted from the definition line (e.g. `f x y = ...` → `["x", "y"]`).
+    pub params: Vec<String>,
     pub body: String,
     pub parsed_body: Option<Vec<Stmt>>,
 }

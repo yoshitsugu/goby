@@ -56,7 +56,30 @@ pub fn typecheck_module(module: &Module) -> Result<(), TypecheckError> {
     for decl in &module.declarations {
         if let Some(stmts) = &decl.parsed_body {
             let declared_return_ty = decl.type_annotation.as_deref().map(annotation_return_ty);
-            check_body_stmts(stmts, &env, &decl.name, declared_return_ty)?;
+
+            // Derive per-parameter types from the function type annotation.
+            let param_tys: Vec<(String, Ty)> = decl
+                .type_annotation
+                .as_deref()
+                .and_then(|ann| {
+                    let base = strip_effect_clause(ann);
+                    parse_function_type(base)
+                })
+                .map(|ft| {
+                    decl.params
+                        .iter()
+                        .zip(ft.arguments.iter())
+                        .map(|(name, ann_ty)| (name.clone(), ty_from_annotation(ann_ty)))
+                        .collect()
+                })
+                .unwrap_or_default();
+
+            let param_ty_refs: Vec<(&str, Ty)> = param_tys
+                .iter()
+                .map(|(name, ty)| (name.as_str(), ty.clone()))
+                .collect();
+
+            check_body_stmts(stmts, &env, &decl.name, declared_return_ty, &param_ty_refs)?;
         }
     }
 
@@ -163,8 +186,37 @@ fn ty_from_annotation(s: &str) -> Ty {
             let inner = ty_from_annotation(&s["List ".len()..]);
             Ty::List(Box::new(inner))
         }
+        _ if s.starts_with('(') && s.ends_with(')') => {
+            let inner = &s[1..s.len() - 1];
+            let parts = split_annotation_commas(inner);
+            if parts.len() >= 2 {
+                Ty::Tuple(parts.iter().map(|p| ty_from_annotation(p)).collect())
+            } else {
+                Ty::Unknown
+            }
+        }
         _ => Ty::Unknown,
     }
+}
+
+/// Split an annotation string at top-level commas (respects nested parentheses).
+fn split_annotation_commas(s: &str) -> Vec<&str> {
+    let mut parts = Vec::new();
+    let mut depth = 0usize;
+    let mut start = 0usize;
+    for (idx, ch) in s.char_indices() {
+        match ch {
+            '(' => depth += 1,
+            ')' => depth = depth.saturating_sub(1),
+            ',' if depth == 0 => {
+                parts.push(s[start..idx].trim());
+                start = idx + 1;
+            }
+            _ => {}
+        }
+    }
+    parts.push(s[start..].trim());
+    parts
 }
 
 // ---------------------------------------------------------------------------
@@ -244,10 +296,14 @@ fn check_body_stmts(
     env: &TypeEnv,
     decl_name: &str,
     declared_return_ty: Option<Ty>,
+    param_tys: &[(&str, Ty)],
 ) -> Result<(), TypecheckError> {
     let mut local_env = TypeEnv {
         globals: env.globals.clone(),
-        locals: HashMap::new(),
+        locals: param_tys
+            .iter()
+            .map(|(name, ty)| (name.to_string(), ty.clone()))
+            .collect(),
     };
 
     for stmt in stmts {
@@ -301,7 +357,10 @@ fn ty_name(ty: &Ty) -> String {
         Ty::Str => "String".to_string(),
         Ty::Unit => "Unit".to_string(),
         Ty::List(inner) => format!("List {}", ty_name(inner)),
-        Ty::Tuple(_) => "Tuple".to_string(),
+        Ty::Tuple(items) => {
+            let inner: Vec<String> = items.iter().map(ty_name).collect();
+            format!("({})", inner.join(", "))
+        }
         Ty::Fun { .. } => "Fun".to_string(),
         Ty::Unknown => "Unknown".to_string(),
     }
@@ -486,6 +545,27 @@ mod tests {
     }
 
     #[test]
+    fn rejects_tuple_annotation_body_mismatch() {
+        // pair : (String, Int) but body returns plain Int — type mismatch.
+        let module = parse_module("pair : (String, Int)\npair = 42\n").expect("should parse");
+        let err = typecheck_module(&module).expect_err("type mismatch should be rejected");
+        assert_eq!(err.declaration.as_deref(), Some("pair"));
+        assert!(
+            err.message.contains("does not match"),
+            "unexpected message: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn accepts_matching_tuple_annotation_body() {
+        // pair : (String, Int) and body returns a (String, Int) tuple.
+        let module =
+            parse_module("pair : (String, Int)\npair = (\"hello\", 42)\n").expect("should parse");
+        typecheck_module(&module).expect("matching tuple annotation should be accepted");
+    }
+
+    #[test]
     fn rejects_malformed_function_type_annotation() {
         let module = parse_module("f : Int -> -> Int\nf = 1\n").expect("should parse");
         let err = typecheck_module(&module).expect_err("malformed function type should fail");
@@ -594,6 +674,28 @@ mod tests {
         // `double : Int -> Int; double x = x + x` — body type is Int, declared Int.
         let module = parse_module("double : Int -> Int\ndouble x = x + x\n").expect("should parse");
         typecheck_module(&module).expect("matching body type should be accepted");
+    }
+
+    #[test]
+    fn rejects_function_body_type_mismatch_via_param() {
+        // `greet : String -> Int; greet name = name` — param is String, declared return is Int.
+        // After A1 fix, `name` resolves to String, which conflicts with declared return Int.
+        let module =
+            parse_module("greet : String -> Int\ngreet name = name\n").expect("should parse");
+        let err = typecheck_module(&module).expect_err("type mismatch via param should be rejected");
+        assert_eq!(err.declaration.as_deref(), Some("greet"));
+        assert!(
+            err.message.contains("does not match"),
+            "unexpected message: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn accepts_function_body_with_param_matching_return_type() {
+        // `id : Int -> Int; id x = x` — param x is Int, return is Int — should pass.
+        let module = parse_module("id : Int -> Int\nid x = x\n").expect("should parse");
+        typecheck_module(&module).expect("identity function should typecheck");
     }
 
     #[test]
