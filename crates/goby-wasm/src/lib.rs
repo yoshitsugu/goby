@@ -1,6 +1,8 @@
 use std::collections::{HashMap, HashSet};
 
-use goby_core::{Expr, Module, Stmt, types::parse_function_type};
+use goby_core::{
+    Expr, Module, Stmt, str_util::parse_string_concat_call, types::parse_function_type,
+};
 
 const IOVEC_OFFSET: u32 = 0;
 const NWRITTEN_OFFSET: u32 = 8;
@@ -9,7 +11,6 @@ const ERR_MISSING_MAIN: &str = "Wasm codegen requires a `main` declaration";
 const ERR_UNSUPPORTED_PRINT_UNKNOWN: &str =
     "print argument is unsupported for Wasm codegen (only String is supported)";
 const BUILTIN_PRINT: &str = "print";
-const BUILTIN_STRING_CONCAT_PREFIX: &str = "string.concat(";
 const MAX_EVAL_DEPTH: usize = 32;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -559,21 +560,22 @@ impl RuntimeOutputResolver {
         evaluators: &RuntimeEvaluators<'_, '_>,
     ) -> Option<()> {
         match statement {
-            Statement::Binding { name, expr } => {
-                self.bind_local(name, expr, evaluators);
-                Some(())
-            }
+            Statement::Binding { name, expr } => self.bind_local(name, expr, evaluators),
             Statement::Print(expr) => self.capture_print(expr, evaluators),
             Statement::Expr(expr) => self.eval_side_effect(expr, evaluators),
         }
     }
 
-    fn bind_local(&mut self, name: &str, expr: &str, evaluators: &RuntimeEvaluators<'_, '_>) {
-        if let Some(value) = self.eval_value(expr, evaluators) {
-            self.locals.store(name, value);
-        } else {
-            self.locals.clear(name);
-        }
+    fn bind_local(
+        &mut self,
+        name: &str,
+        expr: &str,
+        evaluators: &RuntimeEvaluators<'_, '_>,
+    ) -> Option<()> {
+        // Propagate None on eval failure rather than silently clearing the binding.
+        let value = self.eval_value(expr, evaluators)?;
+        self.locals.store(name, value);
+        Some(())
     }
 
     fn capture_print(&mut self, expr: &str, evaluators: &RuntimeEvaluators<'_, '_>) -> Option<()> {
@@ -871,54 +873,6 @@ fn eval_string_expr(expr: &str, locals: &HashMap<String, String>) -> Option<Stri
         let left_text = eval_string_expr(left, locals)?;
         let right_text = eval_string_expr(right, locals)?;
         return Some(format!("{}{}", left_text, right_text));
-    }
-
-    None
-}
-
-fn parse_string_concat_call(expr: &str) -> Option<(&str, &str)> {
-    if !expr.starts_with(BUILTIN_STRING_CONCAT_PREFIX) || !expr.ends_with(')') {
-        return None;
-    }
-
-    let inner = &expr[BUILTIN_STRING_CONCAT_PREFIX.len()..expr.len() - 1];
-    let (left, right) = split_top_level_comma(inner)?;
-    let right = right.trim();
-    // Reject if there is a third (or more) argument.
-    if split_top_level_comma(right).is_some() {
-        return None;
-    }
-    Some((left.trim(), right))
-}
-
-fn split_top_level_comma(s: &str) -> Option<(&str, &str)> {
-    let mut depth = 0usize;
-    let mut in_string = false;
-    let mut prev_escape = false;
-
-    for (idx, ch) in s.char_indices() {
-        if in_string {
-            if prev_escape {
-                prev_escape = false;
-                continue;
-            }
-            if ch == '\\' {
-                prev_escape = true;
-                continue;
-            }
-            if ch == '"' {
-                in_string = false;
-            }
-            continue;
-        }
-
-        match ch {
-            '"' => in_string = true,
-            '(' => depth += 1,
-            ')' => depth = depth.saturating_sub(1),
-            ',' if depth == 0 => return Some((&s[..idx], &s[idx + 1..])),
-            _ => {}
-        }
     }
 
     None

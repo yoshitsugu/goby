@@ -295,15 +295,15 @@ fn check_body_stmts(
     Ok(())
 }
 
-fn ty_name(ty: &Ty) -> &'static str {
+fn ty_name(ty: &Ty) -> String {
     match ty {
-        Ty::Int => "Int",
-        Ty::Str => "String",
-        Ty::Unit => "Unit",
-        Ty::List(_) => "List",
-        Ty::Tuple(_) => "Tuple",
-        Ty::Fun { .. } => "Fun",
-        Ty::Unknown => "Unknown",
+        Ty::Int => "Int".to_string(),
+        Ty::Str => "String".to_string(),
+        Ty::Unit => "Unit".to_string(),
+        Ty::List(inner) => format!("List {}", ty_name(inner)),
+        Ty::Tuple(_) => "Tuple".to_string(),
+        Ty::Fun { .. } => "Fun".to_string(),
+        Ty::Unknown => "Unknown".to_string(),
     }
 }
 
@@ -518,6 +518,20 @@ mod tests {
         .expect("function example should exist");
         let module = parse_module(&source).expect("function.gb should parse");
         typecheck_module(&module).expect("function.gb should typecheck");
+    }
+
+    #[test]
+    fn rejects_list_int_annotation_body_mismatch_shows_element_type() {
+        // ty_name(Ty::List(Ty::Int)) must appear as "List Int" in the error message,
+        // not just "List".
+        let module = parse_module("xs : List Int\nxs = \"oops\"\n").expect("should parse");
+        let err = typecheck_module(&module).expect_err("type mismatch should be rejected");
+        assert_eq!(err.declaration.as_deref(), Some("xs"));
+        assert!(
+            err.message.contains("List Int"),
+            "expected 'List Int' in error message, got: {}",
+            err.message
+        );
     }
 
     #[test]
