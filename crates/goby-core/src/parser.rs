@@ -50,10 +50,11 @@ pub fn parse_module(source: &str) -> Result<Module, ParseError> {
         }
 
         let body_line = lines[i].trim_end();
-        let (name, mut body) = split_top_level_definition(body_line).ok_or_else(|| ParseError {
-            line: i + 1,
-            message: "expected top-level definition (`name ... = ...`)".to_string(),
-        })?;
+        let (name, params, mut body) =
+            split_top_level_definition(body_line).ok_or_else(|| ParseError {
+                line: i + 1,
+                message: "expected top-level definition (`name ... = ...`)".to_string(),
+            })?;
 
         if let Some(annotated_name) = annotated_name
             && annotated_name != name
@@ -74,6 +75,7 @@ pub fn parse_module(source: &str) -> Result<Module, ParseError> {
         declarations.push(Declaration {
             name: name.to_string(),
             type_annotation,
+            params,
             body,
             parsed_body,
         });
@@ -597,12 +599,17 @@ fn split_top_level_type(line: &str) -> Option<(&str, &str)> {
     Some((line[..idx].trim(), line[idx + 1..].trim()))
 }
 
-fn split_top_level_definition(line: &str) -> Option<(&str, String)> {
+fn split_top_level_definition(line: &str) -> Option<(&str, Vec<String>, String)> {
     let idx = line.find('=')?;
     let lhs = line[..idx].trim();
     let rhs = line[idx + 1..].trim_start();
-    let name = lhs.split_whitespace().next()?;
-    Some((name, rhs.to_string()))
+    let mut tokens = lhs.split_whitespace();
+    let name = tokens.next()?;
+    let params: Vec<String> = tokens
+        .filter(|t| is_identifier(t))
+        .map(|t| t.to_string())
+        .collect();
+    Some((name, params, rhs.to_string()))
 }
 
 #[cfg(test)]
