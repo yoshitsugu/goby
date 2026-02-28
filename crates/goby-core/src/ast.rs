@@ -2,7 +2,35 @@
 pub struct Module {
     pub imports: Vec<ImportDecl>,
     pub type_declarations: Vec<TypeDeclaration>,
+    pub effect_declarations: Vec<EffectDecl>,
+    pub handler_declarations: Vec<HandlerDecl>,
     pub declarations: Vec<Declaration>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EffectDecl {
+    pub name: String,
+    pub members: Vec<EffectMember>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EffectMember {
+    pub name: String,
+    pub type_annotation: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HandlerDecl {
+    pub name: String,
+    pub effect: String,
+    pub methods: Vec<HandlerMethod>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HandlerMethod {
+    pub name: String,
+    pub params: Vec<String>,
+    pub body: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -102,6 +130,10 @@ pub enum Expr {
 pub enum Stmt {
     Binding { name: String, value: Expr },
     Expr(Expr),
+    Using {
+        handlers: Vec<String>,
+        body: Vec<Stmt>,
+    },
 }
 
 impl Expr {

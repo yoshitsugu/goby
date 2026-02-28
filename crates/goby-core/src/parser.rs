@@ -1,6 +1,6 @@
 use crate::ast::{
-    BinOpKind, Declaration, Expr, ImportDecl, ImportKind, Module, RecordField, Stmt,
-    TypeDeclaration,
+    BinOpKind, Declaration, EffectDecl, EffectMember, Expr, HandlerDecl, HandlerMethod, ImportDecl,
+    ImportKind, Module, RecordField, Stmt, TypeDeclaration,
 };
 use crate::str_util::split_top_level_commas;
 
@@ -15,6 +15,8 @@ pub fn parse_module(source: &str) -> Result<Module, ParseError> {
     let mut i = 0;
     let mut imports = Vec::new();
     let mut type_declarations = Vec::new();
+    let mut effect_declarations = Vec::new();
+    let mut handler_declarations = Vec::new();
     let mut declarations = Vec::new();
 
     while i < lines.len() {
@@ -50,6 +52,111 @@ pub fn parse_module(source: &str) -> Result<Module, ParseError> {
             })?;
             type_declarations.push(ty_decl);
             i += 1;
+            continue;
+        }
+
+        // `effect Name` block: collect indented member signatures.
+        if trimmed.starts_with("effect ") && !trimmed.contains('=') {
+            let effect_name = trimmed["effect ".len()..].trim().to_string();
+            if effect_name.is_empty() {
+                return Err(ParseError {
+                    line: i + 1,
+                    message: "effect declaration requires a name".to_string(),
+                });
+            }
+            let mut members = Vec::new();
+            i += 1;
+            while i < lines.len() {
+                let member_line = lines[i];
+                let member_trimmed = strip_line_comment(member_line).trim_end();
+                let member_trimmed_str = member_trimmed.trim();
+                if member_trimmed_str.is_empty() || member_trimmed_str.starts_with('#') {
+                    i += 1;
+                    continue;
+                }
+                if !is_indented(member_line) {
+                    break;
+                }
+                // Parse `name: TypeAnnotation`
+                if let Some((name, ty)) = member_trimmed_str.split_once(':') {
+                    let name = name.trim().to_string();
+                    let ty = ty.trim().to_string();
+                    if !name.is_empty() && !ty.is_empty() {
+                        members.push(EffectMember { name, type_annotation: ty });
+                    }
+                }
+                i += 1;
+            }
+            effect_declarations.push(EffectDecl { name: effect_name, members });
+            continue;
+        }
+
+        // `handler Name for Effect` block: collect indented method definitions.
+        if trimmed.starts_with("handler ") {
+            let rest = trimmed.strip_prefix("handler ").unwrap_or("").trim();
+            let (handler_name, effect_name) = if let Some((h, e)) = rest.split_once(" for ") {
+                (h.trim().to_string(), e.trim().to_string())
+            } else {
+                return Err(ParseError {
+                    line: i + 1,
+                    message: "handler declaration requires `handler Name for Effect`".to_string(),
+                });
+            };
+            let mut methods = Vec::new();
+            i += 1;
+            while i < lines.len() {
+                let method_line = lines[i];
+                let method_stripped = strip_line_comment(method_line).trim_end();
+                let method_trimmed = method_stripped.trim();
+                if method_trimmed.is_empty() || method_trimmed.starts_with('#') {
+                    i += 1;
+                    continue;
+                }
+                if !is_indented(method_line) {
+                    break;
+                }
+                // Parse `name params... = body` (single-line or with an indented sub-body).
+                if let Some((lhs, rhs)) = method_trimmed.split_once('=') {
+                    let lhs = lhs.trim();
+                    let parts: Vec<&str> = lhs.split_whitespace().collect();
+                    if !parts.is_empty() {
+                        let name = parts[0].to_string();
+                        let params: Vec<String> =
+                            parts[1..].iter().map(|s| s.to_string()).collect();
+                        let mut body = rhs.trim().to_string();
+                        // Collect any deeper-indented sub-body lines.
+                        i += 1;
+                        while i < lines.len() {
+                            let sub = lines[i];
+                            let sub_s = strip_line_comment(sub).trim_end();
+                            let sub_t = sub_s.trim();
+                            if sub_t.is_empty() {
+                                i += 1;
+                                continue;
+                            }
+                            // Sub-body lines must be indented more than the method line.
+                            // We check for double indentation (at least 4 spaces/2 tabs).
+                            let indent_len = sub.len() - sub.trim_start().len();
+                            let method_indent_len =
+                                method_line.len() - method_line.trim_start().len();
+                            if indent_len <= method_indent_len {
+                                break;
+                            }
+                            body.push('\n');
+                            body.push_str(sub_t);
+                            i += 1;
+                        }
+                        methods.push(HandlerMethod { name, params, body });
+                        continue;
+                    }
+                }
+                i += 1;
+            }
+            handler_declarations.push(HandlerDecl {
+                name: handler_name,
+                effect: effect_name,
+                methods,
+            });
             continue;
         }
 
@@ -112,6 +219,8 @@ pub fn parse_module(source: &str) -> Result<Module, ParseError> {
     Ok(Module {
         imports,
         type_declarations,
+        effect_declarations,
+        handler_declarations,
         declarations,
     })
 }
@@ -119,11 +228,77 @@ pub fn parse_module(source: &str) -> Result<Module, ParseError> {
 /// Parse a declaration body string into a list of statements.
 /// Returns `None` if any line cannot be parsed (caller may fall back to string-based evaluation).
 pub fn parse_body_stmts(body: &str) -> Option<Vec<Stmt>> {
+    parse_stmts_from_lines(&body.lines().collect::<Vec<_>>(), 0).map(|(stmts, _)| stmts)
+}
+
+/// Parse statements from a slice of raw (potentially indented) lines starting at `start`.
+/// Returns `(stmts, lines_consumed)` where `lines_consumed` is the number of lines processed.
+/// Processing stops when a line is encountered that is less indented than the first non-empty line,
+/// or when `start` reaches the end of the slice.
+fn parse_stmts_from_lines(lines: &[&str], start: usize) -> Option<(Vec<Stmt>, usize)> {
     let mut stmts = Vec::new();
-    for line in code_lines(body) {
-        stmts.push(parse_stmt(line)?);
+    let mut i = start;
+
+    // Determine the baseline indent from the first non-empty line.
+    let baseline = {
+        let mut b = None;
+        for line in lines[start..].iter() {
+            let stripped = strip_line_comment(line).trim_end();
+            let trimmed = stripped.trim();
+            if trimmed.is_empty() || trimmed.starts_with('#') {
+                continue;
+            }
+            b = Some(indent_len(stripped));
+            break;
+        }
+        b.unwrap_or(0)
+    };
+
+    while i < lines.len() {
+        let raw = lines[i];
+        let stripped = strip_line_comment(raw).trim_end();
+        let trimmed = stripped.trim();
+
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            i += 1;
+            continue;
+        }
+
+        let this_indent = indent_len(stripped);
+        if this_indent < baseline {
+            // Dedented past our block — stop.
+            break;
+        }
+
+        // `using HandlerA, HandlerB` statement.
+        if trimmed.starts_with("using ") {
+            let handlers_str = trimmed.strip_prefix("using ").unwrap_or("").trim();
+            let handlers: Vec<String> = handlers_str
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
+            if handlers.is_empty() {
+                return None;
+            }
+            i += 1;
+            // Collect the using body: lines more indented than the `using` line.
+            let (body, consumed) = parse_stmts_from_lines(lines, i)?;
+            i += consumed;
+            stmts.push(Stmt::Using { handlers, body });
+            continue;
+        }
+
+        // Regular statement: binding or expression.
+        stmts.push(parse_stmt(trimmed)?);
+        i += 1;
     }
-    Some(stmts)
+
+    Some((stmts, i - start))
+}
+
+fn indent_len(line: &str) -> usize {
+    line.len() - line.trim_start().len()
 }
 
 fn parse_stmt(line: &str) -> Option<Stmt> {
@@ -615,17 +790,18 @@ fn parse_qualified_access(src: &str) -> Option<Expr> {
 /// Try to parse `f x` (space-separated call) or `f(x)` (parenthesised call).
 /// Does NOT match lambda or list/tuple starts.
 fn try_parse_call(src: &str) -> Option<(&str, &str)> {
-    // f(x) style
+    // f(x) style — callee can be a bare identifier or a qualified name (Mod.fn)
     if let Some(open) = src.find('(').filter(|_| src.ends_with(')')) {
         let callee = src[..open].trim();
         let inner = src[open + 1..src.len() - 1].trim();
-        if is_identifier(callee) && !inner.is_empty() {
+        if (is_identifier(callee) || is_qualified_name(callee)) && !inner.is_empty() {
             return Some((callee, inner));
         }
     }
 
     // f x style: split at first whitespace, but callee must be an identifier
-    // and arg must not be empty.  Skip if src starts with special chars.
+    // (or a qualified name like `Mod.fn`) and arg must not be empty.
+    // Skip if src starts with special chars.
     if src.starts_with('|') || src.starts_with('"') || src.starts_with('[') {
         return None;
     }
@@ -634,10 +810,19 @@ fn try_parse_call(src: &str) -> Option<(&str, &str)> {
     let split_pos = chars.find_map(|(idx, ch)| ch.is_whitespace().then_some(idx))?;
     let callee = src[..split_pos].trim();
     let arg = src[split_pos..].trim();
-    if is_identifier(callee) && !arg.is_empty() {
+    if (is_identifier(callee) || is_qualified_name(callee)) && !arg.is_empty() {
         Some((callee, arg))
     } else {
         None
+    }
+}
+
+/// Returns true if `s` is a qualified name of the form `Identifier.identifier`.
+fn is_qualified_name(s: &str) -> bool {
+    if let Some((receiver, member)) = s.split_once('.') {
+        is_identifier(receiver) && is_identifier(member)
+    } else {
+        false
     }
 }
 
@@ -920,12 +1105,6 @@ fn strip_line_comment(line: &str) -> &str {
     line
 }
 
-fn code_lines(body: &str) -> impl Iterator<Item = &str> {
-    body.lines().map(strip_line_comment).map(str::trim).filter(|line| {
-        let line = *line;
-        !line.is_empty() && !line.starts_with('#')
-    })
-}
 
 // ---------------------------------------------------------------------------
 // Existing helpers (unchanged)
@@ -1597,6 +1776,27 @@ mod tests {
     fn parses_function_gb_declarations() {
         let source = read_example("function.gb");
         let module = parse_module(&source).expect("function.gb should parse");
+        for decl in &module.declarations {
+            assert!(
+                decl.parsed_body.is_some(),
+                "declaration `{}` should have parsed_body",
+                decl.name
+            );
+        }
+    }
+
+    #[test]
+    fn parses_effect_gb_declarations() {
+        let source = read_example("effect.gb");
+        let module = parse_module(&source).expect("effect.gb should parse");
+        // effect.gb should have 3 regular declarations: plus_ten_with_log, show_env_var, main
+        assert_eq!(
+            module.declarations.len(),
+            3,
+            "effect.gb should have 3 declarations"
+        );
+        assert_eq!(module.effect_declarations.len(), 2, "effect.gb should have 2 effect declarations");
+        assert_eq!(module.handler_declarations.len(), 2, "effect.gb should have 2 handler declarations");
         for decl in &module.declarations {
             assert!(
                 decl.parsed_body.is_some(),

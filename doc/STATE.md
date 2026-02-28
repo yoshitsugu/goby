@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-02-28 (session 16, uncommitted)
+Last updated: 2026-02-28 (session 17, uncommitted)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -32,6 +32,7 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - nested grouping via parentheses, for example `TypeX (TypeY a b) c`.
 - Indentation-based blocks accept tabs and spaces.
 - Function calls support both `f x` and `f(x)`.
+  - Callee can be a bare identifier or a qualified name (`Mod.fn x`, `Mod.fn(x)`).
 - Block-local binding semantics are locked:
   - `name = expr` is a binding only for assignment `=`, never for `==`.
   - bindings are visible to subsequent statements in the same declaration body.
@@ -60,6 +61,9 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - `[60, 70]`
   - `something`
   - `15`
+- `main` type annotation is required for `run`; optional for `check`.
+  - Declarations without annotations (e.g. `effect.gb`'s `main`) pass `check`.
+  - The Wasm backend enforces the annotation at compile time (for `run`).
 
 ## 3. Known Open Decisions
 
@@ -81,6 +85,15 @@ This file is a restart-safe snapshot for resuming work after context reset.
   (import parsing + minimal built-in module resolver + typecheck integration) and verified full checks.
 - 2026-02-28 (session 16, uncommitted): finalized import collision policy
   (ambiguous imported names error only when referenced) and synced plan/state docs.
+- 2026-02-28 (session 17, uncommitted): completed `effect.gb` slice:
+  - `effect`/`handler` top-level block parsing and AST nodes.
+  - `Stmt::Using` with indentation-aware body parsing.
+  - effect member registration in type env (qualified and bare keys).
+  - handler name registration as `Unknown` in type env.
+  - relaxed `main` annotation requirement (`check` no longer requires it).
+  - fixed `try_parse_call` to accept qualified callee (`Mod.fn x`, `Mod.fn(x)`).
+  - added `parses_effect_gb_declarations` regression test.
+  - `check` now passes for all `examples/*.gb` including `effect.gb`.
 
 ## 5. Current Example Files
 
@@ -91,6 +104,7 @@ This file is a restart-safe snapshot for resuming work after context reset.
 - `examples/import.gb`
 - `examples/control_flow.gb`
 - `examples/type.gb`
+- `examples/effect.gb`
 
 ## 6. Immediate Next Steps (Execution Order)
 
@@ -98,12 +112,15 @@ This file is a restart-safe snapshot for resuming work after context reset.
    - `cargo run -p goby-cli -- check examples/function.gb`
    - `cargo run -p goby-cli -- run examples/function.gb`
    - locked output contract for `function.gb`.
-2. Keep `examples/import.gb` green:
+2. Keep all `examples/*.gb` check-passing:
    - `cargo run -p goby-cli -- check examples/import.gb`
-3. Start next post-MVP vertical slice:
-   - `control_flow.gb` (`case` / `if` / `==`), or
-   - `effect.gb` (`effect` / `handler` / `using`), or
-   - `type.gb` (`type` alias / union / record / field access; visibility is out of scope).
+   - `cargo run -p goby-cli -- check examples/effect.gb`
+   - `cargo run -p goby-cli -- check examples/type.gb`
+   - `cargo run -p goby-cli -- check examples/control_flow.gb`
+3. All post-MVP `examples/*.gb` now pass `check`. Consider next direction:
+   - runtime support for `control_flow.gb` (`case`/`if`/`==` in Wasm backend), or
+   - runtime support for `type.gb` (record construction and field access in Wasm), or
+   - runtime support for `effect.gb` (handler dispatch — significant scope).
 4. After each slice, re-run:
    - `cargo check`
    - `cargo test`
@@ -120,3 +137,6 @@ This file is a restart-safe snapshot for resuming work after context reset.
 
 - Declaration-side generic parameter binders are intentionally deferred
   (design memo only; not in active execution steps).
+- `HandlerMethod.body` is stored as a raw `String`; future handler type-checking
+  would benefit from `Option<Vec<Stmt>>` similar to `Declaration.parsed_body`.
+- Effect-safety / unhandled-effect diagnostics are deferred (out of scope for check slice).

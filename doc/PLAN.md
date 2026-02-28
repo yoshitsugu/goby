@@ -147,11 +147,11 @@ Based on `examples/*.gb`:
 
 ## 5. Example-Driven Feature Checklist
 
-Status baseline (2026-02-28):
+Status baseline (2026-02-28, session 17):
 - `check` passes: `hello.gb`, `basic_types.gb`, `function.gb`, `generic_types.gb`,
   `print/local_binding.gb`, `print/concat.gb`, `parser/mixed_indent.gb`,
-  `control_flow.gb`, `import.gb`.
-- `check` fails: `effect.gb`, `type.gb`.
+  `control_flow.gb`, `import.gb`, `type.gb`, `effect.gb`.
+- `check` fails: none.
 
 ### 5.1 Core Syntax/Typing Used by Stable Examples
 
@@ -179,9 +179,9 @@ Status baseline (2026-02-28):
   (`goby/string`, `goby/list`, `goby/env`) used by `examples/import.gb`.
   - collision policy: if colliding names are actually referenced, report an
     unresolved/ambiguous-name error.
-- [ ] `effect` declarations and effect member signatures
-- [ ] `handler ... for ...` syntax and handler scope semantics
-- [ ] `using` handler application syntax (single/multiple handlers)
+- [x] `effect` declarations and effect member signatures
+- [x] `handler ... for ...` syntax and handler scope semantics
+- [x] `using` handler application syntax (single/multiple handlers)
 - [ ] Multiple effects in `can` with semantic checking (currently parse/type surface only)
 - [ ] `case` expressions with pattern arms and wildcard `_`
 - [ ] `if ... else ...` (or strict desugaring rule to `case`) and `==` typing rules
@@ -299,3 +299,79 @@ Phase 4: Validation and docs
   - `cargo test`
   - `cargo clippy -- -D warnings`
 - update checklist and `doc/STATE.md` with locked decisions and residual gaps.
+
+## 9. Incremental Implementation Plan (Upcoming Slice: `effect.gb`)
+
+Goal:
+- make `cargo run -p goby-cli -- check examples/effect.gb` pass with a minimal effect/handler/using feature set.
+
+### Phase 1: Scope lock (minimum useful subset)
+
+Support only the constructs present in `examples/effect.gb`:
+
+- `effect Name` block with indented member signatures (`member: TypeA -> TypeB`).
+- `handler HandlerName for EffectName` block with indented method definitions (`method params = body`).
+- `using HandlerName\n  body` expression (single handler only).
+- `using HandlerA, HandlerB\n  body` (comma-separated handler list).
+- Qualified effect calls (`EffectName.member arg`) already parse as `Qualified`/`Call`; no new expr node needed.
+- Unqualified effect calls (`log arg`) already parse as normal function calls; no new expr node needed.
+- Multiple effect names in `can` clause (`can Log, Env`) — parser already accepts these as the raw annotation string; keep as-is.
+
+Runtime (`run`) support is explicitly out of scope for this slice.
+
+### Phase 2: Parser / AST extension
+
+Changes to `crates/goby-core/src/ast.rs`:
+- Add `Module::effect_declarations: Vec<EffectDecl>`.
+- Add `Module::handler_declarations: Vec<HandlerDecl>`.
+- Define:
+  ```
+  EffectDecl { name: String, members: Vec<EffectMember> }
+  EffectMember { name: String, type_annotation: String }
+  HandlerDecl { name: String, effect: String, methods: Vec<HandlerMethod> }
+  HandlerMethod { name: String, params: Vec<String>, body: String }
+  ```
+- Add `Expr::Using { handlers: Vec<String>, body: Box<Expr> }` (body is the indented block parsed as a single expression or statement sequence — for this slice, store as `Vec<Stmt>` alongside the handlers list).
+  - Simpler alternative: add `Stmt::Using { handlers: Vec<String>, body: Vec<Stmt> }` to avoid touching the expression evaluator.
+  - **Locked choice**: use `Stmt::Using` to keep the expression evaluator unchanged.
+
+Changes to `crates/goby-core/src/parser.rs`:
+- In `parse_module`, before the existing declaration loop, handle lines starting with `effect ` and `handler `:
+  - `effect Name` — collect indented member lines (`name: type`), build `EffectDecl`.
+  - `handler Name for Effect` — collect indented method lines (`name params = body`), build `HandlerDecl`.
+- In `parse_body_stmts` / `parse_stmt`, handle lines starting with `using `:
+  - parse comma-separated handler name list from the `using ...` line.
+  - collect subsequent indented lines as the `using` body stmts.
+  - emit `Stmt::Using { handlers, body }`.
+
+Backward compatibility:
+- All existing examples must continue to parse unchanged.
+
+### Phase 3: Typecheck integration
+
+Changes to `crates/goby-core/src/typecheck.rs`:
+- Register each `HandlerDecl` name as a global symbol of type `Unknown` (sufficient for `check` to not error on handler name references in `using`).
+- Register each `EffectDecl` member in the global type env with a type derived from its annotation (for call-site type checking of `Log.log` etc.).
+- For `Stmt::Using`: type-check the body stmts using the current env; ignore handler resolution (MVP: no effect-safety checking).
+- `can` clause with multiple effects (`can Log, Env`) is already stripped as metadata; no change needed.
+
+### Phase 4: Validation and docs
+
+Run:
+- `cargo run -p goby-cli -- check examples/effect.gb`
+- `cargo run -p goby-cli -- check examples/function.gb`
+- `cargo run -p goby-cli -- check examples/import.gb`
+- `cargo run -p goby-cli -- check examples/type.gb`
+- `cargo run -p goby-cli -- check examples/control_flow.gb`
+- `cargo run -p goby-cli -- run examples/function.gb`
+- `cargo check`
+- `cargo test`
+- `cargo clippy -- -D warnings`
+
+Update `doc/PLAN.md` checklist (§ 5.3) and `doc/STATE.md` with locked decisions and residual gaps.
+
+Out of scope for this slice:
+- Effect-safety / unhandled-effect diagnostics.
+- Handler dispatch at runtime.
+- Exhaustiveness checking for effect members in handlers.
+- Effect inference.
