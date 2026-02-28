@@ -1,6 +1,7 @@
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Module {
     pub imports: Vec<ImportDecl>,
+    pub type_declarations: Vec<TypeDeclaration>,
     pub declarations: Vec<Declaration>,
 }
 
@@ -15,6 +16,29 @@ pub enum ImportKind {
     Plain,
     Alias(String),
     Selective(Vec<String>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TypeDeclaration {
+    Alias {
+        name: String,
+        target: String,
+    },
+    Union {
+        name: String,
+        constructors: Vec<String>,
+    },
+    Record {
+        name: String,
+        constructor: String,
+        fields: Vec<RecordField>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecordField {
+    pub name: String,
+    pub ty: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
