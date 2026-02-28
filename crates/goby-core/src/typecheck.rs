@@ -55,18 +55,7 @@ pub fn typecheck_module(module: &Module) -> Result<(), TypecheckError> {
     let env = build_type_env(module);
     for decl in &module.declarations {
         if let Some(stmts) = &decl.parsed_body {
-            // Derive the declared return type from the annotation, if present.
-            // For function types (e.g. `Int -> Int`), use the result type.
-            // For non-function types (e.g. `Int`, `String`), the annotation
-            // itself is the expected type of the body expression.
-            let declared_return_ty = decl.type_annotation.as_deref().map(|ann| {
-                let base = strip_effect_clause(ann).trim();
-                if let Some(ft) = parse_function_type(base) {
-                    ty_from_annotation(&ft.result)
-                } else {
-                    ty_from_annotation(base)
-                }
-            });
+            let declared_return_ty = decl.type_annotation.as_deref().map(annotation_return_ty);
             check_body_stmts(stmts, &env, &decl.name, declared_return_ty)?;
         }
     }
@@ -112,6 +101,18 @@ impl TypeEnv {
             globals: self.globals.clone(),
             locals,
         }
+    }
+}
+
+/// Returns the expected return type of a declaration from its type annotation.
+/// For function types (`A -> B`), returns the result type `B`.
+/// For non-function types (`Int`, `String`, …), returns the annotation type itself.
+fn annotation_return_ty(annotation: &str) -> Ty {
+    let base = strip_effect_clause(annotation).trim();
+    if let Some(ft) = parse_function_type(base) {
+        ty_from_annotation(&ft.result)
+    } else {
+        ty_from_annotation(base)
     }
 }
 
@@ -215,16 +216,10 @@ fn check_expr(expr: &Expr, env: &TypeEnv) -> Ty {
                 Ty::Unknown
             }
         }
-        Expr::Pipeline { value, callee } => {
-            let value_ty = check_expr(value, env);
+        Expr::Pipeline { value: _, callee } => {
             let callee_ty = env.lookup(callee);
             match callee_ty {
-                Ty::Fun { result, .. } => {
-                    let _ = value_ty;
-                    *result
-                }
-                // print is a builtin: result is Unit
-                _ if callee == "print" => Ty::Unit,
+                Ty::Fun { result, .. } => *result,
                 _ => Ty::Unknown,
             }
         }
@@ -270,32 +265,30 @@ fn check_body_stmts(
     // Validate the inferred return type of the body against the declared return
     // type, when both are known.  `Ty::Unknown` means we lack enough type
     // information to make a judgement, so we skip the check in that case.
-    if let Some(declared) = declared_return_ty {
-        if declared != Ty::Unknown {
-            // The "return value" of a body is the last expression statement.
-            // If the body ends with a binding there is no return value to check.
-            let inferred = stmts
-                .iter()
-                .rev()
-                .find_map(|s| {
-                    if let Stmt::Expr(expr) = s {
-                        Some(check_expr(expr, &local_env))
-                    } else {
-                        None
-                    }
-                })
-                .unwrap_or(Ty::Unit);
+    if let Some(declared) = declared_return_ty.filter(|d| *d != Ty::Unknown) {
+        // The "return value" of a body is the last expression statement.
+        // If the body ends with a binding there is no return value to check.
+        let inferred = stmts
+            .iter()
+            .rev()
+            .find_map(|s| {
+                if let Stmt::Expr(expr) = s {
+                    Some(check_expr(expr, &local_env))
+                } else {
+                    None
+                }
+            })
+            .unwrap_or(Ty::Unit);
 
-            if inferred != Ty::Unknown && inferred != declared {
-                return Err(TypecheckError {
-                    declaration: Some(decl_name.to_string()),
-                    message: format!(
-                        "body type `{}` does not match declared return type `{}`",
-                        ty_name(&inferred),
-                        ty_name(&declared),
-                    ),
-                });
-            }
+        if inferred != Ty::Unknown && inferred != declared {
+            return Err(TypecheckError {
+                declaration: Some(decl_name.to_string()),
+                message: format!(
+                    "body type `{}` does not match declared return type `{}`",
+                    ty_name(&inferred),
+                    ty_name(&declared),
+                ),
+            });
         }
     }
 
