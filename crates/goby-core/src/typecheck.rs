@@ -3,8 +3,7 @@ use std::collections::{HashMap, HashSet};
 use crate::{
     Module,
     ast::{BinOpKind, Expr, Stmt},
-    str_util::split_top_level_commas,
-    types::parse_function_type,
+    types::{TypeExpr, parse_function_type, parse_type_expr},
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -117,6 +116,8 @@ enum Ty {
     List(Box<Ty>),
     Tuple(Vec<Ty>),
     Fun { params: Vec<Ty>, result: Box<Ty> },
+    Var(String),
+    Con { name: String, args: Vec<Ty> },
     Unknown,
 }
 
@@ -197,28 +198,54 @@ fn build_type_env(module: &Module) -> TypeEnv {
 
 fn ty_from_annotation(s: &str) -> Ty {
     let s = s.trim();
-    match s {
+    let Some(type_expr) = parse_type_expr(s) else {
+        return Ty::Unknown;
+    };
+    ty_from_type_expr(&type_expr)
+}
+
+fn ty_from_type_expr(expr: &TypeExpr) -> Ty {
+    match expr {
+        TypeExpr::Name(name) => ty_from_name(name),
+        TypeExpr::Tuple(items) => Ty::Tuple(items.iter().map(ty_from_type_expr).collect()),
+        TypeExpr::Function { arguments, result } => Ty::Fun {
+            params: arguments.iter().map(ty_from_type_expr).collect(),
+            result: Box::new(ty_from_type_expr(result)),
+        },
+        TypeExpr::Apply { head, args } => {
+            let TypeExpr::Name(name) = head.as_ref() else {
+                return Ty::Unknown;
+            };
+            let converted_args: Vec<Ty> = args.iter().map(ty_from_type_expr).collect();
+            if name == "List" && converted_args.len() == 1 {
+                Ty::List(Box::new(converted_args[0].clone()))
+            } else {
+                Ty::Con {
+                    name: name.clone(),
+                    args: converted_args,
+                }
+            }
+        }
+    }
+}
+
+fn ty_from_name(name: &str) -> Ty {
+    match name {
         "Int" => Ty::Int,
         "String" => Ty::Str,
         "Unit" => Ty::Unit,
-        _ if s.starts_with("List ") => {
-            let inner = ty_from_annotation(&s["List ".len()..]);
-            Ty::List(Box::new(inner))
-        }
-        _ if s.starts_with('(') && s.ends_with(')') => {
-            let inner = &s[1..s.len() - 1];
-            let parts = split_top_level_commas(inner);
-            if parts.len() >= 2 {
-                Ty::Tuple(parts.iter().map(|p| ty_from_annotation(p)).collect())
-            } else if parts.len() == 1 {
-                // Grouped type like `(Int -> Int)` — unwrap the parens.
-                ty_from_annotation(parts[0])
-            } else {
-                Ty::Unknown
-            }
-        }
-        _ => Ty::Unknown,
+        _ if is_type_variable_name(name) => Ty::Var(name.to_string()),
+        _ => Ty::Con {
+            name: name.to_string(),
+            args: Vec::new(),
+        },
     }
+}
+
+fn is_type_variable_name(name: &str) -> bool {
+    name.chars()
+        .next()
+        .is_some_and(|c| c.is_ascii_lowercase() || c == '_')
 }
 
 
@@ -364,8 +391,36 @@ fn ty_name(ty: &Ty) -> String {
             let inner: Vec<String> = items.iter().map(ty_name).collect();
             format!("({})", inner.join(", "))
         }
-        Ty::Fun { .. } => "Fun".to_string(),
+        Ty::Fun { params, result } => {
+            let mut parts: Vec<String> = params.iter().map(format_fun_segment).collect();
+            parts.push(ty_name(result));
+            parts.join(" -> ")
+        }
+        Ty::Var(name) => name.clone(),
+        Ty::Con { name, args } => {
+            if args.is_empty() {
+                name.clone()
+            } else {
+                let rendered_args: Vec<String> = args.iter().map(format_type_application_arg).collect();
+                format!("{} {}", name, rendered_args.join(" "))
+            }
+        }
         Ty::Unknown => "Unknown".to_string(),
+    }
+}
+
+fn format_type_application_arg(ty: &Ty) -> String {
+    match ty {
+        Ty::Con { args, .. } if !args.is_empty() => format!("({})", ty_name(ty)),
+        Ty::Fun { .. } => format!("({})", ty_name(ty)),
+        _ => ty_name(ty),
+    }
+}
+
+fn format_fun_segment(ty: &Ty) -> String {
+    match ty {
+        Ty::Fun { .. } => format!("({})", ty_name(ty)),
+        _ => ty_name(ty),
     }
 }
 
@@ -387,10 +442,25 @@ fn validate_type_annotation(decl_name: &str, annotation: &str) -> Result<(), Typ
         });
     }
 
-    if base.contains("->") && parse_function_type(base).is_none() {
+    if base.contains("->") {
+        let Some(ft) = parse_function_type(base) else {
+            return Err(TypecheckError {
+                declaration: Some(decl_name.to_string()),
+                message: "invalid function type annotation".to_string(),
+            });
+        };
+        let mut segments = ft.arguments;
+        segments.push(ft.result);
+        if segments.iter().any(|segment| parse_type_expr(segment).is_none()) {
+            return Err(TypecheckError {
+                declaration: Some(decl_name.to_string()),
+                message: "invalid function type annotation".to_string(),
+            });
+        }
+    } else if parse_type_expr(base).is_none() {
         return Err(TypecheckError {
             declaration: Some(decl_name.to_string()),
-            message: "invalid function type annotation".to_string(),
+            message: "invalid type annotation".to_string(),
         });
     }
 
@@ -493,12 +563,20 @@ mod tests {
             env!("CARGO_MANIFEST_DIR")
         ))
         .expect("basic_types example should exist");
+        let generic_types = std::fs::read_to_string(format!(
+            "{}/../../examples/generic_types.gb",
+            env!("CARGO_MANIFEST_DIR")
+        ))
+        .expect("generic_types example should exist");
 
         let hello_module = parse_module(&hello).expect("hello should parse");
         let basic_module = parse_module(&basic).expect("basic_types should parse");
+        let generic_types_module =
+            parse_module(&generic_types).expect("generic_types should parse");
 
         typecheck_module(&hello_module).expect("hello should typecheck");
         typecheck_module(&basic_module).expect("basic_types should typecheck");
+        typecheck_module(&generic_types_module).expect("generic_types should typecheck");
     }
 
     #[test]
@@ -635,6 +713,30 @@ mod tests {
         assert!(
             err.message.contains("List Int"),
             "expected 'List Int' in error message, got: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn rejects_generic_application_mismatch_shows_haskell_style_name() {
+        let module = parse_module("x : TypeX a b\nx = 1\n").expect("should parse");
+        let err = typecheck_module(&module).expect_err("type mismatch should be rejected");
+        assert_eq!(err.declaration.as_deref(), Some("x"));
+        assert!(
+            err.message.contains("TypeX a b"),
+            "expected `TypeX a b` in error message, got: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn rejects_nested_generic_application_mismatch_with_parenthesized_arg() {
+        let module = parse_module("x : TypeX (TypeY a b) c\nx = 1\n").expect("should parse");
+        let err = typecheck_module(&module).expect_err("type mismatch should be rejected");
+        assert_eq!(err.declaration.as_deref(), Some("x"));
+        assert!(
+            err.message.contains("TypeX (TypeY a b) c"),
+            "expected nested haskell-style type in error message, got: {}",
             err.message
         );
     }

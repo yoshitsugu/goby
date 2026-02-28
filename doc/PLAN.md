@@ -47,6 +47,11 @@ Based on `examples/*.gb`:
   - `#` starts a comment only outside string literals; inside strings it is a normal character.
   - block comment syntax is not included in MVP.
   - `#!` has no special shebang handling in MVP; it is treated as a normal `#` comment.
+- Generic type application syntax is fixed to Haskell-style spacing:
+  - single-parameter examples: `List Int`.
+  - multi-parameter examples: `TypeX a b`.
+  - nested applications requiring grouping use parentheses: `TypeX (TypeY a b) c`.
+  - diagnostics should render type applications in the same style.
 - Indentation-based blocks accept both tabs and spaces.
   - for MVP, any line with at least one leading space or tab is treated as an indented block line.
   - mixing tabs and spaces in the same block is allowed in MVP (no normalization/error rule yet).
@@ -87,7 +92,7 @@ Based on `examples/*.gb`:
 
 ### 2.2 Types and Checking
 
-- Canonical generic syntax (`List Int` and future multi-parameter generics).
+- Declaration-side generic parameter syntax (for example, `id : a -> a` with explicit binders) is postponed.
 - Type annotation placement rules (required vs optional locations).
 - Tuple and record roadmap (records in MVP or not).
 - Type error diagnostics quality bar is fixed for MVP:

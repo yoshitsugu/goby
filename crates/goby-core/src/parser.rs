@@ -671,6 +671,17 @@ mod tests {
     }
 
     #[test]
+    fn parses_generic_types_example() {
+        let source = read_example("generic_types.gb");
+        let module = parse_module(&source).expect("generic_types.gb should parse");
+
+        assert_eq!(module.declarations.len(), 3);
+        assert_eq!(module.declarations[0].name, "id");
+        assert_eq!(module.declarations[1].name, "project");
+        assert_eq!(module.declarations[2].name, "ints");
+    }
+
+    #[test]
     fn rejects_mismatched_annotation_and_definition_names() {
         let source = "foo : Int\nbar = 1\n";
         let err = parse_module(source).expect_err("mismatched names should be rejected");

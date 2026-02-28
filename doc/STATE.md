@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-02-28 (session 10, uncommitted)
+Last updated: 2026-02-28 (session 11, uncommitted)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -26,6 +26,10 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - execute via external `wasmtime run --invoke main <output.wasm>`
   - if `wasmtime` is missing, skip execution with an informational message.
 - Statement separator is newline or `;`.
+- Generic type application syntax is locked to Haskell-style spacing:
+  - `List Int`
+  - `TypeX a b`
+  - nested grouping via parentheses, for example `TypeX (TypeY a b) c`.
 - Indentation-based blocks accept tabs and spaces.
 - Function calls support both `f x` and `f(x)`.
 - Block-local binding semantics are locked:
@@ -68,21 +72,22 @@ This file is a restart-safe snapshot for resuming work after context reset.
 - `cf107c5`: added parser/typecheck regression tests for locked MVP rules.
 - `96672df`: locked MVP comment syntax policy in `doc/PLAN.md` and `doc/STATE.md`.
 - 2026-02-28 (session 10, uncommitted): validated `check/run` acceptance path and full `cargo check/test/clippy`, and added parser regression coverage for line-end comments and `#!`.
+- 2026-02-28 (session 11, uncommitted): implemented Haskell-style generic type-application parsing in `goby-core` type parsing/typecheck and added regression tests.
 
 ## 5. Current Example Files
 
 - `examples/hello.gb`
 - `examples/basic_types.gb`
 - `examples/function.gb`
+- `examples/generic_types.gb`
 
 ## 6. Immediate Next Steps (Execution Order)
 
-1. Decide canonical generic syntax for single- and multi-parameter type constructors.
-2. Implement generic syntax decision in parser/type parser/typechecker and add focused tests.
-3. Keep CLI/E2E regression checks green for MVP acceptance path:
+1. Keep CLI/E2E regression checks green for MVP acceptance path:
    - `cargo run -p goby-cli -- check examples/function.gb`
    - `cargo run -p goby-cli -- run examples/function.gb`
    - locked output contract for `function.gb`.
+2. Decide and scope declaration-side generic binders (postponed item).
 
 ## 7. Resume Commands
 
