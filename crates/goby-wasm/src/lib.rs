@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use goby_core::{Module, types::parse_function_type};
+use goby_core::{Expr, Module, Stmt, types::parse_function_type};
 
 const IOVEC_OFFSET: u32 = 0;
 const NWRITTEN_OFFSET: u32 = 8;
@@ -24,7 +24,8 @@ pub fn compile_module(module: &Module) -> Result<Vec<u8>, CodegenError> {
         });
     };
 
-    if let Some(text) = resolve_main_runtime_output(module, &main.body) {
+    if let Some(text) = resolve_main_runtime_output(module, &main.body, main.parsed_body.as_deref())
+    {
         return compile_print_module(&text);
     }
 
@@ -181,7 +182,11 @@ fn parse_print_call(line: &str) -> Option<&str> {
     Some(rest.trim())
 }
 
-fn resolve_main_runtime_output(module: &Module, body: &str) -> Option<String> {
+fn resolve_main_runtime_output(
+    module: &Module,
+    body: &str,
+    parsed_stmts: Option<&[Stmt]>,
+) -> Option<String> {
     let int_functions = collect_functions_with_result(module, "Int");
     let list_functions = collect_functions_with_result(module, "List Int");
     let unit_functions = collect_unit_functions(module);
@@ -192,7 +197,7 @@ fn resolve_main_runtime_output(module: &Module, body: &str) -> Option<String> {
         list: &list_evaluator,
         unit: &unit_functions,
     };
-    RuntimeOutputResolver::resolve(body, &evaluators)
+    RuntimeOutputResolver::resolve(body, parsed_stmts, &evaluators)
 }
 
 type EvaluatedFunctions<'a> = HashMap<&'a str, EvaluatedFunction<'a>>;
@@ -229,6 +234,7 @@ fn collect_functions_with_result<'a>(
             EvaluatedFunction {
                 body: &decl.body,
                 parameter,
+                parsed_stmts: decl.parsed_body.as_deref(),
             },
         );
     }
@@ -265,6 +271,7 @@ fn collect_unit_functions<'a>(module: &'a Module) -> EvaluatedFunctions<'a> {
             EvaluatedFunction {
                 body: &decl.body,
                 parameter,
+                parsed_stmts: decl.parsed_body.as_deref(),
             },
         );
     }
@@ -464,11 +471,23 @@ struct RuntimeEvaluators<'a, 'b> {
 }
 
 impl RuntimeOutputResolver {
-    fn resolve(body: &str, evaluators: &RuntimeEvaluators<'_, '_>) -> Option<String> {
+    fn resolve(
+        body: &str,
+        parsed_stmts: Option<&[Stmt]>,
+        evaluators: &RuntimeEvaluators<'_, '_>,
+    ) -> Option<String> {
         let mut resolver = Self::default();
 
-        for statement in statements(body) {
-            resolver.ingest_statement(statement, evaluators)?;
+        if let Some(stmts) = parsed_stmts {
+            // AST-based path (preferred when parsed_body is available)
+            for stmt in stmts {
+                resolver.ingest_ast_statement(stmt, evaluators)?;
+            }
+        } else {
+            // String-based fallback path
+            for statement in statements(body) {
+                resolver.ingest_statement(statement, evaluators)?;
+            }
         }
 
         if resolver.outputs.is_empty() {
@@ -476,6 +495,62 @@ impl RuntimeOutputResolver {
         } else {
             Some(resolver.outputs.join("\n"))
         }
+    }
+
+    fn ingest_ast_statement(
+        &mut self,
+        stmt: &Stmt,
+        evaluators: &RuntimeEvaluators<'_, '_>,
+    ) -> Option<()> {
+        match stmt {
+            Stmt::Binding { name, value } => {
+                // Propagate None so the caller can fall back to the string path
+                // rather than silently dropping the binding.
+                let runtime_val = self.eval_ast_value(value, evaluators)?;
+                self.locals.store(name, runtime_val);
+                Some(())
+            }
+            Stmt::Expr(expr) => self.eval_ast_side_effect(expr, evaluators),
+        }
+    }
+
+    fn eval_ast_side_effect(
+        &mut self,
+        expr: &Expr,
+        evaluators: &RuntimeEvaluators<'_, '_>,
+    ) -> Option<()> {
+        match expr {
+            // print <arg>  —  handle before delegating to string path because
+            // `eval_side_effect` routes through `execute_unit_call` which does not
+            // know about the `print` builtin.
+            Expr::Call { callee, arg } if matches!(callee.as_ref(), Expr::Var(n) if n == BUILTIN_PRINT) =>
+            {
+                let value = self.eval_ast_value(arg, evaluators)?;
+                self.outputs.push(value.to_output_text());
+                Some(())
+            }
+            // value |> print
+            Expr::Pipeline { value, callee } if callee == BUILTIN_PRINT => {
+                let v = self.eval_ast_value(value, evaluators)?;
+                self.outputs.push(v.to_output_text());
+                Some(())
+            }
+            // All other expression statements: delegate to string-based path.
+            _ => {
+                let repr = expr.to_str_repr()?;
+                self.eval_side_effect(&repr, evaluators)
+            }
+        }
+    }
+
+    fn eval_ast_value(
+        &self,
+        expr: &Expr,
+        evaluators: &RuntimeEvaluators<'_, '_>,
+    ) -> Option<RuntimeValue> {
+        let repr = expr.to_str_repr()?;
+        let callables = HashMap::new();
+        self.eval_value_with_context(&repr, &self.locals, &callables, evaluators)
     }
 
     fn ingest_statement(
@@ -584,6 +659,51 @@ impl RuntimeOutputResolver {
         self.eval_value_with_context(&call_expr, locals, callables, evaluators)
     }
 
+    /// Execute a single AST statement inside a unit-returning function body.
+    fn execute_unit_ast_stmt(
+        &mut self,
+        stmt: &Stmt,
+        locals: &mut RuntimeLocals,
+        callables: &mut HashMap<String, IntCallable>,
+        evaluators: &RuntimeEvaluators<'_, '_>,
+    ) -> Option<()> {
+        match stmt {
+            Stmt::Binding { name, value } => {
+                let repr = value.to_str_repr()?;
+                // Propagate None so the caller can detect evaluation failure
+                // rather than silently dropping the binding.
+                let v = self.eval_value_with_context(&repr, locals, callables, evaluators)?;
+                locals.store(name, v);
+                Some(())
+            }
+            Stmt::Expr(expr) => {
+                // print <arg>
+                if let Expr::Call { callee, arg } = expr {
+                    if matches!(callee.as_ref(), Expr::Var(n) if n == BUILTIN_PRINT) {
+                        let repr = arg.to_str_repr()?;
+                        let value =
+                            self.eval_value_with_context(&repr, locals, callables, evaluators)?;
+                        self.outputs.push(value.to_output_text());
+                        return Some(());
+                    }
+                }
+                // value |> print
+                if let Expr::Pipeline { value, callee } = expr {
+                    if callee == BUILTIN_PRINT {
+                        let repr = value.to_str_repr()?;
+                        let v =
+                            self.eval_value_with_context(&repr, locals, callables, evaluators)?;
+                        self.outputs.push(v.to_output_text());
+                        return Some(());
+                    }
+                }
+                // Other expression statements: delegate to string-based unit call path.
+                let repr = expr.to_str_repr()?;
+                self.execute_unit_call(&repr, locals, callables, evaluators)
+            }
+        }
+    }
+
     fn execute_unit_call(
         &mut self,
         expr: &str,
@@ -616,37 +736,48 @@ impl RuntimeOutputResolver {
             }
         }
 
-        for statement in statements(function.body) {
-            match statement {
-                Statement::Binding { name, expr } => {
-                    let value = self.eval_value_with_context(
-                        expr,
-                        &function_locals,
-                        &function_callables,
-                        evaluators,
-                    );
-                    if let Some(value) = value {
-                        function_locals.store(name, value);
-                    } else {
-                        function_locals.clear(name);
+        if let Some(stmts) = function.parsed_stmts {
+            for stmt in stmts {
+                self.execute_unit_ast_stmt(
+                    stmt,
+                    &mut function_locals,
+                    &mut function_callables,
+                    evaluators,
+                )?;
+            }
+        } else {
+            for statement in statements(function.body) {
+                match statement {
+                    Statement::Binding { name, expr } => {
+                        let value = self.eval_value_with_context(
+                            expr,
+                            &function_locals,
+                            &function_callables,
+                            evaluators,
+                        );
+                        if let Some(value) = value {
+                            function_locals.store(name, value);
+                        } else {
+                            function_locals.clear(name);
+                        }
                     }
-                }
-                Statement::Print(print_expr) => {
-                    let value = self.eval_value_with_context(
-                        print_expr,
-                        &function_locals,
-                        &function_callables,
-                        evaluators,
-                    )?;
-                    self.outputs.push(value.to_output_text());
-                }
-                Statement::Expr(inner_expr) => {
-                    self.execute_unit_call(
-                        inner_expr,
-                        &function_locals,
-                        &function_callables,
-                        evaluators,
-                    )?;
+                    Statement::Print(print_expr) => {
+                        let value = self.eval_value_with_context(
+                            print_expr,
+                            &function_locals,
+                            &function_callables,
+                            evaluators,
+                        )?;
+                        self.outputs.push(value.to_output_text());
+                    }
+                    Statement::Expr(inner_expr) => {
+                        self.execute_unit_call(
+                            inner_expr,
+                            &function_locals,
+                            &function_callables,
+                            evaluators,
+                        )?;
+                    }
                 }
             }
         }
@@ -755,7 +886,12 @@ fn parse_string_concat_call(expr: &str) -> Option<(&str, &str)> {
 
     let inner = &expr[BUILTIN_STRING_CONCAT_PREFIX.len()..expr.len() - 1];
     let (left, right) = split_top_level_comma(inner)?;
-    Some((left.trim(), right.trim()))
+    let right = right.trim();
+    // Reject if there is a third (or more) argument.
+    if split_top_level_comma(right).is_some() {
+        return None;
+    }
+    Some((left.trim(), right))
 }
 
 fn split_top_level_comma(s: &str) -> Option<(&str, &str)> {
@@ -981,10 +1117,12 @@ fn parse_list_int_literal(expr: &str) -> Option<Vec<i64>> {
     Some(out)
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct EvaluatedFunction<'a> {
     body: &'a str,
     parameter: Option<&'a str>,
+    /// Pre-parsed AST statements; `None` means fall back to string-based evaluation.
+    parsed_stmts: Option<&'a [Stmt]>,
 }
 
 fn assign_local<T>(name: &str, value: Option<T>, locals: &mut HashMap<String, T>) {
@@ -1262,6 +1400,14 @@ mod tests {
             .expect("main should exist")
     }
 
+    fn main_parsed_body(module: &Module) -> Option<&[Stmt]> {
+        module
+            .declarations
+            .iter()
+            .find(|decl| decl.name == "main")
+            .and_then(|decl| decl.parsed_body.as_deref())
+    }
+
     #[test]
     fn emits_valid_wasm_header_for_main_module() {
         let module = parse_module("main : Unit -> Unit\nmain = 0\n").expect("parse should work");
@@ -1334,8 +1480,9 @@ main =
   [1, 2, 3] |> print
 "#;
         let module = parse_module(source).expect("parse should work");
-        let output = resolve_main_runtime_output(&module, main_body(&module))
-            .expect("runtime output should resolve");
+        let output =
+            resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
+                .expect("runtime output should resolve");
         assert_eq!(output, "[1, 2, 3]");
     }
 
@@ -1343,8 +1490,9 @@ main =
     fn locks_runtime_output_for_function_example() {
         let source = read_example("function.gb");
         let module = parse_module(&source).expect("parse should work");
-        let output = resolve_main_runtime_output(&module, main_body(&module))
-            .expect("runtime output should resolve");
+        let output =
+            resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
+                .expect("runtime output should resolve");
         assert_eq!(output, "90\n[30, 40, 50]\n[60, 70]\nsomething\n15");
     }
 
@@ -1362,8 +1510,9 @@ main =
   callback_after_print (|n| -> n + 5)
 "#;
         let module = parse_module(source).expect("parse should work");
-        let output = resolve_main_runtime_output(&module, main_body(&module))
-            .expect("runtime output should resolve");
+        let output =
+            resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
+                .expect("runtime output should resolve");
         assert_eq!(output, "something\n15");
     }
 }

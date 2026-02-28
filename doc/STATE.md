@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-02-27
+Last updated: 2026-02-28 (session 3)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -64,7 +64,10 @@ This file is a restart-safe snapshot for resuming work after context reset.
 
 ## 6. Immediate Next Steps (Execution Order)
 
-1. Re-introduce stricter typecheck rules after AST-based expression/type representation is in place.
+1. ~~Fix `to_str_repr()` precedence loss~~ — DONE (session 2).
+2. ~~`string.concat` を 2 引数固定でパーサー・評価器を統一~~ — DONE (session 2).
+3. ~~型チェックで宣言型 vs 本体戻り型の検証を追加~~ — DONE (session 2).
+4. 将来: `to_str_repr()` 依存を撤廃し、`Expr` を直接評価する AST evaluator に移行。
 
 ### Function.gb Runtime Parity Checklist
 
@@ -385,3 +388,95 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - `cargo fmt`
   - `cargo test`
   - `cargo run -p goby-cli -- run examples/function.gb`
+
+## 38. Progress Since AST Expression Parser Introduction (Phase 4a/4b)
+
+Incremental migration from string-based evaluation to AST-based evaluation. All 62 tests pass. Changes are uncommitted.
+
+### Added / Modified Files
+
+- `crates/goby-core/src/ast.rs`
+  - Added `Expr`, `Stmt`, and `BinOpKind` AST node types.
+  - Added `Expr::to_str_repr()` — temporary bridge from AST back to string for the legacy evaluator.
+  - Added `Declaration::parsed_body: Option<Vec<Stmt>>` field.
+
+- `crates/goby-core/src/parser.rs`
+  - Added `parse_body_stmts()` and `parse_expr()` to parse declaration bodies into AST.
+  - `parse_module` now populates `parsed_body` automatically.
+
+- `crates/goby-core/src/typecheck.rs`
+  - Added `check_expr()` — type inference for `Expr` nodes (Int / String / List / Fun / Unknown).
+  - Added `check_body_stmts()` — skeleton for statement-level type checking (local bindings only for now).
+  - Added `TypeEnv::with_local()`.
+
+- `crates/goby-wasm/src/lib.rs` (Phase 4a)
+  - Extended `RuntimeOutputResolver::resolve()` with `parsed_stmts: Option<&[Stmt]>`.
+  - Added `ingest_ast_statement()`, `eval_ast_side_effect()`, `eval_ast_value()`.
+  - `main` body now uses the AST path when available, falling back to the string path.
+
+- `crates/goby-wasm/src/lib.rs` (Phase 4b — added this session)
+  - `EvaluatedFunction::parsed_stmts` is now used in the evaluation path.
+  - Added `execute_unit_ast_stmt()` for AST-based execution of unit-returning function bodies.
+  - `execute_unit_call()` uses the AST path when `parsed_stmts` is present, otherwise falls back to the string path.
+
+### All Known Issues Resolved (session 2)
+
+1. ✅ `to_str_repr()` now wraps `Expr::Call` args and `Expr::BinOp` operands in parentheses when needed.
+   - Added `needs_parens_as_subexpr()` helper in `ast.rs`.
+   - 3 regression tests added in `ast::tests`.
+
+2. ✅ Type checker now validates body type vs declared return type.
+   - `check_body_stmts` receives `declared_return_ty: Option<Ty>` and compares the last expression statement's inferred type.
+   - `Ty::Unknown` is tolerated (insufficient type info).
+   - 2 regression tests added in `typecheck::tests`.
+
+3. ✅ `string.concat` is now strictly 2-argument everywhere.
+   - Parser: `parts.len() != 2` → `None`.
+   - `analysis.rs` and `goby-wasm`: 3rd+ arg detection via second `split_top_level_comma` call.
+   - Regression tests added in `parser::tests` and `analysis::tests`.
+
+### Resume Steps
+
+```
+cargo test    # confirm all 69 tests pass
+```
+
+## 39. Progress Since Codex Review P0 Fixes (session 3)
+
+Three P0 bugs identified by Codex review were fixed. All 73 tests pass.
+
+### Fix 1: Non-function type annotation bypassed typecheck (`typecheck.rs`)
+
+- `declared_return_ty` derivation now handles both function types (`Int -> Int` → result type)
+  and non-function types (`Int`, `String` → annotation type directly).
+- Before: `x : Int; x = "hello"` passed silently.
+- After: rejected with `body type 'String' does not match declared return type 'Int'`.
+- 2 regression tests added.
+
+### Fix 2: Silent binding clear on eval failure (`goby-wasm/src/lib.rs`)
+
+- `ingest_ast_statement` and `execute_unit_ast_stmt` now propagate `None` via `?`
+  instead of calling `locals.clear(name)` and returning `Some(())`.
+- Caller (`resolve()`) falls back to the string path when `None` is returned.
+
+### Fix 3: Register `print` builtin in `TypeEnv` (`typecheck.rs`)
+
+- `build_type_env` now inserts `print : Unknown -> Unit` into globals.
+- `check_expr` for `Call` can now infer `print(x)` → `Ty::Unit` from the environment.
+- Before: `f : Int -> Int` body ending with `print "x"` passed silently (`Ty::Unknown`).
+- After: rejected with `body type 'Unit' does not match declared return type 'Int'`.
+- 2 regression tests added.
+
+### Remaining P1 items (not yet fixed)
+
+1. Constant-declaration type check for non-function annotations (`x : Int; x = "hello"`) — **FIXED above**
+2. `ty_name()` shows `"List"` without element type in error messages.
+3. `parse_string_concat_call` duplicated in `analysis.rs` and `goby-wasm/src/lib.rs`.
+4. `MethodCall` missing from `needs_parens_as_subexpr()`.
+5. Function parameters not registered in `TypeEnv` (e.g. `double x = x + x` → `x` is `Unknown`).
+
+### Next work
+
+- Address P1 items above.
+- Migrate evaluator fully to AST path (remove `to_str_repr()` dependency).
+- Wasm codegen: emit actual Wasm bytecode for integer arithmetic (remove WAT dependency).
