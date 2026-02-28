@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-02-28 (session 5)
+Last updated: 2026-02-28 (session 5, commit 2)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -496,6 +496,22 @@ Two commits: refactoring cleanup + P1 item fixes. All 80 tests pass.
 ### Remaining known gaps (P2)
 
 All P2 gaps from session 4 have been resolved in session 5 (Track A commit `2abe600`).
+
+## 42. Progress Since Codex P0/P1 Review Fixes (session 5, commit 2)
+
+Commit `a5b43b9`. 89 tests pass, clippy clean.
+
+### P0-1 (`parser.rs`)
+`split_top_level_definition` now calls `is_assignment_eq` when scanning for the definition `=`, so `==` in the body no longer confuses the splitter.
+
+### P1-1 (`typecheck.rs`)
+`typecheck_module` validates `decl.params.len() == ft.arguments.len()` before zipping. A single `Unit` parameter may be omitted from the definition (idiomatic `main : Unit -> Unit; main = ...`).
+
+### P1-2 (`typecheck.rs`)
+`ty_from_annotation` now recurses on `parts[0]` when `parts.len() == 1` inside a parenthesised annotation, so `(Int)` → `Ty::Int` instead of `Ty::Unknown`.
+
+### P1-3 (`str_util.rs`, `parser.rs`, `typecheck.rs`)
+`split_top_level_commas` (Vec-returning, string-literal + bracket-safe) extracted to `str_util.rs`. Duplicate local implementations in `parser.rs` and `typecheck.rs` removed. `split_top_level_comma` extended to track `[`/`]` depth.
 
 ### Next work
 
