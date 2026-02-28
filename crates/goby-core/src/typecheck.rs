@@ -196,15 +196,37 @@ impl TypeEnv {
     }
 
     fn resolve_alias(&self, ty: &Ty, depth: usize) -> Ty {
-        if depth > 16 {
+        if depth > 32 {
             return ty.clone();
         }
         match ty {
-            Ty::Con { name, args } if args.is_empty() => {
-                if let Some(target) = self.type_aliases.get(name) {
+            Ty::List(inner) => Ty::List(Box::new(self.resolve_alias(inner, depth + 1))),
+            Ty::Tuple(items) => Ty::Tuple(
+                items
+                    .iter()
+                    .map(|item| self.resolve_alias(item, depth + 1))
+                    .collect(),
+            ),
+            Ty::Fun { params, result } => Ty::Fun {
+                params: params
+                    .iter()
+                    .map(|param| self.resolve_alias(param, depth + 1))
+                    .collect(),
+                result: Box::new(self.resolve_alias(result, depth + 1)),
+            },
+            Ty::Con { name, args } => {
+                if args.is_empty()
+                    && let Some(target) = self.type_aliases.get(name)
+                {
                     return self.resolve_alias(target, depth + 1);
                 }
-                ty.clone()
+                Ty::Con {
+                    name: name.clone(),
+                    args: args
+                        .iter()
+                        .map(|arg| self.resolve_alias(arg, depth + 1))
+                        .collect(),
+                }
             }
             _ => ty.clone(),
         }
@@ -678,10 +700,10 @@ fn check_expr(expr: &Expr, env: &TypeEnv) -> Ty {
         Expr::Var(name) => env.lookup(name),
         Expr::Qualified { receiver, member } => {
             if let Some(receiver_ty) = env.locals.get(receiver) {
-                if let Ty::Con { name, .. } = receiver_ty
-                    && let Some(field_ty) = env.record_field_ty(name, member)
+                if let Ty::Con { name, .. } = env.resolve_alias(receiver_ty, 0)
+                    && let Some(field_ty) = env.record_field_ty(&name, member)
                 {
-                    return field_ty;
+                    return env.resolve_alias(&field_ty, 0);
                 }
             }
             env.lookup(&format!("{}.{}", receiver, member))
@@ -850,8 +872,65 @@ fn ensure_no_ambiguous_refs_in_expr(
             fields,
         } => {
             ensure_name_not_ambiguous(constructor, env, decl_name)?;
+            let Some(record) = env.lookup_record_by_constructor(constructor) else {
+                return Err(TypecheckError {
+                    declaration: Some(decl_name.to_string()),
+                    message: format!("unknown record constructor `{}`", constructor),
+                });
+            };
+            let mut seen = HashSet::new();
             for (_, value) in fields {
                 ensure_no_ambiguous_refs_in_expr(value, env, decl_name)?;
+            }
+            for (name, value) in fields {
+                if !seen.insert(name.clone()) {
+                    return Err(TypecheckError {
+                        declaration: Some(decl_name.to_string()),
+                        message: format!(
+                            "duplicate field `{}` in constructor call `{}`",
+                            name, constructor
+                        ),
+                    });
+                }
+                let Some(expected_ty) = record.fields.get(name) else {
+                    return Err(TypecheckError {
+                        declaration: Some(decl_name.to_string()),
+                        message: format!(
+                            "unknown field `{}` in constructor call `{}`",
+                            name, constructor
+                        ),
+                    });
+                };
+                let actual_ty = check_expr(value, env);
+                if actual_ty != Ty::Unknown && !env.are_compatible(expected_ty, &actual_ty) {
+                    return Err(TypecheckError {
+                        declaration: Some(decl_name.to_string()),
+                        message: format!(
+                            "field `{}` in constructor `{}` has type `{}` but expected `{}`",
+                            name,
+                            constructor,
+                            ty_name(&actual_ty),
+                            ty_name(expected_ty),
+                        ),
+                    });
+                }
+            }
+            if seen.len() != record.fields.len() {
+                let mut missing: Vec<String> = record
+                    .fields
+                    .keys()
+                    .filter(|field| !seen.contains(*field))
+                    .cloned()
+                    .collect();
+                missing.sort();
+                return Err(TypecheckError {
+                    declaration: Some(decl_name.to_string()),
+                    message: format!(
+                        "missing field(s) in constructor call `{}`: {}",
+                        constructor,
+                        missing.join(", ")
+                    ),
+                });
             }
             Ok(())
         }
@@ -1178,6 +1257,81 @@ get_name =
 ";
         let module = parse_module(source).expect("should parse");
         typecheck_module(&module).expect("record constructor and field access should typecheck");
+    }
+
+    #[test]
+    fn rejects_duplicate_field_in_record_constructor_call() {
+        let source = "\
+type UserID = String
+type UserStatus = Activated | Deactivated
+type User = User(id: UserID, name: String, status: UserStatus)
+mk : Unit -> User
+mk =
+  User(id: \"1234\", id: \"5678\", status: UserStatus.Activated)
+";
+        let module = parse_module(source).expect("should parse");
+        let err = typecheck_module(&module).expect_err("duplicate constructor field should fail");
+        assert_eq!(err.declaration.as_deref(), Some("mk"));
+        assert!(err.message.contains("duplicate field"));
+    }
+
+    #[test]
+    fn resolves_record_field_access_for_alias_receiver_type() {
+        let mut type_aliases = HashMap::new();
+        type_aliases.insert(
+            "UserAlias".to_string(),
+            Ty::Con {
+                name: "User".to_string(),
+                args: Vec::new(),
+            },
+        );
+        let mut fields = HashMap::new();
+        fields.insert("name".to_string(), Ty::Str);
+        let mut record_types = HashMap::new();
+        record_types.insert(
+            "User".to_string(),
+            RecordTypeInfo {
+                type_name: "User".to_string(),
+                fields,
+            },
+        );
+        let mut locals = HashMap::new();
+        locals.insert(
+            "user".to_string(),
+            Ty::Con {
+                name: "UserAlias".to_string(),
+                args: Vec::new(),
+            },
+        );
+        let env = TypeEnv {
+            globals: HashMap::new(),
+            locals,
+            type_aliases,
+            record_types,
+        };
+        let expr = crate::ast::Expr::Qualified {
+            receiver: "user".to_string(),
+            member: "name".to_string(),
+        };
+        assert_eq!(check_expr(&expr, &env), Ty::Str);
+    }
+
+    #[test]
+    fn resolves_nested_aliases_when_checking_type_compatibility() {
+        let mut type_aliases = HashMap::new();
+        type_aliases.insert("UserID".to_string(), Ty::Str);
+        let env = TypeEnv {
+            globals: HashMap::new(),
+            locals: HashMap::new(),
+            type_aliases,
+            record_types: HashMap::new(),
+        };
+        let expected = Ty::List(Box::new(Ty::Con {
+            name: "UserID".to_string(),
+            args: Vec::new(),
+        }));
+        let actual = Ty::List(Box::new(Ty::Str));
+        assert!(env.are_compatible(&expected, &actual));
     }
 
     #[test]
