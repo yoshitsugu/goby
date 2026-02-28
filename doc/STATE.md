@@ -543,3 +543,32 @@ Track A: all three items completed in commit `2abe600`. 84 tests pass, clippy cl
 
 - `str_util::split_top_level_comma` changed from `pub` to `pub(crate)`.
 - `parse_string_concat_call` remains `pub` as it is used by `goby-wasm`.
+
+## 43. Progress Since Track B Step 1 (session 6)
+
+Native AST expression evaluator implemented in `crates/goby-wasm/src/lib.rs`. 89 tests pass, clippy clean.
+
+### Changes
+
+- Added `RuntimeLocals::get(&str) -> Option<RuntimeValue>` — unified lookup helper.
+- Added `RuntimeOutputResolver::eval_expr_ast(expr, locals, callables, evaluators, depth) -> Option<RuntimeValue>` — evaluates `Expr` nodes directly without `to_str_repr()`.
+  - Handles: `IntLit`, `StringLit`, `Var`, `BinOp` (Add/Mul), `MethodCall` (`string.concat` 2-arg), `ListLit`, `Call` (Int and ListInt function paths), `Pipeline`.
+  - Unsupported: `Lambda` (top-level), `TupleLit`, other `MethodCall` forms → returns `None` (caller falls back).
+  - Depth guard: reuses `MAX_EVAL_DEPTH`.
+- Updated `eval_ast_value` — now calls `eval_expr_ast` instead of `to_str_repr()` + `eval_value_with_context`.
+- Updated `execute_unit_ast_stmt`:
+  - `Stmt::Binding` arm: calls `eval_expr_ast` directly.
+  - `print <arg>` arm: calls `eval_expr_ast` directly.
+  - `value |> print` arm: calls `eval_expr_ast` directly.
+  - Other expression statements: still falls back to `to_str_repr()` + `execute_unit_call` (unit-returning function calls via string path).
+
+### Remaining `to_str_repr()` usage
+
+Only one call site remains: the `_ =>` fallback arm in `execute_unit_ast_stmt` for unit-returning function calls (e.g., `callback_after_print (...)`). This is intentional for now — a follow-up can extend `eval_expr_ast` to return Unit and remove the last `to_str_repr()` call.
+
+### Verification
+
+- `cargo test`: 89 tests pass (6 + 73 + 10).
+- `cargo clippy --all-targets --all-features -- -D warnings`: clean.
+- `cargo run -p goby-cli -- run examples/hello.gb`: `Hello Goby!`
+- `cargo run -p goby-cli -- run examples/function.gb`: `90 / [30, 40, 50] / [60, 70] / something / 15`
