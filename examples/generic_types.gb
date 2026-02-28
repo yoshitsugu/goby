@@ -1,0 +1,8 @@
+id : a -> a
+id x = x
+
+project : TypeX (TypeY a b) c -> TypeX (TypeY a b) c
+project x = x
+
+ints : List Int
+ints = [1, 2, 3]
