@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::{
     Module,
-    ast::{BinOpKind, Expr, ImportKind, Stmt},
+    ast::{BinOpKind, Expr, ImportKind, Stmt, TypeDeclaration},
     types::{TypeExpr, parse_function_type, parse_type_expr},
 };
 
@@ -14,6 +14,7 @@ pub struct TypecheckError {
 
 pub fn typecheck_module(module: &Module) -> Result<(), TypecheckError> {
     validate_imports(module)?;
+    validate_type_declarations(module)?;
 
     let mut names = HashSet::new();
 
@@ -220,10 +221,61 @@ fn build_type_env(module: &Module) -> TypeEnv {
         "builtin `print`".to_string(),
     );
     inject_imported_symbols(module, &mut globals);
+    inject_type_constructors(module, &mut globals);
 
     TypeEnv {
         globals,
         locals: HashMap::new(),
+    }
+}
+
+fn inject_type_constructors(module: &Module, globals: &mut HashMap<String, GlobalBinding>) {
+    for ty_decl in &module.type_declarations {
+        match ty_decl {
+            TypeDeclaration::Alias { .. } => {}
+            TypeDeclaration::Union { name, constructors } => {
+                for constructor in constructors {
+                    insert_global_symbol(
+                        globals,
+                        format!("{}.{}", name, constructor),
+                        Ty::Con {
+                            name: name.clone(),
+                            args: Vec::new(),
+                        },
+                        format!("type `{}` constructor", name),
+                    );
+                }
+            }
+            TypeDeclaration::Record {
+                name,
+                constructor,
+                fields,
+            } => {
+                let params: Vec<Ty> = fields.iter().map(|f| ty_from_annotation(&f.ty)).collect();
+                let result = Ty::Con {
+                    name: name.clone(),
+                    args: Vec::new(),
+                };
+                let ctor_ty = Ty::Fun {
+                    params,
+                    result: Box::new(result),
+                };
+                // Record constructors are available by bare constructor name.
+                insert_global_symbol(
+                    globals,
+                    constructor.clone(),
+                    ctor_ty.clone(),
+                    format!("type `{}` constructor", name),
+                );
+                // Also expose qualified form for consistency with union constructors.
+                insert_global_symbol(
+                    globals,
+                    format!("{}.{}", name, constructor),
+                    ctor_ty,
+                    format!("type `{}` constructor", name),
+                );
+            }
+        }
     }
 }
 
@@ -249,6 +301,113 @@ fn validate_imports(module: &Module) -> Result<(), TypecheckError> {
         }
     }
     Ok(())
+}
+
+fn validate_type_declarations(module: &Module) -> Result<(), TypecheckError> {
+    let mut known_type_names: HashSet<String> = builtin_type_names()
+        .into_iter()
+        .map(|name| name.to_string())
+        .collect();
+    let mut declared_type_names = HashSet::new();
+
+    for ty_decl in &module.type_declarations {
+        let name = match ty_decl {
+            TypeDeclaration::Alias { name, .. } => name,
+            TypeDeclaration::Union { name, .. } => name,
+            TypeDeclaration::Record { name, .. } => name,
+        };
+        if !declared_type_names.insert(name.clone()) {
+            return Err(TypecheckError {
+                declaration: Some(name.clone()),
+                message: format!("duplicate type declaration `{}`", name),
+            });
+        }
+        known_type_names.insert(name.clone());
+    }
+
+    for ty_decl in &module.type_declarations {
+        match ty_decl {
+            TypeDeclaration::Alias { name, target } => {
+                let parsed = parse_type_expr(target).ok_or_else(|| TypecheckError {
+                    declaration: Some(name.clone()),
+                    message: "invalid alias target type".to_string(),
+                })?;
+                validate_type_expr_names(&parsed, &known_type_names, name)?;
+            }
+            TypeDeclaration::Union { name, constructors } => {
+                let mut seen = HashSet::new();
+                for constructor in constructors {
+                    if !seen.insert(constructor.clone()) {
+                        return Err(TypecheckError {
+                            declaration: Some(name.clone()),
+                            message: format!(
+                                "duplicate constructor `{}` in type `{}`",
+                                constructor, name
+                            ),
+                        });
+                    }
+                }
+            }
+            TypeDeclaration::Record { name, fields, .. } => {
+                let mut seen = HashSet::new();
+                for field in fields {
+                    if !seen.insert(field.name.clone()) {
+                        return Err(TypecheckError {
+                            declaration: Some(name.clone()),
+                            message: format!("duplicate field `{}` in type `{}`", field.name, name),
+                        });
+                    }
+                    let parsed = parse_type_expr(&field.ty).ok_or_else(|| TypecheckError {
+                        declaration: Some(name.clone()),
+                        message: format!("invalid field type `{}`", field.ty),
+                    })?;
+                    validate_type_expr_names(&parsed, &known_type_names, name)?;
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_type_expr_names(
+    expr: &TypeExpr,
+    known_type_names: &HashSet<String>,
+    declaration: &str,
+) -> Result<(), TypecheckError> {
+    match expr {
+        TypeExpr::Name(name) => {
+            if builtin_type_names().contains(&name.as_str())
+                || is_type_variable_name(name)
+                || known_type_names.contains(name)
+            {
+                return Ok(());
+            }
+            Err(TypecheckError {
+                declaration: Some(declaration.to_string()),
+                message: format!("unknown type `{}` in type declaration", name),
+            })
+        }
+        TypeExpr::Tuple(items) => {
+            for item in items {
+                validate_type_expr_names(item, known_type_names, declaration)?;
+            }
+            Ok(())
+        }
+        TypeExpr::Function { arguments, result } => {
+            for arg in arguments {
+                validate_type_expr_names(arg, known_type_names, declaration)?;
+            }
+            validate_type_expr_names(result, known_type_names, declaration)
+        }
+        TypeExpr::Apply { head, args } => {
+            validate_type_expr_names(head, known_type_names, declaration)?;
+            for arg in args {
+                validate_type_expr_names(arg, known_type_names, declaration)?;
+            }
+            Ok(())
+        }
+    }
 }
 
 fn inject_imported_symbols(module: &Module, globals: &mut HashMap<String, GlobalBinding>) {
@@ -425,6 +584,10 @@ fn is_type_variable_name(name: &str) -> bool {
     name.chars()
         .next()
         .is_some_and(|c| c.is_ascii_lowercase() || c == '_')
+}
+
+fn builtin_type_names() -> [&'static str; 4] {
+    ["Int", "Bool", "String", "Unit"]
 }
 
 
@@ -866,6 +1029,56 @@ mod tests {
     fn accepts_tab_separated_effect_clause() {
         let module = parse_module("x : Int can\tLog\nx = 1\n").expect("should parse");
         typecheck_module(&module).expect("tab-separated `can` clause should be accepted");
+    }
+
+    #[test]
+    fn accepts_well_formed_type_declarations() {
+        let source = "\
+type UserID = String
+type UserStatus = Activated | Deactivated
+type User = User(id: UserID, name: String, status: UserStatus)
+";
+        let module = parse_module(source).expect("should parse");
+        typecheck_module(&module).expect("well-formed type declarations should pass");
+    }
+
+    #[test]
+    fn rejects_duplicate_type_declarations() {
+        let source = "\
+type User = String
+type User = Int
+";
+        let module = parse_module(source).expect("should parse");
+        let err = typecheck_module(&module).expect_err("duplicate type declarations should fail");
+        assert_eq!(err.declaration.as_deref(), Some("User"));
+        assert!(err.message.contains("duplicate type declaration"));
+    }
+
+    #[test]
+    fn rejects_unknown_type_in_alias_target() {
+        let source = "type UserID = UnknownType\n";
+        let module = parse_module(source).expect("should parse");
+        let err = typecheck_module(&module).expect_err("unknown alias target should fail");
+        assert_eq!(err.declaration.as_deref(), Some("UserID"));
+        assert!(err.message.contains("unknown type"));
+    }
+
+    #[test]
+    fn rejects_duplicate_union_constructor_names() {
+        let source = "type Flag = On | Off | On\n";
+        let module = parse_module(source).expect("should parse");
+        let err = typecheck_module(&module).expect_err("duplicate union constructor should fail");
+        assert_eq!(err.declaration.as_deref(), Some("Flag"));
+        assert!(err.message.contains("duplicate constructor"));
+    }
+
+    #[test]
+    fn rejects_duplicate_record_field_names() {
+        let source = "type User = User(id: String, id: String)\n";
+        let module = parse_module(source).expect("should parse");
+        let err = typecheck_module(&module).expect_err("duplicate record field should fail");
+        assert_eq!(err.declaration.as_deref(), Some("User"));
+        assert!(err.message.contains("duplicate field"));
     }
 
     #[test]
