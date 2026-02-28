@@ -434,22 +434,30 @@ fn parse_tuple_or_grouped_expr(src: &str) -> Option<Expr> {
     Some(Expr::TupleLit(items?))
 }
 
-/// Parse `string.concat(arg1, arg2)` method call.
+/// Parse `receiver.method(arg1, arg2, ...)` method call.
 fn parse_method_call(src: &str) -> Option<Expr> {
-    // Only `string.concat(...)` is in scope for MVP
-    let prefix = "string.concat(";
-    if !src.starts_with(prefix) || !src.ends_with(')') {
+    if !src.ends_with(')') {
         return None;
     }
-    let inner = &src[prefix.len()..src.len() - 1];
+    let open_idx = src.find('(')?;
+    let callee = src[..open_idx].trim();
+    let (receiver, method) = callee.split_once('.')?;
+    if !is_identifier(receiver) || !is_identifier(method) {
+        return None;
+    }
+    let inner = &src[open_idx + 1..src.len() - 1];
     let parts = split_top_level_commas(inner);
-    if parts.len() != 2 {
+    if parts.is_empty() || parts.iter().any(|p| p.trim().is_empty()) {
+        return None;
+    }
+    // Keep locked MVP behavior for string.concat arity.
+    if receiver == "string" && method == "concat" && parts.len() != 2 {
         return None;
     }
     let args: Option<Vec<Expr>> = parts.iter().map(|p| parse_expr(p.trim())).collect();
     Some(Expr::MethodCall {
-        receiver: "string".to_string(),
-        method: "concat".to_string(),
+        receiver: receiver.to_string(),
+        method: method.to_string(),
         args: args?,
     })
 }
@@ -1073,6 +1081,21 @@ mod tests {
                 receiver: "string".to_string(),
                 method: "concat".to_string(),
                 args: vec![Expr::Var("a".to_string()), Expr::Var("b".to_string())],
+            })
+        );
+    }
+
+    #[test]
+    fn parses_generic_qualified_method_call() {
+        assert_eq!(
+            parse_expr("l.join(paths, \"\\n\")"),
+            Some(Expr::MethodCall {
+                receiver: "l".to_string(),
+                method: "join".to_string(),
+                args: vec![
+                    Expr::Var("paths".to_string()),
+                    Expr::StringLit("\\n".to_string()),
+                ],
             })
         );
     }

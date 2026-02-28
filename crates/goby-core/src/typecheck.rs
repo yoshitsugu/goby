@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::{
     Module,
-    ast::{BinOpKind, Expr, Stmt},
+    ast::{BinOpKind, Expr, ImportKind, Stmt},
     types::{TypeExpr, parse_function_type, parse_type_expr},
 };
 
@@ -13,6 +13,8 @@ pub struct TypecheckError {
 }
 
 pub fn typecheck_module(module: &Module) -> Result<(), TypecheckError> {
+    validate_imports(module)?;
+
     let mut names = HashSet::new();
 
     for decl in &module.declarations {
@@ -189,11 +191,110 @@ fn build_type_env(module: &Module) -> TypeEnv {
             result: Box::new(Ty::Unit),
         },
     );
+    inject_imported_symbols(module, &mut globals);
 
     TypeEnv {
         globals,
         locals: HashMap::new(),
     }
+}
+
+fn validate_imports(module: &Module) -> Result<(), TypecheckError> {
+    for import in &module.imports {
+        let exports = builtin_module_exports(&import.module_path).ok_or_else(|| TypecheckError {
+            declaration: None,
+            message: format!("unknown module `{}`", import.module_path),
+        })?;
+
+        if let ImportKind::Selective(names) = &import.kind {
+            for name in names {
+                if !exports.contains_key(name.as_str()) {
+                    return Err(TypecheckError {
+                        declaration: None,
+                        message: format!(
+                            "unknown symbol `{}` in import from `{}`",
+                            name, import.module_path
+                        ),
+                    });
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn inject_imported_symbols(module: &Module, globals: &mut HashMap<String, Ty>) {
+    for import in &module.imports {
+        let Some(exports) = builtin_module_exports(&import.module_path) else {
+            continue;
+        };
+        match &import.kind {
+            ImportKind::Plain => {
+                let qualifier = import
+                    .module_path
+                    .rsplit('/')
+                    .next()
+                    .expect("module path should have at least one segment");
+                for (name, ty) in exports {
+                    globals.insert(format!("{}.{}", qualifier, name), ty.clone());
+                }
+            }
+            ImportKind::Alias(alias) => {
+                for (name, ty) in exports {
+                    globals.insert(format!("{}.{}", alias, name), ty.clone());
+                }
+            }
+            ImportKind::Selective(names) => {
+                for name in names {
+                    if let Some(ty) = exports.get(name.as_str()) {
+                        globals.insert(name.clone(), ty.clone());
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn builtin_module_exports(module_path: &str) -> Option<HashMap<&'static str, Ty>> {
+    let mut exports = HashMap::new();
+    match module_path {
+        "goby/string" => {
+            exports.insert(
+                "concat",
+                Ty::Fun {
+                    params: vec![Ty::Str, Ty::Str],
+                    result: Box::new(Ty::Str),
+                },
+            );
+            exports.insert(
+                "split",
+                Ty::Fun {
+                    params: vec![Ty::Str, Ty::Str],
+                    result: Box::new(Ty::List(Box::new(Ty::Str))),
+                },
+            );
+        }
+        "goby/list" => {
+            exports.insert(
+                "join",
+                Ty::Fun {
+                    params: vec![Ty::List(Box::new(Ty::Str)), Ty::Str],
+                    result: Box::new(Ty::Str),
+                },
+            );
+        }
+        "goby/env" => {
+            exports.insert(
+                "fetch_env_var",
+                Ty::Fun {
+                    params: vec![Ty::Str],
+                    result: Box::new(Ty::Str),
+                },
+            );
+        }
+        _ => return None,
+    }
+    Some(exports)
 }
 
 fn ty_from_annotation(s: &str) -> Ty {
@@ -291,11 +392,10 @@ fn check_expr(expr: &Expr, env: &TypeEnv) -> Ty {
         Expr::MethodCall {
             receiver, method, ..
         } => {
-            // string.concat -> String
-            if receiver == "string" && method == "concat" {
-                Ty::Str
-            } else {
-                Ty::Unknown
+            let qualified = format!("{}.{}", receiver, method);
+            match env.lookup(&qualified) {
+                Ty::Fun { result, .. } => *result,
+                _ => Ty::Unknown,
             }
         }
         Expr::Pipeline { value: _, callee } => {
@@ -568,15 +668,22 @@ mod tests {
             env!("CARGO_MANIFEST_DIR")
         ))
         .expect("generic_types example should exist");
+        let import_example = std::fs::read_to_string(format!(
+            "{}/../../examples/import.gb",
+            env!("CARGO_MANIFEST_DIR")
+        ))
+        .expect("import example should exist");
 
         let hello_module = parse_module(&hello).expect("hello should parse");
         let basic_module = parse_module(&basic).expect("basic_types should parse");
         let generic_types_module =
             parse_module(&generic_types).expect("generic_types should parse");
+        let import_module = parse_module(&import_example).expect("import example should parse");
 
         typecheck_module(&hello_module).expect("hello should typecheck");
         typecheck_module(&basic_module).expect("basic_types should typecheck");
         typecheck_module(&generic_types_module).expect("generic_types should typecheck");
+        typecheck_module(&import_module).expect("import example should typecheck");
     }
 
     #[test]
@@ -701,6 +808,33 @@ mod tests {
         .expect("function example should exist");
         let module = parse_module(&source).expect("function.gb should parse");
         typecheck_module(&module).expect("function.gb should typecheck");
+    }
+
+    #[test]
+    fn typechecks_import_example() {
+        let source = std::fs::read_to_string(format!(
+            "{}/../../examples/import.gb",
+            env!("CARGO_MANIFEST_DIR")
+        ))
+        .expect("import example should exist");
+        let module = parse_module(&source).expect("import.gb should parse");
+        typecheck_module(&module).expect("import.gb should typecheck");
+    }
+
+    #[test]
+    fn rejects_unknown_import_module() {
+        let module = parse_module("import goby/unknown\nmain : Unit -> Unit\nmain = 1\n")
+            .expect("should parse");
+        let err = typecheck_module(&module).expect_err("unknown module should fail");
+        assert!(err.message.contains("unknown module"));
+    }
+
+    #[test]
+    fn rejects_unknown_symbol_in_selective_import() {
+        let source = "import goby/env ( missing )\nmain : Unit -> Unit\nmain = 1\n";
+        let module = parse_module(source).expect("should parse");
+        let err = typecheck_module(&module).expect_err("unknown imported symbol should fail");
+        assert!(err.message.contains("unknown symbol"));
     }
 
     #[test]
