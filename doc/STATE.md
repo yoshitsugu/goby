@@ -71,10 +71,10 @@ This file is a restart-safe snapshot for resuming work after context reset.
 ## 6. Immediate Next Steps (Execution Order)
 
 1. Freeze comment syntax policy in `doc/PLAN.md` and mirror in `doc/STATE.md`.
-2. Add CLI/E2E regression checks for MVP acceptance path:
+2. Keep CLI/E2E regression checks green for MVP acceptance path:
    - `cargo run -p goby-cli -- check examples/function.gb`
    - `cargo run -p goby-cli -- run examples/function.gb`
-   - assert locked output contract for `function.gb`.
+   - locked output contract for `function.gb`.
 3. Run full validation (`cargo check`, `cargo test`, `cargo clippy -- -D warnings`).
 
 ## 7. Resume Commands

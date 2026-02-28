@@ -791,6 +791,12 @@ mod tests {
     }
 
     #[test]
+    fn rejects_pipeline_with_non_identifier_callee_expression() {
+        assert_eq!(parse_expr("x |> f 1"), None);
+        assert_eq!(parse_expr("x |> string.concat(a, b)"), None);
+    }
+
+    #[test]
     fn requires_spaces_around_infix_operators_in_mvp_parser() {
         assert_eq!(parse_expr("a+b"), None);
         assert_eq!(parse_expr("a*2"), None);
