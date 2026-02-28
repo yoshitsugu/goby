@@ -549,9 +549,7 @@ impl RuntimeOutputResolver {
         expr: &Expr,
         evaluators: &RuntimeEvaluators<'_, '_>,
     ) -> Option<RuntimeValue> {
-        let repr = expr.to_str_repr()?;
-        let callables = HashMap::new();
-        self.eval_value_with_context(&repr, &self.locals, &callables, evaluators)
+        self.eval_expr_ast(expr, &self.locals, &HashMap::new(), evaluators, 0)
     }
 
     fn ingest_statement(
@@ -661,6 +659,102 @@ impl RuntimeOutputResolver {
         self.eval_value_with_context(&call_expr, locals, callables, evaluators)
     }
 
+    /// Evaluate an `Expr` node directly, without calling `to_str_repr()`.
+    ///
+    /// Returns `None` when the expression is not yet supported by the native
+    /// evaluator (caller should fall back to the string path).
+    fn eval_expr_ast(
+        &self,
+        expr: &Expr,
+        locals: &RuntimeLocals,
+        callables: &HashMap<String, IntCallable>,
+        evaluators: &RuntimeEvaluators<'_, '_>,
+        depth: usize,
+    ) -> Option<RuntimeValue> {
+        if depth >= MAX_EVAL_DEPTH {
+            return None;
+        }
+
+        match expr {
+            Expr::IntLit(n) => Some(RuntimeValue::Int(*n)),
+            Expr::StringLit(s) => Some(RuntimeValue::String(s.clone())),
+            Expr::Var(name) => locals.get(name),
+            Expr::BinOp { op, left, right } => {
+                let lv = self.eval_expr_ast(left, locals, callables, evaluators, depth + 1)?;
+                let rv = self.eval_expr_ast(right, locals, callables, evaluators, depth + 1)?;
+                match (lv, rv) {
+                    (RuntimeValue::Int(l), RuntimeValue::Int(r)) => match op {
+                        goby_core::BinOpKind::Add => Some(RuntimeValue::Int(l.checked_add(r)?)),
+                        goby_core::BinOpKind::Mul => Some(RuntimeValue::Int(l.checked_mul(r)?)),
+                    },
+                    _ => None,
+                }
+            }
+            Expr::MethodCall {
+                receiver,
+                method,
+                args,
+            } if method == "concat" && receiver == "string" && args.len() == 2 => {
+                let av =
+                    self.eval_expr_ast(&args[0], locals, callables, evaluators, depth + 1)?;
+                let bv =
+                    self.eval_expr_ast(&args[1], locals, callables, evaluators, depth + 1)?;
+                match (av, bv) {
+                    (RuntimeValue::String(a), RuntimeValue::String(b)) => {
+                        Some(RuntimeValue::String(format!("{}{}", a, b)))
+                    }
+                    _ => None,
+                }
+            }
+            Expr::ListLit(items) => {
+                let mut out = Vec::with_capacity(items.len());
+                for item in items {
+                    match self.eval_expr_ast(item, locals, callables, evaluators, depth + 1)? {
+                        RuntimeValue::Int(n) => out.push(n),
+                        _ => return None,
+                    }
+                }
+                Some(RuntimeValue::ListInt(out))
+            }
+            Expr::Call { callee, arg } => {
+                if let Expr::Var(fn_name) = callee.as_ref() {
+                    let arg_val =
+                        self.eval_expr_ast(arg, locals, callables, evaluators, depth + 1)?;
+                    // Int function path
+                    if let RuntimeValue::Int(arg_int) = arg_val {
+                        if let Some(callable) = callables.get(fn_name) {
+                            return evaluators
+                                .int
+                                .eval_callable(callable, arg_int, callables)
+                                .map(RuntimeValue::Int);
+                        }
+                        if let Some(function) = evaluators.int.functions.get(fn_name.as_str()) {
+                            return evaluators
+                                .int
+                                .eval_function(function, Some(arg_int))
+                                .map(RuntimeValue::Int);
+                        }
+                    } else if let RuntimeValue::ListInt(arg_list) = arg_val {
+                        // List function path
+                        if let Some(function) = evaluators.list.functions.get(fn_name.as_str()) {
+                            return evaluators
+                                .list
+                                .eval_function(function, Some(arg_list))
+                                .map(RuntimeValue::ListInt);
+                        }
+                    }
+                }
+                None
+            }
+            Expr::Pipeline { value, callee } => {
+                let v = self.eval_expr_ast(value, locals, callables, evaluators, depth + 1)?;
+                self.apply_pipeline(callee, v, locals, callables, evaluators)
+            }
+            // Lambda as top-level value — not needed in main, return None to fall back.
+            Expr::Lambda { .. } | Expr::TupleLit(_) | Expr::MethodCall { .. } => None,
+        }
+    }
+
     /// Execute a single AST statement inside a unit-returning function body.
     fn execute_unit_ast_stmt(
         &mut self,
@@ -671,10 +765,7 @@ impl RuntimeOutputResolver {
     ) -> Option<()> {
         match stmt {
             Stmt::Binding { name, value } => {
-                let repr = value.to_str_repr()?;
-                // Propagate None so the caller can detect evaluation failure
-                // rather than silently dropping the binding.
-                let v = self.eval_value_with_context(&repr, locals, callables, evaluators)?;
+                let v = self.eval_expr_ast(value, locals, callables, evaluators, 0)?;
                 locals.store(name, v);
                 Some(())
             }
@@ -683,9 +774,7 @@ impl RuntimeOutputResolver {
                 if let Expr::Call { callee, arg } = expr
                     && matches!(callee.as_ref(), Expr::Var(n) if n == BUILTIN_PRINT)
                 {
-                    let repr = arg.to_str_repr()?;
-                    let value =
-                        self.eval_value_with_context(&repr, locals, callables, evaluators)?;
+                    let value = self.eval_expr_ast(arg, locals, callables, evaluators, 0)?;
                     self.outputs.push(value.to_output_text());
                     return Some(());
                 }
@@ -693,8 +782,7 @@ impl RuntimeOutputResolver {
                 if let Expr::Pipeline { value, callee } = expr
                     && callee == BUILTIN_PRINT
                 {
-                    let repr = value.to_str_repr()?;
-                    let v = self.eval_value_with_context(&repr, locals, callables, evaluators)?;
+                    let v = self.eval_expr_ast(value, locals, callables, evaluators, 0)?;
                     self.outputs.push(v.to_output_text());
                     return Some(());
                 }
@@ -812,6 +900,19 @@ impl RuntimeLocals {
         self.string_values.remove(name);
         self.int_values.remove(name);
         self.list_int_values.remove(name);
+    }
+
+    fn get(&self, name: &str) -> Option<RuntimeValue> {
+        if let Some(v) = self.int_values.get(name) {
+            return Some(RuntimeValue::Int(*v));
+        }
+        if let Some(v) = self.string_values.get(name) {
+            return Some(RuntimeValue::String(v.clone()));
+        }
+        if let Some(v) = self.list_int_values.get(name) {
+            return Some(RuntimeValue::ListInt(v.clone()));
+        }
+        None
     }
 }
 
