@@ -41,6 +41,12 @@ Based on `examples/*.gb`:
   - pipeline callee must be an identifier (`expr |> f`).
 - Type annotation style is unified to `name : Type`.
 - Statement terminators are newline or `;`.
+- Comment syntax is fixed for MVP:
+  - single-line comment marker is `#`.
+  - line-end comments are allowed (for example: `x = 1 # note`).
+  - `#` starts a comment only outside string literals; inside strings it is a normal character.
+  - block comment syntax is not included in MVP.
+  - `#!` has no special shebang handling in MVP; it is treated as a normal `#` comment.
 - Indentation-based blocks accept both tabs and spaces.
   - for MVP, any line with at least one leading space or tab is treated as an indented block line.
   - mixing tabs and spaces in the same block is allowed in MVP (no normalization/error rule yet).
@@ -77,7 +83,7 @@ Based on `examples/*.gb`:
 
 ### 2.1 Syntax and Parsing
 
-- Comment syntax policy (currently `# ...` in examples).
+- No additional open syntax/parsing items are currently tracked for MVP.
 
 ### 2.2 Types and Checking
 
