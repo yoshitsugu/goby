@@ -536,6 +536,48 @@ impl RuntimeOutputResolver {
                 self.outputs.push(v.to_output_text());
                 Some(())
             }
+            // Other expression statements: try AST unit-call path.
+            Expr::Call { callee, arg }
+                if matches!(callee.as_ref(), Expr::Var(_)) =>
+            {
+                let Expr::Var(fn_name) = callee.as_ref() else {
+                    unreachable!()
+                };
+                if let Some(arg_val) = self.eval_ast_value(arg, evaluators)
+                    && self
+                        .execute_unit_call_ast(
+                            fn_name,
+                            arg_val,
+                            &RuntimeLocals::default(),
+                            &HashMap::new(),
+                            evaluators,
+                            0,
+                        )
+                        .is_some()
+                {
+                    return Some(());
+                }
+                let repr = expr.to_str_repr()?;
+                self.eval_side_effect(&repr, evaluators)
+            }
+            Expr::Pipeline { value, callee } => {
+                if let Some(v) = self.eval_ast_value(value, evaluators)
+                    && self
+                        .execute_unit_call_ast(
+                            callee,
+                            v,
+                            &RuntimeLocals::default(),
+                            &HashMap::new(),
+                            evaluators,
+                            0,
+                        )
+                        .is_some()
+                {
+                    return Some(());
+                }
+                let repr = expr.to_str_repr()?;
+                self.eval_side_effect(&repr, evaluators)
+            }
             // All other expression statements: delegate to string-based path.
             _ => {
                 let repr = expr.to_str_repr()?;
@@ -793,7 +835,46 @@ impl RuntimeOutputResolver {
                     self.outputs.push(v.to_output_text());
                     return Some(());
                 }
-                // Other expression statements: delegate to string-based unit call path.
+                // Other expression statements: try AST unit-call path.
+                if let Expr::Call { callee, arg } = expr
+                    && let Expr::Var(fn_name) = callee.as_ref()
+                {
+                    if let Some(arg_val) =
+                        self.eval_expr_ast(arg, locals, callables, evaluators, depth)
+                        && self
+                            .execute_unit_call_ast(
+                                fn_name,
+                                arg_val,
+                                locals,
+                                callables,
+                                evaluators,
+                                depth,
+                            )
+                            .is_some()
+                    {
+                        return Some(());
+                    }
+                    let repr = expr.to_str_repr()?;
+                    return self.execute_unit_call(&repr, locals, callables, evaluators);
+                }
+                if let Expr::Pipeline { value, callee } = expr {
+                    if let Some(v) = self.eval_expr_ast(value, locals, callables, evaluators, depth)
+                        && self
+                            .execute_unit_call_ast(
+                                callee,
+                                v,
+                                locals,
+                                callables,
+                                evaluators,
+                                depth,
+                            )
+                            .is_some()
+                    {
+                        return Some(());
+                    }
+                    let repr = expr.to_str_repr()?;
+                    return self.execute_unit_call(&repr, locals, callables, evaluators);
+                }
                 let repr = expr.to_str_repr()?;
                 self.execute_unit_call(&repr, locals, callables, evaluators)
             }
@@ -878,6 +959,64 @@ impl RuntimeOutputResolver {
         }
 
         Some(())
+    }
+
+    /// Execute a unit-returning function call from the AST path.
+    ///
+    /// `fn_name` is the callee name; `arg_val` is the already-evaluated argument
+    /// value.
+    fn execute_unit_call_ast(
+        &mut self,
+        fn_name: &str,
+        arg_val: RuntimeValue,
+        caller_locals: &RuntimeLocals,
+        caller_callables: &HashMap<String, IntCallable>,
+        evaluators: &RuntimeEvaluators<'_, '_>,
+        depth: usize,
+    ) -> Option<()> {
+        let function = evaluators.unit.get(fn_name)?;
+        let mut function_locals = RuntimeLocals::default();
+        let mut function_callables = HashMap::new();
+        let arg_text = arg_val.to_expression_text();
+
+        if let Some(parameter) = function.parameter {
+            match arg_val {
+                RuntimeValue::Int(n) => {
+                    function_locals.int_values.insert(parameter.to_string(), n);
+                }
+                RuntimeValue::String(s) => {
+                    function_locals
+                        .string_values
+                        .insert(parameter.to_string(), s);
+                }
+                RuntimeValue::ListInt(v) => {
+                    function_locals
+                        .list_int_values
+                        .insert(parameter.to_string(), v);
+                }
+            }
+        }
+
+        if let Some(stmts) = function.parsed_stmts {
+            for stmt in stmts {
+                self.execute_unit_ast_stmt(
+                    stmt,
+                    &mut function_locals,
+                    &mut function_callables,
+                    evaluators,
+                    depth + 1,
+                )?;
+            }
+            Some(())
+        } else {
+            // Fall back to the string-based path for functions without parsed AST.
+            let call_expr = if function.parameter.is_some() {
+                format!("{} {}", fn_name, arg_text)
+            } else {
+                fn_name.to_string()
+            };
+            self.execute_unit_call(&call_expr, caller_locals, caller_callables, evaluators)
+        }
     }
 }
 
