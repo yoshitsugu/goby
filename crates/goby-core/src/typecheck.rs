@@ -746,6 +746,13 @@ mod tests {
     }
 
     #[test]
+    fn accepts_rebinding_shadowing_in_same_body() {
+        let source = "f : Unit -> Int\nf =\n  a = 1\n  a = a + 1\n  a\n";
+        let module = parse_module(source).expect("should parse");
+        typecheck_module(&module).expect("re-binding in same body should be accepted");
+    }
+
+    #[test]
     fn check_expr_infers_addition() {
         let env = TypeEnv {
             globals: HashMap::new(),
