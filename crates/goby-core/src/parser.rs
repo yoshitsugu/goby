@@ -197,12 +197,22 @@ pub fn parse_expr(src: &str) -> Option<Expr> {
         return parse_tuple_or_grouped_expr(src);
     }
 
-    // 8. Method call: receiver.method(args)
+    // 8. Record constructor call: TypeName(field: value, ...)
+    if let Some(expr) = parse_record_constructor_call(src) {
+        return Some(expr);
+    }
+
+    // 9. Method call: receiver.method(args)
     if let Some(expr) = parse_method_call(src) {
         return Some(expr);
     }
 
-    // 9. Function call: f x  or  f(x)
+    // 10. Qualified/member access: receiver.member
+    if let Some(expr) = parse_qualified_access(src) {
+        return Some(expr);
+    }
+
+    // 11. Function call: f x  or  f(x)
     if let Some((callee, arg)) = try_parse_call(src) {
         return Some(Expr::Call {
             callee: Box::new(parse_expr(callee)?),
@@ -210,7 +220,7 @@ pub fn parse_expr(src: &str) -> Option<Expr> {
         });
     }
 
-    // 10. String literal: "..."
+    // 12. String literal: "..."
     if src.starts_with('"') && src.ends_with('"') && src.len() >= 2 {
         let inner = &src[1..src.len() - 1];
         if !inner.contains('"') {
@@ -218,7 +228,7 @@ pub fn parse_expr(src: &str) -> Option<Expr> {
         }
     }
 
-    // 11. Bool literal
+    // 13. Bool literal
     if src == "True" {
         return Some(Expr::BoolLit(true));
     }
@@ -226,12 +236,12 @@ pub fn parse_expr(src: &str) -> Option<Expr> {
         return Some(Expr::BoolLit(false));
     }
 
-    // 12. Integer literal
+    // 14. Integer literal
     if let Ok(n) = src.parse::<i64>() {
         return Some(Expr::IntLit(n));
     }
 
-    // 13. Identifier
+    // 15. Identifier
     if is_identifier(src) {
         return Some(Expr::Var(src.to_string()));
     }
@@ -543,6 +553,62 @@ fn parse_method_call(src: &str) -> Option<Expr> {
         receiver: receiver.to_string(),
         method: method.to_string(),
         args: args?,
+    })
+}
+
+/// Parse record constructor call `Ctor(field1: expr, field2: expr)`.
+fn parse_record_constructor_call(src: &str) -> Option<Expr> {
+    if !src.ends_with(')') {
+        return None;
+    }
+    let open_idx = src.find('(')?;
+    let constructor = src[..open_idx].trim();
+    if !is_identifier(constructor) {
+        return None;
+    }
+    let inner = src[open_idx + 1..src.len() - 1].trim();
+    if inner.is_empty() {
+        return Some(Expr::RecordConstruct {
+            constructor: constructor.to_string(),
+            fields: Vec::new(),
+        });
+    }
+
+    let parts = split_top_level_commas(inner);
+    let parsed_fields: Option<Vec<(String, Expr)>> = parts
+        .iter()
+        .map(|part| parse_record_constructor_field(part.trim()))
+        .collect();
+    Some(Expr::RecordConstruct {
+        constructor: constructor.to_string(),
+        fields: parsed_fields?,
+    })
+}
+
+fn parse_record_constructor_field(part: &str) -> Option<(String, Expr)> {
+    let (name, value) = part.split_once(':')?;
+    let name = name.trim();
+    let value = value.trim();
+    if !is_identifier(name) || value.is_empty() {
+        return None;
+    }
+    Some((name.to_string(), parse_expr(value)?))
+}
+
+/// Parse `receiver.member` (no argument list).
+fn parse_qualified_access(src: &str) -> Option<Expr> {
+    if src.contains('(') || src.contains(')') {
+        return None;
+    }
+    let (receiver, member) = src.split_once('.')?;
+    let receiver = receiver.trim();
+    let member = member.trim();
+    if !is_identifier(receiver) || !is_identifier(member) {
+        return None;
+    }
+    Some(Expr::Qualified {
+        receiver: receiver.to_string(),
+        member: member.to_string(),
     })
 }
 
@@ -1030,6 +1096,7 @@ mod tests {
 
         assert!(module.imports.is_empty());
         assert_eq!(module.type_declarations.len(), 3);
+        assert_eq!(module.declarations.len(), 1);
         assert_eq!(
             module.type_declarations[0],
             TypeDeclaration::Alias {
@@ -1065,6 +1132,9 @@ mod tests {
                 ],
             }
         );
+        let main = &module.declarations[0];
+        let stmts = main.parsed_body.as_ref().expect("main body should parse");
+        assert_eq!(stmts.len(), 2);
     }
 
     #[test]
@@ -1427,6 +1497,38 @@ mod tests {
                     Expr::Var("paths".to_string()),
                     Expr::StringLit("\\n".to_string()),
                 ],
+            })
+        );
+    }
+
+    #[test]
+    fn parses_record_constructor_call_with_named_fields() {
+        assert_eq!(
+            parse_expr("User(id: \"1234\", name: \"John\")"),
+            Some(Expr::RecordConstruct {
+                constructor: "User".to_string(),
+                fields: vec![
+                    ("id".to_string(), Expr::StringLit("1234".to_string())),
+                    ("name".to_string(), Expr::StringLit("John".to_string())),
+                ],
+            })
+        );
+    }
+
+    #[test]
+    fn parses_qualified_access_expression() {
+        assert_eq!(
+            parse_expr("UserStatus.Activated"),
+            Some(Expr::Qualified {
+                receiver: "UserStatus".to_string(),
+                member: "Activated".to_string(),
+            })
+        );
+        assert_eq!(
+            parse_expr("user.name"),
+            Some(Expr::Qualified {
+                receiver: "user".to_string(),
+                member: "name".to_string(),
             })
         );
     }

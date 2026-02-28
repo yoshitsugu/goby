@@ -801,7 +801,11 @@ impl RuntimeOutputResolver {
                 self.apply_pipeline(callee, v, locals, callables, evaluators, depth + 1)
             }
             // Lambda as top-level value — not needed in main, return None to fall back.
-            Expr::Lambda { .. } | Expr::TupleLit(_) | Expr::MethodCall { .. } => None,
+            Expr::Lambda { .. }
+            | Expr::TupleLit(_)
+            | Expr::MethodCall { .. }
+            | Expr::Qualified { .. }
+            | Expr::RecordConstruct { .. } => None,
         }
     }
 

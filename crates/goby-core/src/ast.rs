@@ -66,6 +66,14 @@ pub enum Expr {
     ListLit(Vec<Expr>),
     TupleLit(Vec<Expr>),
     Var(String),
+    Qualified {
+        receiver: String,
+        member: String,
+    },
+    RecordConstruct {
+        constructor: String,
+        fields: Vec<(String, Expr)>,
+    },
     BinOp {
         op: BinOpKind,
         left: Box<Expr>,
@@ -104,6 +112,7 @@ impl Expr {
             self,
             Expr::BinOp { .. }
                 | Expr::Call { .. }
+                | Expr::RecordConstruct { .. }
                 | Expr::MethodCall { .. }
                 | Expr::Pipeline { .. }
                 | Expr::Lambda { .. }
@@ -119,6 +128,17 @@ impl Expr {
             Expr::BoolLit(v) => Some(if *v { "True" } else { "False" }.to_string()),
             Expr::StringLit(s) => Some(format!("\"{}\"", s)),
             Expr::Var(name) => Some(name.clone()),
+            Expr::Qualified { receiver, member } => Some(format!("{}.{}", receiver, member)),
+            Expr::RecordConstruct {
+                constructor,
+                fields,
+            } => {
+                let parts: Option<Vec<String>> = fields
+                    .iter()
+                    .map(|(name, value)| Some(format!("{}: {}", name, value.to_str_repr()?)))
+                    .collect();
+                Some(format!("{}({})", constructor, parts?.join(", ")))
+            }
             Expr::ListLit(items) => {
                 let parts: Option<Vec<String>> = items.iter().map(|i| i.to_str_repr()).collect();
                 Some(format!("[{}]", parts?.join(", ")))

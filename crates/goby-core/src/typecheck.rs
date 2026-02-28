@@ -128,12 +128,20 @@ enum Ty {
 struct TypeEnv {
     globals: HashMap<String, GlobalBinding>,
     locals: HashMap<String, Ty>,
+    type_aliases: HashMap<String, Ty>,
+    record_types: HashMap<String, RecordTypeInfo>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum GlobalBinding {
     Resolved { ty: Ty, source: String },
     Ambiguous { sources: Vec<String> },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RecordTypeInfo {
+    type_name: String,
+    fields: HashMap<String, Ty>,
 }
 
 impl TypeEnv {
@@ -165,6 +173,40 @@ impl TypeEnv {
         TypeEnv {
             globals: self.globals.clone(),
             locals,
+            type_aliases: self.type_aliases.clone(),
+            record_types: self.record_types.clone(),
+        }
+    }
+
+    fn lookup_record_by_constructor(&self, constructor: &str) -> Option<&RecordTypeInfo> {
+        self.record_types.get(constructor)
+    }
+
+    fn record_field_ty(&self, type_name: &str, field: &str) -> Option<Ty> {
+        self.record_types
+            .values()
+            .find(|info| info.type_name == type_name)
+            .and_then(|info| info.fields.get(field).cloned())
+    }
+
+    fn are_compatible(&self, expected: &Ty, actual: &Ty) -> bool {
+        let expected = self.resolve_alias(expected, 0);
+        let actual = self.resolve_alias(actual, 0);
+        expected == actual
+    }
+
+    fn resolve_alias(&self, ty: &Ty, depth: usize) -> Ty {
+        if depth > 16 {
+            return ty.clone();
+        }
+        match ty {
+            Ty::Con { name, args } if args.is_empty() => {
+                if let Some(target) = self.type_aliases.get(name) {
+                    return self.resolve_alias(target, depth + 1);
+                }
+                ty.clone()
+            }
+            _ => ty.clone(),
         }
     }
 }
@@ -183,6 +225,8 @@ fn annotation_return_ty(annotation: &str) -> Ty {
 
 fn build_type_env(module: &Module) -> TypeEnv {
     let mut globals = HashMap::new();
+    let mut type_aliases = HashMap::new();
+    let mut record_types = HashMap::new();
     for decl in &module.declarations {
         if let Some(annotation) = decl.type_annotation.as_deref() {
             let base = strip_effect_clause(annotation);
@@ -221,18 +265,27 @@ fn build_type_env(module: &Module) -> TypeEnv {
         "builtin `print`".to_string(),
     );
     inject_imported_symbols(module, &mut globals);
-    inject_type_constructors(module, &mut globals);
+    inject_type_constructors(module, &mut globals, &mut type_aliases, &mut record_types);
 
     TypeEnv {
         globals,
         locals: HashMap::new(),
+        type_aliases,
+        record_types,
     }
 }
 
-fn inject_type_constructors(module: &Module, globals: &mut HashMap<String, GlobalBinding>) {
+fn inject_type_constructors(
+    module: &Module,
+    globals: &mut HashMap<String, GlobalBinding>,
+    type_aliases: &mut HashMap<String, Ty>,
+    record_types: &mut HashMap<String, RecordTypeInfo>,
+) {
     for ty_decl in &module.type_declarations {
         match ty_decl {
-            TypeDeclaration::Alias { .. } => {}
+            TypeDeclaration::Alias { name, target } => {
+                type_aliases.insert(name.clone(), ty_from_annotation(target));
+            }
             TypeDeclaration::Union { name, constructors } => {
                 for constructor in constructors {
                     insert_global_symbol(
@@ -251,7 +304,11 @@ fn inject_type_constructors(module: &Module, globals: &mut HashMap<String, Globa
                 constructor,
                 fields,
             } => {
+                let mut field_map = HashMap::new();
                 let params: Vec<Ty> = fields.iter().map(|f| ty_from_annotation(&f.ty)).collect();
+                for (field_name, field_ty) in fields.iter().map(|f| (&f.name, ty_from_annotation(&f.ty))) {
+                    field_map.insert(field_name.clone(), field_ty);
+                }
                 let result = Ty::Con {
                     name: name.clone(),
                     args: Vec::new(),
@@ -273,6 +330,13 @@ fn inject_type_constructors(module: &Module, globals: &mut HashMap<String, Globa
                     format!("{}.{}", name, constructor),
                     ctor_ty,
                     format!("type `{}` constructor", name),
+                );
+                record_types.insert(
+                    constructor.clone(),
+                    RecordTypeInfo {
+                        type_name: name.clone(),
+                        fields: field_map,
+                    },
                 );
             }
         }
@@ -612,6 +676,40 @@ fn check_expr(expr: &Expr, env: &TypeEnv) -> Ty {
             Ty::Tuple(tys)
         }
         Expr::Var(name) => env.lookup(name),
+        Expr::Qualified { receiver, member } => {
+            if let Some(receiver_ty) = env.locals.get(receiver) {
+                if let Ty::Con { name, .. } = receiver_ty
+                    && let Some(field_ty) = env.record_field_ty(name, member)
+                {
+                    return field_ty;
+                }
+            }
+            env.lookup(&format!("{}.{}", receiver, member))
+        }
+        Expr::RecordConstruct {
+            constructor,
+            fields,
+        } => {
+            let Some(record) = env.lookup_record_by_constructor(constructor) else {
+                return Ty::Unknown;
+            };
+            if fields.len() != record.fields.len() {
+                return Ty::Unknown;
+            }
+            for (name, value) in fields {
+                let Some(expected_ty) = record.fields.get(name) else {
+                    return Ty::Unknown;
+                };
+                let actual_ty = check_expr(value, env);
+                if actual_ty != Ty::Unknown && !env.are_compatible(expected_ty, &actual_ty) {
+                    return Ty::Unknown;
+                }
+            }
+            Ty::Con {
+                name: record.type_name.clone(),
+                args: Vec::new(),
+            }
+        }
         Expr::BinOp { op, left, right } => {
             let lt = check_expr(left, env);
             let rt = check_expr(right, env);
@@ -677,6 +775,8 @@ fn check_body_stmts(
             .iter()
             .map(|(name, ty)| (name.to_string(), ty.clone()))
             .collect(),
+        type_aliases: env.type_aliases.clone(),
+        record_types: env.record_types.clone(),
     };
 
     for stmt in stmts {
@@ -739,6 +839,22 @@ fn ensure_no_ambiguous_refs_in_expr(
             Ok(())
         }
         Expr::Var(name) => ensure_name_not_ambiguous(name, env, decl_name),
+        Expr::Qualified { receiver, member } => {
+            if env.locals.contains_key(receiver) {
+                return Ok(());
+            }
+            ensure_name_not_ambiguous(&format!("{}.{}", receiver, member), env, decl_name)
+        }
+        Expr::RecordConstruct {
+            constructor,
+            fields,
+        } => {
+            ensure_name_not_ambiguous(constructor, env, decl_name)?;
+            for (_, value) in fields {
+                ensure_no_ambiguous_refs_in_expr(value, env, decl_name)?;
+            }
+            Ok(())
+        }
         Expr::BinOp { left, right, .. } => {
             ensure_no_ambiguous_refs_in_expr(left, env, decl_name)?;
             ensure_no_ambiguous_refs_in_expr(right, env, decl_name)
@@ -985,6 +1101,11 @@ mod tests {
             env!("CARGO_MANIFEST_DIR")
         ))
         .expect("control_flow example should exist");
+        let type_example = std::fs::read_to_string(format!(
+            "{}/../../examples/type.gb",
+            env!("CARGO_MANIFEST_DIR")
+        ))
+        .expect("type example should exist");
 
         let hello_module = parse_module(&hello).expect("hello should parse");
         let basic_module = parse_module(&basic).expect("basic_types should parse");
@@ -992,12 +1113,14 @@ mod tests {
             parse_module(&generic_types).expect("generic_types should parse");
         let import_module = parse_module(&import_example).expect("import example should parse");
         let control_flow_module = parse_module(&control_flow).expect("control_flow should parse");
+        let type_module = parse_module(&type_example).expect("type should parse");
 
         typecheck_module(&hello_module).expect("hello should typecheck");
         typecheck_module(&basic_module).expect("basic_types should typecheck");
         typecheck_module(&generic_types_module).expect("generic_types should typecheck");
         typecheck_module(&import_module).expect("import example should typecheck");
         typecheck_module(&control_flow_module).expect("control_flow should typecheck");
+        typecheck_module(&type_module).expect("type example should typecheck");
     }
 
     #[test]
@@ -1040,6 +1163,21 @@ type User = User(id: UserID, name: String, status: UserStatus)
 ";
         let module = parse_module(source).expect("should parse");
         typecheck_module(&module).expect("well-formed type declarations should pass");
+    }
+
+    #[test]
+    fn typechecks_record_constructor_and_field_access() {
+        let source = "\
+type UserID = String
+type UserStatus = Activated | Deactivated
+type User = User(id: UserID, name: String, status: UserStatus)
+get_name : Unit -> String
+get_name =
+  user = User(id: \"1234\", name: \"John\", status: UserStatus.Activated)
+  user.name
+";
+        let module = parse_module(source).expect("should parse");
+        typecheck_module(&module).expect("record constructor and field access should typecheck");
     }
 
     #[test]
@@ -1399,6 +1537,8 @@ main =
         let env = TypeEnv {
             globals: HashMap::new(),
             locals: HashMap::new(),
+            type_aliases: HashMap::new(),
+            record_types: HashMap::new(),
         };
         let expr = crate::ast::Expr::BinOp {
             op: BinOpKind::Add,
