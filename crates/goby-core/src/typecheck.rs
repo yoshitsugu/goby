@@ -1,6 +1,10 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
-use crate::{Module, types::parse_function_type};
+use crate::{
+    Module,
+    ast::{BinOpKind, Expr, Stmt},
+    types::parse_function_type,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TypecheckError {
@@ -47,7 +51,267 @@ pub fn typecheck_module(module: &Module) -> Result<(), TypecheckError> {
         }
     }
 
+    // Expression-level type checking (when parsed_body is available).
+    let env = build_type_env(module);
+    for decl in &module.declarations {
+        if let Some(stmts) = &decl.parsed_body {
+            // Derive the declared return type from the annotation, if present.
+            // For function types (e.g. `Int -> Int`), use the result type.
+            // For non-function types (e.g. `Int`, `String`), the annotation
+            // itself is the expected type of the body expression.
+            let declared_return_ty = decl.type_annotation.as_deref().map(|ann| {
+                let base = strip_effect_clause(ann).trim();
+                if let Some(ft) = parse_function_type(base) {
+                    ty_from_annotation(&ft.result)
+                } else {
+                    ty_from_annotation(base)
+                }
+            });
+            check_body_stmts(stmts, &env, &decl.name, declared_return_ty)?;
+        }
+    }
+
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Internal type representation
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Ty {
+    Int,
+    Str,
+    Unit,
+    List(Box<Ty>),
+    Tuple(Vec<Ty>),
+    Fun { params: Vec<Ty>, result: Box<Ty> },
+    Unknown,
+}
+
+struct TypeEnv {
+    globals: HashMap<String, Ty>,
+    locals: HashMap<String, Ty>,
+}
+
+impl TypeEnv {
+    fn lookup(&self, name: &str) -> Ty {
+        if let Some(ty) = self.locals.get(name) {
+            return ty.clone();
+        }
+        if let Some(ty) = self.globals.get(name) {
+            return ty.clone();
+        }
+        Ty::Unknown
+    }
+
+    fn with_local(&self, name: &str, ty: Ty) -> TypeEnv {
+        let mut locals = self.locals.clone();
+        locals.insert(name.to_string(), ty);
+        TypeEnv {
+            globals: self.globals.clone(),
+            locals,
+        }
+    }
+}
+
+fn build_type_env(module: &Module) -> TypeEnv {
+    let mut globals = HashMap::new();
+    for decl in &module.declarations {
+        if let Some(annotation) = decl.type_annotation.as_deref() {
+            let base = strip_effect_clause(annotation);
+            if let Some(ft) = parse_function_type(base) {
+                let params: Vec<Ty> = ft.arguments.iter().map(|a| ty_from_annotation(a)).collect();
+                let result = ty_from_annotation(&ft.result);
+                globals.insert(
+                    decl.name.clone(),
+                    Ty::Fun {
+                        params,
+                        result: Box::new(result),
+                    },
+                );
+            } else {
+                // Non-function annotation (e.g. tuple, plain type)
+                globals.insert(decl.name.clone(), ty_from_annotation(base.trim()));
+            }
+        }
+    }
+    // Register built-in functions so that call-site type inference can use them.
+    // `print` accepts any value and returns Unit.
+    globals.insert(
+        "print".to_string(),
+        Ty::Fun {
+            params: vec![Ty::Unknown],
+            result: Box::new(Ty::Unit),
+        },
+    );
+
+    TypeEnv {
+        globals,
+        locals: HashMap::new(),
+    }
+}
+
+fn ty_from_annotation(s: &str) -> Ty {
+    let s = s.trim();
+    match s {
+        "Int" => Ty::Int,
+        "String" => Ty::Str,
+        "Unit" => Ty::Unit,
+        _ if s.starts_with("List ") => {
+            let inner = ty_from_annotation(&s["List ".len()..]);
+            Ty::List(Box::new(inner))
+        }
+        _ => Ty::Unknown,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Expression type inference
+// ---------------------------------------------------------------------------
+
+fn check_expr(expr: &Expr, env: &TypeEnv) -> Ty {
+    match expr {
+        Expr::IntLit(_) => Ty::Int,
+        Expr::StringLit(_) => Ty::Str,
+        Expr::ListLit(items) => {
+            if items.is_empty() {
+                return Ty::List(Box::new(Ty::Unknown));
+            }
+            let item_ty = check_expr(&items[0], env);
+            Ty::List(Box::new(item_ty))
+        }
+        Expr::TupleLit(items) => {
+            let tys: Vec<Ty> = items.iter().map(|i| check_expr(i, env)).collect();
+            Ty::Tuple(tys)
+        }
+        Expr::Var(name) => env.lookup(name),
+        Expr::BinOp { op, left, right } => {
+            let lt = check_expr(left, env);
+            let rt = check_expr(right, env);
+            match (op, &lt, &rt) {
+                (BinOpKind::Add, Ty::Int, Ty::Int) => Ty::Int,
+                (BinOpKind::Mul, Ty::Int, Ty::Int) => Ty::Int,
+                // Unknown operands are tolerated (forward-compatibility)
+                (_, Ty::Unknown, _) | (_, _, Ty::Unknown) => Ty::Unknown,
+                _ => Ty::Unknown,
+            }
+        }
+        Expr::Call { callee, arg: _ } => {
+            // Infer result type from callee's function type
+            let callee_ty = check_expr(callee, env);
+            match callee_ty {
+                Ty::Fun { result, .. } => *result,
+                _ => Ty::Unknown,
+            }
+        }
+        Expr::MethodCall {
+            receiver, method, ..
+        } => {
+            // string.concat -> String
+            if receiver == "string" && method == "concat" {
+                Ty::Str
+            } else {
+                Ty::Unknown
+            }
+        }
+        Expr::Pipeline { value, callee } => {
+            let value_ty = check_expr(value, env);
+            let callee_ty = env.lookup(callee);
+            match callee_ty {
+                Ty::Fun { result, .. } => {
+                    let _ = value_ty;
+                    *result
+                }
+                // print is a builtin: result is Unit
+                _ if callee == "print" => Ty::Unit,
+                _ => Ty::Unknown,
+            }
+        }
+        Expr::Lambda { param, body } => {
+            // Infer body type with param as Unknown for now
+            let child_env = env.with_local(param, Ty::Unknown);
+            let result = check_expr(body, &child_env);
+            Ty::Fun {
+                params: vec![Ty::Unknown],
+                result: Box::new(result),
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Statement-level checking
+// ---------------------------------------------------------------------------
+
+fn check_body_stmts(
+    stmts: &[Stmt],
+    env: &TypeEnv,
+    decl_name: &str,
+    declared_return_ty: Option<Ty>,
+) -> Result<(), TypecheckError> {
+    let mut local_env = TypeEnv {
+        globals: env.globals.clone(),
+        locals: HashMap::new(),
+    };
+
+    for stmt in stmts {
+        match stmt {
+            Stmt::Binding { name, value } => {
+                let ty = check_expr(value, &local_env);
+                local_env.locals.insert(name.clone(), ty);
+            }
+            Stmt::Expr(_expr) => {
+                // Expressions as statements are allowed; no checks enforced yet.
+            }
+        }
+    }
+
+    // Validate the inferred return type of the body against the declared return
+    // type, when both are known.  `Ty::Unknown` means we lack enough type
+    // information to make a judgement, so we skip the check in that case.
+    if let Some(declared) = declared_return_ty {
+        if declared != Ty::Unknown {
+            // The "return value" of a body is the last expression statement.
+            // If the body ends with a binding there is no return value to check.
+            let inferred = stmts
+                .iter()
+                .rev()
+                .find_map(|s| {
+                    if let Stmt::Expr(expr) = s {
+                        Some(check_expr(expr, &local_env))
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or(Ty::Unit);
+
+            if inferred != Ty::Unknown && inferred != declared {
+                return Err(TypecheckError {
+                    declaration: Some(decl_name.to_string()),
+                    message: format!(
+                        "body type `{}` does not match declared return type `{}`",
+                        ty_name(&inferred),
+                        ty_name(&declared),
+                    ),
+                });
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn ty_name(ty: &Ty) -> &'static str {
+    match ty {
+        Ty::Int => "Int",
+        Ty::Str => "String",
+        Ty::Unit => "Unit",
+        Ty::List(_) => "List",
+        Ty::Tuple(_) => "Tuple",
+        Ty::Fun { .. } => "Fun",
+        Ty::Unknown => "Unknown",
+    }
 }
 
 fn validate_type_annotation(decl_name: &str, annotation: &str) -> Result<(), TypecheckError> {
@@ -234,5 +498,108 @@ mod tests {
         let err = typecheck_module(&module).expect_err("malformed function type should fail");
         assert_eq!(err.declaration.as_deref(), Some("f"));
         assert!(err.message.contains("invalid function type annotation"));
+    }
+
+    // -----------------------------------------------------------------------
+    // Expression-level type inference tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn infers_int_literal_type() {
+        let module = parse_module("x : Int\nx = 42\n").expect("should parse");
+        typecheck_module(&module).expect("int literal body should typecheck");
+    }
+
+    #[test]
+    fn infers_string_literal_type() {
+        let module = parse_module("s : String\ns = \"hello\"\n").expect("should parse");
+        typecheck_module(&module).expect("string literal body should typecheck");
+    }
+
+    #[test]
+    fn typechecks_function_example() {
+        let source = std::fs::read_to_string(format!(
+            "{}/../../examples/function.gb",
+            env!("CARGO_MANIFEST_DIR")
+        ))
+        .expect("function example should exist");
+        let module = parse_module(&source).expect("function.gb should parse");
+        typecheck_module(&module).expect("function.gb should typecheck");
+    }
+
+    #[test]
+    fn rejects_constant_annotation_type_mismatch() {
+        // `x : Int; x = "hello"` — non-function annotation; body is String not Int.
+        let module = parse_module("x : Int\nx = \"hello\"\n").expect("should parse");
+        let err = typecheck_module(&module).expect_err("type mismatch should be rejected");
+        assert_eq!(err.declaration.as_deref(), Some("x"));
+        assert!(
+            err.message.contains("does not match"),
+            "unexpected message: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn rejects_print_as_last_expr_in_int_returning_function() {
+        // `f : Int -> Int` but body ends with `print`, which returns Unit.
+        let source = "f : Int -> Int\nf x =\n  x + 1\n  print \"side\"\n";
+        let module = parse_module(source).expect("should parse");
+        let err = typecheck_module(&module).expect_err("Unit body in Int->Int should be rejected");
+        assert_eq!(err.declaration.as_deref(), Some("f"));
+        assert!(
+            err.message.contains("does not match"),
+            "unexpected message: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn accepts_print_as_last_expr_in_unit_returning_function() {
+        // `main : Unit -> Unit` body ending with `print` should be accepted.
+        let source = "main : Unit -> Unit\nmain =\n  print \"hi\"\n";
+        let module = parse_module(source).expect("should parse");
+        typecheck_module(&module).expect("Unit-returning function with print body should pass");
+    }
+
+    #[test]
+    fn accepts_constant_annotation_matching_body() {
+        // `n : Int; n = 42` — non-function annotation matching body type.
+        let module = parse_module("n : Int\nn = 42\n").expect("should parse");
+        typecheck_module(&module).expect("matching constant annotation should be accepted");
+    }
+
+    #[test]
+    fn rejects_body_type_mismatch_int_vs_string() {
+        // `f : Int -> Int; f x = "oops"` — body returns String but declared Int.
+        let module = parse_module("f : Int -> Int\nf x = \"oops\"\n").expect("should parse");
+        let err = typecheck_module(&module).expect_err("type mismatch should be rejected");
+        assert_eq!(err.declaration.as_deref(), Some("f"));
+        assert!(
+            err.message.contains("does not match"),
+            "unexpected message: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn accepts_body_type_matching_declared_return() {
+        // `double : Int -> Int; double x = x + x` — body type is Int, declared Int.
+        let module = parse_module("double : Int -> Int\ndouble x = x + x\n").expect("should parse");
+        typecheck_module(&module).expect("matching body type should be accepted");
+    }
+
+    #[test]
+    fn check_expr_infers_addition() {
+        let env = TypeEnv {
+            globals: HashMap::new(),
+            locals: HashMap::new(),
+        };
+        let expr = crate::ast::Expr::BinOp {
+            op: BinOpKind::Add,
+            left: Box::new(crate::ast::Expr::IntLit(1)),
+            right: Box::new(crate::ast::Expr::IntLit(2)),
+        };
+        assert_eq!(check_expr(&expr, &env), Ty::Int);
     }
 }

@@ -9,6 +9,6 @@ pub mod typecheck;
 pub mod types;
 
 pub use analysis::resolve_print_text;
-pub use ast::{Declaration, Module};
-pub use parser::{ParseError, parse_module};
+pub use ast::{BinOpKind, Declaration, Expr, Module, Stmt};
+pub use parser::{ParseError, parse_body_stmts, parse_module};
 pub use typecheck::{TypecheckError, typecheck_module};

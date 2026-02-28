@@ -148,7 +148,12 @@ fn parse_string_concat_call(expr: &str) -> Option<(&str, &str)> {
 
     let inner = &expr[prefix.len()..expr.len() - 1];
     let (left, right) = split_top_level_comma(inner)?;
-    Some((left.trim(), right.trim()))
+    let right = right.trim();
+    // Reject if there is a third (or more) argument.
+    if split_top_level_comma(right).is_some() {
+        return None;
+    }
+    Some((left.trim(), right))
 }
 
 fn split_top_level_comma(s: &str) -> Option<(&str, &str)> {
@@ -257,6 +262,19 @@ print string.concat("A", string.concat("B", "C"))
         let source = "print\t\"tab ok\"";
         let result = resolve_print_text(source).expect("analysis should work");
         assert_eq!(result.as_deref(), Some("tab ok"));
+    }
+
+    #[test]
+    fn rejects_string_concat_with_three_arguments() {
+        // Three-argument concat is not supported; analysis should report an error.
+        let source = r#"print string.concat("a", "b", "c")"#;
+        let err = resolve_print_text(source)
+            .expect_err("three-argument string.concat must be rejected");
+        assert!(
+            !err.is_empty(),
+            "expected a non-empty error message, got: {:?}",
+            err
+        );
     }
 
     #[test]
