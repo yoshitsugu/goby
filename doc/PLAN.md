@@ -90,7 +90,12 @@ Based on `examples/*.gb`:
 - Canonical generic syntax (`List Int` and future multi-parameter generics).
 - Type annotation placement rules (required vs optional locations).
 - Tuple and record roadmap (records in MVP or not).
-- Type error message format and minimum diagnostics quality bar.
+- Type error diagnostics quality bar is fixed for MVP:
+  - diagnostics must be non-empty and human-readable plain text.
+  - when a declaration is known, diagnostics must include the declaration name.
+  - type mismatch diagnostics must include both expected and actual type names.
+  - composite types should be rendered with full shape (for example: `List Int`, `(String, Int)`), not collapsed labels.
+  - line/column reporting is not required in MVP.
 
 ### 2.3 Effect System
 

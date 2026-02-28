@@ -13,7 +13,7 @@ pub fn parse_module(source: &str) -> Result<Module, ParseError> {
     let mut declarations = Vec::new();
 
     while i < lines.len() {
-        let line = lines[i].trim_end();
+        let line = strip_line_comment(lines[i]).trim_end();
         let trimmed = line.trim();
 
         if trimmed.is_empty() || trimmed.starts_with('#') {
@@ -50,7 +50,7 @@ pub fn parse_module(source: &str) -> Result<Module, ParseError> {
             }
         }
 
-        let body_line = lines[i].trim_end();
+        let body_line = strip_line_comment(lines[i]).trim_end();
         let (name, params, mut body) =
             split_top_level_definition(body_line).ok_or_else(|| ParseError {
                 line: i + 1,
@@ -514,9 +514,45 @@ pub fn is_identifier(s: &str) -> bool {
     chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
+fn strip_line_comment(line: &str) -> &str {
+    let bytes = line.as_bytes();
+    let mut in_string = false;
+    let mut escaped = false;
+    let mut i = 0;
+    while i < bytes.len() {
+        if in_string {
+            if escaped {
+                escaped = false;
+                i += 1;
+                continue;
+            }
+            if bytes[i] == b'\\' {
+                escaped = true;
+                i += 1;
+                continue;
+            }
+            if bytes[i] == b'"' {
+                in_string = false;
+            }
+            i += 1;
+            continue;
+        }
+
+        if bytes[i] == b'"' {
+            in_string = true;
+            i += 1;
+            continue;
+        }
+        if bytes[i] == b'#' {
+            return &line[..i];
+        }
+        i += 1;
+    }
+    line
+}
 
 fn code_lines(body: &str) -> impl Iterator<Item = &str> {
-    body.lines().map(str::trim).filter(|line| {
+    body.lines().map(strip_line_comment).map(str::trim).filter(|line| {
         let line = *line;
         !line.is_empty() && !line.starts_with('#')
     })
@@ -655,6 +691,40 @@ mod tests {
         let source = "main : Unit -> Unit can Print\n# comment\n\nmain = print \"ok\"\n";
         let declaration = parse_single_declaration(source);
         assert_eq!(declaration.name, "main");
+    }
+
+    #[test]
+    fn allows_line_end_comments_in_type_and_definition() {
+        let source = "main : Unit -> Unit can Print # type note\nmain = print \"ok\" # body note\n";
+        let declaration = parse_single_declaration(source);
+        assert_eq!(declaration.name, "main");
+        assert_eq!(
+            declaration.type_annotation.as_deref(),
+            Some("Unit -> Unit can Print")
+        );
+    }
+
+    #[test]
+    fn treats_shebang_as_comment_line() {
+        let source = "#!/usr/bin/env goby\nmain : Unit -> Unit can Print\nmain = print \"ok\"\n";
+        let declaration = parse_single_declaration(source);
+        assert_eq!(declaration.name, "main");
+    }
+
+    #[test]
+    fn does_not_treat_hash_inside_string_as_comment() {
+        let source = "main : Unit -> Unit can Print\nmain = print \"a#b\" # trailing comment\n";
+        let declaration = parse_single_declaration(source);
+        let parsed = declaration
+            .parsed_body
+            .expect("body with trailing comment should parse");
+        assert_eq!(parsed.len(), 1);
+        match &parsed[0] {
+            Stmt::Expr(Expr::Call { arg, .. }) => {
+                assert_eq!(**arg, Expr::StringLit("a#b".to_string()));
+            }
+            other => panic!("unexpected stmt: {:?}", other),
+        }
     }
 
     #[test]
