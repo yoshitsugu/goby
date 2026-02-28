@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-02-28 (session 15, uncommitted)
+Last updated: 2026-02-28 (session 16, uncommitted)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -79,6 +79,8 @@ This file is a restart-safe snapshot for resuming work after context reset.
 - 2026-02-28 (session 14, uncommitted): added an incremental implementation plan for the next `import.gb` slice in `doc/PLAN.md`.
 - 2026-02-28 (session 15, uncommitted): completed the initial `import.gb` slice
   (import parsing + minimal built-in module resolver + typecheck integration) and verified full checks.
+- 2026-02-28 (session 16, uncommitted): finalized import collision policy
+  (ambiguous imported names error only when referenced) and synced plan/state docs.
 
 ## 5. Current Example Files
 

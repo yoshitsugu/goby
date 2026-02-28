@@ -176,6 +176,8 @@ Status baseline (2026-02-28):
 - [x] `import` syntax and minimal module resolution
   (`import goby/x`, alias `as`, selective import `(...)`) for built-in modules
   (`goby/string`, `goby/list`, `goby/env`) used by `examples/import.gb`.
+  - collision policy: if colliding names are actually referenced, report an
+    unresolved/ambiguous-name error.
 - [ ] `effect` declarations and effect member signatures
 - [ ] `handler ... for ...` syntax and handler scope semantics
 - [ ] `using` handler application syntax (single/multiple handlers)
@@ -246,3 +248,10 @@ Out of scope for this slice:
 - filesystem-backed package resolution
 - remote dependencies
 - effect/control-flow feature integration changes
+
+Status:
+- Completed on 2026-02-28:
+  - parser/AST import support (`plain`, `as`, `selective`),
+  - minimal built-in resolver for `goby/string`, `goby/list`, `goby/env`,
+  - typecheck integration for imported names used by `examples/import.gb`,
+  - import-collision policy (error when ambiguous name is used).
