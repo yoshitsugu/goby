@@ -200,11 +200,13 @@ pub fn parse_expr(src: &str) -> Option<Expr> {
 /// Split `src` at the top-level `|>` operator.
 /// Returns `(left, right)` where right is the identifier after `|>`.
 fn split_top_level_pipeline(src: &str) -> Option<(&str, &str)> {
-    // Walk through bytes tracking depth/string state, find " |> " at depth 0
+    // Walk through bytes tracking depth/string state, find the LAST `|>` at
+    // depth 0 to preserve left-associativity (`a |> f |> g` => `(a |> f) |> g`).
     let bytes = src.as_bytes();
     let mut depth = 0usize;
     let mut in_string = false;
     let mut escaped = false;
+    let mut last_split: Option<usize> = None;
     let mut i = 0;
     while i < bytes.len() {
         if in_string {
@@ -229,16 +231,21 @@ fn split_top_level_pipeline(src: &str) -> Option<(&str, &str)> {
             b'(' | b'[' => depth += 1,
             b')' | b']' => depth = depth.saturating_sub(1),
             b'|' if depth == 0 && i + 1 < bytes.len() && bytes[i + 1] == b'>' => {
-                let left = src[..i].trim();
-                let right = src[i + 2..].trim();
-                if !left.is_empty() && !right.is_empty() {
-                    return Some((left, right));
-                }
+                last_split = Some(i);
             }
             _ => {}
         }
         i += 1;
     }
+
+    if let Some(pos) = last_split {
+        let left = src[..pos].trim();
+        let right = src[pos + 2..].trim();
+        if !left.is_empty() && !right.is_empty() {
+            return Some((left, right));
+        }
+    }
+
     None
 }
 
@@ -739,6 +746,22 @@ mod tests {
     }
 
     #[test]
+    fn parses_left_associative_multiplication() {
+        assert_eq!(
+            parse_expr("2 * 3 * 4"),
+            Some(Expr::BinOp {
+                op: BinOpKind::Mul,
+                left: Box::new(Expr::BinOp {
+                    op: BinOpKind::Mul,
+                    left: Box::new(Expr::IntLit(2)),
+                    right: Box::new(Expr::IntLit(3)),
+                }),
+                right: Box::new(Expr::IntLit(4)),
+            })
+        );
+    }
+
+    #[test]
     fn parses_pipeline_as_lowest_precedence() {
         assert_eq!(
             parse_expr("1 + 2 |> print"),
@@ -749,6 +772,20 @@ mod tests {
                     right: Box::new(Expr::IntLit(2)),
                 }),
                 callee: "print".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn parses_left_associative_pipeline_chain() {
+        assert_eq!(
+            parse_expr("x |> f |> g"),
+            Some(Expr::Pipeline {
+                value: Box::new(Expr::Pipeline {
+                    value: Box::new(Expr::Var("x".to_string())),
+                    callee: "f".to_string(),
+                }),
+                callee: "g".to_string(),
             })
         );
     }
