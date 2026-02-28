@@ -87,7 +87,6 @@ This file is a restart-safe snapshot for resuming work after context reset.
    - `cargo run -p goby-cli -- check examples/function.gb`
    - `cargo run -p goby-cli -- run examples/function.gb`
    - locked output contract for `function.gb`.
-2. Decide and scope declaration-side generic binders (postponed item).
 
 ## 7. Resume Commands
 
@@ -95,3 +94,8 @@ This file is a restart-safe snapshot for resuming work after context reset.
 - `cargo test`
 - `cargo clippy -- -D warnings`
 - `cargo run -p goby-cli -- run examples/function.gb`
+
+## 8. Deferred TODO
+
+- Declaration-side generic parameter binders are intentionally deferred
+  (design memo only; not in active execution steps).
