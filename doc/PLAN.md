@@ -144,3 +144,58 @@ Based on `examples/*.gb`:
 - Keep regression checks green for the locked MVP subset.
 - Treat remaining design items as post-MVP evolution work.
 - Track all new syntax requests as explicit change proposals.
+
+## 5. Example-Driven Feature Checklist
+
+Status baseline (2026-02-28):
+- `check` passes: `hello.gb`, `basic_types.gb`, `function.gb`, `generic_types.gb`,
+  `print/local_binding.gb`, `print/concat.gb`, `parser/mixed_indent.gb`.
+- `check` fails: `control_flow.gb`, `effect.gb`, `import.gb`.
+
+### 5.1 Core Syntax/Typing Used by Stable Examples
+
+- [x] Top-level declarations with optional type annotations (`name : Type`, `name = expr`)
+- [x] Function types (`A -> B`), including parenthesized function arguments (`(A -> B) -> C`)
+- [x] Haskell-style type application in annotations (`List Int`, `TypeX a b`, `TypeX (TypeY a b) c`)
+- [x] Integer/string literals, tuple/list literals, local bindings, block-last-value return
+- [x] Calls (`f x`, `f(x)`), method call subset (`string.concat(a, b)`), pipeline (`|>`)
+- [x] Lambda forms (`|x| -> ...`, `_ * 10`)
+- [x] Comments (`#`, line-end comments, shebang-as-comment), mixed tabs/spaces indentation
+- [x] MVP diagnostics baseline (non-empty, declaration name when known, expected/actual types)
+
+### 5.2 Runtime/CLI Behaviors Required by Examples
+
+- [x] `check` command (parse + typecheck without runtime entry requirement)
+- [x] `run` command with `main` entrypoint only
+- [x] `main : Unit -> Unit` enforcement for runnable programs
+- [x] Wasm emit + `wasmtime` execution path
+- [x] Locked `examples/function.gb` output parity
+
+### 5.3 Features Referenced by Non-MVP Examples (Post-MVP Backlog)
+
+- [ ] `import` syntax and module resolution
+  (`import goby/x`, alias `as`, selective import `(...)`)
+- [ ] `effect` declarations and effect member signatures
+- [ ] `handler ... for ...` syntax and handler scope semantics
+- [ ] `using` handler application syntax (single/multiple handlers)
+- [ ] Multiple effects in `can` with semantic checking (currently parse/type surface only)
+- [ ] `case` expressions with pattern arms and wildcard `_`
+- [ ] `if ... else ...` (or strict desugaring rule to `case`) and `==` typing rules
+
+## 6. Spec Detail Notes (Need Clarification Before Implementation)
+
+- Import system:
+  module path grammar (`goby/...` vs local paths), lookup order, shadowing, and cyclic import diagnostics.
+- Effects/handlers:
+  effect namespace rules, qualified vs unqualified calls (`Log.log` vs `log`),
+  handler resolution order, and unhandled-effect diagnostics format.
+- Control flow:
+  exact grammar/precedence for multiline `case`/`if`, exhaustiveness requirements,
+  and whether `if` is mandatory sugar or first-class syntax in the AST.
+- Equality/comparison:
+  operator set for MVP+ (`==`, `!=`, etc.), precedence relative to `+/*/|>`,
+  and type constraints for comparable values.
+- Type annotation placement:
+  where annotations are required vs optional outside current MVP subset.
+- Tuple/record roadmap:
+  whether records are introduced before module/effect expansion and minimal syntax shape.

@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-02-28 (session 12, uncommitted)
+Last updated: 2026-02-28 (session 13, uncommitted)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -75,6 +75,7 @@ This file is a restart-safe snapshot for resuming work after context reset.
 - 2026-02-28 (session 10, uncommitted): validated `check/run` acceptance path and full `cargo check/test/clippy`, and added parser regression coverage for line-end comments and `#!`.
 - 2026-02-28 (session 11, uncommitted): implemented Haskell-style generic type-application parsing in `goby-core` type parsing/typecheck and added regression tests.
 - 2026-02-28 (session 12, uncommitted): revalidated acceptance path and full workspace checks; marked locked MVP implementation as complete.
+- 2026-02-28 (session 13, uncommitted): re-audited all `examples/` files and added an example-driven feature checklist + spec-detail memo to `doc/PLAN.md`.
 
 ## 5. Current Example Files
 
@@ -89,7 +90,11 @@ This file is a restart-safe snapshot for resuming work after context reset.
    - `cargo run -p goby-cli -- check examples/function.gb`
    - `cargo run -p goby-cli -- run examples/function.gb`
    - locked output contract for `function.gb`.
-2. Treat remaining language/design items as post-MVP evolution work.
+2. Use the example-driven checklist in `doc/PLAN.md` as the implementation backlog source.
+3. Start with one post-MVP vertical slice from failing examples:
+   - `import.gb` (module/import syntax and resolution), or
+   - `control_flow.gb` (`case`/`if`/`==`), or
+   - `effect.gb` (effects/handlers/using semantics).
 
 ## 7. Resume Commands
 
