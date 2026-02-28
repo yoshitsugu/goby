@@ -1,4 +1,4 @@
-use crate::ast::{BinOpKind, Declaration, Expr, Module, Stmt};
+use crate::ast::{BinOpKind, Declaration, Expr, ImportDecl, ImportKind, Module, Stmt};
 use crate::str_util::split_top_level_commas;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -10,6 +10,7 @@ pub struct ParseError {
 pub fn parse_module(source: &str) -> Result<Module, ParseError> {
     let lines: Vec<&str> = source.lines().collect();
     let mut i = 0;
+    let mut imports = Vec::new();
     let mut declarations = Vec::new();
 
     while i < lines.len() {
@@ -26,6 +27,16 @@ pub fn parse_module(source: &str) -> Result<Module, ParseError> {
                 line: i + 1,
                 message: "unexpected indentation at top level".to_string(),
             });
+        }
+
+        if trimmed.starts_with("import ") {
+            let import = parse_import_line(trimmed).ok_or_else(|| ParseError {
+                line: i + 1,
+                message: "invalid import declaration".to_string(),
+            })?;
+            imports.push(import);
+            i += 1;
+            continue;
         }
 
         let mut annotated_name: Option<&str> = None;
@@ -84,7 +95,10 @@ pub fn parse_module(source: &str) -> Result<Module, ParseError> {
         i = j;
     }
 
-    Ok(Module { declarations })
+    Ok(Module {
+        imports,
+        declarations,
+    })
 }
 
 /// Parse a declaration body string into a list of statements.
@@ -514,6 +528,67 @@ pub fn is_identifier(s: &str) -> bool {
     chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
+fn parse_import_line(line: &str) -> Option<ImportDecl> {
+    let rest = line.strip_prefix("import ")?.trim();
+    if rest.is_empty() {
+        return None;
+    }
+
+    if let Some(open_idx) = rest.find('(') {
+        if !rest.ends_with(')') {
+            return None;
+        }
+        let module_path = rest[..open_idx].trim();
+        if !is_module_path(module_path) {
+            return None;
+        }
+        let inner = rest[open_idx + 1..rest.len() - 1].trim();
+        if inner.is_empty() {
+            return None;
+        }
+        let names = split_top_level_commas(inner);
+        let mut symbols = Vec::new();
+        for name in names {
+            let name = name.trim();
+            if !is_identifier(name) {
+                return None;
+            }
+            symbols.push(name.to_string());
+        }
+        return Some(ImportDecl {
+            module_path: module_path.to_string(),
+            kind: ImportKind::Selective(symbols),
+        });
+    }
+
+    if let Some((module_path, alias)) = rest.split_once(" as ") {
+        let module_path = module_path.trim();
+        let alias = alias.trim();
+        if !is_module_path(module_path) || !is_identifier(alias) {
+            return None;
+        }
+        return Some(ImportDecl {
+            module_path: module_path.to_string(),
+            kind: ImportKind::Alias(alias.to_string()),
+        });
+    }
+
+    if !is_module_path(rest) {
+        return None;
+    }
+    Some(ImportDecl {
+        module_path: rest.to_string(),
+        kind: ImportKind::Plain,
+    })
+}
+
+fn is_module_path(s: &str) -> bool {
+    if s.is_empty() || s.starts_with('/') || s.ends_with('/') || s.contains("//") {
+        return false;
+    }
+    s.split('/').all(is_identifier)
+}
+
 fn strip_line_comment(line: &str) -> &str {
     let bytes = line.as_bytes();
     let mut in_string = false;
@@ -625,7 +700,7 @@ fn split_top_level_definition(line: &str) -> Option<(&str, Vec<String>, String)>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ast::{BinOpKind, Expr, Stmt};
+    use crate::ast::{BinOpKind, Expr, ImportKind, Stmt};
     use std::path::PathBuf;
 
     fn read_example(name: &str) -> String {
@@ -648,6 +723,7 @@ mod tests {
         let source = read_example("hello.gb");
         let module = parse_module(&source).expect("hello.gb should parse");
 
+        assert!(module.imports.is_empty());
         assert_eq!(module.declarations.len(), 1);
         let main_decl = &module.declarations[0];
         assert_eq!(main_decl.name, "main");
@@ -662,6 +738,7 @@ mod tests {
         let source = read_example("basic_types.gb");
         let module = parse_module(&source).expect("basic_types.gb should parse");
 
+        assert!(module.imports.is_empty());
         assert_eq!(module.declarations.len(), 5);
         assert_eq!(module.declarations[0].name, "add");
         assert_eq!(module.declarations[1].name, "add_ten_and_two");
@@ -675,6 +752,7 @@ mod tests {
         let source = read_example("generic_types.gb");
         let module = parse_module(&source).expect("generic_types.gb should parse");
 
+        assert!(module.imports.is_empty());
         assert_eq!(module.declarations.len(), 3);
         assert_eq!(module.declarations[0].name, "id");
         assert_eq!(module.declarations[1].name, "project");
@@ -686,6 +764,31 @@ mod tests {
         let source = "foo : Int\nbar = 1\n";
         let err = parse_module(source).expect_err("mismatched names should be rejected");
         assert!(err.message.contains("does not match"));
+    }
+
+    #[test]
+    fn parses_import_example_with_plain_alias_and_selective_imports() {
+        let source = read_example("import.gb");
+        let module = parse_module(&source).expect("import.gb should parse");
+
+        assert_eq!(module.imports.len(), 3);
+        assert_eq!(module.imports[0].module_path, "goby/string");
+        assert_eq!(module.imports[0].kind, ImportKind::Plain);
+        assert_eq!(module.imports[1].module_path, "goby/list");
+        assert_eq!(module.imports[1].kind, ImportKind::Alias("l".to_string()));
+        assert_eq!(module.imports[2].module_path, "goby/env");
+        assert_eq!(
+            module.imports[2].kind,
+            ImportKind::Selective(vec!["fetch_env_var".to_string()])
+        );
+        assert_eq!(module.declarations.len(), 1);
+    }
+
+    #[test]
+    fn rejects_import_with_invalid_syntax() {
+        let source = "import goby/env ()\nmain = 1\n";
+        let err = parse_module(source).expect_err("invalid import should fail");
+        assert!(err.message.contains("invalid import declaration"));
     }
 
     #[test]
