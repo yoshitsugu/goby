@@ -5,6 +5,7 @@
 pub mod analysis;
 pub mod ast;
 pub mod parser;
+pub mod str_util;
 pub mod typecheck;
 pub mod types;
 

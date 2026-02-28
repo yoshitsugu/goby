@@ -60,7 +60,11 @@ impl Expr {
     fn needs_parens_as_subexpr(&self) -> bool {
         matches!(
             self,
-            Expr::BinOp { .. } | Expr::Call { .. } | Expr::Pipeline { .. } | Expr::Lambda { .. }
+            Expr::BinOp { .. }
+                | Expr::Call { .. }
+                | Expr::MethodCall { .. }
+                | Expr::Pipeline { .. }
+                | Expr::Lambda { .. }
         )
     }
 
@@ -171,6 +175,27 @@ mod tests {
         assert_eq!(
             outer.to_str_repr(),
             Some("print (double (1 + 2))".to_string())
+        );
+    }
+
+    #[test]
+    fn to_str_repr_wraps_method_call_arg_in_parens() {
+        // `f string.concat("a", "b")` — MethodCall as a Call argument must be
+        // wrapped so the legacy evaluator does not misparse the expression.
+        let expr = Expr::Call {
+            callee: Box::new(Expr::Var("f".to_string())),
+            arg: Box::new(Expr::MethodCall {
+                receiver: "string".to_string(),
+                method: "concat".to_string(),
+                args: vec![
+                    Expr::StringLit("a".to_string()),
+                    Expr::StringLit("b".to_string()),
+                ],
+            }),
+        };
+        assert_eq!(
+            expr.to_str_repr(),
+            Some("f (string.concat(\"a\", \"b\"))".to_string())
         );
     }
 
