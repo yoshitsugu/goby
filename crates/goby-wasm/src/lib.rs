@@ -732,6 +732,7 @@ impl RuntimeOutputResolver {
                     (RuntimeValue::Int(l), RuntimeValue::Int(r)) => match op {
                         goby_core::BinOpKind::Add => Some(RuntimeValue::Int(l.checked_add(r)?)),
                         goby_core::BinOpKind::Mul => Some(RuntimeValue::Int(l.checked_mul(r)?)),
+                        goby_core::BinOpKind::Eq => None,
                     },
                     _ => None,
                 }

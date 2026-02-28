@@ -31,6 +31,7 @@ pub struct Declaration {
 pub enum BinOpKind {
     Add,
     Mul,
+    Eq,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -104,6 +105,7 @@ impl Expr {
                 let op_str = match op {
                     BinOpKind::Add => "+",
                     BinOpKind::Mul => "*",
+                    BinOpKind::Eq => "==",
                 };
                 let l_raw = left.to_str_repr()?;
                 let r_raw = right.to_str_repr()?;

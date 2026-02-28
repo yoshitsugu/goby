@@ -113,6 +113,7 @@ pub fn typecheck_module(module: &Module) -> Result<(), TypecheckError> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Ty {
     Int,
+    Bool,
     Str,
     Unit,
     List(Box<Ty>),
@@ -409,6 +410,7 @@ fn ty_from_type_expr(expr: &TypeExpr) -> Ty {
 fn ty_from_name(name: &str) -> Ty {
     match name {
         "Int" => Ty::Int,
+        "Bool" => Ty::Bool,
         "String" => Ty::Str,
         "Unit" => Ty::Unit,
         _ if is_type_variable_name(name) => Ty::Var(name.to_string()),
@@ -445,13 +447,17 @@ fn check_expr(expr: &Expr, env: &TypeEnv) -> Ty {
             let tys: Vec<Ty> = items.iter().map(|i| check_expr(i, env)).collect();
             Ty::Tuple(tys)
         }
-        Expr::Var(name) => env.lookup(name),
+        Expr::Var(name) => match name.as_str() {
+            "true" | "false" => Ty::Bool,
+            _ => env.lookup(name),
+        },
         Expr::BinOp { op, left, right } => {
             let lt = check_expr(left, env);
             let rt = check_expr(right, env);
             match (op, &lt, &rt) {
                 (BinOpKind::Add, Ty::Int, Ty::Int) => Ty::Int,
                 (BinOpKind::Mul, Ty::Int, Ty::Int) => Ty::Int,
+                (BinOpKind::Eq, Ty::Int, Ty::Int) => Ty::Bool,
                 // Unknown operands are tolerated (forward-compatibility)
                 (_, Ty::Unknown, _) | (_, _, Ty::Unknown) => Ty::Unknown,
                 _ => Ty::Unknown,
@@ -623,6 +629,7 @@ fn ensure_name_not_ambiguous(name: &str, env: &TypeEnv, decl_name: &str) -> Resu
 fn ty_name(ty: &Ty) -> String {
     match ty {
         Ty::Int => "Int".to_string(),
+        Ty::Bool => "Bool".to_string(),
         Ty::Str => "String".to_string(),
         Ty::Unit => "Unit".to_string(),
         Ty::List(inner) => format!("List {}", ty_name(inner)),
@@ -812,17 +819,24 @@ mod tests {
             env!("CARGO_MANIFEST_DIR")
         ))
         .expect("import example should exist");
+        let control_flow = std::fs::read_to_string(format!(
+            "{}/../../examples/control_flow.gb",
+            env!("CARGO_MANIFEST_DIR")
+        ))
+        .expect("control_flow example should exist");
 
         let hello_module = parse_module(&hello).expect("hello should parse");
         let basic_module = parse_module(&basic).expect("basic_types should parse");
         let generic_types_module =
             parse_module(&generic_types).expect("generic_types should parse");
         let import_module = parse_module(&import_example).expect("import example should parse");
+        let control_flow_module = parse_module(&control_flow).expect("control_flow should parse");
 
         typecheck_module(&hello_module).expect("hello should typecheck");
         typecheck_module(&basic_module).expect("basic_types should typecheck");
         typecheck_module(&generic_types_module).expect("generic_types should typecheck");
         typecheck_module(&import_module).expect("import example should typecheck");
+        typecheck_module(&control_flow_module).expect("control_flow should typecheck");
     }
 
     #[test]
@@ -936,6 +950,12 @@ mod tests {
     fn infers_string_literal_type() {
         let module = parse_module("s : String\ns = \"hello\"\n").expect("should parse");
         typecheck_module(&module).expect("string literal body should typecheck");
+    }
+
+    #[test]
+    fn infers_equality_as_bool() {
+        let module = parse_module("flag : Bool\nflag = 1 == 1\n").expect("should parse");
+        typecheck_module(&module).expect("equality result should typecheck as Bool");
     }
 
     #[test]
