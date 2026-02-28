@@ -623,7 +623,7 @@ impl RuntimeOutputResolver {
     ) -> Option<RuntimeValue> {
         if let Some((left, callee)) = parse_pipeline(expr) {
             let left_value = self.eval_value_with_context(left, locals, callables, evaluators)?;
-            return self.apply_pipeline(callee, left_value, locals, callables, evaluators);
+            return self.apply_pipeline(callee, left_value, locals, callables, evaluators, 0);
         }
 
         if let Some(text) = eval_string_expr(expr, &locals.string_values) {
@@ -651,10 +651,14 @@ impl RuntimeOutputResolver {
         locals: &RuntimeLocals,
         callables: &HashMap<String, IntCallable>,
         evaluators: &RuntimeEvaluators<'_, '_>,
+        _depth: usize,
     ) -> Option<RuntimeValue> {
         if callee == BUILTIN_PRINT {
             return None;
         }
+        // NOTE: delegates to the string-based path which uses its own depth
+        // counter (IntEvaluator::depth), so _depth is not propagated into that
+        // chain. This is a known limitation until the string path is removed.
         let call_expr = format!("{} {}", callee, value.to_expression_text());
         self.eval_value_with_context(&call_expr, locals, callables, evaluators)
     }
@@ -744,11 +748,13 @@ impl RuntimeOutputResolver {
                         }
                     }
                 }
+                // callee is not a plain Var (e.g. a curried call or lambda
+                // application) — not yet supported by the native evaluator.
                 None
             }
             Expr::Pipeline { value, callee } => {
                 let v = self.eval_expr_ast(value, locals, callables, evaluators, depth + 1)?;
-                self.apply_pipeline(callee, v, locals, callables, evaluators)
+                self.apply_pipeline(callee, v, locals, callables, evaluators, depth + 1)
             }
             // Lambda as top-level value — not needed in main, return None to fall back.
             Expr::Lambda { .. } | Expr::TupleLit(_) | Expr::MethodCall { .. } => None,
@@ -762,10 +768,11 @@ impl RuntimeOutputResolver {
         locals: &mut RuntimeLocals,
         callables: &mut HashMap<String, IntCallable>,
         evaluators: &RuntimeEvaluators<'_, '_>,
+        depth: usize,
     ) -> Option<()> {
         match stmt {
             Stmt::Binding { name, value } => {
-                let v = self.eval_expr_ast(value, locals, callables, evaluators, 0)?;
+                let v = self.eval_expr_ast(value, locals, callables, evaluators, depth)?;
                 locals.store(name, v);
                 Some(())
             }
@@ -774,7 +781,7 @@ impl RuntimeOutputResolver {
                 if let Expr::Call { callee, arg } = expr
                     && matches!(callee.as_ref(), Expr::Var(n) if n == BUILTIN_PRINT)
                 {
-                    let value = self.eval_expr_ast(arg, locals, callables, evaluators, 0)?;
+                    let value = self.eval_expr_ast(arg, locals, callables, evaluators, depth)?;
                     self.outputs.push(value.to_output_text());
                     return Some(());
                 }
@@ -782,7 +789,7 @@ impl RuntimeOutputResolver {
                 if let Expr::Pipeline { value, callee } = expr
                     && callee == BUILTIN_PRINT
                 {
-                    let v = self.eval_expr_ast(value, locals, callables, evaluators, 0)?;
+                    let v = self.eval_expr_ast(value, locals, callables, evaluators, depth)?;
                     self.outputs.push(v.to_output_text());
                     return Some(());
                 }
@@ -826,12 +833,13 @@ impl RuntimeOutputResolver {
         }
 
         if let Some(stmts) = function.parsed_stmts {
-            for stmt in stmts {
+            for (i, stmt) in stmts.iter().enumerate() {
                 self.execute_unit_ast_stmt(
                     stmt,
                     &mut function_locals,
                     &mut function_callables,
                     evaluators,
+                    i + 1,
                 )?;
             }
         } else {
