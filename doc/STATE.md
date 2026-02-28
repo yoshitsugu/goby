@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-02-28 (session 9, uncommitted)
+Last updated: 2026-02-28 (session 10, uncommitted)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -42,6 +42,12 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - `print`
   - `string.concat`
   - `map` (required for `examples/function.gb` parity).
+- Type diagnostics quality bar is locked for MVP:
+  - diagnostics are non-empty plain text.
+  - declaration name is included when known.
+  - mismatch diagnostics include both expected and actual type names.
+  - composite types are shown in full form (for example, `List Int`, `(String, Int)`).
+  - line/column reporting is not required in MVP.
 - `examples/basic_types.gb` is parse/typecheck target only (not runtime entry target).
 - `examples/function.gb` is a fixed canonical run target and must be preserved as-is.
 - `examples/function.gb` expected runtime output is locked:
@@ -60,6 +66,8 @@ This file is a restart-safe snapshot for resuming work after context reset.
 - `0c24614`: fixed AST unit-call fallback in Wasm runtime path (`goby-wasm`).
 - `b468f78`: locked binding and precedence rules in `doc/PLAN.md` and synced state.
 - `cf107c5`: added parser/typecheck regression tests for locked MVP rules.
+- `96672df`: locked MVP comment syntax policy in `doc/PLAN.md` and `doc/STATE.md`.
+- 2026-02-28 (session 10, uncommitted): validated `check/run` acceptance path and full `cargo check/test/clippy`, and added parser regression coverage for line-end comments and `#!`.
 
 ## 5. Current Example Files
 
@@ -69,11 +77,12 @@ This file is a restart-safe snapshot for resuming work after context reset.
 
 ## 6. Immediate Next Steps (Execution Order)
 
-1. Keep CLI/E2E regression checks green for MVP acceptance path:
+1. Decide canonical generic syntax for single- and multi-parameter type constructors.
+2. Implement generic syntax decision in parser/type parser/typechecker and add focused tests.
+3. Keep CLI/E2E regression checks green for MVP acceptance path:
    - `cargo run -p goby-cli -- check examples/function.gb`
    - `cargo run -p goby-cli -- run examples/function.gb`
    - locked output contract for `function.gb`.
-2. Run full validation (`cargo check`, `cargo test`, `cargo clippy -- -D warnings`).
 
 ## 7. Resume Commands
 
