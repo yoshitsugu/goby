@@ -435,6 +435,7 @@ fn is_type_variable_name(name: &str) -> bool {
 fn check_expr(expr: &Expr, env: &TypeEnv) -> Ty {
     match expr {
         Expr::IntLit(_) => Ty::Int,
+        Expr::BoolLit(_) => Ty::Bool,
         Expr::StringLit(_) => Ty::Str,
         Expr::ListLit(items) => {
             if items.is_empty() {
@@ -447,10 +448,7 @@ fn check_expr(expr: &Expr, env: &TypeEnv) -> Ty {
             let tys: Vec<Ty> = items.iter().map(|i| check_expr(i, env)).collect();
             Ty::Tuple(tys)
         }
-        Expr::Var(name) => match name.as_str() {
-            "true" | "false" => Ty::Bool,
-            _ => env.lookup(name),
-        },
+        Expr::Var(name) => env.lookup(name),
         Expr::BinOp { op, left, right } => {
             let lt = check_expr(left, env);
             let rt = check_expr(right, env);
@@ -570,7 +568,7 @@ fn ensure_no_ambiguous_refs_in_expr(
     decl_name: &str,
 ) -> Result<(), TypecheckError> {
     match expr {
-        Expr::IntLit(_) | Expr::StringLit(_) => Ok(()),
+        Expr::IntLit(_) | Expr::BoolLit(_) | Expr::StringLit(_) => Ok(()),
         Expr::ListLit(items) | Expr::TupleLit(items) => {
             for item in items {
                 ensure_no_ambiguous_refs_in_expr(item, env, decl_name)?;
@@ -956,6 +954,12 @@ mod tests {
     fn infers_equality_as_bool() {
         let module = parse_module("flag : Bool\nflag = 1 == 1\n").expect("should parse");
         typecheck_module(&module).expect("equality result should typecheck as Bool");
+    }
+
+    #[test]
+    fn accepts_bool_literal_annotation_match() {
+        let module = parse_module("flag : Bool\nflag = True\n").expect("should parse");
+        typecheck_module(&module).expect("Bool literal should typecheck as Bool");
     }
 
     #[test]

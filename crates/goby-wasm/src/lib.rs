@@ -723,6 +723,7 @@ impl RuntimeOutputResolver {
 
         match expr {
             Expr::IntLit(n) => Some(RuntimeValue::Int(*n)),
+            Expr::BoolLit(_) => None,
             Expr::StringLit(s) => Some(RuntimeValue::String(s.clone())),
             Expr::Var(name) => locals.get(name),
             Expr::BinOp { op, left, right } => {
