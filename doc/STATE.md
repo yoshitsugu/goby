@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-02-28 (session 6, commit 2)
+Last updated: 2026-02-28 (session 7, uncommitted)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -29,6 +29,14 @@ This file is a restart-safe snapshot for resuming work after context reset.
 - Indentation-based blocks:
   - tabs and spaces are both accepted.
 - Function calls support both `f x` and `f(x)`.
+- Block-local binding semantics are locked:
+  - `name = expr` is a binding only for assignment `=`, never for `==`.
+  - bindings are visible to subsequent statements in the same declaration body.
+  - same-name re-binding in one body is allowed and shadows earlier bindings.
+- Operator precedence/associativity is locked:
+  - low -> high: `|>` < `+` < `*` < call/application.
+  - `|>`, `+`, `*` are left-associative.
+  - MVP parser rule: `+` and `*` require spaces on both sides.
 - MVP built-ins:
   - `print`
   - `string.concat`
@@ -44,10 +52,8 @@ This file is a restart-safe snapshot for resuming work after context reset.
 
 ## 3. Known Open Decisions
 
-- Assignment/binding semantics:
-  - exact rule for block-local `a = ...` still needs a formal spec entry.
-- Operator precedence/associativity table:
-  - still not frozen.
+- Comment syntax policy:
+  - currently `# ...` in examples; formal language-spec wording is not frozen.
 
 ## 4. Existing Documents and Their Roles
 
