@@ -361,6 +361,46 @@ fn find_next_nonblank(lines: &[&str], from: usize) -> Option<usize> {
     None
 }
 
+/// Split a case arm line `"<pattern> -> <body>"` into `(pattern_src, body_src)`.
+///
+/// Unlike `split_once(" -> ")`, this function identifies the pattern token first
+/// (a bare word, integer, or quoted string) and then requires ` -> ` immediately
+/// after it. This prevents misidentifying ` -> ` inside a lambda body as the arm
+/// separator (e.g. `5 -> |x| -> x + 1` splits at the first ` -> `, yielding
+/// `"5"` and `"|x| -> x + 1"` correctly).
+fn split_case_arm(src: &str) -> Option<(&str, &str)> {
+    let src = src.trim();
+    // Determine where the pattern token ends.
+    let pat_end = if src.starts_with('"') {
+        // Quoted string pattern: scan to closing quote.
+        let mut idx = 1;
+        let bytes = src.as_bytes();
+        let mut closed = false;
+        while idx < bytes.len() {
+            if bytes[idx] == b'\\' {
+                idx += 2; // skip escaped char
+            } else if bytes[idx] == b'"' {
+                idx += 1;
+                closed = true;
+                break;
+            } else {
+                idx += 1;
+            }
+        }
+        if !closed {
+            return None; // unterminated string pattern
+        }
+        idx
+    } else {
+        // Bare token (identifier, integer, `_`): ends at first space.
+        src.find(' ').unwrap_or(src.len())
+    };
+    let pat_src = src[..pat_end].trim();
+    let rest = src[pat_end..].trim_start();
+    let body_src = rest.strip_prefix("-> ")?.trim();
+    Some((pat_src, body_src))
+}
+
 fn parse_case_pattern(src: &str) -> Option<CasePattern> {
     let src = src.trim();
     if src == "_" {
@@ -402,9 +442,9 @@ fn parse_multiline_expr(lines: &[&str], start: usize) -> Option<(Expr, usize)> {
             if arm_indent <= case_indent {
                 break;
             }
-            let (pat_src, body_src) = arm_trimmed.split_once(" -> ")?;
-            let pattern = parse_case_pattern(pat_src.trim())?;
-            let body = parse_expr(body_src.trim())?;
+            let (pat_src, body_src) = split_case_arm(arm_trimmed)?;
+            let pattern = parse_case_pattern(pat_src)?;
+            let body = parse_expr(body_src)?;
             arms.push(CaseArm {
                 pattern,
                 body: Box::new(body),
