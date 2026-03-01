@@ -1964,10 +1964,14 @@ fn encode_iovec(base: u32, length: u32) -> [u8; 8] {
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
+    use std::sync::Mutex;
 
     use goby_core::parse_module;
 
     use super::*;
+
+    /// Serializes tests that read or write process-wide environment variables.
+    static ENV_MUTEX: Mutex<()> = Mutex::new(());
 
     fn assert_valid_wasm_module(wasm: &[u8]) {
         assert_eq!(&wasm[..4], &[0x00, 0x61, 0x73, 0x6d]);
@@ -2065,6 +2069,7 @@ main =
 
     #[test]
     fn resolves_runtime_output_for_pipeline_print() {
+        let _guard = ENV_MUTEX.lock().unwrap();
         let source = r#"
 main : Unit -> Unit
 main =
@@ -2079,6 +2084,7 @@ main =
 
     #[test]
     fn locks_runtime_output_for_function_example() {
+        let _guard = ENV_MUTEX.lock().unwrap();
         let source = read_example("function.gb");
         let module = parse_module(&source).expect("parse should work");
         let output =
@@ -2089,6 +2095,7 @@ main =
 
     #[test]
     fn resolves_runtime_output_for_function_argument_call() {
+        let _guard = ENV_MUTEX.lock().unwrap();
         let source = r#"
 callback_after_print : (Int -> Int) -> Unit
 callback_after_print f =
@@ -2110,6 +2117,8 @@ main =
     #[test]
     fn locks_runtime_output_for_effect_gb() {
         use goby_core::parse_module;
+        let _guard = ENV_MUTEX.lock().unwrap();
+        // SAFETY: serialized by ENV_MUTEX; no concurrent env access while lock is held.
         unsafe { std::env::set_var("GOBY_PATH", "hello") };
         let source = read_example("effect.gb");
         let module = parse_module(&source).expect("effect.gb should parse");
@@ -2119,6 +2128,8 @@ main =
             main_parsed_body(&module),
         )
         .expect("runtime output should resolve");
+        // Clean up before asserting so env is restored even if the assertion panics.
+        unsafe { std::env::remove_var("GOBY_PATH") };
         assert_eq!(output, "13\nhello");
     }
 }
