@@ -15,6 +15,14 @@ pub struct TypecheckError {
 pub fn typecheck_module(module: &Module) -> Result<(), TypecheckError> {
     validate_imports(module)?;
     validate_type_declarations(module)?;
+    validate_effect_declarations(module)?;
+
+    let known_effects: HashSet<String> = builtin_effect_names()
+        .iter()
+        .copied()
+        .map(str::to_string)
+        .chain(module.effect_declarations.iter().map(|e| e.name.clone()))
+        .collect();
 
     let mut names = HashSet::new();
 
@@ -27,7 +35,7 @@ pub fn typecheck_module(module: &Module) -> Result<(), TypecheckError> {
         }
 
         if let Some(annotation) = decl.type_annotation.as_deref() {
-            validate_type_annotation(&decl.name, annotation)?;
+            validate_type_annotation(&decl.name, annotation, &known_effects)?;
         }
     }
 
@@ -405,6 +413,19 @@ fn inject_type_constructors(
     }
 }
 
+fn validate_effect_declarations(module: &Module) -> Result<(), TypecheckError> {
+    let mut seen = HashSet::new();
+    for effect_decl in &module.effect_declarations {
+        if !seen.insert(effect_decl.name.clone()) {
+            return Err(TypecheckError {
+                declaration: Some(effect_decl.name.clone()),
+                message: format!("duplicate effect declaration `{}`", effect_decl.name),
+            });
+        }
+    }
+    Ok(())
+}
+
 fn validate_imports(module: &Module) -> Result<(), TypecheckError> {
     for import in &module.imports {
         let exports = builtin_module_exports(&import.module_path).ok_or_else(|| TypecheckError {
@@ -716,6 +737,10 @@ fn builtin_type_names() -> [&'static str; 4] {
     ["Int", "Bool", "String", "Unit"]
 }
 
+/// Effects that are provided by the runtime and do not require an `effect` declaration.
+fn builtin_effect_names() -> &'static [&'static str] {
+    &["Print"]
+}
 
 // ---------------------------------------------------------------------------
 // Expression type inference
@@ -1102,7 +1127,11 @@ fn format_fun_segment(ty: &Ty) -> String {
     }
 }
 
-fn validate_type_annotation(decl_name: &str, annotation: &str) -> Result<(), TypecheckError> {
+fn validate_type_annotation(
+    decl_name: &str,
+    annotation: &str,
+    known_effects: &HashSet<String>,
+) -> Result<(), TypecheckError> {
     if uses_legacy_void(annotation) {
         return Err(TypecheckError {
             declaration: Some(decl_name.to_string()),
@@ -1110,7 +1139,7 @@ fn validate_type_annotation(decl_name: &str, annotation: &str) -> Result<(), Typ
         });
     }
 
-    validate_effect_clause(decl_name, annotation)?;
+    validate_effect_clause(decl_name, annotation, known_effects)?;
 
     let base = strip_effect_clause(annotation).trim();
     if base.is_empty() {
@@ -1151,7 +1180,11 @@ fn uses_legacy_void(annotation: &str) -> bool {
         .any(|token| token == "void")
 }
 
-fn validate_effect_clause(decl_name: &str, annotation: &str) -> Result<(), TypecheckError> {
+fn validate_effect_clause(
+    decl_name: &str,
+    annotation: &str,
+    known_effects: &HashSet<String>,
+) -> Result<(), TypecheckError> {
     let Some(effect_idx) = find_can_keyword_index(annotation) else {
         return Ok(());
     };
@@ -1169,6 +1202,12 @@ fn validate_effect_clause(decl_name: &str, annotation: &str) -> Result<(), Typec
             return Err(TypecheckError {
                 declaration: Some(decl_name.to_string()),
                 message: format!("invalid effect name `{}` in type annotation", effect_name),
+            });
+        }
+        if !known_effects.contains(effect_name) {
+            return Err(TypecheckError {
+                declaration: Some(decl_name.to_string()),
+                message: format!("unknown effect `{}` in `can` clause", effect_name),
             });
         }
     }
@@ -1261,6 +1300,11 @@ mod tests {
             env!("CARGO_MANIFEST_DIR")
         ))
         .expect("type example should exist");
+        let effect_example = std::fs::read_to_string(format!(
+            "{}/../../examples/effect.gb",
+            env!("CARGO_MANIFEST_DIR")
+        ))
+        .expect("effect example should exist");
 
         let hello_module = parse_module(&hello).expect("hello should parse");
         let basic_module = parse_module(&basic).expect("basic_types should parse");
@@ -1269,6 +1313,7 @@ mod tests {
         let import_module = parse_module(&import_example).expect("import example should parse");
         let control_flow_module = parse_module(&control_flow).expect("control_flow should parse");
         let type_module = parse_module(&type_example).expect("type should parse");
+        let effect_module = parse_module(&effect_example).expect("effect.gb should parse");
 
         typecheck_module(&hello_module).expect("hello should typecheck");
         typecheck_module(&basic_module).expect("basic_types should typecheck");
@@ -1276,6 +1321,7 @@ mod tests {
         typecheck_module(&import_module).expect("import example should typecheck");
         typecheck_module(&control_flow_module).expect("control_flow should typecheck");
         typecheck_module(&type_module).expect("type example should typecheck");
+        typecheck_module(&effect_module).expect("effect.gb should typecheck");
     }
 
     #[test]
@@ -1305,7 +1351,8 @@ mod tests {
 
     #[test]
     fn accepts_tab_separated_effect_clause() {
-        let module = parse_module("x : Int can\tLog\nx = 1\n").expect("should parse");
+        let source = "effect Log\n  log: String -> Unit\nx : Int can\tLog\nx = 1\n";
+        let module = parse_module(source).expect("should parse");
         typecheck_module(&module).expect("tab-separated `can` clause should be accepted");
     }
 
@@ -1423,6 +1470,21 @@ type User = Int
     }
 
     #[test]
+    fn rejects_duplicate_effect_declarations() {
+        let source = "\
+effect Log
+  log: String -> Unit
+effect Log
+  log: String -> Unit
+";
+        let module = parse_module(source).expect("should parse");
+        let err =
+            typecheck_module(&module).expect_err("duplicate effect declarations should fail");
+        assert_eq!(err.declaration.as_deref(), Some("Log"));
+        assert!(err.message.contains("duplicate effect declaration"));
+    }
+
+    #[test]
     fn rejects_unknown_type_in_alias_target() {
         let source = "type UserID = UnknownType\n";
         let module = parse_module(source).expect("should parse");
@@ -1451,10 +1513,79 @@ type User = Int
 
     #[test]
     fn rejects_invalid_effect_name() {
-        let module = parse_module("x : Int can Log, 1Bad\nx = 1\n").expect("should parse");
+        // `Log` is declared so the identifier check can reach `1Bad`.
+        let source = "effect Log\n  log: String -> Unit\nx : Int can Log, 1Bad\nx = 1\n";
+        let module = parse_module(source).expect("should parse");
         let err = typecheck_module(&module).expect_err("invalid effect name should fail");
         assert_eq!(err.declaration.as_deref(), Some("x"));
         assert!(err.message.contains("invalid effect name"));
+    }
+
+    #[test]
+    fn accepts_can_clause_with_builtin_print_effect() {
+        // `can Print` uses the built-in Print effect — no `effect` declaration needed.
+        let source = "main : Unit -> Unit can Print\nmain = print \"hi\"\n";
+        let module = parse_module(source).expect("should parse");
+        typecheck_module(&module).expect("builtin Print effect should be accepted in `can` clause");
+    }
+
+    #[test]
+    fn rejects_unknown_effect_in_can_clause() {
+        // `can UndeclaredEffect` — no matching `effect UndeclaredEffect` in the module.
+        let source = "x : Int -> Int can UndeclaredEffect\nx n = n\n";
+        let module = parse_module(source).expect("should parse");
+        let err = typecheck_module(&module).expect_err("unknown effect should be rejected");
+        assert_eq!(err.declaration.as_deref(), Some("x"));
+        assert!(
+            err.message.contains("unknown effect"),
+            "unexpected message: {}",
+            err.message
+        );
+        assert!(err.message.contains("UndeclaredEffect"));
+    }
+
+    #[test]
+    fn accepts_can_clause_with_declared_effect() {
+        // `can Log` where `effect Log` is declared in the same module.
+        let source = "\
+effect Log
+  log: String -> Unit
+x : Int -> Int can Log
+x n = n
+";
+        let module = parse_module(source).expect("should parse");
+        typecheck_module(&module).expect("declared effect in `can` clause should be accepted");
+    }
+
+    #[test]
+    fn accepts_can_clause_with_multiple_declared_effects() {
+        // `can Log, Env` where both are declared.
+        let source = "\
+effect Log
+  log: String -> Unit
+effect Env
+  from_env: String -> String
+f : Int -> Int can Log, Env
+f n = n
+";
+        let module = parse_module(source).expect("should parse");
+        typecheck_module(&module).expect("multiple declared effects in `can` clause should be accepted");
+    }
+
+    #[test]
+    fn rejects_second_of_two_effects_when_undeclared() {
+        // First effect is declared but second is not.
+        let source = "\
+effect Log
+  log: String -> Unit
+f : Int -> Int can Log, Ghost
+f n = n
+";
+        let module = parse_module(source).expect("should parse");
+        let err = typecheck_module(&module).expect_err("undeclared second effect should fail");
+        assert_eq!(err.declaration.as_deref(), Some("f"));
+        assert!(err.message.contains("unknown effect"));
+        assert!(err.message.contains("Ghost"));
     }
 
     #[test]
