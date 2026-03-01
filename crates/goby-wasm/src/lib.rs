@@ -1,7 +1,8 @@
 use std::collections::{HashMap, HashSet};
 
 use goby_core::{
-    Expr, Module, Stmt, str_util::parse_string_concat_call, types::parse_function_type,
+    CasePattern, Expr, HandlerMethod, Module, Stmt, parse_body_stmts,
+    str_util::parse_string_concat_call, types::parse_function_type,
 };
 
 const IOVEC_OFFSET: u32 = 0;
@@ -198,7 +199,7 @@ fn resolve_main_runtime_output(
         list: &list_evaluator,
         unit: &unit_functions,
     };
-    RuntimeOutputResolver::resolve(body, parsed_stmts, &evaluators)
+    RuntimeOutputResolver::resolve(module, body, parsed_stmts, &evaluators)
 }
 
 type EvaluatedFunctions<'a> = HashMap<&'a str, EvaluatedFunction<'a>>;
@@ -459,10 +460,12 @@ fn statements(body: &str) -> impl Iterator<Item = Statement<'_>> {
     code_lines(body).map(parse_statement)
 }
 
-#[derive(Default)]
-struct RuntimeOutputResolver {
+struct RuntimeOutputResolver<'m> {
     locals: RuntimeLocals,
     outputs: Vec<String>,
+    module: &'m Module,
+    /// Maps effect name (e.g. "Log") to handler_declarations index.
+    active_handlers: HashMap<String, usize>,
 }
 
 struct RuntimeEvaluators<'a, 'b> {
@@ -471,13 +474,19 @@ struct RuntimeEvaluators<'a, 'b> {
     unit: &'b EvaluatedFunctions<'a>,
 }
 
-impl RuntimeOutputResolver {
+impl<'m> RuntimeOutputResolver<'m> {
     fn resolve(
+        module: &'m Module,
         body: &str,
         parsed_stmts: Option<&[Stmt]>,
         evaluators: &RuntimeEvaluators<'_, '_>,
     ) -> Option<String> {
-        let mut resolver = Self::default();
+        let mut resolver = Self {
+            locals: RuntimeLocals::default(),
+            outputs: Vec::new(),
+            module,
+            active_handlers: HashMap::new(),
+        };
 
         if let Some(stmts) = parsed_stmts {
             // AST-based path (preferred when parsed_body is available)
@@ -512,8 +521,28 @@ impl RuntimeOutputResolver {
                 Some(())
             }
             Stmt::Expr(expr) => self.eval_ast_side_effect(expr, evaluators),
-            // `using` is parse/typecheck metadata only in this slice; skip at runtime.
-            Stmt::Using { .. } => None,
+            Stmt::Using { handlers, body } => {
+                // Install handlers: map effect name → handler_declarations index.
+                let previous = self.active_handlers.clone();
+                for handler_name in handlers {
+                    if let Some(idx) = self
+                        .module
+                        .handler_declarations
+                        .iter()
+                        .position(|h| &h.name == handler_name)
+                    {
+                        let effect = self.module.handler_declarations[idx].effect.clone();
+                        self.active_handlers.insert(effect, idx);
+                    }
+                }
+                // Execute body with active handlers.
+                for stmt in body {
+                    self.ingest_ast_statement(stmt, evaluators)?;
+                }
+                // Restore previous handler context.
+                self.active_handlers = previous;
+                Some(())
+            }
         }
     }
 
@@ -545,19 +574,27 @@ impl RuntimeOutputResolver {
                 let Expr::Var(fn_name) = callee.as_ref() else {
                     unreachable!()
                 };
-                if let Some(arg_val) = self.eval_ast_value(arg, evaluators)
-                    && self
+                if let Some(arg_val) = self.eval_ast_value(arg, evaluators) {
+                    if self
                         .execute_unit_call_ast(
                             fn_name,
-                            arg_val,
+                            arg_val.clone(),
                             &RuntimeLocals::default(),
                             &HashMap::new(),
                             evaluators,
                             0,
                         )
                         .is_some()
-                {
-                    return Some(());
+                    {
+                        return Some(());
+                    }
+                    // Fallback: execute any declaration (including non-Unit return) for side effects.
+                    if self
+                        .execute_decl_as_side_effect(fn_name, arg_val, evaluators, 1)
+                        .is_some()
+                    {
+                        return Some(());
+                    }
                 }
                 let repr = expr.to_str_repr()?;
                 self.eval_side_effect(&repr, evaluators)
@@ -589,11 +626,11 @@ impl RuntimeOutputResolver {
     }
 
     fn eval_ast_value(
-        &self,
+        &mut self,
         expr: &Expr,
         evaluators: &RuntimeEvaluators<'_, '_>,
     ) -> Option<RuntimeValue> {
-        self.eval_expr_ast(expr, &self.locals, &HashMap::new(), evaluators, 0)
+        self.eval_expr_ast(expr, &self.locals.clone(), &HashMap::new(), evaluators, 0)
     }
 
     fn ingest_statement(
@@ -712,7 +749,7 @@ impl RuntimeOutputResolver {
     /// Returns `None` when the expression is not yet supported by the native
     /// evaluator (caller should fall back to the string path).
     fn eval_expr_ast(
-        &self,
+        &mut self,
         expr: &Expr,
         locals: &RuntimeLocals,
         callables: &HashMap<String, IntCallable>,
@@ -725,7 +762,7 @@ impl RuntimeOutputResolver {
 
         match expr {
             Expr::IntLit(n) => Some(RuntimeValue::Int(*n)),
-            Expr::BoolLit(_) => None,
+            Expr::BoolLit(b) => Some(RuntimeValue::Bool(*b)),
             Expr::StringLit(s) => Some(RuntimeValue::String(s.clone())),
             Expr::Var(name) => locals.get(name),
             Expr::BinOp { op, left, right } => {
@@ -735,7 +772,7 @@ impl RuntimeOutputResolver {
                     (RuntimeValue::Int(l), RuntimeValue::Int(r)) => match op {
                         goby_core::BinOpKind::Add => Some(RuntimeValue::Int(l.checked_add(r)?)),
                         goby_core::BinOpKind::Mul => Some(RuntimeValue::Int(l.checked_mul(r)?)),
-                        goby_core::BinOpKind::Eq => None,
+                        goby_core::BinOpKind::Eq => Some(RuntimeValue::Bool(l == r)),
                     },
                     _ => None,
                 }
@@ -768,6 +805,17 @@ impl RuntimeOutputResolver {
             }
             Expr::Call { callee, arg } => {
                 if let Expr::Var(fn_name) = callee.as_ref() {
+                    // fetch_env_var "VAR_NAME" -> read from process environment
+                    if fn_name == "fetch_env_var" {
+                        let av =
+                            self.eval_expr_ast(arg, locals, callables, evaluators, depth + 1)?;
+                        if let RuntimeValue::String(var_name) = av {
+                            let val = std::env::var(&var_name).unwrap_or_default();
+                            return Some(RuntimeValue::String(val));
+                        }
+                        return None;
+                    }
+
                     let arg_val =
                         self.eval_expr_ast(arg, locals, callables, evaluators, depth + 1)?;
                     // Int function path
@@ -794,9 +842,23 @@ impl RuntimeOutputResolver {
                         }
                     }
                 }
+                // Qualified callee: Effect.method arg  (e.g. Log.log result, env.from_env name)
+                // Try exact effect-name match first, then member-name-only scan.
+                if let Expr::Qualified { receiver, member } = callee.as_ref() {
+                    let method = self
+                        .find_handler_method_for_effect(receiver, member)
+                        .or_else(|| self.find_handler_method_by_name(member));
+                    if let Some(method) = method {
+                        let arg_val =
+                            self.eval_expr_ast(arg, locals, callables, evaluators, depth + 1)?;
+                        return self.dispatch_handler_method_as_value(
+                            &method, arg_val, evaluators, depth + 1,
+                        );
+                    }
+                }
                 // callee is not a plain Var (e.g. a curried call or lambda
                 // application) — not yet supported by the native evaluator.
-                None
+                None  // NOTE: qualified callee dispatch is handled above
             }
             Expr::Pipeline { value, callee } => {
                 let v = self.eval_expr_ast(value, locals, callables, evaluators, depth + 1)?;
@@ -830,6 +892,87 @@ impl RuntimeOutputResolver {
                         Some(RuntimeValue::String(member.clone()))
                     }
                     Some(_) => None,
+                }
+            }
+            Expr::Case { scrutinee, arms } => {
+                let scrutinee_val =
+                    self.eval_expr_ast(scrutinee, locals, callables, evaluators, depth + 1)?;
+                for arm in arms {
+                    let matched = match (&arm.pattern, &scrutinee_val) {
+                        (CasePattern::Wildcard, _) => true,
+                        (CasePattern::IntLit(n), RuntimeValue::Int(v)) => n == v,
+                        (CasePattern::StringLit(s), RuntimeValue::String(v)) => s == v,
+                        _ => false,
+                    };
+                    if matched {
+                        return self.eval_expr_ast(
+                            &arm.body,
+                            locals,
+                            callables,
+                            evaluators,
+                            depth + 1,
+                        );
+                    }
+                }
+                None
+            }
+            Expr::If {
+                condition,
+                then_expr,
+                else_expr,
+            } => {
+                let cond_val =
+                    self.eval_expr_ast(condition, locals, callables, evaluators, depth + 1)?;
+                match cond_val {
+                    RuntimeValue::Bool(true) => {
+                        self.eval_expr_ast(then_expr, locals, callables, evaluators, depth + 1)
+                    }
+                    RuntimeValue::Bool(false) => {
+                        self.eval_expr_ast(else_expr, locals, callables, evaluators, depth + 1)
+                    }
+                    _ => None,
+                }
+            }
+            // <module>.fetch_env_var(str) -> String  (e.g. env.fetch_env_var(str))
+            Expr::MethodCall { method, args, .. }
+                if method == "fetch_env_var" && args.len() == 1 =>
+            {
+                let av = self.eval_expr_ast(&args[0], locals, callables, evaluators, depth + 1)?;
+                if let RuntimeValue::String(var_name) = av {
+                    let val = std::env::var(&var_name).unwrap_or_default();
+                    return Some(RuntimeValue::String(val));
+                }
+                None
+            }
+            // string.split(s, delim) -> ListString
+            Expr::MethodCall { receiver, method, args }
+                if method == "split" && receiver == "string" && args.len() == 2 =>
+            {
+                let sv = self.eval_expr_ast(&args[0], locals, callables, evaluators, depth + 1)?;
+                let dv = self.eval_expr_ast(&args[1], locals, callables, evaluators, depth + 1)?;
+                match (sv, dv) {
+                    (RuntimeValue::String(s), RuntimeValue::String(delim)) => {
+                        let parts: Vec<String> = if s.is_empty() {
+                            Vec::new()
+                        } else {
+                            s.split(delim.as_str()).map(|p| p.to_string()).collect()
+                        };
+                        Some(RuntimeValue::ListString(parts))
+                    }
+                    _ => None,
+                }
+            }
+            // <alias>.join(list, sep) -> String  (alias is the import alias for goby/list)
+            Expr::MethodCall { method, args, .. } if method == "join" && args.len() == 2 => {
+                let list_v =
+                    self.eval_expr_ast(&args[0], locals, callables, evaluators, depth + 1)?;
+                let sep_v =
+                    self.eval_expr_ast(&args[1], locals, callables, evaluators, depth + 1)?;
+                match (list_v, sep_v) {
+                    (RuntimeValue::ListString(parts), RuntimeValue::String(sep)) => {
+                        Some(RuntimeValue::String(parts.join(&sep)))
+                    }
+                    _ => None,
                 }
             }
             // Lambda as top-level value — not needed in main, return None to fall back.
@@ -869,27 +1012,64 @@ impl RuntimeOutputResolver {
                     self.outputs.push(v.to_output_text());
                     return Some(());
                 }
+                // Qualified effect call: Effect.method arg  (e.g. Log.log result)
+                if let Expr::Call { callee, arg } = expr
+                    && let Expr::Qualified { receiver, member } = callee.as_ref()
+                {
+                    let method = self.find_handler_method_for_effect(receiver, member);
+                    if let Some(method) = method {
+                        let arg_val =
+                            self.eval_expr_ast(arg, locals, callables, evaluators, depth)?;
+                        return self.dispatch_handler_method(&method, arg_val, evaluators, depth + 1);
+                    }
+                }
                 // Other expression statements: try AST unit-call path.
                 if let Expr::Call { callee, arg } = expr
                     && let Expr::Var(fn_name) = callee.as_ref()
                 {
-                    if let Some(arg_val) =
-                        self.eval_expr_ast(arg, locals, callables, evaluators, depth)
-                        && self
-                            .execute_unit_call_ast(
-                                fn_name,
-                                arg_val,
-                                locals,
-                                callables,
-                                evaluators,
-                                depth,
-                            )
-                            .is_some()
+                    // Evaluate arg once.
+                    let arg_val = self.eval_expr_ast(arg, locals, callables, evaluators, depth)?;
+                    // Bare effect method call: e.g. `log env_var`.
+                    let bare_method = self.find_handler_method_by_name(fn_name);
+                    if let Some(method) = bare_method {
+                        return self.dispatch_handler_method(&method, arg_val, evaluators, depth + 1);
+                    }
+                    // Discarded bare value (return value from Int-returning fn in side-effect context).
+                    if matches!(fn_name.as_str(), _)
+                        && matches!(
+                            arg.as_ref(),
+                            Expr::Var(_) | Expr::IntLit(_) | Expr::StringLit(_) | Expr::BoolLit(_)
+                        )
+                    {
+                        // try normal paths first
+                    }
+                    if self
+                        .execute_unit_call_ast(
+                            fn_name,
+                            arg_val.clone(),
+                            locals,
+                            callables,
+                            evaluators,
+                            depth,
+                        )
+                        .is_some()
+                    {
+                        return Some(());
+                    }
+                    // Try executing as general declaration for side effects.
+                    if self
+                        .execute_decl_as_side_effect(fn_name, arg_val, evaluators, depth + 1)
+                        .is_some()
                     {
                         return Some(());
                     }
                     let repr = expr.to_str_repr()?;
                     return self.execute_unit_call(&repr, locals, callables, evaluators);
+                }
+                // Bare Var expression: discarded return value (e.g. last line of Int fn body).
+                if let Expr::Var(_) | Expr::IntLit(_) | Expr::StringLit(_) | Expr::BoolLit(_) = expr
+                {
+                    return Some(());
                 }
                 if let Expr::Pipeline { value, callee } = expr {
                     if let Some(v) = self.eval_expr_ast(value, locals, callables, evaluators, depth)
@@ -912,8 +1092,25 @@ impl RuntimeOutputResolver {
                 let repr = expr.to_str_repr()?;
                 self.execute_unit_call(&repr, locals, callables, evaluators)
             }
-            // `using` is parse/typecheck metadata only in this slice; skip at runtime.
-            Stmt::Using { .. } => None,
+            Stmt::Using { handlers, body } => {
+                let previous = self.active_handlers.clone();
+                for handler_name in handlers {
+                    if let Some(idx) = self
+                        .module
+                        .handler_declarations
+                        .iter()
+                        .position(|h| &h.name == handler_name)
+                    {
+                        let effect = self.module.handler_declarations[idx].effect.clone();
+                        self.active_handlers.insert(effect, idx);
+                    }
+                }
+                for stmt in body {
+                    self.execute_unit_ast_stmt(stmt, locals, callables, evaluators, depth + 1)?;
+                }
+                self.active_handlers = previous;
+                Some(())
+            }
         }
     }
 
@@ -1040,9 +1237,156 @@ impl RuntimeOutputResolver {
             self.execute_unit_call(&call_expr, caller_locals, caller_callables, evaluators)
         }
     }
+
+    /// Find the handler method for a qualified effect call like `Log.log`.
+    /// Returns a cloned `HandlerMethod` if found.
+    fn find_handler_method_for_effect(
+        &self,
+        effect_name: &str,
+        method_name: &str,
+    ) -> Option<HandlerMethod> {
+        let idx = *self.active_handlers.get(effect_name)?;
+        let handler = &self.module.handler_declarations[idx];
+        handler
+            .methods
+            .iter()
+            .find(|m| m.name == method_name)
+            .cloned()
+    }
+
+    /// Find a handler method by bare name (e.g. `log`) across all active handlers.
+    fn find_handler_method_by_name(&self, method_name: &str) -> Option<HandlerMethod> {
+        let active_idxs: Vec<usize> = self.active_handlers.values().copied().collect();
+        for idx in active_idxs {
+            let handler = &self.module.handler_declarations[idx];
+            if let Some(m) = handler.methods.iter().find(|m| m.name == method_name) {
+                return Some(m.clone());
+            }
+        }
+        None
+    }
+
+    /// Execute a handler method and return the last evaluated value.
+    /// Used when the handler method produces a value (e.g. `env.from_env`).
+    fn dispatch_handler_method_as_value(
+        &mut self,
+        method: &HandlerMethod,
+        arg_val: RuntimeValue,
+        evaluators: &RuntimeEvaluators<'_, '_>,
+        depth: usize,
+    ) -> Option<RuntimeValue> {
+        if depth >= MAX_EVAL_DEPTH {
+            return None;
+        }
+        let stmts = parse_body_stmts(&method.body)?;
+        let mut handler_locals = RuntimeLocals::default();
+        if let Some(param) = method.params.first() {
+            handler_locals.store(param, arg_val);
+        }
+        let mut handler_callables = HashMap::new();
+        let mut last_val: Option<RuntimeValue> = None;
+        for stmt in &stmts {
+            match stmt {
+                Stmt::Binding { name, value } => {
+                    let v =
+                        self.eval_expr_ast(value, &handler_locals, &handler_callables, evaluators, depth + 1)?;
+                    handler_locals.store(name, v);
+                }
+                Stmt::Expr(expr) => {
+                    last_val =
+                        self.eval_expr_ast(expr, &handler_locals, &handler_callables, evaluators, depth + 1);
+                    if last_val.is_none() {
+                        // Side-effect stmt — try as unit side effect
+                        self.execute_unit_ast_stmt(
+                            stmt,
+                            &mut handler_locals,
+                            &mut handler_callables,
+                            evaluators,
+                            depth + 1,
+                        )?;
+                        last_val = None;
+                    }
+                }
+                Stmt::Using { .. } => {}
+            }
+        }
+        last_val
+    }
+
+    /// Parse and execute a handler method body with the given argument.
+    fn dispatch_handler_method(
+        &mut self,
+        method: &HandlerMethod,
+        arg_val: RuntimeValue,
+        evaluators: &RuntimeEvaluators<'_, '_>,
+        depth: usize,
+    ) -> Option<()> {
+        if depth >= MAX_EVAL_DEPTH {
+            return None;
+        }
+        let stmts = parse_body_stmts(&method.body)?;
+        let mut handler_locals = RuntimeLocals::default();
+        if let Some(param) = method.params.first() {
+            handler_locals.store(param, arg_val);
+        }
+        let mut handler_callables = HashMap::new();
+        for stmt in &stmts {
+            self.execute_unit_ast_stmt(
+                stmt,
+                &mut handler_locals,
+                &mut handler_callables,
+                evaluators,
+                depth + 1,
+            )?;
+        }
+        Some(())
+    }
+
+    /// Execute any declaration (including Int-returning ones) as a side-effect call.
+    /// Used when calling functions like `plus_ten_with_log` from a `using` block.
+    fn execute_decl_as_side_effect(
+        &mut self,
+        fn_name: &str,
+        arg_val: RuntimeValue,
+        evaluators: &RuntimeEvaluators<'_, '_>,
+        depth: usize,
+    ) -> Option<()> {
+        if depth >= MAX_EVAL_DEPTH {
+            return None;
+        }
+        // Collect param name and stmts (clone to release the borrow on self.module).
+        let (param_name, stmts) = {
+            let decl = self.module.declarations.iter().find(|d| d.name == fn_name)?;
+            let stmts = decl.parsed_body.as_ref()?.clone();
+            let param = decl.params.first().cloned();
+            (param, stmts)
+        };
+        let mut fn_locals = RuntimeLocals::default();
+        if let Some(param) = param_name {
+            fn_locals.store(&param, arg_val);
+        }
+        let mut fn_callables = HashMap::new();
+        for stmt in &stmts {
+            // Bare value expressions at the end of an Int-returning fn: discard silently.
+            if let Stmt::Expr(
+                Expr::Var(_) | Expr::IntLit(_) | Expr::StringLit(_) | Expr::BoolLit(_),
+            ) = stmt
+            {
+                continue;
+            }
+            self.execute_unit_ast_stmt(
+                stmt,
+                &mut fn_locals,
+                &mut fn_callables,
+                evaluators,
+                depth + 1,
+            )?;
+        }
+        Some(())
+    }
 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 struct RuntimeLocals {
     string_values: HashMap<String, String>,
     int_values: HashMap<String, i64>,
@@ -1065,6 +1409,12 @@ impl RuntimeLocals {
             }
             record @ RuntimeValue::Record { .. } => {
                 self.record_values.insert(name.to_string(), record);
+            }
+            b @ RuntimeValue::Bool(_) => {
+                self.record_values.insert(name.to_string(), b);
+            }
+            ls @ RuntimeValue::ListString(_) => {
+                self.record_values.insert(name.to_string(), ls);
             }
         }
     }
@@ -1097,7 +1447,9 @@ impl RuntimeLocals {
 enum RuntimeValue {
     String(String),
     Int(i64),
+    Bool(bool),
     ListInt(Vec<i64>),
+    ListString(Vec<String>),
     Record {
         constructor: String,
         fields: HashMap<String, RuntimeValue>,
@@ -1109,7 +1461,12 @@ impl RuntimeValue {
         match self {
             Self::String(text) => text.clone(),
             Self::Int(value) => value.to_string(),
+            Self::Bool(b) => if *b { "True" } else { "False" }.to_string(),
             Self::ListInt(values) => format_list_int(values),
+            Self::ListString(values) => {
+                let parts: Vec<String> = values.iter().map(|s| format!("\"{}\"", s)).collect();
+                format!("[{}]", parts.join(", "))
+            }
             // Print the constructor name as a placeholder; field access
             // resolves the actual field value before printing in practice.
             Self::Record { constructor, .. } => constructor.clone(),
@@ -1120,7 +1477,12 @@ impl RuntimeValue {
         match self {
             Self::String(text) => format!("\"{}\"", text),
             Self::Int(value) => value.to_string(),
+            Self::Bool(b) => if *b { "True" } else { "False" }.to_string(),
             Self::ListInt(values) => format_list_int(values),
+            Self::ListString(values) => {
+                let parts: Vec<String> = values.iter().map(|s| format!("\"{}\"", s)).collect();
+                format!("[{}]", parts.join(", "))
+            }
             Self::Record { constructor, .. } => constructor.clone(),
         }
     }
@@ -1752,5 +2114,20 @@ main =
             resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
                 .expect("runtime output should resolve");
         assert_eq!(output, "something\n15");
+    }
+
+    #[test]
+    fn locks_runtime_output_for_effect_gb() {
+        use goby_core::parse_module;
+        unsafe { std::env::set_var("GOBY_PATH", "hello") };
+        let source = read_example("effect.gb");
+        let module = parse_module(&source).expect("effect.gb should parse");
+        let output = resolve_main_runtime_output(
+            &module,
+            main_body(&module),
+            main_parsed_body(&module),
+        )
+        .expect("runtime output should resolve");
+        assert_eq!(output, "13\nhello");
     }
 }

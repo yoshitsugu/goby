@@ -1,6 +1,6 @@
 use crate::ast::{
-    BinOpKind, Declaration, EffectDecl, EffectMember, Expr, HandlerDecl, HandlerMethod, ImportDecl,
-    ImportKind, Module, RecordField, Stmt, TypeDeclaration,
+    BinOpKind, CaseArm, CasePattern, Declaration, EffectDecl, EffectMember, Expr, HandlerDecl,
+    HandlerMethod, ImportDecl, ImportKind, Module, RecordField, Stmt, TypeDeclaration,
 };
 use crate::str_util::split_top_level_commas;
 
@@ -289,6 +289,29 @@ fn parse_stmts_from_lines(lines: &[&str], start: usize) -> Option<(Vec<Stmt>, us
             continue;
         }
 
+        // Check for `callee\n  case ...` or `callee\n  if ...` pattern.
+        // e.g. `print\n    case x\n      5 -> "Five!"`.
+        if (is_identifier(trimmed) || is_qualified_name(trimmed))
+            && let Some(next_i) = find_next_nonblank(lines, i + 1)
+        {
+            let next_raw = lines[next_i];
+            let next_stripped = strip_line_comment(next_raw).trim_end();
+            let next_trimmed = next_stripped.trim();
+            let next_indent = indent_len(next_stripped);
+            if next_indent > this_indent
+                && (next_trimmed.starts_with("case ") || next_trimmed.starts_with("if "))
+                && let Some((multi_expr, consumed)) = parse_multiline_expr(lines, next_i)
+            {
+                let callee = parse_expr(trimmed)?;
+                stmts.push(Stmt::Expr(Expr::Call {
+                    callee: Box::new(callee),
+                    arg: Box::new(multi_expr),
+                }));
+                i = next_i + consumed;
+                continue;
+            }
+        }
+
         // Regular statement: binding or expression.
         stmts.push(parse_stmt(trimmed)?);
         i += 1;
@@ -299,6 +322,178 @@ fn parse_stmts_from_lines(lines: &[&str], start: usize) -> Option<(Vec<Stmt>, us
 
 fn indent_len(line: &str) -> usize {
     line.len() - line.trim_start().len()
+}
+
+/// Expand escape sequences in a string literal body (the content between the quotes).
+/// Supported: `\n` → newline, `\t` → tab, `\\` → backslash, `\"` → double-quote.
+fn unescape_string(s: &str) -> String {
+    let mut result = String::with_capacity(s.len());
+    let mut chars = s.chars();
+    while let Some(c) = chars.next() {
+        if c == '\\' {
+            match chars.next() {
+                Some('n') => result.push('\n'),
+                Some('t') => result.push('\t'),
+                Some('\\') => result.push('\\'),
+                Some('"') => result.push('"'),
+                Some(other) => {
+                    result.push('\\');
+                    result.push(other);
+                }
+                None => result.push('\\'),
+            }
+        } else {
+            result.push(c);
+        }
+    }
+    result
+}
+
+fn find_next_nonblank(lines: &[&str], from: usize) -> Option<usize> {
+    for (offset, line) in lines[from..].iter().enumerate() {
+        let stripped = strip_line_comment(line).trim_end();
+        let trimmed = stripped.trim();
+        if !trimmed.is_empty() && !trimmed.starts_with('#') {
+            return Some(from + offset);
+        }
+    }
+    None
+}
+
+fn parse_case_pattern(src: &str) -> Option<CasePattern> {
+    let src = src.trim();
+    if src == "_" {
+        return Some(CasePattern::Wildcard);
+    }
+    if let Ok(n) = src.parse::<i64>() {
+        return Some(CasePattern::IntLit(n));
+    }
+    if src.starts_with('"') && src.ends_with('"') && src.len() >= 2 {
+        let inner = &src[1..src.len() - 1];
+        if !inner.contains('"') {
+            return Some(CasePattern::StringLit(inner.to_string()));
+        }
+    }
+    None
+}
+
+/// Parse a multi-line `case` or `if` expression starting at `lines[start]`.
+/// Returns `(expr, lines_consumed_from_start)` on success.
+fn parse_multiline_expr(lines: &[&str], start: usize) -> Option<(Expr, usize)> {
+    let raw = lines[start];
+    let stripped = strip_line_comment(raw).trim_end();
+    let trimmed = stripped.trim();
+    let case_indent = indent_len(stripped);
+
+    if let Some(scrutinee_src) = trimmed.strip_prefix("case ") {
+        let scrutinee = parse_expr(scrutinee_src.trim())?;
+        let mut i = start + 1;
+        let mut arms: Vec<CaseArm> = Vec::new();
+        while i < lines.len() {
+            let arm_raw = lines[i];
+            let arm_stripped = strip_line_comment(arm_raw).trim_end();
+            let arm_trimmed = arm_stripped.trim();
+            if arm_trimmed.is_empty() || arm_trimmed.starts_with('#') {
+                i += 1;
+                continue;
+            }
+            let arm_indent = indent_len(arm_stripped);
+            if arm_indent <= case_indent {
+                break;
+            }
+            let (pat_src, body_src) = arm_trimmed.split_once(" -> ")?;
+            let pattern = parse_case_pattern(pat_src.trim())?;
+            let body = parse_expr(body_src.trim())?;
+            arms.push(CaseArm {
+                pattern,
+                body: Box::new(body),
+            });
+            i += 1;
+        }
+        if arms.is_empty() {
+            return None;
+        }
+        Some((
+            Expr::Case {
+                scrutinee: Box::new(scrutinee),
+                arms,
+            },
+            i - start,
+        ))
+    } else if let Some(cond_src) = trimmed.strip_prefix("if ") {
+        let condition = parse_expr(cond_src.trim())?;
+        let mut i = start + 1;
+
+        // Consume then-expression (first non-empty line deeper than `if`)
+        let mut then_expr: Option<Expr> = None;
+        while i < lines.len() && then_expr.is_none() {
+            let then_raw = lines[i];
+            let then_stripped = strip_line_comment(then_raw).trim_end();
+            let then_trimmed = then_stripped.trim();
+            if then_trimmed.is_empty() || then_trimmed.starts_with('#') {
+                i += 1;
+                continue;
+            }
+            let then_indent = indent_len(then_stripped);
+            if then_indent <= case_indent {
+                return None;
+            }
+            then_expr = Some(parse_expr(then_trimmed)?);
+            i += 1;
+        }
+        let then_expr = then_expr?;
+
+        // Consume `else` keyword at same indent as `if`
+        let mut found_else = false;
+        while i < lines.len() && !found_else {
+            let kw_raw = lines[i];
+            let kw_stripped = strip_line_comment(kw_raw).trim_end();
+            let kw_trimmed = kw_stripped.trim();
+            if kw_trimmed.is_empty() || kw_trimmed.starts_with('#') {
+                i += 1;
+                continue;
+            }
+            let kw_indent = indent_len(kw_stripped);
+            if kw_indent != case_indent || kw_trimmed != "else" {
+                return None;
+            }
+            found_else = true;
+            i += 1;
+        }
+        if !found_else {
+            return None;
+        }
+
+        // Consume else-expression (first non-empty line deeper than `if`)
+        let mut else_expr: Option<Expr> = None;
+        while i < lines.len() && else_expr.is_none() {
+            let else_raw = lines[i];
+            let else_stripped = strip_line_comment(else_raw).trim_end();
+            let else_trimmed = else_stripped.trim();
+            if else_trimmed.is_empty() || else_trimmed.starts_with('#') {
+                i += 1;
+                continue;
+            }
+            let else_indent = indent_len(else_stripped);
+            if else_indent <= case_indent {
+                return None;
+            }
+            else_expr = Some(parse_expr(else_trimmed)?);
+            i += 1;
+        }
+        let else_expr = else_expr?;
+
+        Some((
+            Expr::If {
+                condition: Box::new(condition),
+                then_expr: Box::new(then_expr),
+                else_expr: Box::new(else_expr),
+            },
+            i - start,
+        ))
+    } else {
+        None
+    }
 }
 
 fn parse_stmt(line: &str) -> Option<Stmt> {
@@ -399,7 +594,7 @@ pub fn parse_expr(src: &str) -> Option<Expr> {
     if src.starts_with('"') && src.ends_with('"') && src.len() >= 2 {
         let inner = &src[1..src.len() - 1];
         if !inner.contains('"') {
-            return Some(Expr::StringLit(inner.to_string()));
+            return Some(Expr::StringLit(unescape_string(inner)));
         }
     }
 
@@ -1674,7 +1869,7 @@ mod tests {
                 method: "join".to_string(),
                 args: vec![
                     Expr::Var("paths".to_string()),
-                    Expr::StringLit("\\n".to_string()),
+                    Expr::StringLit("\n".to_string()),
                 ],
             })
         );
