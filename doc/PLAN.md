@@ -60,13 +60,14 @@ Based on `examples/*.gb`:
     - if `wasmtime` is not installed, execution is skipped with an informational message.
   - `goby-cli check <file.gb>` performs parse/typecheck without runtime entrypoint.
 - `main` type is restricted to `Unit -> Unit` for MVP.
+  - `main` type annotation is required for `run`; optional for `check`.
 - Legacy `void` type spelling is rejected in type annotations.
 - First backend target is Wasm.
-- Effects are parse-only metadata in MVP.
+- Effects are parse/typecheck metadata in MVP (no effect-safety enforcement).
   - unknown effect names are ignored.
   - `can` clauses must be syntactically valid (non-empty list of identifiers).
-- MVP built-ins are `print` and `string.concat`.
-  - `map` is required for `examples/function.gb` run parity.
+- `using` handler application syntax: comma-separated handler list (`using HandlerA, HandlerB`).
+- MVP built-ins: `print`, `string.concat`, `map`, `fetch_env_var`, `string.split`, `list.join`.
 - `examples/basic_types.gb` is a parse/typecheck target, not a runnable entrypoint target.
   - no `main` addition and no `--entry` option in MVP.
 - `examples/function.gb` is a canonical MVP run target and must be preserved as-is.
@@ -77,30 +78,34 @@ Based on `examples/*.gb`:
     - `[60, 70]`
     - `something`
     - `15`
-- Current status:
-  - as of 2026-02-28, `check` passes for `examples/function.gb`.
-  - as of 2026-02-28, `run` parity is implemented for the locked subset and prints:
-    - `90`
-    - `[30, 40, 50]`
-    - `[60, 70]`
-    - `something`
-    - `15`
-  - as of 2026-02-28, workspace validation is green:
-    - `cargo check`
-    - `cargo test`
-    - `cargo clippy -- -D warnings`
-  - MVP implementation for the locked subset is complete.
+- String escape sequences in string literals: `\n`, `\t`, `\\`, `\"`.
+- `case` expression syntax: multi-line lookahead, arm separator ` -> `, wildcard `_`.
+  - `CasePattern` supports: `IntLit`, `StringLit`, `BoolLit` (`True`/`False`), `Wildcard`.
+  - `else if` chaining is not supported in MVP.
+- `if ... else ...` expression: indentation-based two-branch form.
+- `==` equality operator: produces `Bool` at runtime.
+- Handler dispatch: `active_handlers` uses `BTreeMap` for deterministic (alphabetical) order.
+- Runtime execution model: compile-time interpreter — `resolve_main_runtime_output` runs the
+  program in Rust at Wasm compile time and embeds output as a static string in the Wasm binary.
+- Current status (2026-03-01, session 20):
+  - **All `examples/*.gb` pass both `check` and `run`.**
+  - `function.gb` → `90 / [30, 40, 50] / [60, 70] / something / 15`
+  - `type.gb` → `John`
+  - `control_flow.gb` → `Five! / 50 / 30`
+  - `import.gb` (with `GOBY_PATH=foo,bar`) → `foo / bar`
+  - `effect.gb` (with `GOBY_PATH=hello`) → `13 / hello`
+  - 147 tests pass; `cargo clippy -- -D warnings` clean.
+  - MVP implementation is complete.
 
 ### 2.1 Syntax and Parsing
 
-- No additional open syntax/parsing items are currently tracked for MVP.
+- No additional open syntax/parsing items are tracked for MVP.
 
 ### 2.2 Types and Checking
 
 - TODO (Deferred): declaration-side generic parameter binders
   (for example, `id : a -> a` with explicit binders).
 - Type annotation placement rules (required vs optional locations).
-- Tuple and record roadmap (records in MVP or not).
 - Type error diagnostics quality bar is fixed for MVP:
   - diagnostics must be non-empty and human-readable plain text.
   - when a declaration is known, diagnostics must include the declaration name.
@@ -110,50 +115,62 @@ Based on `examples/*.gb`:
 
 ### 2.3 Effect System
 
-- How to represent multiple effects (`can Print + Read` or other syntax).
-- Effect propagation rules for higher-order functions.
+- Multiple effects in `can` clause are parsed/typechecked as metadata only (no effect-safety enforcement in MVP).
+- How to represent multiple effects (`can Print + Read` or other syntax) — deferred.
+- Effect propagation rules for higher-order functions — deferred.
+- Unhandled-effect diagnostics — deferred.
 
 ### 2.4 Standard Library Surface (MVP)
 
-- Core modules to ship first (`Int`, `String`, `List`, maybe `Result/Option`).
-- Naming conventions for stdlib functions (`string.concat` style consistency).
-- Minimal collection API for immutable workflows.
+- Core modules to ship first (`Int`, `String`, `List`, `Env`) — minimal built-ins implemented.
+- Naming conventions for stdlib functions (`string.concat` style consistency) — established.
+- Minimal collection API for immutable workflows — deferred.
 
 ### 2.5 Runtime / Compiler Scope (MVP)
 
-- First execution target is Wasm backend.
-- Smallest end-to-end pipeline to ship first.
-- Error location strategy (line/column reporting).
+- Current model: compile-time interpreter (Rust) embeds static output in Wasm binary.
+- Real Wasm code generation (actual instruction emission) is a post-MVP target.
+- Error location strategy (line/column reporting) — deferred.
 
 ### 2.6 Tooling Scope (MVP)
 
-- Minimum CLI commands (for example: `goby-cli run`, `goby-cli check`, `goby fmt`).
-- Project layout and package metadata format (Cargo workspace with `goby-core`, `goby-cli`, `goby-wasm`).
-- Formatter policy and non-configurable defaults.
+- Minimum CLI commands (`goby-cli run`, `goby-cli check`) — complete.
+- Project layout and package metadata format (Cargo workspace with `goby-core`, `goby-cli`, `goby-wasm`) — complete.
+- Formatter policy — deferred.
 
 ## 3. Later-Phase Decisions
 
 - Module/package ecosystem and remote dependency management.
-- Advanced effects (async, state, cancellation).
+- Advanced effects (async, state, cancellation, effect-safety diagnostics).
 - Pattern matching exhaustiveness and advanced ADTs.
 - Interoperability/FFI strategy.
 - Governance model, RFC process, compatibility policy.
+- Real Wasm code generation (replace compile-time interpreter).
+- Declaration-side generic parameter binders.
+- `HandlerMethod` type-checking (effect-safety, unhandled-effect diagnostics).
+- `else if` chaining in `if` expressions.
+- REPL or interactive mode.
 
 ## 4. Next Phase Plan
+
+All MVP example targets are complete. The next work is post-MVP:
 
 - Keep regression checks green for the locked MVP subset.
 - Treat remaining design items as post-MVP evolution work.
 - Track all new syntax requests as explicit change proposals.
+- Candidate next focus areas:
+  1. Real Wasm code generation (actual instruction emission, remove compile-time interpreter).
+  2. Better error diagnostics (line/column, effect-safety errors).
+  3. More standard library surface (`Result`, `Option`, etc.).
 
 ## 5. Example-Driven Feature Checklist
 
-Status (2026-02-28, session 18):
+Status (2026-03-01, session 20): **ALL COMPLETE**
+
 - `check` passes: `hello.gb`, `basic_types.gb`, `function.gb`, `generic_types.gb`,
-  `print/local_binding.gb`, `print/concat.gb`, `parser/mixed_indent.gb`,
   `control_flow.gb`, `import.gb`, `type.gb`, `effect.gb`.
 - `check` fails: none.
-- `run` passes (locked output): `function.gb`.
-- `run` passes: `type.gb` (outputs `John`).
+- `run` passes (locked output): `function.gb`, `type.gb`, `control_flow.gb`, `import.gb`, `effect.gb`.
 
 ### 5.1 Core Syntax/Typing Used by Stable Examples
 
@@ -174,7 +191,7 @@ Status (2026-02-28, session 18):
 - [x] Wasm emit + `wasmtime` execution path
 - [x] Locked `examples/function.gb` output parity
 
-### 5.3 Features Referenced by Non-MVP Examples (Post-MVP Backlog)
+### 5.3 Features Referenced by Examples
 
 - [x] `import` syntax and minimal module resolution
   (`import goby/x`, alias `as`, selective import `(...)`) for built-in modules
@@ -183,252 +200,89 @@ Status (2026-02-28, session 18):
     unresolved/ambiguous-name error.
 - [x] `effect` declarations and effect member signatures
 - [x] `handler ... for ...` syntax and handler scope semantics
-- [x] `using` handler application syntax (single/multiple handlers)
-- [ ] Multiple effects in `can` with semantic checking (currently parse/type surface only)
-- [ ] `case` expressions with pattern arms and wildcard `_`
-- [ ] `if ... else ...` (or strict desugaring rule to `case`) and `==` typing rules
-- [ ] `type` declarations:
+- [x] `using` handler application syntax (single/multiple handlers, comma-separated)
+- [x] `case` expressions with pattern arms and wildcard `_`
+  - `CasePattern` supports: `IntLit`, `StringLit`, `BoolLit` (`True`/`False`), `Wildcard`
+  - multi-line lookahead parser; arm separator ` -> ` correctly split by `split_case_arm`
+- [x] `if ... else ...` expression (indentation-based, two-branch)
+- [x] `==` equality operator producing `Bool`
+- [x] `type` declarations:
   - alias (`type UserID = String`)
   - union/sum (`type UserStatus = Activated | Deactivated`)
   - record constructor syntax (`type User = User(...)`)
-  - field visibility is not part of this slice (no private/public distinction yet)
   - qualified constructor/member references (`UserStatus.Activated`, `user.name`)
+- [x] Runtime for all examples:
+  - `function.gb`: higher-order functions, map, list literals, lambdas
+  - `type.gb`: record construction, field access, union constructor reference
+  - `control_flow.gb`: case/if/==, Bool runtime value
+  - `import.gb`: `fetch_env_var`, `string.split`, `list.join`
+  - `effect.gb`: handler dispatch, `Stmt::Using` save/restore, active_handlers BTreeMap
+- [ ] Multiple effects in `can` with semantic checking (currently parse/type surface only)
+- [ ] Effect-safety / unhandled-effect diagnostics
 
-## 6. Spec Detail Notes (Need Clarification Before Implementation)
+## 6. Spec Detail Notes
 
-- Import system:
-  module path grammar (`goby/...` vs local paths), lookup order, shadowing, and cyclic import diagnostics.
-- Effects/handlers:
-  effect namespace rules, qualified vs unqualified calls (`Log.log` vs `log`),
-  handler resolution order, and unhandled-effect diagnostics format.
-- Control flow:
-  exact grammar/precedence for multiline `case`/`if`, exhaustiveness requirements,
-  and whether `if` is mandatory sugar or first-class syntax in the AST.
-- Equality/comparison:
-  operator set for MVP+ (`==`, `!=`, etc.), precedence relative to `+/*/|>`,
-  and type constraints for comparable values.
-- Type annotation placement:
-  where annotations are required vs optional outside current MVP subset.
-- Tuple/record roadmap:
-  whether records are introduced before module/effect expansion and minimal syntax shape.
-- Import system (post-slice remaining scope):
-  filesystem-backed/local package resolution, dependency graph rules, and cache/build integration.
-- Type declaration system:
-  namespace and shadowing rules (type names, constructors, field names),
-  record update/access grammar, and future visibility model (out of scope for now).
+### Resolved in MVP
 
-## 7. Incremental Implementation Plan (Next Slice: `import.gb`)
+- Import system: `goby/...` path grammar, built-in module table (`goby/string`, `goby/list`, `goby/env`), alias binding, selective import, collision policy → complete.
+- Control flow: multiline `case`/`if` with indentation-based lookahead; `case` uses `split_case_arm` to avoid misparse on lambda bodies; `else if` is unsupported and documented → complete.
+- Equality/comparison: `==` produces `Bool`; no other comparison operators in MVP → complete.
+- Type declaration system: alias, union, record; constructor/field qualified references → complete.
+- Effect/handler: `Stmt::Using` save/install/execute/restore; BTreeMap for deterministic dispatch; handler body cached in `parsed_body` → complete.
 
-Goal:
-- make `cargo run -p goby-cli -- check examples/import.gb` pass with a minimal, explicit import model.
+### Still Open (Post-MVP)
 
-Phase 1: Scope lock (minimum useful subset)
-- support only:
-  - `import goby/x`
-  - `import goby/x as alias`
-  - `import goby/x (name1, name2)`
-- keep `run` behavior unchanged in this slice; focus on parser/typecheck path.
-- keep `main` requirements unchanged.
+- Effects/handlers: handler resolution order across multiple effects with same member name — currently first alphabetically wins (BTreeMap); formal semantics TBD.
+- Effect namespace rules: qualified vs unqualified calls, unhandled-effect diagnostics format.
+- Type annotation placement: where annotations are required vs optional outside current MVP subset.
+- Tuple/record roadmap: record update syntax, pattern matching on record fields.
+- Import system: filesystem-backed/local package resolution, dependency graph rules.
+- Equality/comparison: operator set (`!=`, `<`, `>`, etc.) and type constraints.
 
-Phase 2: Parser/AST extension
-- add import declarations to module AST.
-- parse the three import forms above.
-- preserve backward compatibility for all existing non-import examples.
+## 7. Completed Slices
 
-Phase 3: Minimal module resolver
-- introduce a fixed built-in module table for:
-  - `goby/string`
-  - `goby/list`
-  - `goby/env`
-- implement alias binding and selective import symbol exposure.
-- add diagnostics for unknown module and unknown imported symbol.
+### Slice: `import.gb` check (completed 2026-02-28)
 
-Phase 4: Typecheck integration
-- inject imported symbols into type environment.
-- verify imported and qualified calls used by `examples/import.gb`.
-- keep diagnostics explicit and declaration-oriented.
+- Parser/AST import support (`plain`, `as`, `selective`).
+- Minimal built-in resolver for `goby/string`, `goby/list`, `goby/env`.
+- Typecheck integration for imported names.
+- Import-collision policy (error when ambiguous name is used).
 
-Phase 5: Validation and docs
-- run:
-  - `cargo run -p goby-cli -- check examples/import.gb`
-  - `cargo check`
-  - `cargo test`
-  - `cargo clippy -- -D warnings`
-- update this plan checklist and `doc/STATE.md` with decisions and remaining gaps.
+### Slice: `type.gb` check (completed 2026-02-28)
 
-Out of scope for this slice:
-- filesystem-backed package resolution
-- remote dependencies
-- effect/control-flow feature integration changes
+- `type` declaration parsing and AST nodes (alias, union, record).
+- Constructor/field typecheck integration.
+- Qualified constructor/member references.
 
-Status:
-- Completed on 2026-02-28:
-  - parser/AST import support (`plain`, `as`, `selective`),
-  - minimal built-in resolver for `goby/string`, `goby/list`, `goby/env`,
-  - typecheck integration for imported names used by `examples/import.gb`,
-  - import-collision policy (error when ambiguous name is used).
+### Slice: `effect.gb` check (completed 2026-02-28, commit ddbf19e)
 
-## 8. Incremental Implementation Plan (Upcoming Slice: `type.gb`)
+- `effect`/`handler` top-level block parsing and AST nodes.
+- `Stmt::Using` with indentation-aware body parsing.
+- Effect member registration in type env (qualified and bare keys).
+- Relaxed `main` annotation requirement (`check` no longer requires it).
+- `parses_effect_gb_declarations` regression test.
 
-Goal:
-- make `cargo run -p goby-cli -- check examples/type.gb` pass with a minimal type-declaration feature set.
+### Slice: `type.gb` runtime (completed 2026-02-28, commit 7962891)
 
-Phase 1: Scope lock (minimum useful subset)
-- support only:
-  - `type Name = AliasType`
-  - `type Name = CtorA | CtorB`
-  - `type Name = Ctor(field1: Type, field2: Type, ...)`
-- support constructor/value references used by `examples/type.gb`:
-  - `TypeName.Ctor`
-  - `Ctor(field: value, ...)`
-  - `value.field`
-- keep runtime (`run`) support out of scope for this slice; target `check` first.
-- field visibility/private access control is explicitly out of scope in this slice.
+- `RuntimeValue::Record { constructor, fields }` variant.
+- `Expr::RecordConstruct` and `Expr::Qualified` evaluation.
+- `run examples/type.gb` outputs `John`.
 
-Phase 2: Parser/AST extension
-- add top-level `type` declarations to module AST.
-- parse union and record constructor forms.
-- parse named/qualified constructor expressions and member access expressions.
+### Slice: all remaining runtime (completed 2026-03-01, commit c8e669b)
 
-Phase 3: Typecheck integration
-- register declared aliases/unions/records in a type definition table.
-- resolve constructor calls and field access types.
+- `control_flow.gb`: `CasePattern`/`CaseArm`/`Expr::Case`/`Expr::If`, multi-line lookahead parser, `unescape_string`, `RuntimeValue::Bool`, `BinOpKind::Eq` eval.
+- `import.gb`: `fetch_env_var`, `string.split` → `ListString`, `.join` → `String`.
+- `effect.gb`: `active_handlers: BTreeMap`, `Stmt::Using` save/install/execute/restore, handler dispatch helpers.
 
-Phase 4: Validation and docs
-- run:
-  - `cargo run -p goby-cli -- check examples/type.gb`
-  - `cargo check`
-  - `cargo test`
-  - `cargo clippy -- -D warnings`
-- update checklist and `doc/STATE.md` with locked decisions and residual gaps.
+### Slice: Codex review fixes (completed 2026-03-01, session 20)
 
-## 9. Incremental Implementation Plan (Upcoming Slice: `effect.gb`)
-
-Goal:
-- make `cargo run -p goby-cli -- check examples/effect.gb` pass with a minimal effect/handler/using feature set.
-
-### Phase 1: Scope lock (minimum useful subset)
-
-Support only the constructs present in `examples/effect.gb`:
-
-- `effect Name` block with indented member signatures (`member: TypeA -> TypeB`).
-- `handler HandlerName for EffectName` block with indented method definitions (`method params = body`).
-- `using HandlerName\n  body` expression (single handler only).
-- `using HandlerA, HandlerB\n  body` (comma-separated handler list).
-- Qualified effect calls (`EffectName.member arg`) already parse as `Qualified`/`Call`; no new expr node needed.
-- Unqualified effect calls (`log arg`) already parse as normal function calls; no new expr node needed.
-- Multiple effect names in `can` clause (`can Log, Env`) — parser already accepts these as the raw annotation string; keep as-is.
-
-Runtime (`run`) support is explicitly out of scope for this slice.
-
-### Phase 2: Parser / AST extension
-
-Changes to `crates/goby-core/src/ast.rs`:
-- Add `Module::effect_declarations: Vec<EffectDecl>`.
-- Add `Module::handler_declarations: Vec<HandlerDecl>`.
-- Define:
-  ```
-  EffectDecl { name: String, members: Vec<EffectMember> }
-  EffectMember { name: String, type_annotation: String }
-  HandlerDecl { name: String, effect: String, methods: Vec<HandlerMethod> }
-  HandlerMethod { name: String, params: Vec<String>, body: String }
-  ```
-- Add `Expr::Using { handlers: Vec<String>, body: Box<Expr> }` (body is the indented block parsed as a single expression or statement sequence — for this slice, store as `Vec<Stmt>` alongside the handlers list).
-  - Simpler alternative: add `Stmt::Using { handlers: Vec<String>, body: Vec<Stmt> }` to avoid touching the expression evaluator.
-  - **Locked choice**: use `Stmt::Using` to keep the expression evaluator unchanged.
-
-Changes to `crates/goby-core/src/parser.rs`:
-- In `parse_module`, before the existing declaration loop, handle lines starting with `effect ` and `handler `:
-  - `effect Name` — collect indented member lines (`name: type`), build `EffectDecl`.
-  - `handler Name for Effect` — collect indented method lines (`name params = body`), build `HandlerDecl`.
-- In `parse_body_stmts` / `parse_stmt`, handle lines starting with `using `:
-  - parse comma-separated handler name list from the `using ...` line.
-  - collect subsequent indented lines as the `using` body stmts.
-  - emit `Stmt::Using { handlers, body }`.
-
-Backward compatibility:
-- All existing examples must continue to parse unchanged.
-
-### Phase 3: Typecheck integration
-
-Changes to `crates/goby-core/src/typecheck.rs`:
-- Register each `HandlerDecl` name as a global symbol of type `Unknown` (sufficient for `check` to not error on handler name references in `using`).
-- Register each `EffectDecl` member in the global type env with a type derived from its annotation (for call-site type checking of `Log.log` etc.).
-- For `Stmt::Using`: type-check the body stmts using the current env; ignore handler resolution (MVP: no effect-safety checking).
-- `can` clause with multiple effects (`can Log, Env`) is already stripped as metadata; no change needed.
-
-### Phase 4: Validation and docs
-
-Run:
-- `cargo run -p goby-cli -- check examples/effect.gb`
-- `cargo run -p goby-cli -- check examples/function.gb`
-- `cargo run -p goby-cli -- check examples/import.gb`
-- `cargo run -p goby-cli -- check examples/type.gb`
-- `cargo run -p goby-cli -- check examples/control_flow.gb`
-- `cargo run -p goby-cli -- run examples/function.gb`
-- `cargo check`
-- `cargo test`
-- `cargo clippy -- -D warnings`
-
-Update `doc/PLAN.md` checklist (§ 5.3) and `doc/STATE.md` with locked decisions and residual gaps.
-
-Out of scope for this slice:
-- Effect-safety / unhandled-effect diagnostics.
-- Handler dispatch at runtime.
-- Exhaustiveness checking for effect members in handlers.
-- Effect inference.
-
-## 10. Incremental Implementation Plan (Upcoming Slice: `type.gb` runtime)
-
-Goal:
-- make `cargo run -p goby-cli -- run examples/type.gb` produce the correct output (`John`).
-
-### Phase 1: Scope lock (minimum useful subset)
-
-Support only the constructs present in `examples/type.gb`'s `main` body:
-- `User(id: "1234", name: "John", status: UserStatus.Activated)` — record construction at runtime.
-- `UserStatus.Activated` — qualified union constructor reference (evaluates to a string-like value).
-- `user.name` — record field access, evaluated as `Expr::Qualified { receiver: "user", member: "name" }`.
-- `print user.name` — print a String field value.
-
-All changes are confined to `crates/goby-wasm/src/lib.rs`.
-No parser, typechecker, or AST changes are required.
-
-### Phase 2: RuntimeValue and RuntimeLocals extension
-
-- Add `RuntimeValue::Record { constructor: String, fields: HashMap<String, RuntimeValue> }` variant.
-- Add `record_values: HashMap<String, (String, HashMap<String, RuntimeValue>)>` field to `RuntimeLocals`.
-  - `(String, HashMap<...>)` stores `(constructor_name, field_map)`.
-- Update `RuntimeLocals::store`, `clear`, `get` to handle the new variant.
-- Update `RuntimeValue::to_output_text` / `to_expression_text` to handle `Record` (return constructor name for now — not needed by `type.gb` since only a String field is printed, but must not panic).
-
-### Phase 3: eval_expr_ast extension
-
-- `Expr::Qualified { receiver, member }`:
-  - If `locals.get(receiver)` returns `RuntimeValue::Record { fields, .. }`, return `fields.get(member).cloned()`.
-  - Otherwise fall through to `None` (existing behavior for module-qualified names).
-- `Expr::RecordConstruct { constructor, fields }`:
-  - Evaluate each field value recursively via `eval_expr_ast`.
-  - Collect into a `HashMap<String, RuntimeValue>`.
-  - Return `RuntimeValue::Record { constructor: constructor.clone(), fields }`.
-- `Expr::Qualified` for union constructors (`UserStatus.Activated`):
-  - No local variable named `UserStatus` exists → `locals.get("UserStatus")` returns `None`.
-  - Fall through: return `RuntimeValue::String(member.clone())` as the constructor name value.
-  - This is sufficient for `type.gb` since the `status` field is stored but not printed.
-
-### Phase 4: Validation and docs
-
-Run:
-- `cargo run -p goby-cli -- run examples/type.gb` (expected output: `John`)
-- `cargo run -p goby-cli -- run examples/function.gb` (locked output unchanged)
-- `cargo run -p goby-cli -- check examples/effect.gb`
-- `cargo check`
-- `cargo test`
-- `cargo clippy -- -D warnings`
-
-Update `doc/PLAN.md` checklist (§ 5.3) and `doc/STATE.md`.
-
-Out of scope for this slice:
-- Record update syntax.
-- Pattern matching on record fields.
-- Printing a record value (only field access is needed for `type.gb`).
+- H1: removed dead `matches!(fn_name.as_str(), _)` guard.
+- H2: `ENV_MUTEX` for env-var test serialization; `remove_var` before assert.
+- H3: `HandlerMethod.parsed_body` pre-parsed at parse time (no per-dispatch re-parse).
+- M1: `split_case_arm` replaces `split_once(" -> ")` (safe for lambda bodies).
+- M2: `active_handlers: HashMap` → `BTreeMap`; removed unnecessary `Vec<usize>` collect.
+- M3: `arg_val.to_expression_text()` computed only in string-fallback branch.
+- L1: `CasePattern::BoolLit(bool)` for `True`/`False` patterns.
+- L2: `Stmt::Using` fully handled in `dispatch_handler_method_as_value`.
+- Bonus: bare handler value dispatch in `eval_expr_ast` for non-Int/non-List args.
+- 4 new regression tests covering review-flagged gaps.
