@@ -239,8 +239,11 @@ Status (2026-03-01, session 20): **ALL COMPLETE**
   - `control_flow.gb`: case/if/==, Bool runtime value
   - `import.gb`: `fetch_env_var`, `string.split`, `list.join`
   - `effect.gb`: handler dispatch, `Stmt::Using` save/restore, active_handlers BTreeMap
-- [ ] Multiple effects in `can` with semantic checking (currently parse/type surface only)
-- [ ] Effect-safety / unhandled-effect diagnostics
+- [x] Multiple effects in `can` with semantic checking:
+  - Step 1: validate effect names in `can` against declared/builtin effects
+  - Step 2: detect uncovered effect op calls inside `using` blocks
+  - Step 3: detect calls to `can`-annotated functions outside an appropriate `using` handler
+- [x] Effect-safety / unhandled-effect diagnostics
 
 ## 6. Spec Detail Notes
 

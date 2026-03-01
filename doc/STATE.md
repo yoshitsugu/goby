@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-01 (session 23)
+Last updated: 2026-03-01 (session 24)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -102,6 +102,14 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - `ops_from_can_clause`: seeds covered_ops from function's own `can` clause.
   - Codex-review fixes: lambda param shadowing (H1), pipeline callee (H2), MethodCall (H3), Ambiguous binding (M1), L1/L2 style.
   - 11 new tests. 150 → 161 tests pass.
+- 2026-03-01 (session 24): Step 3 — effectful function call requires `using` handler:
+  - `build_required_effects_map`: maps decl name → required effect list (from `can` clause).
+  - `check_callee_required_effects`: checks a named callee's required effects against `covered_ops`.
+  - `check_unhandled_effects_in_expr` extended with `required_effects_map` param; `Expr::Call` + `Expr::Pipeline` now call `check_callee_required_effects`.
+  - `macro_rules! recurse!` introduced to reduce boilerplate with 6-param signature.
+  - `#[allow(clippy::too_many_arguments)]` on `check_body_stmts`.
+  - 4 new tests. 161 → 165 tests pass.
+  - `doc/PLAN.md` §5 items marked complete.
 
 ## 5. Current Example Files
 
@@ -116,7 +124,7 @@ This file is a restart-safe snapshot for resuming work after context reset.
 
 ## 6. Immediate Next Steps (Execution Order)
 
-Post-MVP work in progress: `can` semantic checking (Step 1 + 2 complete; Step 3 remaining).
+Post-MVP work: `can` semantic checking complete (Steps 1–3). Both `doc/PLAN.md` §5 items now checked.
 
 Resume checks:
 ```
