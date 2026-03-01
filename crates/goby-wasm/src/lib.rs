@@ -841,6 +841,13 @@ impl<'m> RuntimeOutputResolver<'m> {
                                 .eval_function(function, Some(arg_list))
                                 .map(RuntimeValue::ListInt);
                         }
+                    } else {
+                        // Bare handler method call that returns a value (e.g. `greet "x"`).
+                        if let Some(method) = self.find_handler_method_by_name(fn_name) {
+                            return self.dispatch_handler_method_as_value(
+                                &method, arg_val, evaluators, depth + 1,
+                            );
+                        }
                     }
                 }
                 // Qualified callee: Effect.method arg  (e.g. Log.log result, env.from_env name)
@@ -2191,4 +2198,77 @@ main =
         unsafe { std::env::remove_var("GOBY_PATH") };
         assert_eq!(output, "13\nhello");
     }
+
+    #[test]
+    fn case_with_no_matching_arm_produces_no_output() {
+        // When no case arm matches and there is no wildcard, resolve_main_runtime_output
+        // returns None (silent — no output emitted).
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let source = r#"
+describe_number : Int -> String
+describe_number n =
+  n
+    case 1 -> "one"
+    case 2 -> "two"
+
+main : Unit -> Unit
+main =
+  r = describe_number 99
+  print r
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let output =
+            resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module));
+        // 99 matches no arm → eval returns None → print has no argument → output is None.
+        assert!(
+            output.is_none(),
+            "case with no matching arm should produce no runtime output"
+        );
+    }
+
+    #[test]
+    fn two_handlers_with_same_method_name_dispatch_deterministically() {
+        // When two active handlers both provide a method with the same bare name,
+        // find_handler_method_by_name selects the one whose effect name comes first
+        // alphabetically (BTreeMap iteration order).
+        use goby_core::parse_module;
+        let _guard = ENV_MUTEX.lock().unwrap();
+        // Effect "Alpha" and "Beta" both have a `greet` method.
+        // Active handlers map: "Alpha" → HandlerA, "Beta" → HandlerB.
+        // BTreeMap iterates alphabetically, so "Alpha" wins.
+        let source = r#"
+effect Alpha
+  greet: String -> String
+
+effect Beta
+  greet: String -> String
+
+handler HandlerA for Alpha
+  greet s =
+    "from-alpha"
+
+handler HandlerB for Beta
+  greet s =
+    "from-beta"
+
+main : Unit -> Unit
+main =
+  using HandlerA, HandlerB
+    print (greet "x")
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let output = resolve_main_runtime_output(
+            &module,
+            main_body(&module),
+            main_parsed_body(&module),
+        );
+        // BTreeMap iterates alphabetically: "Alpha" < "Beta", so HandlerA is checked first.
+        // The bare `greet` call must select HandlerA's method deterministically.
+        assert_eq!(
+            output.as_deref(),
+            Some("from-alpha"),
+            "bare-name dispatch should deterministically select the alphabetically-first effect"
+        );
+    }
 }
+
