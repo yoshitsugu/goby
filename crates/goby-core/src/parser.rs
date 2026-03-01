@@ -6,9 +6,21 @@ use crate::str_util::split_top_level_commas;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParseError {
+    /// 1-indexed line number in the source file.
     pub line: usize,
+    /// 1-indexed byte offset within the line (ASCII sources only; MVP assumption).
+    /// Value `1` means "unknown column".
+    pub col: usize,
     pub message: String,
 }
+
+impl std::fmt::Display for ParseError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "parse error at line {}:{}: {}", self.line, self.col, self.message)
+    }
+}
+
+impl std::error::Error for ParseError {}
 
 pub fn parse_module(source: &str) -> Result<Module, ParseError> {
     let lines: Vec<&str> = source.lines().collect();
@@ -29,8 +41,11 @@ pub fn parse_module(source: &str) -> Result<Module, ParseError> {
         }
 
         if is_indented(line) {
+            // col is byte-offset + 1 within the raw source line (ASCII assumption).
+            let col = lines[i].len() - lines[i].trim_start().len() + 1;
             return Err(ParseError {
                 line: i + 1,
+                col,
                 message: "unexpected indentation at top level".to_string(),
             });
         }
@@ -38,6 +53,7 @@ pub fn parse_module(source: &str) -> Result<Module, ParseError> {
         if trimmed.starts_with("import ") {
             let import = parse_import_line(trimmed).ok_or_else(|| ParseError {
                 line: i + 1,
+                col: 1,
                 message: "invalid import declaration".to_string(),
             })?;
             imports.push(import);
@@ -48,6 +64,7 @@ pub fn parse_module(source: &str) -> Result<Module, ParseError> {
         if trimmed.starts_with("type ") {
             let ty_decl = parse_type_declaration_line(trimmed).ok_or_else(|| ParseError {
                 line: i + 1,
+                col: 1,
                 message: "invalid type declaration".to_string(),
             })?;
             type_declarations.push(ty_decl);
@@ -61,6 +78,7 @@ pub fn parse_module(source: &str) -> Result<Module, ParseError> {
             if effect_name.is_empty() {
                 return Err(ParseError {
                     line: i + 1,
+                    col: 1,
                     message: "effect declaration requires a name".to_string(),
                 });
             }
@@ -99,6 +117,7 @@ pub fn parse_module(source: &str) -> Result<Module, ParseError> {
             } else {
                 return Err(ParseError {
                     line: i + 1,
+                    col: 1,
                     message: "handler declaration requires `handler Name for Effect`".to_string(),
                 });
             };
@@ -168,16 +187,19 @@ pub fn parse_module(source: &str) -> Result<Module, ParseError> {
             if name.is_empty() || ty.is_empty() {
                 return Err(ParseError {
                     line: i + 1,
+                    col: 1,
                     message: "invalid type annotation".to_string(),
                 });
             }
+            let ann_line = i + 1; // remember annotation line for EOF error
             annotated_name = Some(name);
             type_annotation = Some(ty.to_string());
             i += 1;
             i = skip_blank_and_comment_lines(&lines, i);
             if i >= lines.len() {
                 return Err(ParseError {
-                    line: i,
+                    line: ann_line,
+                    col: 1,
                     message: "missing declaration body after type annotation".to_string(),
                 });
             }
@@ -187,6 +209,7 @@ pub fn parse_module(source: &str) -> Result<Module, ParseError> {
         let (name, params, mut body) =
             split_top_level_definition(body_line).ok_or_else(|| ParseError {
                 line: i + 1,
+                col: 1,
                 message: "expected top-level definition (`name ... = ...`)".to_string(),
             })?;
 
@@ -195,6 +218,7 @@ pub fn parse_module(source: &str) -> Result<Module, ParseError> {
         {
             return Err(ParseError {
                 line: i + 1,
+                col: 1,
                 message: format!(
                     "type annotation name `{}` does not match definition name `{}`",
                     annotated_name, name

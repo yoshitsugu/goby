@@ -50,7 +50,10 @@ fn run() -> Result<(), CliError> {
         .map_err(|err| CliError::Runtime(format!("failed to read {}: {}", cli.file, err)))?;
 
     let module = goby_core::parse_module(&source).map_err(|err| {
-        CliError::Runtime(format!("parse error at line {}: {}", err.line, err.message))
+        CliError::Runtime(format!(
+            "{}:{}:{}: parse error: {}",
+            cli.file, err.line, err.col, err.message
+        ))
     })?;
 
     goby_core::typecheck_module(&module).map_err(|err| {
