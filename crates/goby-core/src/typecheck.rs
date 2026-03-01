@@ -61,6 +61,7 @@ pub fn typecheck_module(module: &Module) -> Result<(), TypecheckError> {
 
     // Expression-level type checking (when parsed_body is available).
     let env = build_type_env(module);
+    let effect_map = build_effect_map(module);
     for decl in &module.declarations {
         if let Some(stmts) = &decl.parsed_body {
             let declared_return_ty = decl.type_annotation.as_deref().map(annotation_return_ty);
@@ -105,7 +106,21 @@ pub fn typecheck_module(module: &Module) -> Result<(), TypecheckError> {
                 .map(|(name, ty)| (name.as_str(), ty.clone()))
                 .collect();
 
-            check_body_stmts(stmts, &env, &decl.name, declared_return_ty, &param_ty_refs)?;
+            // Ops declared in the function's own `can` clause are implicitly
+            // available inside that function's body (they do not need an enclosing
+            // `using` block at the call site within the same function).
+            let decl_covered_ops =
+                ops_from_can_clause(decl.type_annotation.as_deref(), &effect_map);
+
+            check_body_stmts(
+                stmts,
+                &env,
+                &effect_map,
+                &decl.name,
+                declared_return_ty,
+                &param_ty_refs,
+                &decl_covered_ops,
+            )?;
         }
     }
 
@@ -194,6 +209,22 @@ impl TypeEnv {
             .and_then(|info| info.fields.get(field).cloned())
     }
 
+    /// Returns true if `name` is a known effect operation (registered via `inject_effect_symbols`).
+    /// A bare name that is `Ambiguous` due to two effects both declaring it is also considered an
+    /// effect op; the ambiguity will have been caught by `ensure_no_ambiguous_refs_in_expr` first.
+    fn is_effect_op(&self, name: &str) -> bool {
+        if self.locals.contains_key(name) {
+            return false;
+        }
+        match self.globals.get(name) {
+            Some(GlobalBinding::Resolved { source, .. }) => source.starts_with("effect `"),
+            Some(GlobalBinding::Ambiguous { sources }) => {
+                sources.iter().all(|s| s.starts_with("effect `"))
+            }
+            None => false,
+        }
+    }
+
     fn are_compatible(&self, expected: &Ty, actual: &Ty) -> bool {
         let expected = self.resolve_alias(expected, 0);
         let actual = self.resolve_alias(actual, 0);
@@ -248,6 +279,72 @@ fn annotation_return_ty(annotation: &str) -> Ty {
     } else {
         ty_from_annotation(base)
     }
+}
+
+/// Maps handler names to the set of effect operation names they cover.
+struct EffectMap {
+    /// handler_name -> effect_name
+    handler_to_effect: HashMap<String, String>,
+    /// effect_name -> set of op identifiers: both qualified ("E.op") and bare ("op")
+    effect_to_ops: HashMap<String, HashSet<String>>,
+}
+
+impl EffectMap {
+    /// Returns the set of all op names (qualified + bare) covered by the given handler names.
+    fn covered_ops(&self, handlers: &[String]) -> HashSet<String> {
+        let mut ops = HashSet::new();
+        for handler in handlers {
+            if let Some(effect_name) = self.handler_to_effect.get(handler)
+                && let Some(op_set) = self.effect_to_ops.get(effect_name)
+            {
+                ops.extend(op_set.iter().cloned());
+            }
+        }
+        ops
+    }
+}
+
+fn build_effect_map(module: &Module) -> EffectMap {
+    let mut handler_to_effect = HashMap::new();
+    for handler_decl in &module.handler_declarations {
+        handler_to_effect.insert(handler_decl.name.clone(), handler_decl.effect.clone());
+    }
+
+    let mut effect_to_ops: HashMap<String, HashSet<String>> = HashMap::new();
+    for effect_decl in &module.effect_declarations {
+        let mut ops = HashSet::new();
+        for member in &effect_decl.members {
+            ops.insert(format!("{}.{}", effect_decl.name, member.name));
+            ops.insert(member.name.clone());
+        }
+        effect_to_ops.insert(effect_decl.name.clone(), ops);
+    }
+
+    EffectMap { handler_to_effect, effect_to_ops }
+}
+
+/// Returns the set of op names (qualified + bare) for all effects listed in
+/// a function's `can` clause.  Used to seed `covered_ops` for that function's body.
+fn ops_from_can_clause(annotation: Option<&str>, effect_map: &EffectMap) -> HashSet<String> {
+    let Some(ann) = annotation else {
+        return HashSet::new();
+    };
+    let Some(idx) = find_can_keyword_index(ann) else {
+        return HashSet::new();
+    };
+    let effects_raw = ann[idx + 3..].trim();
+    effects_raw
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .flat_map(|effect_name| {
+            effect_map
+                .effect_to_ops
+                .get(effect_name)
+                .into_iter()
+                .flat_map(|ops| ops.iter().cloned())
+        })
+        .collect()
 }
 
 fn build_type_env(module: &Module) -> TypeEnv {
@@ -867,9 +964,12 @@ fn check_expr(expr: &Expr, env: &TypeEnv) -> Ty {
 fn check_body_stmts(
     stmts: &[Stmt],
     env: &TypeEnv,
+    effect_map: &EffectMap,
     decl_name: &str,
     declared_return_ty: Option<Ty>,
     param_tys: &[(&str, Ty)],
+    // Op names (qualified and bare) that are covered by enclosing `using` handlers.
+    covered_ops: &HashSet<String>,
 ) -> Result<(), TypecheckError> {
     let mut local_env = TypeEnv {
         globals: env.globals.clone(),
@@ -885,16 +985,19 @@ fn check_body_stmts(
         match stmt {
             Stmt::Binding { name, value } => {
                 ensure_no_ambiguous_refs_in_expr(value, &local_env, decl_name)?;
+                check_unhandled_effects_in_expr(value, &local_env, covered_ops, decl_name)?;
                 let ty = check_expr(value, &local_env);
                 local_env.locals.insert(name.clone(), ty);
             }
             Stmt::Expr(expr) => {
                 ensure_no_ambiguous_refs_in_expr(expr, &local_env, decl_name)?;
+                check_unhandled_effects_in_expr(expr, &local_env, covered_ops, decl_name)?;
             }
-            Stmt::Using { body, .. } => {
-                // Type-check the using body in the current environment.
-                // Handler resolution and effect-safety are out of scope for this slice.
-                check_body_stmts(body, &local_env, decl_name, None, &[])?;
+            Stmt::Using { handlers, body } => {
+                // Compute the ops covered by these handlers, merged with the enclosing set.
+                let mut merged = covered_ops.clone();
+                merged.extend(effect_map.covered_ops(handlers));
+                check_body_stmts(body, &local_env, effect_map, decl_name, None, &[], &merged)?;
             }
         }
     }
@@ -930,6 +1033,111 @@ fn check_body_stmts(
     }
 
     Ok(())
+}
+
+/// Recursively walks `expr` and checks that every effect operation call is covered
+/// by the enclosing `using` handlers (expressed as `covered_ops`).
+/// Only direct calls to effect operations are checked here; calls to user-declared
+/// functions that themselves require effects are handled in Step 3.
+fn check_unhandled_effects_in_expr(
+    expr: &Expr,
+    env: &TypeEnv,
+    covered_ops: &HashSet<String>,
+    decl_name: &str,
+) -> Result<(), TypecheckError> {
+    match expr {
+        Expr::IntLit(_) | Expr::BoolLit(_) | Expr::StringLit(_) => Ok(()),
+        Expr::ListLit(items) | Expr::TupleLit(items) => {
+            for item in items {
+                check_unhandled_effects_in_expr(item, env, covered_ops, decl_name)?;
+            }
+            Ok(())
+        }
+        Expr::Var(name) => {
+            if env.is_effect_op(name) && !covered_ops.contains(name.as_str()) {
+                return Err(TypecheckError {
+                    declaration: Some(decl_name.to_string()),
+                    message: format!(
+                        "effect operation `{}` is not handled by any enclosing `using` block",
+                        name
+                    ),
+                });
+            }
+            Ok(())
+        }
+        Expr::Qualified { receiver, member } => {
+            let qualified = format!("{}.{}", receiver, member);
+            if env.is_effect_op(&qualified) && !covered_ops.contains(qualified.as_str()) {
+                return Err(TypecheckError {
+                    declaration: Some(decl_name.to_string()),
+                    message: format!(
+                        "effect operation `{}` is not handled by any enclosing `using` block",
+                        qualified
+                    ),
+                });
+            }
+            Ok(())
+        }
+        Expr::RecordConstruct { fields, .. } => {
+            for (_, value) in fields {
+                check_unhandled_effects_in_expr(value, env, covered_ops, decl_name)?;
+            }
+            Ok(())
+        }
+        Expr::BinOp { left, right, .. } => {
+            check_unhandled_effects_in_expr(left, env, covered_ops, decl_name)?;
+            check_unhandled_effects_in_expr(right, env, covered_ops, decl_name)
+        }
+        Expr::Call { callee, arg } => {
+            check_unhandled_effects_in_expr(callee, env, covered_ops, decl_name)?;
+            check_unhandled_effects_in_expr(arg, env, covered_ops, decl_name)
+        }
+        Expr::MethodCall { receiver, method, args } => {
+            let qualified = format!("{}.{}", receiver, method);
+            if env.is_effect_op(&qualified) && !covered_ops.contains(qualified.as_str()) {
+                return Err(TypecheckError {
+                    declaration: Some(decl_name.to_string()),
+                    message: format!(
+                        "effect operation `{}` is not handled by any enclosing `using` block",
+                        qualified
+                    ),
+                });
+            }
+            for arg in args {
+                check_unhandled_effects_in_expr(arg, env, covered_ops, decl_name)?;
+            }
+            Ok(())
+        }
+        Expr::Pipeline { value, callee } => {
+            check_unhandled_effects_in_expr(value, env, covered_ops, decl_name)?;
+            if env.is_effect_op(callee) && !covered_ops.contains(callee.as_str()) {
+                return Err(TypecheckError {
+                    declaration: Some(decl_name.to_string()),
+                    message: format!(
+                        "effect operation `{}` is not handled by any enclosing `using` block",
+                        callee
+                    ),
+                });
+            }
+            Ok(())
+        }
+        Expr::Lambda { param, body } => {
+            let child_env = env.with_local(param, Ty::Unknown);
+            check_unhandled_effects_in_expr(body, &child_env, covered_ops, decl_name)
+        }
+        Expr::Case { scrutinee, arms } => {
+            check_unhandled_effects_in_expr(scrutinee, env, covered_ops, decl_name)?;
+            for arm in arms {
+                check_unhandled_effects_in_expr(&arm.body, env, covered_ops, decl_name)?;
+            }
+            Ok(())
+        }
+        Expr::If { condition, then_expr, else_expr } => {
+            check_unhandled_effects_in_expr(condition, env, covered_ops, decl_name)?;
+            check_unhandled_effects_in_expr(then_expr, env, covered_ops, decl_name)?;
+            check_unhandled_effects_in_expr(else_expr, env, covered_ops, decl_name)
+        }
+    }
 }
 
 fn ensure_no_ambiguous_refs_in_expr(
@@ -1482,6 +1690,227 @@ effect Log
             typecheck_module(&module).expect_err("duplicate effect declarations should fail");
         assert_eq!(err.declaration.as_deref(), Some("Log"));
         assert!(err.message.contains("duplicate effect declaration"));
+    }
+
+    // -----------------------------------------------------------------------
+    // using / unhandled-effect tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn rejects_direct_effect_op_call_outside_using() {
+        // `log x` is called directly in `main` without any `using LogHandler`.
+        let source = "\
+effect Log
+  log: String -> Unit
+handler LogHandler for Log
+  log str = print str
+main : Unit -> Unit
+main =
+  log \"hello\"
+";
+        let module = parse_module(source).expect("should parse");
+        let err =
+            typecheck_module(&module).expect_err("unhandled effect op call should be rejected");
+        assert_eq!(err.declaration.as_deref(), Some("main"));
+        assert!(
+            err.message.contains("not handled"),
+            "unexpected message: {}",
+            err.message
+        );
+        assert!(err.message.contains("log"));
+    }
+
+    #[test]
+    fn accepts_effect_op_call_inside_using() {
+        // `log x` is called inside a `using LogHandler` block.
+        let source = "\
+effect Log
+  log: String -> Unit
+handler LogHandler for Log
+  log str = print str
+main : Unit -> Unit
+main =
+  using LogHandler
+    log \"hello\"
+";
+        let module = parse_module(source).expect("should parse");
+        typecheck_module(&module).expect("effect op call inside using should be accepted");
+    }
+
+    #[test]
+    fn accepts_qualified_effect_op_inside_using() {
+        // `Log.log x` (qualified form) inside a `using LogHandler` block.
+        let source = "\
+effect Log
+  log: String -> Unit
+handler LogHandler for Log
+  log str = print str
+main : Unit -> Unit
+main =
+  using LogHandler
+    Log.log \"hello\"
+";
+        let module = parse_module(source).expect("should parse");
+        typecheck_module(&module)
+            .expect("qualified effect op call inside using should be accepted");
+    }
+
+    #[test]
+    fn rejects_effect_op_when_wrong_handler_used() {
+        // `using LogHandler` only covers `Log` ops; calling `Env.from_env` is unhandled.
+        let source = "\
+effect Log
+  log: String -> Unit
+effect Env
+  from_env: String -> String
+handler LogHandler for Log
+  log str = print str
+handler EnvHandler for Env
+  from_env str = str
+main : Unit -> Unit
+main =
+  using LogHandler
+    from_env \"PATH\"
+";
+        let module = parse_module(source).expect("should parse");
+        let err = typecheck_module(&module)
+            .expect_err("wrong handler should not cover unrelated effect op");
+        assert_eq!(err.declaration.as_deref(), Some("main"));
+        assert!(err.message.contains("not handled"));
+        assert!(err.message.contains("from_env"));
+    }
+
+    #[test]
+    fn accepts_can_clause_ops_inside_function_body() {
+        // A function with `can Log` may call `log` in its own body without `using`.
+        let source = "\
+effect Log
+  log: String -> Unit
+handler LogHandler for Log
+  log str = print str
+f : String -> Unit can Log
+f msg =
+  log msg
+";
+        let module = parse_module(source).expect("should parse");
+        typecheck_module(&module)
+            .expect("can-declared effect op should be allowed in function body");
+    }
+
+    #[test]
+    fn rejects_effect_op_in_binding_value_outside_using() {
+        // Effect op used in binding RHS, no enclosing `using`.
+        let source = "\
+effect Log
+  log: String -> Unit
+handler LogHandler for Log
+  log str = print str
+main : Unit -> Unit
+main =
+  x = log \"hi\"
+";
+        let module = parse_module(source).expect("should parse");
+        let err = typecheck_module(&module)
+            .expect_err("effect op in binding outside using should be rejected");
+        assert_eq!(err.declaration.as_deref(), Some("main"));
+        assert!(err.message.contains("not handled"));
+    }
+
+    #[test]
+    fn rejects_effect_op_as_pipeline_callee_outside_using() {
+        // `"hello" |> log` — effect op used as pipeline callee without `using`.
+        let source = "\
+effect Log
+  log: String -> Unit
+handler LogHandler for Log
+  log str = print str
+main : Unit -> Unit
+main =
+  \"hello\" |> log
+";
+        let module = parse_module(source).expect("should parse");
+        let err = typecheck_module(&module)
+            .expect_err("effect op as pipeline callee outside using should be rejected");
+        assert_eq!(err.declaration.as_deref(), Some("main"));
+        assert!(err.message.contains("not handled"));
+        assert!(err.message.contains("log"));
+    }
+
+    #[test]
+    fn accepts_effect_op_as_pipeline_callee_inside_using() {
+        // `"hello" |> log` inside `using LogHandler` should be accepted.
+        let source = "\
+effect Log
+  log: String -> Unit
+handler LogHandler for Log
+  log str = print str
+main : Unit -> Unit
+main =
+  using LogHandler
+    \"hello\" |> log
+";
+        let module = parse_module(source).expect("should parse");
+        typecheck_module(&module)
+            .expect("effect op as pipeline callee inside using should be accepted");
+    }
+
+    #[test]
+    fn accepts_lambda_param_shadowing_effect_op_name() {
+        // `|log| -> log "hi"` — `log` inside the lambda refers to the parameter,
+        // not the effect op; should not be flagged as unhandled.
+        let source = "\
+effect Log
+  log: String -> Unit
+handler LogHandler for Log
+  log str = print str
+main : Unit -> Unit
+main =
+  f = |log| -> log \"hi\"
+  f \"ignored\"
+";
+        let module = parse_module(source).expect("should parse");
+        typecheck_module(&module)
+            .expect("lambda param shadowing effect op name should not be flagged");
+    }
+
+    #[test]
+    fn accepts_nested_using_with_merged_covered_ops() {
+        // Outer `using LogHandler` + inner `using EnvHandler`; inner body calls both `log` and `from_env`.
+        let source = "\
+effect Log
+  log: String -> Unit
+effect Env
+  from_env: String -> String
+handler LogHandler for Log
+  log str = print str
+handler EnvHandler for Env
+  from_env str = str
+main : Unit -> Unit
+main =
+  using LogHandler
+    using EnvHandler
+      log \"hi\"
+      from_env \"PATH\"
+";
+        let module = parse_module(source).expect("should parse");
+        typecheck_module(&module).expect("nested using with merged covered ops should be accepted");
+    }
+
+    #[test]
+    fn accepts_multi_op_effect_via_can_clause() {
+        // `can Log` where `Log` has two ops (`log` and `warn`); both usable in the body.
+        let source = "\
+effect Log
+  log: String -> Unit
+  warn: String -> Unit
+f : String -> Unit can Log
+f msg =
+  log msg
+  warn msg
+";
+        let module = parse_module(source).expect("should parse");
+        typecheck_module(&module)
+            .expect("multi-op effect via can clause should allow all ops in body");
     }
 
     #[test]

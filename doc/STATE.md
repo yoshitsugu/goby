@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-01 (session 21)
+Last updated: 2026-03-01 (session 22)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -90,6 +90,11 @@ This file is a restart-safe snapshot for resuming work after context reset.
 - 2026-03-01 (session 21): algebraic-effects implementation survey and plan lock:
   - Added research-backed post-MVP effect runtime direction to `doc/PLAN.md` (§2.3).
   - Added references for OCaml 5 one-shot continuations, evidence-passing translation, and WasmFX.
+- 2026-03-01 (session 22, commit 796a896): Step 1 of `can` semantic checking:
+  - `validate_effect_declarations`: duplicate `effect` name now rejected.
+  - `validate_effect_clause`: unknown effect name in `can` clause now rejected.
+  - `builtin_effect_names() -> &'static [&'static str]` returns `["Print"]`.
+  - 6 new tests; 2 existing tests updated. 144 → 150 tests pass.
 
 ## 5. Current Example Files
 
@@ -104,7 +109,7 @@ This file is a restart-safe snapshot for resuming work after context reset.
 
 ## 6. Immediate Next Steps (Execution Order)
 
-MVP is complete. No active implementation tasks remain.
+Post-MVP work in progress: `can` semantic checking (Step 1 complete).
 
 Resume checks:
 ```
