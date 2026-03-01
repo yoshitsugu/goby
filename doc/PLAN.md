@@ -120,6 +120,27 @@ Based on `examples/*.gb`:
 - Effect propagation rules for higher-order functions — deferred.
 - Unhandled-effect diagnostics — deferred.
 
+#### Post-MVP Implementation Direction (locked 2026-03-01)
+
+- Adopt **deep handlers + one-shot resumptions** as the baseline semantics.
+  - Rationale: this matches the efficient path used by OCaml 5 and keeps runtime costs low for the common case.
+  - Multi-shot resumptions are deferred; if added later, they must be explicit (clone/copy semantics) and opt-in.
+- Replace name-based runtime handler lookup with **compiled IDs**:
+  - intern `EffectId` and `OpId` at compile time,
+  - compile each handler into a compact operation table indexed by `OpId`,
+  - resolve operations by lexical handler stack walk (nearest enclosing handler wins).
+- Use **selective CPS + evidence passing** in lowering:
+  - keep pure/no-effect functions in direct style,
+  - lower only effectful call paths and handler boundaries to continuation/evidence form,
+  - pass handler evidence explicitly instead of global maps in hot paths.
+- Wasm lowering strategy (phased):
+  - Phase A: explicit continuation objects + trampoline/state-machine execution (portable on current Wasm MVP engines).
+  - Phase B: optional optimization path on engines with typed continuations/stack-switching support.
+- Performance guardrails for implementation:
+  - no `HashMap`/`BTreeMap` lookup on hot operation dispatch paths,
+  - dispatch target should be `O(handler_depth)` frame walk + `O(1)` op-table index,
+  - continuation capture/resume should avoid full-stack copying on one-shot path.
+
 ### 2.4 Standard Library Surface (MVP)
 
 - Core modules to ship first (`Int`, `String`, `List`, `Env`) — minimal built-ins implemented.
@@ -160,8 +181,9 @@ All MVP example targets are complete. The next work is post-MVP:
 - Track all new syntax requests as explicit change proposals.
 - Candidate next focus areas:
   1. Real Wasm code generation (actual instruction emission, remove compile-time interpreter).
-  2. Better error diagnostics (line/column, effect-safety errors).
-  3. More standard library surface (`Result`, `Option`, etc.).
+  2. Effect runtime redesign (one-shot deep handlers + selective CPS/evidence passing).
+  3. Better error diagnostics (line/column, effect-safety errors).
+  4. More standard library surface (`Result`, `Option`, etc.).
 
 ## 5. Example-Driven Feature Checklist
 
@@ -232,7 +254,7 @@ Status (2026-03-01, session 20): **ALL COMPLETE**
 
 ### Still Open (Post-MVP)
 
-- Effects/handlers: handler resolution order across multiple effects with same member name — currently first alphabetically wins (BTreeMap); formal semantics TBD.
+- Effects/handlers: current MVP runtime keeps alphabetical fallback (`BTreeMap`) only as temporary behavior; post-MVP semantics will switch to lexical nearest-handler resolution by compiled `EffectId`/`OpId`.
 - Effect namespace rules: qualified vs unqualified calls, unhandled-effect diagnostics format.
 - Type annotation placement: where annotations are required vs optional outside current MVP subset.
 - Tuple/record roadmap: record update syntax, pattern matching on record fields.
@@ -286,3 +308,14 @@ Status (2026-03-01, session 20): **ALL COMPLETE**
 - L2: `Stmt::Using` fully handled in `dispatch_handler_method_as_value`.
 - Bonus: bare handler value dispatch in `eval_expr_ast` for non-Int/non-List args.
 - 4 new regression tests covering review-flagged gaps.
+
+## 8. Research References (2026-03-01 survey)
+
+- OCaml manual (effect handlers): one-shot continuations are cheaper than multi-shot and are the default operational model.
+  - <https://caml.inria.fr/pub/distrib/ocaml-5.0/ocaml-5.0-refman.html#sec281>
+- Retrofitting Effect Handlers onto OCaml (Sivaramakrishnan et al., PLDI 2021): runtime design with fibers and one-shot continuations integrated into a production compiler/runtime.
+  - <https://arxiv.org/abs/2104.00250>
+- Effect Handlers, Evidently (Xie and Leijen): evidence-passing translation strategy for efficient handlers.
+  - <https://arxiv.org/abs/2106.00160>
+- WasmFX: Typed Continuations and Stack Switching for WebAssembly (Hillerstrom et al., ICFP 2024): practical path for direct-style effect handlers on Wasm backends.
+  - <https://arxiv.org/abs/2403.01036>
