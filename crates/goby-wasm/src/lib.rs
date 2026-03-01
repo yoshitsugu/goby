@@ -1034,15 +1034,6 @@ impl<'m> RuntimeOutputResolver<'m> {
                     if let Some(method) = bare_method {
                         return self.dispatch_handler_method(&method, arg_val, evaluators, depth + 1);
                     }
-                    // Discarded bare value (return value from Int-returning fn in side-effect context).
-                    if matches!(fn_name.as_str(), _)
-                        && matches!(
-                            arg.as_ref(),
-                            Expr::Var(_) | Expr::IntLit(_) | Expr::StringLit(_) | Expr::BoolLit(_)
-                        )
-                    {
-                        // try normal paths first
-                    }
                     if self
                         .execute_unit_call_ast(
                             fn_name,
