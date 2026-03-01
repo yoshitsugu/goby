@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use goby_core::{
     CasePattern, Expr, HandlerMethod, Module, Stmt,
@@ -465,7 +465,8 @@ struct RuntimeOutputResolver<'m> {
     outputs: Vec<String>,
     module: &'m Module,
     /// Maps effect name (e.g. "Log") to handler_declarations index.
-    active_handlers: HashMap<String, usize>,
+    /// BTreeMap gives deterministic iteration order (alphabetical by effect name).
+    active_handlers: BTreeMap<String, usize>,
 }
 
 struct RuntimeEvaluators<'a, 'b> {
@@ -485,7 +486,7 @@ impl<'m> RuntimeOutputResolver<'m> {
             locals: RuntimeLocals::default(),
             outputs: Vec::new(),
             module,
-            active_handlers: HashMap::new(),
+            active_handlers: BTreeMap::new(),
         };
 
         if let Some(stmts) = parsed_stmts {
@@ -1246,9 +1247,9 @@ impl<'m> RuntimeOutputResolver<'m> {
     }
 
     /// Find a handler method by bare name (e.g. `log`) across all active handlers.
+    /// Iteration order is deterministic (BTreeMap: alphabetical by effect name).
     fn find_handler_method_by_name(&self, method_name: &str) -> Option<HandlerMethod> {
-        let active_idxs: Vec<usize> = self.active_handlers.values().copied().collect();
-        for idx in active_idxs {
+        for &idx in self.active_handlers.values() {
             let handler = &self.module.handler_declarations[idx];
             if let Some(m) = handler.methods.iter().find(|m| m.name == method_name) {
                 return Some(m.clone());
