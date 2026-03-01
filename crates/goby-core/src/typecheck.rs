@@ -62,6 +62,7 @@ pub fn typecheck_module(module: &Module) -> Result<(), TypecheckError> {
     // Expression-level type checking (when parsed_body is available).
     let env = build_type_env(module);
     let effect_map = build_effect_map(module);
+    let required_effects_map = build_required_effects_map(module);
     for decl in &module.declarations {
         if let Some(stmts) = &decl.parsed_body {
             let declared_return_ty = decl.type_annotation.as_deref().map(annotation_return_ty);
@@ -116,6 +117,7 @@ pub fn typecheck_module(module: &Module) -> Result<(), TypecheckError> {
                 stmts,
                 &env,
                 &effect_map,
+                &required_effects_map,
                 &decl.name,
                 declared_return_ty,
                 &param_ty_refs,
@@ -302,6 +304,31 @@ impl EffectMap {
         }
         ops
     }
+}
+
+/// Maps top-level declaration names to the list of effect names they require (from `can` clause).
+/// Used to check that callers provide appropriate `using` handlers.
+fn build_required_effects_map(module: &Module) -> HashMap<String, Vec<String>> {
+    let mut map = HashMap::new();
+    for decl in &module.declarations {
+        let Some(ann) = decl.type_annotation.as_deref() else {
+            continue;
+        };
+        let Some(idx) = find_can_keyword_index(ann) else {
+            continue;
+        };
+        let effects_raw = ann[idx + 3..].trim();
+        let effects: Vec<String> = effects_raw
+            .split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+            .collect();
+        if !effects.is_empty() {
+            map.insert(decl.name.clone(), effects);
+        }
+    }
+    map
 }
 
 fn build_effect_map(module: &Module) -> EffectMap {
@@ -961,10 +988,12 @@ fn check_expr(expr: &Expr, env: &TypeEnv) -> Ty {
 // Statement-level checking
 // ---------------------------------------------------------------------------
 
+#[allow(clippy::too_many_arguments)]
 fn check_body_stmts(
     stmts: &[Stmt],
     env: &TypeEnv,
     effect_map: &EffectMap,
+    required_effects_map: &HashMap<String, Vec<String>>,
     decl_name: &str,
     declared_return_ty: Option<Ty>,
     param_tys: &[(&str, Ty)],
@@ -985,19 +1014,42 @@ fn check_body_stmts(
         match stmt {
             Stmt::Binding { name, value } => {
                 ensure_no_ambiguous_refs_in_expr(value, &local_env, decl_name)?;
-                check_unhandled_effects_in_expr(value, &local_env, covered_ops, decl_name)?;
+                check_unhandled_effects_in_expr(
+                    value,
+                    &local_env,
+                    required_effects_map,
+                    effect_map,
+                    covered_ops,
+                    decl_name,
+                )?;
                 let ty = check_expr(value, &local_env);
                 local_env.locals.insert(name.clone(), ty);
             }
             Stmt::Expr(expr) => {
                 ensure_no_ambiguous_refs_in_expr(expr, &local_env, decl_name)?;
-                check_unhandled_effects_in_expr(expr, &local_env, covered_ops, decl_name)?;
+                check_unhandled_effects_in_expr(
+                    expr,
+                    &local_env,
+                    required_effects_map,
+                    effect_map,
+                    covered_ops,
+                    decl_name,
+                )?;
             }
             Stmt::Using { handlers, body } => {
                 // Compute the ops covered by these handlers, merged with the enclosing set.
                 let mut merged = covered_ops.clone();
                 merged.extend(effect_map.covered_ops(handlers));
-                check_body_stmts(body, &local_env, effect_map, decl_name, None, &[], &merged)?;
+                check_body_stmts(
+                    body,
+                    &local_env,
+                    effect_map,
+                    required_effects_map,
+                    decl_name,
+                    None,
+                    &[],
+                    &merged,
+                )?;
             }
         }
     }
@@ -1039,17 +1091,61 @@ fn check_body_stmts(
 /// by the enclosing `using` handlers (expressed as `covered_ops`).
 /// Only direct calls to effect operations are checked here; calls to user-declared
 /// functions that themselves require effects are handled in Step 3.
-fn check_unhandled_effects_in_expr(
-    expr: &Expr,
-    env: &TypeEnv,
+/// Check that calling `callee_name` does not require effects not yet covered.
+/// Reports the first uncovered required effect found.
+fn check_callee_required_effects(
+    callee_name: &str,
+    required_effects_map: &HashMap<String, Vec<String>>,
+    effect_map: &EffectMap,
     covered_ops: &HashSet<String>,
     decl_name: &str,
 ) -> Result<(), TypecheckError> {
+    let Some(required) = required_effects_map.get(callee_name) else {
+        return Ok(());
+    };
+    for effect_name in required {
+        // Check if any op of this effect is missing from covered_ops.
+        // If the effect has no ops registered (e.g. a builtin effect), skip.
+        let Some(ops) = effect_map.effect_to_ops.get(effect_name) else {
+            continue;
+        };
+        let all_covered = ops.iter().all(|op| covered_ops.contains(op));
+        if !all_covered {
+            return Err(TypecheckError {
+                declaration: Some(decl_name.to_string()),
+                message: format!(
+                    "function `{}` requires effect `{}` which is not handled by any enclosing `using` block",
+                    callee_name, effect_name
+                ),
+            });
+        }
+    }
+    Ok(())
+}
+
+fn check_unhandled_effects_in_expr(
+    expr: &Expr,
+    env: &TypeEnv,
+    required_effects_map: &HashMap<String, Vec<String>>,
+    effect_map: &EffectMap,
+    covered_ops: &HashSet<String>,
+    decl_name: &str,
+) -> Result<(), TypecheckError> {
+    // Shorthand for recursive calls.
+    macro_rules! recurse {
+        ($e:expr) => {
+            check_unhandled_effects_in_expr($e, env, required_effects_map, effect_map, covered_ops, decl_name)
+        };
+        ($e:expr, $child_env:expr) => {
+            check_unhandled_effects_in_expr($e, $child_env, required_effects_map, effect_map, covered_ops, decl_name)
+        };
+    }
+
     match expr {
         Expr::IntLit(_) | Expr::BoolLit(_) | Expr::StringLit(_) => Ok(()),
         Expr::ListLit(items) | Expr::TupleLit(items) => {
             for item in items {
-                check_unhandled_effects_in_expr(item, env, covered_ops, decl_name)?;
+                recurse!(item)?;
             }
             Ok(())
         }
@@ -1080,17 +1176,27 @@ fn check_unhandled_effects_in_expr(
         }
         Expr::RecordConstruct { fields, .. } => {
             for (_, value) in fields {
-                check_unhandled_effects_in_expr(value, env, covered_ops, decl_name)?;
+                recurse!(value)?;
             }
             Ok(())
         }
         Expr::BinOp { left, right, .. } => {
-            check_unhandled_effects_in_expr(left, env, covered_ops, decl_name)?;
-            check_unhandled_effects_in_expr(right, env, covered_ops, decl_name)
+            recurse!(left)?;
+            recurse!(right)
         }
         Expr::Call { callee, arg } => {
-            check_unhandled_effects_in_expr(callee, env, covered_ops, decl_name)?;
-            check_unhandled_effects_in_expr(arg, env, covered_ops, decl_name)
+            // Check that callee's required effects are covered before recursing.
+            if let Expr::Var(name) = callee.as_ref() {
+                check_callee_required_effects(
+                    name,
+                    required_effects_map,
+                    effect_map,
+                    covered_ops,
+                    decl_name,
+                )?;
+            }
+            recurse!(callee)?;
+            recurse!(arg)
         }
         Expr::MethodCall { receiver, method, args } => {
             let qualified = format!("{}.{}", receiver, method);
@@ -1104,12 +1210,12 @@ fn check_unhandled_effects_in_expr(
                 });
             }
             for arg in args {
-                check_unhandled_effects_in_expr(arg, env, covered_ops, decl_name)?;
+                recurse!(arg)?;
             }
             Ok(())
         }
         Expr::Pipeline { value, callee } => {
-            check_unhandled_effects_in_expr(value, env, covered_ops, decl_name)?;
+            recurse!(value)?;
             if env.is_effect_op(callee) && !covered_ops.contains(callee.as_str()) {
                 return Err(TypecheckError {
                     declaration: Some(decl_name.to_string()),
@@ -1119,23 +1225,30 @@ fn check_unhandled_effects_in_expr(
                     ),
                 });
             }
-            Ok(())
+            // Also check callee as a user-declared function that requires effects.
+            check_callee_required_effects(
+                callee,
+                required_effects_map,
+                effect_map,
+                covered_ops,
+                decl_name,
+            )
         }
         Expr::Lambda { param, body } => {
             let child_env = env.with_local(param, Ty::Unknown);
-            check_unhandled_effects_in_expr(body, &child_env, covered_ops, decl_name)
+            recurse!(body, &child_env)
         }
         Expr::Case { scrutinee, arms } => {
-            check_unhandled_effects_in_expr(scrutinee, env, covered_ops, decl_name)?;
+            recurse!(scrutinee)?;
             for arm in arms {
-                check_unhandled_effects_in_expr(&arm.body, env, covered_ops, decl_name)?;
+                recurse!(&arm.body)?;
             }
             Ok(())
         }
         Expr::If { condition, then_expr, else_expr } => {
-            check_unhandled_effects_in_expr(condition, env, covered_ops, decl_name)?;
-            check_unhandled_effects_in_expr(then_expr, env, covered_ops, decl_name)?;
-            check_unhandled_effects_in_expr(else_expr, env, covered_ops, decl_name)
+            recurse!(condition)?;
+            recurse!(then_expr)?;
+            recurse!(else_expr)
         }
     }
 }
@@ -1911,6 +2024,112 @@ f msg =
         let module = parse_module(source).expect("should parse");
         typecheck_module(&module)
             .expect("multi-op effect via can clause should allow all ops in body");
+    }
+
+    // ── Step 3: calling effectful functions requires an appropriate `using` handler ──
+
+    #[test]
+    fn rejects_call_to_effectful_function_outside_using() {
+        // `plus_ten_with_log` requires the `Log` effect; calling it from `main` without
+        // `using LogHandler` should be rejected.
+        let source = "\
+effect Log
+  log: String -> Unit
+handler LogHandler for Log
+  log msg = print msg
+plus_ten_with_log : Int -> Int can Log
+plus_ten_with_log n =
+  log \"calling\"
+  n
+main : Unit -> Unit
+main =
+  plus_ten_with_log 3
+";
+        let module = parse_module(source).expect("should parse");
+        let err = typecheck_module(&module)
+            .expect_err("calling effectful function without using should fail");
+        assert_eq!(err.declaration.as_deref(), Some("main"));
+        assert!(
+            err.message.contains("unhandled effect") || err.message.contains("Log"),
+            "unexpected message: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn accepts_call_to_effectful_function_inside_using() {
+        // Same call, but wrapped in `using LogHandler` — should succeed.
+        let source = "\
+effect Log
+  log: String -> Unit
+handler LogHandler for Log
+  log msg = print msg
+plus_ten_with_log : Int -> Int can Log
+plus_ten_with_log n =
+  log \"calling\"
+  n
+main : Unit -> Unit
+main =
+  using LogHandler
+    plus_ten_with_log 3
+";
+        let module = parse_module(source).expect("should parse");
+        typecheck_module(&module)
+            .expect("calling effectful function inside appropriate using should succeed");
+    }
+
+    #[test]
+    fn rejects_call_when_partial_handlers_present() {
+        // `show_env_var` requires both `Log` and `Env`; only `LogHandler` is in scope.
+        let source = "\
+effect Log
+  log: String -> Unit
+effect Env
+  from_env: String -> String
+handler LogHandler for Log
+  log msg = print msg
+handler EnvHandler for Env
+  from_env key = key
+show_env_var : String -> Unit can Log, Env
+show_env_var name =
+  v = from_env name
+  log v
+main : Unit -> Unit
+main =
+  using LogHandler
+    show_env_var \"PATH\"
+";
+        let module = parse_module(source).expect("should parse");
+        let err = typecheck_module(&module)
+            .expect_err("missing Env handler should be rejected");
+        assert_eq!(err.declaration.as_deref(), Some("main"));
+        assert!(
+            err.message.contains("unhandled effect") || err.message.contains("Env"),
+            "unexpected message: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn accepts_effectful_pipeline_callee_inside_using() {
+        // `3 |> plus_ten_with_log` inside `using LogHandler` — pipeline form should also pass.
+        let source = "\
+effect Log
+  log: String -> Unit
+handler LogHandler for Log
+  log msg = print msg
+plus_ten_with_log : Int -> Int can Log
+plus_ten_with_log n =
+  log \"calling\"
+  n
+main : Unit -> Unit
+main =
+  using LogHandler
+    3 |> plus_ten_with_log
+";
+        let module = parse_module(source).expect("should parse");
+        typecheck_module(&module)
+            .expect("effectful pipeline callee inside using should succeed");
     }
 
     #[test]
