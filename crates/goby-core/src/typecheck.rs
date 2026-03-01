@@ -1159,7 +1159,8 @@ fn check_unhandled_effects_in_expr(
                     ),
                 });
             }
-            Ok(())
+            // Also check if this is a user function that requires effects (bare reference).
+            check_callee_required_effects(name, required_effects_map, effect_map, covered_ops, decl_name)
         }
         Expr::Qualified { receiver, member } => {
             let qualified = format!("{}.{}", receiver, member);
