@@ -125,6 +125,16 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - 165 tests pass throughout; `cargo clippy -- -D warnings` clean.
   - Work directory: `.claude-work/` → moved to
     `/home/yoshitsugu/.claude/workspaces/home_yoshitsugu_src_gitlab.com_yoshitsugu_goby/`.
+- 2026-03-02 (session 26): Better error diagnostics — Steps 4–5 (Codex-reviewed):
+  - Step 4 (commit 6f4f4f0): `format_snippet(source, line, col) -> String` in goby-cli;
+    ParseError path appends `\n{snippet}` (no trailing newline when snippet empty);
+    TypecheckError path appends `\n{snippet}` when `span` is `Some` and non-empty;
+    `col: 1` sentinel lands caret at line start (acceptable for unknown column);
+    4 unit tests for `format_snippet`; 169 tests pass.
+  - Step 5 (commit 37a621f): 4 ParseError.line/col tests in parser.rs; 3 TypecheckError.span
+    tests in typecheck.rs (duplicate decl, non-function main type, wrong-function-type main);
+    176 tests pass; `cargo clippy -- -D warnings` clean.
+  - Diagnostics improvement phase complete.
 
 ## 5. Current Example Files
 
@@ -139,7 +149,7 @@ This file is a restart-safe snapshot for resuming work after context reset.
 
 ## 6. Immediate Next Steps (Execution Order)
 
-Diagnostics improvement in progress (session 25). Steps 1–3 complete; Steps 4–5 remain.
+Diagnostics improvement complete (session 26). All 5 steps done; 176 tests pass.
 
 Resume checks:
 ```
@@ -148,14 +158,8 @@ cargo test
 cargo clippy -- -D warnings
 ```
 
-Work plan: `/home/yoshitsugu/.claude/workspaces/home_yoshitsugu_src_gitlab.com_yoshitsugu_goby/implementation-plan.md`
-
-Remaining diagnostics steps:
-- Step 4: CLI source-snippet display with `^` caret (depends on Steps 1–3; scope: `goby-cli/src/main.rs`).
-- Step 5: Regression tests — ≥4 for `ParseError.col`, ≥2 for `TypecheckError.span`; target ≥ 171 tests.
-
-After diagnostics complete, post-MVP candidates (see `doc/PLAN.md` §4):
-1. Real Wasm code generation.
+Post-MVP candidates (see `doc/PLAN.md` §4):
+1. Real Wasm code generation (actual instruction emission, remove compile-time interpreter).
 2. Effect runtime redesign (one-shot deep handlers + selective CPS/evidence passing).
 3. More standard library (`Result`, `Option`, etc.).
 4. `else if` chaining.
