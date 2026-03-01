@@ -2109,6 +2109,49 @@ main =
         }
     }
 
+    // --- ParseError line/col regression tests ---
+
+    #[test]
+    fn parse_error_unexpected_indentation_reports_line_and_col() {
+        // "    foo = 1" at line 1 → col = indent width + 1 = 5
+        let source = "    foo = 1\n";
+        let err = parse_module(source).expect_err("indented top-level should fail");
+        assert_eq!(err.line, 1);
+        assert_eq!(err.col, 5);
+        assert!(err.message.contains("indentation"));
+    }
+
+    #[test]
+    fn parse_error_unexpected_indentation_two_spaces_reports_col_3() {
+        // Same code path as the 4-space test above; verifies col formula for 2-space indent.
+        // "  baz = 2" at line 1: indent width = 2, col = 2 + 1 = 3.
+        let source = "  baz = 2\n";
+        let err = parse_module(source).expect_err("indented top-level line should fail");
+        assert_eq!(err.line, 1);
+        assert_eq!(err.col, 3);
+        assert!(err.message.contains("indentation"));
+    }
+
+    #[test]
+    fn parse_error_missing_annotation_body_reports_annotation_line() {
+        // Type annotation on line 1 followed by nothing → error at line 1
+        let source = "foo : Int\n";
+        let err = parse_module(source).expect_err("annotation without body should fail");
+        assert_eq!(err.line, 1);
+        assert_eq!(err.col, 1);
+        assert!(err.message.contains("missing declaration body"));
+    }
+
+    #[test]
+    fn parse_error_mismatched_annotation_name_reports_definition_line() {
+        // Annotation on line 1, definition on line 2 → error points to definition line (2)
+        let source = "foo : Int\nbar = 1\n";
+        let err = parse_module(source).expect_err("mismatched name should fail");
+        assert_eq!(err.line, 2);
+        assert_eq!(err.col, 1);
+        assert!(err.message.contains("does not match"));
+    }
+
     #[test]
     fn effect_block_with_missing_colon_silently_skips_member() {
         // A handler method line where the name/params section cannot be parsed
