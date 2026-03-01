@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-01 (session 24)
+Last updated: 2026-03-01 (session 25)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -110,6 +110,21 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - `#[allow(clippy::too_many_arguments)]` on `check_body_stmts`.
   - 4 new tests. 161 → 165 tests pass.
   - `doc/PLAN.md` §5 items marked complete.
+- 2026-03-01 (session 25): Better error diagnostics — Steps 1–3 (Codex-reviewed):
+  - Step 1 (commit 4b17f70): `ParseError` gains `col: usize`; `is_indented` error computes
+    col from raw-line indent width; EOF-after-annotation error points to annotation line;
+    `Display`/`Error` impl; CLI format → `"file:line:col: parse error: msg"` (GCC form).
+  - Step 2 (commit b098afc): `Declaration` gains `line: usize` (annotation line when present,
+    definition line otherwise); set by parser via single immutable `decl_line = i + 1`.
+  - Step 3 (commit eb2820f): `Span { line, col }` added to `ast.rs` (re-exported from lib.rs);
+    `TypecheckError` gains `span: Option<Span>` + `Display`/`Error`; 3 declaration-level
+    sites get `Some(Span { line: decl.line, col: 1 })` (duplicate decl, main annotation
+    errors, param count mismatch); remaining 29 sites use `span: None`; CLI typecheck format
+    → `"file: typecheck error in X at line Y:Z: msg"` via Display; TODO comments for
+    `EffectDecl`/`TypeDeclaration` span gap and CLI format asymmetry.
+  - 165 tests pass throughout; `cargo clippy -- -D warnings` clean.
+  - Work directory: `.claude-work/` → moved to
+    `/home/yoshitsugu/.claude/workspaces/home_yoshitsugu_src_gitlab.com_yoshitsugu_goby/`.
 
 ## 5. Current Example Files
 
@@ -124,24 +139,26 @@ This file is a restart-safe snapshot for resuming work after context reset.
 
 ## 6. Immediate Next Steps (Execution Order)
 
-Post-MVP work: `can` semantic checking complete (Steps 1–3). Both `doc/PLAN.md` §5 items now checked.
+Diagnostics improvement in progress (session 25). Steps 1–3 complete; Steps 4–5 remain.
 
 Resume checks:
 ```
 cargo check
 cargo test
 cargo clippy -- -D warnings
-cargo run -p goby-cli -- run examples/function.gb
-cargo run -p goby-cli -- run examples/effect.gb  # requires GOBY_PATH=hello
 ```
 
-Post-MVP candidate work (see `doc/PLAN.md` §4):
-1. Real Wasm code generation (replace compile-time interpreter with actual Wasm instruction emission).
+Work plan: `/home/yoshitsugu/.claude/workspaces/home_yoshitsugu_src_gitlab.com_yoshitsugu_goby/implementation-plan.md`
+
+Remaining diagnostics steps:
+- Step 4: CLI source-snippet display with `^` caret (depends on Steps 1–3; scope: `goby-cli/src/main.rs`).
+- Step 5: Regression tests — ≥4 for `ParseError.col`, ≥2 for `TypecheckError.span`; target ≥ 171 tests.
+
+After diagnostics complete, post-MVP candidates (see `doc/PLAN.md` §4):
+1. Real Wasm code generation.
 2. Effect runtime redesign (one-shot deep handlers + selective CPS/evidence passing).
-3. Better error diagnostics (line/column, effect-safety errors).
-4. More standard library (`Result`, `Option`, etc.).
-5. `else if` chaining.
-6. Handler type-checking (effect-safety / unhandled-effect diagnostics).
+3. More standard library (`Result`, `Option`, etc.).
+4. `else if` chaining.
 
 ## 7. Resume Commands
 
