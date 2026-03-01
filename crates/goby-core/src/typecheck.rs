@@ -2,15 +2,29 @@ use std::collections::{HashMap, HashSet};
 
 use crate::{
     Module,
-    ast::{BinOpKind, Expr, ImportKind, Stmt, TypeDeclaration},
+    ast::{BinOpKind, Expr, ImportKind, Span, Stmt, TypeDeclaration},
     types::{TypeExpr, parse_function_type, parse_type_expr},
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TypecheckError {
     pub declaration: Option<String>,
+    /// Source location of the error, if known.
+    pub span: Option<Span>,
     pub message: String,
 }
+
+impl std::fmt::Display for TypecheckError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let target = self.declaration.as_deref().unwrap_or("<module>");
+        match &self.span {
+            Some(s) => write!(f, "typecheck error in {} at line {}:{}: {}", target, s.line, s.col, self.message),
+            None => write!(f, "typecheck error in {}: {}", target, self.message),
+        }
+    }
+}
+
+impl std::error::Error for TypecheckError {}
 
 pub fn typecheck_module(module: &Module) -> Result<(), TypecheckError> {
     validate_imports(module)?;
@@ -30,6 +44,7 @@ pub fn typecheck_module(module: &Module) -> Result<(), TypecheckError> {
         if !names.insert(decl.name.clone()) {
             return Err(TypecheckError {
                 declaration: Some(decl.name.clone()),
+                span: Some(Span { line: decl.line, col: 1 }),
                 message: "duplicate top-level declaration".to_string(),
             });
         }
@@ -47,12 +62,14 @@ pub fn typecheck_module(module: &Module) -> Result<(), TypecheckError> {
             let base_annotation = strip_effect_clause(annotation);
             let ty = parse_function_type(base_annotation).ok_or_else(|| TypecheckError {
                 declaration: Some("main".to_string()),
+                span: Some(Span { line: main.line, col: 1 }),
                 message: "main type annotation must be a function type".to_string(),
             })?;
 
             if ty.arguments != vec!["Unit".to_string()] || ty.result != "Unit" {
                 return Err(TypecheckError {
                     declaration: Some("main".to_string()),
+                    span: Some(Span { line: main.line, col: 1 }),
                     message: "main type must be `Unit -> Unit` in MVP".to_string(),
                 });
             }
@@ -85,6 +102,7 @@ pub fn typecheck_module(module: &Module) -> Result<(), TypecheckError> {
                     if !unit_param_omitted && decl.params.len() != ft.arguments.len() {
                         return Err(TypecheckError {
                             declaration: Some(decl.name.clone()),
+                            span: Some(Span { line: decl.line, col: 1 }),
                             message: format!(
                                 "definition has {} parameter(s) but type annotation has {}",
                                 decl.params.len(),
@@ -537,12 +555,16 @@ fn inject_type_constructors(
     }
 }
 
+// TODO(post-MVP): EffectDecl and TypeDeclaration do not carry a source line field yet,
+// so errors from these validators always have span: None. Add a line field to those
+// AST nodes (similar to Declaration.line) to enable span reporting here.
 fn validate_effect_declarations(module: &Module) -> Result<(), TypecheckError> {
     let mut seen = HashSet::new();
     for effect_decl in &module.effect_declarations {
         if !seen.insert(effect_decl.name.clone()) {
             return Err(TypecheckError {
                 declaration: Some(effect_decl.name.clone()),
+                span: None,
                 message: format!("duplicate effect declaration `{}`", effect_decl.name),
             });
         }
@@ -554,6 +576,7 @@ fn validate_imports(module: &Module) -> Result<(), TypecheckError> {
     for import in &module.imports {
         let exports = builtin_module_exports(&import.module_path).ok_or_else(|| TypecheckError {
             declaration: None,
+            span: None,
             message: format!("unknown module `{}`", import.module_path),
         })?;
 
@@ -562,6 +585,7 @@ fn validate_imports(module: &Module) -> Result<(), TypecheckError> {
                 if !exports.contains_key(name.as_str()) {
                     return Err(TypecheckError {
                         declaration: None,
+                        span: None,
                         message: format!(
                             "unknown symbol `{}` in import from `{}`",
                             name, import.module_path
@@ -590,6 +614,7 @@ fn validate_type_declarations(module: &Module) -> Result<(), TypecheckError> {
         if !declared_type_names.insert(name.clone()) {
             return Err(TypecheckError {
                 declaration: Some(name.clone()),
+                span: None,
                 message: format!("duplicate type declaration `{}`", name),
             });
         }
@@ -601,6 +626,7 @@ fn validate_type_declarations(module: &Module) -> Result<(), TypecheckError> {
             TypeDeclaration::Alias { name, target } => {
                 let parsed = parse_type_expr(target).ok_or_else(|| TypecheckError {
                     declaration: Some(name.clone()),
+                    span: None,
                     message: "invalid alias target type".to_string(),
                 })?;
                 validate_type_expr_names(&parsed, &known_type_names, name)?;
@@ -611,6 +637,7 @@ fn validate_type_declarations(module: &Module) -> Result<(), TypecheckError> {
                     if !seen.insert(constructor.clone()) {
                         return Err(TypecheckError {
                             declaration: Some(name.clone()),
+                            span: None,
                             message: format!(
                                 "duplicate constructor `{}` in type `{}`",
                                 constructor, name
@@ -625,11 +652,13 @@ fn validate_type_declarations(module: &Module) -> Result<(), TypecheckError> {
                     if !seen.insert(field.name.clone()) {
                         return Err(TypecheckError {
                             declaration: Some(name.clone()),
+                            span: None,
                             message: format!("duplicate field `{}` in type `{}`", field.name, name),
                         });
                     }
                     let parsed = parse_type_expr(&field.ty).ok_or_else(|| TypecheckError {
                         declaration: Some(name.clone()),
+                        span: None,
                         message: format!("invalid field type `{}`", field.ty),
                     })?;
                     validate_type_expr_names(&parsed, &known_type_names, name)?;
@@ -656,6 +685,7 @@ fn validate_type_expr_names(
             }
             Err(TypecheckError {
                 declaration: Some(declaration.to_string()),
+                span: None,
                 message: format!("unknown type `{}` in type declaration", name),
             })
         }
@@ -1075,6 +1105,7 @@ fn check_body_stmts(
         if inferred != Ty::Unknown && inferred != declared {
             return Err(TypecheckError {
                 declaration: Some(decl_name.to_string()),
+                span: None,
                 message: format!(
                     "body type `{}` does not match declared return type `{}`",
                     ty_name(&inferred),
@@ -1113,6 +1144,7 @@ fn check_callee_required_effects(
         if !all_covered {
             return Err(TypecheckError {
                 declaration: Some(decl_name.to_string()),
+                span: None,
                 message: format!(
                     "function `{}` requires effect `{}` which is not handled by any enclosing `using` block",
                     callee_name, effect_name
@@ -1153,6 +1185,7 @@ fn check_unhandled_effects_in_expr(
             if env.is_effect_op(name) && !covered_ops.contains(name.as_str()) {
                 return Err(TypecheckError {
                     declaration: Some(decl_name.to_string()),
+                    span: None,
                     message: format!(
                         "effect operation `{}` is not handled by any enclosing `using` block",
                         name
@@ -1167,6 +1200,7 @@ fn check_unhandled_effects_in_expr(
             if env.is_effect_op(&qualified) && !covered_ops.contains(qualified.as_str()) {
                 return Err(TypecheckError {
                     declaration: Some(decl_name.to_string()),
+                    span: None,
                     message: format!(
                         "effect operation `{}` is not handled by any enclosing `using` block",
                         qualified
@@ -1204,6 +1238,7 @@ fn check_unhandled_effects_in_expr(
             if env.is_effect_op(&qualified) && !covered_ops.contains(qualified.as_str()) {
                 return Err(TypecheckError {
                     declaration: Some(decl_name.to_string()),
+                    span: None,
                     message: format!(
                         "effect operation `{}` is not handled by any enclosing `using` block",
                         qualified
@@ -1220,6 +1255,7 @@ fn check_unhandled_effects_in_expr(
             if env.is_effect_op(callee) && !covered_ops.contains(callee.as_str()) {
                 return Err(TypecheckError {
                     declaration: Some(decl_name.to_string()),
+                    span: None,
                     message: format!(
                         "effect operation `{}` is not handled by any enclosing `using` block",
                         callee
@@ -1282,6 +1318,7 @@ fn ensure_no_ambiguous_refs_in_expr(
             let Some(record) = env.lookup_record_by_constructor(constructor) else {
                 return Err(TypecheckError {
                     declaration: Some(decl_name.to_string()),
+                    span: None,
                     message: format!("unknown record constructor `{}`", constructor),
                 });
             };
@@ -1293,6 +1330,7 @@ fn ensure_no_ambiguous_refs_in_expr(
                 if !seen.insert(name.clone()) {
                     return Err(TypecheckError {
                         declaration: Some(decl_name.to_string()),
+                        span: None,
                         message: format!(
                             "duplicate field `{}` in constructor call `{}`",
                             name, constructor
@@ -1302,6 +1340,7 @@ fn ensure_no_ambiguous_refs_in_expr(
                 let Some(expected_ty) = record.fields.get(name) else {
                     return Err(TypecheckError {
                         declaration: Some(decl_name.to_string()),
+                        span: None,
                         message: format!(
                             "unknown field `{}` in constructor call `{}`",
                             name, constructor
@@ -1312,6 +1351,7 @@ fn ensure_no_ambiguous_refs_in_expr(
                 if actual_ty != Ty::Unknown && !env.are_compatible(expected_ty, &actual_ty) {
                     return Err(TypecheckError {
                         declaration: Some(decl_name.to_string()),
+                        span: None,
                         message: format!(
                             "field `{}` in constructor `{}` has type `{}` but expected `{}`",
                             name,
@@ -1332,6 +1372,7 @@ fn ensure_no_ambiguous_refs_in_expr(
                 missing.sort();
                 return Err(TypecheckError {
                     declaration: Some(decl_name.to_string()),
+                    span: None,
                     message: format!(
                         "missing field(s) in constructor call `{}`: {}",
                         constructor,
@@ -1395,6 +1436,7 @@ fn ensure_name_not_ambiguous(name: &str, env: &TypeEnv, decl_name: &str) -> Resu
     if let Some(sources) = env.ambiguous_sources(name) {
         return Err(TypecheckError {
             declaration: Some(decl_name.to_string()),
+            span: None,
             message: format!(
                 "name `{}` is ambiguous due to import collision: {}",
                 name,
@@ -1457,6 +1499,7 @@ fn validate_type_annotation(
     if uses_legacy_void(annotation) {
         return Err(TypecheckError {
             declaration: Some(decl_name.to_string()),
+            span: None,
             message: "legacy `void` is not supported; use `Unit`".to_string(),
         });
     }
@@ -1467,6 +1510,7 @@ fn validate_type_annotation(
     if base.is_empty() {
         return Err(TypecheckError {
             declaration: Some(decl_name.to_string()),
+            span: None,
             message: "type annotation must not be empty".to_string(),
         });
     }
@@ -1475,6 +1519,7 @@ fn validate_type_annotation(
         let Some(ft) = parse_function_type(base) else {
             return Err(TypecheckError {
                 declaration: Some(decl_name.to_string()),
+                span: None,
                 message: "invalid function type annotation".to_string(),
             });
         };
@@ -1483,12 +1528,14 @@ fn validate_type_annotation(
         if segments.iter().any(|segment| parse_type_expr(segment).is_none()) {
             return Err(TypecheckError {
                 declaration: Some(decl_name.to_string()),
+                span: None,
                 message: "invalid function type annotation".to_string(),
             });
         }
     } else if parse_type_expr(base).is_none() {
         return Err(TypecheckError {
             declaration: Some(decl_name.to_string()),
+            span: None,
             message: "invalid type annotation".to_string(),
         });
     }
@@ -1515,6 +1562,7 @@ fn validate_effect_clause(
     if effects_raw.is_empty() {
         return Err(TypecheckError {
             declaration: Some(decl_name.to_string()),
+            span: None,
             message: "effect list after `can` must not be empty".to_string(),
         });
     }
@@ -1523,12 +1571,14 @@ fn validate_effect_clause(
         if !is_identifier(effect_name) {
             return Err(TypecheckError {
                 declaration: Some(decl_name.to_string()),
+                span: None,
                 message: format!("invalid effect name `{}` in type annotation", effect_name),
             });
         }
         if !known_effects.contains(effect_name) {
             return Err(TypecheckError {
                 declaration: Some(decl_name.to_string()),
+                span: None,
                 message: format!("unknown effect `{}` in `can` clause", effect_name),
             });
         }

@@ -56,10 +56,11 @@ fn run() -> Result<(), CliError> {
         ))
     })?;
 
-    goby_core::typecheck_module(&module).map_err(|err| {
-        let target = err.declaration.as_deref().unwrap_or("<module>");
-        CliError::Runtime(format!("typecheck error in {}: {}", target, err.message))
-    })?;
+    // TODO(Step 4): unify with parse error format ("file:line:col: msg") once snippet
+    // display is added; TypecheckError::Display currently emits "typecheck error in X at line Y:Z"
+    // which does not match the GCC-style format used for parse errors.
+    goby_core::typecheck_module(&module)
+        .map_err(|err| CliError::Runtime(format!("{}: {}", cli.file, err)))?;
 
     match cli.command {
         Command::Run => {
