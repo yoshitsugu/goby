@@ -1,3 +1,13 @@
+/// Source location within a source file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Span {
+    /// 1-indexed line number in the source file.
+    pub line: usize,
+    /// 1-indexed byte offset within the line (ASCII sources only; MVP assumption).
+    /// Value `1` means "unknown column".
+    pub col: usize,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Module {
     pub imports: Vec<ImportDecl>,
