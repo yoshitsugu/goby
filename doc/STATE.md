@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-01 (session 22)
+Last updated: 2026-03-01 (session 23)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -95,6 +95,13 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - `validate_effect_clause`: unknown effect name in `can` clause now rejected.
   - `builtin_effect_names() -> &'static [&'static str]` returns `["Print"]`.
   - 6 new tests; 2 existing tests updated. 144 → 150 tests pass.
+- 2026-03-01 (session 23, commit b889ee0): Step 2 — unhandled effect op detection:
+  - `EffectMap`: handler→effect + effect→ops mapping.
+  - `check_unhandled_effects_in_expr`: full Expr tree walk for uncovered effect ops.
+  - `TypeEnv::is_effect_op`: detects effect-registered globals (Resolved + Ambiguous).
+  - `ops_from_can_clause`: seeds covered_ops from function's own `can` clause.
+  - Codex-review fixes: lambda param shadowing (H1), pipeline callee (H2), MethodCall (H3), Ambiguous binding (M1), L1/L2 style.
+  - 11 new tests. 150 → 161 tests pass.
 
 ## 5. Current Example Files
 
@@ -109,7 +116,7 @@ This file is a restart-safe snapshot for resuming work after context reset.
 
 ## 6. Immediate Next Steps (Execution Order)
 
-Post-MVP work in progress: `can` semantic checking (Step 1 complete).
+Post-MVP work in progress: `can` semantic checking (Step 1 + 2 complete; Step 3 remaining).
 
 Resume checks:
 ```
