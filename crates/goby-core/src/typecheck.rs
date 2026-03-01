@@ -2592,6 +2592,46 @@ main =
         typecheck_module(&module).expect("re-binding in same body should be accepted");
     }
 
+    // --- TypecheckError span regression tests ---
+
+    #[test]
+    fn typecheck_error_duplicate_declaration_has_span_with_line() {
+        // Two declarations named "foo" — duplicate error; span must point to the second
+        // declaration's line (line 3 = annotation line of the second foo).
+        let source = "foo : Int\nfoo = 1\nfoo : Int\nfoo = 2\n";
+        let module = parse_module(source).expect("should parse");
+        let err = typecheck_module(&module).expect_err("duplicate decl should fail");
+        let span = err.span.expect("duplicate decl error must have a span");
+        // Second annotation is on line 3; decl_line = 3.
+        assert_eq!(span.line, 3, "span.line should point to second declaration");
+        assert_eq!(span.col, 1);
+    }
+
+    #[test]
+    fn typecheck_error_main_wrong_type_has_span_with_line() {
+        // main declared with a non-function type annotation; triggers "must be a function type"
+        // error (parse_function_type returns None). span must include a line number.
+        let source = "main : Int\nmain = 1\n";
+        let module = parse_module(source).expect("should parse");
+        let err = typecheck_module(&module).expect_err("wrong main type should fail");
+        let span = err.span.expect("main type error must have a span");
+        assert_eq!(span.line, 1, "span.line should point to main declaration line");
+        assert_eq!(span.col, 1);
+    }
+
+    #[test]
+    fn typecheck_error_main_wrong_function_type_has_span() {
+        // main declared with a valid function type but wrong signature (not Unit -> Unit).
+        // Triggers the second error branch: "main type must be `Unit -> Unit` in MVP".
+        let source = "main : Int -> String\nmain x = string.concat(\"a\", \"b\")\n";
+        let module = parse_module(source).expect("should parse");
+        let err = typecheck_module(&module).expect_err("wrong main function type should fail");
+        let span = err.span.expect("main type error must have a span");
+        assert_eq!(span.line, 1, "span.line should point to main declaration line");
+        assert_eq!(span.col, 1);
+        assert!(err.message.contains("Unit -> Unit"));
+    }
+
     #[test]
     fn check_expr_infers_addition() {
         let env = TypeEnv {
