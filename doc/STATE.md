@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-01 (session 19, uncommitted)
+Last updated: 2026-03-01 (session 20, uncommitted)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -107,6 +107,18 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - `import.gb`: added `fetch_env_var` (Call + MethodCall), `string.split` → `RuntimeValue::ListString`, `.join` → `RuntimeValue::String`; outputs `foo`, `bar` (with `GOBY_PATH=foo,bar`).
   - `effect.gb`: added `active_handlers: HashMap<String, usize>` to `RuntimeOutputResolver`, `Stmt::Using` save/install/execute/restore pattern, `find_handler_method_for_effect`/`find_handler_method_by_name`/`dispatch_handler_method`/`dispatch_handler_method_as_value`/`execute_decl_as_side_effect` helpers; outputs `13`, `hello` (with `GOBY_PATH=hello`).
   - 140 total tests pass; `cargo clippy -- -D warnings` clean.
+- 2026-03-01 (session 20, uncommitted): Codex-review-driven fixes across all crates (8 commits):
+  - H1: removed dead `matches!(fn_name.as_str(), _)` guard (always true, empty body).
+  - H2: serialized env-var tests under `ENV_MUTEX`; fixed `remove_var` ordering (before assert).
+  - H3: cached `HandlerMethod.parsed_body` at parse time; removed per-dispatch `parse_body_stmts` call.
+  - M1: replaced `split_once(" -> ")` in case arm parser with `split_case_arm` (guards against ` -> ` inside lambda bodies; detects unterminated string patterns).
+  - M2: switched `active_handlers` from `HashMap` to `BTreeMap` for deterministic dispatch order; removed unnecessary `Vec<usize>` collect in `find_handler_method_by_name`.
+  - M3: restructured `execute_unit_call_ast` so `arg_val.to_expression_text()` is computed only in the string-fallback branch, not on the hot AST path.
+  - L1: added `CasePattern::BoolLit(bool)` variant; parser maps `"True"`/`"False"` to it; evaluator matches `Bool` runtime value.
+  - L2: implemented full `Stmt::Using` save/install/execute/restore in `dispatch_handler_method_as_value` (was silently skipped).
+  - Bonus: added bare handler value dispatch in `eval_expr_ast` for non-Int/non-List arguments (e.g. `greet "x"` returning `String`).
+  - 4 new tests covering: wrong-else-indent parse failure, malformed handler method skip, case no-match → None, two-handler deterministic dispatch.
+  - 147 total tests pass; `cargo clippy -- -D warnings` clean.
 
 ## 5. Current Example Files
 
@@ -128,6 +140,7 @@ Post-MVP options (not yet planned):
 - Declaration-side generic parameter binders.
 - Handler type-checking (effect-safety / unhandled-effect diagnostics).
 - REPL or interactive mode.
+- `else if` chaining in `if` expressions.
 
 ## 7. Resume Commands
 
