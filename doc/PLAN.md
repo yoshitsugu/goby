@@ -63,9 +63,9 @@ Based on `examples/*.gb`:
   - `main` type annotation is required for `run`; optional for `check`.
 - Legacy `void` type spelling is rejected in type annotations.
 - First backend target is Wasm.
-- Effects are parse/typecheck metadata in MVP (no effect-safety enforcement).
-  - unknown effect names are ignored.
-  - `can` clauses must be syntactically valid (non-empty list of identifiers).
+- Effects and handlers are available in MVP runtime via `effect`, `handler`, and `using`.
+  - handler dispatch is deterministic via `active_handlers: BTreeMap<String, usize>`.
+  - `can` clauses are validated (declared effect or built-in effect names).
 - `using` handler application syntax: comma-separated handler list (`using HandlerA, HandlerB`).
 - MVP built-ins: `print`, `string.concat`, `map`, `fetch_env_var`, `string.split`, `list.join`.
 - `examples/basic_types.gb` is a parse/typecheck target, not a runnable entrypoint target.
@@ -87,15 +87,6 @@ Based on `examples/*.gb`:
 - Handler dispatch: `active_handlers` uses `BTreeMap` for deterministic (alphabetical) order.
 - Runtime execution model: compile-time interpreter — `resolve_main_runtime_output` runs the
   program in Rust at Wasm compile time and embeds output as a static string in the Wasm binary.
-- Current status (2026-03-01, session 20):
-  - **All `examples/*.gb` pass both `check` and `run`.**
-  - `function.gb` → `90 / [30, 40, 50] / [60, 70] / something / 15`
-  - `type.gb` → `John`
-  - `control_flow.gb` → `Five! / 50 / 30`
-  - `import.gb` (with `GOBY_PATH=foo,bar`) → `foo / bar`
-  - `effect.gb` (with `GOBY_PATH=hello`) → `13 / hello`
-  - 147 tests pass; `cargo clippy -- -D warnings` clean.
-  - MVP implementation is complete.
 
 ### 2.1 Syntax and Parsing
 
@@ -115,10 +106,16 @@ Based on `examples/*.gb`:
 
 ### 2.3 Effect System
 
-- Multiple effects in `can` clause are parsed/typechecked as metadata only (no effect-safety enforcement in MVP).
+- Current implemented checks:
+  - `can` effect names must be declared (or built-in).
+  - uncovered effect operation calls are rejected unless covered by enclosing `using`.
+  - calls to `can`-annotated functions require an appropriate enclosing `using`.
+- Current runtime behavior:
+  - effect operations dispatch through installed handlers.
+  - bare-name dispatch falls back to deterministic effect-name order (temporary MVP behavior).
 - How to represent multiple effects (`can Print + Read` or other syntax) — deferred.
 - Effect propagation rules for higher-order functions — deferred.
-- Unhandled-effect diagnostics — deferred.
+- Effect diagnostics UX polish (wording/format consistency) — deferred.
 
 #### Post-MVP Implementation Direction (locked 2026-03-01)
 
@@ -229,75 +226,7 @@ Done criteria:
 - Existing `effect.gb` behavior remains stable unless explicitly updated.
 - No regression in current 176-test baseline (or newer baseline at implementation time).
 
-## 5. Example-Driven Feature Checklist
-
-Status (2026-03-01, session 20): **ALL COMPLETE**
-
-- `check` passes: `hello.gb`, `basic_types.gb`, `function.gb`, `generic_types.gb`,
-  `control_flow.gb`, `import.gb`, `type.gb`, `effect.gb`.
-- `check` fails: none.
-- `run` passes (locked output): `function.gb`, `type.gb`, `control_flow.gb`, `import.gb`, `effect.gb`.
-
-### 5.1 Core Syntax/Typing Used by Stable Examples
-
-- [x] Top-level declarations with optional type annotations (`name : Type`, `name = expr`)
-- [x] Function types (`A -> B`), including parenthesized function arguments (`(A -> B) -> C`)
-- [x] Haskell-style type application in annotations (`List Int`, `TypeX a b`, `TypeX (TypeY a b) c`)
-- [x] Integer/string literals, tuple/list literals, local bindings, block-last-value return
-- [x] Calls (`f x`, `f(x)`), method call subset (`string.concat(a, b)`), pipeline (`|>`)
-- [x] Lambda forms (`|x| -> ...`, `_ * 10`)
-- [x] Comments (`#`, line-end comments, shebang-as-comment), mixed tabs/spaces indentation
-- [x] MVP diagnostics baseline (non-empty, declaration name when known, expected/actual types)
-
-### 5.2 Runtime/CLI Behaviors Required by Examples
-
-- [x] `check` command (parse + typecheck without runtime entry requirement)
-- [x] `run` command with `main` entrypoint only
-- [x] `main : Unit -> Unit` enforcement for runnable programs
-- [x] Wasm emit + `wasmtime` execution path
-- [x] Locked `examples/function.gb` output parity
-
-### 5.3 Features Referenced by Examples
-
-- [x] `import` syntax and minimal module resolution
-  (`import goby/x`, alias `as`, selective import `(...)`) for built-in modules
-  (`goby/string`, `goby/list`, `goby/env`) used by `examples/import.gb`.
-  - collision policy: if colliding names are actually referenced, report an
-    unresolved/ambiguous-name error.
-- [x] `effect` declarations and effect member signatures
-- [x] `handler ... for ...` syntax and handler scope semantics
-- [x] `using` handler application syntax (single/multiple handlers, comma-separated)
-- [x] `case` expressions with pattern arms and wildcard `_`
-  - `CasePattern` supports: `IntLit`, `StringLit`, `BoolLit` (`True`/`False`), `Wildcard`
-  - multi-line lookahead parser; arm separator ` -> ` correctly split by `split_case_arm`
-- [x] `if ... else ...` expression (indentation-based, two-branch)
-- [x] `==` equality operator producing `Bool`
-- [x] `type` declarations:
-  - alias (`type UserID = String`)
-  - union/sum (`type UserStatus = Activated | Deactivated`)
-  - record constructor syntax (`type User = User(...)`)
-  - qualified constructor/member references (`UserStatus.Activated`, `user.name`)
-- [x] Runtime for all examples:
-  - `function.gb`: higher-order functions, map, list literals, lambdas
-  - `type.gb`: record construction, field access, union constructor reference
-  - `control_flow.gb`: case/if/==, Bool runtime value
-  - `import.gb`: `fetch_env_var`, `string.split`, `list.join`
-  - `effect.gb`: handler dispatch, `Stmt::Using` save/restore, active_handlers BTreeMap
-- [x] Multiple effects in `can` with semantic checking:
-  - Step 1: validate effect names in `can` against declared/builtin effects
-  - Step 2: detect uncovered effect op calls inside `using` blocks
-  - Step 3: detect calls to `can`-annotated functions outside an appropriate `using` handler
-- [x] Effect-safety / unhandled-effect diagnostics
-
-## 6. Spec Detail Notes
-
-### Resolved in MVP
-
-- Import system: `goby/...` path grammar, built-in module table (`goby/string`, `goby/list`, `goby/env`), alias binding, selective import, collision policy → complete.
-- Control flow: multiline `case`/`if` with indentation-based lookahead; `case` uses `split_case_arm` to avoid misparse on lambda bodies; `else if` is unsupported and documented → complete.
-- Equality/comparison: `==` produces `Bool`; no other comparison operators in MVP → complete.
-- Type declaration system: alias, union, record; constructor/field qualified references → complete.
-- Effect/handler: `Stmt::Using` save/install/execute/restore; BTreeMap for deterministic dispatch; handler body cached in `parsed_body` → complete.
+## 5. Spec Detail Notes
 
 ### Still Open (Post-MVP)
 
@@ -308,55 +237,7 @@ Status (2026-03-01, session 20): **ALL COMPLETE**
 - Import system: filesystem-backed/local package resolution, dependency graph rules.
 - Equality/comparison: operator set (`!=`, `<`, `>`, etc.) and type constraints.
 
-## 7. Completed Slices
-
-### Slice: `import.gb` check (completed 2026-02-28)
-
-- Parser/AST import support (`plain`, `as`, `selective`).
-- Minimal built-in resolver for `goby/string`, `goby/list`, `goby/env`.
-- Typecheck integration for imported names.
-- Import-collision policy (error when ambiguous name is used).
-
-### Slice: `type.gb` check (completed 2026-02-28)
-
-- `type` declaration parsing and AST nodes (alias, union, record).
-- Constructor/field typecheck integration.
-- Qualified constructor/member references.
-
-### Slice: `effect.gb` check (completed 2026-02-28, commit ddbf19e)
-
-- `effect`/`handler` top-level block parsing and AST nodes.
-- `Stmt::Using` with indentation-aware body parsing.
-- Effect member registration in type env (qualified and bare keys).
-- Relaxed `main` annotation requirement (`check` no longer requires it).
-- `parses_effect_gb_declarations` regression test.
-
-### Slice: `type.gb` runtime (completed 2026-02-28, commit 7962891)
-
-- `RuntimeValue::Record { constructor, fields }` variant.
-- `Expr::RecordConstruct` and `Expr::Qualified` evaluation.
-- `run examples/type.gb` outputs `John`.
-
-### Slice: all remaining runtime (completed 2026-03-01, commit c8e669b)
-
-- `control_flow.gb`: `CasePattern`/`CaseArm`/`Expr::Case`/`Expr::If`, multi-line lookahead parser, `unescape_string`, `RuntimeValue::Bool`, `BinOpKind::Eq` eval.
-- `import.gb`: `fetch_env_var`, `string.split` → `ListString`, `.join` → `String`.
-- `effect.gb`: `active_handlers: BTreeMap`, `Stmt::Using` save/install/execute/restore, handler dispatch helpers.
-
-### Slice: Codex review fixes (completed 2026-03-01, session 20)
-
-- H1: removed dead `matches!(fn_name.as_str(), _)` guard.
-- H2: `ENV_MUTEX` for env-var test serialization; `remove_var` before assert.
-- H3: `HandlerMethod.parsed_body` pre-parsed at parse time (no per-dispatch re-parse).
-- M1: `split_case_arm` replaces `split_once(" -> ")` (safe for lambda bodies).
-- M2: `active_handlers: HashMap` → `BTreeMap`; removed unnecessary `Vec<usize>` collect.
-- M3: `arg_val.to_expression_text()` computed only in string-fallback branch.
-- L1: `CasePattern::BoolLit(bool)` for `True`/`False` patterns.
-- L2: `Stmt::Using` fully handled in `dispatch_handler_method_as_value`.
-- Bonus: bare handler value dispatch in `eval_expr_ast` for non-Int/non-List args.
-- 4 new regression tests covering review-flagged gaps.
-
-## 8. Research References (2026-03-01 survey)
+## 6. Research References (2026-03-01 survey)
 
 - OCaml manual (effect handlers): one-shot continuations are cheaper than multi-shot and are the default operational model.
   - <https://caml.inria.fr/pub/distrib/ocaml-5.0/ocaml-5.0-refman.html#sec281>
