@@ -180,7 +180,7 @@ All MVP example targets are complete. The next work is post-MVP:
   1. Real Wasm code generation (actual instruction emission, remove compile-time interpreter).
   2. Effect runtime redesign (one-shot deep handlers + selective CPS/evidence passing).
   3. Better error diagnostics (line/column, effect-safety errors).
-  4. More standard library surface (`Result`, `Option`, etc.).
+  4. Standard-library foundation for self-hosted Goby libraries.
 
 ### 4.1 Short-Term Patch Plan: bare effect call in `main` / top-level statement AST path
 
@@ -225,6 +225,35 @@ Done criteria:
 - Direct bare effect call inside `using` is observable in runtime output.
 - Existing `effect.gb` behavior remains stable unless explicitly updated.
 - No regression in current 176-test baseline (or newer baseline at implementation time).
+
+### 4.2 Standard-Library Foundation (self-hosted direction)
+
+Goal: prepare infrastructure so core standard libraries can be authored primarily in Goby,
+while preserving practical monorepo workflow during early phases.
+
+Planning constraints:
+
+- Standard libraries should be implemented in Goby itself by default.
+- Libraries should be importable as `import goby/(library_name)`.
+- At least for the near term, stdlib and compiler/runtime remain in the same monorepo.
+
+Preparation steps:
+
+1. Define source layout and naming for Goby stdlib modules in-repo.
+   - Decide canonical directory for Goby stdlib sources.
+   - Map module path `goby/x` to that directory deterministically.
+2. Extend import resolution to load Goby source modules from the stdlib location.
+   - Keep existing built-in module behavior working during migration.
+   - Add clear diagnostics for unresolved/ambiguous stdlib module paths.
+3. Introduce minimal bootstrap boundary between language built-ins and Goby stdlib.
+   - Keep only runtime-primitive operations as built-ins.
+   - Move composable library logic to Goby modules incrementally.
+4. Add regression coverage for stdlib import behavior.
+   - Positive: `import goby/x` resolves and typechecks from in-repo Goby source.
+   - Negative: missing module path reports stable diagnostics.
+5. Validate monorepo workflow.
+   - Ensure `cargo check`, `cargo test`, and example `goby-cli check/run` flows continue to work
+     with stdlib sources in-tree.
 
 ## 5. Spec Detail Notes
 
