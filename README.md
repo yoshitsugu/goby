@@ -5,9 +5,12 @@ build a readable functional language with a modern developer experience.
 
 ## Disclaimer
 
-- This is a hobby project.
-- This is a pre-alpha version, and currently nothing works yet.
-- Development is handled mostly by AI assistance.
+This project is an early-stage hobby POC.
+
+- Goby is both a language experiment and an AI-assisted development experiment.
+- Most implementation work is done with AI assistance.
+- The current goal is exploration and learning, not production-grade polish.
+- Open decisions and active direction are tracked in `doc/PLAN.md`.
 
 ## Language Concept
 
@@ -33,8 +36,16 @@ build a readable functional language with a modern developer experience.
 Detailed and evolving language rules are intentionally documented in
 `doc/PLAN.md` instead of this README.
 
-## Current Status
+## License
 
-The project is in early design and prototyping.
-The first backend target is Wasm.
-Open decisions and next steps are tracked in `doc/PLAN.md`.
+To match the project goals, licensing is split by artifact type:
+
+- **Code**: permissive (free to use, modify, and redistribute) under **MIT-0**.
+- **Language concept/spec text and design docs**: **CC BY-NC-ND 4.0**.
+- See `LICENSE-CODE` and `LICENSE-DOCS` for details.
+
+Notes:
+
+- This split is intentional: code reuse is encouraged, while direct copy/republish of
+  concept/spec documents is restricted.
+- Copyright protects concrete expression (text/code), not abstract ideas.
