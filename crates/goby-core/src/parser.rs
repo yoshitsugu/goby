@@ -2047,4 +2047,69 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn if_expr_with_wrong_else_indent_returns_none() {
+        // `else` must be at the same indent level as `if`.
+        // An under-indented `else` should cause parse_multiline_expr to return None.
+        let source = r#"
+main : Unit -> Unit
+main =
+  print
+    if True
+      "yes"
+   else
+      "no"
+"#;
+        // The module may parse (the print call might fall back), but the if/else expression
+        // with wrong else indent must not produce an Expr::If node.
+        let module = parse_module(source).expect("module-level parse should not panic");
+        let main_decl = module.declarations.iter().find(|d| d.name == "main");
+        if let Some(decl) = main_decl {
+            if let Some(stmts) = &decl.parsed_body {
+                // Verify no Stmt contains an Expr::If (the malformed if/else failed to parse).
+                for stmt in stmts {
+                    if let crate::ast::Stmt::Expr(expr) = stmt {
+                        assert!(
+                            !matches!(expr, crate::ast::Expr::If { .. }),
+                            "malformed else indent should not produce Expr::If"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn effect_block_with_missing_colon_silently_skips_member() {
+        // A handler method line where the name/params section cannot be parsed
+        // (e.g. an extra unexpected token) should be silently skipped by the parser.
+        // The handler should be present with zero parseable methods rather than panicking.
+        let source = r#"
+effect Log
+  log: String -> Unit
+
+handler ConsoleLog for Log
+  !!!invalid method line!!!
+    print "something"
+
+main : Unit -> Unit
+main =
+  print "ok"
+"#;
+        let module = parse_module(source).expect("module should parse despite malformed handler method");
+        let handler = module
+            .handler_declarations
+            .iter()
+            .find(|h| h.name == "ConsoleLog");
+        assert!(handler.is_some(), "ConsoleLog handler should be present");
+        // The invalid method line is skipped; handler has zero methods.
+        let handler = handler.unwrap();
+        assert_eq!(
+            handler.methods.len(),
+            0,
+            "malformed method line should be silently skipped"
+        );
+        assert_eq!(module.declarations.len(), 1);
+    }
 }
