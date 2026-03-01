@@ -1300,7 +1300,64 @@ impl<'m> RuntimeOutputResolver<'m> {
                         last_val = None;
                     }
                 }
-                Stmt::Using { .. } => {}
+                Stmt::Using { handlers, body } => {
+                    let previous = self.active_handlers.clone();
+                    for handler_name in handlers {
+                        if let Some(idx) = self
+                            .module
+                            .handler_declarations
+                            .iter()
+                            .position(|h| &h.name == handler_name)
+                        {
+                            let effect = self.module.handler_declarations[idx].effect.clone();
+                            self.active_handlers.insert(effect, idx);
+                        }
+                    }
+                    for inner_stmt in body {
+                        match inner_stmt {
+                            Stmt::Binding { name, value } => {
+                                let v = self.eval_expr_ast(
+                                    value,
+                                    &handler_locals,
+                                    &handler_callables,
+                                    evaluators,
+                                    depth + 1,
+                                )?;
+                                handler_locals.store(name, v);
+                            }
+                            Stmt::Expr(expr) => {
+                                last_val = self.eval_expr_ast(
+                                    expr,
+                                    &handler_locals,
+                                    &handler_callables,
+                                    evaluators,
+                                    depth + 1,
+                                );
+                                if last_val.is_none() {
+                                    self.execute_unit_ast_stmt(
+                                        inner_stmt,
+                                        &mut handler_locals,
+                                        &mut handler_callables,
+                                        evaluators,
+                                        depth + 1,
+                                    )?;
+                                    last_val = None;
+                                }
+                            }
+                            Stmt::Using { .. } => {
+                                // Nested using: delegate to execute_unit_ast_stmt for full handling.
+                                self.execute_unit_ast_stmt(
+                                    inner_stmt,
+                                    &mut handler_locals,
+                                    &mut handler_callables,
+                                    evaluators,
+                                    depth + 1,
+                                )?;
+                            }
+                        }
+                    }
+                    self.active_handlers = previous;
+                }
             }
         }
         last_val
