@@ -31,6 +31,8 @@ pub struct HandlerMethod {
     pub name: String,
     pub params: Vec<String>,
     pub body: String,
+    /// Pre-parsed body statements; `None` if the body failed to parse.
+    pub parsed_body: Option<Vec<Stmt>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use goby_core::{
-    CasePattern, Expr, HandlerMethod, Module, Stmt, parse_body_stmts,
+    CasePattern, Expr, HandlerMethod, Module, Stmt,
     str_util::parse_string_concat_call, types::parse_function_type,
 };
 
@@ -1269,14 +1269,14 @@ impl<'m> RuntimeOutputResolver<'m> {
         if depth >= MAX_EVAL_DEPTH {
             return None;
         }
-        let stmts = parse_body_stmts(&method.body)?;
+        let stmts = method.parsed_body.as_deref()?;
         let mut handler_locals = RuntimeLocals::default();
         if let Some(param) = method.params.first() {
             handler_locals.store(param, arg_val);
         }
         let mut handler_callables = HashMap::new();
         let mut last_val: Option<RuntimeValue> = None;
-        for stmt in &stmts {
+        for stmt in stmts {
             match stmt {
                 Stmt::Binding { name, value } => {
                     let v =
@@ -1304,7 +1304,7 @@ impl<'m> RuntimeOutputResolver<'m> {
         last_val
     }
 
-    /// Parse and execute a handler method body with the given argument.
+    /// Execute a handler method body with the given argument.
     fn dispatch_handler_method(
         &mut self,
         method: &HandlerMethod,
@@ -1315,13 +1315,13 @@ impl<'m> RuntimeOutputResolver<'m> {
         if depth >= MAX_EVAL_DEPTH {
             return None;
         }
-        let stmts = parse_body_stmts(&method.body)?;
+        let stmts = method.parsed_body.as_deref()?;
         let mut handler_locals = RuntimeLocals::default();
         if let Some(param) = method.params.first() {
             handler_locals.store(param, arg_val);
         }
         let mut handler_callables = HashMap::new();
-        for stmt in &stmts {
+        for stmt in stmts {
             self.execute_unit_ast_stmt(
                 stmt,
                 &mut handler_locals,
