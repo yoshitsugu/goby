@@ -406,6 +406,12 @@ fn parse_case_pattern(src: &str) -> Option<CasePattern> {
     if src == "_" {
         return Some(CasePattern::Wildcard);
     }
+    if src == "True" {
+        return Some(CasePattern::BoolLit(true));
+    }
+    if src == "False" {
+        return Some(CasePattern::BoolLit(false));
+    }
     if let Ok(n) = src.parse::<i64>() {
         return Some(CasePattern::IntLit(n));
     }
