@@ -146,7 +146,8 @@ pub fn parse_module(source: &str) -> Result<Module, ParseError> {
                             body.push_str(sub_t);
                             i += 1;
                         }
-                        methods.push(HandlerMethod { name, params, body });
+                        let parsed_body = parse_body_stmts(&body);
+                        methods.push(HandlerMethod { name, params, body, parsed_body });
                         continue;
                     }
                 }
