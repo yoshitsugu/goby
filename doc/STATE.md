@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-02-28 (session 18, uncommitted)
+Last updated: 2026-03-01 (session 19, uncommitted)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -102,6 +102,11 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - simplified `execute_unit_call_ast` parameter binding via `locals.store`.
   - `run examples/type.gb` now outputs `John`.
   - all `examples/*.gb` pass `check`; `function.gb` and `type.gb` pass `run`.
+- 2026-03-01 (session 19, uncommitted): completed all remaining runtime slices — **all `examples/*.gb` now pass `run`**:
+  - `control_flow.gb`: added `CasePattern`/`CaseArm` AST nodes, `Expr::Case`/`Expr::If` variants, multi-line lookahead parsing (`parse_multiline_expr`), `unescape_string` for `\n`/`\t`/`\\`/`\"`, `RuntimeValue::Bool`, `BinOpKind::Eq` eval; outputs `Five!`, `50`, `30`.
+  - `import.gb`: added `fetch_env_var` (Call + MethodCall), `string.split` → `RuntimeValue::ListString`, `.join` → `RuntimeValue::String`; outputs `foo`, `bar` (with `GOBY_PATH=foo,bar`).
+  - `effect.gb`: added `active_handlers: HashMap<String, usize>` to `RuntimeOutputResolver`, `Stmt::Using` save/install/execute/restore pattern, `find_handler_method_for_effect`/`find_handler_method_by_name`/`dispatch_handler_method`/`dispatch_handler_method_as_value`/`execute_decl_as_side_effect` helpers; outputs `13`, `hello` (with `GOBY_PATH=hello`).
+  - 140 total tests pass; `cargo clippy -- -D warnings` clean.
 
 ## 5. Current Example Files
 
@@ -116,22 +121,13 @@ This file is a restart-safe snapshot for resuming work after context reset.
 
 ## 6. Immediate Next Steps (Execution Order)
 
-1. Keep CLI/E2E regression checks green for MVP acceptance path:
-   - `cargo run -p goby-cli -- check examples/function.gb`
-   - `cargo run -p goby-cli -- run examples/function.gb`
-   - locked output contract for `function.gb`.
-2. Keep all `examples/*.gb` check-passing:
-   - `cargo run -p goby-cli -- check examples/import.gb`
-   - `cargo run -p goby-cli -- check examples/effect.gb`
-   - `cargo run -p goby-cli -- check examples/type.gb`
-   - `cargo run -p goby-cli -- check examples/control_flow.gb`
-3. All post-MVP `examples/*.gb` now pass `check`. Next runtime targets:
-   - runtime support for `control_flow.gb` (`case`/`if`/`==` — needs new AST nodes + parser + Wasm eval), or
-   - runtime support for `effect.gb` (handler dispatch — significant scope).
-4. After each slice, re-run:
-   - `cargo check`
-   - `cargo test`
-   - `cargo clippy -- -D warnings`
+All MVP example targets are complete. All `examples/*.gb` pass both `check` and `run`.
+
+Post-MVP options (not yet planned):
+- Real Wasm code generation (replace compile-time interpreter with actual Wasm emission).
+- Declaration-side generic parameter binders.
+- Handler type-checking (effect-safety / unhandled-effect diagnostics).
+- REPL or interactive mode.
 
 ## 7. Resume Commands
 

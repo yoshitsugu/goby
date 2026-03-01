@@ -87,6 +87,19 @@ pub enum BinOpKind {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CasePattern {
+    IntLit(i64),
+    StringLit(String),
+    Wildcard,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CaseArm {
+    pub pattern: CasePattern,
+    pub body: Box<Expr>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Expr {
     IntLit(i64),
     BoolLit(bool),
@@ -124,6 +137,15 @@ pub enum Expr {
         param: String,
         body: Box<Expr>,
     },
+    Case {
+        scrutinee: Box<Expr>,
+        arms: Vec<CaseArm>,
+    },
+    If {
+        condition: Box<Expr>,
+        then_expr: Box<Expr>,
+        else_expr: Box<Expr>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -148,6 +170,8 @@ impl Expr {
                 | Expr::MethodCall { .. }
                 | Expr::Pipeline { .. }
                 | Expr::Lambda { .. }
+                | Expr::Case { .. }
+                | Expr::If { .. }
         )
     }
 
@@ -230,6 +254,7 @@ impl Expr {
                     Some(format!("|{}| -> {}", param, b))
                 }
             }
+            Expr::Case { .. } | Expr::If { .. } => None,
         }
     }
 }

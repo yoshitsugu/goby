@@ -816,6 +816,22 @@ fn check_expr(expr: &Expr, env: &TypeEnv) -> Ty {
                 result: Box::new(result),
             }
         }
+        Expr::Case { scrutinee, arms } => {
+            let _ = check_expr(scrutinee, env);
+            arms.first()
+                .map(|arm| check_expr(&arm.body, env))
+                .unwrap_or(Ty::Unknown)
+        }
+        Expr::If {
+            condition,
+            then_expr,
+            else_expr,
+        } => {
+            let _ = check_expr(condition, env);
+            let then_ty = check_expr(then_expr, env);
+            let _ = check_expr(else_expr, env);
+            then_ty
+        }
     }
 }
 
@@ -1005,6 +1021,22 @@ fn ensure_no_ambiguous_refs_in_expr(
         Expr::Lambda { param, body } => {
             let child_env = env.with_local(param, Ty::Unknown);
             ensure_no_ambiguous_refs_in_expr(body, &child_env, decl_name)
+        }
+        Expr::Case { scrutinee, arms } => {
+            ensure_no_ambiguous_refs_in_expr(scrutinee, env, decl_name)?;
+            for arm in arms {
+                ensure_no_ambiguous_refs_in_expr(&arm.body, env, decl_name)?;
+            }
+            Ok(())
+        }
+        Expr::If {
+            condition,
+            then_expr,
+            else_expr,
+        } => {
+            ensure_no_ambiguous_refs_in_expr(condition, env, decl_name)?;
+            ensure_no_ambiguous_refs_in_expr(then_expr, env, decl_name)?;
+            ensure_no_ambiguous_refs_in_expr(else_expr, env, decl_name)
         }
     }
 }
