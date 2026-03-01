@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-01 (session 20)
+Last updated: 2026-03-01 (session 21)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -47,6 +47,11 @@ This file is a restart-safe snapshot for resuming work after context reset.
 
 - None for the locked MVP subset — implementation is complete.
 - Post-MVP open items tracked in `doc/PLAN.md` §3 and §6.
+- Post-MVP effect implementation direction is now fixed in `doc/PLAN.md` §2.3:
+  - deep handlers with one-shot resumptions,
+  - selective CPS + evidence passing lowering,
+  - compiled `EffectId`/`OpId` dispatch (no map lookup on hot path),
+  - phased Wasm lowering (portable trampoline first, typed-continuation optimization later).
 
 ## 4. Recent Milestones
 
@@ -82,6 +87,9 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - L2: `Stmt::Using` fully handled in `dispatch_handler_method_as_value`.
   - Bonus: bare handler value dispatch in `eval_expr_ast` for non-Int/non-List arguments.
   - 4 new regression tests; 147 total tests pass; `cargo clippy -- -D warnings` clean.
+- 2026-03-01 (session 21): algebraic-effects implementation survey and plan lock:
+  - Added research-backed post-MVP effect runtime direction to `doc/PLAN.md` (§2.3).
+  - Added references for OCaml 5 one-shot continuations, evidence-passing translation, and WasmFX.
 
 ## 5. Current Example Files
 
@@ -109,10 +117,11 @@ cargo run -p goby-cli -- run examples/effect.gb  # requires GOBY_PATH=hello
 
 Post-MVP candidate work (see `doc/PLAN.md` §4):
 1. Real Wasm code generation (replace compile-time interpreter with actual Wasm instruction emission).
-2. Better error diagnostics (line/column, effect-safety errors).
-3. More standard library (`Result`, `Option`, etc.).
-4. `else if` chaining.
-5. Handler type-checking (effect-safety / unhandled-effect diagnostics).
+2. Effect runtime redesign (one-shot deep handlers + selective CPS/evidence passing).
+3. Better error diagnostics (line/column, effect-safety errors).
+4. More standard library (`Result`, `Option`, etc.).
+5. `else if` chaining.
+6. Handler type-checking (effect-safety / unhandled-effect diagnostics).
 
 ## 7. Resume Commands
 
