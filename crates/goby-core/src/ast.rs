@@ -92,6 +92,7 @@ pub enum BinOpKind {
 pub enum CasePattern {
     IntLit(i64),
     StringLit(String),
+    BoolLit(bool),
     Wildcard,
 }
 

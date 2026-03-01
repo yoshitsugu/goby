@@ -903,6 +903,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                         (CasePattern::Wildcard, _) => true,
                         (CasePattern::IntLit(n), RuntimeValue::Int(v)) => n == v,
                         (CasePattern::StringLit(s), RuntimeValue::String(v)) => s == v,
+                        (CasePattern::BoolLit(b), RuntimeValue::Bool(v)) => b == v,
                         _ => false,
                     };
                     if matched {
