@@ -5,6 +5,23 @@ use std::process::Command as ProcessCommand;
 
 const USAGE: &str = "usage: goby-cli <run|check> <file.gb>";
 
+/// Returns a two-line snippet:
+///   "  {source_line}"
+///   "  {spaces}^"
+///
+/// `line` and `col` are 1-indexed. `col = 1` means "start of line" and is also
+/// used as an "unknown column" sentinel by `TypecheckError`; the caret will land
+/// on the first byte, which is the best available position when column is unknown.
+/// Returns an empty string when `line` is out of range.
+fn format_snippet(source: &str, line: usize, col: usize) -> String {
+    let src_line = match source.lines().nth(line.saturating_sub(1)) {
+        Some(l) => l,
+        None => return String::new(),
+    };
+    let spaces = " ".repeat(col.saturating_sub(1));
+    format!("  {}\n  {}^", src_line, spaces)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Command {
     Run,
@@ -50,17 +67,30 @@ fn run() -> Result<(), CliError> {
         .map_err(|err| CliError::Runtime(format!("failed to read {}: {}", cli.file, err)))?;
 
     let module = goby_core::parse_module(&source).map_err(|err| {
+        let snippet = format_snippet(&source, err.line, err.col);
+        let suffix = if snippet.is_empty() {
+            String::new()
+        } else {
+            format!("\n{}", snippet)
+        };
         CliError::Runtime(format!(
-            "{}:{}:{}: parse error: {}",
-            cli.file, err.line, err.col, err.message
+            "{}:{}:{}: parse error: {}{}",
+            cli.file, err.line, err.col, err.message, suffix
         ))
     })?;
 
-    // TODO(Step 4): unify with parse error format ("file:line:col: msg") once snippet
-    // display is added; TypecheckError::Display currently emits "typecheck error in X at line Y:Z"
-    // which does not match the GCC-style format used for parse errors.
-    goby_core::typecheck_module(&module)
-        .map_err(|err| CliError::Runtime(format!("{}: {}", cli.file, err)))?;
+    // TODO: unify parse/typecheck error format ("file:line:col: msg" GCC-style vs
+    // "file: typecheck error in X at line Y:Z: msg" prose-style); deferred post-MVP.
+    goby_core::typecheck_module(&module).map_err(|err| {
+        let snippet = err
+            .span
+            .as_ref()
+            .map(|s| format_snippet(&source, s.line, s.col))
+            .filter(|s| !s.is_empty())
+            .map(|s| format!("\n{}", s))
+            .unwrap_or_default();
+        CliError::Runtime(format!("{}: {}{}", cli.file, err, snippet))
+    })?;
 
     match cli.command {
         Command::Run => {
@@ -170,6 +200,40 @@ mod tests {
 
     fn to_args<'a>(items: &'a [&'a str]) -> impl Iterator<Item = String> + 'a {
         items.iter().map(|s| s.to_string())
+    }
+
+    #[test]
+    fn format_snippet_normal() {
+        let source = "line one\nline two\nline three";
+        // line 2, col 6 → caret under 't' of "two"
+        let snippet = format_snippet(source, 2, 6);
+        assert_eq!(snippet, "  line two\n       ^");
+    }
+
+    #[test]
+    fn format_snippet_col_past_end() {
+        let source = "abc";
+        // col 20 is past the 3-byte line — caret falls beyond text, no panic.
+        // indent "  " + 19 spaces (col-1) + "^"
+        let snippet = format_snippet(source, 1, 20);
+        assert_eq!(snippet, "  abc\n                     ^");
+    }
+
+    #[test]
+    fn format_snippet_line_out_of_range() {
+        let source = "abc";
+        // line 5 does not exist → empty string
+        let snippet = format_snippet(source, 5, 1);
+        assert_eq!(snippet, "");
+    }
+
+    #[test]
+    fn format_snippet_line_zero() {
+        let source = "abc";
+        // line 0 → saturating_sub(1) = 0 → nth(0) = "abc" (first line)
+        // This is a fallback for misbehaving callers; we just verify no panic.
+        let snippet = format_snippet(source, 0, 1);
+        assert_eq!(snippet, "  abc\n  ^");
     }
 
     #[test]
