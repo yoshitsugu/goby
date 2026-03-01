@@ -182,6 +182,10 @@ pub fn parse_module(source: &str) -> Result<Module, ParseError> {
 
         let mut annotated_name: Option<&str> = None;
         let mut type_annotation = None;
+        // decl_line: annotation line when present, definition line otherwise.
+        // i + 1 is correct for both cases: if annotation is present it equals the annotation
+        // line; if absent it equals the definition line. No reassignment needed inside the block.
+        let decl_line = i + 1;
 
         if let Some((name, ty)) = split_top_level_type(line) {
             if name.is_empty() || ty.is_empty() {
@@ -191,14 +195,14 @@ pub fn parse_module(source: &str) -> Result<Module, ParseError> {
                     message: "invalid type annotation".to_string(),
                 });
             }
-            let ann_line = i + 1; // remember annotation line for EOF error
+            // decl_line already == i + 1 (the annotation line); no reassignment needed.
             annotated_name = Some(name);
             type_annotation = Some(ty.to_string());
             i += 1;
             i = skip_blank_and_comment_lines(&lines, i);
             if i >= lines.len() {
                 return Err(ParseError {
-                    line: ann_line,
+                    line: decl_line,
                     col: 1,
                     message: "missing declaration body after type annotation".to_string(),
                 });
@@ -236,6 +240,7 @@ pub fn parse_module(source: &str) -> Result<Module, ParseError> {
             params,
             body,
             parsed_body,
+            line: decl_line,
         });
 
         i = j;

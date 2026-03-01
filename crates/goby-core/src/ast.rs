@@ -79,6 +79,9 @@ pub struct Declaration {
     pub params: Vec<String>,
     pub body: String,
     pub parsed_body: Option<Vec<Stmt>>,
+    /// 1-indexed source line where this declaration begins (type annotation line if present,
+    /// otherwise the definition line).
+    pub line: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
