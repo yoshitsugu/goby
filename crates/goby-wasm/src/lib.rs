@@ -1202,13 +1202,12 @@ impl<'m> RuntimeOutputResolver<'m> {
         let function = evaluators.unit.get(fn_name)?;
         let mut function_locals = RuntimeLocals::default();
         let mut function_callables = HashMap::new();
-        let arg_text = arg_val.to_expression_text();
-
-        if let Some(parameter) = function.parameter {
-            function_locals.store(parameter, arg_val);
-        }
 
         if let Some(stmts) = function.parsed_stmts {
+            // AST path: move arg_val directly into locals (no clone needed).
+            if let Some(parameter) = function.parameter {
+                function_locals.store(parameter, arg_val);
+            }
             for stmt in stmts {
                 self.execute_unit_ast_stmt(
                     stmt,
@@ -1221,8 +1220,9 @@ impl<'m> RuntimeOutputResolver<'m> {
             Some(())
         } else {
             // Fall back to the string-based path for functions without parsed AST.
+            // arg_text is computed here only, not on the hot AST path.
             let call_expr = if function.parameter.is_some() {
-                format!("{} {}", fn_name, arg_text)
+                format!("{} {}", fn_name, arg_val.to_expression_text())
             } else {
                 fn_name.to_string()
             };
