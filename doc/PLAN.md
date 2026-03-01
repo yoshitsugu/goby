@@ -154,7 +154,9 @@ Based on `examples/*.gb`:
 
 - Minimum CLI commands (`goby-cli run`, `goby-cli check`) — complete.
 - Project layout and package metadata format (Cargo workspace with `goby-core`, `goby-cli`, `goby-wasm`) — complete.
-- Formatter policy — deferred.
+- Tooling direction is now explicit:
+  - prioritize early developer-environment support (syntax highlight, formatter, linter, LSP),
+  - keep diagnostics/messages stable enough to be consumed by editor tooling.
 
 ## 3. Later-Phase Decisions
 
@@ -181,6 +183,7 @@ All MVP example targets are complete. The next work is post-MVP:
   2. Effect runtime redesign (one-shot deep handlers + selective CPS/evidence passing).
   3. Better error diagnostics (line/column, effect-safety errors).
   4. Standard-library foundation for self-hosted Goby libraries.
+  5. Early developer tooling foundation (LSP, syntax highlighting, linter, formatter).
 
 ### 4.1 Short-Term Patch Plan: bare effect call in `main` / top-level statement AST path
 
@@ -254,6 +257,41 @@ Preparation steps:
 5. Validate monorepo workflow.
    - Ensure `cargo check`, `cargo test`, and example `goby-cli check/run` flows continue to work
      with stdlib sources in-tree.
+
+### 4.3 Early Developer Tooling Plan
+
+Goal: align implementation priorities with the language vision that strong tooling is a core
+project value, and make Goby practical in editors early.
+
+Scope to prioritize:
+
+- LSP server (at least hover, go-to-definition, diagnostics, document symbols).
+- Syntax highlighting (TextMate grammar first; Tree-sitter grammar as optional follow-up).
+- Linter (`goby lint`) with stable machine-readable output format for editor integration.
+- Formatter (`goby fmt`) with deterministic output and CI-friendly check mode.
+
+Implementation steps:
+
+1. Tooling protocol/contracts baseline.
+   - Define canonical diagnostic schema (file, line, column, code, message, severity).
+   - Freeze a minimal set of error codes for parser/typechecker/lint.
+2. Formatter MVP.
+   - Implement a deterministic formatter for currently supported syntax.
+   - Add `goby fmt` and `goby fmt --check`.
+   - Add golden-file tests to prevent formatting drift.
+3. Linter MVP.
+   - Implement `goby lint` for high-signal checks (unused bindings, shadowing clarity, style traps).
+   - Output both human-readable and machine-readable formats.
+4. Syntax highlighting packs.
+   - Provide a `.tmLanguage` grammar for immediate editor adoption.
+   - Keep grammar in monorepo with snapshot tests on representative `.gb` snippets.
+5. LSP MVP.
+   - Build `goby-lsp` over parser/typechecker diagnostics.
+   - Implement diagnostics + hover + definition first; defer heavy features.
+   - Verify behavior on `examples/*.gb` and stdlib Goby modules.
+6. Editor integration and release flow.
+   - Publish a minimal VS Code extension wrapper (syntax + LSP wiring).
+   - Keep tooling artifacts versioned in the same monorepo at this stage.
 
 ## 5. Spec Detail Notes
 
