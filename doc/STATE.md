@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-01 (session 25)
+Last updated: 2026-03-02 (session 27)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -135,6 +135,14 @@ This file is a restart-safe snapshot for resuming work after context reset.
     tests in typecheck.rs (duplicate decl, non-function main type, wrong-function-type main);
     176 tests pass; `cargo clippy -- -D warnings` clean.
   - Diagnostics improvement phase complete.
+- 2026-03-02 (session 27, commit 8136d61): bare/qualified/pipeline effect call dispatch in main body (§4.1):
+  - `eval_ast_side_effect` (main/top-level AST path) previously dropped bare effect ops inside `using`.
+  - Added `Expr::Qualified` arm: `find_handler_method_for_effect` → dispatch → string fallthrough.
+  - Added bare-name handler lookup in `Expr::Var` arm (before `execute_unit_call_ast`).
+  - Added bare-name handler lookup in `Pipeline` arm (`"msg" |> log` now dispatches).
+  - Fixed `execute_decl_as_side_effect` depth: 1 → 0 (top-level consistency).
+  - depth=0 for all new `dispatch_handler_method` calls.
+  - 5 new regression tests; 181 total tests pass; `cargo clippy -- -D warnings` clean.
 
 ## 5. Current Example Files
 
@@ -149,7 +157,7 @@ This file is a restart-safe snapshot for resuming work after context reset.
 
 ## 6. Immediate Next Steps (Execution Order)
 
-Diagnostics improvement complete (session 26). All 5 steps done; 176 tests pass.
+§4.1 bare effect call dispatch patch complete (session 27). 181 tests pass.
 
 Resume checks:
 ```
@@ -161,8 +169,8 @@ cargo clippy -- -D warnings
 Post-MVP candidates (see `doc/PLAN.md` §4):
 1. Real Wasm code generation (actual instruction emission, remove compile-time interpreter).
 2. Effect runtime redesign (one-shot deep handlers + selective CPS/evidence passing).
-3. More standard library (`Result`, `Option`, etc.).
-4. `else if` chaining.
+3. Standard-library foundation for self-hosted Goby libraries (§4.2).
+4. Early developer tooling foundation (LSP, syntax highlighting, linter, formatter) (§4.3).
 
 ## 7. Resume Commands
 
