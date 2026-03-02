@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-02 (session 50)
+Last updated: 2026-03-02 (session 51)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -386,6 +386,18 @@ This file is a restart-safe snapshot for resuming work after context reset.
     - `cargo clippy -- -D warnings`
   - `clippy` cleanup included one non-functional let-chain refactor in
     `crates/goby-wasm/src/fallback.rs` (`collapsible_if`).
+- 2026-03-02 (session 51): `PLAN_STANDARD_LIBRARY` Step1 resolver shell complete
+  - Added new module: `crates/goby-core/src/stdlib.rs`.
+  - Added resolver API shell:
+    - `StdlibResolver::new(root: PathBuf)`,
+    - `StdlibResolver::resolve_module(module_path: &str) -> Result<..., StdlibResolveError>`,
+    - `StdlibResolver::module_file_path(module_path: &str) -> Result<PathBuf, ...>`.
+  - Added shell data types: `ResolvedStdlibModule`, `StdlibResolveError`.
+  - Added unit tests for path mapping only:
+    - `goby/string` -> `<root>/goby/string.gb`,
+    - nested module path mapping,
+    - invalid module path rejection.
+  - No integration call sites changed yet (`typecheck` import flow unchanged).
 
 ## 5. Current Example Files
 
