@@ -3,6 +3,7 @@ mod call;
 mod fallback;
 mod layout;
 mod lower;
+mod planning;
 mod support;
 
 use std::collections::{HashMap, HashSet};

@@ -4,7 +4,7 @@ use goby_core::{BinOpKind, CasePattern, Expr, Module, Stmt};
 
 use crate::{
     CodegenError, backend::WasmProgramBuilder, call::extract_direct_print_call_arg,
-    layout::MemoryLayout,
+    layout::MemoryLayout, planning::build_lowering_plan,
 };
 
 pub(crate) fn try_emit_native_module(module: &Module) -> Result<Option<Vec<u8>>, CodegenError> {
@@ -25,6 +25,11 @@ pub(crate) fn try_emit_native_module(module: &Module) -> Result<Option<Vec<u8>>,
     let Some(main_decl) = module.declarations.iter().find(|decl| decl.name == "main") else {
         return Ok(None);
     };
+    let lowering_plan = build_lowering_plan(module);
+    let _ = lowering_plan.handler_resume_present();
+    if !lowering_plan.is_direct_style("main") {
+        return Ok(None);
+    }
     let Some(stmts) = main_decl.parsed_body.as_deref() else {
         return Ok(None);
     };
