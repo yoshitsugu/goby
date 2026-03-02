@@ -2562,4 +2562,44 @@ main =
             "phase-1 subset should use native wasm-encoder emitter, not wat fallback emitter"
         );
     }
+
+    #[test]
+    fn native_codegen_capability_checker_accepts_phase2_int_bool_subset() {
+        let source = r#"
+main : Unit -> Unit
+main =
+  x = 6 * 7
+  ok = x == 42
+  print x
+  print ok
+"#;
+        let module = parse_module(source).expect("source should parse");
+        assert!(
+            fallback::supports_native_codegen(&module),
+            "phase-2 int/bool subset should be accepted by native capability checker"
+        );
+    }
+
+    #[test]
+    fn compile_module_uses_native_emitter_for_phase2_int_bool_subset() {
+        let source = r#"
+main : Unit -> Unit
+main =
+  x = 6 * 7
+  ok = x == 42
+  print x
+  print ok
+"#;
+        let module = parse_module(source).expect("source should parse");
+        let wasm = compile_module(&module).expect("codegen should succeed");
+        let expected_text =
+            resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
+                .expect("runtime output should resolve");
+        assert_eq!(expected_text, "42\nTrue");
+        let expected = compile_print_module(&expected_text).expect("fallback wasm should compile");
+        assert_ne!(
+            wasm, expected,
+            "phase-2 int/bool subset should use native wasm-encoder emitter"
+        );
+    }
 }
