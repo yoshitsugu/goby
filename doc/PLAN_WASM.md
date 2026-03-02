@@ -401,11 +401,11 @@ Current gate result (2026-03-02): Passed.
 - Unsupported-construct fallback boundary documented in `fallback.rs` module doc.
 - Native/fallback path coverage matrix confirmed in `native_fallback_path_matrix_for_examples`.
 
-## Phase 8 - WASI-standard entrypoint (`_start`) and runtime portability
+## Phase 8 - WASI-standard entrypoint (`_start`) and runtime portability — COMPLETE
 
 ### Motivation
 
-Currently `goby-cli run` invokes wasmtime with `--invoke main`, which is a
+Previously `goby-cli run` invoked wasmtime with `--invoke main`, which was a
 non-standard workaround. WASI Preview 1 mandates `_start` as the module
 entrypoint. Without it:
 - `wasmtime run *.wasm` (no flags) produces no output.
@@ -461,6 +461,11 @@ updated to use the standard invocation path instead.
 - Regression gate: `goby-cli run` output unchanged for all `examples/*.gb`.
 - CLI gate: `--invoke main` no longer appears in `execute_wasm`.
 
+Current gate result (2026-03-02): Passed.
+- `_start` export asserted by wasm export-section test.
+- `execute_wasm` no longer injects `--invoke main`.
+- Workspace checks stayed green (`cargo check`, `cargo test`, `cargo clippy -- -D warnings`).
+
 ## 6. Concrete File-Level Work Items
 
 Primary files to add/modify:
@@ -478,9 +483,9 @@ Primary files to add/modify:
   - ~~`crates/goby-wasm/src/fallback.rs`~~ (done Phase 0)
   - `crates/goby-wasm/src/call.rs` (added Phase 6.1)
   - `crates/goby-wasm/src/support.rs` (added Phase 6.1)
-- Phase 8 files to modify:
-  - `crates/goby-wasm/src/backend.rs` — export `_start` instead of `main`.
-  - `crates/goby-cli/src/main.rs` — drop `--invoke main` from `execute_wasm`.
+- ~~Phase 8 files to modify:~~ (done Phase 8)
+  - ~~`crates/goby-wasm/src/backend.rs` — export `_start` instead of `main`.~~
+  - ~~`crates/goby-cli/src/main.rs` — drop `--invoke main` from `execute_wasm`.~~
 - tests:
   - expand `crates/goby-wasm/src/lib.rs` tests or split into `crates/goby-wasm/tests/` integration tests.
 
