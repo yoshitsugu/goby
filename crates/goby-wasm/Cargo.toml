@@ -8,4 +8,5 @@ crate-type = ["rlib"]
 
 [dependencies]
 goby-core = { path = "../goby-core" }
+wasm-encoder = "0.240"
 wat = "1"

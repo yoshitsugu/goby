@@ -16,7 +16,11 @@ pub struct ParseError {
 
 impl std::fmt::Display for ParseError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "parse error at line {}:{}: {}", self.line, self.col, self.message)
+        write!(
+            f,
+            "parse error at line {}:{}: {}",
+            self.line, self.col, self.message
+        )
     }
 }
 
@@ -100,12 +104,18 @@ pub fn parse_module(source: &str) -> Result<Module, ParseError> {
                     let name = name.trim().to_string();
                     let ty = ty.trim().to_string();
                     if !name.is_empty() && !ty.is_empty() {
-                        members.push(EffectMember { name, type_annotation: ty });
+                        members.push(EffectMember {
+                            name,
+                            type_annotation: ty,
+                        });
                     }
                 }
                 i += 1;
             }
-            effect_declarations.push(EffectDecl { name: effect_name, members });
+            effect_declarations.push(EffectDecl {
+                name: effect_name,
+                members,
+            });
             continue;
         }
 
@@ -166,7 +176,12 @@ pub fn parse_module(source: &str) -> Result<Module, ParseError> {
                             i += 1;
                         }
                         let parsed_body = parse_body_stmts(&body);
-                        methods.push(HandlerMethod { name, params, body, parsed_body });
+                        methods.push(HandlerMethod {
+                            name,
+                            params,
+                            body,
+                            parsed_body,
+                        });
                         continue;
                     }
                 }
@@ -1376,7 +1391,6 @@ fn strip_line_comment(line: &str) -> &str {
     line
 }
 
-
 // ---------------------------------------------------------------------------
 // Existing helpers (unchanged)
 // ---------------------------------------------------------------------------
@@ -1485,12 +1499,13 @@ mod tests {
 
         assert!(module.imports.is_empty());
         assert!(module.type_declarations.is_empty());
-        assert_eq!(module.declarations.len(), 5);
+        assert_eq!(module.declarations.len(), 6);
         assert_eq!(module.declarations[0].name, "add");
         assert_eq!(module.declarations[1].name, "add_ten_and_two");
         assert_eq!(module.declarations[2].name, "concatenate");
         assert_eq!(module.declarations[3].name, "print_string");
         assert_eq!(module.declarations[4].name, "a");
+        assert_eq!(module.declarations[5].name, "main");
     }
 
     #[test]
@@ -2066,8 +2081,16 @@ mod tests {
             3,
             "effect.gb should have 3 declarations"
         );
-        assert_eq!(module.effect_declarations.len(), 2, "effect.gb should have 2 effect declarations");
-        assert_eq!(module.handler_declarations.len(), 2, "effect.gb should have 2 handler declarations");
+        assert_eq!(
+            module.effect_declarations.len(),
+            2,
+            "effect.gb should have 2 effect declarations"
+        );
+        assert_eq!(
+            module.handler_declarations.len(),
+            2,
+            "effect.gb should have 2 handler declarations"
+        );
         for decl in &module.declarations {
             assert!(
                 decl.parsed_body.is_some(),
@@ -2169,7 +2192,8 @@ main : Unit -> Unit
 main =
   print "ok"
 "#;
-        let module = parse_module(source).expect("module should parse despite malformed handler method");
+        let module =
+            parse_module(source).expect("module should parse despite malformed handler method");
         let handler = module
             .handler_declarations
             .iter()

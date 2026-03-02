@@ -167,8 +167,10 @@ fn parse_non_function_type_expr(annotation: &str) -> Option<TypeExpr> {
     if let Some(inner) = trim_outer_parens(annotation) {
         let tuple_parts = split_top_level_commas(inner);
         if tuple_parts.len() > 1 {
-            let items: Option<Vec<TypeExpr>> =
-                tuple_parts.iter().map(|part| parse_type_expr(part)).collect();
+            let items: Option<Vec<TypeExpr>> = tuple_parts
+                .iter()
+                .map(|part| parse_type_expr(part))
+                .collect();
             return Some(TypeExpr::Tuple(items?));
         }
         if tuple_parts.len() == 1 {

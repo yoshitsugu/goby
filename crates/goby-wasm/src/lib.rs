@@ -1,13 +1,15 @@
+mod backend;
+mod fallback;
+mod layout;
+mod lower;
+
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use goby_core::{
-    CasePattern, Expr, HandlerMethod, Module, Stmt,
-    str_util::parse_string_concat_call, types::parse_function_type,
+    CasePattern, Expr, HandlerMethod, Module, Stmt, str_util::parse_string_concat_call,
+    types::parse_function_type,
 };
-
-const IOVEC_OFFSET: u32 = 0;
-const NWRITTEN_OFFSET: u32 = 8;
-const TEXT_OFFSET: u32 = 16;
+use layout::{IOVEC_OFFSET, NWRITTEN_OFFSET, TEXT_OFFSET};
 const ERR_MISSING_MAIN: &str = "Wasm codegen requires a `main` declaration";
 const ERR_UNSUPPORTED_PRINT_UNKNOWN: &str =
     "print argument is unsupported for Wasm codegen (only String is supported)";
@@ -25,6 +27,12 @@ pub fn compile_module(module: &Module) -> Result<Vec<u8>, CodegenError> {
             message: ERR_MISSING_MAIN.to_string(),
         });
     };
+
+    if fallback::supports_native_codegen(module)
+        && let Some(wasm) = lower::try_emit_native_module(module)?
+    {
+        return Ok(wasm);
+    }
 
     if let Some(text) = resolve_main_runtime_output(module, &main.body, main.parsed_body.as_deref())
     {
@@ -570,9 +578,7 @@ impl<'m> RuntimeOutputResolver<'m> {
             }
             // Qualified effect call: Effect.method arg  (e.g. Log.log "msg")
             // Must come before the bare-Var arm so the Qualified guard takes precedence.
-            Expr::Call { callee, arg }
-                if matches!(callee.as_ref(), Expr::Qualified { .. }) =>
-            {
+            Expr::Call { callee, arg } if matches!(callee.as_ref(), Expr::Qualified { .. }) => {
                 let Expr::Qualified { receiver, member } = callee.as_ref() else {
                     unreachable!()
                 };
@@ -587,9 +593,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                 self.eval_side_effect(&repr, evaluators)
             }
             // Other expression statements: try AST unit-call path.
-            Expr::Call { callee, arg }
-                if matches!(callee.as_ref(), Expr::Var(_)) =>
-            {
+            Expr::Call { callee, arg } if matches!(callee.as_ref(), Expr::Var(_)) => {
                 let Expr::Var(fn_name) = callee.as_ref() else {
                     unreachable!()
                 };
@@ -814,10 +818,8 @@ impl<'m> RuntimeOutputResolver<'m> {
                 method,
                 args,
             } if method == "concat" && receiver == "string" && args.len() == 2 => {
-                let av =
-                    self.eval_expr_ast(&args[0], locals, callables, evaluators, depth + 1)?;
-                let bv =
-                    self.eval_expr_ast(&args[1], locals, callables, evaluators, depth + 1)?;
+                let av = self.eval_expr_ast(&args[0], locals, callables, evaluators, depth + 1)?;
+                let bv = self.eval_expr_ast(&args[1], locals, callables, evaluators, depth + 1)?;
                 match (av, bv) {
                     (RuntimeValue::String(a), RuntimeValue::String(b)) => {
                         Some(RuntimeValue::String(format!("{}{}", a, b)))
@@ -841,8 +843,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                 if let Expr::Var(ctor_name) = callee.as_ref()
                     && let Some(field_name) = self.single_field_constructor_field(ctor_name)
                 {
-                    let val =
-                        self.eval_expr_ast(arg, locals, callables, evaluators, depth + 1)?;
+                    let val = self.eval_expr_ast(arg, locals, callables, evaluators, depth + 1)?;
                     let mut fields = HashMap::new();
                     fields.insert(field_name, val);
                     return Some(RuntimeValue::Record {
@@ -891,7 +892,10 @@ impl<'m> RuntimeOutputResolver<'m> {
                         // Bare handler method call that returns a value (e.g. `greet "x"`).
                         if let Some(method) = self.find_handler_method_by_name(fn_name) {
                             return self.dispatch_handler_method_as_value(
-                                &method, arg_val, evaluators, depth + 1,
+                                &method,
+                                arg_val,
+                                evaluators,
+                                depth + 1,
                             );
                         }
                     }
@@ -906,20 +910,26 @@ impl<'m> RuntimeOutputResolver<'m> {
                         let arg_val =
                             self.eval_expr_ast(arg, locals, callables, evaluators, depth + 1)?;
                         return self.dispatch_handler_method_as_value(
-                            &method, arg_val, evaluators, depth + 1,
+                            &method,
+                            arg_val,
+                            evaluators,
+                            depth + 1,
                         );
                     }
                 }
                 // callee is not a plain Var (e.g. a curried call or lambda
                 // application) — not yet supported by the native evaluator.
-                None  // NOTE: qualified callee dispatch is handled above
+                None // NOTE: qualified callee dispatch is handled above
             }
             Expr::Pipeline { value, callee } => {
                 let v = self.eval_expr_ast(value, locals, callables, evaluators, depth + 1)?;
                 self.apply_pipeline(callee, v, locals, callables, evaluators, depth + 1)
             }
             // Record construction: evaluate each field, build RuntimeValue::Record.
-            Expr::RecordConstruct { constructor, fields } => {
+            Expr::RecordConstruct {
+                constructor,
+                fields,
+            } => {
                 let mut field_map = HashMap::new();
                 for (field_name, field_expr) in fields {
                     let field_val =
@@ -938,9 +948,7 @@ impl<'m> RuntimeOutputResolver<'m> {
             // If `receiver` is present but not a Record, fall back to None.
             Expr::Qualified { receiver, member } => {
                 match locals.get(receiver) {
-                    Some(RuntimeValue::Record { fields, .. }) => {
-                        fields.get(member).cloned()
-                    }
+                    Some(RuntimeValue::Record { fields, .. }) => fields.get(member).cloned(),
                     None => {
                         // Treat as a type/module-qualified constructor name.
                         Some(RuntimeValue::String(member.clone()))
@@ -1000,9 +1008,11 @@ impl<'m> RuntimeOutputResolver<'m> {
                 None
             }
             // string.split(s, delim) -> ListString
-            Expr::MethodCall { receiver, method, args }
-                if method == "split" && receiver == "string" && args.len() == 2 =>
-            {
+            Expr::MethodCall {
+                receiver,
+                method,
+                args,
+            } if method == "split" && receiver == "string" && args.len() == 2 => {
                 let sv = self.eval_expr_ast(&args[0], locals, callables, evaluators, depth + 1)?;
                 let dv = self.eval_expr_ast(&args[1], locals, callables, evaluators, depth + 1)?;
                 match (sv, dv) {
@@ -1075,7 +1085,12 @@ impl<'m> RuntimeOutputResolver<'m> {
                     if let Some(method) = method {
                         let arg_val =
                             self.eval_expr_ast(arg, locals, callables, evaluators, depth)?;
-                        return self.dispatch_handler_method(&method, arg_val, evaluators, depth + 1);
+                        return self.dispatch_handler_method(
+                            &method,
+                            arg_val,
+                            evaluators,
+                            depth + 1,
+                        );
                     }
                 }
                 // Other expression statements: try AST unit-call path.
@@ -1087,7 +1102,12 @@ impl<'m> RuntimeOutputResolver<'m> {
                     // Bare effect method call: e.g. `log env_var`.
                     let bare_method = self.find_handler_method_by_name(fn_name);
                     if let Some(method) = bare_method {
-                        return self.dispatch_handler_method(&method, arg_val, evaluators, depth + 1);
+                        return self.dispatch_handler_method(
+                            &method,
+                            arg_val,
+                            evaluators,
+                            depth + 1,
+                        );
                     }
                     if self
                         .execute_unit_call_ast(
@@ -1120,14 +1140,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                 if let Expr::Pipeline { value, callee } = expr {
                     if let Some(v) = self.eval_expr_ast(value, locals, callables, evaluators, depth)
                         && self
-                            .execute_unit_call_ast(
-                                callee,
-                                v,
-                                locals,
-                                callables,
-                                evaluators,
-                                depth,
-                            )
+                            .execute_unit_call_ast(callee, v, locals, callables, evaluators, depth)
                             .is_some()
                     {
                         return Some(());
@@ -1304,8 +1317,13 @@ impl<'m> RuntimeOutputResolver<'m> {
     /// Used to support positional single-field constructor sugar: `Ctor(value)` → `Ctor(field: value)`.
     fn single_field_constructor_field(&self, ctor_name: &str) -> Option<String> {
         for ty_decl in &self.module.type_declarations {
-            if let goby_core::TypeDeclaration::Record { constructor, fields, .. } = ty_decl
-                && constructor == ctor_name && fields.len() == 1
+            if let goby_core::TypeDeclaration::Record {
+                constructor,
+                fields,
+                ..
+            } = ty_decl
+                && constructor == ctor_name
+                && fields.len() == 1
             {
                 return Some(fields[0].name.clone());
             }
@@ -1347,13 +1365,23 @@ impl<'m> RuntimeOutputResolver<'m> {
         for stmt in stmts {
             match stmt {
                 Stmt::Binding { name, value } => {
-                    let v =
-                        self.eval_expr_ast(value, &handler_locals, &handler_callables, evaluators, depth + 1)?;
+                    let v = self.eval_expr_ast(
+                        value,
+                        &handler_locals,
+                        &handler_callables,
+                        evaluators,
+                        depth + 1,
+                    )?;
                     handler_locals.store(name, v);
                 }
                 Stmt::Expr(expr) => {
-                    last_val =
-                        self.eval_expr_ast(expr, &handler_locals, &handler_callables, evaluators, depth + 1);
+                    last_val = self.eval_expr_ast(
+                        expr,
+                        &handler_locals,
+                        &handler_callables,
+                        evaluators,
+                        depth + 1,
+                    );
                     if last_val.is_none() {
                         // Side-effect stmt — try as unit side effect
                         self.execute_unit_ast_stmt(
@@ -1472,7 +1500,11 @@ impl<'m> RuntimeOutputResolver<'m> {
         }
         // Collect param name and stmts (clone to release the borrow on self.module).
         let (param_name, stmts) = {
-            let decl = self.module.declarations.iter().find(|d| d.name == fn_name)?;
+            let decl = self
+                .module
+                .declarations
+                .iter()
+                .find(|d| d.name == fn_name)?;
             let stmts = decl.parsed_body.as_ref()?.clone();
             let param = decl.params.first().cloned();
             (param, stmts)
@@ -2247,12 +2279,9 @@ main =
         unsafe { std::env::set_var("GOBY_PATH", "hello") };
         let source = read_example("effect.gb");
         let module = parse_module(&source).expect("effect.gb should parse");
-        let output = resolve_main_runtime_output(
-            &module,
-            main_body(&module),
-            main_parsed_body(&module),
-        )
-        .expect("runtime output should resolve");
+        let output =
+            resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
+                .expect("runtime output should resolve");
         // Clean up before asserting so env is restored even if the assertion panics.
         unsafe { std::env::remove_var("GOBY_PATH") };
         assert_eq!(output, "13\nhello");
@@ -2307,11 +2336,8 @@ main =
     log "hello"
 "#;
         let module = parse_module(source).expect("parse should work");
-        let output = resolve_main_runtime_output(
-            &module,
-            main_body(&module),
-            main_parsed_body(&module),
-        );
+        let output =
+            resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module));
         assert_eq!(
             output.as_deref(),
             Some("hello"),
@@ -2339,11 +2365,8 @@ main =
     Log.log "world"
 "#;
         let module = parse_module(source).expect("parse should work");
-        let output = resolve_main_runtime_output(
-            &module,
-            main_body(&module),
-            main_parsed_body(&module),
-        );
+        let output =
+            resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module));
         assert_eq!(
             output.as_deref(),
             Some("world"),
@@ -2367,11 +2390,8 @@ main =
   greet "fallback"
 "#;
         let module = parse_module(source).expect("parse should work");
-        let output = resolve_main_runtime_output(
-            &module,
-            main_body(&module),
-            main_parsed_body(&module),
-        );
+        let output =
+            resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module));
         assert_eq!(
             output.as_deref(),
             Some("fallback"),
@@ -2410,11 +2430,8 @@ main =
     print (greet "x")
 "#;
         let module = parse_module(source).expect("parse should work");
-        let output = resolve_main_runtime_output(
-            &module,
-            main_body(&module),
-            main_parsed_body(&module),
-        );
+        let output =
+            resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module));
         // BTreeMap iterates alphabetically: "Alpha" < "Beta", so HandlerA is checked first.
         // The bare `greet` call must select HandlerA's method deterministically.
         assert_eq!(
@@ -2444,11 +2461,8 @@ main =
     "piped" |> log
 "#;
         let module = parse_module(source).expect("parse should work");
-        let output = resolve_main_runtime_output(
-            &module,
-            main_body(&module),
-            main_parsed_body(&module),
-        );
+        let output =
+            resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module));
         assert_eq!(
             output.as_deref(),
             Some("piped"),
@@ -2475,11 +2489,8 @@ main =
   Log.log "unreachable"
 "#;
         let module = parse_module(source).expect("parse should work");
-        let output = resolve_main_runtime_output(
-            &module,
-            main_body(&module),
-            main_parsed_body(&module),
-        );
+        let output =
+            resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module));
         assert!(
             output.is_none(),
             "qualified effect call with no active handler should produce no output"
@@ -2508,16 +2519,47 @@ main =
     raise Error("oops")
 "#;
         let module = parse_module(source).expect("parse should work");
-        let output = resolve_main_runtime_output(
-            &module,
-            main_body(&module),
-            main_parsed_body(&module),
-        );
+        let output =
+            resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module));
         assert_eq!(
             output.as_deref(),
             Some("oops"),
             "positional single-field constructor should dispatch handler with correct record value"
         );
     }
-}
 
+    #[test]
+    fn native_codegen_capability_checker_accepts_hello_subset() {
+        let source = read_example("hello.gb");
+        let module = parse_module(&source).expect("hello.gb should parse");
+        assert!(
+            fallback::supports_native_codegen(&module),
+            "hello.gb should be accepted by Phase 0 native capability checker"
+        );
+    }
+
+    #[test]
+    fn native_codegen_capability_checker_rejects_effect_example() {
+        let source = read_example("effect.gb");
+        let module = parse_module(&source).expect("effect.gb should parse");
+        assert!(
+            !fallback::supports_native_codegen(&module),
+            "effect.gb should remain on fallback path in Phase 0"
+        );
+    }
+
+    #[test]
+    fn compile_module_uses_fallback_when_native_lowerer_is_not_ready() {
+        let source = read_example("hello.gb");
+        let module = parse_module(&source).expect("hello.gb should parse");
+        let wasm = compile_module(&module).expect("codegen should succeed");
+        let expected_text =
+            resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
+                .expect("runtime output should resolve");
+        let expected = compile_print_module(&expected_text).expect("fallback wasm should compile");
+        assert_eq!(
+            wasm, expected,
+            "Phase 0 must preserve fallback behavior while native lowering is stubbed"
+        );
+    }
+}
