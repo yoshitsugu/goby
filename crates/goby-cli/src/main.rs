@@ -163,8 +163,6 @@ fn print_parse_summary(declaration_count: usize, file: &str) {
 fn execute_wasm(wasm_path: &str) -> Result<ExecutionOutcome, CliError> {
     let status = match ProcessCommand::new("wasmtime")
         .arg("run")
-        .arg("--invoke")
-        .arg("main")
         .arg(wasm_path)
         .status()
     {

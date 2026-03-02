@@ -75,7 +75,7 @@ fn install_fake_wasmtime(script_path: &Path) {
     use std::os::unix::fs::PermissionsExt;
 
     let script = r#"#!/bin/sh
-if [ "$1" = "run" ] && [ "$2" = "--invoke" ] && [ "$3" = "main" ]; then
+if [ "$1" = "run" ] && [ -n "$2" ]; then
   printf "90\n[30, 40, 50]\n[60, 70]\nsomething\n15\n"
   exit 0
 fi
