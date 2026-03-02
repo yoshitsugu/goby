@@ -351,6 +351,17 @@ This file is a restart-safe snapshot for resuming work after context reset.
     - transitive HOF declaration case switched from fallback to native,
     - call-reason coverage now keeps unsupported-body reason via `using`-based fixtures.
   - Validation: `cargo fmt`, `cargo test -p goby-wasm`, `cargo check`, `cargo test` all green.
+- 2026-03-02 (session 48): Standard-library foundation planning track started
+  - Added detailed execution document: `doc/PLAN_STANDARD_LIBRARY.md`.
+  - Scope is explicitly staged:
+    - resolver skeleton,
+    - typechecker import integration (with legacy builtin fallback),
+    - stdlib seed modules under `stdlib/goby/`,
+    - `goby/stdio` module planning and builtin `print` migration path,
+    - CLI stdlib-root wiring,
+    - diagnostics hardening.
+  - Progress for this track will be managed against the checkpoints and DoD in
+    `doc/PLAN_STANDARD_LIBRARY.md`.
 
 ## 5. Current Example Files
 
@@ -375,9 +386,9 @@ cargo clippy -- -D warnings
 ```
 
 Execution focus (in order):
-1. Effect runtime redesign (one-shot deep handlers + selective CPS/evidence passing).
-2. `resolve_main_runtime_output` retirement (blocked on effect-native support and remaining unsupported forms).
-3. Continue widening native subset for non-effect unsupported forms (e.g. method/record paths).
+1. Standard-library foundation implementation (`doc/PLAN_STANDARD_LIBRARY.md`, Phase A -> E + stdio/print migration checkpoints).
+2. Effect runtime redesign (one-shot deep handlers + selective CPS/evidence passing).
+3. `resolve_main_runtime_output` retirement (blocked on effect-native support and remaining unsupported forms).
 
 ## 7. Resume Commands
 
