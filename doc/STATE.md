@@ -20,7 +20,8 @@ This file is a restart-safe snapshot for resuming work after context reset.
 - Entry function is `main` only.
 - `main` type is `Unit -> Unit`; annotation required for `run`, optional for `check`.
 - CLI commands:
-  - `run`: parse + typecheck + requires `main` + emits Wasm + executes via `wasmtime`.
+  - `run`: parse + typecheck + requires `main` + emits Wasm + executes via `wasmtime run --invoke main`.
+    (Phase 8: migrate to WASI-standard `_start` export; drop `--invoke main`.)
   - `check`: parse + typecheck (no runtime entry requirement).
 - Statement separator is newline or `;`.
 - Generic type application syntax: Haskell-style spacing (`List Int`, `TypeX a b`).
@@ -331,14 +332,14 @@ cargo test
 cargo clippy -- -D warnings
 ```
 
-Execution focus (next major theme):
-1. Effect runtime redesign (one-shot deep handlers + selective CPS/evidence passing).
+Execution focus (in order):
+1. **Phase 8**: WASI-standard `_start` entrypoint — `backend.rs` + `goby-cli` (small, self-contained).
+   - Replace `exports.export("main", ...)` with `exports.export("_start", ...)` in `backend.rs`.
+   - Drop `--invoke main` from `execute_wasm` in `goby-cli/src/main.rs`.
+   - Validates that `wasmer run` and `wasmtime run` (no flags) both work out of the box.
 2. Lambda/HOF native lowering (Phase B prerequisite).
-3. `resolve_main_runtime_output` retirement (blocked on lambda + effect native support).
-2. Keep fallback boundaries and runtime outputs unchanged for intentional fallback examples:
-   - `function.gb`, `effect.gb`.
-3. Parallel/next major theme:
-   - effect runtime redesign (one-shot deep handlers + selective CPS/evidence passing).
+3. Effect runtime redesign (one-shot deep handlers + selective CPS/evidence passing).
+4. `resolve_main_runtime_output` retirement (blocked on lambda + effect native support).
 
 ## 7. Resume Commands
 

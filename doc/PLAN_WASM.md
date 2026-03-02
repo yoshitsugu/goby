@@ -401,21 +401,86 @@ Current gate result (2026-03-02): Passed.
 - Unsupported-construct fallback boundary documented in `fallback.rs` module doc.
 - Native/fallback path coverage matrix confirmed in `native_fallback_path_matrix_for_examples`.
 
+## Phase 8 - WASI-standard entrypoint (`_start`) and runtime portability
+
+### Motivation
+
+Currently `goby-cli run` invokes wasmtime with `--invoke main`, which is a
+non-standard workaround. WASI Preview 1 mandates `_start` as the module
+entrypoint. Without it:
+- `wasmtime run *.wasm` (no flags) produces no output.
+- `wasmer run *.wasm` exits with error (exit 45, no output).
+- Any other WASI-compatible runtime (WasmEdge, wazero, browser WASI shims)
+  will silently do nothing.
+
+### Scope
+
+- Both code paths that emit Wasm bytes must export `_start`:
+  - `backend::WasmProgramBuilder::emit_static_print_module` (native + fallback path).
+  - Any future multi-function native module builder.
+- `goby-cli` must drop the `--invoke main` workaround and call wasmtime without it.
+- `main` export can be kept as an alias or removed (see decision below).
+
+### Decision: `_start` only vs. dual export
+
+Export `_start` as the sole WASI entrypoint and remove the `main` export.
+Rationale: `main` is not a WASI concept; keeping it alongside `_start` adds no
+runtime value and misleads tooling. Tests that currently use `--invoke main` are
+updated to use the standard invocation path instead.
+
+### Changes
+
+1. **`crates/goby-wasm/src/backend.rs`**
+   - In `emit_static_print_module`: replace `exports.export("main", ...)` with
+     `exports.export("_start", ...)`.
+   - `memory` export stays (required by WASI).
+
+2. **`crates/goby-cli/src/main.rs`**
+   - In `execute_wasm`: remove `.arg("--invoke").arg("main")`.
+   - Add wasmer as a secondary runtime probe (optional): try `wasmtime` first,
+     then `wasmer` if wasmtime is not found.
+
+3. **Tests**
+   - Update integration tests that assert wasmtime output or invocation shape.
+   - Add a test that validates the exported function name is `_start`
+     (inspect the wasm binary export section).
+
+### Definition of done
+
+- `wasmtime run examples/hello.wasm` (no flags) prints `Hello Goby!`.
+- `wasmer run examples/hello.wasm` (no flags) prints `Hello Goby!`.
+- `cargo run -p goby-cli -- run examples/hello.gb` output unchanged.
+- All other `examples/*.gb` outputs unchanged.
+- `cargo check && cargo test && cargo clippy -- -D warnings` green.
+
+### Gate checks before Phase 9
+
+- Behavior gate: `wasmtime run` and `wasmer run` (no extra flags) both produce
+  correct output for `hello.gb` and `control_flow.gb`.
+- Path gate: wasm binary export section contains `_start`, not `main`.
+- Regression gate: `goby-cli run` output unchanged for all `examples/*.gb`.
+- CLI gate: `--invoke main` no longer appears in `execute_wasm`.
+
 ## 6. Concrete File-Level Work Items
 
 Primary files to add/modify:
 - `crates/goby-wasm/Cargo.toml`
-  - add `wasm-encoder`.
-  - remove `wat` after Phase 7 cleanup.
+  - ~~add `wasm-encoder`.~~ (done Phase 0)
+  - ~~remove `wat` after Phase 7 cleanup.~~ (done Phase 7)
 - `crates/goby-wasm/src/lib.rs`
   - keep public API.
-  - replace direct `compile_print_module` path with `native_codegen_or_fallback` dispatcher.
-  - progressively delete string-based unsupported-form heuristics.
-- new files (proposed):
-  - `crates/goby-wasm/src/backend.rs`
-  - `crates/goby-wasm/src/layout.rs`
-  - `crates/goby-wasm/src/lower.rs`
-  - `crates/goby-wasm/src/fallback.rs`
+  - ~~replace direct `compile_print_module` path with `native_codegen_or_fallback` dispatcher.~~ (done Phase 0)
+  - ~~progressively delete string-based unsupported-form heuristics.~~ (done Phase 6.1)
+- new files (all created):
+  - ~~`crates/goby-wasm/src/backend.rs`~~ (done Phase 0)
+  - ~~`crates/goby-wasm/src/layout.rs`~~ (done Phase 0)
+  - ~~`crates/goby-wasm/src/lower.rs`~~ (done Phase 0)
+  - ~~`crates/goby-wasm/src/fallback.rs`~~ (done Phase 0)
+  - `crates/goby-wasm/src/call.rs` (added Phase 6.1)
+  - `crates/goby-wasm/src/support.rs` (added Phase 6.1)
+- Phase 8 files to modify:
+  - `crates/goby-wasm/src/backend.rs` — export `_start` instead of `main`.
+  - `crates/goby-cli/src/main.rs` — drop `--invoke main` from `execute_wasm`.
 - tests:
   - expand `crates/goby-wasm/src/lib.rs` tests or split into `crates/goby-wasm/tests/` integration tests.
 
@@ -450,7 +515,7 @@ Mitigation:
 - Add regression tests for `examples/effect.gb` to guarantee fallback path remains behavior-identical.
 - Keep native and fallback path selection deterministic and test-visible.
 
-## 8. Exit Criteria for Full Interpreter Removal
+## 9. Exit Criteria for Full Interpreter Removal
 
 Interpreter (`resolve_main_runtime_output`) can be removed only when all are true:
 1. `examples/*.gb` run via native path with identical output.
