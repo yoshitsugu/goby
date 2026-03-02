@@ -2549,7 +2549,7 @@ main =
     }
 
     #[test]
-    fn compile_module_uses_fallback_when_native_lowerer_is_not_ready() {
+    fn compile_module_uses_native_emitter_for_phase1_subset() {
         let source = read_example("hello.gb");
         let module = parse_module(&source).expect("hello.gb should parse");
         let wasm = compile_module(&module).expect("codegen should succeed");
@@ -2557,9 +2557,9 @@ main =
             resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
                 .expect("runtime output should resolve");
         let expected = compile_print_module(&expected_text).expect("fallback wasm should compile");
-        assert_eq!(
+        assert_ne!(
             wasm, expected,
-            "Phase 0 must preserve fallback behavior while native lowering is stubbed"
+            "phase-1 subset should use native wasm-encoder emitter, not wat fallback emitter"
         );
     }
 }
