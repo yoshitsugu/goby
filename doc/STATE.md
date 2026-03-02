@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-02 (session 44)
+Last updated: 2026-03-02 (session 45)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -318,6 +318,16 @@ This file is a restart-safe snapshot for resuming work after context reset.
     to `$1 = "run" && -n $2`, matching the new `wasmtime run <path>` invocation shape.
   - 215 tests pass; `cargo clippy -- -D warnings` clean.
   - Phase 8 marked complete in `doc/PLAN_WASM.md`.
+- 2026-03-02 (session 45): Wasm test layout cleanup for PLAN_WASM §6
+  - Added integration test file:
+    `crates/goby-wasm/tests/wasm_exports_and_smoke.rs`.
+  - Moved smoke/export checks from `src/lib.rs` tests to integration coverage:
+    - `_start` export-section assertion,
+    - unsupported-main codegen error check,
+    - basic wasm-header smoke checks (`print` literal, `function.gb` compile).
+  - Updated `doc/PLAN_WASM.md` §6 test work-item to done.
+  - Validation: `cargo test -p goby-wasm`, `cargo check`, `cargo test`,
+    `cargo clippy -- -D warnings` all green.
 
 ## 5. Current Example Files
 

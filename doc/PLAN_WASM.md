@@ -487,7 +487,8 @@ Primary files to add/modify:
   - ~~`crates/goby-wasm/src/backend.rs` — export `_start` instead of `main`.~~
   - ~~`crates/goby-cli/src/main.rs` — drop `--invoke main` from `execute_wasm`.~~
 - tests:
-  - expand `crates/goby-wasm/src/lib.rs` tests or split into `crates/goby-wasm/tests/` integration tests.
+  - ~~expand `crates/goby-wasm/src/lib.rs` tests or split into `crates/goby-wasm/tests/` integration tests.~~
+    (done: added integration smoke/export tests in `crates/goby-wasm/tests/wasm_exports_and_smoke.rs`)
 
 ## 7. Risks and Mitigations
 
