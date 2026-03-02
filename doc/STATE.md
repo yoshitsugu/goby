@@ -661,6 +661,34 @@ This file is a restart-safe snapshot for resuming work after context reset.
     - `cargo check`
     - `cargo test` (267 tests passed)
     - `cargo clippy -- -D warnings`
+- 2026-03-02 (session 65): `PLAN_RESUME` Step 7.1 complete (execution-style planning metadata)
+  - Added new wasm planning module:
+    - `crates/goby-wasm/src/planning.rs`
+    - introduces `LoweringPlan` + `LoweringStyle` (`DirectStyle` / `EffectBoundary`).
+  - Planning classification signals implemented:
+    - `can` effect clause in type annotation,
+    - `Stmt::Using` presence,
+    - `Expr::Resume` presence,
+    - missing `parsed_body` (conservative `EffectBoundary`).
+  - Transitive propagation implemented:
+    - declaration call graph over direct named calls,
+    - callers of boundary declarations are marked `EffectBoundary`.
+  - Added handler-context metadata flag:
+    - `handler_resume_present` (any handler method contains `resume`).
+  - Lowerer integration:
+    - `lower::try_emit_native_module` now consults `LoweringPlan`;
+      native lowering proceeds only when `main` is `DirectStyle`.
+  - Added unit tests for planning:
+    - pure direct-style classification,
+    - `can` boundary + caller propagation,
+    - `using` boundary,
+    - `resume` boundary + caller propagation,
+    - handler-resume presence flag.
+  - Quality gates green:
+    - `cargo fmt`
+    - `cargo check`
+    - `cargo test` (268 tests passed)
+    - `cargo clippy -- -D warnings`
 
 ## 5. Current Example Files
 

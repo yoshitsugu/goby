@@ -278,7 +278,7 @@ Step 7: Lowering optimization track (post-correctness)
   - introduce selective CPS/evidence passing only on effectful boundaries,
   - keep pure/no-effect paths in direct style.
 
-Step 7.1: Introduce execution-style planning metadata
+Step 7.1: Introduce execution-style planning metadata — DONE (2026-03-02)
 
 - Add a lowering-planning pass that classifies declarations into:
   - `DirectStyle` (pure path candidates),
@@ -289,6 +289,11 @@ Step 7.1: Introduce execution-style planning metadata
   - `resume` usage in declaration/handler context.
 - Propagate classification transitively over declaration call graph:
   - if `f` calls `g` and `g` is `EffectBoundary`, mark `f` as `EffectBoundary`.
+- Implemented in `goby-wasm` as planning metadata (`LoweringPlan`) with tests for:
+  - pure declaration classification,
+  - `can` / `using` / `resume` boundary signals,
+  - transitive caller propagation,
+  - handler-resume presence marker.
 
 Step 7.2: Define evidence payload shape (internal IR-level contract)
 
