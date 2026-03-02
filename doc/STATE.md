@@ -151,6 +151,12 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - TODO §4.1.1 comments on MethodCall and Qualified-callee deferred paths.
   - 5 new tests: 2 reject (Call + Pipeline wrong type), 2 accept (Call + Pipeline correct type), 1 neutral.
   - 181 → 186 total tests pass; `cargo clippy -- -D warnings` clean.
+- 2026-03-02 (session 28, commit cf14974): positional single-field record constructor sugar (BUG-002):
+  - `Ctor(value)` now accepted as sugar for `Ctor(field: value)` when record has exactly one field.
+  - `check_expr` Expr::Call arm: detects single-field constructor via `lookup_record_by_constructor`, rewrites to RecordConstruct.
+  - `eval_expr_ast` Expr::Call arm: new `single_field_constructor_field` helper scans `module.type_declarations`.
+  - 3 new tests; 186 → 189 total tests pass; `cargo clippy -- -D warnings` clean.
+  - `doc/BUGS.md` created; BUG-001 (handler for unknown effect) and BUG-002 (positional constructor, Fixed) documented.
 
 ## 5. Current Example Files
 
@@ -165,7 +171,7 @@ This file is a restart-safe snapshot for resuming work after context reset.
 
 ## 6. Immediate Next Steps (Execution Order)
 
-§4.1 and §4.1.1 complete (sessions 27–28). 186 tests pass.
+§4.1, §4.1.1, and BUG-002 complete (sessions 27–28). 189 tests pass.
 
 Resume checks:
 ```
