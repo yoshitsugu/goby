@@ -274,8 +274,60 @@ Step 6: Stdlib enablement tasks (consumer track) — DONE (2026-03-02)
 
 Step 7: Lowering optimization track (post-correctness)
 
-- Introduce selective CPS/evidence passing in lowering pipeline.
-- Keep direct style for pure paths.
+- Objective:
+  - introduce selective CPS/evidence passing only on effectful boundaries,
+  - keep pure/no-effect paths in direct style.
+
+Step 7.1: Introduce execution-style planning metadata
+
+- Add a lowering-planning pass that classifies declarations into:
+  - `DirectStyle` (pure path candidates),
+  - `EffectBoundary` (requires handler evidence / continuation plumbing).
+- Initial boundary signals:
+  - explicit `can <Effect>` requirements in type annotation,
+  - `using` statements in declaration body,
+  - `resume` usage in declaration/handler context.
+- Propagate classification transitively over declaration call graph:
+  - if `f` calls `g` and `g` is `EffectBoundary`, mark `f` as `EffectBoundary`.
+
+Step 7.2: Define evidence payload shape (internal IR-level contract)
+
+- Introduce internal representation for handler evidence:
+  - active handler stack snapshot/evidence pointer,
+  - operation dispatch tokens (`EffectId`, `OpId` placeholders until full ID intern pass).
+- Keep this internal-only (no source syntax change in Step 7).
+
+Step 7.3: Direct-style lowerer path stabilization
+
+- Keep existing native lowerer behavior for `DirectStyle` declarations.
+- Ensure unsupported effectful constructs do not regress pure-path codegen:
+  - direct-style subset remains bytecode-compatible with current tests.
+
+Step 7.4: Effect-boundary lowering skeleton (no full feature parity yet)
+
+- Add explicit handoff points where `EffectBoundary` lowering will inject:
+  - continuation capture/re-entry hooks,
+  - evidence passing through calls crossing effect boundaries.
+- In this phase, handoff points may still route to fallback runtime for execution,
+  but boundaries must be explicit and testable in lowering decisions.
+
+Step 7.5: Regression and observability hooks
+
+- Add focused tests for planning correctness:
+  - pure declaration remains `DirectStyle`,
+  - declaration with `can`/`using`/`resume` becomes `EffectBoundary`,
+  - transitive propagation marks callers correctly.
+- Add diagnostics/dev hooks (internal) to inspect selected lowering mode per declaration.
+
+Step 7.6: Step-7 completion criteria
+
+- Planning metadata and boundary classification are implemented and covered by tests.
+- Pure-path native lowering remains green.
+- Effect-boundary handoff points exist in lowering pipeline (even if final CPS runtime wiring is Step 8+).
+- Quality gates pass:
+  - `cargo check`
+  - `cargo test`
+  - `cargo clippy -- -D warnings`
 
 Step 8: Wasm advanced path (optional)
 
