@@ -280,6 +280,7 @@ Gate checks before Phase 6:
 Current gate result (2026-03-02): Passed in test suite (`compile_module_uses_native_emitter_for_control_flow_example`).
 
 ## Phase 6 - `examples/function.gb` native coverage (except HOF/lambda)
+Status (2026-03-02, session 42): Completed.
 
 AST subset lowered natively:
 - all direct first-order parts of `examples/function.gb`.
@@ -306,7 +307,8 @@ Gate checks before Phase 7:
 - Path gate: explicit reason-coded fallback for lambda/HOF is test-covered.
 - Fallback gate: full `examples/function.gb` remains stable when fallback triggers.
 
-Current note (2026-03-02, session 32):
+Current notes:
+- 2026-03-02 (session 32):
 - Re-entry rule was executed end-to-end:
   1) AST shape lock test added for spaced multi-arg calls (`f a b c` nested `Expr::Call`),
   2) `fallback` + `lower` were extended together using the same call-flattening strategy,
@@ -316,8 +318,16 @@ Current note (2026-03-02, session 32):
   - declaration parameter count matches flattened call arity,
   - declaration body stays within the current native-supported subset.
 - `examples/function.gb` still intentionally falls back due to lambda/HOF usage.
+- 2026-03-02 (session 42):
+  - Added explicit Phase-6 boundary tests:
+    - first-order subset derived from `function.gb` is confirmed native,
+    - unused HOF declarations do not block native path,
+    - transitively required HOF declarations force deterministic fallback with reason
+      `call_target_body_not_native_supported`.
+  - Phase-6 gates are now covered by focused tests plus full workspace quality gates.
 
-### Next implementation slice (Phase 6.1, current target)
+### Phase 6.1 Cleanup Slice
+Status (2026-03-02, session 42): Completed.
 
 Objective:
 - close remaining Phase 6 cleanup work and create a clean handoff into Phase 7.
