@@ -195,6 +195,81 @@ through active `using` handlers, matching the behavior of `execute_unit_ast_stmt
 - Fixed `execute_decl_as_side_effect` depth: 1 → 0 (top-level consistency).
 - 5 new regression tests; 181 total tests pass.
 
+### 4.1.1 Effect op argument type checking in `using` blocks
+
+#### Background
+
+`catch "NoCoffeeError"` compiles without error even when `catch : Error -> Unit` (the
+handler expects an `Error` record, not a `String`). At runtime the handler receives a
+`String`, tries to access `.message` field, gets `None`, and silently produces no output.
+
+Root causes identified (2026-03-02):
+
+1. **No argument-type check on effect op calls.** The typechecker only checks that
+   an effect op name is covered by an enclosing `using`; it does not check that the
+   argument type matches the op's declared signature.
+2. **Runtime evaluator cannot construct record values from positional-style calls.**
+   `Error "NoCoffeeError"` is parsed as `Call { callee: Var("Error"), arg: StringLit }`,
+   not as `RecordConstruct`. `eval_ast_value` returns `None` for this form when `Error`
+   is not a declared Goby function, causing silent no-output rather than an error.
+
+#### Goal
+
+Make the above class of errors a **compile-time typecheck error**, not a silent runtime
+failure.  The diagnostic should fire whenever a `using` block contains an effect op call
+whose argument type is statically incompatible with the op's declared signature.
+
+#### Scope and constraints
+
+- Effect op signatures are declared as `op_name: ArgType -> ReturnType` in `effect` blocks.
+- Only single-argument ops are in scope (MVP constraint: all current effect ops take one arg).
+- Full type inference is out of scope; check only the cases where the arg type is
+  unambiguously known at typecheck time (literal types: `Int`, `String`, `Bool`; known record
+  constructors).
+- Do not break any existing passing test.
+- `cargo clippy -- -D warnings` must remain clean.
+
+#### Design
+
+**Step 1: Parse and store effect op arg type.**
+
+Extend `EffectMember` (or a parallel lookup table built during typechecking) to store the
+parsed argument type string from the `op_name: ArgType -> ReturnType` annotation.
+
+- `EffectMember { name: String, type_annotation: String }` already holds the raw annotation.
+- Build a map `op_name → arg_type_str` in `build_effect_map` (or a new helper).
+
+**Step 2: Infer literal and known-constructor arg types at call sites.**
+
+At each effect op call inside a `using` block, determine the argument's type:
+- `StringLit` → `"String"`
+- `IntLit` → `"Int"`
+- `BoolLit` → `"Bool"`
+- `Call { callee: Var(name), .. }` where `name` is a known record constructor → constructor's type name
+- Everything else → unknown (skip check, no error)
+
+**Step 3: Emit typecheck error on mismatch.**
+
+If the inferred arg type is known AND does not match the op's declared arg type, emit:
+
+```
+typecheck error in main: effect op `catch` expects argument of type `Error` but got `String`
+```
+
+**Step 4: Regression tests.**
+
+- Positive: `catch (Error "x")` with correct type → no error.
+- Negative: `catch "x"` when op expects `Error` → error with message including op name,
+  expected type, and actual type.
+- Existing tests: all 181 must continue to pass.
+
+#### Out of scope (deferred)
+
+- Full type inference for arbitrary expressions.
+- Multi-argument ops.
+- Return type checking of effect ops.
+- Checking handler method body types against op signatures.
+
 ### 4.2 Standard-Library Foundation (self-hosted direction)
 
 Goal: prepare infrastructure so core standard libraries can be authored primarily in Goby,
