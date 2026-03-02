@@ -42,6 +42,7 @@ enum NativeValue {
     String(String),
     Int(i64),
     Bool(bool),
+    ListInt(Vec<i64>),
 }
 
 impl NativeValue {
@@ -51,6 +52,14 @@ impl NativeValue {
             Self::Int(n) => n.to_string(),
             Self::Bool(true) => "True".to_string(),
             Self::Bool(false) => "False".to_string(),
+            Self::ListInt(values) => {
+                let inner = values
+                    .iter()
+                    .map(|v| v.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("[{}]", inner)
+            }
         }
     }
 }
@@ -136,6 +145,17 @@ fn eval_expr(
             }
             let arg_val = eval_expr(arg, bindings, env, depth + 1)?;
             eval_named_function(fn_name, Some(arg_val), env, depth + 1)
+        }
+        Expr::ListLit(items) => {
+            let mut out = Vec::with_capacity(items.len());
+            for item in items {
+                let value = eval_expr(item, bindings, env, depth + 1)?;
+                let NativeValue::Int(n) = value else {
+                    return None;
+                };
+                out.push(n);
+            }
+            Some(NativeValue::ListInt(out))
         }
         _ => None,
     }
@@ -254,6 +274,9 @@ fn is_value_expr_supported(
 ) -> bool {
     match expr {
         Expr::StringLit(_) | Expr::IntLit(_) | Expr::BoolLit(_) | Expr::Var(_) => true,
+        Expr::ListLit(items) => items
+            .iter()
+            .all(|item| matches!(item, Expr::IntLit(_) | Expr::Var(_))),
         Expr::BinOp { op, left, right } => {
             matches!(op, BinOpKind::Add | BinOpKind::Mul | BinOpKind::Eq)
                 && is_value_expr_supported(left, module, env, stack)

@@ -55,6 +55,9 @@ fn is_phase2_supported_expr(expr: &Expr, module: &Module) -> bool {
 fn is_phase2_supported_value_expr(expr: &Expr, module: &Module) -> bool {
     match expr {
         Expr::StringLit(_) | Expr::IntLit(_) | Expr::BoolLit(_) | Expr::Var(_) => true,
+        Expr::ListLit(items) => items
+            .iter()
+            .all(|item| matches!(item, Expr::IntLit(_) | Expr::Var(_))),
         Expr::BinOp { op, left, right } => {
             matches!(op, BinOpKind::Add | BinOpKind::Mul | BinOpKind::Eq)
                 && is_phase2_supported_value_expr(left, module)
