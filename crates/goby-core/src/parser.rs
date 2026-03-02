@@ -167,6 +167,13 @@ pub fn parse_module(source: &str) -> Result<Module, ParseError> {
                         let name = parts[0].to_string();
                         let params: Vec<String> =
                             parts[1..].iter().map(|s| s.to_string()).collect();
+                        if params.iter().any(|p| is_reserved_keyword(p)) {
+                            return Err(ParseError {
+                                line: i + 1,
+                                col: 1,
+                                message: "handler parameter name `resume` is reserved".to_string(),
+                            });
+                        }
                         let mut body = rhs.trim().to_string();
                         // Collect any deeper-indented sub-body lines.
                         i += 1;
@@ -246,6 +253,13 @@ pub fn parse_module(source: &str) -> Result<Module, ParseError> {
                 col: 1,
                 message: "expected top-level definition (`name ... = ...`)".to_string(),
             })?;
+        if is_reserved_keyword(name) {
+            return Err(ParseError {
+                line: i + 1,
+                col: 1,
+                message: format!("`{name}` is a reserved keyword"),
+            });
+        }
 
         if let Some(annotated_name) = annotated_name
             && annotated_name != name
@@ -613,6 +627,10 @@ fn parse_stmt(line: &str) -> Option<Stmt> {
     }
     let expr = parse_expr(line)?;
     Some(Stmt::Expr(expr))
+}
+
+fn is_reserved_keyword(s: &str) -> bool {
+    matches!(s, "resume")
 }
 
 /// Parse a single expression from a source string.
@@ -1630,6 +1648,66 @@ mod tests {
         let source = "foo : Int\nbar = 1\n";
         let err = parse_module(source).expect_err("mismatched names should be rejected");
         assert!(err.message.contains("does not match"));
+    }
+
+    #[test]
+    fn rejects_reserved_resume_as_top_level_declaration_name() {
+        let source = "resume : Int -> Int\nresume x = x\n";
+        let err = parse_module(source).expect_err("reserved declaration name should be rejected");
+        assert!(err.message.contains("reserved keyword"));
+    }
+
+    #[test]
+    fn rejects_reserved_resume_as_handler_parameter_name() {
+        let source = r#"
+effect Iter
+  yield: String -> Unit
+
+handler Collect for Iter
+  yield resume = resume Unit
+
+main = 1
+"#;
+        let err = parse_module(source).expect_err("reserved handler parameter should be rejected");
+        assert!(
+            err.message
+                .contains("handler parameter name `resume` is reserved"),
+            "unexpected error message: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn parses_resume_expression_shape_inside_handler_body_contract() {
+        let source = r#"
+effect Iter
+  yield: String -> Unit
+
+handler Collect for Iter
+  yield item = resume Unit
+
+main = 1
+"#;
+        let module = parse_module(source).expect("handler body should parse");
+        let handler = module
+            .handler_declarations
+            .iter()
+            .find(|h| h.name == "Collect")
+            .expect("Collect handler should exist");
+        assert_eq!(handler.methods.len(), 1);
+        let method = &handler.methods[0];
+        let stmts = method
+            .parsed_body
+            .as_ref()
+            .expect("method body should parse into statements");
+        assert_eq!(stmts.len(), 1);
+        match &stmts[0] {
+            Stmt::Expr(Expr::Call { callee, arg }) => {
+                assert_eq!(**callee, Expr::Var("resume".to_string()));
+                assert_eq!(**arg, Expr::Var("Unit".to_string()));
+            }
+            other => panic!("unexpected statement shape: {:?}", other),
+        }
     }
 
     #[test]
