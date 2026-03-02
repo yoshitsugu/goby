@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-02 (session 54)
+Last updated: 2026-03-02 (session 55)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -479,6 +479,26 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - Quality gates green:
     - `cargo check`
     - `cargo test` (242 tests passed)
+    - `cargo clippy -- -D warnings`
+- 2026-03-02 (session 55): `PLAN_STANDARD_LIBRARY` Step11-12 complete (diagnostics hardening + print migration checkpoint)
+  - Step11 diagnostics hardening:
+    - Improved import diagnostics for unknown modules to include attempted stdlib file path.
+    - Improved parser diagnostics for malformed `@embed` declarations:
+      - invalid target now reports expected shape `@embed effect <EffectName>`,
+      - invalid embedded effect name has explicit error text.
+    - Refined resolver diagnostics:
+      - added dedicated `DuplicateEmbeddedEffect` error kind (no longer overloading `DuplicateExport`).
+    - Added regression tests for the above diagnostics.
+  - Step12 print migration handoff checkpoint (current active behavior):
+    - `goby/stdio.print` is importable and callable (`import goby/stdio ( print )`).
+    - bare builtin `print` compatibility is preserved during migration.
+    - `@embed` parsing/typecheck support is active and path-restricted in context-aware flows:
+      - accepted under stdlib root,
+      - rejected outside stdlib root,
+      - duplicate embedded effect names rejected.
+  - Quality gates green:
+    - `cargo check`
+    - `cargo test` (244 tests passed)
     - `cargo clippy -- -D warnings`
 
 ## 5. Current Example Files

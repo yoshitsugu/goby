@@ -50,10 +50,15 @@ pub fn typecheck_module_with_context(
     validate_effect_declarations(module)?;
 
     let imported_embedded_effects = collect_imported_embedded_effects(module, &stdlib_root_path);
+    let local_embedded_effects = module
+        .embed_declarations
+        .iter()
+        .map(|e| e.effect_name.clone());
     let known_effects: HashSet<String> = builtin_effect_names()
         .iter()
         .copied()
         .map(str::to_string)
+        .chain(local_embedded_effects)
         .chain(imported_embedded_effects)
         .chain(module.effect_declarations.iter().map(|e| e.name.clone()))
         .collect();
@@ -881,18 +886,24 @@ fn module_exports_for_import_with_resolver(
             .into_iter()
             .map(|(name, annotation)| (name, ty_from_import_annotation(&annotation)))
             .collect()),
-        Err(StdlibResolveError::ModuleNotFound { .. }) => builtin_module_exports(module_path)
-            .map(|builtin| {
-                builtin
-                    .into_iter()
-                    .map(|(name, ty)| (name.to_string(), ty))
-                    .collect()
-            })
-            .ok_or_else(|| TypecheckError {
-                declaration: None,
-                span: None,
-                message: format!("unknown module `{}`", module_path),
-            }),
+        Err(StdlibResolveError::ModuleNotFound { attempted_path, .. }) => {
+            builtin_module_exports(module_path)
+                .map(|builtin| {
+                    builtin
+                        .into_iter()
+                        .map(|(name, ty)| (name.to_string(), ty))
+                        .collect()
+                })
+                .ok_or_else(|| TypecheckError {
+                    declaration: None,
+                    span: None,
+                    message: format!(
+                        "unknown module `{}` (attempted stdlib path: {})",
+                        module_path,
+                        attempted_path.display()
+                    ),
+                })
+        }
         Err(err) => Err(TypecheckError {
             declaration: None,
             span: None,
@@ -2833,6 +2844,24 @@ f = log \"ok\"
     }
 
     #[test]
+    fn local_embedded_effect_name_is_visible_to_typechecker() {
+        let sandbox = TempDirGuard::new("embedded_effect_local_visible");
+        let stdlib_root = sandbox.path.join("stdlib");
+        let source_path = stdlib_root.join("goby/console.gb");
+        fs::create_dir_all(source_path.parent().expect("parent should exist"))
+            .expect("stdlib path should be creatable");
+        let source = "\
+@embed effect Console
+log : String -> Unit can Console
+log msg = msg |> print
+";
+        fs::write(&source_path, source).expect("fixture file should be writable");
+        let module = parse_module(source).expect("should parse");
+        typecheck_module_with_context(&module, Some(&source_path), Some(&stdlib_root))
+            .expect("local embedded effect name should be accepted in can clause");
+    }
+
+    #[test]
     fn resolver_falls_back_to_builtin_exports_when_file_missing() {
         let sandbox = TempDirGuard::new("resolver_fallback");
         let resolver = StdlibResolver::new(sandbox.path.join("stdlib"));
@@ -2867,6 +2896,17 @@ f = log \"ok\"
             "unexpected message: {}",
             err.message
         );
+    }
+
+    #[test]
+    fn unknown_module_diagnostic_includes_attempted_stdlib_path() {
+        let sandbox = TempDirGuard::new("unknown_module_path_diag");
+        let resolver = StdlibResolver::new(sandbox.path.join("stdlib"));
+        let err = module_exports_for_import_with_resolver("goby/unknown_mod", &resolver)
+            .expect_err("unknown module should fail");
+        assert!(err.message.contains("unknown module `goby/unknown_mod`"));
+        assert!(err.message.contains("attempted stdlib path"));
+        assert!(err.message.contains("goby/unknown_mod.gb"));
     }
 
     #[test]
