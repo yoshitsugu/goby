@@ -1,9 +1,9 @@
+use goby_core::parse_module;
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
-use goby_core::parse_module;
 
 struct TempDirGuard {
     path: PathBuf,
@@ -15,8 +15,12 @@ impl TempDirGuard {
             .duration_since(UNIX_EPOCH)
             .expect("clock should be monotonic enough for tests")
             .as_nanos();
-        let path =
-            env::temp_dir().join(format!("goby_cli_{}_{}_{}", label, std::process::id(), nanos));
+        let path = env::temp_dir().join(format!(
+            "goby_cli_{}_{}_{}",
+            label,
+            std::process::id(),
+            nanos
+        ));
         fs::create_dir_all(&path).expect("temp directory should be creatable");
         Self { path }
     }
@@ -142,7 +146,11 @@ fn run_command_emits_locked_function_output_via_wasmtime() {
     assert_eq!(actual, expected);
 
     let wasm_out = input.with_extension("wasm");
-    assert!(wasm_out.exists(), "expected generated wasm at {:?}", wasm_out);
+    assert!(
+        wasm_out.exists(),
+        "expected generated wasm at {:?}",
+        wasm_out
+    );
 }
 
 #[test]

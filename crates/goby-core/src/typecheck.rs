@@ -18,7 +18,11 @@ impl std::fmt::Display for TypecheckError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let target = self.declaration.as_deref().unwrap_or("<module>");
         match &self.span {
-            Some(s) => write!(f, "typecheck error in {} at line {}:{}: {}", target, s.line, s.col, self.message),
+            Some(s) => write!(
+                f,
+                "typecheck error in {} at line {}:{}: {}",
+                target, s.line, s.col, self.message
+            ),
             None => write!(f, "typecheck error in {}: {}", target, self.message),
         }
     }
@@ -44,7 +48,10 @@ pub fn typecheck_module(module: &Module) -> Result<(), TypecheckError> {
         if !names.insert(decl.name.clone()) {
             return Err(TypecheckError {
                 declaration: Some(decl.name.clone()),
-                span: Some(Span { line: decl.line, col: 1 }),
+                span: Some(Span {
+                    line: decl.line,
+                    col: 1,
+                }),
                 message: "duplicate top-level declaration".to_string(),
             });
         }
@@ -62,14 +69,20 @@ pub fn typecheck_module(module: &Module) -> Result<(), TypecheckError> {
             let base_annotation = strip_effect_clause(annotation);
             let ty = parse_function_type(base_annotation).ok_or_else(|| TypecheckError {
                 declaration: Some("main".to_string()),
-                span: Some(Span { line: main.line, col: 1 }),
+                span: Some(Span {
+                    line: main.line,
+                    col: 1,
+                }),
                 message: "main type annotation must be a function type".to_string(),
             })?;
 
             if ty.arguments != vec!["Unit".to_string()] || ty.result != "Unit" {
                 return Err(TypecheckError {
                     declaration: Some("main".to_string()),
-                    span: Some(Span { line: main.line, col: 1 }),
+                    span: Some(Span {
+                        line: main.line,
+                        col: 1,
+                    }),
                     message: "main type must be `Unit -> Unit` in MVP".to_string(),
                 });
             }
@@ -102,7 +115,10 @@ pub fn typecheck_module(module: &Module) -> Result<(), TypecheckError> {
                     if !unit_param_omitted && decl.params.len() != ft.arguments.len() {
                         return Err(TypecheckError {
                             declaration: Some(decl.name.clone()),
-                            span: Some(Span { line: decl.line, col: 1 }),
+                            span: Some(Span {
+                                line: decl.line,
+                                col: 1,
+                            }),
                             message: format!(
                                 "definition has {} parameter(s) but type annotation has {}",
                                 decl.params.len(),
@@ -365,7 +381,10 @@ fn build_effect_map(module: &Module) -> EffectMap {
         effect_to_ops.insert(effect_decl.name.clone(), ops);
     }
 
-    EffectMap { handler_to_effect, effect_to_ops }
+    EffectMap {
+        handler_to_effect,
+        effect_to_ops,
+    }
 }
 
 /// Returns the set of op names (qualified + bare) for all effects listed in
@@ -518,7 +537,9 @@ fn inject_type_constructors(
             } => {
                 let mut field_map = HashMap::new();
                 let params: Vec<Ty> = fields.iter().map(|f| ty_from_annotation(&f.ty)).collect();
-                for (field_name, field_ty) in fields.iter().map(|f| (&f.name, ty_from_annotation(&f.ty))) {
+                for (field_name, field_ty) in
+                    fields.iter().map(|f| (&f.name, ty_from_annotation(&f.ty)))
+                {
                     field_map.insert(field_name.clone(), field_ty);
                 }
                 let result = Ty::Con {
@@ -574,11 +595,12 @@ fn validate_effect_declarations(module: &Module) -> Result<(), TypecheckError> {
 
 fn validate_imports(module: &Module) -> Result<(), TypecheckError> {
     for import in &module.imports {
-        let exports = builtin_module_exports(&import.module_path).ok_or_else(|| TypecheckError {
-            declaration: None,
-            span: None,
-            message: format!("unknown module `{}`", import.module_path),
-        })?;
+        let exports =
+            builtin_module_exports(&import.module_path).ok_or_else(|| TypecheckError {
+                declaration: None,
+                span: None,
+                message: format!("unknown module `{}`", import.module_path),
+            })?;
 
         if let ImportKind::Selective(names) = &import.kind {
             for name in names {
@@ -1179,10 +1201,24 @@ fn check_unhandled_effects_in_expr(
     // Shorthand for recursive calls.
     macro_rules! recurse {
         ($e:expr) => {
-            check_unhandled_effects_in_expr($e, env, required_effects_map, effect_map, covered_ops, decl_name)
+            check_unhandled_effects_in_expr(
+                $e,
+                env,
+                required_effects_map,
+                effect_map,
+                covered_ops,
+                decl_name,
+            )
         };
         ($e:expr, $child_env:expr) => {
-            check_unhandled_effects_in_expr($e, $child_env, required_effects_map, effect_map, covered_ops, decl_name)
+            check_unhandled_effects_in_expr(
+                $e,
+                $child_env,
+                required_effects_map,
+                effect_map,
+                covered_ops,
+                decl_name,
+            )
         };
     }
 
@@ -1206,7 +1242,13 @@ fn check_unhandled_effects_in_expr(
                 });
             }
             // Also check if this is a user function that requires effects (bare reference).
-            check_callee_required_effects(name, required_effects_map, effect_map, covered_ops, decl_name)
+            check_callee_required_effects(
+                name,
+                required_effects_map,
+                effect_map,
+                covered_ops,
+                decl_name,
+            )
         }
         Expr::Qualified { receiver, member } => {
             let qualified = format!("{}.{}", receiver, member);
@@ -1270,7 +1312,11 @@ fn check_unhandled_effects_in_expr(
             recurse!(callee)?;
             recurse!(arg)
         }
-        Expr::MethodCall { receiver, method, args } => {
+        Expr::MethodCall {
+            receiver,
+            method,
+            args,
+        } => {
             let qualified = format!("{}.{}", receiver, method);
             if env.is_effect_op(&qualified) && !covered_ops.contains(qualified.as_str()) {
                 return Err(TypecheckError {
@@ -1344,7 +1390,11 @@ fn check_unhandled_effects_in_expr(
             }
             Ok(())
         }
-        Expr::If { condition, then_expr, else_expr } => {
+        Expr::If {
+            condition,
+            then_expr,
+            else_expr,
+        } => {
             recurse!(condition)?;
             recurse!(then_expr)?;
             recurse!(else_expr)
@@ -1491,7 +1541,11 @@ fn ensure_no_ambiguous_refs_in_expr(
     }
 }
 
-fn ensure_name_not_ambiguous(name: &str, env: &TypeEnv, decl_name: &str) -> Result<(), TypecheckError> {
+fn ensure_name_not_ambiguous(
+    name: &str,
+    env: &TypeEnv,
+    decl_name: &str,
+) -> Result<(), TypecheckError> {
     if env.locals.contains_key(name) {
         return Ok(());
     }
@@ -1530,7 +1584,8 @@ fn ty_name(ty: &Ty) -> String {
             if args.is_empty() {
                 name.clone()
             } else {
-                let rendered_args: Vec<String> = args.iter().map(format_type_application_arg).collect();
+                let rendered_args: Vec<String> =
+                    args.iter().map(format_type_application_arg).collect();
                 format!("{} {}", name, rendered_args.join(" "))
             }
         }
@@ -1587,7 +1642,10 @@ fn validate_type_annotation(
         };
         let mut segments = ft.arguments;
         segments.push(ft.result);
-        if segments.iter().any(|segment| parse_type_expr(segment).is_none()) {
+        if segments
+            .iter()
+            .any(|segment| parse_type_expr(segment).is_none())
+        {
             return Err(TypecheckError {
                 declaration: Some(decl_name.to_string()),
                 span: None,
@@ -1912,8 +1970,7 @@ effect Log
   log: String -> Unit
 ";
         let module = parse_module(source).expect("should parse");
-        let err =
-            typecheck_module(&module).expect_err("duplicate effect declarations should fail");
+        let err = typecheck_module(&module).expect_err("duplicate effect declarations should fail");
         assert_eq!(err.declaration.as_deref(), Some("Log"));
         assert!(err.message.contains("duplicate effect declaration"));
     }
@@ -2213,8 +2270,7 @@ main =
     show_env_var \"PATH\"
 ";
         let module = parse_module(source).expect("should parse");
-        let err = typecheck_module(&module)
-            .expect_err("missing Env handler should be rejected");
+        let err = typecheck_module(&module).expect_err("missing Env handler should be rejected");
         assert_eq!(err.declaration.as_deref(), Some("main"));
         assert!(
             err.message.contains("unhandled effect") || err.message.contains("Env"),
@@ -2241,8 +2297,7 @@ main =
     3 |> plus_ten_with_log
 ";
         let module = parse_module(source).expect("should parse");
-        typecheck_module(&module)
-            .expect("effectful pipeline callee inside using should succeed");
+        typecheck_module(&module).expect("effectful pipeline callee inside using should succeed");
     }
 
     #[test]
@@ -2330,7 +2385,8 @@ f : Int -> Int can Log, Env
 f n = n
 ";
         let module = parse_module(source).expect("should parse");
-        typecheck_module(&module).expect("multiple declared effects in `can` clause should be accepted");
+        typecheck_module(&module)
+            .expect("multiple declared effects in `can` clause should be accepted");
     }
 
     #[test]
@@ -2389,8 +2445,7 @@ f n = n
     fn grouped_type_annotation_mismatch_is_rejected() {
         // `n : (Int)` but body is String — should be rejected.
         let module = parse_module("n : (Int)\nn = \"oops\"\n").expect("should parse");
-        let err =
-            typecheck_module(&module).expect_err("grouped type mismatch should be rejected");
+        let err = typecheck_module(&module).expect_err("grouped type mismatch should be rejected");
         assert_eq!(err.declaration.as_deref(), Some("n"));
         assert!(
             err.message.contains("does not match"),
@@ -2609,7 +2664,8 @@ main =
         // After A1 fix, `name` resolves to String, which conflicts with declared return Int.
         let module =
             parse_module("greet : String -> Int\ngreet name = name\n").expect("should parse");
-        let err = typecheck_module(&module).expect_err("type mismatch via param should be rejected");
+        let err =
+            typecheck_module(&module).expect_err("type mismatch via param should be rejected");
         assert_eq!(err.declaration.as_deref(), Some("greet"));
         assert!(
             err.message.contains("does not match"),
@@ -2628,10 +2684,8 @@ main =
     #[test]
     fn rejects_param_count_mismatch_fewer_params() {
         // Annotation has 2 params but definition only has 1 — should be rejected.
-        let module =
-            parse_module("add : Int -> Int -> Int\nadd a = a\n").expect("should parse");
-        let err =
-            typecheck_module(&module).expect_err("param count mismatch should be rejected");
+        let module = parse_module("add : Int -> Int -> Int\nadd a = a\n").expect("should parse");
+        let err = typecheck_module(&module).expect_err("param count mismatch should be rejected");
         assert_eq!(err.declaration.as_deref(), Some("add"));
         assert!(
             err.message.contains("parameter"),
@@ -2643,7 +2697,8 @@ main =
     #[test]
     fn accepts_unit_param_omitted_in_definition() {
         // `main : Unit -> Unit; main = ...` — Unit param may be omitted in MVP.
-        let module = parse_module("main : Unit -> Unit\nmain = print \"hi\"\n").expect("should parse");
+        let module =
+            parse_module("main : Unit -> Unit\nmain = print \"hi\"\n").expect("should parse");
         typecheck_module(&module).expect("Unit param omission should be accepted");
     }
 
@@ -2677,7 +2732,10 @@ main =
         let module = parse_module(source).expect("should parse");
         let err = typecheck_module(&module).expect_err("wrong main type should fail");
         let span = err.span.expect("main type error must have a span");
-        assert_eq!(span.line, 1, "span.line should point to main declaration line");
+        assert_eq!(
+            span.line, 1,
+            "span.line should point to main declaration line"
+        );
         assert_eq!(span.col, 1);
     }
 
@@ -2689,7 +2747,10 @@ main =
         let module = parse_module(source).expect("should parse");
         let err = typecheck_module(&module).expect_err("wrong main function type should fail");
         let span = err.span.expect("main type error must have a span");
-        assert_eq!(span.line, 1, "span.line should point to main declaration line");
+        assert_eq!(
+            span.line, 1,
+            "span.line should point to main declaration line"
+        );
         assert_eq!(span.col, 1);
         assert!(err.message.contains("Unit -> Unit"));
     }
@@ -2866,8 +2927,7 @@ main =
     raise Error(\"oops\")
 ";
         let module = parse_module(source).expect("should parse");
-        typecheck_module(&module)
-            .expect("positional single-field constructor should be accepted");
+        typecheck_module(&module).expect("positional single-field constructor should be accepted");
     }
 
     #[test]
