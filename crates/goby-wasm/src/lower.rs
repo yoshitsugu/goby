@@ -89,16 +89,19 @@ fn as_print_expr(
     bindings: &HashMap<&str, NativeValue>,
     env: &EvalEnv<'_>,
 ) -> Option<NativeValue> {
-    let Expr::Call { callee, arg } = expr else {
-        return None;
-    };
-    let Expr::Var(name) = callee.as_ref() else {
-        return None;
-    };
-    if name != "print" {
-        return None;
+    match expr {
+        Expr::Call { callee, arg } => {
+            let Expr::Var(name) = callee.as_ref() else {
+                return None;
+            };
+            if name != "print" {
+                return None;
+            }
+            eval_expr(arg, bindings, env, 0)
+        }
+        Expr::Pipeline { value, callee } if callee == "print" => eval_expr(value, bindings, env, 0),
+        _ => None,
     }
-    eval_expr(arg, bindings, env, 0)
 }
 
 fn eval_expr(
