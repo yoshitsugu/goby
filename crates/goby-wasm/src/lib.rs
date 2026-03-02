@@ -2750,4 +2750,24 @@ main =
             "case-print subset should use native wasm-encoder emitter"
         );
     }
+
+    #[test]
+    fn compile_module_uses_native_emitter_for_control_flow_example() {
+        let source = read_example("control_flow.gb");
+        let module = parse_module(&source).expect("control_flow.gb should parse");
+        assert!(
+            fallback::supports_native_codegen(&module),
+            "control_flow.gb should be accepted by native capability checker"
+        );
+        let wasm = compile_module(&module).expect("codegen should succeed");
+        let expected_text =
+            resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
+                .expect("runtime output should resolve");
+        assert_eq!(expected_text, "Five!\n50\n30");
+        let expected = compile_print_module(&expected_text).expect("fallback wasm should compile");
+        assert_ne!(
+            wasm, expected,
+            "control_flow.gb should use native wasm-encoder emitter"
+        );
+    }
 }
