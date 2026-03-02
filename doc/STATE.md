@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-02 (session 45)
+Last updated: 2026-03-02 (session 46)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -328,6 +328,12 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - Updated `doc/PLAN_WASM.md` §6 test work-item to done.
   - Validation: `cargo test -p goby-wasm`, `cargo check`, `cargo test`,
     `cargo clippy -- -D warnings` all green.
+- 2026-03-02 (session 46): `doc/PLAN_WASM.md` plan closure
+  - Marked PLAN_WASM as complete for its defined scope (Phase 0-8).
+  - Updated baseline behavior note: unsupported non-printable fallback now returns
+    `Err(CodegenError)` (no `minimal_main_module` path).
+  - Reframed §9 as post-plan handoff (out of scope for this closed plan):
+    full interpreter retirement remains follow-up work (lambda/HOF + effect runtime).
 
 ## 5. Current Example Files
 

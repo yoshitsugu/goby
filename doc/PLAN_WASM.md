@@ -1,4 +1,8 @@
-# Real Wasm Code Generation Plan (Post-MVP)
+# Real Wasm Code Generation Plan (Post-MVP) — COMPLETE (Scope: Phase 0-8)
+
+Plan status:
+- Completed on 2026-03-02 (sessions 44-45 sign-off).
+- This document is now a closed record for the Phase 0-8 migration scope.
 
 ## 1. Goal and Constraints
 
@@ -20,7 +24,7 @@ Non-goal (initial phases): full effect runtime lowering.
 2. If `supports_native_codegen(module)` is true, try native lowering (`lower::try_emit_native_module`).
 3. If native lowering succeeds, return wasm-encoder-built Wasm.
 4. Otherwise, use compatibility fallback: `resolve_main_runtime_output(...)` + `compile_print_module(...)`.
-5. If no printable fallback output, use `minimal_main_module`.
+5. If fallback cannot resolve printable output, return `Err(CodegenError)`.
 
 As of 2026-03-02, native lowering covers a meaningful Phase A subset in tests:
 - literal/binding `print`,
@@ -521,7 +525,10 @@ Mitigation:
 - Add regression tests for `examples/effect.gb` to guarantee fallback path remains behavior-identical.
 - Keep native and fallback path selection deterministic and test-visible.
 
-## 9. Exit Criteria for Full Interpreter Removal
+## 9. Post-Plan Handoff (Out of Scope for This Closed Plan)
+
+The following are intentionally moved to follow-up planning and are not blockers for
+marking this document complete (Phase 0-8 scope is already done).
 
 Interpreter (`resolve_main_runtime_output`) can be removed only when all are true:
 1. `examples/*.gb` run via native path with identical output.
@@ -529,4 +536,5 @@ Interpreter (`resolve_main_runtime_output`) can be removed only when all are tru
 3. Lambda/HOF lowering is implemented for required language surface.
 4. No tests assert fallback path for core examples.
 
-Until then, keep fallback as compatibility layer with explicit, narrow boundaries.
+Until those follow-up items are implemented, keep fallback as compatibility layer
+with explicit, narrow boundaries.
