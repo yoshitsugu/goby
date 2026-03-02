@@ -48,6 +48,9 @@ fn is_phase2_supported_expr(expr: &Expr, module: &Module) -> bool {
             matches!(callee.as_ref(), Expr::Var(name) if name == BUILTIN_PRINT)
                 && is_phase2_supported_value_expr(arg, module)
         }
+        Expr::Pipeline { value, callee } => {
+            callee == BUILTIN_PRINT && is_phase2_supported_value_expr(value, module)
+        }
         _ => false,
     }
 }
