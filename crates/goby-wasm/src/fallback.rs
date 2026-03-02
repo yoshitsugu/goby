@@ -230,12 +230,11 @@ fn unsupported_value_expr_reason(
             let Some((name, args)) = flatten_named_call(expr) else {
                 // Allow callable-value application (`f 1`, where `f` is a local/lambda)
                 // when both callee and argument expressions are in the native value subset.
-                if let Expr::Call { callee, arg } = expr {
-                    if is_phase2_supported_value_expr(callee, module, stack)
-                        && is_phase2_supported_value_expr(arg, module, stack)
-                    {
-                        return None;
-                    }
+                if let Expr::Call { callee, arg } = expr
+                    && is_phase2_supported_value_expr(callee, module, stack)
+                    && is_phase2_supported_value_expr(arg, module, stack)
+                {
+                    return None;
                 }
                 return Some(UnsupportedReason::CallCalleeNotDirectName);
             };
