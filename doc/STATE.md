@@ -257,6 +257,15 @@ This file is a restart-safe snapshot for resuming work after context reset.
     - string compatibility API (`native_unsupported_reason`).
   - Path matrix test now validates typed and string reason expectations together.
   - Validation rerun: `cargo test -p goby-wasm`, workspace `cargo check/test/clippy` all green.
+- 2026-03-02 (session 39): shared case-pattern support helper
+  - Added `crates/goby-wasm/src/support.rs` with shared helper:
+    - `is_supported_case_pattern(&CasePattern) -> bool`.
+  - Reused helper from both:
+    - `fallback.rs` (`UnsupportedReason::UnsupportedCasePattern` checks),
+    - `lower.rs` (native value-expression capability checks for `Expr::Case`).
+  - Added helper unit test (`support::tests::supports_current_native_case_patterns`).
+  - Validation rerun: targeted tests, full `cargo test -p goby-wasm`, workspace
+    `cargo check/test/clippy` all green.
 
 ## 5. Current Example Files
 
