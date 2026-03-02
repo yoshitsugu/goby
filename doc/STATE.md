@@ -251,6 +251,12 @@ This file is a restart-safe snapshot for resuming work after context reset.
     - `native_unsupported_reason(&Module) -> Option<&'static str>`.
   - Existing reason-code tests remain unchanged and green (string-compat maintained).
   - Validation rerun: `cargo test -p goby-wasm`, workspace `cargo check/test/clippy` all green.
+- 2026-03-02 (session 38): enum reason API adoption in tests
+  - Updated wasm native/fallback capability tests to assert both:
+    - typed reason API (`native_unsupported_reason_kind`),
+    - string compatibility API (`native_unsupported_reason`).
+  - Path matrix test now validates typed and string reason expectations together.
+  - Validation rerun: `cargo test -p goby-wasm`, workspace `cargo check/test/clippy` all green.
 
 ## 5. Current Example Files
 

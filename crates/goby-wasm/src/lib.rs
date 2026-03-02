@@ -2402,6 +2402,7 @@ main =
             "hello.gb should be accepted by Phase 0 native capability checker"
         );
         assert_eq!(fallback::native_unsupported_reason(&module), None);
+        assert_eq!(fallback::native_unsupported_reason_kind(&module), None);
     }
 
     #[test]
@@ -2411,6 +2412,11 @@ main =
         assert!(
             !fallback::supports_native_codegen(&module),
             "effect.gb should remain on fallback path in Phase 0"
+        );
+        assert_eq!(
+            fallback::native_unsupported_reason_kind(&module),
+            Some(fallback::UnsupportedReason::MainAnnotationNotUnitToUnit),
+            "effect example should expose typed fallback reason"
         );
         assert_eq!(
             fallback::native_unsupported_reason(&module),
@@ -2676,6 +2682,11 @@ main =
             "function.gb should remain on fallback path while lambda/HOF are unsupported"
         );
         assert_eq!(
+            fallback::native_unsupported_reason_kind(&module),
+            Some(fallback::UnsupportedReason::CallTargetBodyNotNativeSupported),
+            "typed fallback reason should classify lambda/HOF-containing call targets"
+        );
+        assert_eq!(
             fallback::native_unsupported_reason(&module),
             Some("call_target_body_not_native_supported"),
             "fallback reason should be explicit for lambda/HOF-containing call targets"
@@ -2761,25 +2772,33 @@ main =
     #[test]
     fn native_fallback_path_matrix_for_examples() {
         let cases = [
-            ("hello.gb", true, None),
-            ("control_flow.gb", true, None),
+            ("hello.gb", true, None, None),
+            ("control_flow.gb", true, None, None),
             (
                 "effect.gb",
                 false,
+                Some(fallback::UnsupportedReason::MainAnnotationNotUnitToUnit),
                 Some("main_annotation_not_unit_to_unit"),
             ),
             (
                 "function.gb",
                 false,
+                Some(fallback::UnsupportedReason::CallTargetBodyNotNativeSupported),
                 Some("call_target_body_not_native_supported"),
             ),
         ];
 
-        for (name, expect_native, expected_reason) in cases {
+        for (name, expect_native, expected_reason_kind, expected_reason) in cases {
             let source = read_example(name);
             let module = parse_module(&source).expect("example should parse");
+            let reason_kind = fallback::native_unsupported_reason_kind(&module);
             let reason = fallback::native_unsupported_reason(&module);
             let supports_native = fallback::supports_native_codegen(&module);
+            assert_eq!(
+                reason_kind, expected_reason_kind,
+                "unexpected typed fallback reason for {}",
+                name
+            );
             assert_eq!(
                 reason, expected_reason,
                 "unexpected fallback reason for {}",
