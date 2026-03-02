@@ -7,6 +7,7 @@ use crate::{
     backend::WasmProgramBuilder,
     call::{extract_direct_print_call_arg, flatten_named_call, resolve_direct_call_target},
     layout::MemoryLayout,
+    support::is_supported_case_pattern,
 };
 
 pub(crate) fn try_emit_native_module(module: &Module) -> Result<Option<Vec<u8>>, CodegenError> {
@@ -321,13 +322,8 @@ fn is_value_expr_supported(
             is_value_expr_supported(scrutinee, module, env, stack)
                 && !arms.is_empty()
                 && arms.iter().all(|arm| {
-                    matches!(
-                        arm.pattern,
-                        CasePattern::IntLit(_)
-                            | CasePattern::StringLit(_)
-                            | CasePattern::BoolLit(_)
-                            | CasePattern::Wildcard
-                    ) && is_value_expr_supported(&arm.body, module, env, stack)
+                    is_supported_case_pattern(&arm.pattern)
+                        && is_value_expr_supported(&arm.body, module, env, stack)
                 })
         }
         Expr::Call { .. } => {

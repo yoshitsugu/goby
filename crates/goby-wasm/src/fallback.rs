@@ -1,4 +1,4 @@
-use goby_core::{BinOpKind, CasePattern, Expr, Module, Stmt, types::parse_function_type};
+use goby_core::{BinOpKind, Expr, Module, Stmt, types::parse_function_type};
 
 use crate::{
     call::{
@@ -6,6 +6,7 @@ use crate::{
         resolve_direct_call_target,
     },
     lower::declaration_body_supported_for_native,
+    support::is_supported_case_pattern,
 };
 
 const BUILTIN_PRINT: &str = "print";
@@ -173,13 +174,7 @@ fn unsupported_value_expr_reason(expr: &Expr, module: &Module) -> Option<Unsuppo
                 return Some(UnsupportedReason::CaseHasNoArms);
             }
             for arm in arms {
-                if !matches!(
-                    arm.pattern,
-                    CasePattern::IntLit(_)
-                        | CasePattern::StringLit(_)
-                        | CasePattern::BoolLit(_)
-                        | CasePattern::Wildcard
-                ) {
+                if !is_supported_case_pattern(&arm.pattern) {
                     return Some(UnsupportedReason::UnsupportedCasePattern);
                 }
                 if let Some(reason) = unsupported_value_expr_reason(&arm.body, module) {
