@@ -2650,6 +2650,31 @@ main =
     }
 
     #[test]
+    fn compile_module_uses_native_emitter_for_multi_arg_direct_function_call_subset() {
+        let source = r#"
+add4 : Int -> Int -> Int -> Int -> Int
+add4 a b c d = a + b + c + d
+
+main : Unit -> Unit
+main =
+  print (add4 1 2 3 4)
+"#;
+        let module = parse_module(source).expect("source should parse");
+        assert!(
+            fallback::supports_native_codegen(&module),
+            "multi-arg direct function call subset should be accepted"
+        );
+        let wasm = compile_module(&module).expect("codegen should succeed");
+        let expected_text = "10".to_string();
+        assert_eq!(expected_text, "10");
+        let expected = compile_print_module(&expected_text).expect("fallback wasm should compile");
+        assert_ne!(
+            wasm, expected,
+            "multi-arg direct function call subset should use native wasm-encoder emitter"
+        );
+    }
+
+    #[test]
     fn compile_module_uses_native_emitter_for_list_int_print_subset() {
         let source = r#"
 main : Unit -> Unit
@@ -2774,6 +2799,21 @@ main =
         assert_ne!(
             wasm, expected,
             "control_flow.gb should use native wasm-encoder emitter"
+        );
+    }
+
+    #[test]
+    fn native_codegen_capability_checker_reports_reason_for_hof_lambda_fallback() {
+        let source = read_example("function.gb");
+        let module = parse_module(&source).expect("function.gb should parse");
+        assert!(
+            !fallback::supports_native_codegen(&module),
+            "function.gb should remain on fallback path while lambda/HOF are unsupported"
+        );
+        assert_eq!(
+            fallback::native_unsupported_reason(&module),
+            Some("call_target_body_not_native_supported"),
+            "fallback reason should be explicit for lambda/HOF-containing call targets"
         );
     }
 }

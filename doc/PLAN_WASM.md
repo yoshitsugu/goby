@@ -306,11 +306,16 @@ Gate checks before Phase 7:
 - Path gate: explicit reason-coded fallback for lambda/HOF is test-covered.
 - Fallback gate: full `examples/function.gb` remains stable when fallback triggers.
 
-Current note (2026-03-02):
-- A first attempt at two-argument direct-call support was intentionally rolled back to avoid
-  parser-shape/capability/lowerer mismatch.
-- Re-entry rule for next session:
-  1) lock AST shape with tests, 2) extend `fallback` + `lower` together, 3) keep reason-coded fallback tests green.
+Current note (2026-03-02, session 32):
+- Re-entry rule was executed end-to-end:
+  1) AST shape lock test added for spaced multi-arg calls (`f a b c` nested `Expr::Call`),
+  2) `fallback` + `lower` were extended together using the same call-flattening strategy,
+  3) reason-coded fallback tests remained green.
+- Native direct-call support now handles arbitrary arity call chains (`f a b ...`) as long as:
+  - callee resolves to a direct named declaration,
+  - declaration parameter count matches flattened call arity,
+  - declaration body stays within the current native-supported subset.
+- `examples/function.gb` still intentionally falls back due to lambda/HOF usage.
 
 ## Phase 7 - Phase A completion and interpreter retirement boundary
 

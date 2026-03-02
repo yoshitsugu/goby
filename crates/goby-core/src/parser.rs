@@ -673,12 +673,9 @@ pub fn parse_expr(src: &str) -> Option<Expr> {
         return Some(expr);
     }
 
-    // 11. Function call: f x  or  f(x)
-    if let Some((callee, arg)) = try_parse_call(src) {
-        return Some(Expr::Call {
-            callee: Box::new(parse_expr(callee)?),
-            arg: Box::new(parse_expr(arg)?),
-        });
+    // 11. Function call: f x / f x y ... / f(x)
+    if let Some(expr) = parse_call_expr(src) {
+        return Some(expr);
     }
 
     // 12. String literal: "..."
@@ -1073,34 +1070,110 @@ fn parse_qualified_access(src: &str) -> Option<Expr> {
     })
 }
 
-/// Try to parse `f x` (space-separated call) or `f(x)` (parenthesised call).
-/// Does NOT match lambda or list/tuple starts.
-fn try_parse_call(src: &str) -> Option<(&str, &str)> {
+/// Try to parse function calls:
+/// - `f(x)` parenthesized single-arg form
+/// - `f x y z` space-separated multi-arg form (left-associative)
+fn parse_call_expr(src: &str) -> Option<Expr> {
     // f(x) style — callee can be a bare identifier or a qualified name (Mod.fn)
     if let Some(open) = src.find('(').filter(|_| src.ends_with(')')) {
         let callee = src[..open].trim();
         let inner = src[open + 1..src.len() - 1].trim();
         if (is_identifier(callee) || is_qualified_name(callee)) && !inner.is_empty() {
-            return Some((callee, inner));
+            return Some(Expr::Call {
+                callee: Box::new(parse_expr(callee)?),
+                arg: Box::new(parse_expr(inner)?),
+            });
         }
     }
 
-    // f x style: split at first whitespace, but callee must be an identifier
-    // (or a qualified name like `Mod.fn`) and arg must not be empty.
-    // Skip if src starts with special chars.
+    // f x y ... style: split into top-level whitespace-separated terms and
+    // fold left to preserve application associativity: `f a b` -> `(f a) b`.
     if src.starts_with('|') || src.starts_with('"') || src.starts_with('[') {
         return None;
     }
 
-    let mut chars = src.char_indices();
-    let split_pos = chars.find_map(|(idx, ch)| ch.is_whitespace().then_some(idx))?;
-    let callee = src[..split_pos].trim();
-    let arg = src[split_pos..].trim();
-    if (is_identifier(callee) || is_qualified_name(callee)) && !arg.is_empty() {
-        Some((callee, arg))
-    } else {
-        None
+    let parts = split_top_level_whitespace_terms(src);
+    if parts.len() < 2 {
+        return None;
     }
+    let callee = parts[0];
+    if !(is_identifier(callee) || is_qualified_name(callee)) {
+        None
+    } else {
+        let mut expr = parse_expr(callee)?;
+        for part in parts.iter().skip(1) {
+            let arg = parse_expr(part)?;
+            expr = Expr::Call {
+                callee: Box::new(expr),
+                arg: Box::new(arg),
+            };
+        }
+        Some(expr)
+    }
+}
+
+fn split_top_level_whitespace_terms(src: &str) -> Vec<&str> {
+    let mut terms = Vec::new();
+    let mut start: Option<usize> = None;
+    let mut depth = 0usize;
+    let mut in_string = false;
+    let mut escaped = false;
+
+    for (idx, ch) in src.char_indices() {
+        if in_string {
+            if escaped {
+                escaped = false;
+                continue;
+            }
+            if ch == '\\' {
+                escaped = true;
+                continue;
+            }
+            if ch == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+
+        match ch {
+            '"' => {
+                in_string = true;
+                if start.is_none() {
+                    start = Some(idx);
+                }
+            }
+            '(' | '[' => {
+                depth += 1;
+                if start.is_none() {
+                    start = Some(idx);
+                }
+            }
+            ')' | ']' => {
+                depth = depth.saturating_sub(1);
+            }
+            c if c.is_whitespace() && depth == 0 => {
+                if let Some(s) = start.take() {
+                    let piece = src[s..idx].trim();
+                    if !piece.is_empty() {
+                        terms.push(piece);
+                    }
+                }
+            }
+            _ => {
+                if start.is_none() {
+                    start = Some(idx);
+                }
+            }
+        }
+    }
+
+    if let Some(s) = start {
+        let piece = src[s..].trim();
+        if !piece.is_empty() {
+            terms.push(piece);
+        }
+    }
+    terms
 }
 
 /// Returns true if `s` is a qualified name of the form `Identifier.identifier`.
@@ -1890,6 +1963,23 @@ mod tests {
             Some(Expr::Call {
                 callee: Box::new(Expr::Var("add_ten".to_string())),
                 arg: Box::new(Expr::IntLit(10)),
+            })
+        );
+    }
+
+    #[test]
+    fn parses_spaced_multi_arg_function_call_left_associative() {
+        assert_eq!(
+            parse_expr("f a b c"),
+            Some(Expr::Call {
+                callee: Box::new(Expr::Call {
+                    callee: Box::new(Expr::Call {
+                        callee: Box::new(Expr::Var("f".to_string())),
+                        arg: Box::new(Expr::Var("a".to_string())),
+                    }),
+                    arg: Box::new(Expr::Var("b".to_string())),
+                }),
+                arg: Box::new(Expr::Var("c".to_string())),
             })
         );
     }
