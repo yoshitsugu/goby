@@ -1,7 +1,10 @@
 use goby_core::{BinOpKind, CasePattern, Expr, Module, Stmt, types::parse_function_type};
 
 use crate::{
-    call::{DirectCallTargetError, flatten_named_call, resolve_direct_call_target},
+    call::{
+        DirectCallTargetError, PrintCallError, extract_direct_print_call_arg, flatten_named_call,
+        resolve_direct_call_target,
+    },
     lower::declaration_body_supported_for_native,
 };
 
@@ -77,18 +80,12 @@ fn is_phase2_supported_value_expr(expr: &Expr, module: &Module) -> bool {
 
 fn unsupported_stmt_expr_reason(expr: &Expr, module: &Module) -> Option<&'static str> {
     match expr {
-        Expr::Call { .. } => {
-            let Some((name, args)) = flatten_named_call(expr) else {
-                return Some(REASON_CALL_CALLEE_NOT_DIRECT_NAME);
-            };
-            if name != BUILTIN_PRINT {
-                return unsupported_value_expr_reason(expr, module);
-            }
-            if args.len() != 1 {
-                return Some(REASON_PRINT_ARITY_NOT_ONE);
-            }
-            unsupported_value_expr_reason(args[0], module)
-        }
+        Expr::Call { .. } => match extract_direct_print_call_arg(expr) {
+            Ok(arg) => unsupported_value_expr_reason(arg, module),
+            Err(PrintCallError::NotPrint) => unsupported_value_expr_reason(expr, module),
+            Err(PrintCallError::ArityNotOne) => Some(REASON_PRINT_ARITY_NOT_ONE),
+            Err(PrintCallError::NonDirectCallee) => Some(REASON_CALL_CALLEE_NOT_DIRECT_NAME),
+        },
         Expr::Pipeline { value, callee } => {
             if callee != BUILTIN_PRINT {
                 return Some(REASON_UNSUPPORTED_PIPELINE_CALLEE);
