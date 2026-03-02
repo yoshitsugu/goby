@@ -5,7 +5,7 @@ mod layout;
 mod lower;
 mod support;
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 
 use goby_core::{
     CasePattern, Expr, HandlerMethod, Module, Stmt, str_util::parse_string_concat_call,
@@ -351,9 +351,8 @@ struct RuntimeOutputResolver<'m> {
     locals: RuntimeLocals,
     outputs: Vec<String>,
     module: &'m Module,
-    /// Maps effect name (e.g. "Log") to handler_declarations index.
-    /// BTreeMap gives deterministic iteration order (alphabetical by effect name).
-    active_handlers: BTreeMap<String, usize>,
+    /// Active handlers in lexical order; later entries are more deeply nested.
+    active_handler_stack: Vec<usize>,
     resume_tokens: Vec<ResumeToken>,
     runtime_error: Option<String>,
 }
@@ -393,7 +392,7 @@ impl<'m> RuntimeOutputResolver<'m> {
             locals: RuntimeLocals::default(),
             outputs: Vec::new(),
             module,
-            active_handlers: BTreeMap::new(),
+            active_handler_stack: Vec::new(),
             resume_tokens: Vec::new(),
             runtime_error: None,
         };
@@ -450,28 +449,38 @@ impl<'m> RuntimeOutputResolver<'m> {
             }
             Stmt::Expr(expr) => self.eval_ast_side_effect(expr, evaluators),
             Stmt::Using { handlers, body } => {
-                // Install handlers: map effect name → handler_declarations index.
-                let previous = self.active_handlers.clone();
-                for handler_name in handlers {
-                    if let Some(idx) = self
-                        .module
-                        .handler_declarations
-                        .iter()
-                        .position(|h| &h.name == handler_name)
-                    {
-                        let effect = self.module.handler_declarations[idx].effect.clone();
-                        self.active_handlers.insert(effect, idx);
+                let pushed = self.push_handlers_by_name(handlers);
+                let result = (|| -> Option<()> {
+                    for stmt in body {
+                        self.ingest_ast_statement(stmt, evaluators)?;
                     }
-                }
-                // Execute body with active handlers.
-                for stmt in body {
-                    self.ingest_ast_statement(stmt, evaluators)?;
-                }
-                // Restore previous handler context.
-                self.active_handlers = previous;
-                Some(())
+                    Some(())
+                })();
+                self.pop_active_handlers(pushed);
+                result
             }
         }
+    }
+
+    fn push_handlers_by_name(&mut self, handlers: &[String]) -> usize {
+        let mut pushed = 0;
+        for handler_name in handlers {
+            if let Some(idx) = self
+                .module
+                .handler_declarations
+                .iter()
+                .position(|h| &h.name == handler_name)
+            {
+                self.active_handler_stack.push(idx);
+                pushed += 1;
+            }
+        }
+        pushed
+    }
+
+    fn pop_active_handlers(&mut self, count: usize) {
+        let next_len = self.active_handler_stack.len().saturating_sub(count);
+        self.active_handler_stack.truncate(next_len);
     }
 
     fn eval_ast_side_effect(
@@ -1094,23 +1103,15 @@ impl<'m> RuntimeOutputResolver<'m> {
                 self.execute_unit_call(&repr, locals, callables, evaluators)
             }
             Stmt::Using { handlers, body } => {
-                let previous = self.active_handlers.clone();
-                for handler_name in handlers {
-                    if let Some(idx) = self
-                        .module
-                        .handler_declarations
-                        .iter()
-                        .position(|h| &h.name == handler_name)
-                    {
-                        let effect = self.module.handler_declarations[idx].effect.clone();
-                        self.active_handlers.insert(effect, idx);
+                let pushed = self.push_handlers_by_name(handlers);
+                let result = (|| -> Option<()> {
+                    for stmt in body {
+                        self.execute_unit_ast_stmt(stmt, locals, callables, evaluators, depth + 1)?;
                     }
-                }
-                for stmt in body {
-                    self.execute_unit_ast_stmt(stmt, locals, callables, evaluators, depth + 1)?;
-                }
-                self.active_handlers = previous;
-                Some(())
+                    Some(())
+                })();
+                self.pop_active_handlers(pushed);
+                result
             }
         }
     }
@@ -1246,17 +1247,19 @@ impl<'m> RuntimeOutputResolver<'m> {
         effect_name: &str,
         method_name: &str,
     ) -> Option<ResolvedHandlerMethod> {
-        let idx = *self.active_handlers.get(effect_name)?;
-        let handler = &self.module.handler_declarations[idx];
-        let method = handler
-            .methods
-            .iter()
-            .find(|m| m.name == method_name)
-            .cloned()?;
-        Some(ResolvedHandlerMethod {
-            handler_decl_idx: idx,
-            method,
-        })
+        for &idx in self.active_handler_stack.iter().rev() {
+            let handler = &self.module.handler_declarations[idx];
+            if handler.effect != effect_name {
+                continue;
+            }
+            if let Some(method) = handler.methods.iter().find(|m| m.name == method_name) {
+                return Some(ResolvedHandlerMethod {
+                    handler_decl_idx: idx,
+                    method: method.clone(),
+                });
+            }
+        }
+        None
     }
 
     /// If `ctor_name` is a record constructor with exactly one field, return that field's name.
@@ -1277,10 +1280,9 @@ impl<'m> RuntimeOutputResolver<'m> {
         None
     }
 
-    /// Find a handler method by bare name (e.g. `log`) across all active handlers.
-    /// Iteration order is deterministic (BTreeMap: alphabetical by effect name).
+    /// Find a handler method by bare name (e.g. `log`) from nearest to outermost.
     fn find_handler_method_by_name(&self, method_name: &str) -> Option<ResolvedHandlerMethod> {
-        for &idx in self.active_handlers.values() {
+        for &idx in self.active_handler_stack.iter().rev() {
             let handler = &self.module.handler_declarations[idx];
             if let Some(m) = handler.methods.iter().find(|m| m.name == method_name) {
                 return Some(ResolvedHandlerMethod {
@@ -1340,7 +1342,7 @@ impl<'m> RuntimeOutputResolver<'m> {
         }
         let stmts = method.method.parsed_body.as_deref()?;
         let token_idx = self.push_resume_token_for_handler(method.handler_decl_idx);
-        let previous_handlers = self.active_handlers.clone();
+        let previous_stack_len = self.active_handler_stack.len();
         let run_result = (|| -> Option<Option<RuntimeValue>> {
             let mut handler_locals = RuntimeLocals::default();
             if let Some(param) = method.method.params.first() {
@@ -1382,40 +1384,41 @@ impl<'m> RuntimeOutputResolver<'m> {
                             }
                         }
                         Stmt::Using { handlers, body } => {
-                            let previous = self.active_handlers.clone();
-                            for handler_name in handlers {
-                                if let Some(idx) = self
-                                    .module
-                                    .handler_declarations
-                                    .iter()
-                                    .position(|h| &h.name == handler_name)
-                                {
-                                    let effect =
-                                        self.module.handler_declarations[idx].effect.clone();
-                                    self.active_handlers.insert(effect, idx);
-                                }
-                            }
-                            for inner_stmt in body {
-                                match inner_stmt {
-                                    Stmt::Binding { name, value } => {
-                                        let v = self.eval_expr_ast(
-                                            value,
-                                            &handler_locals,
-                                            &handler_callables,
-                                            evaluators,
-                                            depth + 1,
-                                        )?;
-                                        handler_locals.store(name, v);
-                                    }
-                                    Stmt::Expr(expr) => {
-                                        last_val = self.eval_expr_ast(
-                                            expr,
-                                            &handler_locals,
-                                            &handler_callables,
-                                            evaluators,
-                                            depth + 1,
-                                        );
-                                        if last_val.is_none() {
+                            let pushed = self.push_handlers_by_name(handlers);
+                            let using_result = (|| -> Option<()> {
+                                for inner_stmt in body {
+                                    match inner_stmt {
+                                        Stmt::Binding { name, value } => {
+                                            let v = self.eval_expr_ast(
+                                                value,
+                                                &handler_locals,
+                                                &handler_callables,
+                                                evaluators,
+                                                depth + 1,
+                                            )?;
+                                            handler_locals.store(name, v);
+                                        }
+                                        Stmt::Expr(expr) => {
+                                            last_val = self.eval_expr_ast(
+                                                expr,
+                                                &handler_locals,
+                                                &handler_callables,
+                                                evaluators,
+                                                depth + 1,
+                                            );
+                                            if last_val.is_none() {
+                                                self.execute_unit_ast_stmt(
+                                                    inner_stmt,
+                                                    &mut handler_locals,
+                                                    &mut handler_callables,
+                                                    evaluators,
+                                                    depth + 1,
+                                                )?;
+                                                last_val = None;
+                                            }
+                                        }
+                                        Stmt::Using { .. } => {
+                                            // Nested using: delegate to execute_unit_ast_stmt for full handling.
                                             self.execute_unit_ast_stmt(
                                                 inner_stmt,
                                                 &mut handler_locals,
@@ -1423,22 +1426,13 @@ impl<'m> RuntimeOutputResolver<'m> {
                                                 evaluators,
                                                 depth + 1,
                                             )?;
-                                            last_val = None;
                                         }
                                     }
-                                    Stmt::Using { .. } => {
-                                        // Nested using: delegate to execute_unit_ast_stmt for full handling.
-                                        self.execute_unit_ast_stmt(
-                                            inner_stmt,
-                                            &mut handler_locals,
-                                            &mut handler_callables,
-                                            evaluators,
-                                            depth + 1,
-                                        )?;
-                                    }
                                 }
-                            }
-                            self.active_handlers = previous;
+                                Some(())
+                            })();
+                            self.pop_active_handlers(pushed);
+                            using_result?;
                         }
                     }
                 } else {
@@ -1462,7 +1456,7 @@ impl<'m> RuntimeOutputResolver<'m> {
         })();
         let resumed = self.take_resume_token_result(token_idx);
         // Never leak handler context changes outside an effect call.
-        self.active_handlers = previous_handlers;
+        self.active_handler_stack.truncate(previous_stack_len);
         let resumed = resumed?;
         let run_result = run_result?;
         if produce_value {
@@ -2318,15 +2312,11 @@ main =
     }
 
     #[test]
-    fn two_handlers_with_same_method_name_dispatch_deterministically() {
+    fn two_handlers_with_same_method_name_dispatches_to_nearest_handler() {
         // When two active handlers both provide a method with the same bare name,
-        // find_handler_method_by_name selects the one whose effect name comes first
-        // alphabetically (BTreeMap iteration order).
+        // lexical stack order should win (nearest/enclosed handler first).
         use goby_core::parse_module;
         let _guard = ENV_MUTEX.lock().unwrap();
-        // Effect "Alpha" and "Beta" both have a `greet` method.
-        // Active handlers map: "Alpha" → HandlerA, "Beta" → HandlerB.
-        // BTreeMap iterates alphabetically, so "Alpha" wins.
         let source = r#"
 effect Alpha
   greet: String -> String
@@ -2350,12 +2340,42 @@ main =
         let module = parse_module(source).expect("parse should work");
         let output =
             resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module));
-        // BTreeMap iterates alphabetically: "Alpha" < "Beta", so HandlerA is checked first.
-        // The bare `greet` call must select HandlerA's method deterministically.
         assert_eq!(
             output.as_deref(),
-            Some("from-alpha"),
-            "bare-name dispatch should deterministically select the alphabetically-first effect"
+            Some("from-beta"),
+            "bare-name dispatch should choose the nearest active handler in lexical stack order"
+        );
+    }
+
+    #[test]
+    fn nested_using_same_effect_prefers_inner_handler() {
+        use goby_core::parse_module;
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let source = r#"
+effect Log
+  log: String -> Unit
+
+handler OuterLog for Log
+  log msg =
+    print "outer"
+
+handler InnerLog for Log
+  log msg =
+    print "inner"
+
+main : Unit -> Unit
+main =
+  using OuterLog
+    using InnerLog
+      log "x"
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let output =
+            resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module));
+        assert_eq!(
+            output.as_deref(),
+            Some("inner"),
+            "nested `using` should dispatch to nearest enclosing handler"
         );
     }
 

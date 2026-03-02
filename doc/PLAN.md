@@ -67,7 +67,7 @@ Based on `examples/*.gb`:
 - Legacy `void` type spelling is rejected in type annotations.
 - First backend target is Wasm.
 - Effects and handlers are available in MVP runtime via `effect`, `handler`, and `using`.
-  - handler dispatch is deterministic via `active_handlers: BTreeMap<String, usize>`.
+  - handler dispatch follows lexical nearest-handler stack order.
   - `can` clauses are validated (declared effect or built-in effect names).
 - `using` handler application syntax: comma-separated handler list (`using HandlerA, HandlerB`).
 - MVP built-ins: `print`, `string.concat`, `map`, `fetch_env_var`, `string.split`, `list.join`.
@@ -87,7 +87,7 @@ Based on `examples/*.gb`:
   - `else if` chaining is not supported in MVP.
 - `if ... else ...` expression: indentation-based two-branch form.
 - `==` equality operator: produces `Bool` at runtime.
-- Handler dispatch: `active_handlers` uses `BTreeMap` for deterministic (alphabetical) order.
+- Handler dispatch: lexical nearest-handler stack walk (no alphabetical fallback).
 - Runtime execution model: prefer native lowering for the supported subset; fallback to
   compile-time interpreter (`resolve_main_runtime_output`) for unsupported forms.
 
@@ -176,7 +176,7 @@ Based on `examples/*.gb`:
   - `resume_arg_type_mismatch`
   - `resume_in_unknown_operation_context`
 
-#### `resume` Runtime Bridge (Step 3 checkpoint, 2026-03-02)
+#### `resume` Runtime Bridge (Step 4 update, 2026-03-02)
 
 - Interpreter-path runtime now has explicit `ResumeToken`/`Continuation` carrier
   objects and one-shot consume tracking.
@@ -185,8 +185,9 @@ Based on `examples/*.gb`:
 - Runtime surfaces explicit resume misuse errors:
   - `resume used without an active continuation`
   - `resume continuation already consumed`
-- Runtime reinstalls captured handler snapshot from continuation frames on `resume`.
-- Lexical nearest-handler semantics replacement remains pending in Step 4.
+- Runtime dispatch now uses lexical handler stack semantics:
+  - nearest enclosing handler wins (LIFO stack walk),
+  - no alphabetical effect-name fallback in runtime operation capture.
 
 ### 2.4 Standard Library Surface (MVP)
 
@@ -446,7 +447,7 @@ Remaining (deferred):
 
 ### Still Open (Post-MVP)
 
-- Effects/handlers: current MVP runtime keeps alphabetical fallback (`BTreeMap`) only as temporary behavior; post-MVP semantics will switch to lexical nearest-handler resolution by compiled `EffectId`/`OpId`.
+- Effects/handlers: lexical nearest-handler runtime semantics are active; post-MVP work is to move from interpreter/runtime lookup to compiled `EffectId`/`OpId` tables.
 - Effect namespace rules: qualified vs unqualified calls, unhandled-effect diagnostics format.
 - Type annotation placement: where annotations are required vs optional outside current MVP subset.
 - Tuple/record roadmap: record update syntax, pattern matching on record fields.

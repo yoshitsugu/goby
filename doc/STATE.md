@@ -607,6 +607,27 @@ This file is a restart-safe snapshot for resuming work after context reset.
     - `cargo fmt`
     - `cargo check`
     - `cargo test` (264 tests passed)
+- 2026-03-02 (session 62): `PLAN_RESUME` Step 4 complete (nearest-handler stack semantics)
+  - Runtime handler dispatch in `goby-wasm` now uses lexical stack order:
+    - replaced `active_handlers: BTreeMap<effect, handler>` with `active_handler_stack: Vec<handler_idx>`,
+    - handler lookup now walks stack from nearest to outermost (LIFO),
+    - removed alphabetical fallback capture behavior.
+  - `using` scope management now uses push/pop by lexical nesting in:
+    - top-level AST ingestion,
+    - unit AST execution,
+    - handler-body core dispatch path.
+  - Resume path consistency:
+    - effect-call boundary still restores handler context even on error path (`truncate` to entry depth).
+  - Updated/added runtime tests:
+    - renamed deterministic overlap test to nearest-handler behavior (`from-beta` expected),
+    - added nested-`using` same-effect test (`inner` expected).
+  - Plan docs synchronized:
+    - `doc/PLAN.md`: runtime section now states lexical nearest-handler semantics active.
+    - `doc/PLAN_RESUME.md`: Step 4 marked DONE.
+  - Quality gates green:
+    - `cargo fmt`
+    - `cargo check`
+    - `cargo test` (265 tests passed)
 
 ## 5. Current Example Files
 
