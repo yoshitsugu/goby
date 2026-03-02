@@ -1,14 +1,6 @@
 effect Iterator
   yield : String -> Int
 
-produce_from : Int -> Int -> Int can Iterator
-produce_from i limit =
-  if i == limit then
-    0
-  else
-    Iterator.yield "tick"
-    produce_from (i + 1) limit
-
 handler PrintEach for Iterator
   yield value =
     print value
@@ -16,4 +8,6 @@ handler PrintEach for Iterator
 
 main =
   using PrintEach
-    produce_from 0 3
+    yield "tick"
+    yield "tick"
+    yield "tick"

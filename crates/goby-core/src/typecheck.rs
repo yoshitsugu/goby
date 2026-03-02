@@ -2268,6 +2268,11 @@ mod tests {
             env!("CARGO_MANIFEST_DIR")
         ))
         .expect("effect example should exist");
+        let iterator_example = std::fs::read_to_string(format!(
+            "{}/../../examples/iterator.gb",
+            env!("CARGO_MANIFEST_DIR")
+        ))
+        .expect("iterator example should exist");
 
         let hello_module = parse_module(&hello).expect("hello should parse");
         let basic_module = parse_module(&basic).expect("basic_types should parse");
@@ -2277,6 +2282,7 @@ mod tests {
         let control_flow_module = parse_module(&control_flow).expect("control_flow should parse");
         let type_module = parse_module(&type_example).expect("type should parse");
         let effect_module = parse_module(&effect_example).expect("effect.gb should parse");
+        let iterator_module = parse_module(&iterator_example).expect("iterator.gb should parse");
 
         typecheck_module(&hello_module).expect("hello should typecheck");
         typecheck_module(&basic_module).expect("basic_types should typecheck");
@@ -2285,6 +2291,7 @@ mod tests {
         typecheck_module(&control_flow_module).expect("control_flow should typecheck");
         typecheck_module(&type_module).expect("type example should typecheck");
         typecheck_module(&effect_module).expect("effect.gb should typecheck");
+        typecheck_module(&iterator_module).expect("iterator.gb should typecheck");
     }
 
     #[test]

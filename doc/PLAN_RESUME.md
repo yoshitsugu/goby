@@ -254,10 +254,23 @@ Step 5: Validation and regression stabilization — DONE (2026-03-02)
   - `cargo test`
   - `cargo clippy -- -D warnings`
 
-Step 6: Stdlib enablement tasks (consumer track)
+Step 6: Stdlib enablement tasks (consumer track) — DONE (2026-03-02)
 
-- Design iteration APIs that depend on `resume`.
-- Re-evaluate which `__goby_*` intrinsics remain necessary.
+- Iteration API direction (resume-based) documented:
+  - keep iterator-style producer API on effects/handlers (`yield` + `resume`) as
+    the first-class pattern,
+  - maintain `examples/iterator.gb` as the lock sample for this shape.
+- Coverage updates:
+  - added runtime lock test for `examples/iterator.gb` output,
+  - included `examples/iterator.gb` in `goby-core` examples typecheck suite.
+- `__goby_*` intrinsic re-evaluation result (current codebase):
+  - no `__goby_*` intrinsic names are currently implemented or consumed by
+    compiler/runtime code paths,
+  - keep intrinsic naming as a deferred standard-library bridge convention
+    (tracked in `doc/PLAN_STANDARD_LIBRARY.md`, ExtraStep B),
+  - immediate runtime bridge priorities remain:
+    - env access boundary (currently served by builtin/runtime path),
+    - string length parity gap in stdlib placeholder implementation.
 
 Step 7: Lowering optimization track (post-correctness)
 

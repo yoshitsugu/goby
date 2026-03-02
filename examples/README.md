@@ -15,6 +15,11 @@ This directory contains small Goby programs grouped by purpose.
   - `concat.gb`: print `string.concat(...)` result
 - `parser/`: parser behavior examples
   - `mixed_indent.gb`: mixed tabs/spaces indentation sample
+- `iterator.gb`: iterator-like effect/handler sample using `resume`
+  - emits:
+    - `tick`
+    - `tick`
+    - `tick`
 
 ## Planned Stdlib Syntax (Not Implemented Yet)
 

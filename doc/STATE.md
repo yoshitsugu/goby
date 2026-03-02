@@ -640,6 +640,27 @@ This file is a restart-safe snapshot for resuming work after context reset.
     - `cargo check`
     - `cargo test` (266 tests passed)
     - `cargo clippy -- -D warnings`
+- 2026-03-02 (session 64): `PLAN_RESUME` Step 6 complete (consumer-track stdlib enablement)
+  - Iteration API direction:
+    - kept effect/handler `yield` + `resume` pattern as the iterator-like baseline.
+    - `examples/iterator.gb` updated to a stable fallback-runtime-compatible lock sample
+      (three value-position `yield` calls via local bindings).
+  - Coverage updates:
+    - added `goby-wasm` runtime lock test for `iterator.gb` output
+      (`locks_runtime_output_for_iterator_gb` => `tick\ntick\ntick`),
+    - added `iterator.gb` into `goby-core` `typechecks_examples` regression suite.
+  - Intrinsic re-evaluation result:
+    - no `__goby_*` names are currently implemented/consumed in compiler/runtime code,
+    - kept `__goby_*` as deferred bridge convention in `doc/PLAN_STANDARD_LIBRARY.md`
+      (do not introduce runtime intrinsics in this Step 6 scope).
+  - Plan docs synchronized:
+    - `doc/PLAN_RESUME.md`: Step 6 marked DONE with decisions above.
+    - `examples/README.md`: iterator sample behavior documented.
+  - Quality gates green:
+    - `cargo fmt`
+    - `cargo check`
+    - `cargo test` (267 tests passed)
+    - `cargo clippy -- -D warnings`
 
 ## 5. Current Example Files
 
