@@ -90,7 +90,18 @@ Based on `examples/*.gb`:
 
 ### 2.1 Syntax and Parsing
 
-- No additional open syntax/parsing items are tracked for MVP.
+- **String interpolation `${}`** (post-MVP).
+  - Syntax `"${expr}"` is shown in `examples/basic_types.gb` but is not yet parsed.
+  - Currently the parser stores the raw literal including `${...}` as a plain `StringLit` with no substitution.
+  - Implementation requires: new `Expr::InterpolatedString` variant (or expand to `string.concat` at parse time),
+    parser support for `${ expr }` inside string literals, typechecker propagation, and runtime/codegen evaluation.
+- **Tuple index access `expr.N`** (post-MVP).
+  - Syntax `a.0`, `a.1` is shown in `examples/basic_types.gb` but is not yet parsed.
+  - `parse_method_call` rejects numeric method names (`is_identifier` fails on digits).
+  - Implementation requires: new `Expr::TupleIndex { expr, index: usize }` variant,
+    parser recognition of `expr.N` where N is a non-negative integer literal,
+    typechecker check that the receiver is a tuple type with sufficient arity,
+    and runtime/codegen evaluation.
 
 ### 2.2 Types and Checking
 
@@ -148,6 +159,9 @@ Based on `examples/*.gb`:
 
 - Current model: compile-time interpreter (Rust) embeds static output in Wasm binary.
 - Real Wasm code generation (actual instruction emission) is a post-MVP target.
+- `goby-cli run examples/basic_types.gb` currently fails with a codegen error because the
+  compile-time interpreter does not handle string interpolation or tuple index access.
+  Both features are blocked until their parser/AST support (§2.1) is in place.
 - Error location strategy (line/column reporting) — deferred.
 
 ### 2.6 Tooling Scope (MVP)
