@@ -200,6 +200,15 @@ All MVP example targets are complete. The next work is post-MVP:
   3. Standard-library foundation for self-hosted Goby libraries.
   4. Early developer tooling foundation (LSP, syntax highlighting, linter, formatter).
 
+### 4.2 Refactoring Candidates (Wasm Track)
+
+- Extract legacy fallback analyzer from `crates/goby-wasm/src/lib.rs` (`UnsupportedFormAnalyzer`
+  and related helpers) into a dedicated module so `compile_module` has a narrower orchestration role.
+- Replace ad-hoc fallback reason string literals in `crates/goby-wasm/src/fallback.rs` with
+  shared constants (or enum-to-string mapping) to reduce typo drift and make tests more robust.
+- Further split `crates/goby-wasm/src/lower.rs` evaluator/capability logic into smaller focused
+  helpers to improve readability and enable more targeted unit tests.
+
 ### 4.1 Short-Term Patch: bare/qualified/pipeline effect call dispatch in `main` body — DONE (2026-03-02, commit 8136d61)
 
 `eval_ast_side_effect` now dispatches bare calls, qualified calls, and pipeline calls
