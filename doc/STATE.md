@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-02 (session 32)
+Last updated: 2026-03-02 (session 44)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -20,8 +20,8 @@ This file is a restart-safe snapshot for resuming work after context reset.
 - Entry function is `main` only.
 - `main` type is `Unit -> Unit`; annotation required for `run`, optional for `check`.
 - CLI commands:
-  - `run`: parse + typecheck + requires `main` + emits Wasm + executes via `wasmtime run --invoke main`.
-    (Phase 8: migrate to WASI-standard `_start` export; drop `--invoke main`.)
+  - `run`: parse + typecheck + requires `main` + emits Wasm + executes via `wasmtime run <path>`.
+    Wasm module exports `_start` (WASI Preview 1 standard); no `--invoke` flags needed.
   - `check`: parse + typecheck (no runtime entry requirement).
 - Statement separator is newline or `;`.
 - Generic type application syntax: Haskell-style spacing (`List Int`, `TypeX a b`).
@@ -309,6 +309,15 @@ This file is a restart-safe snapshot for resuming work after context reset.
     and `compile_module`.
   - 215 tests pass; `cargo doc` warning-free; `cargo clippy -- -D warnings` clean.
   - Phase 7 / Phase A marked complete in `doc/PLAN_WASM.md`.
+- 2026-03-02 (session 44): Phase 8 sign-off completed (commits 832805d, 581775c)
+  - `backend.rs`: renamed export from `"main"` to `"_start"` (WASI Preview 1 standard).
+  - Added `find_wasm_section` helper + `exports_start_entrypoint` test in `lib.rs`:
+    scans export section (id=0x07) only for length-prefixed names to avoid false matches.
+  - `goby-cli/src/main.rs`: removed `.arg("--invoke").arg("main")` from `execute_wasm`.
+  - `cli_integration.rs`: updated fake-wasmtime guard from `--invoke main` positional check
+    to `$1 = "run" && -n $2`, matching the new `wasmtime run <path>` invocation shape.
+  - 215 tests pass; `cargo clippy -- -D warnings` clean.
+  - Phase 8 marked complete in `doc/PLAN_WASM.md`.
 
 ## 5. Current Example Files
 
@@ -323,7 +332,7 @@ This file is a restart-safe snapshot for resuming work after context reset.
 
 ## 6. Immediate Next Steps (Execution Order)
 
-Wasm Phase A (Phases 0–7) complete. 215 tests green, clippy clean.
+Wasm Phase A (Phases 0–8) complete. 215 tests green, clippy clean.
 
 Resume checks:
 ```
@@ -333,13 +342,9 @@ cargo clippy -- -D warnings
 ```
 
 Execution focus (in order):
-1. **Phase 8**: WASI-standard `_start` entrypoint — `backend.rs` + `goby-cli` (small, self-contained).
-   - Replace `exports.export("main", ...)` with `exports.export("_start", ...)` in `backend.rs`.
-   - Drop `--invoke main` from `execute_wasm` in `goby-cli/src/main.rs`.
-   - Validates that `wasmer run` and `wasmtime run` (no flags) both work out of the box.
-2. Lambda/HOF native lowering (Phase B prerequisite).
-3. Effect runtime redesign (one-shot deep handlers + selective CPS/evidence passing).
-4. `resolve_main_runtime_output` retirement (blocked on lambda + effect native support).
+1. Lambda/HOF native lowering (Phase B prerequisite).
+2. Effect runtime redesign (one-shot deep handlers + selective CPS/evidence passing).
+3. `resolve_main_runtime_output` retirement (blocked on lambda + effect native support).
 
 ## 7. Resume Commands
 
