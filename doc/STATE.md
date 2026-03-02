@@ -689,6 +689,29 @@ This file is a restart-safe snapshot for resuming work after context reset.
     - `cargo check`
     - `cargo test` (268 tests passed)
     - `cargo clippy -- -D warnings`
+- 2026-03-02 (session 66): `PLAN_RESUME` Step 7.2 complete (evidence payload shape contract)
+  - Extended wasm planning metadata with evidence payload types:
+    - `EffectId`, `OpId`, `EffectOperationRef`,
+    - `DeclarationEvidenceRequirement` (style + required effects + referenced ops),
+    - `EvidencePayloadShape` (operation table + declaration requirements).
+  - Evidence construction details:
+    - effect declarations indexed to stable placeholder IDs (`EffectId` / `OpId`),
+    - `can` clauses mapped into declaration required-effect IDs,
+    - referenced operations collected from declaration bodies
+      (qualified calls + bare-name candidates via op-name index).
+  - Lowerer integration:
+    - `lower::try_emit_native_module` now reads evidence-shape metadata
+      (internal observability/contract usage), while keeping pure-path gating from 7.1.
+  - Added planning tests for 7.2 contract:
+    - operation-table ID assignment and lookup,
+    - declaration evidence requirement contents from `can` + operation references.
+  - Plan docs synchronized:
+    - `doc/PLAN_RESUME.md`: Step 7.2 marked DONE.
+  - Quality gates green:
+    - `cargo fmt`
+    - `cargo check`
+    - `cargo test` (270 tests passed)
+    - `cargo clippy -- -D warnings`
 
 ## 5. Current Example Files
 
