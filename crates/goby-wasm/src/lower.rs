@@ -26,7 +26,21 @@ pub(crate) fn try_emit_native_module(module: &Module) -> Result<Option<Vec<u8>>,
         return Ok(None);
     };
     let lowering_plan = build_lowering_plan(module);
-    let _ = lowering_plan.handler_resume_present();
+    let evidence_shape = lowering_plan.evidence_shape();
+    let _ = (
+        lowering_plan.handler_resume_present(),
+        evidence_shape.operation_table_len(),
+        evidence_shape.requirements_len(),
+        evidence_shape.checksum(),
+        lowering_plan.evidence_requirement_for("main").map(|req| {
+            (
+                req.style(),
+                req.passes_evidence(),
+                req.required_effect_count(),
+                req.referenced_operation_count(),
+            )
+        }),
+    );
     if !lowering_plan.is_direct_style("main") {
         return Ok(None);
     }

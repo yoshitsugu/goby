@@ -295,12 +295,20 @@ Step 7.1: Introduce execution-style planning metadata — DONE (2026-03-02)
   - transitive caller propagation,
   - handler-resume presence marker.
 
-Step 7.2: Define evidence payload shape (internal IR-level contract)
+Step 7.2: Define evidence payload shape (internal IR-level contract) — DONE (2026-03-02)
 
 - Introduce internal representation for handler evidence:
   - active handler stack snapshot/evidence pointer,
   - operation dispatch tokens (`EffectId`, `OpId` placeholders until full ID intern pass).
 - Keep this internal-only (no source syntax change in Step 7).
+- Implemented in `goby-wasm` planning metadata:
+  - `EffectId`, `OpId`, `EffectOperationRef`,
+  - per-declaration `DeclarationEvidenceRequirement`,
+  - module-level `EvidencePayloadShape` (operation table + declaration requirements).
+- Evidence requirements currently include:
+  - required effects from `can` clauses (mapped to `EffectId` where declared),
+  - referenced effect operations (qualified + bare-name candidates) mapped to
+    `(EffectId, OpId)` entries.
 
 Step 7.3: Direct-style lowerer path stabilization
 
