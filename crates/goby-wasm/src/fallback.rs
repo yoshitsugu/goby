@@ -1,4 +1,4 @@
-use goby_core::{BinOpKind, Expr, Module, Stmt, types::parse_function_type};
+use goby_core::{BinOpKind, CasePattern, Expr, Module, Stmt, types::parse_function_type};
 
 use crate::lower::declaration_body_supported_for_native;
 
@@ -74,6 +74,19 @@ fn is_phase2_supported_value_expr(expr: &Expr, module: &Module) -> bool {
             is_phase2_supported_value_expr(condition, module)
                 && is_phase2_supported_value_expr(then_expr, module)
                 && is_phase2_supported_value_expr(else_expr, module)
+        }
+        Expr::Case { scrutinee, arms } => {
+            is_phase2_supported_value_expr(scrutinee, module)
+                && !arms.is_empty()
+                && arms.iter().all(|arm| {
+                    matches!(
+                        arm.pattern,
+                        CasePattern::IntLit(_)
+                            | CasePattern::StringLit(_)
+                            | CasePattern::BoolLit(_)
+                            | CasePattern::Wildcard
+                    ) && is_phase2_supported_value_expr(&arm.body, module)
+                })
         }
         Expr::Call { callee, arg } => {
             let Expr::Var(name) = callee.as_ref() else {

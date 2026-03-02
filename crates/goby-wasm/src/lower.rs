@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use goby_core::{BinOpKind, Expr, Module, Stmt};
+use goby_core::{BinOpKind, CasePattern, Expr, Module, Stmt};
 
 use crate::{CodegenError, backend::WasmProgramBuilder, layout::MemoryLayout};
 
@@ -175,6 +175,22 @@ fn eval_expr(
                 eval_expr(else_expr, bindings, env, depth + 1)
             }
         }
+        Expr::Case { scrutinee, arms } => {
+            let scrutinee_val = eval_expr(scrutinee, bindings, env, depth + 1)?;
+            for arm in arms {
+                let matched = match (&arm.pattern, &scrutinee_val) {
+                    (CasePattern::Wildcard, _) => true,
+                    (CasePattern::IntLit(p), NativeValue::Int(v)) => p == v,
+                    (CasePattern::StringLit(p), NativeValue::String(v)) => p == v,
+                    (CasePattern::BoolLit(p), NativeValue::Bool(v)) => p == v,
+                    _ => false,
+                };
+                if matched {
+                    return eval_expr(&arm.body, bindings, env, depth + 1);
+                }
+            }
+            None
+        }
         _ => None,
     }
 }
@@ -308,6 +324,19 @@ fn is_value_expr_supported(
             is_value_expr_supported(condition, module, env, stack)
                 && is_value_expr_supported(then_expr, module, env, stack)
                 && is_value_expr_supported(else_expr, module, env, stack)
+        }
+        Expr::Case { scrutinee, arms } => {
+            is_value_expr_supported(scrutinee, module, env, stack)
+                && !arms.is_empty()
+                && arms.iter().all(|arm| {
+                    matches!(
+                        arm.pattern,
+                        CasePattern::IntLit(_)
+                            | CasePattern::StringLit(_)
+                            | CasePattern::BoolLit(_)
+                            | CasePattern::Wildcard
+                    ) && is_value_expr_supported(&arm.body, module, env, stack)
+                })
         }
         Expr::Call { callee, arg } => {
             let Expr::Var(name) = callee.as_ref() else {
