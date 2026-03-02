@@ -1,5 +1,5 @@
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::{
     Module,
@@ -33,7 +33,16 @@ impl std::fmt::Display for TypecheckError {
 impl std::error::Error for TypecheckError {}
 
 pub fn typecheck_module(module: &Module) -> Result<(), TypecheckError> {
+    typecheck_module_with_context(module, None, None)
+}
+
+pub fn typecheck_module_with_context(
+    module: &Module,
+    source_path: Option<&Path>,
+    stdlib_root: Option<&Path>,
+) -> Result<(), TypecheckError> {
     validate_imports(module)?;
+    validate_embed_declarations(module, source_path, stdlib_root)?;
     validate_type_declarations(module)?;
     validate_effect_declarations(module)?;
 
@@ -618,6 +627,52 @@ fn validate_imports(module: &Module) -> Result<(), TypecheckError> {
     Ok(())
 }
 
+fn validate_embed_declarations(
+    module: &Module,
+    source_path: Option<&Path>,
+    stdlib_root: Option<&Path>,
+) -> Result<(), TypecheckError> {
+    if module.embed_declarations.is_empty() {
+        return Ok(());
+    }
+
+    // Compatibility mode for legacy call sites that only use `typecheck_module`.
+    // Path-restricted enforcement is applied when context is provided
+    // (`typecheck_module_with_context`, used by CLI).
+    let Some(source_path) = source_path else {
+        return Ok(());
+    };
+    let stdlib_root = stdlib_root
+        .map(Path::to_path_buf)
+        .unwrap_or_else(default_stdlib_root);
+    if !is_path_within_root(source_path, &stdlib_root) {
+        return Err(TypecheckError {
+            declaration: None,
+            span: None,
+            message: format!(
+                "@embed declarations are only allowed under stdlib root `{}`",
+                stdlib_root.display()
+            ),
+        });
+    }
+
+    let mut seen = HashSet::new();
+    for embed in &module.embed_declarations {
+        if !seen.insert(embed.effect_name.clone()) {
+            return Err(TypecheckError {
+                declaration: None,
+                span: Some(Span {
+                    line: embed.line,
+                    col: 1,
+                }),
+                message: format!("duplicate embedded effect `{}`", embed.effect_name),
+            });
+        }
+    }
+
+    Ok(())
+}
+
 fn validate_type_declarations(module: &Module) -> Result<(), TypecheckError> {
     let mut known_type_names: HashSet<String> = builtin_type_names()
         .into_iter()
@@ -786,6 +841,27 @@ fn default_stdlib_root() -> PathBuf {
         .join("stdlib")
 }
 
+fn is_path_within_root(path: &Path, root: &Path) -> bool {
+    let path = canonical_or_absolute(path);
+    let root = canonical_or_absolute(root);
+    path.starts_with(root)
+}
+
+fn canonical_or_absolute(path: &Path) -> PathBuf {
+    match std::fs::canonicalize(path) {
+        Ok(canonical) => canonical,
+        Err(_) => {
+            if path.is_absolute() {
+                path.to_path_buf()
+            } else {
+                std::env::current_dir()
+                    .unwrap_or_else(|_| PathBuf::from("."))
+                    .join(path)
+            }
+        }
+    }
+}
+
 fn default_stdlib_resolver() -> StdlibResolver {
     StdlibResolver::new(default_stdlib_root())
 }
@@ -887,6 +963,15 @@ fn insert_global_symbol(
             if existing_source == source {
                 return;
             }
+            // During stdio migration, selective `import goby/stdio ( print )`
+            // should be usable even while builtin `print` remains for compatibility.
+            if symbol == "print"
+                && existing_source == "builtin `print`"
+                && is_stdio_print_import_source(&source)
+            {
+                globals.insert(symbol, GlobalBinding::Resolved { ty, source });
+                return;
+            }
             globals.insert(
                 symbol,
                 GlobalBinding::Ambiguous {
@@ -901,6 +986,10 @@ fn insert_global_symbol(
             globals.insert(symbol, GlobalBinding::Ambiguous { sources });
         }
     }
+}
+
+fn is_stdio_print_import_source(source: &str) -> bool {
+    source == "import `goby/stdio` (print)"
 }
 
 fn builtin_module_exports(module_path: &str) -> Option<HashMap<&'static str, Ty>> {
@@ -2758,6 +2847,85 @@ f = fetch_env_var(\"HOME\")
                 result: Box::new(Ty::Str),
             }
         );
+    }
+
+    #[test]
+    fn typechecks_file_based_stdlib_symbol_not_in_builtin_table() {
+        let source = "\
+import goby/string ( length )
+f : Unit -> Int
+f = length(\"abc\")
+";
+        let module = parse_module(source).expect("should parse");
+        typecheck_module(&module).expect("file-based stdlib symbol should typecheck");
+    }
+
+    #[test]
+    fn typechecks_import_from_goby_stdio_module() {
+        let source = "\
+import goby/stdio ( print )
+f : Unit -> Unit can Print
+f = print \"hi\"
+";
+        let module = parse_module(source).expect("should parse");
+        typecheck_module(&module).expect("imported stdio print should be callable");
+    }
+
+    #[test]
+    fn accepts_embed_declaration_inside_stdlib_root_with_context() {
+        let sandbox = TempDirGuard::new("embed_in_stdlib");
+        let stdlib_root = sandbox.path.join("stdlib");
+        let source_path = stdlib_root.join("goby/stdio.gb");
+        fs::create_dir_all(source_path.parent().expect("parent should exist"))
+            .expect("stdlib path should be creatable");
+        let source = "@embed effect Print\nf : Unit -> Int\nf = 1\n";
+        fs::write(&source_path, source).expect("fixture file should be writable");
+        let module = parse_module(source).expect("should parse");
+        typecheck_module_with_context(&module, Some(&source_path), Some(&stdlib_root))
+            .expect("@embed under stdlib root should be accepted");
+    }
+
+    #[test]
+    fn rejects_embed_declaration_outside_stdlib_root_with_context() {
+        let sandbox = TempDirGuard::new("embed_outside_stdlib");
+        let stdlib_root = sandbox.path.join("stdlib");
+        let source_path = sandbox.path.join("user/main.gb");
+        fs::create_dir_all(source_path.parent().expect("parent should exist"))
+            .expect("user path should be creatable");
+        let source = "@embed effect Print\nf : Unit -> Int\nf = 1\n";
+        fs::write(&source_path, source).expect("fixture file should be writable");
+        let module = parse_module(source).expect("should parse");
+        let err = typecheck_module_with_context(&module, Some(&source_path), Some(&stdlib_root))
+            .expect_err("@embed outside stdlib root should be rejected");
+        assert!(
+            err.message
+                .contains("@embed declarations are only allowed under stdlib root"),
+            "unexpected message: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn allows_embed_declaration_without_source_context_for_legacy_api_compat() {
+        let source = "@embed effect Print\nf : Unit -> Int\nf = 1\n";
+        let module = parse_module(source).expect("should parse");
+        typecheck_module(&module)
+            .expect("legacy typecheck API should remain compatible without source context");
+    }
+
+    #[test]
+    fn rejects_duplicate_embed_declaration_names_in_stdlib() {
+        let sandbox = TempDirGuard::new("embed_duplicate");
+        let stdlib_root = sandbox.path.join("stdlib");
+        let source_path = stdlib_root.join("goby/stdio.gb");
+        fs::create_dir_all(source_path.parent().expect("parent should exist"))
+            .expect("stdlib path should be creatable");
+        let source = "@embed effect Print\n@embed effect Print\nf : Unit -> Int\nf = 1\n";
+        fs::write(&source_path, source).expect("fixture file should be writable");
+        let module = parse_module(source).expect("should parse");
+        let err = typecheck_module_with_context(&module, Some(&source_path), Some(&stdlib_root))
+            .expect_err("duplicate embedded effects should be rejected");
+        assert!(err.message.contains("duplicate embedded effect"));
     }
 
     #[test]

@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-02 (session 52)
+Last updated: 2026-03-02 (session 53)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -425,6 +425,39 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - Quality gates green:
     - `cargo check`
     - `cargo test` (231 tests passed)
+    - `cargo clippy -- -D warnings`
+- 2026-03-02 (session 53): `PLAN_STANDARD_LIBRARY` Step6-8 complete (stdlib seed + stdio + `@embed` gate)
+  - Step6 (`stdlib/goby` seed modules):
+    - Added `stdlib/goby/string.gb` with `concat`, `split`, and file-only marker export `length`.
+    - Added `stdlib/goby/list.gb` with `join`.
+    - Added `stdlib/goby/env.gb` with `fetch_env_var`.
+    - Added regression test ensuring file-based stdlib symbol (`goby/string.length`) resolves/typechecks (resolver-first path active).
+  - Step7 (`goby/stdio` module):
+    - Added `stdlib/goby/stdio.gb` with:
+      - `@embed effect Print`
+      - `print : String -> Unit can Print`
+    - Added typecheck regression test for `import goby/stdio ( print )`.
+  - Step8 (stdlib-only `@embed` parsing gate):
+    - AST/parser:
+      - added `Module.embed_declarations` and `EmbedDecl`,
+      - parser now accepts `@embed effect <EffectName>` at top level,
+      - parser rejects malformed `@embed` declarations.
+    - Typechecker:
+      - added `typecheck_module_with_context(module, source_path, stdlib_root)` entrypoint,
+      - `typecheck_module` keeps compatibility and delegates with no context,
+      - `validate_embed_declarations` enforces:
+        - `@embed` allowed only when `source_path` is under stdlib root,
+        - duplicate embedded effect names rejected.
+    - CLI:
+      - switched to `typecheck_module_with_context` and passes current source path.
+    - Added regression tests:
+      - stdlib-path `@embed` accepted,
+      - user-path `@embed` rejected,
+      - legacy no-context API remains compatible (restriction enforced on context-aware path),
+      - duplicate embedded effect names rejected.
+  - Quality gates green:
+    - `cargo check`
+    - `cargo test` (240 tests passed)
     - `cargo clippy -- -D warnings`
 
 ## 5. Current Example Files
