@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-02 (session 28)
+Last updated: 2026-03-02 (session 29)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -163,6 +163,10 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - `tooling/syntax/testdata/highlight_sample.gb`: manual test fixture covering all categories.
   - `tooling/syntax/README.md`: token category table + "Inspect Editor Tokens and Scopes" instructions.
   - Vim and Emacs support deferred to follow-up phase.
+- 2026-03-02 (session 29): Real Wasm codegen planning document added:
+  - `doc/PLAN_WASM.md` created with phased migration from compile-time interpreter to instruction-level codegen.
+  - Plan includes: AST subset per phase, wasm-encoder module layout, value representation (`Int`/`String`/`List Int`),
+    fallback coexistence/retirement timing, concrete file-level task breakdown, DoD checks, and risk mitigations.
 
 ## 5. Current Example Files
 
@@ -188,6 +192,7 @@ cargo clippy -- -D warnings
 
 Post-MVP candidates (see `doc/PLAN.md` §4):
 1. Real Wasm code generation (actual instruction emission, remove compile-time interpreter).
+   - Detailed phase plan: `doc/PLAN_WASM.md`.
 2. Effect runtime redesign (one-shot deep handlers + selective CPS/evidence passing).
 3. Standard-library foundation for self-hosted Goby libraries (§4.2).
 4. Early developer tooling foundation (LSP, syntax highlighting, linter, formatter) (§4.3).
