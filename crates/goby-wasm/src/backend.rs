@@ -75,7 +75,7 @@ impl WasmProgramBuilder {
 
         let mut exports = ExportSection::new();
         exports.export("memory", ExportKind::Memory, 0);
-        exports.export("main", ExportKind::Func, 1);
+        exports.export("_start", ExportKind::Func, 1);
         module.section(&exports);
 
         // Code section (id=10) must come before Data section (id=11) per Wasm spec §5.5.2.
