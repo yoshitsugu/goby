@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-02 (session 46)
+Last updated: 2026-03-02 (session 50)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -362,6 +362,30 @@ This file is a restart-safe snapshot for resuming work after context reset.
     - diagnostics hardening.
   - Progress for this track will be managed against the checkpoints and DoD in
     `doc/PLAN_STANDARD_LIBRARY.md`.
+- 2026-03-02 (session 49): `goby/stdio` + stdlib-only `@embed` policy added to plan
+  - `doc/PLAN_STANDARD_LIBRARY.md` updated with:
+    - `stdlib/goby/stdio.gb` as a first-class module target,
+    - explicit `print` migration sequence through `goby/stdio`,
+    - stdlib-only `@embed` design rule (initial target: `@embed Print`),
+    - diagnostics/test/checkpoint requirements for `@embed` scope enforcement.
+  - `doc/PLAN.md` §4.3 updated with locked planning constraint:
+    - `@embed` is stdlib-only (not allowed in user/non-stdlib modules),
+    - `print` migration proceeds via stdlib bridge with temporary bare-print compatibility.
+  - Execution style locked: proceed via incremental step-by-step plan in
+    `doc/PLAN_STANDARD_LIBRARY.md` §7, completing one small step at a time.
+- 2026-03-02 (session 50): `PLAN_STANDARD_LIBRARY` Step0 baseline lock complete
+  - Added baseline regression tests in `crates/goby-core/src/typecheck.rs` for:
+    - plain import (`import goby/string`) qualified symbol use,
+    - alias import (`import goby/list as l`) qualified symbol use,
+    - selective import (`import goby/env ( fetch_env_var )`) bare symbol use,
+    - bare builtin `print` availability without import.
+  - No language/runtime behavior changes intended in this step.
+  - Quality gates re-run and green:
+    - `cargo check`
+    - `cargo test` (220 tests passed)
+    - `cargo clippy -- -D warnings`
+  - `clippy` cleanup included one non-functional let-chain refactor in
+    `crates/goby-wasm/src/fallback.rs` (`collapsible_if`).
 
 ## 5. Current Example Files
 
@@ -386,7 +410,7 @@ cargo clippy -- -D warnings
 ```
 
 Execution focus (in order):
-1. Standard-library foundation implementation (`doc/PLAN_STANDARD_LIBRARY.md`, Phase A -> E + stdio/print migration checkpoints).
+1. Standard-library foundation implementation (`doc/PLAN_STANDARD_LIBRARY.md`, Phase A -> E + stdio/print + stdlib-only `@embed` checkpoints).
 2. Effect runtime redesign (one-shot deep handlers + selective CPS/evidence passing).
 3. `resolve_main_runtime_output` retirement (blocked on effect-native support and remaining unsupported forms).
 

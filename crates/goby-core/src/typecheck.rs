@@ -2513,6 +2513,46 @@ f n = n
     }
 
     #[test]
+    fn baseline_plain_import_works_with_qualified_access() {
+        let source = "\
+import goby/string
+f : Unit -> String
+f = string.concat(\"a\", \"b\")
+";
+        let module = parse_module(source).expect("should parse");
+        typecheck_module(&module).expect("plain import should expose qualified symbols");
+    }
+
+    #[test]
+    fn baseline_alias_import_works_with_qualified_access() {
+        let source = "\
+import goby/list as l
+f : Unit -> String
+f = l.join([\"a\", \"b\"], \",\")
+";
+        let module = parse_module(source).expect("should parse");
+        typecheck_module(&module).expect("alias import should expose alias-qualified symbols");
+    }
+
+    #[test]
+    fn baseline_selective_import_exposes_bare_symbol() {
+        let source = "\
+import goby/env ( fetch_env_var )
+f : Unit -> String
+f = fetch_env_var(\"HOME\")
+";
+        let module = parse_module(source).expect("should parse");
+        typecheck_module(&module).expect("selective import should expose bare symbol");
+    }
+
+    #[test]
+    fn baseline_bare_print_builtin_is_available_without_import() {
+        let source = "main : Unit -> Unit\nmain = print \"hi\"\n";
+        let module = parse_module(source).expect("should parse");
+        typecheck_module(&module).expect("bare print should remain available as builtin");
+    }
+
+    #[test]
     fn rejects_unknown_import_module() {
         let module = parse_module("import goby/unknown\nmain : Unit -> Unit\nmain = 1\n")
             .expect("should parse");
