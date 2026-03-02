@@ -2547,6 +2547,107 @@ main =
     }
 
     #[test]
+    fn compile_module_uses_native_emitter_for_function_example_first_order_subset() {
+        let source = r#"
+add_ten : Int -> Int
+add_ten x = x + 10
+
+add_ten_mul_three : Int -> Int
+add_ten_mul_three a =
+  b = a + 10
+  b * 3
+
+main : Unit -> Unit
+main =
+  b = add_ten 10
+  c = add_ten_mul_three b
+  print c
+"#;
+        let module = parse_module(source).expect("source should parse");
+        assert!(
+            fallback::supports_native_codegen(&module),
+            "first-order subset derived from function.gb should be accepted"
+        );
+        assert_eq!(fallback::native_unsupported_reason_kind(&module), None);
+        let wasm = compile_module(&module).expect("codegen should succeed");
+        let expected_text =
+            resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
+                .expect("runtime output should resolve");
+        assert_eq!(expected_text, "90");
+        let expected = compile_print_module(&expected_text).expect("fallback wasm should compile");
+        assert_ne!(
+            wasm, expected,
+            "first-order subset of function.gb should use native emitter"
+        );
+    }
+
+    #[test]
+    fn native_codegen_ignores_unused_hof_declaration() {
+        let source = r#"
+mul_tens : List Int -> List Int
+mul_tens ns = map ns (|n| -> n * 10)
+
+main : Unit -> Unit
+main =
+  print 42
+"#;
+        let module = parse_module(source).expect("source should parse");
+        assert!(
+            fallback::supports_native_codegen(&module),
+            "unused HOF declaration should not block native path"
+        );
+        assert_eq!(fallback::native_unsupported_reason_kind(&module), None);
+        let wasm = compile_module(&module).expect("codegen should succeed");
+        let expected_text =
+            resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
+                .expect("runtime output should resolve");
+        assert_eq!(expected_text, "42");
+        let expected = compile_print_module(&expected_text).expect("fallback wasm should compile");
+        assert_ne!(
+            wasm, expected,
+            "module should remain native when unsupported HOF declarations are unreachable from main"
+        );
+    }
+
+    #[test]
+    fn native_codegen_rejects_transitively_required_hof_declaration() {
+        let source = r#"
+mul_tens : List Int -> List Int
+mul_tens ns = map ns (|n| -> n * 10)
+
+wrapped_mul_tens : List Int -> List Int
+wrapped_mul_tens ns = mul_tens ns
+
+main : Unit -> Unit
+main =
+  print (wrapped_mul_tens [1, 2])
+"#;
+        let module = parse_module(source).expect("source should parse");
+        assert!(
+            !fallback::supports_native_codegen(&module),
+            "transitively required HOF declaration should force fallback"
+        );
+        assert_eq!(
+            fallback::native_unsupported_reason_kind(&module),
+            Some(fallback::UnsupportedReason::CallTargetBodyNotNativeSupported)
+        );
+        assert_eq!(
+            fallback::native_unsupported_reason(&module),
+            Some("call_target_body_not_native_supported")
+        );
+        let wasm = compile_module(&module).expect("codegen should succeed");
+        let expected_text =
+            resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
+                .expect("runtime output should resolve");
+        assert_eq!(expected_text, "[10, 20]");
+        let expected = compile_print_module(&expected_text).expect("fallback wasm should compile");
+        assert_eq!(
+            wasm, expected,
+            "transitively required HOF declaration should stay on fallback path"
+        );
+    }
+
+    #[test]
     fn compile_module_uses_native_emitter_for_list_int_print_subset() {
         let source = r#"
 main : Unit -> Unit

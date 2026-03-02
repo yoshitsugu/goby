@@ -281,6 +281,18 @@ This file is a restart-safe snapshot for resuming work after context reset.
     `UnsupportedReason::as_str`.
   - Added typed assertion for lambda/HOF-over-arity priority test.
   - Validation rerun: `cargo test -p goby-wasm`, workspace `cargo check/test/clippy` all green.
+- 2026-03-02 (session 42): Phase 6 completion gates finalized
+  - Added explicit Phase-6 boundary tests in `crates/goby-wasm/src/lib.rs`:
+    - first-order subset derived from `function.gb` uses native path,
+    - unused HOF declaration does not block native path,
+    - transitively required HOF declaration forces fallback with typed reason
+      `CallTargetBodyNotNativeSupported`.
+  - Revalidated full quality gates:
+    - `cargo test -p goby-wasm`,
+    - `cargo check`,
+    - `cargo test`,
+    - `cargo clippy -- -D warnings`.
+  - Phase 6/6.1 marked complete in `doc/PLAN_WASM.md`; focus moves to Phase 7 sign-off.
 
 ## 5. Current Example Files
 
@@ -306,16 +318,12 @@ cargo clippy -- -D warnings
 ```
 
 Execution focus (see `doc/PLAN_WASM.md`):
-1. Execute Phase 6.1 (current target):
-   - complete remaining cleanup items:
-     - audit remaining duplicated expression-shape assumptions between `fallback` and `lower`
-       and collapse any low-risk stragglers into shared helpers where practical.
-     - gradually switch internal checks/tests to `native_unsupported_reason_kind` where useful,
-       keeping string API only for external compatibility surfaces.
-   - keep fallback boundaries and runtime outputs unchanged (`function.gb`, `effect.gb`).
-2. Then Phase 7 cleanup/sign-off:
+1. Execute Phase 7 cleanup/sign-off:
    - confirm fallback boundary is explicit and narrow,
+   - maintain native/fallback coverage matrix by example as regression guard,
    - continue compatibility-layer shrinkage toward interpreter retirement gates.
+2. Keep fallback boundaries and runtime outputs unchanged for intentional fallback examples:
+   - `function.gb`, `effect.gb`.
 3. Parallel/next major theme:
    - effect runtime redesign (one-shot deep handlers + selective CPS/evidence passing).
 
