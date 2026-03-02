@@ -3,6 +3,25 @@ use goby_core::{BinOpKind, CasePattern, Expr, Module, Stmt, types::parse_functio
 use crate::{call::flatten_named_call, lower::declaration_body_supported_for_native};
 
 const BUILTIN_PRINT: &str = "print";
+const REASON_MISSING_MAIN: &str = "missing_main";
+const REASON_MAIN_ANNOTATION_NOT_UNIT_TO_UNIT: &str = "main_annotation_not_unit_to_unit";
+const REASON_MAIN_PARSED_BODY_UNAVAILABLE: &str = "main_parsed_body_unavailable";
+const REASON_MAIN_BODY_EMPTY: &str = "main_body_empty";
+const REASON_USING_NOT_SUPPORTED: &str = "using_not_supported";
+const REASON_CALL_CALLEE_NOT_DIRECT_NAME: &str = "call_callee_not_direct_name";
+const REASON_PRINT_ARITY_NOT_ONE: &str = "print_arity_not_one";
+const REASON_UNSUPPORTED_PIPELINE_CALLEE: &str = "unsupported_pipeline_callee";
+const REASON_UNSUPPORTED_STATEMENT_EXPR: &str = "unsupported_statement_expr";
+const REASON_UNSUPPORTED_LIST_ITEM_EXPR: &str = "unsupported_list_item_expr";
+const REASON_UNSUPPORTED_BINOP: &str = "unsupported_binop";
+const REASON_CASE_HAS_NO_ARMS: &str = "case_has_no_arms";
+const REASON_UNSUPPORTED_CASE_PATTERN: &str = "unsupported_case_pattern";
+const REASON_PRINT_NOT_VALUE_EXPR: &str = "print_not_value_expr";
+const REASON_UNSUPPORTED_CALL_ARGUMENT: &str = "unsupported_call_argument";
+const REASON_CALL_TARGET_NOT_DECLARATION: &str = "call_target_not_declaration";
+const REASON_CALL_TARGET_BODY_NOT_NATIVE_SUPPORTED: &str = "call_target_body_not_native_supported";
+const REASON_CALL_ARITY_MISMATCH: &str = "call_arity_mismatch";
+const REASON_UNSUPPORTED_VALUE_EXPR: &str = "unsupported_value_expr";
 
 pub(crate) fn supports_native_codegen(module: &Module) -> bool {
     native_unsupported_reason(module).is_none()
@@ -10,17 +29,17 @@ pub(crate) fn supports_native_codegen(module: &Module) -> bool {
 
 pub(crate) fn native_unsupported_reason(module: &Module) -> Option<&'static str> {
     let Some(main) = module.declarations.iter().find(|decl| decl.name == "main") else {
-        return Some("missing_main");
+        return Some(REASON_MISSING_MAIN);
     };
     if !is_unit_to_unit(main.type_annotation.as_deref()) {
-        return Some("main_annotation_not_unit_to_unit");
+        return Some(REASON_MAIN_ANNOTATION_NOT_UNIT_TO_UNIT);
     }
 
     let Some(stmts) = main.parsed_body.as_deref() else {
-        return Some("main_parsed_body_unavailable");
+        return Some(REASON_MAIN_PARSED_BODY_UNAVAILABLE);
     };
     if stmts.is_empty() {
-        return Some("main_body_empty");
+        return Some(REASON_MAIN_BODY_EMPTY);
     }
 
     for stmt in stmts {
@@ -45,7 +64,7 @@ fn unsupported_stmt_reason(stmt: &Stmt, module: &Module) -> Option<&'static str>
     match stmt {
         Stmt::Binding { value, .. } => unsupported_value_expr_reason(value, module),
         Stmt::Expr(expr) => unsupported_stmt_expr_reason(expr, module),
-        Stmt::Using { .. } => Some("using_not_supported"),
+        Stmt::Using { .. } => Some(REASON_USING_NOT_SUPPORTED),
     }
 }
 
@@ -57,23 +76,23 @@ fn unsupported_stmt_expr_reason(expr: &Expr, module: &Module) -> Option<&'static
     match expr {
         Expr::Call { .. } => {
             let Some((name, args)) = flatten_named_call(expr) else {
-                return Some("call_callee_not_direct_name");
+                return Some(REASON_CALL_CALLEE_NOT_DIRECT_NAME);
             };
             if name != BUILTIN_PRINT {
                 return unsupported_value_expr_reason(expr, module);
             }
             if args.len() != 1 {
-                return Some("print_arity_not_one");
+                return Some(REASON_PRINT_ARITY_NOT_ONE);
             }
             unsupported_value_expr_reason(args[0], module)
         }
         Expr::Pipeline { value, callee } => {
             if callee != BUILTIN_PRINT {
-                return Some("unsupported_pipeline_callee");
+                return Some(REASON_UNSUPPORTED_PIPELINE_CALLEE);
             }
             unsupported_value_expr_reason(value, module)
         }
-        _ => Some("unsupported_statement_expr"),
+        _ => Some(REASON_UNSUPPORTED_STATEMENT_EXPR),
     }
 }
 
@@ -87,12 +106,12 @@ fn unsupported_value_expr_reason(expr: &Expr, module: &Module) -> Option<&'stati
             {
                 None
             } else {
-                Some("unsupported_list_item_expr")
+                Some(REASON_UNSUPPORTED_LIST_ITEM_EXPR)
             }
         }
         Expr::BinOp { op, left, right } => {
             if !matches!(op, BinOpKind::Add | BinOpKind::Mul | BinOpKind::Eq) {
-                return Some("unsupported_binop");
+                return Some(REASON_UNSUPPORTED_BINOP);
             }
             if let Some(reason) = unsupported_value_expr_reason(left, module) {
                 return Some(reason);
@@ -117,7 +136,7 @@ fn unsupported_value_expr_reason(expr: &Expr, module: &Module) -> Option<&'stati
                 return Some(reason);
             }
             if arms.is_empty() {
-                return Some("case_has_no_arms");
+                return Some(REASON_CASE_HAS_NO_ARMS);
             }
             for arm in arms {
                 if !matches!(
@@ -127,7 +146,7 @@ fn unsupported_value_expr_reason(expr: &Expr, module: &Module) -> Option<&'stati
                         | CasePattern::BoolLit(_)
                         | CasePattern::Wildcard
                 ) {
-                    return Some("unsupported_case_pattern");
+                    return Some(REASON_UNSUPPORTED_CASE_PATTERN);
                 }
                 if let Some(reason) = unsupported_value_expr_reason(&arm.body, module) {
                     return Some(reason);
@@ -137,29 +156,30 @@ fn unsupported_value_expr_reason(expr: &Expr, module: &Module) -> Option<&'stati
         }
         Expr::Call { .. } => {
             let Some((name, args)) = flatten_named_call(expr) else {
-                return Some("call_callee_not_direct_name");
+                return Some(REASON_CALL_CALLEE_NOT_DIRECT_NAME);
             };
             if name == BUILTIN_PRINT {
-                return Some("print_not_value_expr");
+                return Some(REASON_PRINT_NOT_VALUE_EXPR);
             }
             if !args
                 .iter()
                 .all(|arg| is_phase2_supported_value_expr(arg, module))
             {
-                return Some("unsupported_call_argument");
+                return Some(REASON_UNSUPPORTED_CALL_ARGUMENT);
             }
             let Some(decl) = module.declarations.iter().find(|d| d.name == name) else {
-                return Some("call_target_not_declaration");
+                return Some(REASON_CALL_TARGET_NOT_DECLARATION);
             };
+            // Prefer reporting unsupported declaration bodies (for lambda/HOF) before
+            // generic call-shape mismatches when both are present.
+            if !declaration_body_supported_for_native(name, module) {
+                return Some(REASON_CALL_TARGET_BODY_NOT_NATIVE_SUPPORTED);
+            }
             if decl.params.len() != args.len() {
-                return Some("call_arity_mismatch");
+                return Some(REASON_CALL_ARITY_MISMATCH);
             }
-            if declaration_body_supported_for_native(name, module) {
-                None
-            } else {
-                Some("call_target_body_not_native_supported")
-            }
+            None
         }
-        _ => Some("unsupported_value_expr"),
+        _ => Some(REASON_UNSUPPORTED_VALUE_EXPR),
     }
 }

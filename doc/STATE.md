@@ -197,6 +197,25 @@ This file is a restart-safe snapshot for resuming work after context reset.
     - native emitter selection for 4-arg direct call subset,
     - explicit fallback reason on `examples/function.gb` (lambda/HOF path).
   - Quality gates green: `cargo fmt`, `cargo check`, `cargo test`, `cargo clippy -- -D warnings`.
+- 2026-03-02 (session 33): Phase 6.1 safety-first progress
+  - Added reason-code regression coverage for native capability fallback:
+    - table-driven call reason cases (`call_callee_not_direct_name`, `call_arity_mismatch`,
+      `call_target_not_declaration`, `call_target_body_not_native_supported`),
+    - deterministic-priority test: lambda/HOF reason wins over arity mismatch when both coexist.
+  - Updated `crates/goby-wasm/src/fallback.rs` call-reason order:
+    - declaration-body support check now runs before arity mismatch check for direct calls.
+  - Replaced ad-hoc fallback reason literals with shared constants in
+    `crates/goby-wasm/src/fallback.rs`.
+  - Removed legacy string-heuristic unsupported analyzer from `crates/goby-wasm/src/lib.rs`:
+    - removed `find_unsupported_form` / `UnsupportedFormAnalyzer` and related helper code.
+  - Added example path-coverage matrix test in `goby-wasm`:
+    - native: `hello.gb`, `control_flow.gb`,
+    - fallback: `effect.gb`, `function.gb`.
+  - Quality gates green after changes:
+    - `cargo test -p goby-wasm`,
+    - `cargo check`,
+    - `cargo test`,
+    - `cargo clippy -- -D warnings`.
 
 ## 5. Current Example Files
 
@@ -223,12 +242,9 @@ cargo clippy -- -D warnings
 
 Execution focus (see `doc/PLAN_WASM.md`):
 1. Execute Phase 6.1 (current target):
-   - lock deterministic reason-coded fallback behavior for `examples/function.gb`
-     (lambda/HOF reasons, call-shape combinations),
-   - remove legacy string-only unsupported analyzer (`find_unsupported_form` /
-     `UnsupportedFormAnalyzer`) from `crates/goby-wasm/src/lib.rs`,
-   - add native-vs-fallback path coverage matrix tests for `examples/*.gb`,
-   - keep `examples/function.gb` and `examples/effect.gb` behavior unchanged.
+   - complete remaining cleanup items:
+     - tighten shared helper boundaries between `fallback.rs` and `lower.rs`.
+   - keep fallback boundaries and runtime outputs unchanged (`function.gb`, `effect.gb`).
 2. Then Phase 7 cleanup/sign-off:
    - confirm fallback boundary is explicit and narrow,
    - continue compatibility-layer shrinkage toward interpreter retirement gates.
