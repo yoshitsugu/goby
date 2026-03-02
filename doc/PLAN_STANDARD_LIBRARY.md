@@ -20,6 +20,7 @@ In scope:
 - Introduce a canonical in-repo stdlib source layout.
 - Resolve `import goby/...` from `.gb` source files.
 - Keep current built-in import behavior as compatibility fallback during migration.
+- Add a stdlib-only `@embed` annotation for effect embedding declarations.
 - Preserve existing import diagnostics quality.
 - Add regression coverage for file-based stdlib import behavior.
 
@@ -28,6 +29,7 @@ Out of scope (later phases):
 - Full runtime replacement of built-in operations with stdlib Goby code.
 - Package manager / remote dependency resolution.
 - Cross-repo stdlib distribution.
+- General `@embed` support for user code or third-party libraries.
 
 ## 3. Current Baseline
 
@@ -57,6 +59,13 @@ Compatibility rule during migration:
 - Try file-based stdlib resolution first.
 - If unavailable, fall back to legacy built-in export table.
 - Keep a temporary builtin bridge for `print` until `goby/stdio` runtime parity is complete.
+
+`@embed` rule:
+
+- `@embed` is accepted only in stdlib sources under `stdlib/`.
+- `@embed` is rejected in user modules and non-stdlib libraries.
+- Embedded effects are treated as runtime-provided capabilities that do not need
+  user-space effect declaration boilerplate in `main`.
 
 ## 5. Canonical Layout
 
@@ -120,6 +129,7 @@ Deliverables:
 - Add initial stdlib files under `stdlib/goby/`.
 - Include stable export signatures matching current built-in module contracts.
 - Add `goby/stdio` module that exposes standard I/O functions (including `print`).
+- Add stdlib examples of embedded effect declarations, e.g. `@embed Print`.
 
 Notes:
 
@@ -129,6 +139,14 @@ Notes:
 Initial `goby/stdio` API contract (minimum):
 
 - `print : String -> Unit can Print` (or equivalent effect-aware signature accepted by Goby).
+
+Initial embedded declaration model for stdio:
+
+- Stdlib module may include embedded effect declarations such as:
+  - `@embed effect Print`
+  - embedded operation signatures consumed by `goby/stdio.print`.
+- Goal: keep `Print` capability wiring inside stdlib/runtime bridge instead of
+  requiring user modules to declare effect internals.
 
 Deferred additions:
 
@@ -153,6 +171,10 @@ Deliverables:
 - Improve import error messages with attempted path details.
 - Keep machine-readable stability for editor tooling.
 - Ensure ambiguous import diagnostics identify competing sources clearly.
+- Add explicit diagnostics for invalid `@embed` usage:
+  - used outside stdlib root,
+  - malformed embed target,
+  - duplicate embedded effect names.
 
 ### Phase F: Runtime Migration Preparation (Separate Execution Track)
 
@@ -169,10 +191,94 @@ Planned `print` migration sequence:
 1. Keep builtin `print` as runtime primitive while introducing `goby/stdio.print`.
 2. Make `goby/stdio` import path first-class in docs/examples.
 3. Keep compatibility so legacy bare `print` still works during migration.
-4. After parity and adoption, reduce direct compiler/runtime special-casing.
-5. Decide policy: retire bare builtin `print` or keep as permanent compatibility alias.
+4. Introduce stdlib-only `@embed Print` declaration path and wire runtime bridge through it.
+5. After parity and adoption, reduce direct compiler/runtime special-casing.
+6. Decide policy: retire bare builtin `print` or keep as permanent compatibility alias.
 
-## 7. Test Strategy
+## 7. Incremental Step-by-Step Execution Plan
+
+This section is the operational sequence. Each step is intentionally small and
+should be completed (code + tests + docs) before moving to the next.
+
+Step 0: Baseline lock
+
+- Add/confirm baseline tests for current import behavior and bare `print`.
+- No behavior change.
+- Exit criteria: `cargo check/test/clippy` green on unchanged behavior.
+
+Step 1: Add stdlib resolver module shell
+
+- Add `crates/goby-core/src/stdlib.rs` with data types and no integration.
+- Add unit tests for path mapping only.
+- Exit criteria: resolver compiles, no call sites changed.
+
+Step 2: Implement file resolution + parse path
+
+- Implement module-path -> file-path resolution and file loading.
+- Parse resolved `.gb` and return declaration/type metadata.
+- Exit criteria: resolver tests cover success + module-not-found + parse-failed.
+
+Step 3: Export map extraction
+
+- Build symbol->type export map from parsed stdlib module.
+- Add duplicate-export and missing-type tests.
+- Exit criteria: resolver returns stable export maps for fixture modules.
+
+Step 4: Integrate import validation (read path only)
+
+- Switch `validate_imports` to use resolver first, then builtin fallback.
+- Keep symbol injection path unchanged in this step.
+- Exit criteria: unknown-module/symbol diagnostics remain stable.
+
+Step 5: Integrate symbol injection
+
+- Switch `inject_imported_symbols` to resolver-first, builtin fallback.
+- Keep ambiguity/collision behavior unchanged.
+- Exit criteria: existing import collision tests remain green.
+
+Step 6: Seed stdlib files (`string/list/env`)
+
+- Add initial files under `stdlib/goby/` with current signatures.
+- No runtime migration yet.
+- Exit criteria: imports resolve from files in normal repo layout.
+
+Step 7: Add `stdlib/goby/stdio.gb`
+
+- Add `print` signature in `goby/stdio`.
+- Add typecheck test for `import goby/stdio ( print )`.
+- Exit criteria: stdio import path is usable in typechecker.
+
+Step 8: Introduce stdlib-only `@embed` parsing gate
+
+- Add parser/typechecker support for `@embed` declarations.
+- Enforce path restriction: allowed only when module source is under stdlib root.
+- Exit criteria: stdlib fixture accepted; user-module fixture rejected.
+
+Step 9: `@embed Print` stdio bridge metadata
+
+- Wire embedded `Print` declaration metadata into stdio planning path.
+- Keep bare builtin `print` behavior intact.
+- Exit criteria: no runtime regression; bridge metadata visible to compiler stages.
+
+Step 10: CLI stdlib root wiring
+
+- Pass stdlib root to resolver/typecheck flow.
+- Default to repo `stdlib/`; optional env override.
+- Exit criteria: CLI tests cover default and invalid-root error paths.
+
+Step 11: Diagnostic hardening
+
+- Improve resolver/import/embed diagnostics (attempted path, context).
+- Exit criteria: snapshot tests for key diagnostics.
+
+Step 12: print migration handoff checkpoint
+
+- Document active behavior:
+  - `goby/stdio.print` available,
+  - bare `print` compatibility preserved,
+  - `@embed` restricted to stdlib.
+- Exit criteria: checkpoint recorded in `doc/STATE.md`, next runtime step unblocked.
+## 8. Test Strategy
 
 ### Unit Tests (`goby-core`)
 
@@ -185,6 +291,7 @@ Planned `print` migration sequence:
   - `import goby/stdio` resolves `print` symbol with expected type,
   - selective import unknown symbol fails with expected message,
   - collision ambiguity behavior remains unchanged.
+  - `@embed` declaration is rejected outside stdlib modules.
 
 ### Integration/Regression
 
@@ -193,6 +300,7 @@ Planned `print` migration sequence:
 - Add stdio regression:
   - `import goby/stdio ( print )` typechecks,
   - bare `print` compatibility path remains functional until migration completion.
+  - stdlib `@embed Print` fixture is accepted only from stdlib path.
 
 ### Quality Gates
 
@@ -200,14 +308,14 @@ Planned `print` migration sequence:
 - `cargo test`
 - `cargo clippy -- -D warnings`
 
-## 8. Migration Guardrails
+## 9. Migration Guardrails
 
 - Do not break existing built-in module behavior during transition.
 - Keep fallback path until file-based stdlib parity is confirmed.
 - Avoid widening scope into package/dependency resolution.
 - Keep `README.md` user-facing and high-level; put implementation details in `doc/`.
 
-## 9. Risks and Mitigations
+## 10. Risks and Mitigations
 
 Risk: import behavior drift between file-based and built-in fallback.
 Mitigation: table-driven parity tests for shared modules/symbols.
@@ -218,7 +326,7 @@ Mitigation: retain current global symbol insertion and ambiguity logic.
 Risk: runtime/typecheck mismatch while stdlib is type-only.
 Mitigation: keep runtime built-ins as source of truth until explicit runtime migration.
 
-## 10. Execution Checkpoints
+## 11. Execution Checkpoints
 
 Checkpoint 1:
 
@@ -232,6 +340,7 @@ Checkpoint 3:
 
 - `stdlib/goby/*.gb` seed modules committed, `examples/import.gb` regression green.
 - `stdlib/goby/stdio.gb` added and covered by import/typecheck regression.
+- `@embed Print` declaration sample added under stdlib and validated.
 
 Checkpoint 4:
 
@@ -246,11 +355,13 @@ Checkpoint 6:
 - `print` migration track validated:
   - `goby/stdio.print` path is available and tested,
   - compatibility bridge behavior is documented in `doc/STATE.md`.
+  - stdlib-only `@embed` restriction is enforced by parser/typechecker diagnostics.
 
-## 11. Definition of Done
+## 12. Definition of Done
 
 - File-based stdlib import resolution for `goby/...` is implemented and tested.
 - Legacy fallback remains available and verified during transition.
 - Existing import examples and tests pass unchanged.
 - `goby/stdio` is available as stdlib module, and `print` migration status is explicitly tracked.
+- `@embed` is supported for stdlib modules only and rejected elsewhere.
 - Progress and follow-up work are tracked in `doc/STATE.md`.

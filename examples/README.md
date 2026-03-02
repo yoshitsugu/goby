@@ -15,3 +15,12 @@ This directory contains small Goby programs grouped by purpose.
   - `concat.gb`: print `string.concat(...)` result
 - `parser/`: parser behavior examples
   - `mixed_indent.gb`: mixed tabs/spaces indentation sample
+
+## Planned Stdlib Syntax (Not Implemented Yet)
+
+- Standard-library planning includes a `goby/stdio` module and a stdlib-only
+  embed annotation for runtime-bridged effects.
+- Illustrative target shape:
+  - `@embed effect Print`
+  - `print : String -> Unit can Print`
+- Important: `@embed` is planned as stdlib-only and must be rejected in user code.
