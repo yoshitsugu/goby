@@ -836,6 +836,21 @@ impl<'m> RuntimeOutputResolver<'m> {
                 Some(RuntimeValue::ListInt(out))
             }
             Expr::Call { callee, arg } => {
+                // Positional single-field record constructor sugar: `Ctor(value)` → `Ctor(field: value)`.
+                // Apply when callee is a bare name that matches a known single-field record constructor.
+                if let Expr::Var(ctor_name) = callee.as_ref()
+                    && let Some(field_name) = self.single_field_constructor_field(ctor_name)
+                {
+                    let val =
+                        self.eval_expr_ast(arg, locals, callables, evaluators, depth + 1)?;
+                    let mut fields = HashMap::new();
+                    fields.insert(field_name, val);
+                    return Some(RuntimeValue::Record {
+                        constructor: ctor_name.clone(),
+                        fields,
+                    });
+                }
+
                 if let Expr::Var(fn_name) = callee.as_ref() {
                     // fetch_env_var "VAR_NAME" -> read from process environment
                     if fn_name == "fetch_env_var" {
@@ -1283,6 +1298,19 @@ impl<'m> RuntimeOutputResolver<'m> {
             .iter()
             .find(|m| m.name == method_name)
             .cloned()
+    }
+
+    /// If `ctor_name` is a record constructor with exactly one field, return that field's name.
+    /// Used to support positional single-field constructor sugar: `Ctor(value)` → `Ctor(field: value)`.
+    fn single_field_constructor_field(&self, ctor_name: &str) -> Option<String> {
+        for ty_decl in &self.module.type_declarations {
+            if let goby_core::TypeDeclaration::Record { constructor, fields, .. } = ty_decl
+                && constructor == ctor_name && fields.len() == 1
+            {
+                return Some(fields[0].name.clone());
+            }
+        }
+        None
     }
 
     /// Find a handler method by bare name (e.g. `log`) across all active handlers.
@@ -2455,6 +2483,40 @@ main =
         assert!(
             output.is_none(),
             "qualified effect call with no active handler should produce no output"
+        );
+    }
+
+    #[test]
+    fn positional_single_field_constructor_dispatches_handler() {
+        // Bug (BUG-002): `raise Error("msg")` parsed as Expr::Call not RecordConstruct,
+        // so the handler received a wrong value and produced no output.
+        use goby_core::parse_module;
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let source = r#"
+type Error = Error(message: String)
+
+effect RaiseError
+  raise: Error -> Unit
+
+handler PrintErrorHandler for RaiseError
+  raise e =
+    print e.message
+
+main : Unit -> Unit
+main =
+  using PrintErrorHandler
+    raise Error("oops")
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let output = resolve_main_runtime_output(
+            &module,
+            main_body(&module),
+            main_parsed_body(&module),
+        );
+        assert_eq!(
+            output.as_deref(),
+            Some("oops"),
+            "positional single-field constructor should dispatch handler with correct record value"
         );
     }
 }

@@ -962,7 +962,20 @@ fn check_expr(expr: &Expr, env: &TypeEnv) -> Ty {
                 _ => Ty::Unknown,
             }
         }
-        Expr::Call { callee, arg: _ } => {
+        Expr::Call { callee, arg } => {
+            // Positional single-field record constructor sugar: `Ctor(value)` → `Ctor(field: value)`
+            // Apply when callee is a bare name that is a known single-field record constructor.
+            if let Expr::Var(name) = callee.as_ref()
+                && let Some(record) = env.lookup_record_by_constructor(name)
+                && record.fields.len() == 1
+            {
+                let field_name = record.fields.keys().next().unwrap().clone();
+                let rewritten = Expr::RecordConstruct {
+                    constructor: name.clone(),
+                    fields: vec![(field_name, *arg.clone())],
+                };
+                return check_expr(&rewritten, env);
+            }
             // Infer result type from callee's function type
             let callee_ty = check_expr(callee, env);
             match callee_ty {
@@ -2831,6 +2844,55 @@ main =
 ";
         let module = parse_module(source).expect("should parse");
         typecheck_module(&module).expect("String arg to String op should be accepted");
+    }
+
+    #[test]
+    fn accepts_positional_single_field_constructor_in_effect_op_call() {
+        // `raise Error("msg")` — positional sugar for `raise Error(message: "msg")`.
+        // check should accept this because Error has exactly one field.
+        let source = "
+type Error = Error(message: String)
+
+effect RaiseError
+  raise: Error -> Unit
+
+handler H for RaiseError
+  raise e =
+    print e.message
+
+main : Unit -> Unit
+main =
+  using H
+    raise Error(\"oops\")
+";
+        let module = parse_module(source).expect("should parse");
+        typecheck_module(&module)
+            .expect("positional single-field constructor should be accepted");
+    }
+
+    #[test]
+    fn no_sugar_for_multi_field_constructor() {
+        // `raise Pair("a")` when Pair has two fields should NOT be treated as RecordConstruct.
+        // It falls through to Expr::Call, type is Unknown → arg type check skipped → Ok.
+        // (No false positive: we do not fabricate an error for multi-field positional.)
+        let source = "
+type Pair = Pair(first: String, second: String)
+
+effect E
+  op: Pair -> Unit
+
+handler H for E
+  op p =
+    print p.first
+
+main : Unit -> Unit
+main =
+  using H
+    op Pair(\"a\")
+";
+        let module = parse_module(source).expect("should parse");
+        // Multi-field positional is not sugar — type is Unknown, no error expected.
+        typecheck_module(&module).expect("multi-field positional should not raise false error");
     }
 
     #[test]
