@@ -568,6 +568,24 @@ impl<'m> RuntimeOutputResolver<'m> {
                 self.outputs.push(v.to_output_text());
                 Some(())
             }
+            // Qualified effect call: Effect.method arg  (e.g. Log.log "msg")
+            // Must come before the bare-Var arm so the Qualified guard takes precedence.
+            Expr::Call { callee, arg }
+                if matches!(callee.as_ref(), Expr::Qualified { .. }) =>
+            {
+                let Expr::Qualified { receiver, member } = callee.as_ref() else {
+                    unreachable!()
+                };
+                let method = self.find_handler_method_for_effect(receiver, member);
+                if let Some(method) = method {
+                    let arg_val = self.eval_ast_value(arg, evaluators)?;
+                    // depth=0: this is a top-level call; dispatch_handler_method adds 1 internally.
+                    return self.dispatch_handler_method(&method, arg_val, evaluators, 0);
+                }
+                // No active handler for this qualified call; fall through to string path.
+                let repr = expr.to_str_repr()?;
+                self.eval_side_effect(&repr, evaluators)
+            }
             // Other expression statements: try AST unit-call path.
             Expr::Call { callee, arg }
                 if matches!(callee.as_ref(), Expr::Var(_)) =>
@@ -576,6 +594,12 @@ impl<'m> RuntimeOutputResolver<'m> {
                     unreachable!()
                 };
                 if let Some(arg_val) = self.eval_ast_value(arg, evaluators) {
+                    // Bare effect method call (e.g. `log "msg"`) — check active handlers first.
+                    let bare_method = self.find_handler_method_by_name(fn_name);
+                    if let Some(method) = bare_method {
+                        // depth=0: top-level call; dispatch_handler_method adds 1 internally.
+                        return self.dispatch_handler_method(&method, arg_val, evaluators, 0);
+                    }
                     if self
                         .execute_unit_call_ast(
                             fn_name,
@@ -591,7 +615,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                     }
                     // Fallback: execute any declaration (including non-Unit return) for side effects.
                     if self
-                        .execute_decl_as_side_effect(fn_name, arg_val, evaluators, 1)
+                        .execute_decl_as_side_effect(fn_name, arg_val, evaluators, 0)
                         .is_some()
                     {
                         return Some(());
@@ -601,8 +625,14 @@ impl<'m> RuntimeOutputResolver<'m> {
                 self.eval_side_effect(&repr, evaluators)
             }
             Expr::Pipeline { value, callee } => {
-                if let Some(v) = self.eval_ast_value(value, evaluators)
-                    && self
+                if let Some(v) = self.eval_ast_value(value, evaluators) {
+                    // Pipeline into bare effect method call: e.g. `"msg" |> log`.
+                    let bare_method = self.find_handler_method_by_name(callee);
+                    if let Some(method) = bare_method {
+                        // depth=0: top-level call; dispatch_handler_method adds 1 internally.
+                        return self.dispatch_handler_method(&method, v, evaluators, 0);
+                    }
+                    if self
                         .execute_unit_call_ast(
                             callee,
                             v,
@@ -612,8 +642,9 @@ impl<'m> RuntimeOutputResolver<'m> {
                             0,
                         )
                         .is_some()
-                {
-                    return Some(());
+                    {
+                        return Some(());
+                    }
                 }
                 let repr = expr.to_str_repr()?;
                 self.eval_side_effect(&repr, evaluators)
@@ -2226,6 +2257,100 @@ main =
         );
     }
 
+    // --- bare effect call dispatch in main body (§4.1 patch) ---
+
+    #[test]
+    fn bare_effect_call_in_main_using_dispatches_to_handler() {
+        // Bug: eval_ast_side_effect (main/top-level path) did NOT route bare Call through
+        // find_handler_method_by_name, so `log "hello"` inside `using` produced no output.
+        use goby_core::parse_module;
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let source = r#"
+effect Log
+  log: String -> Unit
+
+handler ConsoleLog for Log
+  log msg =
+    print msg
+
+main : Unit -> Unit
+main =
+  using ConsoleLog
+    log "hello"
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let output = resolve_main_runtime_output(
+            &module,
+            main_body(&module),
+            main_parsed_body(&module),
+        );
+        assert_eq!(
+            output.as_deref(),
+            Some("hello"),
+            "bare effect call inside main `using` block should dispatch to handler"
+        );
+    }
+
+    #[test]
+    fn qualified_effect_call_in_main_using_dispatches_to_handler() {
+        // Bug: eval_ast_side_effect had no arm for Expr::Call { callee: Expr::Qualified },
+        // so `Log.log "hello"` inside main body fell through to string-based eval_side_effect.
+        use goby_core::parse_module;
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let source = r#"
+effect Log
+  log: String -> Unit
+
+handler ConsoleLog for Log
+  log msg =
+    print msg
+
+main : Unit -> Unit
+main =
+  using ConsoleLog
+    Log.log "world"
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let output = resolve_main_runtime_output(
+            &module,
+            main_body(&module),
+            main_parsed_body(&module),
+        );
+        assert_eq!(
+            output.as_deref(),
+            Some("world"),
+            "qualified effect call inside main `using` block should dispatch to handler"
+        );
+    }
+
+    #[test]
+    fn bare_call_without_handler_falls_through_to_existing_path() {
+        // When no active handler matches the bare name, dispatch must fall through to
+        // execute_unit_call_ast / execute_decl_as_side_effect (existing behaviour preserved).
+        use goby_core::parse_module;
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let source = r#"
+greet : String -> Unit
+greet name =
+  print name
+
+main : Unit -> Unit
+main =
+  greet "fallback"
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let output = resolve_main_runtime_output(
+            &module,
+            main_body(&module),
+            main_parsed_body(&module),
+        );
+        assert_eq!(
+            output.as_deref(),
+            Some("fallback"),
+            "bare call without active handler should fall through to unit-call path"
+        );
+    }
+
     #[test]
     fn two_handlers_with_same_method_name_dispatch_deterministically() {
         // When two active handlers both provide a method with the same bare name,
@@ -2268,6 +2393,68 @@ main =
             output.as_deref(),
             Some("from-alpha"),
             "bare-name dispatch should deterministically select the alphabetically-first effect"
+        );
+    }
+
+    #[test]
+    fn pipeline_effect_call_in_main_using_dispatches_to_handler() {
+        // `"msg" |> log` inside main `using` block should dispatch to the active handler.
+        // The Pipeline arm in eval_ast_side_effect now checks find_handler_method_by_name.
+        use goby_core::parse_module;
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let source = r#"
+effect Log
+  log: String -> Unit
+
+handler ConsoleLog for Log
+  log msg =
+    print msg
+
+main : Unit -> Unit
+main =
+  using ConsoleLog
+    "piped" |> log
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let output = resolve_main_runtime_output(
+            &module,
+            main_body(&module),
+            main_parsed_body(&module),
+        );
+        assert_eq!(
+            output.as_deref(),
+            Some("piped"),
+            "pipeline effect call inside main `using` block should dispatch to handler"
+        );
+    }
+
+    #[test]
+    fn qualified_effect_call_without_active_handler_falls_through() {
+        // `Log.log "x"` when no handler is active → no output (silent fallthrough to string path).
+        // This documents the expected behaviour: no crash, no output.
+        use goby_core::parse_module;
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let source = r#"
+effect Log
+  log: String -> Unit
+
+handler ConsoleLog for Log
+  log msg =
+    print msg
+
+main : Unit -> Unit
+main =
+  Log.log "unreachable"
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let output = resolve_main_runtime_output(
+            &module,
+            main_body(&module),
+            main_parsed_body(&module),
+        );
+        assert!(
+            output.is_none(),
+            "qualified effect call with no active handler should produce no output"
         );
     }
 }
