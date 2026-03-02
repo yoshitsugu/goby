@@ -12,8 +12,6 @@ use goby_core::{
 };
 use layout::{IOVEC_OFFSET, NWRITTEN_OFFSET, TEXT_OFFSET};
 const ERR_MISSING_MAIN: &str = "Wasm codegen requires a `main` declaration";
-const ERR_UNSUPPORTED_PRINT_UNKNOWN: &str =
-    "print argument is unsupported for Wasm codegen (only String is supported)";
 const BUILTIN_PRINT: &str = "print";
 const MAX_EVAL_DEPTH: usize = 32;
 
@@ -40,139 +38,9 @@ pub fn compile_module(module: &Module) -> Result<Vec<u8>, CodegenError> {
         return compile_print_module(&text);
     }
 
-    if let Some(message) = find_unsupported_form(module, &main.body) {
-        return Err(CodegenError {
-            message: message.to_string(),
-        });
-    }
-
     // Minimal MVP codegen target: emit a valid module that exports an empty `main`.
     // This is a temporary bridge until expression-level lowering is implemented.
     Ok(minimal_main_module())
-}
-
-fn find_unsupported_form(module: &Module, main_body: &str) -> Option<&'static str> {
-    let mut analyzer = UnsupportedFormAnalyzer::new(module);
-    analyzer.find_unsupported_print(main_body)
-}
-
-struct UnsupportedFormAnalyzer<'a> {
-    locals: HashMap<String, KnownType>,
-    result_types: HashMap<&'a str, KnownType>,
-}
-
-impl<'a> UnsupportedFormAnalyzer<'a> {
-    fn new(module: &'a Module) -> Self {
-        Self {
-            locals: HashMap::new(),
-            result_types: declaration_result_types(module),
-        }
-    }
-
-    fn find_unsupported_print(&mut self, main_body: &str) -> Option<&'static str> {
-        for statement in statements(main_body) {
-            match statement {
-                Statement::Binding { name, expr } => self.bind(name, expr),
-                Statement::Print(expr) => {
-                    if let Some(message) = unsupported_print_message(self.infer_expr_type(expr)) {
-                        return Some(message);
-                    }
-                }
-                Statement::Expr(_) => {}
-            }
-        }
-
-        None
-    }
-
-    fn bind(&mut self, name: &str, expr: &str) {
-        let ty = self.infer_expr_type(expr);
-        self.locals.insert(name.to_string(), ty);
-    }
-
-    fn infer_expr_type(&self, expr: &str) -> KnownType {
-        infer_expr_type(expr, &self.locals, &self.result_types)
-    }
-}
-
-fn declaration_result_types(module: &Module) -> HashMap<&str, KnownType> {
-    let mut map = HashMap::new();
-    for decl in &module.declarations {
-        let Some(annotation) = decl.type_annotation.as_deref() else {
-            continue;
-        };
-        let Some(function_type) = parse_function_type(annotation) else {
-            continue;
-        };
-        let known_type = KnownType::from_annotation_result(&function_type.result);
-        map.insert(decl.name.as_str(), known_type);
-    }
-    map
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum KnownType {
-    String,
-    Int,
-    List,
-    Unknown,
-}
-
-impl KnownType {
-    fn from_annotation_result(result: &str) -> Self {
-        match result {
-            "Int" => Self::Int,
-            "String" => Self::String,
-            _ if result.starts_with("List") => Self::List,
-            _ => Self::Unknown,
-        }
-    }
-}
-
-fn infer_expr_type(
-    expr: &str,
-    locals: &HashMap<String, KnownType>,
-    result_types: &HashMap<&str, KnownType>,
-) -> KnownType {
-    let expr = expr.trim();
-    if expr.is_empty() {
-        return KnownType::Unknown;
-    }
-
-    if is_string_literal(expr) || expr.starts_with("string.concat(") {
-        return KnownType::String;
-    }
-
-    if is_int_literal(expr) || is_int_expression(expr) {
-        return KnownType::Int;
-    }
-
-    if is_list_literal(expr) {
-        return KnownType::List;
-    }
-
-    if let Some(local_ty) = locals.get(expr) {
-        return *local_ty;
-    }
-
-    if let Some(result_type) = result_types.get(call_head(expr)) {
-        return *result_type;
-    }
-
-    KnownType::Unknown
-}
-
-fn unsupported_print_message(known_type: KnownType) -> Option<&'static str> {
-    match known_type {
-        KnownType::String | KnownType::Int | KnownType::List => None,
-        KnownType::Unknown => Some(ERR_UNSUPPORTED_PRINT_UNKNOWN),
-    }
-}
-
-fn call_head(expr: &str) -> &str {
-    expr.split(|c: char| c.is_whitespace() || c == '(')
-        .next()
-        .unwrap_or(expr)
 }
 
 fn split_binding(line: &str) -> Option<(&str, &str)> {
@@ -2039,10 +1907,6 @@ fn is_int_literal(expr: &str) -> bool {
     !raw.is_empty() && raw.chars().all(|c| c.is_ascii_digit())
 }
 
-fn is_int_expression(expr: &str) -> bool {
-    expr.contains(" + ") || expr.contains(" * ")
-}
-
 fn is_list_literal(expr: &str) -> bool {
     expr.starts_with('[') && expr.ends_with(']')
 }
@@ -2816,5 +2680,137 @@ main =
             Some("call_target_body_not_native_supported"),
             "fallback reason should be explicit for lambda/HOF-containing call targets"
         );
+    }
+
+    #[test]
+    fn native_codegen_capability_checker_reports_expected_call_reasons() {
+        let cases = [
+            (
+                "non_direct_callee",
+                r#"
+main : Unit -> Unit
+main =
+  print (Foo.bar 1)
+"#,
+                Some("call_callee_not_direct_name"),
+            ),
+            (
+                "arity_mismatch",
+                r#"
+id : Int -> Int
+id x = x
+
+main : Unit -> Unit
+main =
+  print (id 1 2)
+"#,
+                Some("call_arity_mismatch"),
+            ),
+            (
+                "target_missing",
+                r#"
+main : Unit -> Unit
+main =
+  print (unknown 1)
+"#,
+                Some("call_target_not_declaration"),
+            ),
+            (
+                "target_body_not_supported",
+                r#"
+mul_tens : List Int -> List Int
+mul_tens ns = map ns (|n| -> n * 10)
+
+main : Unit -> Unit
+main =
+  print (mul_tens [1, 2, 3])
+"#,
+                Some("call_target_body_not_native_supported"),
+            ),
+        ];
+
+        for (name, source, expected) in cases {
+            let module = parse_module(source).expect("source should parse");
+            assert_eq!(
+                fallback::native_unsupported_reason(&module),
+                expected,
+                "unexpected fallback reason for case: {}",
+                name
+            );
+        }
+    }
+
+    #[test]
+    fn native_codegen_capability_checker_prioritizes_hof_reason_over_arity_mismatch() {
+        let source = r#"
+mul_tens : List Int -> List Int
+mul_tens ns = map ns (|n| -> n * 10)
+
+main : Unit -> Unit
+main =
+  print (mul_tens [1, 2] [3, 4])
+"#;
+        let module = parse_module(source).expect("source should parse");
+        assert_eq!(
+            fallback::native_unsupported_reason(&module),
+            Some("call_target_body_not_native_supported"),
+            "lambda/HOF fallback reason should win when call-shape mismatch coexists"
+        );
+    }
+
+    #[test]
+    fn native_fallback_path_matrix_for_examples() {
+        let cases = [
+            ("hello.gb", true, None),
+            ("control_flow.gb", true, None),
+            (
+                "effect.gb",
+                false,
+                Some("main_annotation_not_unit_to_unit"),
+            ),
+            (
+                "function.gb",
+                false,
+                Some("call_target_body_not_native_supported"),
+            ),
+        ];
+
+        for (name, expect_native, expected_reason) in cases {
+            let source = read_example(name);
+            let module = parse_module(&source).expect("example should parse");
+            let reason = fallback::native_unsupported_reason(&module);
+            let supports_native = fallback::supports_native_codegen(&module);
+            assert_eq!(
+                reason, expected_reason,
+                "unexpected fallback reason for {}",
+                name
+            );
+            assert_eq!(
+                supports_native, expect_native,
+                "unexpected native capability result for {}",
+                name
+            );
+
+            let wasm = compile_module(&module).expect("codegen should succeed");
+            let expected_text =
+                resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
+                    .expect("runtime output should resolve");
+            let fallback_wasm =
+                compile_print_module(&expected_text).expect("fallback wasm should compile");
+
+            if expect_native {
+                assert_ne!(
+                    wasm, fallback_wasm,
+                    "expected native path for {}, but fallback artifact matched",
+                    name
+                );
+            } else {
+                assert_eq!(
+                    wasm, fallback_wasm,
+                    "expected fallback path for {}, but native artifact differed",
+                    name
+                );
+            }
+        }
     }
 }
