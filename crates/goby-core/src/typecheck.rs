@@ -1229,7 +1229,31 @@ fn check_unhandled_effects_in_expr(
                     covered_ops,
                     decl_name,
                 )?;
+                // Arg type check for effect op calls (§4.1.1).
+                // Only fires when the op is covered (i.e. inside an active using block).
+                if env.is_effect_op(name)
+                    && covered_ops.contains(name.as_str())
+                    && let Ty::Fun { params, .. } = env.lookup(name)
+                    && let Some(expected) = params.first()
+                    && *expected != Ty::Unknown
+                {
+                    let actual = check_expr(arg, env);
+                    if actual != Ty::Unknown && !env.are_compatible(expected, &actual) {
+                        return Err(TypecheckError {
+                            declaration: Some(decl_name.to_string()),
+                            span: None,
+                            message: format!(
+                                "effect operation `{}` expects argument of type \
+                                 `{}` but got `{}`",
+                                name,
+                                ty_name(expected),
+                                ty_name(&actual)
+                            ),
+                        });
+                    }
+                }
             }
+            // TODO §4.1.1: arg type check for Expr::Qualified callee (e.g. `Log.log "x"`) not yet implemented.
             recurse!(callee)?;
             recurse!(arg)
         }
@@ -1245,13 +1269,13 @@ fn check_unhandled_effects_in_expr(
                     ),
                 });
             }
+            // TODO §4.1.1: arg type check for MethodCall effect ops not yet implemented.
             for arg in args {
                 recurse!(arg)?;
             }
             Ok(())
         }
         Expr::Pipeline { value, callee } => {
-            recurse!(value)?;
             if env.is_effect_op(callee) && !covered_ops.contains(callee.as_str()) {
                 return Err(TypecheckError {
                     declaration: Some(decl_name.to_string()),
@@ -1262,6 +1286,31 @@ fn check_unhandled_effects_in_expr(
                     ),
                 });
             }
+            // Arg type check for pipeline-style effect op calls (§4.1.1).
+            // check_expr(value) is called here (before recurse!(value)) to avoid double
+            // traversal; recurse!(value) runs after for effect-coverage checking.
+            if env.is_effect_op(callee)
+                && covered_ops.contains(callee.as_str())
+                && let Ty::Fun { params, .. } = env.lookup(callee)
+                && let Some(expected) = params.first()
+                && *expected != Ty::Unknown
+            {
+                let actual = check_expr(value, env);
+                if actual != Ty::Unknown && !env.are_compatible(expected, &actual) {
+                    return Err(TypecheckError {
+                        declaration: Some(decl_name.to_string()),
+                        span: None,
+                        message: format!(
+                            "effect operation `{}` expects argument of type \
+                             `{}` but got `{}`",
+                            callee,
+                            ty_name(expected),
+                            ty_name(&actual)
+                        ),
+                    });
+                }
+            }
+            recurse!(value)?;
             // Also check callee as a user-declared function that requires effects.
             check_callee_required_effects(
                 callee,
@@ -2630,6 +2679,158 @@ main =
         assert_eq!(span.line, 1, "span.line should point to main declaration line");
         assert_eq!(span.col, 1);
         assert!(err.message.contains("Unit -> Unit"));
+    }
+
+    // --- effect op argument type checking (§4.1.1) ---
+
+    #[test]
+    fn rejects_effect_op_call_with_wrong_arg_type() {
+        // `catch "NoCoffeeError"` when `catch : Error -> Unit` — String is not Error.
+        // This should be a typecheck error, not a silent runtime failure.
+        let source = "
+type Error = Error(message: String)
+
+effect ErrorEffect
+  catch: Error -> Unit
+
+handler PrintErrorHandler for ErrorEffect
+  catch e =
+    print e.message
+
+main : Unit -> Unit
+main =
+  using PrintErrorHandler
+    catch \"NoCoffeeError\"
+";
+        let module = parse_module(source).expect("should parse");
+        let result = typecheck_module(&module);
+        assert!(
+            result.is_err(),
+            "passing String to an effect op expecting Error should be a typecheck error"
+        );
+        let err = result.unwrap_err();
+        assert!(
+            err.message.contains("catch"),
+            "error message should mention the op name; got: {}",
+            err.message
+        );
+        assert!(
+            err.message.contains("Error"),
+            "error message should mention expected type; got: {}",
+            err.message
+        );
+        assert!(
+            err.message.contains("String") || err.message.contains("Str"),
+            "error message should mention actual type; got: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn rejects_effect_op_pipeline_with_wrong_arg_type() {
+        // `"NoCoffeeError" |> catch` when `catch : Error -> Unit` — same mismatch via pipeline.
+        let source = "
+type Error = Error(message: String)
+
+effect ErrorEffect
+  catch: Error -> Unit
+
+handler PrintErrorHandler for ErrorEffect
+  catch e =
+    print e.message
+
+main : Unit -> Unit
+main =
+  using PrintErrorHandler
+    \"NoCoffeeError\" |> catch
+";
+        let module = parse_module(source).expect("should parse");
+        let result = typecheck_module(&module);
+        assert!(
+            result.is_err(),
+            "piping String to an effect op expecting Error should be a typecheck error"
+        );
+        let err = result.unwrap_err();
+        assert!(
+            err.message.contains("catch"),
+            "error message should mention the op name; got: {}",
+            err.message
+        );
+        assert!(
+            err.message.contains("Error"),
+            "error message should mention expected type; got: {}",
+            err.message
+        );
+        assert!(
+            err.message.contains("String") || err.message.contains("Str"),
+            "error message should mention actual type; got: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn accepts_effect_op_pipeline_with_correct_arg_type() {
+        // `Error(message: "oops") |> catch` when `catch : Error -> Unit` — should pass.
+        let source = "
+type Error = Error(message: String)
+
+effect ErrorEffect
+  catch: Error -> Unit
+
+handler PrintErrorHandler for ErrorEffect
+  catch e =
+    print e.message
+
+main : Unit -> Unit
+main =
+  using PrintErrorHandler
+    Error(message: \"oops\") |> catch
+";
+        let module = parse_module(source).expect("should parse");
+        typecheck_module(&module).expect("correct arg type via pipeline should be accepted");
+    }
+
+    #[test]
+    fn accepts_effect_op_call_with_correct_arg_type() {
+        // catch receives Error(message:...) which matches the declared Error param — should pass.
+        let source = "
+type Error = Error(message: String)
+
+effect ErrorEffect
+  catch: Error -> Unit
+
+handler PrintErrorHandler for ErrorEffect
+  catch e =
+    print e.message
+
+main : Unit -> Unit
+main =
+  using PrintErrorHandler
+    catch Error(message: \"oops\")
+";
+        let module = parse_module(source).expect("should parse");
+        typecheck_module(&module).expect("correct arg type should be accepted");
+    }
+
+    #[test]
+    fn accepts_effect_op_call_with_string_when_op_expects_string() {
+        // log receives String, which is the declared param type — no error.
+        // Also covers the Unknown-guard path via the correct type.
+        let source = "
+effect Log
+  log: String -> Unit
+
+handler LogHandler for Log
+  log str =
+    print str
+
+main : Unit -> Unit
+main =
+  using LogHandler
+    log \"hello\"
+";
+        let module = parse_module(source).expect("should parse");
+        typecheck_module(&module).expect("String arg to String op should be accepted");
     }
 
     #[test]
