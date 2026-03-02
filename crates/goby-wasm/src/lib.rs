@@ -1436,13 +1436,37 @@ impl<'m> RuntimeOutputResolver<'m> {
                         }
                     }
                 } else {
-                    self.execute_unit_ast_stmt(
-                        stmt,
-                        &mut handler_locals,
-                        &mut handler_callables,
-                        evaluators,
-                        depth + 1,
-                    )?;
+                    match stmt {
+                        // In unit-position handler execution, still evaluate expressions via AST first
+                        // so `resume` works for bare operation statements like `yield "x"`.
+                        Stmt::Expr(expr) => {
+                            let evaluated = self.eval_expr_ast(
+                                expr,
+                                &handler_locals,
+                                &handler_callables,
+                                evaluators,
+                                depth + 1,
+                            );
+                            if evaluated.is_none() {
+                                self.execute_unit_ast_stmt(
+                                    stmt,
+                                    &mut handler_locals,
+                                    &mut handler_callables,
+                                    evaluators,
+                                    depth + 1,
+                                )?;
+                            }
+                        }
+                        _ => {
+                            self.execute_unit_ast_stmt(
+                                stmt,
+                                &mut handler_locals,
+                                &mut handler_callables,
+                                evaluators,
+                                depth + 1,
+                            )?;
+                        }
+                    }
                 }
                 if self.resume_token_has_value(token_idx) {
                     break;
@@ -2197,6 +2221,18 @@ main =
         // Clean up before asserting so env is restored even if the assertion panics.
         unsafe { std::env::remove_var("GOBY_PATH") };
         assert_eq!(output, "13\nhello");
+    }
+
+    #[test]
+    fn locks_runtime_output_for_iterator_gb() {
+        use goby_core::parse_module;
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let source = read_example("iterator.gb");
+        let module = parse_module(&source).expect("iterator.gb should parse");
+        let output =
+            resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
+                .expect("runtime output should resolve");
+        assert_eq!(output, "tick\ntick\ntick");
     }
 
     #[test]
