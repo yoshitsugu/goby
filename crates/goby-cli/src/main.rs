@@ -1,6 +1,6 @@
 use std::env;
 use std::io::ErrorKind;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command as ProcessCommand;
 
 const USAGE: &str = "usage: goby-cli <run|check> <file.gb>";
@@ -63,6 +63,7 @@ fn main() {
 
 fn run() -> Result<(), CliError> {
     let cli = parse_args()?;
+    let stdlib_root = resolve_stdlib_root()?;
     let source = std::fs::read_to_string(&cli.file)
         .map_err(|err| CliError::Runtime(format!("failed to read {}: {}", cli.file, err)))?;
 
@@ -81,18 +82,21 @@ fn run() -> Result<(), CliError> {
 
     // TODO: unify parse/typecheck error format ("file:line:col: msg" GCC-style vs
     // "file: typecheck error in X at line Y:Z: msg" prose-style); deferred post-MVP.
-    goby_core::typecheck_module_with_context(&module, Some(Path::new(&cli.file)), None).map_err(
-        |err| {
-            let snippet = err
-                .span
-                .as_ref()
-                .map(|s| format_snippet(&source, s.line, s.col))
-                .filter(|s| !s.is_empty())
-                .map(|s| format!("\n{}", s))
-                .unwrap_or_default();
-            CliError::Runtime(format!("{}: {}{}", cli.file, err, snippet))
-        },
-    )?;
+    goby_core::typecheck_module_with_context(
+        &module,
+        Some(Path::new(&cli.file)),
+        Some(stdlib_root.as_path()),
+    )
+    .map_err(|err| {
+        let snippet = err
+            .span
+            .as_ref()
+            .map(|s| format_snippet(&source, s.line, s.col))
+            .filter(|s| !s.is_empty())
+            .map(|s| format!("\n{}", s))
+            .unwrap_or_default();
+        CliError::Runtime(format!("{}: {}{}", cli.file, err, snippet))
+    })?;
 
     match cli.command {
         Command::Run => {
@@ -153,6 +157,32 @@ where
 fn output_wasm_path(input: &str) -> String {
     let input_path = Path::new(input);
     input_path.with_extension("wasm").display().to_string()
+}
+
+fn default_stdlib_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .join("stdlib")
+}
+
+fn resolve_stdlib_root() -> Result<PathBuf, CliError> {
+    let path = match env::var_os("GOBY_STDLIB_ROOT") {
+        Some(raw) => PathBuf::from(raw),
+        None => default_stdlib_root(),
+    };
+    if !path.exists() {
+        return Err(CliError::Runtime(format!(
+            "stdlib root does not exist: {}",
+            path.display()
+        )));
+    }
+    if !path.is_dir() {
+        return Err(CliError::Runtime(format!(
+            "stdlib root is not a directory: {}",
+            path.display()
+        )));
+    }
+    Ok(path)
 }
 
 fn print_parse_summary(declaration_count: usize, file: &str) {
