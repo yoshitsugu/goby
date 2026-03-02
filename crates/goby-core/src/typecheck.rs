@@ -239,7 +239,11 @@ fn resolve_handler_method_op_types(
     else {
         return (None, None);
     };
-    let Some(member) = effect_decl.members.iter().find(|member| member.name == op_name) else {
+    let Some(member) = effect_decl
+        .members
+        .iter()
+        .find(|member| member.name == op_name)
+    else {
         return (None, None);
     };
     let Some(ft) = parse_function_type(&member.type_annotation) else {
@@ -3716,7 +3720,11 @@ main =
             "unexpected error: {}",
             err.message
         );
-        assert!(err.message.contains("Int"), "unexpected error: {}", err.message);
+        assert!(
+            err.message.contains("Int"),
+            "unexpected error: {}",
+            err.message
+        );
     }
 
     #[test]
