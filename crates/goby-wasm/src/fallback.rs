@@ -5,23 +5,30 @@ use crate::lower::declaration_body_supported_for_native;
 const BUILTIN_PRINT: &str = "print";
 
 pub(crate) fn supports_native_codegen(module: &Module) -> bool {
+    native_unsupported_reason(module).is_none()
+}
+
+pub(crate) fn native_unsupported_reason(module: &Module) -> Option<&'static str> {
     let Some(main) = module.declarations.iter().find(|decl| decl.name == "main") else {
-        return false;
+        return Some("missing_main");
     };
     if !is_unit_to_unit(main.type_annotation.as_deref()) {
-        return false;
+        return Some("main_annotation_not_unit_to_unit");
     }
 
     let Some(stmts) = main.parsed_body.as_deref() else {
-        return false;
+        return Some("main_parsed_body_unavailable");
     };
     if stmts.is_empty() {
-        return false;
+        return Some("main_body_empty");
     }
 
-    stmts
-        .iter()
-        .all(|stmt| is_phase2_supported_stmt(stmt, module))
+    for stmt in stmts {
+        if let Some(reason) = unsupported_stmt_reason(stmt, module) {
+            return Some(reason);
+        }
+    }
+    None
 }
 
 fn is_unit_to_unit(type_annotation: Option<&str>) -> bool {
@@ -34,14 +41,6 @@ fn is_unit_to_unit(type_annotation: Option<&str>) -> bool {
     fn_ty.arguments.as_slice() == ["Unit"] && fn_ty.result == "Unit"
 }
 
-fn is_phase2_supported_stmt(stmt: &Stmt, module: &Module) -> bool {
-    match stmt {
-        Stmt::Binding { value, .. } => is_phase2_supported_value_expr(value, module),
-        Stmt::Expr(expr) => is_phase2_supported_expr(expr, module),
-        Stmt::Using { .. } => false,
-    }
-}
-
 fn is_phase2_supported_expr(expr: &Expr, module: &Module) -> bool {
     match expr {
         Expr::Call { callee, arg } => {
@@ -52,6 +51,26 @@ fn is_phase2_supported_expr(expr: &Expr, module: &Module) -> bool {
             callee == BUILTIN_PRINT && is_phase2_supported_value_expr(value, module)
         }
         _ => false,
+    }
+}
+
+fn unsupported_stmt_reason(stmt: &Stmt, module: &Module) -> Option<&'static str> {
+    match stmt {
+        Stmt::Binding { value, .. } => {
+            if is_phase2_supported_value_expr(value, module) {
+                None
+            } else {
+                Some("unsupported_binding_expr")
+            }
+        }
+        Stmt::Expr(expr) => {
+            if is_phase2_supported_expr(expr, module) {
+                None
+            } else {
+                Some("unsupported_statement_expr")
+            }
+        }
+        Stmt::Using { .. } => Some("using_not_supported"),
     }
 }
 
