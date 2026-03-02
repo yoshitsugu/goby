@@ -114,6 +114,10 @@ pub fn typecheck_module_with_context(
     let env = build_type_env(module, &stdlib_root_path);
     let effect_map = build_effect_map(module);
     let required_effects_map = build_required_effects_map(module);
+
+    // Step 2 (`resume`) checks in handler method bodies.
+    check_handler_method_resume_usage(module, &env)?;
+
     for decl in &module.declarations {
         if let Some(stmts) = &decl.parsed_body {
             let declared_return_ty = decl.type_annotation.as_deref().map(annotation_return_ty);
@@ -168,6 +172,9 @@ pub fn typecheck_module_with_context(
             let decl_covered_ops =
                 ops_from_can_clause(decl.type_annotation.as_deref(), &effect_map);
 
+            // Step 2 (`resume`) checks in regular declaration bodies.
+            check_resume_in_stmts(stmts, &env, &decl.name, &param_ty_refs, None)?;
+
             check_body_stmts(
                 stmts,
                 &env,
@@ -182,6 +189,65 @@ pub fn typecheck_module_with_context(
     }
 
     Ok(())
+}
+
+fn check_handler_method_resume_usage(module: &Module, env: &TypeEnv) -> Result<(), TypecheckError> {
+    for handler in &module.handler_declarations {
+        for method in &handler.methods {
+            let Some(stmts) = &method.parsed_body else {
+                continue;
+            };
+            let (op_param_ty, op_result_ty) =
+                resolve_handler_method_op_types(module, &handler.effect, &method.name);
+            let param_tys: Vec<(&str, Ty)> = method
+                .params
+                .iter()
+                .enumerate()
+                .map(|(idx, name)| {
+                    let ty = if idx == 0 {
+                        op_param_ty.clone().unwrap_or(Ty::Unknown)
+                    } else {
+                        Ty::Unknown
+                    };
+                    (name.as_str(), ty)
+                })
+                .collect();
+            let resume_ctx = ResumeContext {
+                expected_arg_ty: op_result_ty,
+            };
+            check_resume_in_stmts(
+                stmts,
+                env,
+                &format!("handler `{}` method `{}`", handler.name, method.name),
+                &param_tys,
+                Some(&resume_ctx),
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn resolve_handler_method_op_types(
+    module: &Module,
+    effect_name: &str,
+    op_name: &str,
+) -> (Option<Ty>, Option<Ty>) {
+    let Some(effect_decl) = module
+        .effect_declarations
+        .iter()
+        .find(|effect| effect.name == effect_name)
+    else {
+        return (None, None);
+    };
+    let Some(member) = effect_decl.members.iter().find(|member| member.name == op_name) else {
+        return (None, None);
+    };
+    let Some(ft) = parse_function_type(&member.type_annotation) else {
+        return (None, None);
+    };
+    let param_ty = ft.arguments.first().map(|arg| ty_from_annotation(arg));
+    let result_ty = Some(ty_from_annotation(&ft.result));
+    (param_ty, result_ty)
 }
 
 // ---------------------------------------------------------------------------
@@ -219,6 +285,11 @@ enum GlobalBinding {
 struct RecordTypeInfo {
     type_name: String,
     fields: HashMap<String, Ty>,
+}
+
+#[derive(Debug, Clone)]
+struct ResumeContext {
+    expected_arg_ty: Option<Ty>,
 }
 
 impl TypeEnv {
@@ -1260,6 +1331,153 @@ fn check_expr(expr: &Expr, env: &TypeEnv) -> Ty {
             let then_ty = check_expr(then_expr, env);
             let _ = check_expr(else_expr, env);
             then_ty
+        }
+    }
+}
+
+fn check_resume_in_stmts(
+    stmts: &[Stmt],
+    env: &TypeEnv,
+    decl_name: &str,
+    param_tys: &[(&str, Ty)],
+    resume_ctx: Option<&ResumeContext>,
+) -> Result<(), TypecheckError> {
+    let mut local_env = TypeEnv {
+        globals: env.globals.clone(),
+        locals: param_tys
+            .iter()
+            .map(|(name, ty)| (name.to_string(), ty.clone()))
+            .collect(),
+        type_aliases: env.type_aliases.clone(),
+        record_types: env.record_types.clone(),
+    };
+    check_resume_in_stmts_with_local_env(stmts, &mut local_env, decl_name, resume_ctx)
+}
+
+fn check_resume_in_stmts_with_local_env(
+    stmts: &[Stmt],
+    local_env: &mut TypeEnv,
+    decl_name: &str,
+    resume_ctx: Option<&ResumeContext>,
+) -> Result<(), TypecheckError> {
+    for stmt in stmts {
+        match stmt {
+            Stmt::Binding { name, value } => {
+                check_resume_in_expr(value, local_env, decl_name, resume_ctx)?;
+                let ty = check_expr(value, local_env);
+                local_env.locals.insert(name.clone(), ty);
+            }
+            Stmt::Expr(expr) => {
+                check_resume_in_expr(expr, local_env, decl_name, resume_ctx)?;
+            }
+            Stmt::Using { body, .. } => {
+                let mut child_env = TypeEnv {
+                    globals: local_env.globals.clone(),
+                    locals: local_env.locals.clone(),
+                    type_aliases: local_env.type_aliases.clone(),
+                    record_types: local_env.record_types.clone(),
+                };
+                check_resume_in_stmts_with_local_env(body, &mut child_env, decl_name, resume_ctx)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn check_resume_in_expr(
+    expr: &Expr,
+    env: &TypeEnv,
+    decl_name: &str,
+    resume_ctx: Option<&ResumeContext>,
+) -> Result<(), TypecheckError> {
+    macro_rules! recurse {
+        ($e:expr) => {
+            check_resume_in_expr($e, env, decl_name, resume_ctx)
+        };
+        ($e:expr, $child_env:expr) => {
+            check_resume_in_expr($e, $child_env, decl_name, resume_ctx)
+        };
+    }
+
+    match expr {
+        Expr::IntLit(_) | Expr::BoolLit(_) | Expr::StringLit(_) | Expr::Var(_) => Ok(()),
+        Expr::ListLit(items) | Expr::TupleLit(items) => {
+            for item in items {
+                recurse!(item)?;
+            }
+            Ok(())
+        }
+        Expr::Qualified { .. } => Ok(()),
+        Expr::RecordConstruct { fields, .. } => {
+            for (_, value) in fields {
+                recurse!(value)?;
+            }
+            Ok(())
+        }
+        Expr::BinOp { left, right, .. } => {
+            recurse!(left)?;
+            recurse!(right)
+        }
+        Expr::Call { callee, arg } => {
+            recurse!(callee)?;
+            recurse!(arg)
+        }
+        Expr::MethodCall { args, .. } => {
+            for arg in args {
+                recurse!(arg)?;
+            }
+            Ok(())
+        }
+        Expr::Pipeline { value, .. } => recurse!(value),
+        Expr::Lambda { param, body } => {
+            let child_env = env.with_local(param, Ty::Unknown);
+            recurse!(body, &child_env)
+        }
+        Expr::Resume { value } => {
+            recurse!(value)?;
+            let Some(ctx) = resume_ctx else {
+                return Err(TypecheckError {
+                    declaration: Some(decl_name.to_string()),
+                    span: None,
+                    message: "resume_outside_handler: `resume` can only be used inside handler method bodies".to_string(),
+                });
+            };
+            let Some(expected) = ctx.expected_arg_ty.as_ref() else {
+                return Err(TypecheckError {
+                    declaration: Some(decl_name.to_string()),
+                    span: None,
+                    message: "resume_in_unknown_operation_context: cannot resolve handler operation signature for this `resume`".to_string(),
+                });
+            };
+            let actual = check_expr(value, env);
+            if actual != Ty::Unknown && !env.are_compatible(expected, &actual) {
+                return Err(TypecheckError {
+                    declaration: Some(decl_name.to_string()),
+                    span: None,
+                    message: format!(
+                        "resume_arg_type_mismatch: `resume` expects argument of type `{}` but got `{}`",
+                        ty_name(expected),
+                        ty_name(&actual)
+                    ),
+                });
+            }
+            Ok(())
+        }
+        Expr::Case { scrutinee, arms } => {
+            recurse!(scrutinee)?;
+            for arm in arms {
+                recurse!(&arm.body)?;
+            }
+            Ok(())
+        }
+        Expr::If {
+            condition,
+            then_expr,
+            else_expr,
+        } => {
+            recurse!(condition)?;
+            recurse!(then_expr)?;
+            recurse!(else_expr)
         }
     }
 }
@@ -3459,6 +3677,87 @@ main =
         let module = parse_module(source).expect("should parse");
         // Multi-field positional is not sugar — type is Unknown, no error expected.
         typecheck_module(&module).expect("multi-field positional should not raise false error");
+    }
+
+    #[test]
+    fn rejects_resume_outside_handler() {
+        let source = "
+main : Unit -> Unit
+main =
+  resume 1
+";
+        let module = parse_module(source).expect("should parse");
+        let err = typecheck_module(&module).expect_err("resume outside handler should fail");
+        assert!(
+            err.message.contains("resume_outside_handler"),
+            "unexpected error: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn rejects_resume_arg_type_mismatch_in_handler_method() {
+        let source = "
+effect Iter
+  next: Unit -> Int
+
+handler H for Iter
+  next x =
+    resume \"oops\"
+
+main : Unit -> Unit
+main =
+  print \"ok\"
+";
+        let module = parse_module(source).expect("should parse");
+        let err = typecheck_module(&module).expect_err("resume arg mismatch should fail");
+        assert!(
+            err.message.contains("resume_arg_type_mismatch"),
+            "unexpected error: {}",
+            err.message
+        );
+        assert!(err.message.contains("Int"), "unexpected error: {}", err.message);
+    }
+
+    #[test]
+    fn rejects_resume_in_unknown_operation_context() {
+        let source = "
+effect Iter
+  next: Unit -> Int
+
+handler H for Iter
+  unknown x =
+    resume 1
+
+main : Unit -> Unit
+main =
+  print \"ok\"
+";
+        let module = parse_module(source).expect("should parse");
+        let err = typecheck_module(&module).expect_err("unknown op context should fail");
+        assert!(
+            err.message.contains("resume_in_unknown_operation_context"),
+            "unexpected error: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn accepts_resume_when_arg_matches_operation_return_type() {
+        let source = "
+effect Iter
+  next: Unit -> Int
+
+handler H for Iter
+  next x =
+    resume 1
+
+main : Unit -> Unit
+main =
+  print \"ok\"
+";
+        let module = parse_module(source).expect("should parse");
+        typecheck_module(&module).expect("resume with matching return type should pass");
     }
 
     #[test]

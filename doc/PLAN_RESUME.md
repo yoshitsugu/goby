@@ -213,11 +213,14 @@ Step 1: AST + parser implementation — DONE (2026-03-02)
 - Added `Expr::Resume { value }` and parser support for `resume <expr>`.
 - Added parse diagnostics for malformed `resume` expressions (`resume` without argument).
 
-Step 2: Typecheck integration
+Step 2: Typecheck integration — DONE (2026-03-02)
 
 - Track handler method operation context.
-- Add `resume` typing and diagnostics.
-- Add regression tests for success and failure cases.
+- Added `resume` typing diagnostics:
+  - `resume_outside_handler`,
+  - `resume_arg_type_mismatch`,
+  - `resume_in_unknown_operation_context`.
+- Added regression tests for success and failure cases.
 
 Step 3: Runtime continuation object (interpreter path)
 

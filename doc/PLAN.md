@@ -166,6 +166,16 @@ Based on `examples/*.gb`:
 - Bare `resume` (no argument) is rejected with parse diagnostics:
   - `malformed \`resume\` expression: expected \`resume <expr>\``.
 
+#### `resume` Typecheck Contract (Step 2 done, 2026-03-02)
+
+- `resume` is rejected outside handler method bodies.
+- In handler method bodies, `resume` argument type is checked against the handled
+  operation return type.
+- Dedicated diagnostics are active:
+  - `resume_outside_handler`
+  - `resume_arg_type_mismatch`
+  - `resume_in_unknown_operation_context`
+
 ### 2.4 Standard Library Surface (MVP)
 
 - Core modules to ship first (`Int`, `String`, `List`, `Env`) — minimal built-ins implemented.
