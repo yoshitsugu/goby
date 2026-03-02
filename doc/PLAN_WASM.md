@@ -72,6 +72,23 @@ Lower `print <expr>` to:
 
 ## 5. Phased Implementation Plan
 
+### 5.0 Incremental Execution Policy (mandatory gates)
+
+To keep feedback cycles short, each phase is treated as a hard stop-and-check milestone.
+
+Rules:
+- Do not start Phase N+1 until all Phase N gate checks pass.
+- Keep each phase small enough to be merged independently.
+- Add at least one test that proves native path selection for that phase subset.
+- Keep fallback path green in parallel (no regressions in unsupported features).
+- If a gate fails, rollback or fix within the same phase before proceeding.
+
+Per-phase gate format:
+- `Build gate`: `cargo check`, `cargo test -p goby-wasm`.
+- `Behavior gate`: one or more `goby-cli run examples/X.gb` output checks.
+- `Path gate`: test/assertion that native path (not fallback) is selected for newly supported forms.
+- `Fallback gate`: at least one unsupported example still correctly uses fallback.
+
 ## Phase 0 - Backend skeleton and dual-path gate
 
 AST subset lowered natively:
@@ -100,6 +117,11 @@ Definition of done:
 - `cargo test -p goby-wasm`
 - existing Wasm unit tests still pass.
 
+Gate checks before Phase 1:
+- Build gate passes.
+- Path gate: capability checker exists and is test-covered.
+- Fallback gate: `examples/effect.gb` still uses fallback path.
+
 ## Phase 1 - Minimal real Wasm: `print "hello"`
 
 AST subset lowered natively:
@@ -126,6 +148,11 @@ Definition of done:
   - produced module has valid Wasm header,
   - runtime output equals baseline.
 
+Gate checks before Phase 2:
+- Behavior gate: `examples/hello.gb` exact output match.
+- Path gate: literal print + local string binding print confirmed native.
+- Fallback gate: unsupported forms still route to interpreter.
+
 ## Phase 2 - Int expressions and local bindings in `main`
 
 AST subset lowered natively:
@@ -148,6 +175,11 @@ Delete/replace:
 Definition of done:
 - `cargo run -p goby-cli -- run examples/control_flow.gb` still may fallback due to `case`, but no regressions.
 - New focused tests for native `main` arithmetic + print.
+
+Gate checks before Phase 3:
+- Behavior gate: arithmetic-focused fixtures match baseline output.
+- Path gate: `Int`/`Bool` print cases confirmed native.
+- Fallback gate: `case`/`using` examples remain fallback with unchanged output.
 
 ## Phase 3 - Direct function declarations/calls (first non-main lowering)
 
@@ -172,6 +204,11 @@ Definition of done:
 - `cargo run -p goby-cli -- run` on a new scalar function-call fixture (or reduced subset of `examples/function.gb`) matches baseline.
 - `cargo test` includes regression covering both `f x` and `f(x)` lowering.
 
+Gate checks before Phase 4:
+- Behavior gate: direct scalar decl calls match baseline.
+- Path gate: both `f x` and `f(x)` are natively lowered.
+- Fallback gate: HOF/lambda call sites still fallback.
+
 ## Phase 4 - List Int and pipeline print path
 
 AST subset lowered natively:
@@ -192,6 +229,11 @@ Delete/replace:
 Definition of done:
 - Native path handles `print [1, 2, 3]` and list local binding + print.
 - existing `resolve_runtime_output_for_pipeline_print` semantics preserved.
+
+Gate checks before Phase 5:
+- Behavior gate: list print formatting exactly matches current (`[a, b, c]` spacing included).
+- Path gate: `List Int` print and pipeline print are native.
+- Fallback gate: `List String` flows still fallback.
 
 ## Phase 5 - Control flow and case lowering
 
@@ -218,6 +260,11 @@ Definition of done:
   - `50`
   - `30`
 
+Gate checks before Phase 6:
+- Behavior gate: full `examples/control_flow.gb` output exact match.
+- Path gate: `case` and `if` AST forms are native.
+- Fallback gate: effectful/control-flow combinations outside supported subset fallback safely.
+
 ## Phase 6 - `examples/function.gb` native coverage (except HOF/lambda)
 
 AST subset lowered natively:
@@ -237,6 +284,11 @@ Delete/replace:
 Definition of done:
 - no behavior regression on `cargo run -p goby-cli -- run examples/function.gb` (may still fallback due to HOF).
 - capability checker provides explicit reason codes (for diagnostics/tests).
+
+Gate checks before Phase 7:
+- Behavior gate: first-order subset of `function.gb` validated against baseline fixtures.
+- Path gate: explicit reason-coded fallback for lambda/HOF is test-covered.
+- Fallback gate: full `examples/function.gb` remains stable when fallback triggers.
 
 ## Phase 7 - Phase A completion and interpreter retirement boundary
 
@@ -263,6 +315,11 @@ Definition of done:
 - `cargo check && cargo test && cargo clippy -- -D warnings` green.
 - `goby-cli run` outputs unchanged for all current `examples/*.gb`.
 - Fallback scope is narrow, explicit, and tested.
+
+Gate checks for Phase A sign-off:
+- All phase gates from 0-7 recorded as passed.
+- Native/fallback path coverage matrix exists for `examples/*.gb`.
+- Remaining fallback reasons are documented and intentional.
 
 ## 6. Concrete File-Level Work Items
 
