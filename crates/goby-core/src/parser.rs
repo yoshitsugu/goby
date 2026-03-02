@@ -67,10 +67,10 @@ pub fn parse_module(source: &str) -> Result<Module, ParseError> {
         }
 
         if trimmed.starts_with("@embed ") {
-            let effect_name = parse_embed_line(trimmed).ok_or_else(|| ParseError {
+            let effect_name = parse_embed_line(trimmed).map_err(|message| ParseError {
                 line: i + 1,
                 col: 1,
-                message: "invalid @embed declaration".to_string(),
+                message,
             })?;
             embed_declarations.push(EmbedDecl {
                 effect_name,
@@ -1300,13 +1300,19 @@ fn parse_import_line(line: &str) -> Option<ImportDecl> {
     })
 }
 
-fn parse_embed_line(line: &str) -> Option<String> {
-    let rest = line.strip_prefix("@embed ")?.trim();
-    let effect_name = rest.strip_prefix("effect ")?.trim();
+fn parse_embed_line(line: &str) -> Result<String, String> {
+    let rest = line
+        .strip_prefix("@embed ")
+        .map(str::trim)
+        .ok_or_else(|| "invalid @embed declaration".to_string())?;
+    let effect_name = rest
+        .strip_prefix("effect ")
+        .map(str::trim)
+        .ok_or_else(|| "invalid @embed target: expected `effect <EffectName>`".to_string())?;
     if !is_identifier(effect_name) {
-        return None;
+        return Err("invalid embedded effect name".to_string());
     }
-    Some(effect_name.to_string())
+    Ok(effect_name.to_string())
 }
 
 fn parse_type_declaration_line(line: &str) -> Option<TypeDeclaration> {
@@ -1665,7 +1671,14 @@ mod tests {
     fn rejects_invalid_embed_declaration() {
         let source = "@embed Print\nmain = 1\n";
         let err = parse_module(source).expect_err("invalid embed declaration should fail");
-        assert!(err.message.contains("invalid @embed declaration"));
+        assert!(err.message.contains("invalid @embed target"));
+    }
+
+    #[test]
+    fn rejects_embed_with_invalid_effect_name() {
+        let source = "@embed effect 1Print\nmain = 1\n";
+        let err = parse_module(source).expect_err("invalid embed effect name should fail");
+        assert!(err.message.contains("invalid embedded effect name"));
     }
 
     #[test]
