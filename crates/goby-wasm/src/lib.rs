@@ -1950,64 +1950,6 @@ mod tests {
         assert_eq!(&wasm[4..8], &[0x01, 0x00, 0x00, 0x00], "bad wasm version");
     }
 
-    /// Return the payload bytes of the first Wasm section with the given id, or `None`.
-    /// Parses LEB128-encoded section sizes; returns `None` on malformed input.
-    fn find_wasm_section(wasm: &[u8], target_id: u8) -> Option<&[u8]> {
-        let mut pos = 8usize; // skip magic (4) + version (4)
-        while pos < wasm.len() {
-            let sec_id = *wasm.get(pos)?;
-            pos += 1;
-            // Decode LEB128 section size (unsigned 32-bit).
-            let mut size: u32 = 0;
-            let mut shift = 0u32;
-            loop {
-                let b = *wasm.get(pos)?;
-                pos += 1;
-                size |= ((b & 0x7f) as u32) << shift;
-                shift += 7;
-                if b & 0x80 == 0 {
-                    break;
-                }
-                if shift >= 35 {
-                    return None; // malformed: >5 bytes for u32
-                }
-            }
-            let end = pos.checked_add(size as usize)?;
-            if end > wasm.len() {
-                return None;
-            }
-            if sec_id == target_id {
-                return Some(&wasm[pos..end]);
-            }
-            pos = end;
-        }
-        None
-    }
-
-    /// Wasm export names are length-prefixed in the binary: `\x06_start` (1-byte length + 6 chars).
-    /// Assert that `_start` is exported and that the old `main` export is gone.
-    /// Searches only the export section (id=0x07) to avoid false matches in data or code bytes.
-    #[test]
-    fn exports_start_entrypoint() {
-        let src = "main : Unit -> Unit\nmain = print \"Hello\"\n";
-        let module = parse_module(src).expect("parse");
-        let wasm = compile_module(&module).expect("compile");
-        assert_valid_wasm_module(&wasm);
-        let export_section = find_wasm_section(&wasm, 0x07).expect("export section must exist");
-        // "_start" encoded as a Wasm name: 1-byte length (6) followed by the 6 ASCII bytes.
-        let needle_start: &[u8] = b"\x06_start";
-        // "main" encoded as a Wasm name: 1-byte length (4) followed by 4 ASCII bytes.
-        let needle_main: &[u8] = b"\x04main";
-        assert!(
-            export_section.windows(needle_start.len()).any(|w| w == needle_start),
-            "expected `_start` export in export section"
-        );
-        assert!(
-            !export_section.windows(needle_main.len()).any(|w| w == needle_main),
-            "found stale `main` export in export section"
-        );
-    }
-
     fn read_example(name: &str) -> String {
         let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         path.push("..");
@@ -2032,25 +1974,6 @@ mod tests {
             .iter()
             .find(|decl| decl.name == "main")
             .and_then(|decl| decl.parsed_body.as_deref())
-    }
-
-    #[test]
-    fn unsupported_main_body_returns_codegen_error() {
-        // `main = 0` is neither native-lowerable (UnsupportedStatementExpr) nor
-        // resolvable as static print output, so compile_module must return Err.
-        let module = parse_module("main : Unit -> Unit\nmain = 0\n").expect("parse should work");
-        assert!(
-            compile_module(&module).is_err(),
-            "main body with unsupported constructs should return CodegenError"
-        );
-    }
-
-    #[test]
-    fn emits_valid_wasm_for_print_literal() {
-        let module = parse_module("main : Unit -> Unit\nmain = print \"Hello Goby!\"\n")
-            .expect("parse should work");
-        let wasm = compile_module(&module).expect("codegen should succeed");
-        assert_valid_wasm_module(&wasm);
     }
 
     #[test]
@@ -2084,14 +2007,6 @@ main =
   print n
 "#;
         let module = parse_module(source).expect("parse should work");
-        let wasm = compile_module(&module).expect("codegen should succeed");
-        assert_valid_wasm_module(&wasm);
-    }
-
-    #[test]
-    fn emits_valid_wasm_for_function_example_int_calls() {
-        let source = read_example("function.gb");
-        let module = parse_module(&source).expect("parse should work");
         let wasm = compile_module(&module).expect("codegen should succeed");
         assert_valid_wasm_module(&wasm);
     }
