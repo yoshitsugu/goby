@@ -144,7 +144,9 @@ fn unsupported_stmt_expr_reason(expr: &Expr, module: &Module) -> Option<Unsuppor
             Ok(arg) => unsupported_value_expr_reason(arg, module),
             Err(PrintCallError::NotPrint) => unsupported_value_expr_reason(expr, module),
             Err(PrintCallError::ArityNotOne) => Some(UnsupportedReason::PrintArityNotOne),
-            Err(PrintCallError::NonDirectCallee) => Some(UnsupportedReason::CallCalleeNotDirectName),
+            Err(PrintCallError::NonDirectCallee) => {
+                Some(UnsupportedReason::CallCalleeNotDirectName)
+            }
         },
         Expr::Pipeline { value, callee } => {
             if callee != BUILTIN_PRINT {
