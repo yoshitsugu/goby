@@ -2521,6 +2521,32 @@ main =
     }
 
     #[test]
+    fn no_resume_in_value_position_takes_abortive_path() {
+        use goby_core::parse_module;
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let source = r#"
+effect Iter
+  next: Int -> Int
+
+handler IterHandler for Iter
+  next n =
+    print "handled"
+
+main : Unit -> Unit
+main =
+  using IterHandler
+    print (next 0)
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let output =
+            resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module));
+        assert_eq!(
+            output, None,
+            "when a value-position operation is handled without `resume`, evaluation follows the abortive path"
+        );
+    }
+
+    #[test]
     fn resume_outside_handler_surfaces_runtime_error() {
         use goby_core::parse_module;
         let _guard = ENV_MUTEX.lock().unwrap();

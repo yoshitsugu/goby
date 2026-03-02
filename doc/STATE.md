@@ -628,6 +628,18 @@ This file is a restart-safe snapshot for resuming work after context reset.
     - `cargo fmt`
     - `cargo check`
     - `cargo test` (265 tests passed)
+- 2026-03-02 (session 63): `PLAN_RESUME` Step 5 complete (validation + regression stabilization)
+  - Added focused runtime regression for no-resume abortive path:
+    - `no_resume_in_value_position_takes_abortive_path` in `goby-wasm`.
+  - Existing focused cases confirmed green:
+    - single resume success,
+    - double resume runtime error,
+    - nested `using` nearest-handler selection.
+  - `doc/PLAN_RESUME.md` updated: Step 5 marked DONE.
+  - Quality gates green:
+    - `cargo check`
+    - `cargo test` (266 tests passed)
+    - `cargo clippy -- -D warnings`
 
 ## 5. Current Example Files
 
