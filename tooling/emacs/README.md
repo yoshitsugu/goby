@@ -15,8 +15,11 @@ Emacs major mode for the [Goby programming language](https://gitlab.com/yoshitsu
 
 ### Manual
 
+`load-path` には **ディレクトリ** を追加します（`.el` ファイルのパスではありません）。
+
 ```emacs-lisp
-(add-to-list 'load-path "/path/to/goby/tooling/emacs")
+;; ディレクトリを指定する（末尾に goby-mode.el を含めないこと）
+(add-to-list 'load-path "/home/yoshitsugu/src/gitlab.com/yoshitsugu/goby/tooling/emacs")
 (require 'goby-mode)
 ```
 
@@ -24,7 +27,7 @@ Emacs major mode for the [Goby programming language](https://gitlab.com/yoshitsu
 
 ```emacs-lisp
 (use-package goby-mode
-  :load-path "path/to/goby/tooling/emacs")
+  :load-path "/home/yoshitsugu/src/gitlab.com/yoshitsugu/goby/tooling/emacs")
 ```
 
 After loading, `goby-mode` is automatically activated for `*.gb` files via `auto-mode-alist`.
