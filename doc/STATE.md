@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-02 (session 56)
+Last updated: 2026-03-02 (session 57)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -514,6 +514,25 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - Quality gates green:
     - `cargo check`
     - `cargo test` (251 tests passed)
+    - `cargo clippy -- -D warnings`
+- 2026-03-02 (session 57): `PLAN_RESUME` Step 1 complete (AST/parser + malformed resume diagnostics)
+  - `Expr::Resume { value }` added to `goby-core` AST.
+  - Parser now recognizes `resume <expr>` as a dedicated expression form.
+  - Reserved keyword behavior tightened in expression parsing:
+    - bare identifier `resume` no longer parses as `Expr::Var`.
+  - Dedicated parse diagnostics added for malformed resume syntax:
+    - `malformed \`resume\` expression: expected \`resume <expr>\``.
+    - enforced in declaration and handler-method body parsing paths.
+  - Parser tests updated/added:
+    - `resume Unit` parses to `Expr::Resume`,
+    - malformed `resume` is rejected (`parse_expr` + `parse_module` diagnostics),
+    - handler-body contract test updated from call-form to `Expr::Resume`.
+  - Temporary Step1 bridge behavior:
+    - typechecker treats `Expr::Resume` as `Ty::Unknown` (to be tightened in Step 2),
+    - wasm runtime evaluator treats `Expr::Resume` as unsupported (`None`) pending Step 3.
+  - Quality gates green:
+    - `cargo check`
+    - `cargo test` (255 tests passed)
     - `cargo clippy -- -D warnings`
 
 ## 5. Current Example Files

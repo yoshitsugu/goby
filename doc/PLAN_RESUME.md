@@ -208,10 +208,10 @@ Step 0: Spec lock and parser contract — DONE (2026-03-02)
   - reject handler parameter name `resume`,
   - accept handler-body `resume Unit` shape (currently parsed as call form before Step 1 AST change).
 
-Step 1: AST + parser implementation
+Step 1: AST + parser implementation — DONE (2026-03-02)
 
-- Add `Expr::Resume` and parser support.
-- Add parse diagnostics for malformed `resume` expressions.
+- Added `Expr::Resume { value }` and parser support for `resume <expr>`.
+- Added parse diagnostics for malformed `resume` expressions (`resume` without argument).
 
 Step 2: Typecheck integration
 

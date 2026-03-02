@@ -160,6 +160,9 @@ pub enum Expr {
         param: String,
         body: Box<Expr>,
     },
+    Resume {
+        value: Box<Expr>,
+    },
     Case {
         scrutinee: Box<Expr>,
         arms: Vec<CaseArm>,
@@ -196,6 +199,7 @@ impl Expr {
                 | Expr::MethodCall { .. }
                 | Expr::Pipeline { .. }
                 | Expr::Lambda { .. }
+                | Expr::Resume { .. }
                 | Expr::Case { .. }
                 | Expr::If { .. }
         )
@@ -280,6 +284,7 @@ impl Expr {
                     Some(format!("|{}| -> {}", param, b))
                 }
             }
+            Expr::Resume { .. } => None,
             Expr::Case { .. } | Expr::If { .. } => None,
         }
     }

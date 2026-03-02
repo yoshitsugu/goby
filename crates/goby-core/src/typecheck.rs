@@ -1241,6 +1241,10 @@ fn check_expr(expr: &Expr, env: &TypeEnv) -> Ty {
                 result: Box::new(result),
             }
         }
+        Expr::Resume { value } => {
+            let _ = check_expr(value, env);
+            Ty::Unknown
+        }
         Expr::Case { scrutinee, arms } => {
             let _ = check_expr(scrutinee, env);
             arms.first()
@@ -1594,6 +1598,7 @@ fn check_unhandled_effects_in_expr(
             let child_env = env.with_local(param, Ty::Unknown);
             recurse!(body, &child_env)
         }
+        Expr::Resume { value } => recurse!(value),
         Expr::Case { scrutinee, arms } => {
             recurse!(scrutinee)?;
             for arm in arms {
@@ -1733,6 +1738,7 @@ fn ensure_no_ambiguous_refs_in_expr(
             let child_env = env.with_local(param, Ty::Unknown);
             ensure_no_ambiguous_refs_in_expr(body, &child_env, decl_name)
         }
+        Expr::Resume { value } => ensure_no_ambiguous_refs_in_expr(value, env, decl_name),
         Expr::Case { scrutinee, arms } => {
             ensure_no_ambiguous_refs_in_expr(scrutinee, env, decl_name)?;
             for arm in arms {

@@ -158,7 +158,13 @@ Based on `examples/*.gb`:
 - Parser contract is locked:
   - top-level declaration name `resume` is rejected.
   - handler parameter name `resume` is rejected.
-- Step 1 (`Expr::Resume` AST/parser form and dedicated parse diagnostics) remains pending.
+
+#### `resume` Parser/AST Contract (Step 1 done, 2026-03-02)
+
+- `Expr::Resume { value }` is added to AST.
+- Parser recognizes `resume <expr>` as a dedicated expression form.
+- Bare `resume` (no argument) is rejected with parse diagnostics:
+  - `malformed \`resume\` expression: expected \`resume <expr>\``.
 
 ### 2.4 Standard Library Surface (MVP)
 
