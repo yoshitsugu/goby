@@ -28,6 +28,8 @@ Based on `examples/*.gb`:
 ### 2.0 Locked for Current MVP
 
 - Function calls support both `f x` and `f(x)`.
+  - spaced application supports multiple args (`f a b c`) and is parsed left-associatively
+    (`(((f a) b) c)`).
   - `f(x)` is used when precedence needs to be explicit.
 - Block-local binding semantics are fixed for MVP:
   - `name = expr` is a local binding statement only when `name` is an identifier and `=` is assignment (not `==`).

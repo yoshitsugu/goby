@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-02 (session 31)
+Last updated: 2026-03-02 (session 32)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -185,6 +185,18 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - Hardened native call checks: unsupported callee forms return fallback deterministically.
   - Attempted 2-arg call support (`f a b`) was intentionally rolled back in this session to keep
     parser-shape/capability/lowerer consistency; scheduled for next controlled step (Phase 6).
+- 2026-03-02 (session 32):
+  - Phase 6 re-entry completed for direct-call arity expansion:
+    - parser now builds left-associative spaced call chains (`f a b c` => `(((f a) b) c)`),
+    - native lower/evaluator supports flattened direct named calls with arbitrary arity
+      (subject to declaration param-count match),
+    - fallback capability checker now returns explicit reason codes for unsupported call forms
+      (arity mismatch, non-native callee body, non-declaration target, etc.).
+  - Added regression tests:
+    - parser left-associative multi-arg call shape,
+    - native emitter selection for 4-arg direct call subset,
+    - explicit fallback reason on `examples/function.gb` (lambda/HOF path).
+  - Quality gates green: `cargo fmt`, `cargo check`, `cargo test`, `cargo clippy -- -D warnings`.
 
 ## 5. Current Example Files
 
@@ -212,8 +224,8 @@ cargo clippy -- -D warnings
 Execution focus (see `doc/PLAN_WASM.md`):
 1. Continue Real Wasm code generation at Phase 6:
    - broaden native coverage of `examples/function.gb` first-order subset,
-   - first concrete task: add native support for two-argument direct calls (`Expr::Call` nesting shape),
-     with parser-shape-locked tests and reason-coded fallback tests in the same commit.
+   - next concrete task: push native support deeper into first-order-only declarations used by
+     `examples/function.gb` while keeping lambda/HOF paths explicitly on fallback.
    - keep explicit fallback for lambda/HOF/effects.
 2. Then Phase 7 cleanup:
    - path coverage matrix by example,

@@ -139,16 +139,17 @@ fn eval_expr(
                 _ => None,
             }
         }
-        Expr::Call { callee, arg } => match callee.as_ref() {
-            Expr::Var(fn_name) => {
-                if fn_name == "print" {
-                    return None;
-                }
-                let arg_val = eval_expr(arg, bindings, env, depth + 1)?;
-                eval_named_function(fn_name, Some(arg_val), env, depth + 1)
+        Expr::Call { .. } => {
+            let (fn_name, args) = flatten_named_call(expr)?;
+            if fn_name == "print" {
+                return None;
             }
-            _ => None,
-        },
+            let arg_values = args
+                .iter()
+                .map(|arg| eval_expr(arg, bindings, env, depth + 1))
+                .collect::<Option<Vec<_>>>()?;
+            eval_named_function(fn_name, arg_values, env, depth + 1)
+        }
         Expr::ListLit(items) => {
             let mut out = Vec::with_capacity(items.len());
             for item in items {
@@ -211,7 +212,7 @@ impl<'a> EvalEnv<'a> {
 
 fn eval_named_function(
     fn_name: &str,
-    arg: Option<NativeValue>,
+    args: Vec<NativeValue>,
     env: &EvalEnv<'_>,
     depth: usize,
 ) -> Option<NativeValue> {
@@ -219,15 +220,13 @@ fn eval_named_function(
     if decl.name == "main" {
         return None;
     }
-    if decl.params.len() > 1 {
+    if decl.params.len() != args.len() {
         return None;
     }
     let stmts = decl.parsed_body.as_deref()?;
 
     let mut locals: HashMap<&str, NativeValue> = HashMap::new();
-    if let Some(param) = decl.params.first()
-        && let Some(arg_val) = arg
-    {
+    for (param, arg_val) in decl.params.iter().zip(args.into_iter()) {
         locals.insert(param.as_str(), arg_val);
     }
 
@@ -267,10 +266,6 @@ fn is_decl_supported(
         stack.remove(decl_name);
         return false;
     };
-    if decl.params.len() > 1 {
-        stack.remove(decl_name);
-        return false;
-    }
     let Some(stmts) = decl.parsed_body.as_deref() else {
         stack.remove(decl_name);
         return false;
@@ -338,21 +333,45 @@ fn is_value_expr_supported(
                     ) && is_value_expr_supported(&arm.body, module, env, stack)
                 })
         }
-        Expr::Call { callee, arg } => match callee.as_ref() {
-            Expr::Var(name) => {
-                if name == "print" {
-                    return false;
-                }
-                if !is_value_expr_supported(arg, module, env, stack) {
-                    return false;
-                }
-                if !env.declarations.contains_key(name.as_str()) {
-                    return false;
-                }
-                is_decl_supported(name, module, env, stack)
+        Expr::Call { .. } => {
+            let Some((name, args)) = flatten_named_call(expr) else {
+                return false;
+            };
+            if name == "print" {
+                return false;
             }
-            _ => false,
-        },
+            if !args
+                .iter()
+                .all(|arg| is_value_expr_supported(arg, module, env, stack))
+            {
+                return false;
+            }
+            let Some(decl) = env.declarations.get(name) else {
+                return false;
+            };
+            if decl.params.len() != args.len() {
+                return false;
+            }
+            is_decl_supported(name, module, env, stack)
+        }
         _ => false,
+    }
+}
+
+fn flatten_named_call(expr: &Expr) -> Option<(&str, Vec<&Expr>)> {
+    let mut args: Vec<&Expr> = Vec::new();
+    let mut cur = expr;
+    loop {
+        match cur {
+            Expr::Call { callee, arg } => {
+                args.push(arg.as_ref());
+                cur = callee.as_ref();
+            }
+            Expr::Var(name) => {
+                args.reverse();
+                return Some((name.as_str(), args));
+            }
+            _ => return None,
+        }
     }
 }
