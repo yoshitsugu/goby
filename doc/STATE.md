@@ -222,14 +222,16 @@ cargo clippy -- -D warnings
 ```
 
 Execution focus (see `doc/PLAN_WASM.md`):
-1. Continue Real Wasm code generation at Phase 6:
-   - broaden native coverage of `examples/function.gb` first-order subset,
-   - next concrete task: push native support deeper into first-order-only declarations used by
-     `examples/function.gb` while keeping lambda/HOF paths explicitly on fallback.
-   - keep explicit fallback for lambda/HOF/effects.
-2. Then Phase 7 cleanup:
-   - path coverage matrix by example,
-   - trim legacy fallback heuristics and shrink compatibility boundary.
+1. Execute Phase 6.1 (current target):
+   - lock deterministic reason-coded fallback behavior for `examples/function.gb`
+     (lambda/HOF reasons, call-shape combinations),
+   - remove legacy string-only unsupported analyzer (`find_unsupported_form` /
+     `UnsupportedFormAnalyzer`) from `crates/goby-wasm/src/lib.rs`,
+   - add native-vs-fallback path coverage matrix tests for `examples/*.gb`,
+   - keep `examples/function.gb` and `examples/effect.gb` behavior unchanged.
+2. Then Phase 7 cleanup/sign-off:
+   - confirm fallback boundary is explicit and narrow,
+   - continue compatibility-layer shrinkage toward interpreter retirement gates.
 3. Parallel/next major theme:
    - effect runtime redesign (one-shot deep handlers + selective CPS/evidence passing).
 

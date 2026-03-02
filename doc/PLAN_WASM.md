@@ -317,6 +317,41 @@ Current note (2026-03-02, session 32):
   - declaration body stays within the current native-supported subset.
 - `examples/function.gb` still intentionally falls back due to lambda/HOF usage.
 
+### Next implementation slice (Phase 6.1, current target)
+
+Objective:
+- close remaining Phase 6 cleanup work and create a clean handoff into Phase 7.
+
+Scope (in order):
+1. Lock deterministic fallback reasons for `examples/function.gb`:
+   - ensure `native_unsupported_reason` reports lambda/HOF-related reason codes before
+     generic call-shape reasons when both are present.
+   - add table-driven tests for representative unsupported call patterns.
+2. Remove legacy string-heuristic unsupported analyzer from `lib.rs`:
+   - retire `find_unsupported_form` / `UnsupportedFormAnalyzer` once AST-gated fallback is
+     the sole unsupported-form decision path.
+   - preserve existing user-visible error messages for unsupported print/type cases.
+3. Add native-vs-fallback path coverage matrix tests for `examples/*.gb`:
+   - expected native: `hello.gb`, `control_flow.gb`.
+   - expected fallback: `effect.gb`, full `function.gb` (current phase boundary).
+4. Tighten lower/fallback shared surface:
+   - keep call-shape checks (`flatten_named_call`, arity check, direct named callee)
+     in sync between `fallback.rs` and `lower.rs` through focused helper tests.
+
+Definition of done (Phase 6.1):
+- `cargo check`
+- `cargo test -p goby-wasm`
+- `cargo test` (workspace)
+- `cargo clippy -- -D warnings`
+- no output change for:
+  - `cargo run -p goby-cli -- run examples/function.gb`
+  - `cargo run -p goby-cli -- run examples/effect.gb`
+
+Phase 6.1 exit criteria:
+- no legacy string-only unsupported analyzer remains in `lib.rs`.
+- reason-coded fallback tests cover lambda/HOF + call-shape combinations.
+- path coverage matrix exists and is committed.
+
 ## Phase 7 - Phase A completion and interpreter retirement boundary
 
 AST subset lowered natively (Phase A target):
