@@ -2,7 +2,9 @@ use std::collections::{HashMap, HashSet};
 
 use goby_core::{BinOpKind, CasePattern, Expr, Module, Stmt};
 
-use crate::{CodegenError, backend::WasmProgramBuilder, layout::MemoryLayout};
+use crate::{
+    CodegenError, backend::WasmProgramBuilder, call::flatten_named_call, layout::MemoryLayout,
+};
 
 pub(crate) fn try_emit_native_module(module: &Module) -> Result<Option<Vec<u8>>, CodegenError> {
     if module.declarations.is_empty() {
@@ -262,7 +264,7 @@ fn is_decl_supported(
     if !stack.insert(decl_name.to_string()) {
         return false;
     }
-    let Some(decl) = module.declarations.iter().find(|d| d.name == decl_name) else {
+    let Some(decl) = env.declarations.get(decl_name) else {
         stack.remove(decl_name);
         return false;
     };
@@ -355,23 +357,5 @@ fn is_value_expr_supported(
             is_decl_supported(name, module, env, stack)
         }
         _ => false,
-    }
-}
-
-fn flatten_named_call(expr: &Expr) -> Option<(&str, Vec<&Expr>)> {
-    let mut args: Vec<&Expr> = Vec::new();
-    let mut cur = expr;
-    loop {
-        match cur {
-            Expr::Call { callee, arg } => {
-                args.push(arg.as_ref());
-                cur = callee.as_ref();
-            }
-            Expr::Var(name) => {
-                args.reverse();
-                return Some((name.as_str(), args));
-            }
-            _ => return None,
-        }
     }
 }
