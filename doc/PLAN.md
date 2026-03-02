@@ -60,6 +60,7 @@ Based on `examples/*.gb`:
 - CLI commands:
   - `goby-cli run <file.gb>` uses `main` entrypoint only and executes generated Wasm via external `wasmtime`.
     - if `wasmtime` is not installed, execution is skipped with an informational message.
+    - current invocation: `wasmtime run --invoke main <file.wasm>` (non-standard; Phase 8 migrates to `_start` export + standard `wasmtime run`).
   - `goby-cli check <file.gb>` performs parse/typecheck without runtime entrypoint.
 - `main` type is restricted to `Unit -> Unit` for MVP.
   - `main` type annotation is required for `run`; optional for `check`.

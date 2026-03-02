@@ -77,6 +77,7 @@ This keeps source compatibility while postponing the full effect system.
 - Wasm execution pipeline in `goby-cli run`:
   - emit `<input>.wasm`,
   - invoke external `wasmtime run --invoke main <output.wasm>`,
+    (Phase 8: replace with `wasmtime run <output.wasm>` once `_start` is exported instead of `main`)
   - if `wasmtime` is unavailable, skip execution with an informational message.
 - Effect system handling in MVP:
   - parse-only for `can ...`,
