@@ -363,6 +363,7 @@ Phase 6.1 exit criteria:
 - path coverage matrix exists and is committed.
 
 ## Phase 7 - Phase A completion and interpreter retirement boundary
+Status (2026-03-02): Completed.
 
 AST subset lowered natively (Phase A target):
 - `hello.gb`, `control_flow.gb`, major non-HOF subset of function/basic usage.
@@ -392,6 +393,13 @@ Gate checks for Phase A sign-off:
 - All phase gates from 0-7 recorded as passed.
 - Native/fallback path coverage matrix exists for `examples/*.gb`.
 - Remaining fallback reasons are documented and intentional.
+
+Current gate result (2026-03-02): Passed.
+- `cargo check && cargo test && cargo clippy -- -D warnings` green (215 tests).
+- `wat` dependency removed; `minimal_main_module()` deleted.
+- `compile_print_module` migrated to `wasm-encoder` (section ordering bug fixed).
+- Unsupported-construct fallback boundary documented in `fallback.rs` module doc.
+- Native/fallback path coverage matrix confirmed in `native_fallback_path_matrix_for_examples`.
 
 ## 6. Concrete File-Level Work Items
 
