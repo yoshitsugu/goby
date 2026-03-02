@@ -157,6 +157,12 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - `eval_expr_ast` Expr::Call arm: new `single_field_constructor_field` helper scans `module.type_declarations`.
   - 3 new tests; 186 → 189 total tests pass; `cargo clippy -- -D warnings` clean.
   - `doc/BUGS.md` created; BUG-001 (handler for unknown effect) and BUG-002 (positional constructor, Fixed) documented.
+- 2026-03-02 (session 28, commit 6ba076f): VSCode syntax highlighting (§4.4 phase 1):
+  - `tooling/syntax/textmate/goby.tmLanguage.json`: canonical TextMate grammar (10 token categories).
+  - `tooling/vscode-goby/`: VS Code extension package (package.json, language-configuration.json, grammar copy, README).
+  - `tooling/syntax/testdata/highlight_sample.gb`: manual test fixture covering all categories.
+  - `tooling/syntax/README.md`: token category table + "Inspect Editor Tokens and Scopes" instructions.
+  - Vim and Emacs support deferred to follow-up phase.
 
 ## 5. Current Example Files
 
@@ -171,7 +177,7 @@ This file is a restart-safe snapshot for resuming work after context reset.
 
 ## 6. Immediate Next Steps (Execution Order)
 
-§4.1, §4.1.1, and BUG-002 complete (sessions 27–28). 189 tests pass.
+§4.1, §4.1.1, BUG-002, §4.4 VSCode phase complete (sessions 27–28). 189 tests pass.
 
 Resume checks:
 ```
