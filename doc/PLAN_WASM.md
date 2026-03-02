@@ -284,6 +284,8 @@ Current gate result (2026-03-02): Passed in test suite (`compile_module_uses_nat
 AST subset lowered natively:
 - all direct first-order parts of `examples/function.gb`.
 - explicit fallback marker when lambda/HOF appears (`Expr::Lambda`, passing function values).
+- include two-argument direct-call shape (`f a b`, parsed as nested `Expr::Call`) with
+  capability-check + lowering consistency.
 
 Interpreter coexistence:
 - Keep fallback for `map ns (|n| -> ...)`, `_ * 10`, and function-typed params.
@@ -303,6 +305,12 @@ Gate checks before Phase 7:
 - Behavior gate: first-order subset of `function.gb` validated against baseline fixtures.
 - Path gate: explicit reason-coded fallback for lambda/HOF is test-covered.
 - Fallback gate: full `examples/function.gb` remains stable when fallback triggers.
+
+Current note (2026-03-02):
+- A first attempt at two-argument direct-call support was intentionally rolled back to avoid
+  parser-shape/capability/lowerer mismatch.
+- Re-entry rule for next session:
+  1) lock AST shape with tests, 2) extend `fallback` + `lower` together, 3) keep reason-coded fallback tests green.
 
 ## Phase 7 - Phase A completion and interpreter retirement boundary
 

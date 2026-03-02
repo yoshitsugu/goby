@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-02 (session 30)
+Last updated: 2026-03-02 (session 31)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -175,6 +175,16 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - Phase 4: native `List Int` print + pipeline print landed.
   - Phase 5: native `if`/`case` subset landed; `examples/control_flow.gb` now asserted to use native path in tests.
   - Quality gates kept green at each step: `cargo fmt`, `cargo test`, `cargo clippy -- -D warnings`.
+- 2026-03-02 (session 31, commits 89f53ee, d9a4efd, d3de0e3):
+  - `doc/PLAN_WASM.md` / `doc/STATE.md` refreshed to reflect completed native subset milestones.
+  - Native capability checker now exposes reason codes via
+    `fallback::native_unsupported_reason(&Module) -> Option<&'static str>`.
+  - Added tests asserting native-path selection for `examples/control_flow.gb` and reason-code behavior:
+    - supported example (`hello.gb`) => `None`
+    - unsupported example (`effect.gb`) => `Some("main_annotation_not_unit_to_unit")`
+  - Hardened native call checks: unsupported callee forms return fallback deterministically.
+  - Attempted 2-arg call support (`f a b`) was intentionally rolled back in this session to keep
+    parser-shape/capability/lowerer consistency; scheduled for next controlled step (Phase 6).
 
 ## 5. Current Example Files
 
@@ -202,6 +212,8 @@ cargo clippy -- -D warnings
 Execution focus (see `doc/PLAN_WASM.md`):
 1. Continue Real Wasm code generation at Phase 6:
    - broaden native coverage of `examples/function.gb` first-order subset,
+   - first concrete task: add native support for two-argument direct calls (`Expr::Call` nesting shape),
+     with parser-shape-locked tests and reason-coded fallback tests in the same commit.
    - keep explicit fallback for lambda/HOF/effects.
 2. Then Phase 7 cleanup:
    - path coverage matrix by example,
