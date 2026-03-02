@@ -1,8 +1,10 @@
 use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 
 use crate::{
     Module,
     ast::{BinOpKind, Expr, ImportKind, Span, Stmt, TypeDeclaration},
+    stdlib::{StdlibResolveError, StdlibResolver},
     types::{TypeExpr, parse_function_type, parse_type_expr},
 };
 
@@ -594,17 +596,13 @@ fn validate_effect_declarations(module: &Module) -> Result<(), TypecheckError> {
 }
 
 fn validate_imports(module: &Module) -> Result<(), TypecheckError> {
+    let resolver = default_stdlib_resolver();
     for import in &module.imports {
-        let exports =
-            builtin_module_exports(&import.module_path).ok_or_else(|| TypecheckError {
-                declaration: None,
-                span: None,
-                message: format!("unknown module `{}`", import.module_path),
-            })?;
+        let exports = module_exports_for_import_with_resolver(&import.module_path, &resolver)?;
 
         if let ImportKind::Selective(names) = &import.kind {
             for name in names {
-                if !exports.contains_key(name.as_str()) {
+                if !exports.contains_key(name) {
                     return Err(TypecheckError {
                         declaration: None,
                         span: None,
@@ -734,8 +732,10 @@ fn validate_type_expr_names(
 }
 
 fn inject_imported_symbols(module: &Module, globals: &mut HashMap<String, GlobalBinding>) {
+    let resolver = default_stdlib_resolver();
     for import in &module.imports {
-        let Some(exports) = builtin_module_exports(&import.module_path) else {
+        let Ok(exports) = module_exports_for_import_with_resolver(&import.module_path, &resolver)
+        else {
             continue;
         };
         match &import.kind {
@@ -766,7 +766,7 @@ fn inject_imported_symbols(module: &Module, globals: &mut HashMap<String, Global
             }
             ImportKind::Selective(names) => {
                 for name in names {
-                    if let Some(ty) = exports.get(name.as_str()) {
+                    if let Some(ty) = exports.get(name) {
                         insert_global_symbol(
                             globals,
                             name.clone(),
@@ -777,6 +777,95 @@ fn inject_imported_symbols(module: &Module, globals: &mut HashMap<String, Global
                 }
             }
         }
+    }
+}
+
+fn default_stdlib_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .join("stdlib")
+}
+
+fn default_stdlib_resolver() -> StdlibResolver {
+    StdlibResolver::new(default_stdlib_root())
+}
+
+fn module_exports_for_import_with_resolver(
+    module_path: &str,
+    resolver: &StdlibResolver,
+) -> Result<HashMap<String, Ty>, TypecheckError> {
+    match resolver.resolve_module(module_path) {
+        Ok(resolved) => Ok(resolved
+            .exports
+            .into_iter()
+            .map(|(name, annotation)| (name, ty_from_import_annotation(&annotation)))
+            .collect()),
+        Err(StdlibResolveError::ModuleNotFound { .. }) => builtin_module_exports(module_path)
+            .map(|builtin| {
+                builtin
+                    .into_iter()
+                    .map(|(name, ty)| (name.to_string(), ty))
+                    .collect()
+            })
+            .ok_or_else(|| TypecheckError {
+                declaration: None,
+                span: None,
+                message: format!("unknown module `{}`", module_path),
+            }),
+        Err(err) => Err(TypecheckError {
+            declaration: None,
+            span: None,
+            message: format!(
+                "failed to resolve stdlib module `{}`: {}",
+                module_path,
+                stdlib_error_message(&err)
+            ),
+        }),
+    }
+}
+
+fn stdlib_error_message(err: &StdlibResolveError) -> String {
+    match err {
+        StdlibResolveError::InvalidModulePath(path) => {
+            format!("invalid module path `{path}`")
+        }
+        StdlibResolveError::ModuleNotFound {
+            module_path,
+            attempted_path,
+        } => format!(
+            "module `{}` not found at {}",
+            module_path,
+            attempted_path.display()
+        ),
+        StdlibResolveError::ReadFailed { path, message } => {
+            format!("failed to read {}: {}", path.display(), message)
+        }
+        StdlibResolveError::ParseFailed {
+            module_path,
+            message,
+        } => format!("failed to parse `{module_path}`: {message}"),
+        StdlibResolveError::DuplicateExport {
+            module_path,
+            symbol,
+        } => format!("duplicate export `{symbol}` in `{module_path}`"),
+        StdlibResolveError::ExportTypeMissing {
+            module_path,
+            symbol,
+        } => format!("missing type annotation for export `{symbol}` in `{module_path}`"),
+    }
+}
+
+fn ty_from_import_annotation(annotation: &str) -> Ty {
+    let base = strip_effect_clause(annotation).trim();
+    if let Some(ft) = parse_function_type(base) {
+        let params: Vec<Ty> = ft.arguments.iter().map(|a| ty_from_annotation(a)).collect();
+        let result = ty_from_annotation(&ft.result);
+        Ty::Fun {
+            params,
+            result: Box::new(result),
+        }
+    } else {
+        ty_from_annotation(base)
     }
 }
 
@@ -1756,9 +1845,41 @@ fn is_identifier(s: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
     use crate::parse_module;
+    use crate::stdlib::StdlibResolver;
 
     use super::*;
+
+    struct TempDirGuard {
+        path: PathBuf,
+    }
+
+    impl TempDirGuard {
+        fn new(label: &str) -> Self {
+            let nanos = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("clock should be monotonic enough for tests")
+                .as_nanos();
+            let path = std::env::temp_dir().join(format!(
+                "goby_typecheck_{}_{}_{}",
+                label,
+                std::process::id(),
+                nanos
+            ));
+            fs::create_dir_all(&path).expect("temp directory should be creatable");
+            Self { path }
+        }
+    }
+
+    impl Drop for TempDirGuard {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.path);
+        }
+    }
 
     #[test]
     fn typechecks_examples() {
@@ -2550,6 +2671,93 @@ f = fetch_env_var(\"HOME\")
         let source = "main : Unit -> Unit\nmain = print \"hi\"\n";
         let module = parse_module(source).expect("should parse");
         typecheck_module(&module).expect("bare print should remain available as builtin");
+    }
+
+    #[test]
+    fn resolver_first_prefers_file_based_stdlib_exports() {
+        let sandbox = TempDirGuard::new("resolver_first");
+        let root = sandbox.path.join("stdlib");
+        fs::create_dir_all(root.join("goby")).expect("stdlib/goby should be creatable");
+        fs::write(
+            root.join("goby/env.gb"),
+            "fetch_env_var : String -> Int\nfetch_env_var name = 1\n",
+        )
+        .expect("stdlib file should be writable");
+        let resolver = StdlibResolver::new(root);
+
+        let exports = module_exports_for_import_with_resolver("goby/env", &resolver)
+            .expect("resolver export lookup should succeed");
+        let ty = exports
+            .get("fetch_env_var")
+            .expect("fetch_env_var should be exported");
+        assert_eq!(
+            ty,
+            &Ty::Fun {
+                params: vec![Ty::Str],
+                result: Box::new(Ty::Int),
+            }
+        );
+    }
+
+    #[test]
+    fn resolver_falls_back_to_builtin_exports_when_file_missing() {
+        let sandbox = TempDirGuard::new("resolver_fallback");
+        let resolver = StdlibResolver::new(sandbox.path.join("stdlib"));
+        let exports = module_exports_for_import_with_resolver("goby/env", &resolver)
+            .expect("builtin fallback should resolve");
+        let ty = exports
+            .get("fetch_env_var")
+            .expect("fetch_env_var should be available from builtin fallback");
+        assert_eq!(
+            ty,
+            &Ty::Fun {
+                params: vec![Ty::Str],
+                result: Box::new(Ty::Str),
+            }
+        );
+    }
+
+    #[test]
+    fn resolver_parse_failure_is_reported_during_import_validation() {
+        let sandbox = TempDirGuard::new("resolver_parse_failure");
+        let root = sandbox.path.join("stdlib");
+        fs::create_dir_all(root.join("goby")).expect("stdlib/goby should be creatable");
+        fs::write(root.join("goby/env.gb"), "fetch_env_var : String ->\n")
+            .expect("stdlib file should be writable");
+        let resolver = StdlibResolver::new(root);
+
+        let err = module_exports_for_import_with_resolver("goby/env", &resolver)
+            .expect_err("parse failure should return a typecheck error");
+        assert!(
+            err.message
+                .contains("failed to resolve stdlib module `goby/env`"),
+            "unexpected message: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn resolver_first_preserves_multi_arg_function_shape_for_concat() {
+        let sandbox = TempDirGuard::new("resolver_multi_arg_concat");
+        let root = sandbox.path.join("stdlib");
+        fs::create_dir_all(root.join("goby")).expect("stdlib/goby should be creatable");
+        fs::write(
+            root.join("goby/string.gb"),
+            "concat : String -> String -> String\nconcat a b = a\n",
+        )
+        .expect("stdlib file should be writable");
+        let resolver = StdlibResolver::new(root);
+
+        let exports = module_exports_for_import_with_resolver("goby/string", &resolver)
+            .expect("resolver export lookup should succeed");
+        let ty = exports.get("concat").expect("concat should be exported");
+        assert_eq!(
+            ty,
+            &Ty::Fun {
+                params: vec![Ty::Str, Ty::Str],
+                result: Box::new(Ty::Str),
+            }
+        );
     }
 
     #[test]
