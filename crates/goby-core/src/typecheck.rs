@@ -41,15 +41,20 @@ pub fn typecheck_module_with_context(
     source_path: Option<&Path>,
     stdlib_root: Option<&Path>,
 ) -> Result<(), TypecheckError> {
-    validate_imports(module)?;
+    let stdlib_root_path = stdlib_root
+        .map(Path::to_path_buf)
+        .unwrap_or_else(default_stdlib_root);
+    validate_imports(module, &stdlib_root_path)?;
     validate_embed_declarations(module, source_path, stdlib_root)?;
     validate_type_declarations(module)?;
     validate_effect_declarations(module)?;
 
+    let imported_embedded_effects = collect_imported_embedded_effects(module, &stdlib_root_path);
     let known_effects: HashSet<String> = builtin_effect_names()
         .iter()
         .copied()
         .map(str::to_string)
+        .chain(imported_embedded_effects)
         .chain(module.effect_declarations.iter().map(|e| e.name.clone()))
         .collect();
 
@@ -101,7 +106,7 @@ pub fn typecheck_module_with_context(
     }
 
     // Expression-level type checking (when parsed_body is available).
-    let env = build_type_env(module);
+    let env = build_type_env(module, &stdlib_root_path);
     let effect_map = build_effect_map(module);
     let required_effects_map = build_required_effects_map(module);
     for decl in &module.declarations {
@@ -422,7 +427,7 @@ fn ops_from_can_clause(annotation: Option<&str>, effect_map: &EffectMap) -> Hash
         .collect()
 }
 
-fn build_type_env(module: &Module) -> TypeEnv {
+fn build_type_env(module: &Module, stdlib_root: &Path) -> TypeEnv {
     let mut globals = HashMap::new();
     let mut type_aliases = HashMap::new();
     let mut record_types = HashMap::new();
@@ -463,7 +468,7 @@ fn build_type_env(module: &Module) -> TypeEnv {
         },
         "builtin `print`".to_string(),
     );
-    inject_imported_symbols(module, &mut globals);
+    inject_imported_symbols(module, &mut globals, stdlib_root);
     inject_type_constructors(module, &mut globals, &mut type_aliases, &mut record_types);
     inject_effect_symbols(module, &mut globals);
 
@@ -604,8 +609,8 @@ fn validate_effect_declarations(module: &Module) -> Result<(), TypecheckError> {
     Ok(())
 }
 
-fn validate_imports(module: &Module) -> Result<(), TypecheckError> {
-    let resolver = default_stdlib_resolver();
+fn validate_imports(module: &Module, stdlib_root: &Path) -> Result<(), TypecheckError> {
+    let resolver = StdlibResolver::new(stdlib_root.to_path_buf());
     for import in &module.imports {
         let exports = module_exports_for_import_with_resolver(&import.module_path, &resolver)?;
 
@@ -786,8 +791,12 @@ fn validate_type_expr_names(
     }
 }
 
-fn inject_imported_symbols(module: &Module, globals: &mut HashMap<String, GlobalBinding>) {
-    let resolver = default_stdlib_resolver();
+fn inject_imported_symbols(
+    module: &Module,
+    globals: &mut HashMap<String, GlobalBinding>,
+    stdlib_root: &Path,
+) {
+    let resolver = StdlibResolver::new(stdlib_root.to_path_buf());
     for import in &module.imports {
         let Ok(exports) = module_exports_for_import_with_resolver(&import.module_path, &resolver)
         else {
@@ -862,10 +871,6 @@ fn canonical_or_absolute(path: &Path) -> PathBuf {
     }
 }
 
-fn default_stdlib_resolver() -> StdlibResolver {
-    StdlibResolver::new(default_stdlib_root())
-}
-
 fn module_exports_for_import_with_resolver(
     module_path: &str,
     resolver: &StdlibResolver,
@@ -900,6 +905,16 @@ fn module_exports_for_import_with_resolver(
     }
 }
 
+fn collect_imported_embedded_effects(module: &Module, stdlib_root: &Path) -> HashSet<String> {
+    let resolver = StdlibResolver::new(stdlib_root.to_path_buf());
+    module
+        .imports
+        .iter()
+        .filter_map(|import| resolver.resolve_module(&import.module_path).ok())
+        .flat_map(|resolved| resolved.embedded_effects.into_iter())
+        .collect()
+}
+
 fn stdlib_error_message(err: &StdlibResolveError) -> String {
     match err {
         StdlibResolveError::InvalidModulePath(path) => {
@@ -924,6 +939,13 @@ fn stdlib_error_message(err: &StdlibResolveError) -> String {
             module_path,
             symbol,
         } => format!("duplicate export `{symbol}` in `{module_path}`"),
+        StdlibResolveError::DuplicateEmbeddedEffect {
+            module_path,
+            effect_name,
+        } => format!(
+            "duplicate embedded effect `{}` in `{}`",
+            effect_name, module_path
+        ),
         StdlibResolveError::ExportTypeMissing {
             module_path,
             symbol,
@@ -2786,6 +2808,28 @@ f = fetch_env_var(\"HOME\")
                 result: Box::new(Ty::Int),
             }
         );
+    }
+
+    #[test]
+    fn imported_embedded_effect_name_is_visible_to_typechecker() {
+        let sandbox = TempDirGuard::new("embedded_effect_visible");
+        let root = sandbox.path.join("stdlib");
+        fs::create_dir_all(root.join("goby")).expect("stdlib/goby should be creatable");
+        fs::write(
+            root.join("goby/stdio.gb"),
+            "@embed effect Console\nlog : String -> Unit can Console\nlog msg = msg |> print\n",
+        )
+        .expect("stdlib file should be writable");
+        let source_path = sandbox.path.join("main.gb");
+        let source = "\
+import goby/stdio ( log )
+f : Unit -> Unit can Console
+f = log \"ok\"
+";
+        fs::write(&source_path, source).expect("fixture file should be writable");
+        let module = parse_module(source).expect("should parse");
+        typecheck_module_with_context(&module, Some(&source_path), Some(&root))
+            .expect("embedded effect name from imported stdlib should be accepted in can clause");
     }
 
     #[test]

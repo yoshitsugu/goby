@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-02 (session 53)
+Last updated: 2026-03-02 (session 54)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -458,6 +458,27 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - Quality gates green:
     - `cargo check`
     - `cargo test` (240 tests passed)
+    - `cargo clippy -- -D warnings`
+- 2026-03-02 (session 54): `PLAN_STANDARD_LIBRARY` Step9-10 complete (`@embed Print` metadata + CLI stdlib root wiring)
+  - Step9 (`@embed Print` stdio bridge metadata):
+    - `ResolvedStdlibModule` now includes `embedded_effects: Vec<String>`.
+    - Resolver extracts `@embed effect <Name>` metadata from parsed stdlib modules.
+    - Added resolver regression test confirming `goby/stdio` surfaces `embedded_effects = [\"Print\"]`.
+    - Bare builtin `print` compatibility preserved while allowing `import goby/stdio ( print )` call sites.
+  - Step10 (CLI stdlib root wiring):
+    - Typechecker import resolution now receives stdlib root from context (no hardcoded resolver root in import flow).
+    - CLI resolves stdlib root via:
+      - `GOBY_STDLIB_ROOT` override when set,
+      - repo-default `stdlib/` path otherwise.
+    - CLI now returns explicit runtime errors for invalid stdlib root overrides:
+      - path does not exist,
+      - path is not a directory.
+    - Added CLI integration tests for:
+      - default stdlib root usage (`goby/string.length` file-only symbol),
+      - invalid `GOBY_STDLIB_ROOT` error path.
+  - Quality gates green:
+    - `cargo check`
+    - `cargo test` (242 tests passed)
     - `cargo clippy -- -D warnings`
 
 ## 5. Current Example Files

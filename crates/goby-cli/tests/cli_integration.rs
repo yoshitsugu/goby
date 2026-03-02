@@ -70,6 +70,62 @@ fn check_command_succeeds_for_function_example() {
     );
 }
 
+#[test]
+fn check_command_uses_default_stdlib_root_for_file_based_symbol() {
+    let root = repo_root();
+    let sandbox = TempDirGuard::new("check_default_stdlib_root");
+    let input = sandbox.join("uses_stdlib_length.gb");
+    fs::write(
+        &input,
+        "import goby/string ( length )\nf : Unit -> Int\nf = length(\"abc\")\n",
+    )
+    .expect("temporary input should be writable");
+
+    let output = command_for_goby_cli()
+        .arg("check")
+        .arg(&input)
+        .current_dir(&root)
+        .output()
+        .expect("cli should execute");
+
+    assert!(
+        output.status.success(),
+        "expected success, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("parsed and typechecked"),
+        "unexpected stdout: {}",
+        stdout
+    );
+}
+
+#[test]
+fn check_command_reports_invalid_stdlib_root_env_path() {
+    let root = repo_root();
+    let sandbox = TempDirGuard::new("check_invalid_stdlib_root");
+    let missing_root = sandbox.join("missing-stdlib-root");
+    let output = command_for_goby_cli()
+        .arg("check")
+        .arg("examples/function.gb")
+        .env("GOBY_STDLIB_ROOT", &missing_root)
+        .current_dir(&root)
+        .output()
+        .expect("cli should execute");
+
+    assert!(
+        !output.status.success(),
+        "expected failure for invalid stdlib root"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("stdlib root does not exist"),
+        "unexpected stderr: {}",
+        stderr
+    );
+}
+
 #[cfg(unix)]
 fn install_fake_wasmtime(script_path: &Path) {
     use std::os::unix::fs::PermissionsExt;

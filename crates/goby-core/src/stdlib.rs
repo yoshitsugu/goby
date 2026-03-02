@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use crate::parse_module;
@@ -12,6 +12,7 @@ pub struct StdlibResolver {
 pub struct ResolvedStdlibModule {
     pub module_path: String,
     pub exports: HashMap<String, String>,
+    pub embedded_effects: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -32,6 +33,10 @@ pub enum StdlibResolveError {
     DuplicateExport {
         module_path: String,
         symbol: String,
+    },
+    DuplicateEmbeddedEffect {
+        module_path: String,
+        effect_name: String,
     },
     ExportTypeMissing {
         module_path: String,
@@ -66,9 +71,11 @@ impl StdlibResolver {
                 message: parse_err.message,
             })?;
         let exports = collect_exports(module_path, &module.declarations)?;
+        let embedded_effects = collect_embedded_effects(module_path, &module.embed_declarations)?;
         Ok(ResolvedStdlibModule {
             module_path: module_path.to_string(),
             exports,
+            embedded_effects,
         })
     }
 
@@ -129,6 +136,24 @@ fn collect_exports(
         }
     }
     Ok(exports)
+}
+
+fn collect_embedded_effects(
+    module_path: &str,
+    embeds: &[crate::ast::EmbedDecl],
+) -> Result<Vec<String>, StdlibResolveError> {
+    let mut seen = HashSet::new();
+    let mut names = Vec::new();
+    for embed in embeds {
+        if !seen.insert(embed.effect_name.clone()) {
+            return Err(StdlibResolveError::DuplicateEmbeddedEffect {
+                module_path: module_path.to_string(),
+                effect_name: embed.effect_name.clone(),
+            });
+        }
+        names.push(embed.effect_name.clone());
+    }
+    Ok(names)
 }
 
 #[cfg(test)]
@@ -215,6 +240,49 @@ mod tests {
         assert_eq!(
             resolved.exports.get("concat"),
             Some(&"String -> String -> String".to_string())
+        );
+        assert!(resolved.embedded_effects.is_empty());
+    }
+
+    #[test]
+    fn resolves_embedded_effect_metadata_from_file() {
+        let sandbox = TempDirGuard::new("resolve_embed_metadata");
+        let root = sandbox.path.join("stdlib");
+        fs::create_dir_all(root.join("goby")).expect("stdlib/goby should be creatable");
+        fs::write(
+            root.join("goby/stdio.gb"),
+            "@embed effect Print\nprint : String -> Unit can Print\nprint value = value |> print\n",
+        )
+        .expect("stdlib file should be writable");
+
+        let resolver = StdlibResolver::new(root);
+        let resolved = resolver
+            .resolve_module("goby/stdio")
+            .expect("stdlib module should resolve");
+        assert_eq!(resolved.embedded_effects, vec!["Print".to_string()]);
+    }
+
+    #[test]
+    fn resolve_reports_duplicate_embedded_effect() {
+        let sandbox = TempDirGuard::new("resolve_duplicate_embed");
+        let root = sandbox.path.join("stdlib");
+        fs::create_dir_all(root.join("goby")).expect("stdlib/goby should be creatable");
+        fs::write(
+            root.join("goby/stdio.gb"),
+            "@embed effect Print\n@embed effect Print\nprint : String -> Unit can Print\nprint value = value |> print\n",
+        )
+        .expect("stdlib file should be writable");
+
+        let resolver = StdlibResolver::new(root);
+        let err = resolver
+            .resolve_module("goby/stdio")
+            .expect_err("duplicate embed effect should fail");
+        assert_eq!(
+            err,
+            StdlibResolveError::DuplicateEmbeddedEffect {
+                module_path: "goby/stdio".to_string(),
+                effect_name: "Print".to_string(),
+            }
         );
     }
 
