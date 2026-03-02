@@ -1,4 +1,4 @@
-use goby_core::{BinOpKind, Expr, Module, Stmt, types::parse_function_type};
+use goby_core::{Expr, Module, Stmt, types::parse_function_type};
 
 use crate::{
     call::{
@@ -6,7 +6,7 @@ use crate::{
         resolve_direct_call_target,
     },
     lower::declaration_body_supported_for_native,
-    support::is_supported_case_pattern,
+    support::{is_supported_binop_kind, is_supported_case_pattern, is_supported_list_item_expr},
 };
 
 const BUILTIN_PRINT: &str = "print";
@@ -135,17 +135,14 @@ fn unsupported_value_expr_reason(expr: &Expr, module: &Module) -> Option<Unsuppo
     match expr {
         Expr::StringLit(_) | Expr::IntLit(_) | Expr::BoolLit(_) | Expr::Var(_) => None,
         Expr::ListLit(items) => {
-            if items
-                .iter()
-                .all(|item| matches!(item, Expr::IntLit(_) | Expr::Var(_)))
-            {
+            if items.iter().all(is_supported_list_item_expr) {
                 None
             } else {
                 Some(UnsupportedReason::UnsupportedListItemExpr)
             }
         }
         Expr::BinOp { op, left, right } => {
-            if !matches!(op, BinOpKind::Add | BinOpKind::Mul | BinOpKind::Eq) {
+            if !is_supported_binop_kind(op) {
                 return Some(UnsupportedReason::UnsupportedBinop);
             }
             if let Some(reason) = unsupported_value_expr_reason(left, module) {

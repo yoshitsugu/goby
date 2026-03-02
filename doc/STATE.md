@@ -266,6 +266,14 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - Added helper unit test (`support::tests::supports_current_native_case_patterns`).
   - Validation rerun: targeted tests, full `cargo test -p goby-wasm`, workspace
     `cargo check/test/clippy` all green.
+- 2026-03-02 (session 40): shared list-item/binop support helpers
+  - Expanded `crates/goby-wasm/src/support.rs` with:
+    - `is_supported_list_item_expr(&Expr) -> bool`,
+    - `is_supported_binop_kind(&BinOpKind) -> bool`,
+    - focused helper tests.
+  - Reused these helpers in both `fallback.rs` and `lower.rs` capability checks.
+  - Resolved clippy cleanups (`redundant_closure`) and reran full gates.
+  - Validation rerun: `cargo test -p goby-wasm`, workspace `cargo check/test/clippy` all green.
 
 ## 5. Current Example Files
 
