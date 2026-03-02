@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-02 (session 57)
+Last updated: 2026-03-02 (session 58)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -533,6 +533,25 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - Quality gates green:
     - `cargo check`
     - `cargo test` (255 tests passed)
+    - `cargo clippy -- -D warnings`
+- 2026-03-02 (session 58): `PLAN_RESUME` Step 2 complete (typecheck context + resume diagnostics)
+  - Added handler-method operation context resolution from `effect` signatures
+    (`op : A -> B` gives handler param type `A`, resume expected type `B`).
+  - Added dedicated `resume` typecheck pass for both declaration and handler bodies.
+  - New diagnostics:
+    - `resume_outside_handler`,
+    - `resume_arg_type_mismatch`,
+    - `resume_in_unknown_operation_context`.
+  - Handler method body checks now enforce `resume` argument compatibility with
+    the handled operation return type when known.
+  - Added 4 resume typecheck regression tests:
+    - outside handler rejection,
+    - arg mismatch rejection,
+    - unknown operation context rejection,
+    - matching type acceptance.
+  - Quality gates green:
+    - `cargo check`
+    - `cargo test` (259 tests passed)
     - `cargo clippy -- -D warnings`
 
 ## 5. Current Example Files
