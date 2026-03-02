@@ -1,13 +1,10 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use goby_core::{BinOpKind, CasePattern, Expr, Module, Stmt};
 
 use crate::{
-    CodegenError,
-    backend::WasmProgramBuilder,
-    call::{extract_direct_print_call_arg, flatten_named_call, resolve_direct_call_target},
+    CodegenError, backend::WasmProgramBuilder, call::extract_direct_print_call_arg,
     layout::MemoryLayout,
-    support::{is_supported_binop_kind, is_supported_case_pattern, is_supported_list_item_expr},
 };
 
 pub(crate) fn try_emit_native_module(module: &Module) -> Result<Option<Vec<u8>>, CodegenError> {
@@ -49,6 +46,23 @@ enum NativeValue {
     Int(i64),
     Bool(bool),
     ListInt(Vec<i64>),
+    Callable(NativeCallable),
+}
+
+#[derive(Clone)]
+enum NativeCallable {
+    Named {
+        name: String,
+        applied_args: Vec<NativeValue>,
+    },
+    Lambda(NativeLambda),
+}
+
+#[derive(Clone)]
+struct NativeLambda {
+    param: String,
+    body: Expr,
+    captured: HashMap<String, NativeValue>,
 }
 
 impl NativeValue {
@@ -66,19 +80,20 @@ impl NativeValue {
                     .join(", ");
                 format!("[{}]", inner)
             }
+            Self::Callable(_) => "<function>".to_string(),
         }
     }
 }
 
 fn collect_phase2_output_text(module: &Module, stmts: &[Stmt]) -> Option<String> {
     let env = EvalEnv::from_module(module);
-    let mut bindings: HashMap<&str, NativeValue> = HashMap::new();
+    let mut bindings: HashMap<String, NativeValue> = HashMap::new();
     let mut outputs: Vec<String> = Vec::new();
     for stmt in stmts {
         match stmt {
             Stmt::Binding { name, value } => {
                 let val = eval_expr(value, &bindings, &env, 0)?;
-                bindings.insert(name.as_str(), val);
+                bindings.insert(name.to_string(), val);
             }
             Stmt::Expr(expr) => {
                 let val = as_print_expr(expr, &bindings, &env)?;
@@ -92,7 +107,7 @@ fn collect_phase2_output_text(module: &Module, stmts: &[Stmt]) -> Option<String>
 
 fn as_print_expr(
     expr: &Expr,
-    bindings: &HashMap<&str, NativeValue>,
+    bindings: &HashMap<String, NativeValue>,
     env: &EvalEnv<'_>,
 ) -> Option<NativeValue> {
     match expr {
@@ -104,7 +119,7 @@ fn as_print_expr(
 
 fn eval_expr(
     expr: &Expr,
-    bindings: &HashMap<&str, NativeValue>,
+    bindings: &HashMap<String, NativeValue>,
     env: &EvalEnv<'_>,
     depth: usize,
 ) -> Option<NativeValue> {
@@ -117,7 +132,16 @@ fn eval_expr(
         Expr::StringLit(s) => Some(NativeValue::String(s.clone())),
         Expr::IntLit(n) => Some(NativeValue::Int(*n)),
         Expr::BoolLit(b) => Some(NativeValue::Bool(*b)),
-        Expr::Var(name) => bindings.get(name.as_str()).cloned(),
+        Expr::Var(name) => bindings.get(name).cloned().or_else(|| {
+            if env.declarations.contains_key(name.as_str()) || name == "map" {
+                Some(NativeValue::Callable(NativeCallable::Named {
+                    name: name.clone(),
+                    applied_args: Vec::new(),
+                }))
+            } else {
+                None
+            }
+        }),
         Expr::BinOp { op, left, right } => {
             let lhs = eval_expr(left, bindings, env, depth + 1)?;
             let rhs = eval_expr(right, bindings, env, depth + 1)?;
@@ -137,16 +161,10 @@ fn eval_expr(
                 _ => None,
             }
         }
-        Expr::Call { .. } => {
-            let (fn_name, args) = flatten_named_call(expr)?;
-            if fn_name == "print" {
-                return None;
-            }
-            let arg_values = args
-                .iter()
-                .map(|arg| eval_expr(arg, bindings, env, depth + 1))
-                .collect::<Option<Vec<_>>>()?;
-            eval_named_function(fn_name, arg_values, env, depth + 1)
+        Expr::Call { callee, arg } => {
+            let callee_value = eval_expr(callee, bindings, env, depth + 1)?;
+            let arg_value = eval_expr(arg, bindings, env, depth + 1)?;
+            apply_callable(callee_value, arg_value, env, depth + 1)
         }
         Expr::ListLit(items) => {
             let mut out = Vec::with_capacity(items.len());
@@ -190,6 +208,13 @@ fn eval_expr(
             }
             None
         }
+        Expr::Lambda { param, body } => Some(NativeValue::Callable(NativeCallable::Lambda(
+            NativeLambda {
+                param: param.clone(),
+                body: body.as_ref().clone(),
+                captured: bindings.clone(),
+            },
+        ))),
         _ => None,
     }
 }
@@ -215,17 +240,14 @@ fn eval_named_function(
     depth: usize,
 ) -> Option<NativeValue> {
     let decl = env.declarations.get(fn_name)?;
-    if decl.name == "main" {
-        return None;
-    }
     if decl.params.len() != args.len() {
         return None;
     }
     let stmts = decl.parsed_body.as_deref()?;
 
-    let mut locals: HashMap<&str, NativeValue> = HashMap::new();
+    let mut locals: HashMap<String, NativeValue> = HashMap::new();
     for (param, arg_val) in decl.params.iter().zip(args.into_iter()) {
-        locals.insert(param.as_str(), arg_val);
+        locals.insert(param.clone(), arg_val);
     }
 
     let mut last_expr: Option<NativeValue> = None;
@@ -233,7 +255,7 @@ fn eval_named_function(
         match stmt {
             Stmt::Binding { name, value } => {
                 let val = eval_expr(value, &locals, env, depth + 1)?;
-                locals.insert(name.as_str(), val);
+                locals.insert(name.clone(), val);
             }
             Stmt::Expr(expr) => {
                 let value = eval_expr(expr, &locals, env, depth + 1)?;
@@ -245,103 +267,89 @@ fn eval_named_function(
     last_expr
 }
 
-pub(crate) fn declaration_body_supported_for_native(decl_name: &str, module: &Module) -> bool {
-    let env = EvalEnv::from_module(module);
-    let mut stack = HashSet::new();
-    is_decl_supported(decl_name, module, &env, &mut stack)
-}
-
-fn is_decl_supported(
-    decl_name: &str,
-    module: &Module,
+fn apply_callable(
+    callee: NativeValue,
+    arg: NativeValue,
     env: &EvalEnv<'_>,
-    stack: &mut HashSet<String>,
-) -> bool {
-    if !stack.insert(decl_name.to_string()) {
-        return false;
-    }
-    let Some(decl) = env.declarations.get(decl_name) else {
-        stack.remove(decl_name);
-        return false;
+    depth: usize,
+) -> Option<NativeValue> {
+    let NativeValue::Callable(callable) = callee else {
+        return None;
     };
-    let Some(stmts) = decl.parsed_body.as_deref() else {
-        stack.remove(decl_name);
-        return false;
-    };
-    let ok = stmts
-        .iter()
-        .all(|s| is_stmt_supported(s, module, env, stack));
-    stack.remove(decl_name);
-    ok
-}
-
-fn is_stmt_supported(
-    stmt: &Stmt,
-    module: &Module,
-    env: &EvalEnv<'_>,
-    stack: &mut HashSet<String>,
-) -> bool {
-    match stmt {
-        Stmt::Binding { value, .. } => is_value_expr_supported(value, module, env, stack),
-        Stmt::Expr(expr) => match expr {
-            Expr::Call { callee, arg } if matches!(callee.as_ref(), Expr::Var(n) if n == "print") => {
-                is_value_expr_supported(arg, module, env, stack)
-            }
-            _ => is_value_expr_supported(expr, module, env, stack),
-        },
-        Stmt::Using { .. } => false,
-    }
-}
-
-fn is_value_expr_supported(
-    expr: &Expr,
-    module: &Module,
-    env: &EvalEnv<'_>,
-    stack: &mut HashSet<String>,
-) -> bool {
-    match expr {
-        Expr::StringLit(_) | Expr::IntLit(_) | Expr::BoolLit(_) | Expr::Var(_) => true,
-        Expr::ListLit(items) => items.iter().all(is_supported_list_item_expr),
-        Expr::BinOp { op, left, right } => {
-            is_supported_binop_kind(op)
-                && is_value_expr_supported(left, module, env, stack)
-                && is_value_expr_supported(right, module, env, stack)
-        }
-        Expr::If {
-            condition,
-            then_expr,
-            else_expr,
+    match callable {
+        NativeCallable::Named {
+            name,
+            mut applied_args,
         } => {
-            is_value_expr_supported(condition, module, env, stack)
-                && is_value_expr_supported(then_expr, module, env, stack)
-                && is_value_expr_supported(else_expr, module, env, stack)
-        }
-        Expr::Case { scrutinee, arms } => {
-            is_value_expr_supported(scrutinee, module, env, stack)
-                && !arms.is_empty()
-                && arms.iter().all(|arm| {
-                    is_supported_case_pattern(&arm.pattern)
-                        && is_value_expr_supported(&arm.body, module, env, stack)
-                })
-        }
-        Expr::Call { .. } => {
-            let Some((name, args)) = flatten_named_call(expr) else {
-                return false;
-            };
             if name == "print" {
-                return false;
+                return None;
             }
-            if !args
-                .iter()
-                .all(|arg| is_value_expr_supported(arg, module, env, stack))
-            {
-                return false;
-            }
-            if resolve_direct_call_target(module, name, args.len()).is_err() {
-                return false;
-            }
-            is_decl_supported(name, module, env, stack)
+            applied_args.push(arg);
+            apply_named_callable(name, applied_args, env, depth + 1)
         }
-        _ => false,
+        NativeCallable::Lambda(lambda) => {
+            let mut locals = lambda.captured.clone();
+            locals.insert(lambda.param, arg);
+            eval_expr(&lambda.body, &locals, env, depth + 1)
+        }
     }
+}
+
+fn apply_named_callable(
+    name: String,
+    args: Vec<NativeValue>,
+    env: &EvalEnv<'_>,
+    depth: usize,
+) -> Option<NativeValue> {
+    if name == "map" {
+        return apply_map_builtin(args, env, depth + 1);
+    }
+
+    let decl = env.declarations.get(name.as_str())?;
+    if decl.name == "main" {
+        return None;
+    }
+    if args.len() < decl.params.len() {
+        return Some(NativeValue::Callable(NativeCallable::Named {
+            name,
+            applied_args: args,
+        }));
+    }
+    if args.len() > decl.params.len() {
+        return None;
+    }
+    eval_named_function(name.as_str(), args, env, depth + 1)
+}
+
+fn apply_map_builtin(
+    args: Vec<NativeValue>,
+    env: &EvalEnv<'_>,
+    depth: usize,
+) -> Option<NativeValue> {
+    if args.len() < 2 {
+        return Some(NativeValue::Callable(NativeCallable::Named {
+            name: "map".to_string(),
+            applied_args: args,
+        }));
+    }
+    if args.len() > 2 {
+        return None;
+    }
+    let mut iter = args.into_iter();
+    // `map ns f` is parsed as `Call(Call(map, ns), f)`, so args are `[list, mapper]`.
+    let list = iter.next()?;
+    let mapper = iter.next()?;
+    let NativeValue::ListInt(values) = list else {
+        return None;
+    };
+
+    let mut mapped = Vec::with_capacity(values.len());
+    for value in values {
+        let out = apply_callable(mapper.clone(), NativeValue::Int(value), env, depth + 1)?;
+        let NativeValue::Int(n) = out else {
+            return None;
+        };
+        mapped.push(n);
+    }
+    Some(NativeValue::ListInt(mapped))
 }

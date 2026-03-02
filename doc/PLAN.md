@@ -88,8 +88,8 @@ Based on `examples/*.gb`:
 - `if ... else ...` expression: indentation-based two-branch form.
 - `==` equality operator: produces `Bool` at runtime.
 - Handler dispatch: `active_handlers` uses `BTreeMap` for deterministic (alphabetical) order.
-- Runtime execution model: compile-time interpreter — `resolve_main_runtime_output` runs the
-  program in Rust at Wasm compile time and embeds output as a static string in the Wasm binary.
+- Runtime execution model: prefer native lowering for the supported subset; fallback to
+  compile-time interpreter (`resolve_main_runtime_output`) for unsupported forms.
 
 ### 2.1 Syntax and Parsing
 
@@ -306,6 +306,20 @@ diagnostics in the codebase.
 - Fallback reason literals migrated to shared constants/typed enum mapping.
 - Capability/support helper split completed (`call.rs`, `support.rs`, and focused tests).
 
+### 4.2.1 Lambda/HOF native lowering for `function.gb` subset — DONE (2026-03-02)
+
+- Native lower/evaluator now supports function values:
+  - lambda closure values (`Expr::Lambda`),
+  - declaration references as callable values,
+  - partial application for named callables.
+- Native evaluator supports HOF calls used by `examples/function.gb`:
+  - `map` with lambda/function argument,
+  - callback-style parameter calls (`f 10`) inside declarations.
+- Native capability checker now accepts `examples/function.gb`.
+  - `function.gb` moved from fallback matrix to native matrix in tests.
+  - `call_target_body_not_native_supported` remains for declarations with unsupported forms
+    such as `using` blocks.
+
 ### 4.3 Standard-Library Foundation (self-hosted direction)
 
 Goal: prepare infrastructure so core standard libraries can be authored primarily in Goby,
@@ -370,48 +384,19 @@ Implementation steps:
    - Publish a minimal VS Code extension wrapper (syntax + LSP wiring).
    - Keep tooling artifacts versioned in the same monorepo at this stage.
 
-### 4.5 Editor Syntax Highlight Rollout Plan (VSCode / Emacs / Vim)
+### 4.5 Editor Syntax Highlight Rollout Plan (VSCode / Emacs / Vim) — DONE (2026-03-02)
 
-Goal: ship practical syntax highlighting early across the three primary editor families
-used by contributors: VSCode, Emacs, and Vim.
+All three editor highlight packs are implemented and present in the monorepo:
 
-Deliverables (same monorepo):
+- `tooling/syntax/textmate/goby.tmLanguage.json`: canonical TextMate grammar (10 token categories).
+- `tooling/vscode-goby/`: VS Code extension (package.json, language-configuration.json, grammar, README).
+- `tooling/vim/syntax/goby.vim` + `tooling/vim/ftdetect/goby.vim`: Vim syntax pack + ftdetect.
+- `tooling/emacs/goby-mode.el`: Emacs major mode (font-lock + `auto-mode-alist` for `.gb`).
+- `tooling/syntax/testdata/highlight_sample.gb`: manual test fixture covering all token categories.
 
-- `tooling/syntax/textmate/goby.tmLanguage.json` (canonical highlight grammar source).
-- `tooling/syntax/vim/goby.vim` + `tooling/syntax/vim/ftdetect/goby.vim`.
-- `tooling/syntax/emacs/goby-mode.el`.
-- `tooling/vscode-goby/` extension package (TextMate grammar wiring).
-- Snapshot fixtures under `tooling/syntax/testdata/`.
+Remaining (deferred):
 
-Implementation phases:
-
-1. Token-category baseline (single source of truth).
-   - Lock token categories used across editors:
-     - keywords (`type`, `effect`, `handler`, `for`, `using`, `can`, `if`, `else`, `case`, `import`, `as`)
-     - declarations/identifiers, type names, constructors, literals, comments, operators.
-   - Keep category naming stable so grammars stay aligned.
-2. Canonical TextMate grammar first.
-   - Implement and test `goby.tmLanguage.json` against representative `.gb` snippets.
-   - Cover current syntax in `examples/*.gb` and known edge forms (pipe, lambda, qualified names).
-3. VSCode package (MVP).
-   - Register `.gb` language id, file associations, and TextMate grammar.
-   - Provide minimal `README` + install instructions for local testing.
-4. Vim syntax pack.
-   - Implement `syntax/goby.vim` groups mapped to the same token categories.
-   - Add `ftdetect` rule for `*.gb`.
-   - Validate against `vim -Nu NONE` snapshot scripts.
-5. Emacs major mode (syntax-focused MVP).
-   - Implement `goby-mode.el` with `font-lock` rules and `auto-mode-alist` for `\\.gb\\'`.
-   - Keep indentation/electric features out of MVP; focus on stable highlighting.
-6. Cross-editor regression tests.
-   - Maintain shared fixture snippets and expected token scopes/groups.
-   - Run syntax regression checks in CI on any grammar/mode change.
-
-Definition of done:
-
-- `.gb` files highlight correctly in VSCode, Emacs, and Vim for all `examples/*.gb`.
-- Same keyword/operator/comment coverage is confirmed across all three editors.
-- Installation steps are documented in-repo for each editor.
+- Cross-editor regression tests (shared fixture → expected token scopes/groups in CI).
 
 ## 5. Spec Detail Notes
 

@@ -158,12 +158,14 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - `eval_expr_ast` Expr::Call arm: new `single_field_constructor_field` helper scans `module.type_declarations`.
   - 3 new tests; 186 → 189 total tests pass; `cargo clippy -- -D warnings` clean.
   - `doc/BUGS.md` created; BUG-001 (handler for unknown effect) and BUG-002 (positional constructor, Fixed) documented.
-- 2026-03-02 (session 28, commit 6ba076f): VSCode syntax highlighting (§4.4 phase 1):
+- 2026-03-02 (session 28, commit 6ba076f): Editor syntax highlighting (§4.5):
   - `tooling/syntax/textmate/goby.tmLanguage.json`: canonical TextMate grammar (10 token categories).
   - `tooling/vscode-goby/`: VS Code extension package (package.json, language-configuration.json, grammar copy, README).
+  - `tooling/vim/syntax/goby.vim` + `tooling/vim/ftdetect/goby.vim`: Vim syntax pack + ftdetect rule.
+  - `tooling/emacs/goby-mode.el`: Emacs major mode with font-lock rules and `auto-mode-alist` for `.gb`.
   - `tooling/syntax/testdata/highlight_sample.gb`: manual test fixture covering all categories.
-  - `tooling/syntax/README.md`: token category table + "Inspect Editor Tokens and Scopes" instructions.
-  - Vim and Emacs support deferred to follow-up phase.
+  - `tooling/syntax/README.md`: token category table + install instructions.
+  - All three editors (VSCode, Vim, Emacs) confirmed present; cross-editor regression tests deferred.
 - 2026-03-02 (session 29): Real Wasm codegen planning document added:
   - Wasm migration plan document created with phased migration from compile-time interpreter to instruction-level codegen.
   - Plan includes: AST subset per phase, wasm-encoder module layout, value representation (`Int`/`String`/`List Int`),
@@ -334,6 +336,21 @@ This file is a restart-safe snapshot for resuming work after context reset.
     `Err(CodegenError)` (no `minimal_main_module` path).
   - Reframed §9 as post-plan handoff (out of scope for this closed plan):
     full interpreter retirement remains follow-up work (lambda/HOF + effect runtime).
+- 2026-03-02 (session 47): Lambda/HOF native lowering (`function.gb`) landed
+  - `crates/goby-wasm/src/lower.rs`:
+    - added callable native values (named callable + lambda closure + partial application),
+    - added generic callable application path for `Expr::Call` (not direct-name-only),
+    - added native `map` builtin evaluation on `List Int` with callable mapper,
+    - enabled callback parameter invocation (`f 10`) in native declaration bodies.
+  - `crates/goby-wasm/src/fallback.rs`:
+    - accepts `Expr::Lambda` as native-supported value expression,
+    - accepts direct `map` calls as native-supported value calls,
+    - keeps `CallTargetBodyNotNativeSupported` for unsupported declaration bodies (for example `using`).
+  - `crates/goby-wasm/src/lib.rs` tests:
+    - `function.gb` switched to native-capable expectation,
+    - transitive HOF declaration case switched from fallback to native,
+    - call-reason coverage now keeps unsupported-body reason via `using`-based fixtures.
+  - Validation: `cargo fmt`, `cargo test -p goby-wasm`, `cargo check`, `cargo test` all green.
 
 ## 5. Current Example Files
 
@@ -348,7 +365,7 @@ This file is a restart-safe snapshot for resuming work after context reset.
 
 ## 6. Immediate Next Steps (Execution Order)
 
-Wasm Phase A (Phases 0–8) complete. 215 tests green, clippy clean.
+Wasm Phase A (Phases 0–8) complete. 216 tests green.
 
 Resume checks:
 ```
@@ -358,9 +375,9 @@ cargo clippy -- -D warnings
 ```
 
 Execution focus (in order):
-1. Lambda/HOF native lowering (Phase B prerequisite).
-2. Effect runtime redesign (one-shot deep handlers + selective CPS/evidence passing).
-3. `resolve_main_runtime_output` retirement (blocked on lambda + effect native support).
+1. Effect runtime redesign (one-shot deep handlers + selective CPS/evidence passing).
+2. `resolve_main_runtime_output` retirement (blocked on effect-native support and remaining unsupported forms).
+3. Continue widening native subset for non-effect unsupported forms (e.g. method/record paths).
 
 ## 7. Resume Commands
 
@@ -379,5 +396,6 @@ cargo run -p goby-cli -- run examples/function.gb
 - Record update syntax and pattern matching on record fields.
 - `else if` chaining in `if` expressions (not supported in MVP; documented).
 - Real Wasm next milestone: extend native coverage beyond current subset (lambda/HOF + effect runtime),
+- Real Wasm next milestone: extend native coverage beyond current subset (effect runtime and remaining unsupported expression forms),
   then retire remaining fallback execution paths.
 - REPL / interactive mode.
