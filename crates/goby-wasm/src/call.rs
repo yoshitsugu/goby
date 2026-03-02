@@ -34,6 +34,13 @@ pub(crate) enum DirectCallTargetError {
     ArityMismatch,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PrintCallError {
+    NotPrint,
+    ArityNotOne,
+    NonDirectCallee,
+}
+
 pub(crate) fn resolve_direct_call_target<'a>(
     module: &'a Module,
     name: &str,
@@ -46,6 +53,19 @@ pub(crate) fn resolve_direct_call_target<'a>(
         return Err(DirectCallTargetError::ArityMismatch);
     }
     Ok(decl)
+}
+
+pub(crate) fn extract_direct_print_call_arg(expr: &Expr) -> Result<&Expr, PrintCallError> {
+    let Some((name, args)) = flatten_named_call(expr) else {
+        return Err(PrintCallError::NonDirectCallee);
+    };
+    if name != "print" {
+        return Err(PrintCallError::NotPrint);
+    }
+    if args.len() != 1 {
+        return Err(PrintCallError::ArityNotOne);
+    }
+    Ok(args[0])
 }
 
 #[cfg(test)]
@@ -104,6 +124,59 @@ main =
         assert_eq!(
             resolve_direct_call_target(&module, "add", 1),
             Err(DirectCallTargetError::ArityMismatch)
+        );
+    }
+
+    #[test]
+    fn extract_direct_print_call_arg_reports_expected_outcomes() {
+        let source = r#"
+id : Int -> Int
+id x = x
+
+main : Unit -> Unit
+main =
+  print (id 1)
+"#;
+        let expr = parse_expr(source);
+        assert!(extract_direct_print_call_arg(&expr).is_ok());
+
+        let not_print = parse_expr(
+            r#"
+id : Int -> Int
+id x = x
+
+main : Unit -> Unit
+main =
+  id 1
+"#,
+        );
+        assert_eq!(
+            extract_direct_print_call_arg(&not_print),
+            Err(PrintCallError::NotPrint)
+        );
+
+        let arity_two = parse_expr(
+            r#"
+main : Unit -> Unit
+main =
+  print 1 2
+"#,
+        );
+        assert_eq!(
+            extract_direct_print_call_arg(&arity_two),
+            Err(PrintCallError::ArityNotOne)
+        );
+
+        let non_direct = parse_expr(
+            r#"
+main : Unit -> Unit
+main =
+  (Foo.bar 1)
+"#,
+        );
+        assert_eq!(
+            extract_direct_print_call_arg(&non_direct),
+            Err(PrintCallError::NonDirectCallee)
         );
     }
 }

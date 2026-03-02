@@ -5,7 +5,7 @@ use goby_core::{BinOpKind, CasePattern, Expr, Module, Stmt};
 use crate::{
     CodegenError,
     backend::WasmProgramBuilder,
-    call::{flatten_named_call, resolve_direct_call_target},
+    call::{extract_direct_print_call_arg, flatten_named_call, resolve_direct_call_target},
     layout::MemoryLayout,
 };
 
@@ -95,15 +95,7 @@ fn as_print_expr(
     env: &EvalEnv<'_>,
 ) -> Option<NativeValue> {
     match expr {
-        Expr::Call { callee, arg } => {
-            let Expr::Var(name) = callee.as_ref() else {
-                return None;
-            };
-            if name != "print" {
-                return None;
-            }
-            eval_expr(arg, bindings, env, 0)
-        }
+        Expr::Call { .. } => eval_expr(extract_direct_print_call_arg(expr).ok()?, bindings, env, 0),
         Expr::Pipeline { value, callee } if callee == "print" => eval_expr(value, bindings, env, 0),
         _ => None,
     }

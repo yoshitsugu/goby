@@ -232,6 +232,17 @@ This file is a restart-safe snapshot for resuming work after context reset.
     - direct-call target resolution outcomes
       (`Ok`, `NotDeclaration`, `ArityMismatch`).
   - Validation rerun: `cargo test -p goby-wasm`, workspace `cargo check/test/clippy` all green.
+- 2026-03-02 (session 36): shared print-call helper extraction
+  - Added `extract_direct_print_call_arg` + `PrintCallError` to `crates/goby-wasm/src/call.rs`
+    and covered with unit tests.
+  - Updated `fallback.rs` and `lower.rs` to reuse the shared print-call helper
+    (direct print detection and arity-1 semantics no longer duplicated).
+  - Reason behavior preserved via existing and new tests:
+    - non-print direct call still routes to value-expression checks,
+    - print arity mismatch still reports `print_arity_not_one`,
+    - non-direct call shape still reports `call_callee_not_direct_name`.
+  - Validation rerun: targeted tests, full `cargo test -p goby-wasm`, workspace
+    `cargo check/test/clippy` all green.
 
 ## 5. Current Example Files
 
@@ -259,8 +270,8 @@ cargo clippy -- -D warnings
 Execution focus (see `doc/PLAN_WASM.md`):
 1. Execute Phase 6.1 (current target):
    - complete remaining cleanup items:
-     - audit remaining duplicated call-shape assumptions between `fallback` and `lower`
-       and collapse any stragglers into shared helpers where practical.
+     - audit remaining duplicated expression-shape assumptions between `fallback` and `lower`
+       and collapse any low-risk stragglers into shared helpers where practical.
    - keep fallback boundaries and runtime outputs unchanged (`function.gb`, `effect.gb`).
 2. Then Phase 7 cleanup/sign-off:
    - confirm fallback boundary is explicit and narrow,
