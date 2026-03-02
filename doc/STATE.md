@@ -293,6 +293,21 @@ This file is a restart-safe snapshot for resuming work after context reset.
     - `cargo test`,
     - `cargo clippy -- -D warnings`.
   - Phase 6/6.1 marked complete in `doc/PLAN_WASM.md`; focus moves to Phase 7 sign-off.
+- 2026-03-02 (session 43): Phase 7 sign-off completed
+  - Migrated `compile_print_module` from `wat` to `wasm-encoder`
+    (`backend::WasmProgramBuilder::emit_static_print_module`).
+  - Fixed pre-existing Wasm spec violation in `backend.rs`: code section (id=10)
+    was emitted after data section (id=11); swapped to correct order.
+  - Removed `wat = "1"` dependency from `crates/goby-wasm/Cargo.toml`.
+  - Deleted `minimal_main_module()` and its byte-constant; `compile_module` now
+    returns `Err(CodegenError)` for modules with unsupported-but-non-printable `main`.
+  - Replaced byte-equality fallback test assertions with `supports_native_codegen`
+    + `assert_valid_wasm_module` checks (version byte added to helper).
+  - Added module-level doc to `fallback.rs` documenting the native subset and
+    intentional fallback boundaries; added `///` docs to public `CodegenError`
+    and `compile_module`.
+  - 215 tests pass; `cargo doc` warning-free; `cargo clippy -- -D warnings` clean.
+  - Phase 7 / Phase A marked complete in `doc/PLAN_WASM.md`.
 
 ## 5. Current Example Files
 
@@ -307,8 +322,7 @@ This file is a restart-safe snapshot for resuming work after context reset.
 
 ## 6. Immediate Next Steps (Execution Order)
 
-Wasm Phase A incremental milestones (0–5 subset) completed in tests.
-Current suite status: all tests green (`cargo test`), clippy clean.
+Wasm Phase A (Phases 0–7) complete. 215 tests green, clippy clean.
 
 Resume checks:
 ```
@@ -317,11 +331,10 @@ cargo test
 cargo clippy -- -D warnings
 ```
 
-Execution focus (see `doc/PLAN_WASM.md`):
-1. Execute Phase 7 cleanup/sign-off:
-   - confirm fallback boundary is explicit and narrow,
-   - maintain native/fallback coverage matrix by example as regression guard,
-   - continue compatibility-layer shrinkage toward interpreter retirement gates.
+Execution focus (next major theme):
+1. Effect runtime redesign (one-shot deep handlers + selective CPS/evidence passing).
+2. Lambda/HOF native lowering (Phase B prerequisite).
+3. `resolve_main_runtime_output` retirement (blocked on lambda + effect native support).
 2. Keep fallback boundaries and runtime outputs unchanged for intentional fallback examples:
    - `function.gb`, `effect.gb`.
 3. Parallel/next major theme:

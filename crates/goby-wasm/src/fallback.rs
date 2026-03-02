@@ -1,3 +1,28 @@
+//! Capability checker for the native Wasm lowering path.
+//!
+//! [`supports_native_codegen`] returns `true` when every construct reachable from `main`
+//! is within the currently supported native subset. When it returns `false`,
+//! [`native_unsupported_reason`] / [`native_unsupported_reason_kind`] report the first
+//! unsupported construct found, using [`UnsupportedReason`] variants.
+//!
+//! ## Supported native subset (Phase A)
+//!
+//! - `main : Unit -> Unit` annotation required.
+//! - `Stmt::Binding` with value expressions in the native value subset.
+//! - `Stmt::Expr(print <value>)` and `<value> |> print`.
+//! - Value expressions: `IntLit`, `BoolLit`, `StringLit`, `Var`, `ListLit(IntLit)`,
+//!   `BinOp(+|*|==)`, `If`, `Case` (patterns: `IntLit|StringLit|BoolLit|Wildcard`),
+//!   `Call` to a direct named declaration whose body is also natively supported.
+//!
+//! ## Intentional fallback boundaries (Phase A)
+//!
+//! The following constructs force the entire module onto the fallback (interpreter) path:
+//! - [`UnsupportedReason::UsingNotSupported`]: `Stmt::Using` / effect handlers.
+//! - [`UnsupportedReason::CallTargetBodyNotNativeSupported`]: lambda / HOF in any
+//!   declaration reachable from `main`.
+//! - [`UnsupportedReason::UnsupportedValueExpr`]: expression forms not yet lowered
+//!   (e.g. `Expr::Lambda`, method calls, record operations).
+
 use goby_core::{Expr, Module, Stmt, types::parse_function_type};
 
 use crate::{

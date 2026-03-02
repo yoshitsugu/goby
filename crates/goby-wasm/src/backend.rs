@@ -78,10 +78,7 @@ impl WasmProgramBuilder {
         exports.export("main", ExportKind::Func, 1);
         module.section(&exports);
 
-        let mut data = DataSection::new();
-        data.active(0, &ConstExpr::i32_const(text_ptr), text.as_bytes().to_vec());
-        module.section(&data);
-
+        // Code section (id=10) must come before Data section (id=11) per Wasm spec §5.5.2.
         let mut code = CodeSection::new();
         let mut function = Function::new([]);
         function.instruction(&Instruction::I32Const(iovec_offset));
@@ -107,6 +104,10 @@ impl WasmProgramBuilder {
         function.instruction(&Instruction::End);
         code.function(&function);
         module.section(&code);
+
+        let mut data = DataSection::new();
+        data.active(0, &ConstExpr::i32_const(text_ptr), text.as_bytes().to_vec());
+        module.section(&data);
 
         Ok(module.finish())
     }
