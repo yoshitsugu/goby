@@ -349,6 +349,14 @@ Preparation steps:
    - Ensure `cargo check`, `cargo test`, and example `goby-cli check/run` flows continue to work
      with stdlib sources in-tree.
 
+Additional planning constraint (locked 2026-03-02):
+
+- Introduce `@embed` declarations as a **stdlib-only** feature for runtime-bridged effects
+  (initial target: `@embed Print` for `goby/stdio`).
+- `@embed` is not allowed in user Goby modules or non-stdlib libraries.
+- `print` migration should proceed via `goby/stdio` + stdlib `@embed Print` bridge,
+  with temporary compatibility for existing bare `print`.
+
 ### 4.4 Early Developer Tooling Plan
 
 Goal: align implementation priorities with the language vision that strong tooling is a core
