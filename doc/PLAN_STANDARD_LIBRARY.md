@@ -365,3 +365,93 @@ Checkpoint 6:
 - `goby/stdio` is available as stdlib module, and `print` migration status is explicitly tracked.
 - `@embed` is supported for stdlib modules only and rejected elsewhere.
 - Progress and follow-up work are tracked in `doc/STATE.md`.
+
+## ExtraStep Candidates (Post Step12)
+
+This section tracks follow-up adjustments discovered after Step12 completion.
+These items are intentionally staged as additional work, not retroactive changes
+to Step0-12.
+
+### ExtraStep A: stdio embed model alignment (Print default handler embedding)
+
+Problem statement:
+
+- Current `stdlib/goby/stdio.gb` uses:
+  - `@embed effect Print`
+  - `print : String -> Unit can Print`
+  - body placeholder `value |> print`
+- Intended model is:
+  - explicit effect declaration in stdio module,
+  - embedding declaration for the effect's default runtime handler.
+
+Target shape (illustrative):
+
+```gb
+effect Print
+  print : String -> Unit can Print
+
+@embed Print
+```
+
+Follow-up tasks:
+
+1. Update `@embed` syntax model from `@embed effect <Name>` to `@embed <Name>`
+   (or add compatibility support for both during transition).
+2. Update parser/typechecker diagnostics accordingly.
+3. Add validation rule:
+   - `@embed X` requires an in-module `effect X` declaration.
+4. Update `stdlib/goby/stdio.gb` to the effect+embed form above.
+5. Keep resolver metadata (`embedded_effects`) behavior consistent.
+6. Add regression coverage for:
+   - parse acceptance of `@embed Print`,
+   - rejection when embedded effect is not declared in module,
+   - `goby/stdio` import path behavior unchanged.
+
+### ExtraStep B: stdlib intrinsic bridge naming (`__goby_<module>_<function>`)
+
+Problem statement:
+
+- Some stdlib APIs (for example string length) are difficult to implement
+  faithfully in pure Goby at current language/runtime capability level.
+- Current placeholder implementations (for example `length value = 0`) should
+  be replaced with explicit runtime bridge calls.
+
+Proposed convention:
+
+- Introduce reserved intrinsic names:
+  - `__goby_<module>_<function>`
+  - example: `__goby_string_length : String -> Int`
+- Stdlib modules can call these intrinsics as a temporary runtime bridge.
+- User modules should not define or call `__goby_*` names directly
+  (restriction policy to be enforced in parser/typechecker/lints as follow-up).
+
+Illustrative stdlib usage:
+
+```gb
+length : String -> Int
+length value = __goby_string_length value
+```
+
+Staging guidance:
+
+1. Add only minimal intrinsics needed for parity-critical stdlib APIs.
+2. Keep APIs that can be expressed with future language features
+   (for example iteration + algebraic effects with resume) on a path toward
+   pure Goby stdlib implementations.
+3. Track each intrinsic as technical debt with an explicit retirement target.
+
+Near-term candidate split:
+
+- Intrinsic-backed first:
+  - `string.length` (runtime primitive likely needed short-term).
+  - `env.fetch_env_var` (host environment access requires runtime boundary).
+- Deferred for language-feature implementation:
+  - `string.split` (possible pure stdlib implementation once iteration/resume
+    support is available).
+
+Additional intrinsic example:
+
+```gb
+fetch_env_var : String -> String
+fetch_env_var name = __goby_env_fetch_env_var name
+```
