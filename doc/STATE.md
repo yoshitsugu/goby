@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-02 (session 29)
+Last updated: 2026-03-02 (session 30)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -10,13 +10,13 @@ This file is a restart-safe snapshot for resuming work after context reset.
 - Crates:
   - `crates/goby-core` (language core: AST/parser/typechecker).
   - `crates/goby-cli` (CLI entrypoint).
-  - `crates/goby-wasm` (Wasm backend / compile-time interpreter).
+- `crates/goby-wasm` (Wasm backend with native+fallback dual path).
 
 ## 2. Locked MVP Decisions
 
 - First backend target is Wasm.
-- Runtime model: compile-time interpreter — `resolve_main_runtime_output` runs the program in
-  Rust at Wasm compile time and embeds the output as a static string in the Wasm binary.
+- Runtime model (current): prefer native lowering (`supports_native_codegen` + `lower`),
+  fallback to compile-time interpreter (`resolve_main_runtime_output`) for unsupported subsets.
 - Entry function is `main` only.
 - `main` type is `Unit -> Unit`; annotation required for `run`, optional for `check`.
 - CLI commands:
@@ -167,6 +167,14 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - `doc/PLAN_WASM.md` created with phased migration from compile-time interpreter to instruction-level codegen.
   - Plan includes: AST subset per phase, wasm-encoder module layout, value representation (`Int`/`String`/`List Int`),
     fallback coexistence/retirement timing, concrete file-level task breakdown, DoD checks, and risk mitigations.
+- 2026-03-02 (session 30, commits adda49e..6af6e5e): Real Wasm codegen Phase A progress:
+  - Phase 0: native/fallback scaffold landed (`backend.rs`, `layout.rs`, `lower.rs`, `fallback.rs`), `compile_module` dispatch gate wired.
+  - Phase 1: wasm-encoder static print emitter landed (`print "..."` subset, no `wat` generation path for native subset).
+  - Phase 2: native expression subset expanded (`Int`/`Bool`, `+`, `*`, `==`, bindings, print).
+  - Phase 3: native direct first-order function call subset landed (`Expr::Call` to named decls in supported bodies).
+  - Phase 4: native `List Int` print + pipeline print landed.
+  - Phase 5: native `if`/`case` subset landed; `examples/control_flow.gb` now asserted to use native path in tests.
+  - Quality gates kept green at each step: `cargo fmt`, `cargo test`, `cargo clippy -- -D warnings`.
 
 ## 5. Current Example Files
 
@@ -181,7 +189,8 @@ This file is a restart-safe snapshot for resuming work after context reset.
 
 ## 6. Immediate Next Steps (Execution Order)
 
-§4.1, §4.1.1, BUG-002, §4.4 VSCode phase complete (sessions 27–28). 189 tests pass.
+Wasm Phase A incremental milestones (0–5 subset) completed in tests.
+Current suite status: all tests green (`cargo test`), clippy clean.
 
 Resume checks:
 ```
@@ -190,12 +199,15 @@ cargo test
 cargo clippy -- -D warnings
 ```
 
-Post-MVP candidates (see `doc/PLAN.md` §4):
-1. Real Wasm code generation (actual instruction emission, remove compile-time interpreter).
-   - Detailed phase plan: `doc/PLAN_WASM.md`.
-2. Effect runtime redesign (one-shot deep handlers + selective CPS/evidence passing).
-3. Standard-library foundation for self-hosted Goby libraries (§4.2).
-4. Early developer tooling foundation (LSP, syntax highlighting, linter, formatter) (§4.3).
+Execution focus (see `doc/PLAN_WASM.md`):
+1. Continue Real Wasm code generation at Phase 6:
+   - broaden native coverage of `examples/function.gb` first-order subset,
+   - keep explicit fallback for lambda/HOF/effects.
+2. Then Phase 7 cleanup:
+   - path coverage matrix by example,
+   - trim legacy fallback heuristics and shrink compatibility boundary.
+3. Parallel/next major theme:
+   - effect runtime redesign (one-shot deep handlers + selective CPS/evidence passing).
 
 ## 7. Resume Commands
 
