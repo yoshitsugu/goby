@@ -594,6 +594,19 @@ This file is a restart-safe snapshot for resuming work after context reset.
     - `cargo check`
     - `cargo test` (262 tests passed)
     - `cargo clippy -- -D warnings`
+- 2026-03-02 (session 61): Step1-3 self-review follow-up fixes (runtime consistency + tests)
+  - `goby-wasm` resume/runtime fixes:
+    - removed `resume`-time mutation of `active_handlers` to prevent handler-context leakage.
+    - refactored handler dispatch through shared `dispatch_handler_method_core` to eliminate duplicated token lifecycle logic.
+    - resume token now carries resolved `handler_decl_idx` and validates token-handler consistency on `resume`.
+    - removed unused continuation frame/handler stack plumbing from fallback runtime path.
+  - Added regression tests:
+    - qualified resume call with overlapping handler method names dispatches to target handler.
+    - repeated qualified calls after `resume` keep handler context stable (`2\n2` case).
+  - Quality gates green:
+    - `cargo fmt`
+    - `cargo check`
+    - `cargo test` (264 tests passed)
 
 ## 5. Current Example Files
 
