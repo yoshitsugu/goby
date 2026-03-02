@@ -165,7 +165,7 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - `tooling/syntax/README.md`: token category table + "Inspect Editor Tokens and Scopes" instructions.
   - Vim and Emacs support deferred to follow-up phase.
 - 2026-03-02 (session 29): Real Wasm codegen planning document added:
-  - `doc/PLAN_WASM.md` created with phased migration from compile-time interpreter to instruction-level codegen.
+  - Wasm migration plan document created with phased migration from compile-time interpreter to instruction-level codegen.
   - Plan includes: AST subset per phase, wasm-encoder module layout, value representation (`Int`/`String`/`List Int`),
     fallback coexistence/retirement timing, concrete file-level task breakdown, DoD checks, and risk mitigations.
 - 2026-03-02 (session 30, commits adda49e..6af6e5e): Real Wasm codegen Phase A progress:
@@ -177,7 +177,7 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - Phase 5: native `if`/`case` subset landed; `examples/control_flow.gb` now asserted to use native path in tests.
   - Quality gates kept green at each step: `cargo fmt`, `cargo test`, `cargo clippy -- -D warnings`.
 - 2026-03-02 (session 31, commits 89f53ee, d9a4efd, d3de0e3):
-  - `doc/PLAN_WASM.md` / `doc/STATE.md` refreshed to reflect completed native subset milestones.
+  - Wasm migration plan doc and `doc/STATE.md` refreshed to reflect completed native subset milestones.
   - Native capability checker now exposes reason codes via
     `fallback::native_unsupported_reason(&Module) -> Option<&'static str>`.
   - Added tests asserting native-path selection for `examples/control_flow.gb` and reason-code behavior:
@@ -293,7 +293,7 @@ This file is a restart-safe snapshot for resuming work after context reset.
     - `cargo check`,
     - `cargo test`,
     - `cargo clippy -- -D warnings`.
-  - Phase 6/6.1 marked complete in `doc/PLAN_WASM.md`; focus moves to Phase 7 sign-off.
+  - Phase 6/6.1 marked complete in the Wasm migration plan doc; focus moved to Phase 7 sign-off.
 - 2026-03-02 (session 43): Phase 7 sign-off completed
   - Migrated `compile_print_module` from `wat` to `wasm-encoder`
     (`backend::WasmProgramBuilder::emit_static_print_module`).
@@ -308,7 +308,7 @@ This file is a restart-safe snapshot for resuming work after context reset.
     intentional fallback boundaries; added `///` docs to public `CodegenError`
     and `compile_module`.
   - 215 tests pass; `cargo doc` warning-free; `cargo clippy -- -D warnings` clean.
-  - Phase 7 / Phase A marked complete in `doc/PLAN_WASM.md`.
+  - Phase 7 / Phase A marked complete in the Wasm migration plan doc.
 - 2026-03-02 (session 44): Phase 8 sign-off completed (commits 832805d, 581775c)
   - `backend.rs`: renamed export from `"main"` to `"_start"` (WASI Preview 1 standard).
   - Added `find_wasm_section` helper + `exports_start_entrypoint` test in `lib.rs`:
@@ -317,18 +317,18 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - `cli_integration.rs`: updated fake-wasmtime guard from `--invoke main` positional check
     to `$1 = "run" && -n $2`, matching the new `wasmtime run <path>` invocation shape.
   - 215 tests pass; `cargo clippy -- -D warnings` clean.
-  - Phase 8 marked complete in `doc/PLAN_WASM.md`.
-- 2026-03-02 (session 45): Wasm test layout cleanup for PLAN_WASM §6
+  - Phase 8 marked complete in the Wasm migration plan doc.
+- 2026-03-02 (session 45): Wasm test layout cleanup for migration-plan §6
   - Added integration test file:
     `crates/goby-wasm/tests/wasm_exports_and_smoke.rs`.
   - Moved smoke/export checks from `src/lib.rs` tests to integration coverage:
     - `_start` export-section assertion,
     - unsupported-main codegen error check,
     - basic wasm-header smoke checks (`print` literal, `function.gb` compile).
-  - Updated `doc/PLAN_WASM.md` §6 test work-item to done.
+  - Updated migration-plan §6 test work-item to done.
   - Validation: `cargo test -p goby-wasm`, `cargo check`, `cargo test`,
     `cargo clippy -- -D warnings` all green.
-- 2026-03-02 (session 46): `doc/PLAN_WASM.md` plan closure
+- 2026-03-02 (session 46): Wasm migration plan closure
   - Marked PLAN_WASM as complete for its defined scope (Phase 0-8).
   - Updated baseline behavior note: unsupported non-printable fallback now returns
     `Err(CodegenError)` (no `minimal_main_module` path).
@@ -378,5 +378,6 @@ cargo run -p goby-cli -- run examples/function.gb
 - Effect-safety / unhandled-effect diagnostics (out of scope for MVP).
 - Record update syntax and pattern matching on record fields.
 - `else if` chaining in `if` expressions (not supported in MVP; documented).
-- Real Wasm code generation (current model embeds static string; no instruction-level emit yet).
+- Real Wasm next milestone: extend native coverage beyond current subset (lambda/HOF + effect runtime),
+  then retire remaining fallback execution paths.
 - REPL / interactive mode.

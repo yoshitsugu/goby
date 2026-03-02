@@ -1,7 +1,12 @@
 # Goby MVP Implementation Plan
 
-This MVP focuses on running `examples/hello.gb` and `examples/basic_types.gb`
-without implementing a full effect system.
+Historical planning document for the early MVP phase.
+
+Status:
+
+- Kept for implementation history/context.
+- Not the active design source of truth.
+- For current decisions, use `doc/PLAN.md` and `doc/STATE.md`.
 
 ## 1. MVP Goal
 

@@ -160,10 +160,11 @@ Based on `examples/*.gb`:
 
 ### 2.5 Runtime / Compiler Scope (MVP)
 
-- Current model: compile-time interpreter (Rust) embeds static output in Wasm binary.
-- Real Wasm code generation (actual instruction emission) is a post-MVP target.
-- `goby-cli run examples/basic_types.gb` currently fails with a codegen error because the
-  compile-time interpreter does not handle string interpolation or tuple index access.
+- Current model: native Wasm code generation for the supported subset, with deterministic
+  fallback behavior for unsupported forms.
+- Real Wasm migration plan (Phase 0-8) is completed; implementation record is archived.
+- `goby-cli run examples/basic_types.gb` currently fails with a codegen error because current
+  codegen/runtime paths do not handle string interpolation or tuple index access.
   Both features are blocked until their parser/AST support (§2.1) is in place.
 - Error location strategy (line/column reporting) — deferred.
 
@@ -200,15 +201,6 @@ All MVP example targets are complete. The next work is post-MVP:
   2. Effect runtime redesign (one-shot deep handlers + selective CPS/evidence passing).
   3. Standard-library foundation for self-hosted Goby libraries.
   4. Early developer tooling foundation (LSP, syntax highlighting, linter, formatter).
-
-### 4.2 Refactoring Candidates (Wasm Track)
-
-- Extract legacy fallback analyzer from `crates/goby-wasm/src/lib.rs` (`UnsupportedFormAnalyzer`
-  and related helpers) into a dedicated module so `compile_module` has a narrower orchestration role.
-- Replace ad-hoc fallback reason string literals in `crates/goby-wasm/src/fallback.rs` with
-  shared constants (or enum-to-string mapping) to reduce typo drift and make tests more robust.
-- Further split `crates/goby-wasm/src/lower.rs` evaluator/capability logic into smaller focused
-  helpers to improve readability and enable more targeted unit tests.
 
 ### 4.1 Short-Term Patch: bare/qualified/pipeline effect call dispatch in `main` body — DONE (2026-03-02, commit 8136d61)
 
@@ -308,7 +300,13 @@ diagnostics in the codebase.
 - Return type checking of effect ops.
 - Checking handler method body types against op signatures.
 
-### 4.2 Standard-Library Foundation (self-hosted direction)
+### 4.2 Refactoring Candidates (Wasm Track) — DONE (2026-03-02 sessions 33-40)
+
+- Legacy fallback analyzer extraction from `crates/goby-wasm/src/lib.rs` completed.
+- Fallback reason literals migrated to shared constants/typed enum mapping.
+- Capability/support helper split completed (`call.rs`, `support.rs`, and focused tests).
+
+### 4.3 Standard-Library Foundation (self-hosted direction)
 
 Goal: prepare infrastructure so core standard libraries can be authored primarily in Goby,
 while preserving practical monorepo workflow during early phases.
@@ -337,7 +335,7 @@ Preparation steps:
    - Ensure `cargo check`, `cargo test`, and example `goby-cli check/run` flows continue to work
      with stdlib sources in-tree.
 
-### 4.3 Early Developer Tooling Plan
+### 4.4 Early Developer Tooling Plan
 
 Goal: align implementation priorities with the language vision that strong tooling is a core
 project value, and make Goby practical in editors early.
@@ -372,7 +370,7 @@ Implementation steps:
    - Publish a minimal VS Code extension wrapper (syntax + LSP wiring).
    - Keep tooling artifacts versioned in the same monorepo at this stage.
 
-### 4.4 Editor Syntax Highlight Rollout Plan (VSCode / Emacs / Vim)
+### 4.5 Editor Syntax Highlight Rollout Plan (VSCode / Emacs / Vim)
 
 Goal: ship practical syntax highlighting early across the three primary editor families
 used by contributors: VSCode, Emacs, and Vim.
