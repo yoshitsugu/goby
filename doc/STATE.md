@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-02 (session 27)
+Last updated: 2026-03-02 (session 28)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -143,6 +143,14 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - Fixed `execute_decl_as_side_effect` depth: 1 → 0 (top-level consistency).
   - depth=0 for all new `dispatch_handler_method` calls.
   - 5 new regression tests; 181 total tests pass; `cargo clippy -- -D warnings` clean.
+- 2026-03-02 (session 28, commit f07a85b): effect op arg type checking at typecheck time (§4.1.1):
+  - `check_unhandled_effects_in_expr` `Expr::Call` arm: checks arg type against `Ty::Fun { params }` from `env.lookup`.
+  - `Expr::Pipeline` arm: same check (`callee: String`, `value: Box<Expr>` as arg).
+  - Both arms use let-chains; skip when type is `Ty::Unknown` (no false positives for unknown vars).
+  - `recurse!(value)` in Pipeline arm placed after type check (avoids double traversal).
+  - TODO §4.1.1 comments on MethodCall and Qualified-callee deferred paths.
+  - 5 new tests: 2 reject (Call + Pipeline wrong type), 2 accept (Call + Pipeline correct type), 1 neutral.
+  - 181 → 186 total tests pass; `cargo clippy -- -D warnings` clean.
 
 ## 5. Current Example Files
 
@@ -157,7 +165,7 @@ This file is a restart-safe snapshot for resuming work after context reset.
 
 ## 6. Immediate Next Steps (Execution Order)
 
-§4.1 bare effect call dispatch patch complete (session 27). 181 tests pass.
+§4.1 and §4.1.1 complete (sessions 27–28). 186 tests pass.
 
 Resume checks:
 ```
