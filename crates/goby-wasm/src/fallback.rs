@@ -1,6 +1,6 @@
 use goby_core::{BinOpKind, CasePattern, Expr, Module, Stmt, types::parse_function_type};
 
-use crate::lower::declaration_body_supported_for_native;
+use crate::{call::flatten_named_call, lower::declaration_body_supported_for_native};
 
 const BUILTIN_PRINT: &str = "print";
 
@@ -161,23 +161,5 @@ fn unsupported_value_expr_reason(expr: &Expr, module: &Module) -> Option<&'stati
             }
         }
         _ => Some("unsupported_value_expr"),
-    }
-}
-
-fn flatten_named_call(expr: &Expr) -> Option<(&str, Vec<&Expr>)> {
-    let mut args = Vec::new();
-    let mut cur = expr;
-    loop {
-        match cur {
-            Expr::Call { callee, arg } => {
-                args.push(arg.as_ref());
-                cur = callee.as_ref();
-            }
-            Expr::Var(name) => {
-                args.reverse();
-                return Some((name.as_str(), args));
-            }
-            _ => return None,
-        }
     }
 }
