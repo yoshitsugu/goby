@@ -182,9 +182,11 @@ Based on `examples/*.gb`:
   objects and one-shot consume tracking.
 - `Expr::Resume` evaluates in handler context, marks the current token consumed,
   and returns a resume value to the effect call site.
-- Second resume on the same token fails deterministically in runtime.
-- Full delimited-continuation reinstatement and lexical nearest-handler
-  semantics replacement are still pending follow-up in Step 3/4.
+- Runtime surfaces explicit resume misuse errors:
+  - `resume used without an active continuation`
+  - `resume continuation already consumed`
+- Runtime reinstalls captured handler snapshot from continuation frames on `resume`.
+- Lexical nearest-handler semantics replacement remains pending in Step 4.
 
 ### 2.4 Standard Library Surface (MVP)
 

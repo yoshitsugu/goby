@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-02 (session 59)
+Last updated: 2026-03-02 (session 60)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -573,6 +573,26 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - Quality gates green:
     - `cargo check`
     - `cargo test` (261 tests passed)
+    - `cargo clippy -- -D warnings`
+- 2026-03-02 (session 60): `PLAN_RESUME` Step 3 complete (runtime error surfacing + continuation snapshot restore)
+  - Runtime resume behavior refinements in `goby-wasm`:
+    - `resolve_main_runtime_output` now surfaces runtime errors in output text
+      (`runtime error: ...`) instead of silent `None` when resume misuse occurs.
+    - `Expr::Resume` now reports explicit errors for:
+      - no active continuation,
+      - already-consumed continuation.
+    - token-stack mismatch guard added for defensive runtime consistency checks.
+  - Continuation frame usage tightened:
+    - handler snapshot from captured continuation frames is reinstalled on `resume`.
+    - resume token origin resolution now prefers currently-active handlers
+      (avoids ambiguous global handler-method name scan).
+  - Added/updated runtime tests:
+    - double resume now asserts explicit runtime error message,
+    - resume outside handler runtime error surfacing,
+    - resume return-to-call-site path remains covered.
+  - Quality gates green:
+    - `cargo check`
+    - `cargo test` (262 tests passed)
     - `cargo clippy -- -D warnings`
 
 ## 5. Current Example Files
