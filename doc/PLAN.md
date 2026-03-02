@@ -181,53 +181,19 @@ All MVP example targets are complete. The next work is post-MVP:
 - Candidate next focus areas:
   1. Real Wasm code generation (actual instruction emission, remove compile-time interpreter).
   2. Effect runtime redesign (one-shot deep handlers + selective CPS/evidence passing).
-  3. Better error diagnostics (line/column, effect-safety errors).
-  4. Standard-library foundation for self-hosted Goby libraries.
-  5. Early developer tooling foundation (LSP, syntax highlighting, linter, formatter).
+  3. Standard-library foundation for self-hosted Goby libraries.
+  4. Early developer tooling foundation (LSP, syntax highlighting, linter, formatter).
 
-### 4.1 Short-Term Patch Plan: bare effect call in `main` / top-level statement AST path
+### 4.1 Short-Term Patch: bare/qualified/pipeline effect call dispatch in `main` body — DONE (2026-03-02, commit 8136d61)
 
-Goal: make bare effect operation calls (for example, `catch "NoCoffeeError"`) dispatch
-through active `using` handlers when they appear as direct expression statements in `main`
-or other Unit-returning function bodies.
+`eval_ast_side_effect` now dispatches bare calls, qualified calls, and pipeline calls
+through active `using` handlers, matching the behavior of `execute_unit_ast_stmt`.
 
-Current gap (2026-03-01): in `crates/goby-wasm`, the `eval_ast_side_effect` AST path does
-not route bare `Expr::Call { callee: Expr::Var(..) }` through
-`find_handler_method_by_name` / `dispatch_handler_method`, while
-`execute_unit_ast_stmt` already does. This causes `using ...` + bare effect calls in
-top-level AST side-effect execution to be dropped.
-
-Implementation steps:
-
-1. Unify bare-call dispatch logic for AST side-effect execution.
-   - Add a shared helper in `RuntimeOutputResolver` for AST bare calls:
-     - resolve qualified effect call (`Effect.method arg`) first,
-     - resolve bare effect op name (`method arg`) against active handlers,
-     - then fall back to unit-function and declaration side-effect paths.
-   - Reuse this helper from both:
-     - `eval_ast_side_effect` (main/top-level AST path),
-     - `execute_unit_ast_stmt` (Unit function / handler body path).
-2. Keep deterministic handler resolution unchanged for MVP.
-   - Preserve current `active_handlers: BTreeMap<String, usize>` behavior.
-   - Preserve current precedence: qualified lookup first, then bare-name scan.
-3. Add targeted regression tests in `crates/goby-wasm/src/lib.rs`:
-   - `main` with `using Handler` and direct bare op call prints expected output.
-   - Nested `using` contexts still restore previous handler map after block exit.
-   - Qualified call (`Effect.method`) still dispatches to the effect-specific handler.
-4. Add/adjust example coverage:
-   - Extend `examples/effect.gb` with one minimal direct bare call inside `using`, or
-     add a dedicated tiny fixture under `examples/` if we want to keep existing output
-     lock unchanged.
-5. Validation gate before merge:
-   - `cargo check`
-   - `cargo test`
-   - `cargo run -p goby-cli -- run examples/effect.gb` (and any new fixture).
-
-Done criteria:
-
-- Direct bare effect call inside `using` is observable in runtime output.
-- Existing `effect.gb` behavior remains stable unless explicitly updated.
-- No regression in current 176-test baseline (or newer baseline at implementation time).
+- Added `Expr::Qualified` arm: `find_handler_method_for_effect` → dispatch → string fallthrough.
+- Added bare-name handler lookup in `Expr::Var` arm (before `execute_unit_call_ast`).
+- Added bare-name handler lookup in `Pipeline` arm (`"msg" |> log` dispatches).
+- Fixed `execute_decl_as_side_effect` depth: 1 → 0 (top-level consistency).
+- 5 new regression tests; 181 total tests pass.
 
 ### 4.2 Standard-Library Foundation (self-hosted direction)
 
