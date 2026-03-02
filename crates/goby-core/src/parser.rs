@@ -175,6 +175,14 @@ pub fn parse_module(source: &str) -> Result<Module, ParseError> {
                             });
                         }
                         let mut body = rhs.trim().to_string();
+                        if let Some(offset) = first_malformed_resume_expr_line_offset(&body) {
+                            return Err(ParseError {
+                                line: i + 1 + offset,
+                                col: 1,
+                                message: "malformed `resume` expression: expected `resume <expr>`"
+                                    .to_string(),
+                            });
+                        }
                         // Collect any deeper-indented sub-body lines.
                         i += 1;
                         while i < lines.len() {
@@ -184,6 +192,15 @@ pub fn parse_module(source: &str) -> Result<Module, ParseError> {
                             if sub_t.is_empty() {
                                 i += 1;
                                 continue;
+                            }
+                            if is_malformed_resume_expr_line(sub_t) {
+                                return Err(ParseError {
+                                    line: i + 1,
+                                    col: 1,
+                                    message:
+                                        "malformed `resume` expression: expected `resume <expr>`"
+                                            .to_string(),
+                                });
                             }
                             // Sub-body lines must be indented more than the method line.
                             // We check for double indentation (at least 4 spaces/2 tabs).
@@ -275,6 +292,13 @@ pub fn parse_module(source: &str) -> Result<Module, ParseError> {
         }
 
         let j = collect_indented_body(lines.as_slice(), i + 1, &mut body);
+        if let Some(offset) = first_malformed_resume_expr_line_offset(&body) {
+            return Err(ParseError {
+                line: i + 1 + offset,
+                col: 1,
+                message: "malformed `resume` expression: expected `resume <expr>`".to_string(),
+            });
+        }
 
         let parsed_body = parse_body_stmts(&body);
 
@@ -633,6 +657,33 @@ fn is_reserved_keyword(s: &str) -> bool {
     matches!(s, "resume")
 }
 
+fn parse_resume_expr(src: &str) -> Option<Expr> {
+    let rest = src.strip_prefix("resume")?;
+    if rest.is_empty() {
+        return None;
+    }
+    if !rest.chars().next().is_some_and(char::is_whitespace) {
+        return None;
+    }
+    let value_src = rest.trim();
+    if value_src.is_empty() {
+        return None;
+    }
+    let value = parse_expr(value_src)?;
+    Some(Expr::Resume {
+        value: Box::new(value),
+    })
+}
+
+fn is_malformed_resume_expr_line(src: &str) -> bool {
+    let trimmed = strip_line_comment(src).trim();
+    trimmed == "resume"
+}
+
+fn first_malformed_resume_expr_line_offset(body: &str) -> Option<usize> {
+    body.lines().position(is_malformed_resume_expr_line)
+}
+
 /// Parse a single expression from a source string.
 pub fn parse_expr(src: &str) -> Option<Expr> {
     let src = src.trim();
@@ -655,7 +706,12 @@ pub fn parse_expr(src: &str) -> Option<Expr> {
         return Some(expr);
     }
 
-    // 3. Binary equality: expr == expr
+    // 3. Resume: resume expr
+    if let Some(expr) = parse_resume_expr(src) {
+        return Some(expr);
+    }
+
+    // 4. Binary equality: expr == expr
     if let Some((left, right)) = split_top_level_eq(src) {
         return Some(Expr::BinOp {
             op: BinOpKind::Eq,
@@ -664,7 +720,7 @@ pub fn parse_expr(src: &str) -> Option<Expr> {
         });
     }
 
-    // 4. Binary addition: expr + expr
+    // 5. Binary addition: expr + expr
     if let Some((left, right)) = split_top_level_binop(src, '+') {
         return Some(Expr::BinOp {
             op: BinOpKind::Add,
@@ -673,7 +729,7 @@ pub fn parse_expr(src: &str) -> Option<Expr> {
         });
     }
 
-    // 5. Binary multiplication: expr * expr
+    // 6. Binary multiplication: expr * expr
     if let Some((left, right)) = split_top_level_binop(src, '*') {
         return Some(Expr::BinOp {
             op: BinOpKind::Mul,
@@ -682,37 +738,37 @@ pub fn parse_expr(src: &str) -> Option<Expr> {
         });
     }
 
-    // 6. List literal: [...]
+    // 7. List literal: [...]
     if src.starts_with('[') && src.ends_with(']') {
         return parse_list_expr(src);
     }
 
-    // 7. Tuple or grouped expression: (...)
+    // 8. Tuple or grouped expression: (...)
     if src.starts_with('(') && src.ends_with(')') {
         return parse_tuple_or_grouped_expr(src);
     }
 
-    // 8. Record constructor call: TypeName(field: value, ...)
+    // 9. Record constructor call: TypeName(field: value, ...)
     if let Some(expr) = parse_record_constructor_call(src) {
         return Some(expr);
     }
 
-    // 9. Method call: receiver.method(args)
+    // 10. Method call: receiver.method(args)
     if let Some(expr) = parse_method_call(src) {
         return Some(expr);
     }
 
-    // 10. Qualified/member access: receiver.member
+    // 11. Qualified/member access: receiver.member
     if let Some(expr) = parse_qualified_access(src) {
         return Some(expr);
     }
 
-    // 11. Function call: f x / f x y ... / f(x)
+    // 12. Function call: f x / f x y ... / f(x)
     if let Some(expr) = parse_call_expr(src) {
         return Some(expr);
     }
 
-    // 12. String literal: "..."
+    // 13. String literal: "..."
     if src.starts_with('"') && src.ends_with('"') && src.len() >= 2 {
         let inner = &src[1..src.len() - 1];
         if !inner.contains('"') {
@@ -720,7 +776,7 @@ pub fn parse_expr(src: &str) -> Option<Expr> {
         }
     }
 
-    // 13. Bool literal
+    // 14. Bool literal
     if src == "True" {
         return Some(Expr::BoolLit(true));
     }
@@ -728,13 +784,13 @@ pub fn parse_expr(src: &str) -> Option<Expr> {
         return Some(Expr::BoolLit(false));
     }
 
-    // 14. Integer literal
+    // 15. Integer literal
     if let Ok(n) = src.parse::<i64>() {
         return Some(Expr::IntLit(n));
     }
 
-    // 15. Identifier
-    if is_identifier(src) {
+    // 16. Identifier
+    if is_identifier(src) && !is_reserved_keyword(src) {
         return Some(Expr::Var(src.to_string()));
     }
 
@@ -1702,12 +1758,35 @@ main = 1
             .expect("method body should parse into statements");
         assert_eq!(stmts.len(), 1);
         match &stmts[0] {
-            Stmt::Expr(Expr::Call { callee, arg }) => {
-                assert_eq!(**callee, Expr::Var("resume".to_string()));
-                assert_eq!(**arg, Expr::Var("Unit".to_string()));
+            Stmt::Expr(Expr::Resume { value }) => {
+                assert_eq!(**value, Expr::Var("Unit".to_string()));
             }
             other => panic!("unexpected statement shape: {:?}", other),
         }
+    }
+
+    #[test]
+    fn parse_error_for_malformed_resume_in_declaration_body() {
+        let source = "main = resume\n";
+        let err = parse_module(source).expect_err("malformed resume should be rejected");
+        assert_eq!(err.line, 1);
+        assert_eq!(err.col, 1);
+        assert!(err.message.contains("malformed `resume` expression"));
+    }
+
+    #[test]
+    fn parse_error_for_malformed_resume_in_handler_method_body() {
+        let source = r#"
+effect Iter
+  yield: String -> Unit
+
+handler Collect for Iter
+  yield item = resume
+
+main = 1
+"#;
+        let err = parse_module(source).expect_err("malformed handler resume should be rejected");
+        assert!(err.message.contains("malformed `resume` expression"));
     }
 
     #[test]
@@ -2224,6 +2303,21 @@ main = 1
     fn rejects_string_concat_with_three_arguments() {
         // Only exactly two arguments are allowed for string.concat in MVP.
         assert_eq!(parse_expr("string.concat(\"a\", \"b\", \"c\")"), None);
+    }
+
+    #[test]
+    fn parses_resume_expression() {
+        assert_eq!(
+            parse_expr("resume Unit"),
+            Some(Expr::Resume {
+                value: Box::new(Expr::Var("Unit".to_string()))
+            })
+        );
+    }
+
+    #[test]
+    fn rejects_malformed_resume_expression() {
+        assert_eq!(parse_expr("resume"), None);
     }
 
     // -----------------------------------------------------------------------
