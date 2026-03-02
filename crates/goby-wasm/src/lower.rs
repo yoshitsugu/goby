@@ -7,9 +7,7 @@ use crate::{
     backend::WasmProgramBuilder,
     call::{extract_direct_print_call_arg, flatten_named_call, resolve_direct_call_target},
     layout::MemoryLayout,
-    support::{
-        is_supported_binop_kind, is_supported_case_pattern, is_supported_list_item_expr,
-    },
+    support::{is_supported_binop_kind, is_supported_case_pattern, is_supported_list_item_expr},
 };
 
 pub(crate) fn try_emit_native_module(module: &Module) -> Result<Option<Vec<u8>>, CodegenError> {
