@@ -346,6 +346,49 @@ Implementation steps:
    - Publish a minimal VS Code extension wrapper (syntax + LSP wiring).
    - Keep tooling artifacts versioned in the same monorepo at this stage.
 
+### 4.4 Editor Syntax Highlight Rollout Plan (VSCode / Emacs / Vim)
+
+Goal: ship practical syntax highlighting early across the three primary editor families
+used by contributors: VSCode, Emacs, and Vim.
+
+Deliverables (same monorepo):
+
+- `tooling/syntax/textmate/goby.tmLanguage.json` (canonical highlight grammar source).
+- `tooling/syntax/vim/goby.vim` + `tooling/syntax/vim/ftdetect/goby.vim`.
+- `tooling/syntax/emacs/goby-mode.el`.
+- `tooling/vscode-goby/` extension package (TextMate grammar wiring).
+- Snapshot fixtures under `tooling/syntax/testdata/`.
+
+Implementation phases:
+
+1. Token-category baseline (single source of truth).
+   - Lock token categories used across editors:
+     - keywords (`type`, `effect`, `handler`, `for`, `using`, `can`, `if`, `else`, `case`, `import`, `as`)
+     - declarations/identifiers, type names, constructors, literals, comments, operators.
+   - Keep category naming stable so grammars stay aligned.
+2. Canonical TextMate grammar first.
+   - Implement and test `goby.tmLanguage.json` against representative `.gb` snippets.
+   - Cover current syntax in `examples/*.gb` and known edge forms (pipe, lambda, qualified names).
+3. VSCode package (MVP).
+   - Register `.gb` language id, file associations, and TextMate grammar.
+   - Provide minimal `README` + install instructions for local testing.
+4. Vim syntax pack.
+   - Implement `syntax/goby.vim` groups mapped to the same token categories.
+   - Add `ftdetect` rule for `*.gb`.
+   - Validate against `vim -Nu NONE` snapshot scripts.
+5. Emacs major mode (syntax-focused MVP).
+   - Implement `goby-mode.el` with `font-lock` rules and `auto-mode-alist` for `\\.gb\\'`.
+   - Keep indentation/electric features out of MVP; focus on stable highlighting.
+6. Cross-editor regression tests.
+   - Maintain shared fixture snippets and expected token scopes/groups.
+   - Run syntax regression checks in CI on any grammar/mode change.
+
+Definition of done:
+
+- `.gb` files highlight correctly in VSCode, Emacs, and Vim for all `examples/*.gb`.
+- Same keyword/operator/comment coverage is confirmed across all three editors.
+- Installation steps are documented in-repo for each editor.
+
 ## 5. Spec Detail Notes
 
 ### Still Open (Post-MVP)
