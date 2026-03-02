@@ -241,14 +241,18 @@ Step 4: Nearest-handler stack semantics — DONE (2026-03-02)
 - Runtime handler lookup now walks active handlers in lexical stack order (nearest first).
 - Ensured lexical nesting controls operation capture for both bare and qualified calls.
 
-Step 5: Validation and regression stabilization
+Step 5: Validation and regression stabilization — DONE (2026-03-02)
 
 - Add focused tests:
   - single resume success,
   - no-resume abortive behavior,
   - double resume runtime error,
   - nested `using` nearest-handler selection.
-- Run `cargo check`, `cargo test`, `cargo clippy -- -D warnings`.
+- Added focused runtime tests in `goby-wasm` for all items above.
+- Quality gates completed:
+  - `cargo check`
+  - `cargo test`
+  - `cargo clippy -- -D warnings`
 
 Step 6: Stdlib enablement tasks (consumer track)
 
