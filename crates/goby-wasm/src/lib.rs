@@ -2602,4 +2602,44 @@ main =
             "phase-2 int/bool subset should use native wasm-encoder emitter"
         );
     }
+
+    #[test]
+    fn native_codegen_capability_checker_accepts_direct_function_call_subset() {
+        let source = r#"
+double : Int -> Int
+double n = n * 2
+
+main : Unit -> Unit
+main =
+  print (double 21)
+"#;
+        let module = parse_module(source).expect("source should parse");
+        assert!(
+            fallback::supports_native_codegen(&module),
+            "direct single-arg function call subset should be accepted"
+        );
+    }
+
+    #[test]
+    fn compile_module_uses_native_emitter_for_direct_function_call_subset() {
+        let source = r#"
+double : Int -> Int
+double n = n * 2
+
+main : Unit -> Unit
+main =
+  print (double 21)
+"#;
+        let module = parse_module(source).expect("source should parse");
+        let wasm = compile_module(&module).expect("codegen should succeed");
+        let expected_text =
+            resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
+                .expect("runtime output should resolve");
+        assert_eq!(expected_text, "42");
+        let expected = compile_print_module(&expected_text).expect("fallback wasm should compile");
+        assert_ne!(
+            wasm, expected,
+            "direct function call subset should use native wasm-encoder emitter"
+        );
+    }
 }
