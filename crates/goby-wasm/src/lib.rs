@@ -356,6 +356,7 @@ struct RuntimeOutputResolver<'m> {
     active_handlers: BTreeMap<String, usize>,
     handler_stack: Vec<HandlerFrame>,
     resume_tokens: Vec<ResumeToken>,
+    runtime_error: Option<String>,
 }
 
 #[derive(Clone)]
@@ -396,18 +397,37 @@ impl<'m> RuntimeOutputResolver<'m> {
             active_handlers: BTreeMap::new(),
             handler_stack: Vec::new(),
             resume_tokens: Vec::new(),
+            runtime_error: None,
         };
 
         if let Some(stmts) = parsed_stmts {
             // AST-based path (preferred when parsed_body is available)
             for stmt in stmts {
-                resolver.ingest_ast_statement(stmt, evaluators)?;
+                if resolver.ingest_ast_statement(stmt, evaluators).is_none() {
+                    if resolver.runtime_error.is_some() {
+                        break;
+                    }
+                    return None;
+                }
             }
         } else {
             // String-based fallback path
             for statement in statements(body) {
-                resolver.ingest_statement(statement, evaluators)?;
+                if resolver.ingest_statement(statement, evaluators).is_none() {
+                    if resolver.runtime_error.is_some() {
+                        break;
+                    }
+                    return None;
+                }
             }
+        }
+
+        if let Some(err) = &resolver.runtime_error {
+            let err_line = format!("runtime error: {}", err);
+            if resolver.outputs.is_empty() {
+                return Some(err_line);
+            }
+            return Some(format!("{}\n{}", resolver.outputs.join("\n"), err_line));
         }
 
         if resolver.outputs.is_empty() {
@@ -900,18 +920,26 @@ impl<'m> RuntimeOutputResolver<'m> {
             Expr::Resume { value } => {
                 let resumed =
                     self.eval_expr_ast(value, locals, callables, evaluators, depth + 1)?;
-                let token = self.current_resume_token_mut()?;
-                if token.continuation.consumed {
+                let Some(token_ro) = self.resume_tokens.last() else {
+                    self.set_runtime_error_once("resume used without an active continuation");
+                    return None;
+                };
+                if token_ro.continuation.consumed {
+                    self.set_runtime_error_once("resume continuation already consumed");
                     return None;
                 }
-                // Step 3 bridge: keep captured continuation frames explicit even
-                // before full reinstatement is implemented.
-                let _ = token
-                    .continuation
-                    .frames
-                    .iter()
-                    .map(|f| (f.effect_name.as_str(), f.handler_decl_idx))
-                    .next();
+                // Reinstall captured handler stack snapshot before resuming.
+                let mut restored = BTreeMap::new();
+                for frame in &token_ro.continuation.frames {
+                    if frame.handler_decl_idx != usize::MAX {
+                        restored.insert(frame.effect_name.clone(), frame.handler_decl_idx);
+                    }
+                }
+                self.active_handlers = restored;
+                let Some(token) = self.current_resume_token_mut() else {
+                    self.set_runtime_error_once("resume used without an active continuation");
+                    return None;
+                };
                 token.continuation.consumed = true;
                 token.resumed_value = Some(resumed.clone());
                 Some(resumed)
@@ -1265,12 +1293,23 @@ impl<'m> RuntimeOutputResolver<'m> {
         None
     }
 
+    fn set_runtime_error_once(&mut self, message: impl Into<String>) {
+        if self.runtime_error.is_none() {
+            self.runtime_error = Some(message.into());
+        }
+    }
+
     fn push_resume_token_for_method(&mut self, method: &HandlerMethod) -> usize {
         let idx = self
-            .module
-            .handler_declarations
-            .iter()
-            .position(|h| h.methods.iter().any(|m| m.name == method.name))
+            .active_handlers
+            .values()
+            .find(|&&i| {
+                self.module.handler_declarations[i]
+                    .methods
+                    .iter()
+                    .any(|m| m.name == method.name)
+            })
+            .copied()
             .unwrap_or(usize::MAX);
         let effect_name = self
             .module
@@ -1294,6 +1333,7 @@ impl<'m> RuntimeOutputResolver<'m> {
 
     fn take_resume_token_result(&mut self, token_idx: usize) -> Option<Option<RuntimeValue>> {
         if token_idx + 1 != self.resume_tokens.len() {
+            self.set_runtime_error_once("internal resume token stack mismatch");
             return None;
         }
         let token = self.resume_tokens.pop()?;
@@ -2472,9 +2512,29 @@ main =
         let module = parse_module(source).expect("parse should work");
         let output =
             resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module));
-        assert!(
-            output.is_none(),
-            "second resume on one-shot token should fail deterministically"
+        assert_eq!(
+            output.as_deref(),
+            Some("runtime error: resume continuation already consumed"),
+            "second resume on one-shot token should surface a deterministic runtime error"
+        );
+    }
+
+    #[test]
+    fn resume_outside_handler_surfaces_runtime_error() {
+        use goby_core::parse_module;
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let source = r#"
+main : Unit -> Unit
+main =
+  print (resume 1)
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let output =
+            resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module));
+        assert_eq!(
+            output.as_deref(),
+            Some("runtime error: resume used without an active continuation"),
+            "resume outside handler should report runtime error in fallback runtime"
         );
     }
 

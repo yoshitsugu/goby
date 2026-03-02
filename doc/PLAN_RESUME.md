@@ -222,16 +222,18 @@ Step 2: Typecheck integration — DONE (2026-03-02)
   - `resume_in_unknown_operation_context`.
 - Added regression tests for success and failure cases.
 
-Step 3: Runtime continuation object (interpreter path) — IN PROGRESS (checkpoint landed 2026-03-02)
+Step 3: Runtime continuation object (interpreter path) — DONE (2026-03-02)
 
 - Added continuation carrier structures (`HandlerFrame`, `Continuation`, `ResumeToken`) in
   `goby-wasm` interpreter path.
 - Implemented one-shot consume guard for `resume`.
 - Routed value-position bare effect calls through handler dispatch before Int/List fast paths,
   enabling `resume` return values to flow back to call sites.
-- Remaining Step 3 work:
-  - full delimited continuation reinstatement behavior (beyond current bridge semantics),
-  - stronger runtime error surfacing for illegal resume usage (currently deterministic failure via `None`).
+- Added runtime error surfacing for illegal resume usage:
+  - `resume used without an active continuation`,
+  - `resume continuation already consumed`,
+  - internal token-stack mismatch guard.
+- Runtime now reinstalls captured handler snapshot from continuation frames on `resume`.
 
 Step 4: Nearest-handler stack semantics
 
