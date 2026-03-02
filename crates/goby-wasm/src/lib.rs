@@ -2691,4 +2691,34 @@ main =
             "list-int pipeline print subset should use native wasm-encoder emitter"
         );
     }
+
+    #[test]
+    fn compile_module_uses_native_emitter_for_if_print_subset() {
+        let source = r#"
+main : Unit -> Unit
+main =
+  a = 10
+  b = 20
+  print
+    if a + b == 30
+      "30"
+    else
+      "other"
+"#;
+        let module = parse_module(source).expect("source should parse");
+        assert!(
+            fallback::supports_native_codegen(&module),
+            "if-print subset should be accepted by native capability checker"
+        );
+        let wasm = compile_module(&module).expect("codegen should succeed");
+        let expected_text =
+            resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
+                .expect("runtime output should resolve");
+        assert_eq!(expected_text, "30");
+        let expected = compile_print_module(&expected_text).expect("fallback wasm should compile");
+        assert_ne!(
+            wasm, expected,
+            "if-print subset should use native wasm-encoder emitter"
+        );
+    }
 }

@@ -160,6 +160,21 @@ fn eval_expr(
             }
             Some(NativeValue::ListInt(out))
         }
+        Expr::If {
+            condition,
+            then_expr,
+            else_expr,
+        } => {
+            let cond = eval_expr(condition, bindings, env, depth + 1)?;
+            let NativeValue::Bool(flag) = cond else {
+                return None;
+            };
+            if flag {
+                eval_expr(then_expr, bindings, env, depth + 1)
+            } else {
+                eval_expr(else_expr, bindings, env, depth + 1)
+            }
+        }
         _ => None,
     }
 }
@@ -284,6 +299,15 @@ fn is_value_expr_supported(
             matches!(op, BinOpKind::Add | BinOpKind::Mul | BinOpKind::Eq)
                 && is_value_expr_supported(left, module, env, stack)
                 && is_value_expr_supported(right, module, env, stack)
+        }
+        Expr::If {
+            condition,
+            then_expr,
+            else_expr,
+        } => {
+            is_value_expr_supported(condition, module, env, stack)
+                && is_value_expr_supported(then_expr, module, env, stack)
+                && is_value_expr_supported(else_expr, module, env, stack)
         }
         Expr::Call { callee, arg } => {
             let Expr::Var(name) = callee.as_ref() else {

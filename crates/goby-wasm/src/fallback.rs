@@ -66,6 +66,15 @@ fn is_phase2_supported_value_expr(expr: &Expr, module: &Module) -> bool {
                 && is_phase2_supported_value_expr(left, module)
                 && is_phase2_supported_value_expr(right, module)
         }
+        Expr::If {
+            condition,
+            then_expr,
+            else_expr,
+        } => {
+            is_phase2_supported_value_expr(condition, module)
+                && is_phase2_supported_value_expr(then_expr, module)
+                && is_phase2_supported_value_expr(else_expr, module)
+        }
         Expr::Call { callee, arg } => {
             let Expr::Var(name) = callee.as_ref() else {
                 return false;
