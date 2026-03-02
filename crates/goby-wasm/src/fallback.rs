@@ -18,10 +18,12 @@
 //!
 //! The following constructs force the entire module onto the fallback (interpreter) path:
 //! - [`UnsupportedReason::UsingNotSupported`]: `Stmt::Using` / effect handlers.
-//! - [`UnsupportedReason::CallTargetBodyNotNativeSupported`]: lambda / HOF in any
-//!   declaration reachable from `main`.
+//! - [`UnsupportedReason::CallTargetBodyNotNativeSupported`]: declarations reachable from `main`
+//!   that contain forms outside the native subset (for example `using` blocks).
 //! - [`UnsupportedReason::UnsupportedValueExpr`]: expression forms not yet lowered
-//!   (e.g. `Expr::Lambda`, method calls, record operations).
+//!   (e.g. method calls, record operations).
+
+use std::collections::HashSet;
 
 use goby_core::{Expr, Module, Stmt, types::parse_function_type};
 
@@ -30,11 +32,11 @@ use crate::{
         DirectCallTargetError, PrintCallError, extract_direct_print_call_arg, flatten_named_call,
         resolve_direct_call_target,
     },
-    lower::declaration_body_supported_for_native,
     support::{is_supported_binop_kind, is_supported_case_pattern, is_supported_list_item_expr},
 };
 
 const BUILTIN_PRINT: &str = "print";
+const BUILTIN_MAP: &str = "map";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum UnsupportedReason {
@@ -109,7 +111,8 @@ pub(crate) fn native_unsupported_reason_kind(module: &Module) -> Option<Unsuppor
     }
 
     for stmt in stmts {
-        if let Some(reason) = unsupported_stmt_reason(stmt, module) {
+        let mut stack = HashSet::new();
+        if let Some(reason) = unsupported_stmt_reason(stmt, module, &mut stack) {
             return Some(reason);
         }
     }
@@ -126,23 +129,35 @@ fn is_unit_to_unit(type_annotation: Option<&str>) -> bool {
     fn_ty.arguments.as_slice() == ["Unit"] && fn_ty.result == "Unit"
 }
 
-fn unsupported_stmt_reason(stmt: &Stmt, module: &Module) -> Option<UnsupportedReason> {
+fn unsupported_stmt_reason(
+    stmt: &Stmt,
+    module: &Module,
+    stack: &mut HashSet<String>,
+) -> Option<UnsupportedReason> {
     match stmt {
-        Stmt::Binding { value, .. } => unsupported_value_expr_reason(value, module),
-        Stmt::Expr(expr) => unsupported_stmt_expr_reason(expr, module),
+        Stmt::Binding { value, .. } => unsupported_value_expr_reason(value, module, stack),
+        Stmt::Expr(expr) => unsupported_stmt_expr_reason(expr, module, stack),
         Stmt::Using { .. } => Some(UnsupportedReason::UsingNotSupported),
     }
 }
 
-fn is_phase2_supported_value_expr(expr: &Expr, module: &Module) -> bool {
-    unsupported_value_expr_reason(expr, module).is_none()
+fn is_phase2_supported_value_expr(
+    expr: &Expr,
+    module: &Module,
+    stack: &mut HashSet<String>,
+) -> bool {
+    unsupported_value_expr_reason(expr, module, stack).is_none()
 }
 
-fn unsupported_stmt_expr_reason(expr: &Expr, module: &Module) -> Option<UnsupportedReason> {
+fn unsupported_stmt_expr_reason(
+    expr: &Expr,
+    module: &Module,
+    stack: &mut HashSet<String>,
+) -> Option<UnsupportedReason> {
     match expr {
         Expr::Call { .. } => match extract_direct_print_call_arg(expr) {
-            Ok(arg) => unsupported_value_expr_reason(arg, module),
-            Err(PrintCallError::NotPrint) => unsupported_value_expr_reason(expr, module),
+            Ok(arg) => unsupported_value_expr_reason(arg, module, stack),
+            Err(PrintCallError::NotPrint) => unsupported_value_expr_reason(expr, module, stack),
             Err(PrintCallError::ArityNotOne) => Some(UnsupportedReason::PrintArityNotOne),
             Err(PrintCallError::NonDirectCallee) => {
                 Some(UnsupportedReason::CallCalleeNotDirectName)
@@ -152,13 +167,17 @@ fn unsupported_stmt_expr_reason(expr: &Expr, module: &Module) -> Option<Unsuppor
             if callee != BUILTIN_PRINT {
                 return Some(UnsupportedReason::UnsupportedPipelineCallee);
             }
-            unsupported_value_expr_reason(value, module)
+            unsupported_value_expr_reason(value, module, stack)
         }
         _ => Some(UnsupportedReason::UnsupportedStatementExpr),
     }
 }
 
-fn unsupported_value_expr_reason(expr: &Expr, module: &Module) -> Option<UnsupportedReason> {
+fn unsupported_value_expr_reason(
+    expr: &Expr,
+    module: &Module,
+    stack: &mut HashSet<String>,
+) -> Option<UnsupportedReason> {
     match expr {
         Expr::StringLit(_) | Expr::IntLit(_) | Expr::BoolLit(_) | Expr::Var(_) => None,
         Expr::ListLit(items) => {
@@ -172,26 +191,26 @@ fn unsupported_value_expr_reason(expr: &Expr, module: &Module) -> Option<Unsuppo
             if !is_supported_binop_kind(op) {
                 return Some(UnsupportedReason::UnsupportedBinop);
             }
-            if let Some(reason) = unsupported_value_expr_reason(left, module) {
+            if let Some(reason) = unsupported_value_expr_reason(left, module, stack) {
                 return Some(reason);
             }
-            unsupported_value_expr_reason(right, module)
+            unsupported_value_expr_reason(right, module, stack)
         }
         Expr::If {
             condition,
             then_expr,
             else_expr,
         } => {
-            if let Some(reason) = unsupported_value_expr_reason(condition, module) {
+            if let Some(reason) = unsupported_value_expr_reason(condition, module, stack) {
                 return Some(reason);
             }
-            if let Some(reason) = unsupported_value_expr_reason(then_expr, module) {
+            if let Some(reason) = unsupported_value_expr_reason(then_expr, module, stack) {
                 return Some(reason);
             }
-            unsupported_value_expr_reason(else_expr, module)
+            unsupported_value_expr_reason(else_expr, module, stack)
         }
         Expr::Case { scrutinee, arms } => {
-            if let Some(reason) = unsupported_value_expr_reason(scrutinee, module) {
+            if let Some(reason) = unsupported_value_expr_reason(scrutinee, module, stack) {
                 return Some(reason);
             }
             if arms.is_empty() {
@@ -201,7 +220,7 @@ fn unsupported_value_expr_reason(expr: &Expr, module: &Module) -> Option<Unsuppo
                 if !is_supported_case_pattern(&arm.pattern) {
                     return Some(UnsupportedReason::UnsupportedCasePattern);
                 }
-                if let Some(reason) = unsupported_value_expr_reason(&arm.body, module) {
+                if let Some(reason) = unsupported_value_expr_reason(&arm.body, module, stack) {
                     return Some(reason);
                 }
             }
@@ -209,14 +228,35 @@ fn unsupported_value_expr_reason(expr: &Expr, module: &Module) -> Option<Unsuppo
         }
         Expr::Call { .. } => {
             let Some((name, args)) = flatten_named_call(expr) else {
+                // Allow callable-value application (`f 1`, where `f` is a local/lambda)
+                // when both callee and argument expressions are in the native value subset.
+                if let Expr::Call { callee, arg } = expr {
+                    if is_phase2_supported_value_expr(callee, module, stack)
+                        && is_phase2_supported_value_expr(arg, module, stack)
+                    {
+                        return None;
+                    }
+                }
                 return Some(UnsupportedReason::CallCalleeNotDirectName);
             };
             if name == BUILTIN_PRINT {
                 return Some(UnsupportedReason::PrintNotValueExpr);
             }
+            if name == BUILTIN_MAP {
+                if args.len() != 2 {
+                    return Some(UnsupportedReason::CallArityMismatch);
+                }
+                if !args
+                    .iter()
+                    .all(|arg| is_phase2_supported_value_expr(arg, module, stack))
+                {
+                    return Some(UnsupportedReason::UnsupportedCallArgument);
+                }
+                return None;
+            }
             if !args
                 .iter()
-                .all(|arg| is_phase2_supported_value_expr(arg, module))
+                .all(|arg| is_phase2_supported_value_expr(arg, module, stack))
             {
                 return Some(UnsupportedReason::UnsupportedCallArgument);
             }
@@ -228,17 +268,110 @@ fn unsupported_value_expr_reason(expr: &Expr, module: &Module) -> Option<Unsuppo
                 Err(DirectCallTargetError::ArityMismatch) => {
                     // Prefer reporting unsupported declaration bodies (for lambda/HOF)
                     // before generic call-shape mismatches when both are present.
-                    if !declaration_body_supported_for_native(name, module) {
+                    if !declaration_body_supported_for_native(name, module, stack) {
                         return Some(UnsupportedReason::CallTargetBodyNotNativeSupported);
                     }
                     return Some(UnsupportedReason::CallArityMismatch);
                 }
             }
-            if !declaration_body_supported_for_native(name, module) {
+            if !declaration_body_supported_for_native(name, module, stack) {
                 return Some(UnsupportedReason::CallTargetBodyNotNativeSupported);
             }
             None
         }
+        Expr::Lambda { body, .. } => unsupported_value_expr_reason(body, module, stack),
         _ => Some(UnsupportedReason::UnsupportedValueExpr),
+    }
+}
+
+fn declaration_body_supported_for_native(
+    decl_name: &str,
+    module: &Module,
+    stack: &mut HashSet<String>,
+) -> bool {
+    if !stack.insert(decl_name.to_string()) {
+        // Cycle in declaration reachability graph: treat as capability-supported and
+        // rely on evaluator depth guards to prevent infinite runtime recursion.
+        return true;
+    }
+
+    let Some(decl) = module.declarations.iter().find(|d| d.name == decl_name) else {
+        stack.remove(decl_name);
+        return false;
+    };
+    let Some(stmts) = decl.parsed_body.as_deref() else {
+        stack.remove(decl_name);
+        return false;
+    };
+
+    let supported = stmts
+        .iter()
+        .all(|stmt| is_decl_stmt_supported(stmt, module, stack));
+    stack.remove(decl_name);
+    supported
+}
+
+fn is_decl_stmt_supported(stmt: &Stmt, module: &Module, stack: &mut HashSet<String>) -> bool {
+    match stmt {
+        Stmt::Binding { value, .. } => is_decl_value_expr_supported(value, module, stack),
+        Stmt::Expr(expr) => match expr {
+            Expr::Call { callee, arg } if matches!(callee.as_ref(), Expr::Var(n) if n == BUILTIN_PRINT) => {
+                is_decl_value_expr_supported(arg, module, stack)
+            }
+            _ => is_decl_value_expr_supported(expr, module, stack),
+        },
+        Stmt::Using { .. } => false,
+    }
+}
+
+fn is_decl_value_expr_supported(expr: &Expr, module: &Module, stack: &mut HashSet<String>) -> bool {
+    match expr {
+        Expr::StringLit(_) | Expr::IntLit(_) | Expr::BoolLit(_) | Expr::Var(_) => true,
+        Expr::ListLit(items) => items.iter().all(is_supported_list_item_expr),
+        Expr::BinOp { op, left, right } => {
+            is_supported_binop_kind(op)
+                && is_decl_value_expr_supported(left, module, stack)
+                && is_decl_value_expr_supported(right, module, stack)
+        }
+        Expr::If {
+            condition,
+            then_expr,
+            else_expr,
+        } => {
+            is_decl_value_expr_supported(condition, module, stack)
+                && is_decl_value_expr_supported(then_expr, module, stack)
+                && is_decl_value_expr_supported(else_expr, module, stack)
+        }
+        Expr::Case { scrutinee, arms } => {
+            is_decl_value_expr_supported(scrutinee, module, stack)
+                && !arms.is_empty()
+                && arms.iter().all(|arm| {
+                    is_supported_case_pattern(&arm.pattern)
+                        && is_decl_value_expr_supported(&arm.body, module, stack)
+                })
+        }
+        Expr::Call { callee, arg } => {
+            if matches!(callee.as_ref(), Expr::Var(name) if name == BUILTIN_PRINT) {
+                return false;
+            }
+            if let Some((name, args)) = flatten_named_call(expr) {
+                if name == BUILTIN_MAP {
+                    return args.len() == 2
+                        && is_decl_value_expr_supported(args[0], module, stack)
+                        && is_decl_value_expr_supported(args[1], module, stack);
+                }
+                if let Ok(decl) = resolve_direct_call_target(module, name, args.len()) {
+                    return decl.name != "main"
+                        && args
+                            .iter()
+                            .all(|arg| is_decl_value_expr_supported(arg, module, stack))
+                        && declaration_body_supported_for_native(name, module, stack);
+                }
+            }
+            is_decl_value_expr_supported(callee, module, stack)
+                && is_decl_value_expr_supported(arg, module, stack)
+        }
+        Expr::Lambda { body, .. } => is_decl_value_expr_supported(body, module, stack),
+        _ => false,
     }
 }

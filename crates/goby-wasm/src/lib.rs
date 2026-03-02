@@ -2506,7 +2506,7 @@ main =
     }
 
     #[test]
-    fn native_codegen_rejects_transitively_required_hof_declaration() {
+    fn native_codegen_accepts_transitively_required_hof_declaration() {
         let source = r#"
 mul_tens : List Int -> List Int
 mul_tens ns = map ns (|n| -> n * 10)
@@ -2520,17 +2520,11 @@ main =
 "#;
         let module = parse_module(source).expect("source should parse");
         assert!(
-            !fallback::supports_native_codegen(&module),
-            "transitively required HOF declaration should force fallback"
+            fallback::supports_native_codegen(&module),
+            "transitively required HOF declaration should be accepted by native lowering"
         );
-        assert_eq!(
-            fallback::native_unsupported_reason_kind(&module),
-            Some(fallback::UnsupportedReason::CallTargetBodyNotNativeSupported)
-        );
-        assert_eq!(
-            fallback::native_unsupported_reason(&module),
-            Some("call_target_body_not_native_supported")
-        );
+        assert_eq!(fallback::native_unsupported_reason_kind(&module), None);
+        assert_eq!(fallback::native_unsupported_reason(&module), None);
         let wasm = compile_module(&module).expect("codegen should succeed");
         let expected_text =
             resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
@@ -2648,22 +2642,22 @@ main =
     }
 
     #[test]
-    fn native_codegen_capability_checker_reports_reason_for_hof_lambda_fallback() {
+    fn native_codegen_capability_checker_accepts_function_example_with_hof_lambda() {
         let source = read_example("function.gb");
         let module = parse_module(&source).expect("function.gb should parse");
         assert!(
-            !fallback::supports_native_codegen(&module),
-            "function.gb should remain on fallback path while lambda/HOF are unsupported"
+            fallback::supports_native_codegen(&module),
+            "function.gb should be accepted by native lowering after lambda/HOF support"
         );
         assert_eq!(
             fallback::native_unsupported_reason_kind(&module),
-            Some(fallback::UnsupportedReason::CallTargetBodyNotNativeSupported),
-            "typed fallback reason should classify lambda/HOF-containing call targets"
+            None,
+            "function.gb should no longer report a native fallback reason"
         );
         assert_eq!(
             fallback::native_unsupported_reason(&module),
-            Some("call_target_body_not_native_supported"),
-            "fallback reason should be explicit for lambda/HOF-containing call targets"
+            None,
+            "function.gb should no longer report a native fallback reason"
         );
     }
 
@@ -2703,12 +2697,28 @@ main =
             (
                 "target_body_not_supported",
                 r#"
-mul_tens : List Int -> List Int
-mul_tens ns = map ns (|n| -> n * 10)
+uses_using : Int -> Int
+uses_using x =
+  using Console
+    x
 
 main : Unit -> Unit
 main =
-  print (mul_tens [1, 2, 3])
+  print (uses_using 1)
+"#,
+                Some(fallback::UnsupportedReason::CallTargetBodyNotNativeSupported),
+            ),
+            (
+                "target_body_not_supported_with_lambda",
+                r#"
+uses_using_callback : (Int -> Int) -> Int
+uses_using_callback f =
+  using Console
+    f 1
+
+main : Unit -> Unit
+main =
+  print (uses_using_callback (|x| -> x + 1))
 "#,
                 Some(fallback::UnsupportedReason::CallTargetBodyNotNativeSupported),
             ),
@@ -2733,25 +2743,27 @@ main =
     }
 
     #[test]
-    fn native_codegen_capability_checker_prioritizes_hof_reason_over_arity_mismatch() {
+    fn native_codegen_capability_checker_prioritizes_body_reason_over_arity_mismatch() {
         let source = r#"
-mul_tens : List Int -> List Int
-mul_tens ns = map ns (|n| -> n * 10)
+uses_using : Int -> Int
+uses_using x =
+  using Console
+    x
 
 main : Unit -> Unit
 main =
-  print (mul_tens [1, 2] [3, 4])
+  print (uses_using 1 2)
 "#;
         let module = parse_module(source).expect("source should parse");
         assert_eq!(
             fallback::native_unsupported_reason_kind(&module),
             Some(fallback::UnsupportedReason::CallTargetBodyNotNativeSupported),
-            "typed reason should prefer lambda/HOF fallback over arity mismatch"
+            "typed reason should prefer unsupported declaration body over arity mismatch"
         );
         assert_eq!(
             fallback::native_unsupported_reason(&module),
             Some("call_target_body_not_native_supported"),
-            "lambda/HOF fallback reason should win when call-shape mismatch coexists"
+            "unsupported declaration body reason should win when call-shape mismatch coexists"
         );
     }
 
@@ -2766,12 +2778,7 @@ main =
                 Some(fallback::UnsupportedReason::MainAnnotationNotUnitToUnit),
                 Some("main_annotation_not_unit_to_unit"),
             ),
-            (
-                "function.gb",
-                false,
-                Some(fallback::UnsupportedReason::CallTargetBodyNotNativeSupported),
-                Some("call_target_body_not_native_supported"),
-            ),
+            ("function.gb", true, None, None),
         ];
 
         for (name, expect_native, expected_reason_kind, expected_reason) in cases {
