@@ -2704,7 +2704,7 @@ main : Unit -> Unit
 main =
   print (Foo.bar 1)
 "#,
-                Some("call_callee_not_direct_name"),
+                Some(fallback::UnsupportedReason::CallCalleeNotDirectName),
             ),
             (
                 "arity_mismatch",
@@ -2716,7 +2716,7 @@ main : Unit -> Unit
 main =
   print (id 1 2)
 "#,
-                Some("call_arity_mismatch"),
+                Some(fallback::UnsupportedReason::CallArityMismatch),
             ),
             (
                 "target_missing",
@@ -2725,7 +2725,7 @@ main : Unit -> Unit
 main =
   print (unknown 1)
 "#,
-                Some("call_target_not_declaration"),
+                Some(fallback::UnsupportedReason::CallTargetNotDeclaration),
             ),
             (
                 "target_body_not_supported",
@@ -2737,15 +2737,22 @@ main : Unit -> Unit
 main =
   print (mul_tens [1, 2, 3])
 "#,
-                Some("call_target_body_not_native_supported"),
+                Some(fallback::UnsupportedReason::CallTargetBodyNotNativeSupported),
             ),
         ];
 
-        for (name, source, expected) in cases {
+        for (name, source, expected_kind) in cases {
             let module = parse_module(source).expect("source should parse");
+            let expected_str = expected_kind.map(fallback::UnsupportedReason::as_str);
+            assert_eq!(
+                fallback::native_unsupported_reason_kind(&module),
+                expected_kind,
+                "unexpected typed fallback reason for case: {}",
+                name
+            );
             assert_eq!(
                 fallback::native_unsupported_reason(&module),
-                expected,
+                expected_str,
                 "unexpected fallback reason for case: {}",
                 name
             );
@@ -2763,6 +2770,11 @@ main =
   print (mul_tens [1, 2] [3, 4])
 "#;
         let module = parse_module(source).expect("source should parse");
+        assert_eq!(
+            fallback::native_unsupported_reason_kind(&module),
+            Some(fallback::UnsupportedReason::CallTargetBodyNotNativeSupported),
+            "typed reason should prefer lambda/HOF fallback over arity mismatch"
+        );
         assert_eq!(
             fallback::native_unsupported_reason(&module),
             Some("call_target_body_not_native_supported"),

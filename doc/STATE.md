@@ -274,6 +274,13 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - Reused these helpers in both `fallback.rs` and `lower.rs` capability checks.
   - Resolved clippy cleanups (`redundant_closure`) and reran full gates.
   - Validation rerun: `cargo test -p goby-wasm`, workspace `cargo check/test/clippy` all green.
+- 2026-03-02 (session 41): typed reason checks expanded
+  - Migrated call-reason capability tests in `crates/goby-wasm/src/lib.rs` to
+    typed expectations (`UnsupportedReason`) as primary assertions.
+  - Kept string compatibility checks in parallel by deriving expected strings via
+    `UnsupportedReason::as_str`.
+  - Added typed assertion for lambda/HOF-over-arity priority test.
+  - Validation rerun: `cargo test -p goby-wasm`, workspace `cargo check/test/clippy` all green.
 
 ## 5. Current Example Files
 
