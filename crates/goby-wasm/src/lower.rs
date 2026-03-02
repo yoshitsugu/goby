@@ -7,7 +7,9 @@ use crate::{
     backend::WasmProgramBuilder,
     call::{extract_direct_print_call_arg, flatten_named_call, resolve_direct_call_target},
     layout::MemoryLayout,
-    support::is_supported_case_pattern,
+    support::{
+        is_supported_binop_kind, is_supported_case_pattern, is_supported_list_item_expr,
+    },
 };
 
 pub(crate) fn try_emit_native_module(module: &Module) -> Result<Option<Vec<u8>>, CodegenError> {
@@ -301,11 +303,9 @@ fn is_value_expr_supported(
 ) -> bool {
     match expr {
         Expr::StringLit(_) | Expr::IntLit(_) | Expr::BoolLit(_) | Expr::Var(_) => true,
-        Expr::ListLit(items) => items
-            .iter()
-            .all(|item| matches!(item, Expr::IntLit(_) | Expr::Var(_))),
+        Expr::ListLit(items) => items.iter().all(is_supported_list_item_expr),
         Expr::BinOp { op, left, right } => {
-            matches!(op, BinOpKind::Add | BinOpKind::Mul | BinOpKind::Eq)
+            is_supported_binop_kind(op)
                 && is_value_expr_supported(left, module, env, stack)
                 && is_value_expr_supported(right, module, env, stack)
         }

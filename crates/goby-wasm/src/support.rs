@@ -1,4 +1,4 @@
-use goby_core::CasePattern;
+use goby_core::{BinOpKind, CasePattern, Expr};
 
 pub(crate) fn is_supported_case_pattern(pattern: &CasePattern) -> bool {
     matches!(
@@ -10,9 +10,17 @@ pub(crate) fn is_supported_case_pattern(pattern: &CasePattern) -> bool {
     )
 }
 
+pub(crate) fn is_supported_list_item_expr(expr: &Expr) -> bool {
+    matches!(expr, Expr::IntLit(_) | Expr::Var(_))
+}
+
+pub(crate) fn is_supported_binop_kind(op: &BinOpKind) -> bool {
+    matches!(op, BinOpKind::Add | BinOpKind::Mul | BinOpKind::Eq)
+}
+
 #[cfg(test)]
 mod tests {
-    use goby_core::CasePattern;
+    use goby_core::{BinOpKind, CasePattern, Expr};
 
     use super::*;
 
@@ -24,5 +32,19 @@ mod tests {
         )));
         assert!(is_supported_case_pattern(&CasePattern::BoolLit(true)));
         assert!(is_supported_case_pattern(&CasePattern::Wildcard));
+    }
+
+    #[test]
+    fn supports_current_native_list_item_expressions() {
+        assert!(is_supported_list_item_expr(&Expr::IntLit(1)));
+        assert!(is_supported_list_item_expr(&Expr::Var("x".to_string())));
+        assert!(!is_supported_list_item_expr(&Expr::BoolLit(true)));
+    }
+
+    #[test]
+    fn supports_current_native_binop_kinds() {
+        assert!(is_supported_binop_kind(&BinOpKind::Add));
+        assert!(is_supported_binop_kind(&BinOpKind::Mul));
+        assert!(is_supported_binop_kind(&BinOpKind::Eq));
     }
 }
