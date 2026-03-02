@@ -2536,6 +2536,7 @@ main =
             fallback::supports_native_codegen(&module),
             "hello.gb should be accepted by Phase 0 native capability checker"
         );
+        assert_eq!(fallback::native_unsupported_reason(&module), None);
     }
 
     #[test]
@@ -2545,6 +2546,11 @@ main =
         assert!(
             !fallback::supports_native_codegen(&module),
             "effect.gb should remain on fallback path in Phase 0"
+        );
+        assert_eq!(
+            fallback::native_unsupported_reason(&module),
+            Some("main_annotation_not_unit_to_unit"),
+            "effect example should expose explicit fallback reason"
         );
     }
 
