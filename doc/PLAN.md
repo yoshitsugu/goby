@@ -152,6 +152,14 @@ Based on `examples/*.gb`:
   - dispatch target should be `O(handler_depth)` frame walk + `O(1)` op-table index,
   - continuation capture/resume should avoid full-stack copying on one-shot path.
 
+#### `resume` Surface Contract (Step 0 lock, 2026-03-02)
+
+- `resume` is a reserved keyword for upcoming effect-resumption syntax.
+- Parser contract is locked:
+  - top-level declaration name `resume` is rejected.
+  - handler parameter name `resume` is rejected.
+- Step 1 (`Expr::Resume` AST/parser form and dedicated parse diagnostics) remains pending.
+
 ### 2.4 Standard Library Surface (MVP)
 
 - Core modules to ship first (`Int`, `String`, `List`, `Env`) — minimal built-ins implemented.

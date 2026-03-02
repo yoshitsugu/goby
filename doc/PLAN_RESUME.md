@@ -200,10 +200,13 @@ On effect operation call:
 
 ## 8. Step-by-Step Execution Plan
 
-Step 0: Spec lock and parser contract
+Step 0: Spec lock and parser contract — DONE (2026-03-02)
 
-- Lock syntax/keyword decision in this document and `doc/PLAN.md`.
-- Add parser tests for valid/invalid `resume` placement.
+- Syntax/keyword decision locked in this document and `doc/PLAN.md`.
+- Parser contract tests added:
+  - reject top-level declaration name `resume`,
+  - reject handler parameter name `resume`,
+  - accept handler-body `resume Unit` shape (currently parsed as call form before Step 1 AST change).
 
 Step 1: AST + parser implementation
 
@@ -297,4 +300,3 @@ Risk: mismatch between interpreter-path semantics and future native Wasm.
    or after runtime stabilization?
 3. How aggressively should we reject potentially multi-shot patterns statically
    in phase 1?
-

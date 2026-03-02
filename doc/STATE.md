@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-02 (session 55)
+Last updated: 2026-03-02 (session 56)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -499,6 +499,21 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - Quality gates green:
     - `cargo check`
     - `cargo test` (244 tests passed)
+    - `cargo clippy -- -D warnings`
+- 2026-03-02 (session 56): `PLAN_RESUME` Step 0 complete (spec/keyword lock + parser contract tests)
+  - Spec lock:
+    - `doc/PLAN.md` now explicitly locks `resume` surface contract for Step 0.
+    - `doc/PLAN_RESUME.md` Step 0 marked DONE with landed parser-contract scope.
+  - Parser guardrails:
+    - reserved keyword check added for top-level declaration name `resume`.
+    - handler parameter name `resume` now rejected with dedicated parse error text.
+  - Parser contract tests added:
+    - reject top-level declaration name `resume`,
+    - reject handler parameter name `resume`,
+    - accept handler-body `resume Unit` shape (still call-form pre-`Expr::Resume`).
+  - Quality gates green:
+    - `cargo check`
+    - `cargo test` (251 tests passed)
     - `cargo clippy -- -D warnings`
 
 ## 5. Current Example Files
