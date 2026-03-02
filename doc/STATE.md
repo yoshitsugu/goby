@@ -243,6 +243,14 @@ This file is a restart-safe snapshot for resuming work after context reset.
     - non-direct call shape still reports `call_callee_not_direct_name`.
   - Validation rerun: targeted tests, full `cargo test -p goby-wasm`, workspace
     `cargo check/test/clippy` all green.
+- 2026-03-02 (session 37): fallback reason enum migration (compat layer)
+  - `crates/goby-wasm/src/fallback.rs` now defines typed reason enum:
+    - `UnsupportedReason` with `as_str()` mapping.
+  - Added `native_unsupported_reason_kind(&Module) -> Option<UnsupportedReason>`
+    while preserving existing string API:
+    - `native_unsupported_reason(&Module) -> Option<&'static str>`.
+  - Existing reason-code tests remain unchanged and green (string-compat maintained).
+  - Validation rerun: `cargo test -p goby-wasm`, workspace `cargo check/test/clippy` all green.
 
 ## 5. Current Example Files
 
@@ -272,6 +280,8 @@ Execution focus (see `doc/PLAN_WASM.md`):
    - complete remaining cleanup items:
      - audit remaining duplicated expression-shape assumptions between `fallback` and `lower`
        and collapse any low-risk stragglers into shared helpers where practical.
+     - gradually switch internal checks/tests to `native_unsupported_reason_kind` where useful,
+       keeping string API only for external compatibility surfaces.
    - keep fallback boundaries and runtime outputs unchanged (`function.gb`, `effect.gb`).
 2. Then Phase 7 cleanup/sign-off:
    - confirm fallback boundary is explicit and narrow,
