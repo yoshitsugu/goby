@@ -176,6 +176,16 @@ Based on `examples/*.gb`:
   - `resume_arg_type_mismatch`
   - `resume_in_unknown_operation_context`
 
+#### `resume` Runtime Bridge (Step 3 checkpoint, 2026-03-02)
+
+- Interpreter-path runtime now has explicit `ResumeToken`/`Continuation` carrier
+  objects and one-shot consume tracking.
+- `Expr::Resume` evaluates in handler context, marks the current token consumed,
+  and returns a resume value to the effect call site.
+- Second resume on the same token fails deterministically in runtime.
+- Full delimited-continuation reinstatement and lexical nearest-handler
+  semantics replacement are still pending follow-up in Step 3/4.
+
 ### 2.4 Standard Library Surface (MVP)
 
 - Core modules to ship first (`Int`, `String`, `List`, `Env`) — minimal built-ins implemented.

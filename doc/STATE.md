@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-02 (session 58)
+Last updated: 2026-03-02 (session 59)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -552,6 +552,27 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - Quality gates green:
     - `cargo check`
     - `cargo test` (259 tests passed)
+    - `cargo clippy -- -D warnings`
+- 2026-03-02 (session 59): `PLAN_RESUME` Step 3 runtime checkpoint (interpreter bridge)
+  - `goby-wasm` runtime now tracks explicit resume state:
+    - `HandlerFrame`,
+    - `Continuation` (with one-shot consumed bit),
+    - `ResumeToken` (captures resumed value).
+  - `Expr::Resume` runtime handling added in evaluator:
+    - evaluates resume argument,
+    - consumes current one-shot token,
+    - returns value to effect operation call site.
+  - Effect call evaluation order adjusted for value-position calls:
+    - active handler dispatch is attempted before Int/List function fast paths,
+      so effect ops with Int/List arguments can resume correctly.
+  - One-shot guard behavior added:
+    - second `resume` on the same token fails deterministically (`None` path).
+  - New runtime regression tests in `goby-wasm`:
+    - `resume` returns value to effect call site,
+    - one-shot guard rejects double resume.
+  - Quality gates green:
+    - `cargo check`
+    - `cargo test` (261 tests passed)
     - `cargo clippy -- -D warnings`
 
 ## 5. Current Example Files

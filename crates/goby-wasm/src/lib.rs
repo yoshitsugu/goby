@@ -354,6 +354,26 @@ struct RuntimeOutputResolver<'m> {
     /// Maps effect name (e.g. "Log") to handler_declarations index.
     /// BTreeMap gives deterministic iteration order (alphabetical by effect name).
     active_handlers: BTreeMap<String, usize>,
+    handler_stack: Vec<HandlerFrame>,
+    resume_tokens: Vec<ResumeToken>,
+}
+
+#[derive(Clone)]
+struct HandlerFrame {
+    effect_name: String,
+    handler_decl_idx: usize,
+}
+
+#[derive(Clone)]
+struct Continuation {
+    frames: Vec<HandlerFrame>,
+    consumed: bool,
+}
+
+#[derive(Clone)]
+struct ResumeToken {
+    continuation: Continuation,
+    resumed_value: Option<RuntimeValue>,
 }
 
 struct RuntimeEvaluators<'a, 'b> {
@@ -374,6 +394,8 @@ impl<'m> RuntimeOutputResolver<'m> {
             outputs: Vec::new(),
             module,
             active_handlers: BTreeMap::new(),
+            handler_stack: Vec::new(),
+            resume_tokens: Vec::new(),
         };
 
         if let Some(stmts) = parsed_stmts {
@@ -745,6 +767,16 @@ impl<'m> RuntimeOutputResolver<'m> {
 
                     let arg_val =
                         self.eval_expr_ast(arg, locals, callables, evaluators, depth + 1)?;
+                    // Bare handler method call in value position (e.g. `next 0` inside `using`).
+                    // Check this before Int/List function paths so effect ops can take Int/List args.
+                    if let Some(method) = self.find_handler_method_by_name(fn_name) {
+                        return self.dispatch_handler_method_as_value(
+                            &method,
+                            arg_val,
+                            evaluators,
+                            depth + 1,
+                        );
+                    }
                     // Int function path
                     if let RuntimeValue::Int(arg_int) = arg_val {
                         if let Some(callable) = callables.get(fn_name) {
@@ -766,16 +798,6 @@ impl<'m> RuntimeOutputResolver<'m> {
                                 .list
                                 .eval_function(function, Some(arg_list))
                                 .map(RuntimeValue::ListInt);
-                        }
-                    } else {
-                        // Bare handler method call that returns a value (e.g. `greet "x"`).
-                        if let Some(method) = self.find_handler_method_by_name(fn_name) {
-                            return self.dispatch_handler_method_as_value(
-                                &method,
-                                arg_val,
-                                evaluators,
-                                depth + 1,
-                            );
                         }
                     }
                 }
@@ -875,6 +897,25 @@ impl<'m> RuntimeOutputResolver<'m> {
                     _ => None,
                 }
             }
+            Expr::Resume { value } => {
+                let resumed =
+                    self.eval_expr_ast(value, locals, callables, evaluators, depth + 1)?;
+                let token = self.current_resume_token_mut()?;
+                if token.continuation.consumed {
+                    return None;
+                }
+                // Step 3 bridge: keep captured continuation frames explicit even
+                // before full reinstatement is implemented.
+                let _ = token
+                    .continuation
+                    .frames
+                    .iter()
+                    .map(|f| (f.effect_name.as_str(), f.handler_decl_idx))
+                    .next();
+                token.continuation.consumed = true;
+                token.resumed_value = Some(resumed.clone());
+                Some(resumed)
+            }
             // <module>.fetch_env_var(str) -> String  (e.g. env.fetch_env_var(str))
             Expr::MethodCall { method, args, .. }
                 if method == "fetch_env_var" && args.len() == 1 =>
@@ -922,8 +963,7 @@ impl<'m> RuntimeOutputResolver<'m> {
             // Lambda as top-level value — not needed in main, return None to fall back.
             Expr::Lambda { .. }
             | Expr::TupleLit(_)
-            | Expr::MethodCall { .. }
-            | Expr::Resume { .. } => None,
+            | Expr::MethodCall { .. } => None,
         }
     }
 
@@ -1225,6 +1265,46 @@ impl<'m> RuntimeOutputResolver<'m> {
         None
     }
 
+    fn push_resume_token_for_method(&mut self, method: &HandlerMethod) -> usize {
+        let idx = self
+            .module
+            .handler_declarations
+            .iter()
+            .position(|h| h.methods.iter().any(|m| m.name == method.name))
+            .unwrap_or(usize::MAX);
+        let effect_name = self
+            .module
+            .handler_declarations
+            .get(idx)
+            .map(|h| h.effect.clone())
+            .unwrap_or_else(|| "<unknown>".to_string());
+        self.handler_stack.push(HandlerFrame {
+            effect_name,
+            handler_decl_idx: idx,
+        });
+        self.resume_tokens.push(ResumeToken {
+            continuation: Continuation {
+                frames: self.handler_stack.clone(),
+                consumed: false,
+            },
+            resumed_value: None,
+        });
+        self.resume_tokens.len() - 1
+    }
+
+    fn take_resume_token_result(&mut self, token_idx: usize) -> Option<Option<RuntimeValue>> {
+        if token_idx + 1 != self.resume_tokens.len() {
+            return None;
+        }
+        let token = self.resume_tokens.pop()?;
+        self.handler_stack.pop();
+        Some(token.resumed_value)
+    }
+
+    fn current_resume_token_mut(&mut self) -> Option<&mut ResumeToken> {
+        self.resume_tokens.last_mut()
+    }
+
     /// Execute a handler method and return the last evaluated value.
     /// Used when the handler method produces a value (e.g. `env.from_env`).
     fn dispatch_handler_method_as_value(
@@ -1238,78 +1318,92 @@ impl<'m> RuntimeOutputResolver<'m> {
             return None;
         }
         let stmts = method.parsed_body.as_deref()?;
-        let mut handler_locals = RuntimeLocals::default();
-        if let Some(param) = method.params.first() {
-            handler_locals.store(param, arg_val);
-        }
-        let mut handler_callables = HashMap::new();
-        let mut last_val: Option<RuntimeValue> = None;
-        for stmt in stmts {
-            match stmt {
-                Stmt::Binding { name, value } => {
-                    let v = self.eval_expr_ast(
-                        value,
-                        &handler_locals,
-                        &handler_callables,
-                        evaluators,
-                        depth + 1,
-                    )?;
-                    handler_locals.store(name, v);
-                }
-                Stmt::Expr(expr) => {
-                    last_val = self.eval_expr_ast(
-                        expr,
-                        &handler_locals,
-                        &handler_callables,
-                        evaluators,
-                        depth + 1,
-                    );
-                    if last_val.is_none() {
-                        // Side-effect stmt — try as unit side effect
-                        self.execute_unit_ast_stmt(
-                            stmt,
-                            &mut handler_locals,
-                            &mut handler_callables,
+        let token_idx = self.push_resume_token_for_method(method);
+        let run_result = (|| -> Option<Option<RuntimeValue>> {
+            let mut handler_locals = RuntimeLocals::default();
+            if let Some(param) = method.params.first() {
+                handler_locals.store(param, arg_val);
+            }
+            let mut handler_callables = HashMap::new();
+            let mut last_val: Option<RuntimeValue> = None;
+            for stmt in stmts {
+                match stmt {
+                    Stmt::Binding { name, value } => {
+                        let v = self.eval_expr_ast(
+                            value,
+                            &handler_locals,
+                            &handler_callables,
                             evaluators,
                             depth + 1,
                         )?;
-                        last_val = None;
+                        handler_locals.store(name, v);
                     }
-                }
-                Stmt::Using { handlers, body } => {
-                    let previous = self.active_handlers.clone();
-                    for handler_name in handlers {
-                        if let Some(idx) = self
-                            .module
-                            .handler_declarations
-                            .iter()
-                            .position(|h| &h.name == handler_name)
-                        {
-                            let effect = self.module.handler_declarations[idx].effect.clone();
-                            self.active_handlers.insert(effect, idx);
+                    Stmt::Expr(expr) => {
+                        last_val = self.eval_expr_ast(
+                            expr,
+                            &handler_locals,
+                            &handler_callables,
+                            evaluators,
+                            depth + 1,
+                        );
+                        if last_val.is_none() {
+                            // Side-effect stmt — try as unit side effect
+                            self.execute_unit_ast_stmt(
+                                stmt,
+                                &mut handler_locals,
+                                &mut handler_callables,
+                                evaluators,
+                                depth + 1,
+                            )?;
+                            last_val = None;
                         }
                     }
-                    for inner_stmt in body {
-                        match inner_stmt {
-                            Stmt::Binding { name, value } => {
-                                let v = self.eval_expr_ast(
-                                    value,
-                                    &handler_locals,
-                                    &handler_callables,
-                                    evaluators,
-                                    depth + 1,
-                                )?;
-                                handler_locals.store(name, v);
+                    Stmt::Using { handlers, body } => {
+                        let previous = self.active_handlers.clone();
+                        for handler_name in handlers {
+                            if let Some(idx) = self
+                                .module
+                                .handler_declarations
+                                .iter()
+                                .position(|h| &h.name == handler_name)
+                            {
+                                let effect = self.module.handler_declarations[idx].effect.clone();
+                                self.active_handlers.insert(effect, idx);
                             }
-                            Stmt::Expr(expr) => {
-                                last_val = self.eval_expr_ast(
-                                    expr,
-                                    &handler_locals,
-                                    &handler_callables,
-                                    evaluators,
-                                    depth + 1,
-                                );
-                                if last_val.is_none() {
+                        }
+                        for inner_stmt in body {
+                            match inner_stmt {
+                                Stmt::Binding { name, value } => {
+                                    let v = self.eval_expr_ast(
+                                        value,
+                                        &handler_locals,
+                                        &handler_callables,
+                                        evaluators,
+                                        depth + 1,
+                                    )?;
+                                    handler_locals.store(name, v);
+                                }
+                                Stmt::Expr(expr) => {
+                                    last_val = self.eval_expr_ast(
+                                        expr,
+                                        &handler_locals,
+                                        &handler_callables,
+                                        evaluators,
+                                        depth + 1,
+                                    );
+                                    if last_val.is_none() {
+                                        self.execute_unit_ast_stmt(
+                                            inner_stmt,
+                                            &mut handler_locals,
+                                            &mut handler_callables,
+                                            evaluators,
+                                            depth + 1,
+                                        )?;
+                                        last_val = None;
+                                    }
+                                }
+                                Stmt::Using { .. } => {
+                                    // Nested using: delegate to execute_unit_ast_stmt for full handling.
                                     self.execute_unit_ast_stmt(
                                         inner_stmt,
                                         &mut handler_locals,
@@ -1317,26 +1411,26 @@ impl<'m> RuntimeOutputResolver<'m> {
                                         evaluators,
                                         depth + 1,
                                     )?;
-                                    last_val = None;
                                 }
                             }
-                            Stmt::Using { .. } => {
-                                // Nested using: delegate to execute_unit_ast_stmt for full handling.
-                                self.execute_unit_ast_stmt(
-                                    inner_stmt,
-                                    &mut handler_locals,
-                                    &mut handler_callables,
-                                    evaluators,
-                                    depth + 1,
-                                )?;
-                            }
                         }
+                        self.active_handlers = previous;
                     }
-                    self.active_handlers = previous;
+                }
+                if self
+                    .resume_tokens
+                    .get(token_idx)
+                    .and_then(|token| token.resumed_value.as_ref())
+                    .is_some()
+                {
+                    break;
                 }
             }
-        }
-        last_val
+            Some(last_val)
+        })();
+        let resumed = self.take_resume_token_result(token_idx)?;
+        let last_val = run_result?;
+        resumed.or(last_val)
     }
 
     /// Execute a handler method body with the given argument.
@@ -1351,21 +1445,34 @@ impl<'m> RuntimeOutputResolver<'m> {
             return None;
         }
         let stmts = method.parsed_body.as_deref()?;
-        let mut handler_locals = RuntimeLocals::default();
-        if let Some(param) = method.params.first() {
-            handler_locals.store(param, arg_val);
-        }
-        let mut handler_callables = HashMap::new();
-        for stmt in stmts {
-            self.execute_unit_ast_stmt(
-                stmt,
-                &mut handler_locals,
-                &mut handler_callables,
-                evaluators,
-                depth + 1,
-            )?;
-        }
-        Some(())
+        let token_idx = self.push_resume_token_for_method(method);
+        let run_result = (|| -> Option<()> {
+            let mut handler_locals = RuntimeLocals::default();
+            if let Some(param) = method.params.first() {
+                handler_locals.store(param, arg_val);
+            }
+            let mut handler_callables = HashMap::new();
+            for stmt in stmts {
+                self.execute_unit_ast_stmt(
+                    stmt,
+                    &mut handler_locals,
+                    &mut handler_callables,
+                    evaluators,
+                    depth + 1,
+                )?;
+                if self
+                    .resume_tokens
+                    .get(token_idx)
+                    .and_then(|token| token.resumed_value.as_ref())
+                    .is_some()
+                {
+                    break;
+                }
+            }
+            Some(())
+        })();
+        let _ = self.take_resume_token_result(token_idx)?;
+        run_result
     }
 
     /// Execute any declaration (including Int-returning ones) as a side-effect call.
@@ -2315,6 +2422,59 @@ main =
             output.as_deref(),
             Some("oops"),
             "positional single-field constructor should dispatch handler with correct record value"
+        );
+    }
+
+    #[test]
+    fn resume_in_handler_returns_value_to_effect_call_site() {
+        use goby_core::parse_module;
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let source = r#"
+effect Iter
+  next: Int -> Int
+
+handler IterHandler for Iter
+  next n =
+    resume 7
+
+main : Unit -> Unit
+main =
+  using IterHandler
+    print (next 0)
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let output =
+            resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module));
+        assert_eq!(
+            output.as_deref(),
+            Some("7"),
+            "resume should return value to the operation call site"
+        );
+    }
+
+    #[test]
+    fn one_shot_resume_guard_rejects_second_resume_on_same_token() {
+        use goby_core::parse_module;
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let source = r#"
+effect Iter
+  next: Int -> Int
+
+handler IterHandler for Iter
+  next n =
+    resume (resume 1)
+
+main : Unit -> Unit
+main =
+  using IterHandler
+    print (next 0)
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let output =
+            resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module));
+        assert!(
+            output.is_none(),
+            "second resume on one-shot token should fail deterministically"
         );
     }
 
