@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use goby_core::{Expr, Module, Stmt};
+use goby_core::{BinOpKind, Expr, Module, Stmt};
 
 use crate::{CodegenError, backend::WasmProgramBuilder, layout::MemoryLayout};
 
@@ -26,7 +26,9 @@ pub(crate) fn try_emit_native_module(module: &Module) -> Result<Option<Vec<u8>>,
         return Ok(None);
     };
 
-    let output_text = collect_phase1_output_text(stmts)?;
+    let Some(output_text) = collect_phase2_output_text(stmts) else {
+        return Ok(None);
+    };
     if output_text.is_empty() {
         return Ok(None);
     }
@@ -35,38 +37,44 @@ pub(crate) fn try_emit_native_module(module: &Module) -> Result<Option<Vec<u8>>,
     Ok(Some(wasm))
 }
 
-fn collect_phase1_output_text(stmts: &[Stmt]) -> Result<String, CodegenError> {
-    let mut bindings: HashMap<&str, String> = HashMap::new();
+#[derive(Clone)]
+enum NativeValue {
+    String(String),
+    Int(i64),
+    Bool(bool),
+}
+
+impl NativeValue {
+    fn as_output_text(&self) -> String {
+        match self {
+            Self::String(s) => s.clone(),
+            Self::Int(n) => n.to_string(),
+            Self::Bool(true) => "True".to_string(),
+            Self::Bool(false) => "False".to_string(),
+        }
+    }
+}
+
+fn collect_phase2_output_text(stmts: &[Stmt]) -> Option<String> {
+    let mut bindings: HashMap<&str, NativeValue> = HashMap::new();
     let mut outputs: Vec<String> = Vec::new();
     for stmt in stmts {
         match stmt {
             Stmt::Binding { name, value } => {
-                let Some(text) = as_string_expr(value, &bindings) else {
-                    return Err(CodegenError {
-                        message: format!("unsupported binding in native phase-1 lowerer: {}", name),
-                    });
-                };
-                bindings.insert(name.as_str(), text);
+                let val = eval_expr(value, &bindings)?;
+                bindings.insert(name.as_str(), val);
             }
             Stmt::Expr(expr) => {
-                let Some(text) = as_print_expr(expr, &bindings) else {
-                    return Err(CodegenError {
-                        message: "unsupported expression in native phase-1 lowerer".to_string(),
-                    });
-                };
-                outputs.push(text);
+                let val = as_print_expr(expr, &bindings)?;
+                outputs.push(val.as_output_text());
             }
-            Stmt::Using { .. } => {
-                return Err(CodegenError {
-                    message: "using blocks are not supported in native phase-1 lowerer".to_string(),
-                });
-            }
+            Stmt::Using { .. } => return None,
         }
     }
-    Ok(outputs.join("\n"))
+    Some(outputs.join("\n"))
 }
 
-fn as_print_expr(expr: &Expr, bindings: &HashMap<&str, String>) -> Option<String> {
+fn as_print_expr(expr: &Expr, bindings: &HashMap<&str, NativeValue>) -> Option<NativeValue> {
     let Expr::Call { callee, arg } = expr else {
         return None;
     };
@@ -76,13 +84,31 @@ fn as_print_expr(expr: &Expr, bindings: &HashMap<&str, String>) -> Option<String
     if name != "print" {
         return None;
     }
-    as_string_expr(arg, bindings)
+    eval_expr(arg, bindings)
 }
 
-fn as_string_expr(expr: &Expr, bindings: &HashMap<&str, String>) -> Option<String> {
+fn eval_expr(expr: &Expr, bindings: &HashMap<&str, NativeValue>) -> Option<NativeValue> {
     match expr {
-        Expr::StringLit(s) => Some(s.clone()),
+        Expr::StringLit(s) => Some(NativeValue::String(s.clone())),
+        Expr::IntLit(n) => Some(NativeValue::Int(*n)),
+        Expr::BoolLit(b) => Some(NativeValue::Bool(*b)),
         Expr::Var(name) => bindings.get(name.as_str()).cloned(),
+        Expr::BinOp { op, left, right } => {
+            let lhs = eval_expr(left, bindings)?;
+            let rhs = eval_expr(right, bindings)?;
+            match (op, lhs, rhs) {
+                (BinOpKind::Add, NativeValue::Int(a), NativeValue::Int(b)) => {
+                    Some(NativeValue::Int(a.checked_add(b)?))
+                }
+                (BinOpKind::Mul, NativeValue::Int(a), NativeValue::Int(b)) => {
+                    Some(NativeValue::Int(a.checked_mul(b)?))
+                }
+                (BinOpKind::Eq, NativeValue::Int(a), NativeValue::Int(b)) => {
+                    Some(NativeValue::Bool(a == b))
+                }
+                _ => None,
+            }
+        }
         _ => None,
     }
 }
