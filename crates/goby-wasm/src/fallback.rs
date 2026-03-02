@@ -1,6 +1,9 @@
 use goby_core::{BinOpKind, CasePattern, Expr, Module, Stmt, types::parse_function_type};
 
-use crate::{call::flatten_named_call, lower::declaration_body_supported_for_native};
+use crate::{
+    call::{DirectCallTargetError, flatten_named_call, resolve_direct_call_target},
+    lower::declaration_body_supported_for_native,
+};
 
 const BUILTIN_PRINT: &str = "print";
 const REASON_MISSING_MAIN: &str = "missing_main";
@@ -167,16 +170,22 @@ fn unsupported_value_expr_reason(expr: &Expr, module: &Module) -> Option<&'stati
             {
                 return Some(REASON_UNSUPPORTED_CALL_ARGUMENT);
             }
-            let Some(decl) = module.declarations.iter().find(|d| d.name == name) else {
-                return Some(REASON_CALL_TARGET_NOT_DECLARATION);
-            };
-            // Prefer reporting unsupported declaration bodies (for lambda/HOF) before
-            // generic call-shape mismatches when both are present.
+            match resolve_direct_call_target(module, name, args.len()) {
+                Ok(_) => {}
+                Err(DirectCallTargetError::NotDeclaration) => {
+                    return Some(REASON_CALL_TARGET_NOT_DECLARATION);
+                }
+                Err(DirectCallTargetError::ArityMismatch) => {
+                    // Prefer reporting unsupported declaration bodies (for lambda/HOF)
+                    // before generic call-shape mismatches when both are present.
+                    if !declaration_body_supported_for_native(name, module) {
+                        return Some(REASON_CALL_TARGET_BODY_NOT_NATIVE_SUPPORTED);
+                    }
+                    return Some(REASON_CALL_ARITY_MISMATCH);
+                }
+            }
             if !declaration_body_supported_for_native(name, module) {
                 return Some(REASON_CALL_TARGET_BODY_NOT_NATIVE_SUPPORTED);
-            }
-            if decl.params.len() != args.len() {
-                return Some(REASON_CALL_ARITY_MISMATCH);
             }
             None
         }

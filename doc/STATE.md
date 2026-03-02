@@ -216,6 +216,22 @@ This file is a restart-safe snapshot for resuming work after context reset.
     - `cargo check`,
     - `cargo test`,
     - `cargo clippy -- -D warnings`.
+- 2026-03-02 (session 34): Phase 6.1 helper-boundary tightening
+  - Added shared direct-call target resolver in `crates/goby-wasm/src/call.rs`:
+    - `resolve_direct_call_target(module, name, arity) -> Result<&Declaration, DirectCallTargetError>`.
+  - Switched `fallback.rs` and `lower.rs` to use the shared resolver for
+    declaration lookup + arity checks (removes duplicated per-file logic).
+  - Preserved fallback reason precedence:
+    - `call_target_not_declaration` remains explicit for unknown callees,
+    - lambda/HOF (`call_target_body_not_native_supported`) still wins over arity mismatch when both apply.
+  - Validation: targeted reason/path tests, full `cargo test -p goby-wasm`,
+    workspace `cargo check/test/clippy`, and `cargo run -p goby-cli -- run examples/function.gb` all green.
+- 2026-03-02 (session 35): shared-call helper test lock
+  - Added unit tests in `crates/goby-wasm/src/call.rs` for:
+    - multi-arg flattening (`flatten_named_call`),
+    - direct-call target resolution outcomes
+      (`Ok`, `NotDeclaration`, `ArityMismatch`).
+  - Validation rerun: `cargo test -p goby-wasm`, workspace `cargo check/test/clippy` all green.
 
 ## 5. Current Example Files
 
@@ -243,7 +259,8 @@ cargo clippy -- -D warnings
 Execution focus (see `doc/PLAN_WASM.md`):
 1. Execute Phase 6.1 (current target):
    - complete remaining cleanup items:
-     - tighten shared helper boundaries between `fallback.rs` and `lower.rs`.
+     - audit remaining duplicated call-shape assumptions between `fallback` and `lower`
+       and collapse any stragglers into shared helpers where practical.
    - keep fallback boundaries and runtime outputs unchanged (`function.gb`, `effect.gb`).
 2. Then Phase 7 cleanup/sign-off:
    - confirm fallback boundary is explicit and narrow,

@@ -3,7 +3,10 @@ use std::collections::{HashMap, HashSet};
 use goby_core::{BinOpKind, CasePattern, Expr, Module, Stmt};
 
 use crate::{
-    CodegenError, backend::WasmProgramBuilder, call::flatten_named_call, layout::MemoryLayout,
+    CodegenError,
+    backend::WasmProgramBuilder,
+    call::{flatten_named_call, resolve_direct_call_target},
+    layout::MemoryLayout,
 };
 
 pub(crate) fn try_emit_native_module(module: &Module) -> Result<Option<Vec<u8>>, CodegenError> {
@@ -348,10 +351,7 @@ fn is_value_expr_supported(
             {
                 return false;
             }
-            let Some(decl) = env.declarations.get(name) else {
-                return false;
-            };
-            if decl.params.len() != args.len() {
+            if resolve_direct_call_target(module, name, args.len()).is_err() {
                 return false;
             }
             is_decl_supported(name, module, env, stack)
