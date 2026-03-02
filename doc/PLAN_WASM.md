@@ -1,0 +1,324 @@
+# Real Wasm Code Generation Plan (Post-MVP)
+
+## 1. Goal and Constraints
+
+Goal: replace the current compile-time interpreter path in `crates/goby-wasm/src/lib.rs` with real instruction-level Wasm emission from Goby AST.
+
+Hard constraints:
+- Keep public API: `compile_module(module: &Module) -> Result<Vec<u8>, CodegenError>`.
+- Keep runtime target: WASI Preview 1 (`wasi_snapshot_preview1.fd_write`) for stdout.
+- Preserve current `goby-cli run examples/*.gb` output behavior during migration.
+- Phase A may keep fallback for `Stmt::Using` (effect handler execution).
+- Prefer `wasm-encoder` (not `walrus`/`wat`) for module construction.
+
+Non-goal (initial phases): full effect runtime lowering.
+
+## 2. Current State (Baseline)
+
+`compile_module` currently does:
+1. Find `main` declaration.
+2. Try `resolve_main_runtime_output(...)` (Rust-side interpreter).
+3. If output exists, emit a static-print Wasm module (`compile_print_module`).
+4. Otherwise emit `minimal_main_module`.
+
+This means Goby programs are not lowered to Wasm instructions yet; only precomputed output is embedded.
+
+## 3. Target Backend Architecture
+
+Implement a native codegen pipeline inside `crates/goby-wasm`:
+- `WasmProgramBuilder`: owns module-level sections (`TypeSection`, `ImportSection`, `FunctionSection`, `MemorySection`, `ExportSection`, `CodeSection`, `DataSection`) using `wasm-encoder`.
+- `StringInterner/DataLayout`: assigns static data offsets for string literals.
+- `FnLowerer`: lowers Goby decl/expr AST into Wasm function bodies.
+- `MainLowering`: lowers `main` statement block with local environment.
+- `FallbackGate`: determines if module/decl uses unsupported constructs and must use compile-time interpreter path.
+
+Keep old interpreter path during migration, but put it behind an explicit fallback gate.
+
+## 4. Wasm-Level Representation Decisions
+
+### 4.1 Module/Imports/Memory layout
+- Import: `(import "wasi_snapshot_preview1" "fd_write" (func ...))` via `wasm-encoder::ImportSection`.
+- Single linear memory, exported as `memory`.
+- Reserve low memory for iovec scratch:
+  - `IOVEC_OFFSET = 0` (8 bytes)
+  - `NWRITTEN_OFFSET = 8` (4 bytes)
+  - `HEAP_BASE = 16` (first free byte)
+- Add mutable global `heap_ptr: i32`, initialized to end of static data segment.
+
+### 4.2 Runtime value model (Phase A/B)
+- `Int`: Wasm `i64`.
+- `Bool`: Wasm `i32` (`0/1`).
+- `String`: pair `(ptr: i32, len: i32)` on stack/locals.
+  - String literals are static bytes in data segments.
+  - Dynamic strings (e.g. int-to-string, concat result) allocated from bump heap.
+- `List Int`: pair `(ptr: i32, len: i32)`, elements packed as contiguous little-endian `i64`.
+- `List String` and record runtime layout are deferred; keep fallback until supported.
+
+### 4.3 Locals and function call lowering
+- For each Goby binding (`Stmt::Binding`), allocate Wasm local(s) according to lowered type.
+  - `Int` -> one `i64` local.
+  - `String` -> two `i32` locals.
+  - `List Int` -> two `i32` locals.
+- `f x` and `f(x)` are already normalized as `Expr::Call`; same lowering path.
+- First stage supports only direct named callee calls (`Expr::Var`).
+- Lambda values / closure environment / higher-order indirect calls are deferred (fallback).
+
+### 4.4 `print` built-in to WASI `fd_write`
+Lower `print <expr>` to:
+1. Lower `<expr>` to printable `(ptr,len)` string (direct for string; helper conversion for int/list).
+2. Store `ptr`/`len` into iovec at `IOVEC_OFFSET`.
+3. Call imported `fd_write(fd=1, iovs=IOVEC_OFFSET, iovs_len=1, nwritten=NWRITTEN_OFFSET)`.
+4. Ignore return code in Phase 1-3 (validate non-trap only); add error handling later.
+
+## 5. Phased Implementation Plan
+
+## Phase 0 - Backend skeleton and dual-path gate
+
+AST subset lowered natively:
+- None yet (infra only).
+
+Interpreter coexistence:
+- Default to fallback while scaffold lands.
+- Introduce explicit capability check: `supports_native_codegen(module) -> bool`.
+
+Add:
+- `wasm-encoder` dependency in `crates/goby-wasm/Cargo.toml`.
+- New internal modules in `crates/goby-wasm/src/`:
+  - `backend.rs` (module builder)
+  - `layout.rs` (memory/data offsets)
+  - `lower.rs` (future expr/stmt lowering entry)
+  - `fallback.rs` (feature detector)
+- Refactor `compile_module` to:
+  - try native path first when supported,
+  - otherwise call existing `resolve_main_runtime_output` path.
+
+Delete/replace:
+- No functional deletion yet. Keep `compile_print_module` and interpreter unchanged.
+
+Definition of done:
+- `cargo check`
+- `cargo test -p goby-wasm`
+- existing Wasm unit tests still pass.
+
+## Phase 1 - Minimal real Wasm: `print "hello"`
+
+AST subset lowered natively:
+- `Stmt::Expr(Expr::Call{callee=Var("print"), arg=StringLit})` in `main`.
+- `Stmt::Binding` with `StringLit` + `print <var>` in `main`.
+
+Interpreter coexistence:
+- Fallback for everything else.
+
+Add:
+- `emit_module_for_main(...)` using `wasm-encoder` sections (no `wat::parse_str`).
+- Static string data interning and offset assignment.
+- `emit_fd_write_print(ptr,len)` helper.
+- `main` lowering over parsed `Stmt` list for tiny supported subset.
+
+Delete/replace:
+- Replace `compile_print_module` usage for supported subset with new native emitter.
+- Keep function for fallback-only path temporarily.
+
+Definition of done:
+- `cargo run -p goby-cli -- run examples/hello.gb` output unchanged (`Hello Goby!`).
+- Existing tests plus new tests:
+  - native path selected for literal print,
+  - produced module has valid Wasm header,
+  - runtime output equals baseline.
+
+## Phase 2 - Int expressions and local bindings in `main`
+
+AST subset lowered natively:
+- `Expr::IntLit`, `Expr::Var`, `Expr::BinOp(Add|Mul|Eq)`.
+- `Stmt::Binding`/shadowing in `main`.
+- `print` of `Int` and `Bool` (with helper conversion).
+- `Expr::If` (expression form) where branches return `Int`/`String`/`Bool`.
+
+Interpreter coexistence:
+- Fallback for `List*`, `Case`, function calls, `Using`, lambda.
+
+Add:
+- Int-to-string routine in Wasm (or runtime helper function emitted once).
+- Bool print canonicalization (`True`/`False`) to match current behavior.
+- Local symbol table for lowered `main` bindings.
+
+Delete/replace:
+- Reduce `resolve_main_runtime_output` reliance for `hello.gb` and simple arithmetic cases.
+
+Definition of done:
+- `cargo run -p goby-cli -- run examples/control_flow.gb` still may fallback due to `case`, but no regressions.
+- New focused tests for native `main` arithmetic + print.
+
+## Phase 3 - Direct function declarations/calls (first non-main lowering)
+
+AST subset lowered natively:
+- Top-level declarations with signatures in subset:
+  - `Int -> Int`, `Int -> Unit`, `Unit -> Int`, `Unit -> Unit`.
+- `Expr::Call` where callee is named declaration and arg is supported scalar expr.
+- `Pipeline` to named function with supported value type.
+
+Interpreter coexistence:
+- Fallback for higher-order args, lambda bodies, list/map, `Using`.
+
+Add:
+- Function index table (decl name -> wasm function index).
+- Per-declaration lowering pass before lowering `main`.
+- Call lowering with correct param/result Wasm signatures.
+
+Delete/replace:
+- Stop interpreter-evaluating direct scalar function calls in supported subset.
+
+Definition of done:
+- `cargo run -p goby-cli -- run` on a new scalar function-call fixture (or reduced subset of `examples/function.gb`) matches baseline.
+- `cargo test` includes regression covering both `f x` and `f(x)` lowering.
+
+## Phase 4 - List Int and pipeline print path
+
+AST subset lowered natively:
+- `Expr::ListLit` for `List Int`.
+- `print` of `List Int` in current textual format (`[1, 2, 3]`).
+- `Pipeline` where left is `List Int` and right is `print` or direct named callee.
+
+Interpreter coexistence:
+- Fallback for `map` with lambda/HOF and `List String` operations.
+
+Add:
+- List allocation helper (bump allocator).
+- List-to-string print helper for exact current formatting.
+
+Delete/replace:
+- Remove list printing cases from interpreter fast path when native subset covers them.
+
+Definition of done:
+- Native path handles `print [1, 2, 3]` and list local binding + print.
+- existing `resolve_runtime_output_for_pipeline_print` semantics preserved.
+
+## Phase 5 - Control flow and case lowering
+
+AST subset lowered natively:
+- `Expr::Case` for patterns: `IntLit`, `StringLit`, `BoolLit`, `Wildcard`.
+- `Expr::If` complete (if not fully covered in Phase 2).
+- `==` over `Int` and `Bool` as currently supported.
+
+Interpreter coexistence:
+- Fallback for unsupported pattern/value combinations and effectful branches.
+
+Add:
+- Case lowering strategy:
+  - evaluate scrutinee once,
+  - emit chained branch blocks,
+  - enforce wildcard as final fallback if present.
+
+Delete/replace:
+- Stop interpreter fallback for `examples/control_flow.gb` once full output matches.
+
+Definition of done:
+- `cargo run -p goby-cli -- run examples/control_flow.gb` uses native path and matches exact output:
+  - `Five!`
+  - `50`
+  - `30`
+
+## Phase 6 - `examples/function.gb` native coverage (except HOF/lambda)
+
+AST subset lowered natively:
+- all direct first-order parts of `examples/function.gb`.
+- explicit fallback marker when lambda/HOF appears (`Expr::Lambda`, passing function values).
+
+Interpreter coexistence:
+- Keep fallback for `map ns (|n| -> ...)`, `_ * 10`, and function-typed params.
+
+Add:
+- Mixed-mode compile decision:
+  - if any declaration required by `main` contains HOF/lambda forms, fallback entire module for determinism.
+
+Delete/replace:
+- Remove legacy unsupported-form analyzer that is only string-heuristic-based once AST capability checks are complete.
+
+Definition of done:
+- no behavior regression on `cargo run -p goby-cli -- run examples/function.gb` (may still fallback due to HOF).
+- capability checker provides explicit reason codes (for diagnostics/tests).
+
+## Phase 7 - Phase A completion and interpreter retirement boundary
+
+AST subset lowered natively (Phase A target):
+- `hello.gb`, `control_flow.gb`, major non-HOF subset of function/basic usage.
+- `Stmt::Using` explicitly out of native scope in Phase A.
+
+Interpreter coexistence:
+- Retain fallback only for:
+  - `Stmt::Using` / effect handlers,
+  - lambda/HOF closures,
+  - deferred runtime types (`List String`, records in runtime operations, advanced stdlib calls).
+
+Add:
+- Metrics/logging hook in tests to assert native-vs-fallback path per example.
+- clear documentation of unsupported constructs and fallback reasons.
+
+Delete/replace:
+- Delete `minimal_main_module()` once native codegen always emits real instruction bodies.
+- Remove `wat` dependency if no longer used.
+- Keep `resolve_main_runtime_output` temporarily as isolated compatibility layer.
+
+Definition of done:
+- `cargo check && cargo test && cargo clippy -- -D warnings` green.
+- `goby-cli run` outputs unchanged for all current `examples/*.gb`.
+- Fallback scope is narrow, explicit, and tested.
+
+## 6. Concrete File-Level Work Items
+
+Primary files to add/modify:
+- `crates/goby-wasm/Cargo.toml`
+  - add `wasm-encoder`.
+  - remove `wat` after Phase 7 cleanup.
+- `crates/goby-wasm/src/lib.rs`
+  - keep public API.
+  - replace direct `compile_print_module` path with `native_codegen_or_fallback` dispatcher.
+  - progressively delete string-based unsupported-form heuristics.
+- new files (proposed):
+  - `crates/goby-wasm/src/backend.rs`
+  - `crates/goby-wasm/src/layout.rs`
+  - `crates/goby-wasm/src/lower.rs`
+  - `crates/goby-wasm/src/fallback.rs`
+- tests:
+  - expand `crates/goby-wasm/src/lib.rs` tests or split into `crates/goby-wasm/tests/` integration tests.
+
+## 7. Risks and Mitigations
+
+### 7.1 String memory management (static vs dynamic)
+Risk:
+- String literals are easy (static data), but `int -> string`, concat, and list print require dynamic allocation.
+
+Mitigation:
+- Phase A uses monotonic bump allocator only (no free), scoped to one process run.
+- Keep representation as `(ptr,len)` to avoid null-termination dependence.
+- Add bounds checks for allocation overflow and return `CodegenError` on impossible size.
+
+### 7.2 Lambda / higher-order lowering complexity
+Risk:
+- Closures require environment capture + callable representation (code ptr + env ptr), which is a major jump from direct calls.
+
+Mitigation:
+- Keep HOF/lambda behind fallback through Phase A.
+- For Phase B, choose one strategy explicitly:
+  - closure conversion + env structs in linear memory, or
+  - defunctionalization for limited patterns (e.g. `map` known lambdas).
+- Do not partially support ambiguous closure cases.
+
+### 7.3 `Stmt::Using` fallback limitation in Phase A
+Risk:
+- Mixed native/fallback semantics can drift if supported subset expands around effectful code.
+
+Mitigation:
+- Capability checker must reject whole-module native mode when `Stmt::Using` appears (Phase A).
+- Add regression tests for `examples/effect.gb` to guarantee fallback path remains behavior-identical.
+- Keep native and fallback path selection deterministic and test-visible.
+
+## 8. Exit Criteria for Full Interpreter Removal
+
+Interpreter (`resolve_main_runtime_output`) can be removed only when all are true:
+1. `examples/*.gb` run via native path with identical output.
+2. Effect runtime (`Stmt::Using` + handler dispatch) has native lowering or a replacement runtime.
+3. Lambda/HOF lowering is implemented for required language surface.
+4. No tests assert fallback path for core examples.
+
+Until then, keep fallback as compatibility layer with explicit, narrow boundaries.
