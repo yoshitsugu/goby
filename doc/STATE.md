@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-02 (session 51)
+Last updated: 2026-03-02 (session 52)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -398,6 +398,34 @@ This file is a restart-safe snapshot for resuming work after context reset.
     - nested module path mapping,
     - invalid module path rejection.
   - No integration call sites changed yet (`typecheck` import flow unchanged).
+- 2026-03-02 (session 52): `PLAN_STANDARD_LIBRARY` Step3-5 complete (resolver extraction + import integration)
+  - `crates/goby-core/src/stdlib.rs`:
+    - Implemented `resolve_module` pipeline:
+      - module path -> file path,
+      - read source (`ReadFailed`/`ModuleNotFound`),
+      - parse source (`ParseFailed`),
+      - export map extraction from top-level declarations.
+    - Export extraction policy:
+      - duplicate top-level export names => `DuplicateExport`,
+      - missing type annotation on exported declaration => `ExportTypeMissing`.
+    - Added resolver regression tests for:
+      - successful module resolution/export extraction,
+      - module-not-found,
+      - parse-failed,
+      - duplicate-export,
+      - export-type-missing.
+  - `crates/goby-core/src/typecheck.rs`:
+    - Added resolver-backed import export lookup helper with builtin fallback.
+    - Step4: `validate_imports` now uses resolver-first lookup, builtin fallback on module-not-found.
+    - Step5: `inject_imported_symbols` now uses the same resolver-first lookup path.
+    - Added typecheck integration tests for:
+      - resolver-first precedence over builtin exports,
+      - builtin fallback when file-based stdlib module is missing,
+      - parse-failure path surfaced as import-resolution error.
+  - Quality gates green:
+    - `cargo check`
+    - `cargo test` (231 tests passed)
+    - `cargo clippy -- -D warnings`
 
 ## 5. Current Example Files
 

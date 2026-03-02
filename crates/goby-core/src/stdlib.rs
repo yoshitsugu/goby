@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+use crate::parse_module;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StdlibResolver {
     root: PathBuf,
@@ -47,9 +49,26 @@ impl StdlibResolver {
         module_path: &str,
     ) -> Result<ResolvedStdlibModule, StdlibResolveError> {
         let attempted_path = self.module_file_path(module_path)?;
-        Err(StdlibResolveError::ModuleNotFound {
+        let source =
+            std::fs::read_to_string(&attempted_path).map_err(|read_err| match read_err.kind() {
+                std::io::ErrorKind::NotFound => StdlibResolveError::ModuleNotFound {
+                    module_path: module_path.to_string(),
+                    attempted_path: attempted_path.clone(),
+                },
+                _ => StdlibResolveError::ReadFailed {
+                    path: attempted_path.clone(),
+                    message: read_err.to_string(),
+                },
+            })?;
+        let module =
+            parse_module(&source).map_err(|parse_err| StdlibResolveError::ParseFailed {
+                module_path: module_path.to_string(),
+                message: parse_err.message,
+            })?;
+        let exports = collect_exports(module_path, &module.declarations)?;
+        Ok(ResolvedStdlibModule {
             module_path: module_path.to_string(),
-            attempted_path,
+            exports,
         })
     }
 
@@ -87,11 +106,65 @@ fn is_identifier(s: &str) -> bool {
     chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
+fn collect_exports(
+    module_path: &str,
+    declarations: &[crate::ast::Declaration],
+) -> Result<HashMap<String, String>, StdlibResolveError> {
+    let mut exports = HashMap::new();
+    for declaration in declarations {
+        let ty = declaration.type_annotation.as_deref().ok_or_else(|| {
+            StdlibResolveError::ExportTypeMissing {
+                module_path: module_path.to_string(),
+                symbol: declaration.name.clone(),
+            }
+        })?;
+        if exports
+            .insert(declaration.name.clone(), ty.trim().to_string())
+            .is_some()
+        {
+            return Err(StdlibResolveError::DuplicateExport {
+                module_path: module_path.to_string(),
+                symbol: declaration.name.clone(),
+            });
+        }
+    }
+    Ok(exports)
+}
+
 #[cfg(test)]
 mod tests {
+    use std::fs;
     use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     use super::{StdlibResolveError, StdlibResolver};
+
+    struct TempDirGuard {
+        path: PathBuf,
+    }
+
+    impl TempDirGuard {
+        fn new(label: &str) -> Self {
+            let nanos = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("clock should be monotonic enough for tests")
+                .as_nanos();
+            let path = std::env::temp_dir().join(format!(
+                "goby_core_stdlib_{}_{}_{}",
+                label,
+                std::process::id(),
+                nanos
+            ));
+            fs::create_dir_all(&path).expect("temp directory should be creatable");
+            Self { path }
+        }
+    }
+
+    impl Drop for TempDirGuard {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.path);
+        }
+    }
 
     #[test]
     fn maps_module_path_to_stdlib_file_path() {
@@ -120,6 +193,110 @@ mod tests {
         assert_eq!(
             err,
             StdlibResolveError::InvalidModulePath("goby//string".to_string())
+        );
+    }
+
+    #[test]
+    fn resolves_module_exports_from_file() {
+        let sandbox = TempDirGuard::new("resolve_success");
+        let root = sandbox.path.join("stdlib");
+        fs::create_dir_all(root.join("goby")).expect("stdlib/goby should be creatable");
+        fs::write(
+            root.join("goby/string.gb"),
+            "concat : String -> String -> String\nconcat a b = a\n",
+        )
+        .expect("stdlib file should be writable");
+
+        let resolver = StdlibResolver::new(root);
+        let resolved = resolver
+            .resolve_module("goby/string")
+            .expect("stdlib module should resolve");
+        assert_eq!(resolved.module_path, "goby/string");
+        assert_eq!(
+            resolved.exports.get("concat"),
+            Some(&"String -> String -> String".to_string())
+        );
+    }
+
+    #[test]
+    fn resolve_reports_module_not_found_with_attempted_path() {
+        let sandbox = TempDirGuard::new("resolve_not_found");
+        let root = sandbox.path.join("stdlib");
+        fs::create_dir_all(&root).expect("stdlib root should be creatable");
+        let resolver = StdlibResolver::new(root.clone());
+        let err = resolver
+            .resolve_module("goby/string")
+            .expect_err("missing module should fail");
+        assert_eq!(
+            err,
+            StdlibResolveError::ModuleNotFound {
+                module_path: "goby/string".to_string(),
+                attempted_path: root.join("goby/string.gb"),
+            }
+        );
+    }
+
+    #[test]
+    fn resolve_reports_parse_failed() {
+        let sandbox = TempDirGuard::new("resolve_parse_failed");
+        let root = sandbox.path.join("stdlib");
+        fs::create_dir_all(root.join("goby")).expect("stdlib/goby should be creatable");
+        fs::write(root.join("goby/string.gb"), "concat : String ->\n")
+            .expect("stdlib file should be writable");
+
+        let resolver = StdlibResolver::new(root);
+        let err = resolver
+            .resolve_module("goby/string")
+            .expect_err("parse failure should be reported");
+        match err {
+            StdlibResolveError::ParseFailed { module_path, .. } => {
+                assert_eq!(module_path, "goby/string");
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn resolve_reports_duplicate_export() {
+        let sandbox = TempDirGuard::new("resolve_duplicate_export");
+        let root = sandbox.path.join("stdlib");
+        fs::create_dir_all(root.join("goby")).expect("stdlib/goby should be creatable");
+        fs::write(
+            root.join("goby/string.gb"),
+            "x : Int\nx = 1\nx : Int\nx = 2\n",
+        )
+        .expect("stdlib file should be writable");
+
+        let resolver = StdlibResolver::new(root);
+        let err = resolver
+            .resolve_module("goby/string")
+            .expect_err("duplicate export should fail");
+        assert_eq!(
+            err,
+            StdlibResolveError::DuplicateExport {
+                module_path: "goby/string".to_string(),
+                symbol: "x".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn resolve_reports_export_type_missing() {
+        let sandbox = TempDirGuard::new("resolve_missing_type");
+        let root = sandbox.path.join("stdlib");
+        fs::create_dir_all(root.join("goby")).expect("stdlib/goby should be creatable");
+        fs::write(root.join("goby/string.gb"), "x = 1\n").expect("stdlib file should be writable");
+
+        let resolver = StdlibResolver::new(root);
+        let err = resolver
+            .resolve_module("goby/string")
+            .expect_err("missing type annotation should fail");
+        assert_eq!(
+            err,
+            StdlibResolveError::ExportTypeMissing {
+                module_path: "goby/string".to_string(),
+                symbol: "x".to_string(),
+            }
         );
     }
 }
