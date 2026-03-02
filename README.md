@@ -28,13 +28,15 @@ This project is an early-stage hobby POC.
 - `crates/goby-cli`: command-line interface
 - `crates/goby-wasm`: Wasm backend
 - `examples/`: small sample programs (see `examples/README.md`)
-- `doc/PLAN.md`: language design notes, draft spec details, and open decisions
+- `doc/README.md`: documentation guide and reading order
+- `doc/PLAN.md`: active language design reference and open decisions
 - `doc/STATE.md`: restart-safe snapshot of current decisions and next steps
 
 ## Language Specification
 
 Detailed and evolving language rules are intentionally documented in
-`doc/PLAN.md` instead of this README.
+`doc/PLAN.md` instead of this README. For an overview of all project docs, start at
+`doc/README.md`.
 
 ## License
 

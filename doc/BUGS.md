@@ -91,12 +91,10 @@ At typecheck time, `check_expr` returns `Ty::Unknown` for `Expr::Call { callee: 
 (because `Error` has no function type in the environment), so the §4.1.1 arg-type check is skipped
 (Unknown → no false positive guard). The mismatch goes undetected.
 
-### Fix Options
+### Resolution
 
-1. **Parse-time error**: detect `Ctor(non-field-expr)` in `parse_record_constructor_call` and
-   return a `ParseError` ("positional constructor syntax not supported; use `Ctor(field: value)`").
-2. **Positional sugar**: if the record type has exactly one field, treat `Ctor(value)` as
-   `Ctor(field: value)` automatically.
+Implemented as positional single-field constructor sugar:
 
-Option 1 is simpler and safer for MVP. Option 2 is more ergonomic but requires field-count lookup
-at parse time.
+- `Ctor(value)` is accepted when the constructor has exactly one field.
+- Lowered/checked equivalently to `Ctor(field: value)`.
+- Multi-field constructors still require named-field syntax.
