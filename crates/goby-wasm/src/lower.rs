@@ -139,16 +139,16 @@ fn eval_expr(
                 _ => None,
             }
         }
-        Expr::Call { callee, arg } => {
-            let Expr::Var(fn_name) = callee.as_ref() else {
-                return None;
-            };
-            if fn_name == "print" {
-                return None;
+        Expr::Call { callee, arg } => match callee.as_ref() {
+            Expr::Var(fn_name) => {
+                if fn_name == "print" {
+                    return None;
+                }
+                let arg_val = eval_expr(arg, bindings, env, depth + 1)?;
+                eval_named_function(fn_name, Some(arg_val), env, depth + 1)
             }
-            let arg_val = eval_expr(arg, bindings, env, depth + 1)?;
-            eval_named_function(fn_name, Some(arg_val), env, depth + 1)
-        }
+            _ => None,
+        },
         Expr::ListLit(items) => {
             let mut out = Vec::with_capacity(items.len());
             for item in items {
@@ -338,21 +338,21 @@ fn is_value_expr_supported(
                     ) && is_value_expr_supported(&arm.body, module, env, stack)
                 })
         }
-        Expr::Call { callee, arg } => {
-            let Expr::Var(name) = callee.as_ref() else {
-                return false;
-            };
-            if name == "print" {
-                return false;
+        Expr::Call { callee, arg } => match callee.as_ref() {
+            Expr::Var(name) => {
+                if name == "print" {
+                    return false;
+                }
+                if !is_value_expr_supported(arg, module, env, stack) {
+                    return false;
+                }
+                if !env.declarations.contains_key(name.as_str()) {
+                    return false;
+                }
+                is_decl_supported(name, module, env, stack)
             }
-            if !is_value_expr_supported(arg, module, env, stack) {
-                return false;
-            }
-            if !env.declarations.contains_key(name.as_str()) {
-                return false;
-            }
-            is_decl_supported(name, module, env, stack)
-        }
+            _ => false,
+        },
         _ => false,
     }
 }

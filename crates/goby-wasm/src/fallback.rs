@@ -88,18 +88,18 @@ fn is_phase2_supported_value_expr(expr: &Expr, module: &Module) -> bool {
                     ) && is_phase2_supported_value_expr(&arm.body, module)
                 })
         }
-        Expr::Call { callee, arg } => {
-            let Expr::Var(name) = callee.as_ref() else {
-                return false;
-            };
-            if name == BUILTIN_PRINT {
-                return false;
+        Expr::Call { callee, arg } => match callee.as_ref() {
+            Expr::Var(name) => {
+                if name == BUILTIN_PRINT {
+                    return false;
+                }
+                if !is_phase2_supported_value_expr(arg, module) {
+                    return false;
+                }
+                declaration_body_supported_for_native(name, module)
             }
-            if !is_phase2_supported_value_expr(arg, module) {
-                return false;
-            }
-            declaration_body_supported_for_native(name, module)
-        }
+            _ => false,
+        },
         _ => false,
     }
 }
