@@ -1,0 +1,54 @@
+# comment.line — everything after `#` on this line
+
+# string.quoted.double — with escape sequences
+"hello\nworld\t!\""
+
+# constant.numeric
+42
+
+# constant.language
+True
+False
+
+# keyword.control
+if True
+  "yes"
+else
+  "no"
+
+case 1
+  1 -> "one"
+  _ -> "other"
+
+# keyword.other
+type MyType = MyType(field: String)
+effect MyEffect
+  op: String -> Unit
+handler MyHandler for MyEffect
+  op s = print s
+import goby/string as str
+
+# using / can (keyword.control)
+using MyHandler
+  op "test"
+
+foo : String -> Unit can MyEffect
+foo s = op s
+
+# storage.type (built-in)
+bar : Int -> String -> Bool -> Unit -> List Int -> Unit
+bar n s b u xs = print "ok"
+
+# entity.name.type (UpperCamelCase, user-defined)
+# MyType, MyEffect, MyHandler are highlighted as entity.name.type
+
+# keyword.operator
+result = 1 + 2 * 3
+eq_check = result == 9
+pipe_result = [1, 2, 3] |> print
+lambda_fn = |x| -> x + 1
+
+# punctuation
+pair = (1, "two")
+lst = [1, 2, 3]
+rec = MyType(field: "value")

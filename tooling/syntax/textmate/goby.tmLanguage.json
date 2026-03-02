@@ -1,0 +1,78 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Goby",
+  "scopeName": "source.goby",
+  "fileTypes": ["gb"],
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#strings" },
+    { "include": "#constants" },
+    { "include": "#keywords-control" },
+    { "include": "#keywords-other" },
+    { "include": "#storage-types" },
+    { "include": "#type-names" },
+    { "include": "#operators" },
+    { "include": "#punctuation" }
+  ],
+  "repository": {
+    "comments": {
+      "name": "comment.line.hash.goby",
+      "match": "#.*$"
+    },
+    "strings": {
+      "name": "string.quoted.double.goby",
+      "begin": "\"",
+      "end": "\"",
+      "patterns": [
+        {
+          "name": "constant.character.escape.goby",
+          "match": "\\\\[nrt\\\\\"']"
+        }
+      ]
+    },
+    "constants": {
+      "patterns": [
+        {
+          "name": "constant.numeric.integer.goby",
+          "match": "\\b[0-9]+\\b"
+        },
+        {
+          "name": "constant.language.goby",
+          "match": "\\b(True|False)\\b"
+        }
+      ]
+    },
+    "keywords-control": {
+      "name": "keyword.control.goby",
+      "match": "\\b(if|else|case|using|can)\\b"
+    },
+    "keywords-other": {
+      "name": "keyword.other.goby",
+      "match": "\\b(type|effect|handler|for|import|as)\\b"
+    },
+    "storage-types": {
+      "name": "storage.type.goby",
+      "match": "\\b(Int|String|Bool|Unit|List)\\b"
+    },
+    "type-names": {
+      "name": "entity.name.type.goby",
+      "match": "\\b[A-Z][A-Za-z0-9_]*\\b"
+    },
+    "operators": {
+      "patterns": [
+        {
+          "name": "keyword.operator.goby",
+          "match": "->|\\|>|==|=|\\+|\\*|\\||:"
+        }
+      ]
+    },
+    "punctuation": {
+      "patterns": [
+        {
+          "name": "punctuation.goby",
+          "match": "[()\\[\\],.]"
+        }
+      ]
+    }
+  }
+}

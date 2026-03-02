@@ -1,0 +1,32 @@
+{
+  "name": "vscode-goby",
+  "displayName": "Goby Language Support",
+  "description": "Syntax highlighting for the Goby programming language (.gb files).",
+  "version": "0.1.0",
+  "publisher": "goby-lang",
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "categories": ["Programming Languages"],
+  "repository": {
+    "type": "git",
+    "url": "https://gitlab.com/yoshitsugu/goby"
+  },
+  "contributes": {
+    "languages": [
+      {
+        "id": "goby",
+        "aliases": ["Goby", "goby"],
+        "extensions": [".gb"],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "goby",
+        "scopeName": "source.goby",
+        "path": "./syntaxes/goby.tmLanguage.json"
+      }
+    ]
+  }
+}
