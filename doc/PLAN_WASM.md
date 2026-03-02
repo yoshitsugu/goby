@@ -17,11 +17,17 @@ Non-goal (initial phases): full effect runtime lowering.
 
 `compile_module` currently does:
 1. Find `main` declaration.
-2. Try `resolve_main_runtime_output(...)` (Rust-side interpreter).
-3. If output exists, emit a static-print Wasm module (`compile_print_module`).
-4. Otherwise emit `minimal_main_module`.
+2. If `supports_native_codegen(module)` is true, try native lowering (`lower::try_emit_native_module`).
+3. If native lowering succeeds, return wasm-encoder-built Wasm.
+4. Otherwise, use compatibility fallback: `resolve_main_runtime_output(...)` + `compile_print_module(...)`.
+5. If no printable fallback output, use `minimal_main_module`.
 
-This means Goby programs are not lowered to Wasm instructions yet; only precomputed output is embedded.
+As of 2026-03-02, native lowering covers a meaningful Phase A subset in tests:
+- literal/binding `print`,
+- `Int`/`Bool` expressions (`+`, `*`, `==`),
+- direct first-order function calls in expressions,
+- `List Int` literals + `print`/pipeline print,
+- `if` and `case` expressions used by `examples/control_flow.gb`.
 
 ## 3. Target Backend Architecture
 
@@ -90,6 +96,7 @@ Per-phase gate format:
 - `Fallback gate`: at least one unsupported example still correctly uses fallback.
 
 ## Phase 0 - Backend skeleton and dual-path gate
+Status (2026-03-02): Completed.
 
 AST subset lowered natively:
 - None yet (infra only).
@@ -123,6 +130,7 @@ Gate checks before Phase 1:
 - Fallback gate: `examples/effect.gb` still uses fallback path.
 
 ## Phase 1 - Minimal real Wasm: `print "hello"`
+Status (2026-03-02): Completed.
 
 AST subset lowered natively:
 - `Stmt::Expr(Expr::Call{callee=Var("print"), arg=StringLit})` in `main`.
@@ -154,6 +162,7 @@ Gate checks before Phase 2:
 - Fallback gate: unsupported forms still route to interpreter.
 
 ## Phase 2 - Int expressions and local bindings in `main`
+Status (2026-03-02): Completed.
 
 AST subset lowered natively:
 - `Expr::IntLit`, `Expr::Var`, `Expr::BinOp(Add|Mul|Eq)`.
@@ -182,6 +191,7 @@ Gate checks before Phase 3:
 - Fallback gate: `case`/`using` examples remain fallback with unchanged output.
 
 ## Phase 3 - Direct function declarations/calls (first non-main lowering)
+Status (2026-03-02): Completed for direct first-order expression calls in the current native subset.
 
 AST subset lowered natively:
 - Top-level declarations with signatures in subset:
@@ -210,6 +220,7 @@ Gate checks before Phase 4:
 - Fallback gate: HOF/lambda call sites still fallback.
 
 ## Phase 4 - List Int and pipeline print path
+Status (2026-03-02): Completed for `List Int` literal print and pipeline print in the current native subset.
 
 AST subset lowered natively:
 - `Expr::ListLit` for `List Int`.
@@ -236,6 +247,7 @@ Gate checks before Phase 5:
 - Fallback gate: `List String` flows still fallback.
 
 ## Phase 5 - Control flow and case lowering
+Status (2026-03-02): Completed for current `Expr::If`/`Expr::Case` subset.
 
 AST subset lowered natively:
 - `Expr::Case` for patterns: `IntLit`, `StringLit`, `BoolLit`, `Wildcard`.
@@ -264,6 +276,8 @@ Gate checks before Phase 6:
 - Behavior gate: full `examples/control_flow.gb` output exact match.
 - Path gate: `case` and `if` AST forms are native.
 - Fallback gate: effectful/control-flow combinations outside supported subset fallback safely.
+
+Current gate result (2026-03-02): Passed in test suite (`compile_module_uses_native_emitter_for_control_flow_example`).
 
 ## Phase 6 - `examples/function.gb` native coverage (except HOF/lambda)
 
