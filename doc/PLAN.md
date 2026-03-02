@@ -231,37 +231,49 @@ whose argument type is statically incompatible with the op's declared signature.
 
 #### Design
 
-**Step 1: Parse and store effect op arg type.**
+**No new data structures needed.**
+`inject_effect_symbols` already calls `parse_function_type` on each `EffectMember.type_annotation`
+and stores the result as `Ty::Fun { params, result }` in `TypeEnv`. The arg type is already
+available via `env.lookup(op_name)` — no new map or re-parsing required.
 
-Extend `EffectMember` (or a parallel lookup table built during typechecking) to store the
-parsed argument type string from the `op_name: ArgType -> ReturnType` annotation.
+**Step 1: Add argument type check in `check_unhandled_effects_in_expr`, `Expr::Call` arm.**
 
-- `EffectMember { name: String, type_annotation: String }` already holds the raw annotation.
-- Build a map `op_name → arg_type_str` in `build_effect_map` (or a new helper).
-
-**Step 2: Infer literal and known-constructor arg types at call sites.**
-
-At each effect op call inside a `using` block, determine the argument's type:
-- `StringLit` → `"String"`
-- `IntLit` → `"Int"`
-- `BoolLit` → `"Bool"`
-- `Call { callee: Var(name), .. }` where `name` is a known record constructor → constructor's type name
-- Everything else → unknown (skip check, no error)
-
-**Step 3: Emit typecheck error on mismatch.**
-
-If the inferred arg type is known AND does not match the op's declared arg type, emit:
+Insertion point: after the existing coverage guard and `check_callee_required_effects` call,
+when `callee` is `Expr::Var(name)` and `env.is_effect_op(name)`:
 
 ```
-typecheck error in main: effect op `catch` expects argument of type `Error` but got `String`
+if let Ty::Fun { params, .. } = env.lookup(name) {
+    if let Some(expected) = params.first() {
+        if *expected != Ty::Unknown {
+            let actual = check_expr(arg, env);
+            if actual != Ty::Unknown && actual != *expected {
+                return Err(TypecheckError {
+                    message: format!(
+                        "effect operation `{name}` expects argument of type `{expected}` \
+                         but got `{actual}`"
+                    ),
+                    ...
+                });
+            }
+        }
+    }
+}
 ```
 
-**Step 4: Regression tests.**
+**Step 2: Apply the same check in the `Expr::Pipeline` arm.**
 
-- Positive: `catch (Error "x")` with correct type → no error.
-- Negative: `catch "x"` when op expects `Error` → error with message including op name,
-  expected type, and actual type.
-- Existing tests: all 181 must continue to pass.
+`"NoCoffeeError" |> catch` also passes a typed argument to an effect op and must be checked.
+
+**Step 3: Regression tests (4 cases).**
+
+1. Negative (Call): `catch "x"` when `catch : Error -> Unit` → error including op name,
+   expected type, actual type.
+2. Negative (Pipeline): `"x" |> catch` when `catch : Error -> Unit` → error.
+3. Positive: `catch (Error(message: "x"))` when `catch : Error -> Unit` → accepted.
+4. Neutral: op with annotation that fails to parse → no error (check silently skipped).
+
+Error message convention: use `"effect operation"` (not `"effect op"`) to match existing
+diagnostics in the codebase.
 
 #### Out of scope (deferred)
 
