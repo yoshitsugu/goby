@@ -235,10 +235,11 @@ Step 3: Runtime continuation object (interpreter path) — DONE (2026-03-02)
   - internal token-stack mismatch guard.
 - Runtime now reinstalls captured handler snapshot from continuation frames on `resume`.
 
-Step 4: Nearest-handler stack semantics
+Step 4: Nearest-handler stack semantics — DONE (2026-03-02)
 
-- Replace alphabetical fallback semantics in runtime dispatch path.
-- Ensure lexical nesting controls operation capture.
+- Replaced alphabetical fallback semantics in runtime dispatch path.
+- Runtime handler lookup now walks active handlers in lexical stack order (nearest first).
+- Ensured lexical nesting controls operation capture for both bare and qualified calls.
 
 Step 5: Validation and regression stabilization
 
