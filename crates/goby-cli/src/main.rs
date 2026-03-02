@@ -81,16 +81,18 @@ fn run() -> Result<(), CliError> {
 
     // TODO: unify parse/typecheck error format ("file:line:col: msg" GCC-style vs
     // "file: typecheck error in X at line Y:Z: msg" prose-style); deferred post-MVP.
-    goby_core::typecheck_module(&module).map_err(|err| {
-        let snippet = err
-            .span
-            .as_ref()
-            .map(|s| format_snippet(&source, s.line, s.col))
-            .filter(|s| !s.is_empty())
-            .map(|s| format!("\n{}", s))
-            .unwrap_or_default();
-        CliError::Runtime(format!("{}: {}{}", cli.file, err, snippet))
-    })?;
+    goby_core::typecheck_module_with_context(&module, Some(Path::new(&cli.file)), None).map_err(
+        |err| {
+            let snippet = err
+                .span
+                .as_ref()
+                .map(|s| format_snippet(&source, s.line, s.col))
+                .filter(|s| !s.is_empty())
+                .map(|s| format!("\n{}", s))
+                .unwrap_or_default();
+            CliError::Runtime(format!("{}: {}{}", cli.file, err, snippet))
+        },
+    )?;
 
     match cli.command {
         Command::Run => {

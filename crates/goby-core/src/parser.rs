@@ -1,6 +1,6 @@
 use crate::ast::{
-    BinOpKind, CaseArm, CasePattern, Declaration, EffectDecl, EffectMember, Expr, HandlerDecl,
-    HandlerMethod, ImportDecl, ImportKind, Module, RecordField, Stmt, TypeDeclaration,
+    BinOpKind, CaseArm, CasePattern, Declaration, EffectDecl, EffectMember, EmbedDecl, Expr,
+    HandlerDecl, HandlerMethod, ImportDecl, ImportKind, Module, RecordField, Stmt, TypeDeclaration,
 };
 use crate::str_util::split_top_level_commas;
 
@@ -30,6 +30,7 @@ pub fn parse_module(source: &str) -> Result<Module, ParseError> {
     let lines: Vec<&str> = source.lines().collect();
     let mut i = 0;
     let mut imports = Vec::new();
+    let mut embed_declarations = Vec::new();
     let mut type_declarations = Vec::new();
     let mut effect_declarations = Vec::new();
     let mut handler_declarations = Vec::new();
@@ -61,6 +62,20 @@ pub fn parse_module(source: &str) -> Result<Module, ParseError> {
                 message: "invalid import declaration".to_string(),
             })?;
             imports.push(import);
+            i += 1;
+            continue;
+        }
+
+        if trimmed.starts_with("@embed ") {
+            let effect_name = parse_embed_line(trimmed).ok_or_else(|| ParseError {
+                line: i + 1,
+                col: 1,
+                message: "invalid @embed declaration".to_string(),
+            })?;
+            embed_declarations.push(EmbedDecl {
+                effect_name,
+                line: i + 1,
+            });
             i += 1;
             continue;
         }
@@ -263,6 +278,7 @@ pub fn parse_module(source: &str) -> Result<Module, ParseError> {
 
     Ok(Module {
         imports,
+        embed_declarations,
         type_declarations,
         effect_declarations,
         handler_declarations,
@@ -1284,6 +1300,15 @@ fn parse_import_line(line: &str) -> Option<ImportDecl> {
     })
 }
 
+fn parse_embed_line(line: &str) -> Option<String> {
+    let rest = line.strip_prefix("@embed ")?.trim();
+    let effect_name = rest.strip_prefix("effect ")?.trim();
+    if !is_identifier(effect_name) {
+        return None;
+    }
+    Some(effect_name.to_string())
+}
+
 fn parse_type_declaration_line(line: &str) -> Option<TypeDeclaration> {
     let rest = line.strip_prefix("type ")?.trim();
     let (name, rhs) = rest.split_once('=')?;
@@ -1625,6 +1650,22 @@ mod tests {
         let source = "import goby/env ()\nmain = 1\n";
         let err = parse_module(source).expect_err("invalid import should fail");
         assert!(err.message.contains("invalid import declaration"));
+    }
+
+    #[test]
+    fn parses_embed_effect_declaration() {
+        let source = "@embed effect Print\nmain : Unit -> Unit\nmain = 1\n";
+        let module = parse_module(source).expect("embed declaration should parse");
+        assert_eq!(module.embed_declarations.len(), 1);
+        assert_eq!(module.embed_declarations[0].effect_name, "Print");
+        assert_eq!(module.embed_declarations[0].line, 1);
+    }
+
+    #[test]
+    fn rejects_invalid_embed_declaration() {
+        let source = "@embed Print\nmain = 1\n";
+        let err = parse_module(source).expect_err("invalid embed declaration should fail");
+        assert!(err.message.contains("invalid @embed declaration"));
     }
 
     #[test]

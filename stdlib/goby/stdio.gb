@@ -1,0 +1,6 @@
+@embed effect Print
+
+print : String -> Unit can Print
+print value =
+  # runtime bridge placeholder; behavior stays on builtin path during migration
+  value |> print

@@ -11,10 +11,17 @@ pub struct Span {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Module {
     pub imports: Vec<ImportDecl>,
+    pub embed_declarations: Vec<EmbedDecl>,
     pub type_declarations: Vec<TypeDeclaration>,
     pub effect_declarations: Vec<EffectDecl>,
     pub handler_declarations: Vec<HandlerDecl>,
     pub declarations: Vec<Declaration>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EmbedDecl {
+    pub effect_name: String,
+    pub line: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
