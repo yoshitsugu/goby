@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use goby_core::{BinOpKind, Expr, Module, Stmt};
 
@@ -26,7 +26,7 @@ pub(crate) fn try_emit_native_module(module: &Module) -> Result<Option<Vec<u8>>,
         return Ok(None);
     };
 
-    let Some(output_text) = collect_phase2_output_text(stmts) else {
+    let Some(output_text) = collect_phase2_output_text(module, stmts) else {
         return Ok(None);
     };
     if output_text.is_empty() {
@@ -55,17 +55,18 @@ impl NativeValue {
     }
 }
 
-fn collect_phase2_output_text(stmts: &[Stmt]) -> Option<String> {
+fn collect_phase2_output_text(module: &Module, stmts: &[Stmt]) -> Option<String> {
+    let env = EvalEnv::from_module(module);
     let mut bindings: HashMap<&str, NativeValue> = HashMap::new();
     let mut outputs: Vec<String> = Vec::new();
     for stmt in stmts {
         match stmt {
             Stmt::Binding { name, value } => {
-                let val = eval_expr(value, &bindings)?;
+                let val = eval_expr(value, &bindings, &env, 0)?;
                 bindings.insert(name.as_str(), val);
             }
             Stmt::Expr(expr) => {
-                let val = as_print_expr(expr, &bindings)?;
+                let val = as_print_expr(expr, &bindings, &env)?;
                 outputs.push(val.as_output_text());
             }
             Stmt::Using { .. } => return None,
@@ -74,7 +75,11 @@ fn collect_phase2_output_text(stmts: &[Stmt]) -> Option<String> {
     Some(outputs.join("\n"))
 }
 
-fn as_print_expr(expr: &Expr, bindings: &HashMap<&str, NativeValue>) -> Option<NativeValue> {
+fn as_print_expr(
+    expr: &Expr,
+    bindings: &HashMap<&str, NativeValue>,
+    env: &EvalEnv<'_>,
+) -> Option<NativeValue> {
     let Expr::Call { callee, arg } = expr else {
         return None;
     };
@@ -84,18 +89,28 @@ fn as_print_expr(expr: &Expr, bindings: &HashMap<&str, NativeValue>) -> Option<N
     if name != "print" {
         return None;
     }
-    eval_expr(arg, bindings)
+    eval_expr(arg, bindings, env, 0)
 }
 
-fn eval_expr(expr: &Expr, bindings: &HashMap<&str, NativeValue>) -> Option<NativeValue> {
+fn eval_expr(
+    expr: &Expr,
+    bindings: &HashMap<&str, NativeValue>,
+    env: &EvalEnv<'_>,
+    depth: usize,
+) -> Option<NativeValue> {
+    const MAX_DEPTH: usize = 32;
+    if depth >= MAX_DEPTH {
+        return None;
+    }
+
     match expr {
         Expr::StringLit(s) => Some(NativeValue::String(s.clone())),
         Expr::IntLit(n) => Some(NativeValue::Int(*n)),
         Expr::BoolLit(b) => Some(NativeValue::Bool(*b)),
         Expr::Var(name) => bindings.get(name.as_str()).cloned(),
         Expr::BinOp { op, left, right } => {
-            let lhs = eval_expr(left, bindings)?;
-            let rhs = eval_expr(right, bindings)?;
+            let lhs = eval_expr(left, bindings, env, depth + 1)?;
+            let rhs = eval_expr(right, bindings, env, depth + 1)?;
             match (op, lhs, rhs) {
                 (BinOpKind::Add, NativeValue::Int(a), NativeValue::Int(b)) => {
                     Some(NativeValue::Int(a.checked_add(b)?))
@@ -106,9 +121,159 @@ fn eval_expr(expr: &Expr, bindings: &HashMap<&str, NativeValue>) -> Option<Nativ
                 (BinOpKind::Eq, NativeValue::Int(a), NativeValue::Int(b)) => {
                     Some(NativeValue::Bool(a == b))
                 }
+                (BinOpKind::Eq, NativeValue::Bool(a), NativeValue::Bool(b)) => {
+                    Some(NativeValue::Bool(a == b))
+                }
                 _ => None,
             }
         }
+        Expr::Call { callee, arg } => {
+            let Expr::Var(fn_name) = callee.as_ref() else {
+                return None;
+            };
+            if fn_name == "print" {
+                return None;
+            }
+            let arg_val = eval_expr(arg, bindings, env, depth + 1)?;
+            eval_named_function(fn_name, Some(arg_val), env, depth + 1)
+        }
         _ => None,
+    }
+}
+
+struct EvalEnv<'a> {
+    declarations: HashMap<&'a str, &'a goby_core::Declaration>,
+}
+
+impl<'a> EvalEnv<'a> {
+    fn from_module(module: &'a Module) -> Self {
+        let mut declarations = HashMap::new();
+        for decl in &module.declarations {
+            declarations.insert(decl.name.as_str(), decl);
+        }
+        Self { declarations }
+    }
+}
+
+fn eval_named_function(
+    fn_name: &str,
+    arg: Option<NativeValue>,
+    env: &EvalEnv<'_>,
+    depth: usize,
+) -> Option<NativeValue> {
+    let decl = env.declarations.get(fn_name)?;
+    if decl.name == "main" {
+        return None;
+    }
+    if decl.params.len() > 1 {
+        return None;
+    }
+    let stmts = decl.parsed_body.as_deref()?;
+
+    let mut locals: HashMap<&str, NativeValue> = HashMap::new();
+    if let Some(param) = decl.params.first()
+        && let Some(arg_val) = arg
+    {
+        locals.insert(param.as_str(), arg_val);
+    }
+
+    let mut last_expr: Option<NativeValue> = None;
+    for stmt in stmts {
+        match stmt {
+            Stmt::Binding { name, value } => {
+                let val = eval_expr(value, &locals, env, depth + 1)?;
+                locals.insert(name.as_str(), val);
+            }
+            Stmt::Expr(expr) => {
+                let value = eval_expr(expr, &locals, env, depth + 1)?;
+                last_expr = Some(value);
+            }
+            Stmt::Using { .. } => return None,
+        }
+    }
+    last_expr
+}
+
+pub(crate) fn declaration_body_supported_for_native(decl_name: &str, module: &Module) -> bool {
+    let env = EvalEnv::from_module(module);
+    let mut stack = HashSet::new();
+    is_decl_supported(decl_name, module, &env, &mut stack)
+}
+
+fn is_decl_supported(
+    decl_name: &str,
+    module: &Module,
+    env: &EvalEnv<'_>,
+    stack: &mut HashSet<String>,
+) -> bool {
+    if !stack.insert(decl_name.to_string()) {
+        return false;
+    }
+    let Some(decl) = module.declarations.iter().find(|d| d.name == decl_name) else {
+        stack.remove(decl_name);
+        return false;
+    };
+    if decl.params.len() > 1 {
+        stack.remove(decl_name);
+        return false;
+    }
+    let Some(stmts) = decl.parsed_body.as_deref() else {
+        stack.remove(decl_name);
+        return false;
+    };
+    let ok = stmts
+        .iter()
+        .all(|s| is_stmt_supported(s, module, env, stack));
+    stack.remove(decl_name);
+    ok
+}
+
+fn is_stmt_supported(
+    stmt: &Stmt,
+    module: &Module,
+    env: &EvalEnv<'_>,
+    stack: &mut HashSet<String>,
+) -> bool {
+    match stmt {
+        Stmt::Binding { value, .. } => is_value_expr_supported(value, module, env, stack),
+        Stmt::Expr(expr) => match expr {
+            Expr::Call { callee, arg } if matches!(callee.as_ref(), Expr::Var(n) if n == "print") => {
+                is_value_expr_supported(arg, module, env, stack)
+            }
+            _ => is_value_expr_supported(expr, module, env, stack),
+        },
+        Stmt::Using { .. } => false,
+    }
+}
+
+fn is_value_expr_supported(
+    expr: &Expr,
+    module: &Module,
+    env: &EvalEnv<'_>,
+    stack: &mut HashSet<String>,
+) -> bool {
+    match expr {
+        Expr::StringLit(_) | Expr::IntLit(_) | Expr::BoolLit(_) | Expr::Var(_) => true,
+        Expr::BinOp { op, left, right } => {
+            matches!(op, BinOpKind::Add | BinOpKind::Mul | BinOpKind::Eq)
+                && is_value_expr_supported(left, module, env, stack)
+                && is_value_expr_supported(right, module, env, stack)
+        }
+        Expr::Call { callee, arg } => {
+            let Expr::Var(name) = callee.as_ref() else {
+                return false;
+            };
+            if name == "print" {
+                return false;
+            }
+            if !is_value_expr_supported(arg, module, env, stack) {
+                return false;
+            }
+            if !env.declarations.contains_key(name.as_str()) {
+                return false;
+            }
+            is_decl_supported(name, module, env, stack)
+        }
+        _ => false,
     }
 }
