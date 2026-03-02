@@ -310,11 +310,17 @@ Step 7.2: Define evidence payload shape (internal IR-level contract) — DONE (2
   - referenced effect operations (qualified + bare-name candidates) mapped to
     `(EffectId, OpId)` entries.
 
-Step 7.3: Direct-style lowerer path stabilization
+Step 7.3: Direct-style lowerer path stabilization — DONE (2026-03-02)
 
 - Keep existing native lowerer behavior for `DirectStyle` declarations.
 - Ensure unsupported effectful constructs do not regress pure-path codegen:
   - direct-style subset remains bytecode-compatible with current tests.
+- Implemented direct-style gating inside native evaluator/lowerer call paths:
+  - declaration callables are only materialized when the target declaration is `DirectStyle`,
+  - named function evaluation bails out for `EffectBoundary` declarations.
+- Added lowerer-focused regression tests:
+  - call-graph with `can` declaration causes native lowerer to return `None`,
+  - pure direct-style declaration call still lowers natively.
 
 Step 7.4: Effect-boundary lowering skeleton (no full feature parity yet)
 

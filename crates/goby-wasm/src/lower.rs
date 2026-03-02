@@ -3,8 +3,11 @@ use std::collections::HashMap;
 use goby_core::{BinOpKind, CasePattern, Expr, Module, Stmt};
 
 use crate::{
-    CodegenError, backend::WasmProgramBuilder, call::extract_direct_print_call_arg,
-    layout::MemoryLayout, planning::build_lowering_plan,
+    CodegenError,
+    backend::WasmProgramBuilder,
+    call::extract_direct_print_call_arg,
+    layout::MemoryLayout,
+    planning::{LoweringPlan, build_lowering_plan},
 };
 
 pub(crate) fn try_emit_native_module(module: &Module) -> Result<Option<Vec<u8>>, CodegenError> {
@@ -48,7 +51,7 @@ pub(crate) fn try_emit_native_module(module: &Module) -> Result<Option<Vec<u8>>,
         return Ok(None);
     };
 
-    let Some(output_text) = collect_phase2_output_text(module, stmts) else {
+    let Some(output_text) = collect_phase2_output_text(module, stmts, &lowering_plan) else {
         return Ok(None);
     };
     if output_text.is_empty() {
@@ -104,8 +107,12 @@ impl NativeValue {
     }
 }
 
-fn collect_phase2_output_text(module: &Module, stmts: &[Stmt]) -> Option<String> {
-    let env = EvalEnv::from_module(module);
+fn collect_phase2_output_text(
+    module: &Module,
+    stmts: &[Stmt],
+    lowering_plan: &LoweringPlan,
+) -> Option<String> {
+    let env = EvalEnv::from_module(module, lowering_plan);
     let mut bindings: HashMap<String, NativeValue> = HashMap::new();
     let mut outputs: Vec<String> = Vec::new();
     for stmt in stmts {
@@ -152,7 +159,10 @@ fn eval_expr(
         Expr::IntLit(n) => Some(NativeValue::Int(*n)),
         Expr::BoolLit(b) => Some(NativeValue::Bool(*b)),
         Expr::Var(name) => bindings.get(name).cloned().or_else(|| {
-            if env.declarations.contains_key(name.as_str()) || name == "map" {
+            if (env.declarations.contains_key(name.as_str())
+                && env.lowering_plan.is_direct_style(name.as_str()))
+                || name == "map"
+            {
                 Some(NativeValue::Callable(NativeCallable::Named {
                     name: name.clone(),
                     applied_args: Vec::new(),
@@ -240,15 +250,19 @@ fn eval_expr(
 
 struct EvalEnv<'a> {
     declarations: HashMap<&'a str, &'a goby_core::Declaration>,
+    lowering_plan: &'a LoweringPlan,
 }
 
 impl<'a> EvalEnv<'a> {
-    fn from_module(module: &'a Module) -> Self {
+    fn from_module(module: &'a Module, lowering_plan: &'a LoweringPlan) -> Self {
         let mut declarations = HashMap::new();
         for decl in &module.declarations {
             declarations.insert(decl.name.as_str(), decl);
         }
-        Self { declarations }
+        Self {
+            declarations,
+            lowering_plan,
+        }
     }
 }
 
@@ -258,6 +272,9 @@ fn eval_named_function(
     env: &EvalEnv<'_>,
     depth: usize,
 ) -> Option<NativeValue> {
+    if !env.lowering_plan.is_direct_style(fn_name) {
+        return None;
+    }
     let decl = env.declarations.get(fn_name)?;
     if decl.params.len() != args.len() {
         return None;
@@ -325,6 +342,9 @@ fn apply_named_callable(
     }
 
     let decl = env.declarations.get(name.as_str())?;
+    if !env.lowering_plan.is_direct_style(name.as_str()) {
+        return None;
+    }
     if decl.name == "main" {
         return None;
     }
@@ -371,4 +391,44 @@ fn apply_map_builtin(
         mapped.push(n);
     }
     Some(NativeValue::ListInt(mapped))
+}
+
+#[cfg(test)]
+mod tests {
+    use goby_core::parse_module;
+
+    use super::try_emit_native_module;
+
+    #[test]
+    fn native_lowerer_rejects_main_when_call_graph_contains_effect_boundary() {
+        let source = r#"
+tick : Int -> Int can Tick
+tick n = n
+
+main : Unit -> Unit
+main =
+  print (tick 1)
+"#;
+        let module = parse_module(source).expect("source should parse");
+        let lowered = try_emit_native_module(&module).expect("native lowering should not error");
+        assert_eq!(lowered, None);
+    }
+
+    #[test]
+    fn native_lowerer_accepts_direct_style_declarations() {
+        let source = r#"
+double : Int -> Int
+double n = n * 2
+
+main : Unit -> Unit
+main =
+  print (double 21)
+"#;
+        let module = parse_module(source).expect("source should parse");
+        let lowered = try_emit_native_module(&module).expect("native lowering should not error");
+        assert!(
+            lowered.is_some(),
+            "direct-style module should lower natively"
+        );
+    }
 }

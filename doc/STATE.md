@@ -712,6 +712,21 @@ This file is a restart-safe snapshot for resuming work after context reset.
     - `cargo check`
     - `cargo test` (270 tests passed)
     - `cargo clippy -- -D warnings`
+- 2026-03-02 (session 67): `PLAN_RESUME` Step 7.3 complete (direct-style lowerer path stabilization)
+  - Threaded `LoweringPlan` through `lower.rs` native evaluator environment.
+  - Enforced direct-style-only declaration evaluation/materialization in:
+    - variable-to-callable resolution,
+    - named declaration application/evaluation paths.
+  - Added lowerer regression tests:
+    - native lowering rejects main when transitive call graph includes `can` boundary declaration,
+    - native lowering accepts representative pure direct-style function-call subset.
+  - Plan docs synchronized:
+    - `doc/PLAN_RESUME.md`: Step 7.3 marked DONE.
+  - Quality gates green:
+    - `cargo fmt`
+    - `cargo check`
+    - `cargo test` (276 tests passed)
+    - `cargo clippy -- -D warnings`
 
 ## 5. Current Example Files
 
