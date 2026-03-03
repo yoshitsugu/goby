@@ -1379,10 +1379,10 @@ fn parse_embed_line(line: &str) -> Result<String, String> {
         .strip_prefix("@embed ")
         .map(str::trim)
         .ok_or_else(|| "invalid @embed declaration".to_string())?;
-    let effect_name = rest
-        .strip_prefix("effect ")
-        .map(str::trim)
-        .ok_or_else(|| "invalid @embed target: expected `effect <EffectName>`".to_string())?;
+
+    // Canonical syntax is `@embed <EffectName>`.
+    // Legacy compatibility accepts `@embed effect <EffectName>` during transition.
+    let effect_name = rest.strip_prefix("effect ").map(str::trim).unwrap_or(rest);
     if !is_identifier(effect_name) {
         return Err("invalid embedded effect name".to_string());
     }
@@ -1825,10 +1825,18 @@ main = 1
     }
 
     #[test]
-    fn rejects_invalid_embed_declaration() {
+    fn parses_embed_declaration_without_effect_keyword() {
         let source = "@embed Print\nmain = 1\n";
+        let module = parse_module(source).expect("canonical embed declaration should parse");
+        assert_eq!(module.embed_declarations.len(), 1);
+        assert_eq!(module.embed_declarations[0].effect_name, "Print");
+    }
+
+    #[test]
+    fn rejects_invalid_embed_declaration() {
+        let source = "@embed 1Print\nmain = 1\n";
         let err = parse_module(source).expect_err("invalid embed declaration should fail");
-        assert!(err.message.contains("invalid @embed target"));
+        assert!(err.message.contains("invalid embedded effect name"));
     }
 
     #[test]

@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-03 (session 85)
+Last updated: 2026-03-03 (session 88)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -980,6 +980,35 @@ This file is a restart-safe snapshot for resuming work after context reset.
     - possible explicit `discontinue` as a future extension proposal,
     - default mode switch policy remains a dedicated follow-up decision.
   - Kept `doc/PLAN.md` as the active design source of truth.
+- 2026-03-03 (session 87): `PLAN_STANDARD_LIBRARY` ExtraStep A progress (A1-A10 complete)
+  - `goby-core` parser updated:
+    - canonical embed syntax `@embed <EffectName>` is accepted,
+    - legacy `@embed effect <EffectName>` is kept as temporary compatibility syntax.
+  - `goby-core` typechecker updated:
+    - embedded effect must be declared in the same module (`effect X` required for `@embed X`),
+    - existing stdlib-root-only path restriction remains enforced.
+  - `stdlib/goby/stdio.gb` migrated to canonical model:
+    - `effect Print` declaration + `@embed Print`.
+  - Resolver/typecheck/parser tests updated for canonical syntax and new validation behavior.
+  - `doc/PLAN_STANDARD_LIBRARY.md` ExtraStep A checklist updated:
+    - A1-A10 marked complete,
+    - A11/A12 kept as final doc+gate closeout steps.
+  - Validation in this session:
+    - `cargo fmt`
+    - `cargo check`
+    - `cargo test -p goby-core`
+- 2026-03-03 (session 88): `PLAN_STANDARD_LIBRARY` ExtraStep A closeout (A11-A12 complete)
+  - Docs synchronized for landed behavior:
+    - `doc/PLAN.md` now records canonical embed form and in-module effect requirement
+      (`@embed <EffectName>` + local `effect <EffectName>`),
+    - `doc/PLAN_STANDARD_LIBRARY.md` initial embed model updated to canonical form.
+  - ExtraStep A checklist status:
+    - A1-A12 all complete.
+  - Final quality gates passed:
+    - `cargo fmt`
+    - `cargo check`
+    - `cargo test`
+    - `cargo clippy -- -D warnings`
 
 ## 5. Current Example Files
 
@@ -1006,7 +1035,7 @@ cargo clippy -- -D warnings
 
 Execution focus (in order):
 1. Standard-library follow-up (`doc/PLAN_STANDARD_LIBRARY.md`):
-   ExtraStep A (`@embed` model alignment) and ExtraStep B (intrinsic bridge naming).
+   ExtraStep B (intrinsic bridge naming).
 2. Effect runtime redesign follow-up (one-shot deep handlers + selective CPS/evidence passing), including
    post-`PLAN_RESUME` items now tracked in `doc/PLAN.md`.
 3. `resolve_main_runtime_output` retirement (blocked on effect-native support and remaining unsupported forms).

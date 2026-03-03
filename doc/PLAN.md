@@ -417,6 +417,8 @@ Additional planning constraint (locked 2026-03-02):
 
 - Introduce `@embed` declarations as a **stdlib-only** feature for runtime-bridged effects
   (initial target: `@embed Print` for `goby/stdio`).
+- Canonical stdlib embed form is `@embed <EffectName>` with an in-module `effect <EffectName>`
+  declaration requirement (legacy `@embed effect <EffectName>` is temporarily accepted for compatibility).
 - `@embed` is not allowed in user Goby modules or non-stdlib libraries.
 - `print` migration should proceed via `goby/stdio` + stdlib `@embed Print` bridge,
   with temporary compatibility for existing bare `print`.
