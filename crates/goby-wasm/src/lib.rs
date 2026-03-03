@@ -39,9 +39,9 @@ pub fn compile_module(module: &Module) -> Result<Vec<u8>, CodegenError> {
     };
 
     let native_attempt = lower::try_emit_native_module_with_handoff(module)?;
-    let supports_native = fallback::supports_native_codegen(module);
+    let mut effect_boundary_handoff: Option<lower::EffectBoundaryHandoff> = None;
     match native_attempt {
-        lower::NativeLoweringResult::Emitted(wasm) if supports_native => return Ok(wasm),
+        lower::NativeLoweringResult::Emitted(wasm) => return Ok(wasm),
         lower::NativeLoweringResult::EffectBoundaryHandoff(handoff) => {
             if handoff.main_style == planning::LoweringStyle::DirectStyle {
                 return Err(CodegenError {
@@ -58,8 +58,7 @@ pub fn compile_module(module: &Module) -> Result<Vec<u8>, CodegenError> {
                     message: "internal lowering invariant violation: direct-style main requirement marked as evidence-passing".to_string(),
                 });
             }
-            // Explicit Step 7.4 handoff point: effect-boundary lowering is not
-            // emitted natively yet, so route to the fallback runtime path below.
+            effect_boundary_handoff = Some(handoff);
         }
         _ => {}
     }
@@ -67,6 +66,28 @@ pub fn compile_module(module: &Module) -> Result<Vec<u8>, CodegenError> {
     if let Some(text) = resolve_main_runtime_output(module, &main.body, main.parsed_body.as_deref())
     {
         return compile_print_module(&text);
+    }
+
+    if let Some(handoff) = effect_boundary_handoff {
+        return Err(CodegenError {
+            message: format!(
+                "main lowered as effect boundary (style={:?}, handlers_resume={}, evidence_ops={}, evidence_requirements={}, evidence_fingerprint_hint={}); fallback runtime output could not be resolved",
+                handoff.main_style,
+                handoff.handler_resume_present,
+                handoff.evidence_operation_table_len,
+                handoff.evidence_requirements_len,
+                handoff.evidence_fingerprint_hint,
+            ),
+        });
+    }
+
+    if let Some(reason) = fallback::native_unsupported_reason(module) {
+        return Err(CodegenError {
+            message: format!(
+                "main body contains unsupported constructs that cannot be lowered natively or resolved as static output (native_unsupported_reason={})",
+                reason
+            ),
+        });
     }
 
     Err(CodegenError {

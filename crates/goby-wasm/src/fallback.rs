@@ -88,6 +88,7 @@ impl UnsupportedReason {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn supports_native_codegen(module: &Module) -> bool {
     native_unsupported_reason(module).is_none()
 }
