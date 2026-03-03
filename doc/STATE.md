@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-03 (session 90)
+Last updated: 2026-03-03 (session 91)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -59,6 +59,15 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - phased Wasm lowering (portable trampoline first, typed-continuation optimization later).
 
 ## 4. Recent Milestones
+
+- 2026-03-03 (session 91): ExtraStep C phase-1 progress:
+  - `doc/PLAN_STANDARD_LIBRARY.md` ExtraStep C now has locked split semantics and grapheme policy.
+  - Added intrinsic `__goby_string_each_grapheme` to typechecker known intrinsic set.
+  - Runtime bridge now supports `__goby_string_each_grapheme` with Unicode grapheme segmentation
+    and `Iterator.yield` dispatch; returns yielded grapheme count (`Int`).
+  - Added regression tests in `goby-core` (stdlib-root intrinsic acceptance) and `goby-wasm`
+    (runtime output for grapheme iteration).
+  - `__goby_string_eq` / `__goby_list_push_string` and stdlib `string.split` migration are pending.
 
 - 2026-03-03 (session 90): string interpolation implementation landed end-to-end:
   - `Expr::InterpolatedString` + `InterpolatedPart` added in `goby-core` AST.

@@ -13,3 +13,4 @@ typed-continuation-optimized = []
 [dependencies]
 goby-core = { path = "../goby-core" }
 wasm-encoder = "0.240"
+unicode-segmentation = "1.12"

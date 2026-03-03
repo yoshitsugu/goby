@@ -541,31 +541,32 @@ Problem statement:
 Decisions (2026-03-03):
 
 - New intrinsic name:
-  - `__goby_string_each_grapheme : String -> Unit can Iterator`
+  - `__goby_string_each_grapheme : String -> Int can Iterator`
 - Processing model:
   - stream-like internal execution using `Iterator.yield`,
   - public API remains `List String` for now.
 - Implementation direction:
   - choose **B** strategy: add minimal list/string primitives needed to build
     `split` in stdlib (instead of keeping `string.split` as permanent builtin).
+- Split semantics lock:
+  - preserve empty segments (compatible with current runtime split behavior),
+  - preserve leading/trailing empty segments,
+  - empty delimiter means grapheme-wise split (`"abc"` -> `["a", "b", "c"]`).
+- Grapheme definition lock:
+  - Unicode Extended Grapheme Cluster.
 
-Required pre-lock decisions before code:
+Remaining decisions:
 
-1. `split` compatibility semantics:
-   - whether empty segments are preserved (recommended: preserve, Rust-compatible),
-   - behavior for empty delimiter (recommended: grapheme-wise split).
-2. Grapheme definition:
-   - Unicode Extended Grapheme Cluster (recommended).
-3. Minimal helper primitive set for stdlib implementation:
+1. Minimal helper primitive set for stdlib implementation:
    - `__goby_string_eq : String -> String -> Bool`
    - `__goby_list_push_string : List String -> String -> List String`
    - keep intrinsic scope minimal and stdlib-only.
 
 Execution checklist (incremental):
 
-- [ ] C1. Spec lock in this plan:
-  - lock split edge-case semantics (empty delimiter, consecutive delimiters, leading/trailing delimiters),
-  - lock grapheme definition and test fixtures.
+- [x] C1. Spec lock in this plan:
+  - split edge-case semantics locked (empty delimiter, consecutive delimiters, leading/trailing delimiters),
+  - grapheme definition locked (Unicode Extended Grapheme Cluster).
 - [ ] C2. Typechecker intrinsic model expansion:
   - allow `__goby_string_each_grapheme`, `__goby_string_eq`, `__goby_list_push_string` in stdlib only,
   - keep user-space `__goby_*` hard rejection unchanged.
@@ -584,3 +585,10 @@ Execution checklist (incremental):
   - update `doc/PLAN.md` and `doc/STATE.md` with final intrinsic set and split ownership.
 - [ ] C8. Final quality gates:
   - `cargo fmt`, `cargo check`, `cargo test`, `cargo clippy -- -D warnings`.
+
+Current progress note (2026-03-03):
+
+- `C2/C3` phase-1 landed for `__goby_string_each_grapheme`:
+  - typechecker accepts the intrinsic under stdlib-root policy,
+  - runtime bridge dispatches graphemes through `Iterator.yield` and returns yielded-count.
+- `__goby_string_eq` and `__goby_list_push_string` remain pending.

@@ -638,6 +638,15 @@ fn build_type_env(module: &Module, stdlib_root: &Path) -> TypeEnv {
         },
         "runtime intrinsic `__goby_env_fetch_env_var`".to_string(),
     );
+    insert_global_symbol(
+        &mut globals,
+        "__goby_string_each_grapheme".to_string(),
+        Ty::Fun {
+            params: vec![Ty::Str],
+            result: Box::new(Ty::Int),
+        },
+        "runtime intrinsic `__goby_string_each_grapheme`".to_string(),
+    );
     inject_imported_symbols(module, &mut globals, stdlib_root);
     inject_type_constructors(module, &mut globals, &mut type_aliases, &mut record_types);
     inject_effect_symbols(module, &mut globals);
@@ -929,7 +938,10 @@ fn is_reserved_intrinsic_name(name: &str) -> bool {
 }
 
 fn is_known_runtime_intrinsic_name(name: &str) -> bool {
-    matches!(name, "__goby_string_length" | "__goby_env_fetch_env_var")
+    matches!(
+        name,
+        "__goby_string_length" | "__goby_env_fetch_env_var" | "__goby_string_each_grapheme"
+    )
 }
 
 #[derive(Clone, Copy)]
@@ -3611,6 +3623,26 @@ f = print \"hi\"
         let module = parse_module(source).expect("should parse");
         typecheck_module_with_context(&module, Some(&source_path), Some(&stdlib_root))
             .expect("reserved intrinsic calls should be accepted under stdlib root");
+    }
+
+    #[test]
+    fn accepts_each_grapheme_intrinsic_inside_stdlib_root() {
+        let sandbox = TempDirGuard::new("intrinsic_each_grapheme_inside_stdlib");
+        let stdlib_root = sandbox.path.join("stdlib");
+        let source_path = stdlib_root.join("goby/string.gb");
+        fs::create_dir_all(source_path.parent().expect("parent should exist"))
+            .expect("stdlib path should be creatable");
+        let source = "\
+effect Iterator
+  yield : String -> Int
+@embed Iterator
+count_graphemes : String -> Int can Iterator
+count_graphemes s = __goby_string_each_grapheme s
+";
+        fs::write(&source_path, source).expect("fixture file should be writable");
+        let module = parse_module(source).expect("should parse");
+        typecheck_module_with_context(&module, Some(&source_path), Some(&stdlib_root))
+            .expect("`__goby_string_each_grapheme` should be accepted under stdlib root");
     }
 
     #[test]
