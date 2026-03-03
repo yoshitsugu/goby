@@ -158,6 +158,10 @@ Based on `examples/*.gb`:
 - Parser contract is locked:
   - top-level declaration name `resume` is rejected.
   - handler parameter name `resume` is rejected.
+- Decision (2026-03-03):
+  - do not introduce explicit `discontinue` syntax in the current phase.
+  - keep abortive behavior as "handler does not call `resume`".
+  - track explicit `discontinue` only as a possible later-phase language extension.
 
 #### `resume` Parser/AST Contract (Step 1 done, 2026-03-02)
 
@@ -175,6 +179,11 @@ Based on `examples/*.gb`:
   - `resume_outside_handler`
   - `resume_arg_type_mismatch`
   - `resume_in_unknown_operation_context`
+- Decision update (2026-03-03):
+  - `resume` result type inference is conservative:
+    - allow local inference only when handler operation result type is
+      non-generic and directly available in resume context,
+    - keep `Ty::Unknown` for generic/complex cases.
 
 #### `resume` Runtime Bridge (Step 4 update, 2026-03-02)
 
@@ -217,6 +226,8 @@ Based on `examples/*.gb`:
 
 - Module/package ecosystem and remote dependency management.
 - Advanced effects (async, state, cancellation, effect-safety diagnostics).
+- Potential explicit `discontinue` syntax as a clarity-focused effect-control extension
+  (deferred; not part of current `resume` rollout).
 - Pattern matching exhaustiveness and advanced ADTs.
 - Interoperability/FFI strategy.
 - Governance model, RFC process, compatibility policy.

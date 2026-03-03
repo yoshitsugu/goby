@@ -15,6 +15,10 @@ use goby_core::{
 const ERR_MISSING_MAIN: &str = "Wasm codegen requires a `main` declaration";
 const BUILTIN_PRINT: &str = "print";
 const MAX_EVAL_DEPTH: usize = 32;
+const ERR_RESUME_MISSING: &str = "resume used without an active continuation [E-RESUME-MISSING]: `resume` can only be called while executing a handler operation body";
+const ERR_RESUME_CONSUMED: &str = "resume continuation already consumed [E-RESUME-CONSUMED]: continuations are one-shot; call `resume` at most once per handled operation";
+const ERR_RESUME_HANDLER_MISMATCH: &str = "internal resume token handler mismatch [E-RESUME-HANDLER-MISMATCH]: continuation token points to an unknown handler";
+const ERR_RESUME_STACK_MISMATCH: &str = "internal resume token stack mismatch [E-RESUME-STACK-MISMATCH]: continuation token stack became unbalanced";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 /// Error returned by [`compile_module`] when Wasm emission fails.
@@ -1374,7 +1378,7 @@ impl<'m> RuntimeOutputResolver<'m> {
 
     fn take_resume_token_result(&mut self, token_idx: usize) -> Option<Option<RuntimeValue>> {
         if token_idx + 1 != self.resume_tokens.len() {
-            self.set_runtime_error_once("internal resume token stack mismatch");
+            self.set_runtime_error_once(ERR_RESUME_STACK_MISMATCH);
             return None;
         }
         let token = self.resume_tokens.pop()?;
@@ -1399,7 +1403,7 @@ impl<'m> RuntimeOutputResolver<'m> {
         token_idx: usize,
     ) -> Option<Option<RuntimeValue>> {
         if token_idx + 1 != self.optimized_resume_tokens.len() {
-            self.set_runtime_error_once("internal resume token stack mismatch");
+            self.set_runtime_error_once(ERR_RESUME_STACK_MISMATCH);
             return None;
         }
         let token = self.optimized_resume_tokens.pop()?;
@@ -1469,19 +1473,19 @@ impl<'m> RuntimeOutputResolver<'m> {
         resumed: RuntimeValue,
     ) -> Option<RuntimeValue> {
         let Some(token_ro) = self.resume_tokens.last() else {
-            self.set_runtime_error_once("resume used without an active continuation");
+            self.set_runtime_error_once(ERR_RESUME_MISSING);
             return None;
         };
         if token_ro.continuation.consumed {
-            self.set_runtime_error_once("resume continuation already consumed");
+            self.set_runtime_error_once(ERR_RESUME_CONSUMED);
             return None;
         }
         if token_ro.handler_decl_idx >= self.module.handler_declarations.len() {
-            self.set_runtime_error_once("internal resume token handler mismatch");
+            self.set_runtime_error_once(ERR_RESUME_HANDLER_MISMATCH);
             return None;
         }
         let Some(token) = self.current_resume_token_mut() else {
-            self.set_runtime_error_once("resume used without an active continuation");
+            self.set_runtime_error_once(ERR_RESUME_MISSING);
             return None;
         };
         token.continuation.consumed = true;
@@ -1494,19 +1498,19 @@ impl<'m> RuntimeOutputResolver<'m> {
         resumed: RuntimeValue,
     ) -> Option<RuntimeValue> {
         let Some(token_ro) = self.optimized_resume_tokens.last() else {
-            self.set_runtime_error_once("resume used without an active continuation");
+            self.set_runtime_error_once(ERR_RESUME_MISSING);
             return None;
         };
         if token_ro.consumed {
-            self.set_runtime_error_once("resume continuation already consumed");
+            self.set_runtime_error_once(ERR_RESUME_CONSUMED);
             return None;
         }
         if token_ro.handler_decl_idx >= self.module.handler_declarations.len() {
-            self.set_runtime_error_once("internal resume token handler mismatch");
+            self.set_runtime_error_once(ERR_RESUME_HANDLER_MISMATCH);
             return None;
         }
         let Some(token) = self.current_optimized_resume_token_mut() else {
-            self.set_runtime_error_once("resume used without an active continuation");
+            self.set_runtime_error_once(ERR_RESUME_MISSING);
             return None;
         };
         token.consumed = true;
@@ -2362,13 +2366,27 @@ mod tests {
 
     fn runtime_error_kind_from_output_line(line: &str) -> Option<&'static str> {
         let msg = line.strip_prefix("runtime error: ")?;
-        match msg {
-            "resume used without an active continuation" => Some("continuation_missing"),
-            "resume continuation already consumed" => Some("continuation_consumed"),
-            "internal resume token handler mismatch" => Some("token_handler_mismatch"),
-            "internal resume token stack mismatch" => Some("token_stack_mismatch"),
-            _ => Some("unknown_runtime_error"),
+        if msg.contains("[E-RESUME-MISSING]")
+            || msg.starts_with("resume used without an active continuation")
+        {
+            return Some("continuation_missing");
         }
+        if msg.contains("[E-RESUME-CONSUMED]")
+            || msg.starts_with("resume continuation already consumed")
+        {
+            return Some("continuation_consumed");
+        }
+        if msg.contains("[E-RESUME-HANDLER-MISMATCH]")
+            || msg.starts_with("internal resume token handler mismatch")
+        {
+            return Some("token_handler_mismatch");
+        }
+        if msg.contains("[E-RESUME-STACK-MISMATCH]")
+            || msg.starts_with("internal resume token stack mismatch")
+        {
+            return Some("token_stack_mismatch");
+        }
+        Some("unknown_runtime_error")
     }
 
     #[derive(Debug, Clone, Copy)]
@@ -2894,8 +2912,8 @@ main =
         let output =
             resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module));
         assert_eq!(
-            output.as_deref(),
-            Some("runtime error: resume continuation already consumed"),
+            output.as_deref().map(|s| s.contains("[E-RESUME-CONSUMED]")),
+            Some(true),
             "second resume on one-shot token should surface a deterministic runtime error"
         );
     }
@@ -2939,8 +2957,8 @@ main =
         let output =
             resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module));
         assert_eq!(
-            output.as_deref(),
-            Some("runtime error: resume used without an active continuation"),
+            output.as_deref().map(|s| s.contains("[E-RESUME-MISSING]")),
+            Some(true),
             "resume outside handler should report runtime error in fallback runtime"
         );
     }

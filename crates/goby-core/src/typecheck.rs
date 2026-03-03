@@ -1368,7 +1368,7 @@ fn check_resume_in_stmts_with_local_env(
         match stmt {
             Stmt::Binding { name, value } => {
                 check_resume_in_expr(value, local_env, decl_name, resume_ctx)?;
-                let ty = check_expr(value, local_env);
+                let ty = infer_binding_ty_with_resume_context(value, local_env, resume_ctx);
                 local_env.locals.insert(name.clone(), ty);
             }
             Stmt::Expr(expr) => {
@@ -1386,6 +1386,36 @@ fn check_resume_in_stmts_with_local_env(
         }
     }
     Ok(())
+}
+
+fn infer_binding_ty_with_resume_context(
+    value: &Expr,
+    env: &TypeEnv,
+    resume_ctx: Option<&ResumeContext>,
+) -> Ty {
+    if let Expr::Resume { .. } = value
+        && let Some(ctx) = resume_ctx
+        && let Some(expected) = ctx.expected_arg_ty.as_ref()
+        && !ty_contains_type_var(expected)
+    {
+        // Conservative local inference: for non-generic operation result types,
+        // use the known handler operation result type for resume-bound locals.
+        return expected.clone();
+    }
+    check_expr(value, env)
+}
+
+fn ty_contains_type_var(ty: &Ty) -> bool {
+    match ty {
+        Ty::Var(_) => true,
+        Ty::List(inner) => ty_contains_type_var(inner),
+        Ty::Tuple(items) => items.iter().any(ty_contains_type_var),
+        Ty::Fun { params, result } => {
+            params.iter().any(ty_contains_type_var) || ty_contains_type_var(result)
+        }
+        Ty::Con { args, .. } => args.iter().any(ty_contains_type_var),
+        Ty::Int | Ty::Bool | Ty::Str | Ty::Unit | Ty::Unknown => false,
+    }
 }
 
 fn check_resume_in_expr(
@@ -3773,6 +3803,42 @@ main =
 ";
         let module = parse_module(source).expect("should parse");
         typecheck_module(&module).expect("resume with matching return type should pass");
+    }
+
+    #[test]
+    fn infers_resume_binding_type_from_non_generic_resume_context() {
+        let env = TypeEnv {
+            globals: HashMap::new(),
+            locals: HashMap::new(),
+            type_aliases: HashMap::new(),
+            record_types: HashMap::new(),
+        };
+        let value = Expr::Resume {
+            value: Box::new(Expr::IntLit(1)),
+        };
+        let ctx = ResumeContext {
+            expected_arg_ty: Some(Ty::Int),
+        };
+        let inferred = infer_binding_ty_with_resume_context(&value, &env, Some(&ctx));
+        assert_eq!(inferred, Ty::Int);
+    }
+
+    #[test]
+    fn keeps_resume_binding_unknown_when_resume_context_is_generic() {
+        let env = TypeEnv {
+            globals: HashMap::new(),
+            locals: HashMap::new(),
+            type_aliases: HashMap::new(),
+            record_types: HashMap::new(),
+        };
+        let value = Expr::Resume {
+            value: Box::new(Expr::Var("x".to_string())),
+        };
+        let ctx = ResumeContext {
+            expected_arg_ty: Some(Ty::Var("T".to_string())),
+        };
+        let inferred = infer_binding_ty_with_resume_context(&value, &env, Some(&ctx));
+        assert_eq!(inferred, Ty::Unknown);
     }
 
     #[test]

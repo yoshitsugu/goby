@@ -919,6 +919,40 @@ This file is a restart-safe snapshot for resuming work after context reset.
     - `GOBY_WASM_RUNTIME_PROFILE=wasmer cargo test -p goby-wasm`.
   - Results:
     - both profile runs passed (`71 passed, 0 failed, 1 ignored` unit tests + `6 passed` integration tests).
+- 2026-03-03 (session 83): Open-question sync + runtime resume diagnostics hardening
+  - Open Question #1 decision synchronized in plans:
+    - no explicit `discontinue` syntax in current phase,
+    - abortive behavior remains "not calling `resume`",
+    - `discontinue` tracked as deferred future extension in `doc/PLAN.md`.
+  - Strengthened runtime resume misuse diagnostics with explicit error IDs + hints:
+    - `[E-RESUME-MISSING]`,
+    - `[E-RESUME-CONSUMED]`,
+    - `[E-RESUME-HANDLER-MISMATCH]`,
+    - `[E-RESUME-STACK-MISMATCH]`.
+  - Updated parity error-kind extraction to recognize error IDs (while remaining
+    backward compatible with legacy message prefixes).
+  - Updated resume runtime tests to assert error-ID presence instead of brittle full-string equality.
+  - Validation:
+    - `cargo fmt`
+    - `cargo test -p goby-wasm`
+- 2026-03-03 (session 84): Open Question #2 decision + conservative resume local inference
+  - Decision: `resume` return type inference adopts conservative middle path:
+    - infer local binding type only when handler operation result type is
+      non-generic and directly known,
+    - keep generic/complex cases as `Ty::Unknown`.
+  - `goby-core` typechecker update:
+    - binding inference in resume-aware stmt walk now uses resume context for
+      non-generic cases (`infer_binding_ty_with_resume_context`),
+    - added generic-type detection guard (`ty_contains_type_var`) to avoid
+      premature inference in generic contexts.
+  - Added unit tests:
+    - non-generic resume context infers concrete binding type,
+    - generic resume context keeps `Ty::Unknown`.
+  - Plan docs synchronized:
+    - `doc/PLAN.md` and `doc/PLAN_RESUME.md` now record this inference policy.
+  - Validation:
+    - `cargo fmt`
+    - `cargo test -p goby-core`
 
 ## 5. Current Example Files
 

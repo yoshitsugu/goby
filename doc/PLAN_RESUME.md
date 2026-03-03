@@ -521,9 +521,13 @@ Risk: mismatch between interpreter-path semantics and future native Wasm.
 
 ## 11. Open Questions
 
-1. Do we expose explicit `discontinue` in syntax, or keep abortive behavior as
-   "not calling `resume`" in the first phase?
-2. Should `resume` return type participate in full local inference immediately,
-   or after runtime stabilization?
-3. How aggressively should we reject potentially multi-shot patterns statically
+1. How aggressively should we reject potentially multi-shot patterns statically
    in phase 1?
+
+Resolved (2026-03-03):
+- Explicit `discontinue` syntax is not introduced in the current phase.
+- Keep abortive behavior as "not calling `resume`".
+- Track `discontinue` only as a possible future language extension in `doc/PLAN.md`.
+- `resume` return type inference uses a conservative middle path:
+  - infer local binding type only for non-generic handler operation result types,
+  - keep generic/complex contexts on `Ty::Unknown` until broader inference work.
