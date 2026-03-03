@@ -160,7 +160,20 @@ fn select_effect_execution_mode(
     main_style: LoweringStyle,
     module: &Module,
 ) -> EffectExecutionSelection {
-    let runtime_profile = compile_time_runtime_profile();
+    select_effect_execution_mode_with_inputs(
+        main_style,
+        module,
+        compile_time_runtime_profile(),
+        typed_continuation_optimization_gate_enabled(),
+    )
+}
+
+fn select_effect_execution_mode_with_inputs(
+    main_style: LoweringStyle,
+    module: &Module,
+    runtime_profile: RuntimeProfile,
+    optimization_gate_enabled: bool,
+) -> EffectExecutionSelection {
     if !matches!(
         runtime_profile,
         RuntimeProfile::Wasmtime | RuntimeProfile::Wasmer
@@ -178,17 +191,17 @@ fn select_effect_execution_mode(
             runtime_profile,
         };
     }
+    if !optimization_gate_enabled {
+        return EffectExecutionSelection {
+            mode: EffectExecutionMode::PortableFallback,
+            fallback_reason: Some(EffectModeFallbackReason::OptimizationGateDisabled),
+            runtime_profile,
+        };
+    }
     if contains_unsupported_effect_construct_for_optimized_path(module) {
         return EffectExecutionSelection {
             mode: EffectExecutionMode::PortableFallback,
             fallback_reason: Some(EffectModeFallbackReason::UnsupportedEffectConstruct),
-            runtime_profile,
-        };
-    }
-    if !typed_continuation_optimization_gate_enabled() {
-        return EffectExecutionSelection {
-            mode: EffectExecutionMode::PortableFallback,
-            fallback_reason: Some(EffectModeFallbackReason::OptimizationGateDisabled),
             runtime_profile,
         };
     }
@@ -200,9 +213,14 @@ fn select_effect_execution_mode(
 }
 
 fn contains_unsupported_effect_construct_for_optimized_path(_module: &Module) -> bool {
-    // Step 8.1 default: optimized continuation path is not implemented yet,
-    // so all effect-boundary modules stay on the portable fallback path.
-    true
+    if !_module.handler_declarations.is_empty() {
+        return true;
+    }
+    _module
+        .declarations
+        .iter()
+        .filter_map(|decl| decl.parsed_body.as_deref())
+        .any(stmts_contain_using_or_resume)
 }
 
 fn compile_time_runtime_profile() -> RuntimeProfile {
@@ -215,6 +233,54 @@ fn compile_time_runtime_profile() -> RuntimeProfile {
 
 fn typed_continuation_optimization_gate_enabled() -> bool {
     cfg!(feature = "typed-continuation-optimized")
+}
+
+fn stmts_contain_using_or_resume(stmts: &[Stmt]) -> bool {
+    stmts.iter().any(stmt_contains_using_or_resume)
+}
+
+fn stmt_contains_using_or_resume(stmt: &Stmt) -> bool {
+    match stmt {
+        Stmt::Binding { value, .. } => expr_contains_resume(value),
+        Stmt::Expr(expr) => expr_contains_resume(expr),
+        Stmt::Using { .. } => true,
+    }
+}
+
+fn expr_contains_resume(expr: &Expr) -> bool {
+    match expr {
+        Expr::Resume { .. } => true,
+        Expr::Call { callee, arg } => expr_contains_resume(callee) || expr_contains_resume(arg),
+        Expr::Pipeline { value, .. } => expr_contains_resume(value),
+        Expr::BinOp { left, right, .. } => {
+            expr_contains_resume(left) || expr_contains_resume(right)
+        }
+        Expr::If {
+            condition,
+            then_expr,
+            else_expr,
+        } => {
+            expr_contains_resume(condition)
+                || expr_contains_resume(then_expr)
+                || expr_contains_resume(else_expr)
+        }
+        Expr::Case { scrutinee, arms } => {
+            expr_contains_resume(scrutinee)
+                || arms.iter().any(|arm| expr_contains_resume(&arm.body))
+        }
+        Expr::ListLit(items) => items.iter().any(expr_contains_resume),
+        Expr::TupleLit(items) => items.iter().any(expr_contains_resume),
+        Expr::Lambda { body, .. } => expr_contains_resume(body),
+        Expr::RecordConstruct { fields, .. } => {
+            fields.iter().any(|(_, value)| expr_contains_resume(value))
+        }
+        Expr::MethodCall { args, .. } => args.iter().any(expr_contains_resume),
+        Expr::Qualified { .. }
+        | Expr::Var(_)
+        | Expr::StringLit(_)
+        | Expr::IntLit(_)
+        | Expr::BoolLit(_) => false,
+    }
 }
 
 #[derive(Clone)]
@@ -554,6 +620,7 @@ mod tests {
 
     use super::{
         EffectExecutionMode, EffectModeFallbackReason, NativeLoweringResult, RuntimeProfile,
+        build_lowering_plan, build_typed_continuation_ir, select_effect_execution_mode_with_inputs,
         try_emit_native_module_with_handoff,
     };
 
@@ -603,5 +670,89 @@ main =
         let lowered =
             try_emit_native_module_with_handoff(&module).expect("native lowering should not error");
         assert!(matches!(lowered, NativeLoweringResult::Emitted(_)));
+    }
+
+    #[test]
+    fn effect_mode_selection_prefers_gate_reason_before_construct_reason() {
+        let source = r#"
+effect Tick
+  tick: Int -> Int
+
+handler TickHandler for Tick
+  tick n = resume n
+
+main : Unit -> Unit can Tick
+main =
+  using TickHandler
+    tick 1
+"#;
+        let module = parse_module(source).expect("source should parse");
+        let selection = select_effect_execution_mode_with_inputs(
+            super::LoweringStyle::EffectBoundary,
+            &module,
+            RuntimeProfile::Wasmtime,
+            false,
+        );
+        assert_eq!(selection.mode, EffectExecutionMode::PortableFallback);
+        assert_eq!(
+            selection.fallback_reason,
+            Some(EffectModeFallbackReason::OptimizationGateDisabled)
+        );
+    }
+
+    #[test]
+    fn effect_mode_selection_reports_unsupported_construct_when_gate_enabled() {
+        let source = r#"
+effect Tick
+  tick: Int -> Int
+
+handler TickHandler for Tick
+  tick n = resume n
+
+main : Unit -> Unit can Tick
+main =
+  using TickHandler
+    tick 1
+"#;
+        let module = parse_module(source).expect("source should parse");
+        let selection = select_effect_execution_mode_with_inputs(
+            super::LoweringStyle::EffectBoundary,
+            &module,
+            RuntimeProfile::Wasmtime,
+            true,
+        );
+        assert_eq!(selection.mode, EffectExecutionMode::PortableFallback);
+        assert_eq!(
+            selection.fallback_reason,
+            Some(EffectModeFallbackReason::UnsupportedEffectConstruct)
+        );
+    }
+
+    #[test]
+    fn effect_mode_selection_allows_optimized_mode_for_can_only_effect_boundary() {
+        let source = r#"
+effect Tick
+  tick: Int -> Int
+
+main : Unit -> Unit can Tick
+main =
+  print 1
+"#;
+        let module = parse_module(source).expect("source should parse");
+        let selection = select_effect_execution_mode_with_inputs(
+            super::LoweringStyle::EffectBoundary,
+            &module,
+            RuntimeProfile::Wasmer,
+            true,
+        );
+        assert_eq!(
+            selection.mode,
+            EffectExecutionMode::TypedContinuationOptimized
+        );
+        assert_eq!(selection.fallback_reason, None);
+
+        let plan = build_lowering_plan(&module);
+        let ir = build_typed_continuation_ir(&plan).expect("typed continuation IR should be built");
+        assert!(ir.one_shot_resume);
     }
 }

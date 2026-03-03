@@ -466,6 +466,7 @@ Step 8.6: Rollout guardrails and completion criteria
   - parity test command lines and pass summary for `wasmtime` and `wasmer`,
   - benchmark command lines, environment summary, and p50/p95 comparison table,
   - explicit confirmation that repository default mode is still `PortableFallback`,
+  - Step8 closeout enum hygiene check (keep/remove stale mode-fallback reasons such as `MainNotEffectBoundary` with rationale),
   - milestone summary recorded in `doc/STATE.md`.
 
 ## 9. Test Matrix (minimum)
