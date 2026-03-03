@@ -89,7 +89,11 @@ impl EvidencePayloadShape {
             .cloned()
     }
 
-    pub(crate) fn checksum(&self) -> usize {
+    /// Lightweight observability fingerprint for internal debugging.
+    ///
+    /// This value is intentionally not collision-resistant and must not be
+    /// used for correctness gating or cache-key integrity.
+    pub(crate) fn fingerprint_hint(&self) -> usize {
         let ops_sum = self
             .operation_table
             .iter()
@@ -315,6 +319,7 @@ struct StmtInspection {
     contains_resume: bool,
     called_declarations: HashSet<String>,
     referenced_operations: Vec<EffectOperationRef>,
+    referenced_operation_ids: HashSet<(EffectId, OpId)>,
 }
 
 fn inspect_stmts(
@@ -572,18 +577,10 @@ fn collect_operation_refs(
     qualified_operation_index: &HashMap<(String, String), EffectOperationRef>,
     op_name_index: &HashMap<String, Vec<EffectOperationRef>>,
 ) {
-    let mut seen: HashSet<(EffectId, OpId)> = out
-        .referenced_operations
-        .iter()
-        .map(|op| (op.effect_id, op.op_id))
-        .collect();
-
     if let Expr::Qualified { receiver, member } = expr
         && let Some(op_ref) = qualified_operation_index.get(&(receiver.clone(), member.clone()))
     {
-        if seen.insert((op_ref.effect_id, op_ref.op_id)) {
-            out.referenced_operations.push(op_ref.clone());
-        }
+        record_operation_ref(out, op_ref);
         return;
     }
 
@@ -597,10 +594,17 @@ fn collect_operation_refs(
         && let Some(ops) = op_name_index.get(name)
     {
         for op_ref in ops {
-            if seen.insert((op_ref.effect_id, op_ref.op_id)) {
-                out.referenced_operations.push(op_ref.clone());
-            }
+            record_operation_ref(out, op_ref);
         }
+    }
+}
+
+fn record_operation_ref(out: &mut StmtInspection, op_ref: &EffectOperationRef) {
+    if out
+        .referenced_operation_ids
+        .insert((op_ref.effect_id, op_ref.op_id))
+    {
+        out.referenced_operations.push(op_ref.clone());
     }
 }
 
@@ -721,7 +725,7 @@ main =
             .expect("qualified op should be cataloged");
         assert_eq!(op.effect_id, EffectId(0));
         assert_eq!(op.op_id, OpId(0));
-        assert!(shape.checksum() > 0);
+        assert!(shape.fingerprint_hint() > 0);
     }
 
     #[test]
@@ -771,6 +775,52 @@ main =
     }
 
     #[test]
+    fn multi_hop_propagation_preserves_caller_evidence_metadata_shape() {
+        let source = r#"
+effect Log
+  log: String -> Unit
+
+fx : Int -> Int can Log
+fx x =
+  Log.log "x"
+  x
+
+mid : Int -> Int
+mid x = fx x
+
+main : Unit -> Unit
+main =
+  print (mid 1)
+"#;
+        let module = parse_module(source).expect("source should parse");
+        let plan = build_lowering_plan(&module);
+
+        let fx_req = plan
+            .evidence_requirement_for("fx")
+            .expect("fx requirement should exist");
+        let mid_req = plan
+            .evidence_requirement_for("mid")
+            .expect("mid requirement should exist");
+        let main_req = plan
+            .evidence_requirement_for("main")
+            .expect("main requirement should exist");
+
+        assert!(fx_req.passes_evidence());
+        assert_eq!(fx_req.required_effect_count(), 1);
+        assert_eq!(fx_req.referenced_operation_count(), 1);
+
+        // Callers become effect-boundary via transitive propagation while
+        // keeping direct evidence references empty until explicit calls exist.
+        assert!(mid_req.passes_evidence());
+        assert_eq!(mid_req.required_effect_count(), 0);
+        assert_eq!(mid_req.referenced_operation_count(), 0);
+
+        assert!(main_req.passes_evidence());
+        assert_eq!(main_req.required_effect_count(), 0);
+        assert_eq!(main_req.referenced_operation_count(), 0);
+    }
+
+    #[test]
     fn exposes_declaration_lowering_mode_snapshot_for_observability() {
         let source = r#"
 fx : Int -> Int can Log
@@ -796,7 +846,7 @@ main =
     }
 
     #[test]
-    fn evidence_checksum_is_stable_under_declaration_reordering() {
+    fn evidence_fingerprint_hint_is_stable_under_declaration_reordering() {
         let source_a = r#"
 effect Log
   log: String -> Unit
@@ -827,8 +877,12 @@ main =
 "#;
         let module_a = parse_module(source_a).expect("source_a should parse");
         let module_b = parse_module(source_b).expect("source_b should parse");
-        let checksum_a = build_lowering_plan(&module_a).evidence_shape().checksum();
-        let checksum_b = build_lowering_plan(&module_b).evidence_shape().checksum();
-        assert_eq!(checksum_a, checksum_b);
+        let hint_a = build_lowering_plan(&module_a)
+            .evidence_shape()
+            .fingerprint_hint();
+        let hint_b = build_lowering_plan(&module_b)
+            .evidence_shape()
+            .fingerprint_hint();
+        assert_eq!(hint_a, hint_b);
     }
 }

@@ -17,7 +17,7 @@ pub(crate) struct EffectBoundaryHandoff {
     pub(crate) handler_resume_present: bool,
     pub(crate) evidence_operation_table_len: usize,
     pub(crate) evidence_requirements_len: usize,
-    pub(crate) evidence_checksum: usize,
+    pub(crate) evidence_fingerprint_hint: usize,
     pub(crate) declaration_modes: Vec<DeclarationLoweringMode>,
 }
 
@@ -71,7 +71,7 @@ pub(crate) fn try_emit_native_module_with_handoff(
                 handler_resume_present: lowering_plan.handler_resume_present(),
                 evidence_operation_table_len: evidence_shape.operation_table_len(),
                 evidence_requirements_len: evidence_shape.requirements_len(),
-                evidence_checksum: evidence_shape.checksum(),
+                evidence_fingerprint_hint: evidence_shape.fingerprint_hint(),
                 declaration_modes: lowering_plan.declaration_lowering_modes(),
             },
         ));

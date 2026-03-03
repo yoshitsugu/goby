@@ -84,6 +84,18 @@ fn unsupported_main_body_returns_codegen_error() {
 }
 
 #[test]
+fn effect_boundary_with_unresolvable_fallback_reports_boundary_context() {
+    let module =
+        parse_module("main : Unit -> Unit can Print\nmain = 0\n").expect("parse should work");
+    let err = compile_module(&module).expect_err("compile should report boundary fallback failure");
+    assert!(
+        err.message.contains("effect boundary"),
+        "error should surface effect-boundary context, got: {}",
+        err.message
+    );
+}
+
+#[test]
 fn emits_valid_wasm_for_print_literal() {
     let module =
         parse_module("main : Unit -> Unit\nmain = print \"Hello Goby!\"\n").expect("parse");

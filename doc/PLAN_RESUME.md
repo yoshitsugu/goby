@@ -365,8 +365,12 @@ Step 7.6: Step-7 completion criteria — DONE (2026-03-02)
   - `cargo clippy -- -D warnings`
 - Step-7 closeout adjustments:
   - removed temporary no-op observability reads (`let _ = (...)`) from lowerer entry path,
-  - made `EvidencePayloadShape::checksum` deterministic over declaration requirements
+  - made `EvidencePayloadShape::fingerprint_hint` deterministic over declaration requirements
     (name-sorted fold) and added a regression test for declaration reordering stability.
+  - unified `compile_module` native emit decision to lowerer result
+    (`NativeLoweringResult::Emitted`) to avoid dual native-gating drift risk.
+  - improved fallback failure diagnostics after boundary handoff to include
+    effect-boundary context and evidence observability summary.
 
 Step 8: Wasm advanced path (optional)
 

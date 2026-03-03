@@ -772,6 +772,18 @@ This file is a restart-safe snapshot for resuming work after context reset.
       declaration requirements in declaration-name order.
   - Added regression test:
     - checksum remains stable under declaration reordering.
+- 2026-03-02 (session 72): Step 7 post-review hardening pass
+  - Removed dual native-gating dependency in `compile_module`:
+    - native emit now trusts `lower::try_emit_native_module_with_handoff`
+      (`NativeLoweringResult::Emitted`) as single source of truth.
+  - Improved boundary-handoff diagnostics:
+    - if fallback runtime output resolution fails after `EffectBoundaryHandoff`,
+      error now includes effect-boundary context + evidence observability summary.
+  - Renamed evidence summary primitive from `checksum` to `fingerprint_hint`
+    (explicitly non-integrity, observability-only semantics).
+  - Planning performance/coverage updates:
+    - removed per-node reconstruction of seen-op set in `collect_operation_refs`,
+    - added multi-hop propagation + evidence-metadata composite regression test.
 
 ## 5. Current Example Files
 
