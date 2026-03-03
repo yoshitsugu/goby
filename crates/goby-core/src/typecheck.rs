@@ -1473,8 +1473,8 @@ fn is_type_variable_name(name: &str) -> bool {
         .is_some_and(|c| c.is_ascii_lowercase() || c == '_')
 }
 
-fn builtin_type_names() -> [&'static str; 4] {
-    ["Int", "Bool", "String", "Unit"]
+fn builtin_type_names() -> [&'static str; 5] {
+    ["Int", "Bool", "String", "Unit", "List"]
 }
 
 /// Effects that are provided by the runtime and do not require an `effect` declaration.
@@ -3137,6 +3137,22 @@ main =
         let err = typecheck_module(&module).expect_err("duplicate record field should fail");
         assert_eq!(err.declaration.as_deref(), Some("User"));
         assert!(err.message.contains("duplicate field"));
+    }
+
+    #[test]
+    fn accepts_record_field_with_list_string_type() {
+        let source = "type S = S(xs: List String)\n";
+        let module = parse_module(source).expect("should parse");
+        typecheck_module(&module).expect("record field List String type should be accepted");
+    }
+
+    #[test]
+    fn rejects_malformed_generic_record_field_type() {
+        let source = "type S = S(xs: List (String)\n";
+        let module = parse_module(source).expect("should parse");
+        let err = typecheck_module(&module).expect_err("malformed generic field type should fail");
+        assert_eq!(err.declaration.as_deref(), Some("S"));
+        assert!(err.message.contains("invalid field type"));
     }
 
     #[test]
