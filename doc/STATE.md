@@ -833,6 +833,23 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - Validation:
     - `cargo fmt`
     - `cargo test -p goby-wasm` (68 unit + 5 integration tests passed)
+- 2026-03-03 (session 76): `PLAN_RESUME` Step 8.5 parity oracle hardening
+  - Added mode parity oracle in `goby-wasm` tests:
+    - compares `stdout` and runtime error kind IDs separately
+      (instead of full raw output string only).
+  - Added runtime error kind mapping for parity assertions:
+    - `continuation_missing`,
+    - `continuation_consumed`,
+    - `token_handler_mismatch`,
+    - `token_stack_mismatch`.
+  - Extended Step8 parity coverage for required cases:
+    - resume success path,
+    - no-resume abortive path,
+    - double-resume deterministic error path,
+    - nearest/qualified handler dispatch path.
+  - Validation:
+    - `cargo fmt`
+    - `cargo test -p goby-wasm` (68 unit + 5 integration tests passed)
 
 ## 5. Current Example Files
 

@@ -2258,6 +2258,55 @@ mod tests {
         )
     }
 
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    struct ParityOutcome {
+        stdout: Option<String>,
+        runtime_error_kind: Option<&'static str>,
+    }
+
+    fn parity_outcome_for_mode(module: &Module, mode: lower::EffectExecutionMode) -> ParityOutcome {
+        parity_outcome_from_runtime_output(runtime_output_for_mode(module, mode))
+    }
+
+    fn parity_outcome_from_runtime_output(output: Option<String>) -> ParityOutcome {
+        let Some(text) = output else {
+            return ParityOutcome {
+                stdout: None,
+                runtime_error_kind: None,
+            };
+        };
+        let mut lines = text.lines().map(str::to_string).collect::<Vec<_>>();
+        if let Some(last) = lines.last()
+            && let Some(kind) = runtime_error_kind_from_output_line(last)
+        {
+            lines.pop();
+            let stdout = if lines.is_empty() {
+                None
+            } else {
+                Some(lines.join("\n"))
+            };
+            return ParityOutcome {
+                stdout,
+                runtime_error_kind: Some(kind),
+            };
+        }
+        ParityOutcome {
+            stdout: Some(text),
+            runtime_error_kind: None,
+        }
+    }
+
+    fn runtime_error_kind_from_output_line(line: &str) -> Option<&'static str> {
+        let msg = line.strip_prefix("runtime error: ")?;
+        match msg {
+            "resume used without an active continuation" => Some("continuation_missing"),
+            "resume continuation already consumed" => Some("continuation_consumed"),
+            "internal resume token handler mismatch" => Some("token_handler_mismatch"),
+            "internal resume token stack mismatch" => Some("token_stack_mismatch"),
+            _ => Some("unknown_runtime_error"),
+        }
+    }
+
     #[test]
     fn emits_valid_wasm_for_long_print_literal() {
         let long_text = "x".repeat(128);
@@ -2753,8 +2802,8 @@ main =
 "#;
         let module = parse_module(source).expect("parse should work");
         let fallback =
-            runtime_output_for_mode(&module, lower::EffectExecutionMode::PortableFallback);
-        let typed = runtime_output_for_mode(
+            parity_outcome_for_mode(&module, lower::EffectExecutionMode::PortableFallback);
+        let typed = parity_outcome_for_mode(
             &module,
             lower::EffectExecutionMode::TypedContinuationOptimized,
         );
@@ -2762,6 +2811,40 @@ main =
             typed, fallback,
             "typed continuation bridge should preserve resume success behavior"
         );
+        assert_eq!(typed.stdout.as_deref(), Some("7"));
+        assert_eq!(typed.runtime_error_kind, None);
+    }
+
+    #[test]
+    fn typed_mode_matches_fallback_for_no_resume_abortive_path() {
+        use goby_core::parse_module;
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let source = r#"
+effect Iter
+  next: Int -> Int
+
+handler IterHandler for Iter
+  next n =
+    print "handled"
+
+main : Unit -> Unit
+main =
+  using IterHandler
+    print (next 0)
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let fallback =
+            parity_outcome_for_mode(&module, lower::EffectExecutionMode::PortableFallback);
+        let typed = parity_outcome_for_mode(
+            &module,
+            lower::EffectExecutionMode::TypedContinuationOptimized,
+        );
+        assert_eq!(
+            typed, fallback,
+            "typed continuation bridge should preserve no-resume abortive path behavior"
+        );
+        assert_eq!(typed.stdout, None);
+        assert_eq!(typed.runtime_error_kind, None);
     }
 
     #[test]
@@ -2783,8 +2866,8 @@ main =
 "#;
         let module = parse_module(source).expect("parse should work");
         let fallback =
-            runtime_output_for_mode(&module, lower::EffectExecutionMode::PortableFallback);
-        let typed = runtime_output_for_mode(
+            parity_outcome_for_mode(&module, lower::EffectExecutionMode::PortableFallback);
+        let typed = parity_outcome_for_mode(
             &module,
             lower::EffectExecutionMode::TypedContinuationOptimized,
         );
@@ -2792,10 +2875,8 @@ main =
             typed, fallback,
             "typed continuation bridge should preserve one-shot double-resume runtime error behavior"
         );
-        assert_eq!(
-            typed.as_deref(),
-            Some("runtime error: resume continuation already consumed")
-        );
+        assert_eq!(typed.stdout, None);
+        assert_eq!(typed.runtime_error_kind, Some("continuation_consumed"));
     }
 
     #[test]
@@ -2824,8 +2905,8 @@ main =
 "#;
         let module = parse_module(source).expect("parse should work");
         let fallback =
-            runtime_output_for_mode(&module, lower::EffectExecutionMode::PortableFallback);
-        let typed = runtime_output_for_mode(
+            parity_outcome_for_mode(&module, lower::EffectExecutionMode::PortableFallback);
+        let typed = parity_outcome_for_mode(
             &module,
             lower::EffectExecutionMode::TypedContinuationOptimized,
         );
@@ -2833,7 +2914,8 @@ main =
             typed, fallback,
             "typed continuation bridge should preserve nearest-handler dispatch behavior"
         );
-        assert_eq!(typed.as_deref(), Some("2"));
+        assert_eq!(typed.stdout.as_deref(), Some("2"));
+        assert_eq!(typed.runtime_error_kind, None);
     }
 
     #[test]
