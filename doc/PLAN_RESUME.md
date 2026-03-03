@@ -2,7 +2,7 @@
 
 Status: Draft (research-backed execution plan)
 Owner: Goby core/runtime track
-Last updated: 2026-03-02
+Last updated: 2026-03-03
 
 ## 1. Purpose
 
@@ -521,9 +521,6 @@ Risk: mismatch between interpreter-path semantics and future native Wasm.
 
 ## 11. Open Questions
 
-1. How aggressively should we reject potentially multi-shot patterns statically
-   in phase 1?
-
 Resolved (2026-03-03):
 - Explicit `discontinue` syntax is not introduced in the current phase.
 - Keep abortive behavior as "not calling `resume`".
@@ -531,3 +528,7 @@ Resolved (2026-03-03):
 - `resume` return type inference uses a conservative middle path:
   - infer local binding type only for non-generic handler operation result types,
   - keep generic/complex contexts on `Ty::Unknown` until broader inference work.
+- multi-shot static rejection policy (phase-appropriate):
+  - add conservative syntactic guard for obvious multi-shot patterns
+    (multiple `resume` expressions in a single handler method body),
+  - defer precise control-flow-sensitive rejection to later work.
