@@ -850,6 +850,16 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - Validation:
     - `cargo fmt`
     - `cargo test -p goby-wasm` (68 unit + 5 integration tests passed)
+- 2026-03-03 (session 77): Step8.4-8.5 self-review follow-up fixes
+  - Added missing Step8.5 parity coverage for nested same-effect nearest-handler dispatch
+    (`PortableFallback` vs `TypedContinuationOptimized`).
+  - Reduced bridge-path duplication in `RuntimeOutputResolver` by collapsing
+    mode branches to single shared token-bridge code paths (still mode-aware).
+  - Hardened parity assertions to fail on unmapped runtime error kinds
+    (`unknown_runtime_error`) instead of allowing silent parity pass.
+  - Validation:
+    - `cargo fmt`
+    - `cargo test -p goby-wasm` (70 unit + 5 integration tests passed)
 
 ## 5. Current Example Files
 
