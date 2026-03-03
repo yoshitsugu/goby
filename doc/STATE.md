@@ -739,6 +739,17 @@ This file is a restart-safe snapshot for resuming work after context reset.
       in `lower::try_emit_native_module` (`let _ = (...)` block),
     - decide deterministic ordering policy for `EvidencePayloadShape::checksum`
       if checksum is promoted beyond debug/observability use.
+- 2026-03-02 (session 69): `PLAN_RESUME` Step 7.4 complete (effect-boundary lowering skeleton)
+  - Added explicit native lowerer entry contract:
+    - `NativeLoweringResult::{Emitted, EffectBoundaryHandoff, NotLowered}`.
+  - Added `EffectBoundaryHandoff` metadata payload carrying:
+    - `main_style`,
+    - `handler_resume_present`,
+    - evidence summary (`operation_table_len`, `requirements_len`, `checksum`).
+  - `compile_module` now consumes native-lowering result with an explicit
+    effect-boundary handoff branch before routing to fallback runtime.
+  - Added lowerer regression assertion that effect-boundary call graphs produce
+    `EffectBoundaryHandoff` via the new lowerer API.
 
 ## 5. Current Example Files
 

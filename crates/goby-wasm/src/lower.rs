@@ -7,10 +7,28 @@ use crate::{
     backend::WasmProgramBuilder,
     call::extract_direct_print_call_arg,
     layout::MemoryLayout,
-    planning::{LoweringPlan, build_lowering_plan},
+    planning::{LoweringPlan, LoweringStyle, build_lowering_plan},
 };
 
-pub(crate) fn try_emit_native_module(module: &Module) -> Result<Option<Vec<u8>>, CodegenError> {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct EffectBoundaryHandoff {
+    pub(crate) main_style: LoweringStyle,
+    pub(crate) handler_resume_present: bool,
+    pub(crate) evidence_operation_table_len: usize,
+    pub(crate) evidence_requirements_len: usize,
+    pub(crate) evidence_checksum: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum NativeLoweringResult {
+    Emitted(Vec<u8>),
+    EffectBoundaryHandoff(EffectBoundaryHandoff),
+    NotLowered,
+}
+
+pub(crate) fn try_emit_native_module_with_handoff(
+    module: &Module,
+) -> Result<NativeLoweringResult, CodegenError> {
     if module.declarations.is_empty() {
         return Err(CodegenError {
             message: "module has no declarations".to_string(),
@@ -26,7 +44,7 @@ pub(crate) fn try_emit_native_module(module: &Module) -> Result<Option<Vec<u8>>,
     );
 
     let Some(main_decl) = module.declarations.iter().find(|decl| decl.name == "main") else {
-        return Ok(None);
+        return Ok(NativeLoweringResult::NotLowered);
     };
     let lowering_plan = build_lowering_plan(module);
     let evidence_shape = lowering_plan.evidence_shape();
@@ -44,22 +62,33 @@ pub(crate) fn try_emit_native_module(module: &Module) -> Result<Option<Vec<u8>>,
             )
         }),
     );
-    if !lowering_plan.is_direct_style("main") {
-        return Ok(None);
+    let main_style = lowering_plan
+        .style_for("main")
+        .unwrap_or(LoweringStyle::EffectBoundary);
+    if main_style != LoweringStyle::DirectStyle {
+        return Ok(NativeLoweringResult::EffectBoundaryHandoff(
+            EffectBoundaryHandoff {
+                main_style,
+                handler_resume_present: lowering_plan.handler_resume_present(),
+                evidence_operation_table_len: evidence_shape.operation_table_len(),
+                evidence_requirements_len: evidence_shape.requirements_len(),
+                evidence_checksum: evidence_shape.checksum(),
+            },
+        ));
     }
     let Some(stmts) = main_decl.parsed_body.as_deref() else {
-        return Ok(None);
+        return Ok(NativeLoweringResult::NotLowered);
     };
 
     let Some(output_text) = collect_phase2_output_text(module, stmts, &lowering_plan) else {
-        return Ok(None);
+        return Ok(NativeLoweringResult::NotLowered);
     };
     if output_text.is_empty() {
-        return Ok(None);
+        return Ok(NativeLoweringResult::NotLowered);
     }
 
     let wasm = builder.emit_static_print_module(&output_text)?;
-    Ok(Some(wasm))
+    Ok(NativeLoweringResult::Emitted(wasm))
 }
 
 #[derive(Clone)]
@@ -397,7 +426,7 @@ fn apply_map_builtin(
 mod tests {
     use goby_core::parse_module;
 
-    use super::try_emit_native_module;
+    use super::{NativeLoweringResult, try_emit_native_module_with_handoff};
 
     #[test]
     fn native_lowerer_rejects_main_when_call_graph_contains_effect_boundary() {
@@ -410,8 +439,12 @@ main =
   print (tick 1)
 "#;
         let module = parse_module(source).expect("source should parse");
-        let lowered = try_emit_native_module(&module).expect("native lowering should not error");
-        assert_eq!(lowered, None);
+        let lowered =
+            try_emit_native_module_with_handoff(&module).expect("native lowering should not error");
+        assert!(
+            matches!(lowered, NativeLoweringResult::EffectBoundaryHandoff(_)),
+            "effect-boundary declarations should produce explicit handoff metadata"
+        );
     }
 
     #[test]
@@ -425,10 +458,8 @@ main =
   print (double 21)
 "#;
         let module = parse_module(source).expect("source should parse");
-        let lowered = try_emit_native_module(&module).expect("native lowering should not error");
-        assert!(
-            lowered.is_some(),
-            "direct-style module should lower natively"
-        );
+        let lowered =
+            try_emit_native_module_with_handoff(&module).expect("native lowering should not error");
+        assert!(matches!(lowered, NativeLoweringResult::Emitted(_)));
     }
 }
