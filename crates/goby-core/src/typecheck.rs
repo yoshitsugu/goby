@@ -647,6 +647,15 @@ fn build_type_env(module: &Module, stdlib_root: &Path) -> TypeEnv {
         },
         "runtime intrinsic `__goby_string_each_grapheme`".to_string(),
     );
+    insert_global_symbol(
+        &mut globals,
+        "__goby_list_push_string".to_string(),
+        Ty::Fun {
+            params: vec![Ty::List(Box::new(Ty::Str)), Ty::Str],
+            result: Box::new(Ty::List(Box::new(Ty::Str))),
+        },
+        "runtime intrinsic `__goby_list_push_string`".to_string(),
+    );
     inject_imported_symbols(module, &mut globals, stdlib_root);
     inject_type_constructors(module, &mut globals, &mut type_aliases, &mut record_types);
     inject_effect_symbols(module, &mut globals);
@@ -940,7 +949,10 @@ fn is_reserved_intrinsic_name(name: &str) -> bool {
 fn is_known_runtime_intrinsic_name(name: &str) -> bool {
     matches!(
         name,
-        "__goby_string_length" | "__goby_env_fetch_env_var" | "__goby_string_each_grapheme"
+        "__goby_string_length"
+            | "__goby_env_fetch_env_var"
+            | "__goby_string_each_grapheme"
+            | "__goby_list_push_string"
     )
 }
 
@@ -1532,6 +1544,7 @@ fn check_expr(expr: &Expr, env: &TypeEnv) -> Ty {
                 (BinOpKind::Add, Ty::Int, Ty::Int) => Ty::Int,
                 (BinOpKind::Mul, Ty::Int, Ty::Int) => Ty::Int,
                 (BinOpKind::Eq, Ty::Int, Ty::Int) => Ty::Bool,
+                (BinOpKind::Eq, Ty::Str, Ty::Str) => Ty::Bool,
                 // Unknown operands are tolerated (forward-compatibility)
                 (_, Ty::Unknown, _) | (_, _, Ty::Unknown) => Ty::Unknown,
                 _ => Ty::Unknown,
@@ -3290,6 +3303,12 @@ f n = n
     }
 
     #[test]
+    fn infers_string_equality_as_bool() {
+        let module = parse_module("flag : Bool\nflag = \"a\" == \"a\"\n").expect("should parse");
+        typecheck_module(&module).expect("string equality result should typecheck as Bool");
+    }
+
+    #[test]
     fn accepts_bool_literal_annotation_match() {
         let module = parse_module("flag : Bool\nflag = True\n").expect("should parse");
         typecheck_module(&module).expect("Bool literal should typecheck as Bool");
@@ -3643,6 +3662,30 @@ count_graphemes s = __goby_string_each_grapheme s
         let module = parse_module(source).expect("should parse");
         typecheck_module_with_context(&module, Some(&source_path), Some(&stdlib_root))
             .expect("`__goby_string_each_grapheme` should be accepted under stdlib root");
+    }
+
+    #[test]
+    fn accepts_string_eq_operator_and_list_push_intrinsic_inside_stdlib_root() {
+        let sandbox = TempDirGuard::new("string_eq_operator_and_push_inside_stdlib");
+        let stdlib_root = sandbox.path.join("stdlib");
+        let source_path = stdlib_root.join("goby/string.gb");
+        fs::create_dir_all(source_path.parent().expect("parent should exist"))
+            .expect("stdlib path should be creatable");
+        let source = "\
+f : Unit -> List String
+f =
+  items = __goby_list_push_string [] \"a\"
+  ok = \"a\" == \"a\"
+  if ok
+    items
+  else
+    __goby_list_push_string [] \"b\"
+";
+        fs::write(&source_path, source).expect("fixture file should be writable");
+        let module = parse_module(source).expect("should parse");
+        typecheck_module_with_context(&module, Some(&source_path), Some(&stdlib_root)).expect(
+            "`String == String` and `__goby_list_push_string` should be accepted under stdlib root",
+        );
     }
 
     #[test]
