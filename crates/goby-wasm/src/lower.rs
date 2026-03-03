@@ -28,6 +28,7 @@ pub(crate) enum RuntimeProfile {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum EffectModeFallbackReason {
+    ForcedPortableOverride,
     RuntimeProfileNotSupported,
     MainNotEffectBoundary,
     UnsupportedEffectConstruct,
@@ -163,6 +164,7 @@ fn select_effect_execution_mode(
     select_effect_execution_mode_with_inputs(
         main_style,
         module,
+        runtime_force_portable_fallback_override_enabled(),
         compile_time_runtime_profile(),
         typed_continuation_optimization_gate_enabled(),
     )
@@ -171,9 +173,17 @@ fn select_effect_execution_mode(
 fn select_effect_execution_mode_with_inputs(
     main_style: LoweringStyle,
     module: &Module,
+    force_portable_fallback_override: bool,
     runtime_profile: RuntimeProfile,
     optimization_gate_enabled: bool,
 ) -> EffectExecutionSelection {
+    if force_portable_fallback_override {
+        return EffectExecutionSelection {
+            mode: EffectExecutionMode::PortableFallback,
+            fallback_reason: Some(EffectModeFallbackReason::ForcedPortableOverride),
+            runtime_profile,
+        };
+    }
     if !matches!(
         runtime_profile,
         RuntimeProfile::Wasmtime | RuntimeProfile::Wasmer
@@ -233,6 +243,15 @@ fn compile_time_runtime_profile() -> RuntimeProfile {
 
 fn typed_continuation_optimization_gate_enabled() -> bool {
     cfg!(feature = "typed-continuation-optimized")
+}
+
+fn runtime_force_portable_fallback_override_enabled() -> bool {
+    matches!(
+        std::env::var("GOBY_WASM_FORCE_PORTABLE_FALLBACK")
+            .ok()
+            .as_deref(),
+        Some("1" | "true" | "TRUE" | "yes" | "on")
+    )
 }
 
 fn stmts_contain_using_or_resume(stmts: &[Stmt]) -> bool {
@@ -690,6 +709,7 @@ main =
         let selection = select_effect_execution_mode_with_inputs(
             super::LoweringStyle::EffectBoundary,
             &module,
+            false,
             RuntimeProfile::Wasmtime,
             false,
         );
@@ -718,6 +738,7 @@ main =
         let selection = select_effect_execution_mode_with_inputs(
             super::LoweringStyle::EffectBoundary,
             &module,
+            false,
             RuntimeProfile::Wasmtime,
             true,
         );
@@ -742,6 +763,7 @@ main =
         let selection = select_effect_execution_mode_with_inputs(
             super::LoweringStyle::EffectBoundary,
             &module,
+            false,
             RuntimeProfile::Wasmer,
             true,
         );
@@ -754,5 +776,30 @@ main =
         let plan = build_lowering_plan(&module);
         let ir = build_typed_continuation_ir(&plan).expect("typed continuation IR should be built");
         assert!(ir.one_shot_resume);
+    }
+
+    #[test]
+    fn effect_mode_selection_force_portable_override_has_highest_priority() {
+        let source = r#"
+effect Tick
+  tick: Int -> Int
+
+main : Unit -> Unit can Tick
+main =
+  print 1
+"#;
+        let module = parse_module(source).expect("source should parse");
+        let selection = select_effect_execution_mode_with_inputs(
+            super::LoweringStyle::EffectBoundary,
+            &module,
+            true,
+            RuntimeProfile::Wasmer,
+            true,
+        );
+        assert_eq!(selection.mode, EffectExecutionMode::PortableFallback);
+        assert_eq!(
+            selection.fallback_reason,
+            Some(EffectModeFallbackReason::ForcedPortableOverride)
+        );
     }
 }

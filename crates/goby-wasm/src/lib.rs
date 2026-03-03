@@ -2301,6 +2301,78 @@ mod tests {
         }
     }
 
+    #[derive(Debug, Clone, Copy)]
+    struct PerfStats {
+        p50_micros: u128,
+        p95_micros: u128,
+    }
+
+    fn measure_runtime_mode_micros(
+        module: &Module,
+        mode: lower::EffectExecutionMode,
+        warmup_runs: usize,
+        measured_runs: usize,
+    ) -> PerfStats {
+        for _ in 0..warmup_runs {
+            let _ = runtime_output_for_mode(module, mode);
+        }
+        let mut samples = Vec::with_capacity(measured_runs);
+        for _ in 0..measured_runs {
+            let start = std::time::Instant::now();
+            let _ = runtime_output_for_mode(module, mode);
+            samples.push(start.elapsed().as_micros());
+        }
+        samples.sort_unstable();
+        PerfStats {
+            p50_micros: percentile_micros(&samples, 50),
+            p95_micros: percentile_micros(&samples, 95),
+        }
+    }
+
+    fn percentile_micros(sorted_samples: &[u128], percentile: usize) -> u128 {
+        assert!(!sorted_samples.is_empty(), "samples must not be empty");
+        assert!(percentile <= 100, "percentile out of range");
+        let n = sorted_samples.len();
+        let rank = ((n - 1) * percentile) / 100;
+        sorted_samples[rank]
+    }
+
+    fn assert_perf_within_threshold(
+        sample_name: &str,
+        fallback: PerfStats,
+        typed: PerfStats,
+        max_slowdown_ratio: f64,
+    ) {
+        let p50_ratio = if fallback.p50_micros == 0 {
+            1.0
+        } else {
+            typed.p50_micros as f64 / fallback.p50_micros as f64
+        };
+        let p95_ratio = if fallback.p95_micros == 0 {
+            1.0
+        } else {
+            typed.p95_micros as f64 / fallback.p95_micros as f64
+        };
+        assert!(
+            p50_ratio <= max_slowdown_ratio,
+            "sample `{}` exceeded p50 slowdown threshold: fallback={}us typed={}us ratio={:.4} limit={:.4}",
+            sample_name,
+            fallback.p50_micros,
+            typed.p50_micros,
+            p50_ratio,
+            max_slowdown_ratio
+        );
+        assert!(
+            p95_ratio <= max_slowdown_ratio,
+            "sample `{}` exceeded p95 slowdown threshold: fallback={}us typed={}us ratio={:.4} limit={:.4}",
+            sample_name,
+            fallback.p95_micros,
+            typed.p95_micros,
+            p95_ratio,
+            max_slowdown_ratio
+        );
+    }
+
     fn assert_mode_parity(module: &Module, context: &str) -> ParityOutcome {
         let fallback =
             parity_outcome_for_mode(module, lower::EffectExecutionMode::PortableFallback);
@@ -2925,6 +2997,88 @@ main =
         let typed = assert_mode_parity(&module, "nested same-effect nearest-handler dispatch path");
         assert_eq!(typed.stdout.as_deref(), Some("inner"));
         assert_eq!(typed.runtime_error_kind, None);
+    }
+
+    #[test]
+    #[ignore = "performance acceptance protocol (Step 8.6); run explicitly with --ignored"]
+    fn step8_perf_acceptance_resume_heavy_samples() {
+        use goby_core::parse_module;
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let warmup_runs = 5usize;
+        let measured_runs = 30usize;
+        let max_slowdown_ratio = 1.03f64;
+        let perf_samples = [
+            (
+                "resume_success_path",
+                r#"
+effect Iter
+  next: Int -> Int
+
+handler IterHandler for Iter
+  next n =
+    resume 7
+
+main : Unit -> Unit
+main =
+  using IterHandler
+    print (next 0)
+"#,
+            ),
+            (
+                "double_resume_error_path",
+                r#"
+effect Iter
+  next: Int -> Int
+
+handler IterHandler for Iter
+  next n =
+    resume (resume 1)
+
+main : Unit -> Unit
+main =
+  using IterHandler
+    print (next 0)
+"#,
+            ),
+            (
+                "nested_handler_dispatch_path",
+                r#"
+effect Log
+  log: String -> String
+
+handler OuterLog for Log
+  log msg =
+    resume "outer"
+
+handler InnerLog for Log
+  log msg =
+    resume "inner"
+
+main : Unit -> Unit
+main =
+  using OuterLog
+    using InnerLog
+      print (log "x")
+"#,
+            ),
+        ];
+
+        for (name, source) in perf_samples {
+            let module = parse_module(source).expect("performance sample should parse");
+            let fallback = measure_runtime_mode_micros(
+                &module,
+                lower::EffectExecutionMode::PortableFallback,
+                warmup_runs,
+                measured_runs,
+            );
+            let typed = measure_runtime_mode_micros(
+                &module,
+                lower::EffectExecutionMode::TypedContinuationOptimized,
+                warmup_runs,
+                measured_runs,
+            );
+            assert_perf_within_threshold(name, fallback, typed, max_slowdown_ratio);
+        }
     }
 
     #[test]

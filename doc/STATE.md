@@ -860,6 +860,30 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - Validation:
     - `cargo fmt`
     - `cargo test -p goby-wasm` (70 unit + 5 integration tests passed)
+- 2026-03-03 (session 78): `PLAN_RESUME` Step 8.6 guardrails kickoff (runtime override kill-switch)
+  - Added runtime override kill-switch for mode selection in `goby-wasm` lowerer:
+    - env `GOBY_WASM_FORCE_PORTABLE_FALLBACK=1|true|yes|on` forces
+      `EffectExecutionMode::PortableFallback` with highest priority.
+    - fallback reason now reports `ForcedPortableOverride`.
+  - Added lowerer unit test to assert forced override precedence over runtime profile/gate/construct checks.
+  - Added integration regression test to assert compile diagnostics surface
+    `selected_mode_fallback_reason=Some(ForcedPortableOverride)` when override is active.
+  - Updated Step8.6 plan text to document current env knob name.
+  - Validation:
+    - `cargo fmt`
+    - `cargo test -p goby-wasm`
+- 2026-03-03 (session 79): `PLAN_RESUME` Step 8.6 performance harness wiring
+  - Added explicit Step8.6 performance acceptance harness in `goby-wasm` tests:
+    - ignored test `step8_perf_acceptance_resume_heavy_samples`,
+    - 3 representative resume-heavy samples,
+    - 5 warmup + 30 measured runs per mode/sample,
+    - p50/p95 slowdown assertion (`typed <= fallback * 1.03`).
+  - Added helper utilities for percentile-based microbenchmark assertions in test module.
+  - Updated Step8.6 plan text with concrete harness command.
+  - Validation:
+    - `cargo fmt`
+    - `cargo test -p goby-wasm`
+    - `cargo test -p goby-wasm step8_perf_acceptance_resume_heavy_samples -- --ignored --nocapture`
 
 ## 5. Current Example Files
 
