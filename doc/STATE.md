@@ -812,6 +812,27 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - Validation:
     - `cargo fmt`
     - `cargo test -p goby-wasm` (62 unit + 5 integration tests passed)
+- 2026-03-03 (session 75): `PLAN_RESUME` Step 8.4 bridge wiring (mode-aware runtime continuation path)
+  - Added mode-aware runtime output resolver entry:
+    - `resolve_main_runtime_output_with_mode(..., execution_mode)`,
+    - `compile_module` now threads selected boundary handoff mode into runtime output resolution.
+  - Added continuation bridge points in `RuntimeOutputResolver`:
+    - `begin_handler_continuation_bridge`,
+    - `resume_through_active_continuation_bridge`,
+    - `finish_handler_continuation_bridge`.
+  - `Expr::Resume` path now routes through bridge layer so Step8 optimized mode can
+    plug continuation re-entry while preserving current fallback behavior.
+  - Error contract preserved across modes:
+    - `resume used without an active continuation`,
+    - `resume continuation already consumed`,
+    - `internal resume token handler mismatch`.
+  - Added Step8.4 parity regression tests (`PortableFallback` vs `TypedContinuationOptimized`):
+    - resume success path,
+    - double-resume one-shot error path,
+    - nearest-handler qualified dispatch path.
+  - Validation:
+    - `cargo fmt`
+    - `cargo test -p goby-wasm` (68 unit + 5 integration tests passed)
 
 ## 5. Current Example Files
 
