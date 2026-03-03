@@ -376,6 +376,97 @@ Step 8: Wasm advanced path (optional)
 
 - Investigate typed continuation optimization path (WasmFX-capable engines).
 - Keep portable fallback as baseline.
+- Design lock (2026-03-03):
+  - prefer compile-time execution-mode selection to avoid runtime dispatch overhead,
+  - treat `wasmtime` and `wasmer` as the primary supported runtimes for this path,
+  - keep parity requirement as: output + error-kind equivalence between paths.
+
+Step 8.1: Capability probe and execution-mode contract
+
+- Add an explicit compile-time capability probe for typed continuation support.
+- Introduce execution mode enum for effect-boundary modules:
+  - `PortableFallback` (current baseline),
+  - `TypedContinuationOptimized` (WasmFX path).
+- Default to `PortableFallback` unless compile-time probe + module constraints pass.
+- Lock module constraint checklist (single shared predicate used by planner/lowerer):
+  - target runtime profile is `wasmtime` or `wasmer`,
+  - module `main` is `EffectBoundary`,
+  - no unsupported effect construct is detected for optimized path version,
+  - optimization gate is explicitly enabled.
+- Keep a single source of truth for mode selection (avoid duplicated checks in compile/lower/runtime).
+- Gate policy lock:
+  - repository default must remain `PortableFallback`,
+  - enabling `TypedContinuationOptimized` by default is forbidden until all Step 8.6 gates pass,
+  - default-switch change must be a dedicated follow-up change (separate review surface).
+
+Step 8.2: Internal continuation IR for optimized path
+
+- Define an internal continuation representation used only by optimized lowering/runtime handoff.
+- Reuse Step 7 evidence metadata (`EffectId`/`OpId`, declaration requirements) instead of introducing new surface syntax.
+- Keep one-shot semantics aligned with existing runtime contract.
+
+Step 8.3: Effect-boundary lowering extension
+
+- Extend `EffectBoundaryHandoff` (or successor payload) with optimized-path lowering artifacts.
+- Keep Step 7 direct-style behavior unchanged.
+- Ensure lowering can still return portable handoff when optimized lowering preconditions are not met.
+- Add mode-selection diagnostics that report:
+  - selected mode,
+  - first failing constraint when fallback is selected.
+
+Step 8.4: Runtime bridge for typed continuation re-entry
+
+- Add runtime entry points that:
+  - install captured continuation for the optimized path,
+  - route `resume` value back to effect call site,
+  - preserve nearest-handler lexical semantics.
+- Enforce same runtime errors as fallback path:
+  - continuation missing,
+  - continuation already consumed,
+  - token/handler mismatch.
+
+Step 8.5: Parity validation matrix
+
+- Add path-parity tests that run the same source on both execution modes.
+- Lock parity oracle (must match for each case):
+  - program stdout text,
+  - runtime error presence/absence,
+  - runtime error kind (`continuation_missing`, `continuation_consumed`, `token_handler_mismatch`, etc.).
+- Compare error kind IDs (not full free-form message text) to keep tests stable under wording changes.
+- Required parity cases:
+  - `resume` success path,
+  - no-resume abortive path,
+  - double-resume deterministic failure,
+  - nested/qualified handler dispatch.
+- Keep existing fallback lock tests as source-of-truth baseline.
+- Coverage gate:
+  - any newly added `resume`/handler runtime regression test must include
+    corresponding parity coverage for both execution modes in the same change.
+
+Step 8.6: Rollout guardrails and completion criteria
+
+- Keep optimized path behind an internal gate until parity suite is stable.
+- Add explicit kill-switches for fast rollback/debug:
+  - compile-time flag to force `PortableFallback`,
+  - runtime override (CLI/env) to force `PortableFallback` without rebuild,
+  - test harness knob to run parity suite in forced-fallback mode.
+- Add observability output for selected execution mode and fallback reason at compile/runtime handoff.
+- Add performance acceptance checks with fixed benchmark protocol:
+  - at least 3 representative resume-heavy samples,
+  - at least 30 measured runs per sample per mode (after warmup),
+  - identical runtime version/config per comparison,
+  - fail if `TypedContinuationOptimized` exceeds `PortableFallback` by more than 3% on p50 or p95.
+- Completion criteria:
+  - portable fallback behavior unchanged,
+  - optimized path passes parity suite,
+  - parity suite passes on both runtime profiles (`wasmtime` and `wasmer`),
+  - performance acceptance checks pass on both runtime profiles (`wasmtime` and `wasmer`),
+  - quality gates pass (`cargo check`, `cargo test`, `cargo clippy -- -D warnings`).
+- Required evidence for DONE marking:
+  - parity test command lines and pass summary for `wasmtime` and `wasmer`,
+  - benchmark command lines, environment summary, and p50/p95 comparison table,
+  - explicit confirmation that repository default mode is still `PortableFallback`,
+  - milestone summary recorded in `doc/STATE.md`.
 
 ## 9. Test Matrix (minimum)
 
