@@ -3,7 +3,6 @@ import goby/iterator
 handler PrintEach for Iterator
   yield value =
     print value
-    resume 0
 
 main =
   using PrintEach

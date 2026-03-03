@@ -7,6 +7,7 @@ mod planning;
 mod support;
 
 use std::collections::{HashMap, HashSet};
+use unicode_segmentation::UnicodeSegmentation;
 
 use goby_core::{
     CasePattern, Expr, HandlerMethod, Module, Stmt, ast::InterpolatedPart,
@@ -893,6 +894,29 @@ impl<'m> RuntimeOutputResolver<'m> {
                             return Some(RuntimeValue::Int(len));
                         }
                         return None;
+                    }
+                    if fn_name == "__goby_string_each_grapheme" {
+                        let av =
+                            self.eval_expr_ast(arg, locals, callables, evaluators, depth + 1)?;
+                        let RuntimeValue::String(value) = av else {
+                            return None;
+                        };
+
+                        let mut yielded_count: i64 = 0;
+                        for grapheme in value.graphemes(true) {
+                            let method = self.find_handler_method_by_name("yield")?;
+                            let resumed = self.dispatch_handler_method_as_value(
+                                &method,
+                                RuntimeValue::String(grapheme.to_string()),
+                                evaluators,
+                                depth + 1,
+                            )?;
+                            let RuntimeValue::Int(_) = resumed else {
+                                return None;
+                            };
+                            yielded_count = yielded_count.checked_add(1)?;
+                        }
+                        return Some(RuntimeValue::Int(yielded_count));
                     }
 
                     let arg_val =
@@ -2630,6 +2654,29 @@ main =
         // Clean up before asserting so env is restored even if the assertion panics.
         unsafe { std::env::remove_var("GOBY_INTRINSIC_TEST_PATH") };
         assert_eq!(output, "intrinsic-ok");
+    }
+
+    #[test]
+    fn resolves_runtime_output_for_intrinsic_each_grapheme_call() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let source = r#"
+import goby/iterator
+
+handler Count for Iterator
+  yield _ =
+    resume 0
+
+main : Unit -> Unit can Print
+main =
+  using Count
+    n = __goby_string_each_grapheme "a👨‍👩‍👧‍👦b"
+    print n
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let output =
+            resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
+                .expect("runtime output should resolve");
+        assert_eq!(output, "3");
     }
 
     #[test]

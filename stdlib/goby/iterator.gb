@@ -1,2 +1,4 @@
 effect Iterator
   yield : String -> Int
+
+@embed Iterator
