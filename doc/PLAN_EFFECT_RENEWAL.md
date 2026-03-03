@@ -74,6 +74,17 @@ P0 required semantic decisions (must be explicit and testable):
 - Type/effect policy:
   - `with` removes handled effect operations from the body requirement set,
   - non-handled effects remain in the resulting `can` obligations.
+- Compile-time guarantee policy:
+  - if an effect operation is not handled by `with` and not covered by local context,
+    compilation must fail with an unhandled-effect diagnostic.
+  - declaration-level `can` is a valid deferral boundary:
+    - if a function declares `can E`, unresolved `E` inside that function body is allowed,
+      and resolution is deferred to call sites.
+  - if a function body uses effect operations but the declaration has no corresponding `can`
+    and no enclosing `with` handles them, compilation must fail.
+- `main` policy:
+  - `main` may declare only `can Print` (or no `can` clause).
+  - any non-`Print` effect in `main`'s `can` clause is a compile-time error.
 - Capture policy:
   - clause bodies see all lexical bindings visible at `with` site,
   - clause parameter names shadow outer bindings in clause scope only.
@@ -92,6 +103,10 @@ Completion criteria:
 - Semantics written and approved in `doc/PLAN.md` (or linked section).
 - At least 5 executable examples documented (capture, nested `with`, abortive path,
   resume path, multiple operations).
+- Include explicit positive/negative examples for:
+  - unresolved effect allowed with declaration `can`,
+  - unresolved effect rejected without declaration `can`,
+  - `main` rejecting non-`Print` `can` clauses.
 
 ### P1. Parser + AST Support (`with`)
 
@@ -182,6 +197,14 @@ Typechecking contract to lock in P2:
 - Effect reduction:
   - handled operations are subtracted from required effects of handled body.
   - resolution order must follow P0 static resolution table exactly.
+- Unhandled-effect diagnostics:
+  - if unresolved effects remain after `with` handling and declaration `can` accounting,
+    emit compile-time error in declaration scope.
+- Declaration `can` deferral:
+  - declarations with `can` may typecheck with unresolved effects in body,
+    but call sites must satisfy remaining obligations.
+- `main` effect restriction:
+  - enforce `main` `can` clause contains only `Print` when present.
 
 Completion criteria:
 
@@ -190,6 +213,10 @@ Completion criteria:
   - correct/incorrect `resume` argument,
   - nested `with`,
   - unknown operation/unknown effect diagnostics.
+- New effect-obligation tests for:
+  - unresolved effect is accepted when declaration has matching `can`,
+  - unresolved effect is rejected when declaration has no matching `can` and no `with`,
+  - `main : Unit -> Unit can <non-Print>` is rejected.
 - No regression in existing effect tests.
 
 ### P3. Runtime Execution Model for `with`
