@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-03 (session 73)
+Last updated: 2026-03-03 (session 85)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -953,6 +953,26 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - Validation:
     - `cargo fmt`
     - `cargo test -p goby-core`
+- 2026-03-03 (session 85): Open Question #1 lightweight static guard + plan sync
+  - `goby-core` typechecker update:
+    - added conservative static multi-shot guard in handler methods:
+      - counts syntactic `resume` expressions in each handler method body,
+      - rejects methods with more than one `resume` via
+        `resume_potential_multi_shot`.
+    - scope is intentionally lightweight; precise control-flow-sensitive checks
+      remain deferred.
+  - Added regression tests:
+    - rejects sequential double-`resume` in a handler method,
+    - rejects branch-separated double-`resume` conservatively in this phase.
+  - Plan/docs synchronization:
+    - `doc/PLAN.md`: typecheck contract now includes
+      `resume_potential_multi_shot` and lightweight-policy note.
+    - `doc/PLAN_RESUME.md`: Open Questions section resolved with this policy.
+    - `doc/PLAN_STANDARD_LIBRARY.md`: status updated to
+      `Step 0-12 complete; ExtraStep A/B pending`.
+  - Validation:
+    - `cargo fmt`
+    - `cargo test -p goby-core`
 
 ## 5. Current Example Files
 
@@ -978,7 +998,8 @@ cargo clippy -- -D warnings
 ```
 
 Execution focus (in order):
-1. Standard-library foundation implementation (`doc/PLAN_STANDARD_LIBRARY.md`, Phase A -> E + stdio/print + stdlib-only `@embed` checkpoints).
+1. Standard-library follow-up (`doc/PLAN_STANDARD_LIBRARY.md`):
+   ExtraStep A (`@embed` model alignment) and ExtraStep B (intrinsic bridge naming).
 2. Effect runtime redesign (one-shot deep handlers + selective CPS/evidence passing).
 3. `resolve_main_runtime_output` retirement (blocked on effect-native support and remaining unsupported forms).
 

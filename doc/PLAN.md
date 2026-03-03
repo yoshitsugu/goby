@@ -179,11 +179,16 @@ Based on `examples/*.gb`:
   - `resume_outside_handler`
   - `resume_arg_type_mismatch`
   - `resume_in_unknown_operation_context`
+  - `resume_potential_multi_shot` (conservative syntactic guard: more than one
+    `resume` in a handler method body is rejected in the current phase)
 - Decision update (2026-03-03):
   - `resume` result type inference is conservative:
     - allow local inference only when handler operation result type is
       non-generic and directly available in resume context,
     - keep `Ty::Unknown` for generic/complex cases.
+  - multi-shot static rejection policy is intentionally lightweight:
+    - reject obvious syntactic multi-resume usage in the same handler method,
+    - defer control-flow-sensitive precision improvements to a later phase.
 
 #### `resume` Runtime Bridge (Step 4 update, 2026-03-02)
 

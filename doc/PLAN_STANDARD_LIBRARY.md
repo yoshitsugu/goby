@@ -1,6 +1,6 @@
 # Goby Standard Library Foundation Plan
 
-Status: Draft (execution plan)
+Status: Step 0-12 complete; ExtraStep A/B pending
 Owner: Goby core/tooling track
 Last updated: 2026-03-03
 

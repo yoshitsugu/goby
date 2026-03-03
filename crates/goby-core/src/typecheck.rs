@@ -197,6 +197,20 @@ fn check_handler_method_resume_usage(module: &Module, env: &TypeEnv) -> Result<(
             let Some(stmts) = &method.parsed_body else {
                 continue;
             };
+            let resume_count = count_resume_in_stmts(stmts);
+            if resume_count > 1 {
+                return Err(TypecheckError {
+                    declaration: Some(format!(
+                        "handler `{}` method `{}`",
+                        handler.name, method.name
+                    )),
+                    span: None,
+                    message: format!(
+                        "resume_potential_multi_shot: handler method contains {} `resume` expressions; this phase only allows at most one syntactic `resume` per handler method",
+                        resume_count
+                    ),
+                });
+            }
             let (op_param_ty, op_result_ty) =
                 resolve_handler_method_op_types(module, &handler.effect, &method.name);
             let param_tys: Vec<(&str, Ty)> = method
@@ -225,6 +239,56 @@ fn check_handler_method_resume_usage(module: &Module, env: &TypeEnv) -> Result<(
         }
     }
     Ok(())
+}
+
+fn count_resume_in_stmts(stmts: &[Stmt]) -> usize {
+    stmts
+        .iter()
+        .map(|stmt| match stmt {
+            Stmt::Binding { value, .. } => count_resume_in_expr(value),
+            Stmt::Expr(expr) => count_resume_in_expr(expr),
+            Stmt::Using { body, .. } => count_resume_in_stmts(body),
+        })
+        .sum()
+}
+
+fn count_resume_in_expr(expr: &Expr) -> usize {
+    match expr {
+        Expr::Resume { value } => 1 + count_resume_in_expr(value),
+        Expr::IntLit(_)
+        | Expr::BoolLit(_)
+        | Expr::StringLit(_)
+        | Expr::Var(_)
+        | Expr::Qualified { .. } => 0,
+        Expr::ListLit(items) | Expr::TupleLit(items) => {
+            items.iter().map(count_resume_in_expr).sum()
+        }
+        Expr::RecordConstruct { fields, .. } => fields
+            .iter()
+            .map(|(_, value)| count_resume_in_expr(value))
+            .sum(),
+        Expr::BinOp { left, right, .. } => count_resume_in_expr(left) + count_resume_in_expr(right),
+        Expr::Call { callee, arg } => count_resume_in_expr(callee) + count_resume_in_expr(arg),
+        Expr::MethodCall { args, .. } => args.iter().map(count_resume_in_expr).sum(),
+        Expr::Pipeline { value, .. } => count_resume_in_expr(value),
+        Expr::Lambda { body, .. } => count_resume_in_expr(body),
+        Expr::Case { scrutinee, arms } => {
+            count_resume_in_expr(scrutinee)
+                + arms
+                    .iter()
+                    .map(|arm| count_resume_in_expr(&arm.body))
+                    .sum::<usize>()
+        }
+        Expr::If {
+            condition,
+            then_expr,
+            else_expr,
+        } => {
+            count_resume_in_expr(condition)
+                + count_resume_in_expr(then_expr)
+                + count_resume_in_expr(else_expr)
+        }
+    }
 }
 
 fn resolve_handler_method_op_types(
@@ -3803,6 +3867,54 @@ main =
 ";
         let module = parse_module(source).expect("should parse");
         typecheck_module(&module).expect("resume with matching return type should pass");
+    }
+
+    #[test]
+    fn rejects_multiple_resume_expressions_in_same_handler_method() {
+        let source = "
+effect Iter
+  next: Unit -> Int
+
+handler H for Iter
+  next x =
+    resume 1
+    resume 2
+
+main : Unit -> Unit
+main =
+  print \"ok\"
+";
+        let module = parse_module(source).expect("should parse");
+        let err = typecheck_module(&module).expect_err("multiple resume expressions should fail");
+        assert!(
+            err.message.contains("resume_potential_multi_shot"),
+            "unexpected error: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn rejects_multiple_resume_expressions_in_single_expression_conservatively() {
+        let source = "
+effect Iter
+  next: Unit -> Int
+
+handler H for Iter
+  next x =
+    resume 1 + resume 2
+
+main : Unit -> Unit
+main =
+  print \"ok\"
+";
+        let module = parse_module(source).expect("should parse");
+        let err = typecheck_module(&module)
+            .expect_err("multi-resume in a single expression is conservatively rejected");
+        assert!(
+            err.message.contains("resume_potential_multi_shot"),
+            "unexpected error: {}",
+            err.message
+        );
     }
 
     #[test]
