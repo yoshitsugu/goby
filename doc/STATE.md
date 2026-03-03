@@ -727,6 +727,18 @@ This file is a restart-safe snapshot for resuming work after context reset.
     - `cargo check`
     - `cargo test` (276 tests passed)
     - `cargo clippy -- -D warnings`
+- 2026-03-02 (session 68): Step 7.1-7.3 self-review follow-up
+  - Fixed review item #1 (native capability/lower path consistency):
+    - `fallback::native_unsupported_reason_kind` now also checks
+      `build_lowering_plan(module).is_direct_style("main")`,
+      returning `call_target_body_not_native_supported` when `main` is not direct-style.
+    - Added regression coverage for `can`-only effect-boundary call graph
+      (`tick : Int -> Int can Tick`) to ensure capability checker rejects native path.
+  - Deferred review notes to revisit at Step 7 completion:
+    - remove or formalize current evidence observability no-op reads
+      in `lower::try_emit_native_module` (`let _ = (...)` block),
+    - decide deterministic ordering policy for `EvidencePayloadShape::checksum`
+      if checksum is promoted beyond debug/observability use.
 
 ## 5. Current Example Files
 
