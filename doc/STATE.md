@@ -973,6 +973,13 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - Validation:
     - `cargo fmt`
     - `cargo test -p goby-core`
+- 2026-03-03 (session 86): `PLAN_RESUME` archive + future-work consolidation
+  - Archived `doc/PLAN_RESUME.md` to `doc/old/PLAN_RESUME.md` after Step0-8 completion.
+  - Consolidated remaining `resume` future tasks into `doc/PLAN.md`:
+    - control-flow-sensitive multi-shot static analysis (post current conservative guard),
+    - possible explicit `discontinue` as a future extension proposal,
+    - default mode switch policy remains a dedicated follow-up decision.
+  - Kept `doc/PLAN.md` as the active design source of truth.
 
 ## 5. Current Example Files
 
@@ -1000,7 +1007,8 @@ cargo clippy -- -D warnings
 Execution focus (in order):
 1. Standard-library follow-up (`doc/PLAN_STANDARD_LIBRARY.md`):
    ExtraStep A (`@embed` model alignment) and ExtraStep B (intrinsic bridge naming).
-2. Effect runtime redesign (one-shot deep handlers + selective CPS/evidence passing).
+2. Effect runtime redesign follow-up (one-shot deep handlers + selective CPS/evidence passing), including
+   post-`PLAN_RESUME` items now tracked in `doc/PLAN.md`.
 3. `resolve_main_runtime_output` retirement (blocked on effect-native support and remaining unsupported forms).
 
 ## 7. Resume Commands

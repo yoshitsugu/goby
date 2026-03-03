@@ -203,6 +203,17 @@ Based on `examples/*.gb`:
   - nearest enclosing handler wins (LIFO stack walk),
   - no alphabetical effect-name fallback in runtime operation capture.
 
+#### `resume` Plan Status (2026-03-03)
+
+- `PLAN_RESUME` implementation track (Step 0-8) is complete and archived:
+  - `doc/old/PLAN_RESUME.md`.
+- Remaining `resume`-related work is now tracked here as future development:
+  - improve multi-shot static rejection from current conservative syntactic guard
+    to control-flow-sensitive analysis,
+  - reconsider explicit `discontinue` only as a future language extension,
+  - if/when switching default execution mode from `PortableFallback` to
+    optimized mode, do so in a dedicated follow-up with separate review.
+
 ### 2.4 Standard Library Surface (MVP)
 
 - Core modules to ship first (`Int`, `String`, `List`, `Env`) — minimal built-ins implemented.
@@ -464,6 +475,10 @@ Remaining (deferred):
 ### Still Open (Post-MVP)
 
 - Effects/handlers: lexical nearest-handler runtime semantics are active; post-MVP work is to move from interpreter/runtime lookup to compiled `EffectId`/`OpId` tables.
+- Effects/handlers (`resume` follow-up): tighten multi-shot static analysis beyond
+  the current conservative "multiple syntactic `resume`" rejection.
+- Effects/handlers (`resume` extension): evaluate explicit `discontinue` syntax
+  as a separate language-design proposal.
 - Effect namespace rules: qualified vs unqualified calls, unhandled-effect diagnostics format.
 - Type annotation placement: where annotations are required vs optional outside current MVP subset.
 - Tuple/record roadmap: record update syntax, pattern matching on record fields.
