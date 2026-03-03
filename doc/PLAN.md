@@ -70,7 +70,7 @@ Based on `examples/*.gb`:
   - handler dispatch follows lexical nearest-handler stack order.
   - `can` clauses are validated (declared effect or built-in effect names).
 - `using` handler application syntax: comma-separated handler list (`using HandlerA, HandlerB`).
-- MVP built-ins: `print`, `string.concat`, `map`, `fetch_env_var`, `string.split`, `list.join`.
+- MVP built-ins: `print`, `map`, `fetch_env_var`, `string.split`, `list.join`.
   - `print` execution is resolved by compiler/runtime internals (default stdio print path),
     not by a user-visible stdlib handler definition.
 - `examples/basic_types.gb` is a parse/typecheck target, not a runnable entrypoint target.
@@ -218,7 +218,7 @@ Based on `examples/*.gb`:
 ### 2.4 Standard Library Surface (MVP)
 
 - Core modules to ship first (`Int`, `String`, `List`, `Env`) — minimal built-ins implemented.
-- Naming conventions for stdlib functions (`string.concat` style consistency) — established.
+- Naming conventions for stdlib functions — established.
 - Minimal collection API for immutable workflows — deferred.
 
 ### 2.5 Runtime / Compiler Scope (MVP)

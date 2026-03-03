@@ -228,7 +228,7 @@ mod tests {
         fs::create_dir_all(root.join("goby")).expect("stdlib/goby should be creatable");
         fs::write(
             root.join("goby/string.gb"),
-            "concat : String -> String -> String\nconcat a b = a\n",
+            "split : String -> String -> List String\nsplit value sep = []\n",
         )
         .expect("stdlib file should be writable");
 
@@ -238,8 +238,8 @@ mod tests {
             .expect("stdlib module should resolve");
         assert_eq!(resolved.module_path, "goby/string");
         assert_eq!(
-            resolved.exports.get("concat"),
-            Some(&"String -> String -> String".to_string())
+            resolved.exports.get("split"),
+            Some(&"String -> String -> List String".to_string())
         );
         assert!(resolved.embedded_effects.is_empty());
     }
@@ -309,7 +309,7 @@ mod tests {
         let sandbox = TempDirGuard::new("resolve_parse_failed");
         let root = sandbox.path.join("stdlib");
         fs::create_dir_all(root.join("goby")).expect("stdlib/goby should be creatable");
-        fs::write(root.join("goby/string.gb"), "concat : String ->\n")
+        fs::write(root.join("goby/string.gb"), "split : String ->\n")
             .expect("stdlib file should be writable");
 
         let resolver = StdlibResolver::new(root);

@@ -33,12 +33,12 @@ This file is a restart-safe snapshot for resuming work after context reset.
 - `using` handler syntax: comma-separated (`using HandlerA, HandlerB`).
 - `active_handlers` is a `BTreeMap<String, usize>` (deterministic alphabetical dispatch order).
 - String escape sequences: `\n`, `\t`, `\\`, `\"` expanded at parse time via `unescape_string`.
-- String interpolation `${...}` is parsed into `Expr::InterpolatedString` (not lowered to `string.concat`).
+- String interpolation `${...}` is parsed into `Expr::InterpolatedString`.
   Runtime stringifies embedded expression values when materializing the final `String`.
 - `case` arm separator: ` -> `; parsed by `split_case_arm` (safe for lambda bodies).
 - `CasePattern` variants: `IntLit(i64)`, `StringLit(String)`, `BoolLit(bool)`, `Wildcard`.
 - `HandlerMethod.parsed_body: Option<Vec<Stmt>>` pre-populated at parse time (no per-dispatch re-parse).
-- MVP built-ins: `print`, `string.concat`, `map`, `fetch_env_var`, `string.split`, `list.join`.
+- MVP built-ins: `print`, `map`, `fetch_env_var`, `string.split`, `list.join`.
 - `print` is an internal runtime-resolved operation; `DefaultStdioPrintHandler`-equivalent behavior
   is compiler/runtime-owned and not required to appear as a user-visible stdlib handler definition.
 - `examples/function.gb` expected runtime output (locked):
