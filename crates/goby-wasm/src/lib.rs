@@ -9,6 +9,7 @@ mod support;
 use std::collections::{HashMap, HashSet};
 use unicode_segmentation::UnicodeSegmentation;
 
+use crate::call::flatten_named_call;
 use goby_core::{
     CasePattern, Expr, HandlerMethod, Module, Stmt, ast::InterpolatedPart,
     types::parse_function_type,
@@ -794,6 +795,84 @@ impl<'m> RuntimeOutputResolver<'m> {
         self.eval_value_with_context(&call_expr, locals, callables, evaluators)
     }
 
+    fn apply_runtime_intrinsic_ast(
+        &mut self,
+        name: &str,
+        args: &[RuntimeValue],
+        evaluators: &RuntimeEvaluators<'_, '_>,
+        depth: usize,
+    ) -> Option<RuntimeValue> {
+        match name {
+            "__goby_env_fetch_env_var" => {
+                if args.len() != 1 {
+                    return None;
+                }
+                let RuntimeValue::String(var_name) = &args[0] else {
+                    return None;
+                };
+                Some(RuntimeValue::String(
+                    std::env::var(var_name).unwrap_or_default(),
+                ))
+            }
+            "__goby_string_length" => {
+                if args.len() != 1 {
+                    return None;
+                }
+                let RuntimeValue::String(value) = &args[0] else {
+                    return None;
+                };
+                let len = i64::try_from(value.chars().count()).ok()?;
+                Some(RuntimeValue::Int(len))
+            }
+            "__goby_string_each_grapheme" => {
+                if args.len() != 1 {
+                    return None;
+                }
+                let RuntimeValue::String(value) = &args[0] else {
+                    return None;
+                };
+
+                let mut yielded_count: i64 = 0;
+                for grapheme in value.graphemes(true) {
+                    let method = self.find_handler_method_by_name("yield")?;
+                    let resumed = self.dispatch_handler_method_as_value(
+                        &method,
+                        RuntimeValue::String(grapheme.to_string()),
+                        evaluators,
+                        depth + 1,
+                    )?;
+                    let RuntimeValue::Int(_) = resumed else {
+                        return None;
+                    };
+                    yielded_count = yielded_count.checked_add(1)?;
+                }
+                Some(RuntimeValue::Int(yielded_count))
+            }
+            "__goby_list_push_string" => {
+                if args.len() != 2 {
+                    return None;
+                }
+                let list = &args[0];
+                let RuntimeValue::String(value) = &args[1] else {
+                    return None;
+                };
+                match list {
+                    RuntimeValue::ListString(items) => {
+                        let mut next = items.clone();
+                        next.push(value.clone());
+                        Some(RuntimeValue::ListString(next))
+                    }
+                    // Allow `[]` (currently represented as ListInt([])) to seed List String accumulation.
+                    RuntimeValue::ListInt(items) if items.is_empty() => {
+                        Some(RuntimeValue::ListString(vec![value.clone()]))
+                    }
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    }
+
     /// Evaluate an `Expr` node directly, without calling `to_str_repr()`.
     ///
     /// Returns `None` when the expression is not yet supported by the native
@@ -838,6 +917,11 @@ impl<'m> RuntimeOutputResolver<'m> {
                         goby_core::BinOpKind::Mul => Some(RuntimeValue::Int(l.checked_mul(r)?)),
                         goby_core::BinOpKind::Eq => Some(RuntimeValue::Bool(l == r)),
                     },
+                    (RuntimeValue::String(l), RuntimeValue::String(r))
+                        if matches!(op, goby_core::BinOpKind::Eq) =>
+                    {
+                        Some(RuntimeValue::Bool(l == r))
+                    }
                     _ => None,
                 }
             }
@@ -852,6 +936,23 @@ impl<'m> RuntimeOutputResolver<'m> {
                 Some(RuntimeValue::ListInt(out))
             }
             Expr::Call { callee, arg } => {
+                if let Some((fn_name, args)) = flatten_named_call(expr)
+                    && fn_name.starts_with("__goby_")
+                {
+                    let arg_values: Option<Vec<RuntimeValue>> = args
+                        .iter()
+                        .map(|arg_expr| {
+                            self.eval_expr_ast(arg_expr, locals, callables, evaluators, depth + 1)
+                        })
+                        .collect();
+                    return self.apply_runtime_intrinsic_ast(
+                        fn_name,
+                        &arg_values?,
+                        evaluators,
+                        depth + 1,
+                    );
+                }
+
                 // Positional single-field record constructor sugar: `Ctor(value)` → `Ctor(field: value)`.
                 // Apply when callee is a bare name that matches a known single-field record constructor.
                 if let Expr::Var(ctor_name) = callee.as_ref()
@@ -880,43 +981,32 @@ impl<'m> RuntimeOutputResolver<'m> {
                     if fn_name == "__goby_env_fetch_env_var" {
                         let av =
                             self.eval_expr_ast(arg, locals, callables, evaluators, depth + 1)?;
-                        if let RuntimeValue::String(var_name) = av {
-                            let val = std::env::var(&var_name).unwrap_or_default();
-                            return Some(RuntimeValue::String(val));
-                        }
-                        return None;
+                        return self.apply_runtime_intrinsic_ast(
+                            "__goby_env_fetch_env_var",
+                            &[av],
+                            evaluators,
+                            depth + 1,
+                        );
                     }
                     if fn_name == "__goby_string_length" {
                         let av =
                             self.eval_expr_ast(arg, locals, callables, evaluators, depth + 1)?;
-                        if let RuntimeValue::String(value) = av {
-                            let len = i64::try_from(value.chars().count()).ok()?;
-                            return Some(RuntimeValue::Int(len));
-                        }
-                        return None;
+                        return self.apply_runtime_intrinsic_ast(
+                            "__goby_string_length",
+                            &[av],
+                            evaluators,
+                            depth + 1,
+                        );
                     }
                     if fn_name == "__goby_string_each_grapheme" {
                         let av =
                             self.eval_expr_ast(arg, locals, callables, evaluators, depth + 1)?;
-                        let RuntimeValue::String(value) = av else {
-                            return None;
-                        };
-
-                        let mut yielded_count: i64 = 0;
-                        for grapheme in value.graphemes(true) {
-                            let method = self.find_handler_method_by_name("yield")?;
-                            let resumed = self.dispatch_handler_method_as_value(
-                                &method,
-                                RuntimeValue::String(grapheme.to_string()),
-                                evaluators,
-                                depth + 1,
-                            )?;
-                            let RuntimeValue::Int(_) = resumed else {
-                                return None;
-                            };
-                            yielded_count = yielded_count.checked_add(1)?;
-                        }
-                        return Some(RuntimeValue::Int(yielded_count));
+                        return self.apply_runtime_intrinsic_ast(
+                            "__goby_string_each_grapheme",
+                            &[av],
+                            evaluators,
+                            depth + 1,
+                        );
                     }
 
                     let arg_val =
@@ -2677,6 +2767,38 @@ main =
             resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
                 .expect("runtime output should resolve");
         assert_eq!(output, "3");
+    }
+
+    #[test]
+    fn resolves_runtime_output_for_string_equality_operator() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let source = r#"
+main : Unit -> Unit
+main =
+  print ("alpha" == "alpha")
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let output =
+            resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
+                .expect("runtime output should resolve");
+        assert_eq!(output, "True");
+    }
+
+    #[test]
+    fn resolves_runtime_output_for_intrinsic_list_push_string_call() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let source = r#"
+main : Unit -> Unit
+main =
+  xs = __goby_list_push_string [] "a"
+  ys = __goby_list_push_string xs "b"
+  print ys
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let output =
+            resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
+                .expect("runtime output should resolve");
+        assert_eq!(output, "[\"a\", \"b\"]");
     }
 
     #[test]

@@ -558,8 +558,8 @@ Decisions (2026-03-03):
 Remaining decisions:
 
 1. Minimal helper primitive set for stdlib implementation:
-   - `__goby_string_eq : String -> String -> Bool`
    - `__goby_list_push_string : List String -> String -> List String`
+   - string equality should use `==` operator (`String == String -> Bool`) instead of a dedicated intrinsic.
    - keep intrinsic scope minimal and stdlib-only.
 
 Execution checklist (incremental):
@@ -567,12 +567,14 @@ Execution checklist (incremental):
 - [x] C1. Spec lock in this plan:
   - split edge-case semantics locked (empty delimiter, consecutive delimiters, leading/trailing delimiters),
   - grapheme definition locked (Unicode Extended Grapheme Cluster).
-- [ ] C2. Typechecker intrinsic model expansion:
-  - allow `__goby_string_each_grapheme`, `__goby_string_eq`, `__goby_list_push_string` in stdlib only,
+- [x] C2. Typechecker intrinsic model expansion:
+  - allow `__goby_string_each_grapheme`, `__goby_list_push_string` in stdlib only,
+  - ensure `String == String` is typechecked as `Bool`,
   - keep user-space `__goby_*` hard rejection unchanged.
-- [ ] C3. Runtime bridge implementation:
+- [x] C3. Runtime bridge implementation:
   - implement `__goby_string_each_grapheme` with iterator-effect dispatch,
-  - implement `__goby_string_eq` and `__goby_list_push_string`.
+  - implement `__goby_list_push_string`,
+  - evaluate `String == String` via `==` operator (no string-eq intrinsic).
 - [ ] C4. Stdlib iterator/string implementation:
   - implement `split` in `stdlib/goby/string.gb` using Iterator-driven processing,
   - remove dependency on runtime builtin `string.split(...)`.
@@ -588,7 +590,9 @@ Execution checklist (incremental):
 
 Current progress note (2026-03-03):
 
-- `C2/C3` phase-1 landed for `__goby_string_each_grapheme`:
-  - typechecker accepts the intrinsic under stdlib-root policy,
-  - runtime bridge dispatches graphemes through `Iterator.yield` and returns yielded-count.
-- `__goby_string_eq` and `__goby_list_push_string` remain pending.
+- `C2/C3` completed:
+  - typechecker accepts `__goby_string_each_grapheme` and `__goby_list_push_string`
+    under stdlib-root policy,
+  - runtime bridge implements those intrinsics,
+  - `String == String` is handled by the language `==` operator (typecheck + runtime),
+  - grapheme intrinsic dispatches through `Iterator.yield` and returns yielded-count.
