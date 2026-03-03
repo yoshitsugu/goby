@@ -526,3 +526,61 @@ Execution checklist (incremental):
   - ensure runtime output parity for affected examples/tests.
 - [x] B11. Docs synced (`doc/PLAN.md`, `doc/STATE.md`) with intrinsic bridge policy and limits.
 - [x] B12. Final quality gates pass (`cargo fmt`, `cargo check`, `cargo test`, `cargo clippy -- -D warnings`).
+
+### ExtraStep C: `string.split` stdlib implementation via Iterator + grapheme intrinsic
+
+Problem statement:
+
+- `string.concat` was retired and string interpolation is now the canonical string
+  composition mechanism.
+- `string.split` is still runtime-builtin backed and should move toward stdlib-driven
+  behavior.
+- `Iterator` effect declarations are now available in stdlib and can be used as the
+  stream-like execution model.
+
+Decisions (2026-03-03):
+
+- New intrinsic name:
+  - `__goby_string_each_grapheme : String -> Unit can Iterator`
+- Processing model:
+  - stream-like internal execution using `Iterator.yield`,
+  - public API remains `List String` for now.
+- Implementation direction:
+  - choose **B** strategy: add minimal list/string primitives needed to build
+    `split` in stdlib (instead of keeping `string.split` as permanent builtin).
+
+Required pre-lock decisions before code:
+
+1. `split` compatibility semantics:
+   - whether empty segments are preserved (recommended: preserve, Rust-compatible),
+   - behavior for empty delimiter (recommended: grapheme-wise split).
+2. Grapheme definition:
+   - Unicode Extended Grapheme Cluster (recommended).
+3. Minimal helper primitive set for stdlib implementation:
+   - `__goby_string_eq : String -> String -> Bool`
+   - `__goby_list_push_string : List String -> String -> List String`
+   - keep intrinsic scope minimal and stdlib-only.
+
+Execution checklist (incremental):
+
+- [ ] C1. Spec lock in this plan:
+  - lock split edge-case semantics (empty delimiter, consecutive delimiters, leading/trailing delimiters),
+  - lock grapheme definition and test fixtures.
+- [ ] C2. Typechecker intrinsic model expansion:
+  - allow `__goby_string_each_grapheme`, `__goby_string_eq`, `__goby_list_push_string` in stdlib only,
+  - keep user-space `__goby_*` hard rejection unchanged.
+- [ ] C3. Runtime bridge implementation:
+  - implement `__goby_string_each_grapheme` with iterator-effect dispatch,
+  - implement `__goby_string_eq` and `__goby_list_push_string`.
+- [ ] C4. Stdlib iterator/string implementation:
+  - implement `split` in `stdlib/goby/string.gb` using Iterator-driven processing,
+  - remove dependency on runtime builtin `string.split(...)`.
+- [ ] C5. Runtime builtin retirement:
+  - remove direct runtime handling path for `string.split` method call.
+- [ ] C6. Regression coverage:
+  - add edge-case tests for split semantics and Unicode grapheme behavior,
+  - add import/example parity tests (including `examples/import.gb` behavior).
+- [ ] C7. Docs sync:
+  - update `doc/PLAN.md` and `doc/STATE.md` with final intrinsic set and split ownership.
+- [ ] C8. Final quality gates:
+  - `cargo fmt`, `cargo check`, `cargo test`, `cargo clippy -- -D warnings`.
