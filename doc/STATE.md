@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-02 (session 60)
+Last updated: 2026-03-03 (session 73)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -784,6 +784,11 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - Planning performance/coverage updates:
     - removed per-node reconstruction of seen-op set in `collect_operation_refs`,
     - added multi-hop propagation + evidence-metadata composite regression test.
+- 2026-03-03 (session 73): State sync refresh
+  - Updated `doc/STATE.md` summary fields to latest repository state:
+    - `Last updated` header,
+    - current example list includes `examples/iterator.gb`,
+    - Phase-A quality snapshot updated to 281 tests green.
 
 ## 5. Current Example Files
 
@@ -795,10 +800,11 @@ This file is a restart-safe snapshot for resuming work after context reset.
 - `examples/control_flow.gb`
 - `examples/type.gb`
 - `examples/effect.gb`
+- `examples/iterator.gb`
 
 ## 6. Immediate Next Steps (Execution Order)
 
-Wasm Phase A (Phases 0–8) complete. 216 tests green.
+Wasm Phase A (Phases 0–8) complete. 281 tests green.
 
 Resume checks:
 ```
