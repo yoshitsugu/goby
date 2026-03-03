@@ -372,7 +372,7 @@ Step 7.6: Step-7 completion criteria — DONE (2026-03-02)
   - improved fallback failure diagnostics after boundary handoff to include
     effect-boundary context and evidence observability summary.
 
-Step 8: Wasm advanced path (optional)
+Step 8: Wasm advanced path (optional) — DONE (2026-03-03)
 
 - Investigate typed continuation optimization path (WasmFX-capable engines).
 - Keep portable fallback as baseline.
@@ -380,6 +380,15 @@ Step 8: Wasm advanced path (optional)
   - prefer compile-time execution-mode selection to avoid runtime dispatch overhead,
   - treat `wasmtime` and `wasmer` as the primary supported runtimes for this path,
   - keep parity requirement as: output + error-kind equivalence between paths.
+- Step8 implementation outcome (2026-03-03):
+  - mode-selection gate + observability + fallback reason contract implemented in lowerer,
+  - runtime bridge path supports mode-specific continuation token stacks
+    (`PortableFallback` vs `TypedContinuationOptimized`) with identical error contract,
+  - parity oracle and required parity cases implemented (`stdout` + runtime error kind),
+  - rollout guardrails landed:
+    - forced portable runtime override (`GOBY_WASM_FORCE_PORTABLE_FALLBACK`),
+    - performance acceptance harness (`step8_perf_acceptance_resume_heavy_samples`),
+    - wasmtime/wasmer compile-time profile matrix test evidence recorded in `doc/STATE.md`.
 
 Step 8.1: Capability probe and execution-mode contract
 
