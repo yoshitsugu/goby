@@ -32,6 +32,7 @@ use crate::{
         DirectCallTargetError, PrintCallError, extract_direct_print_call_arg, flatten_named_call,
         resolve_direct_call_target,
     },
+    planning::build_lowering_plan,
     support::{is_supported_binop_kind, is_supported_case_pattern, is_supported_list_item_expr},
 };
 
@@ -116,6 +117,13 @@ pub(crate) fn native_unsupported_reason_kind(module: &Module) -> Option<Unsuppor
             return Some(reason);
         }
     }
+
+    // Keep capability check aligned with lower::try_emit_native_module direct-style gating.
+    let lowering_plan = build_lowering_plan(module);
+    if !lowering_plan.is_direct_style("main") {
+        return Some(UnsupportedReason::CallTargetBodyNotNativeSupported);
+    }
+
     None
 }
 

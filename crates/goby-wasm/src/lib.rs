@@ -2672,15 +2672,21 @@ main =
     }
 
     #[test]
-    fn native_codegen_capability_checker_accepts_hello_subset() {
+    fn native_codegen_capability_checker_rejects_hello_effect_boundary_subset() {
         let source = read_example("hello.gb");
         let module = parse_module(&source).expect("hello.gb should parse");
         assert!(
-            fallback::supports_native_codegen(&module),
-            "hello.gb should be accepted by Phase 0 native capability checker"
+            !fallback::supports_native_codegen(&module),
+            "hello.gb should be rejected by native capability checker when main is EffectBoundary"
         );
-        assert_eq!(fallback::native_unsupported_reason(&module), None);
-        assert_eq!(fallback::native_unsupported_reason_kind(&module), None);
+        assert_eq!(
+            fallback::native_unsupported_reason_kind(&module),
+            Some(fallback::UnsupportedReason::CallTargetBodyNotNativeSupported)
+        );
+        assert_eq!(
+            fallback::native_unsupported_reason(&module),
+            Some("call_target_body_not_native_supported")
+        );
     }
 
     #[test]
@@ -2704,12 +2710,12 @@ main =
     }
 
     #[test]
-    fn compile_module_uses_native_emitter_for_phase1_subset() {
+    fn compile_module_emits_valid_wasm_for_phase1_subset_via_fallback() {
         let source = read_example("hello.gb");
         let module = parse_module(&source).expect("hello.gb should parse");
         assert!(
-            fallback::supports_native_codegen(&module),
-            "phase-1 subset should be accepted by native capability checker"
+            !fallback::supports_native_codegen(&module),
+            "phase-1 hello subset should take fallback path because main is EffectBoundary"
         );
         let wasm = compile_module(&module).expect("codegen should succeed");
         assert_valid_wasm_module(&wasm);
@@ -2982,12 +2988,12 @@ main =
     }
 
     #[test]
-    fn compile_module_uses_native_emitter_for_control_flow_example() {
+    fn compile_module_emits_valid_wasm_for_control_flow_example_via_fallback() {
         let source = read_example("control_flow.gb");
         let module = parse_module(&source).expect("control_flow.gb should parse");
         assert!(
-            fallback::supports_native_codegen(&module),
-            "control_flow.gb should be accepted by native capability checker"
+            !fallback::supports_native_codegen(&module),
+            "control_flow.gb should take fallback path because main is EffectBoundary"
         );
         let wasm = compile_module(&module).expect("codegen should succeed");
         let expected_text =
@@ -3078,6 +3084,18 @@ main =
 "#,
                 Some(fallback::UnsupportedReason::CallTargetBodyNotNativeSupported),
             ),
+            (
+                "target_body_not_supported_due_to_effect_boundary",
+                r#"
+tick : Int -> Int can Tick
+tick n = n
+
+main : Unit -> Unit
+main =
+  print (tick 1)
+"#,
+                Some(fallback::UnsupportedReason::CallTargetBodyNotNativeSupported),
+            ),
         ];
 
         for (name, source, expected_kind) in cases {
@@ -3126,8 +3144,18 @@ main =
     #[test]
     fn native_fallback_path_matrix_for_examples() {
         let cases = [
-            ("hello.gb", true, None, None),
-            ("control_flow.gb", true, None, None),
+            (
+                "hello.gb",
+                false,
+                Some(fallback::UnsupportedReason::CallTargetBodyNotNativeSupported),
+                Some("call_target_body_not_native_supported"),
+            ),
+            (
+                "control_flow.gb",
+                false,
+                Some(fallback::UnsupportedReason::CallTargetBodyNotNativeSupported),
+                Some("call_target_body_not_native_supported"),
+            ),
             (
                 "effect.gb",
                 false,
