@@ -60,6 +60,22 @@ This file is a restart-safe snapshot for resuming work after context reset.
 
 ## 4. Recent Milestones
 
+- 2026-03-03 (session 93): ExtraStep C C4 phase-1 wiring (Iterator state-thread path):
+  - Added `Iterator.yield_state` contract and `GraphemeState` shape in `stdlib/goby/iterator.gb`.
+  - Extended runtime intrinsic `__goby_string_each_grapheme` with state-thread mode:
+    - one-arg mode unchanged (`yield` dispatch, returns grapheme count),
+    - two-arg mode dispatches `yield_state` and threads resumed state value.
+  - Reworked `stdlib/goby/string.gb` `split` implementation toward iterator-driven flow:
+    - empty-delimiter and single-grapheme-delimiter paths now use handler-driven state threading,
+    - multi-grapheme delimiter still falls back to runtime `string.split` (C4/C5 still open).
+  - Added regression tests:
+    - `goby-core`: stdlib acceptance for two-arg grapheme intrinsic state-thread mode.
+    - `goby-wasm`: runtime output test for two-arg grapheme intrinsic state-thread mode.
+  - Known gap:
+    - `stdlib/goby/string.gb` still depends on runtime `string.split` for multi-grapheme delimiter.
+    - `List` field types in record declarations are not yet accepted by isolated stdlib module
+      typecheck (`check stdlib/goby/string.gb`), so this remains a tracked type-system gap.
+
 - 2026-03-03 (session 92): ExtraStep C C2/C3 completion:
   - `doc/PLAN_STANDARD_LIBRARY.md` ExtraStep C now has locked split semantics and grapheme policy.
   - Added intrinsic `__goby_string_each_grapheme` to typechecker known intrinsic set.

@@ -1,5 +1,89 @@
+import goby/iterator
+
+type GraphemeState = GraphemeState(grapheme: String, parts: List String, current: String, delimiter: String, seen: Bool)
+
+effect Iterator
+  yield : String -> Int
+  yield_state : GraphemeState -> GraphemeState
+
+handler CountGrapheme for Iterator
+  yield _ =
+    resume 0
+
+handler SplitByEmptyDelimiter for Iterator
+  yield_state step =
+    next_parts = __goby_list_push_string step.parts step.grapheme
+    resume GraphemeState(
+      grapheme: "",
+      parts: next_parts,
+      current: "",
+      delimiter: "",
+      seen: True
+    )
+
+handler SplitBySingleDelimiter for Iterator
+  yield_state step =
+    if step.grapheme == step.delimiter
+      next_parts = __goby_list_push_string step.parts step.current
+      resume GraphemeState(
+        grapheme: "",
+        parts: next_parts,
+        current: "",
+        delimiter: step.delimiter,
+        seen: True
+      )
+    else
+      next_current = "${step.current}${step.grapheme}"
+      resume GraphemeState(
+        grapheme: "",
+        parts: step.parts,
+        current: next_current,
+        delimiter: step.delimiter,
+        seen: True
+      )
+
+grapheme_count : String -> Int can Iterator
+grapheme_count value =
+  n = 0
+  using CountGrapheme
+    n = __goby_string_each_grapheme value
+  n
+
+split_with_empty_delimiter : String -> List String can Iterator
+split_with_empty_delimiter value =
+  initial =
+    GraphemeState(grapheme: "", parts: [], current: "", delimiter: "", seen: False)
+  final = initial
+  using SplitByEmptyDelimiter
+    final = __goby_string_each_grapheme value initial
+  if final.seen
+    final.parts
+  else
+    []
+
+split_with_single_delimiter : String -> String -> List String can Iterator
+split_with_single_delimiter value sep =
+  initial = GraphemeState(grapheme: "", parts: [], current: "", delimiter: sep, seen: False)
+  final = initial
+  using SplitBySingleDelimiter
+    final = __goby_string_each_grapheme value initial
+  if final.seen
+    __goby_list_push_string final.parts final.current
+  else
+    []
+
 split : String -> String -> List String
-split value sep = string.split(value, sep)
+split value sep =
+  if value == ""
+    []
+  else
+    if sep == ""
+      split_with_empty_delimiter value
+    else
+      if grapheme_count sep == 1
+        split_with_single_delimiter value sep
+      else
+        string.split(value, sep)
 
 length : String -> Int
 length value = __goby_string_length value

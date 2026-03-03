@@ -3665,6 +3665,36 @@ count_graphemes s = __goby_string_each_grapheme s
     }
 
     #[test]
+    fn accepts_each_grapheme_intrinsic_state_thread_mode_inside_stdlib_root() {
+        let sandbox = TempDirGuard::new("intrinsic_each_grapheme_state_inside_stdlib");
+        let stdlib_root = sandbox.path.join("stdlib");
+        let source_path = stdlib_root.join("goby/string.gb");
+        fs::create_dir_all(source_path.parent().expect("parent should exist"))
+            .expect("stdlib path should be creatable");
+        let source = "\
+type GraphemeState = GraphemeState(grapheme: String, current: String, delimiter: String, seen: Bool)
+effect Iterator
+  yield : String -> Int
+  yield_state : GraphemeState -> GraphemeState
+@embed Iterator
+handler Fold for Iterator
+  yield_state step =
+    resume step
+f : String -> GraphemeState can Iterator
+f s =
+  state = GraphemeState(grapheme: \"\", current: \"\", delimiter: \",\", seen: False)
+  out = state
+  using Fold
+    out = __goby_string_each_grapheme s state
+  out
+";
+        fs::write(&source_path, source).expect("fixture file should be writable");
+        let module = parse_module(source).expect("should parse");
+        typecheck_module_with_context(&module, Some(&source_path), Some(&stdlib_root))
+            .expect("state-thread mode should be accepted under stdlib root");
+    }
+
+    #[test]
     fn accepts_string_eq_operator_and_list_push_intrinsic_inside_stdlib_root() {
         let sandbox = TempDirGuard::new("string_eq_operator_and_push_inside_stdlib");
         let stdlib_root = sandbox.path.join("stdlib");

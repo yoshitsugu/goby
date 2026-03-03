@@ -596,3 +596,14 @@ Current progress note (2026-03-03):
   - runtime bridge implements those intrinsics,
   - `String == String` is handled by the language `==` operator (typecheck + runtime),
   - grapheme intrinsic dispatches through `Iterator.yield` and returns yielded-count.
+- `C4` phase 1 started:
+  - `__goby_string_each_grapheme` now supports state-thread mode (`String -> state -> state`)
+    through `Iterator.yield_state`,
+  - `stdlib/goby/string.gb` now contains iterator-driven `split` handlers for:
+    - empty delimiter (grapheme-wise),
+    - single-grapheme delimiter.
+  - multi-grapheme delimiter path still falls back to runtime `string.split(...)` and keeps
+    C4/C5 open.
+  - current typechecker limitation: `List ...` in record type declaration fields is not accepted,
+    so `GraphemeState(parts: List String, ...)` remains parse-time/spec intent in stdlib source
+    but is not yet fully `check`-clean as an isolated module.

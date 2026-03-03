@@ -825,28 +825,60 @@ impl<'m> RuntimeOutputResolver<'m> {
                 Some(RuntimeValue::Int(len))
             }
             "__goby_string_each_grapheme" => {
-                if args.len() != 1 {
-                    return None;
+                match args {
+                    // Backward-compatible mode:
+                    // iterate graphemes, call `yield : String -> Int`, return yielded count.
+                    [RuntimeValue::String(value)] => {
+                        let mut yielded_count: i64 = 0;
+                        for grapheme in value.graphemes(true) {
+                            let method = self.find_handler_method_by_name("yield")?;
+                            let resumed = self.dispatch_handler_method_as_value(
+                                &method,
+                                RuntimeValue::String(grapheme.to_string()),
+                                evaluators,
+                                depth + 1,
+                            )?;
+                            let RuntimeValue::Int(_) = resumed else {
+                                return None;
+                            };
+                            yielded_count = yielded_count.checked_add(1)?;
+                        }
+                        Some(RuntimeValue::Int(yielded_count))
+                    }
+                    // State-thread mode:
+                    // iterate graphemes, call `yield_state` with `{ grapheme, ...state }`,
+                    // and thread resumed state across iterations.
+                    [RuntimeValue::String(value), initial_state] => {
+                        let mut state = initial_state.clone();
+                        for grapheme in value.graphemes(true) {
+                            let RuntimeValue::Record {
+                                constructor,
+                                fields,
+                            } = &state
+                            else {
+                                return None;
+                            };
+                            let mut payload_fields = fields.clone();
+                            payload_fields.insert(
+                                "grapheme".to_string(),
+                                RuntimeValue::String(grapheme.to_string()),
+                            );
+                            let payload = RuntimeValue::Record {
+                                constructor: constructor.clone(),
+                                fields: payload_fields,
+                            };
+                            let method = self.find_handler_method_by_name("yield_state")?;
+                            state = self.dispatch_handler_method_as_value(
+                                &method,
+                                payload,
+                                evaluators,
+                                depth + 1,
+                            )?;
+                        }
+                        Some(state)
+                    }
+                    _ => None,
                 }
-                let RuntimeValue::String(value) = &args[0] else {
-                    return None;
-                };
-
-                let mut yielded_count: i64 = 0;
-                for grapheme in value.graphemes(true) {
-                    let method = self.find_handler_method_by_name("yield")?;
-                    let resumed = self.dispatch_handler_method_as_value(
-                        &method,
-                        RuntimeValue::String(grapheme.to_string()),
-                        evaluators,
-                        depth + 1,
-                    )?;
-                    let RuntimeValue::Int(_) = resumed else {
-                        return None;
-                    };
-                    yielded_count = yielded_count.checked_add(1)?;
-                }
-                Some(RuntimeValue::Int(yielded_count))
             }
             "__goby_list_push_string" => {
                 if args.len() != 2 {
@@ -2767,6 +2799,36 @@ main =
             resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
                 .expect("runtime output should resolve");
         assert_eq!(output, "3");
+    }
+
+    #[test]
+    fn resolves_runtime_output_for_intrinsic_each_grapheme_state_thread_call() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let source = r#"
+type GraphemeState = GraphemeState(grapheme: String, parts: List String, current: String, delimiter: String, seen: Bool)
+
+effect Iterator
+  yield : String -> Int
+  yield_state : GraphemeState -> GraphemeState
+
+handler Fold for Iterator
+  yield_state step =
+    next = "${step.current}${step.grapheme}"
+    resume GraphemeState(grapheme: "", parts: [], current: next, delimiter: "", seen: True)
+
+main : Unit -> Unit can Print
+main =
+  state = GraphemeState(grapheme: "", parts: [], current: "", delimiter: "", seen: False)
+  out = state
+  using Fold
+    out = __goby_string_each_grapheme "a👨‍👩‍👧‍👦b" state
+  print out.current
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let output =
+            resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
+                .expect("runtime output should resolve");
+        assert_eq!(output, "a👨\u{200d}👩\u{200d}👧\u{200d}👦b");
     }
 
     #[test]
