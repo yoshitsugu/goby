@@ -1385,11 +1385,9 @@ impl<'m> RuntimeOutputResolver<'m> {
 
     fn begin_handler_continuation_bridge(&mut self, handler_decl_idx: usize) -> usize {
         match self.execution_mode {
-            lower::EffectExecutionMode::PortableFallback => {
-                self.push_resume_token_for_handler(handler_decl_idx)
-            }
-            lower::EffectExecutionMode::TypedContinuationOptimized => {
-                // Step 8.4 bridge point: optimized continuation path will plug in here.
+            lower::EffectExecutionMode::PortableFallback
+            | lower::EffectExecutionMode::TypedContinuationOptimized => {
+                // Step 8.4: both modes share the same token bridge for now.
                 self.push_resume_token_for_handler(handler_decl_idx)
             }
         }
@@ -1400,11 +1398,9 @@ impl<'m> RuntimeOutputResolver<'m> {
         token_idx: usize,
     ) -> Option<Option<RuntimeValue>> {
         match self.execution_mode {
-            lower::EffectExecutionMode::PortableFallback => {
-                self.take_resume_token_result(token_idx)
-            }
-            lower::EffectExecutionMode::TypedContinuationOptimized => {
-                // Step 8.4 bridge point: optimized continuation path will plug in here.
+            lower::EffectExecutionMode::PortableFallback
+            | lower::EffectExecutionMode::TypedContinuationOptimized => {
+                // Step 8.4: both modes share the same token bridge for now.
                 self.take_resume_token_result(token_idx)
             }
         }
@@ -1415,11 +1411,9 @@ impl<'m> RuntimeOutputResolver<'m> {
         resumed: RuntimeValue,
     ) -> Option<RuntimeValue> {
         match self.execution_mode {
-            lower::EffectExecutionMode::PortableFallback => {
-                self.resume_through_active_continuation_fallback(resumed)
-            }
-            lower::EffectExecutionMode::TypedContinuationOptimized => {
-                // Step 8.4 bridge point: optimized continuation path will plug in here.
+            lower::EffectExecutionMode::PortableFallback
+            | lower::EffectExecutionMode::TypedContinuationOptimized => {
+                // Step 8.4: both modes share the same token bridge for now.
                 self.resume_through_active_continuation_fallback(resumed)
             }
         }
@@ -2307,6 +2301,29 @@ mod tests {
         }
     }
 
+    fn assert_mode_parity(module: &Module, context: &str) -> ParityOutcome {
+        let fallback =
+            parity_outcome_for_mode(module, lower::EffectExecutionMode::PortableFallback);
+        let typed = parity_outcome_for_mode(
+            module,
+            lower::EffectExecutionMode::TypedContinuationOptimized,
+        );
+        assert_ne!(
+            fallback.runtime_error_kind,
+            Some("unknown_runtime_error"),
+            "fallback produced unmapped runtime error kind in {}",
+            context
+        );
+        assert_ne!(
+            typed.runtime_error_kind,
+            Some("unknown_runtime_error"),
+            "typed mode produced unmapped runtime error kind in {}",
+            context
+        );
+        assert_eq!(typed, fallback, "mode parity mismatch in {}", context);
+        typed
+    }
+
     #[test]
     fn emits_valid_wasm_for_long_print_literal() {
         let long_text = "x".repeat(128);
@@ -2796,21 +2813,12 @@ handler IterHandler for Iter
     resume 7
 
 main : Unit -> Unit
-main =
+        main =
   using IterHandler
     print (next 0)
 "#;
         let module = parse_module(source).expect("parse should work");
-        let fallback =
-            parity_outcome_for_mode(&module, lower::EffectExecutionMode::PortableFallback);
-        let typed = parity_outcome_for_mode(
-            &module,
-            lower::EffectExecutionMode::TypedContinuationOptimized,
-        );
-        assert_eq!(
-            typed, fallback,
-            "typed continuation bridge should preserve resume success behavior"
-        );
+        let typed = assert_mode_parity(&module, "resume success path");
         assert_eq!(typed.stdout.as_deref(), Some("7"));
         assert_eq!(typed.runtime_error_kind, None);
     }
@@ -2833,16 +2841,7 @@ main =
     print (next 0)
 "#;
         let module = parse_module(source).expect("parse should work");
-        let fallback =
-            parity_outcome_for_mode(&module, lower::EffectExecutionMode::PortableFallback);
-        let typed = parity_outcome_for_mode(
-            &module,
-            lower::EffectExecutionMode::TypedContinuationOptimized,
-        );
-        assert_eq!(
-            typed, fallback,
-            "typed continuation bridge should preserve no-resume abortive path behavior"
-        );
+        let typed = assert_mode_parity(&module, "no-resume abortive path");
         assert_eq!(typed.stdout, None);
         assert_eq!(typed.runtime_error_kind, None);
     }
@@ -2865,16 +2864,7 @@ main =
     print (next 0)
 "#;
         let module = parse_module(source).expect("parse should work");
-        let fallback =
-            parity_outcome_for_mode(&module, lower::EffectExecutionMode::PortableFallback);
-        let typed = parity_outcome_for_mode(
-            &module,
-            lower::EffectExecutionMode::TypedContinuationOptimized,
-        );
-        assert_eq!(
-            typed, fallback,
-            "typed continuation bridge should preserve one-shot double-resume runtime error behavior"
-        );
+        let typed = assert_mode_parity(&module, "double-resume deterministic error path");
         assert_eq!(typed.stdout, None);
         assert_eq!(typed.runtime_error_kind, Some("continuation_consumed"));
     }
@@ -2904,17 +2894,36 @@ main =
     print (B.next 0)
 "#;
         let module = parse_module(source).expect("parse should work");
-        let fallback =
-            parity_outcome_for_mode(&module, lower::EffectExecutionMode::PortableFallback);
-        let typed = parity_outcome_for_mode(
-            &module,
-            lower::EffectExecutionMode::TypedContinuationOptimized,
-        );
-        assert_eq!(
-            typed, fallback,
-            "typed continuation bridge should preserve nearest-handler dispatch behavior"
-        );
+        let typed = assert_mode_parity(&module, "qualified nearest-handler dispatch path");
         assert_eq!(typed.stdout.as_deref(), Some("2"));
+        assert_eq!(typed.runtime_error_kind, None);
+    }
+
+    #[test]
+    fn typed_mode_matches_fallback_for_nested_same_effect_nearest_handler_dispatch() {
+        use goby_core::parse_module;
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let source = r#"
+effect Log
+  log: String -> String
+
+handler OuterLog for Log
+  log msg =
+    resume "outer"
+
+handler InnerLog for Log
+  log msg =
+    resume "inner"
+
+main : Unit -> Unit
+main =
+  using OuterLog
+    using InnerLog
+      print (log "x")
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let typed = assert_mode_parity(&module, "nested same-effect nearest-handler dispatch path");
+        assert_eq!(typed.stdout.as_deref(), Some("inner"));
         assert_eq!(typed.runtime_error_kind, None);
     }
 
