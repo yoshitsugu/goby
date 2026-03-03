@@ -322,13 +322,21 @@ Step 7.3: Direct-style lowerer path stabilization — DONE (2026-03-02)
   - call-graph with `can` declaration causes native lowerer to return `None`,
   - pure direct-style declaration call still lowers natively.
 
-Step 7.4: Effect-boundary lowering skeleton (no full feature parity yet)
+Step 7.4: Effect-boundary lowering skeleton (no full feature parity yet) — DONE (2026-03-02)
 
 - Add explicit handoff points where `EffectBoundary` lowering will inject:
   - continuation capture/re-entry hooks,
   - evidence passing through calls crossing effect boundaries.
 - In this phase, handoff points may still route to fallback runtime for execution,
   but boundaries must be explicit and testable in lowering decisions.
+- Implemented explicit lower-path result contract in `goby-wasm`:
+  - `NativeLoweringResult::{Emitted, EffectBoundaryHandoff, NotLowered}`,
+  - `EffectBoundaryHandoff` includes boundary metadata
+    (`main_style`, handler-resume marker, evidence shape summary fields).
+- `compile_module` now evaluates this result and uses an explicit handoff branch
+  for `EffectBoundaryHandoff` before fallback runtime execution.
+- Added regression coverage to assert effect-boundary modules return
+  `EffectBoundaryHandoff` via lowerer entry API.
 
 Step 7.5: Regression and observability hooks
 

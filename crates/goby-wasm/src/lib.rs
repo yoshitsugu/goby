@@ -38,10 +38,15 @@ pub fn compile_module(module: &Module) -> Result<Vec<u8>, CodegenError> {
         });
     };
 
-    if fallback::supports_native_codegen(module)
-        && let Some(wasm) = lower::try_emit_native_module(module)?
-    {
-        return Ok(wasm);
+    let native_attempt = lower::try_emit_native_module_with_handoff(module)?;
+    let supports_native = fallback::supports_native_codegen(module);
+    match native_attempt {
+        lower::NativeLoweringResult::Emitted(wasm) if supports_native => return Ok(wasm),
+        lower::NativeLoweringResult::EffectBoundaryHandoff(_handoff) => {
+            // Explicit Step 7.4 handoff point: effect-boundary lowering is not
+            // emitted natively yet, so route to the fallback runtime path below.
+        }
+        _ => {}
     }
 
     if let Some(text) = resolve_main_runtime_output(module, &main.body, main.parsed_body.as_deref())
