@@ -71,6 +71,8 @@ Based on `examples/*.gb`:
   - `can` clauses are validated (declared effect or built-in effect names).
 - `using` handler application syntax: comma-separated handler list (`using HandlerA, HandlerB`).
 - MVP built-ins: `print`, `string.concat`, `map`, `fetch_env_var`, `string.split`, `list.join`.
+  - `print` execution is resolved by compiler/runtime internals (default stdio print path),
+    not by a user-visible stdlib handler definition.
 - `examples/basic_types.gb` is a parse/typecheck target, not a runnable entrypoint target.
   - no `main` addition and no `--entry` option in MVP.
 - `examples/function.gb` is a canonical MVP run target and must be preserved as-is.
@@ -93,11 +95,10 @@ Based on `examples/*.gb`:
 
 ### 2.1 Syntax and Parsing
 
-- **String interpolation `${}`** (post-MVP).
-  - Syntax `"${expr}"` is shown in `examples/basic_types.gb` but is not yet parsed.
-  - Currently the parser stores the raw literal including `${...}` as a plain `StringLit` with no substitution.
-  - Implementation requires: new `Expr::InterpolatedString` variant (or expand to `string.concat` at parse time),
-    parser support for `${ expr }` inside string literals, typechecker propagation, and runtime/codegen evaluation.
+- **String interpolation `${}`** (implemented).
+  - Parser supports `${ expr }` inside string literals and lowers it to `Expr::InterpolatedString`.
+  - Typechecker treats interpolated literals as `String`.
+  - Runtime/codegen evaluates each segment and stringifies embedded expression values.
 - **Tuple index access `expr.N`** (post-MVP).
   - Syntax `a.0`, `a.1` is shown in `examples/basic_types.gb` but is not yet parsed.
   - `parse_method_call` rejects numeric method names (`is_identifier` fails on digits).
@@ -226,8 +227,7 @@ Based on `examples/*.gb`:
   fallback behavior for unsupported forms.
 - Real Wasm migration plan (Phase 0-8) is completed; implementation record is archived.
 - `goby-cli run examples/basic_types.gb` currently fails with a codegen error because current
-  codegen/runtime paths do not handle string interpolation or tuple index access.
-  Both features are blocked until their parser/AST support (§2.1) is in place.
+  codegen/runtime paths do not handle tuple index access (`expr.N`) yet.
 - Error location strategy (line/column reporting) — deferred.
 
 ### 2.6 Tooling Scope (MVP)

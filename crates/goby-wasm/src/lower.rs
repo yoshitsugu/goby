@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use goby_core::{BinOpKind, CasePattern, Expr, Module, Stmt};
+use goby_core::{BinOpKind, CasePattern, Expr, Module, Stmt, ast::InterpolatedPart};
 
 use crate::{
     CodegenError,
@@ -294,6 +294,10 @@ fn expr_contains_resume(expr: &Expr) -> bool {
             fields.iter().any(|(_, value)| expr_contains_resume(value))
         }
         Expr::MethodCall { args, .. } => args.iter().any(expr_contains_resume),
+        Expr::InterpolatedString(parts) => parts.iter().any(|part| match part {
+            InterpolatedPart::Text(_) => false,
+            InterpolatedPart::Expr(expr) => expr_contains_resume(expr),
+        }),
         Expr::Qualified { .. }
         | Expr::Var(_)
         | Expr::StringLit(_)

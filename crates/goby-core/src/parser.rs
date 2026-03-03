@@ -1,6 +1,7 @@
 use crate::ast::{
     BinOpKind, CaseArm, CasePattern, Declaration, EffectDecl, EffectMember, EmbedDecl, Expr,
-    HandlerDecl, HandlerMethod, ImportDecl, ImportKind, Module, RecordField, Stmt, TypeDeclaration,
+    HandlerDecl, HandlerMethod, ImportDecl, ImportKind, InterpolatedPart, Module, RecordField,
+    Stmt, TypeDeclaration,
 };
 use crate::str_util::split_top_level_commas;
 
@@ -448,6 +449,109 @@ fn unescape_string(s: &str) -> String {
     result
 }
 
+/// Parse a string literal body that may contain `${...}` interpolations.
+///
+/// Example: `"a${x}b"` -> `Expr::InterpolatedString([Text("a"), Expr(x), Text("b")])`.
+fn parse_interpolated_string_body(body: &str) -> Option<Expr> {
+    let bytes = body.as_bytes();
+    let mut i = 0usize;
+    let mut literal_start = 0usize;
+    let mut parts: Vec<InterpolatedPart> = Vec::new();
+    let mut saw_interpolation = false;
+
+    while i < bytes.len() {
+        // Preserve escaped characters in literal text; interpolation markers in
+        // escaped sequences (for example `\${`) are not treated as interpolation.
+        if bytes[i] == b'\\' {
+            i += 1;
+            if i < bytes.len() {
+                i += 1;
+            }
+            continue;
+        }
+
+        if bytes[i] == b'$' && i + 1 < bytes.len() && bytes[i + 1] == b'{' {
+            saw_interpolation = true;
+            let literal_raw = &body[literal_start..i];
+            if !literal_raw.is_empty() {
+                parts.push(InterpolatedPart::Text(unescape_string(literal_raw)));
+            }
+
+            let mut j = i + 2;
+            let mut depth = 1usize;
+            let mut in_string = false;
+            let mut escaped = false;
+            while j < bytes.len() {
+                if in_string {
+                    if escaped {
+                        escaped = false;
+                        j += 1;
+                        continue;
+                    }
+                    if bytes[j] == b'\\' {
+                        escaped = true;
+                        j += 1;
+                        continue;
+                    }
+                    if bytes[j] == b'"' {
+                        in_string = false;
+                    }
+                    j += 1;
+                    continue;
+                }
+
+                match bytes[j] {
+                    b'"' => in_string = true,
+                    b'{' => depth += 1,
+                    b'}' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+                j += 1;
+            }
+
+            if j >= bytes.len() || bytes[j] != b'}' {
+                return None;
+            }
+
+            let expr_src = body[i + 2..j].trim();
+            if expr_src.is_empty() {
+                return None;
+            }
+            parts.push(InterpolatedPart::Expr(Box::new(parse_expr(expr_src)?)));
+
+            i = j + 1;
+            literal_start = i;
+            continue;
+        }
+
+        // Unescaped quotes are only valid inside `${...}` expressions.
+        if bytes[i] == b'"' {
+            return None;
+        }
+
+        i += 1;
+    }
+
+    if !saw_interpolation {
+        return Some(Expr::StringLit(unescape_string(body)));
+    }
+
+    let trailing = &body[literal_start..];
+    if !trailing.is_empty() {
+        parts.push(InterpolatedPart::Text(unescape_string(trailing)));
+    }
+
+    if parts.is_empty() {
+        return Some(Expr::StringLit(String::new()));
+    }
+    Some(Expr::InterpolatedString(parts))
+}
+
 fn find_next_nonblank(lines: &[&str], from: usize) -> Option<usize> {
     for (offset, line) in lines[from..].iter().enumerate() {
         let stripped = strip_line_comment(line).trim_end();
@@ -771,9 +875,7 @@ pub fn parse_expr(src: &str) -> Option<Expr> {
     // 13. String literal: "..."
     if src.starts_with('"') && src.ends_with('"') && src.len() >= 2 {
         let inner = &src[1..src.len() - 1];
-        if !inner.contains('"') {
-            return Some(Expr::StringLit(unescape_string(inner)));
-        }
+        return parse_interpolated_string_body(inner);
     }
 
     // 14. Bool literal
@@ -2012,6 +2114,44 @@ main = 1
             parse_expr("\"hello\""),
             Some(Expr::StringLit("hello".to_string()))
         );
+    }
+
+    #[test]
+    fn parses_interpolated_string_with_variables() {
+        assert_eq!(
+            parse_expr("\"${a}${b}\""),
+            Some(Expr::InterpolatedString(vec![
+                InterpolatedPart::Expr(Box::new(Expr::Var("a".to_string()))),
+                InterpolatedPart::Expr(Box::new(Expr::Var("b".to_string()))),
+            ]))
+        );
+    }
+
+    #[test]
+    fn parses_interpolated_string_with_literal_prefix_and_suffix() {
+        assert_eq!(
+            parse_expr("\"hello ${name}!\""),
+            Some(Expr::InterpolatedString(vec![
+                InterpolatedPart::Text("hello ".to_string()),
+                InterpolatedPart::Expr(Box::new(Expr::Var("name".to_string()))),
+                InterpolatedPart::Text("!".to_string()),
+            ]))
+        );
+    }
+
+    #[test]
+    fn parses_interpolated_string_with_string_literal_expression() {
+        assert_eq!(
+            parse_expr("\"${\"a\"}\""),
+            Some(Expr::InterpolatedString(vec![InterpolatedPart::Expr(
+                Box::new(Expr::StringLit("a".to_string())),
+            )]))
+        );
+    }
+
+    #[test]
+    fn rejects_interpolated_string_with_unclosed_expression() {
+        assert_eq!(parse_expr("\"x${name\""), None);
     }
 
     #[test]

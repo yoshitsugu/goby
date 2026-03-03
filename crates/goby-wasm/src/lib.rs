@@ -9,8 +9,8 @@ mod support;
 use std::collections::{HashMap, HashSet};
 
 use goby_core::{
-    CasePattern, Expr, HandlerMethod, Module, Stmt, str_util::parse_string_concat_call,
-    types::parse_function_type,
+    CasePattern, Expr, HandlerMethod, Module, Stmt, ast::InterpolatedPart,
+    str_util::parse_string_concat_call, types::parse_function_type,
 };
 const ERR_MISSING_MAIN: &str = "Wasm codegen requires a `main` declaration";
 const BUILTIN_PRINT: &str = "print";
@@ -813,6 +813,20 @@ impl<'m> RuntimeOutputResolver<'m> {
             Expr::IntLit(n) => Some(RuntimeValue::Int(*n)),
             Expr::BoolLit(b) => Some(RuntimeValue::Bool(*b)),
             Expr::StringLit(s) => Some(RuntimeValue::String(s.clone())),
+            Expr::InterpolatedString(parts) => {
+                let mut out = String::new();
+                for part in parts {
+                    match part {
+                        InterpolatedPart::Text(text) => out.push_str(text),
+                        InterpolatedPart::Expr(expr) => {
+                            let value =
+                                self.eval_expr_ast(expr, locals, callables, evaluators, depth + 1)?;
+                            out.push_str(&value.to_output_text());
+                        }
+                    }
+                }
+                Some(RuntimeValue::String(out))
+            }
             Expr::Var(name) => locals.get(name),
             Expr::BinOp { op, left, right } => {
                 let lv = self.eval_expr_ast(left, locals, callables, evaluators, depth + 1)?;
@@ -2553,6 +2567,23 @@ main =
             resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
                 .expect("runtime output should resolve");
         assert_eq!(output, "[1, 2, 3]");
+    }
+
+    #[test]
+    fn resolves_runtime_output_for_interpolated_string_with_mixed_values() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let source = r#"
+main : Unit -> Unit
+main =
+  n = 42
+  greeting = "Goby"
+  print "value=${n}, hello=${greeting}"
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let output =
+            resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
+                .expect("runtime output should resolve");
+        assert_eq!(output, "value=42, hello=Goby");
     }
 
     #[test]
