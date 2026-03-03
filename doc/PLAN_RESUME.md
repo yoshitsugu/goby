@@ -354,7 +354,7 @@ Step 7.5: Regression and observability hooks — DONE (2026-03-02)
 - Extended Step 7.4 handoff payload with declaration-mode snapshot so callers can
   inspect lowering mode selection per declaration at runtime handoff points.
 
-Step 7.6: Step-7 completion criteria
+Step 7.6: Step-7 completion criteria — DONE (2026-03-02)
 
 - Planning metadata and boundary classification are implemented and covered by tests.
 - Pure-path native lowering remains green.
@@ -363,6 +363,10 @@ Step 7.6: Step-7 completion criteria
   - `cargo check`
   - `cargo test`
   - `cargo clippy -- -D warnings`
+- Step-7 closeout adjustments:
+  - removed temporary no-op observability reads (`let _ = (...)`) from lowerer entry path,
+  - made `EvidencePayloadShape::checksum` deterministic over declaration requirements
+    (name-sorted fold) and added a regression test for declaration reordering stability.
 
 Step 8: Wasm advanced path (optional)
 

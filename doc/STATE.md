@@ -761,6 +761,17 @@ This file is a restart-safe snapshot for resuming work after context reset.
     - multi-hop transitive boundary propagation (`main -> mid -> fx(can ...)`),
     - declaration-mode snapshot content/ordering check.
   - Added lowerer test assertion that effect-boundary handoff exposes declaration-mode snapshot.
+- 2026-03-02 (session 71): `PLAN_RESUME` Step 7.6 complete (Step-7 closeout)
+  - Confirmed Step-7 completion criteria:
+    - planning metadata + boundary classification implemented with regression coverage,
+    - pure-path native lowering remains green,
+    - explicit effect-boundary handoff exists in lowering pipeline.
+  - Closed previously deferred Step-7 review notes:
+    - removed no-op observability reads from `lower::try_emit_native_module_with_handoff`,
+    - made `EvidencePayloadShape::checksum` deterministic by folding
+      declaration requirements in declaration-name order.
+  - Added regression test:
+    - checksum remains stable under declaration reordering.
 
 ## 5. Current Example Files
 

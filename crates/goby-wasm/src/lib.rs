@@ -42,7 +42,22 @@ pub fn compile_module(module: &Module) -> Result<Vec<u8>, CodegenError> {
     let supports_native = fallback::supports_native_codegen(module);
     match native_attempt {
         lower::NativeLoweringResult::Emitted(wasm) if supports_native => return Ok(wasm),
-        lower::NativeLoweringResult::EffectBoundaryHandoff(_handoff) => {
+        lower::NativeLoweringResult::EffectBoundaryHandoff(handoff) => {
+            if handoff.main_style == planning::LoweringStyle::DirectStyle {
+                return Err(CodegenError {
+                    message:
+                        "internal lowering invariant violation: direct-style main produced boundary handoff"
+                            .to_string(),
+                });
+            }
+            if let Some(main_req) = handoff.main_requirement
+                && main_req.style == planning::LoweringStyle::DirectStyle
+                && main_req.passes_evidence
+            {
+                return Err(CodegenError {
+                    message: "internal lowering invariant violation: direct-style main requirement marked as evidence-passing".to_string(),
+                });
+            }
             // Explicit Step 7.4 handoff point: effect-boundary lowering is not
             // emitted natively yet, so route to the fallback runtime path below.
         }
