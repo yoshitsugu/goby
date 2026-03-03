@@ -789,6 +789,29 @@ This file is a restart-safe snapshot for resuming work after context reset.
     - `Last updated` header,
     - current example list includes `examples/iterator.gb`,
     - Phase-A quality snapshot updated to 281 tests green.
+- 2026-03-03 (session 74): `PLAN_RESUME` Step 8 kickoff (8.1-8.3 scaffold)
+  - Added Step8 execution-mode gate skeleton in `goby-wasm` lowerer:
+    - `EffectExecutionMode` (`PortableFallback` / `TypedContinuationOptimized`),
+    - compile-time runtime profile probe via `GOBY_WASM_RUNTIME_PROFILE`
+      (`wasmtime` / `wasmer` / `unknown`),
+    - first-failure fallback reason reporting (`RuntimeProfileNotSupported`, etc.).
+  - Extended effect-boundary handoff observability payload with:
+    - selected execution mode,
+    - selected-mode fallback reason,
+    - compile-time runtime profile,
+    - optional typed-continuation IR artifact slot.
+  - Added internal typed-continuation IR scaffold (Step 8.2/8.3 base):
+    - operation table snapshot,
+    - main declaration required-effect IDs,
+    - main declaration referenced-operation refs,
+    - one-shot resume flag.
+  - Added compile-time gate feature:
+    - `crates/goby-wasm/Cargo.toml` feature `typed-continuation-optimized` (default off).
+  - Updated fallback boundary diagnostics in `compile_module` to include
+    Step8 mode-selection context.
+  - Validation:
+    - `cargo fmt`
+    - `cargo test -p goby-wasm` (62 unit + 5 integration tests passed)
 
 ## 5. Current Example Files
 

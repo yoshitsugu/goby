@@ -53,6 +53,14 @@ impl DeclarationEvidenceRequirement {
     pub(crate) fn referenced_operation_count(&self) -> usize {
         self.referenced_operations.len()
     }
+
+    pub(crate) fn required_effects(&self) -> &[EffectId] {
+        &self.required_effects
+    }
+
+    pub(crate) fn referenced_operations(&self) -> &[EffectOperationRef] {
+        &self.referenced_operations
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -62,6 +70,10 @@ pub(crate) struct EvidencePayloadShape {
 }
 
 impl EvidencePayloadShape {
+    pub(crate) fn operation_table(&self) -> &[EffectOperationRef] {
+        &self.operation_table
+    }
+
     pub(crate) fn operation_table_len(&self) -> usize {
         self.operation_table.len()
     }

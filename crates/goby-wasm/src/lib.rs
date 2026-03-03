@@ -71,8 +71,12 @@ pub fn compile_module(module: &Module) -> Result<Vec<u8>, CodegenError> {
     if let Some(handoff) = effect_boundary_handoff {
         return Err(CodegenError {
             message: format!(
-                "main lowered as effect boundary (style={:?}, handlers_resume={}, evidence_ops={}, evidence_requirements={}, evidence_fingerprint_hint={}); fallback runtime output could not be resolved",
+                "main lowered as effect boundary (style={:?}, selected_mode={:?}, selected_mode_fallback_reason={:?}, runtime_profile={:?}, typed_continuation_ir_present={}, handlers_resume={}, evidence_ops={}, evidence_requirements={}, evidence_fingerprint_hint={}); fallback runtime output could not be resolved",
                 handoff.main_style,
+                handoff.selected_mode,
+                handoff.selected_mode_fallback_reason,
+                handoff.runtime_profile,
+                handoff.typed_continuation_ir.is_some(),
                 handoff.handler_resume_present,
                 handoff.evidence_operation_table_len,
                 handoff.evidence_requirements_len,

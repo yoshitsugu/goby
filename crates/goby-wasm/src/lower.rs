@@ -7,12 +7,47 @@ use crate::{
     backend::WasmProgramBuilder,
     call::extract_direct_print_call_arg,
     layout::MemoryLayout,
-    planning::{DeclarationLoweringMode, LoweringPlan, LoweringStyle, build_lowering_plan},
+    planning::{
+        DeclarationLoweringMode, EffectId, EffectOperationRef, LoweringPlan, LoweringStyle,
+        build_lowering_plan,
+    },
 };
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum EffectExecutionMode {
+    PortableFallback,
+    TypedContinuationOptimized,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RuntimeProfile {
+    Unknown,
+    Wasmtime,
+    Wasmer,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum EffectModeFallbackReason {
+    RuntimeProfileNotSupported,
+    MainNotEffectBoundary,
+    UnsupportedEffectConstruct,
+    OptimizationGateDisabled,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct EffectExecutionSelection {
+    mode: EffectExecutionMode,
+    fallback_reason: Option<EffectModeFallbackReason>,
+    runtime_profile: RuntimeProfile,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct EffectBoundaryHandoff {
     pub(crate) main_style: LoweringStyle,
+    pub(crate) selected_mode: EffectExecutionMode,
+    pub(crate) selected_mode_fallback_reason: Option<EffectModeFallbackReason>,
+    pub(crate) runtime_profile: RuntimeProfile,
+    pub(crate) typed_continuation_ir: Option<TypedContinuationIr>,
     pub(crate) main_requirement: Option<MainEvidenceRequirementSummary>,
     pub(crate) handler_resume_present: bool,
     pub(crate) evidence_operation_table_len: usize,
@@ -27,6 +62,14 @@ pub(crate) struct MainEvidenceRequirementSummary {
     pub(crate) passes_evidence: bool,
     pub(crate) required_effect_count: usize,
     pub(crate) referenced_operation_count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TypedContinuationIr {
+    pub(crate) operation_table: Vec<EffectOperationRef>,
+    pub(crate) main_required_effects: Vec<EffectId>,
+    pub(crate) main_referenced_operations: Vec<EffectOperationRef>,
+    pub(crate) one_shot_resume: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -56,6 +99,7 @@ pub(crate) fn try_emit_native_module_with_handoff(
         .style_for("main")
         .unwrap_or(LoweringStyle::EffectBoundary);
     if main_style != LoweringStyle::DirectStyle {
+        let selection = select_effect_execution_mode(main_style, module);
         let main_requirement = lowering_plan.evidence_requirement_for("main").map(|req| {
             MainEvidenceRequirementSummary {
                 style: req.style(),
@@ -64,9 +108,19 @@ pub(crate) fn try_emit_native_module_with_handoff(
                 referenced_operation_count: req.referenced_operation_count(),
             }
         });
+        let typed_continuation_ir =
+            if selection.mode == EffectExecutionMode::TypedContinuationOptimized {
+                build_typed_continuation_ir(&lowering_plan)
+            } else {
+                None
+            };
         return Ok(NativeLoweringResult::EffectBoundaryHandoff(
             EffectBoundaryHandoff {
                 main_style,
+                selected_mode: selection.mode,
+                selected_mode_fallback_reason: selection.fallback_reason,
+                runtime_profile: selection.runtime_profile,
+                typed_continuation_ir,
                 main_requirement,
                 handler_resume_present: lowering_plan.handler_resume_present(),
                 evidence_operation_table_len: evidence_shape.operation_table_len(),
@@ -89,6 +143,78 @@ pub(crate) fn try_emit_native_module_with_handoff(
 
     let wasm = builder.emit_static_print_module(&output_text)?;
     Ok(NativeLoweringResult::Emitted(wasm))
+}
+
+fn build_typed_continuation_ir(lowering_plan: &LoweringPlan) -> Option<TypedContinuationIr> {
+    let evidence_shape = lowering_plan.evidence_shape();
+    let main_requirement = lowering_plan.evidence_requirement_for("main")?;
+    Some(TypedContinuationIr {
+        operation_table: evidence_shape.operation_table().to_vec(),
+        main_required_effects: main_requirement.required_effects().to_vec(),
+        main_referenced_operations: main_requirement.referenced_operations().to_vec(),
+        one_shot_resume: true,
+    })
+}
+
+fn select_effect_execution_mode(
+    main_style: LoweringStyle,
+    module: &Module,
+) -> EffectExecutionSelection {
+    let runtime_profile = compile_time_runtime_profile();
+    if !matches!(
+        runtime_profile,
+        RuntimeProfile::Wasmtime | RuntimeProfile::Wasmer
+    ) {
+        return EffectExecutionSelection {
+            mode: EffectExecutionMode::PortableFallback,
+            fallback_reason: Some(EffectModeFallbackReason::RuntimeProfileNotSupported),
+            runtime_profile,
+        };
+    }
+    if main_style != LoweringStyle::EffectBoundary {
+        return EffectExecutionSelection {
+            mode: EffectExecutionMode::PortableFallback,
+            fallback_reason: Some(EffectModeFallbackReason::MainNotEffectBoundary),
+            runtime_profile,
+        };
+    }
+    if contains_unsupported_effect_construct_for_optimized_path(module) {
+        return EffectExecutionSelection {
+            mode: EffectExecutionMode::PortableFallback,
+            fallback_reason: Some(EffectModeFallbackReason::UnsupportedEffectConstruct),
+            runtime_profile,
+        };
+    }
+    if !typed_continuation_optimization_gate_enabled() {
+        return EffectExecutionSelection {
+            mode: EffectExecutionMode::PortableFallback,
+            fallback_reason: Some(EffectModeFallbackReason::OptimizationGateDisabled),
+            runtime_profile,
+        };
+    }
+    EffectExecutionSelection {
+        mode: EffectExecutionMode::TypedContinuationOptimized,
+        fallback_reason: None,
+        runtime_profile,
+    }
+}
+
+fn contains_unsupported_effect_construct_for_optimized_path(_module: &Module) -> bool {
+    // Step 8.1 default: optimized continuation path is not implemented yet,
+    // so all effect-boundary modules stay on the portable fallback path.
+    true
+}
+
+fn compile_time_runtime_profile() -> RuntimeProfile {
+    match option_env!("GOBY_WASM_RUNTIME_PROFILE") {
+        Some("wasmtime") => RuntimeProfile::Wasmtime,
+        Some("wasmer") => RuntimeProfile::Wasmer,
+        _ => RuntimeProfile::Unknown,
+    }
+}
+
+fn typed_continuation_optimization_gate_enabled() -> bool {
+    cfg!(feature = "typed-continuation-optimized")
 }
 
 #[derive(Clone)]
@@ -426,7 +552,10 @@ fn apply_map_builtin(
 mod tests {
     use goby_core::parse_module;
 
-    use super::{NativeLoweringResult, try_emit_native_module_with_handoff};
+    use super::{
+        EffectExecutionMode, EffectModeFallbackReason, NativeLoweringResult, RuntimeProfile,
+        try_emit_native_module_with_handoff,
+    };
 
     #[test]
     fn native_lowerer_rejects_main_when_call_graph_contains_effect_boundary() {
@@ -444,6 +573,13 @@ main =
         let NativeLoweringResult::EffectBoundaryHandoff(handoff) = lowered else {
             panic!("effect-boundary declarations should produce explicit handoff metadata");
         };
+        assert_eq!(handoff.selected_mode, EffectExecutionMode::PortableFallback);
+        assert_eq!(
+            handoff.selected_mode_fallback_reason,
+            Some(EffectModeFallbackReason::RuntimeProfileNotSupported)
+        );
+        assert_eq!(handoff.runtime_profile, RuntimeProfile::Unknown);
+        assert_eq!(handoff.typed_continuation_ir, None);
         assert!(
             handoff
                 .declaration_modes
