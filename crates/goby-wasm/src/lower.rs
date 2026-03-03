@@ -222,11 +222,11 @@ fn select_effect_execution_mode_with_inputs(
     }
 }
 
-fn contains_unsupported_effect_construct_for_optimized_path(_module: &Module) -> bool {
-    if !_module.handler_declarations.is_empty() {
+fn contains_unsupported_effect_construct_for_optimized_path(module: &Module) -> bool {
+    if !module.handler_declarations.is_empty() {
         return true;
     }
-    _module
+    module
         .declarations
         .iter()
         .filter_map(|decl| decl.parsed_body.as_deref())
