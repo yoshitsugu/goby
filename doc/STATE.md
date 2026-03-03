@@ -894,6 +894,31 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - Validation:
     - `cargo fmt`
     - `cargo test -p goby-wasm`
+- 2026-03-03 (session 81): Step8 continuation bridge divergence + profile evidence
+  - Runtime bridge divergence (Step8 core progress):
+    - `PortableFallback` and `TypedContinuationOptimized` now use distinct
+      continuation token stacks in `RuntimeOutputResolver`:
+      - fallback: `resume_tokens: Vec<ResumeToken>`,
+      - typed: `optimized_resume_tokens: Vec<OptimizedResumeToken>`.
+    - begin/resume/finish bridge points now dispatch to mode-specific token
+      paths while preserving identical runtime error contract.
+  - Lowerer/profile evidence hardening:
+    - `lower` tests now derive expected runtime profile from compile-time
+      `GOBY_WASM_RUNTIME_PROFILE` (unknown/wasmtime/wasmer aware).
+    - Added successful test runs with compile-time profile builds:
+      - `GOBY_WASM_RUNTIME_PROFILE=wasmtime ...`,
+      - `GOBY_WASM_RUNTIME_PROFILE=wasmer ...`.
+  - Validation:
+    - `cargo fmt`
+    - `cargo test -p goby-wasm`
+    - `GOBY_WASM_RUNTIME_PROFILE=wasmtime cargo test -p goby-wasm lower::tests::native_lowerer_rejects_main_when_call_graph_contains_effect_boundary -- --exact`
+    - `GOBY_WASM_RUNTIME_PROFILE=wasmer cargo test -p goby-wasm lower::tests::native_lowerer_rejects_main_when_call_graph_contains_effect_boundary -- --exact`
+- 2026-03-03 (session 82): Step8.6 profile-matrix full suite evidence
+  - Executed full `goby-wasm` test suite under compile-time runtime profiles:
+    - `GOBY_WASM_RUNTIME_PROFILE=wasmtime cargo test -p goby-wasm`,
+    - `GOBY_WASM_RUNTIME_PROFILE=wasmer cargo test -p goby-wasm`.
+  - Results:
+    - both profile runs passed (`71 passed, 0 failed, 1 ignored` unit tests + `6 passed` integration tests).
 
 ## 5. Current Example Files
 

@@ -643,6 +643,14 @@ mod tests {
         try_emit_native_module_with_handoff,
     };
 
+    fn expected_compile_time_runtime_profile() -> RuntimeProfile {
+        match option_env!("GOBY_WASM_RUNTIME_PROFILE") {
+            Some("wasmtime") => RuntimeProfile::Wasmtime,
+            Some("wasmer") => RuntimeProfile::Wasmer,
+            _ => RuntimeProfile::Unknown,
+        }
+    }
+
     #[test]
     fn native_lowerer_rejects_main_when_call_graph_contains_effect_boundary() {
         let source = r#"
@@ -660,11 +668,17 @@ main =
             panic!("effect-boundary declarations should produce explicit handoff metadata");
         };
         assert_eq!(handoff.selected_mode, EffectExecutionMode::PortableFallback);
+        let expected_reason = match expected_compile_time_runtime_profile() {
+            RuntimeProfile::Unknown => EffectModeFallbackReason::RuntimeProfileNotSupported,
+            RuntimeProfile::Wasmtime | RuntimeProfile::Wasmer => {
+                EffectModeFallbackReason::OptimizationGateDisabled
+            }
+        };
+        assert_eq!(handoff.selected_mode_fallback_reason, Some(expected_reason));
         assert_eq!(
-            handoff.selected_mode_fallback_reason,
-            Some(EffectModeFallbackReason::RuntimeProfileNotSupported)
+            handoff.runtime_profile,
+            expected_compile_time_runtime_profile()
         );
-        assert_eq!(handoff.runtime_profile, RuntimeProfile::Unknown);
         assert_eq!(handoff.typed_continuation_ir, None);
         assert!(
             handoff

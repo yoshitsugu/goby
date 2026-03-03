@@ -423,6 +423,7 @@ struct RuntimeOutputResolver<'m> {
     /// Active handlers in lexical order; later entries are more deeply nested.
     active_handler_stack: Vec<usize>,
     resume_tokens: Vec<ResumeToken>,
+    optimized_resume_tokens: Vec<OptimizedResumeToken>,
     runtime_error: Option<String>,
     execution_mode: lower::EffectExecutionMode,
 }
@@ -436,6 +437,13 @@ struct Continuation {
 struct ResumeToken {
     handler_decl_idx: usize,
     continuation: Continuation,
+    resumed_value: Option<RuntimeValue>,
+}
+
+#[derive(Clone)]
+struct OptimizedResumeToken {
+    handler_decl_idx: usize,
+    consumed: bool,
     resumed_value: Option<RuntimeValue>,
 }
 
@@ -465,6 +473,7 @@ impl<'m> RuntimeOutputResolver<'m> {
             module,
             active_handler_stack: Vec::new(),
             resume_tokens: Vec::new(),
+            optimized_resume_tokens: Vec::new(),
             runtime_error: None,
             execution_mode,
         };
@@ -1376,19 +1385,53 @@ impl<'m> RuntimeOutputResolver<'m> {
         self.resume_tokens.last_mut()
     }
 
+    fn push_optimized_resume_token_for_handler(&mut self, handler_decl_idx: usize) -> usize {
+        self.optimized_resume_tokens.push(OptimizedResumeToken {
+            handler_decl_idx,
+            consumed: false,
+            resumed_value: None,
+        });
+        self.optimized_resume_tokens.len() - 1
+    }
+
+    fn take_optimized_resume_token_result(
+        &mut self,
+        token_idx: usize,
+    ) -> Option<Option<RuntimeValue>> {
+        if token_idx + 1 != self.optimized_resume_tokens.len() {
+            self.set_runtime_error_once("internal resume token stack mismatch");
+            return None;
+        }
+        let token = self.optimized_resume_tokens.pop()?;
+        Some(token.resumed_value)
+    }
+
+    fn current_optimized_resume_token_mut(&mut self) -> Option<&mut OptimizedResumeToken> {
+        self.optimized_resume_tokens.last_mut()
+    }
+
     fn resume_token_has_value(&self, token_idx: usize) -> bool {
-        self.resume_tokens
-            .get(token_idx)
-            .and_then(|token| token.resumed_value.as_ref())
-            .is_some()
+        match self.execution_mode {
+            lower::EffectExecutionMode::PortableFallback => self
+                .resume_tokens
+                .get(token_idx)
+                .and_then(|token| token.resumed_value.as_ref())
+                .is_some(),
+            lower::EffectExecutionMode::TypedContinuationOptimized => self
+                .optimized_resume_tokens
+                .get(token_idx)
+                .and_then(|token| token.resumed_value.as_ref())
+                .is_some(),
+        }
     }
 
     fn begin_handler_continuation_bridge(&mut self, handler_decl_idx: usize) -> usize {
         match self.execution_mode {
-            lower::EffectExecutionMode::PortableFallback
-            | lower::EffectExecutionMode::TypedContinuationOptimized => {
-                // Step 8.4: both modes share the same token bridge for now.
+            lower::EffectExecutionMode::PortableFallback => {
                 self.push_resume_token_for_handler(handler_decl_idx)
+            }
+            lower::EffectExecutionMode::TypedContinuationOptimized => {
+                self.push_optimized_resume_token_for_handler(handler_decl_idx)
             }
         }
     }
@@ -1398,10 +1441,11 @@ impl<'m> RuntimeOutputResolver<'m> {
         token_idx: usize,
     ) -> Option<Option<RuntimeValue>> {
         match self.execution_mode {
-            lower::EffectExecutionMode::PortableFallback
-            | lower::EffectExecutionMode::TypedContinuationOptimized => {
-                // Step 8.4: both modes share the same token bridge for now.
+            lower::EffectExecutionMode::PortableFallback => {
                 self.take_resume_token_result(token_idx)
+            }
+            lower::EffectExecutionMode::TypedContinuationOptimized => {
+                self.take_optimized_resume_token_result(token_idx)
             }
         }
     }
@@ -1411,10 +1455,11 @@ impl<'m> RuntimeOutputResolver<'m> {
         resumed: RuntimeValue,
     ) -> Option<RuntimeValue> {
         match self.execution_mode {
-            lower::EffectExecutionMode::PortableFallback
-            | lower::EffectExecutionMode::TypedContinuationOptimized => {
-                // Step 8.4: both modes share the same token bridge for now.
+            lower::EffectExecutionMode::PortableFallback => {
                 self.resume_through_active_continuation_fallback(resumed)
+            }
+            lower::EffectExecutionMode::TypedContinuationOptimized => {
+                self.resume_through_active_continuation_optimized(resumed)
             }
         }
     }
@@ -1440,6 +1485,31 @@ impl<'m> RuntimeOutputResolver<'m> {
             return None;
         };
         token.continuation.consumed = true;
+        token.resumed_value = Some(resumed.clone());
+        Some(resumed)
+    }
+
+    fn resume_through_active_continuation_optimized(
+        &mut self,
+        resumed: RuntimeValue,
+    ) -> Option<RuntimeValue> {
+        let Some(token_ro) = self.optimized_resume_tokens.last() else {
+            self.set_runtime_error_once("resume used without an active continuation");
+            return None;
+        };
+        if token_ro.consumed {
+            self.set_runtime_error_once("resume continuation already consumed");
+            return None;
+        }
+        if token_ro.handler_decl_idx >= self.module.handler_declarations.len() {
+            self.set_runtime_error_once("internal resume token handler mismatch");
+            return None;
+        }
+        let Some(token) = self.current_optimized_resume_token_mut() else {
+            self.set_runtime_error_once("resume used without an active continuation");
+            return None;
+        };
+        token.consumed = true;
         token.resumed_value = Some(resumed.clone());
         Some(resumed)
     }
@@ -2375,8 +2445,8 @@ mod tests {
 
     fn assert_mode_parity(module: &Module, context: &str) -> ParityOutcome {
         // Step 8.5 note:
-        // current Step 8.4 bridge routes both modes through the same continuation token path,
-        // so parity equality is expected by construction until optimized re-entry diverges.
+        // parity checks must stay green even though modes now use distinct continuation
+        // token bridges internally.
         let fallback =
             parity_outcome_for_mode(module, lower::EffectExecutionMode::PortableFallback);
         let typed = parity_outcome_for_mode(
@@ -3010,8 +3080,7 @@ main =
         use goby_core::parse_module;
         let _guard = ENV_MUTEX.lock().unwrap();
         // Step 8.6 note:
-        // both modes currently share runtime bridge logic, so this benchmark is primarily
-        // protocol lock-in. Re-tune thresholds after optimized mode diverges.
+        // keep this acceptance harness stable as optimized bridge internals evolve.
         let warmup_runs = 5usize;
         let measured_runs = 30usize;
         let max_slowdown_ratio = 1.03f64;
