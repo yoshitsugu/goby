@@ -12,7 +12,7 @@ This directory contains small Goby programs grouped by purpose.
 
 - `print/`: focused print-related examples
   - `local_binding.gb`: print a local string binding
-  - `concat.gb`: print `string.concat(...)` result
+  - `concat.gb`: print interpolated string result
 - `parser/`: parser behavior examples
   - `mixed_indent.gb`: mixed tabs/spaces indentation sample
 - `iterator.gb`: iterator-like effect/handler sample using `resume`

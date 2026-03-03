@@ -340,22 +340,22 @@ mod tests {
 
     #[test]
     fn to_str_repr_wraps_method_call_arg_in_parens() {
-        // `f string.concat("a", "b")` — MethodCall as a Call argument must be
+        // `f string.split("a", ",")` — MethodCall as a Call argument must be
         // wrapped so the legacy evaluator does not misparse the expression.
         let expr = Expr::Call {
             callee: Box::new(Expr::Var("f".to_string())),
             arg: Box::new(Expr::MethodCall {
                 receiver: "string".to_string(),
-                method: "concat".to_string(),
+                method: "split".to_string(),
                 args: vec![
                     Expr::StringLit("a".to_string()),
-                    Expr::StringLit("b".to_string()),
+                    Expr::StringLit(",".to_string()),
                 ],
             }),
         };
         assert_eq!(
             expr.to_str_repr(),
-            Some("f (string.concat(\"a\", \"b\"))".to_string())
+            Some("f (string.split(\"a\", \",\"))".to_string())
         );
     }
 

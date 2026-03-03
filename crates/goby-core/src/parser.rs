@@ -1194,10 +1194,6 @@ fn parse_method_call(src: &str) -> Option<Expr> {
     if parts.is_empty() || parts.iter().any(|p| p.trim().is_empty()) {
         return None;
     }
-    // Keep locked MVP behavior for string.concat arity.
-    if receiver == "string" && method == "concat" && parts.len() != 2 {
-        return None;
-    }
     let args: Option<Vec<Expr>> = parts.iter().map(|p| parse_expr(p.trim())).collect();
     Some(Expr::MethodCall {
         receiver: receiver.to_string(),
@@ -2297,7 +2293,7 @@ main = 1
     #[test]
     fn rejects_pipeline_with_non_identifier_callee_expression() {
         assert_eq!(parse_expr("x |> f 1"), None);
-        assert_eq!(parse_expr("x |> string.concat(a, b)"), None);
+        assert_eq!(parse_expr("x |> string.split(a, b)"), None);
     }
 
     #[test]
@@ -2404,12 +2400,12 @@ main = 1
     }
 
     #[test]
-    fn parses_string_concat_method_call() {
+    fn parses_qualified_method_call() {
         assert_eq!(
-            parse_expr("string.concat(a, b)"),
+            parse_expr("string.split(a, b)"),
             Some(Expr::MethodCall {
                 receiver: "string".to_string(),
-                method: "concat".to_string(),
+                method: "split".to_string(),
                 args: vec![Expr::Var("a".to_string()), Expr::Var("b".to_string())],
             })
         );
@@ -2463,9 +2459,19 @@ main = 1
     }
 
     #[test]
-    fn rejects_string_concat_with_three_arguments() {
-        // Only exactly two arguments are allowed for string.concat in MVP.
-        assert_eq!(parse_expr("string.concat(\"a\", \"b\", \"c\")"), None);
+    fn parses_qualified_method_call_with_three_arguments() {
+        assert_eq!(
+            parse_expr("string.join(a, b, c)"),
+            Some(Expr::MethodCall {
+                receiver: "string".to_string(),
+                method: "join".to_string(),
+                args: vec![
+                    Expr::Var("a".to_string()),
+                    Expr::Var("b".to_string()),
+                    Expr::Var("c".to_string())
+                ],
+            })
+        );
     }
 
     #[test]

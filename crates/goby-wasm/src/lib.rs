@@ -10,7 +10,7 @@ use std::collections::{HashMap, HashSet};
 
 use goby_core::{
     CasePattern, Expr, HandlerMethod, Module, Stmt, ast::InterpolatedPart,
-    str_util::parse_string_concat_call, types::parse_function_type,
+    types::parse_function_type,
 };
 const ERR_MISSING_MAIN: &str = "Wasm codegen requires a `main` declaration";
 const BUILTIN_PRINT: &str = "print";
@@ -837,20 +837,6 @@ impl<'m> RuntimeOutputResolver<'m> {
                         goby_core::BinOpKind::Mul => Some(RuntimeValue::Int(l.checked_mul(r)?)),
                         goby_core::BinOpKind::Eq => Some(RuntimeValue::Bool(l == r)),
                     },
-                    _ => None,
-                }
-            }
-            Expr::MethodCall {
-                receiver,
-                method,
-                args,
-            } if method == "concat" && receiver == "string" && args.len() == 2 => {
-                let av = self.eval_expr_ast(&args[0], locals, callables, evaluators, depth + 1)?;
-                let bv = self.eval_expr_ast(&args[1], locals, callables, evaluators, depth + 1)?;
-                match (av, bv) {
-                    (RuntimeValue::String(a), RuntimeValue::String(b)) => {
-                        Some(RuntimeValue::String(format!("{}{}", a, b)))
-                    }
                     _ => None,
                 }
             }
@@ -1913,12 +1899,6 @@ fn eval_string_expr(expr: &str, locals: &HashMap<String, String>) -> Option<Stri
 
     if is_identifier(expr) {
         return locals.get(expr).cloned();
-    }
-
-    if let Some((left, right)) = parse_string_concat_call(expr) {
-        let left_text = eval_string_expr(left, locals)?;
-        let right_text = eval_string_expr(right, locals)?;
-        return Some(format!("{}{}", left_text, right_text));
     }
 
     None

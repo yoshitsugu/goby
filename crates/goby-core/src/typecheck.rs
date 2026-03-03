@@ -1366,13 +1366,6 @@ fn builtin_module_exports(module_path: &str) -> Option<HashMap<&'static str, Ty>
     match module_path {
         "goby/string" => {
             exports.insert(
-                "concat",
-                Ty::Fun {
-                    params: vec![Ty::Str, Ty::Str],
-                    result: Box::new(Ty::Str),
-                },
-            );
-            exports.insert(
                 "split",
                 Ty::Fun {
                     params: vec![Ty::Str, Ty::Str],
@@ -3316,8 +3309,8 @@ f n = n
     fn baseline_plain_import_works_with_qualified_access() {
         let source = "\
 import goby/string
-f : Unit -> String
-f = string.concat(\"a\", \"b\")
+f : Unit -> List String
+f = string.split(\"a,b\", \",\")
 ";
         let module = parse_module(source).expect("should parse");
         typecheck_module(&module).expect("plain import should expose qualified symbols");
@@ -3469,25 +3462,25 @@ log msg = msg |> print
     }
 
     #[test]
-    fn resolver_first_preserves_multi_arg_function_shape_for_concat() {
-        let sandbox = TempDirGuard::new("resolver_multi_arg_concat");
+    fn resolver_first_preserves_function_shape_for_split() {
+        let sandbox = TempDirGuard::new("resolver_split_shape");
         let root = sandbox.path.join("stdlib");
         fs::create_dir_all(root.join("goby")).expect("stdlib/goby should be creatable");
         fs::write(
             root.join("goby/string.gb"),
-            "concat : String -> String -> String\nconcat a b = a\n",
+            "split : String -> String -> List String\nsplit a b = []\n",
         )
         .expect("stdlib file should be writable");
         let resolver = StdlibResolver::new(root);
 
         let exports = module_exports_for_import_with_resolver("goby/string", &resolver)
             .expect("resolver export lookup should succeed");
-        let ty = exports.get("concat").expect("concat should be exported");
+        let ty = exports.get("split").expect("split should be exported");
         assert_eq!(
             ty,
             &Ty::Fun {
                 params: vec![Ty::Str, Ty::Str],
-                result: Box::new(Ty::Str),
+                result: Box::new(Ty::List(Box::new(Ty::Str))),
             }
         );
     }
@@ -3926,7 +3919,7 @@ main =
     fn typecheck_error_main_wrong_function_type_has_span() {
         // main declared with a valid function type but wrong signature (not Unit -> Unit).
         // Triggers the second error branch: "main type must be `Unit -> Unit` in MVP".
-        let source = "main : Int -> String\nmain x = string.concat(\"a\", \"b\")\n";
+        let source = "main : Int -> String\nmain x = \"ab\"\n";
         let module = parse_module(source).expect("should parse");
         let err = typecheck_module(&module).expect_err("wrong main function type should fail");
         let span = err.span.expect("main type error must have a span");

@@ -57,58 +57,9 @@ pub(crate) fn split_top_level_commas(s: &str) -> Vec<&str> {
     parts
 }
 
-/// Parse a `string.concat(left, right)` call and return the two argument
-/// substrings, trimmed.  Returns `None` if the expression is not a
-/// well-formed two-argument `string.concat` call.
-pub fn parse_string_concat_call(expr: &str) -> Option<(&str, &str)> {
-    const PREFIX: &str = "string.concat(";
-    if !expr.starts_with(PREFIX) || !expr.ends_with(')') {
-        return None;
-    }
-
-    let inner = &expr[PREFIX.len()..expr.len() - 1];
-    let (left, right) = split_top_level_comma(inner)?;
-    let right = right.trim();
-    // Reject if there is a third (or more) argument.
-    if split_top_level_comma(right).is_some() {
-        return None;
-    }
-    Some((left.trim(), right))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn splits_two_arg_concat() {
-        assert_eq!(
-            parse_string_concat_call("string.concat(\"a\", \"b\")"),
-            Some(("\"a\"", "\"b\""))
-        );
-    }
-
-    #[test]
-    fn rejects_three_arg_concat() {
-        assert_eq!(
-            parse_string_concat_call("string.concat(\"a\", \"b\", \"c\")"),
-            None
-        );
-    }
-
-    #[test]
-    fn rejects_one_arg_concat() {
-        assert_eq!(parse_string_concat_call("string.concat(\"a\")"), None);
-    }
-
-    #[test]
-    fn nested_concat_is_not_rejected() {
-        // The inner concat is one argument; top-level still has 2 args.
-        assert_eq!(
-            parse_string_concat_call("string.concat(\"a\", string.concat(\"b\", \"c\"))"),
-            Some(("\"a\"", "string.concat(\"b\", \"c\")"))
-        );
-    }
 
     #[test]
     fn comma_inside_string_is_not_split() {

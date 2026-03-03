@@ -1,9 +1,6 @@
 use std::collections::HashMap;
 
-use crate::str_util::parse_string_concat_call;
-
-const ERR_PRINT_ARG_TYPE: &str =
-    "print argument must resolve to String (literal, identifier, or string.concat)";
+const ERR_PRINT_ARG_TYPE: &str = "print argument must resolve to String (literal or identifier)";
 const ERR_PRINT_ARG_UNBOUND: &str = "print argument must resolve to a String binding";
 const ERR_MULTIPLE_PRINTS: &str = "multiple print calls are not yet supported in MVP";
 
@@ -133,12 +130,6 @@ fn eval_string_expr(expr: &str, locals: &HashMap<String, String>) -> Option<Stri
         return locals.get(expr).cloned();
     }
 
-    if let Some((left, right)) = parse_string_concat_call(expr) {
-        let left_text = eval_string_expr(left, locals)?;
-        let right_text = eval_string_expr(right, locals)?;
-        return Some(format!("{}{}", left_text, right_text));
-    }
-
     None
 }
 
@@ -189,43 +180,10 @@ print "ok"
     }
 
     #[test]
-    fn resolves_print_with_string_concat_and_bindings() {
-        let source = r#"
-a = "Hello, "
-b = "Goby!"
-print string.concat(a, b)
-"#;
-        let result = resolve_print_text(source).expect("analysis should work");
-        assert_eq!(result.as_deref(), Some("Hello, Goby!"));
-    }
-
-    #[test]
-    fn resolves_nested_string_concat() {
-        let source = r#"
-print string.concat("A", string.concat("B", "C"))
-"#;
-        let result = resolve_print_text(source).expect("analysis should work");
-        assert_eq!(result.as_deref(), Some("ABC"));
-    }
-
-    #[test]
     fn resolves_print_with_tab_after_keyword() {
         let source = "print\t\"tab ok\"";
         let result = resolve_print_text(source).expect("analysis should work");
         assert_eq!(result.as_deref(), Some("tab ok"));
-    }
-
-    #[test]
-    fn rejects_string_concat_with_three_arguments() {
-        // Three-argument concat is not supported; analysis should report an error.
-        let source = r#"print string.concat("a", "b", "c")"#;
-        let err =
-            resolve_print_text(source).expect_err("three-argument string.concat must be rejected");
-        assert!(
-            !err.is_empty(),
-            "expected a non-empty error message, got: {:?}",
-            err
-        );
     }
 
     #[test]

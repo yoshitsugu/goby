@@ -1,6 +1,3 @@
-concat : String -> String -> String
-concat a b = string.concat(a, b)
-
 split : String -> String -> List String
 split value sep = string.split(value, sep)
 
