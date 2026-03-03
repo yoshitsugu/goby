@@ -1,6 +1,6 @@
 # Goby Standard Library Foundation Plan
 
-Status: Step 0-12 complete; ExtraStep A/B pending
+Status: Step 0-12 + ExtraStep A/B complete
 Owner: Goby core/tooling track
 Last updated: 2026-03-03
 
@@ -483,36 +483,46 @@ fetch_env_var : String -> String
 fetch_env_var name = __goby_env_fetch_env_var name
 ```
 
+Decision (2026-03-03):
+
+- First intrinsic set is locked to:
+  - `__goby_string_length : String -> Int`
+  - `__goby_env_fetch_env_var : String -> String`
+- Restriction policy (current phase):
+  - user modules are hard-rejected for `__goby_*` declaration/call usage,
+  - stdlib modules may call only the known intrinsic set above,
+  - unknown `__goby_*` names in stdlib are rejected with explicit diagnostics.
+
 Execution checklist (incremental):
 
-- [ ] B1. Baseline lock: current gates pass before edits (`cargo check`, `cargo test`).
-- [ ] B2. Spec lock in this plan:
+- [x] B1. Baseline lock: current gates pass before edits (`cargo check`, `cargo test`).
+- [x] B2. Spec lock in this plan:
   - confirm first intrinsic set (`__goby_string_length`, `__goby_env_fetch_env_var`),
   - lock temporary user restriction policy scope (diagnostic-only vs hard reject).
-- [ ] B3. Reserve intrinsic namespace policy:
+- [x] B3. Reserve intrinsic namespace policy:
   - parser/typechecker/runtime convention for names matching `__goby_*`,
   - clarify whether user definitions/calls are rejected now or warned/deferred.
-- [ ] B4. Typechecker symbol modeling:
+- [x] B4. Typechecker symbol modeling:
   - add intrinsic function types to type environment when referenced by stdlib modules,
   - keep imported API surface unchanged (`goby/string.length`, `goby/env.fetch_env_var`).
-- [ ] B5. Runtime bridge implementation:
+- [x] B5. Runtime bridge implementation:
   - map `__goby_string_length` to runtime string-length primitive,
   - map `__goby_env_fetch_env_var` to existing host env boundary behavior.
-- [ ] B6. Stdlib module migration:
+- [x] B6. Stdlib module migration:
   - update `stdlib/goby/string.gb` `length` to call `__goby_string_length`,
   - update `stdlib/goby/env.gb` `fetch_env_var` to call `__goby_env_fetch_env_var`.
-- [ ] B7. Resolver/import parity checks:
+- [x] B7. Resolver/import parity checks:
   - ensure resolver-first import behavior still matches expected symbol/type contracts,
   - ensure builtin fallback behavior remains intact for missing stdlib files.
-- [ ] B8. Diagnostics hardening:
+- [x] B8. Diagnostics hardening:
   - clear runtime/typecheck errors for unknown intrinsic usage,
   - explicit messages for disallowed user-space `__goby_*` usage (if hard reject is chosen).
-- [ ] B9. Regression tests (`goby-core` + `goby-wasm` + CLI integration where relevant):
+- [x] B9. Regression tests (`goby-core` + `goby-wasm` + CLI integration where relevant):
   - positive tests for `string.length` and `env.fetch_env_var` through stdlib entry points,
   - negative tests for malformed/unknown intrinsic calls,
   - compatibility tests for existing bare `print` and stdlib imports.
-- [ ] B10. Performance/behavior sanity:
+- [x] B10. Performance/behavior sanity:
   - verify no unintended path regression in native/fallback mode selection,
   - ensure runtime output parity for affected examples/tests.
-- [ ] B11. Docs synced (`doc/PLAN.md`, `doc/STATE.md`) with intrinsic bridge policy and limits.
-- [ ] B12. Final quality gates pass (`cargo fmt`, `cargo check`, `cargo test`, `cargo clippy -- -D warnings`).
+- [x] B11. Docs synced (`doc/PLAN.md`, `doc/STATE.md`) with intrinsic bridge policy and limits.
+- [x] B12. Final quality gates pass (`cargo fmt`, `cargo check`, `cargo test`, `cargo clippy -- -D warnings`).

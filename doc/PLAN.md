@@ -422,6 +422,12 @@ Additional planning constraint (locked 2026-03-02):
 - `@embed` is not allowed in user Goby modules or non-stdlib libraries.
 - `print` migration should proceed via `goby/stdio` + stdlib `@embed Print` bridge,
   with temporary compatibility for existing bare `print`.
+- Stdlib intrinsic bridge policy (ExtraStep B lock, 2026-03-03):
+  - active intrinsic set:
+    - `__goby_string_length : String -> Int`
+    - `__goby_env_fetch_env_var : String -> String`
+  - `__goby_*` names are reserved and stdlib-only,
+  - unknown `__goby_*` names in stdlib are rejected explicitly.
 
 ### 4.4 Early Developer Tooling Plan
 

@@ -5,4 +5,4 @@ split : String -> String -> List String
 split value sep = string.split(value, sep)
 
 length : String -> Int
-length value = 0
+length value = __goby_string_length value

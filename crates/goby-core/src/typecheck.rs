@@ -44,6 +44,7 @@ pub fn typecheck_module_with_context(
     let stdlib_root_path = stdlib_root
         .map(Path::to_path_buf)
         .unwrap_or_else(default_stdlib_root);
+    validate_intrinsic_namespace_policy(module, source_path, &stdlib_root_path)?;
     validate_imports(module, &stdlib_root_path)?;
     validate_embed_declarations(module, source_path, stdlib_root)?;
     validate_type_declarations(module)?;
@@ -612,6 +613,24 @@ fn build_type_env(module: &Module, stdlib_root: &Path) -> TypeEnv {
         },
         "builtin `print`".to_string(),
     );
+    insert_global_symbol(
+        &mut globals,
+        "__goby_string_length".to_string(),
+        Ty::Fun {
+            params: vec![Ty::Str],
+            result: Box::new(Ty::Int),
+        },
+        "runtime intrinsic `__goby_string_length`".to_string(),
+    );
+    insert_global_symbol(
+        &mut globals,
+        "__goby_env_fetch_env_var".to_string(),
+        Ty::Fun {
+            params: vec![Ty::Str],
+            result: Box::new(Ty::Str),
+        },
+        "runtime intrinsic `__goby_env_fetch_env_var`".to_string(),
+    );
     inject_imported_symbols(module, &mut globals, stdlib_root);
     inject_type_constructors(module, &mut globals, &mut type_aliases, &mut record_types);
     inject_effect_symbols(module, &mut globals);
@@ -837,6 +856,167 @@ fn validate_embed_declarations(
     }
 
     Ok(())
+}
+
+fn validate_intrinsic_namespace_policy(
+    module: &Module,
+    source_path: Option<&Path>,
+    stdlib_root: &Path,
+) -> Result<(), TypecheckError> {
+    let Some(source_path) = source_path else {
+        // Compatibility mode for legacy call sites that only use `typecheck_module`.
+        return Ok(());
+    };
+    let is_stdlib_source = is_path_within_root(source_path, stdlib_root);
+
+    for decl in &module.declarations {
+        if is_reserved_intrinsic_name(&decl.name) {
+            return Err(TypecheckError {
+                declaration: Some(decl.name.clone()),
+                span: Some(Span {
+                    line: decl.line,
+                    col: 1,
+                }),
+                message: format!(
+                    "reserved intrinsic name `{}` is stdlib-only (`__goby_*`)",
+                    decl.name
+                ),
+            });
+        }
+        if let Some(stmts) = &decl.parsed_body
+            && let Some((name, kind)) = first_disallowed_intrinsic_in_stmts(stmts, is_stdlib_source)
+        {
+            return Err(TypecheckError {
+                declaration: Some(decl.name.clone()),
+                span: Some(Span {
+                    line: decl.line,
+                    col: 1,
+                }),
+                message: intrinsic_error_message(&name, kind),
+            });
+        }
+    }
+
+    for handler in &module.handler_declarations {
+        for method in &handler.methods {
+            if let Some(stmts) = &method.parsed_body
+                && let Some((name, kind)) =
+                    first_disallowed_intrinsic_in_stmts(stmts, is_stdlib_source)
+            {
+                return Err(TypecheckError {
+                    declaration: Some(format!(
+                        "handler `{}` method `{}`",
+                        handler.name, method.name
+                    )),
+                    span: None,
+                    message: intrinsic_error_message(&name, kind),
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+fn is_reserved_intrinsic_name(name: &str) -> bool {
+    name.starts_with("__goby_")
+}
+
+fn is_known_runtime_intrinsic_name(name: &str) -> bool {
+    matches!(name, "__goby_string_length" | "__goby_env_fetch_env_var")
+}
+
+#[derive(Clone, Copy)]
+enum IntrinsicViolationKind {
+    NonStdlibUse,
+    UnknownIntrinsic,
+}
+
+fn intrinsic_error_message(name: &str, kind: IntrinsicViolationKind) -> String {
+    match kind {
+        IntrinsicViolationKind::NonStdlibUse => {
+            format!("reserved intrinsic call `{name}` is stdlib-only (`__goby_*`)")
+        }
+        IntrinsicViolationKind::UnknownIntrinsic => {
+            format!("unknown runtime intrinsic `{name}`")
+        }
+    }
+}
+
+fn first_disallowed_intrinsic_in_stmts(
+    stmts: &[Stmt],
+    is_stdlib_source: bool,
+) -> Option<(String, IntrinsicViolationKind)> {
+    for stmt in stmts {
+        match stmt {
+            Stmt::Binding { value, .. } | Stmt::Expr(value) => {
+                if let Some(hit) = first_disallowed_intrinsic_in_expr(value, is_stdlib_source) {
+                    return Some(hit);
+                }
+            }
+            Stmt::Using { body, .. } => {
+                if let Some(hit) = first_disallowed_intrinsic_in_stmts(body, is_stdlib_source) {
+                    return Some(hit);
+                }
+            }
+        }
+    }
+    None
+}
+
+fn first_disallowed_intrinsic_in_expr(
+    expr: &Expr,
+    is_stdlib_source: bool,
+) -> Option<(String, IntrinsicViolationKind)> {
+    let classify = |name: &str| -> Option<(String, IntrinsicViolationKind)> {
+        if !is_reserved_intrinsic_name(name) {
+            return None;
+        }
+        if !is_stdlib_source {
+            return Some((name.to_string(), IntrinsicViolationKind::NonStdlibUse));
+        }
+        if !is_known_runtime_intrinsic_name(name) {
+            return Some((name.to_string(), IntrinsicViolationKind::UnknownIntrinsic));
+        }
+        None
+    };
+
+    match expr {
+        Expr::Var(name) => classify(name),
+        Expr::IntLit(_) | Expr::BoolLit(_) | Expr::StringLit(_) | Expr::Qualified { .. } => None,
+        Expr::ListLit(items) | Expr::TupleLit(items) => items
+            .iter()
+            .find_map(|item| first_disallowed_intrinsic_in_expr(item, is_stdlib_source)),
+        Expr::RecordConstruct { fields, .. } => fields
+            .iter()
+            .find_map(|(_, value)| first_disallowed_intrinsic_in_expr(value, is_stdlib_source)),
+        Expr::BinOp { left, right, .. } => {
+            first_disallowed_intrinsic_in_expr(left, is_stdlib_source)
+                .or_else(|| first_disallowed_intrinsic_in_expr(right, is_stdlib_source))
+        }
+        Expr::Call { callee, arg } => first_disallowed_intrinsic_in_expr(callee, is_stdlib_source)
+            .or_else(|| first_disallowed_intrinsic_in_expr(arg, is_stdlib_source)),
+        Expr::MethodCall { args, .. } => args
+            .iter()
+            .find_map(|arg| first_disallowed_intrinsic_in_expr(arg, is_stdlib_source)),
+        Expr::Pipeline { value, callee } => {
+            first_disallowed_intrinsic_in_expr(value, is_stdlib_source).or_else(|| classify(callee))
+        }
+        Expr::Lambda { body, .. } => first_disallowed_intrinsic_in_expr(body, is_stdlib_source),
+        Expr::Resume { value } => first_disallowed_intrinsic_in_expr(value, is_stdlib_source),
+        Expr::Case { scrutinee, arms } => {
+            first_disallowed_intrinsic_in_expr(scrutinee, is_stdlib_source).or_else(|| {
+                arms.iter()
+                    .find_map(|arm| first_disallowed_intrinsic_in_expr(&arm.body, is_stdlib_source))
+            })
+        }
+        Expr::If {
+            condition,
+            then_expr,
+            else_expr,
+        } => first_disallowed_intrinsic_in_expr(condition, is_stdlib_source)
+            .or_else(|| first_disallowed_intrinsic_in_expr(then_expr, is_stdlib_source))
+            .or_else(|| first_disallowed_intrinsic_in_expr(else_expr, is_stdlib_source)),
+    }
 }
 
 fn validate_type_declarations(module: &Module) -> Result<(), TypecheckError> {
@@ -3340,6 +3520,77 @@ f = print \"hi\"
     }
 
     #[test]
+    fn rejects_reserved_intrinsic_call_outside_stdlib_root() {
+        let sandbox = TempDirGuard::new("intrinsic_call_outside_stdlib");
+        let stdlib_root = sandbox.path.join("stdlib");
+        let source_path = sandbox.path.join("user/main.gb");
+        fs::create_dir_all(source_path.parent().expect("parent should exist"))
+            .expect("user path should be creatable");
+        let source = "f : String -> Int\nf s = __goby_string_length s\n";
+        fs::write(&source_path, source).expect("fixture file should be writable");
+        let module = parse_module(source).expect("should parse");
+        let err = typecheck_module_with_context(&module, Some(&source_path), Some(&stdlib_root))
+            .expect_err("reserved intrinsic calls should be rejected outside stdlib");
+        assert!(
+            err.message.contains("reserved intrinsic call"),
+            "unexpected message: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn rejects_reserved_intrinsic_declaration_name_outside_stdlib_root() {
+        let sandbox = TempDirGuard::new("intrinsic_decl_outside_stdlib");
+        let stdlib_root = sandbox.path.join("stdlib");
+        let source_path = sandbox.path.join("user/main.gb");
+        fs::create_dir_all(source_path.parent().expect("parent should exist"))
+            .expect("user path should be creatable");
+        let source = "__goby_string_length : String -> Int\n__goby_string_length s = 0\n";
+        fs::write(&source_path, source).expect("fixture file should be writable");
+        let module = parse_module(source).expect("should parse");
+        let err = typecheck_module_with_context(&module, Some(&source_path), Some(&stdlib_root))
+            .expect_err("reserved intrinsic declaration names should be rejected outside stdlib");
+        assert!(
+            err.message.contains("reserved intrinsic name"),
+            "unexpected message: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn accepts_reserved_intrinsic_calls_inside_stdlib_root() {
+        let sandbox = TempDirGuard::new("intrinsic_call_inside_stdlib");
+        let stdlib_root = sandbox.path.join("stdlib");
+        let source_path = stdlib_root.join("goby/string.gb");
+        fs::create_dir_all(source_path.parent().expect("parent should exist"))
+            .expect("stdlib path should be creatable");
+        let source = "length : String -> Int\nlength s = __goby_string_length s\n";
+        fs::write(&source_path, source).expect("fixture file should be writable");
+        let module = parse_module(source).expect("should parse");
+        typecheck_module_with_context(&module, Some(&source_path), Some(&stdlib_root))
+            .expect("reserved intrinsic calls should be accepted under stdlib root");
+    }
+
+    #[test]
+    fn rejects_unknown_intrinsic_calls_inside_stdlib_root() {
+        let sandbox = TempDirGuard::new("unknown_intrinsic_inside_stdlib");
+        let stdlib_root = sandbox.path.join("stdlib");
+        let source_path = stdlib_root.join("goby/string.gb");
+        fs::create_dir_all(source_path.parent().expect("parent should exist"))
+            .expect("stdlib path should be creatable");
+        let source = "length : String -> Int\nlength s = __goby_string_len s\n";
+        fs::write(&source_path, source).expect("fixture file should be writable");
+        let module = parse_module(source).expect("should parse");
+        let err = typecheck_module_with_context(&module, Some(&source_path), Some(&stdlib_root))
+            .expect_err("unknown intrinsic calls should be rejected under stdlib root");
+        assert!(
+            err.message.contains("unknown runtime intrinsic"),
+            "unexpected message: {}",
+            err.message
+        );
+    }
+
+    #[test]
     fn allows_embed_declaration_without_source_context_for_legacy_api_compat() {
         let source =
             "effect Print\n  print : String -> Unit\n@embed Print\nf : Unit -> Int\nf = 1\n";
@@ -3355,8 +3606,7 @@ f = print \"hi\"
         let err = typecheck_module(&module)
             .expect_err("missing in-module effect should fail even without source context");
         assert!(
-            err.message
-                .contains("must be declared in the same module"),
+            err.message.contains("must be declared in the same module"),
             "unexpected message: {}",
             err.message
         );
