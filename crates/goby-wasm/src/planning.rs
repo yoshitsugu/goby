@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use goby_core::{Expr, Module, Stmt, types::strip_effect};
+use goby_core::{Expr, Module, Stmt, ast::InterpolatedPart, types::strip_effect};
 
 use crate::call::flatten_named_call;
 
@@ -389,6 +389,19 @@ fn inspect_expr(
         | Expr::StringLit(_)
         | Expr::Var(_)
         | Expr::Qualified { .. } => {}
+        Expr::InterpolatedString(parts) => {
+            for part in parts {
+                if let InterpolatedPart::Expr(expr) = part {
+                    inspect_expr(
+                        expr,
+                        out,
+                        declaration_names,
+                        qualified_operation_index,
+                        op_name_index,
+                    );
+                }
+            }
+        }
         Expr::ListLit(items) | Expr::TupleLit(items) => {
             for item in items {
                 inspect_expr(

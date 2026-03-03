@@ -123,10 +123,17 @@ pub struct CaseArm {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InterpolatedPart {
+    Text(String),
+    Expr(Box<Expr>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Expr {
     IntLit(i64),
     BoolLit(bool),
     StringLit(String),
+    InterpolatedString(Vec<InterpolatedPart>),
     ListLit(Vec<Expr>),
     TupleLit(Vec<Expr>),
     Var(String),
@@ -213,6 +220,7 @@ impl Expr {
             Expr::IntLit(n) => Some(n.to_string()),
             Expr::BoolLit(v) => Some(if *v { "True" } else { "False" }.to_string()),
             Expr::StringLit(s) => Some(format!("\"{}\"", s)),
+            Expr::InterpolatedString(_) => None,
             Expr::Var(name) => Some(name.clone()),
             Expr::Qualified { receiver, member } => Some(format!("{}.{}", receiver, member)),
             Expr::RecordConstruct {

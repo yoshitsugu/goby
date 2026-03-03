@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use crate::{
     Module,
-    ast::{BinOpKind, Expr, ImportKind, Span, Stmt, TypeDeclaration},
+    ast::{BinOpKind, Expr, ImportKind, InterpolatedPart, Span, Stmt, TypeDeclaration},
     stdlib::{StdlibResolveError, StdlibResolver},
     types::{TypeExpr, parse_function_type, parse_type_expr},
 };
@@ -261,6 +261,13 @@ fn count_resume_in_expr(expr: &Expr) -> usize {
         | Expr::StringLit(_)
         | Expr::Var(_)
         | Expr::Qualified { .. } => 0,
+        Expr::InterpolatedString(parts) => parts
+            .iter()
+            .map(|part| match part {
+                InterpolatedPart::Text(_) => 0,
+                InterpolatedPart::Expr(expr) => count_resume_in_expr(expr),
+            })
+            .sum(),
         Expr::ListLit(items) | Expr::TupleLit(items) => {
             items.iter().map(count_resume_in_expr).sum()
         }
@@ -983,6 +990,12 @@ fn first_disallowed_intrinsic_in_expr(
     match expr {
         Expr::Var(name) => classify(name),
         Expr::IntLit(_) | Expr::BoolLit(_) | Expr::StringLit(_) | Expr::Qualified { .. } => None,
+        Expr::InterpolatedString(parts) => parts.iter().find_map(|part| match part {
+            InterpolatedPart::Text(_) => None,
+            InterpolatedPart::Expr(expr) => {
+                first_disallowed_intrinsic_in_expr(expr, is_stdlib_source)
+            }
+        }),
         Expr::ListLit(items) | Expr::TupleLit(items) => items
             .iter()
             .find_map(|item| first_disallowed_intrinsic_in_expr(item, is_stdlib_source)),
@@ -1332,15 +1345,6 @@ fn insert_global_symbol(
             if existing_source == source {
                 return;
             }
-            // During stdio migration, selective `import goby/stdio ( print )`
-            // should be usable even while builtin `print` remains for compatibility.
-            if symbol == "print"
-                && existing_source == "builtin `print`"
-                && is_stdio_print_import_source(&source)
-            {
-                globals.insert(symbol, GlobalBinding::Resolved { ty, source });
-                return;
-            }
             globals.insert(
                 symbol,
                 GlobalBinding::Ambiguous {
@@ -1355,10 +1359,6 @@ fn insert_global_symbol(
             globals.insert(symbol, GlobalBinding::Ambiguous { sources });
         }
     }
-}
-
-fn is_stdio_print_import_source(source: &str) -> bool {
-    source == "import `goby/stdio` (print)"
 }
 
 fn builtin_module_exports(module_path: &str) -> Option<HashMap<&'static str, Ty>> {
@@ -1474,6 +1474,7 @@ fn check_expr(expr: &Expr, env: &TypeEnv) -> Ty {
         Expr::IntLit(_) => Ty::Int,
         Expr::BoolLit(_) => Ty::Bool,
         Expr::StringLit(_) => Ty::Str,
+        Expr::InterpolatedString(_) => Ty::Str,
         Expr::ListLit(items) => {
             if items.is_empty() {
                 return Ty::List(Box::new(Ty::Unknown));
@@ -1696,6 +1697,14 @@ fn check_resume_in_expr(
 
     match expr {
         Expr::IntLit(_) | Expr::BoolLit(_) | Expr::StringLit(_) | Expr::Var(_) => Ok(()),
+        Expr::InterpolatedString(parts) => {
+            for part in parts {
+                if let InterpolatedPart::Expr(expr) = part {
+                    recurse!(expr)?;
+                }
+            }
+            Ok(())
+        }
         Expr::ListLit(items) | Expr::TupleLit(items) => {
             for item in items {
                 recurse!(item)?;
@@ -1952,6 +1961,14 @@ fn check_unhandled_effects_in_expr(
 
     match expr {
         Expr::IntLit(_) | Expr::BoolLit(_) | Expr::StringLit(_) => Ok(()),
+        Expr::InterpolatedString(parts) => {
+            for part in parts {
+                if let InterpolatedPart::Expr(expr) = part {
+                    recurse!(expr)?;
+                }
+            }
+            Ok(())
+        }
         Expr::ListLit(items) | Expr::TupleLit(items) => {
             for item in items {
                 recurse!(item)?;
@@ -2138,6 +2155,14 @@ fn ensure_no_ambiguous_refs_in_expr(
 ) -> Result<(), TypecheckError> {
     match expr {
         Expr::IntLit(_) | Expr::BoolLit(_) | Expr::StringLit(_) => Ok(()),
+        Expr::InterpolatedString(parts) => {
+            for part in parts {
+                if let InterpolatedPart::Expr(expr) = part {
+                    ensure_no_ambiguous_refs_in_expr(expr, env, decl_name)?;
+                }
+            }
+            Ok(())
+        }
         Expr::ListLit(items) | Expr::TupleLit(items) => {
             for item in items {
                 ensure_no_ambiguous_refs_in_expr(item, env, decl_name)?;
@@ -3248,6 +3273,12 @@ f n = n
     }
 
     #[test]
+    fn infers_interpolated_string_type() {
+        let module = parse_module("s : String\ns = \"n=${1}\"\n").expect("should parse");
+        typecheck_module(&module).expect("interpolated string body should typecheck as String");
+    }
+
+    #[test]
     fn infers_equality_as_bool() {
         let module = parse_module("flag : Bool\nflag = 1 == 1\n").expect("should parse");
         typecheck_module(&module).expect("equality result should typecheck as Bool");
@@ -3475,12 +3506,30 @@ f = length(\"abc\")
     #[test]
     fn typechecks_import_from_goby_stdio_module() {
         let source = "\
+import goby/stdio
+f : Unit -> Unit can Print
+f = print \"hi\"
+";
+        let module = parse_module(source).expect("should parse");
+        typecheck_module(&module).expect("builtin print should remain callable with stdio import");
+    }
+
+    #[test]
+    fn rejects_selective_import_of_stdio_print_symbol() {
+        let source = "\
 import goby/stdio ( print )
 f : Unit -> Unit can Print
 f = print \"hi\"
 ";
         let module = parse_module(source).expect("should parse");
-        typecheck_module(&module).expect("imported stdio print should be callable");
+        let err = typecheck_module(&module)
+            .expect_err("stdio module should not export print symbol for selective import");
+        assert!(
+            err.message
+                .contains("unknown symbol `print` in import from `goby/stdio`"),
+            "unexpected message: {}",
+            err.message
+        );
     }
 
     #[test]
