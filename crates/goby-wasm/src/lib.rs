@@ -2374,6 +2374,9 @@ mod tests {
     }
 
     fn assert_mode_parity(module: &Module, context: &str) -> ParityOutcome {
+        // Step 8.5 note:
+        // current Step 8.4 bridge routes both modes through the same continuation token path,
+        // so parity equality is expected by construction until optimized re-entry diverges.
         let fallback =
             parity_outcome_for_mode(module, lower::EffectExecutionMode::PortableFallback);
         let typed = parity_outcome_for_mode(
@@ -2885,7 +2888,7 @@ handler IterHandler for Iter
     resume 7
 
 main : Unit -> Unit
-        main =
+main =
   using IterHandler
     print (next 0)
 "#;
@@ -2914,6 +2917,8 @@ main =
 "#;
         let module = parse_module(source).expect("parse should work");
         let typed = assert_mode_parity(&module, "no-resume abortive path");
+        // Current runtime contract: no `resume` in value-position operation takes the abortive
+        // path, so handler-body print output is not emitted as final program output.
         assert_eq!(typed.stdout, None);
         assert_eq!(typed.runtime_error_kind, None);
     }
@@ -3004,6 +3009,9 @@ main =
     fn step8_perf_acceptance_resume_heavy_samples() {
         use goby_core::parse_module;
         let _guard = ENV_MUTEX.lock().unwrap();
+        // Step 8.6 note:
+        // both modes currently share runtime bridge logic, so this benchmark is primarily
+        // protocol lock-in. Re-tune thresholds after optimized mode diverges.
         let warmup_runs = 5usize;
         let measured_runs = 30usize;
         let max_slowdown_ratio = 1.03f64;

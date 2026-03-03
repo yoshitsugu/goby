@@ -884,6 +884,16 @@ This file is a restart-safe snapshot for resuming work after context reset.
     - `cargo fmt`
     - `cargo test -p goby-wasm`
     - `cargo test -p goby-wasm step8_perf_acceptance_resume_heavy_samples -- --ignored --nocapture`
+- 2026-03-03 (session 80): Step8 review follow-up polish
+  - Addressed medium review items:
+    - fixed parity test source typo (`main =` indentation in resume-success case),
+    - documented no-resume abortive-path output contract in parity test comments,
+    - documented that Step8.5 parity/perf currently run on shared bridge path by design.
+  - Addressed low review item:
+    - renamed lowerer helper arg `_module` -> `module` for clarity.
+  - Validation:
+    - `cargo fmt`
+    - `cargo test -p goby-wasm`
 
 ## 5. Current Example Files
 
