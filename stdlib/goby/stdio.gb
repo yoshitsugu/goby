@@ -1,4 +1,7 @@
-@embed effect Print
+effect Print
+  print : String -> Unit
+
+@embed Print
 
 print : String -> Unit can Print
 print value =

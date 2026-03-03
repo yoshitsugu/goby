@@ -143,7 +143,8 @@ Initial `goby/stdio` API contract (minimum):
 Initial embedded declaration model for stdio:
 
 - Stdlib module may include embedded effect declarations such as:
-  - `@embed effect Print`
+  - `effect Print`
+  - `@embed Print`
   - embedded operation signatures consumed by `goby/stdio.print`.
 - Goal: keep `Print` capability wiring inside stdlib/runtime bridge instead of
   requiring user modules to declare effect internals.
@@ -406,6 +407,29 @@ Follow-up tasks:
    - parse acceptance of `@embed Print`,
    - rejection when embedded effect is not declared in module,
    - `goby/stdio` import path behavior unchanged.
+
+Decision (2026-03-03):
+
+- Canonical syntax is `@embed <EffectName>`.
+- Legacy `@embed effect <EffectName>` remains accepted temporarily for compatibility.
+
+Execution checklist (incremental):
+
+- [x] A1. Baseline lock: current gates pass before edits (`cargo check`, `cargo test -p goby-core`).
+- [x] A2. Spec lock in this plan: decide compatibility policy for legacy `@embed effect <Name>`.
+- [x] A3. Parser accepts canonical `@embed <Name>`.
+- [x] A4. Parser compatibility behavior implemented per A2 (accept+deprecate or reject with clear error).
+- [x] A5. AST/internal representation normalized so downstream stages are syntax-agnostic.
+- [x] A6. Typechecker rule added: `@embed X` requires in-module `effect X`.
+- [x] A7. Path-gate integration verified:
+  - stdlib path + declared effect => accept,
+  - non-stdlib path => reject,
+  - stdlib path + missing effect => reject.
+- [x] A8. Resolver `embedded_effects` extraction remains stable across accepted embed syntax.
+- [x] A9. `stdlib/goby/stdio.gb` migrated to canonical model (`effect Print` + `@embed Print`).
+- [x] A10. Diagnostics hardened for malformed embed, unknown embedded effect, and duplicates.
+- [x] A11. Docs synced (`doc/PLAN.md`, `doc/STATE.md`) with landed behavior.
+- [x] A12. Final quality gates pass (`cargo fmt`, `cargo check`, `cargo test`, `cargo clippy -- -D warnings`).
 
 ### ExtraStep B: stdlib intrinsic bridge naming (`__goby_<module>_<function>`)
 

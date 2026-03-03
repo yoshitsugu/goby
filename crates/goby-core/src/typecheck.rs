@@ -806,6 +806,11 @@ fn validate_embed_declarations(
     }
 
     let mut seen = HashSet::new();
+    let declared_effects: HashSet<&str> = module
+        .effect_declarations
+        .iter()
+        .map(|effect| effect.name.as_str())
+        .collect();
     for embed in &module.embed_declarations {
         if !seen.insert(embed.effect_name.clone()) {
             return Err(TypecheckError {
@@ -815,6 +820,19 @@ fn validate_embed_declarations(
                     col: 1,
                 }),
                 message: format!("duplicate embedded effect `{}`", embed.effect_name),
+            });
+        }
+        if !declared_effects.contains(embed.effect_name.as_str()) {
+            return Err(TypecheckError {
+                declaration: None,
+                span: Some(Span {
+                    line: embed.line,
+                    col: 1,
+                }),
+                message: format!(
+                    "embedded effect `{}` must be declared in the same module",
+                    embed.effect_name
+                ),
             });
         }
     }
@@ -3157,7 +3175,7 @@ f = fetch_env_var(\"HOME\")
         fs::create_dir_all(root.join("goby")).expect("stdlib/goby should be creatable");
         fs::write(
             root.join("goby/stdio.gb"),
-            "@embed effect Console\nlog : String -> Unit can Console\nlog msg = msg |> print\n",
+            "effect Console\n  log : String -> Unit\n@embed Console\nlog : String -> Unit can Console\nlog msg = msg |> print\n",
         )
         .expect("stdlib file should be writable");
         let source_path = sandbox.path.join("main.gb");
@@ -3180,7 +3198,9 @@ f = log \"ok\"
         fs::create_dir_all(source_path.parent().expect("parent should exist"))
             .expect("stdlib path should be creatable");
         let source = "\
-@embed effect Console
+effect Console
+  log : String -> Unit
+@embed Console
 log : String -> Unit can Console
 log msg = msg |> print
 ";
@@ -3291,7 +3311,8 @@ f = print \"hi\"
         let source_path = stdlib_root.join("goby/stdio.gb");
         fs::create_dir_all(source_path.parent().expect("parent should exist"))
             .expect("stdlib path should be creatable");
-        let source = "@embed effect Print\nf : Unit -> Int\nf = 1\n";
+        let source =
+            "effect Print\n  print : String -> Unit\n@embed Print\nf : Unit -> Int\nf = 1\n";
         fs::write(&source_path, source).expect("fixture file should be writable");
         let module = parse_module(source).expect("should parse");
         typecheck_module_with_context(&module, Some(&source_path), Some(&stdlib_root))
@@ -3305,7 +3326,8 @@ f = print \"hi\"
         let source_path = sandbox.path.join("user/main.gb");
         fs::create_dir_all(source_path.parent().expect("parent should exist"))
             .expect("user path should be creatable");
-        let source = "@embed effect Print\nf : Unit -> Int\nf = 1\n";
+        let source =
+            "effect Print\n  print : String -> Unit\n@embed Print\nf : Unit -> Int\nf = 1\n";
         fs::write(&source_path, source).expect("fixture file should be writable");
         let module = parse_module(source).expect("should parse");
         let err = typecheck_module_with_context(&module, Some(&source_path), Some(&stdlib_root))
@@ -3320,10 +3342,30 @@ f = print \"hi\"
 
     #[test]
     fn allows_embed_declaration_without_source_context_for_legacy_api_compat() {
-        let source = "@embed effect Print\nf : Unit -> Int\nf = 1\n";
+        let source =
+            "effect Print\n  print : String -> Unit\n@embed Print\nf : Unit -> Int\nf = 1\n";
         let module = parse_module(source).expect("should parse");
         typecheck_module(&module)
             .expect("legacy typecheck API should remain compatible without source context");
+    }
+
+    #[test]
+    fn rejects_embed_when_effect_is_not_declared_in_same_module() {
+        let sandbox = TempDirGuard::new("embed_missing_effect");
+        let stdlib_root = sandbox.path.join("stdlib");
+        let source_path = stdlib_root.join("goby/stdio.gb");
+        fs::create_dir_all(source_path.parent().expect("parent should exist"))
+            .expect("stdlib path should be creatable");
+        let source = "@embed Print\nf : Unit -> Int\nf = 1\n";
+        fs::write(&source_path, source).expect("fixture file should be writable");
+        let module = parse_module(source).expect("should parse");
+        let err = typecheck_module_with_context(&module, Some(&source_path), Some(&stdlib_root))
+            .expect_err("embedded effect should require in-module effect declaration");
+        assert!(
+            err.message.contains("must be declared in the same module"),
+            "unexpected message: {}",
+            err.message
+        );
     }
 
     #[test]
@@ -3333,7 +3375,7 @@ f = print \"hi\"
         let source_path = stdlib_root.join("goby/stdio.gb");
         fs::create_dir_all(source_path.parent().expect("parent should exist"))
             .expect("stdlib path should be creatable");
-        let source = "@embed effect Print\n@embed effect Print\nf : Unit -> Int\nf = 1\n";
+        let source = "effect Print\n  print : String -> Unit\n@embed Print\n@embed Print\nf : Unit -> Int\nf = 1\n";
         fs::write(&source_path, source).expect("fixture file should be writable");
         let module = parse_module(source).expect("should parse");
         let err = typecheck_module_with_context(&module, Some(&source_path), Some(&stdlib_root))
