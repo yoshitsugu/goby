@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-03 (session 88)
+Last updated: 2026-03-03 (session 89)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -1009,6 +1009,27 @@ This file is a restart-safe snapshot for resuming work after context reset.
     - `cargo check`
     - `cargo test`
     - `cargo clippy -- -D warnings`
+- 2026-03-03 (session 89): `PLAN_STANDARD_LIBRARY` ExtraStep B complete (intrinsic bridge)
+  - Locked intrinsic bridge set:
+    - `__goby_string_length : String -> Int`
+    - `__goby_env_fetch_env_var : String -> String`
+  - `goby-core` typechecker updates:
+    - intrinsic symbol types injected into type environment for stdlib bridge calls,
+    - user-space `__goby_*` declaration/call usage rejected in context-aware checks,
+    - unknown `__goby_*` names in stdlib modules rejected with explicit diagnostics.
+  - `goby-wasm` runtime updates:
+    - evaluator/lowering bridge supports intrinsic execution for string length and env fetch.
+  - Stdlib module migration:
+    - `stdlib/goby/string.gb`: `length` now calls `__goby_string_length`,
+    - `stdlib/goby/env.gb`: `fetch_env_var` now calls `__goby_env_fetch_env_var`.
+  - Test coverage additions:
+    - `goby-core`: intrinsic namespace policy (allow/reject/unknown) regressions,
+    - `goby-wasm`: runtime-output tests for both intrinsic calls.
+  - Final quality gates passed:
+    - `cargo fmt`
+    - `cargo check`
+    - `cargo test`
+    - `cargo clippy -- -D warnings`
 
 ## 5. Current Example Files
 
@@ -1034,11 +1055,10 @@ cargo clippy -- -D warnings
 ```
 
 Execution focus (in order):
-1. Standard-library follow-up (`doc/PLAN_STANDARD_LIBRARY.md`):
-   ExtraStep B (intrinsic bridge naming).
-2. Effect runtime redesign follow-up (one-shot deep handlers + selective CPS/evidence passing), including
+1. Effect runtime redesign follow-up (one-shot deep handlers + selective CPS/evidence passing), including
    post-`PLAN_RESUME` items now tracked in `doc/PLAN.md`.
-3. `resolve_main_runtime_output` retirement (blocked on effect-native support and remaining unsupported forms).
+2. `resolve_main_runtime_output` retirement (blocked on effect-native support and remaining unsupported forms).
+3. Standard-library intrinsic retirement planning (`__goby_*` debt reduction path) after effect/runtime feature expansion.
 
 ## 7. Resume Commands
 

@@ -402,6 +402,7 @@ fn eval_expr(
             if (env.declarations.contains_key(name.as_str())
                 && env.lowering_plan.is_direct_style(name.as_str()))
                 || name == "map"
+                || is_runtime_intrinsic_name(name)
             {
                 Some(NativeValue::Callable(NativeCallable::Named {
                     name: name.clone(),
@@ -577,6 +578,9 @@ fn apply_named_callable(
     env: &EvalEnv<'_>,
     depth: usize,
 ) -> Option<NativeValue> {
+    if let Some(intrinsic_result) = apply_runtime_intrinsic(name.as_str(), args.as_slice()) {
+        return Some(intrinsic_result);
+    }
     if name == "map" {
         return apply_map_builtin(args, env, depth + 1);
     }
@@ -598,6 +602,37 @@ fn apply_named_callable(
         return None;
     }
     eval_named_function(name.as_str(), args, env, depth + 1)
+}
+
+fn is_runtime_intrinsic_name(name: &str) -> bool {
+    matches!(name, "__goby_string_length" | "__goby_env_fetch_env_var")
+}
+
+fn apply_runtime_intrinsic(name: &str, args: &[NativeValue]) -> Option<NativeValue> {
+    match name {
+        "__goby_string_length" => {
+            if args.len() != 1 {
+                return None;
+            }
+            let NativeValue::String(value) = &args[0] else {
+                return None;
+            };
+            let len = i64::try_from(value.chars().count()).ok()?;
+            Some(NativeValue::Int(len))
+        }
+        "__goby_env_fetch_env_var" => {
+            if args.len() != 1 {
+                return None;
+            }
+            let NativeValue::String(var_name) = &args[0] else {
+                return None;
+            };
+            Some(NativeValue::String(
+                std::env::var(var_name).unwrap_or_default(),
+            ))
+        }
+        _ => None,
+    }
 }
 
 fn apply_map_builtin(

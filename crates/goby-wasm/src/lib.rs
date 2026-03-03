@@ -876,6 +876,24 @@ impl<'m> RuntimeOutputResolver<'m> {
                         }
                         return None;
                     }
+                    if fn_name == "__goby_env_fetch_env_var" {
+                        let av =
+                            self.eval_expr_ast(arg, locals, callables, evaluators, depth + 1)?;
+                        if let RuntimeValue::String(var_name) = av {
+                            let val = std::env::var(&var_name).unwrap_or_default();
+                            return Some(RuntimeValue::String(val));
+                        }
+                        return None;
+                    }
+                    if fn_name == "__goby_string_length" {
+                        let av =
+                            self.eval_expr_ast(arg, locals, callables, evaluators, depth + 1)?;
+                        if let RuntimeValue::String(value) = av {
+                            let len = i64::try_from(value.chars().count()).ok()?;
+                            return Some(RuntimeValue::Int(len));
+                        }
+                        return None;
+                    }
 
                     let arg_val =
                         self.eval_expr_ast(arg, locals, callables, evaluators, depth + 1)?;
@@ -2567,6 +2585,40 @@ main =
             resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
                 .expect("runtime output should resolve");
         assert_eq!(output, "something\n15");
+    }
+
+    #[test]
+    fn resolves_runtime_output_for_intrinsic_string_length_call() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let source = r#"
+main : Unit -> Unit
+main =
+  print (__goby_string_length "hello")
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let output =
+            resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
+                .expect("runtime output should resolve");
+        assert_eq!(output, "5");
+    }
+
+    #[test]
+    fn resolves_runtime_output_for_intrinsic_env_fetch_call() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        // SAFETY: serialized by ENV_MUTEX; no concurrent env access while lock is held.
+        unsafe { std::env::set_var("GOBY_INTRINSIC_TEST_PATH", "intrinsic-ok") };
+        let source = r#"
+main : Unit -> Unit
+main =
+  print (__goby_env_fetch_env_var "GOBY_INTRINSIC_TEST_PATH")
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let output =
+            resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
+                .expect("runtime output should resolve");
+        // Clean up before asserting so env is restored even if the assertion panics.
+        unsafe { std::env::remove_var("GOBY_INTRINSIC_TEST_PATH") };
+        assert_eq!(output, "intrinsic-ok");
     }
 
     #[test]
