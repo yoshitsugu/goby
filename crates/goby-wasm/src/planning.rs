@@ -10,6 +10,12 @@ pub(crate) enum LoweringStyle {
     EffectBoundary,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DeclarationLoweringMode {
+    pub(crate) declaration_name: String,
+    pub(crate) style: LoweringStyle,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct EffectId(pub(crate) u16);
 
@@ -143,6 +149,19 @@ impl LoweringPlan {
         declaration_name: &str,
     ) -> Option<&DeclarationEvidenceRequirement> {
         self.evidence_shape.requirement_for(declaration_name)
+    }
+
+    pub(crate) fn declaration_lowering_modes(&self) -> Vec<DeclarationLoweringMode> {
+        let mut out = self
+            .declaration_styles
+            .iter()
+            .map(|(name, style)| DeclarationLoweringMode {
+                declaration_name: name.clone(),
+                style: *style,
+            })
+            .collect::<Vec<_>>();
+        out.sort_by(|a, b| a.declaration_name.cmp(&b.declaration_name));
+        out
     }
 }
 
@@ -726,5 +745,50 @@ main =
         assert!(req.passes_evidence());
         assert_eq!(req.required_effect_count(), 1);
         assert_eq!(req.referenced_operation_count(), 1);
+    }
+
+    #[test]
+    fn propagates_effect_boundary_transitively_across_multiple_hops() {
+        let source = r#"
+fx : Int -> Int can Log
+fx x = x
+
+mid : Int -> Int
+mid x = fx x
+
+main : Unit -> Unit
+main =
+  print (mid 1)
+"#;
+        let module = parse_module(source).expect("source should parse");
+        let plan = build_lowering_plan(&module);
+        assert_eq!(plan.style_for("fx"), Some(LoweringStyle::EffectBoundary));
+        assert_eq!(plan.style_for("mid"), Some(LoweringStyle::EffectBoundary));
+        assert_eq!(plan.style_for("main"), Some(LoweringStyle::EffectBoundary));
+    }
+
+    #[test]
+    fn exposes_declaration_lowering_mode_snapshot_for_observability() {
+        let source = r#"
+fx : Int -> Int can Log
+fx x = x
+
+pure : Int -> Int
+pure x = x + 1
+
+main : Unit -> Unit
+main =
+  print (pure 1)
+"#;
+        let module = parse_module(source).expect("source should parse");
+        let plan = build_lowering_plan(&module);
+        let snapshot = plan.declaration_lowering_modes();
+        assert_eq!(snapshot.len(), 3);
+        assert_eq!(snapshot[0].declaration_name, "fx");
+        assert_eq!(snapshot[0].style, LoweringStyle::EffectBoundary);
+        assert_eq!(snapshot[1].declaration_name, "main");
+        assert_eq!(snapshot[1].style, LoweringStyle::DirectStyle);
+        assert_eq!(snapshot[2].declaration_name, "pure");
+        assert_eq!(snapshot[2].style, LoweringStyle::DirectStyle);
     }
 }

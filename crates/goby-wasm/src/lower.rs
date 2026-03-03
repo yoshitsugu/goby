@@ -7,7 +7,7 @@ use crate::{
     backend::WasmProgramBuilder,
     call::extract_direct_print_call_arg,
     layout::MemoryLayout,
-    planning::{LoweringPlan, LoweringStyle, build_lowering_plan},
+    planning::{DeclarationLoweringMode, LoweringPlan, LoweringStyle, build_lowering_plan},
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -17,6 +17,7 @@ pub(crate) struct EffectBoundaryHandoff {
     pub(crate) evidence_operation_table_len: usize,
     pub(crate) evidence_requirements_len: usize,
     pub(crate) evidence_checksum: usize,
+    pub(crate) declaration_modes: Vec<DeclarationLoweringMode>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -73,6 +74,7 @@ pub(crate) fn try_emit_native_module_with_handoff(
                 evidence_operation_table_len: evidence_shape.operation_table_len(),
                 evidence_requirements_len: evidence_shape.requirements_len(),
                 evidence_checksum: evidence_shape.checksum(),
+                declaration_modes: lowering_plan.declaration_lowering_modes(),
             },
         ));
     }
@@ -441,9 +443,15 @@ main =
         let module = parse_module(source).expect("source should parse");
         let lowered =
             try_emit_native_module_with_handoff(&module).expect("native lowering should not error");
+        let NativeLoweringResult::EffectBoundaryHandoff(handoff) = lowered else {
+            panic!("effect-boundary declarations should produce explicit handoff metadata");
+        };
         assert!(
-            matches!(lowered, NativeLoweringResult::EffectBoundaryHandoff(_)),
-            "effect-boundary declarations should produce explicit handoff metadata"
+            handoff
+                .declaration_modes
+                .iter()
+                .any(|entry| entry.declaration_name == "main"),
+            "handoff should expose per-declaration lowering mode snapshot"
         );
     }
 

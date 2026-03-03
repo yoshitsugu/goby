@@ -338,13 +338,21 @@ Step 7.4: Effect-boundary lowering skeleton (no full feature parity yet) — DON
 - Added regression coverage to assert effect-boundary modules return
   `EffectBoundaryHandoff` via lowerer entry API.
 
-Step 7.5: Regression and observability hooks
+Step 7.5: Regression and observability hooks — DONE (2026-03-02)
 
 - Add focused tests for planning correctness:
   - pure declaration remains `DirectStyle`,
   - declaration with `can`/`using`/`resume` becomes `EffectBoundary`,
   - transitive propagation marks callers correctly.
 - Add diagnostics/dev hooks (internal) to inspect selected lowering mode per declaration.
+- Added planning regression tests for:
+  - multi-hop transitive boundary propagation (`main -> mid -> fx(can ...)`),
+  - deterministic declaration-mode snapshot exposure.
+- Added internal observability hook:
+  - `LoweringPlan::declaration_lowering_modes() -> Vec<DeclarationLoweringMode>`
+    (name-sorted snapshot).
+- Extended Step 7.4 handoff payload with declaration-mode snapshot so callers can
+  inspect lowering mode selection per declaration at runtime handoff points.
 
 Step 7.6: Step-7 completion criteria
 
