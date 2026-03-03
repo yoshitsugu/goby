@@ -607,3 +607,52 @@ Current progress note (2026-03-03):
   - current typechecker limitation: `List ...` in record type declaration fields is not accepted,
     so `GraphemeState(parts: List String, ...)` remains parse-time/spec intent in stdlib source
     but is not yet fully `check`-clean as an isolated module.
+
+Detailed step-by-step to finish `C4`:
+
+- [ ] C4-S1: Unblock stdlib state type declaration
+   - Extend type declaration validation/type-expression handling so record fields can use
+     generic application types (minimum needed: `List String`).
+   - Add focused `goby-core` regression:
+     - positive: `type S = S(xs: List String)` accepted,
+     - negative: malformed generic field type still rejected.
+   - Exit criteria:
+     - `cargo run -p goby-cli -- check stdlib/goby/string.gb` no longer fails on
+       `GraphemeState` field type.
+
+- [ ] C4-S2: Stabilize iterator state contract in stdlib
+   - Keep `GraphemeState` in `stdlib/goby/iterator.gb` as canonical shared state shape.
+   - Ensure `stdlib/goby/string.gb` imports and uses that shape only (remove duplicated local
+     type/effect declaration once C4-S1 is done).
+   - Exit criteria:
+     - no duplicated `Iterator`/`GraphemeState` declarations across stdlib modules.
+
+- [ ] C4-S3: Implement multi-grapheme delimiter path in stdlib
+   - Add iterator-driven matcher state for delimiter window accumulation:
+     - current token buffer,
+     - delimiter-match progress,
+     - output parts list.
+   - Preserve locked semantics:
+     - leading/trailing empty segments preserved,
+     - consecutive delimiters produce empty segments,
+     - empty input returns `[]` (current compatibility rule).
+   - Exit criteria:
+     - `split` no longer calls runtime `string.split(...)` for any delimiter case.
+
+- [ ] C4-S4: Remove stdlib fallback dependency and harden behavior tests
+   - Add stdlib-level split cases in `goby-wasm` runtime-output tests:
+     - empty delimiter,
+     - single grapheme delimiter,
+     - multi-grapheme delimiter,
+     - consecutive/leading/trailing delimiter cases,
+     - Unicode grapheme cases (including emoji family cluster).
+   - Add parity coverage for `examples/import.gb` behavior with stdlib split path.
+   - Exit criteria:
+     - tests prove stdlib `split` behavior matches lock in C1.
+
+- [ ] C4-S5: Mark C4 done and prepare C5 handoff
+   - Update this plan and `doc/STATE.md`:
+     - C4 completed,
+     - runtime `string.split` branch now strictly legacy path pending C5 deletion.
+   - Exit criteria:
+     - explicit note of remaining C5-only work (runtime method-call branch removal).
