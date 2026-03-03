@@ -750,6 +750,17 @@ This file is a restart-safe snapshot for resuming work after context reset.
     effect-boundary handoff branch before routing to fallback runtime.
   - Added lowerer regression assertion that effect-boundary call graphs produce
     `EffectBoundaryHandoff` via the new lowerer API.
+- 2026-03-02 (session 70): `PLAN_RESUME` Step 7.5 complete (regression + observability hooks)
+  - Added internal planning observability API:
+    - `LoweringPlan::declaration_lowering_modes()`
+    - `DeclarationLoweringMode { declaration_name, style }`
+    - output is name-sorted for deterministic inspection.
+  - Extended `EffectBoundaryHandoff` payload to include declaration-mode snapshot,
+    enabling per-declaration mode inspection at explicit handoff points.
+  - Added planning regression coverage:
+    - multi-hop transitive boundary propagation (`main -> mid -> fx(can ...)`),
+    - declaration-mode snapshot content/ordering check.
+  - Added lowerer test assertion that effect-boundary handoff exposes declaration-mode snapshot.
 
 ## 5. Current Example Files
 
