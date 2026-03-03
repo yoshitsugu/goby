@@ -1,7 +1,6 @@
 pub(crate) const IOVEC_OFFSET: u32 = 0;
 pub(crate) const NWRITTEN_OFFSET: u32 = 8;
 pub(crate) const HEAP_BASE: u32 = 16;
-pub(crate) const TEXT_OFFSET: u32 = HEAP_BASE;
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct MemoryLayout {

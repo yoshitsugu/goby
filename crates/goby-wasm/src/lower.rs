@@ -13,11 +13,20 @@ use crate::{
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct EffectBoundaryHandoff {
     pub(crate) main_style: LoweringStyle,
+    pub(crate) main_requirement: Option<MainEvidenceRequirementSummary>,
     pub(crate) handler_resume_present: bool,
     pub(crate) evidence_operation_table_len: usize,
     pub(crate) evidence_requirements_len: usize,
     pub(crate) evidence_checksum: usize,
     pub(crate) declaration_modes: Vec<DeclarationLoweringMode>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct MainEvidenceRequirementSummary {
+    pub(crate) style: LoweringStyle,
+    pub(crate) passes_evidence: bool,
+    pub(crate) required_effect_count: usize,
+    pub(crate) referenced_operation_count: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -37,39 +46,28 @@ pub(crate) fn try_emit_native_module_with_handoff(
     }
 
     let builder = WasmProgramBuilder::new(MemoryLayout::default());
-    let layout = builder.layout();
-    let _ = (
-        layout.iovec_offset,
-        layout.nwritten_offset,
-        layout.heap_base,
-    );
 
     let Some(main_decl) = module.declarations.iter().find(|decl| decl.name == "main") else {
         return Ok(NativeLoweringResult::NotLowered);
     };
     let lowering_plan = build_lowering_plan(module);
     let evidence_shape = lowering_plan.evidence_shape();
-    let _ = (
-        lowering_plan.handler_resume_present(),
-        evidence_shape.operation_table_len(),
-        evidence_shape.requirements_len(),
-        evidence_shape.checksum(),
-        lowering_plan.evidence_requirement_for("main").map(|req| {
-            (
-                req.style(),
-                req.passes_evidence(),
-                req.required_effect_count(),
-                req.referenced_operation_count(),
-            )
-        }),
-    );
     let main_style = lowering_plan
         .style_for("main")
         .unwrap_or(LoweringStyle::EffectBoundary);
     if main_style != LoweringStyle::DirectStyle {
+        let main_requirement = lowering_plan.evidence_requirement_for("main").map(|req| {
+            MainEvidenceRequirementSummary {
+                style: req.style(),
+                passes_evidence: req.passes_evidence(),
+                required_effect_count: req.required_effect_count(),
+                referenced_operation_count: req.referenced_operation_count(),
+            }
+        });
         return Ok(NativeLoweringResult::EffectBoundaryHandoff(
             EffectBoundaryHandoff {
                 main_style,
+                main_requirement,
                 handler_resume_present: lowering_plan.handler_resume_present(),
                 evidence_operation_table_len: evidence_shape.operation_table_len(),
                 evidence_requirements_len: evidence_shape.requirements_len(),

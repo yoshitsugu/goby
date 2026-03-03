@@ -100,10 +100,12 @@ impl EvidencePayloadShape {
                     + op.op_name.len()
             })
             .sum::<usize>();
-        let req_sum = self
-            .declaration_requirements
-            .values()
-            .map(|req| {
+        let mut req_entries = self.declaration_requirements.iter().collect::<Vec<_>>();
+        req_entries.sort_by(|(a, _), (b, _)| a.cmp(b));
+        let req_sum = req_entries
+            .iter()
+            .map(|(decl_name, req)| {
+                let decl_name_sum = decl_name.len();
                 req.required_effects
                     .iter()
                     .map(|id| usize::from(id.0))
@@ -114,6 +116,7 @@ impl EvidencePayloadShape {
                         .map(|op| usize::from(op.effect_id.0) + usize::from(op.op_id.0))
                         .sum::<usize>()
                     + if req.passes_evidence() { 1 } else { 0 }
+                    + decl_name_sum
             })
             .sum::<usize>();
         ops_sum + req_sum
@@ -790,5 +793,42 @@ main =
         assert_eq!(snapshot[1].style, LoweringStyle::DirectStyle);
         assert_eq!(snapshot[2].declaration_name, "pure");
         assert_eq!(snapshot[2].style, LoweringStyle::DirectStyle);
+    }
+
+    #[test]
+    fn evidence_checksum_is_stable_under_declaration_reordering() {
+        let source_a = r#"
+effect Log
+  log: String -> Unit
+
+fx : Int -> Int can Log
+fx x = x
+
+pure : Int -> Int
+pure x = x + 1
+
+main : Unit -> Unit
+main =
+  print (pure 1)
+"#;
+        let source_b = r#"
+effect Log
+  log: String -> Unit
+
+pure : Int -> Int
+pure x = x + 1
+
+fx : Int -> Int can Log
+fx x = x
+
+main : Unit -> Unit
+main =
+  print (pure 1)
+"#;
+        let module_a = parse_module(source_a).expect("source_a should parse");
+        let module_b = parse_module(source_b).expect("source_b should parse");
+        let checksum_a = build_lowering_plan(&module_a).evidence_shape().checksum();
+        let checksum_b = build_lowering_plan(&module_b).evidence_shape().checksum();
+        assert_eq!(checksum_a, checksum_b);
     }
 }

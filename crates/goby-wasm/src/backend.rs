@@ -4,10 +4,7 @@ use wasm_encoder::{
     TypeSection, ValType,
 };
 
-use crate::{
-    CodegenError,
-    layout::{IOVEC_OFFSET, MemoryLayout, NWRITTEN_OFFSET, TEXT_OFFSET},
-};
+use crate::{CodegenError, layout::MemoryLayout};
 
 pub(crate) struct WasmProgramBuilder {
     layout: MemoryLayout,
@@ -18,23 +15,20 @@ impl WasmProgramBuilder {
         Self { layout }
     }
 
-    pub(crate) fn layout(&self) -> MemoryLayout {
-        self.layout
-    }
-
     pub(crate) fn emit_static_print_module(&self, text: &str) -> Result<Vec<u8>, CodegenError> {
         let text_len = u32::try_from(text.len()).map_err(|_| CodegenError {
             message: "print literal is too large to encode".to_string(),
         })?;
-        let text_ptr = i32::try_from(TEXT_OFFSET).map_err(|_| CodegenError {
+        let text_ptr = i32::try_from(self.layout.heap_base).map_err(|_| CodegenError {
             message: "text offset does not fit in i32".to_string(),
         })?;
-        let iovec_offset = i32::try_from(IOVEC_OFFSET).map_err(|_| CodegenError {
+        let iovec_offset = i32::try_from(self.layout.iovec_offset).map_err(|_| CodegenError {
             message: "iovec offset does not fit in i32".to_string(),
         })?;
-        let nwritten_offset = i32::try_from(NWRITTEN_OFFSET).map_err(|_| CodegenError {
-            message: "nwritten offset does not fit in i32".to_string(),
-        })?;
+        let nwritten_offset =
+            i32::try_from(self.layout.nwritten_offset).map_err(|_| CodegenError {
+                message: "nwritten offset does not fit in i32".to_string(),
+            })?;
         let text_len_i32 = i32::try_from(text_len).map_err(|_| CodegenError {
             message: "print literal length does not fit in i32".to_string(),
         })?;
