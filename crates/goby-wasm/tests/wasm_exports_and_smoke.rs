@@ -1,7 +1,11 @@
 use std::path::PathBuf;
+use std::sync::Mutex;
 
 use goby_core::parse_module;
 use goby_wasm::compile_module;
+
+/// Serializes tests that read or write process-wide environment variables.
+static ENV_MUTEX: Mutex<()> = Mutex::new(());
 
 fn assert_valid_wasm_module(wasm: &[u8]) {
     assert!(wasm.len() >= 8, "module too short: {} bytes", wasm.len());
@@ -93,6 +97,24 @@ fn effect_boundary_with_unresolvable_fallback_reports_boundary_context() {
         "error should surface effect-boundary context, got: {}",
         err.message
     );
+}
+
+#[test]
+fn runtime_override_force_portable_is_reflected_in_boundary_diagnostics() {
+    let _guard = ENV_MUTEX.lock().expect("env mutex lock");
+    // SAFETY: guarded by ENV_MUTEX in this test module.
+    unsafe { std::env::set_var("GOBY_WASM_FORCE_PORTABLE_FALLBACK", "1") };
+    let module =
+        parse_module("main : Unit -> Unit can Print\nmain = 0\n").expect("parse should work");
+    let err = compile_module(&module).expect_err("compile should report boundary fallback failure");
+    assert!(
+        err.message
+            .contains("selected_mode_fallback_reason=Some(ForcedPortableOverride)"),
+        "error should expose forced fallback override reason, got: {}",
+        err.message
+    );
+    // SAFETY: guarded by ENV_MUTEX in this test module.
+    unsafe { std::env::remove_var("GOBY_WASM_FORCE_PORTABLE_FALLBACK") };
 }
 
 #[test]

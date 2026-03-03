@@ -448,7 +448,8 @@ Step 8.6: Rollout guardrails and completion criteria
 - Keep optimized path behind an internal gate until parity suite is stable.
 - Add explicit kill-switches for fast rollback/debug:
   - compile-time flag to force `PortableFallback`,
-  - runtime override (CLI/env) to force `PortableFallback` without rebuild,
+  - runtime override (CLI/env) to force `PortableFallback` without rebuild
+    (current env knob: `GOBY_WASM_FORCE_PORTABLE_FALLBACK=1`),
   - test harness knob to run parity suite in forced-fallback mode.
 - Add observability output for selected execution mode and fallback reason at compile/runtime handoff.
 - Add performance acceptance checks with fixed benchmark protocol:
@@ -456,6 +457,8 @@ Step 8.6: Rollout guardrails and completion criteria
   - at least 30 measured runs per sample per mode (after warmup),
   - identical runtime version/config per comparison,
   - fail if `TypedContinuationOptimized` exceeds `PortableFallback` by more than 3% on p50 or p95.
+  - current harness command:
+    - `cargo test -p goby-wasm step8_perf_acceptance_resume_heavy_samples -- --ignored --nocapture`
 - Completion criteria:
   - portable fallback behavior unchanged,
   - optimized path passes parity suite,
