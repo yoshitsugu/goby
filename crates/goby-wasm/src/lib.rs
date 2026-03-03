@@ -63,8 +63,16 @@ pub fn compile_module(module: &Module) -> Result<Vec<u8>, CodegenError> {
         _ => {}
     }
 
-    if let Some(text) = resolve_main_runtime_output(module, &main.body, main.parsed_body.as_deref())
-    {
+    let runtime_mode = effect_boundary_handoff
+        .as_ref()
+        .map(|handoff| handoff.selected_mode)
+        .unwrap_or(lower::EffectExecutionMode::PortableFallback);
+    if let Some(text) = resolve_main_runtime_output_with_mode(
+        module,
+        &main.body,
+        main.parsed_body.as_deref(),
+        runtime_mode,
+    ) {
         return compile_print_module(&text);
     }
 
@@ -117,10 +125,25 @@ fn parse_print_call(line: &str) -> Option<&str> {
     Some(rest.trim())
 }
 
+#[cfg(test)]
 fn resolve_main_runtime_output(
     module: &Module,
     body: &str,
     parsed_stmts: Option<&[Stmt]>,
+) -> Option<String> {
+    resolve_main_runtime_output_with_mode(
+        module,
+        body,
+        parsed_stmts,
+        lower::EffectExecutionMode::PortableFallback,
+    )
+}
+
+fn resolve_main_runtime_output_with_mode(
+    module: &Module,
+    body: &str,
+    parsed_stmts: Option<&[Stmt]>,
+    execution_mode: lower::EffectExecutionMode,
 ) -> Option<String> {
     let int_functions = collect_functions_with_result(module, "Int");
     let list_functions = collect_functions_with_result(module, "List Int");
@@ -132,7 +155,7 @@ fn resolve_main_runtime_output(
         list: &list_evaluator,
         unit: &unit_functions,
     };
-    RuntimeOutputResolver::resolve(module, body, parsed_stmts, &evaluators)
+    RuntimeOutputResolver::resolve(module, body, parsed_stmts, &evaluators, execution_mode)
 }
 
 type EvaluatedFunctions<'a> = HashMap<&'a str, EvaluatedFunction<'a>>;
@@ -401,6 +424,7 @@ struct RuntimeOutputResolver<'m> {
     active_handler_stack: Vec<usize>,
     resume_tokens: Vec<ResumeToken>,
     runtime_error: Option<String>,
+    execution_mode: lower::EffectExecutionMode,
 }
 
 #[derive(Clone)]
@@ -433,6 +457,7 @@ impl<'m> RuntimeOutputResolver<'m> {
         body: &str,
         parsed_stmts: Option<&[Stmt]>,
         evaluators: &RuntimeEvaluators<'_, '_>,
+        execution_mode: lower::EffectExecutionMode,
     ) -> Option<String> {
         let mut resolver = Self {
             locals: RuntimeLocals::default(),
@@ -441,6 +466,7 @@ impl<'m> RuntimeOutputResolver<'m> {
             active_handler_stack: Vec::new(),
             resume_tokens: Vec::new(),
             runtime_error: None,
+            execution_mode,
         };
 
         if let Some(stmts) = parsed_stmts {
@@ -973,25 +999,7 @@ impl<'m> RuntimeOutputResolver<'m> {
             Expr::Resume { value } => {
                 let resumed =
                     self.eval_expr_ast(value, locals, callables, evaluators, depth + 1)?;
-                let Some(token_ro) = self.resume_tokens.last() else {
-                    self.set_runtime_error_once("resume used without an active continuation");
-                    return None;
-                };
-                if token_ro.continuation.consumed {
-                    self.set_runtime_error_once("resume continuation already consumed");
-                    return None;
-                }
-                if token_ro.handler_decl_idx >= self.module.handler_declarations.len() {
-                    self.set_runtime_error_once("internal resume token handler mismatch");
-                    return None;
-                }
-                let Some(token) = self.current_resume_token_mut() else {
-                    self.set_runtime_error_once("resume used without an active continuation");
-                    return None;
-                };
-                token.continuation.consumed = true;
-                token.resumed_value = Some(resumed.clone());
-                Some(resumed)
+                self.resume_through_active_continuation_bridge(resumed)
             }
             // <module>.fetch_env_var(str) -> String  (e.g. env.fetch_env_var(str))
             Expr::MethodCall { method, args, .. }
@@ -1375,6 +1383,73 @@ impl<'m> RuntimeOutputResolver<'m> {
             .is_some()
     }
 
+    fn begin_handler_continuation_bridge(&mut self, handler_decl_idx: usize) -> usize {
+        match self.execution_mode {
+            lower::EffectExecutionMode::PortableFallback => {
+                self.push_resume_token_for_handler(handler_decl_idx)
+            }
+            lower::EffectExecutionMode::TypedContinuationOptimized => {
+                // Step 8.4 bridge point: optimized continuation path will plug in here.
+                self.push_resume_token_for_handler(handler_decl_idx)
+            }
+        }
+    }
+
+    fn finish_handler_continuation_bridge(
+        &mut self,
+        token_idx: usize,
+    ) -> Option<Option<RuntimeValue>> {
+        match self.execution_mode {
+            lower::EffectExecutionMode::PortableFallback => {
+                self.take_resume_token_result(token_idx)
+            }
+            lower::EffectExecutionMode::TypedContinuationOptimized => {
+                // Step 8.4 bridge point: optimized continuation path will plug in here.
+                self.take_resume_token_result(token_idx)
+            }
+        }
+    }
+
+    fn resume_through_active_continuation_bridge(
+        &mut self,
+        resumed: RuntimeValue,
+    ) -> Option<RuntimeValue> {
+        match self.execution_mode {
+            lower::EffectExecutionMode::PortableFallback => {
+                self.resume_through_active_continuation_fallback(resumed)
+            }
+            lower::EffectExecutionMode::TypedContinuationOptimized => {
+                // Step 8.4 bridge point: optimized continuation path will plug in here.
+                self.resume_through_active_continuation_fallback(resumed)
+            }
+        }
+    }
+
+    fn resume_through_active_continuation_fallback(
+        &mut self,
+        resumed: RuntimeValue,
+    ) -> Option<RuntimeValue> {
+        let Some(token_ro) = self.resume_tokens.last() else {
+            self.set_runtime_error_once("resume used without an active continuation");
+            return None;
+        };
+        if token_ro.continuation.consumed {
+            self.set_runtime_error_once("resume continuation already consumed");
+            return None;
+        }
+        if token_ro.handler_decl_idx >= self.module.handler_declarations.len() {
+            self.set_runtime_error_once("internal resume token handler mismatch");
+            return None;
+        }
+        let Some(token) = self.current_resume_token_mut() else {
+            self.set_runtime_error_once("resume used without an active continuation");
+            return None;
+        };
+        token.continuation.consumed = true;
+        token.resumed_value = Some(resumed.clone());
+        Some(resumed)
+    }
+
     fn dispatch_handler_method_core(
         &mut self,
         method: &ResolvedHandlerMethod,
@@ -1387,7 +1462,7 @@ impl<'m> RuntimeOutputResolver<'m> {
             return None;
         }
         let stmts = method.method.parsed_body.as_deref()?;
-        let token_idx = self.push_resume_token_for_handler(method.handler_decl_idx);
+        let token_idx = self.begin_handler_continuation_bridge(method.handler_decl_idx);
         let previous_stack_len = self.active_handler_stack.len();
         let run_result = (|| -> Option<Option<RuntimeValue>> {
             let mut handler_locals = RuntimeLocals::default();
@@ -1524,7 +1599,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                 Some(None)
             }
         })();
-        let resumed = self.take_resume_token_result(token_idx);
+        let resumed = self.finish_handler_continuation_bridge(token_idx);
         // Never leak handler context changes outside an effect call.
         self.active_handler_stack.truncate(previous_stack_len);
         let resumed = resumed?;
@@ -2171,6 +2246,18 @@ mod tests {
             .and_then(|decl| decl.parsed_body.as_deref())
     }
 
+    fn runtime_output_for_mode(
+        module: &Module,
+        mode: lower::EffectExecutionMode,
+    ) -> Option<String> {
+        resolve_main_runtime_output_with_mode(
+            module,
+            main_body(module),
+            main_parsed_body(module),
+            mode,
+        )
+    }
+
     #[test]
     fn emits_valid_wasm_for_long_print_literal() {
         let long_text = "x".repeat(128);
@@ -2645,6 +2732,108 @@ main =
             Some("runtime error: resume used without an active continuation"),
             "resume outside handler should report runtime error in fallback runtime"
         );
+    }
+
+    #[test]
+    fn typed_mode_matches_fallback_for_resume_success_path() {
+        use goby_core::parse_module;
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let source = r#"
+effect Iter
+  next: Int -> Int
+
+handler IterHandler for Iter
+  next n =
+    resume 7
+
+main : Unit -> Unit
+main =
+  using IterHandler
+    print (next 0)
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let fallback =
+            runtime_output_for_mode(&module, lower::EffectExecutionMode::PortableFallback);
+        let typed = runtime_output_for_mode(
+            &module,
+            lower::EffectExecutionMode::TypedContinuationOptimized,
+        );
+        assert_eq!(
+            typed, fallback,
+            "typed continuation bridge should preserve resume success behavior"
+        );
+    }
+
+    #[test]
+    fn typed_mode_matches_fallback_for_double_resume_error() {
+        use goby_core::parse_module;
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let source = r#"
+effect Iter
+  next: Int -> Int
+
+handler IterHandler for Iter
+  next n =
+    resume (resume 1)
+
+main : Unit -> Unit
+main =
+  using IterHandler
+    print (next 0)
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let fallback =
+            runtime_output_for_mode(&module, lower::EffectExecutionMode::PortableFallback);
+        let typed = runtime_output_for_mode(
+            &module,
+            lower::EffectExecutionMode::TypedContinuationOptimized,
+        );
+        assert_eq!(
+            typed, fallback,
+            "typed continuation bridge should preserve one-shot double-resume runtime error behavior"
+        );
+        assert_eq!(
+            typed.as_deref(),
+            Some("runtime error: resume continuation already consumed")
+        );
+    }
+
+    #[test]
+    fn typed_mode_matches_fallback_for_nearest_handler_dispatch() {
+        use goby_core::parse_module;
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let source = r#"
+effect A
+  next: Int -> Int
+
+effect B
+  next: Int -> Int
+
+handler AHandler for A
+  next x =
+    resume 1
+
+handler BHandler for B
+  next y =
+    resume 2
+
+main : Unit -> Unit
+main =
+  using AHandler, BHandler
+    print (B.next 0)
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let fallback =
+            runtime_output_for_mode(&module, lower::EffectExecutionMode::PortableFallback);
+        let typed = runtime_output_for_mode(
+            &module,
+            lower::EffectExecutionMode::TypedContinuationOptimized,
+        );
+        assert_eq!(
+            typed, fallback,
+            "typed continuation bridge should preserve nearest-handler dispatch behavior"
+        );
+        assert_eq!(typed.as_deref(), Some("2"));
     }
 
     #[test]
