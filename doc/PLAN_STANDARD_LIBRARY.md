@@ -412,6 +412,9 @@ Decision (2026-03-03):
 
 - Canonical syntax is `@embed <EffectName>`.
 - Legacy `@embed effect <EffectName>` remains accepted temporarily for compatibility.
+- Compatibility-removal gate:
+  - remove legacy `@embed effect <EffectName>` acceptance only in a dedicated
+    follow-up change after stdlib/module fixtures are fully migrated.
 
 Execution checklist (incremental):
 

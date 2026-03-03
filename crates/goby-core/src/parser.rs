@@ -66,7 +66,7 @@ pub fn parse_module(source: &str) -> Result<Module, ParseError> {
             continue;
         }
 
-        if trimmed.starts_with("@embed ") {
+        if trimmed.starts_with("@embed") {
             let effect_name = parse_embed_line(trimmed).map_err(|message| ParseError {
                 line: i + 1,
                 col: 1,
@@ -1376,12 +1376,17 @@ fn parse_import_line(line: &str) -> Option<ImportDecl> {
 
 fn parse_embed_line(line: &str) -> Result<String, String> {
     let rest = line
-        .strip_prefix("@embed ")
-        .map(str::trim)
+        .strip_prefix("@embed")
+        .map(str::trim_start)
         .ok_or_else(|| "invalid @embed declaration".to_string())?;
+    if rest.is_empty() {
+        return Err("invalid @embed declaration: expected `@embed <EffectName>`".to_string());
+    }
 
     // Canonical syntax is `@embed <EffectName>`.
     // Legacy compatibility accepts `@embed effect <EffectName>` during transition.
+    // TODO(ExtraStepA cleanup): remove `@embed effect <EffectName>` compatibility
+    // after migration consumers are updated.
     let effect_name = rest.strip_prefix("effect ").map(str::trim).unwrap_or(rest);
     if !is_identifier(effect_name) {
         return Err("invalid embedded effect name".to_string());
@@ -1837,6 +1842,16 @@ main = 1
         let source = "@embed 1Print\nmain = 1\n";
         let err = parse_module(source).expect_err("invalid embed declaration should fail");
         assert!(err.message.contains("invalid embedded effect name"));
+    }
+
+    #[test]
+    fn rejects_embed_without_target() {
+        let source = "@embed\nmain = 1\n";
+        let err = parse_module(source).expect_err("embed without target should fail");
+        assert!(
+            err.message
+                .contains("invalid @embed declaration: expected `@embed <EffectName>`")
+        );
     }
 
     #[test]
