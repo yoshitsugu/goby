@@ -6,6 +6,10 @@ edition = "2024"
 [lib]
 crate-type = ["rlib"]
 
+[features]
+default = []
+typed-continuation-optimized = []
+
 [dependencies]
 goby-core = { path = "../goby-core" }
 wasm-encoder = "0.240"
