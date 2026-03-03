@@ -785,24 +785,23 @@ fn validate_embed_declarations(
         return Ok(());
     }
 
-    // Compatibility mode for legacy call sites that only use `typecheck_module`.
     // Path-restricted enforcement is applied when context is provided
-    // (`typecheck_module_with_context`, used by CLI).
-    let Some(source_path) = source_path else {
-        return Ok(());
-    };
-    let stdlib_root = stdlib_root
-        .map(Path::to_path_buf)
-        .unwrap_or_else(default_stdlib_root);
-    if !is_path_within_root(source_path, &stdlib_root) {
-        return Err(TypecheckError {
-            declaration: None,
-            span: None,
-            message: format!(
-                "@embed declarations are only allowed under stdlib root `{}`",
-                stdlib_root.display()
-            ),
-        });
+    // (`typecheck_module_with_context`, used by CLI).  Structural validation
+    // (duplicates + in-module effect existence) always applies.
+    if let Some(source_path) = source_path {
+        let stdlib_root = stdlib_root
+            .map(Path::to_path_buf)
+            .unwrap_or_else(default_stdlib_root);
+        if !is_path_within_root(source_path, &stdlib_root) {
+            return Err(TypecheckError {
+                declaration: None,
+                span: None,
+                message: format!(
+                    "@embed declarations are only allowed under stdlib root `{}`",
+                    stdlib_root.display()
+                ),
+            });
+        }
     }
 
     let mut seen = HashSet::new();
@@ -3347,6 +3346,20 @@ f = print \"hi\"
         let module = parse_module(source).expect("should parse");
         typecheck_module(&module)
             .expect("legacy typecheck API should remain compatible without source context");
+    }
+
+    #[test]
+    fn rejects_embed_missing_effect_without_source_context() {
+        let source = "@embed Print\nf : Unit -> Int\nf = 1\n";
+        let module = parse_module(source).expect("should parse");
+        let err = typecheck_module(&module)
+            .expect_err("missing in-module effect should fail even without source context");
+        assert!(
+            err.message
+                .contains("must be declared in the same module"),
+            "unexpected message: {}",
+            err.message
+        );
     }
 
     #[test]
