@@ -1248,6 +1248,12 @@ impl<'m> RuntimeOutputResolver<'m> {
                 if let Expr::Qualified { receiver, member } = callee.as_ref() {
                     let arg_val =
                         self.eval_expr_ast(arg, locals, callables, evaluators, depth + 1)?;
+                    if member == "parse" && self.resolves_module_receiver(receiver, "goby/int") {
+                        if let RuntimeValue::String(input) = arg_val {
+                            return self.eval_int_parse_runtime(input, evaluators, depth + 1);
+                        }
+                        return None;
+                    }
                     let method = self
                         .find_handler_method_for_effect(receiver, member)
                         .or_else(|| self.find_handler_method_by_name(member));
@@ -1401,6 +1407,23 @@ impl<'m> RuntimeOutputResolver<'m> {
                         Some(RuntimeValue::String(parts.join(&sep)))
                     }
                     _ => None,
+                }
+            }
+            // <alias>.parse(str) -> Int  (alias/qualifier for `goby/int`)
+            Expr::MethodCall {
+                receiver,
+                method,
+                args,
+            } if method == "parse"
+                && args.len() == 1
+                && self.resolves_module_receiver(receiver, "goby/int") =>
+            {
+                let input =
+                    self.eval_expr_ast(&args[0], locals, callables, evaluators, depth + 1)?;
+                if let RuntimeValue::String(text) = input {
+                    self.eval_int_parse_runtime(text, evaluators, depth + 1)
+                } else {
+                    None
                 }
             }
             // Lambda as top-level value — not needed in main, return None to fall back.
@@ -1774,6 +1797,48 @@ impl<'m> RuntimeOutputResolver<'m> {
             .declarations
             .iter()
             .any(|decl| decl.name == name)
+    }
+
+    fn resolves_module_receiver(&self, receiver: &str, module_path: &str) -> bool {
+        self.module.imports.iter().any(|import| {
+            if import.module_path != module_path {
+                return false;
+            }
+            match &import.kind {
+                goby_core::ImportKind::Plain => import
+                    .module_path
+                    .rsplit('/')
+                    .next()
+                    .is_some_and(|qualifier| qualifier == receiver),
+                goby_core::ImportKind::Alias(alias) => alias == receiver,
+                goby_core::ImportKind::Selective(_) => false,
+            }
+        })
+    }
+
+    fn eval_int_parse_runtime(
+        &mut self,
+        input: String,
+        evaluators: &RuntimeEvaluators<'_, '_>,
+        depth: usize,
+    ) -> Option<RuntimeValue> {
+        match parse_goby_int_text(&input) {
+            Some(value) => Some(RuntimeValue::Int(value)),
+            None => {
+                if let Some(method) = self.find_handler_method_by_name("invalid_integer") {
+                    return self.dispatch_handler_method_as_value(
+                        &method,
+                        RuntimeValue::String(input),
+                        evaluators,
+                        depth + 1,
+                    );
+                }
+                self.set_runtime_error_once(
+                    "unhandled effect operation `invalid_integer` from goby/int.parse",
+                );
+                None
+            }
+        }
     }
 
     /// Find a handler method by bare name (e.g. `log`) from nearest to outermost.
@@ -2325,6 +2390,32 @@ fn resolve_runtime_stdlib_root() -> PathBuf {
                 .join("../..")
                 .join("stdlib")
         })
+}
+
+fn parse_goby_int_text(input: &str) -> Option<i64> {
+    if input.is_empty() {
+        return None;
+    }
+    let (negative, digits) = if let Some(rest) = input.strip_prefix('-') {
+        (true, rest)
+    } else {
+        (false, input)
+    };
+    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+
+    let mut acc: i64 = 0;
+    for b in digits.bytes() {
+        let digit = (b - b'0') as i64;
+        acc = acc.checked_mul(10)?;
+        acc = if negative {
+            acc.checked_sub(digit)?
+        } else {
+            acc.checked_add(digit)?
+        };
+    }
+    Some(acc)
 }
 
 #[derive(Default, Clone)]
@@ -3620,6 +3711,48 @@ main =
             output.as_deref(),
             Some("a=a\nb=b\nc=c\nd=d\ne="),
             "read_line should trim CRLF/LF/CR and return empty string at EOF"
+        );
+    }
+
+    #[test]
+    fn runtime_resolves_goby_int_parse_via_module_alias() {
+        use goby_core::parse_module;
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let source = r#"
+import goby/int as int
+main : Unit -> Unit can Print, StringParseError
+main =
+  with_handler
+    invalid_integer _ ->
+      resume -1
+  in
+    print int.parse("42")
+    print int.parse("-7")
+    print int.parse("12x")
+    print int.parse("9223372036854775808")
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let output =
+            resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module));
+        assert_eq!(output.as_deref(), Some("42\n-7\n-1\n-1"));
+    }
+
+    #[test]
+    fn runtime_reports_unhandled_invalid_integer_from_goby_int_parse() {
+        use goby_core::parse_module;
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let source = r#"
+import goby/int
+main : Unit -> Unit can Print, StringParseError
+main =
+  print int.parse("x")
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let output =
+            resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module));
+        assert_eq!(
+            output.as_deref(),
+            Some("runtime error: unhandled effect operation `invalid_integer` from goby/int.parse")
         );
     }
 
