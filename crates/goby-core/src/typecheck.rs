@@ -56,6 +56,7 @@ pub fn typecheck_module_with_context(
     let imported_embedded_defaults = collect_imported_embedded_defaults(module, &stdlib_root_path)?;
     let imported_effect_declarations =
         collect_imported_effect_declarations(module, &stdlib_root_path);
+    validate_no_ambiguous_effect_names(&imported_effect_declarations, &module.effect_declarations)?;
     let imported_effects = collect_imported_effect_names(module, &stdlib_root_path);
     let local_embedded_defaults = collect_local_embedded_defaults(module);
     let embedded_default_effects: HashSet<String> = imported_embedded_defaults
@@ -469,6 +470,12 @@ struct EffectMap {
     op_to_effects: HashMap<String, HashSet<String>>,
 }
 
+#[derive(Debug, Clone)]
+struct ImportedEffectDecl {
+    source_module: String,
+    decl: crate::ast::EffectDecl,
+}
+
 /// Maps top-level declaration names to the list of effect names they require (from `can` clause).
 fn build_required_effects_map(module: &Module) -> HashMap<String, Vec<String>> {
     let mut map = HashMap::new();
@@ -493,10 +500,11 @@ fn build_required_effects_map(module: &Module) -> HashMap<String, Vec<String>> {
     map
 }
 
-fn build_effect_map(module: &Module, imported_effects: &[crate::ast::EffectDecl]) -> EffectMap {
+fn build_effect_map(module: &Module, imported_effects: &[ImportedEffectDecl]) -> EffectMap {
     let mut effect_to_ops: HashMap<String, HashSet<String>> = HashMap::new();
     for effect_decl in imported_effects
         .iter()
+        .map(|imported| &imported.decl)
         .chain(module.effect_declarations.iter())
     {
         let ops = effect_to_ops.entry(effect_decl.name.clone()).or_default();
@@ -514,11 +522,12 @@ fn build_effect_map(module: &Module, imported_effects: &[crate::ast::EffectDecl]
 
 fn build_op_to_effects(
     module: &Module,
-    imported_effects: &[crate::ast::EffectDecl],
+    imported_effects: &[ImportedEffectDecl],
 ) -> HashMap<String, HashSet<String>> {
     let mut map: HashMap<String, HashSet<String>> = HashMap::new();
     for effect_decl in imported_effects
         .iter()
+        .map(|imported| &imported.decl)
         .chain(module.effect_declarations.iter())
     {
         for member in &effect_decl.members {
@@ -1400,7 +1409,7 @@ fn collect_imported_embedded_defaults(
 fn collect_imported_effect_declarations(
     module: &Module,
     stdlib_root: &Path,
-) -> Vec<crate::ast::EffectDecl> {
+) -> Vec<ImportedEffectDecl> {
     let resolver = StdlibResolver::new(stdlib_root.to_path_buf());
     let mut effects = Vec::new();
     for import in effective_imports(module, &resolver) {
@@ -1413,14 +1422,91 @@ fn collect_imported_effect_declarations(
         let Ok(parsed) = crate::parse_module(&source) else {
             continue;
         };
-        effects.extend(
-            parsed
-                .effect_declarations
-                .into_iter()
-                .filter(|decl| import_selects_name(&import.kind, &decl.name)),
-        );
+        effects.extend(parsed.effect_declarations.into_iter().filter_map(|decl| {
+            import_selects_name(&import.kind, &decl.name).then_some(ImportedEffectDecl {
+                source_module: import.module_path.clone(),
+                decl,
+            })
+        }));
     }
     effects
+}
+
+fn validate_no_ambiguous_effect_names(
+    imported_effects: &[ImportedEffectDecl],
+    local_effects: &[crate::ast::EffectDecl],
+) -> Result<(), TypecheckError> {
+    let mut signatures_by_effect: HashMap<String, HashSet<String>> = HashMap::new();
+    let mut sources_by_effect: HashMap<String, HashSet<String>> = HashMap::new();
+
+    for imported in imported_effects {
+        signatures_by_effect
+            .entry(imported.decl.name.clone())
+            .or_default()
+            .insert(effect_decl_signature(&imported.decl));
+        sources_by_effect
+            .entry(imported.decl.name.clone())
+            .or_default()
+            .insert(format!("import `{}`", imported.source_module));
+    }
+    for local in local_effects {
+        signatures_by_effect
+            .entry(local.name.clone())
+            .or_default()
+            .insert(effect_decl_signature(local));
+        sources_by_effect
+            .entry(local.name.clone())
+            .or_default()
+            .insert("local effect declaration".to_string());
+    }
+
+    let mut conflicting_effects: Vec<(String, Vec<String>)> = signatures_by_effect
+        .into_iter()
+        .filter_map(|(name, signatures)| {
+            (signatures.len() > 1).then(|| {
+                let mut sorted_sources = sources_by_effect
+                    .remove(&name)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .collect::<Vec<_>>();
+                sorted_sources.sort();
+                (name, sorted_sources)
+            })
+        })
+        .collect();
+    conflicting_effects.sort_by(|(left, _), (right, _)| left.cmp(right));
+
+    let Some((effect_name, sources)) = conflicting_effects.first() else {
+        return Ok(());
+    };
+    Err(TypecheckError {
+        declaration: None,
+        span: None,
+        message: format!(
+            "effect `{}` has conflicting declarations across imports/declarations: {}",
+            effect_name,
+            sources.join(", ")
+        ),
+    })
+}
+
+fn effect_decl_signature(effect_decl: &crate::ast::EffectDecl) -> String {
+    let mut members: Vec<(String, String)> = effect_decl
+        .members
+        .iter()
+        .map(|member| {
+            (
+                member.name.clone(),
+                member.type_annotation.trim().to_string(),
+            )
+        })
+        .collect();
+    members.sort();
+    members
+        .into_iter()
+        .map(|(name, annotation)| format!("{name}:{annotation}"))
+        .collect::<Vec<_>>()
+        .join("|")
 }
 
 fn collect_imported_type_names(module: &Module, stdlib_root: &Path) -> HashSet<String> {
@@ -4478,6 +4564,66 @@ f =
         let module = parse_module(source).expect("should parse");
         typecheck_module_with_context(&module, Some(&source_path), Some(&root))
             .expect("selective type/effect import should be accepted");
+    }
+
+    #[test]
+    fn rejects_same_effect_name_imported_from_multiple_modules() {
+        let sandbox = TempDirGuard::new("ambiguous_effect_name_across_imports");
+        let root = sandbox.path.join("stdlib");
+        fs::create_dir_all(root.join("goby")).expect("stdlib/goby should be creatable");
+        fs::write(
+            root.join("goby/a.gb"),
+            "effect ParseError\n  fail_a : String -> Int\n",
+        )
+        .expect("stdlib file should be writable");
+        fs::write(
+            root.join("goby/b.gb"),
+            "effect ParseError\n  fail_b : String -> Int\n",
+        )
+        .expect("stdlib file should be writable");
+        let source_path = sandbox.path.join("main.gb");
+        let source = "\
+import goby/a ( ParseError )
+import goby/b ( ParseError )
+main : Unit -> Unit
+main = ()
+";
+        fs::write(&source_path, source).expect("fixture file should be writable");
+        let module = parse_module(source).expect("should parse");
+        let err = typecheck_module_with_context(&module, Some(&source_path), Some(&root))
+            .expect_err("same effect name from different imports should be rejected");
+        assert!(
+            err.message
+                .contains("effect `ParseError` has conflicting declarations")
+        );
+    }
+
+    #[test]
+    fn rejects_same_effect_name_from_local_and_imported_declaration() {
+        let sandbox = TempDirGuard::new("ambiguous_effect_name_local_and_import");
+        let root = sandbox.path.join("stdlib");
+        fs::create_dir_all(root.join("goby")).expect("stdlib/goby should be creatable");
+        fs::write(
+            root.join("goby/a.gb"),
+            "effect ParseError\n  fail_a : String -> Int\n",
+        )
+        .expect("stdlib file should be writable");
+        let source_path = sandbox.path.join("main.gb");
+        let source = "\
+import goby/a ( ParseError )
+effect ParseError
+  fail_local : String -> Int
+main : Unit -> Unit
+main = ()
+";
+        fs::write(&source_path, source).expect("fixture file should be writable");
+        let module = parse_module(source).expect("should parse");
+        let err = typecheck_module_with_context(&module, Some(&source_path), Some(&root))
+            .expect_err("same effect name from local/import should be rejected");
+        assert!(
+            err.message
+                .contains("effect `ParseError` has conflicting declarations")
+        );
     }
 
     #[test]
