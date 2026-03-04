@@ -27,11 +27,11 @@
 ;;; Code:
 
 (defconst goby-mode-keywords-control
-  '("if" "else" "case" "using" "can")
+  '("if" "else" "case" "with" "with_handler" "in" "resume" "can")
   "Goby control-flow and effect-application keywords.")
 
 (defconst goby-mode-keywords-other
-  '("type" "effect" "handler" "for" "import" "as")
+  '("type" "effect" "handler" "import" "as" "mut")
   "Goby declaration and module keywords.")
 
 (defconst goby-mode-builtin-types
@@ -45,6 +45,7 @@
 (defconst goby-mode-font-lock-keywords
   (let ((kw-control-re (regexp-opt goby-mode-keywords-control 'words))
         (kw-other-re   (regexp-opt goby-mode-keywords-other   'words))
+        (embed-re      (rx (or line-start (not (any "[:alnum:]_"))) "@embed" word-end))
         (builtin-re    (regexp-opt goby-mode-builtin-types    'words))
         (constants-re  (regexp-opt goby-mode-constants        'words))
         ;; UpperCamelCase: user-defined type / constructor names.
@@ -66,6 +67,8 @@
       (,constants-re   . font-lock-constant-face)
       ;; Control keywords
       (,kw-control-re  . font-lock-keyword-face)
+      ;; Stdlib-only embed declaration token
+      (,embed-re       . font-lock-keyword-face)
       ;; Declaration / module keywords
       (,kw-other-re    . font-lock-keyword-face)
       ;; Built-in type names (before the catch-all UpperCamelCase rule)

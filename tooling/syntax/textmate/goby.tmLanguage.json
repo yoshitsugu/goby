@@ -44,11 +44,11 @@
     },
     "keywords-control": {
       "name": "keyword.control.goby",
-      "match": "\\b(if|else|case|using|can)\\b"
+      "match": "\\b(if|else|case|with|with_handler|in|resume|can)\\b"
     },
     "keywords-other": {
       "name": "keyword.other.goby",
-      "match": "\\b(type|effect|handler|for|import|as)\\b"
+      "match": "(?<!\\w)@embed\\b|\\b(type|effect|handler|import|as|mut)\\b"
     },
     "storage-types": {
       "name": "storage.type.goby",

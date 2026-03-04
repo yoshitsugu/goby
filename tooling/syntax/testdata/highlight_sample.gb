@@ -24,23 +24,33 @@ case 1
 type MyType = MyType(field: String)
 effect MyEffect
   op: String -> Unit
-handler MyHandler for MyEffect
-  op s = print s
 import goby/string as str
+mut count = 0
+@embed MyEffect __goby_embeded_effect_stdout_handler
 
-# using / can (keyword.control)
-using MyHandler
-  op "test"
-
+# with / with_handler / resume / can (keyword.control)
 foo : String -> Unit can MyEffect
-foo s = op s
+foo s =
+  with_handler
+    op msg ->
+      resume msg
+  in
+    op s
+
+bar : String -> Unit can MyEffect
+bar s =
+  h = handler
+    op msg ->
+      resume msg
+  with h in
+    op s
 
 # storage.type (built-in)
-bar : Int -> String -> Bool -> Unit -> List Int -> Unit
-bar n s b u xs = print "ok"
+baz : Int -> String -> Bool -> Unit -> List Int -> Unit
+baz n s b u xs = print "ok"
 
 # entity.name.type (UpperCamelCase, user-defined)
-# MyType, MyEffect, MyHandler are highlighted as entity.name.type
+# MyType, MyEffect are highlighted as entity.name.type
 
 # keyword.operator
 result = 1 + 2 * 3
