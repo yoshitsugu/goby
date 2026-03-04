@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-04 (session 134)
+Last updated: 2026-03-04 (session 135)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -63,6 +63,18 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - follow-up work moved to post-MVP tracks in `doc/PLAN.md`.
 
 ## 4. Recent Milestones
+
+- 2026-03-04 (session 135): Unit value literal `()` first implementation
+  - Parser now accepts empty tuple syntax `()` as Unit value literal.
+  - Typechecker now treats `Expr::TupleLit([])` as `Ty::Unit`.
+  - Wasm fallback evaluator now resolves `Expr::TupleLit([])` to `RuntimeValue::Unit`.
+  - Added regression tests:
+    - parser: `parse_expr(\"()\")` and `parse_expr(\"resume ()\")`,
+    - typecheck: `main : Unit -> Unit` with `main = ()`,
+    - wasm runtime: `main = ()` resolves to no output.
+  - `doc/LANGUAGE_SPEC.md` updated:
+    - `()` is canonical Unit value spelling,
+    - legacy expression-form `Unit` remains temporarily accepted.
 
 - 2026-03-04 (session 134): syntax-change workflow reminder added (highlight sync)
   - Added explicit workflow rule in `doc/PLAN.md`:

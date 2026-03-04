@@ -40,8 +40,8 @@ syntax/semantics.
 ## 3. Expressions and Statements
 
 - Literals: `Int`, `String`, `Bool` (`True` / `False`), list, tuple.
-- Unit value spelling (current implementation): `Unit` (identifier-form).
-  - Planned migration target: `()` as canonical Unit value syntax.
+- Unit value spelling: `()` (canonical).
+  - Legacy expression-form `Unit` is still accepted during migration.
 - Function call:
   - spaced application: `f x`, `f a b`
   - parenthesized: `f(x)`
