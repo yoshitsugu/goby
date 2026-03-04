@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-04 (session 119)
+Last updated: 2026-03-04 (session 121)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -59,8 +59,37 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - selective CPS + evidence passing lowering,
   - compiled `EffectId`/`OpId` dispatch (no map lookup on hot path),
   - phased Wasm lowering (portable trampoline first, typed-continuation optimization later).
+- `PLAN_EFFECT_RENEWAL` completion status:
+  - P6 removal is still in progress (not complete).
+  - parser-level legacy rejection is active, but runtime/typecheck compatibility
+    paths and remaining docs/test cleanup are still pending.
 
 ## 4. Recent Milestones
+
+- 2026-03-04 (session 121): mutable variable feature planning and sample doc sync
+  - Added mutable variable implementation plan to `doc/PLAN.md`:
+    - reserved keyword `mut`,
+    - mutable declaration `mut x = ...`,
+    - assignment syntax `x := ...`,
+    - required error cases and target diagnostics.
+  - Added `examples/mut.gb` and polished its English comments.
+  - Validation note:
+    - doc/example updates only (no compiler/runtime behavior change in this step).
+
+- 2026-03-04 (session 120): effect-renewal review follow-up fixes (parser/typecheck wording + tab-compat)
+  - Parser legacy syntax rejection hardening:
+    - legacy `using` detection now handles tab/space after keyword,
+    - legacy top-level `handler` rejection now handles tab/space after keyword.
+  - Typecheck diagnostics wording aligned with canonical syntax:
+    - unhandled-effect messages now reference enclosing `with`/`with_handler` scope
+      instead of legacy `using` wording.
+  - Added parser regressions:
+    - rejects tab-separated legacy `handler` declarations,
+    - rejects tab-separated legacy `using` statements.
+  - Validation completed:
+    - `cargo fmt -- --check`
+    - `cargo test -p goby-core`
+    - `cargo test -p goby-cli`
 
 - 2026-03-04 (session 119): `PLAN_EFFECT_RENEWAL` P6 cleanup (`goby-wasm` planning legacy fallback removal)
   - Simplified lowering-plan resume signal in `crates/goby-wasm/src/planning.rs`:
