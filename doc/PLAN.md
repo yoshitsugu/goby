@@ -614,6 +614,31 @@ Implementation steps:
    - Programs can override behavior with explicit handlers.
    - Missing/invalid prelude resolution yields clear diagnostics.
 
+Additional planning constraint (Unit value spelling migration, locked 2026-03-04):
+
+Goal: make Unit value syntax user-facing and conventional by using `()` instead of
+identifier-form `Unit` in expression position.
+
+Implementation steps:
+
+1. Parser/AST acceptance for `()`.
+   - Add a dedicated Unit literal parse path for empty tuple syntax `()`.
+   - Introduce/route to a Unit expression node (or equivalent canonical representation).
+2. Typechecker/runtime/codegen wiring.
+   - Treat `()` as `Unit` value in all expression positions.
+   - Keep behavior parity for existing `Unit`-typed flows (`main`, handler `resume`, etc.).
+3. Compatibility window and diagnostics.
+   - Temporarily keep legacy expression-form `Unit` accepted.
+   - Emit migration diagnostic suggesting `()` when `Unit` is used as a value.
+4. Stdlib/examples/docs migration.
+   - Rewrite examples/stdlib/tests from `Unit` value to `()`.
+   - Keep type position spelling as `Unit` (no change).
+   - Update `doc/LANGUAGE_SPEC.md` and relevant docs in the same change.
+5. Legacy removal phase.
+   - After migration coverage is stable, reject value-form `Unit` with a clear error:
+     "Use `()` for Unit value".
+   - Keep regression tests for both the warning phase and final rejection phase.
+
 ### 4.4 Early Developer Tooling Plan
 
 Goal: align implementation priorities with the language vision that strong tooling is a core
