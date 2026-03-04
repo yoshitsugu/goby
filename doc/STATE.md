@@ -105,7 +105,7 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - Updated `doc/BUGS.md`:
     - marked BUG-001 (legacy `handler ... for ...` unknown effect) as
       obsolete/closed after syntax removal.
-  - Updated `doc/PLAN_EFFECT_RENEWAL.md`:
+  - Updated `PLAN_EFFECT_RENEWAL (archived)`:
     - P6 status promoted from in-progress to complete,
     - Immediate Next Step section replaced with closure note.
 
@@ -154,7 +154,7 @@ This file is a restart-safe snapshot for resuming work after context reset.
     - `cargo clippy -- -D warnings`
 
 - 2026-03-04 (session 122): `PLAN_EFFECT_RENEWAL` immediate-next-step planning refresh
-  - Expanded `doc/PLAN_EFFECT_RENEWAL.md` §6 from a short note into an ordered
+  - Expanded `PLAN_EFFECT_RENEWAL (archived)` §6 from a short note into an ordered
     execution slice (`P6-R2`) with concrete scope:
     - goby-core AST/parser cleanup (`Stmt::Using` legacy path removal direction),
     - goby-core typechecker cleanup (`handler_declarations` legacy dependency removal),
@@ -315,7 +315,7 @@ This file is a restart-safe snapshot for resuming work after context reset.
     - legacy syntax now fails in default mode for both `check` and `run`,
     - legacy env var presence no longer changes acceptance behavior.
   - Documentation sync:
-    - `doc/PLAN.md`, `doc/PLAN_EFFECT_RENEWAL.md`, and
+    - `doc/PLAN.md`, `PLAN_EFFECT_RENEWAL (archived)`, and
       `doc/EFFECT_RENEWAL_MIGRATION.md` now describe default rejection status.
   - Validation completed:
     - `cargo test -p goby-cli`
@@ -376,7 +376,7 @@ This file is a restart-safe snapshot for resuming work after context reset.
     - `doc/EFFECT_RENEWAL_MIGRATION.md`
       (`handler ... for` / `using` -> `handler` value + `with` / `with_handler`).
   - Linked migration guide from planning docs:
-    - `doc/PLAN_EFFECT_RENEWAL.md` P5 section,
+    - `PLAN_EFFECT_RENEWAL (archived)` P5 section,
     - `doc/PLAN.md` effect-renewal migration policy subsection.
   - No runtime/compiler behavior change in this step.
   - Validation (mandatory flow) completed:
@@ -545,7 +545,7 @@ This file is a restart-safe snapshot for resuming work after context reset.
     - `handler` as expression/value with lexical capture,
     - `with <handler> in <body>` as canonical application form,
     - `with_handler ... in ...` as inline sugar.
-  - Locked decisions recorded in `doc/PLAN_EFFECT_RENEWAL.md`:
+  - Locked decisions recorded in `PLAN_EFFECT_RENEWAL (archived)`:
     - reject double `resume` (keep one-shot contract),
     - handler clause headers remain untyped (`op x -> ...`), with typing sourced from `effect` declarations,
     - `Handler(E1,E2)` and `Handler(E1, E2)` are equivalent (whitespace-insensitive parsing),
@@ -1507,7 +1507,7 @@ This file is a restart-safe snapshot for resuming work after context reset.
     - `cargo fmt`
     - `cargo test -p goby-core`
 - 2026-03-03 (session 86): `PLAN_RESUME` archive + future-work consolidation
-  - Archived `doc/PLAN_RESUME.md` to `doc/old/PLAN_RESUME.md` after Step0-8 completion.
+  - Archived `doc/PLAN_RESUME.md` to `PLAN_RESUME (archived)` after Step0-8 completion.
   - Consolidated remaining `resume` future tasks into `doc/PLAN.md`:
     - control-flow-sensitive multi-shot static analysis (post current conservative guard),
     - possible explicit `discontinue` as a future extension proposal,

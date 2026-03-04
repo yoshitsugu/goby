@@ -139,9 +139,7 @@ Based on `examples/*.gb`:
 
 #### Effect Renewal Syntax/Typing Lock (P0, 2026-03-04)
 
-This section mirrors the locked renewal decisions in
-`doc/PLAN_EFFECT_RENEWAL.md` and is the canonical language-spec entry for the
-new handler-value model.
+This section records the locked renewal decisions and is the canonical language-spec entry for the new handler-value model.
 
 - Effect declaration syntax:
   - `effect <CamelCaseName>` with indented operation signatures.
@@ -255,8 +253,7 @@ new handler-value model.
 
 #### `resume` Plan Status (2026-03-03)
 
-- `PLAN_RESUME` implementation track (Step 0-8) is complete and archived:
-  - `doc/old/PLAN_RESUME.md`.
+- `PLAN_RESUME` implementation track (Step 0-8) is complete and archived.
 - Remaining `resume`-related work is now tracked here as future development:
   - improve multi-shot static rejection from current conservative syntactic guard
     to control-flow-sensitive analysis,
