@@ -2,10 +2,11 @@ effect Iterator
   yield: String -> Int
 
 main =
+  prefix = "tick:"
   with_handler
     yield value ->
-      print value
+      print "${prefix}${value}"
   in
-    yield "tick"
-    yield "tick"
-    yield "tick"
+    yield "a"
+    yield "b"
+    yield "c"
