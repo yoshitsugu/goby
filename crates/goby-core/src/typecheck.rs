@@ -280,6 +280,19 @@ fn count_resume_in_expr(expr: &Expr) -> usize {
         Expr::MethodCall { args, .. } => args.iter().map(count_resume_in_expr).sum(),
         Expr::Pipeline { value, .. } => count_resume_in_expr(value),
         Expr::Lambda { body, .. } => count_resume_in_expr(body),
+        Expr::Handler { clauses } => clauses
+            .iter()
+            .map(|clause| {
+                clause
+                    .parsed_body
+                    .as_ref()
+                    .map(|stmts| count_resume_in_stmts(stmts))
+                    .unwrap_or(0)
+            })
+            .sum(),
+        Expr::With { handler, body } => {
+            count_resume_in_expr(handler) + count_resume_in_stmts(body)
+        }
         Expr::Case { scrutinee, arms } => {
             count_resume_in_expr(scrutinee)
                 + arms
@@ -1039,6 +1052,15 @@ fn first_disallowed_intrinsic_in_expr(
             first_disallowed_intrinsic_in_expr(value, is_stdlib_source).or_else(|| classify(callee))
         }
         Expr::Lambda { body, .. } => first_disallowed_intrinsic_in_expr(body, is_stdlib_source),
+        Expr::Handler { clauses } => clauses.iter().find_map(|clause| {
+            clause.parsed_body.as_ref().and_then(|stmts| {
+                first_disallowed_intrinsic_in_stmts(stmts, is_stdlib_source)
+            })
+        }),
+        Expr::With { handler, body } => {
+            first_disallowed_intrinsic_in_expr(handler, is_stdlib_source)
+                .or_else(|| first_disallowed_intrinsic_in_stmts(body, is_stdlib_source))
+        }
         Expr::Resume { value } => first_disallowed_intrinsic_in_expr(value, is_stdlib_source),
         Expr::Case { scrutinee, arms } => {
             first_disallowed_intrinsic_in_expr(scrutinee, is_stdlib_source).or_else(|| {
@@ -1596,6 +1618,7 @@ fn check_expr(expr: &Expr, env: &TypeEnv) -> Ty {
                 result: Box::new(result),
             }
         }
+        Expr::Handler { .. } | Expr::With { .. } => Ty::Unknown,
         Expr::Resume { value } => {
             let _ = check_expr(value, env);
             Ty::Unknown
@@ -1755,6 +1778,7 @@ fn check_resume_in_expr(
             let child_env = env.with_local(param, Ty::Unknown);
             recurse!(body, &child_env)
         }
+        Expr::Handler { .. } | Expr::With { .. } => Ok(()),
         Expr::Resume { value } => {
             recurse!(value)?;
             let Some(ctx) = resume_ctx else {
@@ -2146,6 +2170,7 @@ fn check_unhandled_effects_in_expr(
             let child_env = env.with_local(param, Ty::Unknown);
             recurse!(body, &child_env)
         }
+        Expr::Handler { .. } | Expr::With { .. } => Ok(()),
         Expr::Resume { value } => recurse!(value),
         Expr::Case { scrutinee, arms } => {
             recurse!(scrutinee)?;
@@ -2294,6 +2319,7 @@ fn ensure_no_ambiguous_refs_in_expr(
             let child_env = env.with_local(param, Ty::Unknown);
             ensure_no_ambiguous_refs_in_expr(body, &child_env, decl_name)
         }
+        Expr::Handler { .. } | Expr::With { .. } => Ok(()),
         Expr::Resume { value } => ensure_no_ambiguous_refs_in_expr(value, env, decl_name),
         Expr::Case { scrutinee, arms } => {
             ensure_no_ambiguous_refs_in_expr(scrutinee, env, decl_name)?;

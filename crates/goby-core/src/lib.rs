@@ -12,8 +12,8 @@ pub mod types;
 
 pub use analysis::resolve_print_text;
 pub use ast::{
-    BinOpKind, CaseArm, CasePattern, Declaration, EmbedDecl, Expr, HandlerDecl, HandlerMethod,
-    ImportDecl, ImportKind, Module, RecordField, Span, Stmt, TypeDeclaration,
+    BinOpKind, CaseArm, CasePattern, Declaration, EmbedDecl, Expr, HandlerClause, HandlerDecl,
+    HandlerMethod, ImportDecl, ImportKind, Module, RecordField, Span, Stmt, TypeDeclaration,
 };
 pub use parser::{ParseError, parse_body_stmts, parse_module};
 pub use typecheck::{TypecheckError, typecheck_module, typecheck_module_with_context};

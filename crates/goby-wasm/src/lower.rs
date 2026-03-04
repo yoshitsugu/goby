@@ -290,6 +290,15 @@ fn expr_contains_resume(expr: &Expr) -> bool {
         Expr::ListLit(items) => items.iter().any(expr_contains_resume),
         Expr::TupleLit(items) => items.iter().any(expr_contains_resume),
         Expr::Lambda { body, .. } => expr_contains_resume(body),
+        Expr::Handler { clauses } => clauses.iter().any(|clause| {
+            clause
+                .parsed_body
+                .as_ref()
+                .is_some_and(|stmts| stmts_contain_using_or_resume(stmts))
+        }),
+        Expr::With { handler, body } => {
+            expr_contains_resume(handler) || stmts_contain_using_or_resume(body)
+        }
         Expr::RecordConstruct { fields, .. } => {
             fields.iter().any(|(_, value)| expr_contains_resume(value))
         }

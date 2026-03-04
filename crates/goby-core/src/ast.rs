@@ -53,6 +53,15 @@ pub struct HandlerMethod {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HandlerClause {
+    pub name: String,
+    pub params: Vec<String>,
+    pub body: String,
+    /// Pre-parsed body statements; `None` if the body failed to parse.
+    pub parsed_body: Option<Vec<Stmt>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ImportDecl {
     pub module_path: String,
     pub kind: ImportKind,
@@ -167,6 +176,13 @@ pub enum Expr {
         param: String,
         body: Box<Expr>,
     },
+    Handler {
+        clauses: Vec<HandlerClause>,
+    },
+    With {
+        handler: Box<Expr>,
+        body: Vec<Stmt>,
+    },
     Resume {
         value: Box<Expr>,
     },
@@ -206,6 +222,8 @@ impl Expr {
                 | Expr::MethodCall { .. }
                 | Expr::Pipeline { .. }
                 | Expr::Lambda { .. }
+                | Expr::Handler { .. }
+                | Expr::With { .. }
                 | Expr::Resume { .. }
                 | Expr::Case { .. }
                 | Expr::If { .. }
@@ -292,7 +310,7 @@ impl Expr {
                     Some(format!("|{}| -> {}", param, b))
                 }
             }
-            Expr::Resume { .. } => None,
+            Expr::Handler { .. } | Expr::With { .. } | Expr::Resume { .. } => None,
             Expr::Case { .. } | Expr::If { .. } => None,
         }
     }

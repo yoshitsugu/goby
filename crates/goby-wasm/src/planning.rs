@@ -481,6 +481,36 @@ fn inspect_expr(
             qualified_operation_index,
             op_name_index,
         ),
+        Expr::Handler { clauses } => {
+            for clause in clauses {
+                if let Some(stmts) = &clause.parsed_body {
+                    inspect_stmts(
+                        stmts,
+                        out,
+                        declaration_names,
+                        qualified_operation_index,
+                        op_name_index,
+                    );
+                }
+            }
+        }
+        Expr::With { handler, body } => {
+            out.contains_using = true;
+            inspect_expr(
+                handler,
+                out,
+                declaration_names,
+                qualified_operation_index,
+                op_name_index,
+            );
+            inspect_stmts(
+                body,
+                out,
+                declaration_names,
+                qualified_operation_index,
+                op_name_index,
+            );
+        }
         Expr::Resume { value } => inspect_expr(
             value,
             out,
