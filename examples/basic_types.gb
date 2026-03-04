@@ -1,3 +1,5 @@
+import goby/prelude
+
 # Int
 add : Int -> Int -> Int
 add a b = a + b

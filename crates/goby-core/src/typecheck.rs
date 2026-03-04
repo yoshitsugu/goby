@@ -52,8 +52,8 @@ pub fn typecheck_module_with_context(
     validate_type_declarations(module)?;
     validate_effect_declarations(module)?;
 
-    let imported_embedded_defaults =
-        collect_imported_embedded_defaults(module, &stdlib_root_path)?;
+    let imported_embedded_defaults = collect_imported_embedded_defaults(module, &stdlib_root_path)?;
+    let imported_effects = collect_imported_effect_names(module, &stdlib_root_path);
     let local_embedded_defaults = collect_local_embedded_defaults(module);
     let embedded_default_effects: HashSet<String> = imported_embedded_defaults
         .keys()
@@ -64,7 +64,7 @@ pub fn typecheck_module_with_context(
         .iter()
         .copied()
         .map(str::to_string)
-        .chain(embedded_default_effects.iter().cloned())
+        .chain(imported_effects)
         .chain(module.effect_declarations.iter().map(|e| e.name.clone()))
         .collect();
 
@@ -1296,6 +1296,18 @@ fn collect_imported_embedded_defaults(
         }
     }
     Ok(defaults)
+}
+
+fn collect_imported_effect_names(module: &Module, stdlib_root: &Path) -> HashSet<String> {
+    let resolver = StdlibResolver::new(stdlib_root.to_path_buf());
+    let mut effects = HashSet::new();
+    for import in &module.imports {
+        let Ok(resolved) = resolver.resolve_module(&import.module_path) else {
+            continue;
+        };
+        effects.extend(resolved.effects);
+    }
+    effects
 }
 
 fn collect_local_embedded_defaults(module: &Module) -> HashMap<String, String> {
@@ -3782,6 +3794,20 @@ main =
         let module = parse_module(source).expect("should parse");
         let err = typecheck_module_with_context(&module, Some(&source_path), Some(&stdlib_root))
             .expect_err("missing prelude should reject Print in can-clause");
+        assert!(err.message.contains("unknown effect"));
+    }
+
+    #[test]
+    fn rejects_non_main_can_clause_with_implicit_prelude_effect() {
+        let source = "\
+f : Unit -> Unit can Print
+f = Unit
+main : Unit -> Unit
+main = Unit
+";
+        let module = parse_module(source).expect("should parse");
+        let err = typecheck_module(&module)
+            .expect_err("non-main can-clause should not use implicit-prelude embedded effect");
         assert!(err.message.contains("unknown effect"));
     }
 

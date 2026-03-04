@@ -1888,7 +1888,8 @@ mod tests {
         let source = read_example("basic_types.gb");
         let module = parse_module(&source).expect("basic_types.gb should parse");
 
-        assert!(module.imports.is_empty());
+        assert_eq!(module.imports.len(), 1);
+        assert_eq!(module.imports[0].module_path, "goby/prelude");
         assert!(module.type_declarations.is_empty());
         assert_eq!(module.declarations.len(), 6);
         assert_eq!(module.declarations[0].name, "add");
