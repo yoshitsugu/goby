@@ -261,7 +261,7 @@ fn check_command_rejects_legacy_syntax_by_default() {
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("legacy effect syntax is no longer supported"),
+        stderr.contains("legacy top-level `handler ... for ...` is no longer supported"),
         "expected legacy rejection message, got stderr: {}",
         stderr
     );
@@ -303,7 +303,7 @@ fn run_command_rejects_legacy_syntax_by_default() {
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("legacy effect syntax is no longer supported"),
+        stderr.contains("legacy top-level `handler ... for ...` is no longer supported"),
         "expected legacy rejection message, got stderr: {}",
         stderr
     );
@@ -334,7 +334,7 @@ fn check_command_rejects_legacy_syntax_even_with_legacy_env_var() {
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("legacy effect syntax is no longer supported"),
+        stderr.contains("legacy top-level `handler ... for ...` is no longer supported"),
         "expected legacy rejection message, got stderr: {}",
         stderr
     );

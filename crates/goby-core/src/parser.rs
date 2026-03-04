@@ -1,7 +1,7 @@
 use crate::ast::{
     BinOpKind, CaseArm, CasePattern, Declaration, EffectDecl, EffectMember, EmbedDecl, Expr,
-    HandlerClause, HandlerDecl, HandlerMethod, ImportDecl, ImportKind, InterpolatedPart, Module,
-    RecordField, Stmt, TypeDeclaration,
+    HandlerClause, ImportDecl, ImportKind, InterpolatedPart, Module, RecordField, Stmt,
+    TypeDeclaration,
 };
 use crate::str_util::split_top_level_commas;
 
@@ -34,7 +34,6 @@ pub fn parse_module(source: &str) -> Result<Module, ParseError> {
     let mut embed_declarations = Vec::new();
     let mut type_declarations = Vec::new();
     let mut effect_declarations = Vec::new();
-    let mut handler_declarations = Vec::new();
     let mut declarations = Vec::new();
 
     while i < lines.len() {
@@ -135,104 +134,13 @@ pub fn parse_module(source: &str) -> Result<Module, ParseError> {
             continue;
         }
 
-        // `handler Name for Effect` block: collect indented method definitions.
+        // Legacy top-level `handler Name for Effect` declarations are removed.
         if trimmed.starts_with("handler ") {
-            let rest = trimmed.strip_prefix("handler ").unwrap_or("").trim();
-            let (handler_name, effect_name) = if let Some((h, e)) = rest.split_once(" for ") {
-                (h.trim().to_string(), e.trim().to_string())
-            } else {
-                return Err(ParseError {
-                    line: i + 1,
-                    col: 1,
-                    message: "handler declaration requires `handler Name for Effect`".to_string(),
-                });
-            };
-            let mut methods = Vec::new();
-            i += 1;
-            while i < lines.len() {
-                let method_line = lines[i];
-                let method_stripped = strip_line_comment(method_line).trim_end();
-                let method_trimmed = method_stripped.trim();
-                if method_trimmed.is_empty() || method_trimmed.starts_with('#') {
-                    i += 1;
-                    continue;
-                }
-                if !is_indented(method_line) {
-                    break;
-                }
-                // Parse `name params... = body` (single-line or with an indented sub-body).
-                if let Some((lhs, rhs)) = method_trimmed.split_once('=') {
-                    let lhs = lhs.trim();
-                    let parts: Vec<&str> = lhs.split_whitespace().collect();
-                    if !parts.is_empty() {
-                        let name = parts[0].to_string();
-                        let params: Vec<String> =
-                            parts[1..].iter().map(|s| s.to_string()).collect();
-                        if params.iter().any(|p| is_reserved_keyword(p)) {
-                            return Err(ParseError {
-                                line: i + 1,
-                                col: 1,
-                                message: "handler parameter name `resume` is reserved".to_string(),
-                            });
-                        }
-                        let mut body = rhs.trim().to_string();
-                        if let Some(offset) = first_malformed_resume_expr_line_offset(&body) {
-                            return Err(ParseError {
-                                line: i + 1 + offset,
-                                col: 1,
-                                message: "malformed `resume` expression: expected `resume <expr>`"
-                                    .to_string(),
-                            });
-                        }
-                        // Collect any deeper-indented sub-body lines.
-                        i += 1;
-                        while i < lines.len() {
-                            let sub = lines[i];
-                            let sub_s = strip_line_comment(sub).trim_end();
-                            let sub_t = sub_s.trim();
-                            if sub_t.is_empty() {
-                                i += 1;
-                                continue;
-                            }
-                            if is_malformed_resume_expr_line(sub_t) {
-                                return Err(ParseError {
-                                    line: i + 1,
-                                    col: 1,
-                                    message:
-                                        "malformed `resume` expression: expected `resume <expr>`"
-                                            .to_string(),
-                                });
-                            }
-                            // Sub-body lines must be indented more than the method line.
-                            // We check for double indentation (at least 4 spaces/2 tabs).
-                            let indent_len = sub.len() - sub.trim_start().len();
-                            let method_indent_len =
-                                method_line.len() - method_line.trim_start().len();
-                            if indent_len <= method_indent_len {
-                                break;
-                            }
-                            body.push('\n');
-                            body.push_str(sub_t);
-                            i += 1;
-                        }
-                        let parsed_body = parse_body_stmts(&body);
-                        methods.push(HandlerMethod {
-                            name,
-                            params,
-                            body,
-                            parsed_body,
-                        });
-                        continue;
-                    }
-                }
-                i += 1;
-            }
-            handler_declarations.push(HandlerDecl {
-                name: handler_name,
-                effect: effect_name,
-                methods,
+            return Err(ParseError {
+                line: i + 1,
+                col: 1,
+                message: "legacy top-level `handler ... for ...` is no longer supported; use `handler` expressions with `with`/`with_handler`".to_string(),
             });
-            continue;
         }
 
         let mut annotated_name: Option<&str> = None;
@@ -300,6 +208,14 @@ pub fn parse_module(source: &str) -> Result<Module, ParseError> {
                 message: "malformed `resume` expression: expected `resume <expr>`".to_string(),
             });
         }
+        if let Some(offset) = first_legacy_using_line_offset(&body) {
+            return Err(ParseError {
+                line: i + 1 + offset,
+                col: 1,
+                message: "legacy `using` syntax is no longer supported; use `with`/`with_handler`"
+                    .to_string(),
+            });
+        }
 
         let parsed_body = parse_body_stmts(&body);
 
@@ -320,7 +236,7 @@ pub fn parse_module(source: &str) -> Result<Module, ParseError> {
         embed_declarations,
         type_declarations,
         effect_declarations,
-        handler_declarations,
+        handler_declarations: Vec::new(),
         declarations,
     })
 }
@@ -404,25 +320,6 @@ fn parse_stmts_from_lines(lines: &[&str], start: usize) -> Option<(Vec<Stmt>, us
                 body,
             }));
             i = after_with;
-            continue;
-        }
-
-        // `using HandlerA, HandlerB` statement.
-        if trimmed.starts_with("using ") {
-            let handlers_str = trimmed.strip_prefix("using ").unwrap_or("").trim();
-            let handlers: Vec<String> = handlers_str
-                .split(',')
-                .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty())
-                .collect();
-            if handlers.is_empty() {
-                return None;
-            }
-            i += 1;
-            // Collect the using body: lines more indented than the `using` line.
-            let (body, consumed) = parse_stmts_from_lines(lines, i)?;
-            i += consumed;
-            stmts.push(Stmt::Using { handlers, body });
             continue;
         }
 
@@ -567,6 +464,13 @@ fn parse_handler_clause_header(src: &str) -> Option<(String, Vec<String>, &str)>
     }
 
     Some((name.to_string(), params, rhs))
+}
+
+fn first_legacy_using_line_offset(body: &str) -> Option<usize> {
+    body.lines().position(|line| {
+        let trimmed = strip_line_comment(line).trim();
+        !trimmed.is_empty() && trimmed.starts_with("using ")
+    })
 }
 
 fn indent_len(line: &str) -> usize {
@@ -1969,27 +1873,7 @@ mod tests {
     }
 
     #[test]
-    fn rejects_reserved_resume_as_handler_parameter_name() {
-        let source = r#"
-effect Iter
-  yield: String -> Unit
-
-handler Collect for Iter
-  yield resume = resume Unit
-
-main = 1
-"#;
-        let err = parse_module(source).expect_err("reserved handler parameter should be rejected");
-        assert!(
-            err.message
-                .contains("handler parameter name `resume` is reserved"),
-            "unexpected error message: {}",
-            err.message
-        );
-    }
-
-    #[test]
-    fn parses_resume_expression_shape_inside_handler_body_contract() {
+    fn rejects_legacy_top_level_handler_syntax() {
         let source = r#"
 effect Iter
   yield: String -> Unit
@@ -1999,23 +1883,48 @@ handler Collect for Iter
 
 main = 1
 "#;
-        let module = parse_module(source).expect("handler body should parse");
-        let handler = module
-            .handler_declarations
-            .iter()
-            .find(|h| h.name == "Collect")
-            .expect("Collect handler should exist");
-        assert_eq!(handler.methods.len(), 1);
-        let method = &handler.methods[0];
-        let stmts = method
+        let err = parse_module(source).expect_err("legacy handler declaration should be rejected");
+        assert!(
+            err.message
+                .contains("legacy top-level `handler ... for ...` is no longer supported"),
+            "unexpected error message: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn parses_resume_expression_shape_inside_with_handler_contract() {
+        let source = r#"
+main =
+  with_handler
+    yield item ->
+      resume Unit
+  in
+    1
+"#;
+        let module = parse_module(source).expect("with_handler body should parse");
+        let stmts = module.declarations[0]
             .parsed_body
             .as_ref()
-            .expect("method body should parse into statements");
+            .expect("declaration body should parse");
         assert_eq!(stmts.len(), 1);
         match &stmts[0] {
-            Stmt::Expr(Expr::Resume { value }) => {
-                assert_eq!(**value, Expr::Var("Unit".to_string()));
-            }
+            Stmt::Expr(Expr::With { handler, .. }) => match handler.as_ref() {
+                Expr::Handler { clauses } => {
+                    let clause_stmts = clauses[0]
+                        .parsed_body
+                        .as_ref()
+                        .expect("handler clause body should parse");
+                    assert_eq!(clause_stmts.len(), 1);
+                    match &clause_stmts[0] {
+                        Stmt::Expr(Expr::Resume { value }) => {
+                            assert_eq!(**value, Expr::Var("Unit".to_string()));
+                        }
+                        other => panic!("unexpected statement shape: {:?}", other),
+                    }
+                }
+                other => panic!("unexpected handler shape: {:?}", other),
+            },
             other => panic!("unexpected statement shape: {:?}", other),
         }
     }
@@ -2030,15 +1939,14 @@ main = 1
     }
 
     #[test]
-    fn parse_error_for_malformed_resume_in_handler_method_body() {
+    fn parse_error_for_malformed_resume_in_with_handler_clause_body() {
         let source = r#"
-effect Iter
-  yield: String -> Unit
-
-handler Collect for Iter
-  yield item = resume
-
-main = 1
+main =
+  with_handler
+    yield item ->
+      resume
+  in
+    1
 "#;
         let err = parse_module(source).expect_err("malformed handler resume should be rejected");
         assert!(err.message.contains("malformed `resume` expression"));
@@ -2868,10 +2776,7 @@ main =
     }
 
     #[test]
-    fn effect_block_with_missing_colon_silently_skips_member() {
-        // A handler method line where the name/params section cannot be parsed
-        // (e.g. an extra unexpected token) should be silently skipped by the parser.
-        // The handler should be present with zero parseable methods rather than panicking.
+    fn parse_error_for_legacy_handler_block_shape() {
         let source = r#"
 effect Log
   log: String -> Unit
@@ -2884,20 +2789,10 @@ main : Unit -> Unit
 main =
   print "ok"
 "#;
-        let module =
-            parse_module(source).expect("module should parse despite malformed handler method");
-        let handler = module
-            .handler_declarations
-            .iter()
-            .find(|h| h.name == "ConsoleLog");
-        assert!(handler.is_some(), "ConsoleLog handler should be present");
-        // The invalid method line is skipped; handler has zero methods.
-        let handler = handler.unwrap();
-        assert_eq!(
-            handler.methods.len(),
-            0,
-            "malformed method line should be silently skipped"
+        let err = parse_module(source).expect_err("legacy top-level handlers should fail");
+        assert!(
+            err.message
+                .contains("legacy top-level `handler ... for ...` is no longer supported")
         );
-        assert_eq!(module.declarations.len(), 1);
     }
 }

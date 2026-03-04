@@ -371,22 +371,25 @@ mod tests {
     }
 
     #[test]
-    fn counts_nested_using_statements_in_module() {
+    fn reports_no_legacy_usage_for_canonical_with_handler_module() {
         let source = "\
 effect Log
   log: String -> Unit
-handler H for Log
-  log x =
-    print x
 main : Unit -> Unit
 main =
-  using H
-    using H
+  with_handler
+    log x ->
+      resume Unit
+  in
+    with_handler
+      log y ->
+        resume Unit
+    in
       log \"x\"
 ";
         let module = goby_core::parse_module(source).expect("source should parse");
         let usage = analyze_legacy_syntax_usage(&module);
-        assert_eq!(usage.using_count, 2);
-        assert_eq!(usage.handler_for_count, 1);
+        assert_eq!(usage.using_count, 0);
+        assert_eq!(usage.handler_for_count, 0);
     }
 }

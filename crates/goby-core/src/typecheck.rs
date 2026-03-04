@@ -1954,6 +1954,19 @@ fn check_resume_in_expr(
         }
         Expr::Handler { clauses } => {
             for clause in clauses {
+                if let Some(stmts) = &clause.parsed_body {
+                    let resume_count = count_resume_in_stmts(stmts);
+                    if resume_count > 1 {
+                        return Err(TypecheckError {
+                            declaration: Some(decl_name.to_string()),
+                            span: None,
+                            message: format!(
+                                "resume_potential_multi_shot: handler clause `{}` contains {} `resume` expressions; this phase only allows at most one syntactic `resume` per handler invocation",
+                                clause.name, resume_count
+                            ),
+                        });
+                    }
+                }
                 let mut child_env = TypeEnv {
                     globals: env.globals.clone(),
                     locals: env.locals.clone(),
@@ -4864,14 +4877,14 @@ main =
 effect Iter
   next: Unit -> Int
 
-handler H for Iter
-  next x =
-    resume 1
-    resume 2
-
 main : Unit -> Unit
 main =
-  print \"ok\"
+  with_handler
+    next x ->
+      resume 1
+      resume 2
+  in
+    print \"ok\"
 ";
         let module = parse_module(source).expect("should parse");
         let err = typecheck_module(&module).expect_err("multiple resume expressions should fail");
@@ -4888,13 +4901,13 @@ main =
 effect Iter
   next: Unit -> Int
 
-handler H for Iter
-  next x =
-    resume 1 + resume 2
-
 main : Unit -> Unit
 main =
-  print \"ok\"
+  with_handler
+    next x ->
+      resume 1 + resume 2
+  in
+    print \"ok\"
 ";
         let module = parse_module(source).expect("should parse");
         let err = typecheck_module(&module)
