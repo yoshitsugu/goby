@@ -11,7 +11,7 @@ use unicode_segmentation::UnicodeSegmentation;
 
 use crate::call::flatten_named_call;
 use goby_core::{
-    CasePattern, Expr, HandlerMethod, Module, Stmt, ast::InterpolatedPart,
+    CasePattern, Expr, HandlerClause, HandlerMethod, Module, Stmt, ast::InterpolatedPart,
     types::parse_function_type,
 };
 const ERR_MISSING_MAIN: &str = "Wasm codegen requires a `main` declaration";
@@ -428,6 +428,8 @@ struct RuntimeOutputResolver<'m> {
     module: &'m Module,
     /// Active handlers in lexical order; later entries are more deeply nested.
     active_handler_stack: Vec<usize>,
+    /// Active inline handlers installed via `with` / `with_handler`.
+    active_inline_handler_stack: Vec<InlineHandlerValue>,
     resume_tokens: Vec<ResumeToken>,
     optimized_resume_tokens: Vec<OptimizedResumeToken>,
     runtime_error: Option<String>,
@@ -442,6 +444,7 @@ struct Continuation {
 #[derive(Clone)]
 struct ResumeToken {
     handler_decl_idx: usize,
+    is_inline: bool,
     continuation: Continuation,
     resumed_value: Option<RuntimeValue>,
 }
@@ -449,6 +452,7 @@ struct ResumeToken {
 #[derive(Clone)]
 struct OptimizedResumeToken {
     handler_decl_idx: usize,
+    is_inline: bool,
     consumed: bool,
     resumed_value: Option<RuntimeValue>,
 }
@@ -457,6 +461,17 @@ struct OptimizedResumeToken {
 struct ResolvedHandlerMethod {
     handler_decl_idx: usize,
     method: HandlerMethod,
+}
+
+#[derive(Clone)]
+struct InlineHandlerMethod {
+    effect_name: Option<String>,
+    method: HandlerMethod,
+}
+
+#[derive(Clone)]
+struct InlineHandlerValue {
+    methods: Vec<InlineHandlerMethod>,
 }
 
 struct RuntimeEvaluators<'a, 'b> {
@@ -478,6 +493,7 @@ impl<'m> RuntimeOutputResolver<'m> {
             outputs: Vec::new(),
             module,
             active_handler_stack: Vec::new(),
+            active_inline_handler_stack: Vec::new(),
             resume_tokens: Vec::new(),
             optimized_resume_tokens: Vec::new(),
             runtime_error: None,
@@ -576,6 +592,22 @@ impl<'m> RuntimeOutputResolver<'m> {
         evaluators: &RuntimeEvaluators<'_, '_>,
     ) -> Option<()> {
         match expr {
+            Expr::With { handler, body } => {
+                let RuntimeValue::Handler(inline_handler) =
+                    self.eval_ast_value(handler, evaluators)?
+                else {
+                    return None;
+                };
+                self.active_inline_handler_stack.push(inline_handler);
+                let result = (|| -> Option<()> {
+                    for stmt in body {
+                        self.ingest_ast_statement(stmt, evaluators)?;
+                    }
+                    Some(())
+                })();
+                self.active_inline_handler_stack.pop();
+                result
+            }
             // print <arg>  —  handle before delegating to string path because
             // `eval_side_effect` routes through `execute_unit_call` which does not
             // know about the `print` builtin.
@@ -939,7 +971,18 @@ impl<'m> RuntimeOutputResolver<'m> {
                 }
                 Some(RuntimeValue::String(out))
             }
-            Expr::Var(name) => locals.get(name),
+            Expr::Var(name) => {
+                if let Some(value) = locals.get(name) {
+                    Some(value)
+                } else if name == "Unit" {
+                    Some(RuntimeValue::Unit)
+                } else {
+                    None
+                }
+            }
+            Expr::Handler { clauses } => {
+                Some(RuntimeValue::Handler(self.inline_handler_from_clauses(clauses)))
+            }
             Expr::BinOp { op, left, right } => {
                 let lv = self.eval_expr_ast(left, locals, callables, evaluators, depth + 1)?;
                 let rv = self.eval_expr_ast(right, locals, callables, evaluators, depth + 1)?;
@@ -1226,7 +1269,6 @@ impl<'m> RuntimeOutputResolver<'m> {
             Expr::Lambda { .. }
             | Expr::TupleLit(_)
             | Expr::MethodCall { .. }
-            | Expr::Handler { .. }
             | Expr::With { .. } => None,
         }
     }
@@ -1247,6 +1289,28 @@ impl<'m> RuntimeOutputResolver<'m> {
                 Some(())
             }
             Stmt::Expr(expr) => {
+                if let Expr::With { handler, body } = expr {
+                    let RuntimeValue::Handler(inline_handler) =
+                        self.eval_expr_ast(handler, locals, callables, evaluators, depth)?
+                    else {
+                        return None;
+                    };
+                    self.active_inline_handler_stack.push(inline_handler);
+                    let result = (|| -> Option<()> {
+                        for stmt in body {
+                            self.execute_unit_ast_stmt(
+                                stmt,
+                                locals,
+                                callables,
+                                evaluators,
+                                depth + 1,
+                            )?;
+                        }
+                        Some(())
+                    })();
+                    self.active_inline_handler_stack.pop();
+                    return result;
+                }
                 // print <arg>
                 if let Expr::Call { callee, arg } = expr
                     && matches!(callee.as_ref(), Expr::Var(n) if n == BUILTIN_PRINT)
@@ -1482,6 +1546,16 @@ impl<'m> RuntimeOutputResolver<'m> {
         effect_name: &str,
         method_name: &str,
     ) -> Option<ResolvedHandlerMethod> {
+        for inline in self.active_inline_handler_stack.iter().rev() {
+            if let Some(method) = inline.methods.iter().find(|m| {
+                m.method.name == method_name && m.effect_name.as_deref() == Some(effect_name)
+            }) {
+                return Some(ResolvedHandlerMethod {
+                    handler_decl_idx: usize::MAX,
+                    method: method.method.clone(),
+                });
+            }
+        }
         for &idx in self.active_handler_stack.iter().rev() {
             let handler = &self.module.handler_declarations[idx];
             if handler.effect != effect_name {
@@ -1517,6 +1591,14 @@ impl<'m> RuntimeOutputResolver<'m> {
 
     /// Find a handler method by bare name (e.g. `log`) from nearest to outermost.
     fn find_handler_method_by_name(&self, method_name: &str) -> Option<ResolvedHandlerMethod> {
+        for inline in self.active_inline_handler_stack.iter().rev() {
+            if let Some(method) = inline.methods.iter().find(|m| m.method.name == method_name) {
+                return Some(ResolvedHandlerMethod {
+                    handler_decl_idx: usize::MAX,
+                    method: method.method.clone(),
+                });
+            }
+        }
         for &idx in self.active_handler_stack.iter().rev() {
             let handler = &self.module.handler_declarations[idx];
             if let Some(m) = handler.methods.iter().find(|m| m.name == method_name) {
@@ -1529,15 +1611,49 @@ impl<'m> RuntimeOutputResolver<'m> {
         None
     }
 
+    fn inline_handler_from_clauses(&self, clauses: &[HandlerClause]) -> InlineHandlerValue {
+        let methods = clauses
+            .iter()
+            .map(|clause| InlineHandlerMethod {
+                effect_name: self.unique_effect_name_for_operation(&clause.name),
+                method: HandlerMethod {
+                    name: clause.name.clone(),
+                    params: clause.params.clone(),
+                    body: clause.body.clone(),
+                    parsed_body: clause.parsed_body.clone(),
+                },
+            })
+            .collect();
+        InlineHandlerValue { methods }
+    }
+
+    fn unique_effect_name_for_operation(&self, op_name: &str) -> Option<String> {
+        let mut matches = self
+            .module
+            .effect_declarations
+            .iter()
+            .filter(|effect| effect.members.iter().any(|member| member.name == op_name))
+            .map(|effect| effect.name.clone())
+            .collect::<Vec<_>>();
+        matches.sort();
+        matches.dedup();
+        if matches.len() == 1 {
+            matches.into_iter().next()
+        } else {
+            None
+        }
+    }
+
     fn set_runtime_error_once(&mut self, message: impl Into<String>) {
         if self.runtime_error.is_none() {
             self.runtime_error = Some(message.into());
         }
     }
 
-    fn push_resume_token_for_handler(&mut self, handler_decl_idx: usize) -> usize {
+    fn push_resume_token_for_handler(&mut self, handler_decl_idx: usize, is_inline: bool) -> usize {
         self.resume_tokens.push(ResumeToken {
             handler_decl_idx,
+            is_inline,
             continuation: Continuation { consumed: false },
             resumed_value: None,
         });
@@ -1557,9 +1673,14 @@ impl<'m> RuntimeOutputResolver<'m> {
         self.resume_tokens.last_mut()
     }
 
-    fn push_optimized_resume_token_for_handler(&mut self, handler_decl_idx: usize) -> usize {
+    fn push_optimized_resume_token_for_handler(
+        &mut self,
+        handler_decl_idx: usize,
+        is_inline: bool,
+    ) -> usize {
         self.optimized_resume_tokens.push(OptimizedResumeToken {
             handler_decl_idx,
+            is_inline,
             consumed: false,
             resumed_value: None,
         });
@@ -1597,13 +1718,13 @@ impl<'m> RuntimeOutputResolver<'m> {
         }
     }
 
-    fn begin_handler_continuation_bridge(&mut self, handler_decl_idx: usize) -> usize {
+    fn begin_handler_continuation_bridge(&mut self, handler_decl_idx: usize, is_inline: bool) -> usize {
         match self.execution_mode {
             lower::EffectExecutionMode::PortableFallback => {
-                self.push_resume_token_for_handler(handler_decl_idx)
+                self.push_resume_token_for_handler(handler_decl_idx, is_inline)
             }
             lower::EffectExecutionMode::TypedContinuationOptimized => {
-                self.push_optimized_resume_token_for_handler(handler_decl_idx)
+                self.push_optimized_resume_token_for_handler(handler_decl_idx, is_inline)
             }
         }
     }
@@ -1648,7 +1769,7 @@ impl<'m> RuntimeOutputResolver<'m> {
             self.set_runtime_error_once(ERR_RESUME_CONSUMED);
             return None;
         }
-        if token_ro.handler_decl_idx >= self.module.handler_declarations.len() {
+        if !token_ro.is_inline && token_ro.handler_decl_idx >= self.module.handler_declarations.len() {
             self.set_runtime_error_once(ERR_RESUME_HANDLER_MISMATCH);
             return None;
         }
@@ -1673,7 +1794,7 @@ impl<'m> RuntimeOutputResolver<'m> {
             self.set_runtime_error_once(ERR_RESUME_CONSUMED);
             return None;
         }
-        if token_ro.handler_decl_idx >= self.module.handler_declarations.len() {
+        if !token_ro.is_inline && token_ro.handler_decl_idx >= self.module.handler_declarations.len() {
             self.set_runtime_error_once(ERR_RESUME_HANDLER_MISMATCH);
             return None;
         }
@@ -1698,7 +1819,10 @@ impl<'m> RuntimeOutputResolver<'m> {
             return None;
         }
         let stmts = method.method.parsed_body.as_deref()?;
-        let token_idx = self.begin_handler_continuation_bridge(method.handler_decl_idx);
+        let token_idx = self.begin_handler_continuation_bridge(
+            method.handler_decl_idx,
+            method.handler_decl_idx == usize::MAX,
+        );
         let previous_stack_len = self.active_handler_stack.len();
         let run_result = (|| -> Option<Option<RuntimeValue>> {
             let mut handler_locals = RuntimeLocals::default();
@@ -1940,6 +2064,9 @@ impl RuntimeLocals {
             RuntimeValue::ListInt(values) => {
                 self.list_int_values.insert(name.to_string(), values);
             }
+            u @ RuntimeValue::Unit => {
+                self.record_values.insert(name.to_string(), u);
+            }
             record @ RuntimeValue::Record { .. } => {
                 self.record_values.insert(name.to_string(), record);
             }
@@ -1948,6 +2075,9 @@ impl RuntimeLocals {
             }
             ls @ RuntimeValue::ListString(_) => {
                 self.record_values.insert(name.to_string(), ls);
+            }
+            h @ RuntimeValue::Handler(_) => {
+                self.record_values.insert(name.to_string(), h);
             }
         }
     }
@@ -1980,9 +2110,11 @@ impl RuntimeLocals {
 enum RuntimeValue {
     String(String),
     Int(i64),
+    Unit,
     Bool(bool),
     ListInt(Vec<i64>),
     ListString(Vec<String>),
+    Handler(InlineHandlerValue),
     Record {
         constructor: String,
         fields: HashMap<String, RuntimeValue>,
@@ -1994,12 +2126,14 @@ impl RuntimeValue {
         match self {
             Self::String(text) => text.clone(),
             Self::Int(value) => value.to_string(),
+            Self::Unit => "Unit".to_string(),
             Self::Bool(b) => if *b { "True" } else { "False" }.to_string(),
             Self::ListInt(values) => format_list_int(values),
             Self::ListString(values) => {
                 let parts: Vec<String> = values.iter().map(|s| format!("\"{}\"", s)).collect();
                 format!("[{}]", parts.join(", "))
             }
+            Self::Handler(_) => "<handler>".to_string(),
             // Print the constructor name as a placeholder; field access
             // resolves the actual field value before printing in practice.
             Self::Record { constructor, .. } => constructor.clone(),
@@ -2010,12 +2144,14 @@ impl RuntimeValue {
         match self {
             Self::String(text) => format!("\"{}\"", text),
             Self::Int(value) => value.to_string(),
+            Self::Unit => "Unit".to_string(),
             Self::Bool(b) => if *b { "True" } else { "False" }.to_string(),
             Self::ListInt(values) => format_list_int(values),
             Self::ListString(values) => {
                 let parts: Vec<String> = values.iter().map(|s| format!("\"{}\"", s)).collect();
                 format!("[{}]", parts.join(", "))
             }
+            Self::Handler(_) => "<handler>".to_string(),
             Self::Record { constructor, .. } => constructor.clone(),
         }
     }
@@ -3258,6 +3394,61 @@ main =
             output.as_deref().map(|s| s.contains("[E-RESUME-MISSING]")),
             Some(true),
             "resume outside handler should report runtime error in fallback runtime"
+        );
+    }
+
+    #[test]
+    fn with_handler_dispatches_effect_operation_in_runtime() {
+        use goby_core::parse_module;
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let source = r#"
+effect Log
+  log: String -> Unit
+
+main : Unit -> Unit
+main =
+  with_handler
+    log msg ->
+      print msg
+      resume Unit
+  in
+    log "hello"
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let output =
+            resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module));
+        assert_eq!(
+            output.as_deref(),
+            Some("hello"),
+            "with_handler should install inline handler and dispatch operation"
+        );
+    }
+
+    #[test]
+    fn with_handler_variable_dispatches_effect_operation_in_runtime() {
+        use goby_core::parse_module;
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let source = r#"
+effect Log
+  log: String -> Unit
+
+main : Unit -> Unit
+main =
+  h = handler
+    log msg ->
+      print msg
+      resume Unit
+  with h
+  in
+    log "world"
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let output =
+            resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module));
+        assert_eq!(
+            output.as_deref(),
+            Some("world"),
+            "with <handler-var> should install stored handler value and dispatch operation"
         );
     }
 
