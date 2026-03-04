@@ -446,7 +446,35 @@ impl TypeEnv {
     fn are_compatible(&self, expected: &Ty, actual: &Ty) -> bool {
         let expected = self.resolve_alias(expected, 0);
         let actual = self.resolve_alias(actual, 0);
+        if let Ty::Con { name, args } = &expected
+            && name == "Handler"
+            && let Ty::Handler { covered_ops } = &actual
+            && let Some(expected_ops) = self.handler_ops_from_type_args(args)
+        {
+            return expected_ops == *covered_ops;
+        }
         expected == actual
+    }
+
+    fn handler_ops_from_type_args(&self, args: &[Ty]) -> Option<HashSet<String>> {
+        let mut covered = HashSet::new();
+        for arg in args {
+            let Ty::Con { name, args } = self.resolve_alias(arg, 0) else {
+                return None;
+            };
+            if !args.is_empty() {
+                return None;
+            }
+            for (symbol, binding) in &self.globals {
+                if let GlobalBinding::Resolved { source, .. } = binding {
+                    let expected_source = format!("effect `{}` member", name);
+                    if source == &expected_source {
+                        covered.insert(symbol.clone());
+                    }
+                }
+            }
+        }
+        Some(covered)
     }
 
     fn resolve_alias(&self, ty: &Ty, depth: usize) -> Ty {
@@ -2101,7 +2129,7 @@ fn check_body_stmts(
             })
             .unwrap_or(Ty::Unit);
 
-        if inferred != Ty::Unknown && inferred != declared {
+        if inferred != Ty::Unknown && !env.are_compatible(&declared, &inferred) {
             return Err(TypecheckError {
                 declaration: Some(decl_name.to_string()),
                 span: None,
@@ -2685,25 +2713,89 @@ fn validate_type_annotation(
         };
         let mut segments = ft.arguments;
         segments.push(ft.result);
-        if segments
-            .iter()
-            .any(|segment| parse_type_expr(segment).is_none())
-        {
+        for segment in &segments {
+            let Some(type_expr) = parse_type_expr(segment) else {
+                return Err(TypecheckError {
+                    declaration: Some(decl_name.to_string()),
+                    span: None,
+                    message: "invalid function type annotation".to_string(),
+                });
+            };
+            validate_handler_type_expr(decl_name, &type_expr, known_effects)?;
+        }
+    } else {
+        let Some(type_expr) = parse_type_expr(base) else {
             return Err(TypecheckError {
                 declaration: Some(decl_name.to_string()),
                 span: None,
-                message: "invalid function type annotation".to_string(),
+                message: "invalid type annotation".to_string(),
             });
-        }
-    } else if parse_type_expr(base).is_none() {
-        return Err(TypecheckError {
-            declaration: Some(decl_name.to_string()),
-            span: None,
-            message: "invalid type annotation".to_string(),
-        });
+        };
+        validate_handler_type_expr(decl_name, &type_expr, known_effects)?;
     }
 
     Ok(())
+}
+
+fn validate_handler_type_expr(
+    decl_name: &str,
+    expr: &TypeExpr,
+    known_effects: &HashSet<String>,
+) -> Result<(), TypecheckError> {
+    match expr {
+        TypeExpr::Name(_) => Ok(()),
+        TypeExpr::Tuple(items) => {
+            for item in items {
+                validate_handler_type_expr(decl_name, item, known_effects)?;
+            }
+            Ok(())
+        }
+        TypeExpr::Function { arguments, result } => {
+            for arg in arguments {
+                validate_handler_type_expr(decl_name, arg, known_effects)?;
+            }
+            validate_handler_type_expr(decl_name, result, known_effects)
+        }
+        TypeExpr::Apply { head, args } => {
+            validate_handler_type_expr(decl_name, head, known_effects)?;
+            for arg in args {
+                validate_handler_type_expr(decl_name, arg, known_effects)?;
+            }
+            if let TypeExpr::Name(name) = head.as_ref()
+                && name == "Handler"
+            {
+                if args.is_empty() {
+                    return Err(TypecheckError {
+                        declaration: Some(decl_name.to_string()),
+                        span: None,
+                        message: "Handler type must include at least one effect".to_string(),
+                    });
+                }
+                for arg in args {
+                    let TypeExpr::Name(effect_name) = arg else {
+                        return Err(TypecheckError {
+                            declaration: Some(decl_name.to_string()),
+                            span: None,
+                            message:
+                                "Handler type arguments must be effect names (identifiers)"
+                                    .to_string(),
+                        });
+                    };
+                    if !known_effects.contains(effect_name) {
+                        return Err(TypecheckError {
+                            declaration: Some(decl_name.to_string()),
+                            span: None,
+                            message: format!(
+                                "unknown effect `{}` in `Handler(...)` type annotation",
+                                effect_name
+                            ),
+                        });
+                    }
+                }
+            }
+            Ok(())
+        }
+    }
 }
 
 fn uses_legacy_void(annotation: &str) -> bool {
@@ -3156,6 +3248,81 @@ main =
             .expect_err("unknown operation in handler expression should fail");
         assert!(err.message.contains("unknown effect operation"));
         assert!(err.message.contains("unknown_op"));
+    }
+
+    #[test]
+    fn accepts_handler_return_annotation_with_matching_handler_value() {
+        let source = "\
+effect Log
+  log: String -> Unit
+mk : Unit -> Handler(Log)
+mk =
+  h = handler
+    log msg ->
+      resume Unit
+  h
+";
+        let module = parse_module(source).expect("should parse");
+        typecheck_module(&module).expect("matching Handler(Log) annotation should pass");
+    }
+
+    #[test]
+    fn accepts_handler_return_annotation_with_order_insensitive_effect_list() {
+        let source = "\
+effect Log
+  log: String -> Unit
+effect Env
+  from_env: String -> Unit
+mk : Unit -> Handler(Env, Log)
+mk =
+  h = handler
+    log msg ->
+      resume Unit
+    from_env key ->
+      resume Unit
+  h
+";
+        let module = parse_module(source).expect("should parse");
+        typecheck_module(&module).expect("Handler effect list order should be ignored");
+    }
+
+    #[test]
+    fn rejects_handler_return_annotation_when_effect_set_mismatches() {
+        let source = "\
+effect Log
+  log: String -> Unit
+effect Env
+  from_env: String -> Unit
+mk : Unit -> Handler(Log)
+mk =
+  h = handler
+    from_env key ->
+      resume Unit
+  h
+";
+        let module = parse_module(source).expect("should parse");
+        let err = typecheck_module(&module)
+            .expect_err("mismatched Handler annotation should fail");
+        assert!(err.message.contains("body type"));
+        assert!(err.message.contains("Handler"));
+    }
+
+    #[test]
+    fn rejects_unknown_effect_in_handler_type_annotation() {
+        let source = "\
+effect Log
+  log: String -> Unit
+mk : Unit -> Handler(Log, MissingEffect)
+mk =
+  handler
+    log msg ->
+      resume Unit
+";
+        let module = parse_module(source).expect("should parse");
+        let err = typecheck_module(&module)
+            .expect_err("unknown effect in Handler annotation should fail");
+        assert!(err.message.contains("unknown effect"));
+        assert!(err.message.contains("Handler"));
     }
 
     #[test]
