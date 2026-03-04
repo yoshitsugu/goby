@@ -100,6 +100,9 @@ syntax/semantics.
 ## 7. Current Runtime/Builtin Notes
 
 - Builtins currently include `print`, `map`, `fetch_env_var`, `string.split`, `list.join`.
+- Stdlib `goby/int` provides `parse : String -> Int can StringParseError`.
+  - accepted form: optional leading `-` followed by one or more ASCII digits.
+  - invalid input delegates to `StringParseError.invalid_integer : String -> Int`.
 - `Print` / `Read` effect resolution is provided via stdlib prelude (`goby/prelude`) embed defaults.
 - Current minimal prelude input contract:
   - `Read.read ()` returns remaining stdin text and then `""` on subsequent reads.

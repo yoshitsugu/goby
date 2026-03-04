@@ -4255,6 +4255,24 @@ f = print \"hi\"
     }
 
     #[test]
+    fn typechecks_import_from_goby_int_module() {
+        let source = "\
+import goby/int as i
+effect StringParseError
+  invalid_integer : String -> Int
+f : Unit -> Int can StringParseError
+f =
+  with_handler
+    invalid_integer _ ->
+      resume -1
+  in
+    i.parse(\"42\")
+";
+        let module = parse_module(source).expect("should parse");
+        typecheck_module(&module).expect("int.parse should typecheck when StringParseError is handled");
+    }
+
+    #[test]
     fn rejects_selective_import_of_stdio_print_symbol() {
         let source = "\
 import goby/stdio ( print )
