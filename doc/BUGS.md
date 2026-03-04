@@ -2,7 +2,7 @@
 
 ## BUG-001: handler `for` clause with unknown effect name gives misleading error
 
-**Status:** Open
+**Status:** Closed (obsolete after effect-renewal removal)
 **Discovered:** 2026-03-02 (session 28)
 
 ### Symptom
@@ -16,33 +16,28 @@ main =
     raise Error(message: "x")
 ```
 
-Error reported:
+Error previously reported:
 
 ```
 typecheck error in main: effect operation `raise` is not handled by any enclosing `using` block
 ```
 
-### Expected
+### Current behavior (2026-03-04)
 
 ```
-typecheck error: handler `PrintErrorHandler` refers to unknown effect `ErrorEffect`
+parse error: legacy top-level `handler ... for ...` is no longer supported; use `handler` expressions with `with`/`with_handler`
 ```
 
 ### Root Cause
 
-`EffectMap::covered_ops` looks up `handler_to_effect.get("PrintErrorHandler")` → `"ErrorEffect"`,
-then `effect_to_ops.get("ErrorEffect")` → `None` (because `effect ErrorEffect` was never declared).
-This silently yields an empty op set, so `raise` appears uncovered.
-
-No validation step checks that a handler's `for` clause names a declared effect.
+The bug belonged to legacy top-level handler declarations (`handler ... for ...`), which
+were removed in the effect renewal migration.
 
 ### Fix
 
-Add a validation pass (e.g. `validate_handler_declarations`) called from `typecheck_module`,
-that iterates `module.handler_declarations` and checks each `handler_decl.effect` against the
-set of declared effect names. Return a `TypecheckError` on mismatch.
-
-The check should run before `build_effect_map` is used for coverage analysis.
+No direct fix is needed in current code because the legacy syntax path no longer exists.
+Any reintroduction of top-level handler declarations should include explicit effect-name
+validation at declaration time.
 
 ## BUG-002: positional record constructor `Ctor("value")` silently misparses as a function call
 

@@ -74,7 +74,6 @@ Based on `examples/*.gb`:
 - Legacy syntax (`handler ... for ...`, `using`) is no longer accepted by the
   language parser as of 2026-03-04.
   - CLI commands (`check` / `run`) therefore reject such sources by default.
-  - internal compatibility structures may remain temporarily during P6 cleanup.
 - MVP built-ins: `print`, `map`, `fetch_env_var`, `string.split`, `list.join`.
   - `print` execution is resolved by compiler/runtime internals (default stdio print path),
     not by a user-visible stdlib handler definition.
@@ -129,7 +128,7 @@ Based on `examples/*.gb`:
 - Current implemented checks:
   - `can` effect names must be declared (or built-in).
   - uncovered effect operation calls are rejected unless covered by enclosing handler scope
-    (`with` / `with_handler`; `using` remains internal compatibility-only during removal work).
+    (`with` / `with_handler`).
   - calls to `can`-annotated functions require an appropriate enclosing handler scope.
 - Current runtime behavior:
   - effect operations dispatch through installed handlers.
@@ -177,7 +176,8 @@ new handler-value model.
 - Migration policy:
   - bridge-window acceptance for top-level `handler ... for ...` and `using` has
     ended (2026-03-04).
-  - current status: parser-level rejection is active; legacy forms are migration-only.
+  - current status: parser/runtime/typecheck legacy compatibility paths are removed;
+    legacy forms remain migration-guide-only.
   - migration mapping examples are documented in
     `doc/EFFECT_RENEWAL_MIGRATION.md`.
 
@@ -298,7 +298,7 @@ new handler-value model.
 - Governance model, RFC process, compatibility policy.
 - Real Wasm code generation (replace compile-time interpreter).
 - Declaration-side generic parameter binders.
-- `HandlerMethod` type-checking (effect-safety, unhandled-effect diagnostics).
+- Handler clause body type-checking improvements (effect-safety and diagnostics polish).
 - `else if` chaining in `if` expressions.
 - REPL or interactive mode.
 
@@ -318,7 +318,8 @@ All MVP example targets are complete. The next work is post-MVP:
 ### 4.1 Short-Term Patch: bare/qualified/pipeline effect call dispatch in `main` body — DONE (2026-03-02, commit 8136d61)
 
 `eval_ast_side_effect` now dispatches bare calls, qualified calls, and pipeline calls
-through active `using` handlers, matching the behavior of `execute_unit_ast_stmt`.
+through active `with` / `with_handler` handlers, matching the behavior of
+`execute_unit_ast_stmt`.
 
 - Added `Expr::Qualified` arm: `find_handler_method_for_effect` → dispatch → string fallthrough.
 - Added bare-name handler lookup in `Expr::Var` arm (before `execute_unit_call_ast`).
@@ -378,7 +379,7 @@ Diagnostic style targets (wording aligned with existing plain errors):
 - `cannot assign to immutable variable \`b\`; declare it with \`mut\` first`
 - `cannot assign to undeclared variable \`x\``
 
-### 4.1.1 Effect op argument type checking in `using` blocks
+### 4.1.1 Effect op argument type checking in handler scopes
 
 #### Background
 
@@ -389,7 +390,7 @@ handler expects an `Error` record, not a `String`). At runtime the handler recei
 Root causes identified (2026-03-02):
 
 1. **No argument-type check on effect op calls.** The typechecker only checks that
-   an effect op name is covered by an enclosing `using`; it does not check that the
+   an effect op name is covered by an enclosing handler scope; it does not check that the
    argument type matches the op's declared signature.
 2. **Runtime evaluator cannot construct record values from positional-style calls.**
    `Error "NoCoffeeError"` is parsed as `Call { callee: Var("Error"), arg: StringLit }`,
@@ -399,7 +400,7 @@ Root causes identified (2026-03-02):
 #### Goal
 
 Make the above class of errors a **compile-time typecheck error**, not a silent runtime
-failure.  The diagnostic should fire whenever a `using` block contains an effect op call
+failure.  The diagnostic should fire whenever a handler scope (`with` / `with_handler`) contains an effect op call
 whose argument type is statically incompatible with the op's declared signature.
 
 #### Scope and constraints
@@ -483,7 +484,7 @@ diagnostics in the codebase.
 - Native capability checker now accepts `examples/function.gb`.
   - `function.gb` moved from fallback matrix to native matrix in tests.
   - `call_target_body_not_native_supported` remains for declarations with unsupported forms
-    such as `using` blocks.
+    such as `with_handler` blocks.
 
 ### 4.3 Standard-Library Foundation (self-hosted direction)
 
