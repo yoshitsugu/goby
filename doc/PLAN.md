@@ -518,7 +518,8 @@ Planning constraints:
 - Import semantics are unified across values/types/effects:
   - plain and alias imports expose module members for all three namespaces.
   - selective import (`import a/b ( ... )`) accepts mixed value/type/effect names.
-  - any name-resolution ambiguity is rejected during resolution (not deferred until use).
+  - import-origin name-resolution ambiguity is rejected during resolution
+    (not deferred until use).
 
 Preparation steps:
 

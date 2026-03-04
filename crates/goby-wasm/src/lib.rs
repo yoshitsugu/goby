@@ -885,7 +885,7 @@ impl<'m> RuntimeOutputResolver<'m> {
             && matches!(callee, "read" | "read_line")
             && matches!(arg, "()" | "Unit")
             && !self.has_declaration_name(callee)
-            && !self.locals.get(callee).is_some()
+            && self.locals.get(callee).is_none()
             && !callables.contains_key(callee)
             && !evaluators.int.functions.contains_key(callee)
             && !evaluators.list.functions.contains_key(callee)
@@ -1283,11 +1283,8 @@ impl<'m> RuntimeOutputResolver<'m> {
                     && !self.has_declaration_name(constructor)
                     && locals.get(constructor).is_none()
                     && !self.is_record_constructor_name(constructor)
-                    && let Some(value) = self.apply_embedded_default_handler(
-                        "Read",
-                        constructor,
-                        RuntimeValue::Unit,
-                    )
+                    && let Some(value) =
+                        self.apply_embedded_default_handler("Read", constructor, RuntimeValue::Unit)
                 {
                     return Some(value);
                 }

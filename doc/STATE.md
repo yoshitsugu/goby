@@ -1734,7 +1734,8 @@ This file is a restart-safe snapshot for resuming work after context reset.
     - import validation now checks selective names against module exports + type names + effect names,
     - imported type names are included in type declaration validation,
     - imported effect declarations/names respect selective lists,
-    - name resolution now fails eagerly when globals become ambiguous (no deferred "only on use" behavior).
+    - import-origin name resolution now fails eagerly when globals become ambiguous
+      (no deferred "only on use" behavior).
   - Stdlib resolver metadata extended with exported type names for validation.
 
 ## 5. Current Example Files
