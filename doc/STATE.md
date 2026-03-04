@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-04 (session 101)
+Last updated: 2026-03-04 (session 102)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -59,6 +59,16 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - phased Wasm lowering (portable trampoline first, typed-continuation optimization later).
 
 ## 4. Recent Milestones
+
+- 2026-03-04 (session 102): `PLAN_EFFECT_RENEWAL` P4 first step (effect example migration start)
+  - Migrated `examples/effect.gb` away from legacy `using` in executable `main` flow:
+    - uses handler-value model (`h = handler ...`) with `with h in ...`,
+    - keeps inline sugar example (`with_handler ... in ...`) for canonical syntax guidance.
+  - Kept example runtime-stable under current fallback constraints:
+    - `cargo run -p goby-cli -- check examples/effect.gb` passes,
+    - `cargo run -p goby-cli -- run examples/effect.gb` executes and prints expected output.
+  - Verified renewal runtime regressions still pass after example migration:
+    - `cargo test -p goby-wasm with_handler_`.
 
 - 2026-03-04 (session 101): `PLAN_EFFECT_RENEWAL` P3 runtime hardening (capture + precedence parity)
   - `goby-wasm` inline handler runtime model now captures lexical evaluation context:
@@ -1212,15 +1222,19 @@ Wasm Phase A (Phases 0–8) complete. 281 tests green.
 
 Resume checks:
 ```
+cargo fmt
 cargo check
 cargo test
 cargo clippy -- -D warnings
 ```
 
+Validation policy (every implementation step):
+- Always run `cargo fmt`, `cargo clippy -- -D warnings`, and `cargo test`.
+
 Execution focus (in order):
 1. `PLAN_EFFECT_RENEWAL` implementation (highest priority):
    - P0-P3 complete (spec + parser/AST + typecheck + fallback-runtime parity core),
-   - next: P4 examples/stdlb migration toward canonical `handler` + `with` syntax.
+   - P4 in progress: migrate examples/stdlib/docs to canonical `handler` + `with` syntax.
 2. Effect runtime redesign follow-up (one-shot deep handlers + selective CPS/evidence passing), including
    post-`PLAN_RESUME` items now tracked in `doc/PLAN.md`.
 3. `resolve_main_runtime_output` retirement (blocked on effect-native support and remaining unsupported forms).
