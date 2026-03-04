@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-04 (session 99)
+Last updated: 2026-03-04 (session 100)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -59,6 +59,23 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - phased Wasm lowering (portable trampoline first, typed-continuation optimization later).
 
 ## 4. Recent Milestones
+
+- 2026-03-04 (session 100): `PLAN_EFFECT_RENEWAL` P3 runtime first step (`with` / inline handler execution in fallback runtime)
+  - `goby-wasm` fallback runtime now evaluates renewal AST directly for:
+    - `Expr::Handler` as runtime handler value,
+    - `Expr::With` execution with lexical push/pop of active inline handlers,
+    - handler dispatch lookup precedence: nearest inline handler first, then legacy named handlers.
+  - Inline-dispatch plumbing added:
+    - runtime-side inline handler representation derived from `HandlerClause`,
+    - resume-token bridge accepts inline-dispatch tokens without legacy handler-index mismatch errors.
+  - Runtime evaluator value model extended with `RuntimeValue::Unit` so handler bodies like
+    `resume Unit` evaluate successfully in the AST runtime path.
+  - Added and validated runtime regressions:
+    - `with_handler_dispatches_effect_operation_in_runtime`
+    - `with_handler_variable_dispatches_effect_operation_in_runtime`
+  - Validation:
+    - `cargo test -p goby-wasm`
+    - `cargo check`
 
 - 2026-03-04 (session 99): `PLAN_EFFECT_RENEWAL` P2 hardening (negative diagnostics coverage)
   - Added additional typecheck regressions for renewal error paths:
@@ -1188,8 +1205,8 @@ cargo clippy -- -D warnings
 
 Execution focus (in order):
 1. `PLAN_EFFECT_RENEWAL` implementation (highest priority):
-   - P0 sync into `doc/PLAN.md` (locked semantics/diagnostics/compatibility),
-   - then P1 parser/AST work for `handler` expression + `with`/`with_handler` + `Handler(...)`.
+   - P0-P2 complete (spec + parser/AST + typecheck semantics/diagnostics),
+   - P3 in progress: runtime completeness for inline handler execution and parity hardening.
 2. Effect runtime redesign follow-up (one-shot deep handlers + selective CPS/evidence passing), including
    post-`PLAN_RESUME` items now tracked in `doc/PLAN.md`.
 3. `resolve_main_runtime_output` retirement (blocked on effect-native support and remaining unsupported forms).
