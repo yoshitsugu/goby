@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-04 (session 117)
+Last updated: 2026-03-04 (session 119)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -61,6 +61,32 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - phased Wasm lowering (portable trampoline first, typed-continuation optimization later).
 
 ## 4. Recent Milestones
+
+- 2026-03-04 (session 119): `PLAN_EFFECT_RENEWAL` P6 cleanup (`goby-wasm` planning legacy fallback removal)
+  - Simplified lowering-plan resume signal in `crates/goby-wasm/src/planning.rs`:
+    - removed legacy `module.handler_declarations` fallback traversal from
+      `handler_resume_present`,
+    - detection now relies on expression-level handler usage in declaration bodies
+      (`with` / `with_handler`) only.
+  - Runtime/lowering tests remain green under canonical syntax fixtures.
+  - Validation completed:
+    - `cargo fmt -- --check`
+    - `cargo clippy -- -D warnings`
+    - `cargo test -p goby-wasm`
+    - `cargo test`
+
+- 2026-03-04 (session 118): `PLAN_EFFECT_RENEWAL` P6 cleanup (CLI legacy scan removal)
+  - Removed redundant CLI-side legacy syntax scan after parser-level rejection landed:
+    - deleted `analyze_legacy_syntax_usage` / `count_using_stmts`,
+    - removed associated unit test that only validated zero-count behavior.
+  - Runtime behavior stays aligned with current model:
+    - legacy syntax is rejected at parse time with migration diagnostics,
+    - CLI no longer performs a second legacy-count gate on parsed modules.
+  - Validation completed:
+    - `cargo fmt -- --check`
+    - `cargo clippy -- -D warnings`
+    - `cargo test -p goby-cli`
+    - `cargo test`
 
 - 2026-03-04 (session 117): `PLAN_EFFECT_RENEWAL` P6 parser-level strict rejection + wasm planning alignment
   - Enforced parser-level rejection for legacy effect syntax:

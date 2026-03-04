@@ -312,13 +312,7 @@ pub(crate) fn build_lowering_plan(module: &Module) -> LoweringPlan {
         .declarations
         .iter()
         .filter_map(|d| d.parsed_body.as_deref())
-        .any(stmts_contain_handler_resume)
-        || module
-            .handler_declarations
-            .iter()
-            .flat_map(|h| h.methods.iter())
-            .filter_map(|m| m.parsed_body.as_deref())
-            .any(stmts_contain_resume);
+        .any(stmts_contain_handler_resume);
 
     LoweringPlan {
         declaration_styles,
