@@ -67,13 +67,15 @@ pub fn parse_module(source: &str) -> Result<Module, ParseError> {
         }
 
         if trimmed.starts_with("@embed") {
-            let effect_name = parse_embed_line(trimmed).map_err(|message| ParseError {
-                line: i + 1,
-                col: 1,
-                message,
-            })?;
+            let (effect_name, handler_name) =
+                parse_embed_line(trimmed).map_err(|message| ParseError {
+                    line: i + 1,
+                    col: 1,
+                    message,
+                })?;
             embed_declarations.push(EmbedDecl {
                 effect_name,
+                handler_name,
                 line: i + 1,
             });
             i += 1;
@@ -1559,24 +1561,45 @@ fn parse_import_line(line: &str) -> Option<ImportDecl> {
     })
 }
 
-fn parse_embed_line(line: &str) -> Result<String, String> {
+fn parse_embed_line(line: &str) -> Result<(String, String), String> {
     let rest = line
         .strip_prefix("@embed")
         .map(str::trim_start)
         .ok_or_else(|| "invalid @embed declaration".to_string())?;
     if rest.is_empty() {
-        return Err("invalid @embed declaration: expected `@embed <EffectName>`".to_string());
+        return Err(
+            "invalid @embed declaration: expected `@embed <EffectName> <HandlerName>`".to_string(),
+        );
     }
 
-    // Canonical syntax is `@embed <EffectName>`.
-    // Legacy compatibility accepts `@embed effect <EffectName>` during transition.
-    // TODO(ExtraStepA cleanup): remove `@embed effect <EffectName>` compatibility
-    // after migration consumers are updated.
-    let effect_name = rest.strip_prefix("effect ").map(str::trim).unwrap_or(rest);
+    if rest.starts_with("effect ") {
+        return Err(
+            "legacy `@embed effect <EffectName>` is no longer supported; use `@embed <EffectName> <HandlerName>`".to_string(),
+        );
+    }
+
+    let mut tokens = rest.split_whitespace();
+    let Some(effect_name) = tokens.next() else {
+        return Err(
+            "invalid @embed declaration: expected `@embed <EffectName> <HandlerName>`".to_string(),
+        );
+    };
+    let Some(handler_name) = tokens.next() else {
+        return Err("embedded handler name is missing".to_string());
+    };
+    if tokens.next().is_some() {
+        return Err(
+            "invalid @embed declaration: expected `@embed <EffectName> <HandlerName>`".to_string(),
+        );
+    }
+
     if !is_identifier(effect_name) {
         return Err("invalid embedded effect name".to_string());
     }
-    Ok(effect_name.to_string())
+    if !is_identifier(handler_name) {
+        return Err("invalid embedded handler name".to_string());
+    }
+    Ok((effect_name.to_string(), handler_name.to_string()))
 }
 
 fn parse_type_declaration_line(line: &str) -> Option<TypeDeclaration> {
@@ -2032,24 +2055,21 @@ main =
 
     #[test]
     fn parses_embed_effect_declaration() {
-        let source = "@embed effect Print\nmain : Unit -> Unit\nmain = 1\n";
+        let source =
+            "@embed Print __goby_embeded_effect_stdout_handler\nmain : Unit -> Unit\nmain = 1\n";
         let module = parse_module(source).expect("embed declaration should parse");
         assert_eq!(module.embed_declarations.len(), 1);
         assert_eq!(module.embed_declarations[0].effect_name, "Print");
+        assert_eq!(
+            module.embed_declarations[0].handler_name,
+            "__goby_embeded_effect_stdout_handler"
+        );
         assert_eq!(module.embed_declarations[0].line, 1);
     }
 
     #[test]
-    fn parses_embed_declaration_without_effect_keyword() {
-        let source = "@embed Print\nmain = 1\n";
-        let module = parse_module(source).expect("canonical embed declaration should parse");
-        assert_eq!(module.embed_declarations.len(), 1);
-        assert_eq!(module.embed_declarations[0].effect_name, "Print");
-    }
-
-    #[test]
     fn rejects_invalid_embed_declaration() {
-        let source = "@embed 1Print\nmain = 1\n";
+        let source = "@embed 1Print __goby_embeded_effect_stdout_handler\nmain = 1\n";
         let err = parse_module(source).expect_err("invalid embed declaration should fail");
         assert!(err.message.contains("invalid embedded effect name"));
     }
@@ -2059,16 +2079,34 @@ main =
         let source = "@embed\nmain = 1\n";
         let err = parse_module(source).expect_err("embed without target should fail");
         assert!(
-            err.message
-                .contains("invalid @embed declaration: expected `@embed <EffectName>`")
+            err.message.contains(
+                "invalid @embed declaration: expected `@embed <EffectName> <HandlerName>`"
+            )
         );
     }
 
     #[test]
-    fn rejects_embed_with_invalid_effect_name() {
-        let source = "@embed effect 1Print\nmain = 1\n";
-        let err = parse_module(source).expect_err("invalid embed effect name should fail");
-        assert!(err.message.contains("invalid embedded effect name"));
+    fn rejects_embed_without_handler_name() {
+        let source = "@embed Print\nmain = 1\n";
+        let err = parse_module(source).expect_err("embed without handler should fail");
+        assert!(err.message.contains("embedded handler name is missing"));
+    }
+
+    #[test]
+    fn rejects_legacy_embed_effect_form() {
+        let source = "@embed effect Print\nmain = 1\n";
+        let err = parse_module(source).expect_err("legacy embed syntax should fail");
+        assert!(
+            err.message
+                .contains("legacy `@embed effect <EffectName>` is no longer supported")
+        );
+    }
+
+    #[test]
+    fn rejects_embed_with_invalid_handler_name() {
+        let source = "@embed Print 1handler\nmain = 1\n";
+        let err = parse_module(source).expect_err("invalid handler name should fail");
+        assert!(err.message.contains("invalid embedded handler name"));
     }
 
     #[test]

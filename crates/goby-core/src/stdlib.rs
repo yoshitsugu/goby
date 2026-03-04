@@ -12,7 +12,13 @@ pub struct StdlibResolver {
 pub struct ResolvedStdlibModule {
     pub module_path: String,
     pub exports: HashMap<String, String>,
-    pub embedded_effects: Vec<String>,
+    pub embedded_defaults: Vec<EmbeddedDefaultHandlerDecl>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EmbeddedDefaultHandlerDecl {
+    pub effect_name: String,
+    pub handler_name: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -71,11 +77,11 @@ impl StdlibResolver {
                 message: parse_err.message,
             })?;
         let exports = collect_exports(module_path, &module.declarations)?;
-        let embedded_effects = collect_embedded_effects(module_path, &module.embed_declarations)?;
+        let embedded_defaults = collect_embedded_defaults(module_path, &module.embed_declarations)?;
         Ok(ResolvedStdlibModule {
             module_path: module_path.to_string(),
             exports,
-            embedded_effects,
+            embedded_defaults,
         })
     }
 
@@ -138,12 +144,12 @@ fn collect_exports(
     Ok(exports)
 }
 
-fn collect_embedded_effects(
+fn collect_embedded_defaults(
     module_path: &str,
     embeds: &[crate::ast::EmbedDecl],
-) -> Result<Vec<String>, StdlibResolveError> {
+) -> Result<Vec<EmbeddedDefaultHandlerDecl>, StdlibResolveError> {
     let mut seen = HashSet::new();
-    let mut names = Vec::new();
+    let mut defaults = Vec::new();
     for embed in embeds {
         if !seen.insert(embed.effect_name.clone()) {
             return Err(StdlibResolveError::DuplicateEmbeddedEffect {
@@ -151,9 +157,12 @@ fn collect_embedded_effects(
                 effect_name: embed.effect_name.clone(),
             });
         }
-        names.push(embed.effect_name.clone());
+        defaults.push(EmbeddedDefaultHandlerDecl {
+            effect_name: embed.effect_name.clone(),
+            handler_name: embed.handler_name.clone(),
+        });
     }
-    Ok(names)
+    Ok(defaults)
 }
 
 #[cfg(test)]
@@ -162,7 +171,7 @@ mod tests {
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    use super::{StdlibResolveError, StdlibResolver};
+    use super::{EmbeddedDefaultHandlerDecl, StdlibResolveError, StdlibResolver};
 
     struct TempDirGuard {
         path: PathBuf,
@@ -241,7 +250,7 @@ mod tests {
             resolved.exports.get("split"),
             Some(&"String -> String -> List String".to_string())
         );
-        assert!(resolved.embedded_effects.is_empty());
+        assert!(resolved.embedded_defaults.is_empty());
     }
 
     #[test]
@@ -251,7 +260,7 @@ mod tests {
         fs::create_dir_all(root.join("goby")).expect("stdlib/goby should be creatable");
         fs::write(
             root.join("goby/stdio.gb"),
-            "effect Print\n  print : String -> Unit\n\n@embed Print\n",
+            "effect Print\n  print : String -> Unit\n\n@embed Print __goby_embeded_effect_stdout_handler\n",
         )
         .expect("stdlib file should be writable");
 
@@ -259,7 +268,13 @@ mod tests {
         let resolved = resolver
             .resolve_module("goby/stdio")
             .expect("stdlib module should resolve");
-        assert_eq!(resolved.embedded_effects, vec!["Print".to_string()]);
+        assert_eq!(
+            resolved.embedded_defaults,
+            vec![EmbeddedDefaultHandlerDecl {
+                effect_name: "Print".to_string(),
+                handler_name: "__goby_embeded_effect_stdout_handler".to_string(),
+            }]
+        );
     }
 
     #[test]
@@ -269,7 +284,7 @@ mod tests {
         fs::create_dir_all(root.join("goby")).expect("stdlib/goby should be creatable");
         fs::write(
             root.join("goby/stdio.gb"),
-            "effect Print\n  print : String -> Unit\n\n@embed Print\n@embed Print\n",
+            "effect Print\n  print : String -> Unit\n\n@embed Print __goby_embeded_effect_stdout_handler\n@embed Print __goby_embeded_effect_stdout_handler\n",
         )
         .expect("stdlib file should be writable");
 

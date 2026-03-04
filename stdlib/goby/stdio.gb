@@ -1,4 +1,4 @@
 effect Print
   print : String -> Unit
 
-@embed Print
+@embed Print __goby_embeded_effect_stdout_handler

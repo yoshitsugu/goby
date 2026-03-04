@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-04 (session 128)
+Last updated: 2026-03-04 (session 129)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -63,6 +63,40 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - follow-up work moved to post-MVP tracks in `doc/PLAN.md`.
 
 ## 4. Recent Milestones
+
+- 2026-03-04 (session 129): `@embed` handler-model migration (`PLAN_EMBED`) implementation
+  - Locked syntax transition completed:
+    - canonical `@embed` form is now `@embed <EffectName> <HandlerName>`,
+    - legacy `@embed effect <EffectName>` is parser-rejected with explicit migration diagnostic.
+  - Core metadata model migrated from effect-name list to effect->handler mapping:
+    - `EmbedDecl` now stores `effect_name` + `handler_name`,
+    - stdlib resolver now exposes `embedded_defaults`.
+  - Typechecker updates:
+    - `@embed` remains stdlib-path gated and requires in-module `effect` declaration,
+    - embedded handler name must start with `__goby_embeded_effect_`,
+    - embedded handler target must be a known runtime intrinsic,
+    - `main` can-clause allows embedded-default effects from local/imported stdlib metadata,
+      while non-main unresolved effect usage remains rejected.
+  - Runtime updates (`goby-wasm` fallback resolver):
+    - added embedded-default dispatch for `Print.print` via
+      `__goby_embeded_effect_stdout_handler`,
+    - explicit `with` / `with_handler` dispatch precedence is preserved over embedded defaults.
+  - Stdlib/docs sync:
+    - `stdlib/goby/stdio.gb` updated to
+      `@embed Print __goby_embeded_effect_stdout_handler`,
+    - `stdlib/goby/iterator.gb` obsolete embed declaration removed,
+    - `examples/README.md` and `doc/PLAN_STANDARD_LIBRARY.md` embed syntax references updated.
+  - Embed-default intrinsic set (current):
+    - `__goby_embeded_effect_stdout_handler`.
+  - Remaining open question:
+    - whether additional embedded default handlers beyond stdout should be introduced,
+      and if so, which effects/handlers are first candidates.
+  - Immediate next steps:
+    - wire imported-stdlib embedded-default metadata into runtime fallback path (currently local-module embed metadata only),
+    - decide whether `Print` remains a builtin effect name or is fully normalized through stdlib embed defaults.
+  - Validation completed:
+    - `cargo test -p goby-core`
+    - `cargo test -p goby-wasm`
 
 - 2026-03-04 (session 128): stdlib mutable-syntax migration for `mut`/`:=`
   - Updated `stdlib/goby/string.gb` to replace same-scope rebinding updates with

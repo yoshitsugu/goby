@@ -3,5 +3,3 @@ type GraphemeState = GraphemeState(grapheme: String, parts: List String, current
 effect Iterator
   yield : String -> Int
   yield_state : GraphemeState -> GraphemeState
-
-@embed Iterator
