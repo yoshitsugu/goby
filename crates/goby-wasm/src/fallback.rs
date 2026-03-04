@@ -142,6 +142,9 @@ fn unsupported_stmt_reason(
 ) -> Option<UnsupportedReason> {
     match stmt {
         Stmt::Binding { value, .. } => unsupported_value_expr_reason(value, module, stack),
+        Stmt::MutBinding { .. } | Stmt::Assign { .. } => {
+            Some(UnsupportedReason::UnsupportedStatementExpr)
+        }
         Stmt::Expr(expr) => unsupported_stmt_expr_reason(expr, module, stack),
     }
 }
@@ -318,6 +321,7 @@ fn declaration_body_supported_for_native(
 fn is_decl_stmt_supported(stmt: &Stmt, module: &Module, stack: &mut HashSet<String>) -> bool {
     match stmt {
         Stmt::Binding { value, .. } => is_decl_value_expr_supported(value, module, stack),
+        Stmt::MutBinding { .. } | Stmt::Assign { .. } => false,
         Stmt::Expr(expr) => match expr {
             Expr::Call { callee, arg } if matches!(callee.as_ref(), Expr::Var(n) if n == BUILTIN_PRINT) => {
                 is_decl_value_expr_supported(arg, module, stack)

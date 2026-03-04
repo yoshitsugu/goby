@@ -121,6 +121,21 @@ fn split_binding(line: &str) -> Option<(&str, &str)> {
     Some((name, line[idx + 1..].trim()))
 }
 
+fn split_mut_binding(line: &str) -> Option<(&str, &str)> {
+    let rest = line.strip_prefix("mut ")?;
+    split_binding(rest)
+}
+
+fn split_assignment(line: &str) -> Option<(&str, &str)> {
+    let (name, expr) = line.split_once(":=")?;
+    let name = name.trim();
+    let expr = expr.trim();
+    if !is_identifier(name) || expr.is_empty() {
+        return None;
+    }
+    Some((name, expr))
+}
+
 fn parse_print_call(line: &str) -> Option<&str> {
     let rest = line.strip_prefix("print")?;
     let first = rest.chars().next()?;
@@ -401,11 +416,19 @@ impl<'a> IntEvaluator<'a> {
 
 enum Statement<'a> {
     Binding { name: &'a str, expr: &'a str },
+    MutBinding { name: &'a str, expr: &'a str },
+    Assign { name: &'a str, expr: &'a str },
     Print(&'a str),
     Expr(&'a str),
 }
 
 fn parse_statement(line: &str) -> Statement<'_> {
+    if let Some((name, expr)) = split_mut_binding(line) {
+        return Statement::MutBinding { name, expr };
+    }
+    if let Some((name, expr)) = split_assignment(line) {
+        return Statement::Assign { name, expr };
+    }
     if let Some((name, expr)) = split_binding(line) {
         return Statement::Binding { name, expr };
     }
@@ -544,9 +567,15 @@ impl<'m> RuntimeOutputResolver<'m> {
         evaluators: &RuntimeEvaluators<'_, '_>,
     ) -> Option<()> {
         match stmt {
-            Stmt::Binding { name, value } => {
+            Stmt::Binding { name, value } | Stmt::MutBinding { name, value } => {
                 // Propagate None so the caller can fall back to the string path
                 // rather than silently dropping the binding.
+                let runtime_val = self.eval_ast_value(value, evaluators)?;
+                self.locals.store(name, runtime_val);
+                Some(())
+            }
+            Stmt::Assign { name, value } => {
+                self.locals.get(name)?;
                 let runtime_val = self.eval_ast_value(value, evaluators)?;
                 self.locals.store(name, runtime_val);
                 Some(())
@@ -692,6 +721,11 @@ impl<'m> RuntimeOutputResolver<'m> {
     ) -> Option<()> {
         match statement {
             Statement::Binding { name, expr } => self.bind_local(name, expr, evaluators),
+            Statement::MutBinding { name, expr } => self.bind_local(name, expr, evaluators),
+            Statement::Assign { name, expr } => {
+                self.locals.get(name)?;
+                self.bind_local(name, expr, evaluators)
+            }
             Statement::Print(expr) => self.capture_print(expr, evaluators),
             Statement::Expr(expr) => self.eval_side_effect(expr, evaluators),
         }
@@ -1252,7 +1286,13 @@ impl<'m> RuntimeOutputResolver<'m> {
         depth: usize,
     ) -> Option<()> {
         match stmt {
-            Stmt::Binding { name, value } => {
+            Stmt::Binding { name, value } | Stmt::MutBinding { name, value } => {
+                let v = self.eval_expr_ast(value, locals, callables, evaluators, depth)?;
+                locals.store(name, v);
+                Some(())
+            }
+            Stmt::Assign { name, value } => {
+                locals.get(name)?;
                 let v = self.eval_expr_ast(value, locals, callables, evaluators, depth)?;
                 locals.store(name, v);
                 Some(())
@@ -1418,9 +1458,19 @@ impl<'m> RuntimeOutputResolver<'m> {
         } else {
             for statement in statements(function.body) {
                 match statement {
-                    Statement::Binding { name, expr } => {
+                    Statement::Binding { name, expr } | Statement::MutBinding { name, expr } => {
                         // Propagate None on eval failure rather than silently
                         // clearing the binding and continuing.
+                        let value = self.eval_value_with_context(
+                            expr,
+                            &function_locals,
+                            &function_callables,
+                            evaluators,
+                        )?;
+                        function_locals.store(name, value);
+                    }
+                    Statement::Assign { name, expr } => {
+                        function_locals.get(name)?;
                         let value = self.eval_value_with_context(
                             expr,
                             &function_locals,
@@ -1786,7 +1836,18 @@ impl<'m> RuntimeOutputResolver<'m> {
             for stmt in stmts {
                 if produce_value {
                     match stmt {
-                        Stmt::Binding { name, value } => {
+                        Stmt::Binding { name, value } | Stmt::MutBinding { name, value } => {
+                            let v = self.eval_expr_ast(
+                                value,
+                                &handler_locals,
+                                &handler_callables,
+                                evaluators,
+                                depth + 1,
+                            )?;
+                            handler_locals.store(name, v);
+                        }
+                        Stmt::Assign { name, value } => {
+                            handler_locals.get(name)?;
                             let v = self.eval_expr_ast(
                                 value,
                                 &handler_locals,

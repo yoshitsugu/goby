@@ -192,7 +192,9 @@ fn count_resume_in_stmts(stmts: &[Stmt]) -> usize {
     stmts
         .iter()
         .map(|stmt| match stmt {
-            Stmt::Binding { value, .. } => count_resume_in_expr(value),
+            Stmt::Binding { value, .. }
+            | Stmt::MutBinding { value, .. }
+            | Stmt::Assign { value, .. } => count_resume_in_expr(value),
             Stmt::Expr(expr) => count_resume_in_expr(expr),
         })
         .sum()
@@ -904,7 +906,10 @@ fn first_disallowed_intrinsic_in_stmts(
 ) -> Option<(String, IntrinsicViolationKind)> {
     for stmt in stmts {
         match stmt {
-            Stmt::Binding { value, .. } | Stmt::Expr(value) => {
+            Stmt::Binding { value, .. }
+            | Stmt::MutBinding { value, .. }
+            | Stmt::Assign { value, .. }
+            | Stmt::Expr(value) => {
                 if let Some(hit) = first_disallowed_intrinsic_in_expr(value, is_stdlib_source) {
                     return Some(hit);
                 }
@@ -1704,10 +1709,13 @@ fn check_resume_in_stmts_with_local_env(
 ) -> Result<(), TypecheckError> {
     for stmt in stmts {
         match stmt {
-            Stmt::Binding { name, value } => {
+            Stmt::Binding { name, value } | Stmt::MutBinding { name, value } => {
                 check_resume_in_expr(value, local_env, decl_name, resume_ctx)?;
                 let ty = infer_binding_ty_with_resume_context(value, local_env, resume_ctx);
                 local_env.locals.insert(name.clone(), ty);
+            }
+            Stmt::Assign { value, .. } => {
+                check_resume_in_expr(value, local_env, decl_name, resume_ctx)?;
             }
             Stmt::Expr(expr) => {
                 check_resume_in_expr(expr, local_env, decl_name, resume_ctx)?;
@@ -1934,10 +1942,24 @@ fn check_body_stmts(
         type_aliases: env.type_aliases.clone(),
         record_types: env.record_types.clone(),
     };
+    let mut local_mutability: HashMap<String, bool> = param_tys
+        .iter()
+        .map(|(name, _)| (name.to_string(), false))
+        .collect();
 
     for stmt in stmts {
         match stmt {
             Stmt::Binding { name, value } => {
+                if local_mutability.contains_key(name) {
+                    return Err(TypecheckError {
+                        declaration: Some(decl_name.to_string()),
+                        span: None,
+                        message: format!(
+                            "duplicate declaration `{}` in the same scope; use `:=` for mutation",
+                            name
+                        ),
+                    });
+                }
                 ensure_no_ambiguous_refs_in_expr(value, &local_env, decl_name)?;
                 check_unhandled_effects_in_expr(
                     value,
@@ -1949,6 +1971,79 @@ fn check_body_stmts(
                 )?;
                 let ty = check_expr(value, &local_env);
                 local_env.locals.insert(name.clone(), ty);
+                local_mutability.insert(name.clone(), false);
+            }
+            Stmt::MutBinding { name, value } => {
+                if local_mutability.contains_key(name) {
+                    return Err(TypecheckError {
+                        declaration: Some(decl_name.to_string()),
+                        span: None,
+                        message: format!(
+                            "duplicate declaration `{}` in the same scope; use `:=` for mutation",
+                            name
+                        ),
+                    });
+                }
+                ensure_no_ambiguous_refs_in_expr(value, &local_env, decl_name)?;
+                check_unhandled_effects_in_expr(
+                    value,
+                    &local_env,
+                    required_effects_map,
+                    effect_map,
+                    covered_ops,
+                    decl_name,
+                )?;
+                let ty = check_expr(value, &local_env);
+                local_env.locals.insert(name.clone(), ty);
+                local_mutability.insert(name.clone(), true);
+            }
+            Stmt::Assign { name, value } => {
+                if !local_mutability.contains_key(name) {
+                    return Err(TypecheckError {
+                        declaration: Some(decl_name.to_string()),
+                        span: None,
+                        message: format!("cannot assign to undeclared variable `{}`", name),
+                    });
+                }
+                if !local_mutability.get(name).copied().unwrap_or(false) {
+                    return Err(TypecheckError {
+                        declaration: Some(decl_name.to_string()),
+                        span: None,
+                        message: format!(
+                            "cannot assign to immutable variable `{}`; declare it with `mut` first",
+                            name
+                        ),
+                    });
+                }
+                ensure_no_ambiguous_refs_in_expr(value, &local_env, decl_name)?;
+                check_unhandled_effects_in_expr(
+                    value,
+                    &local_env,
+                    required_effects_map,
+                    effect_map,
+                    covered_ops,
+                    decl_name,
+                )?;
+                let current_ty = local_env.locals.get(name).cloned().unwrap_or(Ty::Unknown);
+                let assigned_ty = check_expr(value, &local_env);
+                if current_ty != Ty::Unknown
+                    && assigned_ty != Ty::Unknown
+                    && !env.are_compatible(&current_ty, &assigned_ty)
+                {
+                    return Err(TypecheckError {
+                        declaration: Some(decl_name.to_string()),
+                        span: None,
+                        message: format!(
+                            "assignment type `{}` does not match variable `{}` type `{}`",
+                            ty_name(&assigned_ty),
+                            name,
+                            ty_name(&current_ty)
+                        ),
+                    });
+                }
+                if current_ty == Ty::Unknown {
+                    local_env.locals.insert(name.clone(), assigned_ty);
+                }
             }
             Stmt::Expr(expr) => {
                 ensure_no_ambiguous_refs_in_expr(expr, &local_env, decl_name)?;
@@ -2456,7 +2551,11 @@ fn ensure_no_ambiguous_refs_in_stmts(
 ) -> Result<(), TypecheckError> {
     for stmt in stmts {
         match stmt {
-            Stmt::Binding { value, .. } => ensure_no_ambiguous_refs_in_expr(value, env, decl_name)?,
+            Stmt::Binding { value, .. }
+            | Stmt::MutBinding { value, .. }
+            | Stmt::Assign { value, .. } => {
+                ensure_no_ambiguous_refs_in_expr(value, env, decl_name)?
+            }
             Stmt::Expr(expr) => ensure_no_ambiguous_refs_in_expr(expr, env, decl_name)?,
         }
     }
@@ -4377,10 +4476,41 @@ main =
     }
 
     #[test]
-    fn accepts_rebinding_shadowing_in_same_body() {
+    fn rejects_rebinding_in_same_scope() {
         let source = "f : Unit -> Int\nf =\n  a = 1\n  a = a + 1\n  a\n";
         let module = parse_module(source).expect("should parse");
-        typecheck_module(&module).expect("re-binding in same body should be accepted");
+        let err = typecheck_module(&module).expect_err("re-binding in same scope should fail");
+        assert!(err.message.contains("duplicate declaration `a`"));
+        assert!(err.message.contains("use `:=` for mutation"));
+    }
+
+    #[test]
+    fn accepts_mut_declaration_and_assignment() {
+        let source = "f : Unit -> Int\nf =\n  mut a = 1\n  a := 2\n  a\n";
+        let module = parse_module(source).expect("should parse");
+        typecheck_module(&module).expect("mut declaration and assignment should typecheck");
+    }
+
+    #[test]
+    fn rejects_assignment_to_immutable_variable() {
+        let source = "f : Unit -> Int\nf =\n  a = 1\n  a := 2\n  a\n";
+        let module = parse_module(source).expect("should parse");
+        let err = typecheck_module(&module).expect_err("assignment to immutable should fail");
+        assert!(
+            err.message
+                .contains("cannot assign to immutable variable `a`")
+        );
+    }
+
+    #[test]
+    fn rejects_assignment_to_undeclared_variable() {
+        let source = "f : Unit -> Int\nf =\n  x := 1\n  0\n";
+        let module = parse_module(source).expect("should parse");
+        let err = typecheck_module(&module).expect_err("assignment to undeclared should fail");
+        assert!(
+            err.message
+                .contains("cannot assign to undeclared variable `x`")
+        );
     }
 
     // --- TypecheckError span regression tests ---

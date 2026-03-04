@@ -183,6 +183,8 @@ pub enum Expr {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Stmt {
     Binding { name: String, value: Expr },
+    MutBinding { name: String, value: Expr },
+    Assign { name: String, value: Expr },
     Expr(Expr),
 }
 
