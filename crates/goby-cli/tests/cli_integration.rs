@@ -236,3 +236,39 @@ fn run_command_skips_when_wasmtime_is_missing() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("wasmtime not found; skipped wasm execution"));
 }
+
+#[test]
+fn check_command_emits_legacy_syntax_warnings() {
+    let root = repo_root();
+    let sandbox = TempDirGuard::new("check_legacy_warnings");
+    let input = sandbox.join("legacy_effect.gb");
+    fs::write(
+        &input,
+        "effect Log\n  log: String -> Unit\nhandler H for Log\n  log s =\n    print s\nmain : Unit -> Unit\nmain =\n  using H\n    log \"hello\"\n",
+    )
+    .expect("temporary input should be writable");
+
+    let output = command_for_goby_cli()
+        .arg("check")
+        .arg(&input)
+        .current_dir(&root)
+        .output()
+        .expect("cli should execute");
+
+    assert!(
+        output.status.success(),
+        "expected success, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("warning: legacy syntax `handler ... for ...`"),
+        "expected legacy handler warning, got stdout: {}",
+        stdout
+    );
+    assert!(
+        stdout.contains("warning: legacy syntax `using`"),
+        "expected legacy using warning, got stdout: {}",
+        stdout
+    );
+}

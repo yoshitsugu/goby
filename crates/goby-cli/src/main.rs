@@ -1,3 +1,4 @@
+use goby_core::{Module, Stmt};
 use std::env;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
@@ -98,6 +99,8 @@ fn run() -> Result<(), CliError> {
         CliError::Runtime(format!("{}: {}{}", cli.file, err, snippet))
     })?;
 
+    print_legacy_syntax_warnings(&module);
+
     match cli.command {
         Command::Run => {
             let bytes = goby_wasm::compile_module(&module)
@@ -190,6 +193,49 @@ fn print_parse_summary(declaration_count: usize, file: &str) {
         "parsed and typechecked {} declarations from {}",
         declaration_count, file
     );
+}
+
+fn print_legacy_syntax_warnings(module: &Module) {
+    let using_count = count_using_stmts_in_module(module);
+    if !module.handler_declarations.is_empty() {
+        println!(
+            "warning: legacy syntax `handler ... for ...` is temporary compatibility syntax; migrate to `handler` + `with`/`with_handler` (see doc/EFFECT_RENEWAL_MIGRATION.md)"
+        );
+    }
+    if using_count > 0 {
+        println!(
+            "warning: legacy syntax `using` is temporary compatibility syntax ({} use(s)); migrate to `with`/`with_handler` (see doc/EFFECT_RENEWAL_MIGRATION.md)",
+            using_count
+        );
+    }
+}
+
+fn count_using_stmts_in_module(module: &Module) -> usize {
+    let mut count = 0usize;
+    for decl in &module.declarations {
+        if let Some(stmts) = decl.parsed_body.as_deref() {
+            count += count_using_stmts(stmts);
+        }
+    }
+    for handler in &module.handler_declarations {
+        for method in &handler.methods {
+            if let Some(stmts) = method.parsed_body.as_deref() {
+                count += count_using_stmts(stmts);
+            }
+        }
+    }
+    count
+}
+
+fn count_using_stmts(stmts: &[Stmt]) -> usize {
+    let mut count = 0usize;
+    for stmt in stmts {
+        if let Stmt::Using { body, .. } = stmt {
+            count += 1;
+            count += count_using_stmts(body);
+        }
+    }
+    count
 }
 
 fn execute_wasm(wasm_path: &str) -> Result<ExecutionOutcome, CliError> {
@@ -316,5 +362,23 @@ mod tests {
     #[test]
     fn computes_wasm_output_path() {
         assert_eq!(output_wasm_path("examples/hello.gb"), "examples/hello.wasm");
+    }
+
+    #[test]
+    fn counts_nested_using_statements_in_module() {
+        let source = "\
+effect Log
+  log: String -> Unit
+handler H for Log
+  log x =
+    print x
+main : Unit -> Unit
+main =
+  using H
+    using H
+      log \"x\"
+";
+        let module = goby_core::parse_module(source).expect("source should parse");
+        assert_eq!(count_using_stmts_in_module(&module), 2);
     }
 }

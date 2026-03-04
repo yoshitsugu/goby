@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-04 (session 106)
+Last updated: 2026-03-04 (session 107)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -59,6 +59,19 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - phased Wasm lowering (portable trampoline first, typed-continuation optimization later).
 
 ## 4. Recent Milestones
+
+- 2026-03-04 (session 107): `PLAN_EFFECT_RENEWAL` P5 first implementation (legacy syntax warnings)
+  - Added legacy syntax warnings in `goby-cli check/run` success path:
+    - warns when top-level legacy `handler ... for ...` declarations are present,
+    - warns when legacy `using` statements are present (includes counted usages),
+    - warning text points to `doc/EFFECT_RENEWAL_MIGRATION.md`.
+  - Added CLI regression coverage:
+    - unit test for nested `using` statement counting,
+    - integration test asserting warning lines are emitted for legacy syntax input.
+  - Validation (mandatory flow) completed:
+    - `cargo fmt`
+    - `cargo clippy -- -D warnings`
+    - `cargo test`
 
 - 2026-03-04 (session 106): `PLAN_EFFECT_RENEWAL` P5 kickoff (migration guide draft)
   - Added migration mapping document:
