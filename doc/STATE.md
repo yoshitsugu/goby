@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-04 (session 133)
+Last updated: 2026-03-04 (session 134)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -63,6 +63,13 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - follow-up work moved to post-MVP tracks in `doc/PLAN.md`.
 
 ## 4. Recent Milestones
+
+- 2026-03-04 (session 134): syntax-change workflow reminder added (highlight sync)
+  - Added explicit workflow rule in `doc/PLAN.md`:
+    - syntax changes must include syntax-highlighting impact check
+      (`textmate`, `vscode`, `emacs`, `vim`).
+  - Added maintenance rule in `doc/README.md`:
+    - list of highlight files to review/update when syntax evolves.
 
 - 2026-03-04 (session 133): reserved-token hardening follow-up (parser + spec sync)
   - Parser behavior tightened for `effect` member declarations:
