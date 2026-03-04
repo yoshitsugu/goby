@@ -2069,7 +2069,7 @@ fn check_body_stmts(
     decl_name: &str,
     declared_return_ty: Option<Ty>,
     param_tys: &[(&str, Ty)],
-    // Op names (qualified and bare) that are covered by enclosing `using` handlers.
+    // Op names (qualified and bare) that are covered by enclosing handler scope.
     covered_ops: &HashSet<String>,
 ) -> Result<(), TypecheckError> {
     let mut local_env = TypeEnv {
@@ -2161,7 +2161,7 @@ fn check_body_stmts(
 }
 
 /// Recursively walks `expr` and checks that every effect operation call is covered
-/// by the enclosing `using` handlers (expressed as `covered_ops`).
+/// by the enclosing handler scope (`with` / `with_handler`, expressed as `covered_ops`).
 /// Only direct calls to effect operations are checked here; calls to user-declared
 /// functions that themselves require effects are handled in Step 3.
 /// Check that calling `callee_name` does not require effects not yet covered.
@@ -2188,7 +2188,7 @@ fn check_callee_required_effects(
                 declaration: Some(decl_name.to_string()),
                 span: None,
                 message: format!(
-                    "function `{}` requires effect `{}` which is not handled by any enclosing `using` block",
+                    "function `{}` requires effect `{}` which is not handled by any enclosing `with`/`with_handler` scope",
                     callee_name, effect_name
                 ),
             });
@@ -2251,7 +2251,7 @@ fn check_unhandled_effects_in_expr(
                     declaration: Some(decl_name.to_string()),
                     span: None,
                     message: format!(
-                        "effect operation `{}` is not handled by any enclosing `using` block",
+                        "effect operation `{}` is not handled by any enclosing `with`/`with_handler` scope",
                         name
                     ),
                 });
@@ -2272,7 +2272,7 @@ fn check_unhandled_effects_in_expr(
                     declaration: Some(decl_name.to_string()),
                     span: None,
                     message: format!(
-                        "effect operation `{}` is not handled by any enclosing `using` block",
+                        "effect operation `{}` is not handled by any enclosing `with`/`with_handler` scope",
                         qualified
                     ),
                 });
@@ -2300,7 +2300,7 @@ fn check_unhandled_effects_in_expr(
                     decl_name,
                 )?;
                 // Arg type check for effect op calls (§4.1.1).
-                // Only fires when the op is covered (i.e. inside an active using block).
+                // Only fires when the op is covered (i.e. inside an active handler scope).
                 if env.is_effect_op(name)
                     && covered_ops.contains(name.as_str())
                     && let Ty::Fun { params, .. } = env.lookup(name)
@@ -2338,7 +2338,7 @@ fn check_unhandled_effects_in_expr(
                     declaration: Some(decl_name.to_string()),
                     span: None,
                     message: format!(
-                        "effect operation `{}` is not handled by any enclosing `using` block",
+                        "effect operation `{}` is not handled by any enclosing `with`/`with_handler` scope",
                         qualified
                     ),
                 });
@@ -2355,7 +2355,7 @@ fn check_unhandled_effects_in_expr(
                     declaration: Some(decl_name.to_string()),
                     span: None,
                     message: format!(
-                        "effect operation `{}` is not handled by any enclosing `using` block",
+                        "effect operation `{}` is not handled by any enclosing `with`/`with_handler` scope",
                         callee
                     ),
                 });
