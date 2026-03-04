@@ -207,6 +207,7 @@ Exit criteria:
 Files:
 
 - `stdlib/goby/stdio.gb`
+- `stdlib/goby/iterator.gb`
 - `examples/README.md` (if outdated syntax is shown)
 - `doc/PLAN_STANDARD_LIBRARY.md` (if outdated syntax remains)
 
@@ -215,12 +216,18 @@ Steps:
 1. Update stdio declaration:
    - from `@embed Print`
    - to `@embed Print __goby_embeded_effect_stdout_handler`
-2. Remove or mark obsolete legacy syntax references.
-3. Keep README high-level and avoid deep spec duplication.
+2. Update iterator declaration:
+   - from `@embed Iterator`
+   - to a valid embedded handler declaration form that passes the new handler
+     namespace + intrinsic-existence policy.
+   - If no runtime embedded default is intended for `Iterator`, remove the embed
+     declaration and adjust related tests accordingly.
+3. Remove or mark obsolete legacy syntax references.
+4. Keep README high-level and avoid deep spec duplication.
 
 Exit criteria:
 
-- Repository examples/docs do not present removed embed syntax as valid.
+- Repository stdlib/docs do not present removed embed syntax as valid.
 
 ## Phase 7: Validation and Release Checklist
 
@@ -275,7 +282,46 @@ Runtime:
 - explicit user handler dispatch still works
 - embedded default stdout handler is used only when explicit one is absent
 
-## 7. Risk Log
+## 7. Concrete Touchpoints Checklist
+
+This migration should explicitly touch and verify the known `@embed` hot spots.
+
+Parser/AST:
+
+- `crates/goby-core/src/ast.rs` (`EmbedDecl` shape)
+- `crates/goby-core/src/parser.rs` (`parse_embed_line` + parser tests)
+
+Resolver/typechecker:
+
+- `crates/goby-core/src/stdlib.rs` (`ResolvedStdlibModule` embedded metadata)
+- `crates/goby-core/src/typecheck.rs` (`validate_embed_declarations`,
+  imported/local embedded-effect flow, embed-related tests)
+
+Runtime:
+
+- `crates/goby-wasm/src/lib.rs` (embedded default handler intrinsic behavior)
+
+Stdlib and docs:
+
+- `stdlib/goby/stdio.gb`
+- `stdlib/goby/iterator.gb`
+- `examples/README.md`
+- `doc/PLAN_STANDARD_LIBRARY.md` (legacy historical sections should be marked or
+  updated so current syntax is unambiguous)
+
+## 8. State Snapshot Update (Required)
+
+At the end of implementation, update `doc/STATE.md` with:
+
+1. Locked syntax transition completion:
+   - `@embed <EffectName> <HandlerName>` only
+   - legacy `@embed effect ...` removal
+2. Final intrinsic handler set relevant to embed-default semantics.
+3. Any remaining open questions (for example, future embedded handlers beyond
+   stdout).
+4. Immediate next steps after migration closure.
+
+## 9. Risk Log
 
 1. Metadata shape migration risk:
    - resolver/typechecker call sites may assume `Vec<String>`.
@@ -287,13 +333,14 @@ Runtime:
    - tests may rely on exact message fragments.
    - mitigation: stabilize new messages and update tests intentionally.
 
-## 8. Suggested Commit Slicing
+## 10. Suggested Commit Slicing
 
 1. Parser/AST migration + parser tests.
 2. Resolver metadata migration + resolver tests.
 3. Typechecker embed validation update + tests.
 4. Main relaxation semantics + tests.
 5. Runtime intrinsic wiring + runtime tests.
-6. Stdlib/doc sync + full validation run.
+6. Stdlib/doc sync (`stdio.gb`, `iterator.gb`, examples/docs) + full validation run.
+7. `doc/STATE.md` milestone update.
 
 This slicing keeps reviewable diffs small and isolates behavior changes.
