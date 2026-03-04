@@ -102,12 +102,30 @@ pub enum BinOpKind {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ListPatternItem {
+    IntLit(i64),
+    StringLit(String),
+    BoolLit(bool),
+    Bind(String),
+    Wildcard,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ListPatternTail {
+    Ignore,
+    Bind(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CasePattern {
     IntLit(i64),
     StringLit(String),
     BoolLit(bool),
     EmptyList,
-    ListCons { head: String, tail: String },
+    ListPattern {
+        items: Vec<ListPatternItem>,
+        tail: Option<ListPatternTail>,
+    },
     Wildcard,
 }
 

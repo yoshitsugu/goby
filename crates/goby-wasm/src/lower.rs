@@ -485,6 +485,9 @@ fn eval_expr(
                     (CasePattern::IntLit(p), NativeValue::Int(v)) => p == v,
                     (CasePattern::StringLit(p), NativeValue::String(v)) => p == v,
                     (CasePattern::BoolLit(p), NativeValue::Bool(v)) => p == v,
+                    // List patterns are intentionally unsupported in native lowering.
+                    // Return `None` to force fallback runtime evaluation.
+                    (CasePattern::EmptyList | CasePattern::ListPattern { .. }, _) => return None,
                     _ => false,
                 };
                 if matched {
