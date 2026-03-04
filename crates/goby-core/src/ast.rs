@@ -106,6 +106,8 @@ pub enum CasePattern {
     IntLit(i64),
     StringLit(String),
     BoolLit(bool),
+    EmptyList,
+    ListCons { head: String, tail: String },
     Wildcard,
 }
 

@@ -1324,17 +1324,46 @@ impl<'m> RuntimeOutputResolver<'m> {
                 let scrutinee_val =
                     self.eval_expr_ast(scrutinee, locals, callables, evaluators, depth + 1)?;
                 for arm in arms {
+                    let mut arm_locals = locals.clone();
                     let matched = match (&arm.pattern, &scrutinee_val) {
                         (CasePattern::Wildcard, _) => true,
                         (CasePattern::IntLit(n), RuntimeValue::Int(v)) => n == v,
                         (CasePattern::StringLit(s), RuntimeValue::String(v)) => s == v,
                         (CasePattern::BoolLit(b), RuntimeValue::Bool(v)) => b == v,
+                        (CasePattern::EmptyList, RuntimeValue::ListInt(values)) => {
+                            values.is_empty()
+                        }
+                        (CasePattern::EmptyList, RuntimeValue::ListString(values)) => {
+                            values.is_empty()
+                        }
+                        (CasePattern::ListCons { head, tail }, RuntimeValue::ListInt(values)) => {
+                            if let Some(first) = values.first() {
+                                arm_locals.store(head, RuntimeValue::Int(*first));
+                                arm_locals.store(tail, RuntimeValue::ListInt(values[1..].to_vec()));
+                                true
+                            } else {
+                                false
+                            }
+                        }
+                        (
+                            CasePattern::ListCons { head, tail },
+                            RuntimeValue::ListString(values),
+                        ) => {
+                            if let Some(first) = values.first() {
+                                arm_locals.store(head, RuntimeValue::String(first.clone()));
+                                arm_locals
+                                    .store(tail, RuntimeValue::ListString(values[1..].to_vec()));
+                                true
+                            } else {
+                                false
+                            }
+                        }
                         _ => false,
                     };
                     if matched {
                         return self.eval_expr_ast(
                             &arm.body,
-                            locals,
+                            &arm_locals,
                             callables,
                             evaluators,
                             depth + 1,
@@ -3496,6 +3525,25 @@ main =
             output.is_none(),
             "case with no matching arm should produce no runtime output"
         );
+    }
+
+    #[test]
+    fn resolves_runtime_output_for_case_list_cons_pattern() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let source = r#"
+main : Unit -> Unit
+main =
+  xs = [1, 2, 3]
+  print
+    case xs
+      [] -> []
+      [x, ...xxs] -> xxs
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let output =
+            resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
+                .expect("runtime output should resolve");
+        assert_eq!(output, "[2, 3]");
     }
 
     // --- bare effect call dispatch in main body (§4.1 patch) ---

@@ -139,10 +139,10 @@ Based on `examples/*.gb`:
   - Parser supports `${ expr }` inside string literals and lowers it to `Expr::InterpolatedString`.
   - Typechecker treats interpolated literals as `String`.
   - Runtime/codegen evaluates each segment and stringifies embedded expression values.
-- **List `case` patterns** (next implementation slice).
-  - Add parser/AST support for `[]` and `[head, ...tail]` in `case` arms.
-  - Keep the initial shape intentionally minimal (no multi-element destructuring yet).
-  - Add parser regressions for valid and malformed forms.
+- **List `case` patterns** (implemented).
+  - Parser/AST support is available for `[]` and `[head, ...tail]` in `case` arms.
+  - Scope remains intentionally minimal (no multi-element destructuring yet).
+  - Parser regressions cover valid and malformed forms.
 - **Tuple index access `expr.N`** (post-MVP).
   - Syntax `a.0`, `a.1` is shown in `examples/basic_types.gb` but is not yet parsed.
   - `parse_method_call` rejects numeric method names (`is_identifier` fails on digits).
@@ -155,11 +155,13 @@ Based on `examples/*.gb`:
 
 - TODO (Deferred): declaration-side generic parameter binders
   (for example, `id : a -> a` with explicit binders).
-- **List `case` pattern typing** (next implementation slice).
-  - For `case xs` with list patterns, verify scrutinee is `List _` when known.
-  - Extend per-arm local environment:
+- **List `case` pattern typing** (implemented).
+  - For `case xs` with list patterns, typecheck verifies scrutinee is `List _` when known.
+  - Per-arm local environment extension is implemented:
     - `[head, ...tail]` binds `head : a`, `tail : List a`.
-  - Preserve MVP policy: tolerate `Ty::Unknown` when information is insufficient.
+  - MVP `Ty::Unknown` tolerance is preserved when information is insufficient.
+  - Native Wasm capability checker still treats list patterns as unsupported;
+    these cases execute via fallback runtime path.
 - Type annotation placement rules (required vs optional locations).
 - Type error diagnostics quality bar is fixed for MVP:
   - diagnostics must be non-empty and human-readable plain text.

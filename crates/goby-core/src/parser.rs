@@ -658,48 +658,87 @@ fn find_next_nonblank(lines: &[&str], from: usize) -> Option<usize> {
 
 /// Split a case arm line `"<pattern> -> <body>"` into `(pattern_src, body_src)`.
 ///
-/// Unlike `split_once(" -> ")`, this function identifies the pattern token first
-/// (a bare word, integer, or quoted string) and then requires ` -> ` immediately
-/// after it. This prevents misidentifying ` -> ` inside a lambda body as the arm
-/// separator (e.g. `5 -> |x| -> x + 1` splits at the first ` -> `, yielding
-/// `"5"` and `"|x| -> x + 1"` correctly).
+/// Unlike `split_once(" -> ")`, this function locates the first top-level
+/// ` -> ` separator and splits there. This prevents misidentifying ` -> ` inside
+/// a lambda body as the arm separator (e.g. `5 -> |x| -> x + 1` splits into
+/// `"5"` and `"|x| -> x + 1"` correctly), while still allowing patterns that
+/// contain spaces (e.g. `[x, ...xs]`).
 fn split_case_arm(src: &str) -> Option<(&str, &str)> {
     let src = src.trim();
-    // Determine where the pattern token ends.
-    let pat_end = if src.starts_with('"') {
-        // Quoted string pattern: scan to closing quote.
-        let mut idx = 1;
-        let bytes = src.as_bytes();
-        let mut closed = false;
-        while idx < bytes.len() {
-            if bytes[idx] == b'\\' {
-                idx += 2; // skip escaped char
-            } else if bytes[idx] == b'"' {
-                idx += 1;
-                closed = true;
-                break;
-            } else {
-                idx += 1;
-            }
-        }
-        if !closed {
-            return None; // unterminated string pattern
-        }
-        idx
-    } else {
-        // Bare token (identifier, integer, `_`): ends at first space.
-        src.find(' ').unwrap_or(src.len())
-    };
-    let pat_src = src[..pat_end].trim();
-    let rest = src[pat_end..].trim_start();
-    let body_src = rest.strip_prefix("-> ")?.trim();
+    let sep_idx = find_top_level_case_arm_separator(src)?;
+    let pat_src = src[..sep_idx].trim();
+    let body_src = src[sep_idx + 4..].trim();
+    if pat_src.is_empty() || body_src.is_empty() {
+        return None;
+    }
     Some((pat_src, body_src))
+}
+
+fn find_top_level_case_arm_separator(src: &str) -> Option<usize> {
+    let bytes = src.as_bytes();
+    let mut in_string = false;
+    let mut escaped = false;
+    let mut paren_depth = 0usize;
+    let mut bracket_depth = 0usize;
+    let mut brace_depth = 0usize;
+
+    let mut i = 0usize;
+    while i + 3 < bytes.len() {
+        let b = bytes[i];
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if b == b'\\' {
+                escaped = true;
+            } else if b == b'"' {
+                in_string = false;
+            }
+            i += 1;
+            continue;
+        }
+        match b {
+            b'"' => in_string = true,
+            b'(' => paren_depth += 1,
+            b')' => paren_depth = paren_depth.saturating_sub(1),
+            b'[' => bracket_depth += 1,
+            b']' => bracket_depth = bracket_depth.saturating_sub(1),
+            b'{' => brace_depth += 1,
+            b'}' => brace_depth = brace_depth.saturating_sub(1),
+            b' ' if paren_depth == 0 && bracket_depth == 0 && brace_depth == 0 => {
+                if bytes[i + 1] == b'-' && bytes[i + 2] == b'>' && bytes[i + 3] == b' ' {
+                    return Some(i);
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    None
 }
 
 fn parse_case_pattern(src: &str) -> Option<CasePattern> {
     let src = src.trim();
     if src == "_" {
         return Some(CasePattern::Wildcard);
+    }
+    if src == "[]" {
+        return Some(CasePattern::EmptyList);
+    }
+    if let Some(inner) = src.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
+        let inner = inner.trim();
+        if let Some((head_src, tail_src)) = inner.split_once(',') {
+            let head = head_src.trim();
+            let tail_src = tail_src.trim();
+            let tail = tail_src.strip_prefix("...")?.trim();
+            if !is_non_reserved_identifier(head) || !is_non_reserved_identifier(tail) {
+                return None;
+            }
+            return Some(CasePattern::ListCons {
+                head: head.to_string(),
+                tail: tail.to_string(),
+            });
+        }
+        return None;
     }
     if src == "True" {
         return Some(CasePattern::BoolLit(true));
@@ -2959,6 +2998,36 @@ main =
             }
             other => panic!("unexpected statement: {other:?}"),
         }
+    }
+
+    #[test]
+    fn parses_case_list_patterns() {
+        let body = "print\n  case xs\n    [] -> 0\n    [x, ...xxs] -> x";
+        let stmts = parse_body_stmts(body).expect("should parse");
+        assert_eq!(stmts.len(), 1);
+        match &stmts[0] {
+            Stmt::Expr(Expr::Call { arg, .. }) => match arg.as_ref() {
+                Expr::Case { arms, .. } => {
+                    assert_eq!(arms.len(), 2);
+                    assert!(matches!(arms[0].pattern, CasePattern::EmptyList));
+                    assert!(matches!(
+                        &arms[1].pattern,
+                        CasePattern::ListCons { head, tail } if head == "x" && tail == "xxs"
+                    ));
+                }
+                other => panic!("unexpected call arg: {other:?}"),
+            },
+            other => panic!("unexpected statement: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rejects_malformed_case_list_pattern() {
+        let body = "print\n  case xs\n    [x, y] -> x\n    _ -> 0";
+        assert!(
+            parse_body_stmts(body).is_none(),
+            "malformed list pattern should fail parse"
+        );
     }
 
     #[test]
