@@ -472,6 +472,8 @@ struct InlineHandlerMethod {
 #[derive(Clone)]
 struct InlineHandlerValue {
     methods: Vec<InlineHandlerMethod>,
+    captured_locals: RuntimeLocals,
+    captured_callables: HashMap<String, IntCallable>,
 }
 
 struct RuntimeEvaluators<'a, 'b> {
@@ -980,9 +982,11 @@ impl<'m> RuntimeOutputResolver<'m> {
                     None
                 }
             }
-            Expr::Handler { clauses } => {
-                Some(RuntimeValue::Handler(self.inline_handler_from_clauses(clauses)))
-            }
+            Expr::Handler { clauses } => Some(RuntimeValue::Handler(self.inline_handler_from_clauses(
+                clauses,
+                locals,
+                callables,
+            ))),
             Expr::BinOp { op, left, right } => {
                 let lv = self.eval_expr_ast(left, locals, callables, evaluators, depth + 1)?;
                 let rv = self.eval_expr_ast(right, locals, callables, evaluators, depth + 1)?;
@@ -1611,7 +1615,12 @@ impl<'m> RuntimeOutputResolver<'m> {
         None
     }
 
-    fn inline_handler_from_clauses(&self, clauses: &[HandlerClause]) -> InlineHandlerValue {
+    fn inline_handler_from_clauses(
+        &self,
+        clauses: &[HandlerClause],
+        locals: &RuntimeLocals,
+        callables: &HashMap<String, IntCallable>,
+    ) -> InlineHandlerValue {
         let methods = clauses
             .iter()
             .map(|clause| InlineHandlerMethod {
@@ -1624,7 +1633,11 @@ impl<'m> RuntimeOutputResolver<'m> {
                 },
             })
             .collect();
-        InlineHandlerValue { methods }
+        InlineHandlerValue {
+            methods,
+            captured_locals: locals.clone(),
+            captured_callables: callables.clone(),
+        }
     }
 
     fn unique_effect_name_for_operation(&self, op_name: &str) -> Option<String> {
@@ -1825,11 +1838,47 @@ impl<'m> RuntimeOutputResolver<'m> {
         );
         let previous_stack_len = self.active_handler_stack.len();
         let run_result = (|| -> Option<Option<RuntimeValue>> {
-            let mut handler_locals = RuntimeLocals::default();
+            let mut handler_locals = if method.handler_decl_idx == usize::MAX {
+                self.active_inline_handler_stack
+                    .iter()
+                    .rev()
+                    .find_map(|inline| {
+                        inline
+                            .methods
+                            .iter()
+                            .find(|m| {
+                                m.method.name == method.method.name
+                                    && m.method.params == method.method.params
+                                    && m.method.body == method.method.body
+                            })
+                            .map(|_| inline.captured_locals.clone())
+                    })
+                    .unwrap_or_default()
+            } else {
+                RuntimeLocals::default()
+            };
             if let Some(param) = method.method.params.first() {
                 handler_locals.store(param, arg_val);
             }
-            let mut handler_callables = HashMap::new();
+            let mut handler_callables = if method.handler_decl_idx == usize::MAX {
+                self.active_inline_handler_stack
+                    .iter()
+                    .rev()
+                    .find_map(|inline| {
+                        inline
+                            .methods
+                            .iter()
+                            .find(|m| {
+                                m.method.name == method.method.name
+                                    && m.method.params == method.method.params
+                                    && m.method.body == method.method.body
+                            })
+                            .map(|_| inline.captured_callables.clone())
+                    })
+                    .unwrap_or_default()
+            } else {
+                HashMap::new()
+            };
             let mut last_val: Option<RuntimeValue> = None;
             for stmt in stmts {
                 if produce_value {
@@ -3449,6 +3498,125 @@ main =
             output.as_deref(),
             Some("world"),
             "with <handler-var> should install stored handler value and dispatch operation"
+        );
+    }
+
+    #[test]
+    fn with_handler_captures_lexical_local_in_runtime() {
+        use goby_core::parse_module;
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let source = r#"
+effect Log
+  log: String -> Unit
+
+main : Unit -> Unit
+main =
+  prefix = "pre:"
+  with_handler
+    log msg ->
+      print "${prefix}${msg}"
+      resume Unit
+  in
+    log "hello"
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let output =
+            resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module));
+        assert_eq!(
+            output.as_deref(),
+            Some("pre:hello"),
+            "handler value should capture lexical locals used inside clause body"
+        );
+    }
+
+    #[test]
+    fn nested_with_handler_prefers_nearest_inline_handler() {
+        use goby_core::parse_module;
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let source = r#"
+effect Log
+  log: String -> Unit
+
+main : Unit -> Unit
+main =
+  with_handler
+    log msg ->
+      print "outer"
+      resume Unit
+  in
+    with_handler
+      log msg ->
+        print "inner"
+        resume Unit
+    in
+      log "x"
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let output =
+            resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module));
+        assert_eq!(
+            output.as_deref(),
+            Some("inner"),
+            "nearest inline handler should win under nested with blocks"
+        );
+    }
+
+    #[test]
+    fn inline_handler_overrides_legacy_using_handler() {
+        use goby_core::parse_module;
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let source = r#"
+effect Log
+  log: String -> Unit
+
+handler Legacy for Log
+  log msg =
+    print "legacy"
+
+main : Unit -> Unit
+main =
+  using Legacy
+    with_handler
+      log msg ->
+        print "inline"
+        resume Unit
+    in
+      log "x"
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let output =
+            resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module));
+        assert_eq!(
+            output.as_deref(),
+            Some("inline"),
+            "inline handler should take precedence over active legacy using handler"
+        );
+    }
+
+    #[test]
+    fn with_handler_dispatches_qualified_effect_call_in_runtime() {
+        use goby_core::parse_module;
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let source = r#"
+effect Log
+  log: String -> Unit
+
+main : Unit -> Unit
+main =
+  with_handler
+    log msg ->
+      print msg
+      resume Unit
+  in
+    Log.log "qualified"
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let output =
+            resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module));
+        assert_eq!(
+            output.as_deref(),
+            Some("qualified"),
+            "qualified effect call should dispatch to active inline handler for that effect"
         );
     }
 
