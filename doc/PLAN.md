@@ -289,6 +289,43 @@ This section records the locked renewal decisions and is the canonical language-
   - if/when switching default execution mode from `PortableFallback` to
     optimized mode, do so in a dedicated follow-up with separate review.
 
+#### Abortive Handler Behavior Follow-up (planned 2026-03-04)
+
+Goal: align runtime behavior with "exceptions via effects" style where an
+operation handler may intentionally not call `resume`, and the continuation
+from the effect site is discarded.
+
+Planned steps:
+
+1. Spec lock.
+   - Clarify in `doc/LANGUAGE_SPEC.md` that if an operation clause does not call
+     `resume`, control does not return to the operation call site.
+   - State that this is the canonical abortive path (exception-like behavior).
+2. Typecheck expectations.
+   - Keep existing `resume` typing rules as-is (`resume` remains optional in
+     handler clauses).
+   - Ensure no diagnostics imply that handler clauses must call `resume`.
+3. Runtime behavior update.
+   - In handler dispatch bridge, treat "no resume observed" as successful
+     abortive completion rather than runtime failure/`None` propagation.
+   - Preserve one-shot semantics when `resume` is used; this change only affects
+     the no-`resume` branch.
+4. Regression tests.
+   - Add fallback-runtime tests showing:
+     - handler clause without `resume` terminates handled computation path,
+     - surrounding program continues from outside the handled region,
+     - existing `resume` success and double-resume error behavior remain unchanged.
+5. Documentation/examples sync.
+   - Add one small example that models exception-like handling by omitting
+     `resume` in a handler clause.
+
+Acceptance criteria:
+
+1. Programs using handler clauses without `resume` run without runtime error.
+2. Effect call-site continuation is not resumed in that path.
+3. Existing `resume` behavior (single-shot success + double-resume rejection)
+   remains unchanged.
+
 ### 2.4 Standard Library Surface (MVP)
 
 - Core modules to ship first (`Int`, `String`, `List`, `Env`) — minimal built-ins implemented.
