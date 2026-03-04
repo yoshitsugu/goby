@@ -45,7 +45,7 @@ Plug '/path/to/goby/tooling/vim'
 | `SpecialChar` | Escape sequences | `\n` `\t` `\\` `\"` |
 | `Number` | Integer literals | `42` |
 | `Boolean` | Boolean constants | `True`, `False` |
-| `Keyword` | Control + declaration keywords | `if` `else` `type` `effect` … |
+| `Keyword` | Control + declaration keywords | `if` `else` `case` `with` `@embed` `type` … |
 | `Type` | Built-in types + user-defined types | `Int`, `MyType` |
 | `Operator` | Operators | `->` `\|>` `==` `=` `+` `*` `\|` `:` |
 
