@@ -1338,8 +1338,13 @@ impl<'m> RuntimeOutputResolver<'m> {
                         }
                         (CasePattern::ListCons { head, tail }, RuntimeValue::ListInt(values)) => {
                             if let Some(first) = values.first() {
-                                arm_locals.store(head, RuntimeValue::Int(*first));
-                                arm_locals.store(tail, RuntimeValue::ListInt(values[1..].to_vec()));
+                                if head != "_" {
+                                    arm_locals.store(head, RuntimeValue::Int(*first));
+                                }
+                                if tail != "_" {
+                                    arm_locals
+                                        .store(tail, RuntimeValue::ListInt(values[1..].to_vec()));
+                                }
                                 true
                             } else {
                                 false
@@ -1350,9 +1355,15 @@ impl<'m> RuntimeOutputResolver<'m> {
                             RuntimeValue::ListString(values),
                         ) => {
                             if let Some(first) = values.first() {
-                                arm_locals.store(head, RuntimeValue::String(first.clone()));
-                                arm_locals
-                                    .store(tail, RuntimeValue::ListString(values[1..].to_vec()));
+                                if head != "_" {
+                                    arm_locals.store(head, RuntimeValue::String(first.clone()));
+                                }
+                                if tail != "_" {
+                                    arm_locals.store(
+                                        tail,
+                                        RuntimeValue::ListString(values[1..].to_vec()),
+                                    );
+                                }
                                 true
                             } else {
                                 false
@@ -3537,7 +3548,26 @@ main =
   print
     case xs
       [] -> []
-      [x, ...xxs] -> xxs
+      [x, ..xxs] -> xxs
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let output =
+            resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
+                .expect("runtime output should resolve");
+        assert_eq!(output, "[2, 3]");
+    }
+
+    #[test]
+    fn resolves_runtime_output_for_case_list_cons_wildcard_head() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let source = r#"
+main : Unit -> Unit
+main =
+  xs = [1, 2, 3]
+  print
+    case xs
+      [] -> []
+      [_, ..tail] -> tail
 "#;
         let module = parse_module(source).expect("parse should work");
         let output =

@@ -4,4 +4,4 @@ main =
   print
     case xs
       [] -> "empty"
-      [x, ...xxs] -> "${x}:${xxs}"
+      [x, ..xxs] -> "${x}:${xxs}"

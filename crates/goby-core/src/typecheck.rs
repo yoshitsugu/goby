@@ -1934,10 +1934,14 @@ fn env_with_case_pattern_bindings(
     let mut child = env.clone();
     if let CasePattern::ListCons { head, tail } = pattern {
         let item_ty = list_item_ty_for_case_scrutinee(env, scrutinee_ty);
-        child.locals.insert(head.clone(), item_ty.clone());
-        child
-            .locals
-            .insert(tail.clone(), Ty::List(Box::new(item_ty)));
+        if head != "_" {
+            child.locals.insert(head.clone(), item_ty.clone());
+        }
+        if tail != "_" {
+            child
+                .locals
+                .insert(tail.clone(), Ty::List(Box::new(item_ty)));
+        }
     }
     child
 }
@@ -4276,10 +4280,27 @@ head_or_zero xs =
   id
     case xs
       [] -> 0
-      [x, ...xxs] -> x
+      [x, ..xxs] -> x
 "#;
         let module = parse_module(source).expect("should parse");
         typecheck_module(&module).expect("list case bindings should typecheck");
+    }
+
+    #[test]
+    fn accepts_case_list_cons_with_wildcard_head() {
+        let source = r#"
+id : List Int -> List Int
+id xs = xs
+
+tail_or_empty : List Int -> List Int
+tail_or_empty xs =
+  id
+    case xs
+      [] -> []
+      [_, ..tail] -> tail
+"#;
+        let module = parse_module(source).expect("should parse");
+        typecheck_module(&module).expect("wildcard head list pattern should typecheck");
     }
 
     #[test]
@@ -4292,7 +4313,7 @@ f : Int -> Int
 f x =
   id
     case x
-      [head, ...tail] -> head
+      [head, ..tail] -> head
       _ -> 0
 "#;
         let module = parse_module(source).expect("should parse");

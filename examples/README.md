@@ -9,7 +9,7 @@ This directory contains small Goby programs grouped by purpose.
 - `function.gb`: canonical function/lambda/list example used as run-parity target
 - `read.gb`: minimal stdin sample using prelude `Read.read_line` and `Read.read`
 - `to_integer.gb`: `int.parse` sample with `StringParseError` handler
-- `list_case.gb`: list `case` pattern sample (`[]`, `[head, ...tail]`)
+- `list_case.gb`: list `case` pattern sample (current subset: `[]`, `[head, ..tail]`)
 
 ## Grouped Samples
 
