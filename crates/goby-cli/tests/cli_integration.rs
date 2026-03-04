@@ -272,3 +272,51 @@ fn check_command_emits_legacy_syntax_warnings() {
         stdout
     );
 }
+
+#[test]
+#[cfg(unix)]
+fn run_command_emits_legacy_syntax_warnings() {
+    let root = repo_root();
+    let sandbox = TempDirGuard::new("run_legacy_warnings");
+    let fake_bin = sandbox.join("bin");
+    fs::create_dir_all(&fake_bin).expect("bin directory should be creatable");
+    install_fake_wasmtime(&fake_bin.join("wasmtime"));
+
+    let input = sandbox.join("legacy_effect.gb");
+    fs::write(
+        &input,
+        "effect Log\n  log: String -> Unit\nhandler H for Log\n  log s =\n    print s\nmain : Unit -> Unit\nmain =\n  using H\n    log \"hello\"\n",
+    )
+    .expect("temporary input should be writable");
+
+    let mut path_entries = vec![fake_bin.clone()];
+    if let Some(existing) = env::var_os("PATH") {
+        path_entries.extend(env::split_paths(&existing));
+    }
+    let merged_path = env::join_paths(path_entries).expect("PATH should be joinable");
+
+    let output = command_for_goby_cli()
+        .arg("run")
+        .arg(&input)
+        .env("PATH", merged_path)
+        .current_dir(&root)
+        .output()
+        .expect("cli should execute");
+
+    assert!(
+        output.status.success(),
+        "expected success, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("warning: legacy syntax `handler ... for ...`"),
+        "expected legacy handler warning, got stdout: {}",
+        stdout
+    );
+    assert!(
+        stdout.contains("warning: legacy syntax `using`"),
+        "expected legacy using warning, got stdout: {}",
+        stdout
+    );
+}
