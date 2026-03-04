@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-04 (session 107)
+Last updated: 2026-03-04 (session 108)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -59,6 +59,18 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - phased Wasm lowering (portable trampoline first, typed-continuation optimization later).
 
 ## 4. Recent Milestones
+
+- 2026-03-04 (session 108): `PLAN_EFFECT_RENEWAL` P5 warning coverage expansion (`run`)
+  - Extended CLI legacy-warning regression coverage to `run` path:
+    - added integration test asserting `run` also emits legacy warnings for
+      `handler ... for ...` and `using` syntax.
+  - This keeps warning behavior consistent across both CLI entrypoints:
+    - `check`
+    - `run`
+  - Validation (mandatory flow) completed:
+    - `cargo fmt`
+    - `cargo clippy -- -D warnings`
+    - `cargo test`
 
 - 2026-03-04 (session 107): `PLAN_EFFECT_RENEWAL` P5 first implementation (legacy syntax warnings)
   - Added legacy syntax warnings in `goby-cli check/run` success path:
