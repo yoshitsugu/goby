@@ -259,7 +259,46 @@ Completion criteria:
 
 ## 6. Immediate Next Step
 
-Continue P6:
-- remove legacy parser/runtime compatibility paths (`handler ... for ...`, `using`),
-- migrate/retire remaining tests and stdlib internals that still depend on them,
-- keep CLI/default behavior aligned with canonical `handler` + `with` / `with_handler`.
+Next implementation slice: **P6-R2 (core legacy-path removal)**.
+
+Scope and order:
+
+1. AST/parser cleanup (goby-core)
+   - remove `Stmt::Using` from active AST surface.
+   - keep parser rejection diagnostics for legacy `using` / `handler ... for ...`
+     (migration hint quality must not regress).
+   - ensure no parser codepath still produces legacy AST nodes.
+
+2. Typechecker cleanup (goby-core)
+   - remove `module.handler_declarations`-driven checks and symbol injection.
+   - remove legacy-only resume multi-shot checks tied to top-level handler declarations.
+   - keep `with` / `with_handler` resume checks and ambiguity checks as canonical path.
+   - update outdated diagnostic wording/comments that still mention `using` as active syntax.
+
+3. Wasm cleanup (goby-wasm)
+   - remove runtime dispatch fallback paths that traverse `module.handler_declarations`
+     and `active_handler_stack`.
+   - keep inline handler stack (`with` / `with_handler`) as the only dispatch source.
+   - simplify optimized-path unsupported-construct gate by deleting
+     `handler_declarations` / `Stmt::Using` conditions.
+
+4. Test and docs migration
+   - migrate/remove remaining fixtures that still construct legacy handler declarations
+     or `Stmt::Using`.
+   - refresh references in `doc/PLAN.md`, `doc/BUGS.md`, and `doc/STATE.md`
+     that describe `using` as an active implementation path.
+   - preserve migration guide (`doc/EFFECT_RENEWAL_MIGRATION.md`) as historical mapping only.
+
+Definition of done for P6-R2:
+
+- `rg -n "Stmt::Using|handler_declarations" crates/goby-core crates/goby-wasm`
+  returns no active runtime/typecheck usage (tests/docs exceptions allowed only where
+  explicitly marked migration-history).
+- `cargo fmt`
+- `cargo clippy -- -D warnings`
+- `cargo test`
+- `cargo check`
+
+Planned follow-up slice: **P6-R3 (final schema pruning)**:
+- drop obsolete AST structs/fields for legacy top-level handlers if no longer referenced,
+- run final docs/examples consistency pass and close P6 checklist.

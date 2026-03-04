@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-04 (session 121)
+Last updated: 2026-03-04 (session 123)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -65,6 +65,38 @@ This file is a restart-safe snapshot for resuming work after context reset.
     paths and remaining docs/test cleanup are still pending.
 
 ## 4. Recent Milestones
+
+- 2026-03-04 (session 123): `PLAN_EFFECT_RENEWAL` P6-R2 first implementation slice (legacy AST/runtime path shrink)
+  - Removed active legacy `using` AST surface:
+    - deleted `Stmt::Using` variant from `crates/goby-core/src/ast.rs`.
+    - parser continues to reject legacy `using` / top-level `handler ... for ...` with migration hints.
+  - Removed legacy typechecker dependencies:
+    - removed `module.handler_declarations`-driven handler-method resume checks,
+    - removed `using`-scope branches in resume/intrinsic/ambiguity/effect checks,
+    - effect coverage now follows canonical `with` / `with_handler` path only.
+  - Removed `goby-wasm` legacy statement/runtime paths:
+    - deleted `Stmt::Using` handling branches in `planning`, `lower`, `fallback`, and runtime resolver,
+    - removed runtime legacy handler-stack lookups via `module.handler_declarations`,
+    - simplified continuation-token structure for inline-handler-only flow.
+  - Codebase verification for removal target:
+    - `rg -n "Stmt::Using|handler_declarations" crates/goby-core crates/goby-wasm`
+      now reports parser/schema references only (no active runtime/typecheck usage).
+  - Validation completed:
+    - `cargo check`
+    - `cargo test`
+    - `cargo fmt`
+    - `cargo clippy -- -D warnings`
+
+- 2026-03-04 (session 122): `PLAN_EFFECT_RENEWAL` immediate-next-step planning refresh
+  - Expanded `doc/PLAN_EFFECT_RENEWAL.md` §6 from a short note into an ordered
+    execution slice (`P6-R2`) with concrete scope:
+    - goby-core AST/parser cleanup (`Stmt::Using` legacy path removal direction),
+    - goby-core typechecker cleanup (`handler_declarations` legacy dependency removal),
+    - goby-wasm runtime/lowering cleanup (inline-handler-only dispatch path),
+    - tests/docs migration targets and explicit done criteria.
+  - Added follow-up slice definition (`P6-R3`) for final schema pruning and closure.
+  - Validation note:
+    - planning/documentation update only (no compiler/runtime behavior change in this step).
 
 - 2026-03-04 (session 121): mutable variable feature planning and sample doc sync
   - Added mutable variable implementation plan to `doc/PLAN.md`:

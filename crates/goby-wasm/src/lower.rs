@@ -223,14 +223,11 @@ fn select_effect_execution_mode_with_inputs(
 }
 
 fn contains_unsupported_effect_construct_for_optimized_path(module: &Module) -> bool {
-    if !module.handler_declarations.is_empty() {
-        return true;
-    }
     module
         .declarations
         .iter()
         .filter_map(|decl| decl.parsed_body.as_deref())
-        .any(stmts_contain_using_or_resume)
+        .any(stmts_contain_resume)
 }
 
 fn compile_time_runtime_profile() -> RuntimeProfile {
@@ -254,15 +251,14 @@ fn runtime_force_portable_fallback_override_enabled() -> bool {
     )
 }
 
-fn stmts_contain_using_or_resume(stmts: &[Stmt]) -> bool {
-    stmts.iter().any(stmt_contains_using_or_resume)
+fn stmts_contain_resume(stmts: &[Stmt]) -> bool {
+    stmts.iter().any(stmt_contains_resume)
 }
 
-fn stmt_contains_using_or_resume(stmt: &Stmt) -> bool {
+fn stmt_contains_resume(stmt: &Stmt) -> bool {
     match stmt {
         Stmt::Binding { value, .. } => expr_contains_resume(value),
         Stmt::Expr(expr) => expr_contains_resume(expr),
-        Stmt::Using { .. } => true,
     }
 }
 
@@ -294,11 +290,9 @@ fn expr_contains_resume(expr: &Expr) -> bool {
             clause
                 .parsed_body
                 .as_ref()
-                .is_some_and(|stmts| stmts_contain_using_or_resume(stmts))
+                .is_some_and(|stmts| stmts_contain_resume(stmts))
         }),
-        Expr::With { handler, body } => {
-            expr_contains_resume(handler) || stmts_contain_using_or_resume(body)
-        }
+        Expr::With { handler, body } => expr_contains_resume(handler) || stmts_contain_resume(body),
         Expr::RecordConstruct { fields, .. } => {
             fields.iter().any(|(_, value)| expr_contains_resume(value))
         }
@@ -378,7 +372,6 @@ fn collect_phase2_output_text(
                 let val = as_print_expr(expr, &bindings, &env)?;
                 outputs.push(val.as_output_text());
             }
-            Stmt::Using { .. } => return None,
         }
     }
     Some(outputs.join("\n"))
@@ -551,7 +544,6 @@ fn eval_named_function(
                 let value = eval_expr(expr, &locals, env, depth + 1)?;
                 last_expr = Some(value);
             }
-            Stmt::Using { .. } => return None,
         }
     }
     last_expr
