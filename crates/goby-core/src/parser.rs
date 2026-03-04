@@ -103,6 +103,14 @@ pub fn parse_module(source: &str) -> Result<Module, ParseError> {
                     message: "effect declaration requires a name".to_string(),
                 });
             }
+            if !is_non_reserved_identifier(&effect_name) {
+                return Err(ParseError {
+                    line: i + 1,
+                    col: 1,
+                    message: "effect declaration name must be a non-reserved identifier"
+                        .to_string(),
+                });
+            }
             let mut members = Vec::new();
             i += 1;
             while i < lines.len() {
@@ -120,7 +128,7 @@ pub fn parse_module(source: &str) -> Result<Module, ParseError> {
                 if let Some((name, ty)) = member_trimmed_str.split_once(':') {
                     let name = name.trim().to_string();
                     let ty = ty.trim().to_string();
-                    if !name.is_empty() && !ty.is_empty() {
+                    if is_non_reserved_identifier(&name) && !ty.is_empty() {
                         members.push(EffectMember {
                             name,
                             type_annotation: ty,
@@ -452,13 +460,13 @@ fn parse_handler_clause_header(src: &str) -> Option<(String, Vec<String>, &str)>
     let rhs = rhs.trim();
     let mut parts = lhs.split_whitespace();
     let name = parts.next()?;
-    if !is_identifier(name) {
+    if !is_non_reserved_identifier(name) {
         return None;
     }
 
     let mut params = Vec::new();
     for param in parts {
-        if !is_identifier(param) || is_reserved_keyword(param) {
+        if !is_non_reserved_identifier(param) {
             return None;
         }
         params.push(param.to_string());
@@ -836,8 +844,29 @@ fn parse_stmt(line: &str) -> Option<Stmt> {
 fn is_reserved_keyword(s: &str) -> bool {
     matches!(
         s,
-        "resume" | "with" | "with_handler" | "in" | "handler" | "effect" | "mut"
+        "@embed"
+            | "import"
+            | "type"
+            | "effect"
+            | "handler"
+            | "with"
+            | "with_handler"
+            | "in"
+            | "resume"
+            | "mut"
+            | "if"
+            | "else"
+            | "case"
+            | "as"
+            | "can"
+            | "using"
+            | "True"
+            | "False"
     )
+}
+
+fn is_non_reserved_identifier(s: &str) -> bool {
+    is_identifier(s) && !is_reserved_keyword(s)
 }
 
 fn parse_resume_expr(src: &str) -> Option<Expr> {
@@ -971,7 +1000,7 @@ pub fn parse_expr(src: &str) -> Option<Expr> {
     }
 
     // 16. Identifier
-    if is_identifier(src) && !is_reserved_keyword(src) {
+    if is_non_reserved_identifier(src) {
         return Some(Expr::Var(src.to_string()));
     }
 
@@ -1210,7 +1239,7 @@ fn parse_non_lambda_expr(src: &str) -> Option<Expr> {
     if let Ok(n) = src.parse::<i64>() {
         return Some(Expr::IntLit(n));
     }
-    if is_identifier(src) {
+    if is_non_reserved_identifier(src) {
         return Some(Expr::Var(src.to_string()));
     }
     // Allow simple binary ops like `n + 5` on the right hand side of a placeholder
@@ -1464,7 +1493,7 @@ fn try_split_binding(line: &str) -> Option<(&str, &str)> {
     }
     let name = line[..idx].trim();
     let rhs = line[idx + 1..].trim();
-    if is_identifier(name) {
+    if is_non_reserved_identifier(name) {
         Some((name, rhs))
     } else {
         None
@@ -1475,7 +1504,7 @@ fn try_split_assignment(line: &str) -> Option<(&str, &str)> {
     let (lhs, rhs) = line.split_once(":=")?;
     let lhs = lhs.trim();
     let rhs = rhs.trim();
-    if lhs.is_empty() || rhs.is_empty() || !is_identifier(lhs) {
+    if lhs.is_empty() || rhs.is_empty() || !is_non_reserved_identifier(lhs) {
         return None;
     }
     Some((lhs, rhs))
@@ -1529,7 +1558,7 @@ fn parse_import_line(line: &str) -> Option<ImportDecl> {
         let mut symbols = Vec::new();
         for name in names {
             let name = name.trim();
-            if !is_identifier(name) {
+            if !is_non_reserved_identifier(name) {
                 return None;
             }
             symbols.push(name.to_string());
@@ -1543,7 +1572,7 @@ fn parse_import_line(line: &str) -> Option<ImportDecl> {
     if let Some((module_path, alias)) = rest.split_once(" as ") {
         let module_path = module_path.trim();
         let alias = alias.trim();
-        if !is_module_path(module_path) || !is_identifier(alias) {
+        if !is_module_path(module_path) || !is_non_reserved_identifier(alias) {
             return None;
         }
         return Some(ImportDecl {
@@ -1607,7 +1636,7 @@ fn parse_type_declaration_line(line: &str) -> Option<TypeDeclaration> {
     let (name, rhs) = rest.split_once('=')?;
     let name = name.trim();
     let rhs = rhs.trim();
-    if !is_identifier(name) || rhs.is_empty() {
+    if !is_non_reserved_identifier(name) || rhs.is_empty() {
         return None;
     }
 
@@ -1615,7 +1644,7 @@ fn parse_type_declaration_line(line: &str) -> Option<TypeDeclaration> {
         let constructors: Option<Vec<String>> = parts
             .into_iter()
             .map(str::trim)
-            .map(|ctor| is_identifier(ctor).then(|| ctor.to_string()))
+            .map(|ctor| is_non_reserved_identifier(ctor).then(|| ctor.to_string()))
             .collect();
         let constructors = constructors?;
         if constructors.is_empty() {
@@ -1628,7 +1657,7 @@ fn parse_type_declaration_line(line: &str) -> Option<TypeDeclaration> {
     }
 
     if let Some((constructor, inner)) = split_record_constructor_shape(rhs) {
-        if !is_identifier(constructor) {
+        if !is_non_reserved_identifier(constructor) {
             return None;
         }
         let fields = if inner.is_empty() {
@@ -1658,7 +1687,7 @@ fn parse_record_field(field_src: &str) -> Option<RecordField> {
     let (name, ty) = field_src.split_once(':')?;
     let name = name.trim();
     let ty = ty.trim();
-    if !is_identifier(name) || ty.is_empty() {
+    if !is_non_reserved_identifier(name) || ty.is_empty() {
         return None;
     }
     Some(RecordField {
@@ -1728,7 +1757,7 @@ fn split_record_constructor_shape(rhs: &str) -> Option<(&str, &str)> {
     }
     let open_idx = rhs.find('(')?;
     let constructor = rhs[..open_idx].trim();
-    if constructor.is_empty() || !is_identifier(constructor) {
+    if constructor.is_empty() || !is_non_reserved_identifier(constructor) {
         return None;
     }
     if open_idx != constructor.len() {
@@ -1839,10 +1868,13 @@ fn split_top_level_definition(line: &str) -> Option<(&str, Vec<String>, String)>
     let rhs = line[idx + 1..].trim_start();
     let mut tokens = lhs.split_whitespace();
     let name = tokens.next()?;
-    let params: Vec<String> = tokens
-        .filter(|t| is_identifier(t))
-        .map(|t| t.to_string())
-        .collect();
+    let mut params = Vec::new();
+    for token in tokens {
+        if !is_non_reserved_identifier(token) {
+            return None;
+        }
+        params.push(token.to_string());
+    }
     Some((name, params, rhs.to_string()))
 }
 
@@ -1925,6 +1957,49 @@ mod tests {
         let source = "resume : Int -> Int\nresume x = x\n";
         let err = parse_module(source).expect_err("reserved declaration name should be rejected");
         assert!(err.message.contains("reserved keyword"));
+    }
+
+    #[test]
+    fn rejects_all_reserved_syntax_tokens_as_top_level_declaration_names() {
+        let reserved = [
+            "import",
+            "type",
+            "effect",
+            "handler",
+            "with",
+            "with_handler",
+            "in",
+            "resume",
+            "mut",
+            "if",
+            "else",
+            "case",
+            "as",
+            "can",
+            "using",
+            "True",
+            "False",
+        ];
+        for name in reserved {
+            let source = format!("{name} : Int -> Int\n{name} x = x\n");
+            parse_module(&source).expect_err("reserved declaration name should be rejected");
+        }
+    }
+
+    #[test]
+    fn rejects_reserved_syntax_tokens_as_local_binding_names() {
+        let source = "main =\n  if = 1\n  if\n";
+        let module =
+            parse_module(source).expect("module parse itself succeeds even when body parse fails");
+        let main = module
+            .declarations
+            .iter()
+            .find(|decl| decl.name == "main")
+            .expect("main declaration should exist");
+        assert!(
+            main.parsed_body.is_none(),
+            "reserved local binding should prevent statement parse"
+        );
     }
 
     #[test]
