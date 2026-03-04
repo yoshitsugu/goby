@@ -92,6 +92,6 @@ syntax/semantics.
 ## 7. Current Runtime/Builtin Notes
 
 - Builtins currently include `print`, `map`, `fetch_env_var`, `string.split`, `list.join`.
-- `Print` is currently accepted as a built-in effect name.
+- `Print` effect resolution is provided via stdlib prelude (`goby/prelude`) embed defaults.
 - `@embed` default handlers are active for `main` effect validation and runtime
   fallback behavior where configured.

@@ -8,6 +8,8 @@ use crate::{
     types::{TypeExpr, parse_function_type, parse_type_expr},
 };
 
+const PRELUDE_MODULE_PATH: &str = "goby/prelude";
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TypecheckError {
     pub declaration: Option<String>,
@@ -62,6 +64,7 @@ pub fn typecheck_module_with_context(
         .iter()
         .copied()
         .map(str::to_string)
+        .chain(embedded_default_effects.iter().cloned())
         .chain(module.effect_declarations.iter().map(|e| e.name.clone()))
         .collect();
 
@@ -758,7 +761,7 @@ fn validate_effect_declarations(module: &Module) -> Result<(), TypecheckError> {
 
 fn validate_imports(module: &Module, stdlib_root: &Path) -> Result<(), TypecheckError> {
     let resolver = StdlibResolver::new(stdlib_root.to_path_buf());
-    for import in &module.imports {
+    for import in effective_imports(module, &resolver) {
         let exports = module_exports_for_import_with_resolver(&import.module_path, &resolver)?;
 
         if let ImportKind::Selective(names) = &import.kind {
@@ -1152,7 +1155,7 @@ fn inject_imported_symbols(
     stdlib_root: &Path,
 ) {
     let resolver = StdlibResolver::new(stdlib_root.to_path_buf());
-    for import in &module.imports {
+    for import in effective_imports(module, &resolver) {
         let Ok(exports) = module_exports_for_import_with_resolver(&import.module_path, &resolver)
         else {
             continue;
@@ -1272,7 +1275,7 @@ fn collect_imported_embedded_defaults(
 ) -> Result<HashMap<String, String>, TypecheckError> {
     let resolver = StdlibResolver::new(stdlib_root.to_path_buf());
     let mut defaults = HashMap::new();
-    for import in &module.imports {
+    for import in effective_imports(module, &resolver) {
         let Ok(resolved) = resolver.resolve_module(&import.module_path) else {
             continue;
         };
@@ -1301,6 +1304,24 @@ fn collect_local_embedded_defaults(module: &Module) -> HashMap<String, String> {
         .iter()
         .map(|embed| (embed.effect_name.clone(), embed.handler_name.clone()))
         .collect()
+}
+
+fn effective_imports(module: &Module, resolver: &StdlibResolver) -> Vec<crate::ast::ImportDecl> {
+    let mut imports = module.imports.clone();
+    let has_prelude = imports
+        .iter()
+        .any(|import| import.module_path == PRELUDE_MODULE_PATH);
+    let prelude_available = resolver
+        .module_file_path(PRELUDE_MODULE_PATH)
+        .ok()
+        .is_some_and(|path| path.exists());
+    if !has_prelude && prelude_available {
+        imports.push(crate::ast::ImportDecl {
+            module_path: PRELUDE_MODULE_PATH.to_string(),
+            kind: crate::ast::ImportKind::Plain,
+        });
+    }
+    imports
 }
 
 fn stdlib_error_message(err: &StdlibResolveError) -> String {
@@ -1483,7 +1504,7 @@ fn builtin_type_names() -> [&'static str; 5] {
 
 /// Effects that are provided by the runtime and do not require an `effect` declaration.
 fn builtin_effect_names() -> &'static [&'static str] {
-    &["Print"]
+    &[]
 }
 
 // ---------------------------------------------------------------------------
@@ -3720,11 +3741,48 @@ main =
     }
 
     #[test]
-    fn accepts_can_clause_with_builtin_print_effect() {
-        // `can Print` uses the built-in Print effect — no `effect` declaration needed.
+    fn accepts_can_clause_with_implicit_prelude_print_effect() {
+        // `can Print` is accepted via implicit `goby/prelude` embed defaults.
         let source = "main : Unit -> Unit can Print\nmain = print \"hi\"\n";
         let module = parse_module(source).expect("should parse");
-        typecheck_module(&module).expect("builtin Print effect should be accepted in `can` clause");
+        typecheck_module(&module)
+            .expect("implicit prelude Print effect should be accepted in `can` clause");
+    }
+
+    #[test]
+    fn accepts_can_clause_with_explicit_context_prelude() {
+        let sandbox = TempDirGuard::new("implicit_prelude_context");
+        let stdlib_root = sandbox.path.join("stdlib");
+        let source_path = sandbox.path.join("user/main.gb");
+        fs::create_dir_all(stdlib_root.join("goby")).expect("stdlib/goby should be creatable");
+        fs::create_dir_all(source_path.parent().expect("parent should exist"))
+            .expect("user path should be creatable");
+        fs::write(
+            stdlib_root.join("goby/prelude.gb"),
+            "effect Print\n  print : String -> Unit\n@embed Print __goby_embeded_effect_stdout_handler\n",
+        )
+        .expect("prelude file should be writable");
+        let source = "main : Unit -> Unit can Print\nmain = print \"hi\"\n";
+        fs::write(&source_path, source).expect("fixture file should be writable");
+        let module = parse_module(source).expect("should parse");
+        typecheck_module_with_context(&module, Some(&source_path), Some(&stdlib_root))
+            .expect("Print should resolve via implicit prelude import");
+    }
+
+    #[test]
+    fn rejects_print_can_clause_when_prelude_is_missing_in_context_root() {
+        let sandbox = TempDirGuard::new("implicit_prelude_missing");
+        let stdlib_root = sandbox.path.join("stdlib");
+        let source_path = sandbox.path.join("user/main.gb");
+        fs::create_dir_all(&stdlib_root).expect("stdlib root should be creatable");
+        fs::create_dir_all(source_path.parent().expect("parent should exist"))
+            .expect("user path should be creatable");
+        let source = "main : Unit -> Unit can Print\nmain = print \"hi\"\n";
+        fs::write(&source_path, source).expect("fixture file should be writable");
+        let module = parse_module(source).expect("should parse");
+        let err = typecheck_module_with_context(&module, Some(&source_path), Some(&stdlib_root))
+            .expect_err("missing prelude should reject Print in can-clause");
+        assert!(err.message.contains("unknown effect"));
     }
 
     #[test]
