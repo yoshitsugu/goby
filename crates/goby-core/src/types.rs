@@ -179,6 +179,10 @@ fn parse_non_function_type_expr(annotation: &str) -> Option<TypeExpr> {
         return None;
     }
 
+    if let Some(applied) = parse_compact_apply_type(annotation) {
+        return Some(applied);
+    }
+
     let parts = split_top_level_spaces(annotation);
     if parts.is_empty() {
         return None;
@@ -194,6 +198,35 @@ fn parse_non_function_type_expr(annotation: &str) -> Option<TypeExpr> {
         .collect();
     Some(TypeExpr::Apply {
         head: Box::new(head),
+        args: args?,
+    })
+}
+
+fn parse_compact_apply_type(annotation: &str) -> Option<TypeExpr> {
+    if !annotation.ends_with(')') {
+        return None;
+    }
+    let open_idx = annotation.find('(')?;
+    if open_idx == 0 {
+        return None;
+    }
+
+    let head_src = annotation[..open_idx].trim();
+    if !is_identifier(head_src) {
+        return None;
+    }
+    if open_idx != head_src.len() {
+        return None;
+    }
+
+    let inner = annotation[open_idx + 1..annotation.len() - 1].trim();
+    if inner.is_empty() {
+        return None;
+    }
+    let args_raw = split_top_level_commas(inner);
+    let args: Option<Vec<TypeExpr>> = args_raw.iter().map(|part| parse_type_expr(part)).collect();
+    Some(TypeExpr::Apply {
+        head: Box::new(TypeExpr::Name(head_src.to_string())),
         args: args?,
     })
 }
@@ -397,6 +430,34 @@ mod tests {
                         ],
                     },
                     TypeExpr::Name("c".to_string()),
+                ],
+            })
+        );
+    }
+
+    #[test]
+    fn parses_compact_application_with_parenthesized_args() {
+        assert_eq!(
+            parse_type_expr("Handler(Env, Log)"),
+            Some(TypeExpr::Apply {
+                head: Box::new(TypeExpr::Name("Handler".to_string())),
+                args: vec![
+                    TypeExpr::Name("Env".to_string()),
+                    TypeExpr::Name("Log".to_string()),
+                ],
+            })
+        );
+    }
+
+    #[test]
+    fn parses_compact_application_without_spaces_after_comma() {
+        assert_eq!(
+            parse_type_expr("Handler(Env,Log)"),
+            Some(TypeExpr::Apply {
+                head: Box::new(TypeExpr::Name("Handler".to_string())),
+                args: vec![
+                    TypeExpr::Name("Env".to_string()),
+                    TypeExpr::Name("Log".to_string()),
                 ],
             })
         );

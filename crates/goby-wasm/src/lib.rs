@@ -1223,7 +1223,11 @@ impl<'m> RuntimeOutputResolver<'m> {
                 }
             }
             // Lambda as top-level value — not needed in main, return None to fall back.
-            Expr::Lambda { .. } | Expr::TupleLit(_) | Expr::MethodCall { .. } => None,
+            Expr::Lambda { .. }
+            | Expr::TupleLit(_)
+            | Expr::MethodCall { .. }
+            | Expr::Handler { .. }
+            | Expr::With { .. } => None,
         }
     }
 

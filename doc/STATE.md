@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-04 (session 95)
+Last updated: 2026-03-04 (session 96)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -59,6 +59,28 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - phased Wasm lowering (portable trampoline first, typed-continuation optimization later).
 
 ## 4. Recent Milestones
+
+- 2026-03-04 (session 96): `PLAN_EFFECT_RENEWAL` P1 parser/AST kickoff
+  - `goby-core` AST extended with renewal syntax nodes:
+    - `Expr::Handler { clauses }`,
+    - `Expr::With { handler, body }`,
+    - `HandlerClause { name, params, body, parsed_body }`.
+  - `goby-core` parser support added for:
+    - handler-expression binding form: `x = handler ...`,
+    - `with <handler_expr> in ...`,
+    - `with_handler ... in ...` sugar (parsed as `Expr::With` + inline `Expr::Handler`).
+  - Type parser (`types.rs`) now accepts compact type-application form used by renewal:
+    - `Handler(Env, Log)` and `Handler(Env,Log)` parse equivalently.
+  - Regression tests added:
+    - parser tests for handler-expression binding / `with` / `with_handler`,
+    - type parser tests for compact `Handler(...)` syntax spacing variants.
+  - Compatibility follow-up:
+    - `goby-wasm` and `goby-core` exhaustiveness updated for new `Expr` variants.
+    - current typechecker behavior for new renewal nodes is intentionally conservative
+      (`Ty::Unknown` / no-op traversal) until P2 type rules land.
+  - Validation:
+    - `cargo check`
+    - `cargo test -p goby-core`
 
 - 2026-03-04 (session 95): `PLAN_EFFECT_RENEWAL` P0 sync into `doc/PLAN.md`
   - Added canonical effect-renewal lock section in `doc/PLAN.md` §2.3:

@@ -1,7 +1,7 @@
 use crate::ast::{
     BinOpKind, CaseArm, CasePattern, Declaration, EffectDecl, EffectMember, EmbedDecl, Expr,
-    HandlerDecl, HandlerMethod, ImportDecl, ImportKind, InterpolatedPart, Module, RecordField,
-    Stmt, TypeDeclaration,
+    HandlerClause, HandlerDecl, HandlerMethod, ImportDecl, ImportKind, InterpolatedPart, Module,
+    RecordField, Stmt, TypeDeclaration,
 };
 use crate::str_util::split_top_level_commas;
 
@@ -370,6 +370,43 @@ fn parse_stmts_from_lines(lines: &[&str], start: usize) -> Option<(Vec<Stmt>, us
             break;
         }
 
+        // `name = handler` binding with an indented handler-expression block.
+        if let Some((name, rhs)) = try_split_binding(trimmed)
+            && rhs == "handler"
+        {
+            let (handler, next_i) = parse_handler_expr_from_lines(lines, i + 1, this_indent)?;
+            stmts.push(Stmt::Binding {
+                name: name.to_string(),
+                value: handler,
+            });
+            i = next_i;
+            continue;
+        }
+
+        // `with_handler ... in ...` statement (sugar for `with (handler ...) in ...`).
+        if trimmed == "with_handler" {
+            let (handler, next_i) = parse_handler_expr_from_lines(lines, i + 1, this_indent)?;
+            let (body, after_with) = parse_with_in_body(lines, next_i, this_indent)?;
+            stmts.push(Stmt::Expr(Expr::With {
+                handler: Box::new(handler),
+                body,
+            }));
+            i = after_with;
+            continue;
+        }
+
+        // `with <handler_expr> in ...` statement.
+        if let Some(handler_src) = trimmed.strip_prefix("with ") {
+            let handler = parse_expr(handler_src.trim())?;
+            let (body, after_with) = parse_with_in_body(lines, i + 1, this_indent)?;
+            stmts.push(Stmt::Expr(Expr::With {
+                handler: Box::new(handler),
+                body,
+            }));
+            i = after_with;
+            continue;
+        }
+
         // `using HandlerA, HandlerB` statement.
         if trimmed.starts_with("using ") {
             let handlers_str = trimmed.strip_prefix("using ").unwrap_or("").trim();
@@ -418,6 +455,118 @@ fn parse_stmts_from_lines(lines: &[&str], start: usize) -> Option<(Vec<Stmt>, us
     }
 
     Some((stmts, i - start))
+}
+
+fn parse_with_in_body(
+    lines: &[&str],
+    from: usize,
+    expected_indent: usize,
+) -> Option<(Vec<Stmt>, usize)> {
+    let mut in_line = from;
+    while in_line < lines.len() {
+        let stripped = strip_line_comment(lines[in_line]).trim_end();
+        let trimmed = stripped.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            in_line += 1;
+            continue;
+        }
+        let indent = indent_len(stripped);
+        if indent != expected_indent || trimmed != "in" {
+            return None;
+        }
+        let (body, consumed) = parse_stmts_from_lines(lines, in_line + 1)?;
+        if body.is_empty() {
+            return None;
+        }
+        return Some((body, in_line + 1 + consumed));
+    }
+    None
+}
+
+fn parse_handler_expr_from_lines(
+    lines: &[&str],
+    start: usize,
+    parent_indent: usize,
+) -> Option<(Expr, usize)> {
+    let mut clauses = Vec::new();
+    let mut i = start;
+
+    while i < lines.len() {
+        let clause_raw = lines[i];
+        let clause_stripped = strip_line_comment(clause_raw).trim_end();
+        let clause_trimmed = clause_stripped.trim();
+        if clause_trimmed.is_empty() || clause_trimmed.starts_with('#') {
+            i += 1;
+            continue;
+        }
+
+        let clause_indent = indent_len(clause_stripped);
+        if clause_indent <= parent_indent {
+            break;
+        }
+
+        let (name, params, inline_body) = parse_handler_clause_header(clause_trimmed)?;
+        let mut body = inline_body.to_string();
+        i += 1;
+
+        while i < lines.len() {
+            let sub_raw = lines[i];
+            let sub_stripped = strip_line_comment(sub_raw).trim_end();
+            let sub_trimmed = sub_stripped.trim();
+            if sub_trimmed.is_empty() || sub_trimmed.starts_with('#') {
+                i += 1;
+                continue;
+            }
+
+            let sub_indent = indent_len(sub_stripped);
+            if sub_indent <= clause_indent {
+                break;
+            }
+            if !body.is_empty() {
+                body.push('\n');
+            }
+            body.push_str(sub_trimmed);
+            i += 1;
+        }
+
+        if body.is_empty() {
+            return None;
+        }
+
+        let parsed_body = parse_body_stmts(&body);
+        clauses.push(HandlerClause {
+            name,
+            params,
+            body,
+            parsed_body,
+        });
+    }
+
+    if clauses.is_empty() {
+        return None;
+    }
+    Some((Expr::Handler { clauses }, i))
+}
+
+fn parse_handler_clause_header(src: &str) -> Option<(String, Vec<String>, &str)> {
+    let (lhs, rhs) = src.split_once("->")?;
+    let lhs = lhs.trim();
+    let rhs = rhs.trim();
+    let mut parts = lhs.split_whitespace();
+    let name = parts.next()?;
+    if !is_identifier(name) {
+        return None;
+    }
+
+    let mut params = Vec::new();
+    for param in parts {
+        if !is_identifier(param) || is_reserved_keyword(param) {
+            return None;
+        }
+        params.push(param.to_string());
+    }
+
+    Some((name.to_string(), params, rhs))
 }
 
 fn indent_len(line: &str) -> usize {
@@ -2540,6 +2689,61 @@ main = 1
                 assert_eq!(**arg, Expr::StringLit("hello".to_string()));
             }
             other => panic!("unexpected: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parses_handler_expression_binding_body() {
+        let body = "h = handler\n  emit x ->\n    resume x\nh";
+        let stmts = parse_body_stmts(body).expect("should parse");
+        assert_eq!(stmts.len(), 2);
+        match &stmts[0] {
+            Stmt::Binding { name, value } => {
+                assert_eq!(name, "h");
+                match value {
+                    Expr::Handler { clauses } => {
+                        assert_eq!(clauses.len(), 1);
+                        assert_eq!(clauses[0].name, "emit");
+                        assert_eq!(clauses[0].params, vec!["x".to_string()]);
+                    }
+                    other => panic!("expected handler expression, got {other:?}"),
+                }
+            }
+            other => panic!("unexpected statement: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_with_expression_statement() {
+        let body = "with h\nin\n  emit 1";
+        let stmts = parse_body_stmts(body).expect("should parse");
+        assert_eq!(stmts.len(), 1);
+        match &stmts[0] {
+            Stmt::Expr(Expr::With { handler, body }) => {
+                assert_eq!(**handler, Expr::Var("h".to_string()));
+                assert_eq!(body.len(), 1);
+            }
+            other => panic!("unexpected statement: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_with_handler_sugar_statement() {
+        let body = "with_handler\n  emit x ->\n    resume x\nin\n  emit 1";
+        let stmts = parse_body_stmts(body).expect("should parse");
+        assert_eq!(stmts.len(), 1);
+        match &stmts[0] {
+            Stmt::Expr(Expr::With { handler, body }) => {
+                assert_eq!(body.len(), 1);
+                match handler.as_ref() {
+                    Expr::Handler { clauses } => {
+                        assert_eq!(clauses.len(), 1);
+                        assert_eq!(clauses[0].name, "emit");
+                    }
+                    other => panic!("expected handler expression, got {other:?}"),
+                }
+            }
+            other => panic!("unexpected statement: {other:?}"),
         }
     }
 
