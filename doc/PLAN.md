@@ -791,8 +791,11 @@ Implementation plan:
 
 1. Metadata model in `goby-core`.
    - Extend stdlib resolver output to optionally carry runtime bridge metadata.
-   - Add parser support for a minimal stdlib-only bridge declaration (syntax TBD),
-     or load from sidecar metadata file under stdlib root.
+   - **Lock (phase 1)**: load bridge metadata from sidecar files under stdlib root
+     (no language-syntax extension in this phase).
+     - Proposed location: `stdlib/.bridge/<module_path>.json`
+       (example: `stdlib/.bridge/goby/int.json`).
+     - Revisit in-language declaration syntax only after phase-1 stabilization.
    - Validate:
      - declared symbol exists in module export/effect surface,
      - type shape matches declaration annotation,
@@ -805,7 +808,7 @@ Implementation plan:
    - Cache registry per module compile/run invocation to avoid repeated filesystem scans.
 3. Evaluator integration (fallback/runtime path).
    - Refactor `Expr::Call` / `Expr::MethodCall` handling to:
-     - resolve call target to `(module?, symbol, arity, arg types)`,
+     - resolve call target to `(module?, symbol, arity, declared type_shape)`,
      - query bridge registry,
      - dispatch to intrinsic executor if bridge exists.
    - Remove direct symbol checks for stdlib module functions once bridged.
@@ -814,6 +817,10 @@ Implementation plan:
    - For legacy bare handler clauses:
      - accept only when operation identity is unique in visible effect set,
      - otherwise surface deterministic ambiguity/runtime error.
+   - Compatibility sunset policy:
+     - Phase 1-2: keep bare fallback with uniqueness guard.
+     - Phase 3: emit warning when bare fallback path is used.
+     - Phase 4: remove bare fallback (effect-qualified identity required in runtime bridge path).
 5. Migration of existing special-cases.
    - Phase A: wrap current paths (`read`, `read_line`, `fetch_env_var`, `string.length`, `int.parse`)
      with bridge registry lookup while keeping compatibility fallback.
@@ -848,6 +855,11 @@ Acceptance criteria:
    - `cargo test`
    - `cargo clippy -- -D warnings`
    - targeted regression suite for bridge resolution and ambiguity handling.
+5. Diagnostics quality:
+   - unresolved bridge emits deterministic error including:
+     - resolved call target (`module/symbol`),
+     - expected bridge key (`kind`, `arity`, `type_shape`),
+     - mismatch reason (`not_registered`, `type_shape_mismatch`, `ambiguous_operation_identity`).
 
 ### 4.4 Early Developer Tooling Plan
 
