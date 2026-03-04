@@ -61,6 +61,11 @@ syntax/semantics.
 - Conditionals/case:
   - `if ... else ...` expression form
   - `case ...` with `pattern -> expr` arms
+  - list patterns:
+    - empty list: `[]`
+    - head/tail split: `[head, ...tail]`
+      - `head` and `tail` are bindings available in the arm body
+      - `tail` is the remaining list value
 - Mutable locals:
   - declaration: `mut x = expr`
   - assignment: `x := expr`

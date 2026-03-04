@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-04 (session 139)
+Last updated: 2026-03-04 (session 141)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -37,7 +37,9 @@ This file is a restart-safe snapshot for resuming work after context reset.
 - String interpolation `${...}` is parsed into `Expr::InterpolatedString`.
   Runtime stringifies embedded expression values when materializing the final `String`.
 - `case` arm separator: ` -> `; parsed by `split_case_arm` (safe for lambda bodies).
-- `CasePattern` variants: `IntLit(i64)`, `StringLit(String)`, `BoolLit(bool)`, `Wildcard`.
+- Current implementation `CasePattern` variants:
+  `IntLit(i64)`, `StringLit(String)`, `BoolLit(bool)`, `Wildcard`.
+- Next locked syntax slice (spec/plan): list patterns `[]` and `[head, ...tail]`.
 - MVP built-ins: `print`, `map`, `fetch_env_var`, `string.split`, `list.join`.
 - `print` is an internal runtime-resolved operation; `DefaultStdioPrintHandler`-equivalent behavior
   is compiler/runtime-owned and not required to appear as a user-visible stdlib handler definition.
@@ -50,7 +52,9 @@ This file is a restart-safe snapshot for resuming work after context reset.
 
 ## 3. Known Open Decisions
 
-- None for the locked MVP subset — implementation is complete.
+- MVP locked subset remains complete for currently implemented syntax.
+- Next implementation slice is locked and pending:
+  list `case` patterns (`[]`, `[head, ...tail]`) with arm-local bindings.
 - Post-MVP open items tracked in `doc/PLAN.md` §3 and §6.
 - Post-MVP effect implementation direction is now fixed in `doc/PLAN.md` §2.3:
   - deep handlers with one-shot resumptions,
@@ -63,6 +67,23 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - follow-up work moved to post-MVP tracks in `doc/PLAN.md`.
 
 ## 4. Recent Milestones
+
+- 2026-03-04 (session 141): list `case` pattern syntax/plan/state lock
+  - Updated `doc/LANGUAGE_SPEC.md`:
+    - `case` pattern forms now include list patterns:
+      - `[]`
+      - `[head, ...tail]` (arm-local bindings).
+  - Updated `doc/PLAN.md`:
+    - added parser/typechecker intent for list patterns,
+    - added malformed-pattern rejection targets,
+    - locked typing intent for `[head, ...tail]` (`head : a`, `tail : List a`).
+  - Updated `doc/STATE.md`:
+    - recorded this lock as next implementation slice.
+  - Immediate next steps:
+    - AST extension (`CasePattern` list variants),
+    - parser support for `[]` and `[head, ...tail]`,
+    - case-arm env extension in typechecker/runtime evaluators,
+    - regression tests for parser/typecheck/runtime.
 
 - 2026-03-04 (session 139): `f ()` Unit-arg call parse fix + naming-convention lock
   - Parser disambiguation updated:
