@@ -125,16 +125,34 @@ pub fn parse_module(source: &str) -> Result<Module, ParseError> {
                     break;
                 }
                 // Parse `name: TypeAnnotation`
-                if let Some((name, ty)) = member_trimmed_str.split_once(':') {
-                    let name = name.trim().to_string();
-                    let ty = ty.trim().to_string();
-                    if is_non_reserved_identifier(&name) && !ty.is_empty() {
-                        members.push(EffectMember {
-                            name,
-                            type_annotation: ty,
-                        });
-                    }
+                let Some((name_raw, ty_raw)) = member_trimmed_str.split_once(':') else {
+                    return Err(ParseError {
+                        line: i + 1,
+                        col: 1,
+                        message: "invalid effect member signature: expected `name: Type`"
+                            .to_string(),
+                    });
+                };
+                let name = name_raw.trim();
+                let ty = ty_raw.trim();
+                if !is_non_reserved_identifier(name) {
+                    return Err(ParseError {
+                        line: i + 1,
+                        col: 1,
+                        message: "effect member name must be a non-reserved identifier".to_string(),
+                    });
                 }
+                if ty.is_empty() {
+                    return Err(ParseError {
+                        line: i + 1,
+                        col: 1,
+                        message: "effect member type must not be empty".to_string(),
+                    });
+                }
+                members.push(EffectMember {
+                    name: name.to_string(),
+                    type_annotation: ty.to_string(),
+                });
                 i += 1;
             }
             effect_declarations.push(EffectDecl {
@@ -2183,6 +2201,26 @@ main =
         let source = "@embed Print 1handler\nmain = 1\n";
         let err = parse_module(source).expect_err("invalid handler name should fail");
         assert!(err.message.contains("invalid embedded handler name"));
+    }
+
+    #[test]
+    fn rejects_effect_member_with_reserved_name() {
+        let source = "effect Print\n  if: String -> Unit\nmain = 1\n";
+        let err = parse_module(source).expect_err("reserved effect member name should fail");
+        assert!(
+            err.message
+                .contains("effect member name must be a non-reserved identifier")
+        );
+    }
+
+    #[test]
+    fn rejects_effect_member_without_colon_signature() {
+        let source = "effect Print\n  print String -> Unit\nmain = 1\n";
+        let err = parse_module(source).expect_err("malformed effect member should fail");
+        assert!(
+            err.message
+                .contains("invalid effect member signature: expected `name: Type`")
+        );
     }
 
     #[test]

@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-04 (session 132)
+Last updated: 2026-03-04 (session 133)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -63,6 +63,17 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - follow-up work moved to post-MVP tracks in `doc/PLAN.md`.
 
 ## 4. Recent Milestones
+
+- 2026-03-04 (session 133): reserved-token hardening follow-up (parser + spec sync)
+  - Parser behavior tightened for `effect` member declarations:
+    - malformed member lines now fail fast with parse diagnostics
+      (no silent member drop),
+    - reserved-token member names are explicitly rejected.
+  - Added parser regression tests for:
+    - reserved effect member name rejection,
+    - malformed effect member signature rejection.
+  - `doc/LANGUAGE_SPEC.md` updated with explicit reserved-token policy and
+    current reserved-token set.
 
 - 2026-03-04 (session 132): Print effect operation split plan locked (`print` + `println`)
   - Added planning constraint to `doc/PLAN.md`:

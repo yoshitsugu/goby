@@ -23,6 +23,12 @@ syntax/semantics.
 
 - Type annotation: `name : Type`
 - Function definition: `name args = expr`
+- Reserved tokens are not allowed as identifiers (declaration names, parameters,
+  local bindings, type/effect member names).
+  - Current reserved set:
+    - `@embed`, `import`, `type`, `effect`, `handler`, `with`, `with_handler`,
+      `in`, `resume`, `mut`, `if`, `else`, `case`, `as`, `can`, `using`,
+      `True`, `False`
 - Type declarations:
   - alias: `type Name = Target`
   - union: `type Name = A | B`
