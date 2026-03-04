@@ -1,4 +1,3 @@
-use goby_core::{Module, Stmt};
 use std::env;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
@@ -99,14 +98,6 @@ fn run() -> Result<(), CliError> {
         CliError::Runtime(format!("{}: {}{}", cli.file, err, snippet))
     })?;
 
-    let legacy_usage = analyze_legacy_syntax_usage(&module);
-    if legacy_usage.has_any() {
-        return Err(CliError::Runtime(format!(
-            "legacy effect syntax is no longer supported (handler_for={}, using={}); migrate to `handler` + `with`/`with_handler` (see doc/EFFECT_RENEWAL_MIGRATION.md)",
-            legacy_usage.handler_for_count, legacy_usage.using_count
-        )));
-    }
-
     match cli.command {
         Command::Run => {
             let bytes = goby_wasm::compile_module(&module)
@@ -199,49 +190,6 @@ fn print_parse_summary(declaration_count: usize, file: &str) {
         "parsed and typechecked {} declarations from {}",
         declaration_count, file
     );
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct LegacySyntaxUsage {
-    handler_for_count: usize,
-    using_count: usize,
-}
-
-impl LegacySyntaxUsage {
-    fn has_any(self) -> bool {
-        self.handler_for_count > 0 || self.using_count > 0
-    }
-}
-
-fn analyze_legacy_syntax_usage(module: &Module) -> LegacySyntaxUsage {
-    let mut count = 0usize;
-    for decl in &module.declarations {
-        if let Some(stmts) = decl.parsed_body.as_deref() {
-            count += count_using_stmts(stmts);
-        }
-    }
-    for handler in &module.handler_declarations {
-        for method in &handler.methods {
-            if let Some(stmts) = method.parsed_body.as_deref() {
-                count += count_using_stmts(stmts);
-            }
-        }
-    }
-    LegacySyntaxUsage {
-        handler_for_count: module.handler_declarations.len(),
-        using_count: count,
-    }
-}
-
-fn count_using_stmts(stmts: &[Stmt]) -> usize {
-    let mut count = 0usize;
-    for stmt in stmts {
-        if let Stmt::Using { body, .. } = stmt {
-            count += 1;
-            count += count_using_stmts(body);
-        }
-    }
-    count
 }
 
 fn execute_wasm(wasm_path: &str) -> Result<ExecutionOutcome, CliError> {
@@ -368,28 +316,5 @@ mod tests {
     #[test]
     fn computes_wasm_output_path() {
         assert_eq!(output_wasm_path("examples/hello.gb"), "examples/hello.wasm");
-    }
-
-    #[test]
-    fn reports_no_legacy_usage_for_canonical_with_handler_module() {
-        let source = "\
-effect Log
-  log: String -> Unit
-main : Unit -> Unit
-main =
-  with_handler
-    log x ->
-      resume Unit
-  in
-    with_handler
-      log y ->
-        resume Unit
-    in
-      log \"x\"
-";
-        let module = goby_core::parse_module(source).expect("source should parse");
-        let usage = analyze_legacy_syntax_usage(&module);
-        assert_eq!(usage.using_count, 0);
-        assert_eq!(usage.handler_for_count, 0);
     }
 }
