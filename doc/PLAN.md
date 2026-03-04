@@ -639,6 +639,31 @@ Implementation steps:
      "Use `()` for Unit value".
    - Keep regression tests for both the warning phase and final rejection phase.
 
+Additional planning constraint (Print operation split, locked 2026-03-04):
+
+Goal: make stdout behavior explicit by defining two `Print` effect operations:
+`print` (no trailing newline) and `println` (adds trailing newline).
+
+Implementation steps:
+
+1. Effect surface update in stdlib.
+   - Update `effect Print` to expose both:
+     - `print : String -> Unit`
+     - `println : String -> Unit`
+2. Runtime/intrinsic behavior split.
+   - Keep current stdout embedded default handler for `print` semantics (no newline).
+   - Add `println` dispatch semantics that append exactly one `\n`.
+3. Typecheck/runtime operation wiring.
+   - Ensure handler dispatch and operation-resolution logic distinguish
+     `Print.print` and `Print.println` correctly.
+   - Preserve existing precedence rules: explicit user handler > embedded default.
+4. Migration of examples/fixtures.
+   - Keep existing `print` call sites as no-newline behavior.
+   - Update samples/tests that expect line-oriented output to use `println`.
+5. Regression coverage.
+   - Positive tests for both operations under explicit handler and embedded-default paths.
+   - Output-shape tests: `print` does not append newline; `println` appends one newline.
+
 ### 4.4 Early Developer Tooling Plan
 
 Goal: align implementation priorities with the language vision that strong tooling is a core
