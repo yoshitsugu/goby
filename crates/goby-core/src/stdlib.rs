@@ -12,6 +12,7 @@ pub struct StdlibResolver {
 pub struct ResolvedStdlibModule {
     pub module_path: String,
     pub exports: HashMap<String, String>,
+    pub effects: Vec<String>,
     pub embedded_defaults: Vec<EmbeddedDefaultHandlerDecl>,
 }
 
@@ -77,10 +78,12 @@ impl StdlibResolver {
                 message: parse_err.message,
             })?;
         let exports = collect_exports(module_path, &module.declarations)?;
+        let effects = collect_effects(&module.effect_declarations);
         let embedded_defaults = collect_embedded_defaults(module_path, &module.embed_declarations)?;
         Ok(ResolvedStdlibModule {
             module_path: module_path.to_string(),
             exports,
+            effects,
             embedded_defaults,
         })
     }
@@ -163,6 +166,10 @@ fn collect_embedded_defaults(
         });
     }
     Ok(defaults)
+}
+
+fn collect_effects(effects: &[crate::ast::EffectDecl]) -> Vec<String> {
+    effects.iter().map(|effect| effect.name.clone()).collect()
 }
 
 #[cfg(test)]

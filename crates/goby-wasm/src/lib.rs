@@ -12,8 +12,7 @@ use unicode_segmentation::UnicodeSegmentation;
 
 use crate::call::flatten_named_call;
 use goby_core::{
-    CasePattern, Expr, HandlerClause, Module, Stmt, ast::InterpolatedPart,
-    stdlib::StdlibResolver,
+    CasePattern, Expr, HandlerClause, Module, Stmt, ast::InterpolatedPart, stdlib::StdlibResolver,
     types::parse_function_type,
 };
 const ERR_MISSING_MAIN: &str = "Wasm codegen requires a `main` declaration";
@@ -2092,7 +2091,11 @@ fn collect_embedded_default_handlers(module: &Module) -> HashMap<String, String>
         .map(|import| import.module_path.clone())
         .collect();
     let has_prelude = import_paths.iter().any(|path| path == PRELUDE_MODULE_PATH);
-    if !has_prelude && resolver.resolve_module(PRELUDE_MODULE_PATH).is_ok() {
+    let prelude_available = resolver
+        .module_file_path(PRELUDE_MODULE_PATH)
+        .ok()
+        .is_some_and(|path| path.exists());
+    if !has_prelude && prelude_available {
         import_paths.push(PRELUDE_MODULE_PATH.to_string());
     }
     for module_path in import_paths {
@@ -2100,7 +2103,9 @@ fn collect_embedded_default_handlers(module: &Module) -> HashMap<String, String>
             continue;
         };
         for embed in resolved.embedded_defaults {
-            defaults.entry(embed.effect_name).or_insert(embed.handler_name);
+            defaults
+                .entry(embed.effect_name)
+                .or_insert(embed.handler_name);
         }
     }
     defaults
