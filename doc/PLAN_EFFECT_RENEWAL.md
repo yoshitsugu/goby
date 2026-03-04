@@ -219,6 +219,8 @@ Completion criteria:
 
 - Keep legacy top-level `handler ... for ...` and `using` temporarily.
 - Keep bridge phase intentionally short.
+- Status update (2026-03-04): compatibility warning window is complete in CLI;
+  legacy syntax is now rejected by default by `goby-cli check/run`.
 
 Completion criteria:
 
@@ -232,6 +234,9 @@ Migration guide reference:
 ### P6. Removal
 
 - Remove legacy syntax/parser/runtime paths after migration confidence.
+- Status update (2026-03-04): started.
+  - CLI default rejection is landed.
+  - remaining work: parser/runtime path removal and associated tests/docs cleanup.
 
 Completion criteria:
 
@@ -254,5 +259,7 @@ Completion criteria:
 
 ## 6. Immediate Next Step
 
-Start P0: update `doc/PLAN.md` to mirror the locked section 3 decisions, then begin
-P1 parser/AST implementation.
+Continue P6:
+- remove legacy parser/runtime compatibility paths (`handler ... for ...`, `using`),
+- migrate/retire remaining tests and stdlib internals that still depend on them,
+- keep CLI/default behavior aligned with canonical `handler` + `with` / `with_handler`.

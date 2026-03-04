@@ -7,7 +7,7 @@ handler-value model.
 
 ## 1. Scope
 
-- Legacy syntax (bridge compatibility mode):
+- Legacy syntax (deprecated and rejected by CLI):
   - top-level `handler Name for Effect`
   - `using HandlerA, HandlerB`
 - Canonical syntax:
@@ -78,11 +78,10 @@ in
 
 - `with` accepts exactly one handler value expression.
 - `with_handler` is only syntax sugar; semantics match `with (handler ...)`.
-- For now, compatibility syntax (`using`, top-level `handler ... for ...`) still parses,
-  but should be treated as migration-only syntax.
+- `goby-cli check/run` rejects legacy syntax by default as of 2026-03-04.
 
 ## 4. Current Compatibility Window Policy
 
 - Project stage is pre-1.0 and migration is intentionally aggressive.
-- Legacy syntax is temporary and expected to be rejected by default after a short window.
+- Legacy syntax is temporary and already rejected by default in CLI.
 - Keep new examples and docs in canonical syntax only.
