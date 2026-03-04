@@ -1,369 +1,250 @@
-# Effect Syntax Renewal Plan: `handler`/`using` -> `with`
+# Effect Renewal Plan: Handler Value Model (`handler` / `with` / `with_handler`)
 
 Status: Draft  
 Owner: Goby core/runtime track  
-Last updated: 2026-03-03
+Last updated: 2026-03-04
 
 ## 1. Purpose
 
-This document defines a staged migration from current `handler` + `using` effect
-syntax to an expression-scoped `with` model (Ante-like style), so effect handling
-can capture lexical scope values (variables/functions) naturally.
+This document replaces the previous "inline-clause `with`" migration plan with a
+handler-value model aligned with the latest effect renewal notes.
 
 Target direction:
 
-- Keep current programs working during migration.
-- Add `with` first, then migrate stdlib and examples.
-- Retire old `handler` and `using` syntax only after parity and diagnostics are stable.
+- `handler` becomes an expression/value (can capture lexical scope).
+- `with` applies exactly one handler value to a body.
+- `with_handler` provides inline handler syntax sugar.
+- `Handler(<Effects...>)` is introduced as a first-class type.
 
-## 2. Problem Statement
+## 2. Locked Design (Pre-Implementation)
 
-Current `handler` declarations are top-level and cannot naturally capture local scope.
-This blocks idioms like iterator combinators (`foreach`, `take_while`, `collect`) where
-the handler logic needs direct access to local function arguments and locals.
-
-Desired style:
+### 2.1 Effect declaration syntax
 
 ```goby
-each : List a -> (a -> Unit) -> Unit can Iterate
-each xs f =
-  with
-    emit x =
+effect Yield
+  yield : a -> Unit
+
+effect SayHello
+  say_hello : Unit
+  say_goodbye : String -> Unit
+```
+
+- `effect <CamelCaseName>` starts an effect declaration.
+- Members are indented operation signatures.
+- Newline-separated and `;`-separated forms are both accepted.
+
+### 2.2 Handler as expression/value
+
+```goby
+emit_handler =
+  handler
+    emit x ->
       f x
       resume True
+```
+
+- `handler` is an expression that evaluates to a handler value.
+- Handler bodies are lexically scoped and may capture local bindings.
+- Closures and local helper functions are visible in handler clause bodies.
+
+### 2.3 Handler type
+
+```goby
+a : Handler(Log)
+b : Handler(Env, Log)
+```
+
+- `Handler(E)` means "handles effect `E`".
+- `Handler(E1, E2, ...)` means one handler value can handle multiple effects.
+- `Handler(Env, Log)` and `Handler(Log, Env)` are type-equivalent.
+- A multi-effect handler must provide all required operations for each listed effect.
+
+### 2.4 `with` and `with_handler`
+
+```goby
+with emit_handler
+in
   iter xs
 ```
 
-## 3. Non-Goals (for this migration)
+```goby
+with_handler
+  emit x ->
+    f x
+    resume True
+in
+  iter xs
+```
 
-- Full language redesign beyond effect syntax/runtime plumbing.
-- New optimization backend beyond what is needed for semantic parity.
-- Immediate removal of all old runtime code paths in one step.
+- `with` accepts exactly one handler expression/value.
+- `with_handler` is syntax sugar for `with (handler ...)`.
+- `in` introduces the handled body block.
+
+### 2.5 Dispatch and conflict policy
+
+- Dynamic dispatch selects the nearest enclosing active handler that defines the op.
+- A single handler cannot define duplicate clauses for the same operation.
+- If one handler value claims multiple effects that expose the same operation name
+  (for example `Log.log` and `Logger.log`), compile-time error for ambiguous op.
+- Future extension: explicit qualified clause names (`Effect.op`) may relax this.
+
+### 2.6 Reserved keywords
+
+Lock as reserved keywords for this renewal:
+
+- `with`
+- `with_handler`
+- `in`
+- `handler`
+- `effect`
+
+## 3. Locked Decisions (2026-03-04)
+
+1. Resume usage rule:
+   - keep current one-shot guarantee,
+   - reject double `resume` in the same handler invocation.
+2. Handler clause grammar:
+   - support only untyped clause headers (`op x -> ...`),
+   - type information is sourced from `effect` declarations.
+3. `Handler(...)` effect list formatting/tokenization:
+   - comma-separated effect list is accepted with flexible whitespace,
+   - tokenizer/parser ignores spaces around separators (`Handler(E1,E2)` and
+     `Handler(E1, E2)` are equivalent).
+4. Ambiguity diagnostic wording:
+   - follow existing plain-message style used by typechecker (`... is ambiguous ...`),
+   - canonical message:
+     `operation '<op>' is ambiguous across effects in Handler(...): <EffectA>, <EffectB>`.
+5. Compatibility policy:
+   - migration can be aggressive (pre-1.0, no external users),
+   - legacy `handler ... for ...` and `using` are supported only in a short bridge phase,
+     then removed by default quickly.
 
 ## 4. Migration Phases
 
-Each phase includes explicit completion criteria.
-If a phase is too large or risky, split it into substeps (`Px.a`, `Px.b`, ...),
-and add those substeps directly under the phase before implementation starts.
+### P0. Spec Lock in `doc/PLAN.md`
 
-### P0. Semantic Lock for `with`
-
-Define and lock the core `with` semantics before coding.
-
-Scope to lock:
-
-- `with` is expression-scoped and lexically captures outer bindings.
-- Handler clauses are operation clauses (`op arg = ...`) with `resume`.
-- `with` body result type and effect behavior.
-- Interaction with nested `with` blocks and existing `using`/`handler`.
-- Policy for coexistence with old `handler`/`using` declarations during migration.
-
-P0 required semantic decisions (must be explicit and testable):
-
-- `resume` policy:
-  - one-shot per operation handling (same as current runtime contract),
-  - second `resume` in the same clause is rejected (typecheck error).
-- Abortive policy:
-  - if a clause does not call `resume`, the captured continuation is discarded.
-- Dispatch policy:
-  - nearest lexically-scoped `with` clause wins first,
-  - if not found, fall back to active `using` handlers,
-  - if still not found, report existing unhandled-effect diagnostic.
-- Partial handling policy:
-  - `with` may handle only a subset of operations; unhandled ops are propagated.
-- Type/effect policy:
-  - `with` removes handled effect operations from the body requirement set,
-  - non-handled effects remain in the resulting `can` obligations.
-- Compile-time guarantee policy:
-  - if an effect operation is not handled by `with` and not covered by local context,
-    compilation must fail with an unhandled-effect diagnostic.
-  - declaration-level `can` is a valid deferral boundary:
-    - if a function declares `can E`, unresolved `E` inside that function body is allowed,
-      and resolution is deferred to call sites.
-  - if a function body uses effect operations but the declaration has no corresponding `can`
-    and no enclosing `with` handles them, compilation must fail.
-- `main` policy:
-  - `main` may declare only `can Print` (or no `can` clause).
-  - any non-`Print` effect in `main`'s `can` clause is a compile-time error.
-- Capture policy:
-  - clause bodies see all lexical bindings visible at `with` site,
-  - clause parameter names shadow outer bindings in clause scope only.
-
-Static resolution table (must be mirrored by runtime):
-
-| Situation | Resolution |
-| --- | --- |
-| operation handled by nearest `with` and `using` | nearest `with` wins |
-| operation not handled by nearest `with` but handled by outer `with` | nearest matching outer `with` wins |
-| operation not handled by any `with`, handled by `using` | `using` handles |
-| operation handled by neither | unhandled effect diagnostic |
+Record the semantics above in `doc/PLAN.md` and link back to this plan.
 
 Completion criteria:
 
-- Semantics written and approved in `doc/PLAN.md` (or linked section).
-- At least 5 executable examples documented (capture, nested `with`, abortive path,
-  resume path, multiple operations).
-- Include explicit positive/negative examples for:
-  - unresolved effect allowed with declaration `can`,
-  - unresolved effect rejected without declaration `can`,
-  - `main` rejecting non-`Print` `can` clauses.
+- `doc/PLAN.md` has canonical syntax and static semantics for:
+  - `handler` expression,
+  - `Handler(...)` type,
+  - `with` / `with_handler ... in`.
+- Section 3 locked decisions are mirrored in `doc/PLAN.md`.
 
-### P1. Parser + AST Support (`with`)
+### P1. Parser + AST
 
-Add syntax and AST representation for `with` expressions.
+Add syntax and AST nodes for:
 
-Minimum deliverables:
-
-- Parse canonical `with` block form:
-  - `with` on its own line,
-  - one or more operation clauses (`op arg =` + indented body),
-  - followed by exactly one handled body expression/block.
-- Represent handler clauses in AST as expression-level constructs.
-- Preserve existing `handler` parsing unchanged.
-- Reserve concrete error messages for malformed `with`:
-  - missing clause,
-  - missing handled body,
-  - malformed clause header.
-
-Grammar contract to lock in P1:
-
-```text
-WithExpr :=
-  "with" NEWLINE
-    INDENT Clause+ DEDENT
-    INDENT Body DEDENT
-
-Clause :=
-  Ident ParamList? "=" NEWLINE INDENT Stmt* Expr? DEDENT
-
-ParamList :=
-  Ident*
-```
-
-Notes:
-
-- Final grammar shape may adjust for existing parser architecture, but must preserve:
-  - unambiguous clause/body boundary,
-  - indentation-based structure,
-  - no parsing conflict with `if/case/using`.
-  - explicit policy for multi-argument operations:
-    - either curried single-arg operations only, or
-    - direct multi-arg clause headers (`op a b =`), with matching operation signature rules.
-
-### P1.5 Tooling + CLI + Formatter Integration
-
-Add first-class tooling support for `with` syntax before broad migration.
-
-Minimum deliverables:
-
-- CLI diagnostics for malformed `with` match existing quality bar (line/col/snippet).
-- `check`/`run` surface deprecation warnings consistently (when enabled).
-- Formatter support for canonical `with` indentation and clause layout.
+- handler expression (`Expr::Handler`-like node),
+- `with <expr> in <block>` expression,
+- `with_handler ... in ...` sugar (desugared in parser or lowering boundary),
+- `Handler(...)` type annotation parsing.
 
 Completion criteria:
 
-- CLI integration tests for `with` parse/type errors.
-- Formatter golden tests for `with` blocks.
-- No regression in existing CLI/format tests.
+- Positive parser tests:
+  - local handler value binding,
+  - `with` with handler variable,
+  - inline `with_handler`.
+- Negative parser tests:
+  - missing `in`,
+  - malformed handler clause,
+  - malformed `Handler(...)` type list.
+
+### P1.5 Tooling + Formatter + CLI
+
+- Formatter canonicalizes:
+  - `with ... in` layout,
+  - `with_handler` clause indentation.
+- Formatter may emit either `Handler(E1,E2)` or `Handler(E1, E2)`, but parser must
+  accept both forms.
+- CLI diagnostics include line/column/snippet quality parity.
 
 Completion criteria:
 
-- Parser tests for valid/invalid `with` syntax (including indentation errors).
-- Existing parser tests remain green.
+- Golden formatter tests for new syntax.
+- CLI integration tests for parse errors around `with`/`with_handler`.
 
-### P2. Typechecker Support (`with`)
+### P2. Typechecker
 
-Typecheck `with` using lexical environment capture.
+Implement core typing/effect rules:
 
-Minimum deliverables:
-
-- Clause argument typing from effect operation signatures.
-- `resume` typing inside `with` clauses.
-- Effect coverage checking for `with` body.
-- Coexistence rules with `using` and old `handler`.
-
-Typechecking contract to lock in P2:
-
-- Clause operation lookup:
-  - clause name must resolve to a known effect operation in the current effect context.
-- Clause parameter typing:
-  - first clause parameter type must match operation input type.
-- `resume` typing:
-  - `resume <expr>` argument type must match operation result type.
-- Clause result typing:
-  - clause body type must be compatible with operation resume-return expectation.
-- Handled-body typing:
-  - `with` expression type is the handled body result type.
-- Effect reduction:
-  - handled operations are subtracted from required effects of handled body.
-  - resolution order must follow P0 static resolution table exactly.
-- Unhandled-effect diagnostics:
-  - if unresolved effects remain after `with` handling and declaration `can` accounting,
-    emit compile-time error in declaration scope.
-- Declaration `can` deferral:
-  - declarations with `can` may typecheck with unresolved effects in body,
-    but call sites must satisfy remaining obligations.
-- `main` effect restriction:
-  - enforce `main` `can` clause contains only `Print` when present.
+- `handler` expression type inference/checking as `Handler(...)`.
+- Clause parameter typing from effect operation signatures.
+- `resume` argument type checking against operation return type.
+- `with` body effect reduction by handled operations/effects.
+- Unhandled effect diagnostics remain consistent with existing `can` policy.
+- `Handler(E1, E2)` order-insensitive equivalence.
+- Compile-time rejection for operation-name conflicts in a single multi-effect handler.
 
 Completion criteria:
 
-- New `with` typecheck tests for:
-  - lexical capture (`f` and local vars),
-  - correct/incorrect `resume` argument,
-  - nested `with`,
-  - unknown operation/unknown effect diagnostics.
-- New effect-obligation tests for:
-  - unresolved effect is accepted when declaration has matching `can`,
-  - unresolved effect is rejected when declaration has no matching `can` and no `with`,
-  - `main : Unit -> Unit can <non-Print>` is rejected.
-- No regression in existing effect tests.
+- New tests for:
+  - lexical capture in handler expression,
+  - `Handler` type annotation acceptance/rejection,
+  - conflict rejection for overlapping op names,
+  - unresolved effect acceptance/rejection with `can`.
 
-### P3. Runtime Execution Model for `with`
+### P3. Runtime
 
-Implement runtime dispatch for expression-scoped handlers with lexical capture.
+Add runtime support for handler values:
 
-Minimum deliverables:
-
-- Runtime representation of active `with` frames.
-- Operation dispatch selects nearest matching `with` clause.
-- `resume` returns into captured continuation correctly.
-- Abortive behavior when `resume` is not called remains well-defined.
-
-Runtime contract to lock in P3:
-
-- Runtime frame model:
-  - push expression-scoped `with` frames with captured lexical environment snapshot.
-- Dispatch order:
-  - search active `with` frames from innermost to outermost,
-  - then existing `using`/legacy handler path.
-- Continuation bridge:
-  - preserve existing one-shot token semantics and error IDs.
-- Error stability:
-  - retain deterministic runtime error identifiers for misuse paths.
+- Runtime representation for handler closures with captured environment.
+- Active handler stack for `with`.
+- Operation dispatch to nearest active handler.
+- Resume continuation bridging parity with existing one-shot model.
 
 Completion criteria:
 
-- Runtime tests covering:
-  - local capture in clause body,
-  - resume success path,
-  - no-resume abortive path,
-  - nested handler precedence.
-- Parity tests show expected behavior in both fallback and optimized modes.
-- Parity gate is strict:
-  - same output text,
-  - same runtime error ID/hint category,
-  - same one-shot consume behavior.
+- Runtime tests:
+  - local capture via `handler` value,
+  - nearest-handler precedence under nested `with`,
+  - abortive path (no `resume`),
+  - resume success path.
 
-### P4. Stdlib Iterator Rewrite on `with`
+### P4. Examples + Stdlib Migration
 
-Migrate iterator-related stdlib logic from top-level `handler` dependence to local `with`.
-
-Minimum deliverables:
-
-- Rewrite current iterator-driven string pipeline to `with` style.
-- Implement `foreach`/`take_while`/`collect`-like patterns as reference examples.
-- Remove temporary workarounds that existed only due to top-level handler limits.
-
-Preconditions for P4:
-
-- P2 completed with lexical-capture typecheck support.
-- P3 completed with expression-scoped runtime handler frames.
-- Generic/HOF feature subset needed by iterator examples is available (or examples are scoped
-  to current MVP-supported subset and marked accordingly).
+- Migrate effect examples to `handler` value + `with`/`with_handler`.
+- Add at least one iterator-style example that captures local callback.
+- Remove workarounds caused by top-level-only handler limitations.
 
 Completion criteria:
 
-- `stdlib` iterator/string implementation uses `with` for local capture cases.
-- `examples/iterator.gb` (and new iterator examples) demonstrate local capture.
-- C4 split path no longer depends on top-level-handler-only workarounds.
+- `examples/` contains canonical new syntax samples.
+- Docs in `doc/PLAN.md` and examples stay consistent.
 
-### P5. Compatibility + Deprecation Phase
+### P5. Compatibility and Deprecation
 
-Keep old syntax available, but begin deprecation path.
-
-Minimum deliverables:
-
-- Warnings (or docs-level deprecation note) for legacy `handler` and `using` syntax.
-- Migration docs: old -> new syntax mapping.
-- Tooling diagnostics point to `with` alternatives.
-
-Deprecation schedule (initial lock):
-
-- Release N:
-  - old `handler`/`using` accepted, no warning by default.
-- Release N+1:
-  - old `handler`/`using` accepted with warning (`effect_legacy_handler_syntax`).
-- Release N+2:
-  - old `handler`/`using` rejected by default (opt-in compatibility flag allowed temporarily).
+- Keep legacy top-level `handler ... for ...` and `using` temporarily.
+- Keep bridge phase intentionally short.
 
 Completion criteria:
 
-- Deprecation policy written in docs with timeline.
-- Users can migrate examples 1:1 using provided guide.
-- Migration mapping appendix exists with at least:
-  - top-level `handler` + `using` -> `with`,
-  - nested handlers -> nested `with`,
-  - mixed qualified/unqualified operation clauses.
+- Migration guide old -> new patterns.
+- Legacy syntax warning (single release window) references `with`/`with_handler`.
+- Legacy syntax is rejected by default immediately after bridge window.
 
-### P6. Removal Phase (Old `handler`/`using` Syntax)
+### P6. Removal
 
-Remove old top-level `handler` and `using` syntax only after migration confidence is high.
-
-Minimum deliverables:
-
-- Parser/typechecker/runtime cleanup for retired syntax.
-- Remove dead code and compatibility shims.
+- Remove legacy syntax/parser/runtime paths after migration confidence.
 
 Completion criteria:
 
-- All stdlib/examples/tests are `with`-based.
-- No `handler`/`using` syntax remains in active docs/examples.
-- `cargo fmt`, `cargo check`, `cargo test`, `cargo clippy -- -D warnings` all pass.
+- No active docs/examples rely on legacy syntax.
+- `cargo fmt`, `cargo check`, `cargo test`, `cargo clippy -- -D warnings` pass.
 
-## 5. Governance + Delivery Rules
+## 5. Governance Rules
 
-Implementation discipline:
-
-- Each phase must produce:
-  - spec delta (docs),
+- Each phase PR must include:
+  - spec delta,
   - tests,
-  - implementation,
-  - migration notes (if externally visible behavior changed).
-- Each phase PR must state:
-  - scope in/out,
-  - rollback strategy,
-  - compatibility impact.
-- No phase is marked complete without explicit checklist update in this document.
-- Each phase PR must link:
-  - one tracked issue/milestone,
-  - one status update entry in `doc/STATE.md`.
+  - implementation changes,
+  - `doc/STATE.md` progress update.
+- No phase is complete without checklist update in this document.
 
-Suggested ownership split:
+## 6. Immediate Next Step
 
-- Parser/AST: `goby-core` parser owner.
-- Type system/effects: `goby-core` typecheck owner.
-- Runtime dispatch/continuation: `goby-wasm` runtime owner.
-- Stdlib/examples/docs migration: language/library owner.
-
-## 6. Risk Tracking
-
-Key risks:
-
-- Semantic mismatch between existing `resume` runtime model and expression-scoped capture.
-- Performance regressions in nested handler-heavy programs.
-- Ambiguous migration period when `using`, `handler`, and `with` all coexist.
-
-Mitigations:
-
-- Keep phases small with explicit parity tests.
-- Add snapshot tests for diagnostics and runtime behavior.
-- Do not remove old paths until `with` parity is proven.
-- Add performance gate before syntax removal:
-  - resume-heavy benchmark suite,
-  - nested-handler benchmark suite,
-  - allowed regression threshold (initial lock: <= 10% on median runtime for benchmark set).
-
-## 7. Immediate Next Step
-
-Start **P0**: lock exact `with` semantics and add approved examples before parser changes.
+Start P0: update `doc/PLAN.md` to mirror the locked section 3 decisions, then begin
+P1 parser/AST implementation.

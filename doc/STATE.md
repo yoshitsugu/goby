@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-03 (session 92)
+Last updated: 2026-03-04 (session 94)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -59,6 +59,19 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - phased Wasm lowering (portable trampoline first, typed-continuation optimization later).
 
 ## 4. Recent Milestones
+
+- 2026-03-04 (session 94): effect renewal planning sync (`PLAN_EFFECT_RENEWAL`) and priority lock
+  - Replaced prior inline-clause `with` migration framing with handler-value model:
+    - `handler` as expression/value with lexical capture,
+    - `with <handler> in <body>` as canonical application form,
+    - `with_handler ... in ...` as inline sugar.
+  - Locked decisions recorded in `doc/PLAN_EFFECT_RENEWAL.md`:
+    - reject double `resume` (keep one-shot contract),
+    - handler clause headers remain untyped (`op x -> ...`), with typing sourced from `effect` declarations,
+    - `Handler(E1,E2)` and `Handler(E1, E2)` are equivalent (whitespace-insensitive parsing),
+    - ambiguity diagnostic style aligned with existing typecheck wording (`... is ambiguous ...`),
+    - aggressive legacy migration policy (short bridge phase, then legacy rejected by default).
+  - Execution priority updated: effect renewal work is now the highest-priority track.
 
 - 2026-03-03 (session 93): ExtraStep C C4 phase-1 wiring (Iterator state-thread path):
   - Added `Iterator.yield_state` contract and `GraphemeState` shape in `stdlib/goby/iterator.gb`.
@@ -1095,10 +1108,13 @@ cargo clippy -- -D warnings
 ```
 
 Execution focus (in order):
-1. Effect runtime redesign follow-up (one-shot deep handlers + selective CPS/evidence passing), including
+1. `PLAN_EFFECT_RENEWAL` implementation (highest priority):
+   - P0 sync into `doc/PLAN.md` (locked semantics/diagnostics/compatibility),
+   - then P1 parser/AST work for `handler` expression + `with`/`with_handler` + `Handler(...)`.
+2. Effect runtime redesign follow-up (one-shot deep handlers + selective CPS/evidence passing), including
    post-`PLAN_RESUME` items now tracked in `doc/PLAN.md`.
-2. `resolve_main_runtime_output` retirement (blocked on effect-native support and remaining unsupported forms).
-3. Standard-library intrinsic retirement planning (`__goby_*` debt reduction path) after effect/runtime feature expansion.
+3. `resolve_main_runtime_output` retirement (blocked on effect-native support and remaining unsupported forms).
+4. Standard-library intrinsic retirement planning (`__goby_*` debt reduction path) after effect/runtime feature expansion.
 
 ## 7. Resume Commands
 
