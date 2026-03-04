@@ -3251,6 +3251,46 @@ main =
     }
 
     #[test]
+    fn rejects_ambiguous_operation_in_handler_expression() {
+        let source = "\
+effect Log
+  log: String -> Unit
+effect Logger
+  log: String -> Unit
+main : Unit -> Unit
+main =
+  with_handler
+    log msg ->
+      resume Unit
+  in
+    log \"hello\"
+";
+        let module = parse_module(source).expect("should parse");
+        let err = typecheck_module(&module)
+            .expect_err("ambiguous operation in handler expression should fail");
+        assert!(err.message.contains("ambiguous"));
+        assert!(err.message.contains("log"));
+    }
+
+    #[test]
+    fn rejects_with_non_handler_expression() {
+        let source = "\
+effect Log
+  log: String -> Unit
+main : Unit -> Unit
+main =
+  with 1
+  in
+    log \"hello\"
+";
+        let module = parse_module(source).expect("should parse");
+        let err =
+            typecheck_module(&module).expect_err("with non-handler expression should fail");
+        assert!(err.message.contains("with"));
+        assert!(err.message.contains("handler value"));
+    }
+
+    #[test]
     fn accepts_handler_return_annotation_with_matching_handler_value() {
         let source = "\
 effect Log
