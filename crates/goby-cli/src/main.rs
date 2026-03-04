@@ -42,6 +42,12 @@ enum CliError {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LegacySyntaxMode {
+    Warn,
+    Deny,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ExecutionOutcome {
     Executed,
     SkippedNoWasmtime,
@@ -99,7 +105,20 @@ fn run() -> Result<(), CliError> {
         CliError::Runtime(format!("{}: {}{}", cli.file, err, snippet))
     })?;
 
-    print_legacy_syntax_warnings(&module);
+    let legacy_usage = analyze_legacy_syntax_usage(&module);
+    match resolve_legacy_syntax_mode() {
+        LegacySyntaxMode::Warn => {
+            print_legacy_syntax_warnings(&legacy_usage);
+        }
+        LegacySyntaxMode::Deny => {
+            if legacy_usage.has_any() {
+                return Err(CliError::Runtime(format!(
+                    "legacy effect syntax is denied by GOBY_LEGACY_EFFECT_SYNTAX=deny (handler_for={}, using={}); migrate to `handler` + `with`/`with_handler` (see doc/EFFECT_RENEWAL_MIGRATION.md)",
+                    legacy_usage.handler_for_count, legacy_usage.using_count
+                )));
+            }
+        }
+    }
 
     match cli.command {
         Command::Run => {
@@ -195,22 +214,45 @@ fn print_parse_summary(declaration_count: usize, file: &str) {
     );
 }
 
-fn print_legacy_syntax_warnings(module: &Module) {
-    let using_count = count_using_stmts_in_module(module);
-    if !module.handler_declarations.is_empty() {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct LegacySyntaxUsage {
+    handler_for_count: usize,
+    using_count: usize,
+}
+
+impl LegacySyntaxUsage {
+    fn has_any(self) -> bool {
+        self.handler_for_count > 0 || self.using_count > 0
+    }
+}
+
+fn resolve_legacy_syntax_mode() -> LegacySyntaxMode {
+    match env::var("GOBY_LEGACY_EFFECT_SYNTAX")
+        .ok()
+        .as_deref()
+        .map(str::trim)
+    {
+        Some("deny") => LegacySyntaxMode::Deny,
+        _ => LegacySyntaxMode::Warn,
+    }
+}
+
+fn print_legacy_syntax_warnings(usage: &LegacySyntaxUsage) {
+    if usage.handler_for_count > 0 {
         println!(
-            "warning: legacy syntax `handler ... for ...` is temporary compatibility syntax; migrate to `handler` + `with`/`with_handler` (see doc/EFFECT_RENEWAL_MIGRATION.md)"
+            "warning: legacy syntax `handler ... for ...` is temporary compatibility syntax ({} use(s)); migrate to `handler` + `with`/`with_handler` (see doc/EFFECT_RENEWAL_MIGRATION.md)",
+            usage.handler_for_count
         );
     }
-    if using_count > 0 {
+    if usage.using_count > 0 {
         println!(
             "warning: legacy syntax `using` is temporary compatibility syntax ({} use(s)); migrate to `with`/`with_handler` (see doc/EFFECT_RENEWAL_MIGRATION.md)",
-            using_count
+            usage.using_count
         );
     }
 }
 
-fn count_using_stmts_in_module(module: &Module) -> usize {
+fn analyze_legacy_syntax_usage(module: &Module) -> LegacySyntaxUsage {
     let mut count = 0usize;
     for decl in &module.declarations {
         if let Some(stmts) = decl.parsed_body.as_deref() {
@@ -224,7 +266,10 @@ fn count_using_stmts_in_module(module: &Module) -> usize {
             }
         }
     }
-    count
+    LegacySyntaxUsage {
+        handler_for_count: module.handler_declarations.len(),
+        using_count: count,
+    }
 }
 
 fn count_using_stmts(stmts: &[Stmt]) -> usize {
@@ -379,6 +424,18 @@ main =
       log \"x\"
 ";
         let module = goby_core::parse_module(source).expect("source should parse");
-        assert_eq!(count_using_stmts_in_module(&module), 2);
+        let usage = analyze_legacy_syntax_usage(&module);
+        assert_eq!(usage.using_count, 2);
+        assert_eq!(usage.handler_for_count, 1);
+    }
+
+    #[test]
+    fn resolves_legacy_syntax_mode_from_env() {
+        // SAFETY: test process controls env access in this test.
+        unsafe { env::set_var("GOBY_LEGACY_EFFECT_SYNTAX", "deny") };
+        assert_eq!(resolve_legacy_syntax_mode(), LegacySyntaxMode::Deny);
+        // SAFETY: cleanup after temporary test env override.
+        unsafe { env::remove_var("GOBY_LEGACY_EFFECT_SYNTAX") };
+        assert_eq!(resolve_legacy_syntax_mode(), LegacySyntaxMode::Warn);
     }
 }

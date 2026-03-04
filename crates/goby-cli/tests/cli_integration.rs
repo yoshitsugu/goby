@@ -320,3 +320,34 @@ fn run_command_emits_legacy_syntax_warnings() {
         stdout
     );
 }
+
+#[test]
+fn check_command_rejects_legacy_syntax_in_deny_mode() {
+    let root = repo_root();
+    let sandbox = TempDirGuard::new("check_legacy_deny");
+    let input = sandbox.join("legacy_effect.gb");
+    fs::write(
+        &input,
+        "effect Log\n  log: String -> Unit\nhandler H for Log\n  log s =\n    print s\nmain : Unit -> Unit\nmain =\n  using H\n    log \"hello\"\n",
+    )
+    .expect("temporary input should be writable");
+
+    let output = command_for_goby_cli()
+        .arg("check")
+        .arg(&input)
+        .env("GOBY_LEGACY_EFFECT_SYNTAX", "deny")
+        .current_dir(&root)
+        .output()
+        .expect("cli should execute");
+
+    assert!(
+        !output.status.success(),
+        "expected failure in deny mode for legacy syntax"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("legacy effect syntax is denied"),
+        "expected deny-mode error, got stderr: {}",
+        stderr
+    );
+}
