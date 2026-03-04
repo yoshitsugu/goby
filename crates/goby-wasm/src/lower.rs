@@ -759,12 +759,12 @@ main =
 effect Tick
   tick: Int -> Int
 
-handler TickHandler for Tick
-  tick n = resume n
-
 main : Unit -> Unit can Tick
 main =
-  using TickHandler
+  with_handler
+    tick n ->
+      resume n
+  in
     tick 1
 "#;
         let module = parse_module(source).expect("source should parse");
@@ -788,12 +788,12 @@ main =
 effect Tick
   tick: Int -> Int
 
-handler TickHandler for Tick
-  tick n = resume n
-
 main : Unit -> Unit can Tick
 main =
-  using TickHandler
+  with_handler
+    tick n ->
+      resume n
+  in
     tick 1
 "#;
         let module = parse_module(source).expect("source should parse");

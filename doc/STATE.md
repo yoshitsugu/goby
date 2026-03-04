@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-04 (session 114)
+Last updated: 2026-03-04 (session 116)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -61,6 +61,40 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - phased Wasm lowering (portable trampoline first, typed-continuation optimization later).
 
 ## 4. Recent Milestones
+
+- 2026-03-04 (session 116): `PLAN_EFFECT_RENEWAL` P6 prep (legacy fixture reduction, wasm continued)
+  - Further reduced `using`-based fixtures in `crates/goby-wasm`:
+    - converted additional runtime parity/dispatch fixtures in `src/lib.rs` to
+      canonical `with_handler` forms,
+    - converted effect-mode gate fixtures in `src/lower.rs` to `with_handler`.
+  - Updated fallback reason fixture declarations in `src/lib.rs` from
+    `uses_using*` examples to `uses_with_handler*` equivalents while preserving
+    expected unsupported-reason assertions.
+  - Planning tests:
+    - renamed coverage to `marks_with_handler_declaration_as_effect_boundary`,
+    - retained legacy top-level handler fixture for
+      `records_handler_resume_presence` (still keyed off `handler_declarations`).
+  - Validation completed:
+    - `cargo test -p goby-wasm`
+    - `cargo fmt`
+    - `cargo clippy -- -D warnings`
+    - `cargo test`
+
+- 2026-03-04 (session 115): `PLAN_EFFECT_RENEWAL` P6 prep (legacy fixture reduction, continued)
+  - Further migrated `goby-wasm` fixtures to canonical `with_handler` syntax:
+    - typed/fallback parity cases,
+    - nearest-handler dispatch parity cases,
+    - resume success/abortive/double-resume runtime samples.
+  - Migrated effect-boundary gating tests in `goby-wasm` `lower.rs` from
+    legacy `handler ... for`/`using` to `with_handler`.
+  - Updated planning test coverage wording and fixture style where possible
+    (`marks_with_handler_declaration_as_effect_boundary`).
+  - Kept one planning regression fixture on legacy top-level handler
+    (`records_handler_resume_presence`) because current signal source is
+    still `handler_declarations`.
+  - Validation completed:
+    - `cargo test -p goby-wasm`
+    - `cargo test`
 
 - 2026-03-04 (session 114): `PLAN_EFFECT_RENEWAL` P6 prep (goby-wasm test fixture migration)
   - Migrated representative legacy effect fixtures in `crates/goby-wasm/src/lib.rs`
