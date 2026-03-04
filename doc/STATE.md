@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-04 (session 127)
+Last updated: 2026-03-04 (session 128)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -63,6 +63,19 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - follow-up work moved to post-MVP tracks in `doc/PLAN.md`.
 
 ## 4. Recent Milestones
+
+- 2026-03-04 (session 128): stdlib mutable-syntax migration for `mut`/`:=`
+  - Updated `stdlib/goby/string.gb` to replace same-scope rebinding updates with
+    explicit mutable variables and assignment:
+    - `n = ...` update path -> `mut n` + `n := ...`
+    - `final = ...` update paths -> `mut final` + `final := ...`
+  - This keeps stdlib behavior aligned with the new rule that same-scope
+    redeclaration is rejected and mutation must use `:=`.
+  - Validation completed:
+    - `cargo fmt`
+    - `cargo check`
+    - `cargo test`
+    - `cargo clippy -- -D warnings`
 
 - 2026-03-04 (session 127): mutable variable syntax implementation (`mut` / `:=`)
   - Implemented mutable statement surface in core AST/parser:
