@@ -1727,6 +1727,15 @@ This file is a restart-safe snapshot for resuming work after context reset.
     - `cargo check`
     - `cargo test`
     - `cargo clippy -- -D warnings`
+- 2026-03-04 (session 140): import semantics update (type/effect selective import + eager ambiguity error)
+  - `import` behavior clarified and implemented as value/type/effect aware.
+    - selective import now accepts mixed names: values, type names, and effect names.
+  - Typechecker updates:
+    - import validation now checks selective names against module exports + type names + effect names,
+    - imported type names are included in type declaration validation,
+    - imported effect declarations/names respect selective lists,
+    - name resolution now fails eagerly when globals become ambiguous (no deferred "only on use" behavior).
+  - Stdlib resolver metadata extended with exported type names for validation.
 
 ## 5. Current Example Files
 

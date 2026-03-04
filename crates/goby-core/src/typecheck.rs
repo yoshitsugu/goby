@@ -49,10 +49,13 @@ pub fn typecheck_module_with_context(
     validate_intrinsic_namespace_policy(module, source_path, &stdlib_root_path)?;
     validate_imports(module, &stdlib_root_path)?;
     validate_embed_declarations(module, source_path, stdlib_root)?;
-    validate_type_declarations(module)?;
+    let imported_types = collect_imported_type_names(module, &stdlib_root_path);
+    validate_type_declarations(module, &imported_types)?;
     validate_effect_declarations(module)?;
 
     let imported_embedded_defaults = collect_imported_embedded_defaults(module, &stdlib_root_path)?;
+    let imported_effect_declarations =
+        collect_imported_effect_declarations(module, &stdlib_root_path);
     let imported_effects = collect_imported_effect_names(module, &stdlib_root_path);
     let local_embedded_defaults = collect_local_embedded_defaults(module);
     let embedded_default_effects: HashSet<String> = imported_embedded_defaults
@@ -122,7 +125,8 @@ pub fn typecheck_module_with_context(
 
     // Expression-level type checking (when parsed_body is available).
     let env = build_type_env(module, &stdlib_root_path);
-    let effect_map = build_effect_map(module);
+    ensure_no_ambiguous_globals(&env)?;
+    let effect_map = build_effect_map(module, &imported_effect_declarations);
     let required_effects_map = build_required_effects_map(module);
 
     for decl in &module.declarations {
@@ -489,26 +493,34 @@ fn build_required_effects_map(module: &Module) -> HashMap<String, Vec<String>> {
     map
 }
 
-fn build_effect_map(module: &Module) -> EffectMap {
+fn build_effect_map(module: &Module, imported_effects: &[crate::ast::EffectDecl]) -> EffectMap {
     let mut effect_to_ops: HashMap<String, HashSet<String>> = HashMap::new();
-    for effect_decl in &module.effect_declarations {
-        let mut ops = HashSet::new();
+    for effect_decl in imported_effects
+        .iter()
+        .chain(module.effect_declarations.iter())
+    {
+        let ops = effect_to_ops.entry(effect_decl.name.clone()).or_default();
         for member in &effect_decl.members {
-            ops.insert(format!("{}.{}", effect_decl.name, member.name));
-            ops.insert(member.name.clone());
+            let _ = ops.insert(format!("{}.{}", effect_decl.name, member.name));
+            let _ = ops.insert(member.name.clone());
         }
-        effect_to_ops.insert(effect_decl.name.clone(), ops);
     }
 
     EffectMap {
         effect_to_ops,
-        op_to_effects: build_op_to_effects(module),
+        op_to_effects: build_op_to_effects(module, imported_effects),
     }
 }
 
-fn build_op_to_effects(module: &Module) -> HashMap<String, HashSet<String>> {
+fn build_op_to_effects(
+    module: &Module,
+    imported_effects: &[crate::ast::EffectDecl],
+) -> HashMap<String, HashSet<String>> {
     let mut map: HashMap<String, HashSet<String>> = HashMap::new();
-    for effect_decl in &module.effect_declarations {
+    for effect_decl in imported_effects
+        .iter()
+        .chain(module.effect_declarations.iter())
+    {
         for member in &effect_decl.members {
             map.entry(member.name.clone())
                 .or_default()
@@ -646,6 +658,39 @@ fn build_type_env(module: &Module, stdlib_root: &Path) -> TypeEnv {
     }
 }
 
+fn ensure_no_ambiguous_globals(env: &TypeEnv) -> Result<(), TypecheckError> {
+    let mut ambiguous: Vec<(&String, &Vec<String>)> = env
+        .globals
+        .iter()
+        .filter_map(|(name, binding)| match binding {
+            GlobalBinding::Ambiguous { sources } => {
+                let has_import_source = sources.iter().any(|source| source.starts_with("import `"));
+                if has_import_source {
+                    Some((name, sources))
+                } else {
+                    None
+                }
+            }
+            GlobalBinding::Resolved { .. } => None,
+        })
+        .collect();
+    ambiguous.sort_by(|(left, _), (right, _)| left.cmp(right));
+    let Some((name, sources)) = ambiguous.first() else {
+        return Ok(());
+    };
+    let mut sorted_sources = (*sources).clone();
+    sorted_sources.sort();
+    Err(TypecheckError {
+        declaration: None,
+        span: None,
+        message: format!(
+            "name `{}` is ambiguous due to name resolution collision: {}",
+            name,
+            sorted_sources.join(", ")
+        ),
+    })
+}
+
 fn inject_effect_symbols(module: &Module, globals: &mut HashMap<String, GlobalBinding>) {
     for effect_decl in &module.effect_declarations {
         for member in &effect_decl.members {
@@ -768,20 +813,63 @@ fn validate_effect_declarations(module: &Module) -> Result<(), TypecheckError> {
 fn validate_imports(module: &Module, stdlib_root: &Path) -> Result<(), TypecheckError> {
     let resolver = StdlibResolver::new(stdlib_root.to_path_buf());
     for import in effective_imports(module, &resolver) {
-        let exports = module_exports_for_import_with_resolver(&import.module_path, &resolver)?;
-
-        if let ImportKind::Selective(names) = &import.kind {
-            for name in names {
-                if !exports.contains_key(name) {
+        match resolver.resolve_module(&import.module_path) {
+            Ok(resolved) => {
+                if let ImportKind::Selective(names) = &import.kind {
+                    for name in names {
+                        let exists = resolved.exports.contains_key(name)
+                            || resolved.types.iter().any(|ty| ty == name)
+                            || resolved.effects.iter().any(|effect| effect == name);
+                        if !exists {
+                            return Err(TypecheckError {
+                                declaration: None,
+                                span: None,
+                                message: format!(
+                                    "unknown symbol `{}` in import from `{}`",
+                                    name, import.module_path
+                                ),
+                            });
+                        }
+                    }
+                }
+            }
+            Err(StdlibResolveError::ModuleNotFound { attempted_path, .. }) => {
+                let Some(exports) = builtin_module_exports(&import.module_path) else {
                     return Err(TypecheckError {
                         declaration: None,
                         span: None,
                         message: format!(
-                            "unknown symbol `{}` in import from `{}`",
-                            name, import.module_path
+                            "unknown module `{}` (attempted stdlib path: {})",
+                            import.module_path,
+                            attempted_path.display()
                         ),
                     });
+                };
+                if let ImportKind::Selective(names) = &import.kind {
+                    for name in names {
+                        if !exports.contains_key(name.as_str()) {
+                            return Err(TypecheckError {
+                                declaration: None,
+                                span: None,
+                                message: format!(
+                                    "unknown symbol `{}` in import from `{}`",
+                                    name, import.module_path
+                                ),
+                            });
+                        }
+                    }
                 }
+            }
+            Err(err) => {
+                return Err(TypecheckError {
+                    declaration: None,
+                    span: None,
+                    message: format!(
+                        "failed to resolve stdlib module `{}`: {}",
+                        import.module_path,
+                        stdlib_error_message(&err)
+                    ),
+                });
             }
         }
     }
@@ -1043,11 +1131,15 @@ fn first_disallowed_intrinsic_in_expr(
     }
 }
 
-fn validate_type_declarations(module: &Module) -> Result<(), TypecheckError> {
+fn validate_type_declarations(
+    module: &Module,
+    imported_type_names: &HashSet<String>,
+) -> Result<(), TypecheckError> {
     let mut known_type_names: HashSet<String> = builtin_type_names()
         .into_iter()
         .map(|name| name.to_string())
         .collect();
+    known_type_names.extend(imported_type_names.iter().cloned());
     let mut declared_type_names = HashSet::new();
 
     for ty_decl in &module.type_declarations {
@@ -1305,16 +1397,73 @@ fn collect_imported_embedded_defaults(
     Ok(defaults)
 }
 
+fn collect_imported_effect_declarations(
+    module: &Module,
+    stdlib_root: &Path,
+) -> Vec<crate::ast::EffectDecl> {
+    let resolver = StdlibResolver::new(stdlib_root.to_path_buf());
+    let mut effects = Vec::new();
+    for import in effective_imports(module, &resolver) {
+        let Ok(source_path) = resolver.module_file_path(&import.module_path) else {
+            continue;
+        };
+        let Ok(source) = std::fs::read_to_string(source_path) else {
+            continue;
+        };
+        let Ok(parsed) = crate::parse_module(&source) else {
+            continue;
+        };
+        effects.extend(
+            parsed
+                .effect_declarations
+                .into_iter()
+                .filter(|decl| import_selects_name(&import.kind, &decl.name)),
+        );
+    }
+    effects
+}
+
+fn collect_imported_type_names(module: &Module, stdlib_root: &Path) -> HashSet<String> {
+    let resolver = StdlibResolver::new(stdlib_root.to_path_buf());
+    let mut types = HashSet::new();
+    for import in effective_imports(module, &resolver) {
+        let Ok(resolved) = resolver.resolve_module(&import.module_path) else {
+            continue;
+        };
+        types.extend(
+            resolved
+                .types
+                .into_iter()
+                .filter(|name| import_selects_name(&import.kind, name)),
+        );
+    }
+    types
+}
+
 fn collect_imported_effect_names(module: &Module, stdlib_root: &Path) -> HashSet<String> {
     let resolver = StdlibResolver::new(stdlib_root.to_path_buf());
     let mut effects = HashSet::new();
+    // Keep this explicit-import-only behavior for `can`-clause validation.
+    // Implicit prelude effects are handled separately by embedded-default rules.
     for import in &module.imports {
         let Ok(resolved) = resolver.resolve_module(&import.module_path) else {
             continue;
         };
-        effects.extend(resolved.effects);
+        effects.extend(
+            resolved
+                .effects
+                .into_iter()
+                .filter(|name| import_selects_name(&import.kind, name)),
+        );
     }
     effects
+}
+
+fn import_selects_name(kind: &ImportKind, name: &str) -> bool {
+    match kind {
+        ImportKind::Selective(names) => names.iter().any(|selected| selected == name),
+        ImportKind::Plain | ImportKind::Alias(_) => true,
+    }
 }
 
 fn collect_local_embedded_defaults(module: &Module) -> HashMap<String, String> {
@@ -2687,7 +2836,7 @@ fn ensure_name_not_ambiguous(
             declaration: Some(decl_name.to_string()),
             span: None,
             message: format!(
-                "name `{}` is ambiguous due to import collision: {}",
+                "name `{}` is ambiguous due to name resolution collision: {}",
                 name,
                 sources.join(", ")
             ),
@@ -4281,7 +4430,54 @@ f =
     i.parse(\"42\")
 ";
         let module = parse_module(source).expect("should parse");
-        typecheck_module(&module).expect("int.parse should typecheck when StringParseError is handled");
+        typecheck_module(&module)
+            .expect("int.parse should typecheck when StringParseError is handled");
+    }
+
+    #[test]
+    fn typechecks_with_handler_operation_from_imported_effect_without_redeclaration() {
+        let source = "\
+import goby/int as i
+f : Unit -> Int can StringParseError
+f =
+  with_handler
+    invalid_integer _ ->
+      resume -1
+  in
+    i.parse(\"42\")
+";
+        let module = parse_module(source).expect("should parse");
+        typecheck_module(&module).expect(
+            "handler op from imported effect should resolve without local effect redeclaration",
+        );
+    }
+
+    #[test]
+    fn typechecks_selective_import_of_type_and_effect_names() {
+        let sandbox = TempDirGuard::new("selective_type_effect_import");
+        let root = sandbox.path.join("stdlib");
+        fs::create_dir_all(root.join("goby")).expect("stdlib/goby should be creatable");
+        fs::write(
+            root.join("goby/custom.gb"),
+            "type Token = Token(value: String)\neffect CustomEffect\n  fail : String -> Int\nto_int : String -> Int can CustomEffect\nto_int s = 0\n",
+        )
+        .expect("stdlib file should be writable");
+        let source_path = sandbox.path.join("main.gb");
+        let source = "\
+import goby/custom ( Token, CustomEffect )
+type Boxed = Boxed(value: Token)
+f : Unit -> Int can CustomEffect
+f =
+  with_handler
+    fail _ ->
+      resume 0
+  in
+    1
+";
+        fs::write(&source_path, source).expect("fixture file should be writable");
+        let module = parse_module(source).expect("should parse");
+        typecheck_module_with_context(&module, Some(&source_path), Some(&root))
+            .expect("selective type/effect import should be accepted");
     }
 
     #[test]
@@ -4602,7 +4798,7 @@ main =
     }
 
     #[test]
-    fn allows_unused_name_when_import_collides_with_declaration() {
+    fn rejects_unused_name_when_import_collides_with_declaration() {
         let source = "\
 import goby/env ( fetch_env_var )
 fetch_env_var : String -> String
@@ -4612,7 +4808,10 @@ main =
   print \"ok\"
 ";
         let module = parse_module(source).expect("should parse");
-        typecheck_module(&module).expect("unused ambiguous name should be tolerated");
+        let err = typecheck_module(&module)
+            .expect_err("import collisions should fail at name resolution time");
+        assert!(err.message.contains("ambiguous"));
+        assert!(err.message.contains("fetch_env_var"));
     }
 
     #[test]
