@@ -731,6 +731,15 @@ impl<'m> RuntimeOutputResolver<'m> {
                     {
                         return Some(());
                     }
+                    if matches!(fn_name.as_str(), "read" | "read_line")
+                        && !self.has_declaration_name(fn_name)
+                        && self.locals.get(fn_name).is_none()
+                        && self
+                            .apply_embedded_default_handler("Read", fn_name, RuntimeValue::Unit)
+                            .is_some()
+                    {
+                        return Some(());
+                    }
                 }
                 let repr = expr.to_str_repr()?;
                 self.eval_side_effect(&repr, evaluators)
@@ -760,6 +769,15 @@ impl<'m> RuntimeOutputResolver<'m> {
                             0,
                         )
                         .is_some()
+                    {
+                        return Some(());
+                    }
+                    if matches!(callee.as_str(), "read" | "read_line")
+                        && !self.has_declaration_name(callee)
+                        && self.locals.get(callee).is_none()
+                        && self
+                            .apply_embedded_default_handler("Read", callee, RuntimeValue::Unit)
+                            .is_some()
                     {
                         return Some(());
                     }
@@ -842,16 +860,17 @@ impl<'m> RuntimeOutputResolver<'m> {
     }
 
     fn eval_value(
-        &self,
+        &mut self,
         expr: &str,
         evaluators: &RuntimeEvaluators<'_, '_>,
     ) -> Option<RuntimeValue> {
         let callables = HashMap::new();
-        self.eval_value_with_context(expr, &self.locals, &callables, evaluators)
+        let locals = self.locals.clone();
+        self.eval_value_with_context(expr, &locals, &callables, evaluators)
     }
 
     fn eval_value_with_context(
-        &self,
+        &mut self,
         expr: &str,
         locals: &RuntimeLocals,
         callables: &HashMap<String, IntCallable>,
@@ -860,6 +879,19 @@ impl<'m> RuntimeOutputResolver<'m> {
         if let Some((left, callee)) = parse_pipeline(expr) {
             let left_value = self.eval_value_with_context(left, locals, callables, evaluators)?;
             return self.apply_pipeline(callee, left_value, locals, callables, evaluators, 0);
+        }
+
+        if let Some((callee, arg)) = parse_call(expr)
+            && matches!(callee, "read" | "read_line")
+            && matches!(arg, "()" | "Unit")
+            && !self.has_declaration_name(callee)
+            && !self.locals.get(callee).is_some()
+            && !callables.contains_key(callee)
+            && !evaluators.int.functions.contains_key(callee)
+            && !evaluators.list.functions.contains_key(callee)
+            && !evaluators.unit.contains_key(callee)
+        {
+            return self.apply_embedded_default_handler("Read", callee, RuntimeValue::Unit);
         }
 
         if let Some(text) = eval_string_expr(expr, &locals.string_values) {
@@ -881,7 +913,7 @@ impl<'m> RuntimeOutputResolver<'m> {
     }
 
     fn apply_pipeline(
-        &self,
+        &mut self,
         callee: &str,
         value: RuntimeValue,
         locals: &RuntimeLocals,
@@ -1201,6 +1233,15 @@ impl<'m> RuntimeOutputResolver<'m> {
                                 .map(RuntimeValue::ListInt);
                         }
                     }
+                    if matches!(fn_name.as_str(), "read" | "read_line")
+                        && !self.has_declaration_name(fn_name)
+                        && locals.get(fn_name).is_none()
+                        && !callables.contains_key(fn_name)
+                        && let Some(value) =
+                            self.apply_embedded_default_handler("Read", fn_name, RuntimeValue::Unit)
+                    {
+                        return Some(value);
+                    }
                 }
                 // Qualified callee: Effect.method arg  (e.g. Log.log result, env.from_env name)
                 // Try exact effect-name match first, then member-name-only scan.
@@ -1237,6 +1278,19 @@ impl<'m> RuntimeOutputResolver<'m> {
                 constructor,
                 fields,
             } => {
+                if fields.is_empty()
+                    && matches!(constructor.as_str(), "read" | "read_line")
+                    && !self.has_declaration_name(constructor)
+                    && locals.get(constructor).is_none()
+                    && !self.is_record_constructor_name(constructor)
+                    && let Some(value) = self.apply_embedded_default_handler(
+                        "Read",
+                        constructor,
+                        RuntimeValue::Unit,
+                    )
+                {
+                    return Some(value);
+                }
                 let mut field_map = HashMap::new();
                 for (field_name, field_expr) in fields {
                     let field_val =
@@ -1484,6 +1538,16 @@ impl<'m> RuntimeOutputResolver<'m> {
                     {
                         return Some(());
                     }
+                    if matches!(fn_name.as_str(), "read" | "read_line")
+                        && !self.has_declaration_name(fn_name)
+                        && locals.get(fn_name).is_none()
+                        && !callables.contains_key(fn_name)
+                        && self
+                            .apply_embedded_default_handler("Read", fn_name, RuntimeValue::Unit)
+                            .is_some()
+                    {
+                        return Some(());
+                    }
                     let repr = expr.to_str_repr()?;
                     return self.execute_unit_call(&repr, locals, callables, evaluators);
                 }
@@ -1505,6 +1569,16 @@ impl<'m> RuntimeOutputResolver<'m> {
                         if self
                             .execute_unit_call_ast(callee, v, locals, callables, evaluators, depth)
                             .is_some()
+                        {
+                            return Some(());
+                        }
+                        if matches!(callee.as_str(), "read" | "read_line")
+                            && !self.has_declaration_name(callee)
+                            && locals.get(callee).is_none()
+                            && !callables.contains_key(callee)
+                            && self
+                                .apply_embedded_default_handler("Read", callee, RuntimeValue::Unit)
+                                .is_some()
                         {
                             return Some(());
                         }
@@ -1687,6 +1761,22 @@ impl<'m> RuntimeOutputResolver<'m> {
             }
         }
         None
+    }
+
+    fn is_record_constructor_name(&self, name: &str) -> bool {
+        self.module.type_declarations.iter().any(|ty_decl| {
+            matches!(
+                ty_decl,
+                goby_core::TypeDeclaration::Record { constructor, .. } if constructor == name
+            )
+        })
+    }
+
+    fn has_declaration_name(&self, name: &str) -> bool {
+        self.module
+            .declarations
+            .iter()
+            .any(|decl| decl.name == name)
     }
 
     /// Find a handler method by bare name (e.g. `log`) from nearest to outermost.
@@ -3450,6 +3540,32 @@ main =
             output.as_deref(),
             Some("line=alpha\ntail=beta\ngamma\ntail2="),
             "implicit prelude embedded Read handler should serve read_line/read and consume stdin"
+        );
+    }
+
+    #[test]
+    fn embedded_read_handler_supports_bare_calls_via_implicit_prelude() {
+        use goby_core::parse_module;
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let source = r#"
+main : Unit -> Unit can Print, Read
+main =
+  line = read_line ()
+  tail = read ()
+  print "line=${line}"
+  print "tail=${tail}"
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let output = resolve_main_runtime_output_with_stdin(
+            &module,
+            main_body(&module),
+            main_parsed_body(&module),
+            "alpha\nbeta",
+        );
+        assert_eq!(
+            output.as_deref(),
+            Some("line=alpha\ntail=beta"),
+            "bare read_line/read should resolve through implicit prelude embedded Read"
         );
     }
 
