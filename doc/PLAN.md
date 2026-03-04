@@ -71,9 +71,10 @@ Based on `examples/*.gb`:
   - `can` clauses are validated (declared effect or built-in effect names).
 - Canonical handler application syntax is `with <handler_expr> in <body>` and
   `with_handler ... in ...` (inline sugar).
-- Legacy syntax (`handler ... for ...`, `using`) is no longer supported by CLI
-  commands (`check` / `run`) as of 2026-03-04.
-  - parser/runtime compatibility paths may remain internally during P6 removal work.
+- Legacy syntax (`handler ... for ...`, `using`) is no longer accepted by the
+  language parser as of 2026-03-04.
+  - CLI commands (`check` / `run`) therefore reject such sources by default.
+  - internal compatibility structures may remain temporarily during P6 cleanup.
 - MVP built-ins: `print`, `map`, `fetch_env_var`, `string.split`, `list.join`.
   - `print` execution is resolved by compiler/runtime internals (default stdio print path),
     not by a user-visible stdlib handler definition.
@@ -174,11 +175,9 @@ new handler-value model.
 - Reserved keywords for renewal syntax:
   - `with`, `with_handler`, `in`, `handler`, `effect`.
 - Migration policy:
-  - legacy top-level `handler ... for ...` and `using` remain only for a short
-    bridge window.
-  - compatibility window is intentionally aggressive (pre-1.0); after one warning
-    release, legacy syntax is rejected by default.
-  - status update (2026-03-04): CLI already rejects legacy syntax by default.
+  - bridge-window acceptance for top-level `handler ... for ...` and `using` has
+    ended (2026-03-04).
+  - current status: parser-level rejection is active; legacy forms are migration-only.
   - migration mapping examples are documented in
     `doc/EFFECT_RENEWAL_MIGRATION.md`.
 

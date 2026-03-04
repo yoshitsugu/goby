@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-04 (session 116)
+Last updated: 2026-03-04 (session 117)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -61,6 +61,24 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - phased Wasm lowering (portable trampoline first, typed-continuation optimization later).
 
 ## 4. Recent Milestones
+
+- 2026-03-04 (session 117): `PLAN_EFFECT_RENEWAL` P6 parser-level strict rejection + wasm planning alignment
+  - Enforced parser-level rejection for legacy effect syntax:
+    - top-level `handler ... for ...` now fails parse with migration hint,
+    - legacy `using` syntax now fails parse with migration hint.
+  - Updated parser/typecheck/CLI tests to match parser-first rejection messaging
+    and canonical `with_handler` fixtures.
+  - Updated `goby-wasm` lowering-plan resume signal:
+    - `handler_resume_present` now detects `resume` inside expression-level
+      handler clauses (`with_handler` / `with` handler values),
+    - retained compatibility fallback for legacy `handler_declarations` traversal.
+  - Validation completed:
+    - `cargo test -p goby-core`
+    - `cargo test -p goby-cli`
+    - `cargo test -p goby-wasm`
+    - `cargo fmt -- --check`
+    - `cargo clippy -- -D warnings`
+    - `cargo test`
 
 - 2026-03-04 (session 116): `PLAN_EFFECT_RENEWAL` P6 prep (legacy fixture reduction, wasm continued)
   - Further reduced `using`-based fixtures in `crates/goby-wasm`:

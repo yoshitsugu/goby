@@ -309,11 +309,16 @@ pub(crate) fn build_lowering_plan(module: &Module) -> LoweringPlan {
     }
 
     let handler_resume_present = module
-        .handler_declarations
+        .declarations
         .iter()
-        .flat_map(|h| h.methods.iter())
-        .filter_map(|m| m.parsed_body.as_deref())
-        .any(stmts_contain_resume);
+        .filter_map(|d| d.parsed_body.as_deref())
+        .any(stmts_contain_handler_resume)
+        || module
+            .handler_declarations
+            .iter()
+            .flat_map(|h| h.methods.iter())
+            .filter_map(|m| m.parsed_body.as_deref())
+            .any(stmts_contain_resume);
 
     LoweringPlan {
         declaration_styles,
@@ -584,6 +589,69 @@ fn stmts_contain_resume(stmts: &[Stmt]) -> bool {
     inspection.contains_resume
 }
 
+fn stmts_contain_handler_resume(stmts: &[Stmt]) -> bool {
+    stmts.iter().any(stmt_contains_handler_resume)
+}
+
+fn stmt_contains_handler_resume(stmt: &Stmt) -> bool {
+    match stmt {
+        Stmt::Binding { value, .. } | Stmt::Expr(value) => expr_contains_handler_resume(value),
+        Stmt::Using { body, .. } => stmts_contain_handler_resume(body),
+    }
+}
+
+fn expr_contains_handler_resume(expr: &Expr) -> bool {
+    match expr {
+        Expr::IntLit(_)
+        | Expr::BoolLit(_)
+        | Expr::StringLit(_)
+        | Expr::Var(_)
+        | Expr::Qualified { .. } => false,
+        Expr::InterpolatedString(parts) => parts.iter().any(|part| match part {
+            InterpolatedPart::Text(_) => false,
+            InterpolatedPart::Expr(expr) => expr_contains_handler_resume(expr),
+        }),
+        Expr::ListLit(items) | Expr::TupleLit(items) => {
+            items.iter().any(expr_contains_handler_resume)
+        }
+        Expr::RecordConstruct { fields, .. } => fields
+            .iter()
+            .any(|(_, value)| expr_contains_handler_resume(value)),
+        Expr::BinOp { left, right, .. } => {
+            expr_contains_handler_resume(left) || expr_contains_handler_resume(right)
+        }
+        Expr::Call { callee, arg } => {
+            expr_contains_handler_resume(callee) || expr_contains_handler_resume(arg)
+        }
+        Expr::MethodCall { args, .. } => args.iter().any(expr_contains_handler_resume),
+        Expr::Pipeline { value, .. } => expr_contains_handler_resume(value),
+        Expr::Lambda { body, .. } => expr_contains_handler_resume(body),
+        Expr::Handler { clauses } => clauses
+            .iter()
+            .filter_map(|clause| clause.parsed_body.as_deref())
+            .any(stmts_contain_resume),
+        Expr::With { handler, body } => {
+            expr_contains_handler_resume(handler) || stmts_contain_handler_resume(body)
+        }
+        Expr::Resume { value } => expr_contains_handler_resume(value),
+        Expr::If {
+            condition,
+            then_expr,
+            else_expr,
+        } => {
+            expr_contains_handler_resume(condition)
+                || expr_contains_handler_resume(then_expr)
+                || expr_contains_handler_resume(else_expr)
+        }
+        Expr::Case { scrutinee, arms } => {
+            expr_contains_handler_resume(scrutinee)
+                || arms
+                    .iter()
+                    .any(|arm| expr_contains_handler_resume(&arm.body))
+        }
+    }
+}
+
 fn parse_effect_clause_effects(annotation: &str) -> Vec<String> {
     let trimmed = annotation.trim();
     let Some(idx) = find_can_keyword_index(trimmed) else {
@@ -748,13 +816,13 @@ main =
 effect Iter
   next: Int -> Int
 
-handler H for Iter
-  next n =
-    resume n
-
 main : Unit -> Unit
 main =
-  print 1
+  with_handler
+    next n ->
+      resume n
+  in
+    Iter.next 1
 "#;
         let module = parse_module(source).expect("source should parse");
         let plan = build_lowering_plan(&module);
