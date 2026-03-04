@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-04 (session 98)
+Last updated: 2026-03-04 (session 99)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -59,6 +59,16 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - phased Wasm lowering (portable trampoline first, typed-continuation optimization later).
 
 ## 4. Recent Milestones
+
+- 2026-03-04 (session 99): `PLAN_EFFECT_RENEWAL` P2 hardening (negative diagnostics coverage)
+  - Added additional typecheck regressions for renewal error paths:
+    - ambiguous operation in `with_handler` clause (same op name in multiple effects) is rejected,
+    - `with <expr>` rejects non-handler expressions with explicit diagnostic.
+  - Kept diagnostic assertions resilient to wording drift while checking key semantic markers
+    (`ambiguous`, operation name, handler-value requirement).
+  - Validation:
+    - `cargo check`
+    - `cargo test -p goby-core`
 
 - 2026-03-04 (session 98): `PLAN_EFFECT_RENEWAL` P2 second slice (`Handler(...)` type semantics)
   - `Handler(...)` type annotations now have semantic validation:
