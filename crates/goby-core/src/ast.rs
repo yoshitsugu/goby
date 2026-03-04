@@ -14,7 +14,6 @@ pub struct Module {
     pub embed_declarations: Vec<EmbedDecl>,
     pub type_declarations: Vec<TypeDeclaration>,
     pub effect_declarations: Vec<EffectDecl>,
-    pub handler_declarations: Vec<HandlerDecl>,
     pub declarations: Vec<Declaration>,
 }
 
@@ -34,22 +33,6 @@ pub struct EffectDecl {
 pub struct EffectMember {
     pub name: String,
     pub type_annotation: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct HandlerDecl {
-    pub name: String,
-    pub effect: String,
-    pub methods: Vec<HandlerMethod>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct HandlerMethod {
-    pub name: String,
-    pub params: Vec<String>,
-    pub body: String,
-    /// Pre-parsed body statements; `None` if the body failed to parse.
-    pub parsed_body: Option<Vec<Stmt>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

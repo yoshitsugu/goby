@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-04 (session 123)
+Last updated: 2026-03-04 (session 125)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -31,15 +31,13 @@ This file is a restart-safe snapshot for resuming work after context reset.
 - Operator precedence: `|>` < `+` < `*` < call/application; all left-associative.
   - `+` and `*` require spaces on both sides in MVP.
 - Legacy `using` / top-level `handler ... for ...` syntax is rejected by
-  `goby-cli check/run` by default (2026-03-04).
-  Internal parser/runtime compatibility paths remain during P6 removal work.
-- `active_handlers` is a `BTreeMap<String, usize>` (deterministic alphabetical dispatch order).
+  `goby-cli check/run` by default (2026-03-04); migration diagnostics point to
+  canonical `with` / `with_handler`.
 - String escape sequences: `\n`, `\t`, `\\`, `\"` expanded at parse time via `unescape_string`.
 - String interpolation `${...}` is parsed into `Expr::InterpolatedString`.
   Runtime stringifies embedded expression values when materializing the final `String`.
 - `case` arm separator: ` -> `; parsed by `split_case_arm` (safe for lambda bodies).
 - `CasePattern` variants: `IntLit(i64)`, `StringLit(String)`, `BoolLit(bool)`, `Wildcard`.
-- `HandlerMethod.parsed_body: Option<Vec<Stmt>>` pre-populated at parse time (no per-dispatch re-parse).
 - MVP built-ins: `print`, `map`, `fetch_env_var`, `string.split`, `list.join`.
 - `print` is an internal runtime-resolved operation; `DefaultStdioPrintHandler`-equivalent behavior
   is compiler/runtime-owned and not required to appear as a user-visible stdlib handler definition.
@@ -61,10 +59,33 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - phased Wasm lowering (portable trampoline first, typed-continuation optimization later).
 - `PLAN_EFFECT_RENEWAL` completion status:
   - P6 removal is still in progress (not complete).
-  - parser-level legacy rejection is active, but runtime/typecheck compatibility
-    paths and remaining docs/test cleanup are still pending.
+  - parser/runtime/typecheck legacy compatibility paths are removed.
+  - remaining work is docs/test naming cleanup and final closure pass.
 
 ## 4. Recent Milestones
+
+- 2026-03-04 (session 125): `PLAN_EFFECT_RENEWAL` P6-R4 cleanup (naming + validation closure pass)
+  - Renamed remaining test identifiers/messages that still used `using` terminology
+    to canonical `with` / `with_handler` wording in:
+    - `crates/goby-core/src/typecheck.rs`
+    - `crates/goby-wasm/src/lib.rs`
+  - Updated runtime comment wording in `goby-wasm` to remove legacy `using` phrasing.
+  - Re-ran mandatory validation flow after cleanup:
+    - `cargo fmt`
+    - `cargo check`
+    - `cargo test`
+    - `cargo clippy -- -D warnings`
+
+- 2026-03-04 (session 124): `PLAN_EFFECT_RENEWAL` P6-R3 schema pruning (`handler_declarations` removal)
+  - Removed legacy top-level handler schema from core AST:
+    - deleted `Module.handler_declarations`,
+    - deleted `HandlerDecl` / legacy top-level handler struct exports.
+  - Updated parser/module construction and parser tests to reflect schema removal.
+  - Updated `goby-wasm` inline handler runtime representation to local type
+    (`RuntimeHandlerMethod`), decoupled from removed core legacy schema.
+  - Validation completed:
+    - `cargo check`
+    - `cargo test`
 
 - 2026-03-04 (session 123): `PLAN_EFFECT_RENEWAL` P6-R2 first implementation slice (legacy AST/runtime path shrink)
   - Removed active legacy `using` AST surface:

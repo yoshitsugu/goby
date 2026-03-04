@@ -3005,7 +3005,7 @@ effect Log
     // -----------------------------------------------------------------------
 
     #[test]
-    fn rejects_direct_effect_op_call_outside_using() {
+    fn rejects_direct_effect_op_call_outside_with_handler() {
         // `log x` is called directly in `main` without any `with_handler`.
         let source = "\
 effect Log
@@ -3027,7 +3027,7 @@ main =
     }
 
     #[test]
-    fn accepts_effect_op_call_inside_using() {
+    fn accepts_effect_op_call_inside_with_handler_scope() {
         // `log x` is called inside a `with_handler` block.
         let source = "\
 effect Log
@@ -3272,7 +3272,7 @@ f msg =
     }
 
     #[test]
-    fn rejects_effect_op_in_binding_value_outside_using() {
+    fn rejects_effect_op_in_binding_value_outside_with_handler() {
         // Effect op used in binding RHS, no enclosing `with_handler`.
         let source = "\
 effect Log
@@ -3283,13 +3283,13 @@ main =
 ";
         let module = parse_module(source).expect("should parse");
         let err = typecheck_module(&module)
-            .expect_err("effect op in binding outside using should be rejected");
+            .expect_err("effect op in binding outside with_handler should be rejected");
         assert_eq!(err.declaration.as_deref(), Some("main"));
         assert!(err.message.contains("not handled"));
     }
 
     #[test]
-    fn rejects_effect_op_as_pipeline_callee_outside_using() {
+    fn rejects_effect_op_as_pipeline_callee_outside_with_handler() {
         // `"hello" |> log` — effect op used as pipeline callee without `with_handler`.
         let source = "\
 effect Log
@@ -3300,14 +3300,14 @@ main =
 ";
         let module = parse_module(source).expect("should parse");
         let err = typecheck_module(&module)
-            .expect_err("effect op as pipeline callee outside using should be rejected");
+            .expect_err("effect op as pipeline callee outside with_handler should be rejected");
         assert_eq!(err.declaration.as_deref(), Some("main"));
         assert!(err.message.contains("not handled"));
         assert!(err.message.contains("log"));
     }
 
     #[test]
-    fn accepts_effect_op_as_pipeline_callee_inside_using() {
+    fn accepts_effect_op_as_pipeline_callee_inside_with_handler_scope() {
         // `"hello" |> log` inside `with_handler` should be accepted.
         let source = "\
 effect Log
@@ -3343,7 +3343,7 @@ main =
     }
 
     #[test]
-    fn accepts_nested_using_with_merged_covered_ops() {
+    fn accepts_nested_with_handler_with_merged_covered_ops() {
         // Outer `with_handler(log)` + inner `with_handler(from_env)`; inner body calls both ops.
         let source = "\
 effect Log
@@ -3388,7 +3388,7 @@ f msg =
     // ── Step 3: calling effectful functions requires an appropriate handler scope ──
 
     #[test]
-    fn rejects_call_to_effectful_function_outside_using() {
+    fn rejects_call_to_effectful_function_outside_with_handler() {
         // `plus_ten_with_log` requires the `Log` effect; calling it from `main` without
         // `with_handler` should be rejected.
         let source = "\
@@ -3404,7 +3404,7 @@ main =
 ";
         let module = parse_module(source).expect("should parse");
         let err = typecheck_module(&module)
-            .expect_err("calling effectful function without using should fail");
+            .expect_err("calling effectful function without with_handler should fail");
         assert_eq!(err.declaration.as_deref(), Some("main"));
         assert!(
             err.message.contains("unhandled effect") || err.message.contains("Log"),
@@ -3414,7 +3414,7 @@ main =
     }
 
     #[test]
-    fn accepts_call_to_effectful_function_inside_using() {
+    fn accepts_call_to_effectful_function_inside_with_handler_scope() {
         // Same call, but wrapped in `with_handler` — should succeed.
         let source = "\
 effect Log
@@ -3467,7 +3467,7 @@ main =
     }
 
     #[test]
-    fn accepts_effectful_pipeline_callee_inside_using() {
+    fn accepts_effectful_pipeline_callee_inside_with_handler_scope() {
         // `3 |> plus_ten_with_log` inside `with_handler` — pipeline form should also pass.
         let source = "\
 effect Log

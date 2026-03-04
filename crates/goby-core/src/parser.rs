@@ -236,7 +236,6 @@ pub fn parse_module(source: &str) -> Result<Module, ParseError> {
         embed_declarations,
         type_declarations,
         effect_declarations,
-        handler_declarations: Vec::new(),
         declarations,
     })
 }
@@ -2713,11 +2712,6 @@ main =
             module.effect_declarations.len(),
             2,
             "effect.gb should have 2 effect declarations"
-        );
-        assert_eq!(
-            module.handler_declarations.len(),
-            0,
-            "effect.gb should not rely on legacy top-level handler declarations"
         );
         for decl in &module.declarations {
             assert!(
