@@ -50,7 +50,8 @@ pub fn typecheck_module_with_context(
     validate_type_declarations(module)?;
     validate_effect_declarations(module)?;
 
-    let imported_embedded_defaults = collect_imported_embedded_defaults(module, &stdlib_root_path);
+    let imported_embedded_defaults =
+        collect_imported_embedded_defaults(module, &stdlib_root_path)?;
     let local_embedded_defaults = collect_local_embedded_defaults(module);
     let embedded_default_effects: HashSet<String> = imported_embedded_defaults
         .keys()
@@ -1268,7 +1269,7 @@ fn module_exports_for_import_with_resolver(
 fn collect_imported_embedded_defaults(
     module: &Module,
     stdlib_root: &Path,
-) -> HashMap<String, String> {
+) -> Result<HashMap<String, String>, TypecheckError> {
     let resolver = StdlibResolver::new(stdlib_root.to_path_buf());
     let mut defaults = HashMap::new();
     for import in &module.imports {
@@ -1276,10 +1277,22 @@ fn collect_imported_embedded_defaults(
             continue;
         };
         for embed in resolved.embedded_defaults {
+            if let Some(existing) = defaults.get(&embed.effect_name)
+                && existing != &embed.handler_name
+            {
+                return Err(TypecheckError {
+                    declaration: None,
+                    span: None,
+                    message: format!(
+                        "conflicting embedded default handler for effect `{}` across stdlib imports (`{}` vs `{}`)",
+                        embed.effect_name, existing, embed.handler_name
+                    ),
+                });
+            }
             defaults.insert(embed.effect_name, embed.handler_name);
         }
     }
-    defaults
+    Ok(defaults)
 }
 
 fn collect_local_embedded_defaults(module: &Module) -> HashMap<String, String> {
@@ -3979,6 +3992,40 @@ main = Unit
         let module = parse_module(source).expect("should parse");
         typecheck_module_with_context(&module, Some(&source_path), Some(&root))
             .expect("main can-clause should accept imported embedded default effect");
+    }
+
+    #[test]
+    fn rejects_conflicting_embedded_default_handlers_across_imports() {
+        let sandbox = TempDirGuard::new("embedded_effect_conflict");
+        let root = sandbox.path.join("stdlib");
+        fs::create_dir_all(root.join("goby")).expect("stdlib/goby should be creatable");
+        fs::write(
+            root.join("goby/a.gb"),
+            "effect Console\n  log : String -> Unit\n@embed Console __goby_embeded_effect_stdout_handler\nlog : String -> Unit can Console\nlog msg = msg |> print\n",
+        )
+        .expect("stdlib file should be writable");
+        fs::write(
+            root.join("goby/b.gb"),
+            "effect Console\n  log : String -> Unit\n@embed Console __goby_embeded_effect_other_handler\nlog : String -> Unit can Console\nlog msg = msg |> print\n",
+        )
+        .expect("stdlib file should be writable");
+        let source_path = sandbox.path.join("main.gb");
+        let source = "\
+import goby/a ( log )
+import goby/b
+main : Unit -> Unit can Console
+main = Unit
+";
+        fs::write(&source_path, source).expect("fixture file should be writable");
+        let module = parse_module(source).expect("should parse");
+        let err = typecheck_module_with_context(&module, Some(&source_path), Some(&root))
+            .expect_err("conflicting embedded defaults across imports should be rejected");
+        assert!(
+            err.message
+                .contains("conflicting embedded default handler for effect"),
+            "unexpected message: {}",
+            err.message
+        );
     }
 
     #[test]
