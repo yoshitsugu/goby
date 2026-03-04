@@ -1661,7 +1661,7 @@ impl<'m> RuntimeOutputResolver<'m> {
     ) -> Option<RuntimeValue> {
         let handler_name = self.embedded_default_handlers.get(effect_name)?;
         match (handler_name.as_str(), method_name) {
-            ("__goby_embeded_effect_stdout_handler", _) => {
+            ("__goby_embeded_effect_stdout_handler", "print") => {
                 self.outputs.push(arg_val.to_output_text());
                 Some(RuntimeValue::Unit)
             }
@@ -3187,26 +3187,25 @@ main =
         use goby_core::parse_module;
         let _guard = ENV_MUTEX.lock().unwrap();
         let source = r#"
-effect Console
-  log: String -> Unit
+effect Print
+  print: String -> Unit
 
-@embed Console __goby_embeded_effect_stdout_handler
+@embed Print __goby_embeded_effect_stdout_handler
 
-main : Unit -> Unit can Console
+main : Unit -> Unit can Print
 main =
   with_handler
-    log msg ->
-      print "explicit"
+    print msg ->
       resume Unit
   in
-    Console.log "fallback"
+    Print.print "fallback"
 "#;
         let module = parse_module(source).expect("parse should work");
         let output =
             resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module));
         assert_eq!(
             output.as_deref(),
-            Some("explicit"),
+            None,
             "explicit handler must win over embedded default handler"
         );
     }
@@ -3216,14 +3215,14 @@ main =
         use goby_core::parse_module;
         let _guard = ENV_MUTEX.lock().unwrap();
         let source = r#"
-effect Console
-  log: String -> Unit
+effect Print
+  print: String -> Unit
 
-@embed Console __goby_embeded_effect_stdout_handler
+@embed Print __goby_embeded_effect_stdout_handler
 
-main : Unit -> Unit can Console
+main : Unit -> Unit can Print
 main =
-  Console.log "fallback"
+  Print.print "fallback"
 "#;
         let module = parse_module(source).expect("parse should work");
         let output =
