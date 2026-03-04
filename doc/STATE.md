@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-04 (session 141)
+Last updated: 2026-03-04 (session 142)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -38,8 +38,12 @@ This file is a restart-safe snapshot for resuming work after context reset.
   Runtime stringifies embedded expression values when materializing the final `String`.
 - `case` arm separator: ` -> `; parsed by `split_case_arm` (safe for lambda bodies).
 - Current implementation `CasePattern` variants:
-  `IntLit(i64)`, `StringLit(String)`, `BoolLit(bool)`, `Wildcard`.
-- Next locked syntax slice (spec/plan): list patterns `[]` and `[head, ...tail]`.
+  `IntLit(i64)`, `StringLit(String)`, `BoolLit(bool)`, `EmptyList`,
+  `ListCons { head, tail }`, `Wildcard`.
+- List `case` patterns are implemented in parser/typecheck/runtime fallback:
+  `[]`, `[head, ...tail]`.
+- Native Wasm capability checker still treats list patterns as unsupported,
+  so list-pattern `case` executes via fallback runtime path.
 - MVP built-ins: `print`, `map`, `fetch_env_var`, `string.split`, `list.join`.
 - `print` is an internal runtime-resolved operation; `DefaultStdioPrintHandler`-equivalent behavior
   is compiler/runtime-owned and not required to appear as a user-visible stdlib handler definition.
@@ -53,8 +57,8 @@ This file is a restart-safe snapshot for resuming work after context reset.
 ## 3. Known Open Decisions
 
 - MVP locked subset remains complete for currently implemented syntax.
-- Next implementation slice is locked and pending:
-  list `case` patterns (`[]`, `[head, ...tail]`) with arm-local bindings.
+- Remaining open point for list `case` patterns:
+  native lowering support (capability checker + native evaluator path).
 - Post-MVP open items tracked in `doc/PLAN.md` §3 and §6.
 - Post-MVP effect implementation direction is now fixed in `doc/PLAN.md` §2.3:
   - deep handlers with one-shot resumptions,
@@ -67,6 +71,33 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - follow-up work moved to post-MVP tracks in `doc/PLAN.md`.
 
 ## 4. Recent Milestones
+
+- 2026-03-04 (session 142): list `case` pattern implementation (`[]`, `[head, ...tail]`)
+  - AST:
+    - added `CasePattern::EmptyList` and `CasePattern::ListCons { head, tail }`.
+  - Parser:
+    - `split_case_arm` now splits on top-level ` -> ` so list patterns with spaces are accepted,
+    - added list-pattern parsing for `[]` and `[head, ...tail]`,
+    - malformed patterns are rejected.
+  - Typechecker:
+    - per-arm local bindings for list-cons pattern:
+      - `head : a`,
+      - `tail : List a`,
+    - non-list scrutinee with list patterns now reports a type error.
+  - Runtime:
+    - fallback runtime `Expr::Case` now supports list-pattern matching with arm-local bindings.
+  - Native/lowering:
+    - native evaluator gained `ListInt` list-pattern matching support internally,
+      but capability checker remains conservative and marks list patterns unsupported.
+  - Tests:
+    - added parser/typecheck/runtime regressions for list patterns.
+  - Examples/docs:
+    - added `examples/list_case.gb`,
+    - updated `examples/README.md`,
+    - synced `doc/PLAN.md` status from planned -> implemented for parser/typechecker slices.
+  - Validation:
+    - `cargo fmt`
+    - `cargo test`
 
 - 2026-03-04 (session 141): list `case` pattern syntax/plan/state lock
   - Updated `doc/LANGUAGE_SPEC.md`:

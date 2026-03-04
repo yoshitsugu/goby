@@ -480,15 +480,27 @@ fn eval_expr(
         Expr::Case { scrutinee, arms } => {
             let scrutinee_val = eval_expr(scrutinee, bindings, env, depth + 1)?;
             for arm in arms {
+                let mut arm_bindings = bindings.clone();
                 let matched = match (&arm.pattern, &scrutinee_val) {
                     (CasePattern::Wildcard, _) => true,
                     (CasePattern::IntLit(p), NativeValue::Int(v)) => p == v,
                     (CasePattern::StringLit(p), NativeValue::String(v)) => p == v,
                     (CasePattern::BoolLit(p), NativeValue::Bool(v)) => p == v,
+                    (CasePattern::EmptyList, NativeValue::ListInt(values)) => values.is_empty(),
+                    (CasePattern::ListCons { head, tail }, NativeValue::ListInt(values)) => {
+                        if let Some(first) = values.first() {
+                            arm_bindings.insert(head.clone(), NativeValue::Int(*first));
+                            arm_bindings
+                                .insert(tail.clone(), NativeValue::ListInt(values[1..].to_vec()));
+                            true
+                        } else {
+                            false
+                        }
+                    }
                     _ => false,
                 };
                 if matched {
-                    return eval_expr(&arm.body, bindings, env, depth + 1);
+                    return eval_expr(&arm.body, &arm_bindings, env, depth + 1);
                 }
             }
             None

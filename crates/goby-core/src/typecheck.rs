@@ -3,7 +3,9 @@ use std::path::{Path, PathBuf};
 
 use crate::{
     Module,
-    ast::{BinOpKind, Expr, ImportKind, InterpolatedPart, Span, Stmt, TypeDeclaration},
+    ast::{
+        BinOpKind, CasePattern, Expr, ImportKind, InterpolatedPart, Span, Stmt, TypeDeclaration,
+    },
     stdlib::{StdlibResolveError, StdlibResolver},
     types::{TypeExpr, parse_function_type, parse_type_expr},
 };
@@ -290,6 +292,7 @@ enum Ty {
     Unknown,
 }
 
+#[derive(Clone)]
 struct TypeEnv {
     globals: HashMap<String, GlobalBinding>,
     locals: HashMap<String, Ty>,
@@ -1887,9 +1890,12 @@ fn check_expr(expr: &Expr, env: &TypeEnv) -> Ty {
             Ty::Unknown
         }
         Expr::Case { scrutinee, arms } => {
-            let _ = check_expr(scrutinee, env);
+            let scrutinee_ty = check_expr(scrutinee, env);
             arms.first()
-                .map(|arm| check_expr(&arm.body, env))
+                .map(|arm| {
+                    let arm_env = env_with_case_pattern_bindings(env, &arm.pattern, &scrutinee_ty);
+                    check_expr(&arm.body, &arm_env)
+                })
                 .unwrap_or(Ty::Unknown)
         }
         Expr::If {
@@ -1903,6 +1909,37 @@ fn check_expr(expr: &Expr, env: &TypeEnv) -> Ty {
             then_ty
         }
     }
+}
+
+fn is_list_case_pattern(pattern: &CasePattern) -> bool {
+    matches!(
+        pattern,
+        CasePattern::EmptyList | CasePattern::ListCons { .. }
+    )
+}
+
+fn list_item_ty_for_case_scrutinee(env: &TypeEnv, scrutinee_ty: &Ty) -> Ty {
+    match env.resolve_alias(scrutinee_ty, 0) {
+        Ty::List(inner) => *inner,
+        Ty::Unknown => Ty::Unknown,
+        _ => Ty::Unknown,
+    }
+}
+
+fn env_with_case_pattern_bindings(
+    env: &TypeEnv,
+    pattern: &CasePattern,
+    scrutinee_ty: &Ty,
+) -> TypeEnv {
+    let mut child = env.clone();
+    if let CasePattern::ListCons { head, tail } = pattern {
+        let item_ty = list_item_ty_for_case_scrutinee(env, scrutinee_ty);
+        child.locals.insert(head.clone(), item_ty.clone());
+        child
+            .locals
+            .insert(tail.clone(), Ty::List(Box::new(item_ty)));
+    }
+    child
 }
 
 fn infer_handler_covered_ops_lenient(
@@ -2247,8 +2284,23 @@ fn check_resume_in_expr(
         }
         Expr::Case { scrutinee, arms } => {
             recurse!(scrutinee)?;
+            let scrutinee_ty = check_expr(scrutinee, env);
+            let resolved_scrutinee_ty = env.resolve_alias(&scrutinee_ty, 0);
             for arm in arms {
-                recurse!(&arm.body)?;
+                if is_list_case_pattern(&arm.pattern)
+                    && !matches!(resolved_scrutinee_ty, Ty::List(_) | Ty::Unknown)
+                {
+                    return Err(TypecheckError {
+                        declaration: Some(decl_name.to_string()),
+                        span: None,
+                        message: format!(
+                            "list case pattern requires `List` scrutinee, but got `{}`",
+                            ty_name(&resolved_scrutinee_ty)
+                        ),
+                    });
+                }
+                let arm_env = env_with_case_pattern_bindings(env, &arm.pattern, &scrutinee_ty);
+                recurse!(&arm.body, &arm_env)?;
             }
             Ok(())
         }
@@ -2874,8 +2926,10 @@ fn ensure_no_ambiguous_refs_in_expr(
         Expr::Resume { value } => ensure_no_ambiguous_refs_in_expr(value, env, decl_name),
         Expr::Case { scrutinee, arms } => {
             ensure_no_ambiguous_refs_in_expr(scrutinee, env, decl_name)?;
+            let scrutinee_ty = check_expr(scrutinee, env);
             for arm in arms {
-                ensure_no_ambiguous_refs_in_expr(&arm.body, env, decl_name)?;
+                let arm_env = env_with_case_pattern_bindings(env, &arm.pattern, &scrutinee_ty);
+                ensure_no_ambiguous_refs_in_expr(&arm.body, &arm_env, decl_name)?;
             }
             Ok(())
         }
@@ -3275,6 +3329,11 @@ mod tests {
             env!("CARGO_MANIFEST_DIR")
         ))
         .expect("iterator example should exist");
+        let list_case_example = std::fs::read_to_string(format!(
+            "{}/../../examples/list_case.gb",
+            env!("CARGO_MANIFEST_DIR")
+        ))
+        .expect("list_case example should exist");
 
         let hello_module = parse_module(&hello).expect("hello should parse");
         let basic_module = parse_module(&basic).expect("basic_types should parse");
@@ -3285,6 +3344,7 @@ mod tests {
         let type_module = parse_module(&type_example).expect("type should parse");
         let effect_module = parse_module(&effect_example).expect("effect.gb should parse");
         let iterator_module = parse_module(&iterator_example).expect("iterator.gb should parse");
+        let list_case_module = parse_module(&list_case_example).expect("list_case should parse");
 
         typecheck_module(&hello_module).expect("hello should typecheck");
         typecheck_module(&basic_module).expect("basic_types should typecheck");
@@ -3294,6 +3354,7 @@ mod tests {
         typecheck_module(&type_module).expect("type example should typecheck");
         typecheck_module(&effect_module).expect("effect.gb should typecheck");
         typecheck_module(&iterator_module).expect("iterator.gb should typecheck");
+        typecheck_module(&list_case_module).expect("list_case should typecheck");
     }
 
     #[test]
@@ -4202,6 +4263,48 @@ f n = n
     fn accepts_list_int_annotation_matching_list_literal_body() {
         let module = parse_module("xs : List Int\nxs = [1, 2]\n").expect("should parse");
         typecheck_module(&module).expect("list literal body should typecheck");
+    }
+
+    #[test]
+    fn accepts_case_list_cons_bindings_in_arm_body() {
+        let source = r#"
+id : Int -> Int
+id n = n
+
+head_or_zero : List Int -> Int
+head_or_zero xs =
+  id
+    case xs
+      [] -> 0
+      [x, ...xxs] -> x
+"#;
+        let module = parse_module(source).expect("should parse");
+        typecheck_module(&module).expect("list case bindings should typecheck");
+    }
+
+    #[test]
+    fn rejects_list_case_pattern_on_non_list_scrutinee() {
+        let source = r#"
+id : Int -> Int
+id n = n
+
+f : Int -> Int
+f x =
+  id
+    case x
+      [head, ...tail] -> head
+      _ -> 0
+"#;
+        let module = parse_module(source).expect("should parse");
+        let err =
+            typecheck_module(&module).expect_err("list pattern on non-list scrutinee should fail");
+        assert_eq!(err.declaration.as_deref(), Some("f"));
+        assert!(
+            err.message
+                .contains("list case pattern requires `List` scrutinee"),
+            "unexpected message: {}",
+            err.message
+        );
     }
 
     #[test]

@@ -1,13 +1,13 @@
 use goby_core::{BinOpKind, CasePattern, Expr};
 
 pub(crate) fn is_supported_case_pattern(pattern: &CasePattern) -> bool {
-    matches!(
-        pattern,
+    match pattern {
         CasePattern::IntLit(_)
-            | CasePattern::StringLit(_)
-            | CasePattern::BoolLit(_)
-            | CasePattern::Wildcard
-    )
+        | CasePattern::StringLit(_)
+        | CasePattern::BoolLit(_)
+        | CasePattern::Wildcard => true,
+        CasePattern::EmptyList | CasePattern::ListCons { .. } => false,
+    }
 }
 
 pub(crate) fn is_supported_list_item_expr(expr: &Expr) -> bool {
