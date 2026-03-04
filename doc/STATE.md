@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-04 (session 96)
+Last updated: 2026-03-04 (session 97)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -59,6 +59,23 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - phased Wasm lowering (portable trampoline first, typed-continuation optimization later).
 
 ## 4. Recent Milestones
+
+- 2026-03-04 (session 97): `PLAN_EFFECT_RENEWAL` P2 first slice (`with` effect coverage + handler-op diagnostics)
+  - Typechecker now performs `with`-body effect coverage using handler-expression-derived covered ops:
+    - `with_handler ... in ...` and `with <handler-var> in ...` both feed coverage into body checks.
+  - Added strict handler-expression op resolution diagnostics:
+    - unknown op in handler expression => compile-time error,
+    - ambiguous op across multiple effects => compile-time error message aligned with renewal plan wording.
+  - Added internal `Ty::Handler { covered_ops }` to carry handler values through local bindings.
+  - Added compact reserved-keyword enforcement in parser for renewal keywords:
+    - `resume`, `with`, `with_handler`, `in`, `handler`, `effect`.
+  - Added typecheck regressions:
+    - accept effect op calls in `with_handler` body handling,
+    - accept `with <handler-var> in ...` handling,
+    - reject unknown operation in handler expression.
+  - Validation:
+    - `cargo check`
+    - `cargo test -p goby-core`
 
 - 2026-03-04 (session 96): `PLAN_EFFECT_RENEWAL` P1 parser/AST kickoff
   - `goby-core` AST extended with renewal syntax nodes:

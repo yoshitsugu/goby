@@ -354,6 +354,7 @@ enum Ty {
     Fun { params: Vec<Ty>, result: Box<Ty> },
     Var(String),
     Con { name: String, args: Vec<Ty> },
+    Handler { covered_ops: HashSet<String> },
     Unknown,
 }
 
@@ -481,6 +482,9 @@ impl TypeEnv {
                         .collect(),
                 }
             }
+            Ty::Handler { covered_ops } => Ty::Handler {
+                covered_ops: covered_ops.clone(),
+            },
             _ => ty.clone(),
         }
     }
@@ -504,6 +508,8 @@ struct EffectMap {
     handler_to_effect: HashMap<String, String>,
     /// effect_name -> set of op identifiers: both qualified ("E.op") and bare ("op")
     effect_to_ops: HashMap<String, HashSet<String>>,
+    /// bare operation name -> effect names declaring that operation
+    op_to_effects: HashMap<String, HashSet<String>>,
 }
 
 impl EffectMap {
@@ -565,7 +571,20 @@ fn build_effect_map(module: &Module) -> EffectMap {
     EffectMap {
         handler_to_effect,
         effect_to_ops,
+        op_to_effects: build_op_to_effects(module),
     }
+}
+
+fn build_op_to_effects(module: &Module) -> HashMap<String, HashSet<String>> {
+    let mut map: HashMap<String, HashSet<String>> = HashMap::new();
+    for effect_decl in &module.effect_declarations {
+        for member in &effect_decl.members {
+            map.entry(member.name.clone())
+                .or_default()
+                .insert(effect_decl.name.clone());
+        }
+    }
+    map
 }
 
 /// Returns the set of op names (qualified + bare) for all effects listed in
@@ -1618,7 +1637,10 @@ fn check_expr(expr: &Expr, env: &TypeEnv) -> Ty {
                 result: Box::new(result),
             }
         }
-        Expr::Handler { .. } | Expr::With { .. } => Ty::Unknown,
+        Expr::Handler { clauses } => Ty::Handler {
+            covered_ops: infer_handler_covered_ops_lenient(clauses, env),
+        },
+        Expr::With { .. } => Ty::Unknown,
         Expr::Resume { value } => {
             let _ = check_expr(value, env);
             Ty::Unknown
@@ -1640,6 +1662,127 @@ fn check_expr(expr: &Expr, env: &TypeEnv) -> Ty {
             then_ty
         }
     }
+}
+
+fn infer_handler_covered_ops_lenient(
+    clauses: &[crate::ast::HandlerClause],
+    env: &TypeEnv,
+) -> HashSet<String> {
+    let mut covered = HashSet::new();
+    for clause in clauses {
+        let effects = effect_candidates_for_operation(env, &clause.name);
+        if effects.len() != 1 {
+            continue;
+        }
+        let effect = &effects[0];
+        covered.insert(clause.name.clone());
+        covered.insert(format!("{}.{}", effect, clause.name));
+    }
+    covered
+}
+
+fn infer_handler_covered_ops_strict(
+    handler_expr: &Expr,
+    env: &TypeEnv,
+    effect_map: &EffectMap,
+    decl_name: &str,
+) -> Result<HashSet<String>, TypecheckError> {
+    match handler_expr {
+        Expr::Handler { clauses } => {
+            let mut covered = HashSet::new();
+            let mut seen_ops = HashSet::new();
+            for clause in clauses {
+                if !seen_ops.insert(clause.name.clone()) {
+                    return Err(TypecheckError {
+                        declaration: Some(decl_name.to_string()),
+                        span: None,
+                        message: format!(
+                            "duplicate handler clause for operation `{}`",
+                            clause.name
+                        ),
+                    });
+                }
+
+                let Some(effects) = effect_map.op_to_effects.get(&clause.name) else {
+                    return Err(TypecheckError {
+                        declaration: Some(decl_name.to_string()),
+                        span: None,
+                        message: format!(
+                            "unknown effect operation `{}` in handler expression",
+                            clause.name
+                        ),
+                    });
+                };
+
+                if effects.len() > 1 {
+                    let mut names: Vec<String> = effects.iter().cloned().collect();
+                    names.sort();
+                    return Err(TypecheckError {
+                        declaration: Some(decl_name.to_string()),
+                        span: None,
+                        message: format!(
+                            "operation '{}' is ambiguous across effects in Handler(...): {}",
+                            clause.name,
+                            names.join(", ")
+                        ),
+                    });
+                }
+
+                let effect = effects.iter().next().expect("non-empty set");
+                covered.insert(clause.name.clone());
+                covered.insert(format!("{}.{}", effect, clause.name));
+            }
+            Ok(covered)
+        }
+        Expr::Var(name) => match env.lookup(name) {
+            Ty::Handler { covered_ops } => Ok(covered_ops),
+            _ => Err(TypecheckError {
+                declaration: Some(decl_name.to_string()),
+                span: None,
+                message: format!("`with` expects a handler value, but `{}` is not a Handler", name),
+            }),
+        },
+        _ => Err(TypecheckError {
+            declaration: Some(decl_name.to_string()),
+            span: None,
+            message: "`with` expects a handler value".to_string(),
+        }),
+    }
+}
+
+fn effect_candidates_for_operation(env: &TypeEnv, op_name: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let Some(binding) = env.globals.get(op_name) else {
+        return out;
+    };
+    match binding {
+        GlobalBinding::Resolved { source, .. } => {
+            if let Some(effect) = extract_effect_name_from_source(source) {
+                out.push(effect);
+            }
+        }
+        GlobalBinding::Ambiguous { sources } => {
+            for source in sources {
+                if let Some(effect) = extract_effect_name_from_source(source) {
+                    out.push(effect);
+                }
+            }
+            out.sort();
+            out.dedup();
+        }
+    }
+    out
+}
+
+fn extract_effect_name_from_source(source: &str) -> Option<String> {
+    let prefix = "effect `";
+    let suffix = "` member";
+    if !source.starts_with(prefix) || !source.ends_with(suffix) {
+        return None;
+    }
+    let start = prefix.len();
+    let end = source.len() - suffix.len();
+    Some(source[start..end].to_string())
 }
 
 fn check_resume_in_stmts(
@@ -1717,6 +1860,7 @@ fn ty_contains_type_var(ty: &Ty) -> bool {
             params.iter().any(ty_contains_type_var) || ty_contains_type_var(result)
         }
         Ty::Con { args, .. } => args.iter().any(ty_contains_type_var),
+        Ty::Handler { .. } => false,
         Ty::Int | Ty::Bool | Ty::Str | Ty::Unit | Ty::Unknown => false,
     }
 }
@@ -1778,7 +1922,48 @@ fn check_resume_in_expr(
             let child_env = env.with_local(param, Ty::Unknown);
             recurse!(body, &child_env)
         }
-        Expr::Handler { .. } | Expr::With { .. } => Ok(()),
+        Expr::Handler { clauses } => {
+            for clause in clauses {
+                let mut child_env = TypeEnv {
+                    globals: env.globals.clone(),
+                    locals: env.locals.clone(),
+                    type_aliases: env.type_aliases.clone(),
+                    record_types: env.record_types.clone(),
+                };
+                if let Some(first) = clause.params.first() {
+                    child_env.locals.insert(first.clone(), Ty::Unknown);
+                }
+                let resume_ctx = env.lookup(&clause.name);
+                let expected_arg_ty = match resume_ctx {
+                    Ty::Fun { result, .. } => Some(*result),
+                    _ => None,
+                };
+                if expected_arg_ty.is_none() {
+                    // Unknown clause op is diagnosed in effect coverage checks.
+                    continue;
+                }
+                if let Some(stmts) = &clause.parsed_body {
+                    let ctx = ResumeContext { expected_arg_ty };
+                    check_resume_in_stmts_with_local_env(
+                        stmts,
+                        &mut child_env,
+                        decl_name,
+                        Some(&ctx),
+                    )?;
+                }
+            }
+            Ok(())
+        }
+        Expr::With { handler, body } => {
+            recurse!(handler)?;
+            let mut child_env = TypeEnv {
+                globals: env.globals.clone(),
+                locals: env.locals.clone(),
+                type_aliases: env.type_aliases.clone(),
+                record_types: env.record_types.clone(),
+            };
+            check_resume_in_stmts_with_local_env(body, &mut child_env, decl_name, resume_ctx)
+        }
         Expr::Resume { value } => {
             recurse!(value)?;
             let Some(ctx) = resume_ctx else {
@@ -2170,7 +2355,39 @@ fn check_unhandled_effects_in_expr(
             let child_env = env.with_local(param, Ty::Unknown);
             recurse!(body, &child_env)
         }
-        Expr::Handler { .. } | Expr::With { .. } => Ok(()),
+        Expr::Handler { clauses } => {
+            for clause in clauses {
+                if let Some(stmts) = &clause.parsed_body {
+                    check_body_stmts(
+                        stmts,
+                        env,
+                        effect_map,
+                        required_effects_map,
+                        decl_name,
+                        None,
+                        &[],
+                        covered_ops,
+                    )?;
+                }
+            }
+            Ok(())
+        }
+        Expr::With { handler, body } => {
+            let handler_covered =
+                infer_handler_covered_ops_strict(handler, env, effect_map, decl_name)?;
+            let mut merged = covered_ops.clone();
+            merged.extend(handler_covered);
+            check_body_stmts(
+                body,
+                env,
+                effect_map,
+                required_effects_map,
+                decl_name,
+                None,
+                &[],
+                &merged,
+            )
+        }
         Expr::Resume { value } => recurse!(value),
         Expr::Case { scrutinee, arms } => {
             recurse!(scrutinee)?;
@@ -2319,7 +2536,18 @@ fn ensure_no_ambiguous_refs_in_expr(
             let child_env = env.with_local(param, Ty::Unknown);
             ensure_no_ambiguous_refs_in_expr(body, &child_env, decl_name)
         }
-        Expr::Handler { .. } | Expr::With { .. } => Ok(()),
+        Expr::Handler { clauses } => {
+            for clause in clauses {
+                if let Some(stmts) = &clause.parsed_body {
+                    ensure_no_ambiguous_refs_in_stmts(stmts, env, decl_name)?;
+                }
+            }
+            Ok(())
+        }
+        Expr::With { handler, body } => {
+            ensure_no_ambiguous_refs_in_expr(handler, env, decl_name)?;
+            ensure_no_ambiguous_refs_in_stmts(body, env, decl_name)
+        }
         Expr::Resume { value } => ensure_no_ambiguous_refs_in_expr(value, env, decl_name),
         Expr::Case { scrutinee, arms } => {
             ensure_no_ambiguous_refs_in_expr(scrutinee, env, decl_name)?;
@@ -2338,6 +2566,21 @@ fn ensure_no_ambiguous_refs_in_expr(
             ensure_no_ambiguous_refs_in_expr(else_expr, env, decl_name)
         }
     }
+}
+
+fn ensure_no_ambiguous_refs_in_stmts(
+    stmts: &[Stmt],
+    env: &TypeEnv,
+    decl_name: &str,
+) -> Result<(), TypecheckError> {
+    for stmt in stmts {
+        match stmt {
+            Stmt::Binding { value, .. } => ensure_no_ambiguous_refs_in_expr(value, env, decl_name)?,
+            Stmt::Expr(expr) => ensure_no_ambiguous_refs_in_expr(expr, env, decl_name)?,
+            Stmt::Using { body, .. } => ensure_no_ambiguous_refs_in_stmts(body, env, decl_name)?,
+        }
+    }
+    Ok(())
 }
 
 fn ensure_name_not_ambiguous(
@@ -2388,6 +2631,7 @@ fn ty_name(ty: &Ty) -> String {
                 format!("{} {}", name, rendered_args.join(" "))
             }
         }
+        Ty::Handler { .. } => "Handler".to_string(),
         Ty::Unknown => "Unknown".to_string(),
     }
 }
@@ -2856,6 +3100,62 @@ main =
 ";
         let module = parse_module(source).expect("should parse");
         typecheck_module(&module).expect("effect op call inside using should be accepted");
+    }
+
+    #[test]
+    fn accepts_effect_op_call_inside_with_handler() {
+        let source = "\
+effect Log
+  log: String -> Unit
+main : Unit -> Unit
+main =
+  with_handler
+    log msg ->
+      resume Unit
+  in
+    log \"hello\"
+";
+        let module = parse_module(source).expect("should parse");
+        typecheck_module(&module).expect("effect op call inside with_handler should be accepted");
+    }
+
+    #[test]
+    fn accepts_effect_op_call_inside_with_handler_variable() {
+        let source = "\
+effect Log
+  log: String -> Unit
+main : Unit -> Unit
+main =
+  h = handler
+    log msg ->
+      resume Unit
+  with h
+  in
+    log \"hello\"
+";
+        let module = parse_module(source).expect("should parse");
+        typecheck_module(&module)
+            .expect("effect op call inside with <handler-var> should be accepted");
+    }
+
+    #[test]
+    fn rejects_unknown_operation_in_handler_expression() {
+        let source = "\
+effect Log
+  log: String -> Unit
+main : Unit -> Unit
+main =
+  with_handler
+    unknown_op msg ->
+      resume Unit
+  in
+    log \"hello\"
+";
+        let module = parse_module(source).expect("should parse");
+        let err = typecheck_module(&module)
+            .expect_err("unknown operation in handler expression should fail");
+        assert!(err.message.contains("unknown effect operation"));
+        assert!(err.message.contains("unknown_op"));
     }
 
     #[test]

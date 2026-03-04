@@ -907,7 +907,10 @@ fn parse_stmt(line: &str) -> Option<Stmt> {
 }
 
 fn is_reserved_keyword(s: &str) -> bool {
-    matches!(s, "resume")
+    matches!(
+        s,
+        "resume" | "with" | "with_handler" | "in" | "handler" | "effect"
+    )
 }
 
 fn parse_resume_expr(src: &str) -> Option<Expr> {
