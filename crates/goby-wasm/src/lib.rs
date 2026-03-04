@@ -13,8 +13,8 @@ use unicode_segmentation::UnicodeSegmentation;
 
 use crate::call::flatten_named_call;
 use goby_core::{
-    CasePattern, Expr, HandlerClause, Module, Stmt, ast::InterpolatedPart, stdlib::StdlibResolver,
-    types::parse_function_type,
+    CasePattern, Expr, HandlerClause, ListPatternItem, ListPatternTail, Module, Stmt,
+    ast::InterpolatedPart, stdlib::StdlibResolver, types::parse_function_type,
 };
 const ERR_MISSING_MAIN: &str = "Wasm codegen requires a `main` declaration";
 const BUILTIN_PRINT: &str = "print";
@@ -1336,37 +1336,107 @@ impl<'m> RuntimeOutputResolver<'m> {
                         (CasePattern::EmptyList, RuntimeValue::ListString(values)) => {
                             values.is_empty()
                         }
-                        (CasePattern::ListCons { head, tail }, RuntimeValue::ListInt(values)) => {
-                            if let Some(first) = values.first() {
-                                if head != "_" {
-                                    arm_locals.store(head, RuntimeValue::Int(*first));
-                                }
-                                if tail != "_" {
-                                    arm_locals
-                                        .store(tail, RuntimeValue::ListInt(values[1..].to_vec()));
-                                }
-                                true
-                            } else {
+                        (
+                            CasePattern::ListPattern { items, tail },
+                            RuntimeValue::ListInt(values),
+                        ) => {
+                            if values.len() < items.len() {
                                 false
+                            } else {
+                                let mut ok = true;
+                                for (item, value) in items.iter().zip(values.iter()) {
+                                    match item {
+                                        ListPatternItem::IntLit(n) => {
+                                            if *n != *value {
+                                                ok = false;
+                                                break;
+                                            }
+                                        }
+                                        ListPatternItem::Bind(name) => {
+                                            if name != "_" {
+                                                arm_locals.store(name, RuntimeValue::Int(*value));
+                                            }
+                                        }
+                                        ListPatternItem::Wildcard => {}
+                                        _ => {
+                                            ok = false;
+                                            break;
+                                        }
+                                    }
+                                }
+                                if !ok {
+                                    false
+                                } else {
+                                    if let Some(tail_pattern) = tail {
+                                        match tail_pattern {
+                                            ListPatternTail::Ignore => {}
+                                            ListPatternTail::Bind(name) => {
+                                                if name != "_" {
+                                                    arm_locals.store(
+                                                        name,
+                                                        RuntimeValue::ListInt(
+                                                            values[items.len()..].to_vec(),
+                                                        ),
+                                                    );
+                                                }
+                                            }
+                                        }
+                                    }
+                                    true
+                                }
                             }
                         }
                         (
-                            CasePattern::ListCons { head, tail },
+                            CasePattern::ListPattern { items, tail },
                             RuntimeValue::ListString(values),
                         ) => {
-                            if let Some(first) = values.first() {
-                                if head != "_" {
-                                    arm_locals.store(head, RuntimeValue::String(first.clone()));
-                                }
-                                if tail != "_" {
-                                    arm_locals.store(
-                                        tail,
-                                        RuntimeValue::ListString(values[1..].to_vec()),
-                                    );
-                                }
-                                true
-                            } else {
+                            if values.len() < items.len() {
                                 false
+                            } else {
+                                let mut ok = true;
+                                for (item, value) in items.iter().zip(values.iter()) {
+                                    match item {
+                                        ListPatternItem::StringLit(s) => {
+                                            if s != value {
+                                                ok = false;
+                                                break;
+                                            }
+                                        }
+                                        ListPatternItem::Bind(name) => {
+                                            if name != "_" {
+                                                arm_locals.store(
+                                                    name,
+                                                    RuntimeValue::String(value.clone()),
+                                                );
+                                            }
+                                        }
+                                        ListPatternItem::Wildcard => {}
+                                        _ => {
+                                            ok = false;
+                                            break;
+                                        }
+                                    }
+                                }
+                                if !ok {
+                                    false
+                                } else {
+                                    if let Some(tail_pattern) = tail {
+                                        match tail_pattern {
+                                            ListPatternTail::Ignore => {}
+                                            ListPatternTail::Bind(name) => {
+                                                if name != "_" {
+                                                    arm_locals.store(
+                                                        name,
+                                                        RuntimeValue::ListString(
+                                                            values[items.len()..].to_vec(),
+                                                        ),
+                                                    );
+                                                }
+                                            }
+                                        }
+                                    }
+                                    true
+                                }
                             }
                         }
                         _ => false,
@@ -3539,7 +3609,7 @@ main =
     }
 
     #[test]
-    fn resolves_runtime_output_for_case_list_cons_pattern() {
+    fn resolves_runtime_output_for_case_list_pattern_tail_binding() {
         let _guard = ENV_MUTEX.lock().unwrap();
         let source = r#"
 main : Unit -> Unit
@@ -3558,7 +3628,7 @@ main =
     }
 
     #[test]
-    fn resolves_runtime_output_for_case_list_cons_wildcard_head() {
+    fn resolves_runtime_output_for_case_list_pattern_wildcard_head() {
         let _guard = ENV_MUTEX.lock().unwrap();
         let source = r#"
 main : Unit -> Unit
@@ -3574,6 +3644,53 @@ main =
             resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
                 .expect("runtime output should resolve");
         assert_eq!(output, "[2, 3]");
+    }
+
+    #[test]
+    fn resolves_runtime_output_for_all_list_pattern_forms() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let source = r#"
+main : Unit -> Unit
+main =
+  xs0 = []
+  print
+    case xs0
+      [] -> "Empty list"
+      _ -> "Some other list"
+  xs1 = [1]
+  print
+    case xs1
+      [1] -> "List of just 1"
+      _ -> "Some other list"
+  xs2 = [4, 9, 10]
+  print
+    case xs2
+      [4, ..] -> "List starting with 4"
+      _ -> "Some other list"
+  xs3 = [2, 3, 5]
+  print
+    case xs3
+      [a, ..b] -> "List of at least 1 elements with binding"
+      _ -> "Some other list"
+  xs4 = [9, 8]
+  print
+    case xs4
+      [_, _] -> "List of 2 elements"
+      _ -> "Some other list"
+  xs5 = [0]
+  print
+    case xs5
+      [_, _] -> "List of 2 elements"
+      _ -> "Some other list"
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let output =
+            resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
+                .expect("runtime output should resolve");
+        assert_eq!(
+            output,
+            "Empty list\nList of just 1\nList starting with 4\nList of at least 1 elements with binding\nList of 2 elements\nSome other list"
+        );
     }
 
     // --- bare effect call dispatch in main body (§4.1 patch) ---

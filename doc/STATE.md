@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-04 (session 143)
+Last updated: 2026-03-04 (session 144)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -39,11 +39,12 @@ This file is a restart-safe snapshot for resuming work after context reset.
 - `case` arm separator: ` -> `; parsed by `split_case_arm` (safe for lambda bodies).
 - Current implementation `CasePattern` variants:
   `IntLit(i64)`, `StringLit(String)`, `BoolLit(bool)`, `EmptyList`,
-  `ListCons { head, tail }`, `Wildcard`.
-- List `case` patterns are partially implemented:
-  `[]`, `[head, ..tail]` (subset).
-- Not yet implemented:
-  `[1]`, `[4, ..]`, `[_, _]` and other fixed-length/list-literal-head list patterns.
+  `ListPattern { items, tail }`, `Wildcard`.
+- List `case` patterns are implemented:
+  - `[]`
+  - fixed/prefix list patterns (e.g. `[1]`, `[_, _]`, `[a, b]`)
+  - head/tail with rest bind/ignore (e.g. `[a, ..b]`, `[4, ..]`)
+  - `_` is wildcard/non-binding in list items and tail binder position (`.._`).
 - Native Wasm capability checker still treats list patterns as unsupported,
   so list-pattern `case` executes via fallback runtime path.
 - MVP built-ins: `print`, `map`, `fetch_env_var`, `string.split`, `list.join`.
@@ -59,8 +60,7 @@ This file is a restart-safe snapshot for resuming work after context reset.
 ## 3. Known Open Decisions
 
 - MVP locked subset remains complete for currently implemented syntax.
-- Remaining open points for list `case` patterns:
-  - pattern-surface expansion (`[1]`, `[_, _]`, `[4, ..]` and related forms),
+- Remaining open point for list `case` patterns:
   - native lowering support (capability checker + native evaluator path).
 - Post-MVP open items tracked in `doc/PLAN.md` §3 and §6.
 - Post-MVP effect implementation direction is now fixed in `doc/PLAN.md` §2.3:
@@ -74,6 +74,26 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - follow-up work moved to post-MVP tracks in `doc/PLAN.md`.
 
 ## 4. Recent Milestones
+
+- 2026-03-04 (session 144): list `case` pattern completion (`..` syntax)
+  - AST:
+    - replaced `ListCons` with generalized `ListPattern { items, tail }`.
+  - Parser:
+    - supports fixed/prefix list patterns and head-literal forms:
+      - `[1]`, `[_, _]`, `[4, ..]`, `[a, ..b]`
+    - `_` is wildcard (non-binding) in list item and tail positions.
+    - duplicate non-wildcard binders are rejected (e.g. `[x, ..x]`).
+  - Typechecker:
+    - list-pattern binder extension generalized for item binders and tail binders.
+    - list-pattern scrutinee validation remains (`List _` or `Unknown`).
+  - Runtime fallback:
+    - `Expr::Case` matcher supports generalized list-pattern matching for
+      `List Int` and `List String`.
+  - Docs/examples:
+    - updated `doc/LANGUAGE_SPEC.md`, `doc/PLAN.md`, `examples/list_case.gb`.
+  - Validation:
+    - `cargo test`
+    - `cargo run -p goby-cli -- run examples/list_case.gb`
 
 - 2026-03-04 (session 143): list-pattern support scope correction in docs
   - Validation against concrete samples confirmed current subset support only:

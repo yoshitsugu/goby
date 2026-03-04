@@ -4,7 +4,8 @@ use std::path::{Path, PathBuf};
 use crate::{
     Module,
     ast::{
-        BinOpKind, CasePattern, Expr, ImportKind, InterpolatedPart, Span, Stmt, TypeDeclaration,
+        BinOpKind, CasePattern, Expr, ImportKind, InterpolatedPart, ListPatternItem,
+        ListPatternTail, Span, Stmt, TypeDeclaration,
     },
     stdlib::{StdlibResolveError, StdlibResolver},
     types::{TypeExpr, parse_function_type, parse_type_expr},
@@ -1914,7 +1915,7 @@ fn check_expr(expr: &Expr, env: &TypeEnv) -> Ty {
 fn is_list_case_pattern(pattern: &CasePattern) -> bool {
     matches!(
         pattern,
-        CasePattern::EmptyList | CasePattern::ListCons { .. }
+        CasePattern::EmptyList | CasePattern::ListPattern { .. }
     )
 }
 
@@ -1932,15 +1933,21 @@ fn env_with_case_pattern_bindings(
     scrutinee_ty: &Ty,
 ) -> TypeEnv {
     let mut child = env.clone();
-    if let CasePattern::ListCons { head, tail } = pattern {
+    if let CasePattern::ListPattern { items, tail } = pattern {
         let item_ty = list_item_ty_for_case_scrutinee(env, scrutinee_ty);
-        if head != "_" {
-            child.locals.insert(head.clone(), item_ty.clone());
+        for item in items {
+            if let ListPatternItem::Bind(name) = item
+                && name != "_"
+            {
+                child.locals.insert(name.clone(), item_ty.clone());
+            }
         }
-        if tail != "_" {
+        if let Some(ListPatternTail::Bind(name)) = tail
+            && name != "_"
+        {
             child
                 .locals
-                .insert(tail.clone(), Ty::List(Box::new(item_ty)));
+                .insert(name.clone(), Ty::List(Box::new(item_ty)));
         }
     }
     child
@@ -4270,7 +4277,7 @@ f n = n
     }
 
     #[test]
-    fn accepts_case_list_cons_bindings_in_arm_body() {
+    fn accepts_case_list_pattern_bindings_in_arm_body() {
         let source = r#"
 id : Int -> Int
 id n = n
@@ -4287,7 +4294,7 @@ head_or_zero xs =
     }
 
     #[test]
-    fn accepts_case_list_cons_with_wildcard_head() {
+    fn accepts_case_list_pattern_with_wildcard_head() {
         let source = r#"
 id : List Int -> List Int
 id xs = xs
@@ -4301,6 +4308,26 @@ tail_or_empty xs =
 "#;
         let module = parse_module(source).expect("should parse");
         typecheck_module(&module).expect("wildcard head list pattern should typecheck");
+    }
+
+    #[test]
+    fn accepts_case_fixed_length_and_literal_head_list_patterns() {
+        let source = r#"
+id : Int -> Int
+id n = n
+
+f : List Int -> Int
+f xs =
+  id
+    case xs
+      [1] -> 10
+      [4, ..] -> 20
+      [_, _] -> 30
+      [a, ..b] -> a
+      _ -> 0
+"#;
+        let module = parse_module(source).expect("should parse");
+        typecheck_module(&module).expect("list pattern variants should typecheck");
     }
 
     #[test]

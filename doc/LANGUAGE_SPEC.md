@@ -61,14 +61,15 @@ syntax/semantics.
 - Conditionals/case:
   - `if ... else ...` expression form
   - `case ...` with `pattern -> expr` arms
-  - list patterns (current subset):
+  - list patterns:
     - empty list: `[]`
     - head/tail split: `[head, ..tail]`
       - `head` and `tail` are bindings available in the arm body
       - `tail` is the remaining list value
-  - not yet supported:
-    - fixed-length list patterns such as `[1]` and `[_, _]`
-    - head-checked tail patterns such as `[4, ..]`
+    - fixed-length patterns: `[1]`, `[_, _]`, `[a, b, c]`
+    - head-checked tail patterns: `[4, ..]`, `["x", ..rest]`
+    - tail ignore form: `[..]` is not supported; use at least one head item (e.g. `[x, ..]`)
+  - `_` is always a wildcard (non-binding), including in list item positions.
 - Mutable locals:
   - declaration: `mut x = expr`
   - assignment: `x := expr`

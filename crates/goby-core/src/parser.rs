@@ -1,7 +1,7 @@
 use crate::ast::{
     BinOpKind, CaseArm, CasePattern, Declaration, EffectDecl, EffectMember, EmbedDecl, Expr,
-    HandlerClause, ImportDecl, ImportKind, InterpolatedPart, Module, RecordField, Stmt,
-    TypeDeclaration,
+    HandlerClause, ImportDecl, ImportKind, InterpolatedPart, ListPatternItem, ListPatternTail,
+    Module, RecordField, Stmt, TypeDeclaration,
 };
 use crate::str_util::split_top_level_commas;
 
@@ -725,23 +725,51 @@ fn parse_case_pattern(src: &str) -> Option<CasePattern> {
         return Some(CasePattern::EmptyList);
     }
     if let Some(inner) = src.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
-        let inner = inner.trim();
-        if let Some((head_src, tail_src)) = inner.split_once(',') {
-            let head = head_src.trim();
-            let tail_src = tail_src.trim();
-            let tail = tail_src.strip_prefix("..")?.trim();
-            if !is_non_reserved_identifier(head) || !is_non_reserved_identifier(tail) {
-                return None;
-            }
-            if head == tail && head != "_" {
-                return None;
-            }
-            return Some(CasePattern::ListCons {
-                head: head.to_string(),
-                tail: tail.to_string(),
-            });
+        let parts = split_top_level_commas(inner.trim());
+        if parts.is_empty() {
+            return None;
         }
-        return None;
+
+        let mut items: Vec<ListPatternItem> = Vec::new();
+        let mut tail: Option<ListPatternTail> = None;
+        let mut binders = std::collections::HashSet::new();
+
+        for (idx, raw_part) in parts.iter().enumerate() {
+            let part = raw_part.trim();
+            if let Some(rest_src) = part.strip_prefix("..") {
+                if idx != parts.len() - 1 {
+                    return None;
+                }
+                let rest = rest_src.trim();
+                tail = if rest.is_empty() {
+                    Some(ListPatternTail::Ignore)
+                } else {
+                    if !is_non_reserved_identifier(rest) {
+                        return None;
+                    }
+                    if rest != "_" && !binders.insert(rest.to_string()) {
+                        return None;
+                    }
+                    Some(ListPatternTail::Bind(rest.to_string()))
+                };
+                continue;
+            }
+
+            let item = parse_list_pattern_item(part)?;
+            if let ListPatternItem::Bind(name) = &item
+                && name != "_"
+                && !binders.insert(name.clone())
+            {
+                return None;
+            }
+            items.push(item);
+        }
+
+        if items.is_empty() {
+            return None;
+        }
+
+        return Some(CasePattern::ListPattern { items, tail });
     }
     if src == "True" {
         return Some(CasePattern::BoolLit(true));
@@ -757,6 +785,31 @@ fn parse_case_pattern(src: &str) -> Option<CasePattern> {
         if !inner.contains('"') {
             return Some(CasePattern::StringLit(inner.to_string()));
         }
+    }
+    None
+}
+
+fn parse_list_pattern_item(src: &str) -> Option<ListPatternItem> {
+    if src == "_" {
+        return Some(ListPatternItem::Wildcard);
+    }
+    if src == "True" {
+        return Some(ListPatternItem::BoolLit(true));
+    }
+    if src == "False" {
+        return Some(ListPatternItem::BoolLit(false));
+    }
+    if let Ok(n) = src.parse::<i64>() {
+        return Some(ListPatternItem::IntLit(n));
+    }
+    if src.starts_with('"') && src.ends_with('"') && src.len() >= 2 {
+        let inner = &src[1..src.len() - 1];
+        if !inner.contains('"') {
+            return Some(ListPatternItem::StringLit(inner.to_string()));
+        }
+    }
+    if is_non_reserved_identifier(src) {
+        return Some(ListPatternItem::Bind(src.to_string()));
     }
     None
 }
@@ -3015,7 +3068,52 @@ main =
                     assert!(matches!(arms[0].pattern, CasePattern::EmptyList));
                     assert!(matches!(
                         &arms[1].pattern,
-                        CasePattern::ListCons { head, tail } if head == "x" && tail == "xxs"
+                        CasePattern::ListPattern { items, tail }
+                        if items
+                            == &vec![ListPatternItem::Bind("x".to_string())]
+                            && tail == &Some(ListPatternTail::Bind("xxs".to_string()))
+                    ));
+                }
+                other => panic!("unexpected call arg: {other:?}"),
+            },
+            other => panic!("unexpected statement: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_fixed_length_and_literal_head_list_patterns() {
+        let body =
+            "print\n  case xs\n    [1] -> 1\n    [4, ..] -> 4\n    [_, _] -> 2\n    [a, ..b] -> a";
+        let stmts = parse_body_stmts(body).expect("should parse");
+        assert_eq!(stmts.len(), 1);
+        match &stmts[0] {
+            Stmt::Expr(Expr::Call { arg, .. }) => match arg.as_ref() {
+                Expr::Case { arms, .. } => {
+                    assert_eq!(arms.len(), 4);
+                    assert!(matches!(
+                        &arms[0].pattern,
+                        CasePattern::ListPattern { items, tail }
+                        if items == &vec![ListPatternItem::IntLit(1)] && tail.is_none()
+                    ));
+                    assert!(matches!(
+                        &arms[1].pattern,
+                        CasePattern::ListPattern { items, tail }
+                        if items == &vec![ListPatternItem::IntLit(4)]
+                            && tail == &Some(ListPatternTail::Ignore)
+                    ));
+                    assert!(matches!(
+                        &arms[2].pattern,
+                        CasePattern::ListPattern { items, tail }
+                        if items
+                            == &vec![ListPatternItem::Wildcard, ListPatternItem::Wildcard]
+                            && tail.is_none()
+                    ));
+                    assert!(matches!(
+                        &arms[3].pattern,
+                        CasePattern::ListPattern { items, tail }
+                        if items
+                            == &vec![ListPatternItem::Bind("a".to_string())]
+                            && tail == &Some(ListPatternTail::Bind("b".to_string()))
                     ));
                 }
                 other => panic!("unexpected call arg: {other:?}"),
@@ -3026,7 +3124,7 @@ main =
 
     #[test]
     fn rejects_malformed_case_list_pattern() {
-        let body = "print\n  case xs\n    [x, y] -> x\n    _ -> 0";
+        let body = "print\n  case xs\n    [..xs] -> 0\n    _ -> 0";
         assert!(
             parse_body_stmts(body).is_none(),
             "malformed list pattern should fail parse"
