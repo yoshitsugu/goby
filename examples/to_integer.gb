@@ -1,0 +1,15 @@
+import goby/int as int
+
+effect StringParseError
+  invalid_integer : String -> Int
+
+main : Unit -> Unit can Print, StringParseError
+main =
+  with_handler
+    invalid_integer value ->
+      print "invalid: ${value}"
+      resume -1
+  in
+    print int.parse("42")
+    print int.parse("-7")
+    print int.parse("12x")

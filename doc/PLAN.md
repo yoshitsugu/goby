@@ -96,6 +96,9 @@ Based on `examples/*.gb`:
 - MVP built-ins: `print`, `map`, `fetch_env_var`, `string.split`, `list.join`.
   - `print` execution is resolved by compiler/runtime internals (default stdio print path),
     not by a user-visible stdlib handler definition.
+- Stdlib integer parse entrypoint is `int.parse`.
+  - contract: parse optional leading `-` + one or more ASCII digits as base-10 `Int`.
+  - failure path is effect-based: `StringParseError.invalid_integer : String -> Int`.
 - `examples/basic_types.gb` is a parse/typecheck target, not a runnable entrypoint target.
   - no `main` addition and no `--entry` option in MVP.
 - `examples/function.gb` is a canonical MVP run target and must be preserved as-is.

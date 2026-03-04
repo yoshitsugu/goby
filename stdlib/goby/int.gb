@@ -1,0 +1,115 @@
+effect Iterator
+  yield : String -> Int
+
+effect StringParseError
+  invalid_integer : String -> Int
+
+digit_to_int_or_minus_one : String -> Int
+digit_to_int_or_minus_one digit =
+  if digit == "0"
+    0
+  else
+    if digit == "1"
+      1
+    else
+      if digit == "2"
+        2
+      else
+        if digit == "3"
+          3
+        else
+          if digit == "4"
+            4
+          else
+            if digit == "5"
+              5
+            else
+              if digit == "6"
+                6
+              else
+                if digit == "7"
+                  7
+                else
+                  if digit == "8"
+                    8
+                  else
+                    if digit == "9"
+                      9
+                    else
+                      -1
+
+parse : String -> Int can StringParseError
+parse value =
+  mut acc = 0
+  mut index = 0
+  mut negative = False
+  mut valid = True
+  mut saw_digit = False
+  with_handler
+    yield grapheme ->
+      if valid
+        if index == 0
+          if grapheme == "-"
+            negative := True
+            index := index + 1
+            resume 0
+          else
+            digit = digit_to_int_or_minus_one grapheme
+            if digit == -1
+              valid := False
+              index := index + 1
+              resume 0
+            else
+              if acc < -922337203685477580
+                valid := False
+              else
+                if acc == -922337203685477580
+                  if digit > 8
+                    valid := False
+                  else
+                    acc := (acc * 10) + (digit * -1)
+                    saw_digit := True
+                else
+                  acc := (acc * 10) + (digit * -1)
+                  saw_digit := True
+              index := index + 1
+              resume 0
+        else
+          digit = digit_to_int_or_minus_one grapheme
+          if digit == -1
+            valid := False
+            index := index + 1
+            resume 0
+          else
+            if acc < -922337203685477580
+              valid := False
+            else
+              if acc == -922337203685477580
+                if digit > 8
+                  valid := False
+                else
+                  acc := (acc * 10) + (digit * -1)
+                  saw_digit := True
+              else
+                acc := (acc * 10) + (digit * -1)
+                saw_digit := True
+            index := index + 1
+            resume 0
+      else
+        index := index + 1
+        resume 0
+  in
+    __goby_string_each_grapheme value
+  if valid
+    if saw_digit
+      if negative
+        acc
+      else
+        if acc == -9223372036854775808
+          invalid_integer value
+        else
+          acc * -1
+    else
+      invalid_integer value
+  else
+    invalid_integer value

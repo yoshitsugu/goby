@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-04 (session 136)
+Last updated: 2026-03-04 (session 138)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -63,6 +63,31 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - follow-up work moved to post-MVP tracks in `doc/PLAN.md`.
 
 ## 4. Recent Milestones
+
+- 2026-03-04 (session 138): `int.parse` rename + overflow-to-error behavior
+  - stdlib module path renamed:
+    - `stdlib/goby/integer.gb` -> `stdlib/goby/int.gb`.
+  - parse API name stabilized for `Int` naming consistency:
+    - `int.parse : String -> Int can StringParseError`.
+  - Overflow behavior aligned with failure contract:
+    - `parse` now uses negative accumulation with boundary checks,
+    - out-of-range numbers delegate to `invalid_integer` instead of runtime overflow failure.
+  - Docs/examples synced to `goby/int` + `int.parse`.
+
+- 2026-03-04 (session 137): `int.parse` + parse-error effect in stdlib
+  - `stdlib/goby/int.gb` now declares:
+    - `effect StringParseError`
+    - `invalid_integer : String -> Int`
+    - `parse : String -> Int can StringParseError`
+  - `parse` parses base-10 integer strings with optional leading `-`.
+    - success examples: `"42"`, `"-7"`
+    - failure examples: `""`, `"-"`, `"12x"`, `"+"`
+  - failure path is delegated to handler via `invalid_integer value`.
+  - Added sample usage file:
+    - `examples/to_integer.gb` (`with_handler` for `invalid_integer`).
+  - Updated docs:
+    - `doc/LANGUAGE_SPEC.md` runtime notes for `int.parse` contract.
+    - `doc/PLAN.md` locked-MVP notes for failure-path policy.
 
 - 2026-03-04 (session 136): prelude `Read` effect runtime bridge (stdin) first implementation
   - `stdlib/goby/prelude.gb` now declares:
