@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-04 (session 108)
+Last updated: 2026-03-04 (session 109)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -59,6 +59,21 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - phased Wasm lowering (portable trampoline first, typed-continuation optimization later).
 
 ## 4. Recent Milestones
+
+- 2026-03-04 (session 109): `PLAN_EFFECT_RENEWAL` P5 deny mode for legacy syntax
+  - Added CLI legacy syntax mode switch via environment variable:
+    - `GOBY_LEGACY_EFFECT_SYNTAX=deny`
+      rejects legacy `handler ... for ...` and `using` usage with migration hint.
+    - default behavior remains warning mode.
+  - Refactored legacy syntax detection into shared usage analysis:
+    - counts both top-level legacy handlers and nested `using` occurrences.
+  - Added regression coverage:
+    - unit test for mode resolution from env,
+    - integration test for deny-mode failure on `check`.
+  - Validation (mandatory flow) completed:
+    - `cargo fmt`
+    - `cargo clippy -- -D warnings`
+    - `cargo test`
 
 - 2026-03-04 (session 108): `PLAN_EFFECT_RENEWAL` P5 warning coverage expansion (`run`)
   - Extended CLI legacy-warning regression coverage to `run` path:
