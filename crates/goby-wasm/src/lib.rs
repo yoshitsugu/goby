@@ -3570,6 +3570,31 @@ main =
     }
 
     #[test]
+    fn spaced_unit_argument_read_line_is_typechecked_and_runs() {
+        use goby_core::{parse_module, typecheck::typecheck_module};
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let source = r#"
+main : Unit -> Unit can Print, Read
+main =
+  line = read_line ()
+  print "line=${line}"
+"#;
+        let module = parse_module(source).expect("parse should work");
+        typecheck_module(&module).expect("read_line () should typecheck as Unit-arg call");
+        let output = resolve_main_runtime_output_with_stdin(
+            &module,
+            main_body(&module),
+            main_parsed_body(&module),
+            "alpha\n",
+        );
+        assert_eq!(
+            output.as_deref(),
+            Some("line=alpha"),
+            "read_line () should be parsed and executed as a Unit-arg call"
+        );
+    }
+
+    #[test]
     fn embedded_read_line_trims_lf_crlf_and_cr() {
         use goby_core::parse_module;
         let _guard = ENV_MUTEX.lock().unwrap();

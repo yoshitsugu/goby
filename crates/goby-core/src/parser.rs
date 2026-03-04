@@ -103,12 +103,11 @@ pub fn parse_module(source: &str) -> Result<Module, ParseError> {
                     message: "effect declaration requires a name".to_string(),
                 });
             }
-            if !is_non_reserved_identifier(&effect_name) {
+            if !is_camel_case_identifier(&effect_name) {
                 return Err(ParseError {
                     line: i + 1,
                     col: 1,
-                    message: "effect declaration name must be a non-reserved identifier"
-                        .to_string(),
+                    message: "effect declaration name must be CamelCase".to_string(),
                 });
             }
             let mut members = Vec::new();
@@ -207,6 +206,13 @@ pub fn parse_module(source: &str) -> Result<Module, ParseError> {
                 col: 1,
                 message: "expected top-level definition (`name ... = ...`)".to_string(),
             })?;
+        if !is_lowercase_start_identifier(name) {
+            return Err(ParseError {
+                line: i + 1,
+                col: 1,
+                message: "declaration name must start with a lowercase letter".to_string(),
+            });
+        }
         if is_reserved_keyword(name) {
             return Err(ParseError {
                 line: i + 1,
@@ -887,6 +893,22 @@ fn is_non_reserved_identifier(s: &str) -> bool {
     is_identifier(s) && !is_reserved_keyword(s)
 }
 
+fn is_camel_case_identifier(s: &str) -> bool {
+    if !is_non_reserved_identifier(s) {
+        return false;
+    }
+    s.chars().next().is_some_and(|c| c.is_ascii_uppercase())
+}
+
+fn is_lowercase_start_identifier(s: &str) -> bool {
+    if !is_identifier(s) {
+        return false;
+    }
+    s.chars()
+        .next()
+        .is_some_and(|c| c.is_ascii_lowercase() || c == '_')
+}
+
 fn parse_resume_expr(src: &str) -> Option<Expr> {
     let rest = src.strip_prefix("resume")?;
     if rest.is_empty() {
@@ -1336,7 +1358,8 @@ fn parse_record_constructor_call(src: &str) -> Option<Expr> {
     }
     let open_idx = src.find('(')?;
     let constructor = src[..open_idx].trim();
-    if !is_identifier(constructor) {
+    // Constructors are CamelCase by syntax convention.
+    if !is_camel_case_identifier(constructor) {
         return None;
     }
     let inner = src[open_idx + 1..src.len() - 1].trim();
@@ -1655,7 +1678,7 @@ fn parse_type_declaration_line(line: &str) -> Option<TypeDeclaration> {
     let (name, rhs) = rest.split_once('=')?;
     let name = name.trim();
     let rhs = rhs.trim();
-    if !is_non_reserved_identifier(name) || rhs.is_empty() {
+    if !is_camel_case_identifier(name) || rhs.is_empty() {
         return None;
     }
 
@@ -1663,7 +1686,7 @@ fn parse_type_declaration_line(line: &str) -> Option<TypeDeclaration> {
         let constructors: Option<Vec<String>> = parts
             .into_iter()
             .map(str::trim)
-            .map(|ctor| is_non_reserved_identifier(ctor).then(|| ctor.to_string()))
+            .map(|ctor| is_camel_case_identifier(ctor).then(|| ctor.to_string()))
             .collect();
         let constructors = constructors?;
         if constructors.is_empty() {
@@ -1676,7 +1699,7 @@ fn parse_type_declaration_line(line: &str) -> Option<TypeDeclaration> {
     }
 
     if let Some((constructor, inner)) = split_record_constructor_shape(rhs) {
-        if !is_non_reserved_identifier(constructor) {
+        if !is_camel_case_identifier(constructor) {
             return None;
         }
         let fields = if inner.is_empty() {
@@ -1776,7 +1799,7 @@ fn split_record_constructor_shape(rhs: &str) -> Option<(&str, &str)> {
     }
     let open_idx = rhs.find('(')?;
     let constructor = rhs[..open_idx].trim();
-    if constructor.is_empty() || !is_non_reserved_identifier(constructor) {
+    if constructor.is_empty() || !is_camel_case_identifier(constructor) {
         return None;
     }
     if open_idx != constructor.len() {
@@ -2225,6 +2248,31 @@ main =
     }
 
     #[test]
+    fn rejects_lowercase_effect_declaration_name() {
+        let source = "effect print\n  log: String -> Unit\nmain = 1\n";
+        let err = parse_module(source).expect_err("lowercase effect name should be rejected");
+        assert!(err.message.contains("effect declaration name must be CamelCase"));
+    }
+
+    #[test]
+    fn rejects_lowercase_type_declaration_name() {
+        let source = "type user = User(name: String)\nmain = 1\n";
+        let err = parse_module(source).expect_err("lowercase type name should be rejected");
+        assert!(err.message.contains("invalid type declaration"));
+    }
+
+    #[test]
+    fn rejects_uppercase_top_level_declaration_name() {
+        let source = "Main : Unit -> Unit\nMain = ()\n";
+        let err =
+            parse_module(source).expect_err("top-level declaration starting uppercase rejected");
+        assert!(
+            err.message
+                .contains("declaration name must start with a lowercase letter")
+        );
+    }
+
+    #[test]
     fn parses_type_example_alias_union_and_record() {
         let source = read_example("type.gb");
         let module = parse_module(&source).expect("type.gb should parse");
@@ -2620,6 +2668,28 @@ main =
                     arg: Box::new(Expr::Var("b".to_string())),
                 }),
                 arg: Box::new(Expr::Var("c".to_string())),
+            })
+        );
+    }
+
+    #[test]
+    fn parses_spaced_unit_argument_function_call() {
+        assert_eq!(
+            parse_expr("read_line ()"),
+            Some(Expr::Call {
+                callee: Box::new(Expr::Var("read_line".to_string())),
+                arg: Box::new(Expr::TupleLit(vec![])),
+            })
+        );
+    }
+
+    #[test]
+    fn parses_spaced_constructor_call_when_name_is_camel_case() {
+        assert_eq!(
+            parse_expr("User ()"),
+            Some(Expr::RecordConstruct {
+                constructor: "User".to_string(),
+                fields: vec![],
             })
         );
     }
