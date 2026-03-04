@@ -117,7 +117,15 @@ Based on `examples/*.gb`:
     - `15`
 - String escape sequences in string literals: `\n`, `\t`, `\\`, `\"`.
 - `case` expression syntax: multi-line lookahead, arm separator ` -> `, wildcard `_`.
-  - `CasePattern` supports: `IntLit`, `StringLit`, `BoolLit` (`True`/`False`), `Wildcard`.
+  - `CasePattern` supports:
+    - `IntLit`, `StringLit`, `BoolLit` (`True`/`False`), `Wildcard`
+    - list patterns: `[]`, `[head, ...tail]`
+  - list-pattern typing/matching intent:
+    - `[]` matches only empty `List _`.
+    - `[head, ...tail]` matches only non-empty `List _`.
+    - in `[head, ...tail]` arm body, `head` is bound to element type `a`,
+      `tail` is bound to `List a`.
+  - parser rejects malformed list patterns (e.g. `[...xs]`, `[x, y]`, `[x, ...]`).
   - `else if` chaining is not supported in MVP.
 - `if ... else ...` expression: indentation-based two-branch form.
 - `==` equality operator: produces `Bool` at runtime.
@@ -131,6 +139,10 @@ Based on `examples/*.gb`:
   - Parser supports `${ expr }` inside string literals and lowers it to `Expr::InterpolatedString`.
   - Typechecker treats interpolated literals as `String`.
   - Runtime/codegen evaluates each segment and stringifies embedded expression values.
+- **List `case` patterns** (next implementation slice).
+  - Add parser/AST support for `[]` and `[head, ...tail]` in `case` arms.
+  - Keep the initial shape intentionally minimal (no multi-element destructuring yet).
+  - Add parser regressions for valid and malformed forms.
 - **Tuple index access `expr.N`** (post-MVP).
   - Syntax `a.0`, `a.1` is shown in `examples/basic_types.gb` but is not yet parsed.
   - `parse_method_call` rejects numeric method names (`is_identifier` fails on digits).
@@ -143,6 +155,11 @@ Based on `examples/*.gb`:
 
 - TODO (Deferred): declaration-side generic parameter binders
   (for example, `id : a -> a` with explicit binders).
+- **List `case` pattern typing** (next implementation slice).
+  - For `case xs` with list patterns, verify scrutinee is `List _` when known.
+  - Extend per-arm local environment:
+    - `[head, ...tail]` binds `head : a`, `tail : List a`.
+  - Preserve MVP policy: tolerate `Ty::Unknown` when information is insufficient.
 - Type annotation placement rules (required vs optional locations).
 - Type error diagnostics quality bar is fixed for MVP:
   - diagnostics must be non-empty and human-readable plain text.
