@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-04 (session 102)
+Last updated: 2026-03-04 (session 103)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -59,6 +59,19 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - phased Wasm lowering (portable trampoline first, typed-continuation optimization later).
 
 ## 4. Recent Milestones
+
+- 2026-03-04 (session 103): `PLAN_EFFECT_RENEWAL` P4 iterator example migration
+  - Migrated `examples/iterator.gb` from legacy top-level `handler ... for` + `using`
+    to canonical `with_handler ... in ...` form.
+  - To keep current typecheck compatibility for handler-expression op resolution,
+    the sample now declares local `effect Iterator` instead of relying on imported
+    effect metadata for handler-expression validation.
+  - Updated examples index text:
+    - `examples/README.md` now describes `iterator.gb` as a `with_handler` sample.
+  - Validation (mandatory flow) completed:
+    - `cargo fmt`
+    - `cargo clippy -- -D warnings`
+    - `cargo test`
 
 - 2026-03-04 (session 102): `PLAN_EFFECT_RENEWAL` P4 first step (effect example migration start)
   - Migrated `examples/effect.gb` away from legacy `using` in executable `main` flow:
