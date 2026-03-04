@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-04 (session 142)
+Last updated: 2026-03-04 (session 143)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -40,8 +40,10 @@ This file is a restart-safe snapshot for resuming work after context reset.
 - Current implementation `CasePattern` variants:
   `IntLit(i64)`, `StringLit(String)`, `BoolLit(bool)`, `EmptyList`,
   `ListCons { head, tail }`, `Wildcard`.
-- List `case` patterns are implemented in parser/typecheck/runtime fallback:
-  `[]`, `[head, ...tail]`.
+- List `case` patterns are partially implemented:
+  `[]`, `[head, ..tail]` (subset).
+- Not yet implemented:
+  `[1]`, `[4, ..]`, `[_, _]` and other fixed-length/list-literal-head list patterns.
 - Native Wasm capability checker still treats list patterns as unsupported,
   so list-pattern `case` executes via fallback runtime path.
 - MVP built-ins: `print`, `map`, `fetch_env_var`, `string.split`, `list.join`.
@@ -57,8 +59,9 @@ This file is a restart-safe snapshot for resuming work after context reset.
 ## 3. Known Open Decisions
 
 - MVP locked subset remains complete for currently implemented syntax.
-- Remaining open point for list `case` patterns:
-  native lowering support (capability checker + native evaluator path).
+- Remaining open points for list `case` patterns:
+  - pattern-surface expansion (`[1]`, `[_, _]`, `[4, ..]` and related forms),
+  - native lowering support (capability checker + native evaluator path).
 - Post-MVP open items tracked in `doc/PLAN.md` §3 and §6.
 - Post-MVP effect implementation direction is now fixed in `doc/PLAN.md` §2.3:
   - deep handlers with one-shot resumptions,
@@ -72,12 +75,29 @@ This file is a restart-safe snapshot for resuming work after context reset.
 
 ## 4. Recent Milestones
 
-- 2026-03-04 (session 142): list `case` pattern implementation (`[]`, `[head, ...tail]`)
+- 2026-03-04 (session 143): list-pattern support scope correction in docs
+  - Validation against concrete samples confirmed current subset support only:
+    - `[]`
+    - `[a, ..b]`
+  - Confirmed unsupported examples:
+    - `[1]`
+    - `[4, ..]`
+    - `[_, _]`
+  - Updated docs to avoid over-claiming full list-pattern coverage:
+    - `doc/LANGUAGE_SPEC.md`
+    - `doc/PLAN.md`
+    - `doc/STATE.md`
+  - Immediate next step:
+    - extend `CasePattern` and matcher/typechecker to support fixed-length and head-literal list patterns.
+
+- 2026-03-04 (session 142): list `case` pattern implementation (`[]`, `[head, ..tail]`)
   - AST:
     - added `CasePattern::EmptyList` and `CasePattern::ListCons { head, tail }`.
   - Parser:
     - `split_case_arm` now splits on top-level ` -> ` so list patterns with spaces are accepted,
-    - added list-pattern parsing for `[]` and `[head, ...tail]`,
+    - added list-pattern parsing for `[]` and `[head, ..tail]`,
+    - list-cons wildcard `_` is non-binding (`[_, ..xs]`),
+    - duplicate binders are rejected at parse time (`[x, ..x]`).
     - malformed patterns are rejected.
   - Typechecker:
     - per-arm local bindings for list-cons pattern:
@@ -87,8 +107,7 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - Runtime:
     - fallback runtime `Expr::Case` now supports list-pattern matching with arm-local bindings.
   - Native/lowering:
-    - native evaluator gained `ListInt` list-pattern matching support internally,
-      but capability checker remains conservative and marks list patterns unsupported.
+    - capability checker remains conservative and marks list patterns unsupported.
   - Tests:
     - added parser/typecheck/runtime regressions for list patterns.
   - Examples/docs:
@@ -103,16 +122,16 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - Updated `doc/LANGUAGE_SPEC.md`:
     - `case` pattern forms now include list patterns:
       - `[]`
-      - `[head, ...tail]` (arm-local bindings).
+      - `[head, ..tail]` (arm-local bindings).
   - Updated `doc/PLAN.md`:
     - added parser/typechecker intent for list patterns,
     - added malformed-pattern rejection targets,
-    - locked typing intent for `[head, ...tail]` (`head : a`, `tail : List a`).
+    - locked typing intent for `[head, ..tail]` (`head : a`, `tail : List a`).
   - Updated `doc/STATE.md`:
     - recorded this lock as next implementation slice.
   - Immediate next steps:
     - AST extension (`CasePattern` list variants),
-    - parser support for `[]` and `[head, ...tail]`,
+    - parser support for `[]` and `[head, ..tail]`,
     - case-arm env extension in typechecker/runtime evaluators,
     - regression tests for parser/typecheck/runtime.
 

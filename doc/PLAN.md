@@ -119,13 +119,16 @@ Based on `examples/*.gb`:
 - `case` expression syntax: multi-line lookahead, arm separator ` -> `, wildcard `_`.
   - `CasePattern` supports:
     - `IntLit`, `StringLit`, `BoolLit` (`True`/`False`), `Wildcard`
-    - list patterns: `[]`, `[head, ...tail]`
+    - list patterns (implemented subset): `[]`, `[head, ..tail]`
   - list-pattern typing/matching intent:
     - `[]` matches only empty `List _`.
-    - `[head, ...tail]` matches only non-empty `List _`.
-    - in `[head, ...tail]` arm body, `head` is bound to element type `a`,
+    - `[head, ..tail]` matches only non-empty `List _`.
+    - in `[head, ..tail]` arm body, `head` is bound to element type `a`,
       `tail` is bound to `List a`.
-  - parser rejects malformed list patterns (e.g. `[...xs]`, `[x, y]`, `[x, ...]`).
+  - parser rejects malformed list patterns (e.g. `[..xs]`, `[x, y]`, `[x, ..]`, `[x, ..x]`).
+  - not yet implemented:
+    - fixed-length list patterns (e.g. `[1]`, `[_, _]`)
+    - head-literal + rest wildcard forms (e.g. `[4, ..]`)
   - `else if` chaining is not supported in MVP.
 - `if ... else ...` expression: indentation-based two-branch form.
 - `==` equality operator: produces `Bool` at runtime.
@@ -139,10 +142,10 @@ Based on `examples/*.gb`:
   - Parser supports `${ expr }` inside string literals and lowers it to `Expr::InterpolatedString`.
   - Typechecker treats interpolated literals as `String`.
   - Runtime/codegen evaluates each segment and stringifies embedded expression values.
-- **List `case` patterns** (implemented).
-  - Parser/AST support is available for `[]` and `[head, ...tail]` in `case` arms.
-  - Scope remains intentionally minimal (no multi-element destructuring yet).
-  - Parser regressions cover valid and malformed forms.
+- **List `case` patterns** (partially implemented).
+  - Parser/AST support is available for `[]` and `[head, ..tail]` in `case` arms.
+  - Scope is intentionally minimal; fixed-length and head-literal list patterns are pending.
+  - Parser regressions cover the implemented subset and malformed forms.
 - **Tuple index access `expr.N`** (post-MVP).
   - Syntax `a.0`, `a.1` is shown in `examples/basic_types.gb` but is not yet parsed.
   - `parse_method_call` rejects numeric method names (`is_identifier` fails on digits).
@@ -158,10 +161,13 @@ Based on `examples/*.gb`:
 - **List `case` pattern typing** (implemented).
   - For `case xs` with list patterns, typecheck verifies scrutinee is `List _` when known.
   - Per-arm local environment extension is implemented:
-    - `[head, ...tail]` binds `head : a`, `tail : List a`.
+    - `[head, ..tail]` binds `head : a`, `tail : List a`.
   - MVP `Ty::Unknown` tolerance is preserved when information is insufficient.
   - Native Wasm capability checker still treats list patterns as unsupported;
     these cases execute via fallback runtime path.
+  - Pending:
+    - typing rules for fixed-length list patterns (`[a]`, `[a, b]`, ...),
+    - typing rules for literal-guard list heads (`[4, ..]`).
 - Type annotation placement rules (required vs optional locations).
 - Type error diagnostics quality bar is fixed for MVP:
   - diagnostics must be non-empty and human-readable plain text.

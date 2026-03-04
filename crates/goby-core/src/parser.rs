@@ -662,7 +662,7 @@ fn find_next_nonblank(lines: &[&str], from: usize) -> Option<usize> {
 /// ` -> ` separator and splits there. This prevents misidentifying ` -> ` inside
 /// a lambda body as the arm separator (e.g. `5 -> |x| -> x + 1` splits into
 /// `"5"` and `"|x| -> x + 1"` correctly), while still allowing patterns that
-/// contain spaces (e.g. `[x, ...xs]`).
+/// contain spaces (e.g. `[x, ..xs]`).
 fn split_case_arm(src: &str) -> Option<(&str, &str)> {
     let src = src.trim();
     let sep_idx = find_top_level_case_arm_separator(src)?;
@@ -729,8 +729,11 @@ fn parse_case_pattern(src: &str) -> Option<CasePattern> {
         if let Some((head_src, tail_src)) = inner.split_once(',') {
             let head = head_src.trim();
             let tail_src = tail_src.trim();
-            let tail = tail_src.strip_prefix("...")?.trim();
+            let tail = tail_src.strip_prefix("..")?.trim();
             if !is_non_reserved_identifier(head) || !is_non_reserved_identifier(tail) {
+                return None;
+            }
+            if head == tail && head != "_" {
                 return None;
             }
             return Some(CasePattern::ListCons {
@@ -3002,7 +3005,7 @@ main =
 
     #[test]
     fn parses_case_list_patterns() {
-        let body = "print\n  case xs\n    [] -> 0\n    [x, ...xxs] -> x";
+        let body = "print\n  case xs\n    [] -> 0\n    [x, ..xxs] -> x";
         let stmts = parse_body_stmts(body).expect("should parse");
         assert_eq!(stmts.len(), 1);
         match &stmts[0] {
@@ -3027,6 +3030,15 @@ main =
         assert!(
             parse_body_stmts(body).is_none(),
             "malformed list pattern should fail parse"
+        );
+    }
+
+    #[test]
+    fn rejects_case_list_pattern_with_duplicate_binders() {
+        let body = "print\n  case xs\n    [x, ..x] -> x\n    _ -> 0";
+        assert!(
+            parse_body_stmts(body).is_none(),
+            "duplicate binders in list pattern should fail parse"
         );
     }
 
