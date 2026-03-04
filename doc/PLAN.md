@@ -861,6 +861,66 @@ Acceptance criteria:
      - expected bridge key (`kind`, `arity`, `type_shape`),
      - mismatch reason (`not_registered`, `type_shape_mismatch`, `ambiguous_operation_identity`).
 
+Additional planning constraint (CLI `build` command for portable Wasm output, proposed 2026-03-04):
+
+Goal: add a first-class `goby-cli build <file.gb>` flow that emits `.wasm` artifacts
+directly runnable by both `wasmtime` and `wasmer` without requiring `run` mode.
+
+Scope lock:
+
+- `build` compiles only; it does not execute output.
+- Target artifact is WASI-compatible core Wasm module (`_start` export path), aligned with
+  current `run` expectations.
+- Initial output profile targets portability over aggressive optimization.
+
+Implementation plan:
+
+1. CLI surface and UX.
+   - Add command:
+     - `goby-cli build <file.gb>`
+   - Optional flags (phase 1 minimal set):
+     - `--out <path>` (explicit output file path),
+     - `--target wasi-preview1` (default; future-proofed flag),
+     - `--engine-compat wasmtime,wasmer` (default profile preset).
+   - Keep diagnostics style consistent with existing `check/run`.
+2. Artifact contract.
+   - Default output path: `<input_basename>.wasm` next to source (or `--out` override).
+   - Emit deterministic binary bytes for same input+toolchain version when possible.
+   - Ensure module exports/sections required by WASI execution are present and stable.
+3. Backend compatibility profile.
+   - Lock phase-1 codegen profile to features supported by both engines in baseline environments.
+   - Avoid engine-specific extensions in default profile.
+   - If future profiles diverge, require explicit opt-in flag and clear diagnostics.
+4. Runtime compatibility checks.
+   - Add optional post-build verify mode (non-blocking in phase 1):
+     - `--verify-with wasmtime`
+     - `--verify-with wasmer`
+   - Verification runs engine-side module validation/instantiation smoke checks only.
+5. Integration with existing `run`.
+   - Keep `run` behavior unchanged initially.
+   - Internally reuse `build` pipeline so compile path is single-sourced.
+   - `run` should consume the same produced wasm contract to reduce drift.
+6. Test matrix.
+   - CLI integration tests for:
+     - successful `build` output path and file creation,
+     - invalid source / typecheck failure diagnostics,
+     - `--out` path handling and overwrite policy.
+   - Smoke tests (when engine binaries are available in CI/dev env):
+     - `wasmtime run <artifact>`
+     - `wasmer run <artifact>`
+   - Include at least one effectful sample and one pure sample.
+7. Documentation and migration.
+   - Update README and CLI help with `build` examples.
+   - Add troubleshooting section for missing external engines
+     (build succeeds; verify/run may be skipped with clear message).
+
+Acceptance criteria:
+
+1. `goby-cli build examples/hello.gb` emits runnable `.wasm`.
+2. Produced artifact runs successfully on both engines in supported test environments.
+3. `run` and `build` share one compile path (no duplicate divergent codegen entrypoints).
+4. Failure diagnostics clearly distinguish parse/typecheck/codegen/output-write/verify failures.
+
 ### 4.4 Early Developer Tooling Plan
 
 Goal: align implementation priorities with the language vision that strong tooling is a core
