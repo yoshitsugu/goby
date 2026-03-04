@@ -751,6 +751,104 @@ Implementation steps:
    - Update `examples/` with a minimal stdin sample using `read_line` and `read`.
    - Record milestone and open follow-ups in `doc/STATE.md`.
 
+Additional planning constraint (Stdlib Runtime Bridge generalization, proposed 2026-03-04):
+
+Goal: ensure future stdlib growth (`goby/int`, `goby/string`, `goby/datetime`, etc.)
+does not require ad-hoc runtime special-cases per symbol in fallback/runtime evaluators.
+
+Problem statement:
+
+- Current fallback runtime includes symbol-specific branches (for example, `goby/int.parse`).
+- This solves immediate usability, but scales poorly and risks behavior drift between:
+  - stdlib Goby source implementation,
+  - fallback runtime shortcuts,
+  - native/typed lowering paths.
+- Bare operation-name matching (`invalid_integer`) can also become ambiguous as effect surface grows.
+
+Design direction:
+
+1. Introduce a Runtime Bridge Registry (declarative metadata).
+   - Runtime-callable stdlib symbols are registered as bridge entries rather than hardcoded
+     by string checks in evaluator match-arms.
+   - Canonical bridge key:
+     - `module_path`
+     - `symbol_name`
+     - `kind` (`value_function` / `effect_operation` / `default_handler`)
+     - `type_shape` (arity + normalized type annotation)
+   - Canonical bridge target:
+     - `intrinsic_name` (Rust-side implementation id),
+     - optional effect/op identity for operation routing (`EffectName.operation`).
+2. Normalize operation identity.
+   - Internal runtime dispatch should prefer effect-qualified identity
+     (`EffectName.operation`) over bare operation name.
+   - Bare operation fallback may remain for compatibility only when identity is proven unique.
+3. Keep stdlib-first authoring model.
+   - Stdlib Goby source remains source-of-truth API surface.
+   - Bridge metadata only maps selected symbols/operations to runtime intrinsics for execution.
+   - Non-bridged symbols continue through normal evaluator/runtime behavior.
+
+Implementation plan:
+
+1. Metadata model in `goby-core`.
+   - Extend stdlib resolver output to optionally carry runtime bridge metadata.
+   - Add parser support for a minimal stdlib-only bridge declaration (syntax TBD),
+     or load from sidecar metadata file under stdlib root.
+   - Validate:
+     - declared symbol exists in module export/effect surface,
+     - type shape matches declaration annotation,
+     - intrinsic target is known.
+2. Bridge registry assembly in `goby-wasm`.
+   - Build registry from effective imports (+ implicit prelude where applicable).
+   - Reuse existing import semantics:
+     - plain/alias/selective filtering,
+     - ambiguity rejection policy from typechecker.
+   - Cache registry per module compile/run invocation to avoid repeated filesystem scans.
+3. Evaluator integration (fallback/runtime path).
+   - Refactor `Expr::Call` / `Expr::MethodCall` handling to:
+     - resolve call target to `(module?, symbol, arity, arg types)`,
+     - query bridge registry,
+     - dispatch to intrinsic executor if bridge exists.
+   - Remove direct symbol checks for stdlib module functions once bridged.
+4. Effect operation routing hardening.
+   - Route handler dispatch via effect-qualified identity where available.
+   - For legacy bare handler clauses:
+     - accept only when operation identity is unique in visible effect set,
+     - otherwise surface deterministic ambiguity/runtime error.
+5. Migration of existing special-cases.
+   - Phase A: wrap current paths (`read`, `read_line`, `fetch_env_var`, `string.length`, `int.parse`)
+     with bridge registry lookup while keeping compatibility fallback.
+   - Phase B: delete symbol-specific evaluator branches after parity tests pass.
+6. Observability and diagnostics.
+   - Add debug diagnostics (behind env flag) for bridge resolution:
+     - selected bridge entry,
+     - intrinsic dispatch target,
+     - mismatch reason when unresolved.
+   - Add user-facing errors for:
+     - ambiguous bridged operation identity,
+     - bridge metadata/type-shape mismatch.
+
+Acceptance criteria:
+
+1. Extensibility:
+   - adding a new bridged stdlib function requires:
+     - stdlib declaration + bridge metadata entry (+ intrinsic impl if new),
+     - no evaluator match-arm edits.
+2. Correctness:
+   - `int.parse` behavior matches locked stdlib contract for:
+     - valid numbers,
+     - invalid format,
+     - overflow/underflow handling.
+   - handler dispatch for parse failure is effect-qualified and not captured by unrelated
+     same-name operations.
+3. Compatibility:
+   - existing examples (`hello.gb`, `effect.gb`, `to_integer.gb`) continue to run.
+   - import modes (plain/alias/selective) continue to resolve runtime-bridged symbols consistently.
+4. Quality gates:
+   - `cargo fmt`
+   - `cargo test`
+   - `cargo clippy -- -D warnings`
+   - targeted regression suite for bridge resolution and ambiguity handling.
+
 ### 4.4 Early Developer Tooling Plan
 
 Goal: align implementation priorities with the language vision that strong tooling is a core
