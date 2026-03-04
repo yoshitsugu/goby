@@ -226,6 +226,9 @@ Completion criteria:
 - Legacy syntax warning (single release window) references `with`/`with_handler`.
 - Legacy syntax is rejected by default immediately after bridge window.
 
+Migration guide reference:
+- `doc/EFFECT_RENEWAL_MIGRATION.md`
+
 ### P6. Removal
 
 - Remove legacy syntax/parser/runtime paths after migration confidence.
