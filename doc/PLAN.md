@@ -291,40 +291,92 @@ This section records the locked renewal decisions and is the canonical language-
 
 #### Abortive Handler Behavior Follow-up (planned 2026-03-04)
 
-Goal: align runtime behavior with "exceptions via effects" style where an
-operation handler may intentionally not call `resume`, and the continuation
-from the effect site is discarded.
+Goal: align runtime behavior with exception-like handling where an operation
+clause may intentionally omit `resume`; in that path, continuation at the
+effect call site is discarded.
 
-Planned steps:
+Implementation weight assessment:
 
-1. Spec lock.
-   - Clarify in `doc/LANGUAGE_SPEC.md` that if an operation clause does not call
-     `resume`, control does not return to the operation call site.
-   - State that this is the canonical abortive path (exception-like behavior).
-2. Typecheck expectations.
-   - Keep existing `resume` typing rules as-is (`resume` remains optional in
-     handler clauses).
-   - Ensure no diagnostics imply that handler clauses must call `resume`.
-3. Runtime behavior update.
-   - In handler dispatch bridge, treat "no resume observed" as successful
-     abortive completion rather than runtime failure/`None` propagation.
-   - Preserve one-shot semantics when `resume` is used; this change only affects
-     the no-`resume` branch.
-4. Regression tests.
-   - Add fallback-runtime tests showing:
-     - handler clause without `resume` terminates handled computation path,
-     - surrounding program continues from outside the handled region,
-     - existing `resume` success and double-resume error behavior remain unchanged.
-5. Documentation/examples sync.
-   - Add one small example that models exception-like handling by omitting
-     `resume` in a handler clause.
+- Expected effort: medium.
+- Why not "small": current runtime dispatch code uses `Option`-based control
+  flow where `None` currently mixes "normal abortive branch" and "runtime
+  failure", so semantics must be untangled without regressing existing resume
+  diagnostics.
+- Why not "large": syntax/typecheck changes are limited; core work is localized
+  to handler dispatch bridge plus targeted tests/spec wording.
+
+Cross-language reference baseline (for semantic alignment):
+
+- OCaml 5 effect handlers: operation clauses can choose not to continue captured
+  continuations (`continue`) and can model exception-like behavior.
+- Koka handlers: operation clauses are first-class control points; non-resuming
+  branches are a standard way to encode abortive control.
+- Eff language model: handlers decide whether/when to invoke continuation `k`;
+  skipping `k` yields abortive behavior.
+
+Detailed plan:
+
+1. Semantics lock (spec + diagnostics wording).
+   - Update `doc/LANGUAGE_SPEC.md`:
+     - define no-`resume` branch as successful abortive completion (not an
+       interpreter error),
+     - define control boundary precisely: execution does not return to handled
+       operation call site.
+   - Audit runtime diagnostics to ensure messages are reserved for actual misuse
+     (`resume` outside handler, double resume, token mismatch), not no-resume.
+2. Runtime control-flow refactor (portable fallback first).
+   - Refactor handler dispatch result channel to separate:
+     - `RuntimeError`,
+     - `HandledResumed(value)`,
+     - `HandledAbortive`,
+     - optional handler-body terminal value (for value-position calls only).
+   - Remove reliance on `None` as overloaded signal in
+     `dispatch_handler_method_core`.
+   - Preserve one-shot token lifecycle unchanged for paths that actually call
+     `resume`.
+3. Call-site contract updates.
+   - Unit-position effect operation call:
+     - `HandledAbortive` means "statement consumed; continue after enclosing
+       `with` region".
+   - Value-position operation call:
+     - define deterministic behavior for abortive branch (no continuation value);
+       preserve current type/runtime safety and avoid silent value fabrication.
+   - Keep embedded default handler behavior unchanged.
+4. Typecheck and static-policy review.
+   - Keep `resume` optional in handler clauses.
+   - Confirm no static rule accidentally forces "must resume" semantics.
+   - Keep conservative multi-resume rejection policy intact.
+5. Regression matrix.
+   - Add/adjust tests in `crates/goby-wasm/src/lib.rs`:
+     - no-resume abortive path for unit-position operation,
+     - no-resume abortive path for nested handlers (nearest-handler semantics),
+     - resume success path unchanged,
+     - double-resume misuse unchanged,
+     - existing runtime error IDs still emitted only for true misuse.
+   - Add one executable sample in `examples/` for exception-like pattern.
+6. Mode parity and rollout safety.
+   - Verify behavior parity across runtime execution modes currently in use.
+   - Gate merge on `cargo test -p goby-wasm` plus targeted CLI run sample.
+
+Open design decision to lock before implementation:
+
+- Value-position abortive branch (`x = op(...)` where handler omits `resume`)
+  needs explicit contract:
+  - Option A: runtime error with dedicated diagnostic (strict, explicit).
+  - Option B: require handler branch to provide replacement value via language
+    construct (not currently present).
+  - Current recommendation: Option A for now, then revisit with explicit
+    language feature if needed.
 
 Acceptance criteria:
 
-1. Programs using handler clauses without `resume` run without runtime error.
-2. Effect call-site continuation is not resumed in that path.
-3. Existing `resume` behavior (single-shot success + double-resume rejection)
-   remains unchanged.
+1. No-resume handler branch is treated as intentional abortive handling, not a
+   generic runtime failure.
+2. Effect call-site continuation is not resumed in that branch.
+3. Existing `resume` path behavior (single-shot success + misuse diagnostics)
+   remains stable.
+4. Behavior and wording are documented in `doc/LANGUAGE_SPEC.md` and covered by
+   regression tests.
 
 ### 2.4 Standard Library Surface (MVP)
 
