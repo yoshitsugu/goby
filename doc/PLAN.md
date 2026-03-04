@@ -27,6 +27,13 @@ Based on `examples/*.gb`:
 
 ### 2.0 Locked for Current MVP
 
+- Development-phase change policy (locked 2026-03-04):
+  - This project is still in a personal early-development phase; immediate breaking
+    changes are allowed when they improve consistency/simplicity.
+  - However, avoid short-sighted shortcuts that are likely to become long-term design debt.
+    Even if a change is breaking now, it should still align with plausible future
+    language/tooling architecture.
+
 - Function calls support both `f x` and `f(x)`.
   - spaced application supports multiple args (`f a b c`) and is parsed left-associatively
     (`(((f a) b) c)`).
@@ -572,6 +579,32 @@ Implementation plan (`@embed` default-handler model):
    - Entry/main tests showing `main : Unit -> Unit can Print` accepted without
      explicit handler when `Print` has embedded default handler.
    - Negative tests where non-embedded unresolved effects on `main` still fail.
+
+Additional planning constraint (implicit prelude migration, locked 2026-03-04):
+
+Goal: make effect/bootstrap behavior user-visible and predictable by resolving
+`Print` through stdlib prelude wiring rather than compiler-only hidden defaults.
+
+Implementation steps:
+
+1. Add `stdlib/prelude.gb`.
+   - Define prelude-owned foundational declarations, including stdio/effect bridge
+     declarations needed by default user programs.
+   - Keep `@embed` declarations in stdlib modules only (not user modules).
+2. Introduce implicit prelude import in compiler/typechecker pipeline.
+   - Treat every module as if `import goby/prelude` is present unless explicitly
+     disabled by a future internal/testing flag.
+   - Ensure this synthetic import participates in symbol and embed-default resolution.
+3. Extend runtime fallback/default-handler resolution to include imported stdlib embed metadata.
+   - Do not rely on only local-module `@embed` declarations.
+   - Preserve precedence: explicit user handler > embedded default handler.
+4. Retire `Print`/`print` compiler hardcoded bootstrap path after prelude path is stable.
+   - Remove or narrow built-in effect/symbol assumptions so user-facing behavior
+     is explained by stdlib + language rules.
+5. Add migration/regression coverage.
+   - `examples/hello.gb` (no explicit import) still works via implicit prelude.
+   - Programs can override behavior with explicit handlers.
+   - Missing/invalid prelude resolution yields clear diagnostics.
 
 ### 4.4 Early Developer Tooling Plan
 
