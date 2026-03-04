@@ -3151,17 +3151,15 @@ effect Log
     }
 
     // -----------------------------------------------------------------------
-    // using / unhandled-effect tests
+    // with_handler / unhandled-effect tests
     // -----------------------------------------------------------------------
 
     #[test]
     fn rejects_direct_effect_op_call_outside_using() {
-        // `log x` is called directly in `main` without any `using LogHandler`.
+        // `log x` is called directly in `main` without any `with_handler`.
         let source = "\
 effect Log
   log: String -> Unit
-handler LogHandler for Log
-  log str = print str
 main : Unit -> Unit
 main =
   log \"hello\"
@@ -3180,19 +3178,20 @@ main =
 
     #[test]
     fn accepts_effect_op_call_inside_using() {
-        // `log x` is called inside a `using LogHandler` block.
+        // `log x` is called inside a `with_handler` block.
         let source = "\
 effect Log
   log: String -> Unit
-handler LogHandler for Log
-  log str = print str
 main : Unit -> Unit
 main =
-  using LogHandler
+  with_handler
+    log str ->
+      resume Unit
+  in
     log \"hello\"
 ";
         let module = parse_module(source).expect("should parse");
-        typecheck_module(&module).expect("effect op call inside using should be accepted");
+        typecheck_module(&module).expect("effect op call inside with_handler should be accepted");
     }
 
     #[test]
@@ -3365,38 +3364,38 @@ mk =
     }
 
     #[test]
-    fn accepts_qualified_effect_op_inside_using() {
-        // `Log.log x` (qualified form) inside a `using LogHandler` block.
+    fn accepts_qualified_effect_op_inside_with_handler() {
+        // `Log.log x` (qualified form) inside a `with_handler` block.
         let source = "\
 effect Log
   log: String -> Unit
-handler LogHandler for Log
-  log str = print str
 main : Unit -> Unit
 main =
-  using LogHandler
+  with_handler
+    log str ->
+      resume Unit
+  in
     Log.log \"hello\"
 ";
         let module = parse_module(source).expect("should parse");
         typecheck_module(&module)
-            .expect("qualified effect op call inside using should be accepted");
+            .expect("qualified effect op call inside with_handler should be accepted");
     }
 
     #[test]
     fn rejects_effect_op_when_wrong_handler_used() {
-        // `using LogHandler` only covers `Log` ops; calling `Env.from_env` is unhandled.
+        // `with_handler` only covers `Log` ops; calling `Env.from_env` is unhandled.
         let source = "\
 effect Log
   log: String -> Unit
 effect Env
   from_env: String -> String
-handler LogHandler for Log
-  log str = print str
-handler EnvHandler for Env
-  from_env str = str
 main : Unit -> Unit
 main =
-  using LogHandler
+  with_handler
+    log str ->
+      resume Unit
+  in
     from_env \"PATH\"
 ";
         let module = parse_module(source).expect("should parse");
@@ -3409,12 +3408,10 @@ main =
 
     #[test]
     fn accepts_can_clause_ops_inside_function_body() {
-        // A function with `can Log` may call `log` in its own body without `using`.
+        // A function with `can Log` may call `log` in its own body without handlers at call site.
         let source = "\
 effect Log
   log: String -> Unit
-handler LogHandler for Log
-  log str = print str
 f : String -> Unit can Log
 f msg =
   log msg
@@ -3426,12 +3423,10 @@ f msg =
 
     #[test]
     fn rejects_effect_op_in_binding_value_outside_using() {
-        // Effect op used in binding RHS, no enclosing `using`.
+        // Effect op used in binding RHS, no enclosing `with_handler`.
         let source = "\
 effect Log
   log: String -> Unit
-handler LogHandler for Log
-  log str = print str
 main : Unit -> Unit
 main =
   x = log \"hi\"
@@ -3445,12 +3440,10 @@ main =
 
     #[test]
     fn rejects_effect_op_as_pipeline_callee_outside_using() {
-        // `"hello" |> log` — effect op used as pipeline callee without `using`.
+        // `"hello" |> log` — effect op used as pipeline callee without `with_handler`.
         let source = "\
 effect Log
   log: String -> Unit
-handler LogHandler for Log
-  log str = print str
 main : Unit -> Unit
 main =
   \"hello\" |> log
@@ -3465,20 +3458,21 @@ main =
 
     #[test]
     fn accepts_effect_op_as_pipeline_callee_inside_using() {
-        // `"hello" |> log` inside `using LogHandler` should be accepted.
+        // `"hello" |> log` inside `with_handler` should be accepted.
         let source = "\
 effect Log
   log: String -> Unit
-handler LogHandler for Log
-  log str = print str
 main : Unit -> Unit
 main =
-  using LogHandler
+  with_handler
+    log str ->
+      resume Unit
+  in
     \"hello\" |> log
 ";
         let module = parse_module(source).expect("should parse");
         typecheck_module(&module)
-            .expect("effect op as pipeline callee inside using should be accepted");
+            .expect("effect op as pipeline callee inside with_handler should be accepted");
     }
 
     #[test]
@@ -3488,8 +3482,6 @@ main =
         let source = "\
 effect Log
   log: String -> Unit
-handler LogHandler for Log
-  log str = print str
 main : Unit -> Unit
 main =
   f = |log| -> log \"hi\"
@@ -3502,25 +3494,28 @@ main =
 
     #[test]
     fn accepts_nested_using_with_merged_covered_ops() {
-        // Outer `using LogHandler` + inner `using EnvHandler`; inner body calls both `log` and `from_env`.
+        // Outer `with_handler(log)` + inner `with_handler(from_env)`; inner body calls both ops.
         let source = "\
 effect Log
   log: String -> Unit
 effect Env
   from_env: String -> String
-handler LogHandler for Log
-  log str = print str
-handler EnvHandler for Env
-  from_env str = str
 main : Unit -> Unit
 main =
-  using LogHandler
-    using EnvHandler
+  with_handler
+    log str ->
+      resume Unit
+  in
+    with_handler
+      from_env str ->
+        resume str
+    in
       log \"hi\"
       from_env \"PATH\"
 ";
         let module = parse_module(source).expect("should parse");
-        typecheck_module(&module).expect("nested using with merged covered ops should be accepted");
+        typecheck_module(&module)
+            .expect("nested with_handler scopes with merged covered ops should be accepted");
     }
 
     #[test]
@@ -3540,17 +3535,15 @@ f msg =
             .expect("multi-op effect via can clause should allow all ops in body");
     }
 
-    // ── Step 3: calling effectful functions requires an appropriate `using` handler ──
+    // ── Step 3: calling effectful functions requires an appropriate handler scope ──
 
     #[test]
     fn rejects_call_to_effectful_function_outside_using() {
         // `plus_ten_with_log` requires the `Log` effect; calling it from `main` without
-        // `using LogHandler` should be rejected.
+        // `with_handler` should be rejected.
         let source = "\
 effect Log
   log: String -> Unit
-handler LogHandler for Log
-  log msg = print msg
 plus_ten_with_log : Int -> Int can Log
 plus_ten_with_log n =
   log \"calling\"
@@ -3572,45 +3565,45 @@ main =
 
     #[test]
     fn accepts_call_to_effectful_function_inside_using() {
-        // Same call, but wrapped in `using LogHandler` — should succeed.
+        // Same call, but wrapped in `with_handler` — should succeed.
         let source = "\
 effect Log
   log: String -> Unit
-handler LogHandler for Log
-  log msg = print msg
 plus_ten_with_log : Int -> Int can Log
 plus_ten_with_log n =
   log \"calling\"
   n
 main : Unit -> Unit
 main =
-  using LogHandler
+  with_handler
+    log msg ->
+      resume Unit
+  in
     plus_ten_with_log 3
 ";
         let module = parse_module(source).expect("should parse");
         typecheck_module(&module)
-            .expect("calling effectful function inside appropriate using should succeed");
+            .expect("calling effectful function inside appropriate with_handler should succeed");
     }
 
     #[test]
     fn rejects_call_when_partial_handlers_present() {
-        // `show_env_var` requires both `Log` and `Env`; only `LogHandler` is in scope.
+        // `show_env_var` requires both `Log` and `Env`; only log handler is in scope.
         let source = "\
 effect Log
   log: String -> Unit
 effect Env
   from_env: String -> String
-handler LogHandler for Log
-  log msg = print msg
-handler EnvHandler for Env
-  from_env key = key
 show_env_var : String -> Unit can Log, Env
 show_env_var name =
   v = from_env name
   log v
 main : Unit -> Unit
 main =
-  using LogHandler
+  with_handler
+    log msg ->
+      resume Unit
+  in
     show_env_var \"PATH\"
 ";
         let module = parse_module(source).expect("should parse");
@@ -3625,23 +3618,25 @@ main =
 
     #[test]
     fn accepts_effectful_pipeline_callee_inside_using() {
-        // `3 |> plus_ten_with_log` inside `using LogHandler` — pipeline form should also pass.
+        // `3 |> plus_ten_with_log` inside `with_handler` — pipeline form should also pass.
         let source = "\
 effect Log
   log: String -> Unit
-handler LogHandler for Log
-  log msg = print msg
 plus_ten_with_log : Int -> Int can Log
 plus_ten_with_log n =
   log \"calling\"
   n
 main : Unit -> Unit
 main =
-  using LogHandler
+  with_handler
+    log msg ->
+      resume Unit
+  in
     3 |> plus_ten_with_log
 ";
         let module = parse_module(source).expect("should parse");
-        typecheck_module(&module).expect("effectful pipeline callee inside using should succeed");
+        typecheck_module(&module)
+            .expect("effectful pipeline callee inside with_handler should succeed");
     }
 
     #[test]
@@ -4225,14 +4220,14 @@ effect Iterator
   yield : String -> Int
   yield_state : GraphemeState -> GraphemeState
 @embed Iterator
-handler Fold for Iterator
-  yield_state step =
-    resume step
 f : String -> GraphemeState can Iterator
 f s =
   state = GraphemeState(grapheme: \"\", current: \"\", delimiter: \",\", seen: False)
   out = state
-  using Fold
+  with_handler
+    yield_state step ->
+      resume step
+  in
     out = __goby_string_each_grapheme s state
   out
 ";
@@ -4596,13 +4591,12 @@ type Error = Error(message: String)
 effect ErrorEffect
   catch: Error -> Unit
 
-handler PrintErrorHandler for ErrorEffect
-  catch e =
-    print e.message
-
 main : Unit -> Unit
 main =
-  using PrintErrorHandler
+  with_handler
+    catch e ->
+      resume Unit
+  in
     catch \"NoCoffeeError\"
 ";
         let module = parse_module(source).expect("should parse");
@@ -4638,13 +4632,12 @@ type Error = Error(message: String)
 effect ErrorEffect
   catch: Error -> Unit
 
-handler PrintErrorHandler for ErrorEffect
-  catch e =
-    print e.message
-
 main : Unit -> Unit
 main =
-  using PrintErrorHandler
+  with_handler
+    catch e ->
+      resume Unit
+  in
     \"NoCoffeeError\" |> catch
 ";
         let module = parse_module(source).expect("should parse");
@@ -4680,13 +4673,12 @@ type Error = Error(message: String)
 effect ErrorEffect
   catch: Error -> Unit
 
-handler PrintErrorHandler for ErrorEffect
-  catch e =
-    print e.message
-
 main : Unit -> Unit
 main =
-  using PrintErrorHandler
+  with_handler
+    catch e ->
+      resume Unit
+  in
     Error(message: \"oops\") |> catch
 ";
         let module = parse_module(source).expect("should parse");
@@ -4702,13 +4694,12 @@ type Error = Error(message: String)
 effect ErrorEffect
   catch: Error -> Unit
 
-handler PrintErrorHandler for ErrorEffect
-  catch e =
-    print e.message
-
 main : Unit -> Unit
 main =
-  using PrintErrorHandler
+  with_handler
+    catch e ->
+      resume Unit
+  in
     catch Error(message: \"oops\")
 ";
         let module = parse_module(source).expect("should parse");
@@ -4723,13 +4714,12 @@ main =
 effect Log
   log: String -> Unit
 
-handler LogHandler for Log
-  log str =
-    print str
-
 main : Unit -> Unit
 main =
-  using LogHandler
+  with_handler
+    log str ->
+      resume Unit
+  in
     log \"hello\"
 ";
         let module = parse_module(source).expect("should parse");
@@ -4746,13 +4736,12 @@ type Error = Error(message: String)
 effect RaiseError
   raise: Error -> Unit
 
-handler H for RaiseError
-  raise e =
-    print e.message
-
 main : Unit -> Unit
 main =
-  using H
+  with_handler
+    raise e ->
+      resume Unit
+  in
     raise Error(\"oops\")
 ";
         let module = parse_module(source).expect("should parse");
@@ -4770,13 +4759,12 @@ type Pair = Pair(first: String, second: String)
 effect E
   op: Pair -> Unit
 
-handler H for E
-  op p =
-    print p.first
-
 main : Unit -> Unit
 main =
-  using H
+  with_handler
+    op p ->
+      resume Unit
+  in
     op Pair(\"a\")
 ";
         let module = parse_module(source).expect("should parse");
@@ -4806,13 +4794,13 @@ main =
 effect Iter
   next: Unit -> Int
 
-handler H for Iter
-  next x =
-    resume \"oops\"
-
 main : Unit -> Unit
 main =
-  print \"ok\"
+  with_handler
+    next x ->
+      resume \"oops\"
+  in
+    print \"ok\"
 ";
         let module = parse_module(source).expect("should parse");
         let err = typecheck_module(&module).expect_err("resume arg mismatch should fail");
@@ -4834,18 +4822,19 @@ main =
 effect Iter
   next: Unit -> Int
 
-handler H for Iter
-  unknown x =
-    resume 1
-
 main : Unit -> Unit
 main =
-  print \"ok\"
+  with_handler
+    unknown x ->
+      resume 1
+  in
+    print \"ok\"
 ";
         let module = parse_module(source).expect("should parse");
         let err = typecheck_module(&module).expect_err("unknown op context should fail");
         assert!(
-            err.message.contains("resume_in_unknown_operation_context"),
+            err.message.contains("resume_in_unknown_operation_context")
+                || err.message.contains("unknown effect operation"),
             "unexpected error: {}",
             err.message
         );
@@ -4857,13 +4846,13 @@ main =
 effect Iter
   next: Unit -> Int
 
-handler H for Iter
-  next x =
-    resume 1
-
 main : Unit -> Unit
 main =
-  print \"ok\"
+  with_handler
+    next x ->
+      resume 1
+  in
+    print \"ok\"
 ";
         let module = parse_module(source).expect("should parse");
         typecheck_module(&module).expect("resume with matching return type should pass");
