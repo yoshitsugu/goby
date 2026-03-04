@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-04 (session 126)
+Last updated: 2026-03-04 (session 127)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -63,6 +63,28 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - follow-up work moved to post-MVP tracks in `doc/PLAN.md`.
 
 ## 4. Recent Milestones
+
+- 2026-03-04 (session 127): mutable variable syntax implementation (`mut` / `:=`)
+  - Implemented mutable statement surface in core AST/parser:
+    - `mut <name> = <expr>`
+    - `<name> := <expr>`
+  - Typechecker now enforces mutable-variable rules in declaration bodies:
+    - assignment target must be declared,
+    - assignment target must be mutable,
+    - assignment value type must be compatible with the declared variable type,
+    - same-scope redeclaration is rejected with `:=` guidance.
+  - Runtime/fallback execution paths support mutation statements.
+  - Native-lowering capability keeps mutation forms on fallback path.
+  - Tests updated/added:
+    - parser body parse coverage for `mut`/`:=`,
+    - typechecker acceptance/rejection coverage for mutable assignment rules.
+  - Docs sync:
+    - `doc/PLAN.md` mutable syntax section moved from planned to implemented.
+  - Validation completed:
+    - `cargo fmt`
+    - `cargo check`
+    - `cargo test`
+    - `cargo clippy -- -D warnings`
 
 - 2026-03-04 (session 126): `PLAN_EFFECT_RENEWAL` P6 closure docs sync
   - Updated `doc/PLAN.md` wording to remove remaining active-implementation

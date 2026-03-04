@@ -805,6 +805,21 @@ fn parse_multiline_expr(lines: &[&str], start: usize) -> Option<(Expr, usize)> {
 }
 
 fn parse_stmt(line: &str) -> Option<Stmt> {
+    if let Some(rest) = line.strip_prefix("mut ") {
+        let (name, rhs) = try_split_binding(rest)?;
+        let value = parse_expr(rhs)?;
+        return Some(Stmt::MutBinding {
+            name: name.to_string(),
+            value,
+        });
+    }
+    if let Some((name, rhs)) = try_split_assignment(line) {
+        let value = parse_expr(rhs)?;
+        return Some(Stmt::Assign {
+            name: name.to_string(),
+            value,
+        });
+    }
     if let Some((name, rhs)) = try_split_binding(line) {
         let value = parse_expr(rhs)?;
         return Some(Stmt::Binding {
@@ -819,7 +834,7 @@ fn parse_stmt(line: &str) -> Option<Stmt> {
 fn is_reserved_keyword(s: &str) -> bool {
     matches!(
         s,
-        "resume" | "with" | "with_handler" | "in" | "handler" | "effect"
+        "resume" | "with" | "with_handler" | "in" | "handler" | "effect" | "mut"
     )
 }
 
@@ -1452,6 +1467,16 @@ fn try_split_binding(line: &str) -> Option<(&str, &str)> {
     } else {
         None
     }
+}
+
+fn try_split_assignment(line: &str) -> Option<(&str, &str)> {
+    let (lhs, rhs) = line.split_once(":=")?;
+    let lhs = lhs.trim();
+    let rhs = rhs.trim();
+    if lhs.is_empty() || rhs.is_empty() || !is_identifier(lhs) {
+        return None;
+    }
+    Some((lhs, rhs))
 }
 
 fn is_assignment_eq(line: &str, eq_index: usize) -> bool {
@@ -2602,6 +2627,16 @@ main =
         assert_eq!(stmts.len(), 3);
         assert!(matches!(&stmts[0], Stmt::Binding { name, .. } if name == "a"));
         assert!(matches!(&stmts[1], Stmt::Binding { name, .. } if name == "a"));
+        assert!(matches!(&stmts[2], Stmt::Expr(Expr::Var(name)) if name == "a"));
+    }
+
+    #[test]
+    fn parses_mut_binding_and_assignment_body() {
+        let body = "mut a = 1\na := 2\na";
+        let stmts = parse_body_stmts(body).expect("should parse");
+        assert_eq!(stmts.len(), 3);
+        assert!(matches!(&stmts[0], Stmt::MutBinding { name, .. } if name == "a"));
+        assert!(matches!(&stmts[1], Stmt::Assign { name, .. } if name == "a"));
         assert!(matches!(&stmts[2], Stmt::Expr(Expr::Var(name)) if name == "a"));
     }
 

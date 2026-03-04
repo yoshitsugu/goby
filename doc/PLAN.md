@@ -327,7 +327,7 @@ through active `with` / `with_handler` handlers, matching the behavior of
 - Fixed `execute_decl_as_side_effect` depth: 1 → 0 (top-level consistency).
 - 5 new regression tests; 181 total tests pass.
 
-### 4.2 Mutable Variable Syntax (`mut` / `:=`) — Planned
+### 4.2 Mutable Variable Syntax (`mut` / `:=`) — Implemented (2026-03-04)
 
 Goal: support explicit mutable local variables while preserving immutable-by-default
 behavior in declaration bodies.
@@ -344,27 +344,21 @@ Lock decisions for this change:
 - `=` remains declaration syntax; assignment uses `:=`.
 - Variables are immutable by default unless declared with `mut`.
 
-Implementation plan:
+Implementation status:
 
 1. Parser/AST
-   - Add statement variants for mutable declaration and assignment.
-   - Parse `mut <name> = <expr>`.
-   - Parse `<name> := <expr>`.
-   - Reject malformed forms with parser diagnostics consistent with existing style.
+   - Added statement variants for mutable declaration and assignment.
+   - Parses `mut <name> = <expr>`.
+   - Parses `<name> := <expr>`.
 2. Typechecker
-   - Track local variable mutability in the declaration-body environment.
-   - Enforce assignment rules:
-     - assignment target must already be declared,
-     - assignment target must be mutable,
-     - assigned value type must be compatible with the variable's type.
-   - Reject same-scope redeclaration to avoid ambiguity between declaration and mutation.
+   - Tracks declaration-body mutability and enforces assignment rules.
+   - Rejects same-scope redeclaration and guides users to `:=`.
 3. Runtime/lowering
-   - Execute mutable declaration and assignment in fallback/runtime evaluators.
-   - Keep native-lowering behavior explicit (either support or cleanly fall back).
+   - Fallback/runtime evaluators execute mutable declaration and assignment.
+   - Native lowering keeps these forms on fallback path (unsupported in direct subset).
 4. Tests and docs
-   - Add parser/typechecker/runtime regression tests for success and failure cases.
-   - Keep `examples/mut.gb` as the canonical sample for this feature.
-   - Update `doc/STATE.md` at each milestone.
+   - Added parser/typechecker/runtime regression coverage.
+   - `examples/mut.gb` remains the canonical sample.
 
 Required error cases (must pass):
 

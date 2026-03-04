@@ -342,7 +342,10 @@ fn inspect_stmts(
 ) {
     for stmt in stmts {
         match stmt {
-            Stmt::Binding { value, .. } | Stmt::Expr(value) => {
+            Stmt::Binding { value, .. }
+            | Stmt::MutBinding { value, .. }
+            | Stmt::Assign { value, .. }
+            | Stmt::Expr(value) => {
                 inspect_expr(
                     value,
                     out,
@@ -579,7 +582,10 @@ fn stmts_contain_handler_resume(stmts: &[Stmt]) -> bool {
 
 fn stmt_contains_handler_resume(stmt: &Stmt) -> bool {
     match stmt {
-        Stmt::Binding { value, .. } | Stmt::Expr(value) => expr_contains_handler_resume(value),
+        Stmt::Binding { value, .. }
+        | Stmt::MutBinding { value, .. }
+        | Stmt::Assign { value, .. }
+        | Stmt::Expr(value) => expr_contains_handler_resume(value),
     }
 }
 
