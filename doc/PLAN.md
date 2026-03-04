@@ -6,6 +6,14 @@ This document tracks:
 - what must be fixed for MVP,
 - what can be postponed.
 
+Note:
+
+- `doc/LANGUAGE_SPEC.md` is the source of truth for current language
+  syntax/semantics.
+- This `PLAN.md` file is for roadmap/migration/execution planning.
+- Workflow rule: when language syntax/semantics change, update
+  `doc/LANGUAGE_SPEC.md` in the same change.
+
 ## 1. Confirmed in Current Draft
 
 Based on `examples/*.gb`:

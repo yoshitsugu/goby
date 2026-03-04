@@ -10,6 +10,7 @@ This project is an early-stage hobby POC.
 - Goby is both a language experiment and an AI-assisted development experiment.
 - Most implementation work is done with AI assistance.
 - The current goal is exploration and learning, not production-grade polish.
+- Latest language spec is tracked in `doc/LANGUAGE_SPEC.md`.
 - Open decisions and active direction are tracked in `doc/PLAN.md`.
 
 ## Language Concept
@@ -29,13 +30,14 @@ This project is an early-stage hobby POC.
 - `crates/goby-wasm`: Wasm backend
 - `examples/`: small sample programs (see `examples/README.md`)
 - `doc/README.md`: documentation guide and reading order
-- `doc/PLAN.md`: active language design reference and open decisions
+- `doc/LANGUAGE_SPEC.md`: latest language specification
+- `doc/PLAN.md`: active planning reference and open decisions
 - `doc/STATE.md`: restart-safe snapshot of current decisions and next steps
 
 ## Language Specification
 
 Detailed and evolving language rules are intentionally documented in
-`doc/PLAN.md` instead of this README. For an overview of all project docs, start at
+`doc/LANGUAGE_SPEC.md` instead of this README. For an overview of all project docs, start at
 `doc/README.md`.
 
 ## License
