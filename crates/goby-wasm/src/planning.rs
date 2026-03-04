@@ -706,18 +706,18 @@ main =
     }
 
     #[test]
-    fn marks_using_declaration_as_effect_boundary() {
+    fn marks_with_handler_declaration_as_effect_boundary() {
         let source = r#"
 effect Log
   log: String -> Unit
 
-handler H for Log
-  log msg =
-    print msg
-
 main : Unit -> Unit
 main =
-  using H
+  with_handler
+    log msg ->
+      print msg
+      resume Unit
+  in
     log "x"
 "#;
         let module = parse_module(source).expect("source should parse");

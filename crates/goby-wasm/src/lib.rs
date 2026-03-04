@@ -3558,20 +3558,20 @@ main =
     }
 
     #[test]
-    fn inline_handler_overrides_legacy_using_handler() {
+    fn inner_with_handler_overrides_outer_with_handler() {
         use goby_core::parse_module;
         let _guard = ENV_MUTEX.lock().unwrap();
         let source = r#"
 effect Log
   log: String -> Unit
 
-handler Legacy for Log
-  log msg =
-    print "legacy"
-
 main : Unit -> Unit
 main =
-  using Legacy
+  with_handler
+    log msg ->
+      print "outer"
+      resume Unit
+  in
     with_handler
       log msg ->
         print "inline"
@@ -3585,7 +3585,7 @@ main =
         assert_eq!(
             output.as_deref(),
             Some("inline"),
-            "inline handler should take precedence over active legacy using handler"
+            "inner with_handler should take precedence over outer with_handler"
         );
     }
 
@@ -3624,13 +3624,12 @@ main =
 effect Iter
   next: Int -> Int
 
-handler IterHandler for Iter
-  next n =
-    resume 7
-
 main : Unit -> Unit
 main =
-  using IterHandler
+  with_handler
+    next n ->
+      resume 7
+  in
     print (next 0)
 "#;
         let module = parse_module(source).expect("parse should work");
@@ -3647,13 +3646,12 @@ main =
 effect Iter
   next: Int -> Int
 
-handler IterHandler for Iter
-  next n =
-    print "handled"
-
 main : Unit -> Unit
 main =
-  using IterHandler
+  with_handler
+    next n ->
+      print "handled"
+  in
     print (next 0)
 "#;
         let module = parse_module(source).expect("parse should work");
@@ -3672,13 +3670,12 @@ main =
 effect Iter
   next: Int -> Int
 
-handler IterHandler for Iter
-  next n =
-    resume (resume 1)
-
 main : Unit -> Unit
 main =
-  using IterHandler
+  with_handler
+    next n ->
+      resume (resume 1)
+  in
     print (next 0)
 "#;
         let module = parse_module(source).expect("parse should work");
@@ -3698,17 +3695,16 @@ effect A
 effect B
   next: Int -> Int
 
-handler AHandler for A
-  next x =
-    resume 1
-
-handler BHandler for B
-  next y =
-    resume 2
-
 main : Unit -> Unit
 main =
-  using AHandler, BHandler
+  with_handler
+    next x ->
+      resume 1
+  in
+    with_handler
+      next y ->
+        resume 2
+    in
     print (B.next 0)
 "#;
         let module = parse_module(source).expect("parse should work");
@@ -3725,18 +3721,16 @@ main =
 effect Log
   log: String -> String
 
-handler OuterLog for Log
-  log msg =
-    resume "outer"
-
-handler InnerLog for Log
-  log msg =
-    resume "inner"
-
 main : Unit -> Unit
 main =
-  using OuterLog
-    using InnerLog
+  with_handler
+    log msg ->
+      resume "outer"
+  in
+    with_handler
+      log msg ->
+        resume "inner"
+    in
       print (log "x")
 "#;
         let module = parse_module(source).expect("parse should work");
@@ -3762,13 +3756,12 @@ main =
 effect Iter
   next: Int -> Int
 
-handler IterHandler for Iter
-  next n =
-    resume 7
-
 main : Unit -> Unit
 main =
-  using IterHandler
+  with_handler
+    next n ->
+      resume 7
+  in
     print (next 0)
 "#,
             ),
@@ -3778,13 +3771,12 @@ main =
 effect Iter
   next: Int -> Int
 
-handler IterHandler for Iter
-  next n =
-    resume (resume 1)
-
 main : Unit -> Unit
 main =
-  using IterHandler
+  with_handler
+    next n ->
+      resume (resume 1)
+  in
     print (next 0)
 "#,
             ),
@@ -3794,18 +3786,16 @@ main =
 effect Log
   log: String -> String
 
-handler OuterLog for Log
-  log msg =
-    resume "outer"
-
-handler InnerLog for Log
-  log msg =
-    resume "inner"
-
 main : Unit -> Unit
 main =
-  using OuterLog
-    using InnerLog
+  with_handler
+    log msg ->
+      resume "outer"
+  in
+    with_handler
+      log msg ->
+        resume "inner"
+    in
       print (log "x")
 "#,
             ),
@@ -3840,17 +3830,16 @@ effect A
 effect B
   next: Int -> Int
 
-handler AHandler for A
-  next x =
-    resume 1
-
-handler BHandler for B
-  next y =
-    resume 2
-
 main : Unit -> Unit
 main =
-  using AHandler, BHandler
+  with_handler
+    next x ->
+      resume 1
+  in
+    with_handler
+      next y ->
+        resume 2
+    in
     print (B.next 0)
 "#;
         let module = parse_module(source).expect("parse should work");
@@ -3874,17 +3863,16 @@ effect A
 effect B
   next: Int -> Int
 
-handler AHandler for A
-  next x =
-    resume 1
-
-handler BHandler for B
-  next y =
-    resume 2
-
 main : Unit -> Unit
 main =
-  using AHandler, BHandler
+  with_handler
+    next x ->
+      resume 1
+  in
+    with_handler
+      next y ->
+        resume 2
+    in
     print (B.next 0)
     print (B.next 0)
 "#;
@@ -4286,28 +4274,34 @@ main =
             (
                 "target_body_not_supported",
                 r#"
-uses_using : Int -> Int
-uses_using x =
-  using Console
+uses_with_handler : Int -> Int
+uses_with_handler x =
+  with_handler
+    log v ->
+      resume Unit
+  in
     x
 
 main : Unit -> Unit
 main =
-  print (uses_using 1)
+  print (uses_with_handler 1)
 "#,
                 Some(fallback::UnsupportedReason::CallTargetBodyNotNativeSupported),
             ),
             (
                 "target_body_not_supported_with_lambda",
                 r#"
-uses_using_callback : (Int -> Int) -> Int
-uses_using_callback f =
-  using Console
+uses_with_handler_callback : (Int -> Int) -> Int
+uses_with_handler_callback f =
+  with_handler
+    log v ->
+      resume Unit
+  in
     f 1
 
 main : Unit -> Unit
 main =
-  print (uses_using_callback (|x| -> x + 1))
+  print (uses_with_handler_callback (|x| -> x + 1))
 "#,
                 Some(fallback::UnsupportedReason::CallTargetBodyNotNativeSupported),
             ),
@@ -4346,14 +4340,17 @@ main =
     #[test]
     fn native_codegen_capability_checker_prioritizes_body_reason_over_arity_mismatch() {
         let source = r#"
-uses_using : Int -> Int
-uses_using x =
-  using Console
+uses_with_handler : Int -> Int
+uses_with_handler x =
+  with_handler
+    log v ->
+      resume Unit
+  in
     x
 
 main : Unit -> Unit
 main =
-  print (uses_using 1 2)
+  print (uses_with_handler 1 2)
 "#;
         let module = parse_module(source).expect("source should parse");
         assert_eq!(
