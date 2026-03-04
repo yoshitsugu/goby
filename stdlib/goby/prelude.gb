@@ -1,0 +1,7 @@
+# Implicitly imported baseline stdlib module.
+# Keep only foundational declarations here.
+
+effect Print
+  print : String -> Unit
+
+@embed Print __goby_embeded_effect_stdout_handler

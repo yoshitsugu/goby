@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-04 (session 129)
+Last updated: 2026-03-04 (session 130)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -63,6 +63,28 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - follow-up work moved to post-MVP tracks in `doc/PLAN.md`.
 
 ## 4. Recent Milestones
+
+- 2026-03-04 (session 130): implicit prelude bootstrap (`goby/prelude`) implementation
+  - Added `stdlib/goby/prelude.gb` as the implicit bootstrap module:
+    - declares `effect Print`,
+    - declares `@embed Print __goby_embeded_effect_stdout_handler`.
+  - Typechecker import pipeline now supports implicit prelude loading (when present):
+    - effective imports include `goby/prelude` automatically unless explicitly imported,
+    - import symbol injection and embedded-default metadata collection both consume
+      the same effective-import set.
+  - `Print` can-clause acceptance now works via prelude-provided embedded defaults
+    (not builtin effect-name table).
+  - Wasm runtime fallback now collects embedded defaults from imported stdlib modules
+    (including implicit prelude), not only local module embeds.
+  - Added regression coverage:
+    - implicit prelude acceptance for `main : Unit -> Unit can Print`,
+    - explicit context-root prelude behavior,
+    - missing-prelude rejection in context-root tests,
+    - runtime fallback resolution via implicit prelude metadata.
+  - Validation completed:
+    - `cargo test -p goby-core`
+    - `cargo test -p goby-wasm`
+    - `cargo test`
 
 - 2026-03-04 (session 129): `@embed` handler-model migration (`PLAN_EMBED`) implementation
   - Locked syntax transition completed:

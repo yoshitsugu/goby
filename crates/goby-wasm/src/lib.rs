@@ -7,15 +7,18 @@ mod planning;
 mod support;
 
 use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 use unicode_segmentation::UnicodeSegmentation;
 
 use crate::call::flatten_named_call;
 use goby_core::{
     CasePattern, Expr, HandlerClause, Module, Stmt, ast::InterpolatedPart,
+    stdlib::StdlibResolver,
     types::parse_function_type,
 };
 const ERR_MISSING_MAIN: &str = "Wasm codegen requires a `main` declaration";
 const BUILTIN_PRINT: &str = "print";
+const PRELUDE_MODULE_PATH: &str = "goby/prelude";
 const MAX_EVAL_DEPTH: usize = 32;
 const ERR_RESUME_MISSING: &str = "resume used without an active continuation [E-RESUME-MISSING]: `resume` can only be called while executing a handler operation body";
 const ERR_RESUME_CONSUMED: &str = "resume continuation already consumed [E-RESUME-CONSUMED]: continuations are one-shot; call `resume` at most once per handled operation";
@@ -2077,11 +2080,40 @@ impl<'m> RuntimeOutputResolver<'m> {
 }
 
 fn collect_embedded_default_handlers(module: &Module) -> HashMap<String, String> {
-    module
+    let mut defaults: HashMap<String, String> = module
         .embed_declarations
         .iter()
         .map(|embed| (embed.effect_name.clone(), embed.handler_name.clone()))
-        .collect()
+        .collect();
+    let resolver = StdlibResolver::new(resolve_runtime_stdlib_root());
+    let mut import_paths: Vec<String> = module
+        .imports
+        .iter()
+        .map(|import| import.module_path.clone())
+        .collect();
+    let has_prelude = import_paths.iter().any(|path| path == PRELUDE_MODULE_PATH);
+    if !has_prelude && resolver.resolve_module(PRELUDE_MODULE_PATH).is_ok() {
+        import_paths.push(PRELUDE_MODULE_PATH.to_string());
+    }
+    for module_path in import_paths {
+        let Ok(resolved) = resolver.resolve_module(&module_path) else {
+            continue;
+        };
+        for embed in resolved.embedded_defaults {
+            defaults.entry(embed.effect_name).or_insert(embed.handler_name);
+        }
+    }
+    defaults
+}
+
+fn resolve_runtime_stdlib_root() -> PathBuf {
+    std::env::var_os("GOBY_STDLIB_ROOT")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../..")
+                .join("stdlib")
+        })
 }
 
 #[derive(Default, Clone)]
@@ -3231,6 +3263,25 @@ main =
             output.as_deref(),
             Some("fallback"),
             "embedded default handler should handle Print.print when no explicit handler exists"
+        );
+    }
+
+    #[test]
+    fn embedded_default_handler_is_loaded_from_implicit_prelude() {
+        use goby_core::parse_module;
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let source = r#"
+main : Unit -> Unit can Print
+main =
+  Print.print "from-prelude"
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let output =
+            resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module));
+        assert_eq!(
+            output.as_deref(),
+            Some("from-prelude"),
+            "embedded default handler should be discoverable via implicit prelude import"
         );
     }
 
