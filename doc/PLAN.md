@@ -13,6 +13,10 @@ Note:
 - This `PLAN.md` file is for roadmap/migration/execution planning.
 - Workflow rule: when language syntax/semantics change, update
   `doc/LANGUAGE_SPEC.md` in the same change.
+- Workflow rule: when language syntax changes, also verify whether syntax
+  highlighting definitions need updates (`tooling/syntax/textmate`,
+  `tooling/vscode-goby/syntaxes`, `tooling/emacs`, `tooling/vim`), and update
+  them in the same change when needed.
 
 ## 1. Confirmed in Current Draft
 

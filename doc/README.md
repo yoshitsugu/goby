@@ -21,6 +21,12 @@ Archive policy:
 Maintenance rules:
 
 - When syntax/semantics change, update `LANGUAGE_SPEC.md` in the same change.
+- When syntax changes, verify syntax highlighting impact and update relevant
+  tooling files as needed:
+  - `tooling/syntax/textmate/goby.tmLanguage.json` (canonical)
+  - `tooling/vscode-goby/syntaxes/goby.tmLanguage.json` (synced copy)
+  - `tooling/emacs/goby-mode.el`
+  - `tooling/vim/syntax/goby.vim`
 - Update `PLAN.md` when planning status/migration steps/decisions change.
 - At meaningful milestones, update `STATE.md`.
 - Keep `README.md` high-level; keep detailed spec text in this directory.
