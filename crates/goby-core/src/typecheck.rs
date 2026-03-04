@@ -50,17 +50,17 @@ pub fn typecheck_module_with_context(
     validate_type_declarations(module)?;
     validate_effect_declarations(module)?;
 
-    let imported_embedded_effects = collect_imported_embedded_effects(module, &stdlib_root_path);
-    let local_embedded_effects = module
-        .embed_declarations
-        .iter()
-        .map(|e| e.effect_name.clone());
+    let imported_embedded_defaults = collect_imported_embedded_defaults(module, &stdlib_root_path);
+    let local_embedded_defaults = collect_local_embedded_defaults(module);
+    let embedded_default_effects: HashSet<String> = imported_embedded_defaults
+        .keys()
+        .cloned()
+        .chain(local_embedded_defaults.keys().cloned())
+        .collect();
     let known_effects: HashSet<String> = builtin_effect_names()
         .iter()
         .copied()
         .map(str::to_string)
-        .chain(local_embedded_effects)
-        .chain(imported_embedded_effects)
         .chain(module.effect_declarations.iter().map(|e| e.name.clone()))
         .collect();
 
@@ -79,7 +79,12 @@ pub fn typecheck_module_with_context(
         }
 
         if let Some(annotation) = decl.type_annotation.as_deref() {
-            validate_type_annotation(&decl.name, annotation, &known_effects)?;
+            validate_type_annotation(
+                &decl.name,
+                annotation,
+                &known_effects,
+                &embedded_default_effects,
+            )?;
         }
     }
 
@@ -610,6 +615,15 @@ fn build_type_env(module: &Module, stdlib_root: &Path) -> TypeEnv {
         },
         "runtime intrinsic `__goby_list_push_string`".to_string(),
     );
+    insert_global_symbol(
+        &mut globals,
+        "__goby_embeded_effect_stdout_handler".to_string(),
+        Ty::Fun {
+            params: vec![Ty::Str],
+            result: Box::new(Ty::Unit),
+        },
+        "runtime intrinsic `__goby_embeded_effect_stdout_handler`".to_string(),
+    );
     inject_imported_symbols(module, &mut globals, stdlib_root);
     inject_type_constructors(module, &mut globals, &mut type_aliases, &mut record_types);
     inject_effect_symbols(module, &mut globals);
@@ -809,6 +823,32 @@ fn validate_embed_declarations(
                 message: format!("duplicate embedded effect `{}`", embed.effect_name),
             });
         }
+        if !embed.handler_name.starts_with("__goby_embeded_effect_") {
+            return Err(TypecheckError {
+                declaration: None,
+                span: Some(Span {
+                    line: embed.line,
+                    col: 1,
+                }),
+                message: format!(
+                    "embedded handler `{}` must start with `__goby_embeded_effect_`",
+                    embed.handler_name
+                ),
+            });
+        }
+        if !is_known_runtime_intrinsic_name(&embed.handler_name) {
+            return Err(TypecheckError {
+                declaration: None,
+                span: Some(Span {
+                    line: embed.line,
+                    col: 1,
+                }),
+                message: format!(
+                    "unknown embedded handler intrinsic `{}`",
+                    embed.handler_name
+                ),
+            });
+        }
         if !declared_effects.contains(embed.effect_name.as_str()) {
             return Err(TypecheckError {
                 declaration: None,
@@ -880,6 +920,7 @@ fn is_known_runtime_intrinsic_name(name: &str) -> bool {
             | "__goby_env_fetch_env_var"
             | "__goby_string_each_grapheme"
             | "__goby_list_push_string"
+            | "__goby_embeded_effect_stdout_handler"
     )
 }
 
@@ -1224,13 +1265,28 @@ fn module_exports_for_import_with_resolver(
     }
 }
 
-fn collect_imported_embedded_effects(module: &Module, stdlib_root: &Path) -> HashSet<String> {
+fn collect_imported_embedded_defaults(
+    module: &Module,
+    stdlib_root: &Path,
+) -> HashMap<String, String> {
     let resolver = StdlibResolver::new(stdlib_root.to_path_buf());
+    let mut defaults = HashMap::new();
+    for import in &module.imports {
+        let Ok(resolved) = resolver.resolve_module(&import.module_path) else {
+            continue;
+        };
+        for embed in resolved.embedded_defaults {
+            defaults.insert(embed.effect_name, embed.handler_name);
+        }
+    }
+    defaults
+}
+
+fn collect_local_embedded_defaults(module: &Module) -> HashMap<String, String> {
     module
-        .imports
+        .embed_declarations
         .iter()
-        .filter_map(|import| resolver.resolve_module(&import.module_path).ok())
-        .flat_map(|resolved| resolved.embedded_effects.into_iter())
+        .map(|embed| (embed.effect_name.clone(), embed.handler_name.clone()))
         .collect()
 }
 
@@ -2634,6 +2690,7 @@ fn validate_type_annotation(
     decl_name: &str,
     annotation: &str,
     known_effects: &HashSet<String>,
+    embedded_default_effects: &HashSet<String>,
 ) -> Result<(), TypecheckError> {
     if uses_legacy_void(annotation) {
         return Err(TypecheckError {
@@ -2643,7 +2700,12 @@ fn validate_type_annotation(
         });
     }
 
-    validate_effect_clause(decl_name, annotation, known_effects)?;
+    validate_effect_clause(
+        decl_name,
+        annotation,
+        known_effects,
+        embedded_default_effects,
+    )?;
 
     let base = strip_effect_clause(annotation).trim();
     if base.is_empty() {
@@ -2758,6 +2820,7 @@ fn validate_effect_clause(
     decl_name: &str,
     annotation: &str,
     known_effects: &HashSet<String>,
+    embedded_default_effects: &HashSet<String>,
 ) -> Result<(), TypecheckError> {
     let Some(effect_idx) = find_can_keyword_index(annotation) else {
         return Ok(());
@@ -2780,7 +2843,9 @@ fn validate_effect_clause(
                 message: format!("invalid effect name `{}` in type annotation", effect_name),
             });
         }
-        if !known_effects.contains(effect_name) {
+        let is_main_relaxed_embedded =
+            decl_name == "main" && embedded_default_effects.contains(effect_name);
+        if !known_effects.contains(effect_name) && !is_main_relaxed_embedded {
             return Err(TypecheckError {
                 declaration: Some(decl_name.to_string()),
                 span: None,
@@ -3895,29 +3960,29 @@ f = fetch_env_var(\"HOME\")
     }
 
     #[test]
-    fn imported_embedded_effect_name_is_visible_to_typechecker() {
+    fn main_can_clause_accepts_imported_embedded_default_effect() {
         let sandbox = TempDirGuard::new("embedded_effect_visible");
         let root = sandbox.path.join("stdlib");
         fs::create_dir_all(root.join("goby")).expect("stdlib/goby should be creatable");
         fs::write(
             root.join("goby/stdio.gb"),
-            "effect Console\n  log : String -> Unit\n@embed Console\nlog : String -> Unit can Console\nlog msg = msg |> print\n",
+            "effect Console\n  log : String -> Unit\n@embed Console __goby_embeded_effect_stdout_handler\nlog : String -> Unit can Console\nlog msg = msg |> print\n",
         )
         .expect("stdlib file should be writable");
         let source_path = sandbox.path.join("main.gb");
         let source = "\
 import goby/stdio ( log )
-f : Unit -> Unit can Console
-f = log \"ok\"
+main : Unit -> Unit can Console
+main = Unit
 ";
         fs::write(&source_path, source).expect("fixture file should be writable");
         let module = parse_module(source).expect("should parse");
         typecheck_module_with_context(&module, Some(&source_path), Some(&root))
-            .expect("embedded effect name from imported stdlib should be accepted in can clause");
+            .expect("main can-clause should accept imported embedded default effect");
     }
 
     #[test]
-    fn local_embedded_effect_name_is_visible_to_typechecker() {
+    fn non_main_unhandled_embedded_default_effect_is_rejected() {
         let sandbox = TempDirGuard::new("embedded_effect_local_visible");
         let stdlib_root = sandbox.path.join("stdlib");
         let source_path = stdlib_root.join("goby/console.gb");
@@ -3926,14 +3991,23 @@ f = log \"ok\"
         let source = "\
 effect Console
   log : String -> Unit
-@embed Console
-log : String -> Unit can Console
-log msg = msg |> print
+@embed Console __goby_embeded_effect_stdout_handler
+log_value : String -> Unit can Console
+log_value msg = Console.log msg
+f : Unit -> Unit
+f = log_value \"x\"
+main : Unit -> Unit
+main = Unit
 ";
         fs::write(&source_path, source).expect("fixture file should be writable");
         let module = parse_module(source).expect("should parse");
-        typecheck_module_with_context(&module, Some(&source_path), Some(&stdlib_root))
-            .expect("local embedded effect name should be accepted in can clause");
+        let err = typecheck_module_with_context(&module, Some(&source_path), Some(&stdlib_root))
+            .expect_err("non-main unhandled embedded default effect should be rejected");
+        assert!(
+            err.message.contains("not handled"),
+            "unexpected message: {}",
+            err.message
+        );
     }
 
     #[test]
@@ -4055,8 +4129,7 @@ f = print \"hi\"
         let source_path = stdlib_root.join("goby/stdio.gb");
         fs::create_dir_all(source_path.parent().expect("parent should exist"))
             .expect("stdlib path should be creatable");
-        let source =
-            "effect Print\n  print : String -> Unit\n@embed Print\nf : Unit -> Int\nf = 1\n";
+        let source = "effect Print\n  print : String -> Unit\n@embed Print __goby_embeded_effect_stdout_handler\nf : Unit -> Int\nf = 1\n";
         fs::write(&source_path, source).expect("fixture file should be writable");
         let module = parse_module(source).expect("should parse");
         typecheck_module_with_context(&module, Some(&source_path), Some(&stdlib_root))
@@ -4070,8 +4143,7 @@ f = print \"hi\"
         let source_path = sandbox.path.join("user/main.gb");
         fs::create_dir_all(source_path.parent().expect("parent should exist"))
             .expect("user path should be creatable");
-        let source =
-            "effect Print\n  print : String -> Unit\n@embed Print\nf : Unit -> Int\nf = 1\n";
+        let source = "effect Print\n  print : String -> Unit\n@embed Print __goby_embeded_effect_stdout_handler\nf : Unit -> Int\nf = 1\n";
         fs::write(&source_path, source).expect("fixture file should be writable");
         let module = parse_module(source).expect("should parse");
         let err = typecheck_module_with_context(&module, Some(&source_path), Some(&stdlib_root))
@@ -4146,7 +4218,7 @@ f = print \"hi\"
         let source = "\
 effect Iterator
   yield : String -> Int
-@embed Iterator
+@embed Iterator __goby_embeded_effect_stdout_handler
 count_graphemes : String -> Int can Iterator
 count_graphemes s = __goby_string_each_grapheme s
 ";
@@ -4168,7 +4240,7 @@ type GraphemeState = GraphemeState(grapheme: String, current: String, delimiter:
 effect Iterator
   yield : String -> Int
   yield_state : GraphemeState -> GraphemeState
-@embed Iterator
+@embed Iterator __goby_embeded_effect_stdout_handler
 f : String -> GraphemeState can Iterator
 f s =
   state = GraphemeState(grapheme: \"\", current: \"\", delimiter: \",\", seen: False)
@@ -4231,8 +4303,7 @@ f =
 
     #[test]
     fn allows_embed_declaration_without_source_context_for_legacy_api_compat() {
-        let source =
-            "effect Print\n  print : String -> Unit\n@embed Print\nf : Unit -> Int\nf = 1\n";
+        let source = "effect Print\n  print : String -> Unit\n@embed Print __goby_embeded_effect_stdout_handler\nf : Unit -> Int\nf = 1\n";
         let module = parse_module(source).expect("should parse");
         typecheck_module(&module)
             .expect("legacy typecheck API should remain compatible without source context");
@@ -4240,7 +4311,7 @@ f =
 
     #[test]
     fn rejects_embed_missing_effect_without_source_context() {
-        let source = "@embed Print\nf : Unit -> Int\nf = 1\n";
+        let source = "@embed Print __goby_embeded_effect_stdout_handler\nf : Unit -> Int\nf = 1\n";
         let module = parse_module(source).expect("should parse");
         let err = typecheck_module(&module)
             .expect_err("missing in-module effect should fail even without source context");
@@ -4258,7 +4329,7 @@ f =
         let source_path = stdlib_root.join("goby/stdio.gb");
         fs::create_dir_all(source_path.parent().expect("parent should exist"))
             .expect("stdlib path should be creatable");
-        let source = "@embed Print\nf : Unit -> Int\nf = 1\n";
+        let source = "@embed Print __goby_embeded_effect_stdout_handler\nf : Unit -> Int\nf = 1\n";
         fs::write(&source_path, source).expect("fixture file should be writable");
         let module = parse_module(source).expect("should parse");
         let err = typecheck_module_with_context(&module, Some(&source_path), Some(&stdlib_root))
@@ -4277,12 +4348,45 @@ f =
         let source_path = stdlib_root.join("goby/stdio.gb");
         fs::create_dir_all(source_path.parent().expect("parent should exist"))
             .expect("stdlib path should be creatable");
-        let source = "effect Print\n  print : String -> Unit\n@embed Print\n@embed Print\nf : Unit -> Int\nf = 1\n";
+        let source = "effect Print\n  print : String -> Unit\n@embed Print __goby_embeded_effect_stdout_handler\n@embed Print __goby_embeded_effect_stdout_handler\nf : Unit -> Int\nf = 1\n";
         fs::write(&source_path, source).expect("fixture file should be writable");
         let module = parse_module(source).expect("should parse");
         let err = typecheck_module_with_context(&module, Some(&source_path), Some(&stdlib_root))
             .expect_err("duplicate embedded effects should be rejected");
         assert!(err.message.contains("duplicate embedded effect"));
+    }
+
+    #[test]
+    fn rejects_embed_with_invalid_handler_namespace() {
+        let sandbox = TempDirGuard::new("embed_invalid_handler_namespace");
+        let stdlib_root = sandbox.path.join("stdlib");
+        let source_path = stdlib_root.join("goby/stdio.gb");
+        fs::create_dir_all(source_path.parent().expect("parent should exist"))
+            .expect("stdlib path should be creatable");
+        let source = "effect Print\n  print : String -> Unit\n@embed Print stdout_handler\nf : Unit -> Int\nf = 1\n";
+        fs::write(&source_path, source).expect("fixture file should be writable");
+        let module = parse_module(source).expect("should parse");
+        let err = typecheck_module_with_context(&module, Some(&source_path), Some(&stdlib_root))
+            .expect_err("invalid embed handler namespace should be rejected");
+        assert!(
+            err.message
+                .contains("must start with `__goby_embeded_effect_`")
+        );
+    }
+
+    #[test]
+    fn rejects_embed_with_unknown_handler_intrinsic() {
+        let sandbox = TempDirGuard::new("embed_unknown_handler_intrinsic");
+        let stdlib_root = sandbox.path.join("stdlib");
+        let source_path = stdlib_root.join("goby/stdio.gb");
+        fs::create_dir_all(source_path.parent().expect("parent should exist"))
+            .expect("stdlib path should be creatable");
+        let source = "effect Print\n  print : String -> Unit\n@embed Print __goby_embeded_effect_missing\nf : Unit -> Int\nf = 1\n";
+        fs::write(&source_path, source).expect("fixture file should be writable");
+        let module = parse_module(source).expect("should parse");
+        let err = typecheck_module_with_context(&module, Some(&source_path), Some(&stdlib_root))
+            .expect_err("unknown embedded handler intrinsic should be rejected");
+        assert!(err.message.contains("unknown embedded handler intrinsic"));
     }
 
     #[test]

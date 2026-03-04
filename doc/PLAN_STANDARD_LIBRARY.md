@@ -375,10 +375,16 @@ to Step0-12.
 
 ### ExtraStep A: stdio embed model alignment (Print default handler embedding)
 
+Status note (2026-03-04):
+
+- This section is superseded by `doc/PLAN_EMBED.md`.
+- Current locked syntax is `@embed <EffectName> <HandlerName>`.
+- Legacy `@embed effect <EffectName>` is removed and must be rejected by parser.
+
 Problem statement:
 
 - Current `stdlib/goby/stdio.gb` uses:
-  - `@embed effect Print`
+  - `@embed Print __goby_embeded_effect_stdout_handler`
   - `print : String -> Unit can Print`
   - body placeholder `value |> print`
 - Intended model is:
@@ -391,30 +397,15 @@ Target shape (illustrative):
 effect Print
   print : String -> Unit can Print
 
-@embed Print
+@embed Print __goby_embeded_effect_stdout_handler
 ```
 
-Follow-up tasks:
+Follow-up tasks are tracked in `doc/PLAN_EMBED.md`.
 
-1. Update `@embed` syntax model from `@embed effect <Name>` to `@embed <Name>`
-   (or add compatibility support for both during transition).
-2. Update parser/typechecker diagnostics accordingly.
-3. Add validation rule:
-   - `@embed X` requires an in-module `effect X` declaration.
-4. Update `stdlib/goby/stdio.gb` to the effect+embed form above.
-5. Keep resolver metadata (`embedded_effects`) behavior consistent.
-6. Add regression coverage for:
-   - parse acceptance of `@embed Print`,
-   - rejection when embedded effect is not declared in module,
-   - `goby/stdio` import path behavior unchanged.
+Decision (updated 2026-03-04):
 
-Decision (2026-03-03):
-
-- Canonical syntax is `@embed <EffectName>`.
-- Legacy `@embed effect <EffectName>` remains accepted temporarily for compatibility.
-- Compatibility-removal gate:
-  - remove legacy `@embed effect <EffectName>` acceptance only in a dedicated
-    follow-up change after stdlib/module fixtures are fully migrated.
+- Canonical syntax is `@embed <EffectName> <HandlerName>`.
+- Legacy `@embed effect <EffectName>` is rejected.
 
 Execution checklist (incremental):
 

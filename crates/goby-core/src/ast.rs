@@ -20,6 +20,7 @@ pub struct Module {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EmbedDecl {
     pub effect_name: String,
+    pub handler_name: String,
     pub line: usize,
 }
 

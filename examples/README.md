@@ -26,6 +26,6 @@ This directory contains small Goby programs grouped by purpose.
 - Standard-library planning includes a `goby/stdio` module and a stdlib-only
   embed annotation for runtime-bridged effects.
 - Illustrative target shape:
-  - `@embed effect Print`
+  - `@embed Print __goby_embeded_effect_stdout_handler`
   - `print : String -> Unit can Print`
 - Important: `@embed` is planned as stdlib-only and must be rejected in user code.

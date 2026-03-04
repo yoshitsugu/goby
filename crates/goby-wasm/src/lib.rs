@@ -448,6 +448,7 @@ struct RuntimeOutputResolver<'m> {
     locals: RuntimeLocals,
     outputs: Vec<String>,
     module: &'m Module,
+    embedded_default_handlers: HashMap<String, String>,
     /// Active inline handlers installed via `with` / `with_handler`.
     active_inline_handler_stack: Vec<InlineHandlerValue>,
     resume_tokens: Vec<ResumeToken>,
@@ -517,6 +518,7 @@ impl<'m> RuntimeOutputResolver<'m> {
             locals: RuntimeLocals::default(),
             outputs: Vec::new(),
             module,
+            embedded_default_handlers: collect_embedded_default_handlers(module),
             active_inline_handler_stack: Vec::new(),
             resume_tokens: Vec::new(),
             optimized_resume_tokens: Vec::new(),
@@ -627,11 +629,17 @@ impl<'m> RuntimeOutputResolver<'m> {
                 let Expr::Qualified { receiver, member } = callee.as_ref() else {
                     unreachable!()
                 };
+                let arg_val = self.eval_ast_value(arg, evaluators)?;
                 let method = self.find_handler_method_for_effect(receiver, member);
                 if let Some(method) = method {
-                    let arg_val = self.eval_ast_value(arg, evaluators)?;
                     // depth=0: this is a top-level call; dispatch_handler_method adds 1 internally.
                     return self.dispatch_handler_method(&method, arg_val, evaluators, 0);
+                }
+                if self
+                    .apply_embedded_default_handler(receiver, member, arg_val.clone())
+                    .is_some()
+                {
+                    return Some(());
                 }
                 // No active handler for this qualified call; fall through to string path.
                 let repr = expr.to_str_repr()?;
@@ -648,6 +656,13 @@ impl<'m> RuntimeOutputResolver<'m> {
                     if let Some(method) = bare_method {
                         // depth=0: top-level call; dispatch_handler_method adds 1 internally.
                         return self.dispatch_handler_method(&method, arg_val, evaluators, 0);
+                    }
+                    if let Some(effect_name) = self.unique_effect_name_for_operation(fn_name)
+                        && self
+                            .apply_embedded_default_handler(&effect_name, fn_name, arg_val.clone())
+                            .is_some()
+                    {
+                        return Some(());
                     }
                     if self
                         .execute_unit_call_ast(
@@ -680,6 +695,13 @@ impl<'m> RuntimeOutputResolver<'m> {
                     if let Some(method) = bare_method {
                         // depth=0: top-level call; dispatch_handler_method adds 1 internally.
                         return self.dispatch_handler_method(&method, v, evaluators, 0);
+                    }
+                    if let Some(effect_name) = self.unique_effect_name_for_operation(callee)
+                        && self
+                            .apply_embedded_default_handler(&effect_name, callee, v.clone())
+                            .is_some()
+                    {
+                        return Some(());
                     }
                     if self
                         .execute_unit_call_ast(
@@ -1099,6 +1121,15 @@ impl<'m> RuntimeOutputResolver<'m> {
                             depth + 1,
                         );
                     }
+                    if let Some(effect_name) = self.unique_effect_name_for_operation(fn_name)
+                        && let Some(value) = self.apply_embedded_default_handler(
+                            &effect_name,
+                            fn_name,
+                            arg_val.clone(),
+                        )
+                    {
+                        return Some(value);
+                    }
                     // Int function path
                     if let RuntimeValue::Int(arg_int) = arg_val {
                         if let Some(callable) = callables.get(fn_name) {
@@ -1126,18 +1157,23 @@ impl<'m> RuntimeOutputResolver<'m> {
                 // Qualified callee: Effect.method arg  (e.g. Log.log result, env.from_env name)
                 // Try exact effect-name match first, then member-name-only scan.
                 if let Expr::Qualified { receiver, member } = callee.as_ref() {
+                    let arg_val =
+                        self.eval_expr_ast(arg, locals, callables, evaluators, depth + 1)?;
                     let method = self
                         .find_handler_method_for_effect(receiver, member)
                         .or_else(|| self.find_handler_method_by_name(member));
                     if let Some(method) = method {
-                        let arg_val =
-                            self.eval_expr_ast(arg, locals, callables, evaluators, depth + 1)?;
                         return self.dispatch_handler_method_as_value(
                             &method,
                             arg_val,
                             evaluators,
                             depth + 1,
                         );
+                    }
+                    if let Some(value) =
+                        self.apply_embedded_default_handler(receiver, member, arg_val)
+                    {
+                        return Some(value);
                     }
                 }
                 // callee is not a plain Var (e.g. a curried call or lambda
@@ -1340,16 +1376,21 @@ impl<'m> RuntimeOutputResolver<'m> {
                 if let Expr::Call { callee, arg } = expr
                     && let Expr::Qualified { receiver, member } = callee.as_ref()
                 {
+                    let arg_val = self.eval_expr_ast(arg, locals, callables, evaluators, depth)?;
                     let method = self.find_handler_method_for_effect(receiver, member);
                     if let Some(method) = method {
-                        let arg_val =
-                            self.eval_expr_ast(arg, locals, callables, evaluators, depth)?;
                         return self.dispatch_handler_method(
                             &method,
                             arg_val,
                             evaluators,
                             depth + 1,
                         );
+                    }
+                    if self
+                        .apply_embedded_default_handler(receiver, member, arg_val.clone())
+                        .is_some()
+                    {
+                        return Some(());
                     }
                 }
                 // Other expression statements: try AST unit-call path.
@@ -1367,6 +1408,13 @@ impl<'m> RuntimeOutputResolver<'m> {
                             evaluators,
                             depth + 1,
                         );
+                    }
+                    if let Some(effect_name) = self.unique_effect_name_for_operation(fn_name)
+                        && self
+                            .apply_embedded_default_handler(&effect_name, fn_name, arg_val.clone())
+                            .is_some()
+                    {
+                        return Some(());
                     }
                     if self
                         .execute_unit_call_ast(
@@ -1398,11 +1446,20 @@ impl<'m> RuntimeOutputResolver<'m> {
                 }
                 if let Expr::Pipeline { value, callee } = expr {
                     if let Some(v) = self.eval_expr_ast(value, locals, callables, evaluators, depth)
-                        && self
+                    {
+                        if let Some(effect_name) = self.unique_effect_name_for_operation(callee)
+                            && self
+                                .apply_embedded_default_handler(&effect_name, callee, v.clone())
+                                .is_some()
+                        {
+                            return Some(());
+                        }
+                        if self
                             .execute_unit_call_ast(callee, v, locals, callables, evaluators, depth)
                             .is_some()
-                    {
-                        return Some(());
+                        {
+                            return Some(());
+                        }
                     }
                     let repr = expr.to_str_repr()?;
                     return self.execute_unit_call(&repr, locals, callables, evaluators);
@@ -1594,6 +1651,22 @@ impl<'m> RuntimeOutputResolver<'m> {
             }
         }
         None
+    }
+
+    fn apply_embedded_default_handler(
+        &mut self,
+        effect_name: &str,
+        method_name: &str,
+        arg_val: RuntimeValue,
+    ) -> Option<RuntimeValue> {
+        let handler_name = self.embedded_default_handlers.get(effect_name)?;
+        match (handler_name.as_str(), method_name) {
+            ("__goby_embeded_effect_stdout_handler", _) => {
+                self.outputs.push(arg_val.to_output_text());
+                Some(RuntimeValue::Unit)
+            }
+            _ => None,
+        }
     }
 
     fn inline_handler_from_clauses(
@@ -2001,6 +2074,14 @@ impl<'m> RuntimeOutputResolver<'m> {
         }
         Some(())
     }
+}
+
+fn collect_embedded_default_handlers(module: &Module) -> HashMap<String, String> {
+    module
+        .embed_declarations
+        .iter()
+        .map(|embed| (embed.effect_name.clone(), embed.handler_name.clone()))
+        .collect()
 }
 
 #[derive(Default, Clone)]
@@ -3098,6 +3179,59 @@ main =
             output.as_deref(),
             Some("fallback"),
             "bare call without active handler should fall through to unit-call path"
+        );
+    }
+
+    #[test]
+    fn explicit_handler_overrides_embedded_default_handler() {
+        use goby_core::parse_module;
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let source = r#"
+effect Console
+  log: String -> Unit
+
+@embed Console __goby_embeded_effect_stdout_handler
+
+main : Unit -> Unit can Console
+main =
+  with_handler
+    log msg ->
+      print "explicit"
+      resume Unit
+  in
+    Console.log "fallback"
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let output =
+            resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module));
+        assert_eq!(
+            output.as_deref(),
+            Some("explicit"),
+            "explicit handler must win over embedded default handler"
+        );
+    }
+
+    #[test]
+    fn embedded_default_handler_handles_print_without_explicit_handler() {
+        use goby_core::parse_module;
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let source = r#"
+effect Console
+  log: String -> Unit
+
+@embed Console __goby_embeded_effect_stdout_handler
+
+main : Unit -> Unit can Console
+main =
+  Console.log "fallback"
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let output =
+            resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module));
+        assert_eq!(
+            output.as_deref(),
+            Some("fallback"),
+            "embedded default handler should handle Print.print when no explicit handler exists"
         );
     }
 
