@@ -234,11 +234,11 @@ Migration guide reference:
 ### P6. Removal
 
 - Remove legacy syntax/parser/runtime paths after migration confidence.
-- Status update (2026-03-04): in progress.
+- Status update (2026-03-04): complete.
   - CLI default rejection is landed.
   - P6-R2 core removal landed (`Stmt::Using` active AST removal, runtime/typecheck legacy path removal).
   - P6-R3 schema pruning landed (`Module.handler_declarations` / `HandlerDecl` removal).
-  - remaining work: docs/test naming cleanup and final P6 closure checklist update.
+  - P6-R4 docs/test naming cleanup and closure validation landed.
 
 Completion criteria:
 
@@ -261,28 +261,5 @@ Completion criteria:
 
 ## 6. Immediate Next Step
 
-Next implementation slice: **P6-R4 (cleanup + closure)**.
-
-Scope and order:
-
-1. Test naming + fixture wording cleanup
-   - rename remaining tests/messages that still say "inside/outside using" to
-     canonical `with` / `with_handler` terminology.
-   - keep behavior coverage identical; this is naming/readability cleanup only.
-
-2. Documentation cleanup
-   - refresh `doc/PLAN.md`, `doc/BUGS.md`, and `doc/STATE.md` wording where
-     legacy syntax is still described as active implementation behavior.
-   - preserve `doc/EFFECT_RENEWAL_MIGRATION.md` as historical migration mapping.
-
-3. Final validation and closeout
-   - run full mandatory flow and mark P6 complete when green.
-
-Definition of done for P6-R4:
-
-- `rg -n "Stmt::Using|handler_declarations|HandlerDecl" crates/goby-core crates/goby-wasm`
-  returns no active implementation usage.
-- `cargo fmt`
-- `cargo clippy -- -D warnings`
-- `cargo test`
-- `cargo check`
+P6 is closed. Follow-up work should proceed under `doc/PLAN.md` post-MVP tracks
+(runtime optimization, stdlib foundation, tooling).

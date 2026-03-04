@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-04 (session 125)
+Last updated: 2026-03-04 (session 126)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -58,11 +58,21 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - compiled `EffectId`/`OpId` dispatch (no map lookup on hot path),
   - phased Wasm lowering (portable trampoline first, typed-continuation optimization later).
 - `PLAN_EFFECT_RENEWAL` completion status:
-  - P6 removal is still in progress (not complete).
+  - P6 removal is complete (2026-03-04).
   - parser/runtime/typecheck legacy compatibility paths are removed.
-  - remaining work is docs/test naming cleanup and final closure pass.
+  - follow-up work moved to post-MVP tracks in `doc/PLAN.md`.
 
 ## 4. Recent Milestones
+
+- 2026-03-04 (session 126): `PLAN_EFFECT_RENEWAL` P6 closure docs sync
+  - Updated `doc/PLAN.md` wording to remove remaining active-implementation
+    references to legacy `using` paths in effect-system sections.
+  - Updated `doc/BUGS.md`:
+    - marked BUG-001 (legacy `handler ... for ...` unknown effect) as
+      obsolete/closed after syntax removal.
+  - Updated `doc/PLAN_EFFECT_RENEWAL.md`:
+    - P6 status promoted from in-progress to complete,
+    - Immediate Next Step section replaced with closure note.
 
 - 2026-03-04 (session 125): `PLAN_EFFECT_RENEWAL` P6-R4 cleanup (naming + validation closure pass)
   - Renamed remaining test identifiers/messages that still used `using` terminology
