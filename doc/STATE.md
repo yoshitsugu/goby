@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-04 (session 109)
+Last updated: 2026-03-04 (session 110)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -59,6 +59,16 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - phased Wasm lowering (portable trampoline first, typed-continuation optimization later).
 
 ## 4. Recent Milestones
+
+- 2026-03-04 (session 110): state snapshot refresh (renewal progress + next focus sync)
+  - Refreshed restart snapshot after `PLAN_EFFECT_RENEWAL` P4/P5 progress:
+    - P4 examples/docs migration landed (`effect.gb`, `iterator.gb`, docs sync),
+    - P5 compatibility layer landed in CLI:
+      - warning mode by default for legacy `handler ... for ...` and `using`,
+      - `GOBY_LEGACY_EFFECT_SYNTAX=deny` rejects legacy syntax.
+  - Updated execution focus to reflect current phase boundary:
+    - next primary work is P6 migration/removal preparation using deny mode rollout path.
+  - No additional behavior change in this snapshot-only update.
 
 - 2026-03-04 (session 109): `PLAN_EFFECT_RENEWAL` P5 deny mode for legacy syntax
   - Added CLI legacy syntax mode switch via environment variable:
@@ -1322,8 +1332,9 @@ Validation policy (every implementation step):
 
 Execution focus (in order):
 1. `PLAN_EFFECT_RENEWAL` implementation (highest priority):
-   - P0-P3 complete (spec + parser/AST + typecheck + fallback-runtime parity core),
-   - P4 in progress: migrate examples/stdlib/docs to canonical `handler` + `with` syntax.
+   - P0-P4 complete (spec + parser/AST + typecheck + runtime parity + examples/docs migration),
+   - P5 in progress (compatibility/deprecation): warning+deny modes landed in CLI,
+   - next: P6 removal prep (widen deny-mode coverage, then remove legacy parser/runtime paths).
 2. Effect runtime redesign follow-up (one-shot deep handlers + selective CPS/evidence passing), including
    post-`PLAN_RESUME` items now tracked in `doc/PLAN.md`.
 3. `resolve_main_runtime_output` retirement (blocked on effect-native support and remaining unsupported forms).
