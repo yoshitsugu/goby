@@ -135,7 +135,7 @@ pub fn parse_module(source: &str) -> Result<Module, ParseError> {
         }
 
         // Legacy top-level `handler Name for Effect` declarations are removed.
-        if trimmed.starts_with("handler ") {
+        if starts_with_keyword_token(trimmed, "handler") {
             return Err(ParseError {
                 line: i + 1,
                 col: 1,
@@ -469,12 +469,19 @@ fn parse_handler_clause_header(src: &str) -> Option<(String, Vec<String>, &str)>
 fn first_legacy_using_line_offset(body: &str) -> Option<usize> {
     body.lines().position(|line| {
         let trimmed = strip_line_comment(line).trim();
-        !trimmed.is_empty() && trimmed.starts_with("using ")
+        !trimmed.is_empty() && starts_with_keyword_token(trimmed, "using")
     })
 }
 
 fn indent_len(line: &str) -> usize {
     line.len() - line.trim_start().len()
+}
+
+fn starts_with_keyword_token(src: &str, keyword: &str) -> bool {
+    let Some(rest) = src.strip_prefix(keyword) else {
+        return false;
+    };
+    rest.chars().next().is_some_and(char::is_whitespace)
 }
 
 /// Expand escape sequences in a string literal body (the content between the quotes).
@@ -1893,6 +1900,27 @@ main = 1
     }
 
     #[test]
+    fn rejects_legacy_top_level_handler_syntax_with_tab_after_keyword() {
+        let source = r#"
+effect Iter
+  yield: String -> Unit
+
+handler	Collect for Iter
+  yield item = resume Unit
+
+main = 1
+"#;
+        let err = parse_module(source)
+            .expect_err("legacy handler declaration with tab after keyword should be rejected");
+        assert!(
+            err.message
+                .contains("legacy top-level `handler ... for ...` is no longer supported"),
+            "unexpected error message: {}",
+            err.message
+        );
+    }
+
+    #[test]
     fn parses_resume_expression_shape_inside_with_handler_contract() {
         let source = r#"
 main =
@@ -2793,6 +2821,32 @@ main =
         assert!(
             err.message
                 .contains("legacy top-level `handler ... for ...` is no longer supported")
+        );
+    }
+
+    #[test]
+    fn parse_error_for_legacy_using_with_tab_after_keyword() {
+        let source = r#"
+effect Log
+  log: String -> Unit
+
+main : Unit -> Unit
+main =
+  with_handler
+    log msg ->
+      using	H
+        log msg
+      resume Unit
+  in
+    log "x"
+"#;
+        let err =
+            parse_module(source).expect_err("legacy using with tab after keyword should fail");
+        assert!(
+            err.message
+                .contains("legacy `using` syntax is no longer supported"),
+            "unexpected error message: {}",
+            err.message
         );
     }
 }
