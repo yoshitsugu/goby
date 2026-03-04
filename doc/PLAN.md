@@ -921,6 +921,39 @@ Acceptance criteria:
 3. `run` and `build` share one compile path (no duplicate divergent codegen entrypoints).
 4. Failure diagnostics clearly distinguish parse/typecheck/codegen/output-write/verify failures.
 
+Additional planning constraint (CLI binary naming for `cargo install`, proposed 2026-03-04):
+
+Goal: make `cargo install` produce an executable named `goby` (not `goby-cli`) so users run:
+
+- `goby check <file.gb>`
+- `goby run <file.gb>`
+- `goby build <file.gb>`
+
+Implementation plan:
+
+1. Package/binary metadata.
+   - Keep crate/package identity as `goby-cli` for workspace clarity.
+   - Explicitly configure binary target name as `goby` in `crates/goby-cli/Cargo.toml`.
+   - Preserve source entrypoint path (`src/main.rs`).
+2. Backward compatibility window.
+   - Update usage/help text and docs to show `goby` as canonical command.
+   - Keep tests tolerant to argv[0] differences where needed.
+   - Optionally retain `goby-cli` local dev invocation via `cargo run -p goby-cli -- ...`.
+3. Integration/CI updates.
+   - Update integration tests that currently reference `CARGO_BIN_EXE_goby-cli`
+     to the new binary name contract.
+   - Verify `cargo install --path crates/goby-cli` results in runnable `goby`.
+4. Documentation sync.
+   - Update README, examples, and CLI docs from `goby-cli ...` to `goby ...`
+     for user-facing instructions.
+   - Keep developer-oriented Cargo commands unchanged where appropriate.
+
+Acceptance criteria:
+
+1. After `cargo install --path crates/goby-cli`, `goby --help` works.
+2. `goby check/run/build` execute successfully for baseline examples.
+3. CI/integration tests pass under the new binary name contract.
+
 ### 4.4 Early Developer Tooling Plan
 
 Goal: align implementation priorities with the language vision that strong tooling is a core

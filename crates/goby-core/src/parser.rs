@@ -2251,7 +2251,10 @@ main =
     fn rejects_lowercase_effect_declaration_name() {
         let source = "effect print\n  log: String -> Unit\nmain = 1\n";
         let err = parse_module(source).expect_err("lowercase effect name should be rejected");
-        assert!(err.message.contains("effect declaration name must be CamelCase"));
+        assert!(
+            err.message
+                .contains("effect declaration name must be CamelCase")
+        );
     }
 
     #[test]

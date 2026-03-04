@@ -1825,7 +1825,19 @@ impl<'m> RuntimeOutputResolver<'m> {
         match parse_goby_int_text(&input) {
             Some(value) => Some(RuntimeValue::Int(value)),
             None => {
-                if let Some(method) = self.find_handler_method_by_name("invalid_integer") {
+                if let Some(method) =
+                    self.find_handler_method_for_effect("StringParseError", "invalid_integer")
+                {
+                    return self.dispatch_handler_method_as_value(
+                        &method,
+                        RuntimeValue::String(input),
+                        evaluators,
+                        depth + 1,
+                    );
+                }
+                if !self.operation_has_conflicting_effect("invalid_integer", "StringParseError")
+                    && let Some(method) = self.find_handler_method_by_name("invalid_integer")
+                {
                     return self.dispatch_handler_method_as_value(
                         &method,
                         RuntimeValue::String(input),
@@ -1839,6 +1851,42 @@ impl<'m> RuntimeOutputResolver<'m> {
                 None
             }
         }
+    }
+
+    fn operation_has_conflicting_effect(&self, op_name: &str, expected_effect: &str) -> bool {
+        let mut effect_names: HashSet<String> = self
+            .module
+            .effect_declarations
+            .iter()
+            .filter(|effect| effect.members.iter().any(|member| member.name == op_name))
+            .map(|effect| effect.name.clone())
+            .collect();
+
+        let resolver = StdlibResolver::new(resolve_runtime_stdlib_root());
+        for import in &self.module.imports {
+            let Ok(path) = resolver.module_file_path(&import.module_path) else {
+                continue;
+            };
+            let Ok(source) = std::fs::read_to_string(path) else {
+                continue;
+            };
+            let Ok(parsed) = goby_core::parse_module(&source) else {
+                continue;
+            };
+            for effect in parsed.effect_declarations {
+                if let goby_core::ImportKind::Selective(selected) = &import.kind
+                    && !selected.iter().any(|name| name == &effect.name)
+                {
+                    continue;
+                }
+                if effect.members.iter().any(|member| member.name == op_name) {
+                    effect_names.insert(effect.name);
+                }
+            }
+        }
+
+        effect_names.retain(|name| name != expected_effect);
+        !effect_names.is_empty()
     }
 
     /// Find a handler method by bare name (e.g. `log`) from nearest to outermost.
@@ -2393,6 +2441,9 @@ fn resolve_runtime_stdlib_root() -> PathBuf {
 }
 
 fn parse_goby_int_text(input: &str) -> Option<i64> {
+    // Runtime shortcut for stdlib `goby/int.parse`.
+    // Keep this behavior aligned with `stdlib/goby/int.gb`:
+    // optional leading `-`, then one or more ASCII digits, with overflow rejected.
     if input.is_empty() {
         return None;
     }
@@ -3754,6 +3805,46 @@ main =
             output.as_deref(),
             Some("runtime error: unhandled effect operation `invalid_integer` from goby/int.parse")
         );
+    }
+
+    #[test]
+    fn runtime_does_not_dispatch_invalid_integer_to_other_effect_same_op_name() {
+        use goby_core::parse_module;
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let source = r#"
+import goby/int as int
+effect OtherError
+  invalid_integer : String -> Int
+main : Unit -> Unit can Print, StringParseError, OtherError
+main =
+  with_handler
+    invalid_integer _ ->
+      resume -99
+  in
+    print int.parse("x")
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let output =
+            resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module));
+        assert_eq!(
+            output.as_deref(),
+            Some("runtime error: unhandled effect operation `invalid_integer` from goby/int.parse")
+        );
+    }
+
+    #[test]
+    fn parse_goby_int_text_matches_locked_boundary_cases() {
+        assert_eq!(parse_goby_int_text("0"), Some(0));
+        assert_eq!(parse_goby_int_text("-0"), Some(0));
+        assert_eq!(parse_goby_int_text("9223372036854775807"), Some(i64::MAX));
+        assert_eq!(parse_goby_int_text("-9223372036854775808"), Some(i64::MIN));
+        assert_eq!(parse_goby_int_text("9223372036854775808"), None);
+        assert_eq!(parse_goby_int_text("-9223372036854775809"), None);
+        assert_eq!(parse_goby_int_text(""), None);
+        assert_eq!(parse_goby_int_text("-"), None);
+        assert_eq!(parse_goby_int_text("+1"), None);
+        assert_eq!(parse_goby_int_text("1_000"), None);
+        assert_eq!(parse_goby_int_text("12x"), None);
     }
 
     #[test]
