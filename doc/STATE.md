@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-04 (session 135)
+Last updated: 2026-03-04 (session 136)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -63,6 +63,25 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - follow-up work moved to post-MVP tracks in `doc/PLAN.md`.
 
 ## 4. Recent Milestones
+
+- 2026-03-04 (session 136): prelude `Read` effect runtime bridge (stdin) first implementation
+  - `stdlib/goby/prelude.gb` now declares:
+    - `effect Read` with:
+      - `read : Unit -> String`
+      - `read_line : Unit -> String`
+    - `@embed Read __goby_embeded_effect_stdin_handler`.
+  - Typechecker intrinsic allow-list now accepts
+    `__goby_embeded_effect_stdin_handler` for stdlib `@embed`.
+  - Wasm fallback runtime now supports embedded `Read` dispatch:
+    - `Read.read ()`: returns remaining stdin and consumes it,
+    - `Read.read_line ()`: reads one line and trims one trailing terminator
+      (`\n`, `\r\n`, `\r`),
+    - both ops share one per-execution stdin buffer/cursor.
+  - Added regression tests:
+    - implicit prelude `can Read` acceptance in typechecker,
+    - runtime behavior for `Read.read_line` newline trimming and EOF,
+    - runtime interleaving behavior (`read_line` + `read` + EOF reread).
+  - Added `examples/read.gb` as minimal stdin usage sample.
 
 - 2026-03-04 (session 135): Unit value literal `()` first implementation
   - Parser now accepts empty tuple syntax `()` as Unit value literal.

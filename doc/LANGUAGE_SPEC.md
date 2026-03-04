@@ -100,6 +100,11 @@ syntax/semantics.
 ## 7. Current Runtime/Builtin Notes
 
 - Builtins currently include `print`, `map`, `fetch_env_var`, `string.split`, `list.join`.
-- `Print` effect resolution is provided via stdlib prelude (`goby/prelude`) embed defaults.
+- `Print` / `Read` effect resolution is provided via stdlib prelude (`goby/prelude`) embed defaults.
+- Current minimal prelude input contract:
+  - `Read.read ()` returns remaining stdin text and then `""` on subsequent reads.
+  - `Read.read_line ()` returns one line with one trailing terminator removed
+    (`\n`, `\r\n`, `\r`); EOF returns `""`.
+  - stdin is decoded as UTF-8 with replacement for invalid sequences.
 - `@embed` default handlers are active for `main` effect validation and runtime
   fallback behavior where configured.

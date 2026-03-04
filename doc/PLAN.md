@@ -668,6 +668,75 @@ Implementation steps:
    - Positive tests for both operations under explicit handler and embedded-default paths.
    - Output-shape tests: `print` does not append newline; `println` appends one newline.
 
+Additional planning constraint (Read effect stdin support, proposed 2026-03-04):
+
+Goal: make stdin access first-class via prelude `Read` effect and support both
+line-based input (`read_line`) and full-stream input (`read`, EOFまで読み込み).
+Positioning:
+- Prelude `Read`/`Print` are intentionally minimal APIs for quick experiments.
+- Production-grade I/O behavior should be provided by richer standard-library effects
+  in later phases.
+
+Surface contract to lock before implementation:
+
+1. Prelude effect surface.
+   - `effect Read` exposes:
+     - `read : Unit -> String`
+     - `read_line : Unit -> String`
+2. EOF behavior.
+   - `read ()` returns all remaining stdin content and consumes it.
+   - after `read ()` reaches EOF once, subsequent `read ()` returns `""`.
+   - `read_line ()` returns the next line; when no more input is available, it returns `""`.
+   - empty line and EOF are both represented as `""` by design in this minimal API.
+3. Newline policy.
+   - `read_line ()` strips one trailing line terminator (`\n`, `\r\n`, or `\r`) from the returned value.
+   - `read ()` returns remaining stdin as text and preserves newline bytes as-is.
+4. Text decoding policy.
+   - stdin bytes are decoded as UTF-8 with replacement for invalid sequences
+     (lossy decoding) to keep runtime behavior deterministic and non-fatal.
+
+Implementation steps:
+
+1. Stdlib/prelude declarations.
+   - Keep `Read` in `stdlib/goby/prelude.gb`.
+   - Add embedded default declaration for stdin runtime bridge:
+     `@embed Read __goby_embeded_effect_stdin_handler`.
+2. Typechecker embed validation updates.
+   - Extend intrinsic embedded-handler allow-list with
+     `__goby_embeded_effect_stdin_handler`.
+   - Keep existing `@embed` rules unchanged (stdlib-only, in-module effect required,
+     duplicate effect embed rejection).
+3. Runtime intrinsic dispatch.
+   - Add `__goby_embeded_effect_stdin_handler` dispatch in runtime effect bridge.
+   - Implement operation routing for `read` and `read_line`.
+   - Keep dispatch precedence unchanged: explicit user handler first, embedded default second.
+4. Runtime input-state model.
+   - Introduce a per-execution stdin cursor/buffer so `read_line` and `read`
+     consume from the same source consistently.
+   - Define deterministic interleaving behavior:
+     after one or more `read_line` calls, `read` returns only the remaining tail;
+     after `read`, subsequent `read_line` returns `""`.
+5. CLI execution wiring.
+   - Ensure `goby-cli run` passes process stdin to runtime execution paths that can read at runtime.
+   - Compile-time fallback evaluation path is stdin-incompatible; when `Read` is required,
+     force/require runtime execution path (or report clear unsupported diagnostic).
+   - Keep `goby-cli check` behavior unchanged (no stdin usage).
+6. Diagnostics and failure mode.
+   - If stdin cannot be read in runtime context, return a clear runtime error message
+     that identifies `Read.read` or `Read.read_line` as the failing operation.
+   - Do not silently substitute environment variables or hard-coded defaults.
+7. Tests and regression coverage.
+   - Typechecker tests: `main : Unit -> Unit can Read` accepted via implicit prelude.
+   - Runtime unit tests: `read_line` basic case, CRLF trimming, EOF empty return,
+     `read` full-stream return, and interleaving (`read_line` then `read`).
+   - CLI integration tests: pipe input into `goby-cli run` and assert output for
+     both operations.
+   - Negative tests: unknown embedded stdin intrinsic name is rejected.
+8. Documentation sync.
+   - Update `doc/LANGUAGE_SPEC.md` effect/prelude sections with `Read` contract.
+   - Update `examples/` with a minimal stdin sample using `read_line` and `read`.
+   - Record milestone and open follow-ups in `doc/STATE.md`.
+
 ### 4.4 Early Developer Tooling Plan
 
 Goal: align implementation priorities with the language vision that strong tooling is a core

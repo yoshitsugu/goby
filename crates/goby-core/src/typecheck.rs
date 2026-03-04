@@ -628,6 +628,12 @@ fn build_type_env(module: &Module, stdlib_root: &Path) -> TypeEnv {
         },
         "runtime intrinsic `__goby_embeded_effect_stdout_handler`".to_string(),
     );
+    insert_global_symbol(
+        &mut globals,
+        "__goby_embeded_effect_stdin_handler".to_string(),
+        Ty::Unknown,
+        "runtime intrinsic `__goby_embeded_effect_stdin_handler`".to_string(),
+    );
     inject_imported_symbols(module, &mut globals, stdlib_root);
     inject_type_constructors(module, &mut globals, &mut type_aliases, &mut record_types);
     inject_effect_symbols(module, &mut globals);
@@ -925,6 +931,7 @@ fn is_known_runtime_intrinsic_name(name: &str) -> bool {
             | "__goby_string_each_grapheme"
             | "__goby_list_push_string"
             | "__goby_embeded_effect_stdout_handler"
+            | "__goby_embeded_effect_stdin_handler"
     )
 }
 
@@ -3762,6 +3769,15 @@ main =
         let module = parse_module(source).expect("should parse");
         typecheck_module(&module)
             .expect("implicit prelude Print effect should be accepted in `can` clause");
+    }
+
+    #[test]
+    fn accepts_can_clause_with_implicit_prelude_read_effect() {
+        // `can Read` is accepted via implicit `goby/prelude` embed defaults.
+        let source = "main : Unit -> Unit can Read\nmain = ()\n";
+        let module = parse_module(source).expect("should parse");
+        typecheck_module(&module)
+            .expect("implicit prelude Read effect should be accepted in `can` clause");
     }
 
     #[test]

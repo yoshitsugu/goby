@@ -7,6 +7,7 @@ mod planning;
 mod support;
 
 use std::collections::{HashMap, HashSet};
+use std::io::Read as _;
 use std::path::PathBuf;
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -167,6 +168,22 @@ fn resolve_main_runtime_output_with_mode(
     parsed_stmts: Option<&[Stmt]>,
     execution_mode: lower::EffectExecutionMode,
 ) -> Option<String> {
+    resolve_main_runtime_output_with_mode_and_stdin(
+        module,
+        body,
+        parsed_stmts,
+        execution_mode,
+        None,
+    )
+}
+
+fn resolve_main_runtime_output_with_mode_and_stdin(
+    module: &Module,
+    body: &str,
+    parsed_stmts: Option<&[Stmt]>,
+    execution_mode: lower::EffectExecutionMode,
+    stdin_seed: Option<String>,
+) -> Option<String> {
     let int_functions = collect_functions_with_result(module, "Int");
     let list_functions = collect_functions_with_result(module, "List Int");
     let unit_functions = collect_unit_functions(module);
@@ -177,7 +194,30 @@ fn resolve_main_runtime_output_with_mode(
         list: &list_evaluator,
         unit: &unit_functions,
     };
-    RuntimeOutputResolver::resolve(module, body, parsed_stmts, &evaluators, execution_mode)
+    RuntimeOutputResolver::resolve(
+        module,
+        body,
+        parsed_stmts,
+        &evaluators,
+        execution_mode,
+        stdin_seed,
+    )
+}
+
+#[cfg(test)]
+fn resolve_main_runtime_output_with_stdin(
+    module: &Module,
+    body: &str,
+    parsed_stmts: Option<&[Stmt]>,
+    stdin_text: &str,
+) -> Option<String> {
+    resolve_main_runtime_output_with_mode_and_stdin(
+        module,
+        body,
+        parsed_stmts,
+        lower::EffectExecutionMode::PortableFallback,
+        Some(stdin_text.to_string()),
+    )
 }
 
 type EvaluatedFunctions<'a> = HashMap<&'a str, EvaluatedFunction<'a>>;
@@ -457,6 +497,8 @@ struct RuntimeOutputResolver<'m> {
     optimized_resume_tokens: Vec<OptimizedResumeToken>,
     runtime_error: Option<String>,
     execution_mode: lower::EffectExecutionMode,
+    stdin_buffer: Option<String>,
+    stdin_cursor: usize,
 }
 
 #[derive(Clone)]
@@ -515,6 +557,7 @@ impl<'m> RuntimeOutputResolver<'m> {
         parsed_stmts: Option<&[Stmt]>,
         evaluators: &RuntimeEvaluators<'_, '_>,
         execution_mode: lower::EffectExecutionMode,
+        stdin_seed: Option<String>,
     ) -> Option<String> {
         let mut resolver = Self {
             locals: RuntimeLocals::default(),
@@ -526,6 +569,8 @@ impl<'m> RuntimeOutputResolver<'m> {
             optimized_resume_tokens: Vec::new(),
             runtime_error: None,
             execution_mode,
+            stdin_buffer: stdin_seed,
+            stdin_cursor: 0,
         };
 
         if let Some(stmts) = parsed_stmts {
@@ -1668,8 +1713,81 @@ impl<'m> RuntimeOutputResolver<'m> {
                 self.outputs.push(arg_val.to_output_text());
                 Some(RuntimeValue::Unit)
             }
+            ("__goby_embeded_effect_stdin_handler", "read")
+                if matches!(arg_val, RuntimeValue::Unit) =>
+            {
+                Some(RuntimeValue::String(self.read_stdin_remaining("read")?))
+            }
+            ("__goby_embeded_effect_stdin_handler", "read_line")
+                if matches!(arg_val, RuntimeValue::Unit) =>
+            {
+                Some(RuntimeValue::String(self.read_stdin_line("read_line")?))
+            }
             _ => None,
         }
+    }
+
+    fn ensure_stdin_loaded(&mut self, op_name: &str) -> Option<()> {
+        if self.stdin_buffer.is_some() {
+            return Some(());
+        }
+        let mut bytes = Vec::new();
+        match std::io::stdin().read_to_end(&mut bytes) {
+            Ok(_) => {
+                self.stdin_buffer = Some(String::from_utf8_lossy(&bytes).into_owned());
+                Some(())
+            }
+            Err(err) => {
+                self.set_runtime_error_once(format!("Read.{op_name} failed to read stdin: {err}"));
+                None
+            }
+        }
+    }
+
+    fn read_stdin_remaining(&mut self, op_name: &str) -> Option<String> {
+        self.ensure_stdin_loaded(op_name)?;
+        let content = self.stdin_buffer.as_ref()?;
+        if self.stdin_cursor >= content.len() {
+            return Some(String::new());
+        }
+        let tail = content[self.stdin_cursor..].to_string();
+        self.stdin_cursor = content.len();
+        Some(tail)
+    }
+
+    fn read_stdin_line(&mut self, op_name: &str) -> Option<String> {
+        self.ensure_stdin_loaded(op_name)?;
+        let content = self.stdin_buffer.as_ref()?;
+        if self.stdin_cursor >= content.len() {
+            return Some(String::new());
+        }
+        let bytes = content.as_bytes();
+        let start = self.stdin_cursor;
+        let mut idx = start;
+        while idx < bytes.len() {
+            match bytes[idx] {
+                b'\n' => {
+                    let line = content[start..idx].to_string();
+                    self.stdin_cursor = idx + 1;
+                    return Some(line);
+                }
+                b'\r' => {
+                    let line = content[start..idx].to_string();
+                    if idx + 1 < bytes.len() && bytes[idx + 1] == b'\n' {
+                        self.stdin_cursor = idx + 2;
+                    } else {
+                        self.stdin_cursor = idx + 1;
+                    }
+                    return Some(line);
+                }
+                _ => {
+                    idx += 1;
+                }
+            }
+        }
+        let line = content[start..].to_string();
+        self.stdin_cursor = content.len();
+        Some(line)
     }
 
     fn inline_handler_from_clauses(
@@ -3304,6 +3422,66 @@ main =
             output.as_deref(),
             Some("from-prelude"),
             "embedded default handler should be discoverable via implicit prelude import"
+        );
+    }
+
+    #[test]
+    fn embedded_read_handler_is_loaded_from_implicit_prelude() {
+        use goby_core::parse_module;
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let source = r#"
+main : Unit -> Unit can Print, Read
+main =
+  line = Read.read_line ()
+  tail = Read.read ()
+  tail2 = Read.read ()
+  print "line=${line}"
+  print "tail=${tail}"
+  print "tail2=${tail2}"
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let output = resolve_main_runtime_output_with_stdin(
+            &module,
+            main_body(&module),
+            main_parsed_body(&module),
+            "alpha\nbeta\ngamma",
+        );
+        assert_eq!(
+            output.as_deref(),
+            Some("line=alpha\ntail=beta\ngamma\ntail2="),
+            "implicit prelude embedded Read handler should serve read_line/read and consume stdin"
+        );
+    }
+
+    #[test]
+    fn embedded_read_line_trims_lf_crlf_and_cr() {
+        use goby_core::parse_module;
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let source = r#"
+main : Unit -> Unit can Print, Read
+main =
+  a = Read.read_line ()
+  b = Read.read_line ()
+  c = Read.read_line ()
+  d = Read.read_line ()
+  e = Read.read_line ()
+  print "a=${a}"
+  print "b=${b}"
+  print "c=${c}"
+  print "d=${d}"
+  print "e=${e}"
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let output = resolve_main_runtime_output_with_stdin(
+            &module,
+            main_body(&module),
+            main_parsed_body(&module),
+            "a\r\nb\nc\rd",
+        );
+        assert_eq!(
+            output.as_deref(),
+            Some("a=a\nb=b\nc=c\nd=d\ne="),
+            "read_line should trim CRLF/LF/CR and return empty string at EOF"
         );
     }
 
