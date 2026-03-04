@@ -509,21 +509,72 @@ Preparation steps:
    - Ensure `cargo check`, `cargo test`, and example `goby-cli check/run` flows continue to work
      with stdlib sources in-tree.
 
-Additional planning constraint (locked 2026-03-02):
+Additional planning constraint (`@embed` semantics update, locked 2026-03-04):
 
-- Introduce `@embed` declarations as a **stdlib-only** feature for runtime-bridged effects
-  (initial target: `@embed Print` for `goby/stdio`).
-- Canonical stdlib embed form is `@embed <EffectName>` with an in-module `effect <EffectName>`
-  declaration requirement (legacy `@embed effect <EffectName>` is temporarily accepted for compatibility).
-- `@embed` is not allowed in user Goby modules or non-stdlib libraries.
-- `print` migration should proceed via `goby/stdio` + stdlib `@embed Print` bridge,
-  with temporary compatibility for existing bare `print`.
-- Stdlib intrinsic bridge policy (ExtraStep B lock, 2026-03-03):
+- `@embed` is a **stdlib-only default-effect-handler declaration** for effects that may
+  remain on `main`'s `can` list without explicit user handler resolution.
+- Canonical form is:
+  - `@embed <EffectName> <HandlerName>`
+  - example: `@embed Print __goby_embeded_effect_stdout_handler`
+- Legacy form `@embed effect <EffectName>` is removed (parser rejects it).
+- `@embed` is rejected in user modules and non-stdlib libraries.
+- `@embed` requires an in-module `effect <EffectName>` declaration.
+- `@embed` handler target policy:
+  - `<HandlerName>` must be `__goby_embeded_effect_*` namespace.
+  - initial intrinsic handler set includes only:
+    - `__goby_embeded_effect_stdout_handler`
+  - this handler is used as the default resolver for `Print` when the effect
+    remains in `main` and no explicit handler is installed by user code.
+- Stdlib intrinsic bridge policy (updated 2026-03-04):
   - active intrinsic set:
     - `__goby_string_length : String -> Int`
     - `__goby_env_fetch_env_var : String -> String`
-  - `__goby_*` names are reserved and stdlib-only,
+    - `__goby_embeded_effect_stdout_handler` (intrinsic default effect handler)
+  - `__goby_*` names are reserved and stdlib-only.
   - unknown `__goby_*` names in stdlib are rejected explicitly.
+
+Implementation plan (`@embed` default-handler model):
+
+1. Parser/AST migration
+   - Change `@embed` grammar to require two identifiers:
+     `@embed <EffectName> <HandlerName>`.
+   - Remove acceptance of `@embed effect <EffectName>`.
+   - Update AST node shape to store both effect name and handler name.
+   - Add parse diagnostics for:
+     - missing handler name,
+     - malformed handler identifier,
+     - legacy `@embed effect ...` usage.
+2. Typechecker rule updates
+   - Keep stdlib-only gate for all `@embed` declarations.
+   - Keep duplicate embedded-effect rejection per module.
+   - Keep `@embed X` requires `effect X` in same module.
+   - Add handler-name validation for `__goby_embeded_effect_*` namespace.
+   - Add intrinsic-existence check for declared embedded handler target.
+3. Main/default resolution semantics
+   - During entrypoint (`main`) effect validation, allow unresolved effects that
+     are declared as stdlib-embedded defaults via `@embed`.
+   - For each allowed effect, wire the declared embedded handler as the default
+     runtime handler when no explicit user handler is present.
+   - Scope this relaxation to `main` entrypoint validation only (not arbitrary
+     non-main functions).
+4. Runtime/intrinsic wiring
+   - Add intrinsic implementation for
+     `__goby_embeded_effect_stdout_handler`.
+   - Bridge `Print` operation dispatch to the intrinsic default handler behavior.
+   - Keep existing explicit handler dispatch precedence (explicit user handler
+     takes priority over default embedded handler fallback).
+5. Stdlib and examples
+   - Update `stdlib/goby/stdio.gb` to declare:
+     - `effect Print`
+     - `@embed Print __goby_embeded_effect_stdout_handler`
+   - Keep `print` API signatures aligned with `can Print`.
+6. Tests and diagnostics
+   - Parser tests for new syntax acceptance/rejection.
+   - Typechecker tests for stdlib-only gate, declared-effect requirement,
+     handler-name validation, and intrinsic existence.
+   - Entry/main tests showing `main : Unit -> Unit can Print` accepted without
+     explicit handler when `Print` has embedded default handler.
+   - Negative tests where non-embedded unresolved effects on `main` still fail.
 
 ### 4.4 Early Developer Tooling Plan
 
