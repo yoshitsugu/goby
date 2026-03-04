@@ -50,6 +50,12 @@ Based on `examples/*.gb`:
   - spaced application supports multiple args (`f a b c`) and is parsed left-associatively
     (`(((f a) b) c)`).
   - `f(x)` is used when precedence needs to be explicit.
+  - `f ()` is parsed as Unit-argument function application.
+  - constructor parsing follows naming convention: only `CamelCase(...)` / `CamelCase (...)`
+    is treated as constructor form.
+- Naming convention lock:
+  - top-level declaration names start with lowercase (`_` reserved for intrinsic/internal symbols).
+  - `type` / `effect` declarations and constructors are `CamelCase`.
 - Block-local binding semantics are fixed for MVP:
   - `name = expr` is a local binding statement only when `name` is an identifier and `=` is assignment (not `==`).
   - bindings are visible to subsequent statements in the same declaration body.

@@ -23,6 +23,10 @@ syntax/semantics.
 
 - Type annotation: `name : Type`
 - Function definition: `name args = expr`
+- Naming rules:
+  - top-level function/value declarations must start with a lowercase letter (or `_` for intrinsic/internal names).
+  - `type` / `effect` names must be `CamelCase`.
+  - type constructors in `type` declarations must be `CamelCase`.
 - Reserved tokens are not allowed as identifiers (declaration names, parameters,
   local bindings, type/effect member names).
   - Current reserved set:

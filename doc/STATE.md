@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-04 (session 138)
+Last updated: 2026-03-04 (session 139)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -63,6 +63,23 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - follow-up work moved to post-MVP tracks in `doc/PLAN.md`.
 
 ## 4. Recent Milestones
+
+- 2026-03-04 (session 139): `f ()` Unit-arg call parse fix + naming-convention lock
+  - Parser disambiguation updated:
+    - `read_line ()` now parses as `Expr::Call` with Unit argument,
+      instead of being misclassified as record-constructor syntax.
+    - Constructor syntax is now convention-gated to `CamelCase(...)` / `CamelCase (...)`.
+  - Naming checks in parser tightened:
+    - top-level declaration names must start with lowercase (`_` allowed for intrinsic/internal names),
+    - `effect` names must be `CamelCase`,
+    - `type` names and type constructors must be `CamelCase`.
+  - Added regressions:
+    - parser tests for `read_line ()` call shape and `CamelCase` constructor-with-space parsing,
+    - parser tests for lowercase effect/type rejection and uppercase top-level declaration rejection,
+    - typecheck test for `read_line ()` in `main`,
+    - wasm runtime test covering `read_line ()` parse+typecheck+stdin execution path.
+  - Verified:
+    - `cargo test` all pass after parser + typecheck + wasm updates.
 
 - 2026-03-04 (session 138): `int.parse` rename + overflow-to-error behavior
   - stdlib module path renamed:
