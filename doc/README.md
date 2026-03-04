@@ -2,15 +2,17 @@
 
 Use this directory as follows:
 
-- `PLAN.md`: active language design reference (source of truth for current and next decisions).
+- `LANGUAGE_SPEC.md`: active language specification (latest user-visible syntax/semantics).
+- `PLAN.md`: active planning/roadmap reference (migration steps, future decisions, execution plans).
 - `STATE.md`: restart-safe execution snapshot (latest milestones, open items, next actions).
 - `BUGS.md`: known issues and their status.
 
 Recommended reading order:
 
-1. `PLAN.md`
-2. `STATE.md`
-3. `BUGS.md` (when fixing defects)
+1. `LANGUAGE_SPEC.md`
+2. `PLAN.md`
+3. `STATE.md`
+4. `BUGS.md` (when fixing defects)
 
 Archive policy:
 
@@ -18,6 +20,7 @@ Archive policy:
 
 Maintenance rules:
 
-- When syntax/semantics change, update `PLAN.md` first.
+- When syntax/semantics change, update `LANGUAGE_SPEC.md` in the same change.
+- Update `PLAN.md` when planning status/migration steps/decisions change.
 - At meaningful milestones, update `STATE.md`.
 - Keep `README.md` high-level; keep detailed spec text in this directory.

@@ -1,7 +1,8 @@
 # Goby Project Instructions
 
 This document guides AI assistants working on the Goby programming language.
-For the evolving language draft and open decisions, see [doc/PLAN.md](./doc/PLAN.md).
+For the latest language spec, see [doc/LANGUAGE_SPEC.md](./doc/LANGUAGE_SPEC.md).
+For planning and open decisions, see [doc/PLAN.md](./doc/PLAN.md).
 
 ## Project Overview
 
@@ -27,7 +28,7 @@ Target direction:
 
 ## Goby Syntax Quick Reference (Current Draft)
 
-The current draft is based on files in `examples/` and `doc/PLAN.md`.
+The current draft is based on files in `examples/` and `doc/LANGUAGE_SPEC.md`.
 
 - Source files use `.gb`.
 - Function definitions use `=`.
@@ -40,10 +41,12 @@ The current draft is based on files in `examples/` and `doc/PLAN.md`.
 
 ## Full Reference Policy
 
-`doc/PLAN.md` is the active design reference.
+`doc/LANGUAGE_SPEC.md` is the active language-spec reference.
+`doc/PLAN.md` is the active planning/roadmap reference.
 
 **Instruction**: When changing language syntax, semantics, or core terminology:
 
+- update `doc/LANGUAGE_SPEC.md`,
 - update `doc/PLAN.md`,
 - update or add relevant examples in `examples/`,
 - keep `README.md` user-facing (high-level only, not detailed spec text).
@@ -98,10 +101,11 @@ When making non-trivial changes, run at least `cargo check` and `cargo test`.
 
 For language-facing changes:
 
-1. Update `doc/PLAN.md` (spec intent and status).
-2. Update `examples/` (concrete syntax/behavior).
-3. Update implementation in `crates/`.
-4. Run formatting and tests.
+1. Update `doc/LANGUAGE_SPEC.md` (latest spec behavior).
+2. Update `doc/PLAN.md` (plan intent, migration notes, status).
+3. Update `examples/` (concrete syntax/behavior).
+4. Update implementation in `crates/`.
+5. Run formatting and tests.
 
 For restart safety:
 
