@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-04 (session 94)
+Last updated: 2026-03-04 (session 95)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -59,6 +59,18 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - phased Wasm lowering (portable trampoline first, typed-continuation optimization later).
 
 ## 4. Recent Milestones
+
+- 2026-03-04 (session 95): `PLAN_EFFECT_RENEWAL` P0 sync into `doc/PLAN.md`
+  - Added canonical effect-renewal lock section in `doc/PLAN.md` §2.3:
+    - `handler` as expression/value with lexical capture,
+    - `Handler(E...)` type model (order-insensitive multi-effect equivalence),
+    - `with <handler> in <body>` + `with_handler ... in ...` sugar,
+    - untyped clause headers (`op x -> ...`) with effect-signature-driven typing,
+    - ambiguity conflict rejection + canonical diagnostic wording,
+    - one-shot `resume`/double-resume rejection policy,
+    - reserved keyword set (`with`, `with_handler`, `in`, `handler`, `effect`),
+    - aggressive legacy bridge policy (short warning window then default rejection).
+  - `PLAN_EFFECT_RENEWAL` first step (P0 spec synchronization) is now complete.
 
 - 2026-03-04 (session 94): effect renewal planning sync (`PLAN_EFFECT_RENEWAL`) and priority lock
   - Replaced prior inline-clause `with` migration framing with handler-value model:
