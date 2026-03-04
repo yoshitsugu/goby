@@ -351,16 +351,6 @@ fn inspect_stmts(
                     op_name_index,
                 );
             }
-            Stmt::Using { body, .. } => {
-                out.contains_using = true;
-                inspect_stmts(
-                    body,
-                    out,
-                    declaration_names,
-                    qualified_operation_index,
-                    op_name_index,
-                );
-            }
         }
     }
 }
@@ -590,7 +580,6 @@ fn stmts_contain_handler_resume(stmts: &[Stmt]) -> bool {
 fn stmt_contains_handler_resume(stmt: &Stmt) -> bool {
     match stmt {
         Stmt::Binding { value, .. } | Stmt::Expr(value) => expr_contains_handler_resume(value),
-        Stmt::Using { body, .. } => stmts_contain_handler_resume(body),
     }
 }
 

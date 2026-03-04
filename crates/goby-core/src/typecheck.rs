@@ -116,9 +116,6 @@ pub fn typecheck_module_with_context(
     let effect_map = build_effect_map(module);
     let required_effects_map = build_required_effects_map(module);
 
-    // Step 2 (`resume`) checks in handler method bodies.
-    check_handler_method_resume_usage(module, &env)?;
-
     for decl in &module.declarations {
         if let Some(stmts) = &decl.parsed_body {
             let declared_return_ty = decl.type_annotation.as_deref().map(annotation_return_ty);
@@ -168,8 +165,7 @@ pub fn typecheck_module_with_context(
                 .collect();
 
             // Ops declared in the function's own `can` clause are implicitly
-            // available inside that function's body (they do not need an enclosing
-            // `using` block at the call site within the same function).
+            // available inside that function's body.
             let decl_covered_ops =
                 ops_from_can_clause(decl.type_annotation.as_deref(), &effect_map);
 
@@ -192,63 +188,12 @@ pub fn typecheck_module_with_context(
     Ok(())
 }
 
-fn check_handler_method_resume_usage(module: &Module, env: &TypeEnv) -> Result<(), TypecheckError> {
-    for handler in &module.handler_declarations {
-        for method in &handler.methods {
-            let Some(stmts) = &method.parsed_body else {
-                continue;
-            };
-            let resume_count = count_resume_in_stmts(stmts);
-            if resume_count > 1 {
-                return Err(TypecheckError {
-                    declaration: Some(format!(
-                        "handler `{}` method `{}`",
-                        handler.name, method.name
-                    )),
-                    span: None,
-                    message: format!(
-                        "resume_potential_multi_shot: handler method contains {} `resume` expressions; this phase only allows at most one syntactic `resume` per handler method",
-                        resume_count
-                    ),
-                });
-            }
-            let (op_param_ty, op_result_ty) =
-                resolve_handler_method_op_types(module, &handler.effect, &method.name);
-            let param_tys: Vec<(&str, Ty)> = method
-                .params
-                .iter()
-                .enumerate()
-                .map(|(idx, name)| {
-                    let ty = if idx == 0 {
-                        op_param_ty.clone().unwrap_or(Ty::Unknown)
-                    } else {
-                        Ty::Unknown
-                    };
-                    (name.as_str(), ty)
-                })
-                .collect();
-            let resume_ctx = ResumeContext {
-                expected_arg_ty: op_result_ty,
-            };
-            check_resume_in_stmts(
-                stmts,
-                env,
-                &format!("handler `{}` method `{}`", handler.name, method.name),
-                &param_tys,
-                Some(&resume_ctx),
-            )?;
-        }
-    }
-    Ok(())
-}
-
 fn count_resume_in_stmts(stmts: &[Stmt]) -> usize {
     stmts
         .iter()
         .map(|stmt| match stmt {
             Stmt::Binding { value, .. } => count_resume_in_expr(value),
             Stmt::Expr(expr) => count_resume_in_expr(expr),
-            Stmt::Using { body, .. } => count_resume_in_stmts(body),
         })
         .sum()
 }
@@ -308,33 +253,6 @@ fn count_resume_in_expr(expr: &Expr) -> usize {
                 + count_resume_in_expr(else_expr)
         }
     }
-}
-
-fn resolve_handler_method_op_types(
-    module: &Module,
-    effect_name: &str,
-    op_name: &str,
-) -> (Option<Ty>, Option<Ty>) {
-    let Some(effect_decl) = module
-        .effect_declarations
-        .iter()
-        .find(|effect| effect.name == effect_name)
-    else {
-        return (None, None);
-    };
-    let Some(member) = effect_decl
-        .members
-        .iter()
-        .find(|member| member.name == op_name)
-    else {
-        return (None, None);
-    };
-    let Some(ft) = parse_function_type(&member.type_annotation) else {
-        return (None, None);
-    };
-    let param_ty = ft.arguments.first().map(|arg| ty_from_annotation(arg));
-    let result_ty = Some(ty_from_annotation(&ft.result));
-    (param_ty, result_ty)
 }
 
 // ---------------------------------------------------------------------------
@@ -528,33 +446,15 @@ fn annotation_return_ty(annotation: &str) -> Ty {
     }
 }
 
-/// Maps handler names to the set of effect operation names they cover.
+/// Maps effects to their operations and operation-name reverse lookups.
 struct EffectMap {
-    /// handler_name -> effect_name
-    handler_to_effect: HashMap<String, String>,
     /// effect_name -> set of op identifiers: both qualified ("E.op") and bare ("op")
     effect_to_ops: HashMap<String, HashSet<String>>,
     /// bare operation name -> effect names declaring that operation
     op_to_effects: HashMap<String, HashSet<String>>,
 }
 
-impl EffectMap {
-    /// Returns the set of all op names (qualified + bare) covered by the given handler names.
-    fn covered_ops(&self, handlers: &[String]) -> HashSet<String> {
-        let mut ops = HashSet::new();
-        for handler in handlers {
-            if let Some(effect_name) = self.handler_to_effect.get(handler)
-                && let Some(op_set) = self.effect_to_ops.get(effect_name)
-            {
-                ops.extend(op_set.iter().cloned());
-            }
-        }
-        ops
-    }
-}
-
 /// Maps top-level declaration names to the list of effect names they require (from `can` clause).
-/// Used to check that callers provide appropriate `using` handlers.
 fn build_required_effects_map(module: &Module) -> HashMap<String, Vec<String>> {
     let mut map = HashMap::new();
     for decl in &module.declarations {
@@ -579,11 +479,6 @@ fn build_required_effects_map(module: &Module) -> HashMap<String, Vec<String>> {
 }
 
 fn build_effect_map(module: &Module) -> EffectMap {
-    let mut handler_to_effect = HashMap::new();
-    for handler_decl in &module.handler_declarations {
-        handler_to_effect.insert(handler_decl.name.clone(), handler_decl.effect.clone());
-    }
-
     let mut effect_to_ops: HashMap<String, HashSet<String>> = HashMap::new();
     for effect_decl in &module.effect_declarations {
         let mut ops = HashSet::new();
@@ -595,7 +490,6 @@ fn build_effect_map(module: &Module) -> EffectMap {
     }
 
     EffectMap {
-        handler_to_effect,
         effect_to_ops,
         op_to_effects: build_op_to_effects(module),
     }
@@ -755,16 +649,6 @@ fn inject_effect_symbols(module: &Module, globals: &mut HashMap<String, GlobalBi
                 format!("effect `{}` member", effect_decl.name),
             );
         }
-    }
-    for handler_decl in &module.handler_declarations {
-        // Register handler name as Unknown so that `using HandlerName` doesn't produce
-        // an "ambiguous name" error.
-        insert_global_symbol(
-            globals,
-            handler_decl.name.clone(),
-            Ty::Unknown,
-            format!("handler `{}`", handler_decl.name),
-        );
     }
 }
 
@@ -980,23 +864,6 @@ fn validate_intrinsic_namespace_policy(
         }
     }
 
-    for handler in &module.handler_declarations {
-        for method in &handler.methods {
-            if let Some(stmts) = &method.parsed_body
-                && let Some((name, kind)) =
-                    first_disallowed_intrinsic_in_stmts(stmts, is_stdlib_source)
-            {
-                return Err(TypecheckError {
-                    declaration: Some(format!(
-                        "handler `{}` method `{}`",
-                        handler.name, method.name
-                    )),
-                    span: None,
-                    message: intrinsic_error_message(&name, kind),
-                });
-            }
-        }
-    }
     Ok(())
 }
 
@@ -1039,11 +906,6 @@ fn first_disallowed_intrinsic_in_stmts(
         match stmt {
             Stmt::Binding { value, .. } | Stmt::Expr(value) => {
                 if let Some(hit) = first_disallowed_intrinsic_in_expr(value, is_stdlib_source) {
-                    return Some(hit);
-                }
-            }
-            Stmt::Using { body, .. } => {
-                if let Some(hit) = first_disallowed_intrinsic_in_stmts(body, is_stdlib_source) {
                     return Some(hit);
                 }
             }
@@ -1850,15 +1712,6 @@ fn check_resume_in_stmts_with_local_env(
             Stmt::Expr(expr) => {
                 check_resume_in_expr(expr, local_env, decl_name, resume_ctx)?;
             }
-            Stmt::Using { body, .. } => {
-                let mut child_env = TypeEnv {
-                    globals: local_env.globals.clone(),
-                    locals: local_env.locals.clone(),
-                    type_aliases: local_env.type_aliases.clone(),
-                    record_types: local_env.record_types.clone(),
-                };
-                check_resume_in_stmts_with_local_env(body, &mut child_env, decl_name, resume_ctx)?;
-            }
         }
     }
     Ok(())
@@ -2106,21 +1959,6 @@ fn check_body_stmts(
                     effect_map,
                     covered_ops,
                     decl_name,
-                )?;
-            }
-            Stmt::Using { handlers, body } => {
-                // Compute the ops covered by these handlers, merged with the enclosing set.
-                let mut merged = covered_ops.clone();
-                merged.extend(effect_map.covered_ops(handlers));
-                check_body_stmts(
-                    body,
-                    &local_env,
-                    effect_map,
-                    required_effects_map,
-                    decl_name,
-                    None,
-                    &[],
-                    &merged,
                 )?;
             }
         }
@@ -2620,7 +2458,6 @@ fn ensure_no_ambiguous_refs_in_stmts(
         match stmt {
             Stmt::Binding { value, .. } => ensure_no_ambiguous_refs_in_expr(value, env, decl_name)?,
             Stmt::Expr(expr) => ensure_no_ambiguous_refs_in_expr(expr, env, decl_name)?,
-            Stmt::Using { body, .. } => ensure_no_ambiguous_refs_in_stmts(body, env, decl_name)?,
         }
     }
     Ok(())

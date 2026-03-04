@@ -17,9 +17,8 @@
 //! ## Intentional fallback boundaries (Phase A)
 //!
 //! The following constructs force the entire module onto the fallback (interpreter) path:
-//! - [`UnsupportedReason::UsingNotSupported`]: `Stmt::Using` / effect handlers.
 //! - [`UnsupportedReason::CallTargetBodyNotNativeSupported`]: declarations reachable from `main`
-//!   that contain forms outside the native subset (for example `using` blocks).
+//!   that contain forms outside the native subset (for example effect handler bodies).
 //! - [`UnsupportedReason::UnsupportedValueExpr`]: expression forms not yet lowered
 //!   (e.g. method calls, record operations).
 
@@ -45,7 +44,6 @@ pub(crate) enum UnsupportedReason {
     MainAnnotationNotUnitToUnit,
     MainParsedBodyUnavailable,
     MainBodyEmpty,
-    UsingNotSupported,
     CallCalleeNotDirectName,
     PrintArityNotOne,
     UnsupportedPipelineCallee,
@@ -69,7 +67,6 @@ impl UnsupportedReason {
             Self::MainAnnotationNotUnitToUnit => "main_annotation_not_unit_to_unit",
             Self::MainParsedBodyUnavailable => "main_parsed_body_unavailable",
             Self::MainBodyEmpty => "main_body_empty",
-            Self::UsingNotSupported => "using_not_supported",
             Self::CallCalleeNotDirectName => "call_callee_not_direct_name",
             Self::PrintArityNotOne => "print_arity_not_one",
             Self::UnsupportedPipelineCallee => "unsupported_pipeline_callee",
@@ -146,7 +143,6 @@ fn unsupported_stmt_reason(
     match stmt {
         Stmt::Binding { value, .. } => unsupported_value_expr_reason(value, module, stack),
         Stmt::Expr(expr) => unsupported_stmt_expr_reason(expr, module, stack),
-        Stmt::Using { .. } => Some(UnsupportedReason::UsingNotSupported),
     }
 }
 
@@ -328,7 +324,6 @@ fn is_decl_stmt_supported(stmt: &Stmt, module: &Module, stack: &mut HashSet<Stri
             }
             _ => is_decl_value_expr_supported(expr, module, stack),
         },
-        Stmt::Using { .. } => false,
     }
 }
 

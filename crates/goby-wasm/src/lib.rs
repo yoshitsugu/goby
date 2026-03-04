@@ -19,7 +19,6 @@ const BUILTIN_PRINT: &str = "print";
 const MAX_EVAL_DEPTH: usize = 32;
 const ERR_RESUME_MISSING: &str = "resume used without an active continuation [E-RESUME-MISSING]: `resume` can only be called while executing a handler operation body";
 const ERR_RESUME_CONSUMED: &str = "resume continuation already consumed [E-RESUME-CONSUMED]: continuations are one-shot; call `resume` at most once per handled operation";
-const ERR_RESUME_HANDLER_MISMATCH: &str = "internal resume token handler mismatch [E-RESUME-HANDLER-MISMATCH]: continuation token points to an unknown handler";
 const ERR_RESUME_STACK_MISMATCH: &str = "internal resume token stack mismatch [E-RESUME-STACK-MISMATCH]: continuation token stack became unbalanced";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -426,8 +425,6 @@ struct RuntimeOutputResolver<'m> {
     locals: RuntimeLocals,
     outputs: Vec<String>,
     module: &'m Module,
-    /// Active handlers in lexical order; later entries are more deeply nested.
-    active_handler_stack: Vec<usize>,
     /// Active inline handlers installed via `with` / `with_handler`.
     active_inline_handler_stack: Vec<InlineHandlerValue>,
     resume_tokens: Vec<ResumeToken>,
@@ -443,16 +440,12 @@ struct Continuation {
 
 #[derive(Clone)]
 struct ResumeToken {
-    handler_decl_idx: usize,
-    is_inline: bool,
     continuation: Continuation,
     resumed_value: Option<RuntimeValue>,
 }
 
 #[derive(Clone)]
 struct OptimizedResumeToken {
-    handler_decl_idx: usize,
-    is_inline: bool,
     consumed: bool,
     resumed_value: Option<RuntimeValue>,
 }
@@ -494,7 +487,6 @@ impl<'m> RuntimeOutputResolver<'m> {
             locals: RuntimeLocals::default(),
             outputs: Vec::new(),
             module,
-            active_handler_stack: Vec::new(),
             active_inline_handler_stack: Vec::new(),
             resume_tokens: Vec::new(),
             optimized_resume_tokens: Vec::new(),
@@ -553,39 +545,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                 Some(())
             }
             Stmt::Expr(expr) => self.eval_ast_side_effect(expr, evaluators),
-            Stmt::Using { handlers, body } => {
-                let pushed = self.push_handlers_by_name(handlers);
-                let result = (|| -> Option<()> {
-                    for stmt in body {
-                        self.ingest_ast_statement(stmt, evaluators)?;
-                    }
-                    Some(())
-                })();
-                self.pop_active_handlers(pushed);
-                result
-            }
         }
-    }
-
-    fn push_handlers_by_name(&mut self, handlers: &[String]) -> usize {
-        let mut pushed = 0;
-        for handler_name in handlers {
-            if let Some(idx) = self
-                .module
-                .handler_declarations
-                .iter()
-                .position(|h| &h.name == handler_name)
-            {
-                self.active_handler_stack.push(idx);
-                pushed += 1;
-            }
-        }
-        pushed
-    }
-
-    fn pop_active_handlers(&mut self, count: usize) {
-        let next_len = self.active_handler_stack.len().saturating_sub(count);
-        self.active_handler_stack.truncate(next_len);
     }
 
     fn eval_ast_side_effect(
@@ -1403,17 +1363,6 @@ impl<'m> RuntimeOutputResolver<'m> {
                 let repr = expr.to_str_repr()?;
                 self.execute_unit_call(&repr, locals, callables, evaluators)
             }
-            Stmt::Using { handlers, body } => {
-                let pushed = self.push_handlers_by_name(handlers);
-                let result = (|| -> Option<()> {
-                    for stmt in body {
-                        self.execute_unit_ast_stmt(stmt, locals, callables, evaluators, depth + 1)?;
-                    }
-                    Some(())
-                })();
-                self.pop_active_handlers(pushed);
-                result
-            }
         }
     }
 
@@ -1558,18 +1507,6 @@ impl<'m> RuntimeOutputResolver<'m> {
                 });
             }
         }
-        for &idx in self.active_handler_stack.iter().rev() {
-            let handler = &self.module.handler_declarations[idx];
-            if handler.effect != effect_name {
-                continue;
-            }
-            if let Some(method) = handler.methods.iter().find(|m| m.name == method_name) {
-                return Some(ResolvedHandlerMethod {
-                    handler_decl_idx: idx,
-                    method: method.clone(),
-                });
-            }
-        }
         None
     }
 
@@ -1598,15 +1535,6 @@ impl<'m> RuntimeOutputResolver<'m> {
                 return Some(ResolvedHandlerMethod {
                     handler_decl_idx: usize::MAX,
                     method: method.method.clone(),
-                });
-            }
-        }
-        for &idx in self.active_handler_stack.iter().rev() {
-            let handler = &self.module.handler_declarations[idx];
-            if let Some(m) = handler.methods.iter().find(|m| m.name == method_name) {
-                return Some(ResolvedHandlerMethod {
-                    handler_decl_idx: idx,
-                    method: m.clone(),
                 });
             }
         }
@@ -1661,10 +1589,8 @@ impl<'m> RuntimeOutputResolver<'m> {
         }
     }
 
-    fn push_resume_token_for_handler(&mut self, handler_decl_idx: usize, is_inline: bool) -> usize {
+    fn push_resume_token_for_handler(&mut self) -> usize {
         self.resume_tokens.push(ResumeToken {
-            handler_decl_idx,
-            is_inline,
             continuation: Continuation { consumed: false },
             resumed_value: None,
         });
@@ -1684,14 +1610,8 @@ impl<'m> RuntimeOutputResolver<'m> {
         self.resume_tokens.last_mut()
     }
 
-    fn push_optimized_resume_token_for_handler(
-        &mut self,
-        handler_decl_idx: usize,
-        is_inline: bool,
-    ) -> usize {
+    fn push_optimized_resume_token_for_handler(&mut self) -> usize {
         self.optimized_resume_tokens.push(OptimizedResumeToken {
-            handler_decl_idx,
-            is_inline,
             consumed: false,
             resumed_value: None,
         });
@@ -1729,17 +1649,11 @@ impl<'m> RuntimeOutputResolver<'m> {
         }
     }
 
-    fn begin_handler_continuation_bridge(
-        &mut self,
-        handler_decl_idx: usize,
-        is_inline: bool,
-    ) -> usize {
+    fn begin_handler_continuation_bridge(&mut self) -> usize {
         match self.execution_mode {
-            lower::EffectExecutionMode::PortableFallback => {
-                self.push_resume_token_for_handler(handler_decl_idx, is_inline)
-            }
+            lower::EffectExecutionMode::PortableFallback => self.push_resume_token_for_handler(),
             lower::EffectExecutionMode::TypedContinuationOptimized => {
-                self.push_optimized_resume_token_for_handler(handler_decl_idx, is_inline)
+                self.push_optimized_resume_token_for_handler()
             }
         }
     }
@@ -1784,12 +1698,6 @@ impl<'m> RuntimeOutputResolver<'m> {
             self.set_runtime_error_once(ERR_RESUME_CONSUMED);
             return None;
         }
-        if !token_ro.is_inline
-            && token_ro.handler_decl_idx >= self.module.handler_declarations.len()
-        {
-            self.set_runtime_error_once(ERR_RESUME_HANDLER_MISMATCH);
-            return None;
-        }
         let Some(token) = self.current_resume_token_mut() else {
             self.set_runtime_error_once(ERR_RESUME_MISSING);
             return None;
@@ -1809,12 +1717,6 @@ impl<'m> RuntimeOutputResolver<'m> {
         };
         if token_ro.consumed {
             self.set_runtime_error_once(ERR_RESUME_CONSUMED);
-            return None;
-        }
-        if !token_ro.is_inline
-            && token_ro.handler_decl_idx >= self.module.handler_declarations.len()
-        {
-            self.set_runtime_error_once(ERR_RESUME_HANDLER_MISMATCH);
             return None;
         }
         let Some(token) = self.current_optimized_resume_token_mut() else {
@@ -1838,11 +1740,7 @@ impl<'m> RuntimeOutputResolver<'m> {
             return None;
         }
         let stmts = method.method.parsed_body.as_deref()?;
-        let token_idx = self.begin_handler_continuation_bridge(
-            method.handler_decl_idx,
-            method.handler_decl_idx == usize::MAX,
-        );
-        let previous_stack_len = self.active_handler_stack.len();
+        let token_idx = self.begin_handler_continuation_bridge();
         let run_result = (|| -> Option<Option<RuntimeValue>> {
             let mut handler_locals = if method.handler_decl_idx == usize::MAX {
                 self.active_inline_handler_stack
@@ -1919,57 +1817,6 @@ impl<'m> RuntimeOutputResolver<'m> {
                                 last_val = None;
                             }
                         }
-                        Stmt::Using { handlers, body } => {
-                            let pushed = self.push_handlers_by_name(handlers);
-                            let using_result = (|| -> Option<()> {
-                                for inner_stmt in body {
-                                    match inner_stmt {
-                                        Stmt::Binding { name, value } => {
-                                            let v = self.eval_expr_ast(
-                                                value,
-                                                &handler_locals,
-                                                &handler_callables,
-                                                evaluators,
-                                                depth + 1,
-                                            )?;
-                                            handler_locals.store(name, v);
-                                        }
-                                        Stmt::Expr(expr) => {
-                                            last_val = self.eval_expr_ast(
-                                                expr,
-                                                &handler_locals,
-                                                &handler_callables,
-                                                evaluators,
-                                                depth + 1,
-                                            );
-                                            if last_val.is_none() {
-                                                self.execute_unit_ast_stmt(
-                                                    inner_stmt,
-                                                    &mut handler_locals,
-                                                    &mut handler_callables,
-                                                    evaluators,
-                                                    depth + 1,
-                                                )?;
-                                                last_val = None;
-                                            }
-                                        }
-                                        Stmt::Using { .. } => {
-                                            // Nested using: delegate to execute_unit_ast_stmt for full handling.
-                                            self.execute_unit_ast_stmt(
-                                                inner_stmt,
-                                                &mut handler_locals,
-                                                &mut handler_callables,
-                                                evaluators,
-                                                depth + 1,
-                                            )?;
-                                        }
-                                    }
-                                }
-                                Some(())
-                            })();
-                            self.pop_active_handlers(pushed);
-                            using_result?;
-                        }
                     }
                 } else {
                     match stmt {
@@ -2015,8 +1862,6 @@ impl<'m> RuntimeOutputResolver<'m> {
             }
         })();
         let resumed = self.finish_handler_continuation_bridge(token_idx);
-        // Never leak handler context changes outside an effect call.
-        self.active_handler_stack.truncate(previous_stack_len);
         let resumed = resumed?;
         let run_result = run_result?;
         if produce_value {
