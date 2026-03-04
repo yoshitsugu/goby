@@ -982,11 +982,9 @@ impl<'m> RuntimeOutputResolver<'m> {
                     None
                 }
             }
-            Expr::Handler { clauses } => Some(RuntimeValue::Handler(self.inline_handler_from_clauses(
-                clauses,
-                locals,
-                callables,
-            ))),
+            Expr::Handler { clauses } => Some(RuntimeValue::Handler(
+                self.inline_handler_from_clauses(clauses, locals, callables),
+            )),
             Expr::BinOp { op, left, right } => {
                 let lv = self.eval_expr_ast(left, locals, callables, evaluators, depth + 1)?;
                 let rv = self.eval_expr_ast(right, locals, callables, evaluators, depth + 1)?;
@@ -1731,7 +1729,11 @@ impl<'m> RuntimeOutputResolver<'m> {
         }
     }
 
-    fn begin_handler_continuation_bridge(&mut self, handler_decl_idx: usize, is_inline: bool) -> usize {
+    fn begin_handler_continuation_bridge(
+        &mut self,
+        handler_decl_idx: usize,
+        is_inline: bool,
+    ) -> usize {
         match self.execution_mode {
             lower::EffectExecutionMode::PortableFallback => {
                 self.push_resume_token_for_handler(handler_decl_idx, is_inline)
@@ -1782,7 +1784,9 @@ impl<'m> RuntimeOutputResolver<'m> {
             self.set_runtime_error_once(ERR_RESUME_CONSUMED);
             return None;
         }
-        if !token_ro.is_inline && token_ro.handler_decl_idx >= self.module.handler_declarations.len() {
+        if !token_ro.is_inline
+            && token_ro.handler_decl_idx >= self.module.handler_declarations.len()
+        {
             self.set_runtime_error_once(ERR_RESUME_HANDLER_MISMATCH);
             return None;
         }
@@ -1807,7 +1811,9 @@ impl<'m> RuntimeOutputResolver<'m> {
             self.set_runtime_error_once(ERR_RESUME_CONSUMED);
             return None;
         }
-        if !token_ro.is_inline && token_ro.handler_decl_idx >= self.module.handler_declarations.len() {
+        if !token_ro.is_inline
+            && token_ro.handler_decl_idx >= self.module.handler_declarations.len()
+        {
             self.set_runtime_error_once(ERR_RESUME_HANDLER_MISMATCH);
             return None;
         }
@@ -3065,7 +3071,7 @@ main =
                 .expect("runtime output should resolve");
         // Clean up before asserting so env is restored even if the assertion panics.
         unsafe { std::env::remove_var("GOBY_PATH") };
-        assert_eq!(output, "13\nhello");
+        assert_eq!(output, "13\ndone");
     }
 
     #[test]

@@ -290,9 +290,7 @@ fn count_resume_in_expr(expr: &Expr) -> usize {
                     .unwrap_or(0)
             })
             .sum(),
-        Expr::With { handler, body } => {
-            count_resume_in_expr(handler) + count_resume_in_stmts(body)
-        }
+        Expr::With { handler, body } => count_resume_in_expr(handler) + count_resume_in_stmts(body),
         Expr::Case { scrutinee, arms } => {
             count_resume_in_expr(scrutinee)
                 + arms
@@ -1100,9 +1098,10 @@ fn first_disallowed_intrinsic_in_expr(
         }
         Expr::Lambda { body, .. } => first_disallowed_intrinsic_in_expr(body, is_stdlib_source),
         Expr::Handler { clauses } => clauses.iter().find_map(|clause| {
-            clause.parsed_body.as_ref().and_then(|stmts| {
-                first_disallowed_intrinsic_in_stmts(stmts, is_stdlib_source)
-            })
+            clause
+                .parsed_body
+                .as_ref()
+                .and_then(|stmts| first_disallowed_intrinsic_in_stmts(stmts, is_stdlib_source))
         }),
         Expr::With { handler, body } => {
             first_disallowed_intrinsic_in_expr(handler, is_stdlib_source)
@@ -1767,7 +1766,10 @@ fn infer_handler_covered_ops_strict(
             _ => Err(TypecheckError {
                 declaration: Some(decl_name.to_string()),
                 span: None,
-                message: format!("`with` expects a handler value, but `{}` is not a Handler", name),
+                message: format!(
+                    "`with` expects a handler value, but `{}` is not a Handler",
+                    name
+                ),
             }),
         },
         _ => Err(TypecheckError {
@@ -2776,9 +2778,8 @@ fn validate_handler_type_expr(
                         return Err(TypecheckError {
                             declaration: Some(decl_name.to_string()),
                             span: None,
-                            message:
-                                "Handler type arguments must be effect names (identifiers)"
-                                    .to_string(),
+                            message: "Handler type arguments must be effect names (identifiers)"
+                                .to_string(),
                         });
                     };
                     if !known_effects.contains(effect_name) {
@@ -3284,8 +3285,7 @@ main =
     log \"hello\"
 ";
         let module = parse_module(source).expect("should parse");
-        let err =
-            typecheck_module(&module).expect_err("with non-handler expression should fail");
+        let err = typecheck_module(&module).expect_err("with non-handler expression should fail");
         assert!(err.message.contains("with"));
         assert!(err.message.contains("handler value"));
     }
@@ -3341,8 +3341,7 @@ mk =
   h
 ";
         let module = parse_module(source).expect("should parse");
-        let err = typecheck_module(&module)
-            .expect_err("mismatched Handler annotation should fail");
+        let err = typecheck_module(&module).expect_err("mismatched Handler annotation should fail");
         assert!(err.message.contains("body type"));
         assert!(err.message.contains("Handler"));
     }

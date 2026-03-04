@@ -13,18 +13,9 @@ plus_ten_with_log i =
   # This can be written as `log result`.
   result
 
-# You can define an effect handler with `handler`.
-# You need to specify which effect the handler is for.
-handler LogHandler for Log
-  log str =
-    print str
-
 # You can combine multiple effects (algebraic effects).
 effect Env
   from_env: String -> String
-
-handler EnvHandler for Env
-  from_env str = env.fetch_env_var(str)
 
 show_env_var : String -> Unit can Log, Env
 show_env_var name =
@@ -32,12 +23,19 @@ show_env_var name =
   log env_var
 
 main =
-  # You can apply a handler with `using`.
+  # You can create a handler value with `handler` and apply it with `with`.
   # If any effects remain in `main`, the compiler reports `UnHandledEffectError`.
-  # The `Print` effect is handled by default as stdout output, so no custom handler is needed.
-  using LogHandler
+  # The `Print` effect is handled by default as stdout output.
+  h = handler
+    log str ->
+      print str
+  with h
+  in
     plus_ten_with_log 3
 
-  # You can list multiple handlers.
-  using LogHandler, EnvHandler
-    show_env_var "GOBY_PATH"
+  # `with_handler` is inline sugar for `with (handler ...)`.
+  with_handler
+    log str ->
+      print str
+  in
+    log "done"

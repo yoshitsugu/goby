@@ -242,6 +242,11 @@ Completion criteria:
   - tests,
   - implementation changes,
   - `doc/STATE.md` progress update.
+- Validation flow is mandatory on every change (no exceptions):
+  - `cargo fmt`
+  - `cargo clippy -- -D warnings`
+  - `cargo test`
+  - (optional but recommended) `cargo check`
 - No phase is complete without checklist update in this document.
 
 ## 6. Immediate Next Step

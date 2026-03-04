@@ -2780,8 +2780,8 @@ main = 1
         );
         assert_eq!(
             module.handler_declarations.len(),
-            2,
-            "effect.gb should have 2 handler declarations"
+            0,
+            "effect.gb should not rely on legacy top-level handler declarations"
         );
         for decl in &module.declarations {
             assert!(
