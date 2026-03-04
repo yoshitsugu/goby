@@ -132,6 +132,48 @@ Based on `examples/*.gb`:
 - Effect propagation rules for higher-order functions — deferred.
 - Effect diagnostics UX polish (wording/format consistency) — deferred.
 
+#### Effect Renewal Syntax/Typing Lock (P0, 2026-03-04)
+
+This section mirrors the locked renewal decisions in
+`doc/PLAN_EFFECT_RENEWAL.md` and is the canonical language-spec entry for the
+new handler-value model.
+
+- Effect declaration syntax:
+  - `effect <CamelCaseName>` with indented operation signatures.
+  - newline-separated and `;`-separated declaration forms are both accepted.
+- Handler is an expression/value:
+  - `handler` evaluates to a handler value and may capture lexical bindings.
+  - handler clauses use untyped headers only: `op x -> ...`.
+  - operation/argument typing is sourced from effect declaration signatures.
+- Handler type:
+  - `Handler(E)` for single-effect handler values.
+  - `Handler(E1, E2, ...)` for multi-effect handler values.
+  - effect-list order is type-equivalent (`Handler(A, B)` == `Handler(B, A)`).
+  - parser/tokenization is whitespace-insensitive around commas
+    (`Handler(E1,E2)` and `Handler(E1, E2)` are equivalent).
+- Handler application:
+  - canonical form is `with <handler_expr> in <body>`.
+  - `with` accepts exactly one handler value.
+  - `with_handler ... in ...` is syntax sugar for inline handler construction +
+    `with`.
+- Dispatch/conflict policy:
+  - dynamic operation dispatch uses nearest active handler (lexical stack order).
+  - duplicate operation clauses in one handler are rejected.
+  - if one multi-effect handler introduces overlapping operation names across
+    effects, reject as ambiguity.
+  - canonical ambiguity diagnostic:
+    `operation '<op>' is ambiguous across effects in Handler(...): <EffectA>, <EffectB>`.
+- Resume policy:
+  - one-shot continuation contract remains active.
+  - double `resume` in the same handler invocation is rejected.
+- Reserved keywords for renewal syntax:
+  - `with`, `with_handler`, `in`, `handler`, `effect`.
+- Migration policy:
+  - legacy top-level `handler ... for ...` and `using` remain only for a short
+    bridge window.
+  - compatibility window is intentionally aggressive (pre-1.0); after one warning
+    release, legacy syntax is rejected by default.
+
 #### Post-MVP Implementation Direction (locked 2026-03-01)
 
 - Adopt **deep handlers + one-shot resumptions** as the baseline semantics.
