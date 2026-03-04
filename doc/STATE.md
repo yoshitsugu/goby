@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-04 (session 110)
+Last updated: 2026-03-04 (session 111)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -30,7 +30,9 @@ This file is a restart-safe snapshot for resuming work after context reset.
 - Block-local binding semantics: `name = expr` is binding only; re-binding shadows; declaration-local.
 - Operator precedence: `|>` < `+` < `*` < call/application; all left-associative.
   - `+` and `*` require spaces on both sides in MVP.
-- `using` handler syntax: comma-separated (`using HandlerA, HandlerB`).
+- Legacy `using` / top-level `handler ... for ...` syntax is rejected by
+  `goby-cli check/run` by default (2026-03-04).
+  Internal parser/runtime compatibility paths remain during P6 removal work.
 - `active_handlers` is a `BTreeMap<String, usize>` (deterministic alphabetical dispatch order).
 - String escape sequences: `\n`, `\t`, `\\`, `\"` expanded at parse time via `unescape_string`.
 - String interpolation `${...}` is parsed into `Expr::InterpolatedString`.
@@ -59,6 +61,20 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - phased Wasm lowering (portable trampoline first, typed-continuation optimization later).
 
 ## 4. Recent Milestones
+
+- 2026-03-04 (session 111): `PLAN_EFFECT_RENEWAL` P6 first slice (CLI default rejection)
+  - Removed legacy syntax warn/deny mode split from CLI:
+    - removed warning mode and `GOBY_LEGACY_EFFECT_SYNTAX` gating behavior,
+    - `goby-cli check/run` now fail by default when legacy syntax usage is detected.
+  - Updated CLI regression coverage:
+    - legacy syntax now fails in default mode for both `check` and `run`,
+    - legacy env var presence no longer changes acceptance behavior.
+  - Documentation sync:
+    - `doc/PLAN.md`, `doc/PLAN_EFFECT_RENEWAL.md`, and
+      `doc/EFFECT_RENEWAL_MIGRATION.md` now describe default rejection status.
+  - Validation completed:
+    - `cargo test -p goby-cli`
+    - `cargo test -p goby-core`
 
 - 2026-03-04 (session 110): state snapshot refresh (renewal progress + next focus sync)
   - Refreshed restart snapshot after `PLAN_EFFECT_RENEWAL` P4/P5 progress:
@@ -1333,8 +1349,8 @@ Validation policy (every implementation step):
 Execution focus (in order):
 1. `PLAN_EFFECT_RENEWAL` implementation (highest priority):
    - P0-P4 complete (spec + parser/AST + typecheck + runtime parity + examples/docs migration),
-   - P5 in progress (compatibility/deprecation): warning+deny modes landed in CLI,
-   - next: P6 removal prep (widen deny-mode coverage, then remove legacy parser/runtime paths).
+   - P5 complete (compatibility/deprecation window closed in CLI),
+   - P6 in progress: remove legacy parser/runtime paths and remaining internal dependencies.
 2. Effect runtime redesign follow-up (one-shot deep handlers + selective CPS/evidence passing), including
    post-`PLAN_RESUME` items now tracked in `doc/PLAN.md`.
 3. `resolve_main_runtime_output` retirement (blocked on effect-native support and remaining unsupported forms).

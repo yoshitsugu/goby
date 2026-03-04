@@ -71,8 +71,9 @@ Based on `examples/*.gb`:
   - `can` clauses are validated (declared effect or built-in effect names).
 - Canonical handler application syntax is `with <handler_expr> in <body>` and
   `with_handler ... in ...` (inline sugar).
-- Legacy `using` handler application syntax (`using HandlerA, HandlerB`) remains as
-  temporary compatibility syntax in the bridge window.
+- Legacy syntax (`handler ... for ...`, `using`) is no longer supported by CLI
+  commands (`check` / `run`) as of 2026-03-04.
+  - parser/runtime compatibility paths may remain internally during P6 removal work.
 - MVP built-ins: `print`, `map`, `fetch_env_var`, `string.split`, `list.join`.
   - `print` execution is resolved by compiler/runtime internals (default stdio print path),
     not by a user-visible stdlib handler definition.
@@ -127,7 +128,7 @@ Based on `examples/*.gb`:
 - Current implemented checks:
   - `can` effect names must be declared (or built-in).
   - uncovered effect operation calls are rejected unless covered by enclosing handler scope
-    (`with` / `with_handler`; `using` in compatibility mode).
+    (`with` / `with_handler`; `using` remains internal compatibility-only during removal work).
   - calls to `can`-annotated functions require an appropriate enclosing handler scope.
 - Current runtime behavior:
   - effect operations dispatch through installed handlers.
@@ -177,6 +178,7 @@ new handler-value model.
     bridge window.
   - compatibility window is intentionally aggressive (pre-1.0); after one warning
     release, legacy syntax is rejected by default.
+  - status update (2026-03-04): CLI already rejects legacy syntax by default.
   - migration mapping examples are documented in
     `doc/EFFECT_RENEWAL_MIGRATION.md`.
 

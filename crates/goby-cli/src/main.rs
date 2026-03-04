@@ -42,12 +42,6 @@ enum CliError {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum LegacySyntaxMode {
-    Warn,
-    Deny,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ExecutionOutcome {
     Executed,
     SkippedNoWasmtime,
@@ -106,18 +100,11 @@ fn run() -> Result<(), CliError> {
     })?;
 
     let legacy_usage = analyze_legacy_syntax_usage(&module);
-    match resolve_legacy_syntax_mode() {
-        LegacySyntaxMode::Warn => {
-            print_legacy_syntax_warnings(&legacy_usage);
-        }
-        LegacySyntaxMode::Deny => {
-            if legacy_usage.has_any() {
-                return Err(CliError::Runtime(format!(
-                    "legacy effect syntax is denied by GOBY_LEGACY_EFFECT_SYNTAX=deny (handler_for={}, using={}); migrate to `handler` + `with`/`with_handler` (see doc/EFFECT_RENEWAL_MIGRATION.md)",
-                    legacy_usage.handler_for_count, legacy_usage.using_count
-                )));
-            }
-        }
+    if legacy_usage.has_any() {
+        return Err(CliError::Runtime(format!(
+            "legacy effect syntax is no longer supported (handler_for={}, using={}); migrate to `handler` + `with`/`with_handler` (see doc/EFFECT_RENEWAL_MIGRATION.md)",
+            legacy_usage.handler_for_count, legacy_usage.using_count
+        )));
     }
 
     match cli.command {
@@ -223,32 +210,6 @@ struct LegacySyntaxUsage {
 impl LegacySyntaxUsage {
     fn has_any(self) -> bool {
         self.handler_for_count > 0 || self.using_count > 0
-    }
-}
-
-fn resolve_legacy_syntax_mode() -> LegacySyntaxMode {
-    match env::var("GOBY_LEGACY_EFFECT_SYNTAX")
-        .ok()
-        .as_deref()
-        .map(str::trim)
-    {
-        Some("deny") => LegacySyntaxMode::Deny,
-        _ => LegacySyntaxMode::Warn,
-    }
-}
-
-fn print_legacy_syntax_warnings(usage: &LegacySyntaxUsage) {
-    if usage.handler_for_count > 0 {
-        println!(
-            "warning: legacy syntax `handler ... for ...` is temporary compatibility syntax ({} use(s)); migrate to `handler` + `with`/`with_handler` (see doc/EFFECT_RENEWAL_MIGRATION.md)",
-            usage.handler_for_count
-        );
-    }
-    if usage.using_count > 0 {
-        println!(
-            "warning: legacy syntax `using` is temporary compatibility syntax ({} use(s)); migrate to `with`/`with_handler` (see doc/EFFECT_RENEWAL_MIGRATION.md)",
-            usage.using_count
-        );
     }
 }
 
@@ -427,15 +388,5 @@ main =
         let usage = analyze_legacy_syntax_usage(&module);
         assert_eq!(usage.using_count, 2);
         assert_eq!(usage.handler_for_count, 1);
-    }
-
-    #[test]
-    fn resolves_legacy_syntax_mode_from_env() {
-        // SAFETY: test process controls env access in this test.
-        unsafe { env::set_var("GOBY_LEGACY_EFFECT_SYNTAX", "deny") };
-        assert_eq!(resolve_legacy_syntax_mode(), LegacySyntaxMode::Deny);
-        // SAFETY: cleanup after temporary test env override.
-        unsafe { env::remove_var("GOBY_LEGACY_EFFECT_SYNTAX") };
-        assert_eq!(resolve_legacy_syntax_mode(), LegacySyntaxMode::Warn);
     }
 }

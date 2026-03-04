@@ -238,7 +238,7 @@ fn run_command_skips_when_wasmtime_is_missing() {
 }
 
 #[test]
-fn check_command_emits_legacy_syntax_warnings() {
+fn check_command_rejects_legacy_syntax_by_default() {
     let root = repo_root();
     let sandbox = TempDirGuard::new("check_legacy_warnings");
     let input = sandbox.join("legacy_effect.gb");
@@ -256,26 +256,20 @@ fn check_command_emits_legacy_syntax_warnings() {
         .expect("cli should execute");
 
     assert!(
-        output.status.success(),
-        "expected success, stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
+        !output.status.success(),
+        "expected failure for legacy syntax in default mode"
     );
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stdout.contains("warning: legacy syntax `handler ... for ...`"),
-        "expected legacy handler warning, got stdout: {}",
-        stdout
-    );
-    assert!(
-        stdout.contains("warning: legacy syntax `using`"),
-        "expected legacy using warning, got stdout: {}",
-        stdout
+        stderr.contains("legacy effect syntax is no longer supported"),
+        "expected legacy rejection message, got stderr: {}",
+        stderr
     );
 }
 
 #[test]
 #[cfg(unix)]
-fn run_command_emits_legacy_syntax_warnings() {
+fn run_command_rejects_legacy_syntax_by_default() {
     let root = repo_root();
     let sandbox = TempDirGuard::new("run_legacy_warnings");
     let fake_bin = sandbox.join("bin");
@@ -304,25 +298,19 @@ fn run_command_emits_legacy_syntax_warnings() {
         .expect("cli should execute");
 
     assert!(
-        output.status.success(),
-        "expected success, stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
+        !output.status.success(),
+        "expected failure for legacy syntax in default mode"
     );
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stdout.contains("warning: legacy syntax `handler ... for ...`"),
-        "expected legacy handler warning, got stdout: {}",
-        stdout
-    );
-    assert!(
-        stdout.contains("warning: legacy syntax `using`"),
-        "expected legacy using warning, got stdout: {}",
-        stdout
+        stderr.contains("legacy effect syntax is no longer supported"),
+        "expected legacy rejection message, got stderr: {}",
+        stderr
     );
 }
 
 #[test]
-fn check_command_rejects_legacy_syntax_in_deny_mode() {
+fn check_command_rejects_legacy_syntax_even_with_legacy_env_var() {
     let root = repo_root();
     let sandbox = TempDirGuard::new("check_legacy_deny");
     let input = sandbox.join("legacy_effect.gb");
@@ -346,8 +334,8 @@ fn check_command_rejects_legacy_syntax_in_deny_mode() {
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("legacy effect syntax is denied"),
-        "expected deny-mode error, got stderr: {}",
+        stderr.contains("legacy effect syntax is no longer supported"),
+        "expected legacy rejection message, got stderr: {}",
         stderr
     );
 }
