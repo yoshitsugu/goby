@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-04 (session 97)
+Last updated: 2026-03-04 (session 98)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -59,6 +59,24 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - phased Wasm lowering (portable trampoline first, typed-continuation optimization later).
 
 ## 4. Recent Milestones
+
+- 2026-03-04 (session 98): `PLAN_EFFECT_RENEWAL` P2 second slice (`Handler(...)` type semantics)
+  - `Handler(...)` type annotations now have semantic validation:
+    - must include at least one effect,
+    - arguments must be identifier effect names,
+    - unknown effects in `Handler(...)` are rejected.
+  - Added `Ty::Handler { covered_ops }` compatibility bridge:
+    - declaration return-type checking now uses `are_compatible` (not raw `==`),
+    - `Handler(E1, E2, ...)` compares against handler-value covered op sets
+      with order-insensitive effect-list semantics.
+  - Added Handler-type regressions:
+    - accept `Unit -> Handler(Log)` with matching handler value,
+    - accept order-insensitive `Handler(Env, Log)` matching,
+    - reject mismatched handler effect set,
+    - reject unknown effect in `Handler(...)` annotation.
+  - Validation:
+    - `cargo check`
+    - `cargo test -p goby-core`
 
 - 2026-03-04 (session 97): `PLAN_EFFECT_RENEWAL` P2 first slice (`with` effect coverage + handler-op diagnostics)
   - Typechecker now performs `with`-body effect coverage using handler-expression-derived covered ops:
