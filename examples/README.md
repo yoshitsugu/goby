@@ -15,7 +15,7 @@ This directory contains small Goby programs grouped by purpose.
   - `concat.gb`: print interpolated string result
 - `parser/`: parser behavior examples
   - `mixed_indent.gb`: mixed tabs/spaces indentation sample
-- `iterator.gb`: iterator-like effect/handler sample using `resume`
+- `iterator.gb`: iterator-like effect/handler sample using `with_handler`
   - emits:
     - `tick`
     - `tick`

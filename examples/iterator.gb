@@ -1,11 +1,11 @@
-import goby/iterator
-
-handler PrintEach for Iterator
-  yield value =
-    print value
+effect Iterator
+  yield: String -> Int
 
 main =
-  using PrintEach
+  with_handler
+    yield value ->
+      print value
+  in
     yield "tick"
     yield "tick"
     yield "tick"
