@@ -177,6 +177,8 @@ new handler-value model.
     bridge window.
   - compatibility window is intentionally aggressive (pre-1.0); after one warning
     release, legacy syntax is rejected by default.
+  - migration mapping examples are documented in
+    `doc/EFFECT_RENEWAL_MIGRATION.md`.
 
 #### Post-MVP Implementation Direction (locked 2026-03-01)
 

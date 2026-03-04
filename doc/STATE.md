@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-04 (session 105)
+Last updated: 2026-03-04 (session 106)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -59,6 +59,19 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - phased Wasm lowering (portable trampoline first, typed-continuation optimization later).
 
 ## 4. Recent Milestones
+
+- 2026-03-04 (session 106): `PLAN_EFFECT_RENEWAL` P5 kickoff (migration guide draft)
+  - Added migration mapping document:
+    - `doc/EFFECT_RENEWAL_MIGRATION.md`
+      (`handler ... for` / `using` -> `handler` value + `with` / `with_handler`).
+  - Linked migration guide from planning docs:
+    - `doc/PLAN_EFFECT_RENEWAL.md` P5 section,
+    - `doc/PLAN.md` effect-renewal migration policy subsection.
+  - No runtime/compiler behavior change in this step.
+  - Validation (mandatory flow) completed:
+    - `cargo fmt`
+    - `cargo clippy -- -D warnings`
+    - `cargo test`
 
 - 2026-03-04 (session 105): `PLAN_EFFECT_RENEWAL` P4 iterator capture example hardening
   - Updated `examples/iterator.gb` to demonstrate lexical capture in handler values:
