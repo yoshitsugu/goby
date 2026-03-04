@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-04 (session 104)
+Last updated: 2026-03-04 (session 105)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -59,6 +59,18 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - phased Wasm lowering (portable trampoline first, typed-continuation optimization later).
 
 ## 4. Recent Milestones
+
+- 2026-03-04 (session 105): `PLAN_EFFECT_RENEWAL` P4 iterator capture example hardening
+  - Updated `examples/iterator.gb` to demonstrate lexical capture in handler values:
+    - local `prefix` binding is captured inside `with_handler` clause body,
+    - sample output now shows transformed values (`tick:a`, `tick:b`, `tick:c`).
+  - Synced example docs and runtime lock expectation:
+    - `examples/README.md` output bullets updated,
+    - `goby-wasm` `locks_runtime_output_for_iterator_gb` expectation updated.
+  - Validation (mandatory flow) completed:
+    - `cargo fmt`
+    - `cargo clippy -- -D warnings`
+    - `cargo test`
 
 - 2026-03-04 (session 104): `PLAN_EFFECT_RENEWAL` P4 doc sync (`PLAN.md` canonical wording)
   - Updated `doc/PLAN.md` MVP summary and effect-system wording to match renewal direction:

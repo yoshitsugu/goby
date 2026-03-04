@@ -3083,7 +3083,7 @@ main =
         let output =
             resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
                 .expect("runtime output should resolve");
-        assert_eq!(output, "tick\ntick\ntick");
+        assert_eq!(output, "tick:a\ntick:b\ntick:c");
     }
 
     #[test]
