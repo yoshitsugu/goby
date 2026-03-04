@@ -1037,6 +1037,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                 }
                 Some(RuntimeValue::ListInt(out))
             }
+            Expr::TupleLit(items) if items.is_empty() => Some(RuntimeValue::Unit),
             Expr::Call { callee, arg } => {
                 if let Some((fn_name, args)) = flatten_named_call(expr)
                     && fn_name.starts_with("__goby_")
@@ -3060,6 +3061,22 @@ main =
             resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
                 .expect("runtime output should resolve");
         assert_eq!(output, "True");
+    }
+
+    #[test]
+    fn resolves_runtime_output_for_unit_literal_value() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let source = r#"
+main : Unit -> Unit
+main = ()
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let output =
+            resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module));
+        assert!(
+            output.is_none(),
+            "unit literal main without print should produce no runtime output"
+        );
     }
 
     #[test]

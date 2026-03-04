@@ -1537,6 +1537,9 @@ fn check_expr(expr: &Expr, env: &TypeEnv) -> Ty {
             Ty::List(Box::new(item_ty))
         }
         Expr::TupleLit(items) => {
+            if items.is_empty() {
+                return Ty::Unit;
+            }
             let tys: Vec<Ty> = items.iter().map(|i| check_expr(i, env)).collect();
             Ty::Tuple(tys)
         }
@@ -4637,6 +4640,13 @@ main =
         let source = "main : Unit -> Unit\nmain =\n  print \"hi\"\n";
         let module = parse_module(source).expect("should parse");
         typecheck_module(&module).expect("Unit-returning function with print body should pass");
+    }
+
+    #[test]
+    fn accepts_unit_literal_value_for_unit_returning_function() {
+        let source = "main : Unit -> Unit\nmain = ()\n";
+        let module = parse_module(source).expect("should parse");
+        typecheck_module(&module).expect("`()` should be accepted as Unit value");
     }
 
     #[test]

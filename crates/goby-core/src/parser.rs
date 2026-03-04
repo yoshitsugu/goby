@@ -1293,7 +1293,8 @@ fn parse_list_expr(src: &str) -> Option<Expr> {
 fn parse_tuple_or_grouped_expr(src: &str) -> Option<Expr> {
     let inner = src[1..src.len() - 1].trim();
     if inner.is_empty() {
-        return None;
+        // `()` is the canonical Unit value literal.
+        return Some(Expr::TupleLit(Vec::new()));
     }
     let parts = split_top_level_commas(inner);
     if parts.len() == 1 {
@@ -2591,6 +2592,11 @@ main =
     }
 
     #[test]
+    fn parses_unit_literal_as_empty_tuple_syntax() {
+        assert_eq!(parse_expr("()"), Some(Expr::TupleLit(vec![])));
+    }
+
+    #[test]
     fn parses_spaced_function_call() {
         assert_eq!(
             parse_expr("add_ten 10"),
@@ -2744,6 +2750,16 @@ main =
             parse_expr("resume Unit"),
             Some(Expr::Resume {
                 value: Box::new(Expr::Var("Unit".to_string()))
+            })
+        );
+    }
+
+    #[test]
+    fn parses_resume_expression_with_unit_literal() {
+        assert_eq!(
+            parse_expr("resume ()"),
+            Some(Expr::Resume {
+                value: Box::new(Expr::TupleLit(vec![]))
             })
         );
     }
