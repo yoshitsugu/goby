@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-04 (session 130)
+Last updated: 2026-03-04 (session 131)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -63,6 +63,16 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - follow-up work moved to post-MVP tracks in `doc/PLAN.md`.
 
 ## 4. Recent Milestones
+
+- 2026-03-04 (session 131): Unit value spelling migration plan locked (`Unit` -> `()`)
+  - Added implementation constraint to `doc/PLAN.md`:
+    - target syntax is `()` as canonical Unit value spelling in expression position,
+    - staged migration policy is explicit: accept+warn first, then reject legacy value-form `Unit`.
+  - Updated `doc/LANGUAGE_SPEC.md` to explicitly document:
+    - current implementation still accepts value-form `Unit`,
+    - migration target is `()` for Unit values.
+  - Immediate next step:
+    - implement parser acceptance for `()` Unit literal with compatibility diagnostics.
 
 - 2026-03-04 (session 130): implicit prelude bootstrap (`goby/prelude`) implementation
   - Added `stdlib/goby/prelude.gb` as the implicit bootstrap module:
