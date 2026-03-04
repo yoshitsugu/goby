@@ -8,19 +8,19 @@ effect Iterator
 
 grapheme_count : String -> Int can Iterator
 grapheme_count value =
-  n = 0
+  mut n = 0
   with_handler
     yield _ ->
       resume 0
   in
-    n = __goby_string_each_grapheme value
+    n := __goby_string_each_grapheme value
   n
 
 split_with_empty_delimiter : String -> List String can Iterator
 split_with_empty_delimiter value =
   initial =
     GraphemeState(grapheme: "", parts: [], current: "", delimiter: "", seen: False)
-  final = initial
+  mut final = initial
   with_handler
     yield_state step ->
       next_parts = __goby_list_push_string step.parts step.grapheme
@@ -32,7 +32,7 @@ split_with_empty_delimiter value =
         seen: True
       )
   in
-    final = __goby_string_each_grapheme value initial
+    final := __goby_string_each_grapheme value initial
   if final.seen
     final.parts
   else
@@ -41,7 +41,7 @@ split_with_empty_delimiter value =
 split_with_single_delimiter : String -> String -> List String can Iterator
 split_with_single_delimiter value sep =
   initial = GraphemeState(grapheme: "", parts: [], current: "", delimiter: sep, seen: False)
-  final = initial
+  mut final = initial
   with_handler
     yield_state step ->
       if step.grapheme == step.delimiter
@@ -63,7 +63,7 @@ split_with_single_delimiter value sep =
           seen: True
         )
   in
-    final = __goby_string_each_grapheme value initial
+    final := __goby_string_each_grapheme value initial
   if final.seen
     __goby_list_push_string final.parts final.current
   else
