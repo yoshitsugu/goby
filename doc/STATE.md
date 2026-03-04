@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-04 (session 111)
+Last updated: 2026-03-04 (session 112)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -61,6 +61,19 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - phased Wasm lowering (portable trampoline first, typed-continuation optimization later).
 
 ## 4. Recent Milestones
+
+- 2026-03-04 (session 112): `PLAN_EFFECT_RENEWAL` P6 prep (stdlib migration off legacy syntax)
+  - Migrated `stdlib/goby/string.gb` from legacy top-level handlers + `using`
+    to canonical `with_handler ... in ...` usage in:
+    - `grapheme_count`
+    - `split_with_empty_delimiter`
+    - `split_with_single_delimiter`
+  - This removes stdlib parser dependency on:
+    - top-level `handler ... for ...`
+    - `using` statements
+  - Validation completed:
+    - `cargo test -p goby-core`
+    - `cargo test`
 
 - 2026-03-04 (session 111): `PLAN_EFFECT_RENEWAL` P6 first slice (CLI default rejection)
   - Removed legacy syntax warn/deny mode split from CLI:
