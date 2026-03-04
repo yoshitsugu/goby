@@ -234,9 +234,11 @@ Migration guide reference:
 ### P6. Removal
 
 - Remove legacy syntax/parser/runtime paths after migration confidence.
-- Status update (2026-03-04): started.
+- Status update (2026-03-04): in progress.
   - CLI default rejection is landed.
-  - remaining work: parser/runtime path removal and associated tests/docs cleanup.
+  - P6-R2 core removal landed (`Stmt::Using` active AST removal, runtime/typecheck legacy path removal).
+  - P6-R3 schema pruning landed (`Module.handler_declarations` / `HandlerDecl` removal).
+  - remaining work: docs/test naming cleanup and final P6 closure checklist update.
 
 Completion criteria:
 
@@ -259,46 +261,28 @@ Completion criteria:
 
 ## 6. Immediate Next Step
 
-Next implementation slice: **P6-R2 (core legacy-path removal)**.
+Next implementation slice: **P6-R4 (cleanup + closure)**.
 
 Scope and order:
 
-1. AST/parser cleanup (goby-core)
-   - remove `Stmt::Using` from active AST surface.
-   - keep parser rejection diagnostics for legacy `using` / `handler ... for ...`
-     (migration hint quality must not regress).
-   - ensure no parser codepath still produces legacy AST nodes.
+1. Test naming + fixture wording cleanup
+   - rename remaining tests/messages that still say "inside/outside using" to
+     canonical `with` / `with_handler` terminology.
+   - keep behavior coverage identical; this is naming/readability cleanup only.
 
-2. Typechecker cleanup (goby-core)
-   - remove `module.handler_declarations`-driven checks and symbol injection.
-   - remove legacy-only resume multi-shot checks tied to top-level handler declarations.
-   - keep `with` / `with_handler` resume checks and ambiguity checks as canonical path.
-   - update outdated diagnostic wording/comments that still mention `using` as active syntax.
+2. Documentation cleanup
+   - refresh `doc/PLAN.md`, `doc/BUGS.md`, and `doc/STATE.md` wording where
+     legacy syntax is still described as active implementation behavior.
+   - preserve `doc/EFFECT_RENEWAL_MIGRATION.md` as historical migration mapping.
 
-3. Wasm cleanup (goby-wasm)
-   - remove runtime dispatch fallback paths that traverse `module.handler_declarations`
-     and `active_handler_stack`.
-   - keep inline handler stack (`with` / `with_handler`) as the only dispatch source.
-   - simplify optimized-path unsupported-construct gate by deleting
-     `handler_declarations` / `Stmt::Using` conditions.
+3. Final validation and closeout
+   - run full mandatory flow and mark P6 complete when green.
 
-4. Test and docs migration
-   - migrate/remove remaining fixtures that still construct legacy handler declarations
-     or `Stmt::Using`.
-   - refresh references in `doc/PLAN.md`, `doc/BUGS.md`, and `doc/STATE.md`
-     that describe `using` as an active implementation path.
-   - preserve migration guide (`doc/EFFECT_RENEWAL_MIGRATION.md`) as historical mapping only.
+Definition of done for P6-R4:
 
-Definition of done for P6-R2:
-
-- `rg -n "Stmt::Using|handler_declarations" crates/goby-core crates/goby-wasm`
-  returns no active runtime/typecheck usage (tests/docs exceptions allowed only where
-  explicitly marked migration-history).
+- `rg -n "Stmt::Using|handler_declarations|HandlerDecl" crates/goby-core crates/goby-wasm`
+  returns no active implementation usage.
 - `cargo fmt`
 - `cargo clippy -- -D warnings`
 - `cargo test`
 - `cargo check`
-
-Planned follow-up slice: **P6-R3 (final schema pruning)**:
-- drop obsolete AST structs/fields for legacy top-level handlers if no longer referenced,
-- run final docs/examples consistency pass and close P6 checklist.

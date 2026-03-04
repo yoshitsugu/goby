@@ -11,7 +11,7 @@ use unicode_segmentation::UnicodeSegmentation;
 
 use crate::call::flatten_named_call;
 use goby_core::{
-    CasePattern, Expr, HandlerClause, HandlerMethod, Module, Stmt, ast::InterpolatedPart,
+    CasePattern, Expr, HandlerClause, Module, Stmt, ast::InterpolatedPart,
     types::parse_function_type,
 };
 const ERR_MISSING_MAIN: &str = "Wasm codegen requires a `main` declaration";
@@ -452,14 +452,13 @@ struct OptimizedResumeToken {
 
 #[derive(Clone)]
 struct ResolvedHandlerMethod {
-    handler_decl_idx: usize,
-    method: HandlerMethod,
+    method: RuntimeHandlerMethod,
 }
 
 #[derive(Clone)]
 struct InlineHandlerMethod {
     effect_name: Option<String>,
-    method: HandlerMethod,
+    method: RuntimeHandlerMethod,
 }
 
 #[derive(Clone)]
@@ -467,6 +466,14 @@ struct InlineHandlerValue {
     methods: Vec<InlineHandlerMethod>,
     captured_locals: RuntimeLocals,
     captured_callables: HashMap<String, IntCallable>,
+}
+
+#[derive(Clone)]
+struct RuntimeHandlerMethod {
+    name: String,
+    params: Vec<String>,
+    body: String,
+    parsed_body: Option<Vec<Stmt>>,
 }
 
 struct RuntimeEvaluators<'a, 'b> {
@@ -1502,7 +1509,6 @@ impl<'m> RuntimeOutputResolver<'m> {
                 m.method.name == method_name && m.effect_name.as_deref() == Some(effect_name)
             }) {
                 return Some(ResolvedHandlerMethod {
-                    handler_decl_idx: usize::MAX,
                     method: method.method.clone(),
                 });
             }
@@ -1533,7 +1539,6 @@ impl<'m> RuntimeOutputResolver<'m> {
         for inline in self.active_inline_handler_stack.iter().rev() {
             if let Some(method) = inline.methods.iter().find(|m| m.method.name == method_name) {
                 return Some(ResolvedHandlerMethod {
-                    handler_decl_idx: usize::MAX,
                     method: method.method.clone(),
                 });
             }
@@ -1551,7 +1556,7 @@ impl<'m> RuntimeOutputResolver<'m> {
             .iter()
             .map(|clause| InlineHandlerMethod {
                 effect_name: self.unique_effect_name_for_operation(&clause.name),
-                method: HandlerMethod {
+                method: RuntimeHandlerMethod {
                     name: clause.name.clone(),
                     params: clause.params.clone(),
                     body: clause.body.clone(),
@@ -1742,47 +1747,41 @@ impl<'m> RuntimeOutputResolver<'m> {
         let stmts = method.method.parsed_body.as_deref()?;
         let token_idx = self.begin_handler_continuation_bridge();
         let run_result = (|| -> Option<Option<RuntimeValue>> {
-            let mut handler_locals = if method.handler_decl_idx == usize::MAX {
-                self.active_inline_handler_stack
-                    .iter()
-                    .rev()
-                    .find_map(|inline| {
-                        inline
-                            .methods
-                            .iter()
-                            .find(|m| {
-                                m.method.name == method.method.name
-                                    && m.method.params == method.method.params
-                                    && m.method.body == method.method.body
-                            })
-                            .map(|_| inline.captured_locals.clone())
-                    })
-                    .unwrap_or_default()
-            } else {
-                RuntimeLocals::default()
-            };
+            let mut handler_locals = self
+                .active_inline_handler_stack
+                .iter()
+                .rev()
+                .find_map(|inline| {
+                    inline
+                        .methods
+                        .iter()
+                        .find(|m| {
+                            m.method.name == method.method.name
+                                && m.method.params == method.method.params
+                                && m.method.body == method.method.body
+                        })
+                        .map(|_| inline.captured_locals.clone())
+                })
+                .unwrap_or_default();
             if let Some(param) = method.method.params.first() {
                 handler_locals.store(param, arg_val);
             }
-            let mut handler_callables = if method.handler_decl_idx == usize::MAX {
-                self.active_inline_handler_stack
-                    .iter()
-                    .rev()
-                    .find_map(|inline| {
-                        inline
-                            .methods
-                            .iter()
-                            .find(|m| {
-                                m.method.name == method.method.name
-                                    && m.method.params == method.method.params
-                                    && m.method.body == method.method.body
-                            })
-                            .map(|_| inline.captured_callables.clone())
-                    })
-                    .unwrap_or_default()
-            } else {
-                HashMap::new()
-            };
+            let mut handler_callables = self
+                .active_inline_handler_stack
+                .iter()
+                .rev()
+                .find_map(|inline| {
+                    inline
+                        .methods
+                        .iter()
+                        .find(|m| {
+                            m.method.name == method.method.name
+                                && m.method.params == method.method.params
+                                && m.method.body == method.method.body
+                        })
+                        .map(|_| inline.captured_callables.clone())
+                })
+                .unwrap_or_default();
             let mut last_val: Option<RuntimeValue> = None;
             for stmt in stmts {
                 if produce_value {
@@ -1896,7 +1895,7 @@ impl<'m> RuntimeOutputResolver<'m> {
     }
 
     /// Execute any declaration (including Int-returning ones) as a side-effect call.
-    /// Used when calling functions like `plus_ten_with_log` from a `using` block.
+    /// Used when calling functions like `plus_ten_with_log` from a `with_handler` block.
     fn execute_decl_as_side_effect(
         &mut self,
         fn_name: &str,
@@ -2959,9 +2958,9 @@ main =
     // --- bare effect call dispatch in main body (§4.1 patch) ---
 
     #[test]
-    fn bare_effect_call_in_main_using_dispatches_to_handler() {
+    fn bare_effect_call_in_main_with_handler_dispatches_to_handler() {
         // Bug: eval_ast_side_effect (main/top-level path) did NOT route bare Call through
-        // find_handler_method_by_name, so `log "hello"` inside `using` produced no output.
+        // find_handler_method_by_name, so `log "hello"` inside `with_handler` produced no output.
         use goby_core::parse_module;
         let _guard = ENV_MUTEX.lock().unwrap();
         let source = r#"
@@ -2983,12 +2982,12 @@ main =
         assert_eq!(
             output.as_deref(),
             Some("hello"),
-            "bare effect call inside main `using` block should dispatch to handler"
+            "bare effect call inside main `with_handler` block should dispatch to handler"
         );
     }
 
     #[test]
-    fn qualified_effect_call_in_main_using_dispatches_to_handler() {
+    fn qualified_effect_call_in_main_with_handler_dispatches_to_handler() {
         // Bug: eval_ast_side_effect had no arm for Expr::Call { callee: Expr::Qualified },
         // so `Log.log "hello"` inside main body fell through to string-based eval_side_effect.
         use goby_core::parse_module;
@@ -3012,7 +3011,7 @@ main =
         assert_eq!(
             output.as_deref(),
             Some("world"),
-            "qualified effect call inside main `using` block should dispatch to handler"
+            "qualified effect call inside main `with_handler` block should dispatch to handler"
         );
     }
 
@@ -3077,7 +3076,7 @@ main =
     }
 
     #[test]
-    fn nested_using_same_effect_prefers_inner_handler() {
+    fn nested_with_handler_same_effect_prefers_inner_handler() {
         use goby_core::parse_module;
         let _guard = ENV_MUTEX.lock().unwrap();
         let source = r#"
@@ -3104,13 +3103,13 @@ main =
         assert_eq!(
             output.as_deref(),
             Some("inner"),
-            "nested `using` should dispatch to nearest enclosing handler"
+            "nested `with_handler` should dispatch to nearest enclosing handler"
         );
     }
 
     #[test]
-    fn pipeline_effect_call_in_main_using_dispatches_to_handler() {
-        // `"msg" |> log` inside main `using` block should dispatch to the active handler.
+    fn pipeline_effect_call_in_main_with_handler_dispatches_to_handler() {
+        // `"msg" |> log` inside main `with_handler` block should dispatch to the active handler.
         // The Pipeline arm in eval_ast_side_effect now checks find_handler_method_by_name.
         use goby_core::parse_module;
         let _guard = ENV_MUTEX.lock().unwrap();
@@ -3133,7 +3132,7 @@ main =
         assert_eq!(
             output.as_deref(),
             Some("piped"),
-            "pipeline effect call inside main `using` block should dispatch to handler"
+            "pipeline effect call inside main `with_handler` block should dispatch to handler"
         );
     }
 
