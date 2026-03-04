@@ -12,6 +12,7 @@ pub struct StdlibResolver {
 pub struct ResolvedStdlibModule {
     pub module_path: String,
     pub exports: HashMap<String, String>,
+    pub types: Vec<String>,
     pub effects: Vec<String>,
     pub embedded_defaults: Vec<EmbeddedDefaultHandlerDecl>,
 }
@@ -78,11 +79,13 @@ impl StdlibResolver {
                 message: parse_err.message,
             })?;
         let exports = collect_exports(module_path, &module.declarations)?;
+        let types = collect_types(&module.type_declarations);
         let effects = collect_effects(&module.effect_declarations);
         let embedded_defaults = collect_embedded_defaults(module_path, &module.embed_declarations)?;
         Ok(ResolvedStdlibModule {
             module_path: module_path.to_string(),
             exports,
+            types,
             effects,
             embedded_defaults,
         })
@@ -172,6 +175,17 @@ fn collect_effects(effects: &[crate::ast::EffectDecl]) -> Vec<String> {
     effects.iter().map(|effect| effect.name.clone()).collect()
 }
 
+fn collect_types(types: &[crate::ast::TypeDeclaration]) -> Vec<String> {
+    types
+        .iter()
+        .map(|decl| match decl {
+            crate::ast::TypeDeclaration::Alias { name, .. } => name.clone(),
+            crate::ast::TypeDeclaration::Union { name, .. } => name.clone(),
+            crate::ast::TypeDeclaration::Record { name, .. } => name.clone(),
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs;
@@ -244,7 +258,7 @@ mod tests {
         fs::create_dir_all(root.join("goby")).expect("stdlib/goby should be creatable");
         fs::write(
             root.join("goby/string.gb"),
-            "split : String -> String -> List String\nsplit value sep = []\n",
+            "type Token = Token(value: String)\neffect StringOps\n  split_op : String -> String -> List String\nsplit : String -> String -> List String\nsplit value sep = []\n",
         )
         .expect("stdlib file should be writable");
 
@@ -257,6 +271,8 @@ mod tests {
             resolved.exports.get("split"),
             Some(&"String -> String -> List String".to_string())
         );
+        assert_eq!(resolved.types, vec!["Token".to_string()]);
+        assert_eq!(resolved.effects, vec!["StringOps".to_string()]);
         assert!(resolved.embedded_defaults.is_empty());
     }
 

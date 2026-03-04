@@ -17,7 +17,9 @@ syntax/semantics.
 - Imports:
   - `import a/b`
   - `import a/b as x`
-  - `import a/b ( foo, bar )`
+  - `import a/b ( foo, BarType, BazEffect )`
+  - plain/alias import includes module exports for values, types, and effects.
+  - selective import may list any mix of value/type/effect names from the module.
 
 ## 2. Declarations
 

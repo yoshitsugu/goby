@@ -515,6 +515,10 @@ Planning constraints:
 - Standard libraries should be implemented in Goby itself by default.
 - Libraries should be importable as `import goby/(library_name)`.
 - At least for the near term, stdlib and compiler/runtime remain in the same monorepo.
+- Import semantics are unified across values/types/effects:
+  - plain and alias imports expose module members for all three namespaces.
+  - selective import (`import a/b ( ... )`) accepts mixed value/type/effect names.
+  - any name-resolution ambiguity is rejected during resolution (not deferred until use).
 
 Preparation steps:
 
