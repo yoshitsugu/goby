@@ -1,0 +1,14 @@
+main =
+  # You can declare a mutable variable with `mut`.
+  mut a = 1
+  # Mutable variables can be updated with `:=`.
+  a := 2
+  print a # -> 2
+  # The following should be an error:
+  # a = 10
+
+  b = 4
+  # The following should be an error:
+  # Variables are immutable by default.
+  # b := 3
+  print b

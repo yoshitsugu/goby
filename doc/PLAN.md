@@ -326,6 +326,58 @@ through active `using` handlers, matching the behavior of `execute_unit_ast_stmt
 - Fixed `execute_decl_as_side_effect` depth: 1 → 0 (top-level consistency).
 - 5 new regression tests; 181 total tests pass.
 
+### 4.2 Mutable Variable Syntax (`mut` / `:=`) — Planned
+
+Goal: support explicit mutable local variables while preserving immutable-by-default
+behavior in declaration bodies.
+
+Proposed surface syntax:
+
+- Mutable declaration: `mut a = 1`
+- Mutable update: `a := 2`
+- Immutable declaration remains: `b = 4`
+
+Lock decisions for this change:
+
+- `mut` is a reserved keyword.
+- `=` remains declaration syntax; assignment uses `:=`.
+- Variables are immutable by default unless declared with `mut`.
+
+Implementation plan:
+
+1. Parser/AST
+   - Add statement variants for mutable declaration and assignment.
+   - Parse `mut <name> = <expr>`.
+   - Parse `<name> := <expr>`.
+   - Reject malformed forms with parser diagnostics consistent with existing style.
+2. Typechecker
+   - Track local variable mutability in the declaration-body environment.
+   - Enforce assignment rules:
+     - assignment target must already be declared,
+     - assignment target must be mutable,
+     - assigned value type must be compatible with the variable's type.
+   - Reject same-scope redeclaration to avoid ambiguity between declaration and mutation.
+3. Runtime/lowering
+   - Execute mutable declaration and assignment in fallback/runtime evaluators.
+   - Keep native-lowering behavior explicit (either support or cleanly fall back).
+4. Tests and docs
+   - Add parser/typechecker/runtime regression tests for success and failure cases.
+   - Keep `examples/mut.gb` as the canonical sample for this feature.
+   - Update `doc/STATE.md` at each milestone.
+
+Required error cases (must pass):
+
+- `a = 10` after `mut a = ...` in the same scope is rejected
+  (redeclaration; users should use `:=`).
+- `b := 3` when `b` was declared without `mut` is rejected.
+- `x := 1` when `x` is undeclared is rejected.
+
+Diagnostic style targets (wording aligned with existing plain errors):
+
+- `duplicate declaration \`a\` in the same scope; use \`:=\` for mutation`
+- `cannot assign to immutable variable \`b\`; declare it with \`mut\` first`
+- `cannot assign to undeclared variable \`x\``
+
 ### 4.1.1 Effect op argument type checking in `using` blocks
 
 #### Background
