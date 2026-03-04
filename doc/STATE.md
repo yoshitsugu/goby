@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-04 (session 112)
+Last updated: 2026-03-04 (session 114)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -61,6 +61,33 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - phased Wasm lowering (portable trampoline first, typed-continuation optimization later).
 
 ## 4. Recent Milestones
+
+- 2026-03-04 (session 114): `PLAN_EFFECT_RENEWAL` P6 prep (goby-wasm test fixture migration)
+  - Migrated representative legacy effect fixtures in `crates/goby-wasm/src/lib.rs`
+    to canonical `with_handler` form, including:
+    - bare/qualified/pipeline effect dispatch tests in main body,
+    - nearest-handler precedence tests,
+    - intrinsic each-grapheme runtime tests,
+    - positional constructor dispatch and resume runtime path tests.
+  - Legacy-path runtime coverage remains for selected regression scenarios
+    (for example inline-vs-legacy precedence checks), pending parser/runtime
+    removal phase.
+  - Validation completed:
+    - `cargo test -p goby-wasm`
+
+- 2026-03-04 (session 113): `PLAN_EFFECT_RENEWAL` P6 prep (goby-core test fixture migration)
+  - Migrated `crates/goby-core/src/typecheck.rs` effect-related fixtures from
+    legacy top-level handlers/`using` to canonical `with_handler` in most cases:
+    - effect-op coverage tests,
+    - effectful-call coverage tests,
+    - effect-op argument type tests,
+    - stdlib intrinsic state-thread fixture.
+  - Kept two `resume_potential_multi_shot` regression tests on legacy handler
+    declarations temporarily, because current static multi-resume rejection still
+    depends on that path.
+  - Validation completed:
+    - `cargo test -p goby-core`
+    - `cargo test`
 
 - 2026-03-04 (session 112): `PLAN_EFFECT_RENEWAL` P6 prep (stdlib migration off legacy syntax)
   - Migrated `stdlib/goby/string.gb` from legacy top-level handlers + `using`

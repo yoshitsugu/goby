@@ -2979,13 +2979,12 @@ main =
         let source = r#"
 import goby/iterator
 
-handler Count for Iterator
-  yield _ =
-    resume 0
-
 main : Unit -> Unit can Print
 main =
-  using Count
+  with_handler
+    yield _ ->
+      resume 0
+  in
     n = __goby_string_each_grapheme "a👨‍👩‍👧‍👦b"
     print n
 "#;
@@ -3006,16 +3005,15 @@ effect Iterator
   yield : String -> Int
   yield_state : GraphemeState -> GraphemeState
 
-handler Fold for Iterator
-  yield_state step =
-    next = "${step.current}${step.grapheme}"
-    resume GraphemeState(grapheme: "", parts: [], current: next, delimiter: "", seen: True)
-
 main : Unit -> Unit can Print
 main =
   state = GraphemeState(grapheme: "", parts: [], current: "", delimiter: "", seen: False)
   out = state
-  using Fold
+  with_handler
+    yield_state step ->
+      next = "${step.current}${step.grapheme}"
+      resume GraphemeState(grapheme: "", parts: [], current: next, delimiter: "", seen: True)
+  in
     out = __goby_string_each_grapheme "a👨‍👩‍👧‍👦b" state
   print out.current
 "#;
@@ -3125,13 +3123,13 @@ main =
 effect Log
   log: String -> Unit
 
-handler ConsoleLog for Log
-  log msg =
-    print msg
-
 main : Unit -> Unit
 main =
-  using ConsoleLog
+  with_handler
+    log msg ->
+      print msg
+      resume Unit
+  in
     log "hello"
 "#;
         let module = parse_module(source).expect("parse should work");
@@ -3154,13 +3152,13 @@ main =
 effect Log
   log: String -> Unit
 
-handler ConsoleLog for Log
-  log msg =
-    print msg
-
 main : Unit -> Unit
 main =
-  using ConsoleLog
+  with_handler
+    log msg ->
+      print msg
+      resume Unit
+  in
     Log.log "world"
 "#;
         let module = parse_module(source).expect("parse should work");
@@ -3211,18 +3209,17 @@ effect Alpha
 effect Beta
   greet: String -> String
 
-handler HandlerA for Alpha
-  greet s =
-    "from-alpha"
-
-handler HandlerB for Beta
-  greet s =
-    "from-beta"
-
 main : Unit -> Unit
 main =
-  using HandlerA, HandlerB
-    print (greet "x")
+  with_handler
+    greet s ->
+      resume "from-alpha"
+  in
+    with_handler
+      greet s ->
+        resume "from-beta"
+    in
+      print (greet "x")
 "#;
         let module = parse_module(source).expect("parse should work");
         let output =
@@ -3242,18 +3239,18 @@ main =
 effect Log
   log: String -> Unit
 
-handler OuterLog for Log
-  log msg =
-    print "outer"
-
-handler InnerLog for Log
-  log msg =
-    print "inner"
-
 main : Unit -> Unit
 main =
-  using OuterLog
-    using InnerLog
+  with_handler
+    log msg ->
+      print "outer"
+      resume Unit
+  in
+    with_handler
+      log msg ->
+        print "inner"
+        resume Unit
+    in
       log "x"
 "#;
         let module = parse_module(source).expect("parse should work");
@@ -3276,13 +3273,13 @@ main =
 effect Log
   log: String -> Unit
 
-handler ConsoleLog for Log
-  log msg =
-    print msg
-
 main : Unit -> Unit
 main =
-  using ConsoleLog
+  with_handler
+    log msg ->
+      print msg
+      resume Unit
+  in
     "piped" |> log
 "#;
         let module = parse_module(source).expect("parse should work");
@@ -3304,10 +3301,6 @@ main =
         let source = r#"
 effect Log
   log: String -> Unit
-
-handler ConsoleLog for Log
-  log msg =
-    print msg
 
 main : Unit -> Unit
 main =
@@ -3334,13 +3327,13 @@ type Error = Error(message: String)
 effect RaiseError
   raise: Error -> Unit
 
-handler PrintErrorHandler for RaiseError
-  raise e =
-    print e.message
-
 main : Unit -> Unit
 main =
-  using PrintErrorHandler
+  with_handler
+    raise e ->
+      print e.message
+      resume Unit
+  in
     raise Error("oops")
 "#;
         let module = parse_module(source).expect("parse should work");
@@ -3361,13 +3354,12 @@ main =
 effect Iter
   next: Int -> Int
 
-handler IterHandler for Iter
-  next n =
-    resume 7
-
 main : Unit -> Unit
 main =
-  using IterHandler
+  with_handler
+    next n ->
+      resume 7
+  in
     print (next 0)
 "#;
         let module = parse_module(source).expect("parse should work");
@@ -3388,13 +3380,12 @@ main =
 effect Iter
   next: Int -> Int
 
-handler IterHandler for Iter
-  next n =
-    resume (resume 1)
-
 main : Unit -> Unit
 main =
-  using IterHandler
+  with_handler
+    next n ->
+      resume (resume 1)
+  in
     print (next 0)
 "#;
         let module = parse_module(source).expect("parse should work");
@@ -3415,13 +3406,12 @@ main =
 effect Iter
   next: Int -> Int
 
-handler IterHandler for Iter
-  next n =
-    print "handled"
-
 main : Unit -> Unit
 main =
-  using IterHandler
+  with_handler
+    next n ->
+      print "handled"
+  in
     print (next 0)
 "#;
         let module = parse_module(source).expect("parse should work");
