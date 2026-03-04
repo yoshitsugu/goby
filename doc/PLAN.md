@@ -66,10 +66,13 @@ Based on `examples/*.gb`:
   - `main` type annotation is required for `run`; optional for `check`.
 - Legacy `void` type spelling is rejected in type annotations.
 - First backend target is Wasm.
-- Effects and handlers are available in MVP runtime via `effect`, `handler`, and `using`.
+- Effects and handlers are available in MVP runtime via `effect`, `handler`, `with`, and `with_handler`.
   - handler dispatch follows lexical nearest-handler stack order.
   - `can` clauses are validated (declared effect or built-in effect names).
-- `using` handler application syntax: comma-separated handler list (`using HandlerA, HandlerB`).
+- Canonical handler application syntax is `with <handler_expr> in <body>` and
+  `with_handler ... in ...` (inline sugar).
+- Legacy `using` handler application syntax (`using HandlerA, HandlerB`) remains as
+  temporary compatibility syntax in the bridge window.
 - MVP built-ins: `print`, `map`, `fetch_env_var`, `string.split`, `list.join`.
   - `print` execution is resolved by compiler/runtime internals (default stdio print path),
     not by a user-visible stdlib handler definition.
@@ -123,8 +126,9 @@ Based on `examples/*.gb`:
 
 - Current implemented checks:
   - `can` effect names must be declared (or built-in).
-  - uncovered effect operation calls are rejected unless covered by enclosing `using`.
-  - calls to `can`-annotated functions require an appropriate enclosing `using`.
+  - uncovered effect operation calls are rejected unless covered by enclosing handler scope
+    (`with` / `with_handler`; `using` in compatibility mode).
+  - calls to `can`-annotated functions require an appropriate enclosing handler scope.
 - Current runtime behavior:
   - effect operations dispatch through installed handlers.
   - bare-name dispatch falls back to deterministic effect-name order (temporary MVP behavior).

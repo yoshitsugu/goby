@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-04 (session 103)
+Last updated: 2026-03-04 (session 104)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -59,6 +59,17 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - phased Wasm lowering (portable trampoline first, typed-continuation optimization later).
 
 ## 4. Recent Milestones
+
+- 2026-03-04 (session 104): `PLAN_EFFECT_RENEWAL` P4 doc sync (`PLAN.md` canonical wording)
+  - Updated `doc/PLAN.md` MVP summary and effect-system wording to match renewal direction:
+    - canonical handler application is `with` / `with_handler`,
+    - legacy `using` is explicitly marked as temporary compatibility syntax,
+    - effect coverage wording now refers to enclosing handler scope (with compatibility note).
+  - No compiler/runtime behavior changes in this step (documentation alignment only).
+  - Validation (mandatory flow) completed:
+    - `cargo fmt`
+    - `cargo clippy -- -D warnings`
+    - `cargo test`
 
 - 2026-03-04 (session 103): `PLAN_EFFECT_RENEWAL` P4 iterator example migration
   - Migrated `examples/iterator.gb` from legacy top-level `handler ... for` + `using`
