@@ -143,6 +143,66 @@ Based on `examples/*.gb`:
   - Parser/AST support includes prefix, head-literal, wildcard, and tail-binding forms.
   - List item literals in MVP are `Int` / `String` only (no `Bool` list-pattern items).
   - Parser rejects malformed forms and duplicate binders.
+- **`case` arm block body** (planned, next syntax milestone).
+  - Goal:
+    - support both inline arm bodies and indented block arm bodies.
+    - inline (current): `pat -> expr`
+    - block (new): `pat ->` then deeper-indented statements, with last expression as arm result.
+  - Definition of Done (MVP for this item):
+    - `goby-cli check` accepts `case` with mixed inline/block arms.
+    - `goby-cli run` executes selected arm block correctly (binding order + last expression value).
+    - behavior is consistent between native-lowered and fallback-executed paths.
+  - Proposed syntax shape:
+    - `case x`
+    - `  0 ->`
+    - `    y = 1`
+    - `    y + 10`
+    - `  _ -> 0`
+  - Phase 1 (AST/parser):
+    - introduce an explicit expression-level block representation (for example `Expr::Block(Vec<Stmt>)`)
+      so arm blocks are first-class and reusable in other expression positions later.
+    - scope guard:
+      - in this milestone, parser constructs `Expr::Block` only for `case` arm bodies.
+      - reuse in other expression positions is handled by follow-up tasks.
+    - extend `parse_multiline_expr` (`case` arm path):
+      - keep accepting `pattern -> <expr>` inline form.
+      - add `pattern ->` form that consumes a deeper-indented statement block.
+    - error rules:
+      - reject empty arm blocks.
+      - reject non-indented lines immediately after `pattern ->`.
+      - arm block may include blank/comment-only lines; they do not satisfy non-empty block requirement by themselves.
+      - dedent closes current arm block; next sibling arm is parsed at case-arm indent level.
+      - preserve existing malformed-pattern diagnostics.
+  - Phase 2 (typing/analysis):
+    - typecheck block expressions with existing local-binding rules:
+      - each statement extends local env in order.
+      - block type is the type of the last expression statement.
+      - if block tail is not an expression statement (for example trailing binding), report type error.
+    - ensure existing case-arm checks still apply:
+      - list-pattern binding environment extension.
+      - arm result compatibility checks.
+      - effect/resume/intrinsic checks traverse block expressions.
+  - Phase 3 (runtime/codegen):
+    - fallback evaluator: execute arm block statements sequentially and return last expression value.
+    - Wasm lowering:
+      - either lower block expressions directly, or conservatively route such `case` expressions
+        to fallback until native lowering is implemented.
+      - keep behavior parity between native and fallback paths.
+  - Phase 4 (tests/examples/docs):
+    - parser tests:
+      - parse mixed inline/block arms in one `case`.
+      - reject malformed/empty arm block shapes.
+      - accept blank/comment lines inside arm block while still rejecting effectively empty block.
+    - typechecker tests:
+      - arm-local bindings are visible only inside that arm block.
+      - arm block result type participates in arm type checks.
+      - trailing non-expression statement in arm block is rejected.
+    - runtime tests:
+      - selected arm block executes in order and returns last expression.
+      - add CLI integration checks for both `check` and `run` paths with arm-block source.
+    - examples/spec sync:
+      - add one canonical example under `examples/`.
+      - update `doc/LANGUAGE_SPEC.md` once implementation is merged.
 - **Tuple index access `expr.N`** (post-MVP).
   - Syntax `a.0`, `a.1` is shown in `examples/basic_types.gb` but is not yet parsed.
   - `parse_method_call` rejects numeric method names (`is_identifier` fails on digits).
