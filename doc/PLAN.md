@@ -566,7 +566,7 @@ Implementation plan (step-by-step checklist):
   - Temporary compatibility shims were removed after stdlib migration (PR4-2).
   - Definition of done: stdlib iterator-like flows compile and run using only unified `yield`.
 
-- [ ] Step 6: diagnostics and error-message hardening.
+- [x] Step 6: diagnostics and error-message hardening.
   - Improve mismatch diagnostics to display substituted expected types after inference (for example show `Int` instead of raw `a` when already bound).
   - Add explicit diagnostics for unresolved generic constraints in effect handlers.
   - Ensure `_` type-hole errors are readable when constraints conflict.
