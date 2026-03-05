@@ -2,16 +2,15 @@ import goby/iterator
 
 type GraphemeState = GraphemeState(grapheme: String, parts: List String, current: String, delimiter: String, seen: Bool)
 
-effect Iterator
-  yield : String -> Int
-  yield_state : GraphemeState -> GraphemeState
+effect Iterator a b
+  yield : a -> b -> (Bool, b)
 
 grapheme_count : String -> Int can Iterator
 grapheme_count value =
   mut n = 0
   with_handler
-    yield _ ->
-      resume 0
+    yield _ _ ->
+      resume (True, ())
   in
     n := __goby_string_each_grapheme value
   n
@@ -22,15 +21,15 @@ split_with_empty_delimiter value =
     GraphemeState(grapheme: "", parts: [], current: "", delimiter: "", seen: False)
   mut final = initial
   with_handler
-    yield_state step ->
-      next_parts = __goby_list_push_string step.parts step.grapheme
-      resume GraphemeState(
+    yield grapheme step ->
+      next_parts = __goby_list_push_string step.parts grapheme
+      resume (True, GraphemeState(
         grapheme: "",
         parts: next_parts,
         current: "",
         delimiter: "",
         seen: True
-      )
+      ))
   in
     final := __goby_string_each_grapheme value initial
   if final.seen
@@ -43,25 +42,25 @@ split_with_single_delimiter value sep =
   initial = GraphemeState(grapheme: "", parts: [], current: "", delimiter: sep, seen: False)
   mut final = initial
   with_handler
-    yield_state step ->
-      if step.grapheme == step.delimiter
+    yield grapheme step ->
+      if grapheme == step.delimiter
         next_parts = __goby_list_push_string step.parts step.current
-        resume GraphemeState(
+        resume (True, GraphemeState(
           grapheme: "",
           parts: next_parts,
           current: "",
           delimiter: step.delimiter,
           seen: True
-        )
+        ))
       else
-        next_current = "${step.current}${step.grapheme}"
-        resume GraphemeState(
+        next_current = "${step.current}${grapheme}"
+        resume (True, GraphemeState(
           grapheme: "",
           parts: step.parts,
           current: next_current,
           delimiter: step.delimiter,
           seen: True
-        )
+        ))
   in
     final := __goby_string_each_grapheme value initial
   if final.seen

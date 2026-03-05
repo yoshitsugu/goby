@@ -6119,6 +6119,35 @@ f s =
     }
 
     #[test]
+    fn accepts_each_grapheme_intrinsic_unified_iterator_mode_inside_stdlib_root() {
+        let sandbox = TempDirGuard::new("intrinsic_each_grapheme_unified_inside_stdlib");
+        let stdlib_root = sandbox.path.join("stdlib");
+        let source_path = stdlib_root.join("goby/string.gb");
+        fs::create_dir_all(source_path.parent().expect("parent should exist"))
+            .expect("stdlib path should be creatable");
+        let source = "\
+type GraphemeState = GraphemeState(grapheme: String, current: String)
+effect Iterator a b
+  yield : a -> b -> (Bool, b)
+@embed Iterator __goby_embeded_effect_stdout_handler
+f : String -> GraphemeState can Iterator
+f s =
+  state = GraphemeState(grapheme: \"\", current: \"\")
+  out = state
+  with_handler
+    yield grapheme step ->
+      resume (True, step)
+  in
+    out = __goby_string_each_grapheme s state
+  out
+";
+        fs::write(&source_path, source).expect("fixture file should be writable");
+        let module = parse_module(source).expect("should parse");
+        typecheck_module_with_context(&module, Some(&source_path), Some(&stdlib_root))
+            .expect("unified iterator mode should be accepted under stdlib root");
+    }
+
+    #[test]
     fn accepts_string_eq_operator_and_list_push_intrinsic_inside_stdlib_root() {
         let sandbox = TempDirGuard::new("string_eq_operator_and_push_inside_stdlib");
         let stdlib_root = sandbox.path.join("stdlib");
