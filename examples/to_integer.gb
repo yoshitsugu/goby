@@ -5,7 +5,7 @@ effect StringParseError
 
 main : Unit -> Unit can Print, StringParseError
 main =
-  with_handler
+  with
     invalid_integer value ->
       print "invalid: ${value}"
       resume -1

@@ -20,7 +20,7 @@ count_values =
 main : Unit -> Unit
 main =
   # state-less mode: Unit state
-  with_handler
+  with
     yield value _ ->
       print "tick:${value}"
       resume (True, ())
@@ -30,7 +30,7 @@ main =
     yield "c" ()
 
   # state-threaded mode: Int state
-  count_all = with_handler
+  count_all = with
     yield _ step ->
       resume (True, step + 1)
   in
@@ -38,7 +38,7 @@ main =
   print "${count_all}"
 
   # early-stop mode: return (False, state)
-  count_early_stop = with_handler
+  count_early_stop = with
     yield value step ->
       if value == "b"
         resume (False, step)

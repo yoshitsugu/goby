@@ -2245,22 +2245,8 @@ mod tests {
     #[test]
     fn rejects_all_reserved_syntax_tokens_as_top_level_declaration_names() {
         let reserved = [
-            "import",
-            "type",
-            "effect",
-            "handler",
-            "with",
-            "in",
-            "resume",
-            "mut",
-            "if",
-            "else",
-            "case",
-            "as",
-            "can",
-            "using",
-            "True",
-            "False",
+            "import", "type", "effect", "handler", "with", "in", "resume", "mut", "if", "else",
+            "case", "as", "can", "using", "True", "False",
         ];
         for name in reserved {
             let source = format!("{name} : Int -> Int\n{name} x = x\n");
@@ -3237,6 +3223,15 @@ main =
             }
             other => panic!("unexpected statement: {other:?}"),
         }
+    }
+
+    #[test]
+    fn rejects_legacy_with_handler_statement_syntax() {
+        let body = "with_handler\n  emit x ->\n    resume x\nin\n  emit 1";
+        assert!(
+            parse_body_stmts(body).is_none(),
+            "legacy with_handler statement should fail parse"
+        );
     }
 
     #[test]

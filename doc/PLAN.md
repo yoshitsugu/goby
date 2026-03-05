@@ -332,13 +332,13 @@ Goal: remove `with_handler` and use only `with`.
   - [x] Step 5: language docs sync
     - `doc/LANGUAGE_SPEC.md`: remove `with_handler` from reserved tokens and handler syntax section.
     - `doc/PLAN.md`/`doc/STATE.md`: mark completion and remove transitional wording.
-  - [ ] Step 6: examples migration
+  - [x] Step 6: examples migration
     - migrate all `examples/*.gb` from `with_handler` to `with`.
     - verify iterator examples keep multiline RHS behavior.
-  - [ ] Step 7: tests migration
+  - [x] Step 7: tests migration
     - update parser tests for `with` inline/value forms.
     - update typecheck/CLI tests and add `with_handler` rejection coverage.
-  - [ ] Step 8: quality gate
+  - [x] Step 8: quality gate
     - run `cargo fmt`.
     - run `cargo check`.
     - run `cargo test`.
