@@ -24,3 +24,14 @@ each xs f =
   with emit_handler
   in
     iter xs ()
+
+map : List a -> (a -> b) -> List b
+map xs f =
+  emit_handler = handler
+    yield x ys ->
+      ys 
+      resume (True, [f(x), ..ys])
+  with emit_handler
+  in
+    iter xs []
+
