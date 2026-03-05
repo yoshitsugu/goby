@@ -423,7 +423,7 @@ Acceptance criteria:
   including a `list.each`-style case.
 - No new symbol-specific runtime branching is required for HOF call sites.
 
-### 4.4 Active Track C: Stdlib Runtime Bridge Generalization
+### 4.4 Completed Track C: Stdlib Runtime Bridge Generalization
 
 Goal: replace ad-hoc stdlib symbol special-cases in fallback/runtime evaluators
 with a declarative bridge registry.
@@ -458,6 +458,11 @@ Acceptance criteria:
 
 - Adding a new bridged stdlib symbol does not require evaluator match-arm edits.
 - Existing examples continue to run with consistent import behavior.
+
+Completion status (2026-03-05):
+
+- Track C is closed.
+- Implementation checklist Step 0-8 and PR1-PR5 are complete.
 
 Design note (ideal stdlib shape, not implemented yet):
 
