@@ -80,6 +80,10 @@ This file is a restart-safe snapshot for resuming work after context reset.
 
 Recent (detailed):
 
+- 2026-03-05: effect-op argument type checking in handler scopes completed.
+  - typecheck now rejects mismatched arg types for bare/qualified/method-style/pipeline effect-op calls.
+  - regression tests added for qualified and method-style mismatches.
+  - `examples/effect.gb` updated to keep example suite type-correct under stricter checks.
 - 2026-03-05 (session 149): `Print` operation split finalized (`print`/`println`) with
   embedded default handler behavior and regression coverage.
 - 2026-03-05 (sessions 148-146): control-flow typing/runtime parity improvements:
@@ -120,10 +124,9 @@ cargo clippy -- -D warnings
 
 Execution focus (aligned with `doc/PLAN.md`):
 
-1. Effect-op argument type checking in handler scopes.
-2. General lambda-as-function-argument runtime parity (`list.each`-class cases).
-3. Stdlib runtime bridge generalization (reduce symbol-specific fallback branches).
-4. Tooling foundation (`fmt`/`lint`/`lsp`) with stable diagnostics surface.
+1. General lambda-as-function-argument runtime parity (`list.each`-class cases).
+2. Stdlib runtime bridge generalization (reduce symbol-specific fallback branches).
+3. Tooling foundation (`fmt`/`lint`/`lsp`) with stable diagnostics surface.
 
 ## 7. Resume Commands
 

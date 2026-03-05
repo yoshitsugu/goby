@@ -2685,6 +2685,36 @@ fn check_unhandled_effects_in_expr(
     covered_ops: &HashSet<String>,
     decl_name: &str,
 ) -> Result<(), TypecheckError> {
+    fn check_effect_op_arg_type_in_handler_scope(
+        op_name: &str,
+        arg: &Expr,
+        env: &TypeEnv,
+        covered_ops: &HashSet<String>,
+        decl_name: &str,
+    ) -> Result<(), TypecheckError> {
+        if env.is_effect_op(op_name)
+            && covered_ops.contains(op_name)
+            && let Ty::Fun { params, .. } = env.lookup(op_name)
+            && let Some(expected) = params.first()
+            && *expected != Ty::Unknown
+        {
+            let actual = check_expr(arg, env);
+            if actual != Ty::Unknown && !env.are_compatible(expected, &actual) {
+                return Err(TypecheckError {
+                    declaration: Some(decl_name.to_string()),
+                    span: None,
+                    message: format!(
+                        "effect operation `{}` expects argument of type `{}` but got `{}`",
+                        op_name,
+                        ty_name(expected),
+                        ty_name(&actual)
+                    ),
+                });
+            }
+        }
+        Ok(())
+    }
+
     // Shorthand for recursive calls.
     macro_rules! recurse {
         ($e:expr) => {
@@ -2779,31 +2809,18 @@ fn check_unhandled_effects_in_expr(
                     covered_ops,
                     decl_name,
                 )?;
-                // Arg type check for effect op calls (§4.1.1).
-                // Only fires when the op is covered (i.e. inside an active handler scope).
-                if env.is_effect_op(name)
-                    && covered_ops.contains(name.as_str())
-                    && let Ty::Fun { params, .. } = env.lookup(name)
-                    && let Some(expected) = params.first()
-                    && *expected != Ty::Unknown
-                {
-                    let actual = check_expr(arg, env);
-                    if actual != Ty::Unknown && !env.are_compatible(expected, &actual) {
-                        return Err(TypecheckError {
-                            declaration: Some(decl_name.to_string()),
-                            span: None,
-                            message: format!(
-                                "effect operation `{}` expects argument of type \
-                                 `{}` but got `{}`",
-                                name,
-                                ty_name(expected),
-                                ty_name(&actual)
-                            ),
-                        });
-                    }
-                }
+                check_effect_op_arg_type_in_handler_scope(name, arg, env, covered_ops, decl_name)?;
             }
-            // TODO §4.1.1: arg type check for Expr::Qualified callee (e.g. `Log.log "x"`) not yet implemented.
+            if let Expr::Qualified { receiver, member } = callee.as_ref() {
+                let qualified = format!("{}.{}", receiver, member);
+                check_effect_op_arg_type_in_handler_scope(
+                    &qualified,
+                    arg,
+                    env,
+                    covered_ops,
+                    decl_name,
+                )?;
+            }
             recurse!(callee)?;
             recurse!(arg)
         }
@@ -2823,7 +2840,15 @@ fn check_unhandled_effects_in_expr(
                     ),
                 });
             }
-            // TODO §4.1.1: arg type check for MethodCall effect ops not yet implemented.
+            if let Some(first_arg) = args.first() {
+                check_effect_op_arg_type_in_handler_scope(
+                    &qualified,
+                    first_arg,
+                    env,
+                    covered_ops,
+                    decl_name,
+                )?;
+            }
             for arg in args {
                 recurse!(arg)?;
             }
@@ -2840,30 +2865,7 @@ fn check_unhandled_effects_in_expr(
                     ),
                 });
             }
-            // Arg type check for pipeline-style effect op calls (§4.1.1).
-            // check_expr(value) is called here (before recurse!(value)) to avoid double
-            // traversal; recurse!(value) runs after for effect-coverage checking.
-            if env.is_effect_op(callee)
-                && covered_ops.contains(callee.as_str())
-                && let Ty::Fun { params, .. } = env.lookup(callee)
-                && let Some(expected) = params.first()
-                && *expected != Ty::Unknown
-            {
-                let actual = check_expr(value, env);
-                if actual != Ty::Unknown && !env.are_compatible(expected, &actual) {
-                    return Err(TypecheckError {
-                        declaration: Some(decl_name.to_string()),
-                        span: None,
-                        message: format!(
-                            "effect operation `{}` expects argument of type \
-                             `{}` but got `{}`",
-                            callee,
-                            ty_name(expected),
-                            ty_name(&actual)
-                        ),
-                    });
-                }
-            }
+            check_effect_op_arg_type_in_handler_scope(callee, value, env, covered_ops, decl_name)?;
             recurse!(value)?;
             // Also check callee as a user-declared function that requires effects.
             check_callee_required_effects(
@@ -5863,6 +5865,56 @@ main =
             "error message should mention actual type; got: {}",
             err.message
         );
+    }
+
+    #[test]
+    fn rejects_qualified_effect_op_call_with_wrong_arg_type() {
+        // `ErrorEffect.catch "NoCoffeeError"` when `catch : Error -> Unit`.
+        let source = "
+type Error = Error(message: String)
+
+effect ErrorEffect
+  catch: Error -> Unit
+
+main : Unit -> Unit
+main =
+  with_handler
+    catch e ->
+      resume Unit
+  in
+    ErrorEffect.catch \"NoCoffeeError\"
+";
+        let module = parse_module(source).expect("should parse");
+        let err = typecheck_module(&module)
+            .expect_err("qualified effect op call type mismatch should fail");
+        assert!(err.message.contains("ErrorEffect.catch") || err.message.contains("catch"));
+        assert!(err.message.contains("Error"));
+        assert!(err.message.contains("String") || err.message.contains("Str"));
+    }
+
+    #[test]
+    fn rejects_method_style_effect_op_call_with_wrong_arg_type() {
+        // `ErrorEffect.catch("NoCoffeeError")` when `catch : Error -> Unit`.
+        let source = "
+type Error = Error(message: String)
+
+effect ErrorEffect
+  catch: Error -> Unit
+
+main : Unit -> Unit
+main =
+  with_handler
+    catch e ->
+      resume Unit
+  in
+    ErrorEffect.catch(\"NoCoffeeError\")
+";
+        let module = parse_module(source).expect("should parse");
+        let err = typecheck_module(&module)
+            .expect_err("method-style effect op call type mismatch should fail");
+        assert!(err.message.contains("ErrorEffect.catch") || err.message.contains("catch"));
+        assert!(err.message.contains("Error"));
+        assert!(err.message.contains("String") || err.message.contains("Str"));
     }
 
     #[test]
