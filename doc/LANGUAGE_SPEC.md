@@ -66,9 +66,10 @@ syntax/semantics.
     - head/tail split: `[head, ..tail]`
       - `head` and `tail` are bindings available in the arm body
       - `tail` is the remaining list value
-    - fixed-length patterns: `[1]`, `[_, _]`, `[a, b, c]`
+    - prefix patterns (length `>= item_count`): `[1]`, `[_, _]`, `[a, b, c]`
     - head-checked tail patterns: `[4, ..]`, `["x", ..rest]`
     - tail ignore form: `[..]` is not supported; use at least one head item (e.g. `[x, ..]`)
+    - list item literals currently supported in patterns: `Int`, `String` (not `Bool`)
   - `_` is always a wildcard (non-binding), including in list item positions.
 - Mutable locals:
   - declaration: `mut x = expr`
