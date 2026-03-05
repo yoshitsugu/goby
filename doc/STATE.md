@@ -80,6 +80,13 @@ This file is a restart-safe snapshot for resuming work after context reset.
 
 Recent (detailed):
 
+- 2026-03-05 (session 154): effectful callback coverage for
+  `goby/list.each` import variants completed.
+  - runtime regression tests added for effectful callback dispatch under
+    plain/alias/selective imports:
+    `resolves_runtime_output_for_effectful_callback_with_list_each_plain_import`,
+    `resolves_runtime_output_for_effectful_callback_with_list_each_alias_import`,
+    `resolves_runtime_output_for_effectful_callback_with_list_each_selective_import`.
 - 2026-03-05 (session 153): lambda-as-function-argument runtime import-variant
   coverage completed for `list.each`.
   - fallback runtime now dispatches `goby/list.each` callbacks for plain import
