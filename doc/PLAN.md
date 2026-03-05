@@ -324,7 +324,7 @@ Goal: remove `with_handler` and use only `with`.
   - [x] Step 2: parser multiline-RHS update
     - extend multiline RHS parser path to support `with` (in addition to `case`/`if`).
     - cover both binding and assignment RHS forms.
-  - [ ] Step 3: parser diagnostics and keywords
+  - [x] Step 3: parser diagnostics and keywords
     - change parse errors to suggest `with` only.
     - remove `with_handler` from reserved keyword set.
   - [ ] Step 4: typecheck diagnostics wording

@@ -192,7 +192,9 @@ pub fn parse_module(source: &str) -> Result<Module, ParseError> {
             return Err(ParseError {
                 line: i + 1,
                 col: 1,
-                message: "legacy top-level `handler ... for ...` is no longer supported; use `handler` expressions with `with`/`with_handler`".to_string(),
+                message:
+                    "legacy top-level `handler ... for ...` is no longer supported; use `handler` expressions with `with`"
+                        .to_string(),
             });
         }
 
@@ -272,8 +274,7 @@ pub fn parse_module(source: &str) -> Result<Module, ParseError> {
             return Err(ParseError {
                 line: i + 1 + offset,
                 col: 1,
-                message: "legacy `using` syntax is no longer supported; use `with`/`with_handler`"
-                    .to_string(),
+                message: "legacy `using` syntax is no longer supported; use `with`".to_string(),
             });
         }
 
@@ -1105,7 +1106,6 @@ fn is_reserved_keyword(s: &str) -> bool {
             | "effect"
             | "handler"
             | "with"
-            | "with_handler"
             | "in"
             | "resume"
             | "mut"
@@ -2250,7 +2250,6 @@ mod tests {
             "effect",
             "handler",
             "with",
-            "with_handler",
             "in",
             "resume",
             "mut",
@@ -2327,16 +2326,16 @@ main = 1
     }
 
     #[test]
-    fn parses_resume_expression_shape_inside_with_handler_contract() {
+    fn parses_resume_expression_shape_inside_with_contract() {
         let source = r#"
 main =
-  with_handler
+  with
     yield item ->
       resume Unit
   in
     1
 "#;
-        let module = parse_module(source).expect("with_handler body should parse");
+        let module = parse_module(source).expect("with body should parse");
         let stmts = module.declarations[0]
             .parsed_body
             .as_ref()
@@ -2373,10 +2372,10 @@ main =
     }
 
     #[test]
-    fn parse_error_for_malformed_resume_in_with_handler_clause_body() {
+    fn parse_error_for_malformed_resume_in_with_clause_body() {
         let source = r#"
 main =
-  with_handler
+  with
     yield item ->
       resume
   in
@@ -3221,7 +3220,7 @@ main =
     }
 
     #[test]
-    fn parses_with_handler_sugar_statement() {
+    fn parses_with_inline_handler_statement() {
         let body = "with\n  emit x ->\n    resume x\nin\n  emit 1";
         let stmts = parse_body_stmts(body).expect("should parse");
         assert_eq!(stmts.len(), 1);
@@ -3594,7 +3593,7 @@ effect Log
 
 main : Unit -> Unit
 main =
-  with_handler
+  with
     log msg ->
       using	H
         log msg
