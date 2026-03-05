@@ -2688,6 +2688,7 @@ fn check_unhandled_effects_in_expr(
     fn check_effect_op_arg_type_in_handler_scope(
         op_name: &str,
         arg: &Expr,
+        arg_index: usize,
         env: &TypeEnv,
         covered_ops: &HashSet<String>,
         decl_name: &str,
@@ -2695,9 +2696,23 @@ fn check_unhandled_effects_in_expr(
         if env.is_effect_op(op_name)
             && covered_ops.contains(op_name)
             && let Ty::Fun { params, .. } = env.lookup(op_name)
-            && let Some(expected) = params.first()
-            && *expected != Ty::Unknown
         {
+            if arg_index >= params.len() {
+                return Err(TypecheckError {
+                    declaration: Some(decl_name.to_string()),
+                    span: None,
+                    message: format!(
+                        "effect operation `{}` expects {} argument(s) but got at least {}",
+                        op_name,
+                        params.len(),
+                        arg_index + 1
+                    ),
+                });
+            }
+            let expected = &params[arg_index];
+            if *expected == Ty::Unknown {
+                return Ok(());
+            }
             let actual = check_expr(arg, env);
             if actual != Ty::Unknown && !env.are_compatible(expected, &actual) {
                 return Err(TypecheckError {
@@ -2713,6 +2728,24 @@ fn check_unhandled_effects_in_expr(
             }
         }
         Ok(())
+    }
+
+    fn effect_op_call_target_and_existing_args(callee: &Expr) -> Option<(String, usize)> {
+        let mut arg_count = 0usize;
+        let mut node = callee;
+        loop {
+            match node {
+                Expr::Var(name) => return Some((name.clone(), arg_count)),
+                Expr::Qualified { receiver, member } => {
+                    return Some((format!("{}.{}", receiver, member), arg_count));
+                }
+                Expr::Call { callee, .. } => {
+                    arg_count += 1;
+                    node = callee;
+                }
+                _ => return None,
+            }
+        }
     }
 
     // Shorthand for recursive calls.
@@ -2809,13 +2842,21 @@ fn check_unhandled_effects_in_expr(
                     covered_ops,
                     decl_name,
                 )?;
-                check_effect_op_arg_type_in_handler_scope(name, arg, env, covered_ops, decl_name)?;
-            }
-            if let Expr::Qualified { receiver, member } = callee.as_ref() {
-                let qualified = format!("{}.{}", receiver, member);
                 check_effect_op_arg_type_in_handler_scope(
-                    &qualified,
+                    name,
                     arg,
+                    0,
+                    env,
+                    covered_ops,
+                    decl_name,
+                )?;
+            }
+            if let Some((op_name, existing_args)) = effect_op_call_target_and_existing_args(callee)
+            {
+                check_effect_op_arg_type_in_handler_scope(
+                    &op_name,
+                    arg,
+                    existing_args,
                     env,
                     covered_ops,
                     decl_name,
@@ -2840,10 +2881,11 @@ fn check_unhandled_effects_in_expr(
                     ),
                 });
             }
-            if let Some(first_arg) = args.first() {
+            for (idx, arg) in args.iter().enumerate() {
                 check_effect_op_arg_type_in_handler_scope(
                     &qualified,
-                    first_arg,
+                    arg,
+                    idx,
                     env,
                     covered_ops,
                     decl_name,
@@ -2865,7 +2907,14 @@ fn check_unhandled_effects_in_expr(
                     ),
                 });
             }
-            check_effect_op_arg_type_in_handler_scope(callee, value, env, covered_ops, decl_name)?;
+            check_effect_op_arg_type_in_handler_scope(
+                callee,
+                value,
+                0,
+                env,
+                covered_ops,
+                decl_name,
+            )?;
             recurse!(value)?;
             // Also check callee as a user-declared function that requires effects.
             check_callee_required_effects(
@@ -5915,6 +5964,68 @@ main =
         assert!(err.message.contains("ErrorEffect.catch") || err.message.contains("catch"));
         assert!(err.message.contains("Error"));
         assert!(err.message.contains("String") || err.message.contains("Str"));
+    }
+
+    #[test]
+    fn rejects_multi_arg_effect_op_call_when_later_arg_type_mismatches() {
+        let source = "
+effect E
+  op: String -> Int -> Unit
+
+main : Unit -> Unit
+main =
+  with_handler
+    op s n ->
+      resume Unit
+  in
+    E.op \"ok\" \"bad\"
+";
+        let module = parse_module(source).expect("should parse");
+        let err = typecheck_module(&module).expect_err("second argument type mismatch should fail");
+        assert!(err.message.contains("E.op") || err.message.contains("op"));
+        assert!(err.message.contains("Int"));
+        assert!(err.message.contains("String") || err.message.contains("Str"));
+    }
+
+    #[test]
+    fn rejects_multi_arg_method_style_effect_op_call_when_later_arg_type_mismatches() {
+        let source = "
+effect E
+  op: String -> Int -> Unit
+
+main : Unit -> Unit
+main =
+  with_handler
+    op s n ->
+      resume Unit
+  in
+    E.op(\"ok\", \"bad\")
+";
+        let module = parse_module(source).expect("should parse");
+        let err = typecheck_module(&module)
+            .expect_err("method-style second argument type mismatch should fail");
+        assert!(err.message.contains("E.op") || err.message.contains("op"));
+        assert!(err.message.contains("Int"));
+        assert!(err.message.contains("String") || err.message.contains("Str"));
+    }
+
+    #[test]
+    fn rejects_effect_op_call_with_too_many_arguments() {
+        let source = "
+effect E
+  op: String -> Unit
+
+main : Unit -> Unit
+main =
+  with_handler
+    op s ->
+      resume Unit
+  in
+    E.op \"ok\" 1
+";
+        let module = parse_module(source).expect("should parse");
+        let err = typecheck_module(&module).expect_err("too many args should fail");
+        assert!(err.message.contains("expects 1 argument(s)"));
     }
 
     #[test]
