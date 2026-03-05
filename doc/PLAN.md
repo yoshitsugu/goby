@@ -317,7 +317,7 @@ Goal: remove `with_handler` and use only `with`.
   - remove `with_handler` from reserved keyword/docs/typecheck diagnostics wording in the
     same change set to avoid mixed guidance.
 - Step-by-step implementation checklist:
-  - [ ] Step 1: parser statement-path update
+  - [x] Step 1: parser statement-path update
     - add `with` exact-line inline-handler branch.
     - keep existing `with <handler_expr>` statement parsing.
     - remove `with_handler` statement parse branch.
