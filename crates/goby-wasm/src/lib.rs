@@ -1789,7 +1789,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                 && self
                     .execute_decl_with_callable_as_side_effect(
                         fn_name,
-                        IntCallable::Named(arg_name.clone()),
+                        self.resolve_callable_argument(arg_name, callables),
                         evaluators,
                         depth + 1,
                     )
@@ -2921,6 +2921,17 @@ impl<'m> RuntimeOutputResolver<'m> {
         }
     }
 
+    fn resolve_callable_argument(
+        &self,
+        arg_name: &str,
+        callables: &HashMap<String, IntCallable>,
+    ) -> IntCallable {
+        callables
+            .get(arg_name)
+            .cloned()
+            .unwrap_or_else(|| IntCallable::Named(arg_name.to_string()))
+    }
+
     fn declaration_expects_callable_param(&self, fn_name: &str) -> bool {
         let Some(decl) = self.module.declarations.iter().find(|d| d.name == fn_name) else {
             return false;
@@ -3892,6 +3903,34 @@ each_two f =
 main : Unit -> Unit
 main =
   each_two log_num
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let output =
+            resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
+                .expect("runtime output should resolve");
+        assert_eq!(output, "1\n2");
+    }
+
+    #[test]
+    fn resolves_runtime_output_for_unit_callback_argument_forwarded_alias() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let source = r#"
+log_num : Int -> Unit
+log_num n =
+  print "${n}"
+
+each_two : (Int -> Unit) -> Unit
+each_two f =
+  f 1
+  f 2
+
+wrapper : (Int -> Unit) -> Unit
+wrapper g =
+  each_two g
+
+main : Unit -> Unit
+main =
+  wrapper log_num
 "#;
         let module = parse_module(source).expect("parse should work");
         let output =
