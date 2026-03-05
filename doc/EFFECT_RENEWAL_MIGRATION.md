@@ -13,7 +13,7 @@ handler-value model.
 - Canonical syntax:
   - handler values via `handler ...`
   - handler application via `with <handler_expr> in ...`
-  - inline sugar via `with_handler ... in ...`
+  - inline handler via `with` + indented clauses + `in ...`
 
 ## 2. Pattern Mapping
 
@@ -50,7 +50,7 @@ in
 
 Or inline:
 ```goby
-with_handler
+with
   log msg ->
     print msg
 in
@@ -76,8 +76,9 @@ in
 
 ## 3. Practical Notes
 
-- `with` accepts exactly one handler value expression.
-- `with_handler` is only syntax sugar; semantics match `with (handler ...)`.
+- `with` accepts either:
+  - one handler value expression (`with <handler_expr> in ...`), or
+  - inline handler clauses (`with` + indented clauses + `in ...`).
 - `goby-cli check/run` rejects legacy syntax by default as of 2026-03-04.
 
 ## 4. Current Compatibility Window Policy

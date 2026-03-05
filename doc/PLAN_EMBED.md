@@ -27,7 +27,7 @@ The implementation must satisfy all of the following:
 6. During `main` validation only, unresolved effects may be accepted if they
    have stdlib `@embed` default handlers.
 7. Runtime dispatch precedence is preserved:
-   explicit user handler (`with` / `with_handler`) wins over embedded default.
+   explicit user handler (`with`) wins over embedded default.
 
 ## 3. Non-Goals
 
@@ -192,7 +192,7 @@ Steps:
    - no explicit active handler resolves the operation, and
    - embedded default mapping provides stdout handler target.
 3. Preserve precedence:
-   - explicit `with` / `with_handler` dispatch first
+   - explicit `with` dispatch first
    - embedded default fallback second.
 4. Add runtime tests:
    - explicit handler overrides default
