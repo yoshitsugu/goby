@@ -358,8 +358,8 @@ fn parse_stmts_from_lines(lines: &[&str], start: usize) -> Option<(Vec<Stmt>, us
             continue;
         }
 
-        // `with_handler ... in ...` statement (sugar for `with (handler ...) in ...`).
-        if trimmed == "with_handler" {
+        // `with ... in ...` inline handler statement.
+        if trimmed == "with" {
             let (handler, next_i) = parse_handler_expr_from_lines(lines, i + 1, this_indent)?;
             let (body, after_with) = parse_with_in_body(lines, next_i, this_indent)?;
             stmts.push(Stmt::Expr(Expr::With {
