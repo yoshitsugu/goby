@@ -756,7 +756,8 @@ fn inject_effect_symbols(module: &Module, globals: &mut HashMap<String, GlobalBi
         for member in &effect_decl.members {
             // Register as qualified key `EffectName.member`.
             let qualified_key = format!("{}.{}", effect_decl.name, member.name);
-            let ty = match parse_type_expr(&member.type_annotation).map(|expr| ty_from_type_expr(&expr))
+            let ty = match parse_type_expr(&member.type_annotation)
+                .map(|expr| ty_from_type_expr(&expr))
             {
                 Some(fun_ty @ Ty::Fun { .. }) => fun_ty,
                 _ => Ty::Unknown,
@@ -2625,6 +2626,77 @@ fn unify_types_with_subst(
     }
 }
 
+fn instantiate_ty_with_fresh_type_vars(
+    ty: &Ty,
+    mapping: &mut HashMap<String, String>,
+    next_id: &mut usize,
+) -> Ty {
+    match ty {
+        Ty::Var(name) => {
+            let fresh = mapping.entry(name.clone()).or_insert_with(|| {
+                let id = *next_id;
+                *next_id += 1;
+                format!("__goby_fresh_ty_{}", id)
+            });
+            Ty::Var(fresh.clone())
+        }
+        Ty::List(inner) => Ty::List(Box::new(instantiate_ty_with_fresh_type_vars(
+            inner, mapping, next_id,
+        ))),
+        Ty::Tuple(items) => Ty::Tuple(
+            items
+                .iter()
+                .map(|item| instantiate_ty_with_fresh_type_vars(item, mapping, next_id))
+                .collect(),
+        ),
+        Ty::Fun { params, result } => Ty::Fun {
+            params: params
+                .iter()
+                .map(|param| instantiate_ty_with_fresh_type_vars(param, mapping, next_id))
+                .collect(),
+            result: Box::new(instantiate_ty_with_fresh_type_vars(
+                result, mapping, next_id,
+            )),
+        },
+        Ty::Con { name, args } => Ty::Con {
+            name: name.clone(),
+            args: args
+                .iter()
+                .map(|arg| instantiate_ty_with_fresh_type_vars(arg, mapping, next_id))
+                .collect(),
+        },
+        Ty::Handler { covered_ops } => Ty::Handler {
+            covered_ops: covered_ops.clone(),
+        },
+        Ty::Int | Ty::Bool | Ty::Str | Ty::Unit | Ty::Unknown => ty.clone(),
+    }
+}
+
+fn instantiate_handler_clause_signature(
+    env: &TypeEnv,
+    clause_name: &str,
+    next_id: &mut usize,
+) -> Option<(Vec<Ty>, Ty)> {
+    let op_ty = {
+        let effects = effect_candidates_for_operation(env, clause_name);
+        if effects.len() == 1 {
+            env.lookup(&format!("{}.{}", effects[0], clause_name))
+        } else {
+            env.lookup(clause_name)
+        }
+    };
+    let Ty::Fun { params, result } = op_ty else {
+        return None;
+    };
+    let mut mapping = HashMap::new();
+    let params = params
+        .iter()
+        .map(|param| instantiate_ty_with_fresh_type_vars(param, &mut mapping, next_id))
+        .collect();
+    let result = instantiate_ty_with_fresh_type_vars(&result, &mut mapping, next_id);
+    Some((params, result))
+}
+
 fn ty_contains_type_var(ty: &Ty) -> bool {
     match ty {
         Ty::Var(_) => true,
@@ -2697,6 +2769,7 @@ fn check_resume_in_expr(
             recurse!(body, &child_env)
         }
         Expr::Handler { clauses } => {
+            let mut fresh_type_counter = 0usize;
             for clause in clauses {
                 if let Some(stmts) = &clause.parsed_body {
                     let resume_count = count_resume_in_stmts(stmts);
@@ -2711,20 +2784,26 @@ fn check_resume_in_expr(
                         });
                     }
                 }
+                let instantiated = instantiate_handler_clause_signature(
+                    env,
+                    &clause.name,
+                    &mut fresh_type_counter,
+                );
                 let mut child_env = TypeEnv {
                     globals: env.globals.clone(),
                     locals: env.locals.clone(),
                     type_aliases: env.type_aliases.clone(),
                     record_types: env.record_types.clone(),
                 };
-                if let Some(first) = clause.params.first() {
+                let expected_arg_ty = instantiated.as_ref().map(|(_, result)| result.clone());
+                if let Some((param_tys, _)) = instantiated.as_ref() {
+                    for (idx, param_name) in clause.params.iter().enumerate() {
+                        let ty = param_tys.get(idx).cloned().unwrap_or(Ty::Unknown);
+                        child_env.locals.insert(param_name.clone(), ty);
+                    }
+                } else if let Some(first) = clause.params.first() {
                     child_env.locals.insert(first.clone(), Ty::Unknown);
                 }
-                let resume_ctx = env.lookup(&clause.name);
-                let expected_arg_ty = match resume_ctx {
-                    Ty::Fun { result, .. } => Some(*result),
-                    _ => None,
-                };
                 if expected_arg_ty.is_none() {
                     // Unknown clause op is diagnosed in effect coverage checks.
                     continue;
@@ -3292,6 +3371,7 @@ fn check_unhandled_effects_in_expr(
             recurse!(body, &child_env)
         }
         Expr::Handler { clauses } => {
+            let mut fresh_type_counter = 0usize;
             for clause in clauses {
                 let Some(effects) = effect_map.op_to_effects.get(&clause.name) else {
                     return Err(TypecheckError {
@@ -3333,6 +3413,34 @@ fn check_unhandled_effects_in_expr(
                     }
                 }
                 if let Some(stmts) = &clause.parsed_body {
+                    let instantiated = instantiate_handler_clause_signature(
+                        env,
+                        &clause.name,
+                        &mut fresh_type_counter,
+                    );
+                    let params: Vec<(String, Ty)> = if let Some((param_tys, _)) = instantiated {
+                        clause
+                            .params
+                            .iter()
+                            .enumerate()
+                            .map(|(idx, name)| {
+                                (
+                                    name.clone(),
+                                    param_tys.get(idx).cloned().unwrap_or(Ty::Unknown),
+                                )
+                            })
+                            .collect()
+                    } else {
+                        clause
+                            .params
+                            .iter()
+                            .map(|name| (name.clone(), Ty::Unknown))
+                            .collect()
+                    };
+                    let param_refs: Vec<(&str, Ty)> = params
+                        .iter()
+                        .map(|(name, ty)| (name.as_str(), ty.clone()))
+                        .collect();
                     check_body_stmts(
                         stmts,
                         env,
@@ -3341,7 +3449,7 @@ fn check_unhandled_effects_in_expr(
                         required_effects_map,
                         decl_name,
                         None,
-                        &[],
+                        &param_refs,
                         &clause_covered_ops,
                     )?;
                 }
@@ -6700,6 +6808,26 @@ main =
 ";
         let module = parse_module(source).expect("should parse");
         typecheck_module(&module).expect("generic effect op call should infer `a = Int`");
+    }
+
+    #[test]
+    fn accepts_multiple_calls_to_same_generic_effect_op_with_different_types() {
+        let source = "
+effect Iter a
+  op: a -> Unit
+
+main : Unit -> Unit
+main =
+  with_handler
+    op x ->
+      resume Unit
+  in
+    op 1
+    op \"two\"
+";
+        let module = parse_module(source).expect("should parse");
+        typecheck_module(&module)
+            .expect("separate calls to same generic effect op should instantiate independently");
     }
 
     #[test]
