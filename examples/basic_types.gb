@@ -29,6 +29,6 @@ main =
   hello = concatenate("Hello ", "Goby")
   print "${t}${hello}"
 
-  # Tuple members are accessed by index: .(index)
+  # Tuple members are accessed by index: .0, .1, ...
   print a.0
   print a.1

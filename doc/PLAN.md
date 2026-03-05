@@ -557,12 +557,12 @@ Implementation plan (step-by-step checklist):
     - temporary compatibility bridge accepts both old and new iterator contracts during PR3->PR4.
   - Definition of done: runtime behavior for continue/stop/state-threading is deterministic and tested.
 
-- [ ] Step 5: migrate stdlib modules to unified `Iterator.yield`.
+- [x] Step 5: migrate stdlib modules to unified `Iterator.yield`.
   - Remove `yield_state` from stdlib effect declarations.
   - Update `stdlib/goby/iterator.gb`, `stdlib/goby/string.gb`, `stdlib/goby/int.gb`, and `stdlib/goby/list.gb`.
   - Current status:
-    - completed for `stdlib/goby/iterator.gb`, `stdlib/goby/string.gb`, `stdlib/goby/int.gb`,
-    - pending for `stdlib/goby/list.gb` (needs tuple result ergonomics for `(Bool, state)` consumption in source-level control flow).
+    - completed for `stdlib/goby/iterator.gb`, `stdlib/goby/string.gb`, `stdlib/goby/int.gb`, `stdlib/goby/list.gb`.
+    - tuple result consumption in source-level control flow is covered by tuple member access (`pair.0` / `pair.1`) in parser/typecheck/runtime.
   - Keep temporary compatibility shims only if needed for incremental landing; remove shims before closing the track.
   - Definition of done: stdlib iterator-like flows compile and run using only unified `yield`.
 
@@ -588,7 +588,7 @@ Recommended landing sequence (PR slices):
 - [x] PR1: spec lock + parser/AST groundwork.
 - [x] PR2: typecheck unification core for effect ops + resume.
 - [x] PR3: runtime iterator contract switch.
-- [ ] PR4: stdlib migration.
+- [x] PR4: stdlib migration.
 - [ ] PR5: diagnostics/docs/examples polish + full regression expansion.
 
 ### 4.5 Active Track D: Developer Tooling Foundation

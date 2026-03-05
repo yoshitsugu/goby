@@ -1613,13 +1613,17 @@ fn parse_qualified_access(src: &str) -> Option<Expr> {
     let (receiver, member) = src.split_once('.')?;
     let receiver = receiver.trim();
     let member = member.trim();
-    if !is_identifier(receiver) || !is_identifier(member) {
+    if !is_identifier(receiver) || !(is_identifier(member) || is_tuple_member_index(member)) {
         return None;
     }
     Some(Expr::Qualified {
         receiver: receiver.to_string(),
         member: member.to_string(),
     })
+}
+
+fn is_tuple_member_index(s: &str) -> bool {
+    !s.is_empty() && s.chars().all(|c| c.is_ascii_digit())
 }
 
 /// Try to parse function calls:
@@ -3041,6 +3045,13 @@ main =
             Some(Expr::Qualified {
                 receiver: "user".to_string(),
                 member: "name".to_string(),
+            })
+        );
+        assert_eq!(
+            parse_expr("pair.0"),
+            Some(Expr::Qualified {
+                receiver: "pair".to_string(),
+                member: "0".to_string(),
             })
         );
     }

@@ -2051,11 +2051,18 @@ fn check_expr(expr: &Expr, env: &TypeEnv) -> Ty {
         }
         Expr::Var(name) => env.lookup(name),
         Expr::Qualified { receiver, member } => {
-            if let Some(receiver_ty) = env.locals.get(receiver)
-                && let Ty::Con { name, .. } = env.resolve_alias(receiver_ty, 0)
-                && let Some(field_ty) = env.record_field_ty(&name, member)
-            {
-                return env.resolve_alias(&field_ty, 0);
+            if let Some(receiver_ty) = env.locals.get(receiver) {
+                let resolved_receiver_ty = env.resolve_alias(receiver_ty, 0);
+                if let Ty::Tuple(items) = &resolved_receiver_ty
+                    && let Ok(index) = member.parse::<usize>()
+                {
+                    return items.get(index).cloned().unwrap_or(Ty::Unknown);
+                }
+                if let Ty::Con { name, .. } = &resolved_receiver_ty
+                    && let Some(field_ty) = env.record_field_ty(name, member)
+                {
+                    return env.resolve_alias(&field_ty, 0);
+                }
             }
             env.lookup(&format!("{}.{}", receiver, member))
         }
@@ -4437,6 +4444,40 @@ mk =
             member: "name".to_string(),
         };
         assert_eq!(check_expr(&expr, &env), Ty::Str);
+    }
+
+    #[test]
+    fn resolves_tuple_member_access_by_index() {
+        let mut locals = HashMap::new();
+        locals.insert("pair".to_string(), Ty::Tuple(vec![Ty::Bool, Ty::Int]));
+        let env = TypeEnv {
+            globals: HashMap::new(),
+            locals,
+            type_aliases: HashMap::new(),
+            record_types: HashMap::new(),
+        };
+        let expr = crate::ast::Expr::Qualified {
+            receiver: "pair".to_string(),
+            member: "1".to_string(),
+        };
+        assert_eq!(check_expr(&expr, &env), Ty::Int);
+    }
+
+    #[test]
+    fn tuple_member_access_out_of_range_is_unknown() {
+        let mut locals = HashMap::new();
+        locals.insert("pair".to_string(), Ty::Tuple(vec![Ty::Bool]));
+        let env = TypeEnv {
+            globals: HashMap::new(),
+            locals,
+            type_aliases: HashMap::new(),
+            record_types: HashMap::new(),
+        };
+        let expr = crate::ast::Expr::Qualified {
+            receiver: "pair".to_string(),
+            member: "1".to_string(),
+        };
+        assert_eq!(check_expr(&expr, &env), Ty::Unknown);
     }
 
     #[test]
