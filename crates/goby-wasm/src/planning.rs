@@ -1121,6 +1121,7 @@ main =
     fn build_plan_preserves_boundary_u16_effect_and_op_ids() {
         let effect_decl = EffectDecl {
             name: "Big".to_string(),
+            type_params: Vec::new(),
             members: vec![EffectMember {
                 name: "op".to_string(),
                 type_annotation: "Unit -> Unit".to_string(),

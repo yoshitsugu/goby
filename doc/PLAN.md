@@ -504,17 +504,14 @@ iter xs =
 
 Implementation plan (step-by-step checklist):
 
-- [ ] Step 0: lock syntax/semantics before code.
-  - Decide whether generic binders are explicit on effect declarations (`effect Iterator a b`)
-    or implicit via member signatures only (`yield : a -> b -> ...`).
-  - Decide the meaning of `_` in type position:
-    - Option A: fresh type hole (preferred for this plan).
-    - Option B: ordinary type variable identifier.
-  - Document both decisions in `doc/LANGUAGE_SPEC.md` before implementation.
+- [x] Step 0: lock syntax/semantics before code.
+  - Chosen: explicit generic binders on effect declarations (`effect Iterator a b`).
+  - Chosen: `_` in type position is reserved as an anonymous type-hole marker.
+  - Decisions documented in `doc/LANGUAGE_SPEC.md`.
   - Gate condition: do not start Step 1+ implementation until this step is merged and spec text is locked.
   - Definition of done: parser/typechecker target behavior for generic effect members is unambiguous in spec text.
 
-- [ ] Step 1: AST + parser support for chosen effect-generic surface.
+- [x] Step 1: AST + parser support for chosen effect-generic surface.
   - Extend AST to carry effect type parameters when explicit-binder form is adopted.
   - Update parser to accept new effect header form (if selected) while preserving existing non-generic effect declarations.
   - Add parser tests for valid generic effect declarations, invalid binder names/duplicates, and backward-compatible non-generic declarations.
@@ -569,7 +566,7 @@ Implementation plan (step-by-step checklist):
 
 Recommended landing sequence (PR slices):
 
-- [ ] PR1: spec lock + parser/AST groundwork.
+- [x] PR1: spec lock + parser/AST groundwork.
 - [ ] PR2: typecheck unification core for effect ops + resume.
 - [ ] PR3: runtime iterator contract switch.
 - [ ] PR4: stdlib migration.

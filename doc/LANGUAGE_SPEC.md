@@ -1,7 +1,7 @@
 # Goby Language Specification (Current)
 
 Status: active
-Last updated: 2026-03-04
+Last updated: 2026-03-05
 
 This file is the current language-spec source of truth for user-visible Goby
 syntax/semantics.
@@ -41,6 +41,9 @@ syntax/semantics.
   - record: `type Name = Ctor(field: Type, ...)`
 - Effect declaration:
   - `effect EffectName`
+  - `effect EffectName a b ...` (optional effect type parameters)
+    - effect type parameter names must start with a lowercase letter or `_`
+    - duplicate effect type parameter names are rejected
   - indented operation signatures
 
 ## 3. Expressions and Statements
@@ -82,6 +85,9 @@ syntax/semantics.
 - `main` must be `Unit -> Unit` for `run`.
 - `check` allows missing `main` annotation, but `run` requires entry constraints.
 - Type annotations are optional where inference is sufficient.
+- Type-variable identifiers in type annotations are lowercase-start names (or `_`).
+- For effect-member generic design, `_` in type position is reserved as an anonymous
+  type-hole marker (full inference behavior rollout is tracked in `doc/PLAN.md`).
 - `if` / `case` are value expressions and all branches must resolve to one compatible result type.
 - `void` spelling is rejected; use `Unit`.
 
