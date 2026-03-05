@@ -63,6 +63,9 @@ This file is a restart-safe snapshot for resuming work after context reset.
 ## 3. Known Open Decisions
 
 - MVP locked subset remains complete for currently implemented syntax.
+- Effect dependency cycle diagnostics for operation-declared dependencies
+  (`op : ... can Dep`) are not yet a hard typecheck error; deterministic ordering
+  currently tolerates cycles conservatively.
 - Remaining open point for list `case` patterns:
   - native lowering support (capability checker + native evaluator path).
 - Post-MVP open items tracked in `doc/PLAN.md` §3 and §6.
@@ -80,6 +83,20 @@ This file is a restart-safe snapshot for resuming work after context reset.
 
 Recent (detailed):
 
+- 2026-03-05 (session 156): operation-level effect dependency rules introduced.
+  - effect member signatures now support dependency declarations via `can`
+    (e.g. `trace : String -> Unit can Print`), validated in typecheck.
+  - handler clause bodies now enforce dependency-constrained effect usage:
+    allowed = currently covered effects + dependencies declared by the handled op.
+  - `with` path now always validates inline handler bodies through the same
+    unhandled-effect analysis path.
+  - Wasm lowering plan now expands declaration required effects through
+    operation-declared dependencies with deterministic topological ordering
+    (source-order tie-break via DFS traversal order).
+  - spec/planning docs synced:
+    - `doc/LANGUAGE_SPEC.md` §5
+    - `doc/EFFECT_HANDLER_RESOLUTION.md` §4.1, §6.1
+    - `doc/PLAN.md` §2.3 notes
 - 2026-03-05 (session 155): callable dispatch diagnostics hardened.
   - fallback runtime now reports deterministic runtime errors for unsupported
     callable argument shapes (`[E-CALLABLE-DISPATCH]`) in:
@@ -168,7 +185,8 @@ cargo clippy -- -D warnings
 
 Execution focus (aligned with `doc/PLAN.md`):
 
-1. General lambda-as-function-argument runtime parity (`list.each`-class cases).
+1. Effect dependency cycle handling: promote conservative runtime-order tolerance
+   to explicit compile-time diagnostics where appropriate.
 2. Stdlib runtime bridge generalization (reduce symbol-specific fallback branches).
 3. Tooling foundation (`fmt`/`lint`/`lsp`) with stable diagnostics surface.
 
