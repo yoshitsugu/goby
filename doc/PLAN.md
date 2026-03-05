@@ -262,218 +262,29 @@ Based on `examples/*.gb`:
 - Effect propagation rules for higher-order functions — deferred.
 - Effect diagnostics UX polish (wording/format consistency) — deferred.
 
-#### Effect Renewal Syntax/Typing Lock (P0, 2026-03-04)
 
-This section records the locked renewal decisions and is the canonical language-spec entry for the new handler-value model.
+#### Effect Renewal/Resume Status (Summary)
 
-- Effect declaration syntax:
-  - `effect <CamelCaseName>` with indented operation signatures.
-  - newline-separated and `;`-separated declaration forms are both accepted.
-- Handler is an expression/value:
-  - `handler` evaluates to a handler value and may capture lexical bindings.
-  - handler clauses use untyped headers only: `op x -> ...`.
-  - operation/argument typing is sourced from effect declaration signatures.
-- Handler type:
-  - `Handler(E)` for single-effect handler values.
-  - `Handler(E1, E2, ...)` for multi-effect handler values.
-  - effect-list order is type-equivalent (`Handler(A, B)` == `Handler(B, A)`).
-  - parser/tokenization is whitespace-insensitive around commas
-    (`Handler(E1,E2)` and `Handler(E1, E2)` are equivalent).
-- Handler application:
-  - canonical form is `with <handler_expr> in <body>`.
-  - `with` accepts exactly one handler value.
-  - `with_handler ... in ...` is syntax sugar for inline handler construction +
-    `with`.
-- Dispatch/conflict policy:
-  - dynamic operation dispatch uses nearest active handler (lexical stack order).
-  - duplicate operation clauses in one handler are rejected.
-  - if one multi-effect handler introduces overlapping operation names across
-    effects, reject as ambiguity.
-  - canonical ambiguity diagnostic:
-    `operation '<op>' is ambiguous across effects in Handler(...): <EffectA>, <EffectB>`.
-- Resume policy:
-  - one-shot continuation contract remains active.
-  - double `resume` in the same handler invocation is rejected.
-- Reserved keywords for renewal syntax:
-  - `with`, `with_handler`, `in`, `handler`, `effect`.
-- Migration policy:
-  - bridge-window acceptance for top-level `handler ... for ...` and `using` has
-    ended (2026-03-04).
-  - current status: parser/runtime/typecheck legacy compatibility paths are removed;
-    legacy forms remain migration-guide-only.
-  - migration mapping examples are documented in
-    `doc/EFFECT_RENEWAL_MIGRATION.md`.
+- Renewal syntax model is locked and active:
+  - `handler` is a value,
+  - canonical application is `with <handler> in ...`,
+  - `with_handler ... in ...` is inline sugar.
+- Legacy forms (`handler ... for ...`, `using`) are fully removed from parser/runtime/typecheck paths.
+- `resume` support is active with one-shot continuation guardrails:
+  - outside-handler `resume` is rejected,
+  - type mismatch for resumed value is rejected,
+  - obvious multi-resume misuse is rejected conservatively.
+- Runtime dispatch semantics:
+  - nearest lexical handler wins,
+  - embedded/default-handler fallback applies only when no explicit handler captures the operation.
+- Post-MVP follow-up remains:
+  - improve precision of multi-resume analysis,
+  - continue migration from name-based runtime dispatch to compiled operation identity (`EffectId`/`OpId`),
+  - evaluate explicit `discontinue` only as a later separate proposal.
 
-#### Post-MVP Implementation Direction (locked 2026-03-01)
+Note: detailed step-by-step renewal history is intentionally omitted here; use
+`doc/STATE.md` and git history for chronological implementation records.
 
-- Adopt **deep handlers + one-shot resumptions** as the baseline semantics.
-  - Rationale: this matches the efficient path used by OCaml 5 and keeps runtime costs low for the common case.
-  - Multi-shot resumptions are deferred; if added later, they must be explicit (clone/copy semantics) and opt-in.
-- Replace name-based runtime handler lookup with **compiled IDs**:
-  - intern `EffectId` and `OpId` at compile time,
-  - compile each handler into a compact operation table indexed by `OpId`,
-  - resolve operations by lexical handler stack walk (nearest enclosing handler wins).
-- Use **selective CPS + evidence passing** in lowering:
-  - keep pure/no-effect functions in direct style,
-  - lower only effectful call paths and handler boundaries to continuation/evidence form,
-  - pass handler evidence explicitly instead of global maps in hot paths.
-- Wasm lowering strategy (phased):
-  - Phase A: explicit continuation objects + trampoline/state-machine execution (portable on current Wasm MVP engines).
-  - Phase B: optional optimization path on engines with typed continuations/stack-switching support.
-- Performance guardrails for implementation:
-  - no `HashMap`/`BTreeMap` lookup on hot operation dispatch paths,
-  - dispatch target should be `O(handler_depth)` frame walk + `O(1)` op-table index,
-  - continuation capture/resume should avoid full-stack copying on one-shot path.
-
-#### `resume` Surface Contract (Step 0 lock, 2026-03-02)
-
-- `resume` is a reserved keyword for upcoming effect-resumption syntax.
-- Parser contract is locked:
-  - top-level declaration name `resume` is rejected.
-  - handler parameter name `resume` is rejected.
-- Decision (2026-03-03):
-  - do not introduce explicit `discontinue` syntax in the current phase.
-  - keep abortive behavior as "handler does not call `resume`".
-  - track explicit `discontinue` only as a possible later-phase language extension.
-
-#### `resume` Parser/AST Contract (Step 1 done, 2026-03-02)
-
-- `Expr::Resume { value }` is added to AST.
-- Parser recognizes `resume <expr>` as a dedicated expression form.
-- Bare `resume` (no argument) is rejected with parse diagnostics:
-  - `malformed \`resume\` expression: expected \`resume <expr>\``.
-
-#### `resume` Typecheck Contract (Step 2 done, 2026-03-02)
-
-- `resume` is rejected outside handler method bodies.
-- In handler method bodies, `resume` argument type is checked against the handled
-  operation return type.
-- Dedicated diagnostics are active:
-  - `resume_outside_handler`
-  - `resume_arg_type_mismatch`
-  - `resume_in_unknown_operation_context`
-  - `resume_potential_multi_shot` (conservative syntactic guard: more than one
-    `resume` in a handler method body is rejected in the current phase)
-- Decision update (2026-03-03):
-  - `resume` result type inference is conservative:
-    - allow local inference only when handler operation result type is
-      non-generic and directly available in resume context,
-    - keep `Ty::Unknown` for generic/complex cases.
-  - multi-shot static rejection policy is intentionally lightweight:
-    - reject obvious syntactic multi-resume usage in the same handler method,
-    - defer control-flow-sensitive precision improvements to a later phase.
-
-#### `resume` Runtime Bridge (Step 4 update, 2026-03-02)
-
-- Interpreter-path runtime now has explicit `ResumeToken`/`Continuation` carrier
-  objects and one-shot consume tracking.
-- `Expr::Resume` evaluates in handler context, marks the current token consumed,
-  and returns a resume value to the effect call site.
-- Runtime surfaces explicit resume misuse errors:
-  - `resume used without an active continuation`
-  - `resume continuation already consumed`
-- Runtime dispatch now uses lexical handler stack semantics:
-  - nearest enclosing handler wins (LIFO stack walk),
-  - no alphabetical effect-name fallback in runtime operation capture.
-
-#### `resume` Plan Status (2026-03-03)
-
-- `PLAN_RESUME` implementation track (Step 0-8) is complete and archived.
-- Remaining `resume`-related work is now tracked here as future development:
-  - improve multi-shot static rejection from current conservative syntactic guard
-    to control-flow-sensitive analysis,
-  - reconsider explicit `discontinue` only as a future language extension,
-  - if/when switching default execution mode from `PortableFallback` to
-    optimized mode, do so in a dedicated follow-up with separate review.
-
-#### Abortive Handler Behavior Follow-up (planned 2026-03-04)
-
-Goal: align runtime behavior with exception-like handling where an operation
-clause may intentionally omit `resume`; in that path, continuation at the
-effect call site is discarded.
-
-Implementation weight assessment:
-
-- Expected effort: medium.
-- Why not "small": current runtime dispatch code uses `Option`-based control
-  flow where `None` currently mixes "normal abortive branch" and "runtime
-  failure", so semantics must be untangled without regressing existing resume
-  diagnostics.
-- Why not "large": syntax/typecheck changes are limited; core work is localized
-  to handler dispatch bridge plus targeted tests/spec wording.
-
-Cross-language reference baseline (for semantic alignment):
-
-- OCaml 5 effect handlers: operation clauses can choose not to continue captured
-  continuations (`continue`) and can model exception-like behavior.
-- Koka handlers: operation clauses are first-class control points; non-resuming
-  branches are a standard way to encode abortive control.
-- Eff language model: handlers decide whether/when to invoke continuation `k`;
-  skipping `k` yields abortive behavior.
-
-Detailed plan:
-
-1. Semantics lock (spec + diagnostics wording).
-   - Update `doc/LANGUAGE_SPEC.md`:
-     - define no-`resume` branch as successful abortive completion (not an
-       interpreter error),
-     - define control boundary precisely: execution does not return to handled
-       operation call site.
-   - Audit runtime diagnostics to ensure messages are reserved for actual misuse
-     (`resume` outside handler, double resume, token mismatch), not no-resume.
-2. Runtime control-flow refactor (portable fallback first).
-   - Refactor handler dispatch result channel to separate:
-     - `RuntimeError`,
-     - `HandledResumed(value)`,
-     - `HandledAbortive`,
-     - optional handler-body terminal value (for value-position calls only).
-   - Remove reliance on `None` as overloaded signal in
-     `dispatch_handler_method_core`.
-   - Preserve one-shot token lifecycle unchanged for paths that actually call
-     `resume`.
-3. Call-site contract updates.
-   - Unit-position effect operation call:
-     - `HandledAbortive` means "statement consumed; continue after enclosing
-       `with` region".
-   - Value-position operation call:
-     - define deterministic behavior for abortive branch (no continuation value);
-       preserve current type/runtime safety and avoid silent value fabrication.
-   - Keep embedded default handler behavior unchanged.
-4. Typecheck and static-policy review.
-   - Keep `resume` optional in handler clauses.
-   - Confirm no static rule accidentally forces "must resume" semantics.
-   - Keep conservative multi-resume rejection policy intact.
-5. Regression matrix.
-   - Add/adjust tests in `crates/goby-wasm/src/lib.rs`:
-     - no-resume abortive path for unit-position operation,
-     - no-resume abortive path for nested handlers (nearest-handler semantics),
-     - resume success path unchanged,
-     - double-resume misuse unchanged,
-     - existing runtime error IDs still emitted only for true misuse.
-   - Add one executable sample in `examples/` for exception-like pattern.
-6. Mode parity and rollout safety.
-   - Verify behavior parity across runtime execution modes currently in use.
-   - Gate merge on `cargo test -p goby-wasm` plus targeted CLI run sample.
-
-Open design decision to lock before implementation:
-
-- Value-position abortive branch (`x = op(...)` where handler omits `resume`)
-  needs explicit contract:
-  - Option A: runtime error with dedicated diagnostic (strict, explicit).
-  - Option B: require handler branch to provide replacement value via language
-    construct (not currently present).
-  - Current recommendation: Option A for now, then revisit with explicit
-    language feature if needed.
-
-Acceptance criteria:
-
-1. No-resume handler branch is treated as intentional abortive handling, not a
-   generic runtime failure.
-2. Effect call-site continuation is not resumed in that branch.
-3. Existing `resume` path behavior (single-shot success + misuse diagnostics)
-   remains stable.
-4. Behavior and wording are documented in `doc/LANGUAGE_SPEC.md` and covered by
-   regression tests.
 
 ### 2.4 Standard Library Surface (MVP)
 
