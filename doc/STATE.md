@@ -80,6 +80,31 @@ This file is a restart-safe snapshot for resuming work after context reset.
 
 Recent (detailed):
 
+- 2026-03-05 (session 162): stdlib migration progress toward unified `Iterator.yield`.
+  - migrated to `effect Iterator a b / yield : a -> b -> (Bool, b)`:
+    - `stdlib/goby/iterator.gb`,
+    - `stdlib/goby/string.gb`,
+    - `stdlib/goby/int.gb`.
+  - runtime and typecheck remain backward-compatible with legacy iterator shapes
+    during migration window (as planned in PR3 bridge policy).
+  - `stdlib/goby/list.gb` migration is still pending due tuple-result consumption ergonomics
+    in source-level control flow (no tuple pattern destructuring yet).
+- 2026-03-05 (session 161): runtime iterator contract bridge (PR3 slice) landed.
+  - runtime intrinsic `__goby_string_each_grapheme` now supports unified iterator
+    contract path:
+    - `yield : String -> state -> (Bool, state)` for state-thread mode,
+    - `(Bool, Unit)` path for 1-arg count mode with early-stop support.
+  - compatibility bridge kept for migration:
+    - legacy `yield : String -> Int` one-arg mode remains accepted,
+    - legacy `yield_state` state-thread mode remains accepted.
+  - runtime evaluator now supports non-empty tuple values (`RuntimeValue::Tuple`)
+    required for `(Bool, state)` resume payloads.
+  - handler dispatch core now supports multi-argument method binding, enabling
+    intrinsic-driven two-arg `yield` calls.
+  - regression coverage added:
+    - unified iterator state-thread runtime path,
+    - unified iterator early-stop runtime path,
+    - stdlib-root typecheck acceptance for unified intrinsic usage shape.
 - 2026-03-05 (session 160): handler-clause fresh instantiation + type-hole/type-param consistency fixes.
   - effect member type variables are now instantiated freshly per handler clause,
     and clause parameter locals + `resume` expected type share the same instantiated signature.

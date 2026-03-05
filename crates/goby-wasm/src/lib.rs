@@ -1039,9 +1039,41 @@ impl<'m> RuntimeOutputResolver<'m> {
             "__goby_string_each_grapheme" => {
                 match args {
                     // Backward-compatible mode:
-                    // iterate graphemes, call `yield : String -> Int`, return yielded count.
+                    // iterate graphemes.
+                    // - new contract: `yield : String -> _ -> (Bool, _)` (state = Unit)
+                    // - fallback contract: `yield : String -> Int`
                     [RuntimeValue::String(value)] => {
                         let mut yielded_count: i64 = 0;
+                        // New contract path (state threaded as Unit in 1-arg intrinsic mode).
+                        if let Some(method) = self.find_handler_method_by_name("yield")
+                            && method.method.params.len() == 2
+                        {
+                            let mut state = RuntimeValue::Unit;
+                            for grapheme in value.graphemes(true) {
+                                let resumed = self.dispatch_handler_method_as_value_with_args(
+                                    &method,
+                                    &[RuntimeValue::String(grapheme.to_string()), state],
+                                    evaluators,
+                                    depth + 1,
+                                )?;
+                                let RuntimeValue::Tuple(items) = resumed else {
+                                    return None;
+                                };
+                                if items.len() != 2 {
+                                    return None;
+                                }
+                                let RuntimeValue::Bool(keep_going) = items[0] else {
+                                    return None;
+                                };
+                                state = items[1].clone();
+                                yielded_count = yielded_count.checked_add(1)?;
+                                if !keep_going {
+                                    break;
+                                }
+                            }
+                            return Some(RuntimeValue::Int(yielded_count));
+                        }
+                        // Legacy contract path.
                         for grapheme in value.graphemes(true) {
                             let method = self.find_handler_method_by_name("yield")?;
                             let resumed = self.dispatch_handler_method_as_value(
@@ -1058,9 +1090,39 @@ impl<'m> RuntimeOutputResolver<'m> {
                         Some(RuntimeValue::Int(yielded_count))
                     }
                     // State-thread mode:
-                    // iterate graphemes, call `yield_state` with `{ grapheme, ...state }`,
-                    // and thread resumed state across iterations.
+                    // iterate graphemes and thread state.
+                    // - new contract: `yield : String -> state -> (Bool, state)`
+                    // - fallback contract: `yield_state : state_with_grapheme -> state`
                     [RuntimeValue::String(value), initial_state] => {
+                        // New contract path.
+                        if let Some(method) = self.find_handler_method_by_name("yield")
+                            && method.method.params.len() == 2
+                        {
+                            let mut state = initial_state.clone();
+                            for grapheme in value.graphemes(true) {
+                                let resumed = self.dispatch_handler_method_as_value_with_args(
+                                    &method,
+                                    &[RuntimeValue::String(grapheme.to_string()), state],
+                                    evaluators,
+                                    depth + 1,
+                                )?;
+                                let RuntimeValue::Tuple(items) = resumed else {
+                                    return None;
+                                };
+                                if items.len() != 2 {
+                                    return None;
+                                }
+                                let RuntimeValue::Bool(keep_going) = items[0] else {
+                                    return None;
+                                };
+                                state = items[1].clone();
+                                if !keep_going {
+                                    break;
+                                }
+                            }
+                            return Some(state);
+                        }
+                        // Legacy state-thread path.
                         let mut state = initial_state.clone();
                         for grapheme in value.graphemes(true) {
                             let RuntimeValue::Record {
@@ -1261,7 +1323,16 @@ impl<'m> RuntimeOutputResolver<'m> {
                 }
                 Some(RuntimeValue::ListInt(out))
             }
-            Expr::TupleLit(items) if items.is_empty() => Some(RuntimeValue::Unit),
+            Expr::TupleLit(items) => {
+                if items.is_empty() {
+                    return Some(RuntimeValue::Unit);
+                }
+                let values: Option<Vec<RuntimeValue>> = items
+                    .iter()
+                    .map(|item| self.eval_expr_ast(item, locals, callables, evaluators, depth + 1))
+                    .collect();
+                Some(RuntimeValue::Tuple(values?))
+            }
             Expr::Call { callee, arg } => {
                 if let Some((fn_name, args)) = flatten_named_call(expr)
                     && fn_name.starts_with("__goby_")
@@ -1731,10 +1802,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                 }
             }
             // Lambda as top-level value — not needed in main, return None to fall back.
-            Expr::Lambda { .. }
-            | Expr::TupleLit(_)
-            | Expr::MethodCall { .. }
-            | Expr::With { .. } => None,
+            Expr::Lambda { .. } | Expr::MethodCall { .. } | Expr::With { .. } => None,
         }
     }
 
@@ -2857,7 +2925,7 @@ impl<'m> RuntimeOutputResolver<'m> {
     fn dispatch_handler_method_core(
         &mut self,
         method: &ResolvedHandlerMethod,
-        arg_val: RuntimeValue,
+        args: &[RuntimeValue],
         evaluators: &RuntimeEvaluators<'_, '_>,
         depth: usize,
         produce_value: bool,
@@ -2866,6 +2934,9 @@ impl<'m> RuntimeOutputResolver<'m> {
             return None;
         }
         let stmts = method.method.parsed_body.as_deref()?;
+        if args.len() != method.method.params.len() {
+            return None;
+        }
         let token_idx = self.begin_handler_continuation_bridge();
         let run_result = (|| -> Option<Option<RuntimeValue>> {
             let mut handler_locals = self
@@ -2884,8 +2955,8 @@ impl<'m> RuntimeOutputResolver<'m> {
                         .map(|_| inline.captured_locals.clone())
                 })
                 .unwrap_or_default();
-            if let Some(param) = method.method.params.first() {
-                handler_locals.store(param, arg_val);
+            for (param, arg) in method.method.params.iter().zip(args.iter()) {
+                handler_locals.store(param, arg.clone());
             }
             let mut handler_callables = self
                 .active_inline_handler_stack
@@ -3011,7 +3082,17 @@ impl<'m> RuntimeOutputResolver<'m> {
         evaluators: &RuntimeEvaluators<'_, '_>,
         depth: usize,
     ) -> Option<RuntimeValue> {
-        self.dispatch_handler_method_core(method, arg_val, evaluators, depth, true)?
+        self.dispatch_handler_method_core(method, &[arg_val], evaluators, depth, true)?
+    }
+
+    fn dispatch_handler_method_as_value_with_args(
+        &mut self,
+        method: &ResolvedHandlerMethod,
+        args: &[RuntimeValue],
+        evaluators: &RuntimeEvaluators<'_, '_>,
+        depth: usize,
+    ) -> Option<RuntimeValue> {
+        self.dispatch_handler_method_core(method, args, evaluators, depth, true)?
     }
 
     /// Execute a handler method body with the given argument.
@@ -3022,7 +3103,7 @@ impl<'m> RuntimeOutputResolver<'m> {
         evaluators: &RuntimeEvaluators<'_, '_>,
         depth: usize,
     ) -> Option<()> {
-        let _ = self.dispatch_handler_method_core(method, arg_val, evaluators, depth, false)?;
+        let _ = self.dispatch_handler_method_core(method, &[arg_val], evaluators, depth, false)?;
         Some(())
     }
 
@@ -3302,6 +3383,9 @@ impl RuntimeLocals {
             ls @ RuntimeValue::ListString(_) => {
                 self.record_values.insert(name.to_string(), ls);
             }
+            t @ RuntimeValue::Tuple(_) => {
+                self.record_values.insert(name.to_string(), t);
+            }
             h @ RuntimeValue::Handler(_) => {
                 self.record_values.insert(name.to_string(), h);
             }
@@ -3338,6 +3422,7 @@ enum RuntimeValue {
     Int(i64),
     Unit,
     Bool(bool),
+    Tuple(Vec<RuntimeValue>),
     ListInt(Vec<i64>),
     ListString(Vec<String>),
     Handler(InlineHandlerValue),
@@ -3354,6 +3439,10 @@ impl RuntimeValue {
             Self::Int(value) => value.to_string(),
             Self::Unit => "Unit".to_string(),
             Self::Bool(b) => if *b { "True" } else { "False" }.to_string(),
+            Self::Tuple(items) => {
+                let parts: Vec<String> = items.iter().map(RuntimeValue::to_output_text).collect();
+                format!("({})", parts.join(", "))
+            }
             Self::ListInt(values) => format_list_int(values),
             Self::ListString(values) => {
                 let parts: Vec<String> = values.iter().map(|s| format!("\"{}\"", s)).collect();
@@ -3372,6 +3461,11 @@ impl RuntimeValue {
             Self::Int(value) => value.to_string(),
             Self::Unit => "Unit".to_string(),
             Self::Bool(b) => if *b { "True" } else { "False" }.to_string(),
+            Self::Tuple(items) => {
+                let parts: Vec<String> =
+                    items.iter().map(RuntimeValue::to_expression_text).collect();
+                format!("({})", parts.join(", "))
+            }
             Self::ListInt(values) => format_list_int(values),
             Self::ListString(values) => {
                 let parts: Vec<String> = values.iter().map(|s| format!("\"{}\"", s)).collect();
@@ -4515,6 +4609,57 @@ main =
             resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
                 .expect("runtime output should resolve");
         assert_eq!(output, "a👨\u{200d}👩\u{200d}👧\u{200d}👦b");
+    }
+
+    #[test]
+    fn resolves_runtime_output_for_intrinsic_each_grapheme_unified_iterator_contract() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let source = r#"
+type GraphemeState = GraphemeState(grapheme: String, current: String)
+
+effect Iterator a b
+  yield : a -> b -> (Bool, b)
+
+main : Unit -> Unit can Print
+main =
+  state = GraphemeState(grapheme: "", current: "")
+  out = state
+  with_handler
+    yield grapheme step ->
+      next = "${step.current}${grapheme}"
+      resume (True, GraphemeState(grapheme: grapheme, current: next))
+  in
+    out = __goby_string_each_grapheme "a👨‍👩‍👧‍👦b" state
+  print out.current
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let output =
+            resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
+                .expect("runtime output should resolve");
+        assert_eq!(output, "a👨\u{200d}👩\u{200d}👧\u{200d}👦b");
+    }
+
+    #[test]
+    fn resolves_runtime_output_for_intrinsic_each_grapheme_unified_early_stop() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let source = r#"
+effect Iterator a b
+  yield : a -> b -> (Bool, b)
+
+main : Unit -> Unit can Print
+main =
+  with_handler
+    yield _ _ ->
+      resume (False, ())
+  in
+    n = __goby_string_each_grapheme "abc"
+    print n
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let output =
+            resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
+                .expect("runtime output should resolve");
+        assert_eq!(output, "1");
     }
 
     #[test]

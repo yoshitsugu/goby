@@ -1,5 +1,5 @@
-effect Iterator
-  yield : String -> Int
+effect Iterator a b
+  yield : a -> b -> (Bool, b)
 
 effect StringParseError
   invalid_integer : String -> Int
@@ -33,12 +33,12 @@ parse value =
   mut valid = True
   mut saw_digit = False
   with_handler
-    yield grapheme ->
+    yield grapheme _ ->
       if valid
         if index == 0 && grapheme == "-"
           negative := True
           index := index + 1
-          resume 0
+          resume (True, ())
         else
           digit = digit_to_int_or_minus_one grapheme
           if digit == -1
@@ -53,10 +53,10 @@ parse value =
                 acc := (acc * 10) + (digit * -1)
                 saw_digit := True
           index := index + 1
-          resume 0
+          resume (True, ())
       else
         index := index + 1
-        resume 0
+        resume (True, ())
   in
     __goby_string_each_grapheme value
   if valid

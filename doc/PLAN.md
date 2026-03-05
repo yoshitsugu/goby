@@ -531,19 +531,21 @@ Implementation plan (step-by-step checklist):
   - Avoid leaking one call site's inferred types into unrelated calls.
   - Definition of done: two calls to the same generic operation in one function can infer different concrete types safely.
 
-- [ ] Step 4: define and implement runtime contract for unified Iterator.
+- [x] Step 4: define and implement runtime contract for unified Iterator.
   - Standardize intrinsic/runtime boundary to consume and return `(Bool, state)`:
     - `True` => continue with returned state.
     - `False` => stop iteration and return state.
   - Update iterator-related runtime helpers/intrinsics (`__goby_string_each_grapheme` and friends) to pass state through the unified effect call.
-  - Migration policy (must choose and document before PR3 lands):
-    - option A: flag-day switch (runtime + stdlib migrate together in one slice), or
-    - option B: temporary compatibility bridge accepting both old and new iterator contracts during PR3->PR4.
+  - Migration policy: option B selected.
+    - temporary compatibility bridge accepts both old and new iterator contracts during PR3->PR4.
   - Definition of done: runtime behavior for continue/stop/state-threading is deterministic and tested.
 
 - [ ] Step 5: migrate stdlib modules to unified `Iterator.yield`.
   - Remove `yield_state` from stdlib effect declarations.
   - Update `stdlib/goby/iterator.gb`, `stdlib/goby/string.gb`, `stdlib/goby/int.gb`, and `stdlib/goby/list.gb`.
+  - Current status:
+    - completed for `stdlib/goby/iterator.gb`, `stdlib/goby/string.gb`, `stdlib/goby/int.gb`,
+    - pending for `stdlib/goby/list.gb` (needs tuple result ergonomics for `(Bool, state)` consumption in source-level control flow).
   - Keep temporary compatibility shims only if needed for incremental landing; remove shims before closing the track.
   - Definition of done: stdlib iterator-like flows compile and run using only unified `yield`.
 
@@ -568,7 +570,7 @@ Recommended landing sequence (PR slices):
 
 - [x] PR1: spec lock + parser/AST groundwork.
 - [x] PR2: typecheck unification core for effect ops + resume.
-- [ ] PR3: runtime iterator contract switch.
+- [x] PR3: runtime iterator contract switch.
 - [ ] PR4: stdlib migration.
 - [ ] PR5: diagnostics/docs/examples polish + full regression expansion.
 
