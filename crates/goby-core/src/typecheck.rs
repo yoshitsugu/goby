@@ -3142,7 +3142,7 @@ fn check_body_stmts(
 }
 
 /// Recursively walks `expr` and checks that every effect operation call is covered
-/// by the enclosing handler scope (`with` / `with_handler`, expressed as `covered_ops`).
+/// by the enclosing handler scope (`with`, expressed as `covered_ops`).
 /// Only direct calls to effect operations are checked here; calls to user-declared
 /// functions that themselves require effects are handled in Step 3.
 /// Check that calling `callee_name` does not require effects not yet covered.
@@ -3169,7 +3169,7 @@ fn check_callee_required_effects(
                 declaration: Some(decl_name.to_string()),
                 span: None,
                 message: format!(
-                    "function `{}` requires effect `{}` which is not handled by any enclosing `with`/`with_handler` scope",
+                    "function `{}` requires effect `{}` which is not handled by any enclosing `with` scope",
                     callee_name, effect_name
                 ),
             });
@@ -3314,7 +3314,7 @@ fn check_unhandled_effects_in_expr(
                     declaration: Some(decl_name.to_string()),
                     span: None,
                     message: format!(
-                        "effect operation `{}` is not handled by any enclosing `with`/`with_handler` scope",
+                        "effect operation `{}` is not handled by any enclosing `with` scope",
                         name
                     ),
                 });
@@ -3335,7 +3335,7 @@ fn check_unhandled_effects_in_expr(
                     declaration: Some(decl_name.to_string()),
                     span: None,
                     message: format!(
-                        "effect operation `{}` is not handled by any enclosing `with`/`with_handler` scope",
+                        "effect operation `{}` is not handled by any enclosing `with` scope",
                         qualified
                     ),
                 });
@@ -3386,7 +3386,7 @@ fn check_unhandled_effects_in_expr(
                     declaration: Some(decl_name.to_string()),
                     span: None,
                     message: format!(
-                        "effect operation `{}` is not handled by any enclosing `with`/`with_handler` scope",
+                        "effect operation `{}` is not handled by any enclosing `with` scope",
                         qualified
                     ),
                 });
@@ -3410,7 +3410,7 @@ fn check_unhandled_effects_in_expr(
                     declaration: Some(decl_name.to_string()),
                     span: None,
                     message: format!(
-                        "effect operation `{}` is not handled by any enclosing `with`/`with_handler` scope",
+                        "effect operation `{}` is not handled by any enclosing `with` scope",
                         callee
                     ),
                 });

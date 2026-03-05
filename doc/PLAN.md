@@ -327,7 +327,7 @@ Goal: remove `with_handler` and use only `with`.
   - [x] Step 3: parser diagnostics and keywords
     - change parse errors to suggest `with` only.
     - remove `with_handler` from reserved keyword set.
-  - [ ] Step 4: typecheck diagnostics wording
+  - [x] Step 4: typecheck diagnostics wording
     - replace user-facing `with`/`with_handler` guidance with `with`-only guidance.
   - [ ] Step 5: language docs sync
     - `doc/LANGUAGE_SPEC.md`: remove `with_handler` from reserved tokens and handler syntax section.
