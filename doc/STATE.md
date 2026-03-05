@@ -255,7 +255,6 @@ Recent (detailed):
     (source-order tie-break via DFS traversal order).
   - spec/planning docs synced:
     - `doc/LANGUAGE_SPEC.md` §5
-    - `doc/EFFECT_HANDLER_RESOLUTION.md` §4.1, §6.1
     - `doc/PLAN.md` §2.3 notes
 - 2026-03-05 (session 155): callable dispatch diagnostics hardened.
   - fallback runtime now reports deterministic runtime errors for unsupported
