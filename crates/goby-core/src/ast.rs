@@ -27,6 +27,7 @@ pub struct EmbedDecl {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EffectDecl {
     pub name: String,
+    pub type_params: Vec<String>,
     pub members: Vec<EffectMember>,
 }
 

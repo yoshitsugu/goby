@@ -1,0 +1,6 @@
+# Generic effect declaration parse/typecheck sample.
+effect Iterator a b
+  yield: a -> b -> (Bool, b)
+
+main : Unit -> Unit
+main = ()

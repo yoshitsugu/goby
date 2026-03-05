@@ -80,6 +80,17 @@ This file is a restart-safe snapshot for resuming work after context reset.
 
 Recent (detailed):
 
+- 2026-03-05 (session 158): generic effect header groundwork (PR1 slice) landed.
+  - parser now accepts effect declarations with optional type parameters
+    (`effect Iterator a b`), while preserving existing `effect Name` syntax.
+  - parser now rejects invalid/duplicate effect type parameter names.
+  - AST `EffectDecl` now carries `type_params`.
+  - conflict-signature comparison for effect declarations now includes type-parameter
+    list in addition to member signatures.
+  - docs/examples synced:
+    - `doc/LANGUAGE_SPEC.md` effect declaration syntax updated.
+    - `doc/PLAN.md` Step 0/1 and PR1 checklist marked complete.
+    - `examples/effect_generic.gb` added.
 - 2026-03-05 (session 157): effect dependency cycle diagnostics hardened.
   - typecheck now rejects cycles in effect-member `can` dependencies
     (including self-cycles and multi-effect cycles).

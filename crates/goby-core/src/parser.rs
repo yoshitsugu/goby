@@ -95,20 +95,45 @@ pub fn parse_module(source: &str) -> Result<Module, ParseError> {
 
         // `effect Name` block: collect indented member signatures.
         if trimmed.starts_with("effect ") && !trimmed.contains('=') {
-            let effect_name = trimmed["effect ".len()..].trim().to_string();
-            if effect_name.is_empty() {
+            let effect_header = trimmed["effect ".len()..].trim();
+            if effect_header.is_empty() {
                 return Err(ParseError {
                     line: i + 1,
                     col: 1,
                     message: "effect declaration requires a name".to_string(),
                 });
             }
+            let mut header_parts = effect_header.split_whitespace();
+            let effect_name = header_parts
+                .next()
+                .expect("effect header should have first token")
+                .to_string();
             if !is_camel_case_identifier(&effect_name) {
                 return Err(ParseError {
                     line: i + 1,
                     col: 1,
                     message: "effect declaration name must be CamelCase".to_string(),
                 });
+            }
+            let mut type_params = Vec::new();
+            let mut seen_type_params = std::collections::HashSet::new();
+            for param in header_parts {
+                if !is_type_parameter_identifier(param) {
+                    return Err(ParseError {
+                        line: i + 1,
+                        col: 1,
+                        message: "effect type parameter must start with a lowercase letter or `_`"
+                            .to_string(),
+                    });
+                }
+                if !seen_type_params.insert(param) {
+                    return Err(ParseError {
+                        line: i + 1,
+                        col: 1,
+                        message: format!("duplicate effect type parameter `{}`", param),
+                    });
+                }
+                type_params.push(param.to_string());
             }
             let mut members = Vec::new();
             i += 1;
@@ -156,6 +181,7 @@ pub fn parse_module(source: &str) -> Result<Module, ParseError> {
             }
             effect_declarations.push(EffectDecl {
                 name: effect_name,
+                type_params,
                 members,
             });
             continue;
@@ -1088,6 +1114,13 @@ fn is_lowercase_start_identifier(s: &str) -> bool {
     s.chars()
         .next()
         .is_some_and(|c| c.is_ascii_lowercase() || c == '_')
+}
+
+fn is_type_parameter_identifier(s: &str) -> bool {
+    is_non_reserved_identifier(s)
+        && s.chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_lowercase() || c == '_')
 }
 
 fn parse_resume_expr(src: &str) -> Option<Expr> {
@@ -2424,6 +2457,37 @@ main =
         assert!(
             err.message
                 .contains("invalid effect member signature: expected `name: Type`")
+        );
+    }
+
+    #[test]
+    fn parses_effect_declaration_with_type_parameters() {
+        let source = "effect Iterator a b\n  yield: a -> b -> (Bool, b)\nmain = 1\n";
+        let module = parse_module(source).expect("generic effect declaration should parse");
+        assert_eq!(module.effect_declarations.len(), 1);
+        assert_eq!(module.effect_declarations[0].name, "Iterator");
+        assert_eq!(
+            module.effect_declarations[0].type_params,
+            vec!["a".to_string(), "b".to_string()]
+        );
+    }
+
+    #[test]
+    fn rejects_effect_declaration_with_duplicate_type_parameter() {
+        let source = "effect Iterator a a\n  yield: a -> a\nmain = 1\n";
+        let err =
+            parse_module(source).expect_err("duplicate effect type parameters should be rejected");
+        assert!(err.message.contains("duplicate effect type parameter"));
+    }
+
+    #[test]
+    fn rejects_effect_declaration_with_invalid_type_parameter_name() {
+        let source = "effect Iterator A\n  yield: A -> A\nmain = 1\n";
+        let err =
+            parse_module(source).expect_err("uppercase effect type parameter should be rejected");
+        assert!(
+            err.message
+                .contains("effect type parameter must start with a lowercase letter or `_`")
         );
     }
 

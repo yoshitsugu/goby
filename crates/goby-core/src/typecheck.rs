@@ -1670,6 +1670,11 @@ fn validate_no_ambiguous_effect_names(
 }
 
 fn effect_decl_signature(effect_decl: &crate::ast::EffectDecl) -> String {
+    let params = if effect_decl.type_params.is_empty() {
+        String::new()
+    } else {
+        format!("<{}>", effect_decl.type_params.join(","))
+    };
     let mut members: Vec<(String, String)> = effect_decl
         .members
         .iter()
@@ -1681,11 +1686,16 @@ fn effect_decl_signature(effect_decl: &crate::ast::EffectDecl) -> String {
         })
         .collect();
     members.sort();
-    members
-        .into_iter()
-        .map(|(name, annotation)| format!("{name}:{annotation}"))
-        .collect::<Vec<_>>()
-        .join("|")
+    format!(
+        "{}{}::{}",
+        effect_decl.name,
+        params,
+        members
+            .into_iter()
+            .map(|(name, annotation)| format!("{name}:{annotation}"))
+            .collect::<Vec<_>>()
+            .join("|")
+    )
 }
 
 fn collect_imported_type_names(module: &Module, stdlib_root: &Path) -> HashSet<String> {

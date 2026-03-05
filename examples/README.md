@@ -11,6 +11,7 @@ This directory contains small Goby programs grouped by purpose.
 - `to_integer.gb`: `int.parse` sample with `StringParseError` handler
 - `list_case.gb`: list `case` pattern sample (`[]`, `[1]`, `[4, ..]`, `[a, ..b]`, `[_, _]`, `_`)
 - `case_arm_block.gb`: `case` arm block sample (`pattern ->` + indented block body)
+- `effect_generic.gb`: generic effect header sample (`effect Iterator a b`)
 
 ## Grouped Samples
 
