@@ -6117,46 +6117,21 @@ f = print \"hi\"
         fs::create_dir_all(source_path.parent().expect("parent should exist"))
             .expect("stdlib path should be creatable");
         let source = "\
-effect Iterator
-  yield : String -> Int
+effect Iterator a b
+  yield : a -> b -> (Bool, b)
 @embed Iterator __goby_embeded_effect_stdout_handler
 count_graphemes : String -> Int can Iterator
-count_graphemes s = __goby_string_each_grapheme s
+count_graphemes s =
+  with_handler
+    yield _ _ ->
+      resume (True, ())
+  in
+    __goby_string_each_grapheme s
 ";
         fs::write(&source_path, source).expect("fixture file should be writable");
         let module = parse_module(source).expect("should parse");
         typecheck_module_with_context(&module, Some(&source_path), Some(&stdlib_root))
             .expect("`__goby_string_each_grapheme` should be accepted under stdlib root");
-    }
-
-    #[test]
-    fn accepts_each_grapheme_intrinsic_state_thread_mode_inside_stdlib_root() {
-        let sandbox = TempDirGuard::new("intrinsic_each_grapheme_state_inside_stdlib");
-        let stdlib_root = sandbox.path.join("stdlib");
-        let source_path = stdlib_root.join("goby/string.gb");
-        fs::create_dir_all(source_path.parent().expect("parent should exist"))
-            .expect("stdlib path should be creatable");
-        let source = "\
-type GraphemeState = GraphemeState(grapheme: String, current: String, delimiter: String, seen: Bool)
-effect Iterator
-  yield : String -> Int
-  yield_state : GraphemeState -> GraphemeState
-@embed Iterator __goby_embeded_effect_stdout_handler
-f : String -> GraphemeState can Iterator
-f s =
-  state = GraphemeState(grapheme: \"\", current: \"\", delimiter: \",\", seen: False)
-  out = state
-  with_handler
-    yield_state step ->
-      resume step
-  in
-    out = __goby_string_each_grapheme s state
-  out
-";
-        fs::write(&source_path, source).expect("fixture file should be writable");
-        let module = parse_module(source).expect("should parse");
-        typecheck_module_with_context(&module, Some(&source_path), Some(&stdlib_root))
-            .expect("state-thread mode should be accepted under stdlib root");
     }
 
     #[test]

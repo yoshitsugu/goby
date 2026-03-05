@@ -1204,116 +1204,69 @@ impl<'m> RuntimeOutputResolver<'m> {
             }
             "__goby_string_each_grapheme" => {
                 match args {
-                    // Backward-compatible mode:
-                    // iterate graphemes.
-                    // - new contract: `yield : String -> _ -> (Bool, _)` (state = Unit)
-                    // - fallback contract: `yield : String -> Int`
+                    // Count mode:
+                    // iterate graphemes with Unit state.
+                    // contract: `yield : String -> state -> (Bool, state)`
                     [RuntimeValue::String(value)] => {
-                        let mut yielded_count: i64 = 0;
-                        // New contract path (state threaded as Unit in 1-arg intrinsic mode).
-                        if let Some(method) = self.find_handler_method_by_name("yield")
-                            && method.method.params.len() == 2
-                        {
-                            let mut state = RuntimeValue::Unit;
-                            for grapheme in value.graphemes(true) {
-                                let resumed = self.dispatch_handler_method_as_value_with_args(
-                                    &method,
-                                    &[RuntimeValue::String(grapheme.to_string()), state],
-                                    evaluators,
-                                    depth + 1,
-                                )?;
-                                let RuntimeValue::Tuple(items) = resumed else {
-                                    return None;
-                                };
-                                if items.len() != 2 {
-                                    return None;
-                                }
-                                let RuntimeValue::Bool(keep_going) = items[0] else {
-                                    return None;
-                                };
-                                state = items[1].clone();
-                                yielded_count = yielded_count.checked_add(1)?;
-                                if !keep_going {
-                                    break;
-                                }
-                            }
-                            return Some(RuntimeValue::Int(yielded_count));
+                        let method = self.find_handler_method_by_name("yield")?;
+                        if method.method.params.len() != 2 {
+                            return None;
                         }
-                        // Legacy contract path.
+                        let mut yielded_count: i64 = 0;
+                        let mut state = RuntimeValue::Unit;
                         for grapheme in value.graphemes(true) {
-                            let method = self.find_handler_method_by_name("yield")?;
-                            let resumed = self.dispatch_handler_method_as_value(
+                            let resumed = self.dispatch_handler_method_as_value_with_args(
                                 &method,
-                                RuntimeValue::String(grapheme.to_string()),
+                                &[RuntimeValue::String(grapheme.to_string()), state],
                                 evaluators,
                                 depth + 1,
                             )?;
-                            let RuntimeValue::Int(_) = resumed else {
+                            let RuntimeValue::Tuple(items) = resumed else {
                                 return None;
                             };
+                            if items.len() != 2 {
+                                return None;
+                            }
+                            let RuntimeValue::Bool(keep_going) = items[0] else {
+                                return None;
+                            };
+                            state = items[1].clone();
                             yielded_count = yielded_count.checked_add(1)?;
+                            if !keep_going {
+                                break;
+                            }
                         }
                         Some(RuntimeValue::Int(yielded_count))
                     }
                     // State-thread mode:
                     // iterate graphemes and thread state.
-                    // - new contract: `yield : String -> state -> (Bool, state)`
-                    // - fallback contract: `yield_state : state_with_grapheme -> state`
+                    // contract: `yield : String -> state -> (Bool, state)`
                     [RuntimeValue::String(value), initial_state] => {
-                        // New contract path.
-                        if let Some(method) = self.find_handler_method_by_name("yield")
-                            && method.method.params.len() == 2
-                        {
-                            let mut state = initial_state.clone();
-                            for grapheme in value.graphemes(true) {
-                                let resumed = self.dispatch_handler_method_as_value_with_args(
-                                    &method,
-                                    &[RuntimeValue::String(grapheme.to_string()), state],
-                                    evaluators,
-                                    depth + 1,
-                                )?;
-                                let RuntimeValue::Tuple(items) = resumed else {
-                                    return None;
-                                };
-                                if items.len() != 2 {
-                                    return None;
-                                }
-                                let RuntimeValue::Bool(keep_going) = items[0] else {
-                                    return None;
-                                };
-                                state = items[1].clone();
-                                if !keep_going {
-                                    break;
-                                }
-                            }
-                            return Some(state);
+                        let method = self.find_handler_method_by_name("yield")?;
+                        if method.method.params.len() != 2 {
+                            return None;
                         }
-                        // Legacy state-thread path.
                         let mut state = initial_state.clone();
                         for grapheme in value.graphemes(true) {
-                            let RuntimeValue::Record {
-                                constructor,
-                                fields,
-                            } = &state
-                            else {
-                                return None;
-                            };
-                            let mut payload_fields = fields.clone();
-                            payload_fields.insert(
-                                "grapheme".to_string(),
-                                RuntimeValue::String(grapheme.to_string()),
-                            );
-                            let payload = RuntimeValue::Record {
-                                constructor: constructor.clone(),
-                                fields: payload_fields,
-                            };
-                            let method = self.find_handler_method_by_name("yield_state")?;
-                            state = self.dispatch_handler_method_as_value(
+                            let resumed = self.dispatch_handler_method_as_value_with_args(
                                 &method,
-                                payload,
+                                &[RuntimeValue::String(grapheme.to_string()), state],
                                 evaluators,
                                 depth + 1,
                             )?;
+                            let RuntimeValue::Tuple(items) = resumed else {
+                                return None;
+                            };
+                            if items.len() != 2 {
+                                return None;
+                            }
+                            let RuntimeValue::Bool(keep_going) = items[0] else {
+                                return None;
+                            };
+                            state = items[1].clone();
+                            if !keep_going {
+                                break;
+                            }
                         }
                         Some(state)
                     }
@@ -4919,16 +4872,19 @@ main =
     }
 
     #[test]
-    fn resolves_runtime_output_for_intrinsic_each_grapheme_call() {
+    fn resolves_runtime_output_for_intrinsic_each_grapheme_count_mode_unified_contract() {
         let _guard = ENV_MUTEX.lock().unwrap();
         let source = r#"
 import goby/iterator
 
+effect Iterator a b
+  yield : a -> b -> (Bool, b)
+
 main : Unit -> Unit can Print
 main =
   with_handler
-    yield _ ->
-      resume 0
+    yield _ _ ->
+      resume (True, ())
   in
     n = __goby_string_each_grapheme "a👨‍👩‍👧‍👦b"
     print n
@@ -4938,35 +4894,6 @@ main =
             resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
                 .expect("runtime output should resolve");
         assert_eq!(output, "3");
-    }
-
-    #[test]
-    fn resolves_runtime_output_for_intrinsic_each_grapheme_state_thread_call() {
-        let _guard = ENV_MUTEX.lock().unwrap();
-        let source = r#"
-type GraphemeState = GraphemeState(grapheme: String, parts: List String, current: String, delimiter: String, seen: Bool)
-
-effect Iterator
-  yield : String -> Int
-  yield_state : GraphemeState -> GraphemeState
-
-main : Unit -> Unit can Print
-main =
-  state = GraphemeState(grapheme: "", parts: [], current: "", delimiter: "", seen: False)
-  out = state
-  with_handler
-    yield_state step ->
-      next = "${step.current}${step.grapheme}"
-      resume GraphemeState(grapheme: "", parts: [], current: next, delimiter: "", seen: True)
-  in
-    out = __goby_string_each_grapheme "a👨‍👩‍👧‍👦b" state
-  print out.current
-"#;
-        let module = parse_module(source).expect("parse should work");
-        let output =
-            resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
-                .expect("runtime output should resolve");
-        assert_eq!(output, "a👨\u{200d}👩\u{200d}👧\u{200d}👦b");
     }
 
     #[test]
