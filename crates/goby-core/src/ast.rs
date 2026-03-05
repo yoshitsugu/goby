@@ -189,6 +189,7 @@ pub enum Expr {
     Resume {
         value: Box<Expr>,
     },
+    Block(Vec<Stmt>),
     Case {
         scrutinee: Box<Expr>,
         arms: Vec<CaseArm>,
@@ -223,6 +224,7 @@ impl Expr {
                 | Expr::Handler { .. }
                 | Expr::With { .. }
                 | Expr::Resume { .. }
+                | Expr::Block(..)
                 | Expr::Case { .. }
                 | Expr::If { .. }
         )
@@ -308,7 +310,9 @@ impl Expr {
                     Some(format!("|{}| -> {}", param, b))
                 }
             }
-            Expr::Handler { .. } | Expr::With { .. } | Expr::Resume { .. } => None,
+            Expr::Handler { .. } | Expr::With { .. } | Expr::Resume { .. } | Expr::Block(..) => {
+                None
+            }
             Expr::Case { .. } | Expr::If { .. } => None,
         }
     }

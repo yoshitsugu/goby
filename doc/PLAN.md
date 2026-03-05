@@ -143,7 +143,7 @@ Based on `examples/*.gb`:
   - Parser/AST support includes prefix, head-literal, wildcard, and tail-binding forms.
   - List item literals in MVP are `Int` / `String` only (no `Bool` list-pattern items).
   - Parser rejects malformed forms and duplicate binders.
-- **`case` arm block body** (planned, next syntax milestone).
+- **`case` arm block body** (implemented, 2026-03-05).
   - Goal:
     - support both inline arm bodies and indented block arm bodies.
     - inline (current): `pat -> expr`
@@ -158,6 +158,14 @@ Based on `examples/*.gb`:
     - `    y = 1`
     - `    y + 10`
     - `  _ -> 0`
+  - Implemented scope:
+    - parser accepts both inline and block arm bodies.
+    - block arm body is represented by expression-level block AST.
+    - typecheck enforces that a block arm ends with an expression.
+    - runtime supports evaluating selected arm block and returning tail-expression value.
+  - Follow-up scope:
+    - generalize expression-level block parsing beyond `case` arms (currently case-arm focused).
+  - Phase notes (kept for maintenance):
   - Phase 1 (AST/parser):
     - introduce an explicit expression-level block representation (for example `Expr::Block(Vec<Stmt>)`)
       so arm blocks are first-class and reusable in other expression positions later.

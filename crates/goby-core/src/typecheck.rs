@@ -255,6 +255,7 @@ fn count_resume_in_expr(expr: &Expr) -> usize {
             })
             .sum(),
         Expr::With { handler, body } => count_resume_in_expr(handler) + count_resume_in_stmts(body),
+        Expr::Block(stmts) => count_resume_in_stmts(stmts),
         Expr::Case { scrutinee, arms } => {
             count_resume_in_expr(scrutinee)
                 + arms
@@ -1128,6 +1129,7 @@ fn first_disallowed_intrinsic_in_expr(
                 .or_else(|| first_disallowed_intrinsic_in_stmts(body, is_stdlib_source))
         }
         Expr::Resume { value } => first_disallowed_intrinsic_in_expr(value, is_stdlib_source),
+        Expr::Block(stmts) => first_disallowed_intrinsic_in_stmts(stmts, is_stdlib_source),
         Expr::Case { scrutinee, arms } => {
             first_disallowed_intrinsic_in_expr(scrutinee, is_stdlib_source).or_else(|| {
                 arms.iter()
@@ -1890,6 +1892,7 @@ fn check_expr(expr: &Expr, env: &TypeEnv) -> Ty {
             let _ = check_expr(value, env);
             Ty::Unknown
         }
+        Expr::Block(stmts) => infer_block_expr_ty(stmts, env),
         Expr::Case { scrutinee, arms } => {
             let scrutinee_ty = check_expr(scrutinee, env);
             arms.first()
@@ -1909,6 +1912,34 @@ fn check_expr(expr: &Expr, env: &TypeEnv) -> Ty {
             let _ = check_expr(else_expr, env);
             then_ty
         }
+    }
+}
+
+fn infer_block_expr_ty(stmts: &[Stmt], env: &TypeEnv) -> Ty {
+    let mut local_env = env.clone();
+    let mut last_expr_ty = Ty::Unknown;
+    let mut has_tail_expr = false;
+    for stmt in stmts {
+        match stmt {
+            Stmt::Binding { name, value } | Stmt::MutBinding { name, value } => {
+                let ty = check_expr(value, &local_env);
+                local_env.locals.insert(name.clone(), ty);
+                has_tail_expr = false;
+            }
+            Stmt::Assign { value, .. } => {
+                let _ = check_expr(value, &local_env);
+                has_tail_expr = false;
+            }
+            Stmt::Expr(expr) => {
+                last_expr_ty = check_expr(expr, &local_env);
+                has_tail_expr = true;
+            }
+        }
+    }
+    if has_tail_expr {
+        last_expr_ty
+    } else {
+        Ty::Unknown
     }
 }
 
@@ -2292,6 +2323,15 @@ fn check_resume_in_expr(
                 });
             }
             Ok(())
+        }
+        Expr::Block(stmts) => {
+            let mut child_env = TypeEnv {
+                globals: env.globals.clone(),
+                locals: env.locals.clone(),
+                type_aliases: env.type_aliases.clone(),
+                record_types: env.record_types.clone(),
+            };
+            check_resume_in_stmts_with_local_env(stmts, &mut child_env, decl_name, resume_ctx)
         }
         Expr::Case { scrutinee, arms } => {
             recurse!(scrutinee)?;
@@ -2775,10 +2815,62 @@ fn check_unhandled_effects_in_expr(
             )
         }
         Expr::Resume { value } => recurse!(value),
+        Expr::Block(stmts) => {
+            if !matches!(stmts.last(), Some(Stmt::Expr(_))) {
+                return Err(TypecheckError {
+                    declaration: Some(decl_name.to_string()),
+                    span: None,
+                    message: "block expression must end with an expression".to_string(),
+                });
+            }
+            let mut local_env = env.clone();
+            for stmt in stmts {
+                match stmt {
+                    Stmt::Binding { name, value } | Stmt::MutBinding { name, value } => {
+                        ensure_no_ambiguous_refs_in_expr(value, &local_env, decl_name)?;
+                        check_unhandled_effects_in_expr(
+                            value,
+                            &local_env,
+                            required_effects_map,
+                            effect_map,
+                            covered_ops,
+                            decl_name,
+                        )?;
+                        let ty = check_expr(value, &local_env);
+                        local_env.locals.insert(name.clone(), ty);
+                    }
+                    Stmt::Assign { value, .. } => {
+                        ensure_no_ambiguous_refs_in_expr(value, &local_env, decl_name)?;
+                        check_unhandled_effects_in_expr(
+                            value,
+                            &local_env,
+                            required_effects_map,
+                            effect_map,
+                            covered_ops,
+                            decl_name,
+                        )?;
+                    }
+                    Stmt::Expr(expr) => {
+                        ensure_no_ambiguous_refs_in_expr(expr, &local_env, decl_name)?;
+                        check_unhandled_effects_in_expr(
+                            expr,
+                            &local_env,
+                            required_effects_map,
+                            effect_map,
+                            covered_ops,
+                            decl_name,
+                        )?;
+                    }
+                }
+            }
+            Ok(())
+        }
         Expr::Case { scrutinee, arms } => {
             recurse!(scrutinee)?;
+            let scrutinee_ty = check_expr(scrutinee, env);
             for arm in arms {
-                recurse!(&arm.body)?;
+                let arm_env = env_with_case_pattern_bindings(env, &arm.pattern, &scrutinee_ty);
+                recurse!(&arm.body, &arm_env)?;
             }
             Ok(())
         }
@@ -2935,6 +3027,32 @@ fn ensure_no_ambiguous_refs_in_expr(
             ensure_no_ambiguous_refs_in_stmts(body, env, decl_name)
         }
         Expr::Resume { value } => ensure_no_ambiguous_refs_in_expr(value, env, decl_name),
+        Expr::Block(stmts) => {
+            if !matches!(stmts.last(), Some(Stmt::Expr(_))) {
+                return Err(TypecheckError {
+                    declaration: Some(decl_name.to_string()),
+                    span: None,
+                    message: "block expression must end with an expression".to_string(),
+                });
+            }
+            let mut local_env = env.clone();
+            for stmt in stmts {
+                match stmt {
+                    Stmt::Binding { name, value } | Stmt::MutBinding { name, value } => {
+                        ensure_no_ambiguous_refs_in_expr(value, &local_env, decl_name)?;
+                        let ty = check_expr(value, &local_env);
+                        local_env.locals.insert(name.clone(), ty);
+                    }
+                    Stmt::Assign { value, .. } => {
+                        ensure_no_ambiguous_refs_in_expr(value, &local_env, decl_name)?;
+                    }
+                    Stmt::Expr(expr) => {
+                        ensure_no_ambiguous_refs_in_expr(expr, &local_env, decl_name)?;
+                    }
+                }
+            }
+            Ok(())
+        }
         Expr::Case { scrutinee, arms } => {
             ensure_no_ambiguous_refs_in_expr(scrutinee, env, decl_name)?;
             let scrutinee_ty = check_expr(scrutinee, env);
@@ -4328,6 +4446,51 @@ f xs =
 "#;
         let module = parse_module(source).expect("should parse");
         typecheck_module(&module).expect("list pattern variants should typecheck");
+    }
+
+    #[test]
+    fn accepts_case_arm_block_body() {
+        let source = r#"
+id : Int -> Int
+id n = n
+
+f : Int -> Int
+f x =
+  id
+    case x
+      0 ->
+        y = 1
+        y + 10
+      _ -> 0
+"#;
+        let module = parse_module(source).expect("should parse");
+        typecheck_module(&module).expect("case arm block body should typecheck");
+    }
+
+    #[test]
+    fn rejects_case_arm_block_without_tail_expression() {
+        let source = r#"
+id : Int -> Int
+id n = n
+
+f : Int -> Int
+f x =
+  id
+    case x
+      0 ->
+        y = 1
+      _ -> 0
+"#;
+        let module = parse_module(source).expect("should parse");
+        let err = typecheck_module(&module)
+            .expect_err("case arm block without tail expression should fail");
+        assert_eq!(err.declaration.as_deref(), Some("f"));
+        assert!(
+            err.message
+                .contains("block expression must end with an expression"),
+            "unexpected message: {}",
+            err.message
+        );
     }
 
     #[test]

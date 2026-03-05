@@ -1391,6 +1391,49 @@ impl<'m> RuntimeOutputResolver<'m> {
                     Some(_) => None,
                 }
             }
+            Expr::Block(stmts) => {
+                let mut block_locals = locals.clone();
+                let mut last_value: Option<RuntimeValue> = None;
+                for stmt in stmts {
+                    match stmt {
+                        Stmt::Binding { name, value } | Stmt::MutBinding { name, value } => {
+                            let v = self.eval_expr_ast(
+                                value,
+                                &block_locals,
+                                callables,
+                                evaluators,
+                                depth + 1,
+                            )?;
+                            block_locals.store(name, v);
+                            last_value = None;
+                        }
+                        Stmt::Assign { name, value } => {
+                            if block_locals.get(name).is_none() {
+                                return None;
+                            }
+                            let v = self.eval_expr_ast(
+                                value,
+                                &block_locals,
+                                callables,
+                                evaluators,
+                                depth + 1,
+                            )?;
+                            block_locals.store(name, v);
+                            last_value = None;
+                        }
+                        Stmt::Expr(expr) => {
+                            last_value = Some(self.eval_expr_ast(
+                                expr,
+                                &block_locals,
+                                callables,
+                                evaluators,
+                                depth + 1,
+                            )?);
+                        }
+                    }
+                }
+                last_value
+            }
             Expr::Case { scrutinee, arms } => {
                 let scrutinee_val =
                     self.eval_expr_ast(scrutinee, locals, callables, evaluators, depth + 1)?;
@@ -3351,6 +3394,11 @@ main =
   [1, 2, 3] |> print
 "#;
         let module = parse_module(source).expect("parse should work");
+        assert!(
+            main_parsed_body(&module).is_some(),
+            "main parsed_body should exist for case arm block source"
+        );
+        eprintln!("parsed main body: {:#?}", main_parsed_body(&module));
         let output =
             resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
                 .expect("runtime output should resolve");
@@ -3630,6 +3678,32 @@ main =
             resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
                 .expect("runtime output should resolve");
         assert_eq!(output, "[2, 3]");
+    }
+
+    #[test]
+    fn resolves_runtime_output_for_case_arm_block_body() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let source = r#"
+main : Unit -> Unit
+main =
+  x = 0
+  print
+    case x
+      0 ->
+        y = 1
+        y + 10
+      _ -> 0
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let output =
+            resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module));
+        assert!(
+            output.is_some(),
+            "runtime output should resolve; parsed={:#?}",
+            main_parsed_body(&module)
+        );
+        let output = output.expect("checked Some above");
+        assert_eq!(output, "11");
     }
 
     #[test]

@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-05 (session 145)
+Last updated: 2026-03-05 (session 146)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -37,6 +37,9 @@ This file is a restart-safe snapshot for resuming work after context reset.
 - String interpolation `${...}` is parsed into `Expr::InterpolatedString`.
   Runtime stringifies embedded expression values when materializing the final `String`.
 - `case` arm separator: ` -> `; parsed by `split_case_arm` (safe for lambda bodies).
+- `case` arms support both inline and block bodies:
+  - inline: `pattern -> expr`
+  - block: `pattern ->` + deeper-indented statements, where the last expression is the arm value.
 - Current implementation `CasePattern` variants:
   `IntLit(i64)`, `StringLit(String)`, `BoolLit(bool)`, `EmptyList`,
   `ListPattern { items, tail }`, `Wildcard`.
@@ -74,6 +77,26 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - follow-up work moved to post-MVP tracks in `doc/PLAN.md`.
 
 ## 4. Recent Milestones
+
+- 2026-03-05 (session 146): `case` arm block implementation completed
+  - AST:
+    - added expression-level `Expr::Block(Vec<Stmt>)`.
+  - Parser:
+    - `case` arm now accepts both `pattern -> expr` and `pattern ->` + indented block body.
+    - malformed arm-block shapes are rejected (`->` without indented body, comment/blank-only block).
+  - Typechecker:
+    - block expressions are checked with sequential local-env extension.
+    - block expressions must end with an expression (`block expression must end with an expression`).
+    - `case` arm checks now recurse with per-arm pattern-binding env.
+  - Runtime/codegen:
+    - native/fallback evaluators support `Expr::Block` evaluation (sequential statements + tail expr result).
+  - Tests/docs/examples:
+    - added parser/typecheck/runtime/CLI tests for `case` arm blocks.
+    - added `examples/case_arm_block.gb`.
+    - updated `doc/LANGUAGE_SPEC.md`, `doc/PLAN.md`, and `examples/README.md`.
+  - Validation:
+    - `cargo check`
+    - targeted tests for parser/typecheck/runtime/CLI arm-block behavior.
 
 - 2026-03-05 (session 145): list-pattern semantics/robustness follow-up
   - Spec wording aligned to actual semantics:
