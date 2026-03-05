@@ -960,7 +960,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                         .try_apply_bare_runtime_bridge_side_effect(
                             fn_name,
                             arg_val,
-                            &RuntimeLocals::default(),
+                            &self.locals.clone(),
                             &HashMap::new(),
                             evaluators,
                             0,
@@ -1005,7 +1005,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                         .try_apply_bare_runtime_bridge_side_effect(
                             callee,
                             v,
-                            &RuntimeLocals::default(),
+                            &self.locals.clone(),
                             &HashMap::new(),
                             evaluators,
                             0,
