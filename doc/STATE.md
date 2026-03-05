@@ -80,6 +80,14 @@ This file is a restart-safe snapshot for resuming work after context reset.
 
 Recent (detailed):
 
+- 2026-03-05 (session 153): lambda-as-function-argument runtime import-variant
+  coverage completed for `list.each`.
+  - fallback runtime now dispatches `goby/list.each` callbacks for plain import
+    (`list.each`), alias import (`l.each`), and selective import (`each`).
+  - added runtime regression tests:
+    `resolves_runtime_output_for_list_each_with_plain_import`,
+    `resolves_runtime_output_for_list_each_with_alias_import`,
+    `resolves_runtime_output_for_list_each_with_selective_import`.
 - 2026-03-05 (session 152): lambda-as-function-argument import-variant
   typecheck coverage completed.
   - added `goby/list.each` regression tests for import modes:

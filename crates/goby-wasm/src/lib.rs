@@ -1724,6 +1724,13 @@ impl<'m> RuntimeOutputResolver<'m> {
             return result;
         }
 
+        if self
+            .try_execute_imported_list_each_call(expr, locals, callables, evaluators, depth + 1)
+            .is_some()
+        {
+            return Some(());
+        }
+
         if let Some((fn_name, args)) = flatten_named_call(expr)
             && args.len() > 1
             && self
@@ -2030,6 +2037,71 @@ impl<'m> RuntimeOutputResolver<'m> {
         None
     }
 
+    fn try_execute_imported_list_each_call(
+        &mut self,
+        expr: &Expr,
+        locals: &RuntimeLocals,
+        callables: &HashMap<String, IntCallable>,
+        evaluators: &RuntimeEvaluators<'_, '_>,
+        depth: usize,
+    ) -> Option<()> {
+        let Expr::Call {
+            callee,
+            arg: callback,
+        } = expr
+        else {
+            return None;
+        };
+        let Expr::Call {
+            callee: head,
+            arg: list_arg,
+        } = callee.as_ref()
+        else {
+            return None;
+        };
+
+        let is_list_each = match head.as_ref() {
+            Expr::Qualified { receiver, member } => {
+                member == "each" && self.resolves_module_receiver(receiver, "goby/list")
+            }
+            Expr::Var(name) => {
+                name == "each" && self.has_selective_import_symbol("goby/list", "each")
+            }
+            _ => false,
+        };
+        if !is_list_each {
+            return None;
+        }
+
+        let RuntimeValue::ListInt(values) =
+            self.eval_expr_ast(list_arg, locals, callables, evaluators, depth + 1)?
+        else {
+            return None;
+        };
+        let callback_callable = match callback.as_ref() {
+            Expr::Lambda { param, body } => IntCallable::AstLambda(Box::new(AstLambdaCallable {
+                parameter: param.clone(),
+                body: (*body.clone()),
+                captured_locals: locals.clone(),
+                captured_callables: callables.clone(),
+            })),
+            Expr::Var(name) => self.resolve_callable_argument(name, callables),
+            _ => return None,
+        };
+
+        for n in values {
+            self.dispatch_callable_side_effect(
+                &callback_callable,
+                RuntimeValue::Int(n),
+                locals,
+                callables,
+                evaluators,
+                depth + 1,
+            )?;
+        }
+        Some(())
+    }
+
     fn execute_decl_call_chain_as_side_effect(
         &mut self,
         fn_name: &str,
@@ -2325,6 +2397,20 @@ impl<'m> RuntimeOutputResolver<'m> {
                     .is_some_and(|qualifier| qualifier == receiver),
                 goby_core::ImportKind::Alias(alias) => alias == receiver,
                 goby_core::ImportKind::Selective(_) => false,
+            }
+        })
+    }
+
+    fn has_selective_import_symbol(&self, module_path: &str, symbol: &str) -> bool {
+        self.module.imports.iter().any(|import| {
+            if import.module_path != module_path {
+                return false;
+            }
+            match &import.kind {
+                goby_core::ImportKind::Selective(selected) => {
+                    selected.iter().any(|name| name == symbol)
+                }
+                _ => false,
             }
         })
     }
@@ -4088,6 +4174,57 @@ main =
             resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
                 .expect("runtime output should resolve");
         assert_eq!(output, "3\n5");
+    }
+
+    #[test]
+    fn resolves_runtime_output_for_list_each_with_plain_import() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let source = r#"
+import goby/list
+
+main : Unit -> Unit
+main =
+  list.each [2, 4] (|n| -> print "${n}")
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let output =
+            resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
+                .expect("runtime output should resolve");
+        assert_eq!(output, "2\n4");
+    }
+
+    #[test]
+    fn resolves_runtime_output_for_list_each_with_alias_import() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let source = r#"
+import goby/list as l
+
+main : Unit -> Unit
+main =
+  l.each [6, 8] (|n| -> print "${n}")
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let output =
+            resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
+                .expect("runtime output should resolve");
+        assert_eq!(output, "6\n8");
+    }
+
+    #[test]
+    fn resolves_runtime_output_for_list_each_with_selective_import() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let source = r#"
+import goby/list ( each )
+
+main : Unit -> Unit
+main =
+  each [10, 12] (|n| -> print "${n}")
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let output =
+            resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
+                .expect("runtime output should resolve");
+        assert_eq!(output, "10\n12");
     }
 
     #[test]
