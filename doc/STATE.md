@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-06 (session 176)
+Last updated: 2026-03-06 (session 177)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -50,7 +50,8 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - `_` is wildcard/non-binding in list items and tail binder position (`.._`).
 - Native Wasm capability checker still treats list patterns as unsupported,
   so list-pattern `case` executes via fallback runtime path.
-- MVP built-ins: `print`, `map`, `fetch_env_var`, `string.split`, `list.join`.
+- MVP built-ins: `print`, `fetch_env_var`, `string.split`, `list.join`.
+  - list mapping path is being consolidated on stdlib `goby/list.map`.
 - `print` is an internal runtime-resolved operation; `DefaultStdioPrintHandler`-equivalent behavior
   is compiler/runtime-owned and not required to appear as a user-visible stdlib handler definition.
 - `examples/function.gb` expected runtime output (locked):
@@ -70,9 +71,11 @@ This file is a restart-safe snapshot for resuming work after context reset.
     AST/parser/typecheck/fallback runtime.
   - native lowering currently routes spread-containing modules to fallback path
     (safe parity boundary).
-- Active migration task (new, 2026-03-06):
-  - map semantics should be consolidated in `stdlib/goby/list.gb` (`list.map`),
-    replacing builtin/internal map paths where possible.
+- Map consolidation task (2026-03-06) status:
+  - callsites are migrated to stdlib-imported `goby/list.map` usage.
+  - native-lowering/fallback capability checker `map`-specific builtin paths are trimmed.
+  - runtime list-evaluator `map` shortcut is now gated behind selective import
+    (`import goby/list ( map )`) to avoid builtin-only behavior.
 - Post-MVP open items tracked in `doc/PLAN.md` §3 and §4.
 - Post-MVP effect implementation direction is now fixed in `doc/PLAN.md` §2.3:
   - deep handlers with one-shot resumptions,
@@ -87,6 +90,20 @@ This file is a restart-safe snapshot for resuming work after context reset.
 ## 4. Recent Milestones
 
 Recent (detailed):
+
+- 2026-03-06 (session 177): map consolidation Step 8-9 completed.
+  - PLAN.md §4.5 checklist updated:
+    - completed: Step 8-9 (map callsite migration + builtin-path trim).
+  - Examples/tests:
+    - `examples/function.gb` now explicitly imports `map` from `goby/list`.
+    - inline runtime regression snippets that use `map` now import from `goby/list`.
+  - Runtime/lowering:
+    - removed native lowering `map` builtin shortcut path (`crates/goby-wasm/src/lower.rs`).
+    - removed native capability checker `map`-special handling (`crates/goby-wasm/src/fallback.rs`).
+    - runtime list-evaluator `map` shortcut now activates only when selective import
+      `goby/list ( map )` is present.
+  - Docs:
+    - builtins list updated to treat list mapping as stdlib `goby/list.map` path.
 
 - 2026-03-06 (session 176): list spread Step 4-7, 10-11 completed.
   - PLAN.md §4.5 checklist updated:
@@ -400,8 +417,8 @@ cargo clippy -- -D warnings
 Execution focus (aligned with `doc/PLAN.md`):
 
 1. **Active**: List spread expression implementation (PLAN.md §4.5).
-   - Steps 1-7, 10-11 are done.
-   - Remaining: map migration (Steps 8-9) to consolidate semantics in stdlib.
+   - Step 1-11 are done.
+   - follow-up: continue parity hardening and remove remaining legacy helper paths.
 2. Stdlib runtime bridge generalization (reduce symbol-specific fallback branches).
 3. Tooling foundation (`fmt`/`lint`/`lsp`) with stable diagnostics surface.
 4. Native lowering coverage expansion for remaining unsupported expression/effect paths.

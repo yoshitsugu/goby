@@ -420,7 +420,6 @@ fn eval_expr(
         Expr::Var(name) => bindings.get(name).cloned().or_else(|| {
             if (env.declarations.contains_key(name.as_str())
                 && env.lowering_plan.is_direct_style(name.as_str()))
-                || name == "map"
                 || is_runtime_intrinsic_name(name)
             {
                 Some(NativeValue::Callable(NativeCallable::Named {
@@ -637,9 +636,6 @@ fn apply_named_callable(
     if let Some(intrinsic_result) = apply_runtime_intrinsic(name.as_str(), args.as_slice()) {
         return Some(intrinsic_result);
     }
-    if name == "map" {
-        return apply_map_builtin(args, env, depth + 1);
-    }
 
     let decl = env.declarations.get(name.as_str())?;
     if !env.lowering_plan.is_direct_style(name.as_str()) {
@@ -689,39 +685,6 @@ fn apply_runtime_intrinsic(name: &str, args: &[NativeValue]) -> Option<NativeVal
         }
         _ => None,
     }
-}
-
-fn apply_map_builtin(
-    args: Vec<NativeValue>,
-    env: &EvalEnv<'_>,
-    depth: usize,
-) -> Option<NativeValue> {
-    if args.len() < 2 {
-        return Some(NativeValue::Callable(NativeCallable::Named {
-            name: "map".to_string(),
-            applied_args: args,
-        }));
-    }
-    if args.len() > 2 {
-        return None;
-    }
-    let mut iter = args.into_iter();
-    // `map ns f` is parsed as `Call(Call(map, ns), f)`, so args are `[list, mapper]`.
-    let list = iter.next()?;
-    let mapper = iter.next()?;
-    let NativeValue::ListInt(values) = list else {
-        return None;
-    };
-
-    let mut mapped = Vec::with_capacity(values.len());
-    for value in values {
-        let out = apply_callable(mapper.clone(), NativeValue::Int(value), env, depth + 1)?;
-        let NativeValue::Int(n) = out else {
-            return None;
-        };
-        mapped.push(n);
-    }
-    Some(NativeValue::ListInt(mapped))
 }
 
 #[cfg(test)]

@@ -144,7 +144,8 @@ syntax/semantics.
 
 ## 7. Current Runtime/Builtin Notes
 
-- Builtins currently include `print`, `map`, `fetch_env_var`, `string.split`, `list.join`.
+- Builtins currently include `print`, `fetch_env_var`, `string.split`, `list.join`.
+- List mapping is provided via stdlib `goby/list.map`.
 - Iterator runtime intrinsic contract (current):
   - `__goby_string_each_grapheme` expects handler operation
     `yield : String -> state -> (Bool, state)`.
