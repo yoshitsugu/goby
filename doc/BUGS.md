@@ -25,7 +25,7 @@ typecheck error in main: effect operation `raise` is not handled by any enclosin
 ### Current behavior (2026-03-04)
 
 ```
-parse error: legacy top-level `handler ... for ...` is no longer supported; use `handler` expressions with `with`/`with_handler`
+parse error: legacy top-level `handler ... for ...` is no longer supported; use `handler` expressions with `with`
 ```
 
 ### Root Cause

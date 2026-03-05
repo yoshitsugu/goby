@@ -1,8 +1,8 @@
 # Effect/Handler Resolution Rules (Draft)
 
 This document defines the intended resolution model for effect operations and
-handlers in Goby, including `with_handler` matching and implicit handling in
-`main`.
+handlers in Goby, including handler matching in `with` scopes and implicit
+handling in `main`.
 
 ## 1. Goals
 
@@ -48,9 +48,9 @@ Name priority rule:
 Qualified operation syntax (`EffectName.op`) can be added to disambiguate in
 the future. Until then, duplicate operation names in visible scope are errors.
 
-## 4. `with_handler` Clause Resolution
+## 4. `with` Clause Resolution
 
-For each handler clause in `with_handler` / `handler`:
+For each handler clause in `with` inline handler blocks / `handler` values:
 
 - Clause name (left side of `->`) is resolved by operation name using the same
   visibility rules as operation calls.
@@ -103,7 +103,7 @@ effect EffectB
 
 main : Unit -> Unit
 main =
-  with_handler
+  with
     a ->
       do_something_1
       do_something_2
@@ -127,7 +127,7 @@ The resolver confirms:
 
 When `main` declares effect requirements (for example `can Print`), default
 handlers should be integrated through the same pipeline as user-written
-`with`/`with_handler`.
+`with`.
 
 Conceptually:
 

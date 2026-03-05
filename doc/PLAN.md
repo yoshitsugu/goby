@@ -290,9 +290,9 @@ Based on `examples/*.gb`:
 
 #### Planned Syntax Simplification: `with` Unification
 
-Status: planned (not yet implemented)
+Status: completed (2026-03-05)
 
-Goal: remove `with_handler` and use only `with`.
+Goal: unify handler application syntax on `with` only.
 
 - Target syntax:
   - inline handler form:
@@ -301,51 +301,47 @@ Goal: remove `with_handler` and use only `with`.
     - `in`
     - body block
   - handler value form: `with <handler_expr> in <body>`
-- Scope and placement rules (target):
-  - `with` statement form remains supported.
-  - multiline RHS `with` is supported for bindings/assignments to preserve existing
-    iterator-style code patterns currently written with multiline `with_handler`.
-  - parser entry points for multiline RHS handling must treat `with` the same way as
-    current multiline `case` / `if` handling.
+- Scope and placement rules:
+  - `with` statement form is supported.
+  - multiline RHS `with` is supported for bindings/assignments.
+  - parser multiline RHS handling treats `with` similarly to multiline `case` / `if`.
 - Parser disambiguation rule:
   - if the statement line is exactly `with`, parse inline handler clauses from the next indented block.
   - if the statement line starts with `with `, parse the remainder as `<handler_expr>`.
   - do not rely on fixed token-count lookahead before `->` (handler clauses allow variable arity).
-- Compatibility/migration policy:
-  - remove `with_handler` parser support directly (no warning mode).
-  - parse error should point users to `with` inline form.
-  - remove `with_handler` from reserved keyword/docs/typecheck diagnostics wording in the
-    same change set to avoid mixed guidance.
+- Compatibility/migration result:
+  - parser support for the legacy inline-handler keyword is removed.
+  - parse/typecheck diagnostics now use `with`-only guidance.
+  - language/docs/examples/tests are synced to `with` syntax.
 - Step-by-step implementation checklist:
   - [x] Step 1: parser statement-path update
     - add `with` exact-line inline-handler branch.
     - keep existing `with <handler_expr>` statement parsing.
-    - remove `with_handler` statement parse branch.
+    - remove legacy statement parse branch.
   - [x] Step 2: parser multiline-RHS update
     - extend multiline RHS parser path to support `with` (in addition to `case`/`if`).
     - cover both binding and assignment RHS forms.
   - [x] Step 3: parser diagnostics and keywords
     - change parse errors to suggest `with` only.
-    - remove `with_handler` from reserved keyword set.
+    - remove legacy keyword from reserved keyword set.
   - [x] Step 4: typecheck diagnostics wording
-    - replace user-facing `with`/`with_handler` guidance with `with`-only guidance.
+    - replace user-facing mixed guidance with `with`-only guidance.
   - [x] Step 5: language docs sync
-    - `doc/LANGUAGE_SPEC.md`: remove `with_handler` from reserved tokens and handler syntax section.
+    - `doc/LANGUAGE_SPEC.md`: update reserved tokens and handler syntax section.
     - `doc/PLAN.md`/`doc/STATE.md`: mark completion and remove transitional wording.
   - [x] Step 6: examples migration
-    - migrate all `examples/*.gb` from `with_handler` to `with`.
+    - migrate all `examples/*.gb` to `with`.
     - verify iterator examples keep multiline RHS behavior.
   - [x] Step 7: tests migration
     - update parser tests for `with` inline/value forms.
-    - update typecheck/CLI tests and add `with_handler` rejection coverage.
+    - update typecheck/CLI tests and add legacy keyword rejection coverage.
   - [x] Step 8: quality gate
     - run `cargo fmt`.
     - run `cargo check`.
     - run `cargo test`.
     - run `cargo clippy -- -D warnings`.
-- Migration scale note:
-  - repository currently contains many `with_handler` references (including tests/docs/examples),
-    so migration should be landed as one coherent change to avoid partial-state breakage.
+- Completion note:
+  - migration landed as one coherent change to avoid partial-state breakage.
 
 Note: detailed step-by-step renewal history is intentionally omitted here; use
 `doc/STATE.md` and git history for chronological implementation records.
