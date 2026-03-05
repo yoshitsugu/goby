@@ -80,6 +80,11 @@ This file is a restart-safe snapshot for resuming work after context reset.
 
 Recent (detailed):
 
+- 2026-03-05 (session 152): lambda-as-function-argument import-variant
+  typecheck coverage completed.
+  - added `goby/list.each` regression tests for import modes:
+    plain (`import goby/list`), alias (`import goby/list as l`), selective
+    (`import goby/list ( each )`).
 - 2026-03-05 (session 151): lambda-as-function-argument runtime parity
   (list.each-style + captured closure slice) completed.
   - fallback runtime now executes curried declaration call chains with callable
