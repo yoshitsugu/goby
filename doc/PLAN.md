@@ -375,7 +375,7 @@ Acceptance criteria:
 - Type mismatch is reported as compile-time error with expected/actual type names.
 - Existing passing tests stay green.
 
-### 4.3 Active Track B: General Lambda-as-Function-Argument Support
+### 4.3 Completed Track B: General Lambda-as-Function-Argument Support
 
 Goal: make lambda/function values callable anywhere a function argument is expected
 (including stdlib HOF-like APIs such as `list.each`), without call-site-specific hacks.
@@ -422,6 +422,11 @@ Acceptance criteria:
 - `goby-cli check` and `goby-cli run` succeed for canonical lambda-argument samples,
   including a `list.each`-style case.
 - No new symbol-specific runtime branching is required for HOF call sites.
+
+Completion status (2026-03-05):
+
+- Track B is closed.
+- Planned scope items 1-6 are implemented and covered by regressions.
 
 ### 4.4 Completed Track C: Stdlib Runtime Bridge Generalization
 
