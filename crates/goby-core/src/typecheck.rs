@@ -2046,13 +2046,19 @@ fn check_expr(expr: &Expr, env: &TypeEnv) -> Ty {
         Expr::StringLit(_) => Ty::Str,
         Expr::InterpolatedString(_) => Ty::Str,
         Expr::ListLit { elements, spread } => {
-            if spread.is_some() {
-                return Ty::Unknown;
-            }
             if elements.is_empty() {
                 return Ty::List(Box::new(Ty::Unknown));
             }
-            let item_ty = check_expr(&elements[0], env);
+            let mut item_ty = check_expr(&elements[0], env);
+            for item in &elements[1..] {
+                item_ty = merge_branch_type(env, item_ty, check_expr(item, env));
+            }
+            if let Some(tail) = spread {
+                let tail_ty = check_expr(tail, env);
+                if let Ty::List(tail_inner) = env.resolve_alias(&tail_ty, 0) {
+                    item_ty = merge_branch_type(env, item_ty, *tail_inner);
+                }
+            }
             Ty::List(Box::new(item_ty))
         }
         Expr::TupleLit(items) => {
@@ -2195,6 +2201,84 @@ fn check_expr(expr: &Expr, env: &TypeEnv) -> Ty {
             let then_ty = check_expr(then_expr, env);
             let else_ty = check_expr(else_expr, env);
             merge_branch_type(env, then_ty, else_ty)
+        }
+    }
+}
+
+fn check_list_spread_constraints(
+    elements: &[Expr],
+    spread: Option<&Expr>,
+    env: &TypeEnv,
+    decl_name: &str,
+) -> Result<(), TypecheckError> {
+    let Some(tail_expr) = spread else {
+        return Ok(());
+    };
+
+    let mut merged_prefix_ty: Option<Ty> = None;
+    for (idx, element) in elements.iter().enumerate() {
+        let element_ty = env.resolve_alias(&check_expr(element, env), 0);
+        if element_ty == Ty::Unknown || ty_contains_type_var(&element_ty) {
+            continue;
+        }
+        if let Some(expected) = &merged_prefix_ty
+            && !env.are_compatible(expected, &element_ty)
+            && !env.are_compatible(&element_ty, expected)
+        {
+            return Err(TypecheckError {
+                declaration: Some(decl_name.to_string()),
+                span: None,
+                message: format!(
+                    "list spread prefix element type mismatch: element #{} is `{}` but earlier prefix elements require `{}`",
+                    idx + 1,
+                    ty_name(&element_ty),
+                    ty_name(expected)
+                ),
+            });
+        }
+        merged_prefix_ty = Some(match merged_prefix_ty {
+            Some(prev) => merge_branch_type(env, prev, element_ty),
+            None => element_ty,
+        });
+    }
+
+    let tail_ty = env.resolve_alias(&check_expr(tail_expr, env), 0);
+    match tail_ty {
+        Ty::List(tail_item_ty) => {
+            let tail_item_ty = *tail_item_ty;
+            if tail_item_ty == Ty::Unknown || ty_contains_type_var(&tail_item_ty) {
+                return Ok(());
+            }
+            if let Some(expected_prefix_ty) = merged_prefix_ty
+                && expected_prefix_ty != Ty::Unknown
+                && !ty_contains_type_var(&expected_prefix_ty)
+                && !env.are_compatible(&expected_prefix_ty, &tail_item_ty)
+                && !env.are_compatible(&tail_item_ty, &expected_prefix_ty)
+            {
+                return Err(TypecheckError {
+                    declaration: Some(decl_name.to_string()),
+                    span: None,
+                    message: format!(
+                        "list spread tail element type mismatch: expected `List {}` but got `List {}`",
+                        ty_name(&expected_prefix_ty),
+                        ty_name(&tail_item_ty)
+                    ),
+                });
+            }
+            Ok(())
+        }
+        Ty::Unknown | Ty::Var(_) => Ok(()),
+        other => {
+            let expected = merged_prefix_ty.unwrap_or(Ty::Unknown);
+            Err(TypecheckError {
+                declaration: Some(decl_name.to_string()),
+                span: None,
+                message: format!(
+                    "list spread tail must be `List {}` but got `{}`",
+                    ty_name(&expected),
+                    ty_name(&other)
+                ),
+            })
         }
     }
 }
@@ -2794,6 +2878,7 @@ fn check_resume_in_expr(
             if let Some(s) = spread {
                 recurse!(s)?;
             }
+            check_list_spread_constraints(elements, spread.as_deref(), env, decl_name)?;
             Ok(())
         }
         Expr::TupleLit(items) => {
@@ -5577,6 +5662,50 @@ f n = n
     fn accepts_list_int_annotation_matching_list_literal_body() {
         let module = parse_module("xs : List Int\nxs = [1, 2]\n").expect("should parse");
         typecheck_module(&module).expect("list literal body should typecheck");
+    }
+
+    #[test]
+    fn accepts_list_spread_annotation_matching_list_literal_body() {
+        let module = parse_module("xs : List Int\nxs = [1, ..[2, 3]]\n").expect("should parse");
+        typecheck_module(&module).expect("list spread body should typecheck");
+    }
+
+    #[test]
+    fn rejects_list_spread_tail_when_tail_is_not_list() {
+        let module = parse_module("xs : List Int\nxs = [1, ..2]\n").expect("should parse");
+        let err = typecheck_module(&module).expect_err("non-list spread tail should fail");
+        assert_eq!(err.declaration.as_deref(), Some("xs"));
+        assert!(
+            err.message.contains("list spread tail must be"),
+            "unexpected message: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn rejects_list_spread_prefix_element_type_mismatch() {
+        let module = parse_module("xs : List Int\nxs = [1, \"x\", ..[2]]\n").expect("should parse");
+        let err = typecheck_module(&module).expect_err("spread prefix mismatch should fail");
+        assert_eq!(err.declaration.as_deref(), Some("xs"));
+        assert!(
+            err.message
+                .contains("list spread prefix element type mismatch"),
+            "unexpected message: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn rejects_list_spread_tail_element_type_mismatch() {
+        let module = parse_module("xs : List Int\nxs = [1, ..[\"x\"]]\n").expect("should parse");
+        let err = typecheck_module(&module).expect_err("spread tail element mismatch should fail");
+        assert_eq!(err.declaration.as_deref(), Some("xs"));
+        assert!(
+            err.message
+                .contains("list spread tail element type mismatch"),
+            "unexpected message: {}",
+            err.message
+        );
     }
 
     #[test]

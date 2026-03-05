@@ -487,25 +487,25 @@ consolidate map semantics in stdlib.
 
 Step-by-step checklist:
 
-- [ ] Step 1: parser grammar update for list spread expressions
+- [x] Step 1: parser grammar update for list spread expressions
   - accept `[a, b, ..xs]` and `[f(x), ..ys]` in expression position.
   - allow zero or more prefix elements, with one trailing spread segment only.
-- [ ] Step 2: parser validation and diagnostics
+- [x] Step 2: parser validation and diagnostics
   - reject malformed forms (multiple `..`, non-trailing `..`, missing spread expression).
   - keep `case` list-pattern parsing rules unchanged.
-- [ ] Step 3: AST extension for spread list literals
+- [x] Step 3: AST extension for spread list literals
   - represent list prefix elements and optional spread tail in AST explicitly.
   - update parser tests to lock AST shape for valid inputs.
-- [ ] Step 4: typecheck rule for prefix element unification
+- [x] Step 4: typecheck rule for prefix element unification
   - unify all prefix element types to one element type `a`.
   - surface type mismatch diagnostics when prefix elements disagree.
-- [ ] Step 5: typecheck rule for spread tail
+- [x] Step 5: typecheck rule for spread tail
   - require spread tail type to be `List a` where `a` is the unified element type.
   - report explicit `List <type>` expectation on tail mismatch/non-list tail.
-- [ ] Step 6: runtime/fallback evaluation support
+- [x] Step 6: runtime/fallback evaluation support
   - evaluate prefix elements and spread tail in deterministic order.
   - concatenate into one list value with current list runtime semantics.
-- [ ] Step 7: native lowering parity
+- [x] Step 7: native lowering parity
   - add lowering support or route safely to fallback path.
   - ensure observable behavior parity between native and fallback execution.
 - [ ] Step 8: migrate map callsites to stdlib
@@ -514,10 +514,10 @@ Step-by-step checklist:
 - [ ] Step 9: trim builtin-only map path
   - remove or narrow redundant builtin `map` special handling after migration.
   - keep one canonical map semantics source in stdlib.
-- [ ] Step 10: docs sync
+- [x] Step 10: docs sync
   - update `doc/LANGUAGE_SPEC.md` for expression-side `..` list syntax.
   - add one canonical example using `[a, b, ..xs]`.
-- [ ] Step 11: regression tests
+- [x] Step 11: regression tests
   - parser: valid/invalid spread forms.
   - typecheck: prefix mismatch, tail non-list, tail element mismatch.
   - runtime/CLI: end-to-end behavior for list spread + stdlib `map`.
