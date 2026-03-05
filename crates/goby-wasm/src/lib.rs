@@ -299,10 +299,19 @@ fn collect_unit_functions<'a>(module: &'a Module) -> EvaluatedFunctions<'a> {
     functions
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 enum IntCallable {
     Lambda(IntLambda),
     Named(String),
+    AstLambda(Box<AstLambdaCallable>),
+}
+
+#[derive(Clone)]
+struct AstLambdaCallable {
+    parameter: String,
+    body: Expr,
+    captured_locals: RuntimeLocals,
+    captured_callables: HashMap<String, IntCallable>,
 }
 
 #[derive(Clone, Debug)]
@@ -441,6 +450,7 @@ impl<'a> IntEvaluator<'a> {
                 let expr = format!("{} {}", name, arg);
                 self.eval_expr(&expr, &HashMap::new(), callables)
             }
+            IntCallable::AstLambda(_) => None,
         }
     }
 
@@ -697,6 +707,33 @@ impl<'m> RuntimeOutputResolver<'m> {
                 let Expr::Var(fn_name) = callee.as_ref() else {
                     unreachable!()
                 };
+                if let Expr::Lambda { param, body } = arg.as_ref() {
+                    let callable = IntCallable::AstLambda(Box::new(AstLambdaCallable {
+                        parameter: param.clone(),
+                        body: (*body.clone()),
+                        captured_locals: self.locals.clone(),
+                        captured_callables: HashMap::new(),
+                    }));
+                    if self
+                        .execute_decl_with_callable_as_side_effect(fn_name, callable, evaluators, 0)
+                        .is_some()
+                    {
+                        return Some(());
+                    }
+                }
+                if let Expr::Var(arg_name) = arg.as_ref()
+                    && self.declaration_expects_callable_param(fn_name)
+                    && self
+                        .execute_decl_with_callable_as_side_effect(
+                            fn_name,
+                            IntCallable::Named(arg_name.clone()),
+                            evaluators,
+                            0,
+                        )
+                        .is_some()
+                {
+                    return Some(());
+                }
                 if let Some(arg_val) = self.eval_ast_value(arg, evaluators) {
                     // Bare effect method call (e.g. `log "msg"`) — check active handlers first.
                     let bare_method = self.find_handler_method_by_name(fn_name);
@@ -1291,11 +1328,34 @@ impl<'m> RuntimeOutputResolver<'m> {
                     }
                     // Int function path
                     if let RuntimeValue::Int(arg_int) = arg_val {
-                        if let Some(callable) = callables.get(fn_name) {
-                            return evaluators
-                                .int
-                                .eval_callable(callable, arg_int, callables)
-                                .map(RuntimeValue::Int);
+                        if let Some(callable) = callables.get(fn_name).cloned() {
+                            match callable {
+                                IntCallable::AstLambda(callable) => {
+                                    let AstLambdaCallable {
+                                        parameter,
+                                        body,
+                                        captured_locals,
+                                        captured_callables,
+                                    } = *callable;
+                                    let mut lambda_locals = captured_locals;
+                                    lambda_locals.store(&parameter, RuntimeValue::Int(arg_int));
+                                    if let Some(RuntimeValue::Int(value)) = self.eval_expr_ast(
+                                        &body,
+                                        &lambda_locals,
+                                        &captured_callables,
+                                        evaluators,
+                                        depth + 1,
+                                    ) {
+                                        return Some(RuntimeValue::Int(value));
+                                    }
+                                }
+                                other => {
+                                    return evaluators
+                                        .int
+                                        .eval_callable(&other, arg_int, callables)
+                                        .map(RuntimeValue::Int);
+                                }
+                            }
                         }
                         if let Some(function) = evaluators.int.functions.get(fn_name.as_str()) {
                             return evaluators
@@ -1703,8 +1763,56 @@ impl<'m> RuntimeOutputResolver<'m> {
         if let Expr::Call { callee, arg } = expr
             && let Expr::Var(fn_name) = callee.as_ref()
         {
+            // Callable argument forms that cannot be materialized as RuntimeValue:
+            // pass them directly into declaration-local callable environment.
+            if let Expr::Lambda { param, body } = arg.as_ref() {
+                let callable = IntCallable::AstLambda(Box::new(AstLambdaCallable {
+                    parameter: param.clone(),
+                    body: (*body.clone()),
+                    captured_locals: locals.clone(),
+                    captured_callables: callables.clone(),
+                }));
+                if self
+                    .execute_decl_with_callable_as_side_effect(
+                        fn_name,
+                        callable,
+                        evaluators,
+                        depth + 1,
+                    )
+                    .is_some()
+                {
+                    return Some(());
+                }
+            }
+            if let Expr::Var(arg_name) = arg.as_ref()
+                && self.declaration_expects_callable_param(fn_name)
+                && self
+                    .execute_decl_with_callable_as_side_effect(
+                        fn_name,
+                        IntCallable::Named(arg_name.clone()),
+                        evaluators,
+                        depth + 1,
+                    )
+                    .is_some()
+            {
+                return Some(());
+            }
             // Evaluate arg once.
             let arg_val = self.eval_expr_ast(arg, locals, callables, evaluators, depth)?;
+            if let Some(callable) = callables.get(fn_name)
+                && self
+                    .dispatch_callable_side_effect(
+                        callable,
+                        arg_val.clone(),
+                        locals,
+                        callables,
+                        evaluators,
+                        depth + 1,
+                    )
+                    .is_some()
+            {
+                return Some(());
+            }
             // Bare effect method call: e.g. `log env_var`.
             let bare_method = self.find_handler_method_by_name(fn_name);
             if let Some(method) = bare_method {
@@ -2724,6 +2832,110 @@ impl<'m> RuntimeOutputResolver<'m> {
         }
         Some(())
     }
+
+    fn execute_decl_with_callable_as_side_effect(
+        &mut self,
+        fn_name: &str,
+        callable: IntCallable,
+        evaluators: &RuntimeEvaluators<'_, '_>,
+        depth: usize,
+    ) -> Option<()> {
+        if depth >= MAX_EVAL_DEPTH {
+            return None;
+        }
+        let (param_name, stmts) = {
+            let decl = self
+                .module
+                .declarations
+                .iter()
+                .find(|d| d.name == fn_name)?;
+            let stmts = decl.parsed_body.as_ref()?.clone();
+            let param = decl.params.first().cloned();
+            (param, stmts)
+        };
+        let mut fn_locals = RuntimeLocals::default();
+        let mut fn_callables = HashMap::new();
+        let param = param_name?;
+        fn_callables.insert(param, callable);
+        for stmt in &stmts {
+            if let Stmt::Expr(
+                Expr::Var(_) | Expr::IntLit(_) | Expr::StringLit(_) | Expr::BoolLit(_),
+            ) = stmt
+            {
+                continue;
+            }
+            self.execute_unit_ast_stmt(
+                stmt,
+                &mut fn_locals,
+                &mut fn_callables,
+                evaluators,
+                depth + 1,
+            )?;
+        }
+        Some(())
+    }
+
+    fn dispatch_callable_side_effect(
+        &mut self,
+        callable: &IntCallable,
+        arg_val: RuntimeValue,
+        _locals: &RuntimeLocals,
+        callables: &HashMap<String, IntCallable>,
+        evaluators: &RuntimeEvaluators<'_, '_>,
+        depth: usize,
+    ) -> Option<()> {
+        match callable {
+            IntCallable::Named(name) => {
+                self.execute_decl_as_side_effect(name, arg_val, evaluators, depth + 1)
+            }
+            IntCallable::Lambda(lambda) => {
+                if let RuntimeValue::Int(n) = arg_val
+                    && evaluators.int.eval_lambda(lambda, n, callables).is_some()
+                {
+                    return Some(());
+                }
+                None
+            }
+            IntCallable::AstLambda(callable) => {
+                let mut lambda_locals = callable.captured_locals.clone();
+                lambda_locals.store(&callable.parameter, arg_val);
+                let mut lambda_callables = callable.captured_callables.clone();
+                self.execute_unit_expr_ast(
+                    &callable.body,
+                    &mut lambda_locals,
+                    &mut lambda_callables,
+                    evaluators,
+                    depth + 1,
+                )
+                .or_else(|| {
+                    self.eval_expr_ast(
+                        &callable.body,
+                        &lambda_locals,
+                        &lambda_callables,
+                        evaluators,
+                        depth + 1,
+                    )
+                    .map(|_| ())
+                })
+            }
+        }
+    }
+
+    fn declaration_expects_callable_param(&self, fn_name: &str) -> bool {
+        let Some(decl) = self.module.declarations.iter().find(|d| d.name == fn_name) else {
+            return false;
+        };
+        let Some(annotation) = decl.type_annotation.as_deref() else {
+            return false;
+        };
+        let Some(function_type) = parse_function_type(annotation) else {
+            return false;
+        };
+        let Some(first_param) = function_type.arguments.first() else {
+            return false;
+        };
+        first_param.contains("->")
+    }
 }
 
 fn collect_embedded_default_handlers(module: &Module) -> HashMap<String, String> {
@@ -3642,6 +3854,50 @@ main =
             resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
                 .expect("runtime output should resolve");
         assert_eq!(output, "something\n15");
+    }
+
+    #[test]
+    fn resolves_runtime_output_for_unit_callback_argument_inline_lambda() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let source = r#"
+each_two : (Int -> Unit) -> Unit
+each_two f =
+  f 1
+  f 2
+
+main : Unit -> Unit
+main =
+  each_two (|n| -> print "${n}")
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let output =
+            resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
+                .expect("runtime output should resolve");
+        assert_eq!(output, "1\n2");
+    }
+
+    #[test]
+    fn resolves_runtime_output_for_unit_callback_argument_named_function() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let source = r#"
+log_num : Int -> Unit
+log_num n =
+  print "${n}"
+
+each_two : (Int -> Unit) -> Unit
+each_two f =
+  f 1
+  f 2
+
+main : Unit -> Unit
+main =
+  each_two log_num
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let output =
+            resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
+                .expect("runtime output should resolve");
+        assert_eq!(output, "1\n2");
     }
 
     #[test]

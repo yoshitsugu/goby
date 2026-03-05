@@ -80,6 +80,13 @@ This file is a restart-safe snapshot for resuming work after context reset.
 
 Recent (detailed):
 
+- 2026-03-05 (session 150): lambda-as-function-argument runtime parity
+  (Unit callback slice) completed.
+  - fallback runtime now resolves declaration-local callable parameters for
+    inline lambdas and named functions in side-effect position.
+  - added regression tests:
+    `resolves_runtime_output_for_unit_callback_argument_inline_lambda` and
+    `resolves_runtime_output_for_unit_callback_argument_named_function`.
 - 2026-03-05: effect-op argument type checking in handler scopes completed.
   - typecheck now rejects mismatched arg types for bare/qualified/method-style/pipeline effect-op calls.
   - regression tests added for qualified and method-style mismatches.
