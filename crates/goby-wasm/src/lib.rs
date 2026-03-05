@@ -1694,6 +1694,9 @@ impl<'m> RuntimeOutputResolver<'m> {
                         items.get(index).cloned()
                     }
                     None => {
+                        if member.chars().all(|c| c.is_ascii_digit()) {
+                            return None;
+                        }
                         // Treat as a type/module-qualified constructor name.
                         Some(RuntimeValue::String(member.clone()))
                     }
@@ -5017,6 +5020,23 @@ main =
             resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
                 .expect("runtime output should resolve");
         assert_eq!(output, "42");
+    }
+
+    #[test]
+    fn rejects_runtime_output_for_numeric_member_on_non_tuple_receiver() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let source = r#"
+main : Unit -> Unit
+main =
+  print Status.0
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let output =
+            resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module));
+        assert!(
+            output.is_none(),
+            "numeric member access on non-tuple receiver should not produce runtime output"
+        );
     }
 
     #[test]

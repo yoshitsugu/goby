@@ -80,6 +80,14 @@ This file is a restart-safe snapshot for resuming work after context reset.
 
 Recent (detailed):
 
+- 2026-03-05 (session 168): tuple index access strictness fix.
+  - fixed regression where non-tuple numeric qualified access (for example
+    `Status.0`) could parse/typecheck/run through fallback paths.
+  - typecheck now rejects numeric qualified member access unless receiver type
+    resolves to a tuple; out-of-range tuple index now reports explicit error.
+  - fallback runtime now rejects numeric member access when receiver is absent
+    from locals (instead of treating it as constructor/member string).
+  - regression tests added for rejecting non-tuple numeric qualified access.
 - 2026-03-05 (session 167): Track C Step 6 diagnostics hardening landed.
   - effect-op argument checks in handler scope now emit explicit unresolved-generic
     diagnostics when argument type remains unresolved under generic constraints

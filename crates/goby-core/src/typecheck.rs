@@ -2051,13 +2051,15 @@ fn check_expr(expr: &Expr, env: &TypeEnv) -> Ty {
         }
         Expr::Var(name) => env.lookup(name),
         Expr::Qualified { receiver, member } => {
+            let receiver_ty = env.lookup(receiver);
+            let resolved_receiver_ty = env.resolve_alias(&receiver_ty, 0);
+            if let Ty::Tuple(items) = &resolved_receiver_ty
+                && let Some(index) = parse_tuple_member_index(member)
+            {
+                return items.get(index).cloned().unwrap_or(Ty::Unknown);
+            }
             if let Some(receiver_ty) = env.locals.get(receiver) {
                 let resolved_receiver_ty = env.resolve_alias(receiver_ty, 0);
-                if let Ty::Tuple(items) = &resolved_receiver_ty
-                    && let Ok(index) = member.parse::<usize>()
-                {
-                    return items.get(index).cloned().unwrap_or(Ty::Unknown);
-                }
                 if let Ty::Con { name, .. } = &resolved_receiver_ty
                     && let Some(field_ty) = env.record_field_ty(name, member)
                 {
@@ -2716,6 +2718,13 @@ fn ty_contains_type_var(ty: &Ty) -> bool {
         Ty::Handler { .. } => false,
         Ty::Int | Ty::Bool | Ty::Str | Ty::Unit | Ty::Unknown => false,
     }
+}
+
+fn parse_tuple_member_index(member: &str) -> Option<usize> {
+    if member.is_empty() || !member.chars().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    member.parse::<usize>().ok()
 }
 
 fn ty_contains_anonymous_type_hole(ty: &Ty) -> bool {
@@ -3630,6 +3639,46 @@ fn ensure_no_ambiguous_refs_in_expr(
         }
         Expr::Var(name) => ensure_name_not_ambiguous(name, env, decl_name),
         Expr::Qualified { receiver, member } => {
+            if let Some(index) = parse_tuple_member_index(member) {
+                let receiver_ty = env.lookup(receiver);
+                let resolved_receiver_ty = env.resolve_alias(&receiver_ty, 0);
+                return match resolved_receiver_ty {
+                    Ty::Tuple(items) => {
+                        if index < items.len() {
+                            Ok(())
+                        } else {
+                            Err(TypecheckError {
+                                declaration: Some(decl_name.to_string()),
+                                span: None,
+                                message: format!(
+                                    "tuple member access index `{}` is out of range for receiver `{}` of type `{}`",
+                                    index,
+                                    receiver,
+                                    ty_name(&Ty::Tuple(items))
+                                ),
+                            })
+                        }
+                    }
+                    Ty::Unknown => Err(TypecheckError {
+                        declaration: Some(decl_name.to_string()),
+                        span: None,
+                        message: format!(
+                            "tuple member access `{}` requires tuple receiver, but `{}` type is unresolved",
+                            member, receiver
+                        ),
+                    }),
+                    other => Err(TypecheckError {
+                        declaration: Some(decl_name.to_string()),
+                        span: None,
+                        message: format!(
+                            "tuple member access `{}` requires tuple receiver, but `{}` has type `{}`",
+                            member,
+                            receiver,
+                            ty_name(&other)
+                        ),
+                    }),
+                };
+            }
             if env.locals.contains_key(receiver) {
                 return Ok(());
             }
@@ -4528,6 +4577,41 @@ mk =
             member: "1".to_string(),
         };
         assert_eq!(check_expr(&expr, &env), Ty::Unknown);
+    }
+
+    #[test]
+    fn rejects_numeric_qualified_access_on_non_tuple_receiver() {
+        let source = "\
+type Status = Ready | Busy
+main : Unit -> Unit
+main =
+  print Status.0
+";
+        let module = parse_module(source).expect("should parse");
+        let err =
+            typecheck_module(&module).expect_err("numeric member access on non-tuple should fail");
+        assert!(
+            err.message.contains("tuple member access"),
+            "unexpected error: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn accepts_numeric_qualified_access_on_global_tuple_receiver() {
+        let source = "\
+pair : (Bool, Int)
+pair = (True, 42)
+main : Unit -> Unit
+main =
+  if pair.0
+    print pair.1
+  else
+    print 0
+";
+        let module = parse_module(source).expect("should parse");
+        typecheck_module(&module)
+            .expect("numeric member access on tuple-typed global should typecheck");
     }
 
     #[test]
