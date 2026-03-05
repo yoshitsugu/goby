@@ -80,6 +80,11 @@ This file is a restart-safe snapshot for resuming work after context reset.
 
 Recent (detailed):
 
+- 2026-03-05 (session 173): `doc/PLAN.md` cleanup for closed tracks.
+  - verified language-facing changes are synchronized in
+    `doc/LANGUAGE_SPEC.md` before cleanup.
+  - removed detailed Track A/B/C descriptions from `doc/PLAN.md`.
+  - retained closed-track history in `doc/STATE.md` and git history.
 - 2026-03-05 (session 172): Track B officially closed.
   - `doc/PLAN.md` section 4.3 is now marked `Completed Track B`.
   - acceptance criteria confirmed via existing regression matrix and passing
