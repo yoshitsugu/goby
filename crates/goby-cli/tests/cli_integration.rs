@@ -37,7 +37,7 @@ impl Drop for TempDirGuard {
 }
 
 fn command_for_goby_cli() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_goby-cli"))
+    Command::new(env!("CARGO_BIN_EXE_goby"))
 }
 
 fn repo_root() -> PathBuf {

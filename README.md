@@ -13,6 +13,38 @@ This project is an early-stage hobby POC.
 - Latest language spec is tracked in `doc/LANGUAGE_SPEC.md`.
 - Open decisions and active direction are tracked in `doc/PLAN.md`.
 
+## Getting Started
+
+Clone the repository:
+
+```bash
+git clone https://github.com/yoshitsugu/goby
+cd goby
+```
+
+Install the Goby CLI (`goby`) with Cargo:
+
+```bash
+cargo install --path crates/goby-cli
+```
+
+Create a minimal program:
+
+```bash
+cat > hello.gb <<'EOF'
+main : Unit -> Unit
+main = print "Hello Goby"
+EOF
+```
+
+Run it:
+
+```bash
+goby run hello.gb
+```
+
+If `wasmtime` is not installed, install it first so `goby run` can execute generated Wasm.
+
 ## Language Concept
 
 - Functional-first language design.

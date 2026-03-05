@@ -3,7 +3,7 @@ use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::process::Command as ProcessCommand;
 
-const USAGE: &str = "usage: goby-cli <run|check> <file.gb>";
+const USAGE: &str = "usage: goby <run|check> <file.gb>";
 
 /// Returns a two-line snippet:
 ///   "  {source_line}"
@@ -268,7 +268,7 @@ mod tests {
 
     #[test]
     fn parses_run_args() {
-        let cli = parse_args_from(to_args(&["goby-cli", "run", "examples/hello.gb"]))
+        let cli = parse_args_from(to_args(&["goby", "run", "examples/hello.gb"]))
             .expect("run args should parse");
         assert_eq!(cli.command, Command::Run);
         assert_eq!(cli.file, "examples/hello.gb");
@@ -276,7 +276,7 @@ mod tests {
 
     #[test]
     fn rejects_unknown_command() {
-        let err = parse_args_from(to_args(&["goby-cli", "build", "examples/hello.gb"]))
+        let err = parse_args_from(to_args(&["goby", "build", "examples/hello.gb"]))
             .expect_err("unknown command should fail");
         match err {
             CliError::Usage(message) => assert!(message.contains("unknown command")),
@@ -286,7 +286,7 @@ mod tests {
 
     #[test]
     fn rejects_extra_argument() {
-        let err = parse_args_from(to_args(&["goby-cli", "check", "a.gb", "extra"]))
+        let err = parse_args_from(to_args(&["goby", "check", "a.gb", "extra"]))
             .expect_err("extra argument should fail");
         match err {
             CliError::Usage(message) => assert!(message.contains("unexpected argument")),
@@ -296,7 +296,7 @@ mod tests {
 
     #[test]
     fn rejects_missing_command() {
-        let err = parse_args_from(to_args(&["goby-cli"])).expect_err("missing command should fail");
+        let err = parse_args_from(to_args(&["goby"])).expect_err("missing command should fail");
         match err {
             CliError::Usage(message) => assert!(message.contains("missing command")),
             CliError::Runtime(_) => panic!("expected usage error"),
@@ -305,7 +305,7 @@ mod tests {
 
     #[test]
     fn rejects_missing_file() {
-        let err = parse_args_from(to_args(&["goby-cli", "run"]))
+        let err = parse_args_from(to_args(&["goby", "run"]))
             .expect_err("missing input file should fail");
         match err {
             CliError::Usage(message) => assert!(message.contains("missing input file")),
