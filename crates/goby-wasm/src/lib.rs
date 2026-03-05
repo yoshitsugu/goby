@@ -1417,9 +1417,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                             last_value = None;
                         }
                         Stmt::Assign { name, value } => {
-                            if block_locals.get(name).is_none() {
-                                return None;
-                            }
+                            block_locals.get(name)?;
                             let v = self.eval_expr_ast(
                                 value,
                                 &block_locals,
