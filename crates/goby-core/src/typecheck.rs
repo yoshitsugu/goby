@@ -2444,6 +2444,113 @@ fn infer_binding_ty_with_resume_context(
     check_expr(value, env)
 }
 
+type TypeSubst = HashMap<String, Ty>;
+
+fn apply_type_substitution(ty: &Ty, subst: &TypeSubst, env: &TypeEnv) -> Ty {
+    let resolved = env.resolve_alias(ty, 0);
+    match resolved {
+        Ty::Var(name) => match subst.get(&name) {
+            Some(bound) => apply_type_substitution(bound, subst, env),
+            None => Ty::Var(name),
+        },
+        Ty::List(inner) => Ty::List(Box::new(apply_type_substitution(&inner, subst, env))),
+        Ty::Tuple(items) => Ty::Tuple(
+            items
+                .iter()
+                .map(|item| apply_type_substitution(item, subst, env))
+                .collect(),
+        ),
+        Ty::Fun { params, result } => Ty::Fun {
+            params: params
+                .iter()
+                .map(|param| apply_type_substitution(param, subst, env))
+                .collect(),
+            result: Box::new(apply_type_substitution(&result, subst, env)),
+        },
+        Ty::Con { name, args } => Ty::Con {
+            name,
+            args: args
+                .iter()
+                .map(|arg| apply_type_substitution(arg, subst, env))
+                .collect(),
+        },
+        Ty::Handler { covered_ops } => Ty::Handler { covered_ops },
+        Ty::Int | Ty::Bool | Ty::Str | Ty::Unit | Ty::Unknown => resolved,
+    }
+}
+
+fn bind_type_variable(name: &str, ty: &Ty, subst: &mut TypeSubst, env: &TypeEnv) -> bool {
+    if let Some(bound) = subst.get(name).cloned() {
+        return unify_types_with_subst(&bound, ty, subst, env);
+    }
+    if matches!(ty, Ty::Var(other) if other == name) {
+        return true;
+    }
+    subst.insert(name.to_string(), apply_type_substitution(ty, subst, env));
+    true
+}
+
+fn unify_types_with_subst(
+    expected: &Ty,
+    actual: &Ty,
+    subst: &mut TypeSubst,
+    env: &TypeEnv,
+) -> bool {
+    let expected = apply_type_substitution(expected, subst, env);
+    let actual = apply_type_substitution(actual, subst, env);
+    match (expected, actual) {
+        (Ty::Unknown, _) | (_, Ty::Unknown) => true,
+        (Ty::Var(name), ty) => bind_type_variable(&name, &ty, subst, env),
+        (ty, Ty::Var(name)) => bind_type_variable(&name, &ty, subst, env),
+        (Ty::Int, Ty::Int) | (Ty::Bool, Ty::Bool) | (Ty::Str, Ty::Str) | (Ty::Unit, Ty::Unit) => {
+            true
+        }
+        (Ty::List(left), Ty::List(right)) => unify_types_with_subst(&left, &right, subst, env),
+        (Ty::Tuple(left), Ty::Tuple(right)) if left.len() == right.len() => left
+            .iter()
+            .zip(right.iter())
+            .all(|(l, r)| unify_types_with_subst(l, r, subst, env)),
+        (
+            Ty::Fun {
+                params: left_params,
+                result: left_result,
+            },
+            Ty::Fun {
+                params: right_params,
+                result: right_result,
+            },
+        ) if left_params.len() == right_params.len() => {
+            left_params
+                .iter()
+                .zip(right_params.iter())
+                .all(|(l, r)| unify_types_with_subst(l, r, subst, env))
+                && unify_types_with_subst(&left_result, &right_result, subst, env)
+        }
+        (
+            Ty::Con {
+                name: left_name,
+                args: left_args,
+            },
+            Ty::Con {
+                name: right_name,
+                args: right_args,
+            },
+        ) if left_name == right_name && left_args.len() == right_args.len() => left_args
+            .iter()
+            .zip(right_args.iter())
+            .all(|(l, r)| unify_types_with_subst(l, r, subst, env)),
+        (
+            Ty::Handler {
+                covered_ops: left_ops,
+            },
+            Ty::Handler {
+                covered_ops: right_ops,
+            },
+        ) => left_ops == right_ops,
+        _ => false,
+    }
+}
+
 fn ty_contains_type_var(ty: &Ty) -> bool {
     match ty {
         Ty::Var(_) => true,
@@ -2587,13 +2694,15 @@ fn check_resume_in_expr(
                 });
             };
             let actual = check_expr(value, env);
-            if actual != Ty::Unknown && !env.are_compatible(expected, &actual) {
+            let mut subst = TypeSubst::new();
+            if actual != Ty::Unknown && !unify_types_with_subst(expected, &actual, &mut subst, env)
+            {
                 return Err(TypecheckError {
                     declaration: Some(decl_name.to_string()),
                     span: None,
                     message: format!(
                         "resume_arg_type_mismatch: `resume` expects argument of type `{}` but got `{}`",
-                        ty_name(expected),
+                        ty_name(&apply_type_substitution(expected, &subst, env)),
                         ty_name(&actual)
                     ),
                 });
@@ -2874,10 +2983,9 @@ fn check_unhandled_effects_in_expr(
     covered_ops: &HashSet<String>,
     decl_name: &str,
 ) -> Result<(), TypecheckError> {
-    fn check_effect_op_arg_type_in_handler_scope(
+    fn check_effect_op_call_arg_types_in_handler_scope(
         op_name: &str,
-        arg: &Expr,
-        arg_index: usize,
+        args: &[&Expr],
         env: &TypeEnv,
         covered_ops: &HashSet<String>,
         decl_name: &str,
@@ -2886,7 +2994,7 @@ fn check_unhandled_effects_in_expr(
             && covered_ops.contains(op_name)
             && let Ty::Fun { params, .. } = env.lookup(op_name)
         {
-            if arg_index >= params.len() {
+            if args.len() > params.len() {
                 return Err(TypecheckError {
                     declaration: Some(decl_name.to_string()),
                     span: None,
@@ -2894,46 +3002,48 @@ fn check_unhandled_effects_in_expr(
                         "effect operation `{}` expects {} argument(s) but got at least {}",
                         op_name,
                         params.len(),
-                        arg_index + 1
+                        args.len()
                     ),
                 });
             }
-            let expected = &params[arg_index];
-            if *expected == Ty::Unknown {
-                return Ok(());
-            }
-            let actual = check_expr(arg, env);
-            if actual != Ty::Unknown && !env.are_compatible(expected, &actual) {
-                return Err(TypecheckError {
-                    declaration: Some(decl_name.to_string()),
-                    span: None,
-                    message: format!(
-                        "effect operation `{}` expects argument of type `{}` but got `{}`",
-                        op_name,
-                        ty_name(expected),
-                        ty_name(&actual)
-                    ),
-                });
+            let mut subst = TypeSubst::new();
+            for (idx, arg) in args.iter().enumerate() {
+                let expected = &params[idx];
+                if *expected == Ty::Unknown {
+                    continue;
+                }
+                let actual = check_expr(arg, env);
+                if actual != Ty::Unknown
+                    && !unify_types_with_subst(expected, &actual, &mut subst, env)
+                {
+                    return Err(TypecheckError {
+                        declaration: Some(decl_name.to_string()),
+                        span: None,
+                        message: format!(
+                            "effect operation `{}` expects argument of type `{}` but got `{}`",
+                            op_name,
+                            ty_name(&apply_type_substitution(expected, &subst, env)),
+                            ty_name(&actual)
+                        ),
+                    });
+                }
             }
         }
         Ok(())
     }
 
-    fn effect_op_call_target_and_existing_args(callee: &Expr) -> Option<(String, usize)> {
-        let mut arg_count = 0usize;
-        let mut node = callee;
-        loop {
-            match node {
-                Expr::Var(name) => return Some((name.clone(), arg_count)),
-                Expr::Qualified { receiver, member } => {
-                    return Some((format!("{}.{}", receiver, member), arg_count));
-                }
-                Expr::Call { callee, .. } => {
-                    arg_count += 1;
-                    node = callee;
-                }
-                _ => return None,
+    fn effect_op_call_target_and_args(expr: &Expr) -> Option<(String, Vec<&Expr>)> {
+        match expr {
+            Expr::Var(name) => Some((name.clone(), Vec::new())),
+            Expr::Qualified { receiver, member } => {
+                Some((format!("{}.{}", receiver, member), Vec::new()))
             }
+            Expr::Call { callee, arg } => {
+                let (target, mut args) = effect_op_call_target_and_args(callee)?;
+                args.push(arg.as_ref());
+                Some((target, args))
+            }
+            _ => None,
         }
     }
 
@@ -3033,21 +3143,11 @@ fn check_unhandled_effects_in_expr(
                     covered_ops,
                     decl_name,
                 )?;
-                check_effect_op_arg_type_in_handler_scope(
-                    name,
-                    arg,
-                    0,
-                    env,
-                    covered_ops,
-                    decl_name,
-                )?;
             }
-            if let Some((op_name, existing_args)) = effect_op_call_target_and_existing_args(callee)
-            {
-                check_effect_op_arg_type_in_handler_scope(
+            if let Some((op_name, args)) = effect_op_call_target_and_args(expr) {
+                check_effect_op_call_arg_types_in_handler_scope(
                     &op_name,
-                    arg,
-                    existing_args,
+                    &args,
                     env,
                     covered_ops,
                     decl_name,
@@ -3072,16 +3172,14 @@ fn check_unhandled_effects_in_expr(
                     ),
                 });
             }
-            for (idx, arg) in args.iter().enumerate() {
-                check_effect_op_arg_type_in_handler_scope(
-                    &qualified,
-                    arg,
-                    idx,
-                    env,
-                    covered_ops,
-                    decl_name,
-                )?;
-            }
+            let provided: Vec<&Expr> = args.iter().collect();
+            check_effect_op_call_arg_types_in_handler_scope(
+                &qualified,
+                &provided,
+                env,
+                covered_ops,
+                decl_name,
+            )?;
             for arg in args {
                 recurse!(arg)?;
             }
@@ -3098,10 +3196,9 @@ fn check_unhandled_effects_in_expr(
                     ),
                 });
             }
-            check_effect_op_arg_type_in_handler_scope(
+            check_effect_op_call_arg_types_in_handler_scope(
                 callee,
-                value,
-                0,
+                &[value.as_ref()],
                 env,
                 covered_ops,
                 decl_name,
@@ -6494,6 +6591,45 @@ main =
     }
 
     #[test]
+    fn accepts_generic_effect_op_call_with_inferred_type_variable() {
+        let source = "
+effect Iter a
+  op: a -> Unit
+
+main : Unit -> Unit
+main =
+  with_handler
+    op x ->
+      resume Unit
+  in
+    op 1
+";
+        let module = parse_module(source).expect("should parse");
+        typecheck_module(&module).expect("generic effect op call should infer `a = Int`");
+    }
+
+    #[test]
+    fn rejects_generic_effect_op_call_when_type_variable_constraints_conflict() {
+        let source = "
+effect Iter a
+  pair: a -> a -> Unit
+
+main : Unit -> Unit
+main =
+  with_handler
+    pair x y ->
+      resume Unit
+  in
+    pair 1 \"oops\"
+";
+        let module = parse_module(source).expect("should parse");
+        let err = typecheck_module(&module).expect_err("conflicting generic args should fail");
+        assert!(err.message.contains("pair"));
+        assert!(err.message.contains("Int"));
+        assert!(err.message.contains("String") || err.message.contains("Str"));
+    }
+
+    #[test]
     fn accepts_positional_single_field_constructor_in_effect_op_call() {
         // `raise Error("msg")` — positional sugar for `raise Error(message: "msg")`.
         // check should accept this because Error has exactly one field.
@@ -6623,6 +6759,47 @@ main =
 ";
         let module = parse_module(source).expect("should parse");
         typecheck_module(&module).expect("resume with matching return type should pass");
+    }
+
+    #[test]
+    fn accepts_resume_with_generic_operation_result_type() {
+        let source = "
+effect Iterator a b
+  yield: a -> b -> (Bool, b)
+
+main : Unit -> Unit
+main =
+  with_handler
+    yield x state ->
+      resume (True, state)
+  in
+    yield \"a\" 0
+    ()
+";
+        let module = parse_module(source).expect("should parse");
+        typecheck_module(&module).expect("resume should accept generic `(Bool, b)` result");
+    }
+
+    #[test]
+    fn rejects_resume_when_generic_operation_result_shape_mismatches() {
+        let source = "
+effect Iterator a b
+  yield: a -> b -> (Bool, b)
+
+main : Unit -> Unit
+main =
+  with_handler
+    yield x state ->
+      resume (1, state)
+  in
+    yield \"a\" 0
+    ()
+";
+        let module = parse_module(source).expect("should parse");
+        let err = typecheck_module(&module)
+            .expect_err("resume should reject incompatible generic result shape");
+        assert!(err.message.contains("resume_arg_type_mismatch"));
+        assert!(err.message.contains("Bool"));
     }
 
     #[test]

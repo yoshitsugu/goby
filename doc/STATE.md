@@ -80,6 +80,16 @@ This file is a restart-safe snapshot for resuming work after context reset.
 
 Recent (detailed):
 
+- 2026-03-05 (session 159): effect-member generic unification core (PR2 slice) landed.
+  - typecheck now uses substitution/unification for effect operation argument checks
+    in handler-covered scopes, instead of strict equality-only matching.
+  - multi-argument generic constraints are validated as one call-site constraint set
+    (for example `a -> a -> Unit` rejects `Int` + `String` mix).
+  - `resume` argument validation now accepts generic operation return signatures
+    when they unify with actual resume values (and still rejects incompatible shapes).
+  - regression tests added for:
+    - generic effect op argument acceptance/rejection,
+    - generic resume return acceptance/rejection.
 - 2026-03-05 (session 158): generic effect header groundwork (PR1 slice) landed.
   - parser now accepts effect declarations with optional type parameters
     (`effect Iterator a b`), while preserving existing `effect Name` syntax.
