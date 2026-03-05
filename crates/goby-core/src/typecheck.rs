@@ -2718,6 +2718,28 @@ fn ty_contains_type_var(ty: &Ty) -> bool {
     }
 }
 
+fn ty_contains_anonymous_type_hole(ty: &Ty) -> bool {
+    match ty {
+        Ty::Var(name) => name.starts_with("__goby_type_hole_"),
+        Ty::List(inner) => ty_contains_anonymous_type_hole(inner),
+        Ty::Tuple(items) => items.iter().any(ty_contains_anonymous_type_hole),
+        Ty::Fun { params, result } => {
+            params.iter().any(ty_contains_anonymous_type_hole)
+                || ty_contains_anonymous_type_hole(result)
+        }
+        Ty::Con { args, .. } => args.iter().any(ty_contains_anonymous_type_hole),
+        Ty::Handler { .. } | Ty::Int | Ty::Bool | Ty::Str | Ty::Unit | Ty::Unknown => false,
+    }
+}
+
+fn type_hole_conflict_note(expected: &Ty) -> &'static str {
+    if ty_contains_anonymous_type_hole(expected) {
+        " (anonymous type-hole `_` constraints conflict)"
+    } else {
+        ""
+    }
+}
+
 fn check_resume_in_expr(
     expr: &Expr,
     env: &TypeEnv,
@@ -2855,15 +2877,28 @@ fn check_resume_in_expr(
             };
             let actual = check_expr(value, env);
             let mut subst = TypeSubst::new();
-            if actual != Ty::Unknown && !unify_types_with_subst(expected, &actual, &mut subst, env)
-            {
+            let expected_after_subst = apply_type_substitution(expected, &subst, env);
+            if actual == Ty::Unknown && ty_contains_type_var(&expected_after_subst) {
                 return Err(TypecheckError {
                     declaration: Some(decl_name.to_string()),
                     span: None,
                     message: format!(
-                        "resume_arg_type_mismatch: `resume` expects argument of type `{}` but got `{}`",
-                        ty_name(&apply_type_substitution(expected, &subst, env)),
-                        ty_name(&actual)
+                        "resume_unresolved_generic_constraints: cannot resolve generic constraints for `resume` argument (expected `{}` but got unresolved argument type)",
+                        ty_name(&expected_after_subst)
+                    ),
+                });
+            }
+            if actual != Ty::Unknown && !unify_types_with_subst(expected, &actual, &mut subst, env)
+            {
+                let expected_rendered = apply_type_substitution(expected, &subst, env);
+                return Err(TypecheckError {
+                    declaration: Some(decl_name.to_string()),
+                    span: None,
+                    message: format!(
+                        "resume_arg_type_mismatch: `resume` expects argument of type `{}` but got `{}`{}",
+                        ty_name(&expected_rendered),
+                        ty_name(&actual),
+                        type_hole_conflict_note(&expected_rendered)
                     ),
                 });
             }
@@ -3173,17 +3208,32 @@ fn check_unhandled_effects_in_expr(
                     continue;
                 }
                 let actual = check_expr(arg, env);
-                if actual != Ty::Unknown
-                    && !unify_types_with_subst(expected, &actual, &mut subst, env)
-                {
+                let expected_after_subst = apply_type_substitution(expected, &subst, env);
+                if actual == Ty::Unknown && ty_contains_type_var(&expected_after_subst) {
                     return Err(TypecheckError {
                         declaration: Some(decl_name.to_string()),
                         span: None,
                         message: format!(
-                            "effect operation `{}` expects argument of type `{}` but got `{}`",
+                            "effect_op_unresolved_generic_constraints: effect operation `{}` argument #{} cannot resolve generic constraints (expected `{}` but argument type is unresolved)",
                             op_name,
-                            ty_name(&apply_type_substitution(expected, &subst, env)),
-                            ty_name(&actual)
+                            idx + 1,
+                            ty_name(&expected_after_subst)
+                        ),
+                    });
+                }
+                if actual != Ty::Unknown
+                    && !unify_types_with_subst(expected, &actual, &mut subst, env)
+                {
+                    let expected_rendered = apply_type_substitution(expected, &subst, env);
+                    return Err(TypecheckError {
+                        declaration: Some(decl_name.to_string()),
+                        span: None,
+                        message: format!(
+                            "effect operation `{}` expects argument of type `{}` but got `{}`{}",
+                            op_name,
+                            ty_name(&expected_rendered),
+                            ty_name(&actual),
+                            type_hole_conflict_note(&expected_rendered)
                         ),
                     });
                 }
@@ -6897,6 +6947,60 @@ main =
     }
 
     #[test]
+    fn rejects_effect_op_call_when_generic_constraints_are_unresolved() {
+        let source = "
+effect Iter a
+  op: a -> Unit
+
+main : Unit -> Unit
+main =
+  with_handler
+    op _ ->
+      resume Unit
+  in
+    op missing
+";
+        let module = parse_module(source).expect("should parse");
+        let err = typecheck_module(&module)
+            .expect_err("unresolved generic constraint in effect-op call should fail");
+        assert!(
+            err.message
+                .contains("effect_op_unresolved_generic_constraints"),
+            "unexpected error: {}",
+            err.message
+        );
+        assert!(
+            err.message.contains("op"),
+            "unexpected error: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn rejects_effect_op_call_with_type_hole_conflict_note() {
+        let source = "
+effect Iter
+  op: List _ -> Unit
+
+main : Unit -> Unit
+main =
+  with_handler
+    op _ ->
+      resume Unit
+  in
+    op \"oops\"
+";
+        let module = parse_module(source).expect("should parse");
+        let err = typecheck_module(&module).expect_err("type-hole conflict should fail");
+        assert!(
+            err.message
+                .contains("anonymous type-hole `_` constraints conflict"),
+            "unexpected error: {}",
+            err.message
+        );
+    }
+
+    #[test]
     fn accepts_effect_op_call_with_independent_anonymous_type_holes() {
         let source = "
 effect Iter
@@ -7064,6 +7168,31 @@ main =
 ";
         let module = parse_module(source).expect("should parse");
         typecheck_module(&module).expect("resume should accept generic `(Bool, b)` result");
+    }
+
+    #[test]
+    fn rejects_resume_when_generic_constraints_are_unresolved() {
+        let source = "
+effect Iterator a b
+  yield: a -> b -> (Bool, b)
+
+main : Unit -> Unit
+main =
+  with_handler
+    yield _ _ ->
+      resume missing
+  in
+    print \"ok\"
+";
+        let module = parse_module(source).expect("should parse");
+        let err = typecheck_module(&module)
+            .expect_err("resume unresolved generic constraints should fail");
+        assert!(
+            err.message
+                .contains("resume_unresolved_generic_constraints"),
+            "unexpected error: {}",
+            err.message
+        );
     }
 
     #[test]

@@ -80,6 +80,19 @@ This file is a restart-safe snapshot for resuming work after context reset.
 
 Recent (detailed):
 
+- 2026-03-05 (session 167): Track C Step 6 diagnostics hardening landed.
+  - effect-op argument checks in handler scope now emit explicit unresolved-generic
+    diagnostics when argument type remains unresolved under generic constraints
+    (`effect_op_unresolved_generic_constraints`).
+  - `resume` checks now emit explicit unresolved-generic diagnostics when resume
+    argument type remains unresolved under generic expected types
+    (`resume_unresolved_generic_constraints`).
+  - mismatch diagnostics now append an anonymous type-hole conflict hint when
+    `_` constraints are involved.
+  - regression tests added for:
+    - unresolved generic constraints in handler effect-op call,
+    - unresolved generic constraints in `resume`,
+    - `_` type-hole conflict message readability.
 - 2026-03-05 (session 166): Track C PR4-2 legacy iterator compatibility shim removed.
   - fallback runtime intrinsic `__goby_string_each_grapheme` now accepts only
     unified contract handlers:
