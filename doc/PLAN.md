@@ -271,7 +271,7 @@ Based on `examples/*.gb`:
 
 #### Effect Renewal/Resume Status (Summary)
 
-- Renewal syntax model is locked and active:
+- Renewal syntax model is locked and active (current shipped behavior as of 2026-03-05):
   - `handler` is a value,
   - canonical application is `with <handler> in ...`,
   - `with_handler ... in ...` is inline sugar.
@@ -301,6 +301,12 @@ Goal: remove `with_handler` and use only `with`.
     - `in`
     - body block
   - handler value form: `with <handler_expr> in <body>`
+- Scope and placement rules (target):
+  - `with` statement form remains supported.
+  - multiline RHS `with` is supported for bindings/assignments to preserve existing
+    iterator-style code patterns currently written with multiline `with_handler`.
+  - parser entry points for multiline RHS handling must treat `with` the same way as
+    current multiline `case` / `if` handling.
 - Parser disambiguation rule:
   - if the statement line is exactly `with`, parse inline handler clauses from the next indented block.
   - if the statement line starts with `with `, parse the remainder as `<handler_expr>`.
@@ -308,11 +314,26 @@ Goal: remove `with_handler` and use only `with`.
 - Compatibility/migration policy:
   - remove `with_handler` parser support directly (no warning mode).
   - parse error should point users to `with` inline form.
+  - remove `with_handler` from reserved keyword/docs/typecheck diagnostics wording in the
+    same change set to avoid mixed guidance.
 - Planned update sequence:
-  - parser (`with_handler` branch removal + `with` exact-line branch),
-  - parser/typecheck diagnostics wording (`with`-only guidance),
-  - language docs (`doc/LANGUAGE_SPEC.md`, `doc/PLAN.md`) and examples (`examples/*.gb`),
-  - regression tests for both `with` forms and `with_handler` rejection.
+  - 1) parser:
+    - add `with` exact-line inline-handler branch,
+    - extend multiline RHS parser path to support `with` (in addition to current `case`/`if`),
+    - remove `with_handler` parse branch.
+  - 2) typecheck/diagnostics:
+    - replace user-facing `with`/`with_handler` guidance with `with`-only guidance.
+  - 3) language/docs cleanup:
+    - `doc/LANGUAGE_SPEC.md`: remove `with_handler` from reserved tokens and handler syntax section.
+    - `doc/PLAN.md`/`doc/STATE.md`: mark completion and remove transitional wording.
+  - 4) examples/tests migration:
+    - migrate all `examples/*.gb` from `with_handler` to `with`.
+    - update parser/typecheck/CLI tests to assert `with_handler` rejection.
+  - 5) quality gate:
+    - run `cargo fmt`, `cargo check`, `cargo test`, `cargo clippy -- -D warnings`.
+- Migration scale note:
+  - repository currently contains many `with_handler` references (including tests/docs/examples),
+    so migration should be landed as one coherent change to avoid partial-state breakage.
 
 Note: detailed step-by-step renewal history is intentionally omitted here; use
 `doc/STATE.md` and git history for chronological implementation records.
