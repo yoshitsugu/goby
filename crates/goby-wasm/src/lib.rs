@@ -1334,21 +1334,32 @@ impl<'m> RuntimeOutputResolver<'m> {
                 Some(RuntimeValue::Tuple(values?))
             }
             Expr::Call { callee, arg } => {
-                if let Some((fn_name, args)) = flatten_named_call(expr)
-                    && fn_name.starts_with("__goby_")
-                {
+                if let Some((fn_name, args)) = flatten_named_call(expr) {
                     let arg_values: Option<Vec<RuntimeValue>> = args
                         .iter()
                         .map(|arg_expr| {
                             self.eval_expr_ast(arg_expr, locals, callables, evaluators, depth + 1)
                         })
                         .collect();
-                    return self.apply_runtime_intrinsic_ast(
-                        fn_name,
-                        &arg_values?,
-                        evaluators,
-                        depth + 1,
-                    );
+                    let arg_values = arg_values?;
+                    if fn_name.starts_with("__goby_") {
+                        return self.apply_runtime_intrinsic_ast(
+                            fn_name,
+                            &arg_values,
+                            evaluators,
+                            depth + 1,
+                        );
+                    }
+                    if args.len() > 1
+                        && let Some(method) = self.find_handler_method_by_name(fn_name)
+                    {
+                        return self.dispatch_handler_method_as_value_with_args(
+                            &method,
+                            &arg_values,
+                            evaluators,
+                            depth + 1,
+                        );
+                    }
                 }
 
                 // Positional single-field record constructor sugar: `Ctor(value)` → `Ctor(field: value)`.
@@ -4660,6 +4671,28 @@ main =
             resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
                 .expect("runtime output should resolve");
         assert_eq!(output, "1");
+    }
+
+    #[test]
+    fn resolves_runtime_output_for_multi_arg_effect_op_call() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let source = r#"
+effect Iterator a b
+  yield : a -> b -> (Bool, b)
+
+main : Unit -> Unit can Print
+main =
+  with_handler
+    yield _ step ->
+      resume (True, step + 1)
+  in
+    print (yield "x" 41)
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let output =
+            resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
+                .expect("runtime output should resolve");
+        assert_eq!(output, "(True, 42)");
     }
 
     #[test]
