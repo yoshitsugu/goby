@@ -80,6 +80,13 @@ This file is a restart-safe snapshot for resuming work after context reset.
 
 Recent (detailed):
 
+- 2026-03-05 (session 163): fallback runtime multi-arg effect-op dispatch generalized.
+  - `Expr::Call` evaluation now dispatches multi-arg bare effect operations
+    via handler method lookup (not intrinsic-only).
+  - this unblocks source-level calls like `yield x state` for unified iterator
+    contract usage in runtime evaluation path.
+  - added regression test:
+    `resolves_runtime_output_for_multi_arg_effect_op_call`.
 - 2026-03-05 (session 162): stdlib migration progress toward unified `Iterator.yield`.
   - migrated to `effect Iterator a b / yield : a -> b -> (Bool, b)`:
     - `stdlib/goby/iterator.gb`,
@@ -87,8 +94,9 @@ Recent (detailed):
     - `stdlib/goby/int.gb`.
   - runtime and typecheck remain backward-compatible with legacy iterator shapes
     during migration window (as planned in PR3 bridge policy).
-  - `stdlib/goby/list.gb` migration is still pending due tuple-result consumption ergonomics
-    in source-level control flow (no tuple pattern destructuring yet).
+  - `stdlib/goby/list.gb` migration remains pending mainly for source-level
+    tuple-result consumption ergonomics (no tuple pattern destructuring yet);
+    runtime multi-arg dispatch blocker is resolved in session 163.
 - 2026-03-05 (session 161): runtime iterator contract bridge (PR3 slice) landed.
   - runtime intrinsic `__goby_string_each_grapheme` now supports unified iterator
     contract path:
