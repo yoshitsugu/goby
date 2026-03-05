@@ -196,7 +196,6 @@ fn run_command_emits_locked_function_output_via_wasmtime() {
         "[60, 70]".to_string(),
         "something".to_string(),
         "15".to_string(),
-        "executed wasm via wasmtime".to_string(),
     ];
     let actual: Vec<String> = stdout.lines().map(|line| line.to_string()).collect();
     assert_eq!(actual, expected);

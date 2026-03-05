@@ -109,7 +109,7 @@ fn run() -> Result<(), CliError> {
             print_parse_summary(module.declarations.len(), &cli.file);
             println!("generated wasm: {}", output);
             match execute_wasm(&output)? {
-                ExecutionOutcome::Executed => println!("executed wasm via wasmtime"),
+                ExecutionOutcome::Executed => {}
                 ExecutionOutcome::SkippedNoWasmtime => {
                     println!("wasmtime not found; skipped wasm execution")
                 }
