@@ -400,6 +400,8 @@ Progress snapshot (2026-03-05):
   list.each-style effect+handler callback dispatch.
 - typecheck regression coverage now includes import mode variants for
   `goby/list.each` (plain/alias/selective).
+- runtime regression coverage now includes import mode variants for
+  `goby/list.each` (plain/alias/selective).
 
 Acceptance criteria:
 
