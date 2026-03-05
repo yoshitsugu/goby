@@ -4673,12 +4673,12 @@ effect Log
     }
 
     // -----------------------------------------------------------------------
-    // with_handler / unhandled-effect tests
+    // with / unhandled-effect tests
     // -----------------------------------------------------------------------
 
     #[test]
-    fn rejects_direct_effect_op_call_outside_with_handler() {
-        // `log x` is called directly in `main` without any `with_handler`.
+    fn rejects_direct_effect_op_call_outside_with() {
+        // `log x` is called directly in `main` without any `with`.
         let source = "\
 effect Log
   log: String -> Unit
@@ -4699,42 +4699,42 @@ main =
     }
 
     #[test]
-    fn accepts_effect_op_call_inside_with_handler_scope() {
-        // `log x` is called inside a `with_handler` block.
+    fn accepts_effect_op_call_inside_with_scope() {
+        // `log x` is called inside a `with` block.
         let source = "\
 effect Log
   log: String -> Unit
 main : Unit -> Unit
 main =
-  with_handler
+  with
     log str ->
       resume Unit
   in
     log \"hello\"
 ";
         let module = parse_module(source).expect("should parse");
-        typecheck_module(&module).expect("effect op call inside with_handler should be accepted");
+        typecheck_module(&module).expect("effect op call inside with should be accepted");
     }
 
     #[test]
-    fn accepts_effect_op_call_inside_with_handler() {
+    fn accepts_effect_op_call_inside_with() {
         let source = "\
 effect Log
   log: String -> Unit
 main : Unit -> Unit
 main =
-  with_handler
+  with
     log msg ->
       resume Unit
   in
     log \"hello\"
 ";
         let module = parse_module(source).expect("should parse");
-        typecheck_module(&module).expect("effect op call inside with_handler should be accepted");
+        typecheck_module(&module).expect("effect op call inside with should be accepted");
     }
 
     #[test]
-    fn accepts_effect_op_call_inside_with_handler_variable() {
+    fn accepts_effect_op_call_inside_with_variable() {
         let source = "\
 effect Log
   log: String -> Unit
@@ -4759,7 +4759,7 @@ effect Log
   log: String -> Unit
 main : Unit -> Unit
 main =
-  with_handler
+  with
     unknown_op msg ->
       resume Unit
   in
@@ -4781,7 +4781,7 @@ effect Logger
   log: String -> Unit
 main : Unit -> Unit
 main =
-  with_handler
+  with
     log msg ->
       resume Unit
   in
@@ -4886,27 +4886,26 @@ mk =
     }
 
     #[test]
-    fn accepts_qualified_effect_op_inside_with_handler() {
-        // `Log.log x` (qualified form) inside a `with_handler` block.
+    fn accepts_qualified_effect_op_inside_with() {
+        // `Log.log x` (qualified form) inside a `with` block.
         let source = "\
 effect Log
   log: String -> Unit
 main : Unit -> Unit
 main =
-  with_handler
+  with
     log str ->
       resume Unit
   in
     Log.log \"hello\"
 ";
         let module = parse_module(source).expect("should parse");
-        typecheck_module(&module)
-            .expect("qualified effect op call inside with_handler should be accepted");
+        typecheck_module(&module).expect("qualified effect op call inside with should be accepted");
     }
 
     #[test]
     fn rejects_effect_op_when_wrong_handler_used() {
-        // `with_handler` only covers `Log` ops; calling `Env.from_env` is unhandled.
+        // `with` only covers `Log` ops; calling `Env.from_env` is unhandled.
         let source = "\
 effect Log
   log: String -> Unit
@@ -4914,7 +4913,7 @@ effect Env
   from_env: String -> String
 main : Unit -> Unit
 main =
-  with_handler
+  with
     log str ->
       resume Unit
   in
@@ -4944,8 +4943,8 @@ f msg =
     }
 
     #[test]
-    fn rejects_effect_op_in_binding_value_outside_with_handler() {
-        // Effect op used in binding RHS, no enclosing `with_handler`.
+    fn rejects_effect_op_in_binding_value_outside_with() {
+        // Effect op used in binding RHS, no enclosing `with`.
         let source = "\
 effect Log
   log: String -> Unit
@@ -4955,14 +4954,14 @@ main =
 ";
         let module = parse_module(source).expect("should parse");
         let err = typecheck_module(&module)
-            .expect_err("effect op in binding outside with_handler should be rejected");
+            .expect_err("effect op in binding outside with should be rejected");
         assert_eq!(err.declaration.as_deref(), Some("main"));
         assert!(err.message.contains("not handled"));
     }
 
     #[test]
-    fn rejects_effect_op_as_pipeline_callee_outside_with_handler() {
-        // `"hello" |> log` — effect op used as pipeline callee without `with_handler`.
+    fn rejects_effect_op_as_pipeline_callee_outside_with() {
+        // `"hello" |> log` — effect op used as pipeline callee without `with`.
         let source = "\
 effect Log
   log: String -> Unit
@@ -4972,21 +4971,21 @@ main =
 ";
         let module = parse_module(source).expect("should parse");
         let err = typecheck_module(&module)
-            .expect_err("effect op as pipeline callee outside with_handler should be rejected");
+            .expect_err("effect op as pipeline callee outside with should be rejected");
         assert_eq!(err.declaration.as_deref(), Some("main"));
         assert!(err.message.contains("not handled"));
         assert!(err.message.contains("log"));
     }
 
     #[test]
-    fn accepts_effect_op_as_pipeline_callee_inside_with_handler_scope() {
-        // `"hello" |> log` inside `with_handler` should be accepted.
+    fn accepts_effect_op_as_pipeline_callee_inside_with_scope() {
+        // `"hello" |> log` inside `with` should be accepted.
         let source = "\
 effect Log
   log: String -> Unit
 main : Unit -> Unit
 main =
-  with_handler
+  with
     log str ->
       resume Unit
   in
@@ -4994,7 +4993,7 @@ main =
 ";
         let module = parse_module(source).expect("should parse");
         typecheck_module(&module)
-            .expect("effect op as pipeline callee inside with_handler should be accepted");
+            .expect("effect op as pipeline callee inside with should be accepted");
     }
 
     #[test]
@@ -5015,8 +5014,8 @@ main =
     }
 
     #[test]
-    fn accepts_nested_with_handler_with_merged_covered_ops() {
-        // Outer `with_handler(log)` + inner `with_handler(from_env)`; inner body calls both ops.
+    fn accepts_nested_with_with_merged_covered_ops() {
+        // Outer `with(log)` + inner `with(from_env)`; inner body calls both ops.
         let source = "\
 effect Log
   log: String -> Unit
@@ -5024,11 +5023,11 @@ effect Env
   from_env: String -> String
 main : Unit -> Unit
 main =
-  with_handler
+  with
     log str ->
       resume Unit
   in
-    with_handler
+    with
       from_env str ->
         resume str
     in
@@ -5037,7 +5036,7 @@ main =
 ";
         let module = parse_module(source).expect("should parse");
         typecheck_module(&module)
-            .expect("nested with_handler scopes with merged covered ops should be accepted");
+            .expect("nested with scopes with merged covered ops should be accepted");
     }
 
     #[test]
@@ -5060,9 +5059,9 @@ f msg =
     // ── Step 3: calling effectful functions requires an appropriate handler scope ──
 
     #[test]
-    fn rejects_call_to_effectful_function_outside_with_handler() {
+    fn rejects_call_to_effectful_function_outside_with() {
         // `plus_ten_with_log` requires the `Log` effect; calling it from `main` without
-        // `with_handler` should be rejected.
+        // `with` should be rejected.
         let source = "\
 effect Log
   log: String -> Unit
@@ -5076,7 +5075,7 @@ main =
 ";
         let module = parse_module(source).expect("should parse");
         let err = typecheck_module(&module)
-            .expect_err("calling effectful function without with_handler should fail");
+            .expect_err("calling effectful function without with should fail");
         assert_eq!(err.declaration.as_deref(), Some("main"));
         assert!(
             err.message.contains("unhandled effect") || err.message.contains("Log"),
@@ -5086,8 +5085,8 @@ main =
     }
 
     #[test]
-    fn accepts_call_to_effectful_function_inside_with_handler_scope() {
-        // Same call, but wrapped in `with_handler` — should succeed.
+    fn accepts_call_to_effectful_function_inside_with_scope() {
+        // Same call, but wrapped in `with` — should succeed.
         let source = "\
 effect Log
   log: String -> Unit
@@ -5097,7 +5096,7 @@ plus_ten_with_log n =
   n
 main : Unit -> Unit
 main =
-  with_handler
+  with
     log msg ->
       resume Unit
   in
@@ -5105,7 +5104,7 @@ main =
 ";
         let module = parse_module(source).expect("should parse");
         typecheck_module(&module)
-            .expect("calling effectful function inside appropriate with_handler should succeed");
+            .expect("calling effectful function inside appropriate with should succeed");
     }
 
     #[test]
@@ -5122,7 +5121,7 @@ show_env_var name =
   log v
 main : Unit -> Unit
 main =
-  with_handler
+  with
     log msg ->
       resume Unit
   in
@@ -5139,8 +5138,8 @@ main =
     }
 
     #[test]
-    fn accepts_effectful_pipeline_callee_inside_with_handler_scope() {
-        // `3 |> plus_ten_with_log` inside `with_handler` — pipeline form should also pass.
+    fn accepts_effectful_pipeline_callee_inside_with_scope() {
+        // `3 |> plus_ten_with_log` inside `with` — pipeline form should also pass.
         let source = "\
 effect Log
   log: String -> Unit
@@ -5150,15 +5149,14 @@ plus_ten_with_log n =
   n
 main : Unit -> Unit
 main =
-  with_handler
+  with
     log msg ->
       resume Unit
   in
     3 |> plus_ten_with_log
 ";
         let module = parse_module(source).expect("should parse");
-        typecheck_module(&module)
-            .expect("effectful pipeline callee inside with_handler should succeed");
+        typecheck_module(&module).expect("effectful pipeline callee inside with should succeed");
     }
 
     #[test]
@@ -5282,7 +5280,7 @@ effect Trace
   trace : String -> Unit
 main : Unit -> Unit can Trace
 main =
-  with_handler
+  with
     trace msg ->
       log msg
   in
@@ -5306,7 +5304,7 @@ effect Trace
   trace : String -> Unit can Log
 main : Unit -> Unit can Trace
 main =
-  with_handler
+  with
     trace msg ->
       log msg
   in
@@ -6000,7 +5998,7 @@ effect StringParseError
   invalid_integer : String -> Int
 f : Unit -> Int can StringParseError
 f =
-  with_handler
+  with
     invalid_integer _ ->
       resume -1
   in
@@ -6048,12 +6046,12 @@ main =
     }
 
     #[test]
-    fn typechecks_with_handler_operation_from_imported_effect_without_redeclaration() {
+    fn typechecks_with_operation_from_imported_effect_without_redeclaration() {
         let source = "\
 import goby/int as i
 f : Unit -> Int can StringParseError
 f =
-  with_handler
+  with
     invalid_integer _ ->
       resume -1
   in
@@ -6081,7 +6079,7 @@ import goby/custom ( Token, CustomEffect )
 type Boxed = Boxed(value: Token)
 f : Unit -> Int can CustomEffect
 f =
-  with_handler
+  with
     fail _ ->
       resume 0
   in
@@ -6270,7 +6268,7 @@ effect Iterator a b
 @embed Iterator __goby_embeded_effect_stdout_handler
 count_graphemes : String -> Int can Iterator
 count_graphemes s =
-  with_handler
+  with
     yield _ _ ->
       resume (True, ())
   in
@@ -6298,7 +6296,7 @@ f : String -> GraphemeState can Iterator
 f s =
   state = GraphemeState(grapheme: \"\", current: \"\")
   out = state
-  with_handler
+  with
     yield grapheme step ->
       resume (True, step)
   in
@@ -6740,7 +6738,7 @@ effect ErrorEffect
 
 main : Unit -> Unit
 main =
-  with_handler
+  with
     catch e ->
       resume Unit
   in
@@ -6781,7 +6779,7 @@ effect ErrorEffect
 
 main : Unit -> Unit
 main =
-  with_handler
+  with
     catch e ->
       resume Unit
   in
@@ -6806,7 +6804,7 @@ effect ErrorEffect
 
 main : Unit -> Unit
 main =
-  with_handler
+  with
     catch e ->
       resume Unit
   in
@@ -6828,7 +6826,7 @@ effect E
 
 main : Unit -> Unit
 main =
-  with_handler
+  with
     op s n ->
       resume Unit
   in
@@ -6849,7 +6847,7 @@ effect E
 
 main : Unit -> Unit
 main =
-  with_handler
+  with
     op s n ->
       resume Unit
   in
@@ -6871,7 +6869,7 @@ effect E
 
 main : Unit -> Unit
 main =
-  with_handler
+  with
     op s ->
       resume Unit
   in
@@ -6893,7 +6891,7 @@ effect ErrorEffect
 
 main : Unit -> Unit
 main =
-  with_handler
+  with
     catch e ->
       resume Unit
   in
@@ -6934,7 +6932,7 @@ effect ErrorEffect
 
 main : Unit -> Unit
 main =
-  with_handler
+  with
     catch e ->
       resume Unit
   in
@@ -6955,7 +6953,7 @@ effect ErrorEffect
 
 main : Unit -> Unit
 main =
-  with_handler
+  with
     catch e ->
       resume Unit
   in
@@ -6975,7 +6973,7 @@ effect Log
 
 main : Unit -> Unit
 main =
-  with_handler
+  with
     log str ->
       resume Unit
   in
@@ -6993,7 +6991,7 @@ effect Iter a
 
 main : Unit -> Unit
 main =
-  with_handler
+  with
     op x ->
       resume Unit
   in
@@ -7011,7 +7009,7 @@ effect Iter a
 
 main : Unit -> Unit
 main =
-  with_handler
+  with
     op x ->
       resume Unit
   in
@@ -7031,7 +7029,7 @@ effect Iter a
 
 main : Unit -> Unit
 main =
-  with_handler
+  with
     pair x y ->
       resume Unit
   in
@@ -7052,7 +7050,7 @@ effect Iter a
 
 main : Unit -> Unit
 main =
-  with_handler
+  with
     op _ ->
       resume Unit
   in
@@ -7082,7 +7080,7 @@ effect Iter
 
 main : Unit -> Unit
 main =
-  with_handler
+  with
     op _ ->
       resume Unit
   in
@@ -7106,7 +7104,7 @@ effect Iter
 
 main : Unit -> Unit
 main =
-  with_handler
+  with
     op x y ->
       resume Unit
   in
@@ -7129,7 +7127,7 @@ effect RaiseError
 
 main : Unit -> Unit
 main =
-  with_handler
+  with
     raise e ->
       resume Unit
   in
@@ -7152,7 +7150,7 @@ effect E
 
 main : Unit -> Unit
 main =
-  with_handler
+  with
     op p ->
       resume Unit
   in
@@ -7187,7 +7185,7 @@ effect Iter
 
 main : Unit -> Unit
 main =
-  with_handler
+  with
     next x ->
       resume \"oops\"
   in
@@ -7215,7 +7213,7 @@ effect Iter
 
 main : Unit -> Unit
 main =
-  with_handler
+  with
     unknown x ->
       resume 1
   in
@@ -7239,7 +7237,7 @@ effect Iter
 
 main : Unit -> Unit
 main =
-  with_handler
+  with
     next x ->
       resume 1
   in
@@ -7257,7 +7255,7 @@ effect Iterator a b
 
 main : Unit -> Unit
 main =
-  with_handler
+  with
     yield x state ->
       resume (True, state)
   in
@@ -7276,7 +7274,7 @@ effect Iterator a b
 
 main : Unit -> Unit
 main =
-  with_handler
+  with
     yield _ _ ->
       resume missing
   in
@@ -7301,7 +7299,7 @@ effect Iterator a b
 
 main : Unit -> Unit
 main =
-  with_handler
+  with
     yield x state ->
       resume (1, state)
   in
@@ -7323,7 +7321,7 @@ effect Iter
 
 main : Unit -> Unit
 main =
-  with_handler
+  with
     next x ->
       resume 1
       resume 2
@@ -7347,7 +7345,7 @@ effect Iter
 
 main : Unit -> Unit
 main =
-  with_handler
+  with
     next x ->
       resume 1 + resume 2
   in

@@ -4,7 +4,7 @@ effect Iterator a b
 main : Unit -> Unit
 main =
   prefix = "tick:"
-  with_handler
+  with
     yield value _ ->
       print "${prefix}${value}"
       resume (True, ())

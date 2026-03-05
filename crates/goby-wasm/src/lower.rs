@@ -798,7 +798,7 @@ effect Tick
 
 main : Unit -> Unit can Tick
 main =
-  with_handler
+  with
     tick n ->
       resume n
   in
@@ -827,7 +827,7 @@ effect Tick
 
 main : Unit -> Unit can Tick
 main =
-  with_handler
+  with
     tick n ->
       resume n
   in

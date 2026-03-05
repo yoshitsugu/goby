@@ -504,7 +504,7 @@ struct RuntimeOutputResolver<'m> {
     module: &'m Module,
     embedded_default_handlers: HashMap<String, String>,
     runtime_bridges: RuntimeBridgeRegistry,
-    /// Active inline handlers installed via `with` / `with_handler`.
+    /// Active inline handlers installed via `with` / `with`.
     active_inline_handler_stack: Vec<InlineHandlerValue>,
     resume_tokens: Vec<ResumeToken>,
     optimized_resume_tokens: Vec<OptimizedResumeToken>,
@@ -3338,7 +3338,7 @@ impl<'m> RuntimeOutputResolver<'m> {
     }
 
     /// Execute any declaration (including Int-returning ones) as a side-effect call.
-    /// Used when calling functions like `plus_ten_with_log` from a `with_handler` block.
+    /// Used when calling functions like `plus_ten_with_log` from a `with` block.
     fn execute_decl_as_side_effect(
         &mut self,
         fn_name: &str,
@@ -4641,7 +4641,7 @@ effect Log
 
 main : Unit -> Unit
 main =
-  with_handler
+  with
     log n ->
       print "${n}"
   in
@@ -4665,7 +4665,7 @@ effect Log
 
 main : Unit -> Unit
 main =
-  with_handler
+  with
     log n ->
       print "${n}"
   in
@@ -4689,7 +4689,7 @@ effect Log
 
 main : Unit -> Unit
 main =
-  with_handler
+  with
     log n ->
       print "${n}"
   in
@@ -4861,7 +4861,7 @@ effect StringParseError
 
 main : Unit -> Unit can Print, StringParseError
 main =
-  with_handler
+  with
     invalid_integer _ ->
       resume -1
   in
@@ -4885,7 +4885,7 @@ effect Iterator a b
 
 main : Unit -> Unit can Print
 main =
-  with_handler
+  with
     yield _ _ ->
       resume (True, ())
   in
@@ -4912,7 +4912,7 @@ main : Unit -> Unit can Print
 main =
   state = GraphemeState(grapheme: "", current: "")
   out = state
-  with_handler
+  with
     yield grapheme step ->
       next = "${step.current}${grapheme}"
       resume (True, GraphemeState(grapheme: grapheme, current: next))
@@ -4936,7 +4936,7 @@ effect Iterator a b
 
 main : Unit -> Unit can Print
 main =
-  with_handler
+  with
     yield _ _ ->
       resume (False, ())
   in
@@ -4959,7 +4959,7 @@ effect Iterator a b
 
 main : Unit -> Unit can Print
 main =
-  with_handler
+  with
     yield _ step ->
       resume (True, step + 1)
   in
@@ -5287,9 +5287,9 @@ main =
     // --- bare effect call dispatch in main body (§4.1 patch) ---
 
     #[test]
-    fn bare_effect_call_in_main_with_handler_dispatches_to_handler() {
+    fn bare_effect_call_in_main_with_dispatches_to_handler() {
         // Bug: eval_ast_side_effect (main/top-level path) did NOT route bare Call through
-        // find_handler_method_by_name, so `log "hello"` inside `with_handler` produced no output.
+        // find_handler_method_by_name, so `log "hello"` inside `with` produced no output.
         use goby_core::parse_module;
         let _guard = ENV_MUTEX.lock().unwrap();
         let source = r#"
@@ -5298,7 +5298,7 @@ effect Log
 
 main : Unit -> Unit
 main =
-  with_handler
+  with
     log msg ->
       print msg
       resume Unit
@@ -5311,12 +5311,12 @@ main =
         assert_eq!(
             output.as_deref(),
             Some("hello"),
-            "bare effect call inside main `with_handler` block should dispatch to handler"
+            "bare effect call inside main `with` block should dispatch to handler"
         );
     }
 
     #[test]
-    fn qualified_effect_call_in_main_with_handler_dispatches_to_handler() {
+    fn qualified_effect_call_in_main_with_dispatches_to_handler() {
         // Bug: eval_ast_side_effect had no arm for Expr::Call { callee: Expr::Qualified },
         // so `Log.log "hello"` inside main body fell through to string-based eval_side_effect.
         use goby_core::parse_module;
@@ -5327,7 +5327,7 @@ effect Log
 
 main : Unit -> Unit
 main =
-  with_handler
+  with
     log msg ->
       print msg
       resume Unit
@@ -5340,7 +5340,7 @@ main =
         assert_eq!(
             output.as_deref(),
             Some("world"),
-            "qualified effect call inside main `with_handler` block should dispatch to handler"
+            "qualified effect call inside main `with` block should dispatch to handler"
         );
     }
 
@@ -5382,7 +5382,7 @@ effect Print
 
 main : Unit -> Unit can Print
 main =
-  with_handler
+  with
     print msg ->
       resume Unit
     println msg ->
@@ -5632,7 +5632,7 @@ main =
 import goby/int as int
 main : Unit -> Unit can Print, StringParseError
 main =
-  with_handler
+  with
     invalid_integer _ ->
       resume -1
   in
@@ -5676,7 +5676,7 @@ effect OtherError
   invalid_integer : String -> Int
 main : Unit -> Unit can Print, StringParseError, OtherError
 main =
-  with_handler
+  with
     invalid_integer _ ->
       resume -99
   in
@@ -5721,11 +5721,11 @@ effect Beta
 
 main : Unit -> Unit
 main =
-  with_handler
+  with
     greet s ->
       resume "from-alpha"
   in
-    with_handler
+    with
       greet s ->
         resume "from-beta"
     in
@@ -5742,7 +5742,7 @@ main =
     }
 
     #[test]
-    fn nested_with_handler_same_effect_prefers_inner_handler() {
+    fn nested_with_same_effect_prefers_inner_handler() {
         use goby_core::parse_module;
         let _guard = ENV_MUTEX.lock().unwrap();
         let source = r#"
@@ -5751,12 +5751,12 @@ effect Log
 
 main : Unit -> Unit
 main =
-  with_handler
+  with
     log msg ->
       print "outer"
       resume Unit
   in
-    with_handler
+    with
       log msg ->
         print "inner"
         resume Unit
@@ -5769,13 +5769,13 @@ main =
         assert_eq!(
             output.as_deref(),
             Some("inner"),
-            "nested `with_handler` should dispatch to nearest enclosing handler"
+            "nested `with` should dispatch to nearest enclosing handler"
         );
     }
 
     #[test]
-    fn pipeline_effect_call_in_main_with_handler_dispatches_to_handler() {
-        // `"msg" |> log` inside main `with_handler` block should dispatch to the active handler.
+    fn pipeline_effect_call_in_main_with_dispatches_to_handler() {
+        // `"msg" |> log` inside main `with` block should dispatch to the active handler.
         // The Pipeline arm in eval_ast_side_effect now checks find_handler_method_by_name.
         use goby_core::parse_module;
         let _guard = ENV_MUTEX.lock().unwrap();
@@ -5785,7 +5785,7 @@ effect Log
 
 main : Unit -> Unit
 main =
-  with_handler
+  with
     log msg ->
       print msg
       resume Unit
@@ -5798,7 +5798,7 @@ main =
         assert_eq!(
             output.as_deref(),
             Some("piped"),
-            "pipeline effect call inside main `with_handler` block should dispatch to handler"
+            "pipeline effect call inside main `with` block should dispatch to handler"
         );
     }
 
@@ -5839,7 +5839,7 @@ effect RaiseError
 
 main : Unit -> Unit
 main =
-  with_handler
+  with
     raise e ->
       print e.message
       resume Unit
@@ -5866,7 +5866,7 @@ effect Iter
 
 main : Unit -> Unit
 main =
-  with_handler
+  with
     next n ->
       resume 7
   in
@@ -5892,7 +5892,7 @@ effect Iter
 
 main : Unit -> Unit
 main =
-  with_handler
+  with
     next n ->
       resume (resume 1)
   in
@@ -5918,7 +5918,7 @@ effect Iter
 
 main : Unit -> Unit
 main =
-  with_handler
+  with
     next n ->
       print "handled"
   in
@@ -5953,7 +5953,7 @@ main =
     }
 
     #[test]
-    fn with_handler_dispatches_effect_operation_in_runtime() {
+    fn with_dispatches_effect_operation_in_runtime() {
         use goby_core::parse_module;
         let _guard = ENV_MUTEX.lock().unwrap();
         let source = r#"
@@ -5962,7 +5962,7 @@ effect Log
 
 main : Unit -> Unit
 main =
-  with_handler
+  with
     log msg ->
       print msg
       resume Unit
@@ -5975,12 +5975,12 @@ main =
         assert_eq!(
             output.as_deref(),
             Some("hello"),
-            "with_handler should install inline handler and dispatch operation"
+            "with should install inline handler and dispatch operation"
         );
     }
 
     #[test]
-    fn with_handler_variable_dispatches_effect_operation_in_runtime() {
+    fn with_variable_dispatches_effect_operation_in_runtime() {
         use goby_core::parse_module;
         let _guard = ENV_MUTEX.lock().unwrap();
         let source = r#"
@@ -6008,7 +6008,7 @@ main =
     }
 
     #[test]
-    fn with_handler_captures_lexical_local_in_runtime() {
+    fn with_captures_lexical_local_in_runtime() {
         use goby_core::parse_module;
         let _guard = ENV_MUTEX.lock().unwrap();
         let source = r#"
@@ -6018,7 +6018,7 @@ effect Log
 main : Unit -> Unit
 main =
   prefix = "pre:"
-  with_handler
+  with
     log msg ->
       print "${prefix}${msg}"
       resume Unit
@@ -6036,7 +6036,7 @@ main =
     }
 
     #[test]
-    fn nested_with_handler_prefers_nearest_inline_handler() {
+    fn nested_with_prefers_nearest_inline_handler() {
         use goby_core::parse_module;
         let _guard = ENV_MUTEX.lock().unwrap();
         let source = r#"
@@ -6045,12 +6045,12 @@ effect Log
 
 main : Unit -> Unit
 main =
-  with_handler
+  with
     log msg ->
       print "outer"
       resume Unit
   in
-    with_handler
+    with
       log msg ->
         print "inner"
         resume Unit
@@ -6068,7 +6068,7 @@ main =
     }
 
     #[test]
-    fn inner_with_handler_overrides_outer_with_handler() {
+    fn inner_with_overrides_outer_with() {
         use goby_core::parse_module;
         let _guard = ENV_MUTEX.lock().unwrap();
         let source = r#"
@@ -6077,12 +6077,12 @@ effect Log
 
 main : Unit -> Unit
 main =
-  with_handler
+  with
     log msg ->
       print "outer"
       resume Unit
   in
-    with_handler
+    with
       log msg ->
         print "inline"
         resume Unit
@@ -6095,12 +6095,12 @@ main =
         assert_eq!(
             output.as_deref(),
             Some("inline"),
-            "inner with_handler should take precedence over outer with_handler"
+            "inner with should take precedence over outer with"
         );
     }
 
     #[test]
-    fn with_handler_dispatches_qualified_effect_call_in_runtime() {
+    fn with_dispatches_qualified_effect_call_in_runtime() {
         use goby_core::parse_module;
         let _guard = ENV_MUTEX.lock().unwrap();
         let source = r#"
@@ -6109,7 +6109,7 @@ effect Log
 
 main : Unit -> Unit
 main =
-  with_handler
+  with
     log msg ->
       print msg
       resume Unit
@@ -6136,7 +6136,7 @@ effect Iter
 
 main : Unit -> Unit
 main =
-  with_handler
+  with
     next n ->
       resume 7
   in
@@ -6158,7 +6158,7 @@ effect Iter
 
 main : Unit -> Unit
 main =
-  with_handler
+  with
     next n ->
       print "handled"
   in
@@ -6182,7 +6182,7 @@ effect Iter
 
 main : Unit -> Unit
 main =
-  with_handler
+  with
     next n ->
       resume (resume 1)
   in
@@ -6207,11 +6207,11 @@ effect B
 
 main : Unit -> Unit
 main =
-  with_handler
+  with
     next x ->
       resume 1
   in
-    with_handler
+    with
       next y ->
         resume 2
     in
@@ -6233,11 +6233,11 @@ effect Log
 
 main : Unit -> Unit
 main =
-  with_handler
+  with
     log msg ->
       resume "outer"
   in
-    with_handler
+    with
       log msg ->
         resume "inner"
     in
@@ -6268,7 +6268,7 @@ effect Iter
 
 main : Unit -> Unit
 main =
-  with_handler
+  with
     next n ->
       resume 7
   in
@@ -6283,7 +6283,7 @@ effect Iter
 
 main : Unit -> Unit
 main =
-  with_handler
+  with
     next n ->
       resume (resume 1)
   in
@@ -6298,11 +6298,11 @@ effect Log
 
 main : Unit -> Unit
 main =
-  with_handler
+  with
     log msg ->
       resume "outer"
   in
-    with_handler
+    with
       log msg ->
         resume "inner"
     in
@@ -6342,11 +6342,11 @@ effect B
 
 main : Unit -> Unit
 main =
-  with_handler
+  with
     next x ->
       resume 1
   in
-    with_handler
+    with
       next y ->
         resume 2
     in
@@ -6375,11 +6375,11 @@ effect B
 
 main : Unit -> Unit
 main =
-  with_handler
+  with
     next x ->
       resume 1
   in
-    with_handler
+    with
       next y ->
         resume 2
     in
@@ -6784,9 +6784,9 @@ main =
             (
                 "target_body_not_supported",
                 r#"
-uses_with_handler : Int -> Int
-uses_with_handler x =
-  with_handler
+uses_with : Int -> Int
+uses_with x =
+  with
     log v ->
       resume Unit
   in
@@ -6794,16 +6794,16 @@ uses_with_handler x =
 
 main : Unit -> Unit
 main =
-  print (uses_with_handler 1)
+  print (uses_with 1)
 "#,
                 Some(fallback::UnsupportedReason::CallTargetBodyNotNativeSupported),
             ),
             (
                 "target_body_not_supported_with_lambda",
                 r#"
-uses_with_handler_callback : (Int -> Int) -> Int
-uses_with_handler_callback f =
-  with_handler
+uses_with_callback : (Int -> Int) -> Int
+uses_with_callback f =
+  with
     log v ->
       resume Unit
   in
@@ -6811,7 +6811,7 @@ uses_with_handler_callback f =
 
 main : Unit -> Unit
 main =
-  print (uses_with_handler_callback (|x| -> x + 1))
+  print (uses_with_callback (|x| -> x + 1))
 "#,
                 Some(fallback::UnsupportedReason::CallTargetBodyNotNativeSupported),
             ),
@@ -6850,9 +6850,9 @@ main =
     #[test]
     fn native_codegen_capability_checker_prioritizes_body_reason_over_arity_mismatch() {
         let source = r#"
-uses_with_handler : Int -> Int
-uses_with_handler x =
-  with_handler
+uses_with : Int -> Int
+uses_with x =
+  with
     log v ->
       resume Unit
   in
@@ -6860,7 +6860,7 @@ uses_with_handler x =
 
 main : Unit -> Unit
 main =
-  print (uses_with_handler 1 2)
+  print (uses_with 1 2)
 "#;
         let module = parse_module(source).expect("source should parse");
         assert_eq!(

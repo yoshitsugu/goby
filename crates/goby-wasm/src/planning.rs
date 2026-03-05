@@ -842,14 +842,14 @@ main =
     }
 
     #[test]
-    fn marks_with_handler_declaration_as_effect_boundary() {
+    fn marks_with_declaration_as_effect_boundary() {
         let source = r#"
 effect Log
   log: String -> Unit
 
 main : Unit -> Unit
 main =
-  with_handler
+  with
     log msg ->
       print msg
       resume Unit
@@ -886,7 +886,7 @@ effect Iter
 
 main : Unit -> Unit
 main =
-  with_handler
+  with
     next n ->
       resume n
   in
