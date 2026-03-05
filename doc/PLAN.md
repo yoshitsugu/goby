@@ -220,13 +220,10 @@ Based on `examples/*.gb`:
     - examples/spec sync:
       - add one canonical example under `examples/`.
       - update `doc/LANGUAGE_SPEC.md` once implementation is merged.
-- **Tuple index access `expr.N`** (post-MVP).
-  - Syntax `a.0`, `a.1` is shown in `examples/basic_types.gb` but is not yet parsed.
-  - `parse_method_call` rejects numeric method names (`is_identifier` fails on digits).
-  - Implementation requires: new `Expr::TupleIndex { expr, index: usize }` variant,
-    parser recognition of `expr.N` where N is a non-negative integer literal,
-    typechecker check that the receiver is a tuple type with sufficient arity,
-    and runtime/codegen evaluation.
+- **Tuple index access `expr.N`** (implemented).
+  - `a.0`, `a.1` parse as qualified numeric member access and are typechecked/runtime-evaluated as tuple index access.
+  - Numeric member access is valid only for tuple receivers.
+  - Non-tuple receivers (for example `Status.0`) are rejected.
 
 ### 2.2 Types and Checking
 
@@ -306,8 +303,6 @@ Note: detailed step-by-step renewal history is intentionally omitted here; use
 - Current model: native Wasm code generation for the supported subset, with deterministic
   fallback behavior for unsupported forms.
 - Real Wasm migration plan (Phase 0-8) is completed; implementation record is archived.
-- `goby-cli run examples/basic_types.gb` currently fails with a codegen error because current
-  codegen/runtime paths do not handle tuple index access (`expr.N`) yet.
 - Error location strategy (line/column reporting) — deferred.
 
 ### 2.6 Tooling Scope (MVP)
@@ -360,7 +355,7 @@ Note: detailed execution history for these items is retained in git history and
 Tracks A/B/C are closed. Detailed records were removed from this plan file and
 are retained in `doc/STATE.md` and git history.
 
-### 4.5 Active Track D: Developer Tooling Foundation
+### 4.3 Active Track D: Developer Tooling Foundation
 
 Goal: establish practical developer tooling aligned with current language behavior.
 
@@ -375,7 +370,7 @@ Acceptance criteria:
 
 - Formatter/linter commands and baseline LSP diagnostics are usable on `examples/` and stdlib sources.
 
-### 4.6 Review Follow-ups (Backlog)
+### 4.4 Review Follow-ups (Backlog)
 
 The following items were identified in a focused code review and are tracked as
 near/mid-term engineering debt after current active tracks.
@@ -408,7 +403,7 @@ Note:
 - Critical correctness items from the same review batch were already fixed:
   parser explicit early-return clarity and planning `u16` overflow fail-fast behavior.
 
-### 4.7 Parking Lot (Needs Revalidation Before Implementation)
+### 4.5 Parking Lot (Needs Revalidation Before Implementation)
 
 - CLI `build` expansion details (`--target`, `--engine-compat`, verify modes).
 - CLI binary naming migration (`goby-cli` -> `goby`) final policy.
