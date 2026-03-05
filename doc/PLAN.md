@@ -288,6 +288,32 @@ Based on `examples/*.gb`:
   - continue migration from name-based runtime dispatch to compiled operation identity (`EffectId`/`OpId`),
   - evaluate explicit `discontinue` only as a later separate proposal.
 
+#### Planned Syntax Simplification: `with` Unification
+
+Status: planned (not yet implemented)
+
+Goal: remove `with_handler` and use only `with`.
+
+- Target syntax:
+  - inline handler form:
+    - `with`
+    - indented handler clauses
+    - `in`
+    - body block
+  - handler value form: `with <handler_expr> in <body>`
+- Parser disambiguation rule:
+  - if the statement line is exactly `with`, parse inline handler clauses from the next indented block.
+  - if the statement line starts with `with `, parse the remainder as `<handler_expr>`.
+  - do not rely on fixed token-count lookahead before `->` (handler clauses allow variable arity).
+- Compatibility/migration policy:
+  - remove `with_handler` parser support directly (no warning mode).
+  - parse error should point users to `with` inline form.
+- Planned update sequence:
+  - parser (`with_handler` branch removal + `with` exact-line branch),
+  - parser/typecheck diagnostics wording (`with`-only guidance),
+  - language docs (`doc/LANGUAGE_SPEC.md`, `doc/PLAN.md`) and examples (`examples/*.gb`),
+  - regression tests for both `with` forms and `with_handler` rejection.
+
 Note: detailed step-by-step renewal history is intentionally omitted here; use
 `doc/STATE.md` and git history for chronological implementation records.
 
