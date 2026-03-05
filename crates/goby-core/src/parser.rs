@@ -793,12 +793,6 @@ fn parse_list_pattern_item(src: &str) -> Option<ListPatternItem> {
     if src == "_" {
         return Some(ListPatternItem::Wildcard);
     }
-    if src == "True" {
-        return Some(ListPatternItem::BoolLit(true));
-    }
-    if src == "False" {
-        return Some(ListPatternItem::BoolLit(false));
-    }
     if let Ok(n) = src.parse::<i64>() {
         return Some(ListPatternItem::IntLit(n));
     }
@@ -3128,6 +3122,15 @@ main =
         assert!(
             parse_body_stmts(body).is_none(),
             "malformed list pattern should fail parse"
+        );
+    }
+
+    #[test]
+    fn rejects_case_list_pattern_with_bool_item() {
+        let body = "print\n  case xs\n    [True] -> 1\n    _ -> 0";
+        assert!(
+            parse_body_stmts(body).is_none(),
+            "bool list pattern items are not supported in MVP"
         );
     }
 

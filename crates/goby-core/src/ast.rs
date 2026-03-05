@@ -105,7 +105,6 @@ pub enum BinOpKind {
 pub enum ListPatternItem {
     IntLit(i64),
     StringLit(String),
-    BoolLit(bool),
     Bind(String),
     Wildcard,
 }

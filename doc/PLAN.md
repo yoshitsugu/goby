@@ -140,7 +140,8 @@ Based on `examples/*.gb`:
   - Typechecker treats interpolated literals as `String`.
   - Runtime/codegen evaluates each segment and stringifies embedded expression values.
 - **List `case` patterns** (implemented).
-  - Parser/AST support includes fixed-length, head-literal, wildcard, and tail-binding forms.
+  - Parser/AST support includes prefix, head-literal, wildcard, and tail-binding forms.
+  - List item literals in MVP are `Int` / `String` only (no `Bool` list-pattern items).
   - Parser rejects malformed forms and duplicate binders.
 - **Tuple index access `expr.N`** (post-MVP).
   - Syntax `a.0`, `a.1` is shown in `examples/basic_types.gb` but is not yet parsed.

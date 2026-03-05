@@ -1041,6 +1041,77 @@ impl<'m> RuntimeOutputResolver<'m> {
         }
     }
 
+    fn match_list_pattern_int(
+        &self,
+        items: &[ListPatternItem],
+        tail: Option<&ListPatternTail>,
+        values: &[i64],
+        arm_locals: &mut RuntimeLocals,
+    ) -> bool {
+        if values.len() < items.len() {
+            return false;
+        }
+        for (item, value) in items.iter().zip(values.iter()) {
+            match item {
+                ListPatternItem::IntLit(n) => {
+                    if *n != *value {
+                        return false;
+                    }
+                }
+                ListPatternItem::Bind(name) => {
+                    if name != "_" {
+                        arm_locals.store(name, RuntimeValue::Int(*value));
+                    }
+                }
+                ListPatternItem::Wildcard => {}
+                _ => return false,
+            }
+        }
+        if let Some(ListPatternTail::Bind(name)) = tail
+            && name != "_"
+        {
+            arm_locals.store(name, RuntimeValue::ListInt(values[items.len()..].to_vec()));
+        }
+        true
+    }
+
+    fn match_list_pattern_string(
+        &self,
+        items: &[ListPatternItem],
+        tail: Option<&ListPatternTail>,
+        values: &[String],
+        arm_locals: &mut RuntimeLocals,
+    ) -> bool {
+        if values.len() < items.len() {
+            return false;
+        }
+        for (item, value) in items.iter().zip(values.iter()) {
+            match item {
+                ListPatternItem::StringLit(s) => {
+                    if s != value {
+                        return false;
+                    }
+                }
+                ListPatternItem::Bind(name) => {
+                    if name != "_" {
+                        arm_locals.store(name, RuntimeValue::String(value.clone()));
+                    }
+                }
+                ListPatternItem::Wildcard => {}
+                _ => return false,
+            }
+        }
+        if let Some(ListPatternTail::Bind(name)) = tail
+            && name != "_"
+        {
+            arm_locals.store(
+                name,
+                RuntimeValue::ListString(values[items.len()..].to_vec()),
+            );
+        }
+        true
+    }
+
     /// Evaluate an `Expr` node directly, without calling `to_str_repr()`.
     ///
     /// Returns `None` when the expression is not yet supported by the native
@@ -1339,106 +1410,21 @@ impl<'m> RuntimeOutputResolver<'m> {
                         (
                             CasePattern::ListPattern { items, tail },
                             RuntimeValue::ListInt(values),
-                        ) => {
-                            if values.len() < items.len() {
-                                false
-                            } else {
-                                let mut ok = true;
-                                for (item, value) in items.iter().zip(values.iter()) {
-                                    match item {
-                                        ListPatternItem::IntLit(n) => {
-                                            if *n != *value {
-                                                ok = false;
-                                                break;
-                                            }
-                                        }
-                                        ListPatternItem::Bind(name) => {
-                                            if name != "_" {
-                                                arm_locals.store(name, RuntimeValue::Int(*value));
-                                            }
-                                        }
-                                        ListPatternItem::Wildcard => {}
-                                        _ => {
-                                            ok = false;
-                                            break;
-                                        }
-                                    }
-                                }
-                                if !ok {
-                                    false
-                                } else {
-                                    if let Some(tail_pattern) = tail {
-                                        match tail_pattern {
-                                            ListPatternTail::Ignore => {}
-                                            ListPatternTail::Bind(name) => {
-                                                if name != "_" {
-                                                    arm_locals.store(
-                                                        name,
-                                                        RuntimeValue::ListInt(
-                                                            values[items.len()..].to_vec(),
-                                                        ),
-                                                    );
-                                                }
-                                            }
-                                        }
-                                    }
-                                    true
-                                }
-                            }
-                        }
+                        ) => self.match_list_pattern_int(
+                            items,
+                            tail.as_ref(),
+                            values,
+                            &mut arm_locals,
+                        ),
                         (
                             CasePattern::ListPattern { items, tail },
                             RuntimeValue::ListString(values),
-                        ) => {
-                            if values.len() < items.len() {
-                                false
-                            } else {
-                                let mut ok = true;
-                                for (item, value) in items.iter().zip(values.iter()) {
-                                    match item {
-                                        ListPatternItem::StringLit(s) => {
-                                            if s != value {
-                                                ok = false;
-                                                break;
-                                            }
-                                        }
-                                        ListPatternItem::Bind(name) => {
-                                            if name != "_" {
-                                                arm_locals.store(
-                                                    name,
-                                                    RuntimeValue::String(value.clone()),
-                                                );
-                                            }
-                                        }
-                                        ListPatternItem::Wildcard => {}
-                                        _ => {
-                                            ok = false;
-                                            break;
-                                        }
-                                    }
-                                }
-                                if !ok {
-                                    false
-                                } else {
-                                    if let Some(tail_pattern) = tail {
-                                        match tail_pattern {
-                                            ListPatternTail::Ignore => {}
-                                            ListPatternTail::Bind(name) => {
-                                                if name != "_" {
-                                                    arm_locals.store(
-                                                        name,
-                                                        RuntimeValue::ListString(
-                                                            values[items.len()..].to_vec(),
-                                                        ),
-                                                    );
-                                                }
-                                            }
-                                        }
-                                    }
-                                    true
-                                }
-                            }
-                        }
+                        ) => self.match_list_pattern_string(
+                            items,
+                            tail.as_ref(),
+                            values,
+                            &mut arm_locals,
+                        ),
                         _ => false,
                     };
                     if matched {
@@ -3691,6 +3677,25 @@ main =
             output,
             "Empty list\nList of just 1\nList starting with 4\nList of at least 1 elements with binding\nList of 2 elements\nSome other list"
         );
+    }
+
+    #[test]
+    fn resolves_runtime_output_for_prefix_list_pattern_semantics() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let source = r#"
+main : Unit -> Unit
+main =
+  xs = [1, 2]
+  print
+    case xs
+      [1] -> "prefix"
+      _ -> "other"
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let output =
+            resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
+                .expect("runtime output should resolve");
+        assert_eq!(output, "prefix");
     }
 
     // --- bare effect call dispatch in main body (§4.1 patch) ---

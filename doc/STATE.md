@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-04 (session 144)
+Last updated: 2026-03-05 (session 145)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -74,6 +74,18 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - follow-up work moved to post-MVP tracks in `doc/PLAN.md`.
 
 ## 4. Recent Milestones
+
+- 2026-03-05 (session 145): list-pattern semantics/robustness follow-up
+  - Spec wording aligned to actual semantics:
+    - `[p1, p2, ...]` is prefix match (`len >= item_count`), not exact-length match.
+  - Parser tightened:
+    - list-pattern bool items (`[True]`, `[False]`) are now rejected in MVP.
+  - Runtime matcher refactor:
+    - duplicated int/string list-pattern matching logic extracted into helpers
+      to reduce drift risk.
+  - Validation:
+    - `cargo test`
+    - `cargo run -p goby-cli -- run examples/list_case.gb`
 
 - 2026-03-04 (session 144): list `case` pattern completion (`..` syntax)
   - AST:
