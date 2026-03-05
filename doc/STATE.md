@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-06 (session 175)
+Last updated: 2026-03-06 (session 176)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -65,12 +65,11 @@ This file is a restart-safe snapshot for resuming work after context reset.
 - MVP locked subset remains complete for currently implemented syntax.
 - Remaining open point for list `case` patterns:
   - native lowering support (capability checker + native evaluator path).
-- Active language task (new, 2026-03-06):
-  - expression-side list spread/concat syntax (`[a, b, ..xs]`) is not implemented yet.
-  - required behavior:
-    - allow arbitrary prefix elements + one trailing `..` tail in list literals.
-    - enforce type rule: prefix elements share one element type `a`, and tail is `List a`.
-  - this is required to support stdlib `goby/list.map` implementation using `[f(x), ..ys]`.
+- List spread expression task (2026-03-06) status:
+  - expression-side list spread/concat syntax (`[a, b, ..xs]`) is implemented across
+    AST/parser/typecheck/fallback runtime.
+  - native lowering currently routes spread-containing modules to fallback path
+    (safe parity boundary).
 - Active migration task (new, 2026-03-06):
   - map semantics should be consolidated in `stdlib/goby/list.gb` (`list.map`),
     replacing builtin/internal map paths where possible.
@@ -88,6 +87,28 @@ This file is a restart-safe snapshot for resuming work after context reset.
 ## 4. Recent Milestones
 
 Recent (detailed):
+
+- 2026-03-06 (session 176): list spread Step 4-7, 10-11 completed.
+  - PLAN.md §4.5 checklist updated:
+    - completed: Step 4-7 (typecheck + runtime + native parity via fallback boundary),
+      Step 10-11 (spec sync + regression tests).
+    - remaining: Step 8-9 (map callsite migration + builtin map-path trim).
+  - Typecheck:
+    - `check_expr` now infers list literal type with spread-aware merge.
+    - added spread constraints diagnostics:
+      - prefix element mismatch,
+      - tail non-list mismatch,
+      - tail element mismatch.
+  - Runtime:
+    - fallback AST evaluator now executes list spread literals with deterministic
+      prefix-then-tail evaluation order.
+    - supports both `List Int` and `List String` spread materialization.
+    - allows empty tail-list bridge for mixed empty-list seed cases.
+  - Tests:
+    - `goby-core` typecheck tests added for spread success/failure matrix.
+    - `goby-wasm` runtime tests added for Int/String spread output.
+  - Docs:
+    - `doc/LANGUAGE_SPEC.md` updated with expression-side list spread syntax and type rule.
 
 - 2026-03-06 (session 175): list spread expression — AST + parser implementation.
   - PLAN.md §4.5 Step 1-3 (AST/parser slice) — Step 1 and Step 2 completed.
@@ -379,9 +400,8 @@ cargo clippy -- -D warnings
 Execution focus (aligned with `doc/PLAN.md`):
 
 1. **Active**: List spread expression implementation (PLAN.md §4.5).
-   - AST + parser done (Steps 1-3). Next: typecheck (Steps 4-5), runtime (Steps 6-7),
-     then map migration (Steps 8-9) and docs/tests (Steps 10-11).
-   - Codex review pass 1 for Step 2 parser change is pending — run before continuing.
+   - Steps 1-7, 10-11 are done.
+   - Remaining: map migration (Steps 8-9) to consolidate semantics in stdlib.
 2. Stdlib runtime bridge generalization (reduce symbol-specific fallback branches).
 3. Tooling foundation (`fmt`/`lint`/`lsp`) with stable diagnostics surface.
 4. Native lowering coverage expansion for remaining unsupported expression/effect paths.

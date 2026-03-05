@@ -1,7 +1,7 @@
 # Goby Language Specification (Current)
 
 Status: active
-Last updated: 2026-03-05
+Last updated: 2026-03-06
 
 This file is the current language-spec source of truth for user-visible Goby
 syntax/semantics.
@@ -49,6 +49,11 @@ syntax/semantics.
 ## 3. Expressions and Statements
 
 - Literals: `Int`, `String`, `Bool` (`True` / `False`), list, tuple.
+- List literal spread (expression side):
+  - `[a, b, ..xs]` (zero or more prefix elements + one trailing spread segment)
+  - spread segment is expression-only syntax and must be trailing
+  - `[..xs]`, `[a, ..]`, `[a, ..b, c]` are rejected
+  - type rule: prefix elements unify to one element type `a`; spread tail must be `List a`
 - Tuple member access uses numeric qualified form: `pair.0`, `pair.1`, ...
 - Unit value spelling: `()` (canonical).
   - Legacy expression-form `Unit` is still accepted during migration.

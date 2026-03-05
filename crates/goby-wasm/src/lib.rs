@@ -1433,17 +1433,57 @@ impl<'m> RuntimeOutputResolver<'m> {
                 }
             }
             Expr::ListLit { elements, spread } => {
-                if spread.is_some() {
-                    return None;
-                }
-                let mut out = Vec::with_capacity(elements.len());
+                let mut int_items = Vec::with_capacity(elements.len());
+                let mut string_items = Vec::with_capacity(elements.len());
+                let mut list_kind: Option<&'static str> = None;
                 for item in elements {
                     match self.eval_expr_ast(item, locals, callables, evaluators, depth + 1)? {
-                        RuntimeValue::Int(n) => out.push(n),
+                        RuntimeValue::Int(n) => {
+                            if list_kind == Some("string") {
+                                return None;
+                            }
+                            list_kind = Some("int");
+                            int_items.push(n);
+                        }
+                        RuntimeValue::String(text) => {
+                            if list_kind == Some("int") {
+                                return None;
+                            }
+                            list_kind = Some("string");
+                            string_items.push(text);
+                        }
                         _ => return None,
                     }
                 }
-                Some(RuntimeValue::ListInt(out))
+                if let Some(tail) = spread {
+                    match self.eval_expr_ast(tail, locals, callables, evaluators, depth + 1)? {
+                        RuntimeValue::ListInt(mut values) => {
+                            if list_kind == Some("string") {
+                                if values.is_empty() {
+                                    return Some(RuntimeValue::ListString(string_items));
+                                }
+                                return None;
+                            }
+                            int_items.append(&mut values);
+                            return Some(RuntimeValue::ListInt(int_items));
+                        }
+                        RuntimeValue::ListString(mut values) => {
+                            if list_kind == Some("int") {
+                                if values.is_empty() {
+                                    return Some(RuntimeValue::ListInt(int_items));
+                                }
+                                return None;
+                            }
+                            string_items.append(&mut values);
+                            return Some(RuntimeValue::ListString(string_items));
+                        }
+                        _ => return None,
+                    }
+                }
+                match list_kind {
+                    Some("string") => Some(RuntimeValue::ListString(string_items)),
+                    _ => Some(RuntimeValue::ListInt(int_items)),
+                }
             }
             Expr::TupleLit(items) => {
                 if items.is_empty() {
@@ -6642,6 +6682,44 @@ main =
                 .expect("runtime output should resolve");
         assert_eq!(expected_text, "[1, 2, 3]");
         assert_valid_wasm_module(&wasm);
+    }
+
+    #[test]
+    fn resolves_runtime_output_for_list_spread_int_values() {
+        let source = r#"
+main : Unit -> Unit
+main =
+  rest = [2, 3]
+  print [1, ..rest]
+"#;
+        let module = parse_module(source).expect("source should parse");
+        assert!(
+            !fallback::supports_native_codegen(&module),
+            "list spread currently routes through fallback runtime path"
+        );
+        let output =
+            resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
+                .expect("runtime output should resolve");
+        assert_eq!(output, "[1, 2, 3]");
+    }
+
+    #[test]
+    fn resolves_runtime_output_for_list_spread_string_values() {
+        let source = r#"
+main : Unit -> Unit
+main =
+  rest = ["b", "c"]
+  print ["a", ..rest]
+"#;
+        let module = parse_module(source).expect("source should parse");
+        assert!(
+            !fallback::supports_native_codegen(&module),
+            "list spread currently routes through fallback runtime path"
+        );
+        let output =
+            resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
+                .expect("runtime output should resolve");
+        assert_eq!(output, "[\"a\", \"b\", \"c\"]");
     }
 
     #[test]
