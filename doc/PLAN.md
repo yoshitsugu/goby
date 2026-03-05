@@ -392,6 +392,13 @@ Plan (phased):
    - effectful callback,
    - import mode variants (plain/alias/selective).
 
+Progress snapshot (2026-03-05):
+
+- fallback runtime supports curried declaration call chains with callable
+  parameters in Unit side-effect execution path (list.each-style callback dispatch).
+- regression coverage now includes captured-inline-closure callback and
+  list.each-style effect+handler callback dispatch.
+
 Acceptance criteria:
 
 - `goby-cli check` and `goby-cli run` succeed for canonical lambda-argument samples,
