@@ -17,6 +17,7 @@ This directory contains small Goby programs grouped by purpose.
 - `print/`: focused print-related examples
   - `local_binding.gb`: print a local string binding
   - `concat.gb`: print interpolated string result
+  - `println.gb`: `print` (no newline) と `println` (末尾改行あり) の差分
 - `parser/`: parser behavior examples
   - `mixed_indent.gb`: mixed tabs/spaces indentation sample
 - `iterator.gb`: iterator-like effect/handler sample using `with_handler` with lexical capture
@@ -32,4 +33,5 @@ This directory contains small Goby programs grouped by purpose.
 - Illustrative target shape:
   - `@embed Print __goby_embeded_effect_stdout_handler`
   - `print : String -> Unit can Print`
+  - `println : String -> Unit can Print`
 - Important: `@embed` is planned as stdlib-only and must be rejected in user code.

@@ -123,6 +123,9 @@ syntax/semantics.
   - accepted form: optional leading `-` followed by one or more ASCII digits.
   - invalid input delegates to `StringParseError.invalid_integer : String -> Int`.
 - `Print` / `Read` effect resolution is provided via stdlib prelude (`goby/prelude`) embed defaults.
+- Prelude `Print` effect exposes:
+  - `print : String -> Unit` (no trailing newline)
+  - `println : String -> Unit` (appends exactly one trailing `\n`)
 - Current minimal prelude input contract:
   - `Read.read ()` returns remaining stdin text and then `""` on subsequent reads.
   - `Read.read_line ()` returns one line with one trailing terminator removed

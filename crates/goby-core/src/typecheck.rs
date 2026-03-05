@@ -4462,6 +4462,14 @@ main =
     }
 
     #[test]
+    fn accepts_println_call_with_implicit_prelude_print_effect() {
+        let source = "main : Unit -> Unit can Print\nmain = println \"hi\"\n";
+        let module = parse_module(source).expect("should parse");
+        typecheck_module(&module)
+            .expect("implicit prelude Print effect should resolve `println` operation");
+    }
+
+    #[test]
     fn accepts_can_clause_with_implicit_prelude_read_effect() {
         // `can Read` is accepted via implicit `goby/prelude` embed defaults.
         let source = "main : Unit -> Unit can Read\nmain = ()\n";
@@ -4492,7 +4500,7 @@ main =
             .expect("user path should be creatable");
         fs::write(
             stdlib_root.join("goby/prelude.gb"),
-            "effect Print\n  print : String -> Unit\n@embed Print __goby_embeded_effect_stdout_handler\n",
+            "effect Print\n  print : String -> Unit\n  println : String -> Unit\n@embed Print __goby_embeded_effect_stdout_handler\n",
         )
         .expect("prelude file should be writable");
         let source = "main : Unit -> Unit can Print\nmain = print \"hi\"\n";
@@ -5443,7 +5451,7 @@ f =
 
     #[test]
     fn allows_embed_declaration_without_source_context_for_legacy_api_compat() {
-        let source = "effect Print\n  print : String -> Unit\n@embed Print __goby_embeded_effect_stdout_handler\nf : Unit -> Int\nf = 1\n";
+        let source = "effect Print\n  print : String -> Unit\n  println : String -> Unit\n@embed Print __goby_embeded_effect_stdout_handler\nf : Unit -> Int\nf = 1\n";
         let module = parse_module(source).expect("should parse");
         typecheck_module(&module)
             .expect("legacy typecheck API should remain compatible without source context");
@@ -5488,7 +5496,7 @@ f =
         let source_path = stdlib_root.join("goby/stdio.gb");
         fs::create_dir_all(source_path.parent().expect("parent should exist"))
             .expect("stdlib path should be creatable");
-        let source = "effect Print\n  print : String -> Unit\n@embed Print __goby_embeded_effect_stdout_handler\n@embed Print __goby_embeded_effect_stdout_handler\nf : Unit -> Int\nf = 1\n";
+        let source = "effect Print\n  print : String -> Unit\n  println : String -> Unit\n@embed Print __goby_embeded_effect_stdout_handler\n@embed Print __goby_embeded_effect_stdout_handler\nf : Unit -> Int\nf = 1\n";
         fs::write(&source_path, source).expect("fixture file should be writable");
         let module = parse_module(source).expect("should parse");
         let err = typecheck_module_with_context(&module, Some(&source_path), Some(&stdlib_root))
@@ -5503,7 +5511,7 @@ f =
         let source_path = stdlib_root.join("goby/stdio.gb");
         fs::create_dir_all(source_path.parent().expect("parent should exist"))
             .expect("stdlib path should be creatable");
-        let source = "effect Print\n  print : String -> Unit\n@embed Print stdout_handler\nf : Unit -> Int\nf = 1\n";
+        let source = "effect Print\n  print : String -> Unit\n  println : String -> Unit\n@embed Print stdout_handler\nf : Unit -> Int\nf = 1\n";
         fs::write(&source_path, source).expect("fixture file should be writable");
         let module = parse_module(source).expect("should parse");
         let err = typecheck_module_with_context(&module, Some(&source_path), Some(&stdlib_root))
