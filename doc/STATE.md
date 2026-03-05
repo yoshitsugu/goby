@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-05 (session 146)
+Last updated: 2026-03-05 (session 147)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -77,6 +77,23 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - follow-up work moved to post-MVP tracks in `doc/PLAN.md`.
 
 ## 4. Recent Milestones
+
+- 2026-03-05 (session 147): multiline `case`/`if` AST coverage + effectful branch runtime support
+  - Parser (`parse_body_stmts`) now parses multiline control-flow expressions in additional positions:
+    - standalone statement form (`case ...` / `if ...`),
+    - binding RHS (`x = case ...`, `x = if ...`),
+    - mutable binding / assignment RHS (`mut x = ...`, `x := ...`).
+  - Runtime fallback (`goby-wasm`) now evaluates effectful branch bodies in unit contexts:
+    - `case` / `if` / `Expr::Block` branches can execute side-effect expressions such as `print` and handled effect ops.
+    - top-level expression statements now route through AST unit-evaluation before string fallback.
+  - User-visible regression resolved:
+    - programs shaped like `b = case ...; print b` now run successfully instead of failing with
+      `fallback runtime output could not be resolved`.
+    - standalone `case` with block-arm `print` calls now runs successfully.
+  - Validation:
+    - `cargo check`
+    - `cargo test`
+    - targeted runtime regression runs via `goby-cli run` on `/tmp` copies.
 
 - 2026-03-05 (session 146): `case` arm block implementation completed
   - AST:

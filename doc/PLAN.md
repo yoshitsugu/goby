@@ -166,11 +166,11 @@ Based on `examples/*.gb`:
   - Follow-up scope:
     - generalize expression-level block parsing beyond `case` arms (currently case-arm focused).
   - Known remaining gaps (to be implemented):
-    - make `case` arm blocks work with effectful expressions (`print`, effect ops, function calls requiring `can ...`) in `run` path as well as `check`.
+    - (done 2026-03-05) `run` now supports effectful expressions inside `case` arm blocks (`print`, effect ops, calls requiring `can ...`) and preserves parity with `check` for covered patterns.
     - in arm-block effect resolution, use the same lexical outer-scope search flow as normal expression evaluation:
       - unresolved effects must be searched in outer scopes.
       - if still unresolved at `main`, keep existing behavior: allow only embedded/builtin runtime-backed effects, and report missing handler error for others.
-    - make `case` consistently value-returning in all positions (including bindings like `x = case ...`), not only direct tail-expression positions.
+    - (done 2026-03-05) make `case` consistently value-returning in all positions (including bindings like `x = case ...`), not only direct tail-expression positions.
     - enforce branch result type unification for both `if` and `case`:
       - all branches must resolve to one compatible result type.
       - extend type inference + type checking to carry this constraint and report mismatch diagnostics.
