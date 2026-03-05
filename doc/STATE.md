@@ -87,7 +87,7 @@ This file is a restart-safe snapshot for resuming work after context reset.
     - embedded default handler `__goby_embeded_effect_stdout_handler` now
       handles both operations.
     - `Print.print` keeps no-newline behavior.
-    - `Print.println` appends exactly one trailing `\n`.
+    - `Print.println` ensures trailing `\n` (adds one only when missing).
   - Tests:
     - added typechecker regression for implicit-prelude `println` call acceptance.
     - added Wasm fallback regressions for explicit-handler precedence and
@@ -330,7 +330,7 @@ This file is a restart-safe snapshot for resuming work after context reset.
 
 - 2026-03-04 (session 132): Print effect operation split plan locked (`print` + `println`)
   - Added planning constraint to `doc/PLAN.md`:
-    - `Print` effect exposes two ops: `print` (no newline), `println` (adds newline),
+    - `Print` effect exposes two ops: `print` (no newline), `println` (ensures trailing newline),
     - runtime/dispatch split and regression requirements are documented.
   - Immediate next step:
     - implement stdlib `effect Print` surface update and runtime dispatch split.
