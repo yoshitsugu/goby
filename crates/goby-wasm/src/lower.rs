@@ -295,6 +295,7 @@ fn expr_contains_resume(expr: &Expr) -> bool {
                 .is_some_and(|stmts| stmts_contain_resume(stmts))
         }),
         Expr::With { handler, body } => expr_contains_resume(handler) || stmts_contain_resume(body),
+        Expr::Block(stmts) => stmts_contain_resume(stmts),
         Expr::RecordConstruct { fields, .. } => {
             fields.iter().any(|(_, value)| expr_contains_resume(value))
         }
@@ -495,6 +496,31 @@ fn eval_expr(
                 }
             }
             None
+        }
+        Expr::Block(stmts) => {
+            let mut locals = bindings.clone();
+            let mut last_expr: Option<NativeValue> = None;
+            for stmt in stmts {
+                match stmt {
+                    Stmt::Binding { name, value } | Stmt::MutBinding { name, value } => {
+                        let val = eval_expr(value, &locals, env, depth + 1)?;
+                        locals.insert(name.clone(), val);
+                        last_expr = None;
+                    }
+                    Stmt::Assign { name, value } => {
+                        if !locals.contains_key(name) {
+                            return None;
+                        }
+                        let val = eval_expr(value, &locals, env, depth + 1)?;
+                        locals.insert(name.clone(), val);
+                        last_expr = None;
+                    }
+                    Stmt::Expr(expr) => {
+                        last_expr = Some(eval_expr(expr, &locals, env, depth + 1)?);
+                    }
+                }
+            }
+            last_expr
         }
         Expr::Lambda { param, body } => Some(NativeValue::Callable(NativeCallable::Lambda(
             NativeLambda {

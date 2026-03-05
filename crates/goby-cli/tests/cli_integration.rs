@@ -238,6 +238,88 @@ fn run_command_skips_when_wasmtime_is_missing() {
 }
 
 #[test]
+fn check_command_accepts_case_arm_block_program() {
+    let root = repo_root();
+    let sandbox = TempDirGuard::new("check_case_arm_block");
+    let input = sandbox.join("case_arm_block.gb");
+    fs::write(
+        &input,
+        r#"
+main : Unit -> Unit
+main =
+  x = 0
+  print
+    case x
+      0 ->
+        y = 1
+        y + 10
+      _ -> 0
+"#,
+    )
+    .expect("temporary input should be writable");
+
+    let output = command_for_goby_cli()
+        .arg("check")
+        .arg(&input)
+        .current_dir(&root)
+        .output()
+        .expect("cli should execute");
+
+    assert!(
+        output.status.success(),
+        "expected success, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("parsed and typechecked"),
+        "unexpected stdout: {}",
+        stdout
+    );
+}
+
+#[test]
+fn run_command_accepts_case_arm_block_program_without_wasmtime() {
+    let root = repo_root();
+    let sandbox = TempDirGuard::new("run_case_arm_block_no_wasmtime");
+    let empty_bin = sandbox.join("empty-bin");
+    fs::create_dir_all(&empty_bin).expect("empty bin should be creatable");
+    let input = sandbox.join("case_arm_block.gb");
+    fs::write(
+        &input,
+        r#"
+main : Unit -> Unit
+main =
+  x = 0
+  print
+    case x
+      0 ->
+        y = 1
+        y + 10
+      _ -> 0
+"#,
+    )
+    .expect("temporary input should be writable");
+
+    let output = command_for_goby_cli()
+        .arg("run")
+        .arg(&input)
+        .env("PATH", &empty_bin)
+        .current_dir(&root)
+        .output()
+        .expect("cli should execute");
+
+    assert!(
+        output.status.success(),
+        "expected success, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("parsed and typechecked"));
+    assert!(stdout.contains("wasmtime not found; skipped wasm execution"));
+}
+
+#[test]
 fn check_command_rejects_legacy_syntax_by_default() {
     let root = repo_root();
     let sandbox = TempDirGuard::new("check_legacy_warnings");

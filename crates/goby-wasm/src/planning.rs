@@ -510,6 +510,13 @@ fn inspect_expr(
             qualified_operation_index,
             op_name_index,
         ),
+        Expr::Block(stmts) => inspect_stmts(
+            stmts,
+            out,
+            declaration_names,
+            qualified_operation_index,
+            op_name_index,
+        ),
         Expr::If {
             condition,
             then_expr,
@@ -623,6 +630,7 @@ fn expr_contains_handler_resume(expr: &Expr) -> bool {
             expr_contains_handler_resume(handler) || stmts_contain_handler_resume(body)
         }
         Expr::Resume { value } => expr_contains_handler_resume(value),
+        Expr::Block(stmts) => stmts_contain_handler_resume(stmts),
         Expr::If {
             condition,
             then_expr,

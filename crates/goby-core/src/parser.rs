@@ -667,11 +667,28 @@ fn split_case_arm(src: &str) -> Option<(&str, &str)> {
     let src = src.trim();
     let sep_idx = find_top_level_case_arm_separator(src)?;
     let pat_src = src[..sep_idx].trim();
-    let body_src = src[sep_idx + 4..].trim();
-    if pat_src.is_empty() || body_src.is_empty() {
+    let body_src = src[sep_idx + 3..].trim();
+    if pat_src.is_empty() {
         return None;
     }
     Some((pat_src, body_src))
+}
+
+fn parse_required_indented_stmt_block(
+    lines: &[&str],
+    from: usize,
+    parent_indent: usize,
+) -> Option<(Vec<Stmt>, usize)> {
+    let first_idx = find_next_nonblank(lines, from)?;
+    let first_stripped = strip_line_comment(lines[first_idx]).trim_end();
+    if indent_len(first_stripped) <= parent_indent {
+        return None;
+    }
+    let (stmts, consumed) = parse_stmts_from_lines(lines, first_idx)?;
+    if stmts.is_empty() {
+        return None;
+    }
+    Some((stmts, first_idx + consumed))
 }
 
 fn find_top_level_case_arm_separator(src: &str) -> Option<usize> {
@@ -683,7 +700,7 @@ fn find_top_level_case_arm_separator(src: &str) -> Option<usize> {
     let mut brace_depth = 0usize;
 
     let mut i = 0usize;
-    while i + 3 < bytes.len() {
+    while i + 2 < bytes.len() {
         let b = bytes[i];
         if in_string {
             if escaped {
@@ -705,7 +722,10 @@ fn find_top_level_case_arm_separator(src: &str) -> Option<usize> {
             b'{' => brace_depth += 1,
             b'}' => brace_depth = brace_depth.saturating_sub(1),
             b' ' if paren_depth == 0 && bracket_depth == 0 && brace_depth == 0 => {
-                if bytes[i + 1] == b'-' && bytes[i + 2] == b'>' && bytes[i + 3] == b' ' {
+                if bytes[i + 1] == b'-'
+                    && bytes[i + 2] == b'>'
+                    && (i + 3 == bytes.len() || bytes[i + 3].is_ascii_whitespace())
+                {
                     return Some(i);
                 }
             }
@@ -834,12 +854,17 @@ fn parse_multiline_expr(lines: &[&str], start: usize) -> Option<(Expr, usize)> {
             }
             let (pat_src, body_src) = split_case_arm(arm_trimmed)?;
             let pattern = parse_case_pattern(pat_src)?;
-            let body = parse_expr(body_src)?;
+            let (body, next_i) = if body_src.is_empty() {
+                let (stmts, next_i) = parse_required_indented_stmt_block(lines, i + 1, arm_indent)?;
+                (Expr::Block(stmts), next_i)
+            } else {
+                (parse_expr(body_src)?, i + 1)
+            };
             arms.push(CaseArm {
                 pattern,
                 body: Box::new(body),
             });
-            i += 1;
+            i = next_i;
         }
         if arms.is_empty() {
             return None;
@@ -3072,6 +3097,48 @@ main =
             },
             other => panic!("unexpected statement: {other:?}"),
         }
+    }
+
+    #[test]
+    fn parses_case_arm_block_body() {
+        let body = "print\n  case x\n    0 ->\n      y = 1\n      y + 10\n    _ -> 0";
+        let stmts = parse_body_stmts(body).expect("should parse");
+        assert_eq!(stmts.len(), 1);
+        match &stmts[0] {
+            Stmt::Expr(Expr::Call { arg, .. }) => match arg.as_ref() {
+                Expr::Case { arms, .. } => {
+                    assert_eq!(arms.len(), 2);
+                    match arms[0].body.as_ref() {
+                        Expr::Block(stmts) => {
+                            assert_eq!(stmts.len(), 2);
+                            assert!(matches!(stmts[0], Stmt::Binding { .. }));
+                            assert!(matches!(stmts[1], Stmt::Expr(_)));
+                        }
+                        other => panic!("expected block arm body, got {other:?}"),
+                    }
+                }
+                other => panic!("unexpected call arg: {other:?}"),
+            },
+            other => panic!("unexpected statement: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rejects_case_arm_block_without_indented_body() {
+        let body = "print\n  case x\n    0 ->\n    _ -> 0";
+        assert!(
+            parse_body_stmts(body).is_none(),
+            "arm block without indented body should fail parse"
+        );
+    }
+
+    #[test]
+    fn rejects_effectively_empty_case_arm_block() {
+        let body = "print\n  case x\n    0 ->\n      # only comment\n    _ -> 0";
+        assert!(
+            parse_body_stmts(body).is_none(),
+            "effectively empty arm block should fail parse"
+        );
     }
 
     #[test]

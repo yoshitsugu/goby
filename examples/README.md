@@ -10,6 +10,7 @@ This directory contains small Goby programs grouped by purpose.
 - `read.gb`: minimal stdin sample using prelude `Read.read_line` and `Read.read`
 - `to_integer.gb`: `int.parse` sample with `StringParseError` handler
 - `list_case.gb`: list `case` pattern sample (`[]`, `[1]`, `[4, ..]`, `[a, ..b]`, `[_, _]`, `_`)
+- `case_arm_block.gb`: `case` arm block sample (`pattern ->` + indented block body)
 
 ## Grouped Samples
 

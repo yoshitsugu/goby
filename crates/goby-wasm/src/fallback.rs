@@ -234,6 +234,29 @@ fn unsupported_value_expr_reason(
             }
             None
         }
+        Expr::Block(stmts) => {
+            if !matches!(stmts.last(), Some(Stmt::Expr(_))) {
+                return Some(UnsupportedReason::UnsupportedValueExpr);
+            }
+            for stmt in stmts {
+                match stmt {
+                    Stmt::Binding { value, .. } | Stmt::MutBinding { value, .. } => {
+                        if let Some(reason) = unsupported_value_expr_reason(value, module, stack) {
+                            return Some(reason);
+                        }
+                    }
+                    Stmt::Assign { .. } => {
+                        return Some(UnsupportedReason::UnsupportedStatementExpr);
+                    }
+                    Stmt::Expr(expr) => {
+                        if let Some(reason) = unsupported_value_expr_reason(expr, module, stack) {
+                            return Some(reason);
+                        }
+                    }
+                }
+            }
+            None
+        }
         Expr::Call { .. } => {
             let Some((name, args)) = flatten_named_call(expr) else {
                 // Allow callable-value application (`f 1`, where `f` is a local/lambda)
@@ -355,6 +378,17 @@ fn is_decl_value_expr_supported(expr: &Expr, module: &Module, stack: &mut HashSe
                 && arms.iter().all(|arm| {
                     is_supported_case_pattern(&arm.pattern)
                         && is_decl_value_expr_supported(&arm.body, module, stack)
+                })
+        }
+        Expr::Block(stmts) => {
+            !stmts.is_empty()
+                && matches!(stmts.last(), Some(Stmt::Expr(_)))
+                && stmts.iter().all(|stmt| match stmt {
+                    Stmt::Binding { value, .. } => {
+                        is_decl_value_expr_supported(value, module, stack)
+                    }
+                    Stmt::MutBinding { .. } | Stmt::Assign { .. } => false,
+                    Stmt::Expr(expr) => is_decl_value_expr_supported(expr, module, stack),
                 })
         }
         Expr::Call { callee, arg } => {

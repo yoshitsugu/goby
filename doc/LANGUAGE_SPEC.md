@@ -60,7 +60,9 @@ syntax/semantics.
   - `+` and `*` require spaces around operators
 - Conditionals/case:
   - `if ... else ...` expression form
-  - `case ...` with `pattern -> expr` arms
+  - `case ...` arms support both:
+    - inline body: `pattern -> expr`
+    - block body: `pattern ->` then deeper-indented statements (last expression is arm result)
   - list patterns:
     - empty list: `[]`
     - head/tail split: `[head, ..tail]`
