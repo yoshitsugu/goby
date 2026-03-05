@@ -442,6 +442,139 @@ Acceptance criteria:
 - Adding a new bridged stdlib symbol does not require evaluator match-arm edits.
 - Existing examples continue to run with consistent import behavior.
 
+Design note (ideal stdlib shape, not implemented yet):
+
+- Target direction is to unify iterator-like effect APIs into one operation:
+
+```gb
+effect Iterator
+  yield : a -> b -> (Bool, b)
+```
+
+- `a`: yielded value type.
+- `b`: threaded state type (`_` placeholder when caller does not need state).
+- Intended outcome: remove split APIs such as dedicated `yield_state`, and model
+  `goby/int`, `goby/string`, `goby/list` iteration flows with one effect contract.
+- This is currently a post-MVP design sketch; it depends on robust
+  effect-member generic type handling (inference/unification) that is not yet
+  available in the current implementation.
+
+Hypothetical stdlib sketch under the unified model:
+
+```gb
+effect Iterator
+  yield : a -> b -> (Bool, b)
+
+# goby/int (state not needed)
+parse : String -> Int can Iterator, StringParseError
+parse value =
+  acc0 = 0
+  with_handler
+    yield grapheme _ ->
+      # update lexical mutable/local parse state and continue
+      resume (True, ())
+  in
+    __goby_string_each_grapheme value ()
+  acc0
+
+# goby/string (state needed)
+split_with_single_delimiter : String -> String -> List String can Iterator
+split_with_single_delimiter value sep =
+  initial = SplitState(parts: [], current: "", delimiter: sep, seen: False)
+  mut final = initial
+  with_handler
+    yield grapheme st ->
+      next = step_split_state grapheme st
+      resume (True, next)
+  in
+    final := __goby_string_each_grapheme value initial
+  finalize_split final
+
+# goby/list (state optional)
+iter : List Int -> Unit can Iterator
+iter xs =
+  case xs
+    [] -> ()
+    [x, ..rest] ->
+      decision = yield x ()
+      case decision
+        (True, _) -> iter rest
+        (False, _) -> ()
+```
+
+Implementation plan (step-by-step checklist):
+
+- [ ] Step 0: lock syntax/semantics before code.
+  - Decide whether generic binders are explicit on effect declarations (`effect Iterator a b`)
+    or implicit via member signatures only (`yield : a -> b -> ...`).
+  - Decide the meaning of `_` in type position:
+    - Option A: fresh type hole (preferred for this plan).
+    - Option B: ordinary type variable identifier.
+  - Document both decisions in `doc/LANGUAGE_SPEC.md` before implementation.
+  - Gate condition: do not start Step 1+ implementation until this step is merged and spec text is locked.
+  - Definition of done: parser/typechecker target behavior for generic effect members is unambiguous in spec text.
+
+- [ ] Step 1: AST + parser support for chosen effect-generic surface.
+  - Extend AST to carry effect type parameters when explicit-binder form is adopted.
+  - Update parser to accept new effect header form (if selected) while preserving existing non-generic effect declarations.
+  - Add parser tests for valid generic effect declarations, invalid binder names/duplicates, and backward-compatible non-generic declarations.
+  - Definition of done: `parse_module` round-trips generic and non-generic `effect` declarations with tests.
+
+- [ ] Step 2: introduce type substitution/unification for generic members.
+  - Add a small substitution engine for `Ty::Var` assignments.
+  - Replace strict expected/actual equality checks in relevant call paths with unification-aware compatibility.
+  - Keep scope intentionally narrow in first pass: generic effect-operation calls and generic `resume` return matching inside handler clauses.
+  - Definition of done:
+    - `yield : a -> Int` accepts `yield 1`.
+    - `yield : a -> b -> (Bool, b)` can bind `b` from call-site state type.
+
+- [ ] Step 3: instantiate effect member signatures per call/clause.
+  - When resolving an effect operation, instantiate member type with fresh type variables.
+  - Use the same instantiation context across operation argument checks and `resume` expected argument type in the corresponding handler clause.
+  - Avoid leaking one call site's inferred types into unrelated calls.
+  - Definition of done: two calls to the same generic operation in one function can infer different concrete types safely.
+
+- [ ] Step 4: define and implement runtime contract for unified Iterator.
+  - Standardize intrinsic/runtime boundary to consume and return `(Bool, state)`:
+    - `True` => continue with returned state.
+    - `False` => stop iteration and return state.
+  - Update iterator-related runtime helpers/intrinsics (`__goby_string_each_grapheme` and friends) to pass state through the unified effect call.
+  - Migration policy (must choose and document before PR3 lands):
+    - option A: flag-day switch (runtime + stdlib migrate together in one slice), or
+    - option B: temporary compatibility bridge accepting both old and new iterator contracts during PR3->PR4.
+  - Definition of done: runtime behavior for continue/stop/state-threading is deterministic and tested.
+
+- [ ] Step 5: migrate stdlib modules to unified `Iterator.yield`.
+  - Remove `yield_state` from stdlib effect declarations.
+  - Update `stdlib/goby/iterator.gb`, `stdlib/goby/string.gb`, `stdlib/goby/int.gb`, and `stdlib/goby/list.gb`.
+  - Keep temporary compatibility shims only if needed for incremental landing; remove shims before closing the track.
+  - Definition of done: stdlib iterator-like flows compile and run using only unified `yield`.
+
+- [ ] Step 6: diagnostics and error-message hardening.
+  - Improve mismatch diagnostics to display substituted expected types after inference (for example show `Int` instead of raw `a` when already bound).
+  - Add explicit diagnostics for unresolved generic constraints in effect handlers.
+  - Ensure `_` type-hole errors are readable when constraints conflict.
+  - Definition of done: generic effect type errors are actionable without inspecting compiler internals.
+
+- [ ] Step 7: documentation and examples sync.
+  - Update `doc/LANGUAGE_SPEC.md` for final syntax/typing/runtime rules.
+  - Update this `doc/PLAN.md` section from proposed to completed status.
+  - Add/update examples showing state-less iteration (`b = _`/Unit-style), state-threaded iteration, and early-stop via `(False, state)`.
+  - Definition of done: docs + examples reflect actual compiler behavior (no speculative mismatch).
+
+- [ ] Step 8: regression test matrix and quality gates.
+  - Add/expand tests in parser/typecheck/runtime layers: positive generic effect inference, negative constraint conflicts, `resume` type consistency, and stdlib integration (`list.each`, `string.split`, `int.parse` paths).
+  - Run required gates: `cargo fmt`, `cargo check`, `cargo test`, `cargo clippy -- -D warnings`.
+  - Definition of done: all quality gates pass and new tests prevent regression to non-unifying behavior.
+
+Recommended landing sequence (PR slices):
+
+- [ ] PR1: spec lock + parser/AST groundwork.
+- [ ] PR2: typecheck unification core for effect ops + resume.
+- [ ] PR3: runtime iterator contract switch.
+- [ ] PR4: stdlib migration.
+- [ ] PR5: diagnostics/docs/examples polish + full regression expansion.
+
 ### 4.5 Active Track D: Developer Tooling Foundation
 
 Goal: establish practical developer tooling aligned with current language behavior.
