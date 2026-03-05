@@ -80,6 +80,16 @@ This file is a restart-safe snapshot for resuming work after context reset.
 
 Recent (detailed):
 
+- 2026-03-05 (session 165): Track C PR4 stdlib iterator migration completed.
+  - `stdlib/goby/list.gb` migrated to unified iterator effect contract:
+    - `effect Iterator a b`,
+    - `yield : a -> b -> (Bool, b)`,
+    - `iter : List Int -> b -> b can Iterator`.
+  - tuple member index access (`pair.0` / `pair.1`) is now wired through:
+    - parser (`receiver.<digits>` qualified access),
+    - typecheck (`Ty::Tuple` index resolution),
+    - fallback runtime evaluator (`RuntimeValue::Tuple` index resolution).
+  - regression tests added for parser, typecheck, and runtime tuple index access.
 - 2026-03-05 (session 164): Track C runtime bridge registry slice landed.
   - `crates/goby-wasm` fallback runtime now includes declarative bridge metadata
     (`module`, `symbol`, `kind`, `type_shape`, `intrinsic`) with duplicate

@@ -1729,12 +1729,17 @@ impl<'m> RuntimeOutputResolver<'m> {
             }
             // Qualified access: `receiver.member`
             // If `receiver` is a local record variable, return the field value.
+            // If `receiver` is a local tuple, numeric member access returns the indexed item.
             // If `receiver` is absent from locals (e.g. a union type name), return
             // the member name as a string (e.g. `UserStatus.Activated` → `"Activated"`).
             // If `receiver` is present but not a Record, fall back to None.
             Expr::Qualified { receiver, member } => {
                 match locals.get(receiver) {
                     Some(RuntimeValue::Record { fields, .. }) => fields.get(member).cloned(),
+                    Some(RuntimeValue::Tuple(items)) => {
+                        let index = member.parse::<usize>().ok()?;
+                        items.get(index).cloned()
+                    }
                     None => {
                         // Treat as a type/module-qualified constructor name.
                         Some(RuntimeValue::String(member.clone()))
@@ -5066,6 +5071,25 @@ main = ()
             output.is_none(),
             "unit literal main without print should produce no runtime output"
         );
+    }
+
+    #[test]
+    fn resolves_runtime_output_for_tuple_member_access_by_index() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let source = r#"
+main : Unit -> Unit
+main =
+  pair = (True, 42)
+  if pair.0
+    print pair.1
+  else
+    print 0
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let output =
+            resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
+                .expect("runtime output should resolve");
+        assert_eq!(output, "42");
     }
 
     #[test]

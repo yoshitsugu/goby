@@ -49,6 +49,7 @@ syntax/semantics.
 ## 3. Expressions and Statements
 
 - Literals: `Int`, `String`, `Bool` (`True` / `False`), list, tuple.
+- Tuple member access uses numeric qualified form: `pair.0`, `pair.1`, ...
 - Unit value spelling: `()` (canonical).
   - Legacy expression-form `Unit` is still accepted during migration.
 - Function call:
