@@ -80,6 +80,16 @@ This file is a restart-safe snapshot for resuming work after context reset.
 
 Recent (detailed):
 
+- 2026-03-05 (session 169): Track C Step 7 docs/examples sync completed.
+  - updated language spec runtime notes for unified iterator intrinsic contract:
+    - `yield : String -> state -> (Bool, state)`,
+    - implicit Unit state in 1-arg intrinsic mode,
+    - explicit state in 2-arg mode,
+    - early stop via `(False, state)`.
+  - examples split by purpose:
+    - `examples/iterator.gb`: minimal unified state-less sample (runtime lock target),
+    - `examples/iterator_unified.gb`: state-less/state-threaded/early-stop consolidated sample.
+  - updated `examples/README.md` output expectations accordingly.
 - 2026-03-05 (session 168): tuple index access strictness fix.
   - fixed regression where non-tuple numeric qualified access (for example
     `Status.0`) could parse/typecheck/run through fallback paths.

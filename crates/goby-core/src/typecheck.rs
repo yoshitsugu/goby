@@ -3659,14 +3659,20 @@ fn ensure_no_ambiguous_refs_in_expr(
                             })
                         }
                     }
-                    Ty::Unknown => Err(TypecheckError {
-                        declaration: Some(decl_name.to_string()),
-                        span: None,
-                        message: format!(
-                            "tuple member access `{}` requires tuple receiver, but `{}` type is unresolved",
-                            member, receiver
-                        ),
-                    }),
+                    Ty::Unknown => {
+                        if env.locals.contains_key(receiver) {
+                            Ok(())
+                        } else {
+                            Err(TypecheckError {
+                                declaration: Some(decl_name.to_string()),
+                                span: None,
+                                message: format!(
+                                    "tuple member access `{}` requires tuple receiver, but `{}` type is unresolved",
+                                    member, receiver
+                                ),
+                            })
+                        }
+                    }
                     other => Err(TypecheckError {
                         declaration: Some(decl_name.to_string()),
                         span: None,

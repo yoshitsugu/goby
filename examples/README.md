@@ -21,11 +21,23 @@ This directory contains small Goby programs grouped by purpose.
   - `println.gb`: `print` (no newline) と `println` (末尾改行あり) の差分
 - `parser/`: parser behavior examples
   - `mixed_indent.gb`: mixed tabs/spaces indentation sample
-- `iterator.gb`: iterator-like effect/handler sample using `with_handler` with lexical capture
+- `iterator.gb`: unified iterator runtime contract sample (`effect Iterator a b`)
+  - minimal state-less mode sample used by runtime-lock tests
   - emits:
     - `tick:a`
     - `tick:b`
     - `tick:c`
+- `iterator_unified.gb`: unified iterator contract modes sample
+  - demonstrates:
+    - state-less mode (`b = Unit` style)
+    - state-threaded mode (`b = Int`)
+    - early-stop via `(False, state)`
+  - emits:
+    - `tick:a`
+    - `tick:b`
+    - `tick:c`
+    - `3`
+    - `1`
 
 ## Planned Stdlib Syntax (Not Implemented Yet)
 

@@ -572,7 +572,7 @@ Implementation plan (step-by-step checklist):
   - Ensure `_` type-hole errors are readable when constraints conflict.
   - Definition of done: generic effect type errors are actionable without inspecting compiler internals.
 
-- [ ] Step 7: documentation and examples sync.
+- [x] Step 7: documentation and examples sync.
   - Update `doc/LANGUAGE_SPEC.md` for final syntax/typing/runtime rules.
   - Update this `doc/PLAN.md` section from proposed to completed status.
   - Add/update examples showing state-less iteration (`b = _`/Unit-style), state-threaded iteration, and early-stop via `(False, state)`.
