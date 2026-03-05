@@ -4228,6 +4228,78 @@ main =
     }
 
     #[test]
+    fn resolves_runtime_output_for_effectful_callback_with_list_each_plain_import() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let source = r#"
+import goby/list
+
+effect Log
+  log : Int -> Unit
+
+main : Unit -> Unit
+main =
+  with_handler
+    log n ->
+      print "${n}"
+  in
+    list.each [1, 3] (|n| -> log n)
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let output =
+            resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
+                .expect("runtime output should resolve");
+        assert_eq!(output, "1\n3");
+    }
+
+    #[test]
+    fn resolves_runtime_output_for_effectful_callback_with_list_each_alias_import() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let source = r#"
+import goby/list as l
+
+effect Log
+  log : Int -> Unit
+
+main : Unit -> Unit
+main =
+  with_handler
+    log n ->
+      print "${n}"
+  in
+    l.each [5, 7] (|n| -> log n)
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let output =
+            resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
+                .expect("runtime output should resolve");
+        assert_eq!(output, "5\n7");
+    }
+
+    #[test]
+    fn resolves_runtime_output_for_effectful_callback_with_list_each_selective_import() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let source = r#"
+import goby/list ( each )
+
+effect Log
+  log : Int -> Unit
+
+main : Unit -> Unit
+main =
+  with_handler
+    log n ->
+      print "${n}"
+  in
+    each [9, 11] (|n| -> log n)
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let output =
+            resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
+                .expect("runtime output should resolve");
+        assert_eq!(output, "9\n11");
+    }
+
+    #[test]
     fn resolves_runtime_output_for_intrinsic_string_length_call() {
         let _guard = ENV_MUTEX.lock().unwrap();
         let source = r#"
