@@ -200,18 +200,13 @@ pub(crate) fn build_lowering_plan(module: &Module) -> LoweringPlan {
     let mut effect_name_to_id: HashMap<String, EffectId> = HashMap::new();
 
     for (effect_idx, effect_decl) in module.effect_declarations.iter().enumerate() {
-        let Ok(effect_id_u16) = u16::try_from(effect_idx) else {
-            continue;
-        };
-        let effect_id = EffectId(effect_id_u16);
+        let effect_id = effect_id_from_index(effect_idx);
         effect_name_to_id.insert(effect_decl.name.clone(), effect_id);
         for (op_idx, member) in effect_decl.members.iter().enumerate() {
-            let Ok(op_id_u16) = u16::try_from(op_idx) else {
-                continue;
-            };
+            let op_id = op_id_from_index(op_idx);
             let op_ref = EffectOperationRef {
                 effect_id,
-                op_id: OpId(op_id_u16),
+                op_id,
                 effect_name: effect_decl.name.clone(),
                 op_name: member.name.clone(),
             };
@@ -322,6 +317,18 @@ pub(crate) fn build_lowering_plan(module: &Module) -> LoweringPlan {
             declaration_requirements,
         },
     }
+}
+
+fn effect_id_from_index(effect_idx: usize) -> EffectId {
+    let effect_id_u16 = u16::try_from(effect_idx)
+        .unwrap_or_else(|_| panic!("too many effects: effect index {effect_idx} exceeds u16"));
+    EffectId(effect_id_u16)
+}
+
+fn op_id_from_index(op_idx: usize) -> OpId {
+    let op_id_u16 = u16::try_from(op_idx)
+        .unwrap_or_else(|_| panic!("too many ops in effect: op index {op_idx} exceeds u16"));
+    OpId(op_id_u16)
 }
 
 #[derive(Default)]
@@ -730,6 +737,7 @@ fn record_operation_ref(out: &mut StmtInspection, op_ref: &EffectOperationRef) {
 
 #[cfg(test)]
 mod tests {
+    use goby_core::ast::{EffectDecl, EffectMember};
     use goby_core::parse_module;
 
     use super::*;
@@ -1004,5 +1012,40 @@ main =
             .evidence_shape()
             .fingerprint_hint();
         assert_eq!(hint_a, hint_b);
+    }
+
+    #[test]
+    #[should_panic(expected = "too many effects")]
+    fn panics_when_effect_index_exceeds_u16() {
+        let _ = effect_id_from_index(usize::from(u16::MAX) + 1);
+    }
+
+    #[test]
+    #[should_panic(expected = "too many ops in effect")]
+    fn panics_when_operation_index_exceeds_u16() {
+        let _ = op_id_from_index(usize::from(u16::MAX) + 1);
+    }
+
+    #[test]
+    fn build_plan_preserves_boundary_u16_effect_and_op_ids() {
+        let effect_decl = EffectDecl {
+            name: "Big".to_string(),
+            members: vec![EffectMember {
+                name: "op".to_string(),
+                type_annotation: "Unit -> Unit".to_string(),
+            }],
+        };
+        let module = Module {
+            imports: Vec::new(),
+            embed_declarations: Vec::new(),
+            type_declarations: Vec::new(),
+            effect_declarations: vec![effect_decl],
+            declarations: Vec::new(),
+        };
+        let plan = build_lowering_plan(&module);
+        let ops = plan.evidence_shape.operation_table();
+        assert_eq!(ops.len(), 1);
+        assert_eq!(ops[0].effect_id, EffectId(0));
+        assert_eq!(ops[0].op_id, OpId(0));
     }
 }

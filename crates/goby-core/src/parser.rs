@@ -1617,18 +1617,17 @@ fn parse_call_expr(src: &str) -> Option<Expr> {
     }
     let callee = parts[0];
     if !(is_identifier(callee) || is_qualified_name(callee)) {
-        None
-    } else {
-        let mut expr = parse_expr(callee)?;
-        for part in parts.iter().skip(1) {
-            let arg = parse_expr(part)?;
-            expr = Expr::Call {
-                callee: Box::new(expr),
-                arg: Box::new(arg),
-            };
-        }
-        Some(expr)
+        return None;
     }
+    let mut expr = parse_expr(callee)?;
+    for part in parts.iter().skip(1) {
+        let arg = parse_expr(part)?;
+        expr = Expr::Call {
+            callee: Box::new(expr),
+            arg: Box::new(arg),
+        };
+    }
+    Some(expr)
 }
 
 fn split_top_level_whitespace_terms(src: &str) -> Vec<&str> {

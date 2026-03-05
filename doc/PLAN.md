@@ -432,7 +432,40 @@ Acceptance criteria:
 
 - Formatter/linter commands and baseline LSP diagnostics are usable on `examples/` and stdlib sources.
 
-### 4.6 Parking Lot (Needs Revalidation Before Implementation)
+### 4.6 Review Follow-ups (Backlog)
+
+The following items were identified in a focused code review and are tracked as
+near/mid-term engineering debt after current active tracks.
+
+Priority-ordered follow-ups:
+
+1. Typecheck env cloning strategy:
+   - Replace repeated full `TypeEnv` clone on local scope transitions with a
+     cheaper scope-chain/persistent-map strategy (`Rc` + parent chain or equivalent).
+2. Large-function decomposition for testability/readability:
+   - candidate functions include `eval_expr_ast`, `execute_unit_expr_ast`,
+     `check_unhandled_effects_in_expr`, `check_resume_in_expr`, `check_body_stmts`,
+     and parser/lowering long functions.
+3. Hot-path allocation reduction:
+   - remove avoidable clones in Wasm runtime dispatch paths (`find_map` + clone patterns,
+     local/callable env cloning in frequently executed branches).
+4. Planning call-graph closure algorithm:
+   - replace naive fixed-point transitive closure with worklist/topological strategy
+     to avoid avoidable quadratic behavior on larger declaration graphs.
+5. Small algorithmic cleanups:
+   - replace `collect + sort + first` selection patterns with `min_by(_key)` where applicable.
+6. Shared utility deduplication:
+   - unify duplicated `find_can_keyword_index` and resume-detection helpers across modules.
+7. Diagnostics metadata completeness:
+   - add source span/line metadata to type/effect declaration AST nodes so type errors
+     can consistently report precise locations (LSP-friendly diagnostics).
+
+Note:
+
+- Critical correctness items from the same review batch were already fixed:
+  parser explicit early-return clarity and planning `u16` overflow fail-fast behavior.
+
+### 4.7 Parking Lot (Needs Revalidation Before Implementation)
 
 - CLI `build` expansion details (`--target`, `--engine-compat`, verify modes).
 - CLI binary naming migration (`goby-cli` -> `goby`) final policy.
