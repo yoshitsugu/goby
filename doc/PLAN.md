@@ -252,6 +252,8 @@ Based on `examples/*.gb`:
 
 - Current implemented checks:
   - `can` effect names must be declared (or built-in).
+  - effect member signatures can declare dependency effects (`op : ... can Dep`), and
+    handler clause bodies are validated against those declared dependencies.
   - uncovered effect operation calls are rejected unless covered by enclosing handler scope
     (`with` / `with_handler`).
   - calls to `can`-annotated functions require an appropriate enclosing handler scope.
@@ -261,6 +263,12 @@ Based on `examples/*.gb`:
 - How to represent multiple effects (`can Print + Read` or other syntax) — deferred.
 - Effect propagation rules for higher-order functions — deferred.
 - Effect diagnostics UX polish (wording/format consistency) — deferred.
+- Warning mechanism for lexical shadowing of visible effect operation names
+  (for example local `a` shadows operation `a`) — deferred.
+  - resolution rule remains: lexical value namespace wins.
+  - warning is planned as tooling/diagnostics improvement, not a type error.
+- Multi-effect implicit `main` wrapper ordering and topological expansion based on
+  effect-member dependency declarations (`op ... can Dep`) — in progress.
 
 
 #### Effect Renewal/Resume Status (Summary)

@@ -74,6 +74,7 @@ pub fn typecheck_module_with_context(
         .chain(imported_effects)
         .chain(module.effect_declarations.iter().map(|e| e.name.clone()))
         .collect();
+    validate_effect_member_effect_clauses(module, &known_effects)?;
 
     let mut names = HashSet::new();
 
@@ -131,6 +132,8 @@ pub fn typecheck_module_with_context(
     let env = build_type_env(module, &stdlib_root_path);
     ensure_no_ambiguous_globals(&env)?;
     let effect_map = build_effect_map(module, &imported_effect_declarations);
+    let effect_dependency_info =
+        build_effect_dependency_info(module, &imported_effect_declarations);
     let required_effects_map = build_required_effects_map(module);
 
     for decl in &module.declarations {
@@ -193,6 +196,7 @@ pub fn typecheck_module_with_context(
                 stmts,
                 &env,
                 &effect_map,
+                &effect_dependency_info,
                 &required_effects_map,
                 &decl.name,
                 declared_return_ty,
@@ -475,6 +479,12 @@ struct EffectMap {
     op_to_effects: HashMap<String, HashSet<String>>,
 }
 
+/// Per-operation dependencies declared in effect member `can` clauses.
+/// Key format: `EffectName.operation`.
+struct EffectDependencyInfo {
+    op_required_effects: HashMap<String, Vec<String>>,
+}
+
 #[derive(Debug, Clone)]
 struct ImportedEffectDecl {
     source_module: String,
@@ -525,6 +535,28 @@ fn build_effect_map(module: &Module, imported_effects: &[ImportedEffectDecl]) ->
     }
 }
 
+fn build_effect_dependency_info(
+    module: &Module,
+    imported_effects: &[ImportedEffectDecl],
+) -> EffectDependencyInfo {
+    let mut op_required_effects: HashMap<String, Vec<String>> = HashMap::new();
+    for effect_decl in imported_effects
+        .iter()
+        .map(|imported| &imported.decl)
+        .chain(module.effect_declarations.iter())
+    {
+        for member in &effect_decl.members {
+            op_required_effects.insert(
+                format!("{}.{}", effect_decl.name, member.name),
+                parse_can_clause_effects(&member.type_annotation),
+            );
+        }
+    }
+    EffectDependencyInfo {
+        op_required_effects,
+    }
+}
+
 fn build_op_to_effects(
     module: &Module,
     imported_effects: &[ImportedEffectDecl],
@@ -565,6 +597,19 @@ fn ops_from_can_clause(annotation: Option<&str>, effect_map: &EffectMap) -> Hash
                 .into_iter()
                 .flat_map(|ops| ops.iter().cloned())
         })
+        .collect()
+}
+
+fn parse_can_clause_effects(annotation: &str) -> Vec<String> {
+    let Some(idx) = find_can_keyword_index(annotation) else {
+        return Vec::new();
+    };
+    let effects_raw = annotation[idx + 3..].trim();
+    effects_raw
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
         .collect()
 }
 
@@ -819,6 +864,55 @@ fn validate_effect_declarations(module: &Module) -> Result<(), TypecheckError> {
                 span: None,
                 message: format!("duplicate effect declaration `{}`", effect_decl.name),
             });
+        }
+    }
+    Ok(())
+}
+
+fn validate_effect_member_effect_clauses(
+    module: &Module,
+    known_effects: &HashSet<String>,
+) -> Result<(), TypecheckError> {
+    for effect_decl in &module.effect_declarations {
+        for member in &effect_decl.members {
+            if let Some(idx) = find_can_keyword_index(&member.type_annotation)
+                && member.type_annotation[idx + 3..].trim().is_empty()
+            {
+                return Err(TypecheckError {
+                    declaration: Some(effect_decl.name.clone()),
+                    span: None,
+                    message: format!(
+                        "effect list after `can` must not be empty in `{}.{}`",
+                        effect_decl.name, member.name
+                    ),
+                });
+            }
+            let deps = parse_can_clause_effects(&member.type_annotation);
+            if deps.is_empty() {
+                continue;
+            }
+            for dep in deps {
+                if !is_identifier(&dep) {
+                    return Err(TypecheckError {
+                        declaration: Some(effect_decl.name.clone()),
+                        span: None,
+                        message: format!(
+                            "invalid effect name `{}` in `can` clause of `{}.{}`",
+                            dep, effect_decl.name, member.name
+                        ),
+                    });
+                }
+                if !known_effects.contains(&dep) {
+                    return Err(TypecheckError {
+                        declaration: Some(effect_decl.name.clone()),
+                        span: None,
+                        message: format!(
+                            "unknown effect `{}` in `can` clause of `{}.{}`",
+                            dep, effect_decl.name, member.name
+                        ),
+                    });
+                }
+            }
         }
     }
     Ok(())
@@ -2469,6 +2563,7 @@ fn check_body_stmts(
     stmts: &[Stmt],
     env: &TypeEnv,
     effect_map: &EffectMap,
+    effect_dependency_info: &EffectDependencyInfo,
     required_effects_map: &HashMap<String, Vec<String>>,
     decl_name: &str,
     declared_return_ty: Option<Ty>,
@@ -2507,6 +2602,7 @@ fn check_body_stmts(
                 check_unhandled_effects_in_expr(
                     value,
                     &local_env,
+                    effect_dependency_info,
                     required_effects_map,
                     effect_map,
                     covered_ops,
@@ -2532,6 +2628,7 @@ fn check_body_stmts(
                 check_unhandled_effects_in_expr(
                     value,
                     &local_env,
+                    effect_dependency_info,
                     required_effects_map,
                     effect_map,
                     covered_ops,
@@ -2564,6 +2661,7 @@ fn check_body_stmts(
                 check_unhandled_effects_in_expr(
                     value,
                     &local_env,
+                    effect_dependency_info,
                     required_effects_map,
                     effect_map,
                     covered_ops,
@@ -2596,6 +2694,7 @@ fn check_body_stmts(
                 check_unhandled_effects_in_expr(
                     expr,
                     &local_env,
+                    effect_dependency_info,
                     required_effects_map,
                     effect_map,
                     covered_ops,
@@ -2680,6 +2779,7 @@ fn check_callee_required_effects(
 fn check_unhandled_effects_in_expr(
     expr: &Expr,
     env: &TypeEnv,
+    effect_dependency_info: &EffectDependencyInfo,
     required_effects_map: &HashMap<String, Vec<String>>,
     effect_map: &EffectMap,
     covered_ops: &HashSet<String>,
@@ -2754,6 +2854,7 @@ fn check_unhandled_effects_in_expr(
             check_unhandled_effects_in_expr(
                 $e,
                 env,
+                effect_dependency_info,
                 required_effects_map,
                 effect_map,
                 covered_ops,
@@ -2764,6 +2865,7 @@ fn check_unhandled_effects_in_expr(
             check_unhandled_effects_in_expr(
                 $e,
                 $child_env,
+                effect_dependency_info,
                 required_effects_map,
                 effect_map,
                 covered_ops,
@@ -2931,22 +3033,64 @@ fn check_unhandled_effects_in_expr(
         }
         Expr::Handler { clauses } => {
             for clause in clauses {
+                let Some(effects) = effect_map.op_to_effects.get(&clause.name) else {
+                    return Err(TypecheckError {
+                        declaration: Some(decl_name.to_string()),
+                        span: None,
+                        message: format!(
+                            "unknown effect operation `{}` in handler expression",
+                            clause.name
+                        ),
+                    });
+                };
+                if effects.len() > 1 {
+                    let mut names: Vec<String> = effects.iter().cloned().collect();
+                    names.sort();
+                    return Err(TypecheckError {
+                        declaration: Some(decl_name.to_string()),
+                        span: None,
+                        message: format!(
+                            "operation '{}' is ambiguous across effects in Handler(...): {}",
+                            clause.name,
+                            names.join(", ")
+                        ),
+                    });
+                }
+                let effect_name = effects
+                    .iter()
+                    .next()
+                    .expect("single-effect handler clause resolution");
+                let qualified_op = format!("{}.{}", effect_name, clause.name);
+                let mut clause_covered_ops = covered_ops.clone();
+                if let Some(required_effects) = effect_dependency_info
+                    .op_required_effects
+                    .get(&qualified_op)
+                {
+                    for required_effect in required_effects {
+                        if let Some(required_ops) = effect_map.effect_to_ops.get(required_effect) {
+                            clause_covered_ops.extend(required_ops.iter().cloned());
+                        }
+                    }
+                }
                 if let Some(stmts) = &clause.parsed_body {
                     check_body_stmts(
                         stmts,
                         env,
                         effect_map,
+                        effect_dependency_info,
                         required_effects_map,
                         decl_name,
                         None,
                         &[],
-                        covered_ops,
+                        &clause_covered_ops,
                     )?;
                 }
             }
             Ok(())
         }
         Expr::With { handler, body } => {
+            // Validate handler clause bodies under current scope + per-operation dependency rules.
+            recurse!(handler)?;
             let handler_covered =
                 infer_handler_covered_ops_strict(handler, env, effect_map, decl_name)?;
             let mut merged = covered_ops.clone();
@@ -2955,6 +3099,7 @@ fn check_unhandled_effects_in_expr(
                 body,
                 env,
                 effect_map,
+                effect_dependency_info,
                 required_effects_map,
                 decl_name,
                 None,
@@ -2979,6 +3124,7 @@ fn check_unhandled_effects_in_expr(
                         check_unhandled_effects_in_expr(
                             value,
                             &local_env,
+                            effect_dependency_info,
                             required_effects_map,
                             effect_map,
                             covered_ops,
@@ -2992,6 +3138,7 @@ fn check_unhandled_effects_in_expr(
                         check_unhandled_effects_in_expr(
                             value,
                             &local_env,
+                            effect_dependency_info,
                             required_effects_map,
                             effect_map,
                             covered_ops,
@@ -3003,6 +3150,7 @@ fn check_unhandled_effects_in_expr(
                         check_unhandled_effects_in_expr(
                             expr,
                             &local_env,
+                            effect_dependency_info,
                             required_effects_map,
                             effect_map,
                             covered_ops,
@@ -4501,6 +4649,65 @@ main =
         let err = typecheck_module(&module).expect_err("invalid effect name should fail");
         assert_eq!(err.declaration.as_deref(), Some("x"));
         assert!(err.message.contains("invalid effect name"));
+    }
+
+    #[test]
+    fn rejects_unknown_effect_in_effect_member_can_clause() {
+        let source = "\
+effect Trace
+  trace : String -> Unit can Ghost
+main : Unit -> Unit
+main = Unit
+";
+        let module = parse_module(source).expect("should parse");
+        let err = typecheck_module(&module)
+            .expect_err("unknown effect in effect member can-clause should fail");
+        assert_eq!(err.declaration.as_deref(), Some("Trace"));
+        assert!(err.message.contains("unknown effect `Ghost`"));
+    }
+
+    #[test]
+    fn rejects_effect_use_in_handler_clause_when_member_dependency_is_not_declared() {
+        let source = "\
+effect Log
+  log : String -> Unit
+effect Trace
+  trace : String -> Unit
+main : Unit -> Unit can Trace
+main =
+  with_handler
+    trace msg ->
+      log msg
+  in
+    trace \"x\"
+";
+        let module = parse_module(source).expect("should parse");
+        let err = typecheck_module(&module)
+            .expect_err("handler clause should reject undeclared effect dependency");
+        assert!(
+            err.message
+                .contains("effect operation `log` is not handled")
+        );
+    }
+
+    #[test]
+    fn accepts_effect_use_in_handler_clause_when_member_dependency_is_declared() {
+        let source = "\
+effect Log
+  log : String -> Unit
+effect Trace
+  trace : String -> Unit can Log
+main : Unit -> Unit can Trace
+main =
+  with_handler
+    trace msg ->
+      log msg
+  in
+    trace \"x\"
+";
+        let module = parse_module(source).expect("should parse");
+        typecheck_module(&module)
+            .expect("handler clause should allow effect usage declared via member can-clause");
     }
 
     #[test]

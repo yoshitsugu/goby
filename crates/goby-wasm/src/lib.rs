@@ -676,6 +676,16 @@ impl<'m> RuntimeOutputResolver<'m> {
                 self.outputs.push(value.to_output_text());
                 Some(())
             }
+            Expr::Call { callee, arg } if matches!(callee.as_ref(), Expr::Var(n) if n == "println") =>
+            {
+                let value = self.eval_ast_value(arg, evaluators)?;
+                let mut text = value.to_output_text();
+                if !text.ends_with('\n') {
+                    text.push('\n');
+                }
+                self.outputs.push(text);
+                Some(())
+            }
             // value |> print
             Expr::Pipeline { value, callee } if callee == BUILTIN_PRINT => {
                 let v = self.eval_ast_value(value, evaluators)?;
@@ -748,6 +758,14 @@ impl<'m> RuntimeOutputResolver<'m> {
                     if let Some(method) = bare_method {
                         // depth=0: top-level call; dispatch_handler_method adds 1 internally.
                         return self.dispatch_handler_method(&method, arg_val, evaluators, 0);
+                    }
+                    if fn_name == "println" {
+                        let mut text = arg_val.to_output_text();
+                        if !text.ends_with('\n') {
+                            text.push('\n');
+                        }
+                        self.outputs.push(text);
+                        return Some(());
                     }
                     if let Some(effect_name) = self.unique_effect_name_for_operation(fn_name)
                         && self
@@ -1325,6 +1343,14 @@ impl<'m> RuntimeOutputResolver<'m> {
                             depth + 1,
                         );
                     }
+                    if fn_name == "println" {
+                        let mut text = arg_val.to_output_text();
+                        if !text.ends_with('\n') {
+                            text.push('\n');
+                        }
+                        self.outputs.push(text);
+                        return Some(RuntimeValue::Unit);
+                    }
                     if let Some(effect_name) = self.unique_effect_name_for_operation(fn_name)
                         && let Some(value) = self.apply_embedded_default_handler(
                             &effect_name,
@@ -1763,6 +1789,17 @@ impl<'m> RuntimeOutputResolver<'m> {
             self.outputs.push(value.to_output_text());
             return Some(());
         }
+        if let Expr::Call { callee, arg } = expr
+            && matches!(callee.as_ref(), Expr::Var(n) if n == "println")
+        {
+            let value = self.eval_expr_ast(arg, locals, callables, evaluators, depth)?;
+            let mut text = value.to_output_text();
+            if !text.ends_with('\n') {
+                text.push('\n');
+            }
+            self.outputs.push(text);
+            return Some(());
+        }
 
         // value |> print
         if let Expr::Pipeline { value, callee } = expr
@@ -1854,6 +1891,14 @@ impl<'m> RuntimeOutputResolver<'m> {
             let bare_method = self.find_handler_method_by_name(fn_name);
             if let Some(method) = bare_method {
                 return self.dispatch_handler_method(&method, arg_val, evaluators, depth + 1);
+            }
+            if fn_name == "println" {
+                let mut text = arg_val.to_output_text();
+                if !text.ends_with('\n') {
+                    text.push('\n');
+                }
+                self.outputs.push(text);
+                return Some(());
             }
             if let Some(effect_name) = self.unique_effect_name_for_operation(fn_name)
                 && self
@@ -4317,6 +4362,24 @@ main =
             resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
                 .expect("runtime output should resolve");
         assert_eq!(output, "9\n11");
+    }
+
+    #[test]
+    fn resolves_runtime_output_for_list_each_callback_with_bare_println() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let source = r#"
+import goby/list
+
+main : Unit -> Unit can Print
+main =
+  ns = [1, 2, 3]
+  list.each ns (|i| -> println(i * 10))
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let output =
+            resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
+                .expect("runtime output should resolve");
+        assert_eq!(output, "10\n\n20\n\n30\n");
     }
 
     #[test]
