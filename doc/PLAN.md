@@ -321,7 +321,7 @@ Goal: remove `with_handler` and use only `with`.
     - add `with` exact-line inline-handler branch.
     - keep existing `with <handler_expr>` statement parsing.
     - remove `with_handler` statement parse branch.
-  - [ ] Step 2: parser multiline-RHS update
+  - [x] Step 2: parser multiline-RHS update
     - extend multiline RHS parser path to support `with` (in addition to `case`/`if`).
     - cover both binding and assignment RHS forms.
   - [ ] Step 3: parser diagnostics and keywords
