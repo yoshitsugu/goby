@@ -379,12 +379,79 @@ fn parse_stmts_from_lines(lines: &[&str], start: usize) -> Option<(Vec<Stmt>, us
             }
         }
 
+        // Standalone multiline `case` / `if` expression statement.
+        if (trimmed.starts_with("case ") || trimmed.starts_with("if "))
+            && let Some((multi_expr, consumed)) = parse_multiline_expr(lines, i)
+        {
+            stmts.push(Stmt::Expr(multi_expr));
+            i += consumed;
+            continue;
+        }
+
+        // `name = case ...` / `name = if ...` multiline RHS binding.
+        if let Some((name, rhs)) = try_split_binding(trimmed)
+            && let Some((value, next_i)) = parse_multiline_rhs_expr(lines, i, this_indent, rhs)
+        {
+            stmts.push(Stmt::Binding {
+                name: name.to_string(),
+                value,
+            });
+            i = next_i;
+            continue;
+        }
+
+        // `mut name = case ...` / `mut name = if ...` multiline RHS binding.
+        if let Some(rest) = trimmed.strip_prefix("mut ")
+            && let Some((name, rhs)) = try_split_binding(rest)
+            && let Some((value, next_i)) = parse_multiline_rhs_expr(lines, i, this_indent, rhs)
+        {
+            stmts.push(Stmt::MutBinding {
+                name: name.to_string(),
+                value,
+            });
+            i = next_i;
+            continue;
+        }
+
+        // `name := case ...` / `name := if ...` multiline RHS assignment.
+        if let Some((name, rhs)) = try_split_assignment(trimmed)
+            && let Some((value, next_i)) = parse_multiline_rhs_expr(lines, i, this_indent, rhs)
+        {
+            stmts.push(Stmt::Assign {
+                name: name.to_string(),
+                value,
+            });
+            i = next_i;
+            continue;
+        }
+
         // Regular statement: binding or expression.
         stmts.push(parse_stmt(trimmed)?);
         i += 1;
     }
 
     Some((stmts, i - start))
+}
+
+fn parse_multiline_rhs_expr(
+    lines: &[&str],
+    line_idx: usize,
+    line_indent: usize,
+    rhs: &str,
+) -> Option<(Expr, usize)> {
+    let rhs_trimmed = rhs.trim();
+    if !(rhs_trimmed.starts_with("case ") || rhs_trimmed.starts_with("if ")) {
+        return None;
+    }
+
+    let mut virtual_lines: Vec<String> = Vec::new();
+    virtual_lines.push(format!("{}{}", " ".repeat(line_indent), rhs_trimmed));
+    for raw in &lines[line_idx + 1..] {
+        virtual_lines.push((*raw).to_string());
+    }
+    let refs: Vec<&str> = virtual_lines.iter().map(String::as_str).collect();
+    let (expr, consumed) = parse_multiline_expr(&refs, 0)?;
+    Some((expr, line_idx + consumed))
 }
 
 fn parse_with_in_body(
@@ -3119,6 +3186,56 @@ main =
                 }
                 other => panic!("unexpected call arg: {other:?}"),
             },
+            other => panic!("unexpected statement: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_multiline_case_rhs_in_binding() {
+        let body = "a = 10\nb = case a\n  10 ->\n    1 + 10\n  _ ->\n    20 + 30\nprint b";
+        let stmts = parse_body_stmts(body).expect("should parse");
+        assert_eq!(stmts.len(), 3);
+        match &stmts[1] {
+            Stmt::Binding { name, value } => {
+                assert_eq!(name, "b");
+                match value {
+                    Expr::Case { arms, .. } => {
+                        assert_eq!(arms.len(), 2);
+                        assert!(matches!(arms[0].body.as_ref(), Expr::Block(_)));
+                        assert!(matches!(arms[1].body.as_ref(), Expr::Block(_)));
+                    }
+                    other => panic!("expected case expression in binding rhs, got {other:?}"),
+                }
+            }
+            other => panic!("unexpected statement: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_multiline_if_rhs_in_binding() {
+        let body = "x = if True\n  1\nelse\n  2\nprint x";
+        let stmts = parse_body_stmts(body).expect("should parse");
+        assert_eq!(stmts.len(), 2);
+        match &stmts[0] {
+            Stmt::Binding { name, value } => {
+                assert_eq!(name, "x");
+                assert!(matches!(value, Expr::If { .. }));
+            }
+            other => panic!("unexpected statement: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_standalone_multiline_case_expression_statement() {
+        let body = "a = 10\ncase a\n  10 -> print \"Ten\"\n  _ -> print \"Other\"";
+        let stmts = parse_body_stmts(body).expect("should parse");
+        assert_eq!(stmts.len(), 2);
+        match &stmts[1] {
+            Stmt::Expr(Expr::Case { arms, .. }) => {
+                assert_eq!(arms.len(), 2);
+                assert!(matches!(arms[0].body.as_ref(), Expr::Call { .. }));
+                assert!(matches!(arms[1].body.as_ref(), Expr::Call { .. }));
+            }
             other => panic!("unexpected statement: {other:?}"),
         }
     }
