@@ -503,6 +503,7 @@ struct RuntimeOutputResolver<'m> {
     outputs: Vec<String>,
     module: &'m Module,
     embedded_default_handlers: HashMap<String, String>,
+    runtime_bridges: RuntimeBridgeRegistry,
     /// Active inline handlers installed via `with` / `with_handler`.
     active_inline_handler_stack: Vec<InlineHandlerValue>,
     resume_tokens: Vec<ResumeToken>,
@@ -562,6 +563,161 @@ struct RuntimeEvaluators<'a, 'b> {
     unit: &'b EvaluatedFunctions<'a>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RuntimeBridgeKind {
+    Function,
+    EffectOperation,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RuntimeBridgeTypeShape {
+    UnitToString,
+    StringToString,
+    StringToInt,
+    StringToIntCanStringParseError,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RuntimeBridgeIntrinsic {
+    EmbeddedDefaultHandler {
+        effect_name: &'static str,
+        method_name: &'static str,
+    },
+    EnvFetchEnvVar,
+    IntParse,
+    StringLength,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct RuntimeBridgeMetadata {
+    module: &'static str,
+    symbol: &'static str,
+    kind: RuntimeBridgeKind,
+    type_shape: RuntimeBridgeTypeShape,
+    intrinsic: RuntimeBridgeIntrinsic,
+}
+
+const RUNTIME_BRIDGE_CATALOG: [RuntimeBridgeMetadata; 5] = [
+    RuntimeBridgeMetadata {
+        module: PRELUDE_MODULE_PATH,
+        symbol: "read",
+        kind: RuntimeBridgeKind::EffectOperation,
+        type_shape: RuntimeBridgeTypeShape::UnitToString,
+        intrinsic: RuntimeBridgeIntrinsic::EmbeddedDefaultHandler {
+            effect_name: "Read",
+            method_name: "read",
+        },
+    },
+    RuntimeBridgeMetadata {
+        module: PRELUDE_MODULE_PATH,
+        symbol: "read_line",
+        kind: RuntimeBridgeKind::EffectOperation,
+        type_shape: RuntimeBridgeTypeShape::UnitToString,
+        intrinsic: RuntimeBridgeIntrinsic::EmbeddedDefaultHandler {
+            effect_name: "Read",
+            method_name: "read_line",
+        },
+    },
+    RuntimeBridgeMetadata {
+        module: "goby/env",
+        symbol: "fetch_env_var",
+        kind: RuntimeBridgeKind::Function,
+        type_shape: RuntimeBridgeTypeShape::StringToString,
+        intrinsic: RuntimeBridgeIntrinsic::EnvFetchEnvVar,
+    },
+    RuntimeBridgeMetadata {
+        module: "goby/string",
+        symbol: "length",
+        kind: RuntimeBridgeKind::Function,
+        type_shape: RuntimeBridgeTypeShape::StringToInt,
+        intrinsic: RuntimeBridgeIntrinsic::StringLength,
+    },
+    RuntimeBridgeMetadata {
+        module: "goby/int",
+        symbol: "parse",
+        kind: RuntimeBridgeKind::Function,
+        type_shape: RuntimeBridgeTypeShape::StringToIntCanStringParseError,
+        intrinsic: RuntimeBridgeIntrinsic::IntParse,
+    },
+];
+
+#[derive(Default)]
+struct RuntimeBridgeRegistry {
+    bare_symbols: HashMap<String, RuntimeBridgeMetadata>,
+    receiver_symbols: HashMap<(String, String), RuntimeBridgeMetadata>,
+}
+
+impl RuntimeBridgeRegistry {
+    fn build(module: &Module) -> Self {
+        validate_runtime_bridge_catalog();
+        let mut registry = Self::default();
+
+        for import in effective_runtime_imports(module) {
+            for bridge in RUNTIME_BRIDGE_CATALOG {
+                if import.module_path != bridge.module {
+                    continue;
+                }
+                match &import.kind {
+                    goby_core::ImportKind::Plain => {
+                        if let Some(receiver) = import.module_path.rsplit('/').next() {
+                            registry.insert_receiver(receiver, bridge.symbol, bridge);
+                        }
+                        if import.module_path == PRELUDE_MODULE_PATH
+                            && bridge.kind == RuntimeBridgeKind::EffectOperation
+                        {
+                            registry.insert_bare(bridge.symbol, bridge);
+                        }
+                    }
+                    goby_core::ImportKind::Alias(alias) => {
+                        registry.insert_receiver(alias, bridge.symbol, bridge);
+                    }
+                    goby_core::ImportKind::Selective(selected) => {
+                        if selected.iter().any(|name| name == bridge.symbol) {
+                            registry.insert_bare(bridge.symbol, bridge);
+                        }
+                    }
+                }
+            }
+        }
+
+        registry
+    }
+
+    fn resolve_bare(&self, symbol: &str) -> Option<RuntimeBridgeMetadata> {
+        self.bare_symbols.get(symbol).copied()
+    }
+
+    fn resolve_receiver(&self, receiver: &str, symbol: &str) -> Option<RuntimeBridgeMetadata> {
+        self.receiver_symbols
+            .get(&(receiver.to_string(), symbol.to_string()))
+            .copied()
+    }
+
+    fn insert_bare(&mut self, symbol: &str, bridge: RuntimeBridgeMetadata) {
+        self.bare_symbols
+            .entry(symbol.to_string())
+            .or_insert(bridge);
+    }
+
+    fn insert_receiver(&mut self, receiver: &str, symbol: &str, bridge: RuntimeBridgeMetadata) {
+        self.receiver_symbols
+            .entry((receiver.to_string(), symbol.to_string()))
+            .or_insert(bridge);
+    }
+}
+
+fn validate_runtime_bridge_catalog() {
+    let mut seen = HashSet::new();
+    for bridge in RUNTIME_BRIDGE_CATALOG {
+        debug_assert!(
+            seen.insert((bridge.module, bridge.symbol)),
+            "duplicate runtime bridge metadata for {}/{}",
+            bridge.module,
+            bridge.symbol
+        );
+    }
+}
+
 impl<'m> RuntimeOutputResolver<'m> {
     fn resolve(
         module: &'m Module,
@@ -576,6 +732,7 @@ impl<'m> RuntimeOutputResolver<'m> {
             outputs: Vec::new(),
             module,
             embedded_default_handlers: collect_embedded_default_handlers(module),
+            runtime_bridges: RuntimeBridgeRegistry::build(module),
             active_inline_handler_stack: Vec::new(),
             resume_tokens: Vec::new(),
             optimized_resume_tokens: Vec::new(),
@@ -794,17 +951,21 @@ impl<'m> RuntimeOutputResolver<'m> {
                     }
                     // Fallback: execute any declaration (including non-Unit return) for side effects.
                     if self
-                        .execute_decl_as_side_effect(fn_name, arg_val, evaluators, 0)
+                        .execute_decl_as_side_effect(fn_name, arg_val.clone(), evaluators, 0)
                         .is_some()
                     {
                         return Some(());
                     }
-                    if matches!(fn_name.as_str(), "read" | "read_line")
-                        && !self.has_declaration_name(fn_name)
-                        && self.locals.get(fn_name).is_none()
-                        && self
-                            .apply_embedded_default_handler("Read", fn_name, RuntimeValue::Unit)
-                            .is_some()
+                    if self
+                        .try_apply_bare_runtime_bridge_side_effect(
+                            fn_name,
+                            arg_val,
+                            &RuntimeLocals::default(),
+                            &HashMap::new(),
+                            evaluators,
+                            0,
+                        )
+                        .is_some()
                     {
                         return Some(());
                     }
@@ -830,7 +991,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                     if self
                         .execute_unit_call_ast(
                             callee,
-                            v,
+                            v.clone(),
                             &RuntimeLocals::default(),
                             &HashMap::new(),
                             evaluators,
@@ -840,12 +1001,16 @@ impl<'m> RuntimeOutputResolver<'m> {
                     {
                         return Some(());
                     }
-                    if matches!(callee.as_str(), "read" | "read_line")
-                        && !self.has_declaration_name(callee)
-                        && self.locals.get(callee).is_none()
-                        && self
-                            .apply_embedded_default_handler("Read", callee, RuntimeValue::Unit)
-                            .is_some()
+                    if self
+                        .try_apply_bare_runtime_bridge_side_effect(
+                            callee,
+                            v,
+                            &RuntimeLocals::default(),
+                            &HashMap::new(),
+                            evaluators,
+                            0,
+                        )
+                        .is_some()
                     {
                         return Some(());
                     }
@@ -958,16 +1123,17 @@ impl<'m> RuntimeOutputResolver<'m> {
         }
 
         if let Some((callee, arg)) = parse_call(expr)
-            && matches!(callee, "read" | "read_line")
             && matches!(arg, "()" | "Unit")
-            && !self.has_declaration_name(callee)
-            && self.locals.get(callee).is_none()
-            && !callables.contains_key(callee)
-            && !evaluators.int.functions.contains_key(callee)
-            && !evaluators.list.functions.contains_key(callee)
-            && !evaluators.unit.contains_key(callee)
+            && let Some(value) = self.try_apply_bare_runtime_bridge_value(
+                callee,
+                RuntimeValue::Unit,
+                locals,
+                callables,
+                evaluators,
+                0,
+            )
         {
-            return self.apply_embedded_default_handler("Read", callee, RuntimeValue::Unit);
+            return Some(value);
         }
 
         if let Some(text) = eval_string_expr(expr, &locals.string_values) {
@@ -1377,16 +1543,6 @@ impl<'m> RuntimeOutputResolver<'m> {
                 }
 
                 if let Expr::Var(fn_name) = callee.as_ref() {
-                    // fetch_env_var "VAR_NAME" -> read from process environment
-                    if fn_name == "fetch_env_var" {
-                        let av =
-                            self.eval_expr_ast(arg, locals, callables, evaluators, depth + 1)?;
-                        if let RuntimeValue::String(var_name) = av {
-                            let val = std::env::var(&var_name).unwrap_or_default();
-                            return Some(RuntimeValue::String(val));
-                        }
-                        return None;
-                    }
                     if fn_name == "__goby_env_fetch_env_var" {
                         let av =
                             self.eval_expr_ast(arg, locals, callables, evaluators, depth + 1)?;
@@ -1447,6 +1603,16 @@ impl<'m> RuntimeOutputResolver<'m> {
                     {
                         return Some(value);
                     }
+                    if let Some(value) = self.try_apply_bare_runtime_bridge_value(
+                        fn_name,
+                        arg_val.clone(),
+                        locals,
+                        callables,
+                        evaluators,
+                        depth + 1,
+                    ) {
+                        return Some(value);
+                    }
                     // Int function path
                     if let RuntimeValue::Int(arg_int) = arg_val {
                         if let Some(callable) = callables.get(fn_name).cloned() {
@@ -1493,26 +1659,20 @@ impl<'m> RuntimeOutputResolver<'m> {
                                 .map(RuntimeValue::ListInt);
                         }
                     }
-                    if matches!(fn_name.as_str(), "read" | "read_line")
-                        && !self.has_declaration_name(fn_name)
-                        && locals.get(fn_name).is_none()
-                        && !callables.contains_key(fn_name)
-                        && let Some(value) =
-                            self.apply_embedded_default_handler("Read", fn_name, RuntimeValue::Unit)
-                    {
-                        return Some(value);
-                    }
                 }
                 // Qualified callee: Effect.method arg  (e.g. Log.log result, env.from_env name)
                 // Try exact effect-name match first, then member-name-only scan.
                 if let Expr::Qualified { receiver, member } = callee.as_ref() {
                     let arg_val =
                         self.eval_expr_ast(arg, locals, callables, evaluators, depth + 1)?;
-                    if member == "parse" && self.resolves_module_receiver(receiver, "goby/int") {
-                        if let RuntimeValue::String(input) = arg_val {
-                            return self.eval_int_parse_runtime(input, evaluators, depth + 1);
-                        }
-                        return None;
+                    if let Some(value) = self.try_apply_receiver_runtime_bridge_value(
+                        receiver,
+                        member,
+                        arg_val.clone(),
+                        evaluators,
+                        depth + 1,
+                    ) {
+                        return Some(value);
                     }
                     let method = self
                         .find_handler_method_for_effect(receiver, member)
@@ -1545,12 +1705,14 @@ impl<'m> RuntimeOutputResolver<'m> {
                 fields,
             } => {
                 if fields.is_empty()
-                    && matches!(constructor.as_str(), "read" | "read_line")
-                    && !self.has_declaration_name(constructor)
-                    && locals.get(constructor).is_none()
-                    && !self.is_record_constructor_name(constructor)
-                    && let Some(value) =
-                        self.apply_embedded_default_handler("Read", constructor, RuntimeValue::Unit)
+                    && let Some(value) = self.try_apply_bare_runtime_bridge_value(
+                        constructor,
+                        RuntimeValue::Unit,
+                        locals,
+                        callables,
+                        evaluators,
+                        depth + 1,
+                    )
                 {
                     return Some(value);
                 }
@@ -1751,17 +1913,6 @@ impl<'m> RuntimeOutputResolver<'m> {
                     self.eval_expr_ast(value, locals, callables, evaluators, depth + 1)?;
                 self.resume_through_active_continuation_bridge(resumed)
             }
-            // <module>.fetch_env_var(str) -> String  (e.g. env.fetch_env_var(str))
-            Expr::MethodCall { method, args, .. }
-                if method == "fetch_env_var" && args.len() == 1 =>
-            {
-                let av = self.eval_expr_ast(&args[0], locals, callables, evaluators, depth + 1)?;
-                if let RuntimeValue::String(var_name) = av {
-                    let val = std::env::var(&var_name).unwrap_or_default();
-                    return Some(RuntimeValue::String(val));
-                }
-                None
-            }
             // string.split(s, delim) -> ListString
             Expr::MethodCall {
                 receiver,
@@ -1795,22 +1946,23 @@ impl<'m> RuntimeOutputResolver<'m> {
                     _ => None,
                 }
             }
-            // <alias>.parse(str) -> Int  (alias/qualifier for `goby/int`)
             Expr::MethodCall {
                 receiver,
                 method,
                 args,
-            } if method == "parse"
-                && args.len() == 1
-                && self.resolves_module_receiver(receiver, "goby/int") =>
-            {
-                let input =
+            } if args.len() == 1 => {
+                let arg_val =
                     self.eval_expr_ast(&args[0], locals, callables, evaluators, depth + 1)?;
-                if let RuntimeValue::String(text) = input {
-                    self.eval_int_parse_runtime(text, evaluators, depth + 1)
-                } else {
-                    None
+                if let Some(value) = self.try_apply_receiver_runtime_bridge_value(
+                    receiver,
+                    method,
+                    arg_val,
+                    evaluators,
+                    depth + 1,
+                ) {
+                    return Some(value);
                 }
+                None
             }
             // Lambda as top-level value — not needed in main, return None to fall back.
             Expr::Lambda { .. } | Expr::MethodCall { .. } | Expr::With { .. } => None,
@@ -2006,18 +2158,21 @@ impl<'m> RuntimeOutputResolver<'m> {
             }
             // Try executing as general declaration for side effects.
             if self
-                .execute_decl_as_side_effect(fn_name, arg_val, evaluators, depth + 1)
+                .execute_decl_as_side_effect(fn_name, arg_val.clone(), evaluators, depth + 1)
                 .is_some()
             {
                 return Some(());
             }
-            if matches!(fn_name.as_str(), "read" | "read_line")
-                && !self.has_declaration_name(fn_name)
-                && locals.get(fn_name).is_none()
-                && !callables.contains_key(fn_name)
-                && self
-                    .apply_embedded_default_handler("Read", fn_name, RuntimeValue::Unit)
-                    .is_some()
+            if self
+                .try_apply_bare_runtime_bridge_side_effect(
+                    fn_name,
+                    arg_val,
+                    locals,
+                    callables,
+                    evaluators,
+                    depth + 1,
+                )
+                .is_some()
             {
                 return Some(());
             }
@@ -2035,18 +2190,21 @@ impl<'m> RuntimeOutputResolver<'m> {
                     return Some(());
                 }
                 if self
-                    .execute_unit_call_ast(callee, v, locals, callables, evaluators, depth)
+                    .execute_unit_call_ast(callee, v.clone(), locals, callables, evaluators, depth)
                     .is_some()
                 {
                     return Some(());
                 }
-                if matches!(callee.as_str(), "read" | "read_line")
-                    && !self.has_declaration_name(callee)
-                    && locals.get(callee).is_none()
-                    && !callables.contains_key(callee)
-                    && self
-                        .apply_embedded_default_handler("Read", callee, RuntimeValue::Unit)
-                        .is_some()
+                if self
+                    .try_apply_bare_runtime_bridge_side_effect(
+                        callee,
+                        v,
+                        locals,
+                        callables,
+                        evaluators,
+                        depth + 1,
+                    )
+                    .is_some()
                 {
                     return Some(());
                 }
@@ -2531,6 +2689,106 @@ impl<'m> RuntimeOutputResolver<'m> {
             .declarations
             .iter()
             .any(|decl| decl.name == name)
+    }
+
+    fn can_apply_bare_runtime_bridge(
+        &self,
+        symbol: &str,
+        locals: &RuntimeLocals,
+        callables: &HashMap<String, IntCallable>,
+        evaluators: &RuntimeEvaluators<'_, '_>,
+    ) -> bool {
+        !self.has_declaration_name(symbol)
+            && locals.get(symbol).is_none()
+            && !callables.contains_key(symbol)
+            && !evaluators.int.functions.contains_key(symbol)
+            && !evaluators.list.functions.contains_key(symbol)
+            && !evaluators.unit.contains_key(symbol)
+            && !self.is_record_constructor_name(symbol)
+    }
+
+    fn apply_runtime_bridge_value(
+        &mut self,
+        bridge: RuntimeBridgeMetadata,
+        arg_val: RuntimeValue,
+        evaluators: &RuntimeEvaluators<'_, '_>,
+        depth: usize,
+    ) -> Option<RuntimeValue> {
+        match bridge.intrinsic {
+            RuntimeBridgeIntrinsic::EmbeddedDefaultHandler {
+                effect_name,
+                method_name,
+            } => self.apply_embedded_default_handler(effect_name, method_name, arg_val),
+            RuntimeBridgeIntrinsic::EnvFetchEnvVar => {
+                let RuntimeValue::String(var_name) = arg_val else {
+                    return None;
+                };
+                Some(RuntimeValue::String(
+                    std::env::var(&var_name).unwrap_or_default(),
+                ))
+            }
+            RuntimeBridgeIntrinsic::IntParse => {
+                let RuntimeValue::String(input) = arg_val else {
+                    return None;
+                };
+                self.eval_int_parse_runtime(input, evaluators, depth + 1)
+            }
+            RuntimeBridgeIntrinsic::StringLength => {
+                let RuntimeValue::String(value) = arg_val else {
+                    return None;
+                };
+                let len = i64::try_from(value.chars().count()).ok()?;
+                Some(RuntimeValue::Int(len))
+            }
+        }
+    }
+
+    fn try_apply_bare_runtime_bridge_value(
+        &mut self,
+        symbol: &str,
+        arg_val: RuntimeValue,
+        locals: &RuntimeLocals,
+        callables: &HashMap<String, IntCallable>,
+        evaluators: &RuntimeEvaluators<'_, '_>,
+        depth: usize,
+    ) -> Option<RuntimeValue> {
+        if !self.can_apply_bare_runtime_bridge(symbol, locals, callables, evaluators) {
+            return None;
+        }
+        let bridge = self.runtime_bridges.resolve_bare(symbol)?;
+        self.apply_runtime_bridge_value(bridge, arg_val, evaluators, depth + 1)
+    }
+
+    fn try_apply_bare_runtime_bridge_side_effect(
+        &mut self,
+        symbol: &str,
+        arg_val: RuntimeValue,
+        locals: &RuntimeLocals,
+        callables: &HashMap<String, IntCallable>,
+        evaluators: &RuntimeEvaluators<'_, '_>,
+        depth: usize,
+    ) -> Option<()> {
+        self.try_apply_bare_runtime_bridge_value(
+            symbol,
+            arg_val,
+            locals,
+            callables,
+            evaluators,
+            depth + 1,
+        )?;
+        Some(())
+    }
+
+    fn try_apply_receiver_runtime_bridge_value(
+        &mut self,
+        receiver: &str,
+        symbol: &str,
+        arg_val: RuntimeValue,
+        evaluators: &RuntimeEvaluators<'_, '_>,
+        depth: usize,
+    ) -> Option<RuntimeValue> {
+        let bridge = self.runtime_bridges.resolve_receiver(receiver, symbol)?;
+        self.apply_runtime_bridge_value(bridge, arg_val, evaluators, depth + 1)
     }
 
     fn resolves_module_receiver(&self, receiver: &str, module_path: &str) -> bool {
@@ -3296,21 +3554,8 @@ fn collect_embedded_default_handlers(module: &Module) -> HashMap<String, String>
         .map(|embed| (embed.effect_name.clone(), embed.handler_name.clone()))
         .collect();
     let resolver = StdlibResolver::new(resolve_runtime_stdlib_root());
-    let mut import_paths: Vec<String> = module
-        .imports
-        .iter()
-        .map(|import| import.module_path.clone())
-        .collect();
-    let has_prelude = import_paths.iter().any(|path| path == PRELUDE_MODULE_PATH);
-    let prelude_available = resolver
-        .module_file_path(PRELUDE_MODULE_PATH)
-        .ok()
-        .is_some_and(|path| path.exists());
-    if !has_prelude && prelude_available {
-        import_paths.push(PRELUDE_MODULE_PATH.to_string());
-    }
-    for module_path in import_paths {
-        let Ok(resolved) = resolver.resolve_module(&module_path) else {
+    for import in effective_runtime_imports(module) {
+        let Ok(resolved) = resolver.resolve_module(&import.module_path) else {
             continue;
         };
         for embed in resolved.embedded_defaults {
@@ -3320,6 +3565,28 @@ fn collect_embedded_default_handlers(module: &Module) -> HashMap<String, String>
         }
     }
     defaults
+}
+
+fn effective_runtime_imports(module: &Module) -> Vec<goby_core::ImportDecl> {
+    let mut imports = module.imports.clone();
+    let has_prelude = imports
+        .iter()
+        .any(|import| import.module_path == PRELUDE_MODULE_PATH);
+    if has_prelude {
+        return imports;
+    }
+    let resolver = StdlibResolver::new(resolve_runtime_stdlib_root());
+    let prelude_available = resolver
+        .module_file_path(PRELUDE_MODULE_PATH)
+        .ok()
+        .is_some_and(|path| path.exists());
+    if prelude_available {
+        imports.push(goby_core::ImportDecl {
+            module_path: PRELUDE_MODULE_PATH.to_string(),
+            kind: goby_core::ImportKind::Plain,
+        });
+    }
+    imports
 }
 
 fn resolve_runtime_stdlib_root() -> PathBuf {
@@ -4569,6 +4836,41 @@ main =
         // Clean up before asserting so env is restored even if the assertion panics.
         unsafe { std::env::remove_var("GOBY_INTRINSIC_TEST_PATH") };
         assert_eq!(output, "intrinsic-ok");
+    }
+
+    #[test]
+    fn runtime_resolves_goby_env_fetch_via_selective_import_bridge() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        // SAFETY: serialized by ENV_MUTEX; no concurrent env access while lock is held.
+        unsafe { std::env::set_var("GOBY_ENV_BRIDGE_TEST_PATH", "env-bridge-ok") };
+        let source = r#"
+import goby/env ( fetch_env_var )
+main : Unit -> Unit
+main =
+  print (fetch_env_var "GOBY_ENV_BRIDGE_TEST_PATH")
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let output =
+            resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
+                .expect("runtime output should resolve");
+        unsafe { std::env::remove_var("GOBY_ENV_BRIDGE_TEST_PATH") };
+        assert_eq!(output, "env-bridge-ok");
+    }
+
+    #[test]
+    fn runtime_resolves_goby_string_length_via_module_receiver_bridge() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let source = r#"
+import goby/string
+main : Unit -> Unit
+main =
+  print (string.length "hello")
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let output =
+            resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
+                .expect("runtime output should resolve");
+        assert_eq!(output, "5");
     }
 
     #[test]
