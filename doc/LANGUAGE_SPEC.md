@@ -88,12 +88,20 @@ syntax/semantics.
 ## 5. Effects and Handlers
 
 - Effect annotation: `can EffectA, EffectB`.
+- Effect member signatures may also declare dependencies with `can`:
+  - example: `trace : String -> Unit can Print`
+  - meaning: implementations/handlers of that operation may use `Print`.
+  - if omitted, the operation implementation is not allowed to use additional effects.
 - Handler value expression:
   - `handler`
   - indented clauses: `op arg -> ...`
 - Handler application:
   - canonical: `with <handler_expr> in ...`
   - sugar: `with_handler ... in ...`
+- Handler clause validation:
+  - clause operation name must resolve to exactly one visible effect operation.
+  - clause body may use only effects currently handled in scope plus effects declared by
+    that operation member's `can` clause.
 - `resume`:
   - expression form: `resume <expr>`
   - valid only inside handler operation bodies

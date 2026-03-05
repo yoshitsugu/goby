@@ -198,6 +198,7 @@ pub(crate) fn build_lowering_plan(module: &Module) -> LoweringPlan {
         HashMap::new();
     let mut op_name_index: HashMap<String, Vec<EffectOperationRef>> = HashMap::new();
     let mut effect_name_to_id: HashMap<String, EffectId> = HashMap::new();
+    let effect_dependency_graph = build_effect_dependency_graph(module);
 
     for (effect_idx, effect_decl) in module.effect_declarations.iter().enumerate() {
         let effect_id = effect_id_from_index(effect_idx);
@@ -229,7 +230,10 @@ pub(crate) fn build_lowering_plan(module: &Module) -> LoweringPlan {
             && has_effect_clause(annotation)
         {
             is_effect_boundary = true;
-            for effect_name in parse_effect_clause_effects(annotation) {
+            let declared_effects = parse_effect_clause_effects(annotation);
+            let ordered_effects =
+                expand_effects_with_dependencies(&declared_effects, &effect_dependency_graph);
+            for effect_name in ordered_effects {
                 if let Some(effect_id) = effect_name_to_id.get(&effect_name).copied() {
                     required_effects.push(effect_id);
                 }
@@ -673,6 +677,65 @@ fn parse_effect_clause_effects(annotation: &str) -> Vec<String> {
         .collect()
 }
 
+fn build_effect_dependency_graph(module: &Module) -> HashMap<String, Vec<String>> {
+    let mut graph: HashMap<String, Vec<String>> = HashMap::new();
+    for effect_decl in &module.effect_declarations {
+        let deps = graph.entry(effect_decl.name.clone()).or_default();
+        for member in &effect_decl.members {
+            for dep in parse_effect_clause_effects(&member.type_annotation) {
+                if !deps.contains(&dep) {
+                    deps.push(dep);
+                }
+            }
+        }
+    }
+    graph
+}
+
+fn expand_effects_with_dependencies(
+    declared_effects: &[String],
+    dependency_graph: &HashMap<String, Vec<String>>,
+) -> Vec<String> {
+    fn dfs(
+        effect: &str,
+        dependency_graph: &HashMap<String, Vec<String>>,
+        visiting: &mut HashSet<String>,
+        visited: &mut HashSet<String>,
+        out: &mut Vec<String>,
+    ) {
+        if visited.contains(effect) {
+            return;
+        }
+        if !visiting.insert(effect.to_string()) {
+            // Cycle: keep deterministic behavior by stopping this branch.
+            return;
+        }
+        if let Some(deps) = dependency_graph.get(effect) {
+            for dep in deps {
+                dfs(dep, dependency_graph, visiting, visited, out);
+            }
+        }
+        visiting.remove(effect);
+        if visited.insert(effect.to_string()) {
+            out.push(effect.to_string());
+        }
+    }
+
+    let mut out = Vec::new();
+    let mut visited = HashSet::new();
+    let mut visiting = HashSet::new();
+    for effect in declared_effects {
+        dfs(
+            effect,
+            dependency_graph,
+            &mut visiting,
+            &mut visited,
+            &mut out,
+        );
+    }
+    out
+}
+
 fn find_can_keyword_index(annotation: &str) -> Option<usize> {
     for (idx, _) in annotation.char_indices() {
         let rest = &annotation[idx..];
@@ -880,6 +943,34 @@ main =
         assert!(req.passes_evidence());
         assert_eq!(req.required_effect_count(), 1);
         assert_eq!(req.referenced_operation_count(), 1);
+    }
+
+    #[test]
+    fn expands_required_effects_with_member_declared_dependencies_in_topological_order() {
+        let source = r#"
+effect Print
+  print: String -> Unit
+
+effect Log
+  log: String -> Unit
+
+effect Trace
+  trace_print: String -> Unit can Print
+  trace_log: String -> Unit can Log
+
+main : Unit -> Unit can Trace
+main =
+  Unit
+"#;
+        let module = parse_module(source).expect("source should parse");
+        let plan = build_lowering_plan(&module);
+        let req = plan
+            .evidence_requirement_for("main")
+            .expect("main requirement should exist");
+        assert_eq!(
+            req.required_effects(),
+            &[EffectId(0), EffectId(1), EffectId(2)]
+        );
     }
 
     #[test]
