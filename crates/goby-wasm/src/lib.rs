@@ -612,13 +612,18 @@ impl<'m> RuntimeOutputResolver<'m> {
             if resolver.outputs.is_empty() {
                 return Some(err_line);
             }
-            return Some(format!("{}\n{}", resolver.outputs.join("\n"), err_line));
+            let mut out = resolver.outputs.concat();
+            if !out.ends_with('\n') {
+                out.push('\n');
+            }
+            out.push_str(&err_line);
+            return Some(out);
         }
 
         if resolver.outputs.is_empty() {
             None
         } else {
-            Some(resolver.outputs.join("\n"))
+            Some(resolver.outputs.concat())
         }
     }
 
@@ -4086,7 +4091,7 @@ main =
         let output =
             resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
                 .expect("runtime output should resolve");
-        assert_eq!(output, "90\n[30, 40, 50]\n[60, 70]\nsomething\n15");
+        assert_eq!(output, "90[30, 40, 50][60, 70]something15");
     }
 
     #[test]
@@ -4107,7 +4112,7 @@ main =
         let output =
             resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
                 .expect("runtime output should resolve");
-        assert_eq!(output, "something\n15");
+        assert_eq!(output, "something15");
     }
 
     #[test]
@@ -4127,7 +4132,7 @@ main =
         let output =
             resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
                 .expect("runtime output should resolve");
-        assert_eq!(output, "1\n2");
+        assert_eq!(output, "12");
     }
 
     #[test]
@@ -4151,7 +4156,7 @@ main =
         let output =
             resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
                 .expect("runtime output should resolve");
-        assert_eq!(output, "1\n2");
+        assert_eq!(output, "12");
     }
 
     #[test]
@@ -4179,7 +4184,7 @@ main =
         let output =
             resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
                 .expect("runtime output should resolve");
-        assert_eq!(output, "1\n2");
+        assert_eq!(output, "12");
     }
 
     #[test]
@@ -4200,7 +4205,7 @@ main =
         let output =
             resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
                 .expect("runtime output should resolve");
-        assert_eq!(output, "41\n42");
+        assert_eq!(output, "4142");
     }
 
     #[test]
@@ -4238,7 +4243,7 @@ main =
         let output =
             resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
                 .expect("runtime output should resolve");
-        assert_eq!(output, "3\n5");
+        assert_eq!(output, "35");
     }
 
     #[test]
@@ -4255,7 +4260,7 @@ main =
         let output =
             resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
                 .expect("runtime output should resolve");
-        assert_eq!(output, "2\n4");
+        assert_eq!(output, "24");
     }
 
     #[test]
@@ -4272,7 +4277,7 @@ main =
         let output =
             resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
                 .expect("runtime output should resolve");
-        assert_eq!(output, "6\n8");
+        assert_eq!(output, "68");
     }
 
     #[test]
@@ -4289,7 +4294,7 @@ main =
         let output =
             resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
                 .expect("runtime output should resolve");
-        assert_eq!(output, "10\n12");
+        assert_eq!(output, "1012");
     }
 
     #[test]
@@ -4313,7 +4318,7 @@ main =
         let output =
             resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
                 .expect("runtime output should resolve");
-        assert_eq!(output, "1\n3");
+        assert_eq!(output, "13");
     }
 
     #[test]
@@ -4337,7 +4342,7 @@ main =
         let output =
             resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
                 .expect("runtime output should resolve");
-        assert_eq!(output, "5\n7");
+        assert_eq!(output, "57");
     }
 
     #[test]
@@ -4361,7 +4366,7 @@ main =
         let output =
             resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
                 .expect("runtime output should resolve");
-        assert_eq!(output, "9\n11");
+        assert_eq!(output, "911");
     }
 
     #[test]
@@ -4379,7 +4384,7 @@ main =
         let output =
             resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
                 .expect("runtime output should resolve");
-        assert_eq!(output, "10\n\n20\n\n30\n");
+        assert_eq!(output, "10\n20\n30\n");
     }
 
     #[test]
@@ -4573,7 +4578,7 @@ main =
                 .expect("runtime output should resolve");
         // Clean up before asserting so env is restored even if the assertion panics.
         unsafe { std::env::remove_var("GOBY_PATH") };
-        assert_eq!(output, "13\ndone");
+        assert_eq!(output, "13done");
     }
 
     #[test]
@@ -4585,7 +4590,7 @@ main =
         let output =
             resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
                 .expect("runtime output should resolve");
-        assert_eq!(output, "tick:a\ntick:b\ntick:c");
+        assert_eq!(output, "tick:atick:btick:c");
     }
 
     #[test]
@@ -4765,7 +4770,7 @@ main =
                 .expect("runtime output should resolve");
         assert_eq!(
             output,
-            "Empty list\nList of just 1\nList starting with 4\nList of at least 1 elements with binding\nList of 2 elements\nSome other list"
+            "Empty listList of just 1List starting with 4List of at least 1 elements with bindingList of 2 elementsSome other list"
         );
     }
 
@@ -5040,7 +5045,7 @@ main =
         );
         assert_eq!(
             output.as_deref(),
-            Some("line=alpha\ntail=beta\ngamma\ntail2="),
+            Some("line=alphatail=beta\ngammatail2="),
             "implicit prelude embedded Read handler should serve read_line/read and consume stdin"
         );
     }
@@ -5066,7 +5071,7 @@ main =
         );
         assert_eq!(
             output.as_deref(),
-            Some("line=alpha\ntail=beta"),
+            Some("line=alphatail=beta"),
             "bare read_line/read should resolve through implicit prelude embedded Read"
         );
     }
@@ -5123,7 +5128,7 @@ main =
         );
         assert_eq!(
             output.as_deref(),
-            Some("a=a\nb=b\nc=c\nd=d\ne="),
+            Some("a=ab=bc=cd=de="),
             "read_line should trim CRLF/LF/CR and return empty string at EOF"
         );
     }
@@ -5148,7 +5153,7 @@ main =
         let module = parse_module(source).expect("parse should work");
         let output =
             resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module));
-        assert_eq!(output.as_deref(), Some("42\n-7\n-1\n-1"));
+        assert_eq!(output.as_deref(), Some("42-7-1-1"));
     }
 
     #[test]
@@ -5895,7 +5900,7 @@ main =
             resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module));
         assert_eq!(
             output.as_deref(),
-            Some("2\n2"),
+            Some("22"),
             "handler context should remain stable after resume across multiple qualified calls"
         );
     }
@@ -5982,7 +5987,7 @@ main =
         let expected_text =
             resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
                 .expect("runtime output should resolve");
-        assert_eq!(expected_text, "42\nTrue");
+        assert_eq!(expected_text, "42True");
         assert_valid_wasm_module(&wasm);
     }
 
@@ -6228,7 +6233,7 @@ main =
         let expected_text =
             resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
                 .expect("runtime output should resolve");
-        assert_eq!(expected_text, "Five!\n50\n30");
+        assert_eq!(expected_text, "Five!5030");
         assert_valid_wasm_module(&wasm);
     }
 
