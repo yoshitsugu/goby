@@ -846,10 +846,10 @@ Implementation steps:
 Additional planning constraint (Print operation split, locked 2026-03-04):
 
 Goal: make stdout behavior explicit by defining two `Print` effect operations:
-`print` (no trailing newline) and `println` (adds trailing newline).
+`print` (no trailing newline) and `println` (ensures trailing newline).
 
 Status update (2026-03-05): implemented in stdlib prelude surface and fallback
-runtime embedded default handler (`Print.println` appends exactly one `\n`).
+runtime embedded default handler (`Print.println` ensures trailing `\n`).
 
 Implementation steps:
 
@@ -859,7 +859,7 @@ Implementation steps:
      - `println : String -> Unit`
 2. Runtime/intrinsic behavior split.
    - Keep current stdout embedded default handler for `print` semantics (no newline).
-   - Add `println` dispatch semantics that append exactly one `\n`.
+   - Add `println` dispatch semantics that append `\n` only when missing.
 3. Typecheck/runtime operation wiring.
    - Ensure handler dispatch and operation-resolution logic distinguish
      `Print.print` and `Print.println` correctly.
@@ -869,7 +869,7 @@ Implementation steps:
    - Update samples/tests that expect line-oriented output to use `println`.
 5. Regression coverage.
    - Positive tests for both operations under explicit handler and embedded-default paths.
-   - Output-shape tests: `print` does not append newline; `println` appends one newline.
+   - Output-shape tests: `print` does not append newline; `println` ensures trailing newline.
 
 Additional planning constraint (Read effect stdin support, proposed 2026-03-04):
 

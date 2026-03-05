@@ -2237,7 +2237,11 @@ impl<'m> RuntimeOutputResolver<'m> {
                 Some(RuntimeValue::Unit)
             }
             ("__goby_embeded_effect_stdout_handler", "println") => {
-                self.outputs.push(format!("{}\n", arg_val.to_output_text()));
+                let mut text = arg_val.to_output_text();
+                if !text.ends_with('\n') {
+                    text.push('\n');
+                }
+                self.outputs.push(text);
                 Some(RuntimeValue::Unit)
             }
             ("__goby_embeded_effect_stdin_handler", "read")
@@ -4165,7 +4169,32 @@ main =
         assert_eq!(
             output.as_deref(),
             Some("fallback\n"),
-            "embedded default handler should handle Print.println with one trailing newline"
+            "embedded default handler should ensure trailing newline for Print.println"
+        );
+    }
+
+    #[test]
+    fn embedded_default_handler_println_keeps_existing_trailing_newline() {
+        use goby_core::parse_module;
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let source = r#"
+effect Print
+  print: String -> Unit
+  println: String -> Unit
+
+@embed Print __goby_embeded_effect_stdout_handler
+
+main : Unit -> Unit can Print
+main =
+  Print.println "fallback\n"
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let output =
+            resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module));
+        assert_eq!(
+            output.as_deref(),
+            Some("fallback\n"),
+            "embedded default handler should not duplicate trailing newline for Print.println"
         );
     }
 
