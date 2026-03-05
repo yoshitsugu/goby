@@ -346,19 +346,20 @@ predictable.
 Note: detailed execution history for these items is retained in git history and
 `doc/STATE.md`; this section keeps only decision-level summaries.
 
-### 4.2 Active Track A: Effect Operation Argument Type Checking
+### 4.2 Completed Track A: Effect Operation Argument Type Checking
 
 Goal: reject statically-incompatible effect operation arguments at typecheck time
 inside handler scopes (`with` / `with_handler`).
 
-Plan:
+Completed scope:
 
-1. Add arg-type checks for effect operation calls in both direct call and pipeline paths.
-2. Reuse existing effect member type info in `TypeEnv` (no new parallel metadata store).
-3. Add regressions:
-   - negative: wrong arg type for call and pipeline,
-   - positive: matching record argument,
-   - neutral: unresolved/unknown type case should not produce noisy false positives.
+1. Arg-type checks for effect operation calls are enforced across:
+   - bare/direct call (`op arg`),
+   - qualified call (`Effect.op arg`),
+   - method-style call (`Effect.op(arg)`),
+   - pipeline (`arg |> op`).
+2. Checks reuse existing effect member type info in `TypeEnv` (no parallel metadata store).
+3. Regression coverage includes negative/positive/neutral cases, including qualified and method-style forms.
 
 Acceptance criteria:
 
