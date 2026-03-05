@@ -36,7 +36,6 @@ use crate::{
 };
 
 const BUILTIN_PRINT: &str = "print";
-const BUILTIN_MAP: &str = "map";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum UnsupportedReason {
@@ -275,18 +274,6 @@ fn unsupported_value_expr_reason(
             if name == BUILTIN_PRINT {
                 return Some(UnsupportedReason::PrintNotValueExpr);
             }
-            if name == BUILTIN_MAP {
-                if args.len() != 2 {
-                    return Some(UnsupportedReason::CallArityMismatch);
-                }
-                if !args
-                    .iter()
-                    .all(|arg| is_phase2_supported_value_expr(arg, module, stack))
-                {
-                    return Some(UnsupportedReason::UnsupportedCallArgument);
-                }
-                return None;
-            }
             if !args
                 .iter()
                 .all(|arg| is_phase2_supported_value_expr(arg, module, stack))
@@ -400,19 +387,14 @@ fn is_decl_value_expr_supported(expr: &Expr, module: &Module, stack: &mut HashSe
             if matches!(callee.as_ref(), Expr::Var(name) if name == BUILTIN_PRINT) {
                 return false;
             }
-            if let Some((name, args)) = flatten_named_call(expr) {
-                if name == BUILTIN_MAP {
-                    return args.len() == 2
-                        && is_decl_value_expr_supported(args[0], module, stack)
-                        && is_decl_value_expr_supported(args[1], module, stack);
-                }
-                if let Ok(decl) = resolve_direct_call_target(module, name, args.len()) {
-                    return decl.name != "main"
-                        && args
-                            .iter()
-                            .all(|arg| is_decl_value_expr_supported(arg, module, stack))
-                        && declaration_body_supported_for_native(name, module, stack);
-                }
+            if let Some((name, args)) = flatten_named_call(expr)
+                && let Ok(decl) = resolve_direct_call_target(module, name, args.len())
+            {
+                return decl.name != "main"
+                    && args
+                        .iter()
+                        .all(|arg| is_decl_value_expr_supported(arg, module, stack))
+                    && declaration_body_supported_for_native(name, module, stack);
             }
             is_decl_value_expr_supported(callee, module, stack)
                 && is_decl_value_expr_supported(arg, module, stack)

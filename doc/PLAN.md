@@ -100,7 +100,8 @@ Based on `examples/*.gb`:
 - Legacy syntax (`handler ... for ...`, `using`) is no longer accepted by the
   language parser as of 2026-03-04.
   - CLI commands (`check` / `run`) therefore reject such sources by default.
-- MVP built-ins: `print`, `map`, `fetch_env_var`, `string.split`, `list.join`.
+- MVP built-ins: `print`, `fetch_env_var`, `string.split`, `list.join`.
+  - list mapping should use stdlib `goby/list.map`.
   - `print` execution is resolved by compiler/runtime internals (default stdio print path),
     not by a user-visible stdlib handler definition.
 - Stdlib integer parse entrypoint is `int.parse`.
@@ -508,10 +509,10 @@ Step-by-step checklist:
 - [x] Step 7: native lowering parity
   - add lowering support or route safely to fallback path.
   - ensure observable behavior parity between native and fallback execution.
-- [ ] Step 8: migrate map callsites to stdlib
+- [x] Step 8: migrate map callsites to stdlib
   - identify existing builtin/internal `map` callsites.
   - switch each to `goby/list` `map` where semantics are equivalent.
-- [ ] Step 9: trim builtin-only map path
+- [x] Step 9: trim builtin-only map path
   - remove or narrow redundant builtin `map` special handling after migration.
   - keep one canonical map semantics source in stdlib.
 - [x] Step 10: docs sync

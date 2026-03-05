@@ -190,7 +190,10 @@ fn resolve_main_runtime_output_with_mode_and_stdin(
     let list_functions = collect_functions_with_result(module, "List Int");
     let unit_functions = collect_unit_functions(module);
     let int_evaluator = IntEvaluator::root(&int_functions);
-    let list_evaluator = ListIntEvaluator::root(&list_functions);
+    let list_evaluator = ListIntEvaluator::root(
+        &list_functions,
+        module_has_selective_import_symbol(module, "goby/list", "map"),
+    );
     let evaluators = RuntimeEvaluators {
         int: &int_evaluator,
         list: &list_evaluator,
@@ -3593,6 +3596,20 @@ fn effective_runtime_imports(module: &Module) -> Vec<goby_core::ImportDecl> {
     imports
 }
 
+fn module_has_selective_import_symbol(module: &Module, module_path: &str, symbol: &str) -> bool {
+    module.imports.iter().any(|import| {
+        if import.module_path != module_path {
+            return false;
+        }
+        match &import.kind {
+            goby_core::ImportKind::Selective(selected) => {
+                selected.iter().any(|name| name == symbol)
+            }
+            _ => false,
+        }
+    })
+}
+
 fn resolve_runtime_stdlib_root() -> PathBuf {
     std::env::var_os("GOBY_STDLIB_ROOT")
         .map(PathBuf::from)
@@ -3794,13 +3811,15 @@ fn eval_string_expr(expr: &str, locals: &HashMap<String, String>) -> Option<Stri
 
 struct ListIntEvaluator<'a> {
     functions: &'a EvaluatedFunctions<'a>,
+    allow_imported_list_map: bool,
     depth: usize,
 }
 
 impl<'a> ListIntEvaluator<'a> {
-    fn root(functions: &'a EvaluatedFunctions<'a>) -> Self {
+    fn root(functions: &'a EvaluatedFunctions<'a>, allow_imported_list_map: bool) -> Self {
         Self {
             functions,
+            allow_imported_list_map,
             depth: 0,
         }
     }
@@ -3812,6 +3831,7 @@ impl<'a> ListIntEvaluator<'a> {
 
         Some(Self {
             functions: self.functions,
+            allow_imported_list_map: self.allow_imported_list_map,
             depth: self.depth + 1,
         })
     }
@@ -3830,7 +3850,9 @@ impl<'a> ListIntEvaluator<'a> {
             return Some(value.clone());
         }
 
-        if let Some((list_expr, lambda_expr)) = parse_map_call(expr) {
+        if self.allow_imported_list_map
+            && let Some((list_expr, lambda_expr)) = parse_map_call(expr)
+        {
             let list_values = self.descend()?.eval_expr(list_expr, locals)?;
             let lambda = parse_map_lambda(lambda_expr)?;
             return apply_map_lambda(&list_values, &lambda);
@@ -6614,6 +6636,8 @@ main =
     #[test]
     fn native_codegen_ignores_unused_hof_declaration() {
         let source = r#"
+import goby/list ( map )
+
 mul_tens : List Int -> List Int
 mul_tens ns = map ns (|n| -> n * 10)
 
@@ -6638,6 +6662,8 @@ main =
     #[test]
     fn native_codegen_accepts_transitively_required_hof_declaration() {
         let source = r#"
+import goby/list ( map )
+
 mul_tens : List Int -> List Int
 mul_tens ns = map ns (|n| -> n * 10)
 

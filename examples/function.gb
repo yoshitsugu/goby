@@ -1,3 +1,5 @@
+import goby/list ( map )
+
 # Functions are defined with `=`
 add_ten : Int -> Int
 add_ten x = x + 10
