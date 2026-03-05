@@ -82,6 +82,7 @@ syntax/semantics.
 - `main` must be `Unit -> Unit` for `run`.
 - `check` allows missing `main` annotation, but `run` requires entry constraints.
 - Type annotations are optional where inference is sufficient.
+- `if` / `case` are value expressions and all branches must resolve to one compatible result type.
 - `void` spelling is rejected; use `Unit`.
 
 ## 5. Effects and Handlers

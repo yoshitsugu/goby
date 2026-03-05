@@ -171,9 +171,9 @@ Based on `examples/*.gb`:
       - unresolved effects must be searched in outer scopes.
       - if still unresolved at `main`, keep existing behavior: allow only embedded/builtin runtime-backed effects, and report missing handler error for others.
     - (done 2026-03-05) make `case` consistently value-returning in all positions (including bindings like `x = case ...`), not only direct tail-expression positions.
-    - enforce branch result type unification for both `if` and `case`:
+    - (done 2026-03-05) enforce branch result type unification for both `if` and `case`:
       - all branches must resolve to one compatible result type.
-      - extend type inference + type checking to carry this constraint and report mismatch diagnostics.
+      - type inference + type checking now carry this constraint and report mismatch diagnostics.
   - Phase notes (kept for maintenance):
   - Phase 1 (AST/parser):
     - introduce an explicit expression-level block representation (for example `Expr::Block(Vec<Stmt>)`)
