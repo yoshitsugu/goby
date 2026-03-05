@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-05 (session 147)
+Last updated: 2026-03-05 (session 148)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -77,6 +77,21 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - follow-up work moved to post-MVP tracks in `doc/PLAN.md`.
 
 ## 4. Recent Milestones
+
+- 2026-03-05 (session 148): `if` / `case` branch result type unification in typechecker
+  - Type inference updates:
+    - `check_expr` now merges branch result types for `if` / `case`
+      (compatible types are preserved; incompatible known types collapse to `Unknown`).
+  - Type checking updates:
+    - explicit branch-type consistency check added for nested expressions.
+    - mismatched known branch types now fail with diagnostics:
+      - `if branch type mismatch: then is ... else is ...`
+      - `case branch type mismatch: ... vs ...`
+    - checks are applied through declaration bodies, including multiline `case/if` RHS and block expressions.
+  - Tests:
+    - added regressions for `if` mismatch rejection and `case` mismatch rejection.
+  - Validation:
+    - targeted `cargo test -p goby-core` regressions for new checks.
 
 - 2026-03-05 (session 147): multiline `case`/`if` AST coverage + effectful branch runtime support
   - Parser (`parse_body_stmts`) now parses multiline control-flow expressions in additional positions:

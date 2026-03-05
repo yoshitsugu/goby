@@ -1895,12 +1895,16 @@ fn check_expr(expr: &Expr, env: &TypeEnv) -> Ty {
         Expr::Block(stmts) => infer_block_expr_ty(stmts, env),
         Expr::Case { scrutinee, arms } => {
             let scrutinee_ty = check_expr(scrutinee, env);
-            arms.first()
-                .map(|arm| {
-                    let arm_env = env_with_case_pattern_bindings(env, &arm.pattern, &scrutinee_ty);
-                    check_expr(&arm.body, &arm_env)
-                })
-                .unwrap_or(Ty::Unknown)
+            let mut merged: Option<Ty> = None;
+            for arm in arms {
+                let arm_env = env_with_case_pattern_bindings(env, &arm.pattern, &scrutinee_ty);
+                let arm_ty = check_expr(&arm.body, &arm_env);
+                merged = Some(match merged {
+                    Some(prev) => merge_branch_type(env, prev, arm_ty),
+                    None => arm_ty,
+                });
+            }
+            merged.unwrap_or(Ty::Unknown)
         }
         Expr::If {
             condition,
@@ -1909,9 +1913,98 @@ fn check_expr(expr: &Expr, env: &TypeEnv) -> Ty {
         } => {
             let _ = check_expr(condition, env);
             let then_ty = check_expr(then_expr, env);
-            let _ = check_expr(else_expr, env);
-            then_ty
+            let else_ty = check_expr(else_expr, env);
+            merge_branch_type(env, then_ty, else_ty)
         }
+    }
+}
+
+fn merge_branch_type(env: &TypeEnv, left: Ty, right: Ty) -> Ty {
+    let left = env.resolve_alias(&left, 0);
+    let right = env.resolve_alias(&right, 0);
+    match (left, right) {
+        (Ty::Unknown, ty) | (ty, Ty::Unknown) => ty,
+        (Ty::List(l), Ty::List(r)) => Ty::List(Box::new(merge_branch_type(env, *l, *r))),
+        (Ty::Tuple(ls), Ty::Tuple(rs)) if ls.len() == rs.len() => {
+            let merged = ls
+                .into_iter()
+                .zip(rs)
+                .map(|(l, r)| merge_branch_type(env, l, r))
+                .collect();
+            Ty::Tuple(merged)
+        }
+        (
+            Ty::Fun {
+                params: lps,
+                result: lr,
+            },
+            Ty::Fun {
+                params: rps,
+                result: rr,
+            },
+        ) if lps.len() == rps.len() => {
+            let merged_params = lps
+                .into_iter()
+                .zip(rps)
+                .map(|(l, r)| merge_branch_type(env, l, r))
+                .collect();
+            Ty::Fun {
+                params: merged_params,
+                result: Box::new(merge_branch_type(env, *lr, *rr)),
+            }
+        }
+        (Ty::Con { name: ln, args: la }, Ty::Con { name: rn, args: ra })
+            if ln == rn && la.len() == ra.len() =>
+        {
+            let merged_args = la
+                .into_iter()
+                .zip(ra)
+                .map(|(l, r)| merge_branch_type(env, l, r))
+                .collect();
+            Ty::Con {
+                name: ln,
+                args: merged_args,
+            }
+        }
+        (l, r) if env.are_compatible(&l, &r) => l,
+        (l, r) if env.are_compatible(&r, &l) => r,
+        _ => Ty::Unknown,
+    }
+}
+
+fn branch_types_compatible(env: &TypeEnv, left: &Ty, right: &Ty) -> bool {
+    let left = env.resolve_alias(left, 0);
+    let right = env.resolve_alias(right, 0);
+    match (left, right) {
+        (Ty::Unknown, _) | (_, Ty::Unknown) => true,
+        (Ty::List(l), Ty::List(r)) => branch_types_compatible(env, &l, &r),
+        (Ty::Tuple(ls), Ty::Tuple(rs)) if ls.len() == rs.len() => ls
+            .iter()
+            .zip(rs.iter())
+            .all(|(l, r)| branch_types_compatible(env, l, r)),
+        (
+            Ty::Fun {
+                params: lps,
+                result: lr,
+            },
+            Ty::Fun {
+                params: rps,
+                result: rr,
+            },
+        ) if lps.len() == rps.len() => {
+            lps.iter()
+                .zip(rps.iter())
+                .all(|(l, r)| branch_types_compatible(env, l, r))
+                && branch_types_compatible(env, &lr, &rr)
+        }
+        (Ty::Con { name: ln, args: la }, Ty::Con { name: rn, args: ra })
+            if ln == rn && la.len() == ra.len() =>
+        {
+            la.iter()
+                .zip(ra.iter())
+                .all(|(l, r)| branch_types_compatible(env, l, r))
+        }
+        (l, r) => env.are_compatible(&l, &r) || env.are_compatible(&r, &l),
     }
 }
 
@@ -2419,6 +2512,7 @@ fn check_body_stmts(
                     covered_ops,
                     decl_name,
                 )?;
+                check_branch_type_consistency_in_expr(value, &local_env, decl_name)?;
                 let ty = check_expr(value, &local_env);
                 local_env.locals.insert(name.clone(), ty);
                 local_mutability.insert(name.clone(), false);
@@ -2443,6 +2537,7 @@ fn check_body_stmts(
                     covered_ops,
                     decl_name,
                 )?;
+                check_branch_type_consistency_in_expr(value, &local_env, decl_name)?;
                 let ty = check_expr(value, &local_env);
                 local_env.locals.insert(name.clone(), ty);
                 local_mutability.insert(name.clone(), true);
@@ -2474,6 +2569,7 @@ fn check_body_stmts(
                     covered_ops,
                     decl_name,
                 )?;
+                check_branch_type_consistency_in_expr(value, &local_env, decl_name)?;
                 let current_ty = local_env.locals.get(name).cloned().unwrap_or(Ty::Unknown);
                 let assigned_ty = check_expr(value, &local_env);
                 if current_ty != Ty::Unknown
@@ -2505,6 +2601,7 @@ fn check_body_stmts(
                     covered_ops,
                     decl_name,
                 )?;
+                check_branch_type_consistency_in_expr(expr, &local_env, decl_name)?;
             }
         }
     }
@@ -3090,6 +3187,174 @@ fn ensure_no_ambiguous_refs_in_stmts(
         }
     }
     Ok(())
+}
+
+fn check_branch_type_consistency_in_stmts(
+    stmts: &[Stmt],
+    env: &TypeEnv,
+    decl_name: &str,
+) -> Result<(), TypecheckError> {
+    let mut local_env = env.clone();
+    for stmt in stmts {
+        match stmt {
+            Stmt::Binding { name, value } | Stmt::MutBinding { name, value } => {
+                check_branch_type_consistency_in_expr(value, &local_env, decl_name)?;
+                let ty = check_expr(value, &local_env);
+                local_env.locals.insert(name.clone(), ty);
+            }
+            Stmt::Assign { value, .. } => {
+                check_branch_type_consistency_in_expr(value, &local_env, decl_name)?;
+            }
+            Stmt::Expr(expr) => {
+                check_branch_type_consistency_in_expr(expr, &local_env, decl_name)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn check_branch_type_consistency_in_expr(
+    expr: &Expr,
+    env: &TypeEnv,
+    decl_name: &str,
+) -> Result<(), TypecheckError> {
+    macro_rules! recurse {
+        ($e:expr) => {
+            check_branch_type_consistency_in_expr($e, env, decl_name)
+        };
+        ($e:expr, $child_env:expr) => {
+            check_branch_type_consistency_in_expr($e, $child_env, decl_name)
+        };
+    }
+
+    match expr {
+        Expr::IntLit(_) | Expr::BoolLit(_) | Expr::StringLit(_) | Expr::Var(_) => Ok(()),
+        Expr::InterpolatedString(parts) => {
+            for part in parts {
+                if let InterpolatedPart::Expr(expr) = part {
+                    recurse!(expr)?;
+                }
+            }
+            Ok(())
+        }
+        Expr::ListLit(items) | Expr::TupleLit(items) => {
+            for item in items {
+                recurse!(item)?;
+            }
+            Ok(())
+        }
+        Expr::Qualified { .. } => Ok(()),
+        Expr::RecordConstruct { fields, .. } => {
+            for (_, value) in fields {
+                recurse!(value)?;
+            }
+            Ok(())
+        }
+        Expr::BinOp { left, right, .. } => {
+            recurse!(left)?;
+            recurse!(right)
+        }
+        Expr::Call { callee, arg } => {
+            recurse!(callee)?;
+            recurse!(arg)
+        }
+        Expr::MethodCall { args, .. } => {
+            for arg in args {
+                recurse!(arg)?;
+            }
+            Ok(())
+        }
+        Expr::Pipeline { value, .. } => recurse!(value),
+        Expr::Lambda { param, body } => {
+            let child_env = env.with_local(param, Ty::Unknown);
+            recurse!(body, &child_env)
+        }
+        Expr::Handler { clauses } => {
+            for clause in clauses {
+                if let Some(stmts) = &clause.parsed_body {
+                    let mut child_env = TypeEnv {
+                        globals: env.globals.clone(),
+                        locals: env.locals.clone(),
+                        type_aliases: env.type_aliases.clone(),
+                        record_types: env.record_types.clone(),
+                    };
+                    if let Some(first) = clause.params.first() {
+                        child_env.locals.insert(first.clone(), Ty::Unknown);
+                    }
+                    check_branch_type_consistency_in_stmts(stmts, &child_env, decl_name)?;
+                }
+            }
+            Ok(())
+        }
+        Expr::With { handler, body } => {
+            recurse!(handler)?;
+            let child_env = TypeEnv {
+                globals: env.globals.clone(),
+                locals: env.locals.clone(),
+                type_aliases: env.type_aliases.clone(),
+                record_types: env.record_types.clone(),
+            };
+            check_branch_type_consistency_in_stmts(body, &child_env, decl_name)
+        }
+        Expr::Resume { value } => recurse!(value),
+        Expr::Block(stmts) => check_branch_type_consistency_in_stmts(stmts, env, decl_name),
+        Expr::Case { scrutinee, arms } => {
+            recurse!(scrutinee)?;
+            let scrutinee_ty = check_expr(scrutinee, env);
+            let mut merged: Option<Ty> = None;
+            for arm in arms {
+                let arm_env = env_with_case_pattern_bindings(env, &arm.pattern, &scrutinee_ty);
+                recurse!(&arm.body, &arm_env)?;
+                let arm_ty = check_expr(&arm.body, &arm_env);
+                if let Some(prev) = &merged
+                    && *prev != Ty::Unknown
+                    && arm_ty != Ty::Unknown
+                    && !branch_types_compatible(env, prev, &arm_ty)
+                {
+                    return Err(TypecheckError {
+                        declaration: Some(decl_name.to_string()),
+                        span: None,
+                        message: format!(
+                            "case branch type mismatch: `{}` vs `{}`",
+                            ty_name(prev),
+                            ty_name(&arm_ty)
+                        ),
+                    });
+                }
+                merged = Some(match merged {
+                    Some(prev) => merge_branch_type(env, prev, arm_ty),
+                    None => arm_ty,
+                });
+            }
+            Ok(())
+        }
+        Expr::If {
+            condition,
+            then_expr,
+            else_expr,
+        } => {
+            recurse!(condition)?;
+            recurse!(then_expr)?;
+            recurse!(else_expr)?;
+            let then_ty = check_expr(then_expr, env);
+            let else_ty = check_expr(else_expr, env);
+            if then_ty != Ty::Unknown
+                && else_ty != Ty::Unknown
+                && !branch_types_compatible(env, &then_ty, &else_ty)
+            {
+                return Err(TypecheckError {
+                    declaration: Some(decl_name.to_string()),
+                    span: None,
+                    message: format!(
+                        "if branch type mismatch: then is `{}`, else is `{}`",
+                        ty_name(&then_ty),
+                        ty_name(&else_ty)
+                    ),
+                });
+            }
+            Ok(())
+        }
+    }
 }
 
 fn ensure_name_not_ambiguous(
@@ -4513,6 +4778,45 @@ f x =
         assert!(
             err.message
                 .contains("list case pattern requires `List` scrutinee"),
+            "unexpected message: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn rejects_if_branch_type_mismatch() {
+        let source = r#"
+f : Unit -> Int
+f _ =
+  if True
+    1
+  else
+    "oops"
+"#;
+        let module = parse_module(source).expect("should parse");
+        let err = typecheck_module(&module).expect_err("if branch type mismatch should fail");
+        assert_eq!(err.declaration.as_deref(), Some("f"));
+        assert!(
+            err.message.contains("if branch type mismatch"),
+            "unexpected message: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn rejects_case_branch_type_mismatch() {
+        let source = r#"
+f : Int -> Int
+f x =
+  case x
+    0 -> 1
+    _ -> "oops"
+"#;
+        let module = parse_module(source).expect("should parse");
+        let err = typecheck_module(&module).expect_err("case branch type mismatch should fail");
+        assert_eq!(err.declaration.as_deref(), Some("f"));
+        assert!(
+            err.message.contains("case branch type mismatch"),
             "unexpected message: {}",
             err.message
         );
