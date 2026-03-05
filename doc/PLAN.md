@@ -578,7 +578,7 @@ Implementation plan (step-by-step checklist):
   - Add/update examples showing state-less iteration (`b = _`/Unit-style), state-threaded iteration, and early-stop via `(False, state)`.
   - Definition of done: docs + examples reflect actual compiler behavior (no speculative mismatch).
 
-- [ ] Step 8: regression test matrix and quality gates.
+- [x] Step 8: regression test matrix and quality gates.
   - Add/expand tests in parser/typecheck/runtime layers: positive generic effect inference, negative constraint conflicts, `resume` type consistency, and stdlib integration (`list.each`, `string.split`, `int.parse` paths).
   - Run required gates: `cargo fmt`, `cargo check`, `cargo test`, `cargo clippy -- -D warnings`.
   - Definition of done: all quality gates pass and new tests prevent regression to non-unifying behavior.
@@ -589,7 +589,7 @@ Recommended landing sequence (PR slices):
 - [x] PR2: typecheck unification core for effect ops + resume.
 - [x] PR3: runtime iterator contract switch.
 - [x] PR4: stdlib migration.
-- [ ] PR5: diagnostics/docs/examples polish + full regression expansion.
+- [x] PR5: diagnostics/docs/examples polish + full regression expansion.
 
 ### 4.5 Active Track D: Developer Tooling Foundation
 

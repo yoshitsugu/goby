@@ -80,6 +80,18 @@ This file is a restart-safe snapshot for resuming work after context reset.
 
 Recent (detailed):
 
+- 2026-03-05 (session 170): Track C Step 8 regression matrix + quality gates completed.
+  - expanded examples typecheck regression coverage to include
+    `examples/iterator_unified.gb` in `typechecks_examples`.
+  - iterator examples are now split for stability and coverage:
+    - `iterator.gb`: runtime lock-compatible minimal sample,
+    - `iterator_unified.gb`: unified iterator modes sample for typecheck/docs regression.
+  - required gates executed and passing:
+    - `cargo fmt`,
+    - `cargo check`,
+    - `cargo test`,
+    - `cargo clippy -- -D warnings`.
+  - Track C PR5 checklist is now complete in `doc/PLAN.md`.
 - 2026-03-05 (session 169): Track C Step 7 docs/examples sync completed.
   - updated language spec runtime notes for unified iterator intrinsic contract:
     - `yield : String -> state -> (Bool, state)`,

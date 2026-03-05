@@ -4408,6 +4408,11 @@ mod tests {
             env!("CARGO_MANIFEST_DIR")
         ))
         .expect("iterator example should exist");
+        let iterator_unified_example = std::fs::read_to_string(format!(
+            "{}/../../examples/iterator_unified.gb",
+            env!("CARGO_MANIFEST_DIR")
+        ))
+        .expect("iterator_unified example should exist");
         let list_case_example = std::fs::read_to_string(format!(
             "{}/../../examples/list_case.gb",
             env!("CARGO_MANIFEST_DIR")
@@ -4423,6 +4428,8 @@ mod tests {
         let type_module = parse_module(&type_example).expect("type should parse");
         let effect_module = parse_module(&effect_example).expect("effect.gb should parse");
         let iterator_module = parse_module(&iterator_example).expect("iterator.gb should parse");
+        let iterator_unified_module =
+            parse_module(&iterator_unified_example).expect("iterator_unified.gb should parse");
         let list_case_module = parse_module(&list_case_example).expect("list_case should parse");
 
         typecheck_module(&hello_module).expect("hello should typecheck");
@@ -4433,6 +4440,7 @@ mod tests {
         typecheck_module(&type_module).expect("type example should typecheck");
         typecheck_module(&effect_module).expect("effect.gb should typecheck");
         typecheck_module(&iterator_module).expect("iterator.gb should typecheck");
+        typecheck_module(&iterator_unified_module).expect("iterator_unified.gb should typecheck");
         typecheck_module(&list_case_module).expect("list_case should typecheck");
     }
 
