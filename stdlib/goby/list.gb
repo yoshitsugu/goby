@@ -4,7 +4,7 @@ join values sep = list.join(values, sep)
 effect Iterator a b
   yield : a -> b -> (Bool, b)
 
-iter : List Int -> b -> b can Iterator
+iter : List a -> b -> b can Iterator
 iter xs state =
   case xs
     [] -> state
@@ -15,7 +15,7 @@ iter xs state =
       else
         decision.1
 
-each : List Int -> (Int -> Unit) -> Unit
+each : List a -> (a -> Unit) -> Unit
 each xs f =
   emit_handler = handler
     yield x _ ->
