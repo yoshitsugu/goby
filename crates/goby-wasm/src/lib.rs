@@ -4874,6 +4874,46 @@ main =
     }
 
     #[test]
+    fn runtime_resolves_goby_string_length_via_selective_import_bridge() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let source = r#"
+import goby/string ( length )
+main : Unit -> Unit
+main =
+  print (length "hello")
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let output =
+            resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
+                .expect("runtime output should resolve");
+        assert_eq!(output, "5");
+    }
+
+    #[test]
+    fn runtime_resolves_goby_int_parse_via_selective_import_bridge() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let source = r#"
+import goby/int ( parse )
+
+effect StringParseError
+  invalid_integer : String -> Int
+
+main : Unit -> Unit can Print, StringParseError
+main =
+  with_handler
+    invalid_integer _ ->
+      resume -1
+  in
+    print parse("42")
+    print parse("x")
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let output =
+            resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module));
+        assert_eq!(output.as_deref(), Some("42-1"));
+    }
+
+    #[test]
     fn resolves_runtime_output_for_intrinsic_each_grapheme_call() {
         let _guard = ENV_MUTEX.lock().unwrap();
         let source = r#"
