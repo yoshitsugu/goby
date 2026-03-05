@@ -466,6 +466,30 @@ fn parse_multiline_rhs_expr(
     rhs: &str,
 ) -> Option<(Expr, usize)> {
     let rhs_trimmed = rhs.trim();
+    if rhs_trimmed == "with" {
+        let (handler, next_i) = parse_handler_expr_from_lines(lines, line_idx + 1, line_indent)?;
+        let (body, after_with) = parse_with_in_body(lines, next_i, line_indent)?;
+        return Some((
+            Expr::With {
+                handler: Box::new(handler),
+                body,
+            },
+            after_with,
+        ));
+    }
+
+    if let Some(handler_src) = rhs_trimmed.strip_prefix("with ") {
+        let handler = parse_expr(handler_src.trim())?;
+        let (body, after_with) = parse_with_in_body(lines, line_idx + 1, line_indent)?;
+        return Some((
+            Expr::With {
+                handler: Box::new(handler),
+                body,
+            },
+            after_with,
+        ));
+    }
+
     if !(rhs_trimmed.starts_with("case ") || rhs_trimmed.starts_with("if ")) {
         return None;
     }
@@ -3198,7 +3222,7 @@ main =
 
     #[test]
     fn parses_with_handler_sugar_statement() {
-        let body = "with_handler\n  emit x ->\n    resume x\nin\n  emit 1";
+        let body = "with\n  emit x ->\n    resume x\nin\n  emit 1";
         let stmts = parse_body_stmts(body).expect("should parse");
         assert_eq!(stmts.len(), 1);
         match &stmts[0] {
@@ -3211,6 +3235,34 @@ main =
                     }
                     other => panic!("expected handler expression, got {other:?}"),
                 }
+            }
+            other => panic!("unexpected statement: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_multiline_with_rhs_in_binding() {
+        let body = "x = with\n  emit v ->\n    resume v\nin\n  emit 1\nprint x";
+        let stmts = parse_body_stmts(body).expect("should parse");
+        assert_eq!(stmts.len(), 2);
+        match &stmts[0] {
+            Stmt::Binding { name, value } => {
+                assert_eq!(name, "x");
+                assert!(matches!(value, Expr::With { .. }));
+            }
+            other => panic!("unexpected statement: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_multiline_with_rhs_in_assignment() {
+        let body = "mut x = 0\nx := with\n  emit v ->\n    resume v\nin\n  emit 1\nprint x";
+        let stmts = parse_body_stmts(body).expect("should parse");
+        assert_eq!(stmts.len(), 3);
+        match &stmts[1] {
+            Stmt::Assign { name, value } => {
+                assert_eq!(name, "x");
+                assert!(matches!(value, Expr::With { .. }));
             }
             other => panic!("unexpected statement: {other:?}"),
         }
