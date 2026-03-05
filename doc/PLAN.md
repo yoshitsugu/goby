@@ -940,6 +940,99 @@ Implementation steps:
    - Update `examples/` with a minimal stdin sample using `read_line` and `read`.
    - Record milestone and open follow-ups in `doc/STATE.md`.
 
+Additional planning constraint (General lambda-as-function argument support, proposed 2026-03-05):
+
+Goal: make lambda/function values callable anywhere a function argument is expected,
+without depending on ad-hoc evaluator special-cases.
+
+Problem statement:
+
+- Current behavior is partial:
+  - some HOF shapes are supported in native/fallback subsets (`map`-centric path),
+  - other valid-looking call sites (for example `list.each xs (|i| -> ...)`) fail at runtime/codegen.
+- This creates a mismatch between:
+  - typecheck-level acceptance of function arguments,
+  - fallback evaluator execution capability,
+  - native lowering capability boundaries.
+
+Scope lock:
+
+- Target is first-order function arguments (`A -> B`, `A -> Unit`) passed as values,
+  including inline lambdas and named function references.
+- Must work uniformly for:
+  - local/user-defined HOFs,
+  - stdlib HOF-like APIs (`goby/list`, `goby/string`, future modules),
+  - effectful lambdas (`can`-aware dispatch where relevant).
+- Out of scope for this phase:
+  - general closure serialization/FFI,
+  - advanced polymorphic specialization of higher-kinded abstractions.
+- Dependency/ordering note:
+  - This track should be implemented in a way that remains compatible with the
+    later `Stdlib Runtime Bridge generalization` track below.
+  - Do not introduce new call-site-specific hardcoded branches that would block
+    bridge-registry migration.
+
+Implementation plan:
+
+1. Phase A: type model and callable identity normalization.
+   - Introduce a shared runtime/lowering callable representation for function values:
+     - lambda literal,
+     - named declaration reference,
+     - captured environment snapshot (when closure capture is needed).
+   - Ensure parser/typechecker IR carries enough callable metadata into codegen/fallback.
+2. Phase B: fallback runtime execution unification.
+   - Remove HOF handling that is hardcoded per builtin/function name.
+   - Route function-value application through one generic call path usable by:
+     - direct call (`f x`),
+     - function argument invocation inside declarations (`h arg` where `h` is callable param),
+     - stdlib-imported functions that consume function arguments.
+   - Preserve effect handler precedence and continuation semantics when callable bodies are effectful.
+3. Phase C: native lowering parity plan.
+   - Extend capability checker and lowering rules so function-argument call sites are classified
+     consistently (supported natively or cleanly handed off), rather than failing late.
+   - Where native support is not yet implemented, guarantee deterministic fallback handoff.
+4. Phase D: stdlib integration hardening.
+   - Audit stdlib modules for HOF-like APIs (`list.each`, `map`-like helpers, iterators).
+   - Replace reserved/legacy naming traps and ensure examples are parse/typecheck clean.
+   - Add/refresh stdlib fixtures proving lambda argument execution through imports.
+5. Phase E: diagnostics.
+   - If a function argument call cannot be executed in current mode, emit a targeted message
+     identifying:
+     - call site,
+     - callable value kind (lambda/named),
+     - failing execution path (native/fallback),
+     - suggested workaround only when unavoidable.
+6. Phase F: regression matrix.
+   - Add tests for each axis:
+     - inline lambda arg (`list.each xs (|i| -> print (i * 10))`),
+     - named function arg (`list.each xs emit`),
+     - lambda capture (`prefix` captured in callback),
+     - effectful callback under `with` / `with_handler`,
+     - imported HOF module path (plain/alias/selective import forms).
+7. Documentation sync.
+   - Update `doc/LANGUAGE_SPEC.md` runtime/call behavior notes for callable
+     arguments once behavior is locked.
+   - Update relevant examples in `examples/` and record restart-safe status in
+     `doc/STATE.md`.
+
+Acceptance criteria:
+
+1. `goby-cli check` and `goby-cli run` both succeed for canonical lambda-argument samples
+   across local and stdlib HOF call sites.
+   - include a `list.each`-style sample equivalent to current failure shape.
+2. No symbol-specific runtime branching is required to support new HOF call sites.
+3. Capability checker decisions are stable and explainable for HOF-heavy `main` programs.
+4. Existing `examples/function.gb` behavior remains unchanged.
+5. Runtime behavior parity is verified for callback shapes:
+   - inline lambda,
+   - named function,
+   - captured closure,
+   - effectful callback.
+6. Quality gates:
+   - `cargo fmt`
+   - `cargo test`
+   - `cargo clippy -- -D warnings`
+
 Additional planning constraint (Stdlib Runtime Bridge generalization, proposed 2026-03-04):
 
 Goal: ensure future stdlib growth (`goby/int`, `goby/string`, `goby/datetime`, etc.)
