@@ -32,7 +32,7 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - `+` and `*` require spaces on both sides in MVP.
 - Legacy `using` / top-level `handler ... for ...` syntax is rejected by
   `goby-cli check/run` by default (2026-03-04); migration diagnostics point to
-  canonical `with` / `with_handler`.
+  canonical `with`.
 - String escape sequences: `\n`, `\t`, `\\`, `\"` expanded at parse time via `unescape_string`.
 - String interpolation `${...}` is parsed into `Expr::InterpolatedString`.
   Runtime stringifies embedded expression values when materializing the final `String`.

@@ -91,11 +91,12 @@ Based on `examples/*.gb`:
   - `main` type annotation is required for `run`; optional for `check`.
 - Legacy `void` type spelling is rejected in type annotations.
 - First backend target is Wasm.
-- Effects and handlers are available in MVP runtime via `effect`, `handler`, `with`, and `with_handler`.
+- Effects and handlers are available in MVP runtime via `effect`, `handler`, and `with`.
   - handler dispatch follows lexical nearest-handler stack order.
   - `can` clauses are validated (declared effect or built-in effect names).
-- Canonical handler application syntax is `with <handler_expr> in <body>` and
-  `with_handler ... in ...` (inline sugar).
+- Handler application syntax supports:
+  - inline handler: `with` + indented clauses + `in <body>`
+  - handler value: `with <handler_expr> in <body>`
 - Legacy syntax (`handler ... for ...`, `using`) is no longer accepted by the
   language parser as of 2026-03-04.
   - CLI commands (`check` / `run`) therefore reject such sources by default.
@@ -253,7 +254,7 @@ Based on `examples/*.gb`:
     handler clause bodies are validated against those declared dependencies.
   - dependency cycles in effect-member `can` declarations are rejected at typecheck time.
   - uncovered effect operation calls are rejected unless covered by enclosing handler scope
-    (`with` / `with_handler`).
+    (`with`).
   - calls to `can`-annotated functions require an appropriate enclosing handler scope.
 - Current runtime behavior:
   - effect operations dispatch through installed handlers.
@@ -273,8 +274,7 @@ Based on `examples/*.gb`:
 
 - Renewal syntax model is locked and active (current shipped behavior as of 2026-03-05):
   - `handler` is a value,
-  - canonical application is `with <handler> in ...`,
-  - `with_handler ... in ...` is inline sugar.
+  - handler application uses `with` (inline handler or handler value form).
 - Legacy forms (`handler ... for ...`, `using`) are fully removed from parser/runtime/typecheck paths.
 - `resume` support is active with one-shot continuation guardrails:
   - outside-handler `resume` is rejected,
@@ -329,7 +329,7 @@ Goal: remove `with_handler` and use only `with`.
     - remove `with_handler` from reserved keyword set.
   - [x] Step 4: typecheck diagnostics wording
     - replace user-facing `with`/`with_handler` guidance with `with`-only guidance.
-  - [ ] Step 5: language docs sync
+  - [x] Step 5: language docs sync
     - `doc/LANGUAGE_SPEC.md`: remove `with_handler` from reserved tokens and handler syntax section.
     - `doc/PLAN.md`/`doc/STATE.md`: mark completion and remove transitional wording.
   - [ ] Step 6: examples migration
