@@ -32,7 +32,7 @@ syntax/semantics.
 - Reserved tokens are not allowed as identifiers (declaration names, parameters,
   local bindings, type/effect member names).
   - Current reserved set:
-    - `@embed`, `import`, `type`, `effect`, `handler`, `with`, `with_handler`,
+    - `@embed`, `import`, `type`, `effect`, `handler`, `with`,
       `in`, `resume`, `mut`, `if`, `else`, `case`, `as`, `can`, `using`,
       `True`, `False`
 - Type declarations:
@@ -109,8 +109,8 @@ syntax/semantics.
   - `handler`
   - indented clauses: `op arg -> ...`
 - Handler application:
-  - canonical: `with <handler_expr> in ...`
-  - sugar: `with_handler ... in ...`
+  - inline handler: `with` + indented clauses + `in ...`
+  - handler value: `with <handler_expr> in ...`
 - Handler clause validation:
   - clause operation name must resolve to exactly one visible effect operation.
   - clause body may use only effects currently handled in scope plus effects declared by
