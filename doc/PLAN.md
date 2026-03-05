@@ -563,7 +563,7 @@ Implementation plan (step-by-step checklist):
   - Current status:
     - completed for `stdlib/goby/iterator.gb`, `stdlib/goby/string.gb`, `stdlib/goby/int.gb`, `stdlib/goby/list.gb`.
     - tuple result consumption in source-level control flow is covered by tuple member access (`pair.0` / `pair.1`) in parser/typecheck/runtime.
-  - Keep temporary compatibility shims only if needed for incremental landing; remove shims before closing the track.
+  - Temporary compatibility shims were removed after stdlib migration (PR4-2).
   - Definition of done: stdlib iterator-like flows compile and run using only unified `yield`.
 
 - [ ] Step 6: diagnostics and error-message hardening.

@@ -80,6 +80,15 @@ This file is a restart-safe snapshot for resuming work after context reset.
 
 Recent (detailed):
 
+- 2026-03-05 (session 166): Track C PR4-2 legacy iterator compatibility shim removed.
+  - fallback runtime intrinsic `__goby_string_each_grapheme` now accepts only
+    unified contract handlers:
+    - count mode: `yield : String -> state -> (Bool, state)` with implicit Unit state,
+    - state-thread mode: `yield : String -> state -> (Bool, state)`.
+  - removed runtime fallback paths for:
+    - legacy one-arg `yield : String -> Int`,
+    - legacy `yield_state` state-thread operation.
+  - updated typecheck/runtime regression tests to unified-only fixtures.
 - 2026-03-05 (session 165): Track C PR4 stdlib iterator migration completed.
   - `stdlib/goby/list.gb` migrated to unified iterator effect contract:
     - `effect Iterator a b`,
