@@ -237,9 +237,11 @@ fn count_resume_in_expr(expr: &Expr) -> usize {
                 InterpolatedPart::Expr(expr) => count_resume_in_expr(expr),
             })
             .sum(),
-        Expr::ListLit(items) | Expr::TupleLit(items) => {
-            items.iter().map(count_resume_in_expr).sum()
+        Expr::ListLit { elements, spread } => {
+            let sum: usize = elements.iter().map(count_resume_in_expr).sum();
+            sum + spread.as_ref().map_or(0, |s| count_resume_in_expr(s))
         }
+        Expr::TupleLit(items) => items.iter().map(count_resume_in_expr).sum(),
         Expr::RecordConstruct { fields, .. } => fields
             .iter()
             .map(|(_, value)| count_resume_in_expr(value))
@@ -1324,7 +1326,15 @@ fn first_disallowed_intrinsic_in_expr(
                 first_disallowed_intrinsic_in_expr(expr, is_stdlib_source)
             }
         }),
-        Expr::ListLit(items) | Expr::TupleLit(items) => items
+        Expr::ListLit { elements, spread } => elements
+            .iter()
+            .find_map(|item| first_disallowed_intrinsic_in_expr(item, is_stdlib_source))
+            .or_else(|| {
+                spread
+                    .as_ref()
+                    .and_then(|s| first_disallowed_intrinsic_in_expr(s, is_stdlib_source))
+            }),
+        Expr::TupleLit(items) => items
             .iter()
             .find_map(|item| first_disallowed_intrinsic_in_expr(item, is_stdlib_source)),
         Expr::RecordConstruct { fields, .. } => fields
@@ -2035,11 +2045,14 @@ fn check_expr(expr: &Expr, env: &TypeEnv) -> Ty {
         Expr::BoolLit(_) => Ty::Bool,
         Expr::StringLit(_) => Ty::Str,
         Expr::InterpolatedString(_) => Ty::Str,
-        Expr::ListLit(items) => {
-            if items.is_empty() {
+        Expr::ListLit { elements, spread } => {
+            if spread.is_some() {
+                return Ty::Unknown;
+            }
+            if elements.is_empty() {
                 return Ty::List(Box::new(Ty::Unknown));
             }
-            let item_ty = check_expr(&items[0], env);
+            let item_ty = check_expr(&elements[0], env);
             Ty::List(Box::new(item_ty))
         }
         Expr::TupleLit(items) => {
@@ -2774,7 +2787,16 @@ fn check_resume_in_expr(
             }
             Ok(())
         }
-        Expr::ListLit(items) | Expr::TupleLit(items) => {
+        Expr::ListLit { elements, spread } => {
+            for item in elements {
+                recurse!(item)?;
+            }
+            if let Some(s) = spread {
+                recurse!(s)?;
+            }
+            Ok(())
+        }
+        Expr::TupleLit(items) => {
             for item in items {
                 recurse!(item)?;
             }
@@ -3302,7 +3324,16 @@ fn check_unhandled_effects_in_expr(
             }
             Ok(())
         }
-        Expr::ListLit(items) | Expr::TupleLit(items) => {
+        Expr::ListLit { elements, spread } => {
+            for item in elements {
+                recurse!(item)?;
+            }
+            if let Some(s) = spread {
+                recurse!(s)?;
+            }
+            Ok(())
+        }
+        Expr::TupleLit(items) => {
             for item in items {
                 recurse!(item)?;
             }
@@ -3631,7 +3662,16 @@ fn ensure_no_ambiguous_refs_in_expr(
             }
             Ok(())
         }
-        Expr::ListLit(items) | Expr::TupleLit(items) => {
+        Expr::ListLit { elements, spread } => {
+            for item in elements {
+                ensure_no_ambiguous_refs_in_expr(item, env, decl_name)?;
+            }
+            if let Some(s) = spread {
+                ensure_no_ambiguous_refs_in_expr(s, env, decl_name)?;
+            }
+            Ok(())
+        }
+        Expr::TupleLit(items) => {
             for item in items {
                 ensure_no_ambiguous_refs_in_expr(item, env, decl_name)?;
             }
@@ -3916,7 +3956,16 @@ fn check_branch_type_consistency_in_expr(
             }
             Ok(())
         }
-        Expr::ListLit(items) | Expr::TupleLit(items) => {
+        Expr::ListLit { elements, spread } => {
+            for item in elements {
+                recurse!(item)?;
+            }
+            if let Some(s) = spread {
+                recurse!(s)?;
+            }
+            Ok(())
+        }
+        Expr::TupleLit(items) => {
             for item in items {
                 recurse!(item)?;
             }

@@ -405,7 +405,27 @@ fn inspect_expr(
                 }
             }
         }
-        Expr::ListLit(items) | Expr::TupleLit(items) => {
+        Expr::ListLit { elements, spread } => {
+            for item in elements {
+                inspect_expr(
+                    item,
+                    out,
+                    declaration_names,
+                    qualified_operation_index,
+                    op_name_index,
+                );
+            }
+            if let Some(s) = spread {
+                inspect_expr(
+                    s,
+                    out,
+                    declaration_names,
+                    qualified_operation_index,
+                    op_name_index,
+                );
+            }
+        }
+        Expr::TupleLit(items) => {
             for item in items {
                 inspect_expr(
                     item,
@@ -618,9 +638,13 @@ fn expr_contains_handler_resume(expr: &Expr) -> bool {
             InterpolatedPart::Text(_) => false,
             InterpolatedPart::Expr(expr) => expr_contains_handler_resume(expr),
         }),
-        Expr::ListLit(items) | Expr::TupleLit(items) => {
-            items.iter().any(expr_contains_handler_resume)
+        Expr::ListLit { elements, spread } => {
+            elements.iter().any(expr_contains_handler_resume)
+                || spread
+                    .as_ref()
+                    .is_some_and(|s| expr_contains_handler_resume(s))
         }
+        Expr::TupleLit(items) => items.iter().any(expr_contains_handler_resume),
         Expr::RecordConstruct { fields, .. } => fields
             .iter()
             .any(|(_, value)| expr_contains_handler_resume(value)),

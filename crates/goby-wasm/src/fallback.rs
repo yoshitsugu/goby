@@ -188,8 +188,11 @@ fn unsupported_value_expr_reason(
 ) -> Option<UnsupportedReason> {
     match expr {
         Expr::StringLit(_) | Expr::IntLit(_) | Expr::BoolLit(_) | Expr::Var(_) => None,
-        Expr::ListLit(items) => {
-            if items.iter().all(is_supported_list_item_expr) {
+        Expr::ListLit { elements, spread } => {
+            if spread.is_some() {
+                return Some(UnsupportedReason::UnsupportedListItemExpr);
+            }
+            if elements.iter().all(is_supported_list_item_expr) {
                 None
             } else {
                 Some(UnsupportedReason::UnsupportedListItemExpr)
@@ -357,7 +360,9 @@ fn is_decl_stmt_supported(stmt: &Stmt, module: &Module, stack: &mut HashSet<Stri
 fn is_decl_value_expr_supported(expr: &Expr, module: &Module, stack: &mut HashSet<String>) -> bool {
     match expr {
         Expr::StringLit(_) | Expr::IntLit(_) | Expr::BoolLit(_) | Expr::Var(_) => true,
-        Expr::ListLit(items) => items.iter().all(is_supported_list_item_expr),
+        Expr::ListLit { elements, spread } => {
+            spread.is_none() && elements.iter().all(is_supported_list_item_expr)
+        }
         Expr::BinOp { op, left, right } => {
             is_supported_binop_kind(op)
                 && is_decl_value_expr_supported(left, module, stack)

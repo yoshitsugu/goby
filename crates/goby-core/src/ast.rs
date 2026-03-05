@@ -147,7 +147,10 @@ pub enum Expr {
     BoolLit(bool),
     StringLit(String),
     InterpolatedString(Vec<InterpolatedPart>),
-    ListLit(Vec<Expr>),
+    ListLit {
+        elements: Vec<Expr>,
+        spread: Option<Box<Expr>>,
+    },
     TupleLit(Vec<Expr>),
     Var(String),
     Qualified {
@@ -252,9 +255,16 @@ impl Expr {
                     .collect();
                 Some(format!("{}({})", constructor, parts?.join(", ")))
             }
-            Expr::ListLit(items) => {
-                let parts: Option<Vec<String>> = items.iter().map(|i| i.to_str_repr()).collect();
-                Some(format!("[{}]", parts?.join(", ")))
+            Expr::ListLit { elements, spread } => {
+                let parts: Option<Vec<String>> = elements.iter().map(|i| i.to_str_repr()).collect();
+                let mut repr = parts?.join(", ");
+                if let Some(tail) = spread {
+                    if !repr.is_empty() {
+                        repr.push_str(", ");
+                    }
+                    repr.push_str(&format!("..{}", tail.to_str_repr()?));
+                }
+                Some(format!("[{}]", repr))
             }
             Expr::TupleLit(items) => {
                 let parts: Option<Vec<String>> = items.iter().map(|i| i.to_str_repr()).collect();
