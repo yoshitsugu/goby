@@ -2,9 +2,6 @@ import goby/iterator
 
 type GraphemeState = GraphemeState(grapheme: String, parts: List String, current: String, delimiter: String, seen: Bool)
 
-effect Iterator a b
-  yield : a -> b -> (Bool, b)
-
 grapheme_count : String -> Int can Iterator
 grapheme_count value =
   mut n = 0

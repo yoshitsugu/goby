@@ -1,5 +1,4 @@
-effect Iterator a b
-  yield : a -> b -> (Bool, b)
+import goby/iterator
 
 main : Unit -> Unit
 main =
