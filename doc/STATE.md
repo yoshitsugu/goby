@@ -63,9 +63,6 @@ This file is a restart-safe snapshot for resuming work after context reset.
 ## 3. Known Open Decisions
 
 - MVP locked subset remains complete for currently implemented syntax.
-- Effect dependency cycle diagnostics for operation-declared dependencies
-  (`op : ... can Dep`) are not yet a hard typecheck error; deterministic ordering
-  currently tolerates cycles conservatively.
 - Remaining open point for list `case` patterns:
   - native lowering support (capability checker + native evaluator path).
 - Post-MVP open items tracked in `doc/PLAN.md` §3 and §6.
@@ -83,6 +80,13 @@ This file is a restart-safe snapshot for resuming work after context reset.
 
 Recent (detailed):
 
+- 2026-03-05 (session 157): effect dependency cycle diagnostics hardened.
+  - typecheck now rejects cycles in effect-member `can` dependencies
+    (including self-cycles and multi-effect cycles).
+  - added regression tests for `A -> B -> A` and `A -> A`.
+  - docs synced:
+    - `doc/LANGUAGE_SPEC.md` §5
+    - `doc/PLAN.md` §2.3
 - 2026-03-05 (session 156): operation-level effect dependency rules introduced.
   - effect member signatures now support dependency declarations via `can`
     (e.g. `trace : String -> Unit can Print`), validated in typecheck.
@@ -185,10 +189,9 @@ cargo clippy -- -D warnings
 
 Execution focus (aligned with `doc/PLAN.md`):
 
-1. Effect dependency cycle handling: promote conservative runtime-order tolerance
-   to explicit compile-time diagnostics where appropriate.
-2. Stdlib runtime bridge generalization (reduce symbol-specific fallback branches).
-3. Tooling foundation (`fmt`/`lint`/`lsp`) with stable diagnostics surface.
+1. Stdlib runtime bridge generalization (reduce symbol-specific fallback branches).
+2. Tooling foundation (`fmt`/`lint`/`lsp`) with stable diagnostics surface.
+3. Native lowering coverage expansion for remaining unsupported expression/effect paths.
 
 ## 7. Resume Commands
 

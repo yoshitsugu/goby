@@ -92,6 +92,7 @@ syntax/semantics.
   - example: `trace : String -> Unit can Print`
   - meaning: implementations/handlers of that operation may use `Print`.
   - if omitted, the operation implementation is not allowed to use additional effects.
+  - effect dependencies must be acyclic across local `effect` declarations; cycles are a typecheck error.
 - Handler value expression:
   - `handler`
   - indented clauses: `op arg -> ...`

@@ -254,6 +254,7 @@ Based on `examples/*.gb`:
   - `can` effect names must be declared (or built-in).
   - effect member signatures can declare dependency effects (`op : ... can Dep`), and
     handler clause bodies are validated against those declared dependencies.
+  - dependency cycles in effect-member `can` declarations are rejected at typecheck time.
   - uncovered effect operation calls are rejected unless covered by enclosing handler scope
     (`with` / `with_handler`).
   - calls to `can`-annotated functions require an appropriate enclosing handler scope.
