@@ -65,7 +65,7 @@ This file is a restart-safe snapshot for resuming work after context reset.
 - MVP locked subset remains complete for currently implemented syntax.
 - Remaining open point for list `case` patterns:
   - native lowering support (capability checker + native evaluator path).
-- Post-MVP open items tracked in `doc/PLAN.md` §3 and §6.
+- Post-MVP open items tracked in `doc/PLAN.md` §3 and §4.
 - Post-MVP effect implementation direction is now fixed in `doc/PLAN.md` §2.3:
   - deep handlers with one-shot resumptions,
   - selective CPS + evidence passing lowering,
@@ -86,11 +86,11 @@ Recent (detailed):
   - removed detailed Track A/B/C descriptions from `doc/PLAN.md`.
   - retained closed-track history in `doc/STATE.md` and git history.
 - 2026-03-05 (session 172): Track B officially closed.
-  - `doc/PLAN.md` section 4.3 is now marked `Completed Track B`.
+  - `doc/PLAN.md` marked Track B as completed (before later archive pruning).
   - acceptance criteria confirmed via existing regression matrix and passing
     project quality gates (`check/test/clippy`).
 - 2026-03-05 (session 171): Track C officially closed.
-  - `doc/PLAN.md` section 4.4 is now marked `Completed Track C`.
+  - `doc/PLAN.md` marked Track C as completed (before later archive pruning).
   - all Track C milestones are complete:
     - Step 0-8 completed,
     - PR1-PR5 completed.
