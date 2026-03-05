@@ -23,6 +23,8 @@ const MAX_EVAL_DEPTH: usize = 32;
 const ERR_RESUME_MISSING: &str = "resume used without an active continuation [E-RESUME-MISSING]: `resume` can only be called while executing a handler operation body";
 const ERR_RESUME_CONSUMED: &str = "resume continuation already consumed [E-RESUME-CONSUMED]: continuations are one-shot; call `resume` at most once per handled operation";
 const ERR_RESUME_STACK_MISMATCH: &str = "internal resume token stack mismatch [E-RESUME-STACK-MISMATCH]: continuation token stack became unbalanced";
+const ERR_CALLABLE_DISPATCH_LIST_EACH_CALLBACK: &str = "unsupported callable dispatch [E-CALLABLE-DISPATCH]: goby/list.each callback must be a lambda or function name";
+const ERR_CALLABLE_DISPATCH_DECL_PARAM: &str = "unsupported callable dispatch [E-CALLABLE-DISPATCH]: callable parameter requires a lambda or function name argument";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 /// Error returned by [`compile_module`] when Wasm emission fails.
@@ -733,6 +735,12 @@ impl<'m> RuntimeOutputResolver<'m> {
                         .is_some()
                 {
                     return Some(());
+                }
+                if self.declaration_expects_callable_param(fn_name)
+                    && !matches!(arg.as_ref(), Expr::Lambda { .. } | Expr::Var(_))
+                {
+                    self.set_runtime_error_once(ERR_CALLABLE_DISPATCH_DECL_PARAM);
+                    return None;
                 }
                 if let Some(arg_val) = self.eval_ast_value(arg, evaluators) {
                     // Bare effect method call (e.g. `log "msg"`) — check active handlers first.
@@ -1820,6 +1828,12 @@ impl<'m> RuntimeOutputResolver<'m> {
             {
                 return Some(());
             }
+            if self.declaration_expects_callable_param(fn_name)
+                && !matches!(arg.as_ref(), Expr::Lambda { .. } | Expr::Var(_))
+            {
+                self.set_runtime_error_once(ERR_CALLABLE_DISPATCH_DECL_PARAM);
+                return None;
+            }
             // Evaluate arg once.
             let arg_val = self.eval_expr_ast(arg, locals, callables, evaluators, depth)?;
             if let Some(callable) = callables.get(fn_name)
@@ -2086,7 +2100,10 @@ impl<'m> RuntimeOutputResolver<'m> {
                 captured_callables: callables.clone(),
             })),
             Expr::Var(name) => self.resolve_callable_argument(name, callables),
-            _ => return None,
+            _ => {
+                self.set_runtime_error_once(ERR_CALLABLE_DISPATCH_LIST_EACH_CALLBACK);
+                return None;
+            }
         };
 
         for n in values {
@@ -2142,7 +2159,10 @@ impl<'m> RuntimeOutputResolver<'m> {
                         }))
                     }
                     Expr::Var(name) => self.resolve_callable_argument(name, caller_callables),
-                    _ => return None,
+                    _ => {
+                        self.set_runtime_error_once(ERR_CALLABLE_DISPATCH_DECL_PARAM);
+                        return None;
+                    }
                 };
                 fn_callables.insert(param.clone(), callable);
                 continue;
@@ -4297,6 +4317,51 @@ main =
             resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
                 .expect("runtime output should resolve");
         assert_eq!(output, "9\n11");
+    }
+
+    #[test]
+    fn reports_callable_dispatch_error_for_list_each_non_callable_callback() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let source = r#"
+import goby/list
+
+main : Unit -> Unit
+main =
+  list.each [1, 2] 1
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let output =
+            resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module));
+        assert_eq!(
+            output.as_deref(),
+            Some(
+                "runtime error: unsupported callable dispatch [E-CALLABLE-DISPATCH]: goby/list.each callback must be a lambda or function name"
+            )
+        );
+    }
+
+    #[test]
+    fn reports_callable_dispatch_error_for_decl_callable_param_non_callable_arg() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let source = r#"
+each_two : (Int -> Unit) -> Unit
+each_two f =
+  f 1
+  f 2
+
+main : Unit -> Unit
+main =
+  each_two 1
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let output =
+            resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module));
+        assert_eq!(
+            output.as_deref(),
+            Some(
+                "runtime error: unsupported callable dispatch [E-CALLABLE-DISPATCH]: callable parameter requires a lambda or function name argument"
+            )
+        );
     }
 
     #[test]

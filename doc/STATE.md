@@ -80,6 +80,14 @@ This file is a restart-safe snapshot for resuming work after context reset.
 
 Recent (detailed):
 
+- 2026-03-05 (session 155): callable dispatch diagnostics hardened.
+  - fallback runtime now reports deterministic runtime errors for unsupported
+    callable argument shapes (`[E-CALLABLE-DISPATCH]`) in:
+    - `goby/list.each` callback argument dispatch,
+    - callable-parameter declaration calls.
+  - added regression tests:
+    `reports_callable_dispatch_error_for_list_each_non_callable_callback` and
+    `reports_callable_dispatch_error_for_decl_callable_param_non_callable_arg`.
 - 2026-03-05 (session 154): effectful callback coverage for
   `goby/list.each` import variants completed.
   - runtime regression tests added for effectful callback dispatch under
