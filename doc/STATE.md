@@ -80,6 +80,20 @@ This file is a restart-safe snapshot for resuming work after context reset.
 
 Recent (detailed):
 
+- 2026-03-05 (session 164): Track C runtime bridge registry slice landed.
+  - `crates/goby-wasm` fallback runtime now includes declarative bridge metadata
+    (`module`, `symbol`, `kind`, `type_shape`, `intrinsic`) with duplicate
+    metadata validation.
+  - runtime bridge registry is now built from effective imports (explicit imports
+    + implicit prelude when available).
+  - fallback dispatch now resolves stdlib runtime bridges through registry lookup
+    for:
+    - prelude `read` / `read_line` bare paths,
+    - `goby/env.fetch_env_var`,
+    - `goby/int.parse`,
+    - `goby/string.length`.
+  - added wasm runtime regression coverage for selective `fetch_env_var` and
+    module-receiver `string.length` bridge dispatch.
 - 2026-03-05 (session 163): fallback runtime multi-arg effect-op dispatch generalized.
   - `Expr::Call` evaluation now dispatches multi-arg bare effect operations
     via handler method lookup (not intrinsic-only).

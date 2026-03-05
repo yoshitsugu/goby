@@ -437,6 +437,23 @@ Plan:
 5. Migrate current special-cases incrementally (`read`, `read_line`, `fetch_env_var`, `string.length`, `int.parse`).
 6. Add deterministic diagnostics for unresolved/ambiguous bridge resolution.
 
+Progress snapshot (2026-03-05):
+
+- fallback runtime now has a bridge metadata catalog
+  (`module`, `symbol`, `kind`, `type_shape`, `intrinsic`) and runtime validation
+  for duplicate bridge definitions.
+- fallback runtime now builds a bridge registry from effective imports
+  (explicit imports + implicit prelude when available).
+- fallback call dispatch now routes stdlib bridge resolution through the registry
+  for:
+  - prelude `Read.read` / `Read.read_line` bare operation paths,
+  - `goby/env.fetch_env_var` (selective bare + module receiver),
+  - `goby/int.parse` (module receiver),
+  - `goby/string.length` (module receiver).
+- regression coverage added for:
+  - selective-import `fetch_env_var` bridge dispatch,
+  - module-receiver `string.length` bridge dispatch.
+
 Acceptance criteria:
 
 - Adding a new bridged stdlib symbol does not require evaluator match-arm edits.
