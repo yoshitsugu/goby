@@ -756,15 +756,10 @@ fn inject_effect_symbols(module: &Module, globals: &mut HashMap<String, GlobalBi
         for member in &effect_decl.members {
             // Register as qualified key `EffectName.member`.
             let qualified_key = format!("{}.{}", effect_decl.name, member.name);
-            let ty = if let Some(ft) = parse_function_type(&member.type_annotation) {
-                let params: Vec<Ty> = ft.arguments.iter().map(|a| ty_from_annotation(a)).collect();
-                let result = ty_from_annotation(&ft.result);
-                Ty::Fun {
-                    params,
-                    result: Box::new(result),
-                }
-            } else {
-                Ty::Unknown
+            let ty = match parse_type_expr(&member.type_annotation).map(|expr| ty_from_type_expr(&expr))
+            {
+                Some(fun_ty @ Ty::Fun { .. }) => fun_ty,
+                _ => Ty::Unknown,
             };
             insert_global_symbol(
                 globals,
@@ -875,7 +870,36 @@ fn validate_effect_member_effect_clauses(
     known_effects: &HashSet<String>,
 ) -> Result<(), TypecheckError> {
     for effect_decl in &module.effect_declarations {
+        let declared_type_params: HashSet<String> =
+            effect_decl.type_params.iter().cloned().collect();
         for member in &effect_decl.members {
+            let parsed =
+                parse_type_expr(&member.type_annotation).ok_or_else(|| TypecheckError {
+                    declaration: Some(effect_decl.name.clone()),
+                    span: None,
+                    message: format!(
+                        "invalid effect member type annotation in `{}.{}`",
+                        effect_decl.name, member.name
+                    ),
+                })?;
+            let mut used_type_vars = HashSet::new();
+            collect_type_variable_names_in_type_expr(&parsed, &mut used_type_vars);
+            for type_var in used_type_vars {
+                if type_var == "_" {
+                    // `_` is an anonymous type hole.
+                    continue;
+                }
+                if !declared_type_params.contains(&type_var) {
+                    return Err(TypecheckError {
+                        declaration: Some(effect_decl.name.clone()),
+                        span: None,
+                        message: format!(
+                            "unknown effect type parameter `{}` in `{}.{}`",
+                            type_var, effect_decl.name, member.name
+                        ),
+                    });
+                }
+            }
             if let Some(idx) = find_can_keyword_index(&member.type_annotation)
                 && member.type_annotation[idx + 3..].trim().is_empty()
             {
@@ -917,6 +941,33 @@ fn validate_effect_member_effect_clauses(
         }
     }
     Ok(())
+}
+
+fn collect_type_variable_names_in_type_expr(expr: &TypeExpr, out: &mut HashSet<String>) {
+    match expr {
+        TypeExpr::Name(name) => {
+            if is_type_variable_name(name) {
+                out.insert(name.clone());
+            }
+        }
+        TypeExpr::Tuple(items) => {
+            for item in items {
+                collect_type_variable_names_in_type_expr(item, out);
+            }
+        }
+        TypeExpr::Function { arguments, result } => {
+            for arg in arguments {
+                collect_type_variable_names_in_type_expr(arg, out);
+            }
+            collect_type_variable_names_in_type_expr(result, out);
+        }
+        TypeExpr::Apply { head, args } => {
+            collect_type_variable_names_in_type_expr(head, out);
+            for arg in args {
+                collect_type_variable_names_in_type_expr(arg, out);
+            }
+        }
+    }
 }
 
 fn validate_effect_dependency_cycles(module: &Module) -> Result<(), TypecheckError> {
@@ -1897,18 +1948,41 @@ fn ty_from_annotation(s: &str) -> Ty {
 }
 
 fn ty_from_type_expr(expr: &TypeExpr) -> Ty {
+    let mut type_hole_counter = 0usize;
+    ty_from_type_expr_with_holes(expr, &mut type_hole_counter)
+}
+
+fn ty_from_type_expr_with_holes(expr: &TypeExpr, type_hole_counter: &mut usize) -> Ty {
     match expr {
-        TypeExpr::Name(name) => ty_from_name(name),
-        TypeExpr::Tuple(items) => Ty::Tuple(items.iter().map(ty_from_type_expr).collect()),
+        TypeExpr::Name(name) => {
+            if name == "_" {
+                let current = *type_hole_counter;
+                *type_hole_counter += 1;
+                return Ty::Var(format!("__goby_type_hole_{}", current));
+            }
+            ty_from_name(name)
+        }
+        TypeExpr::Tuple(items) => Ty::Tuple(
+            items
+                .iter()
+                .map(|item| ty_from_type_expr_with_holes(item, type_hole_counter))
+                .collect(),
+        ),
         TypeExpr::Function { arguments, result } => Ty::Fun {
-            params: arguments.iter().map(ty_from_type_expr).collect(),
-            result: Box::new(ty_from_type_expr(result)),
+            params: arguments
+                .iter()
+                .map(|arg| ty_from_type_expr_with_holes(arg, type_hole_counter))
+                .collect(),
+            result: Box::new(ty_from_type_expr_with_holes(result, type_hole_counter)),
         },
         TypeExpr::Apply { head, args } => {
             let TypeExpr::Name(name) = head.as_ref() else {
                 return Ty::Unknown;
             };
-            let converted_args: Vec<Ty> = args.iter().map(ty_from_type_expr).collect();
+            let converted_args: Vec<Ty> = args
+                .iter()
+                .map(|arg| ty_from_type_expr_with_holes(arg, type_hole_counter))
+                .collect();
             if name == "List" && converted_args.len() == 1 {
                 Ty::List(Box::new(converted_args[0].clone()))
             } else {
@@ -3780,7 +3854,13 @@ fn ty_name(ty: &Ty) -> String {
             parts.push(ty_name(result));
             parts.join(" -> ")
         }
-        Ty::Var(name) => name.clone(),
+        Ty::Var(name) => {
+            if name.starts_with("__goby_type_hole_") {
+                "_".to_string()
+            } else {
+                name.clone()
+            }
+        }
         Ty::Con { name, args } => {
             if args.is_empty() {
                 name.clone()
@@ -4850,6 +4930,20 @@ main = Unit
             .expect_err("unknown effect in effect member can-clause should fail");
         assert_eq!(err.declaration.as_deref(), Some("Trace"));
         assert!(err.message.contains("unknown effect `Ghost`"));
+    }
+
+    #[test]
+    fn rejects_unknown_effect_type_parameter_in_effect_member_type_annotation() {
+        let source = "
+effect Iter a
+  op : b -> Unit
+main : Unit -> Unit
+main = ()
+";
+        let module = parse_module(source).expect("should parse");
+        let err = typecheck_module(&module)
+            .expect_err("unknown effect type parameter in member annotation should fail");
+        assert!(err.message.contains("unknown effect type parameter `b`"));
     }
 
     #[test]
@@ -6627,6 +6721,25 @@ main =
         assert!(err.message.contains("pair"));
         assert!(err.message.contains("Int"));
         assert!(err.message.contains("String") || err.message.contains("Str"));
+    }
+
+    #[test]
+    fn accepts_effect_op_call_with_independent_anonymous_type_holes() {
+        let source = "
+effect Iter
+  op: _ -> _ -> Unit
+
+main : Unit -> Unit
+main =
+  with_handler
+    op x y ->
+      resume Unit
+  in
+    op 1 \"s\"
+";
+        let module = parse_module(source).expect("should parse");
+        typecheck_module(&module)
+            .expect("anonymous type holes should be independent per occurrence");
     }
 
     #[test]
