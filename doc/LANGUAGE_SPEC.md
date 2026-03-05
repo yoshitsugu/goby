@@ -102,6 +102,8 @@ syntax/semantics.
 - Effect-member generic type variables are unified at typecheck time for:
   - effect operation call arguments in handler-covered scopes,
   - `resume` argument validation against the operation return type.
+- Handler clause typechecking uses per-clause fresh instantiation for effect-member
+  generic signatures (no type-variable leakage across independent calls/clauses).
 - Handler value expression:
   - `handler`
   - indented clauses: `op arg -> ...`

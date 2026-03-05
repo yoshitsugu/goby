@@ -80,6 +80,18 @@ This file is a restart-safe snapshot for resuming work after context reset.
 
 Recent (detailed):
 
+- 2026-03-05 (session 160): handler-clause fresh instantiation + type-hole/type-param consistency fixes.
+  - effect member type variables are now instantiated freshly per handler clause,
+    and clause parameter locals + `resume` expected type share the same instantiated signature.
+  - handler clause body checks now receive instantiated parameter types instead of all-`Unknown`.
+  - fixed type-hole semantics: `_` in type position is now treated as an anonymous
+    hole per occurrence (independent fresh vars), not a shared named type variable.
+  - fixed effect-member type validation: unknown/free type variables not declared in
+    effect header are now rejected.
+  - regression tests added for:
+    - unknown effect type parameter rejection,
+    - independent `_` holes in multi-arg effect member signatures,
+    - independent instantiation across multiple calls to same generic effect op.
 - 2026-03-05 (session 159): effect-member generic unification core (PR2 slice) landed.
   - typecheck now uses substitution/unification for effect operation argument checks
     in handler-covered scopes, instead of strict equality-only matching.

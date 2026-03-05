@@ -525,7 +525,7 @@ Implementation plan (step-by-step checklist):
     - `yield : a -> Int` accepts `yield 1`.
     - `yield : a -> b -> (Bool, b)` can bind `b` from call-site state type.
 
-- [ ] Step 3: instantiate effect member signatures per call/clause.
+- [x] Step 3: instantiate effect member signatures per call/clause.
   - When resolving an effect operation, instantiate member type with fresh type variables.
   - Use the same instantiation context across operation argument checks and `resume` expected argument type in the corresponding handler clause.
   - Avoid leaking one call site's inferred types into unrelated calls.
