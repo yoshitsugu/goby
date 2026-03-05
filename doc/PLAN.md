@@ -316,21 +316,33 @@ Goal: remove `with_handler` and use only `with`.
   - parse error should point users to `with` inline form.
   - remove `with_handler` from reserved keyword/docs/typecheck diagnostics wording in the
     same change set to avoid mixed guidance.
-- Planned update sequence:
-  - 1) parser:
-    - add `with` exact-line inline-handler branch,
-    - extend multiline RHS parser path to support `with` (in addition to current `case`/`if`),
-    - remove `with_handler` parse branch.
-  - 2) typecheck/diagnostics:
+- Step-by-step implementation checklist:
+  - [ ] Step 1: parser statement-path update
+    - add `with` exact-line inline-handler branch.
+    - keep existing `with <handler_expr>` statement parsing.
+    - remove `with_handler` statement parse branch.
+  - [ ] Step 2: parser multiline-RHS update
+    - extend multiline RHS parser path to support `with` (in addition to `case`/`if`).
+    - cover both binding and assignment RHS forms.
+  - [ ] Step 3: parser diagnostics and keywords
+    - change parse errors to suggest `with` only.
+    - remove `with_handler` from reserved keyword set.
+  - [ ] Step 4: typecheck diagnostics wording
     - replace user-facing `with`/`with_handler` guidance with `with`-only guidance.
-  - 3) language/docs cleanup:
+  - [ ] Step 5: language docs sync
     - `doc/LANGUAGE_SPEC.md`: remove `with_handler` from reserved tokens and handler syntax section.
     - `doc/PLAN.md`/`doc/STATE.md`: mark completion and remove transitional wording.
-  - 4) examples/tests migration:
+  - [ ] Step 6: examples migration
     - migrate all `examples/*.gb` from `with_handler` to `with`.
-    - update parser/typecheck/CLI tests to assert `with_handler` rejection.
-  - 5) quality gate:
-    - run `cargo fmt`, `cargo check`, `cargo test`, `cargo clippy -- -D warnings`.
+    - verify iterator examples keep multiline RHS behavior.
+  - [ ] Step 7: tests migration
+    - update parser tests for `with` inline/value forms.
+    - update typecheck/CLI tests and add `with_handler` rejection coverage.
+  - [ ] Step 8: quality gate
+    - run `cargo fmt`.
+    - run `cargo check`.
+    - run `cargo test`.
+    - run `cargo clippy -- -D warnings`.
 - Migration scale note:
   - repository currently contains many `with_handler` references (including tests/docs/examples),
     so migration should be landed as one coherent change to avoid partial-state breakage.
