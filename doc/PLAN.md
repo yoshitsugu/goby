@@ -515,775 +515,117 @@ Acceptance criteria:
 
 ## 4. Next Phase Plan
 
-All MVP example targets are complete. The next work is post-MVP:
-
-- Keep regression checks green for the locked MVP subset.
-- Treat remaining design items as post-MVP evolution work.
-- Track all new syntax requests as explicit change proposals.
-- Candidate next focus areas:
-  1. Real Wasm code generation (actual instruction emission, remove compile-time interpreter).
-  2. Effect runtime redesign (one-shot deep handlers + selective CPS/evidence passing).
-  3. Standard-library foundation for self-hosted Goby libraries.
-  4. Early developer tooling foundation (LSP, syntax highlighting, linter, formatter).
-
-### 4.1 Short-Term Patch: bare/qualified/pipeline effect call dispatch in `main` body — DONE (2026-03-02, commit 8136d61)
-
-`eval_ast_side_effect` now dispatches bare calls, qualified calls, and pipeline calls
-through active `with` / `with_handler` handlers, matching the behavior of
-`execute_unit_ast_stmt`.
-
-- Added `Expr::Qualified` arm: `find_handler_method_for_effect` → dispatch → string fallthrough.
-- Added bare-name handler lookup in `Expr::Var` arm (before `execute_unit_call_ast`).
-- Added bare-name handler lookup in `Pipeline` arm (`"msg" |> log` dispatches).
-- Fixed `execute_decl_as_side_effect` depth: 1 → 0 (top-level consistency).
-- 5 new regression tests; 181 total tests pass.
-
-### 4.2 Mutable Variable Syntax (`mut` / `:=`) — Implemented (2026-03-04)
-
-Goal: support explicit mutable local variables while preserving immutable-by-default
-behavior in declaration bodies.
-
-Proposed surface syntax:
-
-- Mutable declaration: `mut a = 1`
-- Mutable update: `a := 2`
-- Immutable declaration remains: `b = 4`
-
-Lock decisions for this change:
-
-- `mut` is a reserved keyword.
-- `=` remains declaration syntax; assignment uses `:=`.
-- Variables are immutable by default unless declared with `mut`.
-
-Implementation status:
-
-1. Parser/AST
-   - Added statement variants for mutable declaration and assignment.
-   - Parses `mut <name> = <expr>`.
-   - Parses `<name> := <expr>`.
-2. Typechecker
-   - Tracks declaration-body mutability and enforces assignment rules.
-   - Rejects same-scope redeclaration and guides users to `:=`.
-3. Runtime/lowering
-   - Fallback/runtime evaluators execute mutable declaration and assignment.
-   - Native lowering keeps these forms on fallback path (unsupported in direct subset).
-4. Tests and docs
-   - Added parser/typechecker/runtime regression coverage.
-   - `examples/mut.gb` remains the canonical sample.
-
-Required error cases (must pass):
-
-- `a = 10` after `mut a = ...` in the same scope is rejected
-  (redeclaration; users should use `:=`).
-- `b := 3` when `b` was declared without `mut` is rejected.
-- `x := 1` when `x` is undeclared is rejected.
-
-Diagnostic style targets (wording aligned with existing plain errors):
-
-- `duplicate declaration \`a\` in the same scope; use \`:=\` for mutation`
-- `cannot assign to immutable variable \`b\`; declare it with \`mut\` first`
-- `cannot assign to undeclared variable \`x\``
-
-### 4.1.1 Effect op argument type checking in handler scopes
-
-#### Background
-
-`catch "NoCoffeeError"` compiles without error even when `catch : Error -> Unit` (the
-handler expects an `Error` record, not a `String`). At runtime the handler receives a
-`String`, tries to access `.message` field, gets `None`, and silently produces no output.
-
-Root causes identified (2026-03-02):
-
-1. **No argument-type check on effect op calls.** The typechecker only checks that
-   an effect op name is covered by an enclosing handler scope; it does not check that the
-   argument type matches the op's declared signature.
-2. **Runtime evaluator cannot construct record values from positional-style calls.**
-   `Error "NoCoffeeError"` is parsed as `Call { callee: Var("Error"), arg: StringLit }`,
-   not as `RecordConstruct`. `eval_ast_value` returns `None` for this form when `Error`
-   is not a declared Goby function, causing silent no-output rather than an error.
-
-#### Goal
-
-Make the above class of errors a **compile-time typecheck error**, not a silent runtime
-failure.  The diagnostic should fire whenever a handler scope (`with` / `with_handler`) contains an effect op call
-whose argument type is statically incompatible with the op's declared signature.
-
-#### Scope and constraints
-
-- Effect op signatures are declared as `op_name: ArgType -> ReturnType` in `effect` blocks.
-- Only single-argument ops are in scope (MVP constraint: all current effect ops take one arg).
-- Full type inference is out of scope; check only the cases where the arg type is
-  unambiguously known at typecheck time (literal types: `Int`, `String`, `Bool`; known record
-  constructors).
-- Do not break any existing passing test.
-- `cargo clippy -- -D warnings` must remain clean.
-
-#### Design
-
-**No new data structures needed.**
-`inject_effect_symbols` already calls `parse_function_type` on each `EffectMember.type_annotation`
-and stores the result as `Ty::Fun { params, result }` in `TypeEnv`. The arg type is already
-available via `env.lookup(op_name)` — no new map or re-parsing required.
-
-**Step 1: Add argument type check in `check_unhandled_effects_in_expr`, `Expr::Call` arm.**
-
-Insertion point: after the existing coverage guard and `check_callee_required_effects` call,
-when `callee` is `Expr::Var(name)` and `env.is_effect_op(name)`:
-
-```
-if let Ty::Fun { params, .. } = env.lookup(name) {
-    if let Some(expected) = params.first() {
-        if *expected != Ty::Unknown {
-            let actual = check_expr(arg, env);
-            if actual != Ty::Unknown && actual != *expected {
-                return Err(TypecheckError {
-                    message: format!(
-                        "effect operation `{name}` expects argument of type `{expected}` \
-                         but got `{actual}`"
-                    ),
-                    ...
-                });
-            }
-        }
-    }
-}
-```
-
-**Step 2: Apply the same check in the `Expr::Pipeline` arm.**
-
-`"NoCoffeeError" |> catch` also passes a typed argument to an effect op and must be checked.
-
-**Step 3: Regression tests (4 cases).**
-
-1. Negative (Call): `catch "x"` when `catch : Error -> Unit` → error including op name,
-   expected type, actual type.
-2. Negative (Pipeline): `"x" |> catch` when `catch : Error -> Unit` → error.
-3. Positive: `catch (Error(message: "x"))` when `catch : Error -> Unit` → accepted.
-4. Neutral: op with annotation that fails to parse → no error (check silently skipped).
-
-Error message convention: use `"effect operation"` (not `"effect op"`) to match existing
-diagnostics in the codebase.
-
-#### Out of scope (deferred)
-
-- Full type inference for arbitrary expressions.
-- Multi-argument ops.
-- Return type checking of effect ops.
-- Checking handler method body types against op signatures.
-
-### 4.2 Refactoring Candidates (Wasm Track) — DONE (2026-03-02 sessions 33-40)
-
-- Legacy fallback analyzer extraction from `crates/goby-wasm/src/lib.rs` completed.
-- Fallback reason literals migrated to shared constants/typed enum mapping.
-- Capability/support helper split completed (`call.rs`, `support.rs`, and focused tests).
-
-### 4.2.1 Lambda/HOF native lowering for `function.gb` subset — DONE (2026-03-02)
-
-- Native lower/evaluator now supports function values:
-  - lambda closure values (`Expr::Lambda`),
-  - declaration references as callable values,
-  - partial application for named callables.
-- Native evaluator supports HOF calls used by `examples/function.gb`:
-  - `map` with lambda/function argument,
-  - callback-style parameter calls (`f 10`) inside declarations.
-- Native capability checker now accepts `examples/function.gb`.
-  - `function.gb` moved from fallback matrix to native matrix in tests.
-  - `call_target_body_not_native_supported` remains for declarations with unsupported forms
-    such as `with_handler` blocks.
-
-### 4.3 Standard-Library Foundation (self-hosted direction)
-
-Goal: prepare infrastructure so core standard libraries can be authored primarily in Goby,
-while preserving practical monorepo workflow during early phases.
-
-Planning constraints:
-
-- Standard libraries should be implemented in Goby itself by default.
-- Libraries should be importable as `import goby/(library_name)`.
-- At least for the near term, stdlib and compiler/runtime remain in the same monorepo.
-- Import semantics are unified across values/types/effects:
-  - plain and alias imports expose module members for all three namespaces.
-  - selective import (`import a/b ( ... )`) accepts mixed value/type/effect names.
-  - import-origin name-resolution ambiguity is rejected during resolution
-    (not deferred until use).
-
-Preparation steps:
-
-1. Define source layout and naming for Goby stdlib modules in-repo.
-   - Decide canonical directory for Goby stdlib sources.
-   - Map module path `goby/x` to that directory deterministically.
-2. Extend import resolution to load Goby source modules from the stdlib location.
-   - Keep existing built-in module behavior working during migration.
-   - Add clear diagnostics for unresolved/ambiguous stdlib module paths.
-3. Introduce minimal bootstrap boundary between language built-ins and Goby stdlib.
-   - Keep only runtime-primitive operations as built-ins.
-   - Move composable library logic to Goby modules incrementally.
-4. Add regression coverage for stdlib import behavior.
-   - Positive: `import goby/x` resolves and typechecks from in-repo Goby source.
-   - Negative: missing module path reports stable diagnostics.
-5. Validate monorepo workflow.
-   - Ensure `cargo check`, `cargo test`, and example `goby-cli check/run` flows continue to work
-     with stdlib sources in-tree.
-
-Additional planning constraint (`@embed` semantics update, locked 2026-03-04):
-
-- `@embed` is a **stdlib-only default-effect-handler declaration** for effects that may
-  remain on `main`'s `can` list without explicit user handler resolution.
-- Canonical form is:
-  - `@embed <EffectName> <HandlerName>`
-  - example: `@embed Print __goby_embeded_effect_stdout_handler`
-- Legacy form `@embed effect <EffectName>` is removed (parser rejects it).
-- `@embed` is rejected in user modules and non-stdlib libraries.
-- `@embed` requires an in-module `effect <EffectName>` declaration.
-- `@embed` handler target policy:
-  - `<HandlerName>` must be `__goby_embeded_effect_*` namespace.
-  - initial intrinsic handler set includes only:
-    - `__goby_embeded_effect_stdout_handler`
-  - this handler is used as the default resolver for `Print` when the effect
-    remains in `main` and no explicit handler is installed by user code.
-- Stdlib intrinsic bridge policy (updated 2026-03-04):
-  - active intrinsic set:
-    - `__goby_string_length : String -> Int`
-    - `__goby_env_fetch_env_var : String -> String`
-    - `__goby_embeded_effect_stdout_handler` (intrinsic default effect handler)
-  - `__goby_*` names are reserved and stdlib-only.
-  - unknown `__goby_*` names in stdlib are rejected explicitly.
-
-Implementation plan (`@embed` default-handler model):
-
-1. Parser/AST migration
-   - Change `@embed` grammar to require two identifiers:
-     `@embed <EffectName> <HandlerName>`.
-   - Remove acceptance of `@embed effect <EffectName>`.
-   - Update AST node shape to store both effect name and handler name.
-   - Add parse diagnostics for:
-     - missing handler name,
-     - malformed handler identifier,
-     - legacy `@embed effect ...` usage.
-2. Typechecker rule updates
-   - Keep stdlib-only gate for all `@embed` declarations.
-   - Keep duplicate embedded-effect rejection per module.
-   - Keep `@embed X` requires `effect X` in same module.
-   - Add handler-name validation for `__goby_embeded_effect_*` namespace.
-   - Add intrinsic-existence check for declared embedded handler target.
-3. Main/default resolution semantics
-   - During entrypoint (`main`) effect validation, allow unresolved effects that
-     are declared as stdlib-embedded defaults via `@embed`.
-   - For each allowed effect, wire the declared embedded handler as the default
-     runtime handler when no explicit user handler is present.
-   - Scope this relaxation to `main` entrypoint validation only (not arbitrary
-     non-main functions).
-4. Runtime/intrinsic wiring
-   - Add intrinsic implementation for
-     `__goby_embeded_effect_stdout_handler`.
-   - Bridge `Print` operation dispatch to the intrinsic default handler behavior.
-   - Keep existing explicit handler dispatch precedence (explicit user handler
-     takes priority over default embedded handler fallback).
-5. Stdlib and examples
-   - Update `stdlib/goby/stdio.gb` to declare:
-     - `effect Print`
-     - `@embed Print __goby_embeded_effect_stdout_handler`
-   - Keep `print` API signatures aligned with `can Print`.
-6. Tests and diagnostics
-   - Parser tests for new syntax acceptance/rejection.
-   - Typechecker tests for stdlib-only gate, declared-effect requirement,
-     handler-name validation, and intrinsic existence.
-   - Entry/main tests showing `main : Unit -> Unit can Print` accepted without
-     explicit handler when `Print` has embedded default handler.
-   - Negative tests where non-embedded unresolved effects on `main` still fail.
-
-Additional planning constraint (implicit prelude migration, locked 2026-03-04):
-
-Goal: make effect/bootstrap behavior user-visible and predictable by resolving
-`Print` through stdlib prelude wiring rather than compiler-only hidden defaults.
-
-Implementation steps:
-
-1. Add `stdlib/prelude.gb`.
-   - Define prelude-owned foundational declarations, including stdio/effect bridge
-     declarations needed by default user programs.
-   - Keep `@embed` declarations in stdlib modules only (not user modules).
-2. Introduce implicit prelude import in compiler/typechecker pipeline.
-   - Treat every module as if `import goby/prelude` is present unless explicitly
-     disabled by a future internal/testing flag.
-   - Ensure this synthetic import participates in symbol and embed-default resolution.
-3. Extend runtime fallback/default-handler resolution to include imported stdlib embed metadata.
-   - Do not rely on only local-module `@embed` declarations.
-   - Preserve precedence: explicit user handler > embedded default handler.
-4. Retire `Print`/`print` compiler hardcoded bootstrap path after prelude path is stable.
-   - Remove or narrow built-in effect/symbol assumptions so user-facing behavior
-     is explained by stdlib + language rules.
-5. Add migration/regression coverage.
-   - `examples/hello.gb` (no explicit import) still works via implicit prelude.
-   - Programs can override behavior with explicit handlers.
-   - Missing/invalid prelude resolution yields clear diagnostics.
-
-Additional planning constraint (Unit value spelling migration, locked 2026-03-04):
-
-Goal: make Unit value syntax user-facing and conventional by using `()` instead of
-identifier-form `Unit` in expression position.
-
-Implementation steps:
-
-1. Parser/AST acceptance for `()`.
-   - Add a dedicated Unit literal parse path for empty tuple syntax `()`.
-   - Introduce/route to a Unit expression node (or equivalent canonical representation).
-2. Typechecker/runtime/codegen wiring.
-   - Treat `()` as `Unit` value in all expression positions.
-   - Keep behavior parity for existing `Unit`-typed flows (`main`, handler `resume`, etc.).
-3. Compatibility window and diagnostics.
-   - Temporarily keep legacy expression-form `Unit` accepted.
-   - Emit migration diagnostic suggesting `()` when `Unit` is used as a value.
-4. Stdlib/examples/docs migration.
-   - Rewrite examples/stdlib/tests from `Unit` value to `()`.
-   - Keep type position spelling as `Unit` (no change).
-   - Update `doc/LANGUAGE_SPEC.md` and relevant docs in the same change.
-5. Legacy removal phase.
-   - After migration coverage is stable, reject value-form `Unit` with a clear error:
-     "Use `()` for Unit value".
-   - Keep regression tests for both the warning phase and final rejection phase.
-
-Additional planning constraint (Print operation split, locked 2026-03-04):
-
-Goal: make stdout behavior explicit by defining two `Print` effect operations:
-`print` (no trailing newline) and `println` (ensures trailing newline).
-
-Status update (2026-03-05): implemented in stdlib prelude surface and fallback
-runtime embedded default handler (`Print.println` ensures trailing `\n`).
-
-Implementation steps:
-
-1. Effect surface update in stdlib.
-   - Update `effect Print` to expose both:
-     - `print : String -> Unit`
-     - `println : String -> Unit`
-2. Runtime/intrinsic behavior split.
-   - Keep current stdout embedded default handler for `print` semantics (no newline).
-   - Add `println` dispatch semantics that append `\n` only when missing.
-3. Typecheck/runtime operation wiring.
-   - Ensure handler dispatch and operation-resolution logic distinguish
-     `Print.print` and `Print.println` correctly.
-   - Preserve existing precedence rules: explicit user handler > embedded default.
-4. Migration of examples/fixtures.
-   - Keep existing `print` call sites as no-newline behavior.
-   - Update samples/tests that expect line-oriented output to use `println`.
-5. Regression coverage.
-   - Positive tests for both operations under explicit handler and embedded-default paths.
-   - Output-shape tests: `print` does not append newline; `println` ensures trailing newline.
-
-Additional planning constraint (Read effect stdin support, proposed 2026-03-04):
-
-Goal: make stdin access first-class via prelude `Read` effect and support both
-line-based input (`read_line`) and full-stream input (`read`, EOFまで読み込み).
-Positioning:
-- Prelude `Read`/`Print` are intentionally minimal APIs for quick experiments.
-- Production-grade I/O behavior should be provided by richer standard-library effects
-  in later phases.
-
-Surface contract to lock before implementation:
-
-1. Prelude effect surface.
-   - `effect Read` exposes:
-     - `read : Unit -> String`
-     - `read_line : Unit -> String`
-2. EOF behavior.
-   - `read ()` returns all remaining stdin content and consumes it.
-   - after `read ()` reaches EOF once, subsequent `read ()` returns `""`.
-   - `read_line ()` returns the next line; when no more input is available, it returns `""`.
-   - empty line and EOF are both represented as `""` by design in this minimal API.
-3. Newline policy.
-   - `read_line ()` strips one trailing line terminator (`\n`, `\r\n`, or `\r`) from the returned value.
-   - `read ()` returns remaining stdin as text and preserves newline bytes as-is.
-4. Text decoding policy.
-   - stdin bytes are decoded as UTF-8 with replacement for invalid sequences
-     (lossy decoding) to keep runtime behavior deterministic and non-fatal.
-
-Implementation steps:
-
-1. Stdlib/prelude declarations.
-   - Keep `Read` in `stdlib/goby/prelude.gb`.
-   - Add embedded default declaration for stdin runtime bridge:
-     `@embed Read __goby_embeded_effect_stdin_handler`.
-2. Typechecker embed validation updates.
-   - Extend intrinsic embedded-handler allow-list with
-     `__goby_embeded_effect_stdin_handler`.
-   - Keep existing `@embed` rules unchanged (stdlib-only, in-module effect required,
-     duplicate effect embed rejection).
-3. Runtime intrinsic dispatch.
-   - Add `__goby_embeded_effect_stdin_handler` dispatch in runtime effect bridge.
-   - Implement operation routing for `read` and `read_line`.
-   - Keep dispatch precedence unchanged: explicit user handler first, embedded default second.
-4. Runtime input-state model.
-   - Introduce a per-execution stdin cursor/buffer so `read_line` and `read`
-     consume from the same source consistently.
-   - Define deterministic interleaving behavior:
-     after one or more `read_line` calls, `read` returns only the remaining tail;
-     after `read`, subsequent `read_line` returns `""`.
-5. CLI execution wiring.
-   - Ensure `goby-cli run` passes process stdin to runtime execution paths that can read at runtime.
-   - Compile-time fallback evaluation path is stdin-incompatible; when `Read` is required,
-     force/require runtime execution path (or report clear unsupported diagnostic).
-   - Keep `goby-cli check` behavior unchanged (no stdin usage).
-6. Diagnostics and failure mode.
-   - If stdin cannot be read in runtime context, return a clear runtime error message
-     that identifies `Read.read` or `Read.read_line` as the failing operation.
-   - Do not silently substitute environment variables or hard-coded defaults.
-7. Tests and regression coverage.
-   - Typechecker tests: `main : Unit -> Unit can Read` accepted via implicit prelude.
-   - Runtime unit tests: `read_line` basic case, CRLF trimming, EOF empty return,
-     `read` full-stream return, and interleaving (`read_line` then `read`).
-   - CLI integration tests: pipe input into `goby-cli run` and assert output for
-     both operations.
-   - Negative tests: unknown embedded stdin intrinsic name is rejected.
-8. Documentation sync.
-   - Update `doc/LANGUAGE_SPEC.md` effect/prelude sections with `Read` contract.
-   - Update `examples/` with a minimal stdin sample using `read_line` and `read`.
-   - Record milestone and open follow-ups in `doc/STATE.md`.
-
-Additional planning constraint (General lambda-as-function argument support, proposed 2026-03-05):
-
-Goal: make lambda/function values callable anywhere a function argument is expected,
-without depending on ad-hoc evaluator special-cases.
-
-Problem statement:
-
-- Current behavior is partial:
-  - some HOF shapes are supported in native/fallback subsets (`map`-centric path),
-  - other valid-looking call sites (for example `list.each xs (|i| -> ...)`) fail at runtime/codegen.
-- This creates a mismatch between:
-  - typecheck-level acceptance of function arguments,
-  - fallback evaluator execution capability,
-  - native lowering capability boundaries.
-
-Scope lock:
-
-- Target is first-order function arguments (`A -> B`, `A -> Unit`) passed as values,
-  including inline lambdas and named function references.
-- Must work uniformly for:
-  - local/user-defined HOFs,
-  - stdlib HOF-like APIs (`goby/list`, `goby/string`, future modules),
-  - effectful lambdas (`can`-aware dispatch where relevant).
-- Out of scope for this phase:
-  - general closure serialization/FFI,
-  - advanced polymorphic specialization of higher-kinded abstractions.
-- Dependency/ordering note:
-  - This track should be implemented in a way that remains compatible with the
-    later `Stdlib Runtime Bridge generalization` track below.
-  - Do not introduce new call-site-specific hardcoded branches that would block
-    bridge-registry migration.
-
-Implementation plan:
-
-1. Phase A: type model and callable identity normalization.
-   - Introduce a shared runtime/lowering callable representation for function values:
-     - lambda literal,
-     - named declaration reference,
-     - captured environment snapshot (when closure capture is needed).
-   - Ensure parser/typechecker IR carries enough callable metadata into codegen/fallback.
-2. Phase B: fallback runtime execution unification.
-   - Remove HOF handling that is hardcoded per builtin/function name.
-   - Route function-value application through one generic call path usable by:
-     - direct call (`f x`),
-     - function argument invocation inside declarations (`h arg` where `h` is callable param),
-     - stdlib-imported functions that consume function arguments.
-   - Preserve effect handler precedence and continuation semantics when callable bodies are effectful.
-3. Phase C: native lowering parity plan.
-   - Extend capability checker and lowering rules so function-argument call sites are classified
-     consistently (supported natively or cleanly handed off), rather than failing late.
-   - Where native support is not yet implemented, guarantee deterministic fallback handoff.
-4. Phase D: stdlib integration hardening.
-   - Audit stdlib modules for HOF-like APIs (`list.each`, `map`-like helpers, iterators).
-   - Replace reserved/legacy naming traps and ensure examples are parse/typecheck clean.
-   - Add/refresh stdlib fixtures proving lambda argument execution through imports.
-5. Phase E: diagnostics.
-   - If a function argument call cannot be executed in current mode, emit a targeted message
-     identifying:
-     - call site,
-     - callable value kind (lambda/named),
-     - failing execution path (native/fallback),
-     - suggested workaround only when unavoidable.
-6. Phase F: regression matrix.
-   - Add tests for each axis:
-     - inline lambda arg (`list.each xs (|i| -> print (i * 10))`),
-     - named function arg (`list.each xs emit`),
-     - lambda capture (`prefix` captured in callback),
-     - effectful callback under `with` / `with_handler`,
-     - imported HOF module path (plain/alias/selective import forms).
-7. Documentation sync.
-   - Update `doc/LANGUAGE_SPEC.md` runtime/call behavior notes for callable
-     arguments once behavior is locked.
-   - Update relevant examples in `examples/` and record restart-safe status in
-     `doc/STATE.md`.
+Post-MVP focus is to reduce fallback-runtime special-cases and make execution paths
+predictable.
+
+### 4.1 Completed Work (Summary)
+
+- Effect call dispatch in `main` body (`bare` / `qualified` / `pipeline`) is implemented.
+- Mutable local syntax (`mut` / `:=`) is implemented with parser/typecheck/runtime coverage.
+- Wasm track refactor split (`call.rs`, `support.rs`) and `function.gb` native HOF subset support are implemented.
+- Stdlib foundation milestones already merged:
+  - stdlib source loading from `stdlib/goby/*`,
+  - stdlib-only `@embed` model,
+  - implicit `goby/prelude`,
+  - Unit value `()` path,
+  - `Print` split (`print` / `println`),
+  - `Read` default handler (`read`, `read_line`).
+- Editor syntax packs (VSCode/Emacs/Vim/TextMate) are implemented.
+
+Note: detailed execution history for these items is retained in git history and
+`doc/STATE.md`; this section keeps only decision-level summaries.
+
+### 4.2 Active Track A: Effect Operation Argument Type Checking
+
+Goal: reject statically-incompatible effect operation arguments at typecheck time
+inside handler scopes (`with` / `with_handler`).
+
+Plan:
+
+1. Add arg-type checks for effect operation calls in both direct call and pipeline paths.
+2. Reuse existing effect member type info in `TypeEnv` (no new parallel metadata store).
+3. Add regressions:
+   - negative: wrong arg type for call and pipeline,
+   - positive: matching record argument,
+   - neutral: unresolved/unknown type case should not produce noisy false positives.
 
 Acceptance criteria:
 
-1. `goby-cli check` and `goby-cli run` both succeed for canonical lambda-argument samples
-   across local and stdlib HOF call sites.
-   - include a `list.each`-style sample equivalent to current failure shape.
-2. No symbol-specific runtime branching is required to support new HOF call sites.
-3. Capability checker decisions are stable and explainable for HOF-heavy `main` programs.
-4. Existing `examples/function.gb` behavior remains unchanged.
-5. Runtime behavior parity is verified for callback shapes:
-   - inline lambda,
-   - named function,
+- Type mismatch is reported as compile-time error with expected/actual type names.
+- Existing passing tests stay green.
+
+### 4.3 Active Track B: General Lambda-as-Function-Argument Support
+
+Goal: make lambda/function values callable anywhere a function argument is expected
+(including stdlib HOF-like APIs such as `list.each`), without call-site-specific hacks.
+
+Scope:
+
+- In scope: first-order function values (`A -> B`, `A -> Unit`), inline lambdas,
+  named function references, captured closures.
+- Out of scope: FFI closure serialization and advanced higher-kinded specialization.
+- Constraint: keep design compatible with Track C (runtime bridge generalization).
+
+Plan (phased):
+
+1. Normalize callable representation shared by fallback and lowering paths.
+2. Unify fallback runtime invocation path for callable values (remove per-symbol HOF branching).
+3. Align native capability checker/lowering decisions with fallback handoff behavior.
+4. Harden stdlib HOF modules and fixtures (`goby/list` etc.) for parse/typecheck/runtime parity.
+5. Add diagnostics for unsupported callable dispatch paths (native vs fallback).
+6. Expand regression matrix:
+   - inline lambda arg,
+   - named function arg,
    - captured closure,
-   - effectful callback.
-6. Quality gates:
-   - `cargo fmt`
-   - `cargo test`
-   - `cargo clippy -- -D warnings`
-
-Additional planning constraint (Stdlib Runtime Bridge generalization, proposed 2026-03-04):
-
-Goal: ensure future stdlib growth (`goby/int`, `goby/string`, `goby/datetime`, etc.)
-does not require ad-hoc runtime special-cases per symbol in fallback/runtime evaluators.
-
-Problem statement:
-
-- Current fallback runtime includes symbol-specific branches (for example, `goby/int.parse`).
-- This solves immediate usability, but scales poorly and risks behavior drift between:
-  - stdlib Goby source implementation,
-  - fallback runtime shortcuts,
-  - native/typed lowering paths.
-- Bare operation-name matching (`invalid_integer`) can also become ambiguous as effect surface grows.
-
-Design direction:
-
-1. Introduce a Runtime Bridge Registry (declarative metadata).
-   - Runtime-callable stdlib symbols are registered as bridge entries rather than hardcoded
-     by string checks in evaluator match-arms.
-   - Canonical bridge key:
-     - `module_path`
-     - `symbol_name`
-     - `kind` (`value_function` / `effect_operation` / `default_handler`)
-     - `type_shape` (arity + normalized type annotation)
-   - Canonical bridge target:
-     - `intrinsic_name` (Rust-side implementation id),
-     - optional effect/op identity for operation routing (`EffectName.operation`).
-2. Normalize operation identity.
-   - Internal runtime dispatch should prefer effect-qualified identity
-     (`EffectName.operation`) over bare operation name.
-   - Bare operation fallback may remain for compatibility only when identity is proven unique.
-3. Keep stdlib-first authoring model.
-   - Stdlib Goby source remains source-of-truth API surface.
-   - Bridge metadata only maps selected symbols/operations to runtime intrinsics for execution.
-   - Non-bridged symbols continue through normal evaluator/runtime behavior.
-
-Implementation plan:
-
-1. Metadata model in `goby-core`.
-   - Extend stdlib resolver output to optionally carry runtime bridge metadata.
-   - **Lock (phase 1)**: load bridge metadata from sidecar files under stdlib root
-     (no language-syntax extension in this phase).
-     - Proposed location: `stdlib/.bridge/<module_path>.json`
-       (example: `stdlib/.bridge/goby/int.json`).
-     - Revisit in-language declaration syntax only after phase-1 stabilization.
-   - Validate:
-     - declared symbol exists in module export/effect surface,
-     - type shape matches declaration annotation,
-     - intrinsic target is known.
-2. Bridge registry assembly in `goby-wasm`.
-   - Build registry from effective imports (+ implicit prelude where applicable).
-   - Reuse existing import semantics:
-     - plain/alias/selective filtering,
-     - ambiguity rejection policy from typechecker.
-   - Cache registry per module compile/run invocation to avoid repeated filesystem scans.
-3. Evaluator integration (fallback/runtime path).
-   - Refactor `Expr::Call` / `Expr::MethodCall` handling to:
-     - resolve call target to `(module?, symbol, arity, declared type_shape)`,
-     - query bridge registry,
-     - dispatch to intrinsic executor if bridge exists.
-   - Remove direct symbol checks for stdlib module functions once bridged.
-4. Effect operation routing hardening.
-   - Route handler dispatch via effect-qualified identity where available.
-   - For legacy bare handler clauses:
-     - accept only when operation identity is unique in visible effect set,
-     - otherwise surface deterministic ambiguity/runtime error.
-   - Compatibility sunset policy:
-     - Phase 1-2: keep bare fallback with uniqueness guard.
-     - Phase 3: emit warning when bare fallback path is used.
-     - Phase 4: remove bare fallback (effect-qualified identity required in runtime bridge path).
-5. Migration of existing special-cases.
-   - Phase A: wrap current paths (`read`, `read_line`, `fetch_env_var`, `string.length`, `int.parse`)
-     with bridge registry lookup while keeping compatibility fallback.
-   - Phase B: delete symbol-specific evaluator branches after parity tests pass.
-6. Observability and diagnostics.
-   - Add debug diagnostics (behind env flag) for bridge resolution:
-     - selected bridge entry,
-     - intrinsic dispatch target,
-     - mismatch reason when unresolved.
-   - Add user-facing errors for:
-     - ambiguous bridged operation identity,
-     - bridge metadata/type-shape mismatch.
+   - effectful callback,
+   - import mode variants (plain/alias/selective).
 
 Acceptance criteria:
 
-1. Extensibility:
-   - adding a new bridged stdlib function requires:
-     - stdlib declaration + bridge metadata entry (+ intrinsic impl if new),
-     - no evaluator match-arm edits.
-2. Correctness:
-   - `int.parse` behavior matches locked stdlib contract for:
-     - valid numbers,
-     - invalid format,
-     - overflow/underflow handling.
-   - handler dispatch for parse failure is effect-qualified and not captured by unrelated
-     same-name operations.
-3. Compatibility:
-   - existing examples (`hello.gb`, `effect.gb`, `to_integer.gb`) continue to run.
-   - import modes (plain/alias/selective) continue to resolve runtime-bridged symbols consistently.
-4. Quality gates:
-   - `cargo fmt`
-   - `cargo test`
-   - `cargo clippy -- -D warnings`
-   - targeted regression suite for bridge resolution and ambiguity handling.
-5. Diagnostics quality:
-   - unresolved bridge emits deterministic error including:
-     - resolved call target (`module/symbol`),
-     - expected bridge key (`kind`, `arity`, `type_shape`),
-     - mismatch reason (`not_registered`, `type_shape_mismatch`, `ambiguous_operation_identity`).
+- `goby-cli check` and `goby-cli run` succeed for canonical lambda-argument samples,
+  including a `list.each`-style case.
+- No new symbol-specific runtime branching is required for HOF call sites.
 
-Additional planning constraint (CLI `build` command for portable Wasm output, proposed 2026-03-04):
+### 4.4 Active Track C: Stdlib Runtime Bridge Generalization
 
-Goal: add a first-class `goby-cli build <file.gb>` flow that emits `.wasm` artifacts
-directly runnable by both `wasmtime` and `wasmer` without requiring `run` mode.
+Goal: replace ad-hoc stdlib symbol special-cases in fallback/runtime evaluators
+with a declarative bridge registry.
 
-Scope lock:
+Plan:
 
-- `build` compiles only; it does not execute output.
-- Target artifact is WASI-compatible core Wasm module (`_start` export path), aligned with
-  current `run` expectations.
-- Initial output profile targets portability over aggressive optimization.
-
-Implementation plan:
-
-1. CLI surface and UX.
-   - Add command:
-     - `goby-cli build <file.gb>`
-   - Optional flags (phase 1 minimal set):
-     - `--out <path>` (explicit output file path),
-     - `--target wasi-preview1` (default; future-proofed flag),
-     - `--engine-compat wasmtime,wasmer` (default profile preset).
-   - Keep diagnostics style consistent with existing `check/run`.
-2. Artifact contract.
-   - Default output path: `<input_basename>.wasm` next to source (or `--out` override).
-   - Emit deterministic binary bytes for same input+toolchain version when possible.
-   - Ensure module exports/sections required by WASI execution are present and stable.
-3. Backend compatibility profile.
-   - Lock phase-1 codegen profile to features supported by both engines in baseline environments.
-   - Avoid engine-specific extensions in default profile.
-   - If future profiles diverge, require explicit opt-in flag and clear diagnostics.
-4. Runtime compatibility checks.
-   - Add optional post-build verify mode (non-blocking in phase 1):
-     - `--verify-with wasmtime`
-     - `--verify-with wasmer`
-   - Verification runs engine-side module validation/instantiation smoke checks only.
-5. Integration with existing `run`.
-   - Keep `run` behavior unchanged initially.
-   - Internally reuse `build` pipeline so compile path is single-sourced.
-   - `run` should consume the same produced wasm contract to reduce drift.
-6. Test matrix.
-   - CLI integration tests for:
-     - successful `build` output path and file creation,
-     - invalid source / typecheck failure diagnostics,
-     - `--out` path handling and overwrite policy.
-   - Smoke tests (when engine binaries are available in CI/dev env):
-     - `wasmtime run <artifact>`
-     - `wasmer run <artifact>`
-   - Include at least one effectful sample and one pure sample.
-7. Documentation and migration.
-   - Update README and CLI help with `build` examples.
-   - Add troubleshooting section for missing external engines
-     (build succeeds; verify/run may be skipped with clear message).
+1. Define bridge metadata model and validation (`module`, `symbol`, `kind`, `type_shape`, `intrinsic`).
+2. Build bridge registry from effective imports (+ implicit prelude).
+3. Route evaluator call dispatch through registry lookup.
+4. Normalize effect operation identity toward `EffectName.operation`.
+5. Migrate current special-cases incrementally (`read`, `read_line`, `fetch_env_var`, `string.length`, `int.parse`).
+6. Add deterministic diagnostics for unresolved/ambiguous bridge resolution.
 
 Acceptance criteria:
 
-1. `goby-cli build examples/hello.gb` emits runnable `.wasm`.
-2. Produced artifact runs successfully on both engines in supported test environments.
-3. `run` and `build` share one compile path (no duplicate divergent codegen entrypoints).
-4. Failure diagnostics clearly distinguish parse/typecheck/codegen/output-write/verify failures.
+- Adding a new bridged stdlib symbol does not require evaluator match-arm edits.
+- Existing examples continue to run with consistent import behavior.
 
-Additional planning constraint (CLI binary naming for `cargo install`, proposed 2026-03-04):
+### 4.5 Active Track D: Developer Tooling Foundation
 
-Goal: make `cargo install` produce an executable named `goby` (not `goby-cli`) so users run:
+Goal: establish practical developer tooling aligned with current language behavior.
 
-- `goby check <file.gb>`
-- `goby run <file.gb>`
-- `goby build <file.gb>`
+Near-term scope:
 
-Implementation plan:
-
-1. Package/binary metadata.
-   - Keep crate/package identity as `goby-cli` for workspace clarity.
-   - Explicitly configure binary target name as `goby` in `crates/goby-cli/Cargo.toml`.
-   - Preserve source entrypoint path (`src/main.rs`).
-2. Backward compatibility window.
-   - Update usage/help text and docs to show `goby` as canonical command.
-   - Keep tests tolerant to argv[0] differences where needed.
-   - Optionally retain `goby-cli` local dev invocation via `cargo run -p goby-cli -- ...`.
-3. Integration/CI updates.
-   - Update integration tests that currently reference `CARGO_BIN_EXE_goby-cli`
-     to the new binary name contract.
-   - Verify `cargo install --path crates/goby-cli` results in runnable `goby`.
-4. Documentation sync.
-   - Update README, examples, and CLI docs from `goby-cli ...` to `goby ...`
-     for user-facing instructions.
-   - Keep developer-oriented Cargo commands unchanged where appropriate.
+1. `goby fmt` / `goby fmt --check` (deterministic formatting).
+2. `goby lint` (high-signal checks + machine-readable output).
+3. `goby-lsp` MVP (diagnostics, hover, definition).
+4. Cross-editor syntax regression tests for existing highlight packs.
 
 Acceptance criteria:
 
-1. After `cargo install --path crates/goby-cli`, `goby --help` works.
-2. `goby check/run/build` execute successfully for baseline examples.
-3. CI/integration tests pass under the new binary name contract.
+- Formatter/linter commands and baseline LSP diagnostics are usable on `examples/` and stdlib sources.
 
-### 4.4 Early Developer Tooling Plan
+### 4.6 Parking Lot (Needs Revalidation Before Implementation)
 
-Goal: align implementation priorities with the language vision that strong tooling is a core
-project value, and make Goby practical in editors early.
+- CLI `build` expansion details (`--target`, `--engine-compat`, verify modes).
+- CLI binary naming migration (`goby-cli` -> `goby`) final policy.
 
-Scope to prioritize:
-
-- LSP server (at least hover, go-to-definition, diagnostics, document symbols).
-- Syntax highlighting (TextMate grammar first; Tree-sitter grammar as optional follow-up).
-- Linter (`goby lint`) with stable machine-readable output format for editor integration.
-- Formatter (`goby fmt`) with deterministic output and CI-friendly check mode.
-
-Implementation steps:
-
-1. Tooling protocol/contracts baseline.
-   - Define canonical diagnostic schema (file, line, column, code, message, severity).
-   - Freeze a minimal set of error codes for parser/typechecker/lint.
-2. Formatter MVP.
-   - Implement a deterministic formatter for currently supported syntax.
-   - Add `goby fmt` and `goby fmt --check`.
-   - Add golden-file tests to prevent formatting drift.
-3. Linter MVP.
-   - Implement `goby lint` for high-signal checks (unused bindings, shadowing clarity, style traps).
-   - Output both human-readable and machine-readable formats.
-4. Syntax highlighting packs.
-   - Provide a `.tmLanguage` grammar for immediate editor adoption.
-   - Keep grammar in monorepo with snapshot tests on representative `.gb` snippets.
-5. LSP MVP.
-   - Build `goby-lsp` over parser/typechecker diagnostics.
-   - Implement diagnostics + hover + definition first; defer heavy features.
-   - Verify behavior on `examples/*.gb` and stdlib Goby modules.
-6. Editor integration and release flow.
-   - Publish a minimal VS Code extension wrapper (syntax + LSP wiring).
-   - Keep tooling artifacts versioned in the same monorepo at this stage.
-
-### 4.5 Editor Syntax Highlight Rollout Plan (VSCode / Emacs / Vim) — DONE (2026-03-02)
-
-All three editor highlight packs are implemented and present in the monorepo:
-
-- `tooling/syntax/textmate/goby.tmLanguage.json`: canonical TextMate grammar (10 token categories).
-- `tooling/vscode-goby/`: VS Code extension (package.json, language-configuration.json, grammar, README).
-- `tooling/vim/syntax/goby.vim` + `tooling/vim/ftdetect/goby.vim`: Vim syntax pack + ftdetect.
-- `tooling/emacs/goby-mode.el`: Emacs major mode (font-lock + `auto-mode-alist` for `.gb`).
-- `tooling/syntax/testdata/highlight_sample.gb`: manual test fixture covering all token categories.
-
-Remaining (deferred):
-
-- Cross-editor regression tests (shared fixture → expected token scopes/groups in CI).
+These items are intentionally kept as short placeholders until they become active.
 
 ## 5. Spec Detail Notes
 
