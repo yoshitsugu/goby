@@ -225,6 +225,16 @@ Based on `examples/*.gb`:
   - `a.0`, `a.1` parse as qualified numeric member access and are typechecked/runtime-evaluated as tuple index access.
   - Numeric member access is valid only for tuple receivers.
   - Non-tuple receivers (for example `Status.0`) are rejected.
+- **List spread/concat expression (`[a, b, ..xs]`)** (planned).
+  - Goal:
+    - allow list construction with fixed prefix elements plus tail concatenation in expression position.
+    - examples: `[f(x), ..ys]`, `[a, b, c, ..xs]`.
+  - Parsing scope:
+    - support zero or more normal elements followed by at most one trailing `..expr`.
+    - reject malformed forms (`[..xs]` at current MVP scope, multiple spread segments, non-trailing spread).
+    - keep `case` list-pattern syntax behavior unchanged; this item is expression syntax only.
+  - AST scope:
+    - represent list literal elements and optional spread tail distinctly so lowering/typecheck can validate shape without reparsing.
 
 ### 2.2 Types and Checking
 
@@ -238,6 +248,14 @@ Based on `examples/*.gb`:
   - MVP `Ty::Unknown` tolerance is preserved when information is insufficient.
   - Native Wasm capability checker still treats list patterns as unsupported;
     these cases execute via fallback runtime path.
+- **List spread expression typing (`[a, b, ..xs]`)** (planned).
+  - Type rules to implement:
+    - for `[e1, e2, ..., ..tail]`, all prefix elements must unify to the same type `a`.
+    - `tail` must typecheck as `List a`.
+    - whole expression type is `List a`.
+  - Diagnostics:
+    - when prefix element types conflict, report expected element type vs actual element type.
+    - when tail is not a list (or has mismatched element type), report expected `List a` shape explicitly.
 - Type annotation placement rules (required vs optional locations).
 - Type error diagnostics quality bar is fixed for MVP:
   - diagnostics must be non-empty and human-readable plain text.
@@ -352,6 +370,10 @@ Note: detailed step-by-step renewal history is intentionally omitted here; use
 - Core modules to ship first (`Int`, `String`, `List`, `Env`) — minimal built-ins implemented.
 - Naming conventions for stdlib functions — established.
 - Minimal collection API for immutable workflows — deferred.
+- `List.map` migration plan (planned):
+  - keep canonical map behavior in `stdlib/goby/list.gb` (`list.map` export path).
+  - replace internal/builtin-path map callsites with stdlib module usage where possible.
+  - after migration, trim builtin-only `map` special handling so runtime/compiler has a single semantics source.
 
 ### 2.5 Runtime / Compiler Scope (MVP)
 
@@ -458,7 +480,49 @@ Note:
 - Critical correctness items from the same review batch were already fixed:
   parser explicit early-return clarity and planning `u16` overflow fail-fast behavior.
 
-### 4.5 Parking Lot (Needs Revalidation Before Implementation)
+### 4.5 Active Language Task: List Spread Expressions and `List.map` Consolidation
+
+Goal: enable `stdlib/goby/list.gb` `map` implementation (`[f(x), ..ys]`) and
+consolidate map semantics in stdlib.
+
+Step-by-step checklist:
+
+- [ ] Step 1: parser grammar update for list spread expressions
+  - accept `[a, b, ..xs]` and `[f(x), ..ys]` in expression position.
+  - allow zero or more prefix elements, with one trailing spread segment only.
+- [ ] Step 2: parser validation and diagnostics
+  - reject malformed forms (multiple `..`, non-trailing `..`, missing spread expression).
+  - keep `case` list-pattern parsing rules unchanged.
+- [ ] Step 3: AST extension for spread list literals
+  - represent list prefix elements and optional spread tail in AST explicitly.
+  - update parser tests to lock AST shape for valid inputs.
+- [ ] Step 4: typecheck rule for prefix element unification
+  - unify all prefix element types to one element type `a`.
+  - surface type mismatch diagnostics when prefix elements disagree.
+- [ ] Step 5: typecheck rule for spread tail
+  - require spread tail type to be `List a` where `a` is the unified element type.
+  - report explicit `List <type>` expectation on tail mismatch/non-list tail.
+- [ ] Step 6: runtime/fallback evaluation support
+  - evaluate prefix elements and spread tail in deterministic order.
+  - concatenate into one list value with current list runtime semantics.
+- [ ] Step 7: native lowering parity
+  - add lowering support or route safely to fallback path.
+  - ensure observable behavior parity between native and fallback execution.
+- [ ] Step 8: migrate map callsites to stdlib
+  - identify existing builtin/internal `map` callsites.
+  - switch each to `goby/list` `map` where semantics are equivalent.
+- [ ] Step 9: trim builtin-only map path
+  - remove or narrow redundant builtin `map` special handling after migration.
+  - keep one canonical map semantics source in stdlib.
+- [ ] Step 10: docs sync
+  - update `doc/LANGUAGE_SPEC.md` for expression-side `..` list syntax.
+  - add one canonical example using `[a, b, ..xs]`.
+- [ ] Step 11: regression tests
+  - parser: valid/invalid spread forms.
+  - typecheck: prefix mismatch, tail non-list, tail element mismatch.
+  - runtime/CLI: end-to-end behavior for list spread + stdlib `map`.
+
+### 4.6 Parking Lot (Needs Revalidation Before Implementation)
 
 - CLI `build` expansion details (`--target`, `--engine-compat`, verify modes).
 - CLI binary naming migration (`goby-cli` -> `goby`) final policy.

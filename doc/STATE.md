@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-05
+Last updated: 2026-03-06
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -65,6 +65,15 @@ This file is a restart-safe snapshot for resuming work after context reset.
 - MVP locked subset remains complete for currently implemented syntax.
 - Remaining open point for list `case` patterns:
   - native lowering support (capability checker + native evaluator path).
+- Active language task (new, 2026-03-06):
+  - expression-side list spread/concat syntax (`[a, b, ..xs]`) is not implemented yet.
+  - required behavior:
+    - allow arbitrary prefix elements + one trailing `..` tail in list literals.
+    - enforce type rule: prefix elements share one element type `a`, and tail is `List a`.
+  - this is required to support stdlib `goby/list.map` implementation using `[f(x), ..ys]`.
+- Active migration task (new, 2026-03-06):
+  - map semantics should be consolidated in `stdlib/goby/list.gb` (`list.map`),
+    replacing builtin/internal map paths where possible.
 - Post-MVP open items tracked in `doc/PLAN.md` §3 and §4.
 - Post-MVP effect implementation direction is now fixed in `doc/PLAN.md` §2.3:
   - deep handlers with one-shot resumptions,
@@ -79,6 +88,17 @@ This file is a restart-safe snapshot for resuming work after context reset.
 ## 4. Recent Milestones
 
 Recent (detailed):
+
+- 2026-03-06 (session 174): list spread + map consolidation task planning added.
+  - `doc/PLAN.md` updated with step-by-step checkbox plan for:
+    - parser/AST support for expression-side list spread (`[a, b, ..xs]`),
+    - typecheck rules for prefix/tail element-type consistency,
+    - runtime/native parity,
+    - stdlib map migration away from builtin/internal map paths,
+    - docs/examples/tests sync.
+  - current code state:
+    - `stdlib/goby/list.gb` already includes `map` draft using `[f(x), ..ys]`.
+    - parser/typecheck/runtime support for expression-side `..` is pending.
 
 - 2026-03-05 (session 173): `doc/PLAN.md` cleanup for closed tracks.
   - verified language-facing changes are synchronized in
