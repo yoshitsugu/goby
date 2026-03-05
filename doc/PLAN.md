@@ -398,6 +398,8 @@ Progress snapshot (2026-03-05):
   parameters in Unit side-effect execution path (list.each-style callback dispatch).
 - regression coverage now includes captured-inline-closure callback and
   list.each-style effect+handler callback dispatch.
+- typecheck regression coverage now includes import mode variants for
+  `goby/list.each` (plain/alias/selective).
 
 Acceptance criteria:
 

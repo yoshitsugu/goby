@@ -5198,6 +5198,42 @@ f =
     }
 
     #[test]
+    fn typechecks_list_each_with_plain_import() {
+        let source = "\
+import goby/list
+main : Unit -> Unit can Print
+main =
+  list.each [1, 2] (|n| -> print \"${n}\")
+";
+        let module = parse_module(source).expect("should parse");
+        typecheck_module(&module).expect("list.each should typecheck via plain import");
+    }
+
+    #[test]
+    fn typechecks_list_each_with_alias_import() {
+        let source = "\
+import goby/list as l
+main : Unit -> Unit can Print
+main =
+  l.each [1, 2] (|n| -> print \"${n}\")
+";
+        let module = parse_module(source).expect("should parse");
+        typecheck_module(&module).expect("list.each should typecheck via alias import");
+    }
+
+    #[test]
+    fn typechecks_list_each_with_selective_import() {
+        let source = "\
+import goby/list ( each )
+main : Unit -> Unit can Print
+main =
+  each [1, 2] (|n| -> print \"${n}\")
+";
+        let module = parse_module(source).expect("should parse");
+        typecheck_module(&module).expect("list.each should typecheck via selective import");
+    }
+
+    #[test]
     fn typechecks_with_handler_operation_from_imported_effect_without_redeclaration() {
         let source = "\
 import goby/int as i
