@@ -1538,7 +1538,7 @@ fn parse_non_lambda_expr(src: &str) -> Option<Expr> {
     None
 }
 
-/// Parse a list literal `[expr, expr, ...]`.
+/// Parse a list literal `[expr, expr, ...]` or `[expr, ..tail]`.
 fn parse_list_expr(src: &str) -> Option<Expr> {
     let inner = src[1..src.len() - 1].trim();
     if inner.is_empty() {
@@ -1548,6 +1548,36 @@ fn parse_list_expr(src: &str) -> Option<Expr> {
         });
     }
     let parts = split_top_level_commas(inner);
+
+    // Check for `..` spread in non-last positions → reject.
+    for part in &parts[..parts.len() - 1] {
+        if part.trim().starts_with("..") {
+            return None;
+        }
+    }
+
+    let last = parts.last().unwrap().trim();
+    if let Some(tail_src) = last.strip_prefix("..") {
+        let tail_src = tail_src.trim();
+        // `[..xs]` (no prefix elements) is rejected in expression position.
+        if parts.len() == 1 {
+            return None;
+        }
+        // `[a, ..]` (missing expression after `..`) is rejected.
+        if tail_src.is_empty() {
+            return None;
+        }
+        let spread_expr = parse_expr(tail_src)?;
+        let elements: Option<Vec<Expr>> = parts[..parts.len() - 1]
+            .iter()
+            .map(|p| parse_expr(p.trim()))
+            .collect();
+        return Some(Expr::ListLit {
+            elements: elements?,
+            spread: Some(Box::new(spread_expr)),
+        });
+    }
+
     let items: Option<Vec<Expr>> = parts.iter().map(|p| parse_expr(p.trim())).collect();
     Some(Expr::ListLit {
         elements: items?,
@@ -2891,6 +2921,66 @@ main =
                 spread: None,
             })
         );
+    }
+
+    #[test]
+    fn parses_list_spread_with_variable() {
+        assert_eq!(
+            parse_expr("[1, 2, ..xs]"),
+            Some(Expr::ListLit {
+                elements: vec![Expr::IntLit(1), Expr::IntLit(2)],
+                spread: Some(Box::new(Expr::Var("xs".to_string()))),
+            })
+        );
+    }
+
+    #[test]
+    fn parses_list_spread_with_call_expr() {
+        assert_eq!(
+            parse_expr("[f(x), ..ys]"),
+            Some(Expr::ListLit {
+                elements: vec![Expr::Call {
+                    callee: Box::new(Expr::Var("f".to_string())),
+                    arg: Box::new(Expr::Var("x".to_string())),
+                }],
+                spread: Some(Box::new(Expr::Var("ys".to_string()))),
+            })
+        );
+    }
+
+    #[test]
+    fn parses_list_spread_single_prefix() {
+        assert_eq!(
+            parse_expr("[a, ..rest]"),
+            Some(Expr::ListLit {
+                elements: vec![Expr::Var("a".to_string())],
+                spread: Some(Box::new(Expr::Var("rest".to_string()))),
+            })
+        );
+    }
+
+    #[test]
+    fn rejects_list_spread_only() {
+        // [..xs] with no prefix elements is rejected.
+        assert_eq!(parse_expr("[..xs]"), None);
+    }
+
+    #[test]
+    fn rejects_list_spread_non_trailing() {
+        // [..a, b] is rejected.
+        assert_eq!(parse_expr("[..a, b]"), None);
+    }
+
+    #[test]
+    fn rejects_list_spread_middle() {
+        // [a, ..b, c] is rejected.
+        assert_eq!(parse_expr("[a, ..b, c]"), None);
+    }
+
+    #[test]
+    fn rejects_list_spread_missing_expr() {
+        // [a, ..] is rejected in expression position.
+        assert_eq!(parse_expr("[a, ..]"), None);
     }
 
     #[test]

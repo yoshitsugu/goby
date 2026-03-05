@@ -404,4 +404,13 @@ mod tests {
         };
         assert_eq!(expr.to_str_repr(), Some("(a + b) * c".to_string()));
     }
+
+    #[test]
+    fn to_str_repr_list_with_spread() {
+        let expr = Expr::ListLit {
+            elements: vec![Expr::IntLit(1), Expr::IntLit(2)],
+            spread: Some(Box::new(Expr::Var("xs".to_string()))),
+        };
+        assert_eq!(expr.to_str_repr(), Some("[1, 2, ..xs]".to_string()));
+    }
 }

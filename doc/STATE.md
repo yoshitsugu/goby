@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-06
+Last updated: 2026-03-06 (session 175)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -89,16 +89,30 @@ This file is a restart-safe snapshot for resuming work after context reset.
 
 Recent (detailed):
 
+- 2026-03-06 (session 175): list spread expression — AST + parser implementation.
+  - PLAN.md §4.5 Step 1-3 (AST/parser slice) — Step 1 and Step 2 completed.
+  - Step 1 (committed): `Expr::ListLit(Vec<Expr>)` → `Expr::ListLit { elements, spread }`.
+    - All 18 match sites across 7 files updated mechanically.
+    - Combined `ListLit | TupleLit` arms split into separate arms.
+    - Typecheck/runtime guards return `Ty::Unknown` / `None` when spread is present.
+    - Codex pass 1 + pass 2 review completed, no issues.
+  - Step 2 (committed): `parse_list_expr` now accepts trailing `..expr` in list literals.
+    - Accepts: `[a, b, ..xs]`, `[f(x), ..ys]`, `[1, ..rest]`.
+    - Rejects: `[..xs]` (no prefix), `[a, ..]` (missing expr), `[..a, b]` / `[a, ..b, c]` (non-trailing).
+    - 7 parser tests + 1 `to_str_repr` test added.
+    - Codex pass 1 review pending (session ended before pass 1 completion).
+  - Remaining for this slice:
+    - Step 3: quality gate + `examples/function.gb` integration verification (trivial).
+  - Next slices (PLAN.md §4.5 Steps 4-11):
+    - Step 4-5: typecheck rules (prefix element unification + spread tail `List a` check).
+    - Step 6-7: runtime/fallback + native lowering support.
+    - Step 8-9: migrate builtin `map` to stdlib `goby/list.map`.
+    - Step 10-11: docs sync + regression tests.
+  - Workspace files: `~/.claude/workspaces/home_yoshitsugu_src_gitlab-com_yoshitsugu_goby/`.
+
 - 2026-03-06 (session 174): list spread + map consolidation task planning added.
-  - `doc/PLAN.md` updated with step-by-step checkbox plan for:
-    - parser/AST support for expression-side list spread (`[a, b, ..xs]`),
-    - typecheck rules for prefix/tail element-type consistency,
-    - runtime/native parity,
-    - stdlib map migration away from builtin/internal map paths,
-    - docs/examples/tests sync.
-  - current code state:
-    - `stdlib/goby/list.gb` already includes `map` draft using `[f(x), ..ys]`.
-    - parser/typecheck/runtime support for expression-side `..` is pending.
+  - `doc/PLAN.md` updated with step-by-step checkbox plan.
+  - `stdlib/goby/list.gb` already includes `map` draft using `[f(x), ..ys]`.
 
 - 2026-03-05 (session 173): `doc/PLAN.md` cleanup for closed tracks.
   - verified language-facing changes are synchronized in
@@ -364,9 +378,13 @@ cargo clippy -- -D warnings
 
 Execution focus (aligned with `doc/PLAN.md`):
 
-1. Stdlib runtime bridge generalization (reduce symbol-specific fallback branches).
-2. Tooling foundation (`fmt`/`lint`/`lsp`) with stable diagnostics surface.
-3. Native lowering coverage expansion for remaining unsupported expression/effect paths.
+1. **Active**: List spread expression implementation (PLAN.md §4.5).
+   - AST + parser done (Steps 1-3). Next: typecheck (Steps 4-5), runtime (Steps 6-7),
+     then map migration (Steps 8-9) and docs/tests (Steps 10-11).
+   - Codex review pass 1 for Step 2 parser change is pending — run before continuing.
+2. Stdlib runtime bridge generalization (reduce symbol-specific fallback branches).
+3. Tooling foundation (`fmt`/`lint`/`lsp`) with stable diagnostics surface.
+4. Native lowering coverage expansion for remaining unsupported expression/effect paths.
 
 ## 7. Resume Commands
 
