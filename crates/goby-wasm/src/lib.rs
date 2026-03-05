@@ -787,6 +787,14 @@ impl<'m> RuntimeOutputResolver<'m> {
             }
             // All other expression statements: delegate to string-based path.
             _ => {
+                let mut locals = self.locals.clone();
+                let mut callables = HashMap::new();
+                if self
+                    .execute_unit_expr_ast(expr, &mut locals, &mut callables, evaluators, 0)
+                    .is_some()
+                {
+                    return Some(());
+                }
                 let repr = expr.to_str_repr()?;
                 self.eval_side_effect(&repr, evaluators)
             }
@@ -1393,6 +1401,7 @@ impl<'m> RuntimeOutputResolver<'m> {
             }
             Expr::Block(stmts) => {
                 let mut block_locals = locals.clone();
+                let mut block_callables = callables.clone();
                 let mut last_value: Option<RuntimeValue> = None;
                 for stmt in stmts {
                     match stmt {
@@ -1400,7 +1409,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                             let v = self.eval_expr_ast(
                                 value,
                                 &block_locals,
-                                callables,
+                                &block_callables,
                                 evaluators,
                                 depth + 1,
                             )?;
@@ -1414,7 +1423,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                             let v = self.eval_expr_ast(
                                 value,
                                 &block_locals,
-                                callables,
+                                &block_callables,
                                 evaluators,
                                 depth + 1,
                             )?;
@@ -1422,13 +1431,24 @@ impl<'m> RuntimeOutputResolver<'m> {
                             last_value = None;
                         }
                         Stmt::Expr(expr) => {
-                            last_value = Some(self.eval_expr_ast(
+                            if let Some(v) = self.eval_expr_ast(
                                 expr,
                                 &block_locals,
-                                callables,
+                                &block_callables,
                                 evaluators,
                                 depth + 1,
-                            )?);
+                            ) {
+                                last_value = Some(v);
+                            } else {
+                                self.execute_unit_expr_ast(
+                                    expr,
+                                    &mut block_locals,
+                                    &mut block_callables,
+                                    evaluators,
+                                    depth + 1,
+                                )?;
+                                last_value = Some(RuntimeValue::Unit);
+                            }
                         }
                     }
                 }
@@ -1471,13 +1491,25 @@ impl<'m> RuntimeOutputResolver<'m> {
                         _ => false,
                     };
                     if matched {
-                        return self.eval_expr_ast(
+                        if let Some(v) = self.eval_expr_ast(
                             &arm.body,
                             &arm_locals,
                             callables,
                             evaluators,
                             depth + 1,
-                        );
+                        ) {
+                            return Some(v);
+                        }
+                        let mut arm_callables = callables.clone();
+                        let mut arm_locals_for_unit = arm_locals;
+                        self.execute_unit_expr_ast(
+                            &arm.body,
+                            &mut arm_locals_for_unit,
+                            &mut arm_callables,
+                            evaluators,
+                            depth + 1,
+                        )?;
+                        return Some(RuntimeValue::Unit);
                     }
                 }
                 None
@@ -1490,12 +1522,48 @@ impl<'m> RuntimeOutputResolver<'m> {
                 let cond_val =
                     self.eval_expr_ast(condition, locals, callables, evaluators, depth + 1)?;
                 match cond_val {
-                    RuntimeValue::Bool(true) => {
-                        self.eval_expr_ast(then_expr, locals, callables, evaluators, depth + 1)
-                    }
-                    RuntimeValue::Bool(false) => {
-                        self.eval_expr_ast(else_expr, locals, callables, evaluators, depth + 1)
-                    }
+                    RuntimeValue::Bool(true) => match self.eval_expr_ast(
+                        then_expr,
+                        locals,
+                        callables,
+                        evaluators,
+                        depth + 1,
+                    ) {
+                        Some(v) => Some(v),
+                        None => {
+                            let mut branch_locals = locals.clone();
+                            let mut branch_callables = callables.clone();
+                            self.execute_unit_expr_ast(
+                                then_expr,
+                                &mut branch_locals,
+                                &mut branch_callables,
+                                evaluators,
+                                depth + 1,
+                            )?;
+                            Some(RuntimeValue::Unit)
+                        }
+                    },
+                    RuntimeValue::Bool(false) => match self.eval_expr_ast(
+                        else_expr,
+                        locals,
+                        callables,
+                        evaluators,
+                        depth + 1,
+                    ) {
+                        Some(v) => Some(v),
+                        None => {
+                            let mut branch_locals = locals.clone();
+                            let mut branch_callables = callables.clone();
+                            self.execute_unit_expr_ast(
+                                else_expr,
+                                &mut branch_locals,
+                                &mut branch_callables,
+                                evaluators,
+                                depth + 1,
+                            )?;
+                            Some(RuntimeValue::Unit)
+                        }
+                    },
                     _ => None,
                 }
             }
@@ -1573,6 +1641,273 @@ impl<'m> RuntimeOutputResolver<'m> {
         }
     }
 
+    fn execute_unit_expr_ast(
+        &mut self,
+        expr: &Expr,
+        locals: &mut RuntimeLocals,
+        callables: &mut HashMap<String, IntCallable>,
+        evaluators: &RuntimeEvaluators<'_, '_>,
+        depth: usize,
+    ) -> Option<()> {
+        if let Expr::With { handler, body } = expr {
+            let RuntimeValue::Handler(inline_handler) =
+                self.eval_expr_ast(handler, locals, callables, evaluators, depth)?
+            else {
+                return None;
+            };
+            self.active_inline_handler_stack.push(inline_handler);
+            let result = (|| -> Option<()> {
+                for stmt in body {
+                    self.execute_unit_ast_stmt(stmt, locals, callables, evaluators, depth + 1)?;
+                }
+                Some(())
+            })();
+            self.active_inline_handler_stack.pop();
+            return result;
+        }
+
+        // print <arg>
+        if let Expr::Call { callee, arg } = expr
+            && matches!(callee.as_ref(), Expr::Var(n) if n == BUILTIN_PRINT)
+        {
+            let value = self.eval_expr_ast(arg, locals, callables, evaluators, depth)?;
+            self.outputs.push(value.to_output_text());
+            return Some(());
+        }
+
+        // value |> print
+        if let Expr::Pipeline { value, callee } = expr
+            && callee == BUILTIN_PRINT
+        {
+            let v = self.eval_expr_ast(value, locals, callables, evaluators, depth)?;
+            self.outputs.push(v.to_output_text());
+            return Some(());
+        }
+
+        // Qualified effect call: Effect.method arg  (e.g. Log.log result)
+        if let Expr::Call { callee, arg } = expr
+            && let Expr::Qualified { receiver, member } = callee.as_ref()
+        {
+            let arg_val = self.eval_expr_ast(arg, locals, callables, evaluators, depth)?;
+            let method = self.find_handler_method_for_effect(receiver, member);
+            if let Some(method) = method {
+                return self.dispatch_handler_method(&method, arg_val, evaluators, depth + 1);
+            }
+            if self
+                .apply_embedded_default_handler(receiver, member, arg_val.clone())
+                .is_some()
+            {
+                return Some(());
+            }
+        }
+
+        // Other expression statements: try AST unit-call path.
+        if let Expr::Call { callee, arg } = expr
+            && let Expr::Var(fn_name) = callee.as_ref()
+        {
+            // Evaluate arg once.
+            let arg_val = self.eval_expr_ast(arg, locals, callables, evaluators, depth)?;
+            // Bare effect method call: e.g. `log env_var`.
+            let bare_method = self.find_handler_method_by_name(fn_name);
+            if let Some(method) = bare_method {
+                return self.dispatch_handler_method(&method, arg_val, evaluators, depth + 1);
+            }
+            if let Some(effect_name) = self.unique_effect_name_for_operation(fn_name)
+                && self
+                    .apply_embedded_default_handler(&effect_name, fn_name, arg_val.clone())
+                    .is_some()
+            {
+                return Some(());
+            }
+            if self
+                .execute_unit_call_ast(
+                    fn_name,
+                    arg_val.clone(),
+                    locals,
+                    callables,
+                    evaluators,
+                    depth,
+                )
+                .is_some()
+            {
+                return Some(());
+            }
+            // Try executing as general declaration for side effects.
+            if self
+                .execute_decl_as_side_effect(fn_name, arg_val, evaluators, depth + 1)
+                .is_some()
+            {
+                return Some(());
+            }
+            if matches!(fn_name.as_str(), "read" | "read_line")
+                && !self.has_declaration_name(fn_name)
+                && locals.get(fn_name).is_none()
+                && !callables.contains_key(fn_name)
+                && self
+                    .apply_embedded_default_handler("Read", fn_name, RuntimeValue::Unit)
+                    .is_some()
+            {
+                return Some(());
+            }
+            let repr = expr.to_str_repr()?;
+            return self.execute_unit_call(&repr, locals, callables, evaluators);
+        }
+
+        if let Expr::Pipeline { value, callee } = expr {
+            if let Some(v) = self.eval_expr_ast(value, locals, callables, evaluators, depth) {
+                if let Some(effect_name) = self.unique_effect_name_for_operation(callee)
+                    && self
+                        .apply_embedded_default_handler(&effect_name, callee, v.clone())
+                        .is_some()
+                {
+                    return Some(());
+                }
+                if self
+                    .execute_unit_call_ast(callee, v, locals, callables, evaluators, depth)
+                    .is_some()
+                {
+                    return Some(());
+                }
+                if matches!(callee.as_str(), "read" | "read_line")
+                    && !self.has_declaration_name(callee)
+                    && locals.get(callee).is_none()
+                    && !callables.contains_key(callee)
+                    && self
+                        .apply_embedded_default_handler("Read", callee, RuntimeValue::Unit)
+                        .is_some()
+                {
+                    return Some(());
+                }
+            }
+            let repr = expr.to_str_repr()?;
+            return self.execute_unit_call(&repr, locals, callables, evaluators);
+        }
+
+        // Bare literal/var expression: evaluate and discard.
+        if let Expr::Var(_) | Expr::IntLit(_) | Expr::StringLit(_) | Expr::BoolLit(_) = expr {
+            return Some(());
+        }
+
+        if let Expr::Case { scrutinee, arms } = expr {
+            let scrutinee_val =
+                self.eval_expr_ast(scrutinee, locals, callables, evaluators, depth)?;
+            for arm in arms {
+                let mut arm_locals = locals.clone();
+                let matched = match (&arm.pattern, &scrutinee_val) {
+                    (CasePattern::Wildcard, _) => true,
+                    (CasePattern::IntLit(n), RuntimeValue::Int(v)) => n == v,
+                    (CasePattern::StringLit(s), RuntimeValue::String(v)) => s == v,
+                    (CasePattern::BoolLit(b), RuntimeValue::Bool(v)) => b == v,
+                    (CasePattern::EmptyList, RuntimeValue::ListInt(values)) => values.is_empty(),
+                    (CasePattern::EmptyList, RuntimeValue::ListString(values)) => values.is_empty(),
+                    (CasePattern::ListPattern { items, tail }, RuntimeValue::ListInt(values)) => {
+                        self.match_list_pattern_int(items, tail.as_ref(), values, &mut arm_locals)
+                    }
+                    (
+                        CasePattern::ListPattern { items, tail },
+                        RuntimeValue::ListString(values),
+                    ) => self.match_list_pattern_string(
+                        items,
+                        tail.as_ref(),
+                        values,
+                        &mut arm_locals,
+                    ),
+                    _ => false,
+                };
+                if matched {
+                    if self
+                        .eval_expr_ast(&arm.body, &arm_locals, callables, evaluators, depth + 1)
+                        .is_some()
+                    {
+                        return Some(());
+                    }
+                    let mut arm_callables = callables.clone();
+                    return self.execute_unit_expr_ast(
+                        &arm.body,
+                        &mut arm_locals,
+                        &mut arm_callables,
+                        evaluators,
+                        depth + 1,
+                    );
+                }
+            }
+            return Some(());
+        }
+
+        if let Expr::If {
+            condition,
+            then_expr,
+            else_expr,
+        } = expr
+        {
+            let cond_val = self.eval_expr_ast(condition, locals, callables, evaluators, depth)?;
+            match cond_val {
+                RuntimeValue::Bool(true) => {
+                    if self
+                        .eval_expr_ast(then_expr, locals, callables, evaluators, depth + 1)
+                        .is_some()
+                    {
+                        return Some(());
+                    }
+                    return self.execute_unit_expr_ast(
+                        then_expr,
+                        locals,
+                        callables,
+                        evaluators,
+                        depth + 1,
+                    );
+                }
+                RuntimeValue::Bool(false) => {
+                    if self
+                        .eval_expr_ast(else_expr, locals, callables, evaluators, depth + 1)
+                        .is_some()
+                    {
+                        return Some(());
+                    }
+                    return self.execute_unit_expr_ast(
+                        else_expr,
+                        locals,
+                        callables,
+                        evaluators,
+                        depth + 1,
+                    );
+                }
+                _ => return None,
+            }
+        }
+
+        if let Expr::Block(stmts) = expr {
+            let mut block_locals = locals.clone();
+            let mut block_callables = callables.clone();
+            for stmt in stmts {
+                self.execute_unit_ast_stmt(
+                    stmt,
+                    &mut block_locals,
+                    &mut block_callables,
+                    evaluators,
+                    depth + 1,
+                )?;
+            }
+            return Some(());
+        }
+
+        // Fallback: evaluating to a value is fine in unit position (discarded).
+        if self
+            .eval_expr_ast(expr, locals, callables, evaluators, depth + 1)
+            .is_some()
+        {
+            return Some(());
+        }
+
+        // Preserve existing call/pipeline string fallback behavior for uncovered forms.
+        if let Expr::Call { .. } | Expr::Pipeline { .. } = expr {
+            let repr = expr.to_str_repr()?;
+            return self.execute_unit_call(&repr, locals, callables, evaluators);
+        }
+
+        None
+    }
+
     /// Execute a single AST statement inside a unit-returning function body.
     fn execute_unit_ast_stmt(
         &mut self,
@@ -1595,158 +1930,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                 Some(())
             }
             Stmt::Expr(expr) => {
-                if let Expr::With { handler, body } = expr {
-                    let RuntimeValue::Handler(inline_handler) =
-                        self.eval_expr_ast(handler, locals, callables, evaluators, depth)?
-                    else {
-                        return None;
-                    };
-                    self.active_inline_handler_stack.push(inline_handler);
-                    let result = (|| -> Option<()> {
-                        for stmt in body {
-                            self.execute_unit_ast_stmt(
-                                stmt,
-                                locals,
-                                callables,
-                                evaluators,
-                                depth + 1,
-                            )?;
-                        }
-                        Some(())
-                    })();
-                    self.active_inline_handler_stack.pop();
-                    return result;
-                }
-                // print <arg>
-                if let Expr::Call { callee, arg } = expr
-                    && matches!(callee.as_ref(), Expr::Var(n) if n == BUILTIN_PRINT)
-                {
-                    let value = self.eval_expr_ast(arg, locals, callables, evaluators, depth)?;
-                    self.outputs.push(value.to_output_text());
-                    return Some(());
-                }
-                // value |> print
-                if let Expr::Pipeline { value, callee } = expr
-                    && callee == BUILTIN_PRINT
-                {
-                    let v = self.eval_expr_ast(value, locals, callables, evaluators, depth)?;
-                    self.outputs.push(v.to_output_text());
-                    return Some(());
-                }
-                // Qualified effect call: Effect.method arg  (e.g. Log.log result)
-                if let Expr::Call { callee, arg } = expr
-                    && let Expr::Qualified { receiver, member } = callee.as_ref()
-                {
-                    let arg_val = self.eval_expr_ast(arg, locals, callables, evaluators, depth)?;
-                    let method = self.find_handler_method_for_effect(receiver, member);
-                    if let Some(method) = method {
-                        return self.dispatch_handler_method(
-                            &method,
-                            arg_val,
-                            evaluators,
-                            depth + 1,
-                        );
-                    }
-                    if self
-                        .apply_embedded_default_handler(receiver, member, arg_val.clone())
-                        .is_some()
-                    {
-                        return Some(());
-                    }
-                }
-                // Other expression statements: try AST unit-call path.
-                if let Expr::Call { callee, arg } = expr
-                    && let Expr::Var(fn_name) = callee.as_ref()
-                {
-                    // Evaluate arg once.
-                    let arg_val = self.eval_expr_ast(arg, locals, callables, evaluators, depth)?;
-                    // Bare effect method call: e.g. `log env_var`.
-                    let bare_method = self.find_handler_method_by_name(fn_name);
-                    if let Some(method) = bare_method {
-                        return self.dispatch_handler_method(
-                            &method,
-                            arg_val,
-                            evaluators,
-                            depth + 1,
-                        );
-                    }
-                    if let Some(effect_name) = self.unique_effect_name_for_operation(fn_name)
-                        && self
-                            .apply_embedded_default_handler(&effect_name, fn_name, arg_val.clone())
-                            .is_some()
-                    {
-                        return Some(());
-                    }
-                    if self
-                        .execute_unit_call_ast(
-                            fn_name,
-                            arg_val.clone(),
-                            locals,
-                            callables,
-                            evaluators,
-                            depth,
-                        )
-                        .is_some()
-                    {
-                        return Some(());
-                    }
-                    // Try executing as general declaration for side effects.
-                    if self
-                        .execute_decl_as_side_effect(fn_name, arg_val, evaluators, depth + 1)
-                        .is_some()
-                    {
-                        return Some(());
-                    }
-                    if matches!(fn_name.as_str(), "read" | "read_line")
-                        && !self.has_declaration_name(fn_name)
-                        && locals.get(fn_name).is_none()
-                        && !callables.contains_key(fn_name)
-                        && self
-                            .apply_embedded_default_handler("Read", fn_name, RuntimeValue::Unit)
-                            .is_some()
-                    {
-                        return Some(());
-                    }
-                    let repr = expr.to_str_repr()?;
-                    return self.execute_unit_call(&repr, locals, callables, evaluators);
-                }
-                // Bare Var expression: discarded return value (e.g. last line of Int fn body).
-                if let Expr::Var(_) | Expr::IntLit(_) | Expr::StringLit(_) | Expr::BoolLit(_) = expr
-                {
-                    return Some(());
-                }
-                if let Expr::Pipeline { value, callee } = expr {
-                    if let Some(v) = self.eval_expr_ast(value, locals, callables, evaluators, depth)
-                    {
-                        if let Some(effect_name) = self.unique_effect_name_for_operation(callee)
-                            && self
-                                .apply_embedded_default_handler(&effect_name, callee, v.clone())
-                                .is_some()
-                        {
-                            return Some(());
-                        }
-                        if self
-                            .execute_unit_call_ast(callee, v, locals, callables, evaluators, depth)
-                            .is_some()
-                        {
-                            return Some(());
-                        }
-                        if matches!(callee.as_str(), "read" | "read_line")
-                            && !self.has_declaration_name(callee)
-                            && locals.get(callee).is_none()
-                            && !callables.contains_key(callee)
-                            && self
-                                .apply_embedded_default_handler("Read", callee, RuntimeValue::Unit)
-                                .is_some()
-                        {
-                            return Some(());
-                        }
-                    }
-                    let repr = expr.to_str_repr()?;
-                    return self.execute_unit_call(&repr, locals, callables, evaluators);
-                }
-                let repr = expr.to_str_repr()?;
-                self.execute_unit_call(&repr, locals, callables, evaluators)
+                self.execute_unit_expr_ast(expr, locals, callables, evaluators, depth)
             }
         }
     }
@@ -3704,6 +3888,49 @@ main =
         );
         let output = output.expect("checked Some above");
         assert_eq!(output, "11");
+    }
+
+    #[test]
+    fn resolves_runtime_output_for_case_value_bound_then_printed() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let source = r#"
+main : Unit -> Unit can Print
+main =
+  a = 10
+  b = case a
+    10 ->
+      1 + 10
+    _ ->
+      20 + 30
+  print b
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let output =
+            resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module));
+        assert_eq!(output, Some("11".to_string()));
+    }
+
+    #[test]
+    fn resolves_runtime_output_for_standalone_case_with_effectful_arm_bodies() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let source = r#"
+main : Unit -> Unit can Print
+main =
+  a = 10
+  case a
+    10 ->
+      print "Ten"
+    _ ->
+      print "Other"
+"#;
+        let module = parse_module(source).expect("parse should work");
+        assert!(
+            main_parsed_body(&module).is_some(),
+            "parsed_body should exist"
+        );
+        let output =
+            resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module));
+        assert_eq!(output, Some("Ten".to_string()));
     }
 
     #[test]
