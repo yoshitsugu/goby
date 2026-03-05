@@ -80,6 +80,11 @@ This file is a restart-safe snapshot for resuming work after context reset.
 
 Recent (detailed):
 
+- 2026-03-05 (session 171): Track C officially closed.
+  - `doc/PLAN.md` section 4.4 is now marked `Completed Track C`.
+  - all Track C milestones are complete:
+    - Step 0-8 completed,
+    - PR1-PR5 completed.
 - 2026-03-05 (session 170): Track C Step 8 regression matrix + quality gates completed.
   - expanded examples typecheck regression coverage to include
     `examples/iterator_unified.gb` in `typechecks_examples`.
