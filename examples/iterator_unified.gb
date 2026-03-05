@@ -1,5 +1,4 @@
-effect Iterator a b
-  yield : a -> b -> (Bool, b)
+import goby/iterator
 
 yield_int_state : String -> Int -> (Bool, Int) can Iterator
 yield_int_state value state = yield value state

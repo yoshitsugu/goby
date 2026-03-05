@@ -11,7 +11,7 @@ This directory contains small Goby programs grouped by purpose.
 - `to_integer.gb`: `int.parse` sample with `StringParseError` handler
 - `list_case.gb`: list `case` pattern sample (`[]`, `[1]`, `[4, ..]`, `[a, ..b]`, `[_, _]`, `_`)
 - `case_arm_block.gb`: `case` arm block sample (`pattern ->` + indented block body)
-- `effect_generic.gb`: generic effect header sample (`effect Iterator a b`)
+- `effect_generic.gb`: generic effect header sample (`effect Stream a b`)
 
 ## Grouped Samples
 
@@ -21,7 +21,7 @@ This directory contains small Goby programs grouped by purpose.
   - `println.gb`: `print` (no newline) と `println` (末尾改行あり) の差分
 - `parser/`: parser behavior examples
   - `mixed_indent.gb`: mixed tabs/spaces indentation sample
-- `iterator.gb`: unified iterator runtime contract sample (`effect Iterator a b`)
+- `iterator.gb`: unified iterator runtime contract sample (`import goby/iterator`)
   - minimal state-less mode sample used by runtime-lock tests
   - emits:
     - `tick:a`

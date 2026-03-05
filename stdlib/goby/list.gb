@@ -1,8 +1,7 @@
 join : List String -> String -> String
 join values sep = list.join(values, sep)
 
-effect Iterator a b
-  yield : a -> b -> (Bool, b)
+import goby/iterator
 
 iter : List a -> b -> b can Iterator
 iter xs state =
@@ -34,4 +33,3 @@ map xs f =
   with emit_handler
   in
     iter xs []
-
