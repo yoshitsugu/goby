@@ -80,6 +80,10 @@ This file is a restart-safe snapshot for resuming work after context reset.
 
 Recent (detailed):
 
+- 2026-03-05 (session 172): Track B officially closed.
+  - `doc/PLAN.md` section 4.3 is now marked `Completed Track B`.
+  - acceptance criteria confirmed via existing regression matrix and passing
+    project quality gates (`check/test/clippy`).
 - 2026-03-05 (session 171): Track C officially closed.
   - `doc/PLAN.md` section 4.4 is now marked `Completed Track C`.
   - all Track C milestones are complete:
