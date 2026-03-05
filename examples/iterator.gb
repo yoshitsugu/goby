@@ -1,12 +1,14 @@
-effect Iterator
-  yield: String -> Int
+effect Iterator a b
+  yield : a -> b -> (Bool, b)
 
+main : Unit -> Unit
 main =
   prefix = "tick:"
   with_handler
-    yield value ->
+    yield value _ ->
       print "${prefix}${value}"
+      resume (True, ())
   in
-    yield "a"
-    yield "b"
-    yield "c"
+    yield "a" ()
+    yield "b" ()
+    yield "c" ()
