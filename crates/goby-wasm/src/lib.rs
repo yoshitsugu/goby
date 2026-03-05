@@ -2236,6 +2236,10 @@ impl<'m> RuntimeOutputResolver<'m> {
                 self.outputs.push(arg_val.to_output_text());
                 Some(RuntimeValue::Unit)
             }
+            ("__goby_embeded_effect_stdout_handler", "println") => {
+                self.outputs.push(format!("{}\n", arg_val.to_output_text()));
+                Some(RuntimeValue::Unit)
+            }
             ("__goby_embeded_effect_stdin_handler", "read")
                 if matches!(arg_val, RuntimeValue::Unit) =>
             {
@@ -4091,6 +4095,7 @@ main =
         let source = r#"
 effect Print
   print: String -> Unit
+  println: String -> Unit
 
 @embed Print __goby_embeded_effect_stdout_handler
 
@@ -4099,8 +4104,10 @@ main =
   with_handler
     print msg ->
       resume Unit
+    println msg ->
+      resume Unit
   in
-    Print.print "fallback"
+    Print.println "fallback"
 "#;
         let module = parse_module(source).expect("parse should work");
         let output =
@@ -4108,7 +4115,7 @@ main =
         assert_eq!(
             output.as_deref(),
             None,
-            "explicit handler must win over embedded default handler"
+            "explicit handler must win over embedded default handler for println"
         );
     }
 
@@ -4119,6 +4126,7 @@ main =
         let source = r#"
 effect Print
   print: String -> Unit
+  println: String -> Unit
 
 @embed Print __goby_embeded_effect_stdout_handler
 
@@ -4133,6 +4141,31 @@ main =
             output.as_deref(),
             Some("fallback"),
             "embedded default handler should handle Print.print when no explicit handler exists"
+        );
+    }
+
+    #[test]
+    fn embedded_default_handler_handles_println_without_explicit_handler() {
+        use goby_core::parse_module;
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let source = r#"
+effect Print
+  print: String -> Unit
+  println: String -> Unit
+
+@embed Print __goby_embeded_effect_stdout_handler
+
+main : Unit -> Unit can Print
+main =
+  Print.println "fallback"
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let output =
+            resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module));
+        assert_eq!(
+            output.as_deref(),
+            Some("fallback\n"),
+            "embedded default handler should handle Print.println with one trailing newline"
         );
     }
 
@@ -4152,6 +4185,25 @@ main =
             output.as_deref(),
             Some("from-prelude"),
             "embedded default handler should be discoverable via implicit prelude import"
+        );
+    }
+
+    #[test]
+    fn embedded_println_handler_is_loaded_from_implicit_prelude() {
+        use goby_core::parse_module;
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let source = r#"
+main : Unit -> Unit can Print
+main =
+  Print.println "from-prelude"
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let output =
+            resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module));
+        assert_eq!(
+            output.as_deref(),
+            Some("from-prelude\n"),
+            "embedded default handler should support Print.println via implicit prelude import"
         );
     }
 

@@ -283,7 +283,7 @@ mod tests {
         fs::create_dir_all(root.join("goby")).expect("stdlib/goby should be creatable");
         fs::write(
             root.join("goby/stdio.gb"),
-            "effect Print\n  print : String -> Unit\n\n@embed Print __goby_embeded_effect_stdout_handler\n",
+            "effect Print\n  print : String -> Unit\n  println : String -> Unit\n\n@embed Print __goby_embeded_effect_stdout_handler\n",
         )
         .expect("stdlib file should be writable");
 
@@ -307,7 +307,7 @@ mod tests {
         fs::create_dir_all(root.join("goby")).expect("stdlib/goby should be creatable");
         fs::write(
             root.join("goby/stdio.gb"),
-            "effect Print\n  print : String -> Unit\n\n@embed Print __goby_embeded_effect_stdout_handler\n@embed Print __goby_embeded_effect_stdout_handler\n",
+            "effect Print\n  print : String -> Unit\n  println : String -> Unit\n\n@embed Print __goby_embeded_effect_stdout_handler\n@embed Print __goby_embeded_effect_stdout_handler\n",
         )
         .expect("stdlib file should be writable");
 

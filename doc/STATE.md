@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-05 (session 148)
+Last updated: 2026-03-05 (session 149)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -77,6 +77,21 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - follow-up work moved to post-MVP tracks in `doc/PLAN.md`.
 
 ## 4. Recent Milestones
+
+- 2026-03-05 (session 149): Print effect operation split (`print` + `println`) implemented
+  - Stdlib/prelude surface:
+    - `effect Print` now exposes both `print : String -> Unit` and
+      `println : String -> Unit`.
+    - updated `stdlib/goby/stdio.gb` and `stdlib/goby/prelude.gb`.
+  - Runtime fallback dispatch:
+    - embedded default handler `__goby_embeded_effect_stdout_handler` now
+      handles both operations.
+    - `Print.print` keeps no-newline behavior.
+    - `Print.println` appends exactly one trailing `\n`.
+  - Tests:
+    - added typechecker regression for implicit-prelude `println` call acceptance.
+    - added Wasm fallback regressions for explicit-handler precedence and
+      embedded-default behavior of `Print.println`.
 
 - 2026-03-05 (session 148): `if` / `case` branch result type unification in typechecker
   - Type inference updates:

@@ -848,6 +848,9 @@ Additional planning constraint (Print operation split, locked 2026-03-04):
 Goal: make stdout behavior explicit by defining two `Print` effect operations:
 `print` (no trailing newline) and `println` (adds trailing newline).
 
+Status update (2026-03-05): implemented in stdlib prelude surface and fallback
+runtime embedded default handler (`Print.println` appends exactly one `\n`).
+
 Implementation steps:
 
 1. Effect surface update in stdlib.

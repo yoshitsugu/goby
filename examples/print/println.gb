@@ -1,0 +1,4 @@
+main : Unit -> Unit can Print
+main =
+  print "no-newline"
+  println " + newline"
