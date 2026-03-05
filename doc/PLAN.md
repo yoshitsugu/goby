@@ -517,7 +517,7 @@ Implementation plan (step-by-step checklist):
   - Add parser tests for valid generic effect declarations, invalid binder names/duplicates, and backward-compatible non-generic declarations.
   - Definition of done: `parse_module` round-trips generic and non-generic `effect` declarations with tests.
 
-- [ ] Step 2: introduce type substitution/unification for generic members.
+- [x] Step 2: introduce type substitution/unification for generic members.
   - Add a small substitution engine for `Ty::Var` assignments.
   - Replace strict expected/actual equality checks in relevant call paths with unification-aware compatibility.
   - Keep scope intentionally narrow in first pass: generic effect-operation calls and generic `resume` return matching inside handler clauses.
@@ -567,7 +567,7 @@ Implementation plan (step-by-step checklist):
 Recommended landing sequence (PR slices):
 
 - [x] PR1: spec lock + parser/AST groundwork.
-- [ ] PR2: typecheck unification core for effect ops + resume.
+- [x] PR2: typecheck unification core for effect ops + resume.
 - [ ] PR3: runtime iterator contract switch.
 - [ ] PR4: stdlib migration.
 - [ ] PR5: diagnostics/docs/examples polish + full regression expansion.

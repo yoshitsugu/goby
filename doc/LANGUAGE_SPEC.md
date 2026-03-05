@@ -99,6 +99,9 @@ syntax/semantics.
   - meaning: implementations/handlers of that operation may use `Print`.
   - if omitted, the operation implementation is not allowed to use additional effects.
   - effect dependencies must be acyclic across local `effect` declarations; cycles are a typecheck error.
+- Effect-member generic type variables are unified at typecheck time for:
+  - effect operation call arguments in handler-covered scopes,
+  - `resume` argument validation against the operation return type.
 - Handler value expression:
   - `handler`
   - indented clauses: `op arg -> ...`
