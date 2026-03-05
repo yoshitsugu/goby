@@ -404,6 +404,9 @@ Progress snapshot (2026-03-05):
   `goby/list.each` (plain/alias/selective).
 - runtime regression coverage also includes effectful callback dispatch
   through `goby/list.each` across plain/alias/selective import modes.
+- fallback runtime diagnostics now include deterministic unsupported-callable
+  dispatch errors (`[E-CALLABLE-DISPATCH]`) for callback/declaration-callable
+  argument shape mismatches.
 
 Acceptance criteria:
 
