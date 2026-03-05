@@ -75,6 +75,7 @@ pub fn typecheck_module_with_context(
         .chain(module.effect_declarations.iter().map(|e| e.name.clone()))
         .collect();
     validate_effect_member_effect_clauses(module, &known_effects)?;
+    validate_effect_dependency_cycles(module)?;
 
     let mut names = HashSet::new();
 
@@ -915,6 +916,84 @@ fn validate_effect_member_effect_clauses(
             }
         }
     }
+    Ok(())
+}
+
+fn validate_effect_dependency_cycles(module: &Module) -> Result<(), TypecheckError> {
+    let mut graph: HashMap<String, Vec<String>> = HashMap::new();
+    let local_effects: HashSet<String> = module
+        .effect_declarations
+        .iter()
+        .map(|decl| decl.name.clone())
+        .collect();
+
+    for effect_decl in &module.effect_declarations {
+        let deps = graph.entry(effect_decl.name.clone()).or_default();
+        for member in &effect_decl.members {
+            for dep in parse_can_clause_effects(&member.type_annotation) {
+                if local_effects.contains(&dep) && !deps.contains(&dep) {
+                    deps.push(dep);
+                }
+            }
+        }
+    }
+
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum VisitState {
+        Visiting,
+        Visited,
+    }
+
+    fn dfs_cycle(
+        effect: &str,
+        graph: &HashMap<String, Vec<String>>,
+        state: &mut HashMap<String, VisitState>,
+        stack: &mut Vec<String>,
+    ) -> Option<Vec<String>> {
+        match state.get(effect) {
+            Some(VisitState::Visiting) => {
+                let cycle_start = stack
+                    .iter()
+                    .position(|name| name == effect)
+                    .unwrap_or_default();
+                let mut cycle = stack[cycle_start..].to_vec();
+                cycle.push(effect.to_string());
+                return Some(cycle);
+            }
+            Some(VisitState::Visited) => return None,
+            None => {}
+        }
+
+        state.insert(effect.to_string(), VisitState::Visiting);
+        stack.push(effect.to_string());
+        if let Some(deps) = graph.get(effect) {
+            for dep in deps {
+                if let Some(cycle) = dfs_cycle(dep, graph, state, stack) {
+                    return Some(cycle);
+                }
+            }
+        }
+        stack.pop();
+        state.insert(effect.to_string(), VisitState::Visited);
+        None
+    }
+
+    let mut state: HashMap<String, VisitState> = HashMap::new();
+    let mut stack = Vec::new();
+    for effect_decl in &module.effect_declarations {
+        if let Some(cycle) = dfs_cycle(&effect_decl.name, &graph, &mut state, &mut stack) {
+            let cycle_display = cycle.join(" -> ");
+            return Err(TypecheckError {
+                declaration: Some(effect_decl.name.clone()),
+                span: None,
+                message: format!(
+                    "effect dependency cycle detected in member `can` clauses: {}",
+                    cycle_display
+                ),
+            });
+        }
+    }
+
     Ok(())
 }
 
@@ -4664,6 +4743,36 @@ main = Unit
             .expect_err("unknown effect in effect member can-clause should fail");
         assert_eq!(err.declaration.as_deref(), Some("Trace"));
         assert!(err.message.contains("unknown effect `Ghost`"));
+    }
+
+    #[test]
+    fn rejects_effect_dependency_cycle_in_effect_member_can_clause() {
+        let source = "\
+effect A
+  a : Unit -> Unit can B
+effect B
+  b : Unit -> Unit can A
+main : Unit -> Unit
+main = ()
+";
+        let module = parse_module(source).expect("should parse");
+        let err = typecheck_module(&module).expect_err("effect dependency cycle should fail");
+        assert!(err.message.contains("effect dependency cycle detected"));
+        assert!(err.message.contains("A -> B -> A"));
+    }
+
+    #[test]
+    fn rejects_self_effect_dependency_cycle_in_effect_member_can_clause() {
+        let source = "\
+effect A
+  a : Unit -> Unit can A
+main : Unit -> Unit
+main = ()
+";
+        let module = parse_module(source).expect("should parse");
+        let err = typecheck_module(&module).expect_err("self effect dependency cycle should fail");
+        assert!(err.message.contains("effect dependency cycle detected"));
+        assert!(err.message.contains("A -> A"));
     }
 
     #[test]
