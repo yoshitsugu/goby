@@ -285,7 +285,10 @@ fn expr_contains_resume(expr: &Expr) -> bool {
             expr_contains_resume(scrutinee)
                 || arms.iter().any(|arm| expr_contains_resume(&arm.body))
         }
-        Expr::ListLit(items) => items.iter().any(expr_contains_resume),
+        Expr::ListLit { elements, spread } => {
+            elements.iter().any(expr_contains_resume)
+                || spread.as_ref().is_some_and(|s| expr_contains_resume(s))
+        }
         Expr::TupleLit(items) => items.iter().any(expr_contains_resume),
         Expr::Lambda { body, .. } => expr_contains_resume(body),
         Expr::Handler { clauses } => clauses.iter().any(|clause| {
@@ -452,9 +455,12 @@ fn eval_expr(
             let arg_value = eval_expr(arg, bindings, env, depth + 1)?;
             apply_callable(callee_value, arg_value, env, depth + 1)
         }
-        Expr::ListLit(items) => {
-            let mut out = Vec::with_capacity(items.len());
-            for item in items {
+        Expr::ListLit { elements, spread } => {
+            if spread.is_some() {
+                return None;
+            }
+            let mut out = Vec::with_capacity(elements.len());
+            for item in elements {
                 let value = eval_expr(item, bindings, env, depth + 1)?;
                 let NativeValue::Int(n) = value else {
                     return None;

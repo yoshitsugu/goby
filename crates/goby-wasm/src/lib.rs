@@ -1432,9 +1432,12 @@ impl<'m> RuntimeOutputResolver<'m> {
                     _ => None,
                 }
             }
-            Expr::ListLit(items) => {
-                let mut out = Vec::with_capacity(items.len());
-                for item in items {
+            Expr::ListLit { elements, spread } => {
+                if spread.is_some() {
+                    return None;
+                }
+                let mut out = Vec::with_capacity(elements.len());
+                for item in elements {
                     match self.eval_expr_ast(item, locals, callables, evaluators, depth + 1)? {
                         RuntimeValue::Int(n) => out.push(n),
                         _ => return None,

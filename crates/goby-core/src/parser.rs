@@ -1542,11 +1542,17 @@ fn parse_non_lambda_expr(src: &str) -> Option<Expr> {
 fn parse_list_expr(src: &str) -> Option<Expr> {
     let inner = src[1..src.len() - 1].trim();
     if inner.is_empty() {
-        return Some(Expr::ListLit(Vec::new()));
+        return Some(Expr::ListLit {
+            elements: Vec::new(),
+            spread: None,
+        });
     }
     let parts = split_top_level_commas(inner);
     let items: Option<Vec<Expr>> = parts.iter().map(|p| parse_expr(p.trim())).collect();
-    Some(Expr::ListLit(items?))
+    Some(Expr::ListLit {
+        elements: items?,
+        spread: None,
+    })
 }
 
 /// Parse a tuple literal `(a, b)` or a grouped expression `(expr)`.
@@ -2880,11 +2886,10 @@ main =
     fn parses_list_literal() {
         assert_eq!(
             parse_expr("[3, 4, 5]"),
-            Some(Expr::ListLit(vec![
-                Expr::IntLit(3),
-                Expr::IntLit(4),
-                Expr::IntLit(5)
-            ]))
+            Some(Expr::ListLit {
+                elements: vec![Expr::IntLit(3), Expr::IntLit(4), Expr::IntLit(5)],
+                spread: None,
+            })
         );
     }
 
