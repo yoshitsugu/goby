@@ -1724,6 +1724,22 @@ impl<'m> RuntimeOutputResolver<'m> {
             return result;
         }
 
+        if let Some((fn_name, args)) = flatten_named_call(expr)
+            && args.len() > 1
+            && self
+                .execute_decl_call_chain_as_side_effect(
+                    fn_name,
+                    args.as_slice(),
+                    locals,
+                    callables,
+                    evaluators,
+                    depth + 1,
+                )
+                .is_some()
+        {
+            return Some(());
+        }
+
         // print <arg>
         if let Expr::Call { callee, arg } = expr
             && matches!(callee.as_ref(), Expr::Var(n) if n == BUILTIN_PRINT)
@@ -2012,6 +2028,74 @@ impl<'m> RuntimeOutputResolver<'m> {
         }
 
         None
+    }
+
+    fn execute_decl_call_chain_as_side_effect(
+        &mut self,
+        fn_name: &str,
+        args: &[&Expr],
+        caller_locals: &RuntimeLocals,
+        caller_callables: &HashMap<String, IntCallable>,
+        evaluators: &RuntimeEvaluators<'_, '_>,
+        depth: usize,
+    ) -> Option<()> {
+        if depth >= MAX_EVAL_DEPTH {
+            return None;
+        }
+        let (params, callable_param_mask, stmts) = {
+            let decl = self
+                .module
+                .declarations
+                .iter()
+                .find(|d| d.name == fn_name)?;
+            if decl.params.len() != args.len() {
+                return None;
+            }
+            let callable_param_mask = self.declaration_callable_param_mask(decl);
+            let stmts = decl.parsed_body.as_ref()?.clone();
+            (decl.params.clone(), callable_param_mask, stmts)
+        };
+        let mut fn_locals = RuntimeLocals::default();
+        let mut fn_callables = HashMap::new();
+
+        for (idx, (param, arg)) in params.iter().zip(args.iter()).enumerate() {
+            if callable_param_mask.get(idx).copied().unwrap_or(false) {
+                let callable = match arg {
+                    Expr::Lambda { param, body } => {
+                        IntCallable::AstLambda(Box::new(AstLambdaCallable {
+                            parameter: param.clone(),
+                            body: (*body.clone()),
+                            captured_locals: caller_locals.clone(),
+                            captured_callables: caller_callables.clone(),
+                        }))
+                    }
+                    Expr::Var(name) => self.resolve_callable_argument(name, caller_callables),
+                    _ => return None,
+                };
+                fn_callables.insert(param.clone(), callable);
+                continue;
+            }
+            let arg_val =
+                self.eval_expr_ast(arg, caller_locals, caller_callables, evaluators, depth + 1)?;
+            fn_locals.store(param, arg_val);
+        }
+
+        for stmt in &stmts {
+            if let Stmt::Expr(
+                Expr::Var(_) | Expr::IntLit(_) | Expr::StringLit(_) | Expr::BoolLit(_),
+            ) = stmt
+            {
+                continue;
+            }
+            self.execute_unit_ast_stmt(
+                stmt,
+                &mut fn_locals,
+                &mut fn_callables,
+                evaluators,
+                depth + 1,
+            )?;
+        }
+        Some(())
     }
 
     /// Execute a single AST statement inside a unit-returning function body.
@@ -2936,16 +3020,24 @@ impl<'m> RuntimeOutputResolver<'m> {
         let Some(decl) = self.module.declarations.iter().find(|d| d.name == fn_name) else {
             return false;
         };
+        self.declaration_callable_param_mask(decl)
+            .first()
+            .copied()
+            .unwrap_or(false)
+    }
+
+    fn declaration_callable_param_mask(&self, decl: &goby_core::Declaration) -> Vec<bool> {
         let Some(annotation) = decl.type_annotation.as_deref() else {
-            return false;
+            return vec![false; decl.params.len()];
         };
         let Some(function_type) = parse_function_type(annotation) else {
-            return false;
+            return vec![false; decl.params.len()];
         };
-        let Some(first_param) = function_type.arguments.first() else {
-            return false;
-        };
-        first_param.contains("->")
+        function_type
+            .arguments
+            .iter()
+            .map(|arg| arg.contains("->"))
+            .collect()
     }
 }
 
@@ -3937,6 +4029,65 @@ main =
             resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
                 .expect("runtime output should resolve");
         assert_eq!(output, "1\n2");
+    }
+
+    #[test]
+    fn resolves_runtime_output_for_unit_callback_argument_inline_lambda_with_capture() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let source = r#"
+each_two : (Int -> Unit) -> Unit
+each_two f =
+  f 1
+  f 2
+
+main : Unit -> Unit
+main =
+  base = 40
+  each_two (|n| -> print "${n + base}")
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let output =
+            resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
+                .expect("runtime output should resolve");
+        assert_eq!(output, "41\n42");
+    }
+
+    #[test]
+    fn resolves_runtime_output_for_list_each_style_callback_dispatch() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let source = r#"
+effect ListYield
+  yield : Int -> Bool
+
+iter : List Int -> Unit can ListYield
+iter xs =
+  case xs
+    [] -> ()
+    [x, ..xxs] ->
+      if yield x
+        iter xxs
+      else
+        ()
+
+each : List Int -> (Int -> Unit) -> Unit
+each xs f =
+  emit_handler = handler
+    yield x ->
+      f x
+      resume True
+  with emit_handler
+  in
+    iter xs
+
+main : Unit -> Unit
+main =
+  each [3, 5] (|n| -> print "${n}")
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let output =
+            resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
+                .expect("runtime output should resolve");
+        assert_eq!(output, "3\n5");
     }
 
     #[test]

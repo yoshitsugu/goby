@@ -1,2 +1,25 @@
 join : List String -> String -> String
 join values sep = list.join(values, sep)
+
+effect ListYield
+  yield : Int -> Bool
+
+iter : List Int -> Unit can ListYield
+iter xs =
+  case xs
+    [] -> ()
+    [x, ..xxs] ->
+      if yield x
+        iter xxs
+      else
+        ()
+
+each : List Int -> (Int -> Unit) -> Unit
+each xs f =
+  emit_handler = handler
+    yield x ->
+      f x
+      resume True
+  with emit_handler
+  in
+    iter xs

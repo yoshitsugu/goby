@@ -80,6 +80,15 @@ This file is a restart-safe snapshot for resuming work after context reset.
 
 Recent (detailed):
 
+- 2026-03-05 (session 151): lambda-as-function-argument runtime parity
+  (list.each-style + captured closure slice) completed.
+  - fallback runtime now executes curried declaration call chains with callable
+    parameters in Unit side-effect position.
+  - added runtime regression tests:
+    `resolves_runtime_output_for_list_each_style_callback_dispatch` and
+    `resolves_runtime_output_for_unit_callback_argument_inline_lambda_with_capture`.
+  - `stdlib/goby/list.gb` now includes `iter`/`each` based on effect+handler
+    structure (`ListYield` + `with handler ... in`).
 - 2026-03-05 (session 150): lambda-as-function-argument runtime parity
   (Unit callback slice) completed.
   - fallback runtime now resolves declaration-local callable parameters for
