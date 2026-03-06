@@ -134,3 +134,10 @@
   continuation shapes; the next implementation target is a unified
   `AstEvalOutcome::Suspended(Box<...>)` frame model that can replace the current
   exploratory token-side replay slices over time.
+- 2026-03-06: Step 3 execution granularity was tightened further: implement the
+  unified frame refactor in compact turns (`frame interface` -> `migrate one
+  shape` -> `remove old path`), starting from the smallest nested case
+  (`single-arg call`) instead of broad multi-shape rewrites.
+- 2026-03-06: Step 3.2a landed the minimal frame-entry boundary by routing
+  `resume` through `AstContinuationFrame` / `execute_ast_continuation(...)`
+  while keeping semantics unchanged for the currently exploratory replay slices.

@@ -586,6 +586,13 @@ Step-by-step checklist:
         - introduced `AstEvalOutcome<T>` as the Step 3 runtime-shape carrier.
         - handler-dispatch statement execution now branches on explicit AST outcomes instead of
           relying only on `Option` + token-state probing.
+      - frame-entry groundwork:
+        - resume tokens now carry one transport field for AST continuation replay
+          (`AstContinuationFrame`) instead of separate statement/value fields.
+        - `resume` now routes through a single AST continuation entrypoint before returning to the
+          handler body.
+        - this does not emit `Suspended(...)` yet, but it establishes the minimal frame boundary
+          required for Step 3.2a.
       - unit-position replay:
         - resume tokens can carry an AST statement-tail continuation snapshot.
         - top-level `with` bodies and unit-position AST statement sequences register checkpoints
@@ -711,6 +718,7 @@ Step-by-step checklist:
           - AST-backed unit-position statement tails,
           - direct binding / assignment RHS replay,
           - declaration/value-expression AST paths needed by `iterator_unified`.
+          - shared resume transport via `AstContinuationFrame`.
         - not yet unified:
           - inner expression checkpoints are still represented by ad hoc replay shapes,
           - statement/value replay are still split across token-side structures.
@@ -725,6 +733,9 @@ Step-by-step checklist:
             - frame receives the resumed value,
             - frame returns the next `AstEvalOutcome`,
             - handler/token state is only transport, not where evaluation logic accumulates.
+          - current status:
+            - landed: `AstContinuationFrame` transport + `execute_ast_continuation(...)` entrypoint.
+            - still missing: evaluator-produced `AstEvalOutcome::Suspended(...)` frames.
           - done when:
             - one concrete frame type exists for the new path,
             - `resume` can route through the frame entrypoint,

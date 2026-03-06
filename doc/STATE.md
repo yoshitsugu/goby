@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-06 (session 190)
+Last updated: 2026-03-06 (session 191)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -387,6 +387,32 @@ Recent (detailed):
       - `doc/PLAN.md` Step 3 quick view
       - `doc/PLAN.md` Step 3.2 implementation order
       - then this session note
+
+- 2026-03-06 (session 191): Track 4.7 Step 3.2a frame-entry groundwork landed.
+  - runtime:
+    - `ResumeToken` / `OptimizedResumeToken` now store one AST continuation transport field
+      (`AstContinuationFrame`) instead of separate statement/value continuation fields.
+    - `resume` now enters AST continuation replay through a single entrypoint:
+      - `resume_through_ast_continuation_frame`
+      - `execute_ast_continuation`
+      - `execute_ast_continuation_frame`
+    - the new frame currently wraps the existing exploratory statement/value replay machinery, so
+      semantics are unchanged for covered slices.
+  - why this matters:
+    - Step 3.2a required a minimal responsibility boundary where handler/token state is transport
+      only and continuation replay logic lives behind one AST continuation interface.
+    - this reduces the amount of token-shape churn needed when Step 3.2b migrates the first real
+      nested checkpoint to `AstEvalOutcome::Suspended(...)`.
+  - still open:
+    - evaluator paths still do not emit `AstEvalOutcome::Suspended(...)`.
+    - inner expression checkpoints are still modeled by exploratory ad hoc replay shapes.
+    - statement/value replay are not yet unified beyond the transport boundary.
+  - validation completed:
+    - `cargo fmt`
+    - `cargo test -p goby-wasm`
+  - immediate next step:
+    - start Step 3.2b by migrating the `single-arg call` nested value-position slice to suspend via
+      the new frame entrypoint instead of the old token-only replay path.
 
 - 2026-03-06 (session 177): map consolidation Step 8-9 completed.
   - PLAN.md §4.5 checklist updated:

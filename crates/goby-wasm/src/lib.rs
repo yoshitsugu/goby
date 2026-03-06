@@ -512,6 +512,7 @@ struct RuntimeOutputResolver<'m> {
     resume_tokens: Vec<ResumeToken>,
     optimized_resume_tokens: Vec<OptimizedResumeToken>,
     pending_stmt_continuations: Vec<AstStmtContinuation>,
+    pending_value_continuations: Vec<AstValueContinuation>,
     active_stmt_sequence_ids: Vec<usize>,
     next_stmt_sequence_id: usize,
     consumed_stmt_sequence_id: Option<usize>,
@@ -532,14 +533,14 @@ struct Continuation {
 struct ResumeToken {
     continuation: Continuation,
     state: HandlerContinuationState,
-    stmt_continuation: Option<AstStmtContinuation>,
+    frame: Option<AstContinuationFrame>,
 }
 
 #[derive(Clone)]
 struct OptimizedResumeToken {
     consumed: bool,
     state: HandlerContinuationState,
-    stmt_continuation: Option<AstStmtContinuation>,
+    frame: Option<AstContinuationFrame>,
 }
 
 #[derive(Clone)]
@@ -555,7 +556,38 @@ enum HandlerCompletion {
 
 #[allow(dead_code)]
 #[derive(Clone)]
-struct AstContinuation;
+enum AstContinuation {
+    Frame(AstContinuationFrame),
+}
+
+#[derive(Clone)]
+struct AstContinuationFrame {
+    value: Option<AstValueContinuation>,
+    stmt: Option<AstStmtContinuation>,
+}
+
+#[derive(Clone)]
+struct AstValueContinuation {
+    kind: AstValueContinuationKind,
+    locals: RuntimeLocals,
+    callables: HashMap<String, IntCallable>,
+    depth: usize,
+}
+
+#[derive(Clone)]
+enum AstValueContinuationKind {
+    SingleArgNamedCall {
+        fn_name: String,
+    },
+    BinOpLeft {
+        op: goby_core::BinOpKind,
+        right: Expr,
+    },
+    BinOpRight {
+        op: goby_core::BinOpKind,
+        left_value: RuntimeValue,
+    },
+}
 
 #[derive(Clone)]
 struct AstStmtContinuation {
@@ -577,7 +609,7 @@ enum AstStmtContinuationKind {
 #[allow(dead_code)]
 enum AstEvalOutcome<T> {
     Complete(T),
-    Suspended(AstContinuation),
+    Suspended(Box<AstContinuation>),
     Aborted,
     Unsupported,
 }
@@ -788,6 +820,7 @@ impl<'m> RuntimeOutputResolver<'m> {
             resume_tokens: Vec::new(),
             optimized_resume_tokens: Vec::new(),
             pending_stmt_continuations: Vec::new(),
+            pending_value_continuations: Vec::new(),
             active_stmt_sequence_ids: Vec::new(),
             next_stmt_sequence_id: 0,
             consumed_stmt_sequence_id: None,
@@ -1471,21 +1504,30 @@ impl<'m> RuntimeOutputResolver<'m> {
                 self.inline_handler_from_clauses(clauses, locals, callables),
             )),
             Expr::BinOp { op, left, right } => {
-                let lv = self.eval_expr_ast(left, locals, callables, evaluators, depth + 1)?;
-                let rv = self.eval_expr_ast(right, locals, callables, evaluators, depth + 1)?;
-                match (lv, rv) {
-                    (RuntimeValue::Int(l), RuntimeValue::Int(r)) => match op {
-                        goby_core::BinOpKind::Add => Some(RuntimeValue::Int(l.checked_add(r)?)),
-                        goby_core::BinOpKind::Mul => Some(RuntimeValue::Int(l.checked_mul(r)?)),
-                        goby_core::BinOpKind::Eq => Some(RuntimeValue::Bool(l == r)),
+                self.pending_value_continuations.push(AstValueContinuation {
+                    kind: AstValueContinuationKind::BinOpLeft {
+                        op: op.clone(),
+                        right: (*right.clone()),
                     },
-                    (RuntimeValue::String(l), RuntimeValue::String(r))
-                        if matches!(op, goby_core::BinOpKind::Eq) =>
-                    {
-                        Some(RuntimeValue::Bool(l == r))
-                    }
-                    _ => None,
-                }
+                    locals: locals.clone(),
+                    callables: callables.clone(),
+                    depth: depth + 1,
+                });
+                let lv = self.eval_expr_ast(left, locals, callables, evaluators, depth + 1);
+                self.pending_value_continuations.pop();
+                let lv = lv?;
+                self.pending_value_continuations.push(AstValueContinuation {
+                    kind: AstValueContinuationKind::BinOpRight {
+                        op: op.clone(),
+                        left_value: lv.clone(),
+                    },
+                    locals: locals.clone(),
+                    callables: callables.clone(),
+                    depth: depth + 1,
+                });
+                let rv = self.eval_expr_ast(right, locals, callables, evaluators, depth + 1);
+                self.pending_value_continuations.pop();
+                self.apply_binop_runtime_value(op.clone(), lv, rv?)
             }
             Expr::ListLit { elements, spread } => {
                 let mut int_items = Vec::with_capacity(elements.len());
@@ -1555,31 +1597,35 @@ impl<'m> RuntimeOutputResolver<'m> {
                     let arg_values: Option<Vec<RuntimeValue>> = args
                         .iter()
                         .map(|arg_expr| {
-                            self.eval_expr_ast(arg_expr, locals, callables, evaluators, depth + 1)
+                            if args.len() == 1 {
+                                self.pending_value_continuations.push(AstValueContinuation {
+                                    kind: AstValueContinuationKind::SingleArgNamedCall {
+                                        fn_name: fn_name.to_string(),
+                                    },
+                                    locals: locals.clone(),
+                                    callables: callables.clone(),
+                                    depth: depth + 1,
+                                });
+                            }
+                            let value = self.eval_expr_ast(
+                                arg_expr,
+                                locals,
+                                callables,
+                                evaluators,
+                                depth + 1,
+                            );
+                            if args.len() == 1 {
+                                self.pending_value_continuations.pop();
+                            }
+                            value
                         })
                         .collect();
                     let arg_values = arg_values?;
-                    if fn_name.starts_with("__goby_") {
-                        return self.apply_runtime_intrinsic_ast(
-                            fn_name,
-                            &arg_values,
-                            evaluators,
-                            depth + 1,
-                        );
-                    }
-                    if args.len() > 1
-                        && let Some(method) = self.find_handler_method_by_name(fn_name)
-                    {
-                        return self.dispatch_handler_method_as_value_with_args(
-                            &method,
-                            &arg_values,
-                            evaluators,
-                            depth + 1,
-                        );
-                    }
-                    if let Some(value) = self.eval_decl_as_value_with_args_ast(
+                    if let Some(value) = self.apply_named_value_call_ast(
                         fn_name,
                         &arg_values,
+                        locals,
+                        callables,
                         evaluators,
                         depth + 1,
                     ) {
@@ -1602,126 +1648,26 @@ impl<'m> RuntimeOutputResolver<'m> {
                 }
 
                 if let Expr::Var(fn_name) = callee.as_ref() {
-                    if fn_name == "__goby_env_fetch_env_var" {
-                        let av =
-                            self.eval_expr_ast(arg, locals, callables, evaluators, depth + 1)?;
-                        return self.apply_runtime_intrinsic_ast(
-                            "__goby_env_fetch_env_var",
-                            &[av],
-                            evaluators,
-                            depth + 1,
-                        );
-                    }
-                    if fn_name == "__goby_string_length" {
-                        let av =
-                            self.eval_expr_ast(arg, locals, callables, evaluators, depth + 1)?;
-                        return self.apply_runtime_intrinsic_ast(
-                            "__goby_string_length",
-                            &[av],
-                            evaluators,
-                            depth + 1,
-                        );
-                    }
-                    if fn_name == "__goby_string_each_grapheme" {
-                        let av =
-                            self.eval_expr_ast(arg, locals, callables, evaluators, depth + 1)?;
-                        return self.apply_runtime_intrinsic_ast(
-                            "__goby_string_each_grapheme",
-                            &[av],
-                            evaluators,
-                            depth + 1,
-                        );
-                    }
-
-                    let arg_val =
-                        self.eval_expr_ast(arg, locals, callables, evaluators, depth + 1)?;
-                    // Bare handler method call in value position (e.g. `next 0` inside `using`).
-                    // Check this before Int/List function paths so effect ops can take Int/List args.
-                    if let Some(method) = self.find_handler_method_by_name(fn_name) {
-                        return self.dispatch_handler_method_as_value(
-                            &method,
-                            arg_val,
-                            evaluators,
-                            depth + 1,
-                        );
-                    }
-                    if fn_name == "println" {
-                        let mut text = arg_val.to_output_text();
-                        if !text.ends_with('\n') {
-                            text.push('\n');
-                        }
-                        self.outputs.push(text);
-                        return Some(RuntimeValue::Unit);
-                    }
-                    if let Some(effect_name) = self.unique_effect_name_for_operation(fn_name)
-                        && let Some(value) = self.apply_embedded_default_handler(
-                            &effect_name,
-                            fn_name,
-                            arg_val.clone(),
-                        )
-                    {
-                        return Some(value);
-                    }
-                    if let Some(value) = self.try_apply_bare_runtime_bridge_value(
+                    self.pending_value_continuations.push(AstValueContinuation {
+                        kind: AstValueContinuationKind::SingleArgNamedCall {
+                            fn_name: fn_name.clone(),
+                        },
+                        locals: locals.clone(),
+                        callables: callables.clone(),
+                        depth: depth + 1,
+                    });
+                    let arg_val = self.eval_expr_ast(arg, locals, callables, evaluators, depth + 1);
+                    self.pending_value_continuations.pop();
+                    let arg_val = arg_val?;
+                    if let Some(value) = self.apply_named_value_call_ast(
                         fn_name,
-                        arg_val.clone(),
+                        &[arg_val],
                         locals,
                         callables,
                         evaluators,
                         depth + 1,
                     ) {
                         return Some(value);
-                    }
-                    if let Some(value) =
-                        self.eval_decl_as_value_ast(fn_name, arg_val.clone(), evaluators, depth + 1)
-                    {
-                        return Some(value);
-                    }
-                    // Int function path
-                    if let RuntimeValue::Int(arg_int) = arg_val {
-                        if let Some(callable) = callables.get(fn_name).cloned() {
-                            match callable {
-                                IntCallable::AstLambda(callable) => {
-                                    let AstLambdaCallable {
-                                        parameter,
-                                        body,
-                                        captured_locals,
-                                        captured_callables,
-                                    } = *callable;
-                                    let mut lambda_locals = captured_locals;
-                                    lambda_locals.store(&parameter, RuntimeValue::Int(arg_int));
-                                    if let Some(RuntimeValue::Int(value)) = self.eval_expr_ast(
-                                        &body,
-                                        &lambda_locals,
-                                        &captured_callables,
-                                        evaluators,
-                                        depth + 1,
-                                    ) {
-                                        return Some(RuntimeValue::Int(value));
-                                    }
-                                }
-                                other => {
-                                    return evaluators
-                                        .int
-                                        .eval_callable(&other, arg_int, callables)
-                                        .map(RuntimeValue::Int);
-                                }
-                            }
-                        }
-                        if let Some(function) = evaluators.int.functions.get(fn_name.as_str()) {
-                            return evaluators
-                                .int
-                                .eval_function(function, Some(arg_int))
-                                .map(RuntimeValue::Int);
-                        }
-                    } else if let RuntimeValue::ListInt(arg_list) = arg_val {
-                        // List function path
-                        if let Some(function) = evaluators.list.functions.get(fn_name.as_str()) {
-                            return evaluators
-                                .list
-                                .eval_function(function, Some(arg_list))
-                                .map(RuntimeValue::ListInt);
-                        }
                     }
                 }
                 // Qualified callee: Effect.method arg  (e.g. Log.log result, env.from_env name)
@@ -3463,14 +3409,154 @@ impl<'m> RuntimeOutputResolver<'m> {
         )
     }
 
-    fn eval_decl_as_value_ast(
+    fn apply_named_value_call_ast(
         &mut self,
         fn_name: &str,
-        arg_val: RuntimeValue,
+        arg_values: &[RuntimeValue],
+        locals: &RuntimeLocals,
+        callables: &HashMap<String, IntCallable>,
         evaluators: &RuntimeEvaluators<'_, '_>,
         depth: usize,
     ) -> Option<RuntimeValue> {
-        self.eval_decl_as_value_with_args_ast(fn_name, &[arg_val], evaluators, depth)
+        if fn_name.starts_with("__goby_") {
+            return self.apply_runtime_intrinsic_ast(fn_name, arg_values, evaluators, depth + 1);
+        }
+        if arg_values.len() > 1
+            && let Some(method) = self.find_handler_method_by_name(fn_name)
+        {
+            return self.dispatch_handler_method_as_value_with_args(
+                &method,
+                arg_values,
+                evaluators,
+                depth + 1,
+            );
+        }
+        if let Some(value) =
+            self.eval_decl_as_value_with_args_ast(fn_name, arg_values, evaluators, depth + 1)
+        {
+            return Some(value);
+        }
+        if arg_values.len() != 1 {
+            return None;
+        }
+        let arg_val = arg_values[0].clone();
+        if fn_name == "__goby_env_fetch_env_var" {
+            return self.apply_runtime_intrinsic_ast(
+                "__goby_env_fetch_env_var",
+                &[arg_val],
+                evaluators,
+                depth + 1,
+            );
+        }
+        if fn_name == "__goby_string_length" {
+            return self.apply_runtime_intrinsic_ast(
+                "__goby_string_length",
+                &[arg_val],
+                evaluators,
+                depth + 1,
+            );
+        }
+        if fn_name == "__goby_string_each_grapheme" {
+            return self.apply_runtime_intrinsic_ast(
+                "__goby_string_each_grapheme",
+                &[arg_val],
+                evaluators,
+                depth + 1,
+            );
+        }
+        if let Some(method) = self.find_handler_method_by_name(fn_name) {
+            return self.dispatch_handler_method_as_value(&method, arg_val, evaluators, depth + 1);
+        }
+        if fn_name == "println" {
+            let mut text = arg_val.to_output_text();
+            if !text.ends_with('\n') {
+                text.push('\n');
+            }
+            self.outputs.push(text);
+            return Some(RuntimeValue::Unit);
+        }
+        if let Some(effect_name) = self.unique_effect_name_for_operation(fn_name)
+            && let Some(value) =
+                self.apply_embedded_default_handler(&effect_name, fn_name, arg_val.clone())
+        {
+            return Some(value);
+        }
+        if let Some(value) = self.try_apply_bare_runtime_bridge_value(
+            fn_name,
+            arg_val.clone(),
+            locals,
+            callables,
+            evaluators,
+            depth + 1,
+        ) {
+            return Some(value);
+        }
+        if let RuntimeValue::Int(arg_int) = arg_val.clone() {
+            if let Some(callable) = callables.get(fn_name).cloned() {
+                match callable {
+                    IntCallable::AstLambda(callable) => {
+                        let AstLambdaCallable {
+                            parameter,
+                            body,
+                            captured_locals,
+                            captured_callables,
+                        } = *callable;
+                        let mut lambda_locals = captured_locals;
+                        lambda_locals.store(&parameter, RuntimeValue::Int(arg_int));
+                        if let Some(RuntimeValue::Int(value)) = self.eval_expr_ast(
+                            &body,
+                            &lambda_locals,
+                            &captured_callables,
+                            evaluators,
+                            depth + 1,
+                        ) {
+                            return Some(RuntimeValue::Int(value));
+                        }
+                    }
+                    other => {
+                        return evaluators
+                            .int
+                            .eval_callable(&other, arg_int, callables)
+                            .map(RuntimeValue::Int);
+                    }
+                }
+            }
+            if let Some(function) = evaluators.int.functions.get(fn_name) {
+                return evaluators
+                    .int
+                    .eval_function(function, Some(arg_int))
+                    .map(RuntimeValue::Int);
+            }
+        } else if let RuntimeValue::ListInt(arg_list) = arg_val
+            && let Some(function) = evaluators.list.functions.get(fn_name)
+        {
+            return evaluators
+                .list
+                .eval_function(function, Some(arg_list))
+                .map(RuntimeValue::ListInt);
+        }
+        None
+    }
+
+    fn apply_binop_runtime_value(
+        &self,
+        op: goby_core::BinOpKind,
+        lv: RuntimeValue,
+        rv: RuntimeValue,
+    ) -> Option<RuntimeValue> {
+        match (lv, rv) {
+            (RuntimeValue::Int(l), RuntimeValue::Int(r)) => match op {
+                goby_core::BinOpKind::Add => l.checked_add(r).map(RuntimeValue::Int),
+                goby_core::BinOpKind::Mul => l.checked_mul(r).map(RuntimeValue::Int),
+                goby_core::BinOpKind::Eq => Some(RuntimeValue::Bool(l == r)),
+            },
+            (RuntimeValue::String(l), RuntimeValue::String(r))
+                if matches!(op, goby_core::BinOpKind::Eq) =>
+            {
+                Some(RuntimeValue::Bool(l == r))
+            }
+            _ => None,
+        }
     }
 
     fn resolves_module_receiver(&self, receiver: &str, module_path: &str) -> bool {
@@ -3759,11 +3845,36 @@ impl<'m> RuntimeOutputResolver<'m> {
         }
     }
 
+    fn current_pending_value_continuation_for_dispatch(
+        &self,
+        dispatch_depth: usize,
+    ) -> Option<AstValueContinuation> {
+        let continuation = self.pending_value_continuations.last()?.clone();
+        if continuation.depth + 1 == dispatch_depth {
+            Some(continuation)
+        } else {
+            None
+        }
+    }
+
+    fn current_pending_resume_frame_for_dispatch(
+        &self,
+        dispatch_depth: usize,
+    ) -> Option<AstContinuationFrame> {
+        let stmt = self.current_pending_stmt_continuation_for_dispatch(dispatch_depth);
+        let value = self.current_pending_value_continuation_for_dispatch(dispatch_depth);
+        if stmt.is_none() && value.is_none() {
+            None
+        } else {
+            Some(AstContinuationFrame { value, stmt })
+        }
+    }
+
     fn push_resume_token_for_handler(&mut self, dispatch_depth: usize) -> usize {
         self.resume_tokens.push(ResumeToken {
             continuation: Continuation { consumed: false },
             state: HandlerContinuationState::Pending,
-            stmt_continuation: self.current_pending_stmt_continuation_for_dispatch(dispatch_depth),
+            frame: self.current_pending_resume_frame_for_dispatch(dispatch_depth),
         });
         self.resume_tokens.len() - 1
     }
@@ -3788,7 +3899,7 @@ impl<'m> RuntimeOutputResolver<'m> {
         self.optimized_resume_tokens.push(OptimizedResumeToken {
             consumed: false,
             state: HandlerContinuationState::Pending,
-            stmt_continuation: self.current_pending_stmt_continuation_for_dispatch(dispatch_depth),
+            frame: self.current_pending_resume_frame_for_dispatch(dispatch_depth),
         });
         self.optimized_resume_tokens.len() - 1
     }
@@ -3869,14 +3980,21 @@ impl<'m> RuntimeOutputResolver<'m> {
             self.set_runtime_error_once(ERR_RESUME_MISSING);
             return None;
         };
-        let continuation = token.stmt_continuation.clone();
+        let frame = token.frame.clone();
         token.continuation.consumed = true;
         token.state = HandlerContinuationState::Resumed(Box::new(resumed.clone()));
-        token.stmt_continuation = None;
-        if let Some(continuation) = continuation {
-            self.execute_saved_stmt_continuation(continuation, resumed.clone(), evaluators)?;
+        token.frame = None;
+        match self.resume_through_ast_continuation_frame(frame, resumed, evaluators) {
+            AstEvalOutcome::Complete(value) => Some(value),
+            AstEvalOutcome::Suspended(_continuation) => {
+                self.set_runtime_error_once(
+                    "internal error: unexpected nested suspension while resuming",
+                );
+                None
+            }
+            AstEvalOutcome::Aborted => None,
+            AstEvalOutcome::Unsupported => None,
         }
-        Some(resumed)
     }
 
     fn resume_through_active_continuation_optimized(
@@ -3896,14 +4014,114 @@ impl<'m> RuntimeOutputResolver<'m> {
             self.set_runtime_error_once(ERR_RESUME_MISSING);
             return None;
         };
-        let continuation = token.stmt_continuation.clone();
+        let frame = token.frame.clone();
         token.consumed = true;
         token.state = HandlerContinuationState::Resumed(Box::new(resumed.clone()));
-        token.stmt_continuation = None;
-        if let Some(continuation) = continuation {
-            self.execute_saved_stmt_continuation(continuation, resumed.clone(), evaluators)?;
+        token.frame = None;
+        match self.resume_through_ast_continuation_frame(frame, resumed, evaluators) {
+            AstEvalOutcome::Complete(value) => Some(value),
+            AstEvalOutcome::Suspended(_continuation) => {
+                self.set_runtime_error_once(
+                    "internal error: unexpected nested suspension while resuming",
+                );
+                None
+            }
+            AstEvalOutcome::Aborted => None,
+            AstEvalOutcome::Unsupported => None,
         }
-        Some(resumed)
+    }
+
+    fn resume_through_ast_continuation_frame(
+        &mut self,
+        frame: Option<AstContinuationFrame>,
+        resumed: RuntimeValue,
+        evaluators: &RuntimeEvaluators<'_, '_>,
+    ) -> AstEvalOutcome<RuntimeValue> {
+        let Some(frame) = frame else {
+            return AstEvalOutcome::Complete(resumed);
+        };
+        self.execute_ast_continuation(AstContinuation::Frame(frame), resumed, evaluators)
+    }
+
+    fn execute_ast_continuation(
+        &mut self,
+        continuation: AstContinuation,
+        resumed: RuntimeValue,
+        evaluators: &RuntimeEvaluators<'_, '_>,
+    ) -> AstEvalOutcome<RuntimeValue> {
+        match continuation {
+            AstContinuation::Frame(frame) => {
+                self.execute_ast_continuation_frame(frame, resumed, evaluators)
+            }
+        }
+    }
+
+    fn execute_ast_continuation_frame(
+        &mut self,
+        frame: AstContinuationFrame,
+        resumed: RuntimeValue,
+        evaluators: &RuntimeEvaluators<'_, '_>,
+    ) -> AstEvalOutcome<RuntimeValue> {
+        let resumed = if let Some(continuation) = frame.value {
+            match self.execute_saved_value_continuation(continuation, resumed, evaluators) {
+                Some(value) => value,
+                None if self.has_abort_without_error() => return AstEvalOutcome::Aborted,
+                None => return AstEvalOutcome::Unsupported,
+            }
+        } else {
+            resumed
+        };
+        if let Some(continuation) = frame.stmt {
+            match self.execute_saved_stmt_continuation(continuation, resumed.clone(), evaluators) {
+                Some(()) => {}
+                None if self.has_abort_without_error() => return AstEvalOutcome::Aborted,
+                None => return AstEvalOutcome::Unsupported,
+            }
+        }
+        AstEvalOutcome::Complete(resumed)
+    }
+
+    fn execute_saved_value_continuation(
+        &mut self,
+        continuation: AstValueContinuation,
+        resumed: RuntimeValue,
+        evaluators: &RuntimeEvaluators<'_, '_>,
+    ) -> Option<RuntimeValue> {
+        match continuation.kind {
+            AstValueContinuationKind::SingleArgNamedCall { fn_name } => self
+                .apply_named_value_call_ast(
+                    &fn_name,
+                    &[resumed],
+                    &continuation.locals,
+                    &continuation.callables,
+                    evaluators,
+                    continuation.depth,
+                ),
+            AstValueContinuationKind::BinOpLeft { op, right } => {
+                let left_value = resumed;
+                self.pending_value_continuations.push(AstValueContinuation {
+                    kind: AstValueContinuationKind::BinOpRight {
+                        op: op.clone(),
+                        left_value: left_value.clone(),
+                    },
+                    locals: continuation.locals.clone(),
+                    callables: continuation.callables.clone(),
+                    depth: continuation.depth,
+                });
+                let right_value = self.eval_expr_ast(
+                    &right,
+                    &continuation.locals,
+                    &continuation.callables,
+                    evaluators,
+                    continuation.depth,
+                );
+                self.pending_value_continuations.pop();
+                self.apply_binop_runtime_value(op, left_value, right_value?)
+            }
+            AstValueContinuationKind::BinOpRight { op, left_value } => {
+                self.apply_binop_runtime_value(op, left_value, resumed)
+            }
+        }
     }
 
     fn execute_saved_stmt_continuation(
@@ -7383,6 +7601,126 @@ main =
         let module = parse_module(&source).expect("iterator_unified.gb should parse");
         let typed = assert_mode_parity(&module, "iterator unified progression shape");
         assert_eq!(typed.stdout.as_deref(), Some("tick:atick:btick:c31"));
+        assert_eq!(typed.runtime_error_kind, None);
+    }
+
+    #[test]
+    fn resume_replays_single_arg_call_continuation_in_value_position() {
+        use goby_core::parse_module;
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let source = r#"
+effect Iter
+  next: Int -> Int
+
+id : Int -> Int
+id x = x
+
+main : Unit -> Unit
+main =
+  with
+    next n ->
+      resume (n + 1)
+  in
+    print (id (next 0))
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let output =
+            resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
+                .expect("runtime output should resolve");
+        assert_eq!(output, "1");
+    }
+
+    #[test]
+    fn typed_mode_matches_fallback_for_single_arg_call_value_replay() {
+        use goby_core::parse_module;
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let source = r#"
+effect Iter
+  next: Int -> Int
+
+id : Int -> Int
+id x = x
+
+main : Unit -> Unit
+main =
+  with
+    next n ->
+      resume (n + 1)
+  in
+    print (id (next 0))
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let typed = assert_mode_parity(&module, "single-arg call value replay");
+        assert_eq!(typed.stdout.as_deref(), Some("1"));
+        assert_eq!(typed.runtime_error_kind, None);
+    }
+
+    #[test]
+    fn resume_replays_binop_left_operand_continuation() {
+        use goby_core::parse_module;
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let source = r#"
+effect Iter
+  next: Int -> Int
+
+main : Unit -> Unit
+main =
+  with
+    next n ->
+      resume (n + 1)
+  in
+    print (next 0 + 4)
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let output =
+            resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
+                .expect("runtime output should resolve");
+        assert_eq!(output, "5");
+    }
+
+    #[test]
+    fn resume_replays_binop_right_operand_continuation() {
+        use goby_core::parse_module;
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let source = r#"
+effect Iter
+  next: Int -> Int
+
+main : Unit -> Unit
+main =
+  with
+    next n ->
+      resume (n + 1)
+  in
+    print (4 + next 0)
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let output =
+            resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
+                .expect("runtime output should resolve");
+        assert_eq!(output, "5");
+    }
+
+    #[test]
+    fn typed_mode_matches_fallback_for_binop_operand_replay() {
+        use goby_core::parse_module;
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let source = r#"
+effect Iter
+  next: Int -> Int
+
+main : Unit -> Unit
+main =
+  with
+    next n ->
+      resume (n + 1)
+  in
+    print (4 + next 0)
+    print (next 0 + 4)
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let typed = assert_mode_parity(&module, "binop operand replay");
+        assert_eq!(typed.stdout.as_deref(), Some("55"));
         assert_eq!(typed.runtime_error_kind, None);
     }
 
