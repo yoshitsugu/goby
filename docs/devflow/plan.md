@@ -104,3 +104,6 @@
 
 - 2026-03-06: Initial Track 4.7 plan created for abortive handlers and
   multi-resume progression.
+- 2026-03-06: Step 2 was split into a landed core slice (value/unit abort
+  contract) and a remaining nested-handler follow-up under `doc/PLAN.md`
+  Step 2.10 / 2.11.
