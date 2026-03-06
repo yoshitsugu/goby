@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-06 (session 187)
+Last updated: 2026-03-06 (session 190)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -297,6 +297,87 @@ Recent (detailed):
     - move from statement/declaration-level replay toward true nested
       expression-level checkpoints, likely starting with direct call-argument or
       branch subexpression suspension.
+
+- 2026-03-06 (session 188): Track 4.7 Step 3 single-arg call continuation slice.
+  - runtime:
+    - resume tokens now optionally carry an AST value continuation in addition
+      to statement continuations.
+    - the first supported value continuation shape is a single-argument named
+      call replay (`id (next 0)`-style nested value-position continuation).
+    - on `resume`, the resumed value is first threaded through the saved
+      single-arg call continuation and only then through any saved statement
+      continuation.
+  - coverage:
+    - added fallback regression for:
+      - `print (id (next 0))` style nested value-position replay.
+    - added typed/fallback parity coverage for the same nested call-argument slice.
+  - still open within Step 3:
+    - no general `Suspended(...)` producer exists yet.
+    - nested checkpoints are still partial:
+      - single-arg named calls are covered,
+      - binops, branch subexpressions, `resume (op ...)`, and broader call shapes
+        are still pending.
+  - validation completed:
+    - `cargo test -p goby-wasm single_arg_call_value_replay`
+    - `cargo test -p goby-wasm`
+  - immediate next step:
+    - extend value continuations beyond single-arg named calls to another
+      composite expression boundary, likely binop or branch progression.
+
+- 2026-03-06 (session 189): Track 4.7 Step 3 binop operand replay slice.
+  - runtime:
+    - `AstValueContinuationKind` now also supports:
+      - left-operand binop replay,
+      - right-operand binop replay.
+    - handled operations suspended inside direct `BinOp` operands now replay
+      through the interrupted arithmetic/equality expression before returning to
+      outer flow.
+  - coverage:
+    - added fallback regression for:
+      - left operand replay (`next 0 + 4`),
+      - right operand replay (`4 + next 0`).
+    - added typed/fallback parity coverage for the same binop operand slice.
+  - still open within Step 3:
+    - no general `Suspended(...)` producer exists yet.
+    - nested checkpoints still do not cover:
+      - `resume (op ...)`,
+      - multi-arg / non-named call subexpressions,
+      - branch/case re-entry,
+      - deeper general expression-tree replay.
+  - validation completed:
+    - `cargo test -p goby-wasm resume_replays_binop_left_operand_continuation`
+    - `cargo test -p goby-wasm resume_replays_binop_right_operand_continuation`
+    - `cargo test -p goby-wasm typed_mode_matches_fallback_for_binop_operand_replay`
+    - `cargo test -p goby-wasm`
+  - immediate next step:
+    - extend nested value continuations to a control-flow boundary (`if` or
+      `case`) or to `resume (op ...)`, depending on which gives the smallest
+      checkpoint shape.
+
+- 2026-03-06 (session 190): Track 4.7 Step 3 strategy pivot recorded.
+  - planning decision:
+    - Step 3 should no longer continue by adding more expression-shape-specific
+      replay variants on top of the current token-side continuation machinery.
+    - the slices completed in sessions 184-189 remain useful as working semantic
+      proof points, but they are now treated as exploratory scaffolding rather
+      than the desired final architecture.
+  - locked rationale:
+    - Goby is still in an early personal concept-validation phase, so a cleaner
+      destructive refactor is preferred over preserving incremental machinery
+      that would make future language changes expensive.
+    - the current split between `AstStmtContinuation` and
+      `AstValueContinuationKind::*` would likely expand across `if`, `case`,
+      broader call shapes, and `resume (op ...)`, increasing change surface.
+  - updated implementation target:
+    - make `AstEvalOutcome::Suspended(Box<...>)` a real runtime result.
+    - shift Step 3 toward unified continuation frames that model "what to do
+      next" rather than AST-shape-specific replay enums.
+    - prove the new model first by converting one existing nested value-position
+      slice (`single-arg call` or direct `BinOp`) to the suspended-frame path.
+  - immediate next step:
+    - update `docs/devflow/plan.md` to reflect the same pivot, then begin the
+      continuation-model refactor in `crates/goby-wasm/src/lib.rs` instead of
+      adding another ad hoc checkpoint shape.
 
 - 2026-03-06 (session 177): map consolidation Step 8-9 completed.
   - PLAN.md §4.5 checklist updated:

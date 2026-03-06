@@ -126,3 +126,11 @@
 - 2026-03-06: Step 3 kept `iterator_unified` on the AST runtime path by adding
   value-position `with` support and AST-backed general declaration value calls
   (including `f ()` and flattened multi-arg calls).
+- 2026-03-06: Step 3 added the first true nested expression replay slice by
+  carrying a single-arg named-call value continuation through resume tokens.
+- 2026-03-06: Step 3 extended value continuations to direct `BinOp` operand
+  replay for both left and right handled subexpressions.
+- 2026-03-06: Step 3 strategy pivoted away from accumulating more ad hoc
+  continuation shapes; the next implementation target is a unified
+  `AstEvalOutcome::Suspended(Box<...>)` frame model that can replace the current
+  exploratory token-side replay slices over time.
