@@ -857,6 +857,21 @@ Recent (detailed):
     - continue auditing remaining legacy direct-evaluation shapes with the same bias toward small
       expression families rather than another broad entrypoint swap.
 
+- 2026-03-06 (session 214): Track 4.7 Step 3 moved legacy tuple-literal replay onto the outcome consumer.
+  - implementation:
+    - `crates/goby-wasm/src/lib.rs` now routes legacy `Expr::TupleLit` value evaluation through
+      `eval_expr_ast_outcome(...)` plus `complete_ast_value_outcome(...)` instead of collecting
+      tuple items only through the direct evaluator.
+    - this lets tuple elements replay handled values on the same suspended-frame boundary before
+      later tuple-member access.
+  - coverage:
+    - added fallback regression for `pair = (next 0, 2); print pair.0`.
+    - added typed/fallback parity coverage for the same tuple replay shape.
+  - immediate next step:
+    - keep shrinking remaining legacy direct-evaluation shapes one family at a time; `ListLit`
+      without spread is the next obvious candidate, but spread-related fallback rules still make it
+      a larger slice than tuple/interpolation.
+
   - immediate next step:
     - return to the next semantic gap rather than more symmetry-only coverage unless a real
       regression risk appears.

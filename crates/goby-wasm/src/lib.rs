@@ -1590,15 +1590,10 @@ impl<'m> RuntimeOutputResolver<'m> {
                     _ => Some(RuntimeValue::ListInt(int_items)),
                 }
             }
-            Expr::TupleLit(items) => {
-                if items.is_empty() {
-                    return Some(RuntimeValue::Unit);
-                }
-                let values: Option<Vec<RuntimeValue>> = items
-                    .iter()
-                    .map(|item| self.eval_expr_ast(item, locals, callables, evaluators, depth + 1))
-                    .collect();
-                Some(RuntimeValue::Tuple(values?))
+            Expr::TupleLit(_) => {
+                let outcome =
+                    self.eval_expr_ast_outcome(expr, locals, callables, evaluators, depth);
+                self.complete_ast_value_outcome(outcome, evaluators)
             }
             Expr::Call { callee, arg } => {
                 if let Some((fn_name, args)) = flatten_named_call(expr) {
@@ -6511,6 +6506,53 @@ main =
             resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
                 .expect("runtime output should resolve");
         assert_eq!(output, "42");
+    }
+
+    #[test]
+    fn tuple_literal_replays_handled_value() {
+        use goby_core::parse_module;
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let source = r#"
+effect Iter
+  next: Int -> Int
+
+main : Unit -> Unit
+main =
+  with
+    next n ->
+      resume (n + 1)
+  in
+    pair = (next 0, 2)
+    print pair.0
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let output =
+            resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
+                .expect("runtime output should resolve");
+        assert_eq!(output, "1");
+    }
+
+    #[test]
+    fn typed_mode_matches_fallback_for_tuple_literal_replay() {
+        use goby_core::parse_module;
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let source = r#"
+effect Iter
+  next: Int -> Int
+
+main : Unit -> Unit
+main =
+  with
+    next n ->
+      resume (n + 2)
+  in
+    pair = (next 0, 2)
+    print pair.0
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let typed = assert_mode_parity(&module, "tuple literal replay");
+        assert_eq!(typed.stdout.as_deref(), Some("2"));
+        assert_eq!(typed.runtime_error_kind, None);
     }
 
     #[test]

@@ -815,6 +815,8 @@ Step-by-step checklist:
                 handled values without depending on a separate direct evaluator path.
               - legacy interpolated-string value evaluation now also reuses the outcome consumer
                 boundary, so `${...}` segments can replay handled values on the AST path.
+              - legacy tuple-literal value evaluation now also reuses the outcome consumer
+                boundary, so tuple elements can replay handled values before later member access.
             - broader call-shape migration has started:
               - direct named multi-arg call chains can now suspend while evaluating their argument
                 list and resume through the same frame consumer boundary.
