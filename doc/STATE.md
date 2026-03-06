@@ -106,8 +106,9 @@ Recent (detailed):
     - `BinOp`,
     - pipelines.
   - current restart focus:
-    - keep trimming any remaining replay branches that still depend on legacy direct evaluation or
-      string reconstruction before broadening the model again.
+    - cleanup slices are now paying less than before.
+    - prefer returning to semantic targets that move unit-position/control-flow execution onto the
+      same outcome path when they can be landed narrowly.
 
 - 2026-03-06 (session 179): Track 4.7 Step 1 and partial Step 2 completed.
   - Planning/devflow:
@@ -733,6 +734,25 @@ Recent (detailed):
   - immediate next step:
     - decide whether the remaining cleanup slices are still buying enough clarity, or pivot back to
       a larger semantic target.
+
+- 2026-03-06 (session 207): Track 4.7 Step 3 widened `if` progression into unit position.
+  - runtime:
+    - `execute_unit_expr_ast(...)` now evaluates `if` conditions through
+      `eval_expr_ast_outcome(...)` plus `complete_ast_value_outcome(...)` instead of the legacy
+      direct value path.
+    - this lets unit-position `if` condition replay use the same suspended-frame contract already
+      used by value-position `if`.
+  - coverage:
+    - added fallback regression for unit-position `if flag 0` replay.
+    - added typed/fallback parity coverage for the same shape.
+  - validation completed:
+    - `cargo fmt`
+    - `cargo test -p goby-wasm unit_position_if_condition_replay_uses_suspended_frame_path -- --nocapture`
+    - `cargo test -p goby-wasm typed_mode_matches_fallback_for_unit_position_if_condition_replay -- --nocapture`
+    - `cargo test -p goby-wasm`
+  - immediate next step:
+    - extend the same unit-position outcome-path treatment to the next narrow control-flow seam if
+      it is still reachable, or move to the next remaining semantic gap.
 
 - 2026-03-06 (session 177): map consolidation Step 8-9 completed.
   - PLAN.md §4.5 checklist updated:

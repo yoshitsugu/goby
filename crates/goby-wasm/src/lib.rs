@@ -2944,7 +2944,9 @@ impl<'m> RuntimeOutputResolver<'m> {
             else_expr,
         } = expr
         {
-            let cond_val = self.eval_expr_ast(condition, locals, callables, evaluators, depth)?;
+            let cond_outcome =
+                self.eval_expr_ast_outcome(condition, locals, callables, evaluators, depth);
+            let cond_val = self.complete_ast_value_outcome(cond_outcome, evaluators)?;
             match cond_val {
                 RuntimeValue::Bool(true) => {
                     if self
@@ -8244,6 +8246,57 @@ main =
 "#;
         let module = parse_module(source).expect("parse should work");
         let typed = assert_mode_parity(&module, "if condition replay");
+        assert_eq!(typed.stdout.as_deref(), Some("20"));
+        assert_eq!(typed.runtime_error_kind, None);
+    }
+
+    #[test]
+    fn unit_position_if_condition_replay_uses_suspended_frame_path() {
+        use goby_core::parse_module;
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let source = r#"
+effect Pred
+  flag: Int -> Bool
+
+main : Unit -> Unit
+main =
+  with
+    flag n ->
+      resume True
+  in
+    if flag 0
+      print 10
+    else
+      print 20
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let output =
+            resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
+                .expect("runtime output should resolve");
+        assert_eq!(output, "10");
+    }
+
+    #[test]
+    fn typed_mode_matches_fallback_for_unit_position_if_condition_replay() {
+        use goby_core::parse_module;
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let source = r#"
+effect Pred
+  flag: Int -> Bool
+
+main : Unit -> Unit
+main =
+  with
+    flag n ->
+      resume False
+  in
+    if flag 0
+      print 10
+    else
+      print 20
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let typed = assert_mode_parity(&module, "unit-position if condition replay");
         assert_eq!(typed.stdout.as_deref(), Some("20"));
         assert_eq!(typed.runtime_error_kind, None);
     }

@@ -799,6 +799,7 @@ Step-by-step checklist:
               - `complete_ast_value_outcome(...)` consumes real suspended frames,
               - `if` condition replay is covered on the AST declaration path with fallback/typed
                 parity tests,
+              - unit-position `if` condition replay now also uses the same suspended-frame path,
               - `case` scrutinee replay is covered on the AST declaration path with fallback/typed
                 parity tests.
             - broader call-shape migration has started:
