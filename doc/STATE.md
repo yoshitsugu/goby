@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-06 (session 182)
+Last updated: 2026-03-06 (session 183)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -170,6 +170,21 @@ Recent (detailed):
     3. mirror semantics in typed mode,
     4. add parity/exhaustion tests,
     5. rerun full quality gates.
+
+- 2026-03-06 (session 183): Track 4.7 Step 3 groundwork started in runtime.
+  - introduced `AstEvalOutcome<T>` in `crates/goby-wasm/src/lib.rs` as the
+    explicit AST-runtime outcome shape for Step 3.
+  - refactored handler-dispatch statement execution to branch on explicit AST
+    outcomes (`Complete` / `Aborted` / future `Suspended`) instead of relying
+    only on `Option` returns plus resume-token side observation.
+  - current limitation:
+    - `Suspended` is scaffolded but not emitted yet.
+    - real continuation checkpoints and multi-resume progression semantics are
+      still pending.
+  - validation completed:
+    - `cargo fmt`
+    - `cargo check`
+    - `cargo test -p goby-wasm`
 
 - 2026-03-06 (session 177): map consolidation Step 8-9 completed.
   - PLAN.md §4.5 checklist updated:

@@ -546,6 +546,18 @@ enum HandlerCompletion {
     Resumed(Box<RuntimeValue>),
 }
 
+#[allow(dead_code)]
+#[derive(Clone)]
+struct AstContinuation;
+
+#[allow(dead_code)]
+enum AstEvalOutcome<T> {
+    Complete(T),
+    Suspended(AstContinuation),
+    Aborted,
+    Unsupported,
+}
+
 #[derive(Clone)]
 struct ResolvedHandlerMethod {
     method: RuntimeHandlerMethod,
@@ -1994,6 +2006,21 @@ impl<'m> RuntimeOutputResolver<'m> {
         }
     }
 
+    fn eval_expr_ast_outcome(
+        &mut self,
+        expr: &Expr,
+        locals: &RuntimeLocals,
+        callables: &HashMap<String, IntCallable>,
+        evaluators: &RuntimeEvaluators<'_, '_>,
+        depth: usize,
+    ) -> AstEvalOutcome<RuntimeValue> {
+        match self.eval_expr_ast(expr, locals, callables, evaluators, depth) {
+            Some(value) => AstEvalOutcome::Complete(value),
+            None if self.has_abort_without_error() => AstEvalOutcome::Aborted,
+            None => AstEvalOutcome::Unsupported,
+        }
+    }
+
     fn execute_unit_expr_ast(
         &mut self,
         expr: &Expr,
@@ -2526,6 +2553,21 @@ impl<'m> RuntimeOutputResolver<'m> {
             Stmt::Expr(expr) => {
                 self.execute_unit_expr_ast(expr, locals, callables, evaluators, depth)
             }
+        }
+    }
+
+    fn execute_unit_ast_stmt_outcome(
+        &mut self,
+        stmt: &Stmt,
+        locals: &mut RuntimeLocals,
+        callables: &mut HashMap<String, IntCallable>,
+        evaluators: &RuntimeEvaluators<'_, '_>,
+        depth: usize,
+    ) -> AstEvalOutcome<()> {
+        match self.execute_unit_ast_stmt(stmt, locals, callables, evaluators, depth) {
+            Some(()) => AstEvalOutcome::Complete(()),
+            None if self.has_abort_without_error() => AstEvalOutcome::Aborted,
+            None => AstEvalOutcome::Unsupported,
         }
     }
 
@@ -3286,43 +3328,67 @@ impl<'m> RuntimeOutputResolver<'m> {
                 if produce_value {
                     match stmt {
                         Stmt::Binding { name, value } | Stmt::MutBinding { name, value } => {
-                            let v = self.eval_expr_ast(
+                            let v = match self.eval_expr_ast_outcome(
                                 value,
                                 &handler_locals,
                                 &handler_callables,
                                 evaluators,
                                 depth + 1,
-                            )?;
+                            ) {
+                                AstEvalOutcome::Complete(value) => value,
+                                AstEvalOutcome::Suspended(_continuation) => {
+                                    return None;
+                                }
+                                AstEvalOutcome::Aborted => return None,
+                                AstEvalOutcome::Unsupported => return None,
+                            };
                             handler_locals.store(name, v);
                         }
                         Stmt::Assign { name, value } => {
                             handler_locals.get(name)?;
-                            let v = self.eval_expr_ast(
+                            let v = match self.eval_expr_ast_outcome(
                                 value,
                                 &handler_locals,
                                 &handler_callables,
                                 evaluators,
                                 depth + 1,
-                            )?;
+                            ) {
+                                AstEvalOutcome::Complete(value) => value,
+                                AstEvalOutcome::Suspended(_continuation) => {
+                                    return None;
+                                }
+                                AstEvalOutcome::Aborted => return None,
+                                AstEvalOutcome::Unsupported => return None,
+                            };
                             handler_locals.store(name, v);
                         }
                         Stmt::Expr(expr) => {
-                            let value = self.eval_expr_ast(
+                            let value = self.eval_expr_ast_outcome(
                                 expr,
                                 &handler_locals,
                                 &handler_callables,
                                 evaluators,
                                 depth + 1,
                             );
-                            if value.is_none() {
-                                // Side-effect stmt — try as unit side effect.
-                                self.execute_unit_ast_stmt(
-                                    stmt,
-                                    &mut handler_locals,
-                                    &mut handler_callables,
-                                    evaluators,
-                                    depth + 1,
-                                )?;
+                            match value {
+                                AstEvalOutcome::Complete(_) => {}
+                                AstEvalOutcome::Suspended(_continuation) => return None,
+                                AstEvalOutcome::Aborted => return None,
+                                AstEvalOutcome::Unsupported => {
+                                    // Side-effect stmt — try as unit side effect.
+                                    match self.execute_unit_ast_stmt_outcome(
+                                        stmt,
+                                        &mut handler_locals,
+                                        &mut handler_callables,
+                                        evaluators,
+                                        depth + 1,
+                                    ) {
+                                        AstEvalOutcome::Complete(()) => {}
+                                        AstEvalOutcome::Suspended(_continuation) => return None,
+                                        AstEvalOutcome::Aborted => return None,
+                                        AstEvalOutcome::Unsupported => return None,
+                                    }
+                                }
                             }
                         }
                     }
@@ -3331,31 +3397,45 @@ impl<'m> RuntimeOutputResolver<'m> {
                         // In unit-position handler execution, still evaluate expressions via AST first
                         // so `resume` works for bare operation statements like `yield "x"`.
                         Stmt::Expr(expr) => {
-                            let evaluated = self.eval_expr_ast(
+                            let evaluated = self.eval_expr_ast_outcome(
                                 expr,
                                 &handler_locals,
                                 &handler_callables,
                                 evaluators,
                                 depth + 1,
                             );
-                            if evaluated.is_none() {
-                                self.execute_unit_ast_stmt(
-                                    stmt,
-                                    &mut handler_locals,
-                                    &mut handler_callables,
-                                    evaluators,
-                                    depth + 1,
-                                )?;
+                            match evaluated {
+                                AstEvalOutcome::Complete(_) => {}
+                                AstEvalOutcome::Suspended(_continuation) => return None,
+                                AstEvalOutcome::Aborted => return None,
+                                AstEvalOutcome::Unsupported => match self
+                                    .execute_unit_ast_stmt_outcome(
+                                        stmt,
+                                        &mut handler_locals,
+                                        &mut handler_callables,
+                                        evaluators,
+                                        depth + 1,
+                                    ) {
+                                    AstEvalOutcome::Complete(()) => {}
+                                    AstEvalOutcome::Suspended(_continuation) => return None,
+                                    AstEvalOutcome::Aborted => return None,
+                                    AstEvalOutcome::Unsupported => return None,
+                                },
                             }
                         }
                         _ => {
-                            self.execute_unit_ast_stmt(
+                            match self.execute_unit_ast_stmt_outcome(
                                 stmt,
                                 &mut handler_locals,
                                 &mut handler_callables,
                                 evaluators,
                                 depth + 1,
-                            )?;
+                            ) {
+                                AstEvalOutcome::Complete(()) => {}
+                                AstEvalOutcome::Suspended(_continuation) => return None,
+                                AstEvalOutcome::Aborted => return None,
+                                AstEvalOutcome::Unsupported => return None,
+                            }
                         }
                     }
                 }

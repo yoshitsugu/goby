@@ -551,6 +551,11 @@ Step-by-step checklist:
       the AST evaluator boundary.
     - a direct one-line change from one-shot to multi-shot would be incorrect because `resume`
       currently only returns a value to the handler body and does not reify the caller continuation.
+    - groundwork landed in `crates/goby-wasm/src/lib.rs`:
+      - introduced `AstEvalOutcome<T>` as the Step 3 runtime-shape carrier.
+      - handler-dispatch statement execution now branches on explicit AST outcomes instead of
+        relying only on `Option` + token-state probing.
+      - `Suspended(...)` is not emitted yet; real checkpoints still need to be implemented.
   - confirmed investigation findings:
     - current runtime anchor points:
       - `crates/goby-wasm/src/lib.rs`: `dispatch_handler_method_core`
