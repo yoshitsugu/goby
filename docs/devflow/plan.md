@@ -141,3 +141,7 @@
 - 2026-03-06: Step 3.2a landed the minimal frame-entry boundary by routing
   `resume` through `AstContinuationFrame` / `execute_ast_continuation(...)`
   while keeping semantics unchanged for the currently exploratory replay slices.
+- 2026-03-06: Step 3.2b migrated the smallest real nested shape to the new
+  suspended-frame path: value-only `single-arg named call` now suspends via
+  `AstEvalOutcome::Suspended(...)`, while statement and mixed-frame cases remain
+  on the old replay path temporarily.

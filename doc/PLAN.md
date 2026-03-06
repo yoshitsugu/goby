@@ -593,6 +593,15 @@ Step-by-step checklist:
           handler body.
         - this does not emit `Suspended(...)` yet, but it establishes the minimal frame boundary
           required for Step 3.2a.
+      - first real suspended-frame slice:
+        - `eval_expr_ast_outcome` now handles `single-arg named call` through an outcome-aware path.
+        - when `resume` sees a value-only `SingleArgNamedCall` frame, it now returns
+          `AstEvalOutcome::Suspended(...)` instead of immediately replaying that frame inside the
+          token bridge.
+        - handler dispatch can surface that suspension back through
+          `dispatch_handler_method_as_value_outcome`.
+        - the slice is intentionally narrow: statement continuations and broader value shapes still
+          complete through the old replay path.
       - unit-position replay:
         - resume tokens can carry an AST statement-tail continuation snapshot.
         - top-level `with` bodies and unit-position AST statement sequences register checkpoints
@@ -719,8 +728,9 @@ Step-by-step checklist:
           - direct binding / assignment RHS replay,
           - declaration/value-expression AST paths needed by `iterator_unified`.
           - shared resume transport via `AstContinuationFrame`.
+          - first evaluator-produced suspended frame for value-only single-arg named calls.
         - not yet unified:
-          - inner expression checkpoints are still represented by ad hoc replay shapes,
+          - most inner expression checkpoints are still represented by ad hoc replay shapes,
           - statement/value replay are still split across token-side structures.
       - start with AST-backed paths only; string-fallback paths are not the target for Step 3.
       - next acceptance target:
@@ -743,6 +753,12 @@ Step-by-step checklist:
         - Step 3.2b:
           - migrate one small nested value-position shape to the new frame path.
           - preferred first target: `single-arg call`.
+          - current status:
+            - landed narrowly for value-only `single-arg named call`.
+            - handler-body `resume` in outcome-aware paths can now surface
+              `AstEvalOutcome::Suspended(...)` for that shape.
+            - statement-tail and mixed frame shapes are intentionally left on the old replay path in
+              this slice.
           - done when:
             - the chosen shape suspends via `AstEvalOutcome::Suspended(...)`,
             - resume returns through the frame path instead of the old token-only replay path,
@@ -750,6 +766,9 @@ Step-by-step checklist:
         - Step 3.2c:
           - delete or collapse the replaced old replay machinery for that migrated shape before
             expanding coverage.
+          - next target:
+            - remove the remaining token-only `SingleArgNamedCall` replay dependency now that the
+              outcome path can suspend that shape directly.
           - done when:
             - the old replay branch for that shape is removed or no longer reachable,
             - tests still pass without relying on dual paths.

@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-06 (session 191)
+Last updated: 2026-03-06 (session 192)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -413,6 +413,29 @@ Recent (detailed):
   - immediate next step:
     - start Step 3.2b by migrating the `single-arg call` nested value-position slice to suspend via
       the new frame entrypoint instead of the old token-only replay path.
+
+- 2026-03-06 (session 192): Track 4.7 Step 3.2b single-arg suspended-frame slice landed.
+  - runtime:
+    - `eval_expr_ast_outcome` now handles `Expr::Call` and `Expr::Resume` through outcome-aware
+      branches for the narrow `single-arg named call` path.
+    - `HandlerContinuationState` / `HandlerCompletion` now distinguish suspended completion in
+      addition to resumed and abortive completion.
+    - when `resume` sees a value-only `SingleArgNamedCall` frame, it now returns
+      `AstEvalOutcome::Suspended(Box<AstContinuation>)` instead of immediately replaying that frame
+      inside the token bridge.
+    - `dispatch_handler_method_as_value_outcome` can now surface that suspension back to the
+      caller-side outcome evaluator.
+  - scope boundary:
+    - this slice is intentionally narrow.
+    - statement continuations and mixed frame shapes still execute through the old replay path so
+      previously landed Step 3 behavior remains stable.
+  - validation completed:
+    - `cargo fmt`
+    - `cargo test -p goby-wasm`
+  - immediate next step:
+    - start Step 3.2c by deleting or collapsing the remaining old
+      `SingleArgNamedCall` token-only replay path now that the outcome path can suspend it
+      directly.
 
 - 2026-03-06 (session 177): map consolidation Step 8-9 completed.
   - PLAN.md §4.5 checklist updated:
