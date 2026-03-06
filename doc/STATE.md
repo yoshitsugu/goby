@@ -717,6 +717,23 @@ Recent (detailed):
     - continue trimming remaining bespoke helper edges or move back to a larger semantic target if
       the remaining cleanup slices stop paying for themselves.
 
+- 2026-03-06 (session 206): Track 4.7 Step 3 cleanup extended shared replay consumption to control-flow branches.
+  - runtime:
+    - `CaseScrutinee` and `IfCondition` replay-time branch execution now also uses the shared
+      replay outcome consumer helper.
+    - this removes another small split between call-like and control-flow replay branches.
+  - result:
+    - replay-time value continuation exits are more uniform across migrated Step 3 shapes.
+    - this is structural cleanup only; semantics are unchanged.
+  - validation completed:
+    - `cargo fmt`
+    - `cargo test -p goby-wasm typed_mode_matches_fallback_for_case_scrutinee_replay -- --nocapture`
+    - `cargo test -p goby-wasm typed_mode_matches_fallback_for_if_condition_replay -- --nocapture`
+    - `cargo test -p goby-wasm`
+  - immediate next step:
+    - decide whether the remaining cleanup slices are still buying enough clarity, or pivot back to
+      a larger semantic target.
+
 - 2026-03-06 (session 177): map consolidation Step 8-9 completed.
   - PLAN.md §4.5 checklist updated:
     - completed: Step 8-9 (map callsite migration + builtin-path trim).

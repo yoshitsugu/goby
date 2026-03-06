@@ -4502,7 +4502,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                     evaluators,
                     continuation.depth,
                 );
-                self.complete_ast_value_outcome(outcome, evaluators)
+                self.consume_saved_value_outcome(outcome, evaluators)
             }
             AstValueContinuationKind::IfCondition {
                 then_expr,
@@ -4520,7 +4520,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                     evaluators,
                     continuation.depth,
                 );
-                self.complete_ast_value_outcome(outcome, evaluators)
+                self.consume_saved_value_outcome(outcome, evaluators)
             }
             AstValueContinuationKind::BinOpLeft { op, right } => {
                 let left_value = resumed;
