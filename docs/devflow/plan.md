@@ -163,3 +163,7 @@
   multi-arg direct named-call argument lists now suspend through a unified
   `MultiArgNamedCall` frame on the AST path, with fallback / typed parity
   coverage.
+- 2026-03-06: Step 3.2d also migrated nested resume values narrowly:
+  `Expr::Resume` now runs through the outcome consumer path, and `resume (op
+  ...)` re-enters via a dedicated `ResumeValue` continuation instead of the old
+  direct bridge path.

@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-06 (session 197)
+Last updated: 2026-03-06 (session 198)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -547,6 +547,25 @@ Recent (detailed):
   - immediate next step:
     - revisit `resume (op ...)` as the remaining high-value nested progression gap.
     - if call-shape work continues first, target non-direct callees or mixed call/effect chains.
+
+- 2026-03-06 (session 198): Track 4.7 Step 3.2d nested `resume (...)` slice landed.
+  - runtime:
+    - added `ResumeValue` as the next unified value continuation shape.
+    - `Expr::Resume` now routes through `eval_expr_ast_outcome(...)` +
+      `complete_ast_value_outcome(...)` instead of the old direct bridge path.
+    - old non-outcome resume bridge helpers were removed after the AST runtime no longer used them.
+  - result:
+    - nested `resume (op ...)` now re-enters through the unified suspended-frame consumer path.
+    - existing double-resume error coverage now exercises the new nested resume-value route rather
+      than the legacy direct bridge.
+  - validation completed:
+    - `cargo fmt`
+    - `cargo test -p goby-wasm typed_mode_matches_fallback_for_double_resume_error -- --nocapture`
+    - `cargo test -p goby-wasm`
+  - immediate next step:
+    - revisit non-direct callees or mixed call/effect chains as the next nested progression gap.
+    - keep shrinking any remaining direct token-only replay seams when a migrated shape no longer
+      needs them.
 
 - 2026-03-06 (session 177): map consolidation Step 8-9 completed.
   - PLAN.md §4.5 checklist updated:

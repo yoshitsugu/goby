@@ -581,6 +581,7 @@ struct AstValueContinuation {
 
 #[derive(Clone)]
 enum AstValueContinuationKind {
+    ResumeValue,
     SingleArgNamedCall {
         fn_name: String,
     },
@@ -1859,10 +1860,10 @@ impl<'m> RuntimeOutputResolver<'m> {
                 self.active_inline_handler_stack.pop();
                 result
             }
-            Expr::Resume { value } => {
-                let resumed =
-                    self.eval_expr_ast(value, locals, callables, evaluators, depth + 1)?;
-                self.resume_through_active_continuation_bridge(resumed, evaluators)
+            Expr::Resume { .. } => {
+                let outcome =
+                    self.eval_expr_ast_outcome(expr, locals, callables, evaluators, depth);
+                self.complete_ast_value_outcome(outcome, evaluators)
             }
             // string.split(s, delim) -> ListString
             Expr::MethodCall {
@@ -2504,6 +2505,12 @@ impl<'m> RuntimeOutputResolver<'m> {
                 self.ast_outcome_from_option(value)
             }
             Expr::Resume { value } => {
+                self.pending_value_continuations.push(AstValueContinuation {
+                    kind: AstValueContinuationKind::ResumeValue,
+                    locals: locals.clone(),
+                    callables: callables.clone(),
+                    depth: depth + 1,
+                });
                 let resumed = match self.eval_expr_ast_outcome(
                     value,
                     locals,
@@ -2513,11 +2520,19 @@ impl<'m> RuntimeOutputResolver<'m> {
                 ) {
                     AstEvalOutcome::Complete(value) => value,
                     AstEvalOutcome::Suspended(continuation) => {
+                        self.pending_value_continuations.pop();
                         return AstEvalOutcome::Suspended(continuation);
                     }
-                    AstEvalOutcome::Aborted => return AstEvalOutcome::Aborted,
-                    AstEvalOutcome::Unsupported => return AstEvalOutcome::Unsupported,
+                    AstEvalOutcome::Aborted => {
+                        self.pending_value_continuations.pop();
+                        return AstEvalOutcome::Aborted;
+                    }
+                    AstEvalOutcome::Unsupported => {
+                        self.pending_value_continuations.pop();
+                        return AstEvalOutcome::Unsupported;
+                    }
                 };
+                self.pending_value_continuations.pop();
                 self.resume_through_active_continuation_bridge_outcome(resumed, evaluators)
             }
             _ => {
@@ -4045,21 +4060,6 @@ impl<'m> RuntimeOutputResolver<'m> {
         }
     }
 
-    fn resume_through_active_continuation_bridge(
-        &mut self,
-        resumed: RuntimeValue,
-        evaluators: &RuntimeEvaluators<'_, '_>,
-    ) -> Option<RuntimeValue> {
-        match self.execution_mode {
-            lower::EffectExecutionMode::PortableFallback => {
-                self.resume_through_active_continuation_fallback(resumed, evaluators)
-            }
-            lower::EffectExecutionMode::TypedContinuationOptimized => {
-                self.resume_through_active_continuation_optimized(resumed, evaluators)
-            }
-        }
-    }
-
     fn resume_through_active_continuation_bridge_outcome(
         &mut self,
         resumed: RuntimeValue,
@@ -4072,40 +4072,6 @@ impl<'m> RuntimeOutputResolver<'m> {
             lower::EffectExecutionMode::TypedContinuationOptimized => {
                 self.resume_through_active_continuation_optimized_outcome(resumed, evaluators)
             }
-        }
-    }
-
-    fn resume_through_active_continuation_fallback(
-        &mut self,
-        resumed: RuntimeValue,
-        evaluators: &RuntimeEvaluators<'_, '_>,
-    ) -> Option<RuntimeValue> {
-        let Some(token_ro) = self.resume_tokens.last() else {
-            self.set_runtime_error_once(ERR_RESUME_MISSING);
-            return None;
-        };
-        if token_ro.continuation.consumed {
-            self.set_runtime_error_once(ERR_RESUME_CONSUMED);
-            return None;
-        }
-        let Some(token) = self.current_resume_token_mut() else {
-            self.set_runtime_error_once(ERR_RESUME_MISSING);
-            return None;
-        };
-        let frame = token.frame.clone();
-        token.continuation.consumed = true;
-        token.state = HandlerContinuationState::Resumed(Box::new(resumed.clone()));
-        token.frame = None;
-        match self.resume_through_ast_continuation_frame(frame, resumed, evaluators) {
-            AstEvalOutcome::Complete(value) => Some(value),
-            AstEvalOutcome::Suspended(_continuation) => {
-                self.set_runtime_error_once(
-                    "internal error: unexpected nested suspension while resuming",
-                );
-                None
-            }
-            AstEvalOutcome::Aborted => None,
-            AstEvalOutcome::Unsupported => None,
         }
     }
 
@@ -4153,40 +4119,6 @@ impl<'m> RuntimeOutputResolver<'m> {
             AstEvalOutcome::Aborted | AstEvalOutcome::Unsupported => {}
         }
         outcome
-    }
-
-    fn resume_through_active_continuation_optimized(
-        &mut self,
-        resumed: RuntimeValue,
-        evaluators: &RuntimeEvaluators<'_, '_>,
-    ) -> Option<RuntimeValue> {
-        let Some(token_ro) = self.optimized_resume_tokens.last() else {
-            self.set_runtime_error_once(ERR_RESUME_MISSING);
-            return None;
-        };
-        if token_ro.consumed {
-            self.set_runtime_error_once(ERR_RESUME_CONSUMED);
-            return None;
-        }
-        let Some(token) = self.current_optimized_resume_token_mut() else {
-            self.set_runtime_error_once(ERR_RESUME_MISSING);
-            return None;
-        };
-        let frame = token.frame.clone();
-        token.consumed = true;
-        token.state = HandlerContinuationState::Resumed(Box::new(resumed.clone()));
-        token.frame = None;
-        match self.resume_through_ast_continuation_frame(frame, resumed, evaluators) {
-            AstEvalOutcome::Complete(value) => Some(value),
-            AstEvalOutcome::Suspended(_continuation) => {
-                self.set_runtime_error_once(
-                    "internal error: unexpected nested suspension while resuming",
-                );
-                None
-            }
-            AstEvalOutcome::Aborted => None,
-            AstEvalOutcome::Unsupported => None,
-        }
     }
 
     fn resume_through_active_continuation_optimized_outcome(
@@ -4240,7 +4172,8 @@ impl<'m> RuntimeOutputResolver<'m> {
             && matches!(
                 frame.value.as_ref().map(|continuation| &continuation.kind),
                 Some(
-                    AstValueContinuationKind::SingleArgNamedCall { .. }
+                    AstValueContinuationKind::ResumeValue
+                        | AstValueContinuationKind::SingleArgNamedCall { .. }
                         | AstValueContinuationKind::MultiArgNamedCall { .. }
                         | AstValueContinuationKind::CaseScrutinee { .. }
                         | AstValueContinuationKind::IfCondition { .. }
@@ -4323,6 +4256,16 @@ impl<'m> RuntimeOutputResolver<'m> {
         evaluators: &RuntimeEvaluators<'_, '_>,
     ) -> Option<RuntimeValue> {
         match continuation.kind {
+            AstValueContinuationKind::ResumeValue => {
+                match self.resume_through_active_continuation_bridge_outcome(resumed, evaluators) {
+                    AstEvalOutcome::Complete(value) => Some(value),
+                    AstEvalOutcome::Suspended(continuation) => self.complete_ast_value_outcome(
+                        AstEvalOutcome::Suspended(continuation),
+                        evaluators,
+                    ),
+                    AstEvalOutcome::Aborted | AstEvalOutcome::Unsupported => None,
+                }
+            }
             AstValueContinuationKind::SingleArgNamedCall { fn_name } => match self
                 .apply_named_value_call_ast_outcome(
                     &fn_name,
