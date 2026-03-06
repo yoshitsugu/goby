@@ -210,78 +210,6 @@ pub fn typecheck_module_with_context(
     Ok(())
 }
 
-fn count_resume_in_stmts(stmts: &[Stmt]) -> usize {
-    stmts
-        .iter()
-        .map(|stmt| match stmt {
-            Stmt::Binding { value, .. }
-            | Stmt::MutBinding { value, .. }
-            | Stmt::Assign { value, .. } => count_resume_in_expr(value),
-            Stmt::Expr(expr) => count_resume_in_expr(expr),
-        })
-        .sum()
-}
-
-fn count_resume_in_expr(expr: &Expr) -> usize {
-    match expr {
-        Expr::Resume { value } => 1 + count_resume_in_expr(value),
-        Expr::IntLit(_)
-        | Expr::BoolLit(_)
-        | Expr::StringLit(_)
-        | Expr::Var(_)
-        | Expr::Qualified { .. } => 0,
-        Expr::InterpolatedString(parts) => parts
-            .iter()
-            .map(|part| match part {
-                InterpolatedPart::Text(_) => 0,
-                InterpolatedPart::Expr(expr) => count_resume_in_expr(expr),
-            })
-            .sum(),
-        Expr::ListLit { elements, spread } => {
-            let sum: usize = elements.iter().map(count_resume_in_expr).sum();
-            sum + spread.as_ref().map_or(0, |s| count_resume_in_expr(s))
-        }
-        Expr::TupleLit(items) => items.iter().map(count_resume_in_expr).sum(),
-        Expr::RecordConstruct { fields, .. } => fields
-            .iter()
-            .map(|(_, value)| count_resume_in_expr(value))
-            .sum(),
-        Expr::BinOp { left, right, .. } => count_resume_in_expr(left) + count_resume_in_expr(right),
-        Expr::Call { callee, arg } => count_resume_in_expr(callee) + count_resume_in_expr(arg),
-        Expr::MethodCall { args, .. } => args.iter().map(count_resume_in_expr).sum(),
-        Expr::Pipeline { value, .. } => count_resume_in_expr(value),
-        Expr::Lambda { body, .. } => count_resume_in_expr(body),
-        Expr::Handler { clauses } => clauses
-            .iter()
-            .map(|clause| {
-                clause
-                    .parsed_body
-                    .as_ref()
-                    .map(|stmts| count_resume_in_stmts(stmts))
-                    .unwrap_or(0)
-            })
-            .sum(),
-        Expr::With { handler, body } => count_resume_in_expr(handler) + count_resume_in_stmts(body),
-        Expr::Block(stmts) => count_resume_in_stmts(stmts),
-        Expr::Case { scrutinee, arms } => {
-            count_resume_in_expr(scrutinee)
-                + arms
-                    .iter()
-                    .map(|arm| count_resume_in_expr(&arm.body))
-                    .sum::<usize>()
-        }
-        Expr::If {
-            condition,
-            then_expr,
-            else_expr,
-        } => {
-            count_resume_in_expr(condition)
-                + count_resume_in_expr(then_expr)
-                + count_resume_in_expr(else_expr)
-        }
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Internal type representation
 // ---------------------------------------------------------------------------
@@ -2916,19 +2844,6 @@ fn check_resume_in_expr(
         Expr::Handler { clauses } => {
             let mut fresh_type_counter = 0usize;
             for clause in clauses {
-                if let Some(stmts) = &clause.parsed_body {
-                    let resume_count = count_resume_in_stmts(stmts);
-                    if resume_count > 1 {
-                        return Err(TypecheckError {
-                            declaration: Some(decl_name.to_string()),
-                            span: None,
-                            message: format!(
-                                "resume_potential_multi_shot: handler clause `{}` contains {} `resume` expressions; this phase only allows at most one syntactic `resume` per handler invocation",
-                                clause.name, resume_count
-                            ),
-                        });
-                    }
-                }
                 let instantiated = instantiate_handler_clause_signature(
                     env,
                     &clause.name,
@@ -7492,7 +7407,7 @@ main =
     }
 
     #[test]
-    fn rejects_multiple_resume_expressions_in_same_handler_method() {
+    fn accepts_multiple_resume_expressions_in_same_handler_method() {
         let source = "
 effect Iter
   next: Unit -> Int
@@ -7507,16 +7422,12 @@ main =
     print \"ok\"
 ";
         let module = parse_module(source).expect("should parse");
-        let err = typecheck_module(&module).expect_err("multiple resume expressions should fail");
-        assert!(
-            err.message.contains("resume_potential_multi_shot"),
-            "unexpected error: {}",
-            err.message
-        );
+        typecheck_module(&module)
+            .expect("multiple resume expressions should no longer be conservatively rejected");
     }
 
     #[test]
-    fn rejects_multiple_resume_expressions_in_single_expression_conservatively() {
+    fn accepts_multiple_resume_expressions_in_single_expression_for_runtime_validation() {
         let source = "
 effect Iter
   next: Unit -> Int
@@ -7530,13 +7441,31 @@ main =
     print \"ok\"
 ";
         let module = parse_module(source).expect("should parse");
+        typecheck_module(&module)
+            .expect("multi-resume expression should defer invalid progression handling to runtime");
+    }
+
+    #[test]
+    fn rejects_multiple_resume_expressions_when_one_branch_has_type_mismatch() {
+        let source = "
+effect Iter
+  next: Unit -> Int
+
+main : Unit -> Unit
+main =
+  with
+    next x ->
+      if True
+        resume 1
+      else
+        resume \"oops\"
+  in
+    print \"ok\"
+";
+        let module = parse_module(source).expect("should parse");
         let err = typecheck_module(&module)
-            .expect_err("multi-resume in a single expression is conservatively rejected");
-        assert!(
-            err.message.contains("resume_potential_multi_shot"),
-            "unexpected error: {}",
-            err.message
-        );
+            .expect_err("resume type mismatch should still be rejected under multiple branches");
+        assert!(err.message.contains("resume_arg_type_mismatch"));
     }
 
     #[test]

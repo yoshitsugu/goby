@@ -573,7 +573,7 @@ fn parse_handler_expr_from_lines(
             if !body.is_empty() {
                 body.push('\n');
             }
-            body.push_str(sub_trimmed);
+            body.push_str(sub_stripped.get(clause_indent..).unwrap_or(sub_trimmed));
             i += 1;
         }
 
@@ -2382,6 +2382,50 @@ main =
             },
             other => panic!("unexpected statement shape: {:?}", other),
         }
+    }
+
+    #[test]
+    fn parses_nested_with_inside_handler_clause_body() {
+        let source = r#"
+effect Outer
+  op: String -> Unit
+
+effect Inner
+  boom: String -> Unit
+
+main =
+  with
+    op msg ->
+      with
+        boom inner ->
+          print inner
+      in
+        boom msg
+      resume Unit
+  in
+    op "x"
+"#;
+        let module = parse_module(source).expect("nested with in handler clause should parse");
+        let stmts = module.declarations[0]
+            .parsed_body
+            .as_ref()
+            .expect("main body should parse");
+        let Stmt::Expr(Expr::With { handler, .. }) = &stmts[0] else {
+            panic!("expected top-level with");
+        };
+        let Expr::Handler { clauses } = handler.as_ref() else {
+            panic!("expected inline handler");
+        };
+        let clause_stmts = clauses[0]
+            .parsed_body
+            .as_ref()
+            .expect("handler clause body should keep nested indentation and parse");
+        assert!(
+            clause_stmts
+                .iter()
+                .any(|stmt| matches!(stmt, Stmt::Expr(Expr::With { .. }))),
+            "handler clause body should contain nested with expression"
+        );
     }
 
     #[test]

@@ -602,7 +602,7 @@ Step-by-step checklist:
       - update side-effect operation call sites so abortive completion stops the enclosing
         statement/declaration execution immediately.
       - ensure statements after an aborted handled operation are not executed.
-    - [ ] Step 2.10: bridge parity and edge-case review
+    - [x] Step 2.10: bridge parity and edge-case review
       - confirm `with` inline handler and handler-value forms both use the same abort contract.
       - confirm embedded default handlers are unaffected unless they explicitly participate
         in the same continuation bridge.
@@ -615,8 +615,6 @@ Step-by-step checklist:
         - nested handler abort propagation.
       - add typed-mode parity coverage for the same cases.
       - keep existing invalid resume runtime error tests passing unchanged.
-      - current status: value/unit abort coverage and parity are added; nested-handler abort
-        coverage remains pending under Step 2.10 review follow-up.
     - [x] Step 2.12: post-implementation validation
       - run `cargo fmt`.
       - run targeted `cargo test` for effect-runtime cases first.
@@ -625,12 +623,18 @@ Step-by-step checklist:
   - replace one-shot token consumption model with resumable progression model for one handler invocation.
   - each `resume` continues from the next resumable point; exhausted continuation raises runtime error.
   - keep guardrails for clearly invalid continuation state transitions.
-- [ ] Step 4: typecheck rule update
+- [x] Step 4: typecheck rule update
   - remove conservative "multiple syntactic `resume` is always rejected" rule.
   - retain checks for:
     - `resume` outside handler rejection,
     - `resume` argument type compatibility with operation return type,
     - unresolved generic constraint diagnostics.
+  - note:
+    - parser support for nested handler-clause blocks now exposes previously hidden
+      valid multi-branch `resume` cases (for example `examples/iterator_unified.gb`),
+      so the conservative syntactic rejection has been removed.
+    - runtime progression semantics beyond one-shot nested re-entry remain tracked
+      in Step 3.
 - [ ] Step 5: tests and parity locks
   - add/update fallback runtime tests for:
     - no-`resume` immediate abort in value and unit position,
