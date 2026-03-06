@@ -123,3 +123,6 @@
 - 2026-03-06: Step 3 added a narrow value-position replay slice for direct
   binding / assignment RHS handled operations in AST statement sequences while
   explicitly keeping deeper expression-tree checkpoints deferred.
+- 2026-03-06: Step 3 kept `iterator_unified` on the AST runtime path by adding
+  value-position `with` support and AST-backed general declaration value calls
+  (including `f ()` and flattened multi-arg calls).

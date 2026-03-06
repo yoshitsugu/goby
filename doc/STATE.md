@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-06 (session 186)
+Last updated: 2026-03-06 (session 187)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -264,6 +264,39 @@ Recent (detailed):
     - extend value-position progression beyond direct statement RHS into nested
       composite expressions (`if`, `case`, call chains, etc.) using the recursive
       `AstEvalOutcome` groundwork from session 185.
+
+- 2026-03-06 (session 187): Track 4.7 Step 3 declaration/value-expression slice.
+  - runtime:
+    - AST value evaluation now supports value-position `with ... in <expr>` by
+      evaluating the `with` body as a handler-scoped block expression.
+    - AST value evaluation now supports general declaration calls as values:
+      - single-arg declarations,
+      - zero-arity declarations invoked as `f ()`,
+      - flattened multi-arg named calls.
+    - this keeps progression-relevant declaration bodies on the AST path instead
+      of dropping back to the old string evaluator.
+  - user-visible outcome:
+    - `examples/iterator_unified.gb` now resolves in the fallback runtime path
+      and via `goby-cli run`, producing locked output `tick:atick:btick:c31`.
+  - coverage:
+    - added fallback regression for declaration value-call progression.
+    - added typed/fallback parity regression for the same shape.
+    - added locked runtime-output coverage for `examples/iterator_unified.gb`.
+    - added typed/fallback parity coverage for the iterator unified example shape.
+  - still open within Step 3:
+    - continuation progression still relies on statement-level replay, not a
+      general `Suspended(...)` producer.
+    - nested intermediate checkpoints inside arbitrary expression trees
+      (`resume (op ...)`, arithmetic/call subexpressions, etc.) are still open.
+  - validation completed:
+    - `cargo test -p goby-wasm declaration_value_call_replays_nested_binding_progression`
+    - `cargo test -p goby-wasm locks_runtime_output_for_iterator_unified_gb`
+    - `cargo test -p goby-wasm typed_mode_matches_fallback_for_iterator_unified_example_shape`
+    - `cargo run -p goby-cli -- run examples/iterator_unified.gb`
+  - immediate next step:
+    - move from statement/declaration-level replay toward true nested
+      expression-level checkpoints, likely starting with direct call-argument or
+      branch subexpression suspension.
 
 - 2026-03-06 (session 177): map consolidation Step 8-9 completed.
   - PLAN.md §4.5 checklist updated:

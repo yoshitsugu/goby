@@ -585,6 +585,14 @@ Step-by-step checklist:
       - top-level / `with`-body direct RHS bindings are covered in both fallback and typed mode.
       - nested deeper value-position checkpoints inside arbitrary expression trees are still open;
         the current capture is intentionally limited to direct statement RHS replay.
+    - latest declaration/value-expression slice:
+      - AST value evaluation now supports `with ... in <expr>` in value position by evaluating the
+        body as a handler-scoped block expression.
+      - AST value evaluation now supports general declaration calls as values, including:
+        - zero-arity declarations invoked as `f ()`,
+        - multi-argument declarations represented by flattened named calls.
+      - this is sufficient to resolve `examples/iterator_unified.gb` through the fallback runtime
+        and keep typed/fallback parity for that progression shape.
   - confirmed investigation findings:
     - current runtime anchor points:
       - `crates/goby-wasm/src/lib.rs`: `dispatch_handler_method_core`
@@ -655,6 +663,8 @@ Step-by-step checklist:
       - current status:
         - continuation completion path now works for saved unit-position statement tails.
         - direct binding / assignment RHS replay now works for AST statement sequences.
+        - declaration value calls and value-position `with` expressions now stay on the AST path
+          for covered shapes instead of dropping to the old string fallback.
         - repeated `resume` after that completion is covered by regression tests.
         - progression to intermediate value-position resumable points is still pending.
       - preserve deterministic `continuation_missing` / `continuation_consumed` style runtime errors.
@@ -672,6 +682,8 @@ Step-by-step checklist:
       - current status:
         - added fallback + typed parity regression for unit-position replay then exhaustion.
         - added fallback + typed parity regression for direct binding-value replay.
+        - added regression/parity coverage for declaration-call progression and
+          `iterator_unified.gb`.
         - broader matrix for value-position progression is still open.
   - restart checklist:
     - begin from `crates/goby-wasm/src/lib.rs`; no parser or typecheck blocker remains for Step 3.

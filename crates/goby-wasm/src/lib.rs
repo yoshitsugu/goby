@@ -1577,6 +1577,14 @@ impl<'m> RuntimeOutputResolver<'m> {
                             depth + 1,
                         );
                     }
+                    if let Some(value) = self.eval_decl_as_value_with_args_ast(
+                        fn_name,
+                        &arg_values,
+                        evaluators,
+                        depth + 1,
+                    ) {
+                        return Some(value);
+                    }
                 }
 
                 // Positional single-field record constructor sugar: `Ctor(value)` → `Ctor(field: value)`.
@@ -1662,6 +1670,11 @@ impl<'m> RuntimeOutputResolver<'m> {
                         evaluators,
                         depth + 1,
                     ) {
+                        return Some(value);
+                    }
+                    if let Some(value) =
+                        self.eval_decl_as_value_ast(fn_name, arg_val.clone(), evaluators, depth + 1)
+                    {
                         return Some(value);
                     }
                     // Int function path
@@ -1967,6 +1980,19 @@ impl<'m> RuntimeOutputResolver<'m> {
                     _ => None,
                 }
             }
+            Expr::With { handler, body } => {
+                let RuntimeValue::Handler(inline_handler) =
+                    self.eval_expr_ast(handler, locals, callables, evaluators, depth + 1)?
+                else {
+                    return None;
+                };
+                self.active_inline_handler_stack.push(inline_handler);
+                let body_expr = Expr::Block(body.clone());
+                let result =
+                    self.eval_expr_ast(&body_expr, locals, callables, evaluators, depth + 1);
+                self.active_inline_handler_stack.pop();
+                result
+            }
             Expr::Resume { value } => {
                 let resumed =
                     self.eval_expr_ast(value, locals, callables, evaluators, depth + 1)?;
@@ -2024,7 +2050,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                 None
             }
             // Lambda as top-level value — not needed in main, return None to fall back.
-            Expr::Lambda { .. } | Expr::MethodCall { .. } | Expr::With { .. } => None,
+            Expr::Lambda { .. } | Expr::MethodCall { .. } => None,
         }
     }
 
@@ -3395,6 +3421,56 @@ impl<'m> RuntimeOutputResolver<'m> {
     ) -> Option<RuntimeValue> {
         let bridge = self.runtime_bridges.resolve_receiver(receiver, symbol)?;
         self.apply_runtime_bridge_value(bridge, arg_val, evaluators, depth + 1)
+    }
+
+    fn eval_decl_as_value_with_args_ast(
+        &mut self,
+        fn_name: &str,
+        args: &[RuntimeValue],
+        evaluators: &RuntimeEvaluators<'_, '_>,
+        depth: usize,
+    ) -> Option<RuntimeValue> {
+        if depth >= MAX_EVAL_DEPTH {
+            return None;
+        }
+        let (params, stmts) = {
+            let decl = self
+                .module
+                .declarations
+                .iter()
+                .find(|d| d.name == fn_name)?;
+            let stmts = decl.parsed_body.as_ref()?.clone();
+            (decl.params.clone(), stmts)
+        };
+        let accepts_unit_arg_as_zero_arity =
+            params.is_empty() && matches!(args, [RuntimeValue::Unit]);
+        if params.len() != args.len() && !accepts_unit_arg_as_zero_arity {
+            return None;
+        }
+        let mut fn_locals = RuntimeLocals::default();
+        if !accepts_unit_arg_as_zero_arity {
+            for (param, arg) in params.iter().zip(args.iter()) {
+                fn_locals.store(param, arg.clone());
+            }
+        }
+        let fn_callables = HashMap::new();
+        self.eval_expr_ast(
+            &Expr::Block(stmts),
+            &fn_locals,
+            &fn_callables,
+            evaluators,
+            depth + 1,
+        )
+    }
+
+    fn eval_decl_as_value_ast(
+        &mut self,
+        fn_name: &str,
+        arg_val: RuntimeValue,
+        evaluators: &RuntimeEvaluators<'_, '_>,
+        depth: usize,
+    ) -> Option<RuntimeValue> {
+        self.eval_decl_as_value_with_args_ast(fn_name, &[arg_val], evaluators, depth)
     }
 
     fn resolves_module_receiver(&self, receiver: &str, module_path: &str) -> bool {
@@ -5869,6 +5945,18 @@ main =
     }
 
     #[test]
+    fn locks_runtime_output_for_iterator_unified_gb() {
+        use goby_core::parse_module;
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let source = read_example("iterator_unified.gb");
+        let module = parse_module(&source).expect("iterator_unified.gb should parse");
+        let output =
+            resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
+                .expect("runtime output should resolve");
+        assert_eq!(output, "tick:atick:btick:c31");
+    }
+
+    #[test]
     fn case_with_no_matching_arm_produces_no_output() {
         // When no case arm matches and there is no wildcard, resolve_main_runtime_output
         // returns None (silent — no output emitted).
@@ -7207,6 +7295,94 @@ main =
         let module = parse_module(source).expect("parse should work");
         let typed = assert_mode_parity(&module, "binding value replay");
         assert_eq!(typed.stdout.as_deref(), Some("2"));
+        assert_eq!(typed.runtime_error_kind, None);
+    }
+
+    #[test]
+    fn declaration_value_call_replays_nested_binding_progression() {
+        use goby_core::parse_module;
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let source = r#"
+effect Iterator a b
+  yield : a -> b -> (Bool, b)
+
+yield_int_state : String -> Int -> (Bool, Int) can Iterator
+yield_int_state value state = yield value state
+
+count_values : Unit -> Int can Iterator
+count_values =
+  s1 = yield_int_state "a" 0
+  s2 = if s1.0
+    yield_int_state "b" s1.1
+  else
+    s1
+  s3 = if s2.0
+    yield_int_state "c" s2.1
+  else
+    s2
+  s3.1
+
+main : Unit -> Unit
+main =
+  with
+    yield _ step ->
+      resume (True, step + 1)
+  in
+    print (count_values ())
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let output =
+            resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
+                .expect("runtime output should resolve");
+        assert_eq!(output, "3");
+    }
+
+    #[test]
+    fn typed_mode_matches_fallback_for_declaration_value_call_progression() {
+        use goby_core::parse_module;
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let source = r#"
+effect Iterator a b
+  yield : a -> b -> (Bool, b)
+
+yield_int_state : String -> Int -> (Bool, Int) can Iterator
+yield_int_state value state = yield value state
+
+count_values : Unit -> Int can Iterator
+count_values =
+  s1 = yield_int_state "a" 0
+  s2 = if s1.0
+    yield_int_state "b" s1.1
+  else
+    s1
+  s3 = if s2.0
+    yield_int_state "c" s2.1
+  else
+    s2
+  s3.1
+
+main : Unit -> Unit
+main =
+  with
+    yield _ step ->
+      resume (True, step + 1)
+  in
+    print (count_values ())
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let typed = assert_mode_parity(&module, "declaration value call progression");
+        assert_eq!(typed.stdout.as_deref(), Some("3"));
+        assert_eq!(typed.runtime_error_kind, None);
+    }
+
+    #[test]
+    fn typed_mode_matches_fallback_for_iterator_unified_example_shape() {
+        use goby_core::parse_module;
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let source = read_example("iterator_unified.gb");
+        let module = parse_module(&source).expect("iterator_unified.gb should parse");
+        let typed = assert_mode_parity(&module, "iterator unified progression shape");
+        assert_eq!(typed.stdout.as_deref(), Some("tick:atick:btick:c31"));
         assert_eq!(typed.runtime_error_kind, None);
     }
 
