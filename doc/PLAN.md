@@ -731,6 +731,7 @@ Step-by-step checklist:
           - first evaluator-produced suspended frame for value-only single-arg named calls.
           - multi-arg direct named-call argument replay on the AST path.
           - `resume (op ...)` / nested resume-value replay on the AST path.
+          - one-arg receiver/method call argument replay on the AST path.
           - first branch/control-flow suspended frame for `if` condition replay on the AST path.
           - `case` scrutinee suspended frame on the AST declaration path.
         - not yet unified:
@@ -804,6 +805,9 @@ Step-by-step checklist:
               - `Expr::Resume` is routed through the outcome consumer path,
               - inner handled operations inside `resume (...)` re-enter through a dedicated
                 `ResumeValue` continuation.
+            - non-direct callee migration has started narrowly:
+              - one-argument receiver/method calls now suspend while evaluating their argument and
+                resume through the same frame consumer boundary.
             - string-fallback execution is still intentionally out of scope for Step 3.
           - done when:
             - branch/control-flow suspension is proven on both `if` and `case` AST paths,
@@ -835,6 +839,7 @@ Step-by-step checklist:
           - single-arg call,
           - multi-arg direct named call arguments,
           - nested resume-value replay,
+          - one-arg receiver/method call arguments,
           - direct binop operand replay,
           - `if` condition replay on the AST declaration path,
           - `case` scrutinee replay on the AST declaration path.
@@ -852,6 +857,7 @@ Step-by-step checklist:
         - added fallback + typed parity regression for single-arg call-argument replay.
         - added fallback + typed parity regression for multi-arg named call-argument replay.
         - existing double-resume parity coverage now exercises the unified nested resume-value path.
+        - added fallback + typed parity regression for one-arg receiver/method call replay.
         - added fallback + typed parity regression for direct binop operand replay.
         - added fallback + typed parity regression for `if` condition replay.
         - added fallback + typed parity regression for `case` scrutinee replay.

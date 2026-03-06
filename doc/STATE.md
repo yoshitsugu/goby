@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-06 (session 198)
+Last updated: 2026-03-06 (session 199)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -566,6 +566,27 @@ Recent (detailed):
     - revisit non-direct callees or mixed call/effect chains as the next nested progression gap.
     - keep shrinking any remaining direct token-only replay seams when a migrated shape no longer
       needs them.
+
+- 2026-03-06 (session 199): Track 4.7 Step 3.2d receiver/method-call slice landed.
+  - runtime:
+    - added `ReceiverMethodCall` as a unified continuation shape for one-arg non-direct callees.
+    - direct receiver-method value dispatch now has an outcome-aware helper, shared by the call
+      site and resumed continuation path.
+    - declaration value evaluation now completes through `complete_ast_value_outcome(...)`, which
+      keeps migrated nested shapes on the AST outcome path instead of dropping back to legacy
+      `eval_expr_ast`.
+  - result:
+    - non-direct callee migration has started without introducing another token-only replay path.
+    - receiver/method-call arguments now join the same suspended-frame model already used by named
+      calls, `resume (...)`, `BinOp`, `if`, and `case`.
+  - validation completed:
+    - `cargo fmt`
+    - `cargo test -p goby-wasm receiver_method_call_argument_replay -- --nocapture`
+    - `cargo test -p goby-wasm typed_mode_matches_fallback_for_double_resume_error -- --nocapture`
+    - `cargo test -p goby-wasm`
+  - immediate next step:
+    - revisit pipeline or other mixed call/effect chains as the next non-direct nested gap.
+    - continue shrinking any remaining legacy direct-eval seams that are no longer needed.
 
 - 2026-03-06 (session 177): map consolidation Step 8-9 completed.
   - PLAN.md §4.5 checklist updated:

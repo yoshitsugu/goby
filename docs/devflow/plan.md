@@ -167,3 +167,7 @@
   `Expr::Resume` now runs through the outcome consumer path, and `resume (op
   ...)` re-enters via a dedicated `ResumeValue` continuation instead of the old
   direct bridge path.
+- 2026-03-06: Step 3.2d then started non-direct callee migration narrowly:
+  one-argument receiver/method calls now suspend through a unified
+  `ReceiverMethodCall` frame on the AST path, with fallback / typed parity
+  coverage.

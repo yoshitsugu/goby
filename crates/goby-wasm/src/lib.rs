@@ -585,6 +585,10 @@ enum AstValueContinuationKind {
     SingleArgNamedCall {
         fn_name: String,
     },
+    ReceiverMethodCall {
+        receiver: String,
+        member: String,
+    },
     MultiArgNamedCall {
         fn_name: String,
         evaluated_args: Vec<RuntimeValue>,
@@ -1995,6 +1999,40 @@ impl<'m> RuntimeOutputResolver<'m> {
         AstEvalOutcome::Complete(evaluated_args)
     }
 
+    fn apply_receiver_method_value_call_ast_outcome(
+        &mut self,
+        receiver: &str,
+        member: &str,
+        arg_value: RuntimeValue,
+        evaluators: &RuntimeEvaluators<'_, '_>,
+        depth: usize,
+    ) -> AstEvalOutcome<RuntimeValue> {
+        if let Some(value) = self.try_apply_receiver_runtime_bridge_value(
+            receiver,
+            member,
+            arg_value.clone(),
+            evaluators,
+            depth + 1,
+        ) {
+            return AstEvalOutcome::Complete(value);
+        }
+        let method = self
+            .find_handler_method_for_effect(receiver, member)
+            .or_else(|| self.find_handler_method_by_name(member));
+        if let Some(method) = method {
+            return self.dispatch_handler_method_as_value_outcome(
+                &method,
+                arg_value,
+                evaluators,
+                depth + 1,
+            );
+        }
+        if let Some(value) = self.apply_embedded_default_handler(receiver, member, arg_value) {
+            return AstEvalOutcome::Complete(value);
+        }
+        AstEvalOutcome::Unsupported
+    }
+
     fn eval_expr_ast_outcome(
         &mut self,
         expr: &Expr,
@@ -2466,6 +2504,35 @@ impl<'m> RuntimeOutputResolver<'m> {
                     );
                     return self.ast_outcome_from_option(value);
                 }
+                if let Expr::Qualified { receiver, member } = callee.as_ref() {
+                    self.pending_value_continuations.push(AstValueContinuation {
+                        kind: AstValueContinuationKind::ReceiverMethodCall {
+                            receiver: receiver.clone(),
+                            member: member.clone(),
+                        },
+                        locals: locals.clone(),
+                        callables: callables.clone(),
+                        depth: depth + 1,
+                    });
+                    let arg_value =
+                        self.eval_expr_ast_outcome(arg, locals, callables, evaluators, depth + 1);
+                    self.pending_value_continuations.pop();
+                    let arg_value = match arg_value {
+                        AstEvalOutcome::Complete(value) => value,
+                        AstEvalOutcome::Suspended(continuation) => {
+                            return AstEvalOutcome::Suspended(continuation);
+                        }
+                        AstEvalOutcome::Aborted => return AstEvalOutcome::Aborted,
+                        AstEvalOutcome::Unsupported => return AstEvalOutcome::Unsupported,
+                    };
+                    return self.apply_receiver_method_value_call_ast_outcome(
+                        receiver,
+                        member,
+                        arg_value,
+                        evaluators,
+                        depth + 1,
+                    );
+                }
                 if let Expr::Var(fn_name) = callee.as_ref() {
                     let capture_single_arg_frame =
                         self.find_handler_method_by_name(fn_name).is_none();
@@ -2503,6 +2570,39 @@ impl<'m> RuntimeOutputResolver<'m> {
                 }
                 let value = self.eval_expr_ast(expr, locals, callables, evaluators, depth);
                 self.ast_outcome_from_option(value)
+            }
+            Expr::MethodCall {
+                receiver,
+                method,
+                args,
+            } if args.len() == 1 => {
+                self.pending_value_continuations.push(AstValueContinuation {
+                    kind: AstValueContinuationKind::ReceiverMethodCall {
+                        receiver: receiver.clone(),
+                        member: method.clone(),
+                    },
+                    locals: locals.clone(),
+                    callables: callables.clone(),
+                    depth: depth + 1,
+                });
+                let arg_value =
+                    self.eval_expr_ast_outcome(&args[0], locals, callables, evaluators, depth + 1);
+                self.pending_value_continuations.pop();
+                let arg_value = match arg_value {
+                    AstEvalOutcome::Complete(value) => value,
+                    AstEvalOutcome::Suspended(continuation) => {
+                        return AstEvalOutcome::Suspended(continuation);
+                    }
+                    AstEvalOutcome::Aborted => return AstEvalOutcome::Aborted,
+                    AstEvalOutcome::Unsupported => return AstEvalOutcome::Unsupported,
+                };
+                self.apply_receiver_method_value_call_ast_outcome(
+                    receiver,
+                    method,
+                    arg_value,
+                    evaluators,
+                    depth + 1,
+                )
             }
             Expr::Resume { value } => {
                 self.pending_value_continuations.push(AstValueContinuation {
@@ -3478,13 +3578,14 @@ impl<'m> RuntimeOutputResolver<'m> {
             }
         }
         let fn_callables = HashMap::new();
-        self.eval_expr_ast(
+        let outcome = self.eval_expr_ast_outcome(
             &Expr::Block(stmts),
             &fn_locals,
             &fn_callables,
             evaluators,
             depth + 1,
-        )
+        );
+        self.complete_ast_value_outcome(outcome, evaluators)
     }
 
     fn apply_named_value_call_ast(
@@ -4174,6 +4275,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                 Some(
                     AstValueContinuationKind::ResumeValue
                         | AstValueContinuationKind::SingleArgNamedCall { .. }
+                        | AstValueContinuationKind::ReceiverMethodCall { .. }
                         | AstValueContinuationKind::MultiArgNamedCall { .. }
                         | AstValueContinuationKind::CaseScrutinee { .. }
                         | AstValueContinuationKind::IfCondition { .. }
@@ -4258,6 +4360,22 @@ impl<'m> RuntimeOutputResolver<'m> {
         match continuation.kind {
             AstValueContinuationKind::ResumeValue => {
                 match self.resume_through_active_continuation_bridge_outcome(resumed, evaluators) {
+                    AstEvalOutcome::Complete(value) => Some(value),
+                    AstEvalOutcome::Suspended(continuation) => self.complete_ast_value_outcome(
+                        AstEvalOutcome::Suspended(continuation),
+                        evaluators,
+                    ),
+                    AstEvalOutcome::Aborted | AstEvalOutcome::Unsupported => None,
+                }
+            }
+            AstValueContinuationKind::ReceiverMethodCall { receiver, member } => {
+                match self.apply_receiver_method_value_call_ast_outcome(
+                    &receiver,
+                    &member,
+                    resumed,
+                    evaluators,
+                    continuation.depth,
+                ) {
                     AstEvalOutcome::Complete(value) => Some(value),
                     AstEvalOutcome::Suspended(continuation) => self.complete_ast_value_outcome(
                         AstEvalOutcome::Suspended(continuation),
@@ -8169,6 +8287,69 @@ main =
         let module = parse_module(source).expect("parse should work");
         let typed = assert_mode_parity(&module, "multi-arg named call replay");
         assert_eq!(typed.stdout.as_deref(), Some("76"));
+        assert_eq!(typed.runtime_error_kind, None);
+    }
+
+    #[test]
+    fn resume_replays_receiver_method_call_argument() {
+        use goby_core::parse_module;
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let source = r#"
+effect Iter
+  next: Int -> Int
+
+effect Log
+  log: Int -> Int
+
+pick : Int -> Int
+pick n =
+  Log.log (next n)
+
+main : Unit -> Unit
+main =
+  with
+    next n ->
+      resume (n + 1)
+    log n ->
+      resume (n + 10)
+  in
+    print (pick 0)
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let output =
+            resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
+                .expect("runtime output should resolve");
+        assert_eq!(output, "11");
+    }
+
+    #[test]
+    fn typed_mode_matches_fallback_for_receiver_method_call_argument_replay() {
+        use goby_core::parse_module;
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let source = r#"
+effect Iter
+  next: Int -> Int
+
+effect Log
+  log: Int -> Int
+
+pick : Int -> Int
+pick n =
+  Log.log (next n)
+
+main : Unit -> Unit
+main =
+  with
+    next n ->
+      resume (n + 2)
+    log n ->
+      resume (n + 20)
+  in
+    print (pick 0)
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let typed = assert_mode_parity(&module, "receiver method call argument replay");
+        assert_eq!(typed.stdout.as_deref(), Some("22"));
         assert_eq!(typed.runtime_error_kind, None);
     }
 
