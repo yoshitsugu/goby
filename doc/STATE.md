@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-06 (session 201)
+Last updated: 2026-03-06 (session 203)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -90,6 +90,24 @@ This file is a restart-safe snapshot for resuming work after context reset.
 ## 4. Recent Milestones
 
 Recent (detailed):
+
+- 2026-03-06 Step 3 snapshot:
+  - unified suspended-frame progression now covers the main AST value-position families already
+    migrated in runtime:
+    - named calls,
+    - receiver/method one-arg calls,
+    - pipelines,
+    - `BinOp`,
+    - `if`,
+    - `case`,
+    - nested `resume`.
+  - recent cleanup slices also removed the most obvious shared replay seams for:
+    - single-arg named calls,
+    - `BinOp`,
+    - pipelines.
+  - current restart focus:
+    - keep trimming any remaining replay branches that still depend on legacy direct evaluation or
+      string reconstruction before broadening the model again.
 
 - 2026-03-06 (session 179): Track 4.7 Step 1 and partial Step 2 completed.
   - Planning/devflow:
@@ -625,8 +643,8 @@ Recent (detailed):
     - `cargo test -p goby-wasm single_arg_call_value_replay -- --nocapture`
     - `cargo test -p goby-wasm`
   - immediate next step:
-    - continue shrinking remaining compatibility seams, especially around `BinOp` and any other
-      path still described as temporary/shared replay fallback in the plan.
+    - continue shrinking remaining compatibility seams, especially around `BinOp` and any replay
+      branch still on a legacy helper path.
 
 - 2026-03-06 (session 202): Track 4.7 Step 3 cleanup trimmed the remaining `BinOp` replay seam.
   - runtime:

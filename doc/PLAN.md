@@ -776,12 +776,12 @@ Step-by-step checklist:
             - legacy `eval_expr_ast` no longer captures `SingleArgNamedCall` replay checkpoints.
             - legacy `eval_expr_ast` no longer captures `BinOpLeft` / `BinOpRight` replay
               checkpoints either.
-            - single-arg call replay now depends on the outcome-aware path, with only a narrow
-              legacy guard remaining inside shared continuation replay.
+            - single-arg call replay now reuses the same outcome consumer boundary during shared
+              continuation replay instead of treating `Suspended(...)` as a legacy-only internal
+              branch.
             - `BinOp` replay now also depends on the outcome-aware path end-to-end:
               shared continuation replay evaluates the right operand through
-              `eval_expr_ast_outcome(...)` and `complete_ast_value_outcome(...)` instead of the
-              old direct-eval seam.
+              `eval_expr_ast_outcome(...)` and `complete_ast_value_outcome(...)`.
           - done when:
             - the old replay branch for that shape is removed or no longer reachable,
             - tests still pass without relying on dual paths.
@@ -815,11 +815,11 @@ Step-by-step checklist:
               - `value |> callee` now suspends while evaluating the left-hand value and resumes
                 through a dedicated pipeline continuation.
             - shared replay cleanup also progressed:
-              - the remaining single-arg named-call replay seam no longer treats `Suspended(...)`
-                as an internal error and now reuses the same continuation consumer path.
-              - the remaining `BinOp` shared replay seam now does the same for right-operand
-                evaluation instead of dropping back to `eval_expr_ast(...)`.
-              - `PipelineCall` now also reuses the outcome-aware named-call helper instead of
+              - single-arg named-call replay no longer treats `Suspended(...)` as an internal
+                error and reuses the same continuation consumer path.
+              - `BinOp` shared replay now also evaluates the right operand through the same
+                outcome-aware boundary.
+              - `PipelineCall` now reuses the outcome-aware named-call helper instead of
                 replay-time string reconstruction through `apply_pipeline(...)`.
             - string-fallback execution is still intentionally out of scope for Step 3.
           - done when:
