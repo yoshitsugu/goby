@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-06 (session 217)
+Last updated: 2026-03-07 (session 218)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -10,27 +10,27 @@ If any older note in this file conflicts with the current restart direction,
 this section takes priority.
 
 - Current uncommitted work:
-  - [crates/goby-wasm/src/lib.rs](/home/yoshitsugu/src/gitlab.com/yoshitsugu/goby/crates/goby-wasm/src/lib.rs)
   - [doc/PLAN.md](/home/yoshitsugu/src/gitlab.com/yoshitsugu/goby/doc/PLAN.md)
   - [doc/STATE.md](/home/yoshitsugu/src/gitlab.com/yoshitsugu/goby/doc/STATE.md)
 - Current Step 3 status:
-  - unified suspended-frame replay already covers the main AST value-position
-    families that were migrated earlier (`single-arg`/multi-arg named calls,
-    receiver-method calls, pipeline, `BinOp`, `if`, `case`, nested `resume`).
-  - recent legacy-value bridges now also route through the same outcome
-    consumer for:
-    - `Expr::InterpolatedString`
-    - `Expr::TupleLit`
-    - `Expr::ListLit`
-    - `Expr::RecordConstruct`
-    - positional single-field constructor sugar in legacy `Expr::Call`
+  - unified suspended-frame replay covers all previously migrated AST value-position
+    families (single-arg/multi-arg named calls, receiver-method calls, pipeline,
+    `BinOp`, `if`, `case`, nested `resume`, `InterpolatedString`, `TupleLit`,
+    `ListLit`, `RecordConstruct`, positional single-field constructor sugar).
+  - legacy `eval_expr_ast` `Expr::Call` named-call seams are now also bridged:
+    - `flatten_named_call` multi-arg arm routes through outcome consumer
+    - `Expr::Var` single-arg arm routes through outcome consumer
+    - `flatten_named_call` gained `args.len() > 1` guard to match outcome-path split
+  - committed: `Route legacy Expr::Call named-call seams through outcome consumer`
+    (commit b9e332a)
 - Required next restart point:
-  - start from the continuation of this exact work, not from older cleanup
-    notes.
-  - the next slice should inspect the remaining legacy direct-evaluation
-    branches inside `Expr::Call` and choose the smallest compact seam there,
-    with plain named-call fallback branches as the default next target unless a
-    clearly smaller isolated family is discovered.
+  - the remaining `Expr::Call` legacy direct-eval branches in `eval_expr_ast` are now:
+    - positional single-field ctor arm (1581-1591) — still uses `eval_expr_ast` directly,
+      but the early guard (1551-1557) already routes outcome path first
+    - `Expr::Qualified` callee arm (1609+) — still uses `eval_expr_ast` directly
+  - next candidate: inspect `Expr::Qualified` callee arm in `eval_expr_ast` for
+    migration to outcome path, or assess whether remaining ctor/qualified seams
+    are worth a further slice vs moving to a new semantic target.
 - External internal records:
   - devflow notes live outside the repo under
     `/home/yoshitsugu/.codex/devflow/goby-c372fa22bba4/`
@@ -123,6 +123,24 @@ this section takes priority.
 ## 4. Recent Milestones
 
 Recent (detailed):
+
+- 2026-03-07 (session 218): Track 4.7 Step 3 legacy `Expr::Call` named-call seams bridged.
+  - runtime:
+    - `eval_expr_ast` `Expr::Call` `flatten_named_call` multi-arg arm no longer evaluates
+      args via legacy `eval_expr_ast`; now routes through `eval_expr_ast_outcome` +
+      `complete_ast_value_outcome`.
+    - `eval_expr_ast` `Expr::Call` `Expr::Var` single-arg arm similarly routes through
+      outcome consumer instead of `eval_expr_ast` + `apply_named_value_call_ast`.
+    - `flatten_named_call` arm gained `args.len() > 1` guard to match outcome-path split
+      (previously, single-arg calls were intercepted by this arm before the Var arm).
+  - result:
+    - all plain named-call fallback seams in legacy `eval_expr_ast` are now on the
+      outcome-aware path, matching the pattern used by `Pipeline`, `RecordConstruct`,
+      `ListLit`, `TupleLit`, `InterpolatedString`, and other migrated shapes.
+  - validation completed:
+    - `cargo fmt`
+    - `cargo clippy -p goby-wasm -- -D warnings`
+    - `cargo test -p goby-wasm` (183 passed)
 
 - 2026-03-06 Step 3 snapshot:
   - unified suspended-frame progression now covers the main AST value-position families already
