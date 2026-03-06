@@ -37,7 +37,7 @@ using **Developer: Inspect Editor Tokens and Scopes**.
 | `string.quoted.double.goby` | `"hello\n"` |
 | `constant.numeric.integer.goby` | `42` |
 | `constant.language.goby` | `True`, `False` |
-| `keyword.control.goby` | `if` `else` `case` `with` `with_handler` `in` `resume` `can` |
+| `keyword.control.goby` | `if` `else` `case` `with` `with` `in` `resume` `can` |
 | `keyword.other.goby` | `@embed` `type` `effect` `handler` `import` `as` `mut` |
 | `storage.type.goby` | `Int` `String` `Bool` `Unit` `List` |
 | `entity.name.type.goby` | `MyType`, `Error`, `LogHandler` |

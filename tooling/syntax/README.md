@@ -10,7 +10,7 @@ This directory contains the canonical syntax highlighting grammar for the Goby l
 | `string.quoted.double.goby` | String literals | `"hello\n"` |
 | `constant.numeric.integer.goby` | Integer literals | `42` |
 | `constant.language.goby` | Boolean constants | `True`, `False` |
-| `keyword.control.goby` | Control flow + effect application | `if` `else` `case` `with` `with_handler` `in` `resume` `can` |
+| `keyword.control.goby` | Control flow + effect application | `if` `else` `case` `with` `with` `in` `resume` `can` |
 | `keyword.other.goby` | Declarations and module keywords | `@embed` `type` `effect` `handler` `import` `as` `mut` |
 | `storage.type.goby` | Built-in type names | `Int` `String` `Bool` `Unit` `List` |
 | `entity.name.type.goby` | User-defined type / constructor names | `MyType`, `Error`, `LogHandler` |
@@ -55,7 +55,7 @@ tooling/vscode-goby/
 | `"hello\nworld…"` | `string.quoted.double.goby` |
 | `42` | `constant.numeric.integer.goby` |
 | `True` / `False` | `constant.language.goby` |
-| `if` / `else` / `case` / `with` / `with_handler` / `in` / `resume` / `can` | `keyword.control.goby` |
+| `if` / `else` / `case` / `with` / `with` / `in` / `resume` / `can` | `keyword.control.goby` |
 | `@embed` / `type` / `effect` / `handler` / `import` / `as` / `mut` | `keyword.other.goby` |
 | `Int` / `String` / `Bool` / `Unit` / `List` | `storage.type.goby` |
 | `MyType` / `MyHandler` (UpperCamelCase) | `entity.name.type.goby` |

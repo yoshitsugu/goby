@@ -23,7 +23,7 @@ syntax match gobyNumber /\<[0-9]\+\>/
 syntax keyword gobyBoolean True False
 
 " Control-flow and effect-application keywords
-syntax keyword gobyKeyword if else case with with_handler in resume can
+syntax keyword gobyKeyword if else case with with in resume can
 
 " Declaration and module keywords
 syntax keyword gobyKeyword type effect handler import as mut

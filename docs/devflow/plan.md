@@ -110,3 +110,6 @@
 - 2026-03-06: Nested-handler abort propagation required a parser fix because
   handler clause bodies were stripping relative indentation and hiding valid
   nested `with` / multi-branch `resume` forms from AST/typecheck/runtime paths.
+- 2026-03-06: legacy syntax cleanup removed remaining `with_handler` and
+  expression-form `Unit` value compatibility paths while keeping `Unit` as the
+  type name.

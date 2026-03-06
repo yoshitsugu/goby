@@ -2313,7 +2313,7 @@ effect Iter
   yield: String -> Unit
 
 handler Collect for Iter
-  yield item = resume Unit
+  yield item = resume ()
 
 main = 1
 "#;
@@ -2333,7 +2333,7 @@ effect Iter
   yield: String -> Unit
 
 handler	Collect for Iter
-  yield item = resume Unit
+  yield item = resume ()
 
 main = 1
 "#;
@@ -2353,7 +2353,7 @@ main = 1
 main =
   with
     yield item ->
-      resume Unit
+      resume ()
   in
     1
 "#;
@@ -2373,7 +2373,7 @@ main =
                     assert_eq!(clause_stmts.len(), 1);
                     match &clause_stmts[0] {
                         Stmt::Expr(Expr::Resume { value }) => {
-                            assert_eq!(**value, Expr::Var("Unit".to_string()));
+                            assert_eq!(**value, Expr::TupleLit(vec![]));
                         }
                         other => panic!("unexpected statement shape: {:?}", other),
                     }
@@ -2401,7 +2401,7 @@ main =
           print inner
       in
         boom msg
-      resume Unit
+      resume ()
   in
     op "x"
 "#;
@@ -3223,9 +3223,9 @@ main =
     #[test]
     fn parses_resume_expression() {
         assert_eq!(
-            parse_expr("resume Unit"),
+            parse_expr("resume ()"),
             Some(Expr::Resume {
-                value: Box::new(Expr::Var("Unit".to_string()))
+                value: Box::new(Expr::TupleLit(vec![]))
             })
         );
     }
@@ -3731,7 +3731,7 @@ main =
     log msg ->
       using	H
         log msg
-      resume Unit
+      resume ()
   in
     log "x"
 "#;

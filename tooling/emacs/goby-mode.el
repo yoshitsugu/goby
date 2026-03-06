@@ -27,7 +27,7 @@
 ;;; Code:
 
 (defconst goby-mode-keywords-control
-  '("if" "else" "case" "with" "with_handler" "in" "resume" "can")
+  '("if" "else" "case" "with" "in" "resume" "can")
   "Goby control-flow and effect-application keywords.")
 
 (defconst goby-mode-keywords-other

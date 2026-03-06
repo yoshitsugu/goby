@@ -2780,6 +2780,17 @@ fn check_resume_in_expr(
     decl_name: &str,
     resume_ctx: Option<&ResumeContext>,
 ) -> Result<(), TypecheckError> {
+    if let Expr::Var(name) = expr
+        && name == "Unit"
+    {
+        return Err(TypecheckError {
+            declaration: Some(decl_name.to_string()),
+            span: None,
+            message: "legacy_unit_value_syntax: `Unit` is no longer a value expression; use `()`"
+                .to_string(),
+        });
+    }
+
     macro_rules! recurse {
         ($e:expr) => {
             check_resume_in_expr($e, env, decl_name, resume_ctx)
@@ -4757,7 +4768,7 @@ main : Unit -> Unit
 main =
   with
     log str ->
-      resume Unit
+      resume ()
   in
     log \"hello\"
 ";
@@ -4774,7 +4785,7 @@ main : Unit -> Unit
 main =
   with
     log msg ->
-      resume Unit
+      resume ()
   in
     log \"hello\"
 ";
@@ -4791,7 +4802,7 @@ main : Unit -> Unit
 main =
   h = handler
     log msg ->
-      resume Unit
+      resume ()
   with h
   in
     log \"hello\"
@@ -4810,7 +4821,7 @@ main : Unit -> Unit
 main =
   with
     unknown_op msg ->
-      resume Unit
+      resume ()
   in
     log \"hello\"
 ";
@@ -4832,7 +4843,7 @@ main : Unit -> Unit
 main =
   with
     log msg ->
-      resume Unit
+      resume ()
   in
     log \"hello\"
 ";
@@ -4869,7 +4880,7 @@ mk : Unit -> Handler(Log)
 mk =
   h = handler
     log msg ->
-      resume Unit
+      resume ()
   h
 ";
         let module = parse_module(source).expect("should parse");
@@ -4887,9 +4898,9 @@ mk : Unit -> Handler(Env, Log)
 mk =
   h = handler
     log msg ->
-      resume Unit
+      resume ()
     from_env key ->
-      resume Unit
+      resume ()
   h
 ";
         let module = parse_module(source).expect("should parse");
@@ -4907,7 +4918,7 @@ mk : Unit -> Handler(Log)
 mk =
   h = handler
     from_env key ->
-      resume Unit
+      resume ()
   h
 ";
         let module = parse_module(source).expect("should parse");
@@ -4925,7 +4936,7 @@ mk : Unit -> Handler(Log, MissingEffect)
 mk =
   handler
     log msg ->
-      resume Unit
+      resume ()
 ";
         let module = parse_module(source).expect("should parse");
         let err = typecheck_module(&module)
@@ -4944,7 +4955,7 @@ main : Unit -> Unit
 main =
   with
     log str ->
-      resume Unit
+      resume ()
   in
     Log.log \"hello\"
 ";
@@ -4964,7 +4975,7 @@ main : Unit -> Unit
 main =
   with
     log str ->
-      resume Unit
+      resume ()
   in
     from_env \"PATH\"
 ";
@@ -5036,7 +5047,7 @@ main : Unit -> Unit
 main =
   with
     log str ->
-      resume Unit
+      resume ()
   in
     \"hello\" |> log
 ";
@@ -5074,7 +5085,7 @@ main : Unit -> Unit
 main =
   with
     log str ->
-      resume Unit
+      resume ()
   in
     with
       from_env str ->
@@ -5147,7 +5158,7 @@ main : Unit -> Unit
 main =
   with
     log msg ->
-      resume Unit
+      resume ()
   in
     plus_ten_with_log 3
 ";
@@ -5172,7 +5183,7 @@ main : Unit -> Unit
 main =
   with
     log msg ->
-      resume Unit
+      resume ()
   in
     show_env_var \"PATH\"
 ";
@@ -5200,7 +5211,7 @@ main : Unit -> Unit
 main =
   with
     log msg ->
-      resume Unit
+      resume ()
   in
     3 |> plus_ten_with_log
 ";
@@ -5267,7 +5278,7 @@ main =
 effect Trace
   trace : String -> Unit can Ghost
 main : Unit -> Unit
-main = Unit
+main = ()
 ";
         let module = parse_module(source).expect("should parse");
         let err = typecheck_module(&module)
@@ -5442,9 +5453,9 @@ main =
     fn rejects_non_main_can_clause_with_implicit_prelude_effect() {
         let source = "\
 f : Unit -> Unit can Print
-f = Unit
+f = ()
 main : Unit -> Unit
-main = Unit
+main = ()
 ";
         let module = parse_module(source).expect("should parse");
         let err = typecheck_module(&module)
@@ -5918,7 +5929,7 @@ f = fetch_env_var(\"HOME\")
         let source = "\
 import goby/stdio ( log )
 main : Unit -> Unit can Console
-main = Unit
+main = ()
 ";
         fs::write(&source_path, source).expect("fixture file should be writable");
         let module = parse_module(source).expect("should parse");
@@ -5946,7 +5957,7 @@ main = Unit
 import goby/a ( log )
 import goby/b
 main : Unit -> Unit can Console
-main = Unit
+main = ()
 ";
         fs::write(&source_path, source).expect("fixture file should be writable");
         let module = parse_module(source).expect("should parse");
@@ -5976,7 +5987,7 @@ log_value msg = Console.log msg
 f : Unit -> Unit
 f = log_value \"x\"
 main : Unit -> Unit
-main = Unit
+main = ()
 ";
         fs::write(&source_path, source).expect("fixture file should be writable");
         let module = parse_module(source).expect("should parse");
@@ -6663,6 +6674,15 @@ main =
     }
 
     #[test]
+    fn rejects_legacy_unit_value_expression() {
+        let source = "main : Unit -> Unit\nmain = Unit\n";
+        let module = parse_module(source).expect("should parse");
+        let err = typecheck_module(&module).expect_err("legacy Unit value expression should fail");
+        assert!(err.message.contains("legacy_unit_value_syntax"));
+        assert!(err.message.contains("use `()`"));
+    }
+
+    #[test]
     fn accepts_constant_annotation_matching_body() {
         // `n : Int; n = 42` — non-function annotation matching body type.
         let module = parse_module("n : Int\nn = 42\n").expect("should parse");
@@ -6833,7 +6853,7 @@ main : Unit -> Unit
 main =
   with
     catch e ->
-      resume Unit
+      resume ()
   in
     catch \"NoCoffeeError\"
 ";
@@ -6874,7 +6894,7 @@ main : Unit -> Unit
 main =
   with
     catch e ->
-      resume Unit
+      resume ()
   in
     ErrorEffect.catch \"NoCoffeeError\"
 ";
@@ -6899,7 +6919,7 @@ main : Unit -> Unit
 main =
   with
     catch e ->
-      resume Unit
+      resume ()
   in
     ErrorEffect.catch(\"NoCoffeeError\")
 ";
@@ -6921,7 +6941,7 @@ main : Unit -> Unit
 main =
   with
     op s n ->
-      resume Unit
+      resume ()
   in
     E.op \"ok\" \"bad\"
 ";
@@ -6942,7 +6962,7 @@ main : Unit -> Unit
 main =
   with
     op s n ->
-      resume Unit
+      resume ()
   in
     E.op(\"ok\", \"bad\")
 ";
@@ -6964,7 +6984,7 @@ main : Unit -> Unit
 main =
   with
     op s ->
-      resume Unit
+      resume ()
   in
     E.op \"ok\" 1
 ";
@@ -6986,7 +7006,7 @@ main : Unit -> Unit
 main =
   with
     catch e ->
-      resume Unit
+      resume ()
   in
     \"NoCoffeeError\" |> catch
 ";
@@ -7027,7 +7047,7 @@ main : Unit -> Unit
 main =
   with
     catch e ->
-      resume Unit
+      resume ()
   in
     Error(message: \"oops\") |> catch
 ";
@@ -7048,7 +7068,7 @@ main : Unit -> Unit
 main =
   with
     catch e ->
-      resume Unit
+      resume ()
   in
     catch Error(message: \"oops\")
 ";
@@ -7068,7 +7088,7 @@ main : Unit -> Unit
 main =
   with
     log str ->
-      resume Unit
+      resume ()
   in
     log \"hello\"
 ";
@@ -7086,7 +7106,7 @@ main : Unit -> Unit
 main =
   with
     op x ->
-      resume Unit
+      resume ()
   in
     op 1
 ";
@@ -7104,7 +7124,7 @@ main : Unit -> Unit
 main =
   with
     op x ->
-      resume Unit
+      resume ()
   in
     op 1
     op \"two\"
@@ -7124,7 +7144,7 @@ main : Unit -> Unit
 main =
   with
     pair x y ->
-      resume Unit
+      resume ()
   in
     pair 1 \"oops\"
 ";
@@ -7145,7 +7165,7 @@ main : Unit -> Unit
 main =
   with
     op _ ->
-      resume Unit
+      resume ()
   in
     op missing
 ";
@@ -7175,7 +7195,7 @@ main : Unit -> Unit
 main =
   with
     op _ ->
-      resume Unit
+      resume ()
   in
     op \"oops\"
 ";
@@ -7199,7 +7219,7 @@ main : Unit -> Unit
 main =
   with
     op x y ->
-      resume Unit
+      resume ()
   in
     op 1 \"s\"
 ";
@@ -7222,7 +7242,7 @@ main : Unit -> Unit
 main =
   with
     raise e ->
-      resume Unit
+      resume ()
   in
     raise Error(\"oops\")
 ";
@@ -7245,7 +7265,7 @@ main : Unit -> Unit
 main =
   with
     op p ->
-      resume Unit
+      resume ()
   in
     op Pair(\"a\")
 ";

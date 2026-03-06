@@ -23,7 +23,7 @@
   clear place to extend from one-shot to progression-aware continuation state.
 - Fallback and typed modes now share the same bridge contract, which reduces the
   number of semantics knobs Step 3 must touch.
-- Tests updated to require explicit `resume Unit` in handler fixtures that are
+- Tests updated to require explicit `resume ()` in handler fixtures that are
   intended to continue, which keeps future semantics changes local.
 
 ## Maintainability Check
@@ -47,7 +47,7 @@
 - Existing examples/tests assumed implicit continuation for handlers that omit
   `resume`.
 - `examples/effect.gb` and callback-oriented runtime tests needed explicit
-  `resume Unit` to preserve their original intent under the new contract.
+  `resume ()` to preserve their original intent under the new contract.
 - Nested abort propagation still needs dedicated follow-up coverage.
 
 ## Fixes Applied
@@ -58,4 +58,4 @@
 - Added regression tests for value-position and unit-position abortive handlers
   plus typed-mode parity.
 - Updated handler fixtures/examples that are supposed to continue with
-  `resume Unit`.
+  `resume ()`.

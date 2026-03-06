@@ -56,7 +56,7 @@ syntax/semantics.
   - type rule: prefix elements unify to one element type `a`; spread tail must be `List a`
 - Tuple member access uses numeric qualified form: `pair.0`, `pair.1`, ...
 - Unit value spelling: `()` (canonical).
-  - Legacy expression-form `Unit` is still accepted during migration.
+  - Legacy expression-form `Unit` is rejected.
 - Function call:
   - spaced application: `f x`, `f a b`
   - parenthesized: `f(x)`

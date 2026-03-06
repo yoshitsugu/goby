@@ -31,7 +31,7 @@ parse value =
   mut negative = False
   mut valid = True
   mut saw_digit = False
-  with_handler
+  with
     yield grapheme _ ->
       if valid
         if index == 0 && grapheme == "-"
