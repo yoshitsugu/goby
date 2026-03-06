@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-06 (session 177)
+Last updated: 2026-03-06 (session 178)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -416,9 +416,10 @@ cargo clippy -- -D warnings
 
 Execution focus (aligned with `doc/PLAN.md`):
 
-1. **Active**: List spread expression implementation (PLAN.md §4.5).
-   - Step 1-11 are done.
-   - follow-up: continue parity hardening and remove remaining legacy helper paths.
+1. **Active**: Abortive handlers + multi-resume progression (PLAN.md §4.7).
+   - implement immediate abort when handler clause finishes without `resume`.
+   - implement continuation progression for multiple `resume` calls in one invocation.
+   - relax conservative static rejection of multiple syntactic `resume`.
 2. Stdlib runtime bridge generalization (reduce symbol-specific fallback branches).
 3. Tooling foundation (`fmt`/`lint`/`lsp`) with stable diagnostics surface.
 4. Native lowering coverage expansion for remaining unsupported expression/effect paths.
