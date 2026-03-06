@@ -4418,64 +4418,42 @@ impl<'m> RuntimeOutputResolver<'m> {
     ) -> Option<RuntimeValue> {
         match continuation.kind {
             AstValueContinuationKind::ResumeValue => {
-                match self.resume_through_active_continuation_bridge_outcome(resumed, evaluators) {
-                    AstEvalOutcome::Complete(value) => Some(value),
-                    AstEvalOutcome::Suspended(continuation) => self.complete_ast_value_outcome(
-                        AstEvalOutcome::Suspended(continuation),
-                        evaluators,
-                    ),
-                    AstEvalOutcome::Aborted | AstEvalOutcome::Unsupported => None,
-                }
+                let outcome =
+                    self.resume_through_active_continuation_bridge_outcome(resumed, evaluators);
+                self.consume_saved_value_outcome(outcome, evaluators)
             }
             AstValueContinuationKind::PipelineCall { callee } => {
-                match self.apply_pipeline_ast_outcome(
+                let outcome = self.apply_pipeline_ast_outcome(
                     &callee,
                     resumed,
                     &continuation.locals,
                     &continuation.callables,
                     evaluators,
                     continuation.depth,
-                ) {
-                    AstEvalOutcome::Complete(value) => Some(value),
-                    AstEvalOutcome::Suspended(continuation) => self.complete_ast_value_outcome(
-                        AstEvalOutcome::Suspended(continuation),
-                        evaluators,
-                    ),
-                    AstEvalOutcome::Aborted | AstEvalOutcome::Unsupported => None,
-                }
+                );
+                self.consume_saved_value_outcome(outcome, evaluators)
             }
             AstValueContinuationKind::ReceiverMethodCall { receiver, member } => {
-                match self.apply_receiver_method_value_call_ast_outcome(
+                let outcome = self.apply_receiver_method_value_call_ast_outcome(
                     &receiver,
                     &member,
                     resumed,
                     evaluators,
                     continuation.depth,
-                ) {
-                    AstEvalOutcome::Complete(value) => Some(value),
-                    AstEvalOutcome::Suspended(continuation) => self.complete_ast_value_outcome(
-                        AstEvalOutcome::Suspended(continuation),
-                        evaluators,
-                    ),
-                    AstEvalOutcome::Aborted | AstEvalOutcome::Unsupported => None,
-                }
+                );
+                self.consume_saved_value_outcome(outcome, evaluators)
             }
-            AstValueContinuationKind::SingleArgNamedCall { fn_name } => match self
-                .apply_named_value_call_ast_outcome(
+            AstValueContinuationKind::SingleArgNamedCall { fn_name } => {
+                let outcome = self.apply_named_value_call_ast_outcome(
                     &fn_name,
                     resumed,
                     &continuation.locals,
                     &continuation.callables,
                     evaluators,
                     continuation.depth,
-                ) {
-                AstEvalOutcome::Complete(value) => Some(value),
-                AstEvalOutcome::Suspended(continuation) => self.complete_ast_value_outcome(
-                    AstEvalOutcome::Suspended(continuation),
-                    evaluators,
-                ),
-                AstEvalOutcome::Aborted | AstEvalOutcome::Unsupported => None,
-            },
+                );
+                self.consume_saved_value_outcome(outcome, evaluators)
+            }
             AstValueContinuationKind::MultiArgNamedCall {
                 fn_name,
                 evaluated_args,
@@ -4504,21 +4482,15 @@ impl<'m> RuntimeOutputResolver<'m> {
                     }
                     AstEvalOutcome::Aborted | AstEvalOutcome::Unsupported => return None,
                 };
-                match self.apply_named_value_call_args_ast_outcome(
+                let outcome = self.apply_named_value_call_args_ast_outcome(
                     &fn_name,
                     &arg_values,
                     &continuation.locals,
                     &continuation.callables,
                     evaluators,
                     continuation.depth,
-                ) {
-                    AstEvalOutcome::Complete(value) => Some(value),
-                    AstEvalOutcome::Suspended(continuation) => self.complete_ast_value_outcome(
-                        AstEvalOutcome::Suspended(continuation),
-                        evaluators,
-                    ),
-                    AstEvalOutcome::Aborted | AstEvalOutcome::Unsupported => None,
-                }
+                );
+                self.consume_saved_value_outcome(outcome, evaluators)
             }
             AstValueContinuationKind::CaseScrutinee { arms } => {
                 let (arm_body, arm_locals) =
@@ -4575,6 +4547,20 @@ impl<'m> RuntimeOutputResolver<'m> {
             AstValueContinuationKind::BinOpRight { op, left_value } => {
                 self.apply_binop_runtime_value(op, left_value, resumed)
             }
+        }
+    }
+
+    fn consume_saved_value_outcome(
+        &mut self,
+        outcome: AstEvalOutcome<RuntimeValue>,
+        evaluators: &RuntimeEvaluators<'_, '_>,
+    ) -> Option<RuntimeValue> {
+        match outcome {
+            AstEvalOutcome::Complete(value) => Some(value),
+            AstEvalOutcome::Suspended(continuation) => {
+                self.complete_ast_value_outcome(AstEvalOutcome::Suspended(continuation), evaluators)
+            }
+            AstEvalOutcome::Aborted | AstEvalOutcome::Unsupported => None,
         }
     }
 

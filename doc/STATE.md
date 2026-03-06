@@ -700,6 +700,23 @@ Recent (detailed):
     - continue checking whether any replay/apply branch can be collapsed into the same
       outcome-aware helper style before moving back to larger semantic work.
 
+- 2026-03-06 (session 205): Track 4.7 Step 3 cleanup unified replay-time outcome consumption.
+  - runtime:
+    - `execute_saved_value_continuation(...)` now uses a shared helper to consume
+      `AstEvalOutcome<RuntimeValue>` for replay-time call-like branches.
+    - `ResumeValue`, `PipelineCall`, `ReceiverMethodCall`, `SingleArgNamedCall`, and
+      `MultiArgNamedCall` no longer each open-code the same suspended/completed outcome match.
+  - result:
+    - replay-time outcome handling is less repetitive and easier to audit.
+    - this is a structural cleanup only; no new continuation kind or semantic branch was added.
+  - validation completed:
+    - `cargo fmt`
+    - `cargo test -p goby-wasm typed_mode_matches_fallback_for_multi_arg_named_call_replay -- --nocapture`
+    - `cargo test -p goby-wasm`
+  - immediate next step:
+    - continue trimming remaining bespoke helper edges or move back to a larger semantic target if
+      the remaining cleanup slices stop paying for themselves.
+
 - 2026-03-06 (session 177): map consolidation Step 8-9 completed.
   - PLAN.md §4.5 checklist updated:
     - completed: Step 8-9 (map callsite migration + builtin-path trim).
