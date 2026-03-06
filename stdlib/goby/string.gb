@@ -5,7 +5,7 @@ type GraphemeState = GraphemeState(grapheme: String, parts: List String, current
 grapheme_count : String -> Int can Iterator
 grapheme_count value =
   mut n = 0
-  with_handler
+  with
     yield _ _ ->
       resume (True, ())
   in
@@ -17,7 +17,7 @@ split_with_empty_delimiter value =
   initial =
     GraphemeState(grapheme: "", parts: [], current: "", delimiter: "", seen: False)
   mut final = initial
-  with_handler
+  with
     yield grapheme step ->
       next_parts = __goby_list_push_string step.parts grapheme
       resume (True, GraphemeState(
@@ -38,7 +38,7 @@ split_with_single_delimiter : String -> String -> List String can Iterator
 split_with_single_delimiter value sep =
   initial = GraphemeState(grapheme: "", parts: [], current: "", delimiter: sep, seen: False)
   mut final = initial
-  with_handler
+  with
     yield grapheme step ->
       if grapheme == step.delimiter
         next_parts = __goby_list_push_string step.parts step.current

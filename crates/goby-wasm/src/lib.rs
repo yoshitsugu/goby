@@ -1152,7 +1152,7 @@ impl<'m> RuntimeOutputResolver<'m> {
         }
 
         if let Some((callee, arg)) = parse_call(expr)
-            && matches!(arg, "()" | "Unit")
+            && matches!(arg, "()")
             && let Some(value) = self.try_apply_bare_runtime_bridge_value(
                 callee,
                 RuntimeValue::Unit,
@@ -1432,15 +1432,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                 }
                 Some(RuntimeValue::String(out))
             }
-            Expr::Var(name) => {
-                if let Some(value) = locals.get(name) {
-                    Some(value)
-                } else if name == "Unit" {
-                    Some(RuntimeValue::Unit)
-                } else {
-                    None
-                }
-            }
+            Expr::Var(name) => locals.get(name),
             Expr::Handler { clauses } => Some(RuntimeValue::Handler(
                 self.inline_handler_from_clauses(clauses, locals, callables),
             )),
@@ -4760,7 +4752,7 @@ main =
   with
     log n ->
       print "${n}"
-      resume Unit
+      resume ()
   in
     list.each [1, 3] (|n| -> log n)
 "#;
@@ -4785,7 +4777,7 @@ main =
   with
     log n ->
       print "${n}"
-      resume Unit
+      resume ()
   in
     l.each [5, 7] (|n| -> log n)
 "#;
@@ -4810,7 +4802,7 @@ main =
   with
     log n ->
       print "${n}"
-      resume Unit
+      resume ()
   in
     each [9, 11] (|n| -> log n)
 "#;
@@ -5420,7 +5412,7 @@ main =
   with
     log msg ->
       print msg
-      resume Unit
+      resume ()
   in
     log "hello"
 "#;
@@ -5449,7 +5441,7 @@ main =
   with
     log msg ->
       print msg
-      resume Unit
+      resume ()
   in
     Log.log "world"
 "#;
@@ -5503,9 +5495,9 @@ main : Unit -> Unit can Print
 main =
   with
     print msg ->
-      resume Unit
+      resume ()
     println msg ->
-      resume Unit
+      resume ()
   in
     Print.println "fallback"
 "#;
@@ -5873,12 +5865,12 @@ main =
   with
     log msg ->
       print "outer"
-      resume Unit
+      resume ()
   in
     with
       log msg ->
         print "inner"
-        resume Unit
+        resume ()
     in
       log "x"
 "#;
@@ -5907,7 +5899,7 @@ main =
   with
     log msg ->
       print msg
-      resume Unit
+      resume ()
   in
     "piped" |> log
 "#;
@@ -5961,7 +5953,7 @@ main =
   with
     raise e ->
       print e.message
-      resume Unit
+      resume ()
   in
     raise Error("oops")
 "#;
@@ -6101,7 +6093,7 @@ main =
       in
         boom msg
       print "outer-after"
-      resume Unit
+      resume ()
   in
     op "x"
     print "main-after"
@@ -6148,7 +6140,7 @@ main =
   with
     log msg ->
       print msg
-      resume Unit
+      resume ()
   in
     log "hello"
 "#;
@@ -6175,7 +6167,7 @@ main =
   h = handler
     log msg ->
       print msg
-      resume Unit
+      resume ()
   with h
   in
     log "world"
@@ -6204,7 +6196,7 @@ main =
   with
     log msg ->
       print "${prefix}${msg}"
-      resume Unit
+      resume ()
   in
     log "hello"
 "#;
@@ -6231,12 +6223,12 @@ main =
   with
     log msg ->
       print "outer"
-      resume Unit
+      resume ()
   in
     with
       log msg ->
         print "inner"
-        resume Unit
+        resume ()
     in
       log "x"
 "#;
@@ -6263,12 +6255,12 @@ main =
   with
     log msg ->
       print "outer"
-      resume Unit
+      resume ()
   in
     with
       log msg ->
         print "inline"
-        resume Unit
+        resume ()
     in
       log "x"
 "#;
@@ -6295,7 +6287,7 @@ main =
   with
     log msg ->
       print msg
-      resume Unit
+      resume ()
   in
     Log.log "qualified"
 "#;
@@ -6397,7 +6389,7 @@ main =
       in
         boom msg
       print "outer-after"
-      resume Unit
+      resume ()
   in
     op "x"
     print "main-after"
@@ -7066,7 +7058,7 @@ uses_with : Int -> Int
 uses_with x =
   with
     log v ->
-      resume Unit
+      resume ()
   in
     x
 
@@ -7083,7 +7075,7 @@ uses_with_callback : (Int -> Int) -> Int
 uses_with_callback f =
   with
     log v ->
-      resume Unit
+      resume ()
   in
     f 1
 
@@ -7132,7 +7124,7 @@ uses_with : Int -> Int
 uses_with x =
   with
     log v ->
-      resume Unit
+      resume ()
   in
     x
 

@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-06 (session 180)
+Last updated: 2026-03-06 (session 181)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -112,7 +112,7 @@ Recent (detailed):
     - added runtime + typed-mode parity tests for value-position/unit-position
       abortive handlers.
     - updated continuation-intended fixtures/examples to use explicit
-      `resume Unit` (including `examples/effect.gb` and list-each runtime tests).
+      `resume ()` (including `examples/effect.gb` and list-each runtime tests).
   - Remaining within Step 2:
     - nested-handler abort propagation review/coverage is still open
       (`doc/PLAN.md` Step 2.10 / 2.11 follow-up).
@@ -136,6 +136,15 @@ Recent (detailed):
     - `cargo fmt`, `cargo clippy -- -D warnings`, and `cargo test` all pass.
   - Remaining within Track 4.7:
     - Step 3 multi-resume progression runtime semantics is still pending.
+
+- 2026-03-06 (session 181): legacy syntax cleanup for `with` / `()`.
+  - removed remaining stdlib/examples/tooling references to legacy
+    `with_handler`; canonical handler application syntax is now `with` only.
+  - removed runtime compatibility paths that treated expression-form `Unit` as a
+    value; canonical Unit value syntax is `()`.
+  - added explicit typecheck diagnostic:
+    - `legacy_unit_value_syntax: \`Unit\` is no longer a value expression; use \`()\``
+  - updated parser/runtime/typecheck tests and syntax-pack docs accordingly.
 
 - 2026-03-06 (session 177): map consolidation Step 8-9 completed.
   - PLAN.md §4.5 checklist updated:

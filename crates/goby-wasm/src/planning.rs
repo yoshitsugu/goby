@@ -876,7 +876,7 @@ main =
   with
     log msg ->
       print msg
-      resume Unit
+      resume ()
   in
     log "x"
 "#;

@@ -28,10 +28,10 @@ import goby/string as str
 mut count = 0
 @embed MyEffect __goby_embeded_effect_stdout_handler
 
-# with / with_handler / resume / can (keyword.control)
+# with / with / resume / can (keyword.control)
 foo : String -> Unit can MyEffect
 foo s =
-  with_handler
+  with
     op msg ->
       resume msg
   in
