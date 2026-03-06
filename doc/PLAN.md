@@ -768,8 +768,12 @@ Step-by-step checklist:
             expanding coverage.
           - current status:
             - legacy `eval_expr_ast` no longer captures `SingleArgNamedCall` replay checkpoints.
+            - legacy `eval_expr_ast` no longer captures `BinOpLeft` / `BinOpRight` replay
+              checkpoints either.
             - single-arg call replay now depends on the outcome-aware path, with only a narrow
               legacy guard remaining inside shared continuation replay.
+            - `BinOp` replay now also depends on the outcome-aware path for checkpoint capture,
+              while its shared replay fallback remains temporarily in place.
           - done when:
             - the old replay branch for that shape is removed or no longer reachable,
             - tests still pass without relying on dual paths.
@@ -777,7 +781,6 @@ Step-by-step checklist:
           - repeat the same pattern for the next shape (`BinOp`, then branch/control-flow
             boundaries).
           - order after first migration:
-            - `BinOp`
             - branch/control-flow boundaries (`if`, `case`)
             - broader call shapes
             - `resume (op ...)`

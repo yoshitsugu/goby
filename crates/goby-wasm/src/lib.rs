@@ -1506,29 +1506,9 @@ impl<'m> RuntimeOutputResolver<'m> {
                 self.inline_handler_from_clauses(clauses, locals, callables),
             )),
             Expr::BinOp { op, left, right } => {
-                self.pending_value_continuations.push(AstValueContinuation {
-                    kind: AstValueContinuationKind::BinOpLeft {
-                        op: op.clone(),
-                        right: (*right.clone()),
-                    },
-                    locals: locals.clone(),
-                    callables: callables.clone(),
-                    depth: depth + 1,
-                });
                 let lv = self.eval_expr_ast(left, locals, callables, evaluators, depth + 1);
-                self.pending_value_continuations.pop();
                 let lv = lv?;
-                self.pending_value_continuations.push(AstValueContinuation {
-                    kind: AstValueContinuationKind::BinOpRight {
-                        op: op.clone(),
-                        left_value: lv.clone(),
-                    },
-                    locals: locals.clone(),
-                    callables: callables.clone(),
-                    depth: depth + 1,
-                });
                 let rv = self.eval_expr_ast(right, locals, callables, evaluators, depth + 1);
-                self.pending_value_continuations.pop();
                 self.apply_binop_runtime_value(op.clone(), lv, rv?)
             }
             Expr::ListLit { elements, spread } => {

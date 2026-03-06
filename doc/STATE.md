@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-06 (session 193)
+Last updated: 2026-03-06 (session 194)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -456,6 +456,25 @@ Recent (detailed):
     - choose the next migrated shape for Step 3.2d.
     - `BinOp` is the natural next target because it already has a bounded continuation shape and
       existing parity tests.
+
+- 2026-03-06 (session 194): Track 4.7 Step 3.2d `BinOp` cleanup landed.
+  - runtime:
+    - legacy `eval_expr_ast` no longer pushes `BinOpLeft` / `BinOpRight` replay checkpoints.
+    - `eval_expr_ast_outcome` now owns `BinOp` checkpoint capture for the migrated shape.
+    - value-only `BinOp` frames can suspend via the new outcome path, while shared replay fallback
+      remains temporarily in place for compatibility during the migration.
+  - result:
+    - `BinOp` now follows the same migration pattern as `single-arg named call`:
+      - real suspended-frame path for outcome-aware evaluation,
+      - legacy checkpoint capture removed,
+      - only a narrow shared replay seam still left.
+  - validation completed:
+    - `cargo fmt`
+    - `cargo test -p goby-wasm`
+  - immediate next step:
+    - migrate the first branch/control-flow boundary.
+    - `if` is the smallest next target because it has one condition checkpoint and two branch-entry
+      checkpoints, without `case` arm matching complexity.
 
 - 2026-03-06 (session 177): map consolidation Step 8-9 completed.
   - PLAN.md §4.5 checklist updated:

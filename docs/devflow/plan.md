@@ -148,3 +148,6 @@
 - 2026-03-06: Step 3.2c collapsed the old single-arg replay overlap by removing
   legacy `eval_expr_ast` checkpoint capture for plain named calls and routing the
   remaining shared replay guard back through the outcome-aware named-call path.
+- 2026-03-06: Step 3.2d began migrating `BinOp` the same way: suspended-frame
+  support now comes from `eval_expr_ast_outcome`, and legacy `eval_expr_ast`
+  operand checkpoint capture was removed.
