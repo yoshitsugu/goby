@@ -295,15 +295,17 @@ Based on `examples/*.gb`:
   - `handler` is a value,
   - handler application uses `with` (inline handler or handler value form).
 - Legacy forms (`handler ... for ...`, `using`) are fully removed from parser/runtime/typecheck paths.
-- `resume` support is active with one-shot continuation guardrails:
+- `resume` support is active with partial 4.7 alignment:
   - outside-handler `resume` is rejected,
   - type mismatch for resumed value is rejected,
-  - obvious multi-resume misuse is rejected conservatively.
+  - no-`resume` handler completion aborts at the handled operation boundary,
+  - nested abortive handler propagation is implemented,
+  - conservative syntactic multi-`resume` rejection is removed,
+  - runtime multi-resume progression is still incomplete.
 - Runtime dispatch semantics:
   - nearest lexical handler wins,
   - embedded/default-handler fallback applies only when no explicit handler captures the operation.
 - Post-MVP follow-up remains:
-  - improve precision of multi-resume analysis,
   - continue migration from name-based runtime dispatch to compiled operation identity (`EffectId`/`OpId`),
   - evaluate explicit `discontinue` only as a later separate proposal.
 
@@ -544,6 +546,122 @@ Step-by-step checklist:
   - replace one-shot token consumption model with resumable progression model for one handler invocation.
   - each `resume` continues from the next resumable point; exhausted continuation raises runtime error.
   - keep guardrails for clearly invalid continuation state transitions.
+  - implementation status (2026-03-06):
+    - this step is not a token-only change; the current runtime must be made continuation-aware at
+      the AST evaluator boundary.
+    - a direct one-line change from one-shot to multi-shot would be incorrect because `resume`
+      currently only returns a value to the handler body and does not reify the caller continuation.
+  - confirmed investigation findings:
+    - current runtime anchor points:
+      - `crates/goby-wasm/src/lib.rs`: `dispatch_handler_method_core`
+      - `crates/goby-wasm/src/lib.rs`: `resume_through_active_continuation_fallback`
+      - `crates/goby-wasm/src/lib.rs`: `resume_through_active_continuation_optimized`
+      - `crates/goby-wasm/src/lib.rs`: `eval_expr_ast`
+      - `crates/goby-wasm/src/lib.rs`: `execute_unit_expr_ast`
+      - `crates/goby-wasm/src/lib.rs`: `execute_unit_ast_stmt`
+    - current token model:
+      - fallback mode stores `ResumeToken { continuation: Continuation { consumed }, state }`.
+      - typed mode stores `OptimizedResumeToken { consumed, state }`.
+      - both modes mark the token consumed at the first `resume`.
+      - `dispatch_handler_method_core` breaks the handler-body loop as soon as a resumed value is observed.
+    - semantic gap:
+      - the current bridge can express:
+        - single `resume` success,
+        - no-`resume` abort,
+        - deterministic runtime error on second `resume`.
+      - the current bridge cannot express:
+        - "resume caller continuation until the next resumable point, then return control to the same handler invocation".
+      - this gap affects both value-position and unit-position operation calls.
+    - why the gap exists:
+      - `Expr::Resume` in `eval_expr_ast` currently calls `resume_through_active_continuation_bridge`
+        and receives only a plain `RuntimeValue`.
+      - no continuation frame, AST cursor, or statement-sequence checkpoint is stored for the
+        operation call site.
+      - `dispatch_handler_method_core` therefore has no way to continue from "the next resumable
+        point" after the caller resumes and later suspends again.
+    - concrete affected examples:
+      - state-threaded iterator flows such as `examples/iterator_unified.gb`
+        require progression across multiple `yield` operations from one enclosing handler invocation.
+      - nested value-position calls such as `resume (op ...)` must distinguish "resumed again later"
+        from true continuation exhaustion.
+  - required implementation direction (locked for restart):
+    - do not try to fake Step 3 by merely changing `consumed: bool` into a counter or queue.
+    - first introduce an explicit continuation result at the AST runtime layer so evaluation can
+      suspend and later continue.
+    - keep fallback and typed-continuation modes on the same semantic contract even if the internal
+      storage differs.
+  - staged execution plan:
+    - [ ] Step 3.1: introduce continuation-aware runtime result types
+      - replace the current `Option<RuntimeValue>` / `Option<()>`-only bridge at handler-sensitive
+        paths with an explicit result that can represent:
+        - completed value,
+        - completed unit,
+        - suspended effect operation carrying the resumed payload / next checkpoint,
+        - abortive completion,
+        - runtime error.
+      - thread the new result through:
+        - `eval_expr_ast`
+        - `execute_unit_expr_ast`
+        - `execute_unit_ast_stmt`
+        - `dispatch_handler_method_core`
+    - [ ] Step 3.2: model resumable caller checkpoints for AST execution
+      - capture enough information to continue evaluation after an effect operation:
+        - statement index within block/function/handler body,
+        - local/callable environment snapshot,
+        - pending expression shape where value-position resumption must re-enter.
+      - start with AST-backed paths only; string-fallback paths are not the target for Step 3.
+    - [ ] Step 3.3: implement progression in fallback mode first
+      - make one handler invocation able to call `resume` repeatedly.
+      - each `resume` should drive the captured caller continuation until:
+        - another handled operation suspends back to the same handler invocation, or
+        - the continuation completes, after which the invocation is exhausted.
+      - preserve deterministic `continuation_missing` / `continuation_consumed` style runtime errors.
+    - [ ] Step 3.4: mirror the same contract in typed-continuation mode
+      - keep the current mode-parity harness green while reusing the same externally visible
+        behavior.
+      - implementation may still use separate token storage, but not separate semantics.
+    - [ ] Step 3.5: cover the progression matrix with tests
+      - fallback success: one handler invocation resumes through multiple operation sites.
+      - fallback exhaustion: extra `resume` after continuation completion fails deterministically.
+      - nested handlers: inner suspension returns control to the correct enclosing invocation.
+      - typed/fallback parity for the same cases.
+  - restart checklist:
+    - begin from `crates/goby-wasm/src/lib.rs`; no parser or typecheck blocker remains for Step 3.
+    - preserve existing error-kind mapping in `parity_outcome_from_runtime_output`.
+    - preserve Step 2 behavior:
+      - no-`resume` remains abortive,
+      - nested abort propagation remains explicit,
+      - nearest lexical handler resolution must not regress.
+    - after Step 3 lands, update this section, `doc/LANGUAGE_SPEC.md`, and `doc/STATE.md` together.
+  - success criteria:
+    - semantic acceptance:
+      - one handler invocation can `resume` more than once and each `resume` advances from the
+        next resumable point instead of restarting from the beginning.
+      - when the resumed continuation finishes, any further `resume` from that same handler
+        invocation reports the deterministic consumed-continuation runtime error.
+      - no-`resume` handler completion still aborts immediately at the handled boundary.
+      - nested handlers still route control to the nearest matching lexical handler.
+    - runtime architecture acceptance:
+      - Step 3 no longer depends on the current "set resumed value and break" one-shot loop in
+        `dispatch_handler_method_core`.
+      - AST runtime paths retain enough checkpoint information to resume both:
+        - unit-position handled operations,
+        - value-position handled operations used in bindings, conditionals, blocks, and call chains.
+      - fallback and typed modes share the same externally visible continuation contract.
+    - regression acceptance:
+      - `examples/iterator_unified.gb` typechecks and its runtime-relevant progression shape is
+        covered by tests.
+      - dedicated runtime tests exist for:
+        - multi-resume progression success,
+        - continuation exhaustion error,
+        - nested handler progression/dispatch correctness,
+        - fallback/typed parity for the same matrix.
+    - quality gate acceptance:
+      - `cargo fmt`
+      - `cargo check`
+      - `cargo test`
+      - `cargo clippy -- -D warnings`
+      all pass after the Step 3 implementation.
 - [x] Step 4: typecheck rule update
   - conservative syntactic multi-`resume` rejection was removed.
   - retained checks are `resume` placement, resumed-value type compatibility, and unresolved generic diagnostics.

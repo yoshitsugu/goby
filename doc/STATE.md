@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-06 (session 181)
+Last updated: 2026-03-06 (session 182)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -145,6 +145,31 @@ Recent (detailed):
   - added explicit typecheck diagnostic:
     - `legacy_unit_value_syntax: \`Unit\` is no longer a value expression; use \`()\``
   - updated parser/runtime/typecheck tests and syntax-pack docs accordingly.
+
+- 2026-03-06 (session 182): Track 4.7 Step 3 investigation recorded before implementation.
+  - no code changes landed in this session; the goal was restart-safe planning.
+  - `doc/PLAN.md` §4.7 now records the concrete blocker and staged implementation
+    plan for multi-resume progression.
+  - confirmed runtime blocker:
+    - current `resume` bridge in `crates/goby-wasm/src/lib.rs` is one-shot and
+      returns only a plain resumed value.
+    - `dispatch_handler_method_core` stops after the first observed resume and
+      does not retain caller continuation checkpoints.
+    - therefore Step 3 requires continuation-aware AST runtime results, not a
+      token-field tweak.
+  - confirmed next entry points:
+    - `eval_expr_ast`
+    - `execute_unit_expr_ast`
+    - `execute_unit_ast_stmt`
+    - `dispatch_handler_method_core`
+    - `resume_through_active_continuation_fallback`
+    - `resume_through_active_continuation_optimized`
+  - recommended restart order:
+    1. introduce explicit continuation/suspend result types in the AST runtime,
+    2. implement fallback progression first,
+    3. mirror semantics in typed mode,
+    4. add parity/exhaustion tests,
+    5. rerun full quality gates.
 
 - 2026-03-06 (session 177): map consolidation Step 8-9 completed.
   - PLAN.md §4.5 checklist updated:
