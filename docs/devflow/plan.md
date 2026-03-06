@@ -113,3 +113,6 @@
 - 2026-03-06: legacy syntax cleanup removed remaining `with_handler` and
   expression-form `Unit` value compatibility paths while keeping `Unit` as the
   type name.
+- 2026-03-06: Step 3 gained a first runtime slice limited to AST-backed
+  unit-position statement-tail replay; value-position continuation checkpoints
+  remain deferred and are tracked explicitly in `doc/PLAN.md`.

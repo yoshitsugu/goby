@@ -556,6 +556,18 @@ Step-by-step checklist:
       - handler-dispatch statement execution now branches on explicit AST outcomes instead of
         relying only on `Option` + token-state probing.
       - `Suspended(...)` is not emitted yet; real checkpoints still need to be implemented.
+    - first progression slice landed in `crates/goby-wasm/src/lib.rs`:
+      - resume tokens can now carry an AST statement-tail continuation snapshot.
+      - top-level `with` bodies and unit-position AST statement sequences now register
+        continuation checkpoints for remaining statements.
+      - when `resume` consumes such a checkpoint, the remaining unit-position statements execute
+        before the handler body continues, enabling handler-local code after the first `resume`.
+      - continuation exhaustion after that replay still reports the existing deterministic
+        consumed-continuation runtime error.
+    - remaining gap after this slice:
+      - value-position continuation checkpoints are still not implemented.
+      - no explicit `Suspended(...)` result is emitted yet; progression is currently modeled
+        through statement-tail replay only.
   - confirmed investigation findings:
     - current runtime anchor points:
       - `crates/goby-wasm/src/lib.rs`: `dispatch_handler_method_core`
@@ -596,7 +608,7 @@ Step-by-step checklist:
     - keep fallback and typed-continuation modes on the same semantic contract even if the internal
       storage differs.
   - staged execution plan:
-    - [ ] Step 3.1: introduce continuation-aware runtime result types
+    - [x] Step 3.1: introduce continuation-aware runtime result types
       - replace the current `Option<RuntimeValue>` / `Option<()>`-only bridge at handler-sensitive
         paths with an explicit result that can represent:
         - completed value,
@@ -609,27 +621,39 @@ Step-by-step checklist:
         - `execute_unit_expr_ast`
         - `execute_unit_ast_stmt`
         - `dispatch_handler_method_core`
-    - [ ] Step 3.2: model resumable caller checkpoints for AST execution
+    - [~] Step 3.2: model resumable caller checkpoints for AST execution
       - capture enough information to continue evaluation after an effect operation:
         - statement index within block/function/handler body,
         - local/callable environment snapshot,
         - pending expression shape where value-position resumption must re-enter.
+      - current status:
+        - implemented for AST-backed unit-position statement tails only.
+        - not yet implemented for value-position resumptions or inner expression checkpoints.
       - start with AST-backed paths only; string-fallback paths are not the target for Step 3.
-    - [ ] Step 3.3: implement progression in fallback mode first
+    - [~] Step 3.3: implement progression in fallback mode first
       - make one handler invocation able to call `resume` repeatedly.
       - each `resume` should drive the captured caller continuation until:
         - another handled operation suspends back to the same handler invocation, or
         - the continuation completes, after which the invocation is exhausted.
+      - current status:
+        - continuation completion path now works for saved unit-position statement tails.
+        - repeated `resume` after that completion is covered by regression tests.
+        - progression to intermediate value-position resumable points is still pending.
       - preserve deterministic `continuation_missing` / `continuation_consumed` style runtime errors.
-    - [ ] Step 3.4: mirror the same contract in typed-continuation mode
+    - [~] Step 3.4: mirror the same contract in typed-continuation mode
       - keep the current mode-parity harness green while reusing the same externally visible
         behavior.
+      - current status:
+        - typed mode mirrors the new unit-position replay + exhaustion slice.
       - implementation may still use separate token storage, but not separate semantics.
-    - [ ] Step 3.5: cover the progression matrix with tests
+    - [~] Step 3.5: cover the progression matrix with tests
       - fallback success: one handler invocation resumes through multiple operation sites.
       - fallback exhaustion: extra `resume` after continuation completion fails deterministically.
       - nested handlers: inner suspension returns control to the correct enclosing invocation.
       - typed/fallback parity for the same cases.
+      - current status:
+        - added fallback + typed parity regression for unit-position replay then exhaustion.
+        - broader matrix for value-position progression is still open.
   - restart checklist:
     - begin from `crates/goby-wasm/src/lib.rs`; no parser or typecheck blocker remains for Step 3.
     - preserve existing error-kind mapping in `parity_outcome_from_runtime_output`.

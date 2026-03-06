@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-06 (session 183)
+Last updated: 2026-03-06 (session 184)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -181,6 +181,30 @@ Recent (detailed):
     - `Suspended` is scaffolded but not emitted yet.
     - real continuation checkpoints and multi-resume progression semantics are
       still pending.
+  - validation completed:
+    - `cargo fmt`
+    - `cargo check`
+    - `cargo test -p goby-wasm`
+
+- 2026-03-06 (session 184): Track 4.7 Step 3 unit-position replay slice landed.
+  - runtime:
+    - resume tokens now optionally capture AST statement-tail continuations
+      (`AstStmtContinuation`) for unit-position statement sequences.
+    - `resume` can execute the saved remaining statements before handler-body
+      execution continues.
+    - `dispatch_handler_method_core` no longer exits immediately after the first
+      observed `resume`; handler code after `resume` can now run.
+    - sequence-owner tracking prevents replayed statement tails from being
+      executed twice by enclosing AST loops.
+  - coverage:
+    - added fallback runtime regression for:
+      - replaying remaining unit statements after `resume`,
+      - deterministic consumed-continuation error on a second `resume`.
+    - added typed-mode parity coverage for the same slice.
+  - still open within Step 3:
+    - value-position continuation checkpoints are not implemented.
+    - no general `Suspended(...)` AST result is emitted yet; current progression
+      support is limited to unit-position statement-tail replay.
   - validation completed:
     - `cargo fmt`
     - `cargo check`

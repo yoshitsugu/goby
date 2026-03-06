@@ -511,6 +511,11 @@ struct RuntimeOutputResolver<'m> {
     active_inline_handler_stack: Vec<InlineHandlerValue>,
     resume_tokens: Vec<ResumeToken>,
     optimized_resume_tokens: Vec<OptimizedResumeToken>,
+    pending_stmt_continuations: Vec<AstStmtContinuation>,
+    active_stmt_sequence_ids: Vec<usize>,
+    next_stmt_sequence_id: usize,
+    consumed_stmt_sequence_id: Option<usize>,
+    replaying_stmt_continuation_depth: usize,
     runtime_error: Option<String>,
     runtime_aborted: bool,
     execution_mode: lower::EffectExecutionMode,
@@ -527,12 +532,14 @@ struct Continuation {
 struct ResumeToken {
     continuation: Continuation,
     state: HandlerContinuationState,
+    stmt_continuation: Option<AstStmtContinuation>,
 }
 
 #[derive(Clone)]
 struct OptimizedResumeToken {
     consumed: bool,
     state: HandlerContinuationState,
+    stmt_continuation: Option<AstStmtContinuation>,
 }
 
 #[derive(Clone)]
@@ -549,6 +556,15 @@ enum HandlerCompletion {
 #[allow(dead_code)]
 #[derive(Clone)]
 struct AstContinuation;
+
+#[derive(Clone)]
+struct AstStmtContinuation {
+    remaining_stmts: Vec<Stmt>,
+    locals: RuntimeLocals,
+    callables: HashMap<String, IntCallable>,
+    depth: usize,
+    owner_sequence_id: usize,
+}
 
 #[allow(dead_code)]
 enum AstEvalOutcome<T> {
@@ -763,6 +779,11 @@ impl<'m> RuntimeOutputResolver<'m> {
             active_inline_handler_stack: Vec::new(),
             resume_tokens: Vec::new(),
             optimized_resume_tokens: Vec::new(),
+            pending_stmt_continuations: Vec::new(),
+            active_stmt_sequence_ids: Vec::new(),
+            next_stmt_sequence_id: 0,
+            consumed_stmt_sequence_id: None,
+            replaying_stmt_continuation_depth: 0,
             runtime_error: None,
             runtime_aborted: false,
             execution_mode,
@@ -820,6 +841,7 @@ impl<'m> RuntimeOutputResolver<'m> {
         }
     }
 
+    #[allow(dead_code)]
     fn ingest_ast_statement(
         &mut self,
         stmt: &Stmt,
@@ -843,6 +865,7 @@ impl<'m> RuntimeOutputResolver<'m> {
         }
     }
 
+    #[allow(dead_code)]
     fn eval_ast_side_effect(
         &mut self,
         expr: &Expr,
@@ -856,12 +879,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                     return None;
                 };
                 self.active_inline_handler_stack.push(inline_handler);
-                let result = (|| -> Option<()> {
-                    for stmt in body {
-                        self.ingest_ast_statement(stmt, evaluators)?;
-                    }
-                    Some(())
-                })();
+                let result = self.execute_ingest_ast_stmt_sequence(body, evaluators);
                 self.active_inline_handler_stack.pop();
                 result
             }
@@ -953,11 +971,6 @@ impl<'m> RuntimeOutputResolver<'m> {
                 if let Some(arg_val) = self.eval_ast_value(arg, evaluators) {
                     // Bare effect method call (e.g. `log "msg"`) — check active handlers first.
                     let bare_method = self.find_handler_method_by_name(fn_name);
-                    eprintln!(
-                        "eval_ast_side_effect bare call fn={} handler_found={}",
-                        fn_name,
-                        bare_method.is_some()
-                    );
                     if let Some(method) = bare_method {
                         // depth=0: top-level call; dispatch_handler_method adds 1 internally.
                         return self.dispatch_handler_method(&method, arg_val, evaluators, 0);
@@ -1075,6 +1088,7 @@ impl<'m> RuntimeOutputResolver<'m> {
         }
     }
 
+    #[allow(dead_code)]
     fn eval_ast_value(
         &mut self,
         expr: &Expr,
@@ -1948,7 +1962,7 @@ impl<'m> RuntimeOutputResolver<'m> {
             Expr::Resume { value } => {
                 let resumed =
                     self.eval_expr_ast(value, locals, callables, evaluators, depth + 1)?;
-                self.resume_through_active_continuation_bridge(resumed)
+                self.resume_through_active_continuation_bridge(resumed, evaluators)
             }
             // string.split(s, delim) -> ListString
             Expr::MethodCall {
@@ -2036,12 +2050,8 @@ impl<'m> RuntimeOutputResolver<'m> {
                 return None;
             };
             self.active_inline_handler_stack.push(inline_handler);
-            let result = (|| -> Option<()> {
-                for stmt in body {
-                    self.execute_unit_ast_stmt(stmt, locals, callables, evaluators, depth + 1)?;
-                }
-                Some(())
-            })();
+            let result =
+                self.execute_ast_stmt_sequence(body, locals, callables, evaluators, depth + 1);
             self.active_inline_handler_stack.pop();
             return result;
         }
@@ -2361,15 +2371,13 @@ impl<'m> RuntimeOutputResolver<'m> {
         if let Expr::Block(stmts) = expr {
             let mut block_locals = locals.clone();
             let mut block_callables = callables.clone();
-            for stmt in stmts {
-                self.execute_unit_ast_stmt(
-                    stmt,
-                    &mut block_locals,
-                    &mut block_callables,
-                    evaluators,
-                    depth + 1,
-                )?;
-            }
+            self.execute_ast_stmt_sequence(
+                stmts,
+                &mut block_locals,
+                &mut block_callables,
+                evaluators,
+                depth + 1,
+            )?;
             return Some(());
         }
 
@@ -2511,21 +2519,25 @@ impl<'m> RuntimeOutputResolver<'m> {
             fn_locals.store(param, arg_val);
         }
 
-        for stmt in &stmts {
-            if let Stmt::Expr(
-                Expr::Var(_) | Expr::IntLit(_) | Expr::StringLit(_) | Expr::BoolLit(_),
-            ) = stmt
-            {
-                continue;
-            }
-            self.execute_unit_ast_stmt(
-                stmt,
-                &mut fn_locals,
-                &mut fn_callables,
-                evaluators,
-                depth + 1,
-            )?;
-        }
+        let filtered_stmts: Vec<Stmt> = stmts
+            .iter()
+            .filter(|stmt| {
+                !matches!(
+                    stmt,
+                    Stmt::Expr(
+                        Expr::Var(_) | Expr::IntLit(_) | Expr::StringLit(_) | Expr::BoolLit(_)
+                    )
+                )
+            })
+            .cloned()
+            .collect();
+        self.execute_ast_stmt_sequence(
+            &filtered_stmts,
+            &mut fn_locals,
+            &mut fn_callables,
+            evaluators,
+            depth + 1,
+        )?;
         Some(())
     }
 
@@ -2569,6 +2581,98 @@ impl<'m> RuntimeOutputResolver<'m> {
             None if self.has_abort_without_error() => AstEvalOutcome::Aborted,
             None => AstEvalOutcome::Unsupported,
         }
+    }
+
+    fn stmt_is_unit_effect_continuation_candidate(stmt: &Stmt) -> bool {
+        matches!(
+            stmt,
+            Stmt::Expr(
+                Expr::Call { .. } | Expr::Pipeline { .. } | Expr::With { .. } | Expr::Block(_)
+            )
+        )
+    }
+
+    fn execute_ingest_ast_stmt_sequence(
+        &mut self,
+        stmts: &[Stmt],
+        evaluators: &RuntimeEvaluators<'_, '_>,
+    ) -> Option<()> {
+        let sequence_id = self.next_stmt_sequence_id;
+        self.next_stmt_sequence_id += 1;
+        self.active_stmt_sequence_ids.push(sequence_id);
+        for (idx, stmt) in stmts.iter().enumerate() {
+            let should_capture =
+                idx + 1 < stmts.len() && Self::stmt_is_unit_effect_continuation_candidate(stmt);
+            if should_capture {
+                self.pending_stmt_continuations.push(AstStmtContinuation {
+                    remaining_stmts: stmts[idx + 1..].to_vec(),
+                    locals: self.locals.clone(),
+                    callables: HashMap::new(),
+                    depth: 0,
+                    owner_sequence_id: sequence_id,
+                });
+            }
+            let result = self.ingest_ast_statement(stmt, evaluators);
+            if should_capture {
+                self.pending_stmt_continuations.pop();
+            }
+            if result.is_none() {
+                self.active_stmt_sequence_ids.pop();
+                return None;
+            }
+            if let Some(target_sequence_id) = self.consumed_stmt_sequence_id {
+                self.active_stmt_sequence_ids.pop();
+                if target_sequence_id == sequence_id {
+                    self.consumed_stmt_sequence_id = None;
+                }
+                return Some(());
+            }
+        }
+        self.active_stmt_sequence_ids.pop();
+        Some(())
+    }
+
+    fn execute_ast_stmt_sequence(
+        &mut self,
+        stmts: &[Stmt],
+        locals: &mut RuntimeLocals,
+        callables: &mut HashMap<String, IntCallable>,
+        evaluators: &RuntimeEvaluators<'_, '_>,
+        depth: usize,
+    ) -> Option<()> {
+        let sequence_id = self.next_stmt_sequence_id;
+        self.next_stmt_sequence_id += 1;
+        self.active_stmt_sequence_ids.push(sequence_id);
+        for (idx, stmt) in stmts.iter().enumerate() {
+            let should_capture =
+                idx + 1 < stmts.len() && Self::stmt_is_unit_effect_continuation_candidate(stmt);
+            if should_capture {
+                self.pending_stmt_continuations.push(AstStmtContinuation {
+                    remaining_stmts: stmts[idx + 1..].to_vec(),
+                    locals: locals.clone(),
+                    callables: callables.clone(),
+                    depth,
+                    owner_sequence_id: sequence_id,
+                });
+            }
+            let result = self.execute_unit_ast_stmt(stmt, locals, callables, evaluators, depth);
+            if should_capture {
+                self.pending_stmt_continuations.pop();
+            }
+            if result.is_none() {
+                self.active_stmt_sequence_ids.pop();
+                return None;
+            }
+            if let Some(target_sequence_id) = self.consumed_stmt_sequence_id {
+                self.active_stmt_sequence_ids.pop();
+                if target_sequence_id == sequence_id {
+                    self.consumed_stmt_sequence_id = None;
+                }
+                return Some(());
+            }
+        }
+        self.active_stmt_sequence_ids.pop();
+        Some(())
     }
 
     fn execute_unit_call(
@@ -2683,15 +2787,13 @@ impl<'m> RuntimeOutputResolver<'m> {
             if let Some(parameter) = function.parameter {
                 function_locals.store(parameter, arg_val);
             }
-            for stmt in stmts {
-                self.execute_unit_ast_stmt(
-                    stmt,
-                    &mut function_locals,
-                    &mut function_callables,
-                    evaluators,
-                    depth + 1,
-                )?;
-            }
+            self.execute_ast_stmt_sequence(
+                stmts,
+                &mut function_locals,
+                &mut function_callables,
+                evaluators,
+                depth + 1,
+            )?;
             Some(())
         } else {
             // Fall back to the string-based path for functions without parsed AST.
@@ -3133,6 +3235,11 @@ impl<'m> RuntimeOutputResolver<'m> {
         self.resume_tokens.push(ResumeToken {
             continuation: Continuation { consumed: false },
             state: HandlerContinuationState::Pending,
+            stmt_continuation: if self.replaying_stmt_continuation_depth == 0 {
+                self.pending_stmt_continuations.last().cloned()
+            } else {
+                None
+            },
         });
         self.resume_tokens.len() - 1
     }
@@ -3157,6 +3264,11 @@ impl<'m> RuntimeOutputResolver<'m> {
         self.optimized_resume_tokens.push(OptimizedResumeToken {
             consumed: false,
             state: HandlerContinuationState::Pending,
+            stmt_continuation: if self.replaying_stmt_continuation_depth == 0 {
+                self.pending_stmt_continuations.last().cloned()
+            } else {
+                None
+            },
         });
         self.optimized_resume_tokens.len() - 1
     }
@@ -3178,19 +3290,6 @@ impl<'m> RuntimeOutputResolver<'m> {
 
     fn current_optimized_resume_token_mut(&mut self) -> Option<&mut OptimizedResumeToken> {
         self.optimized_resume_tokens.last_mut()
-    }
-
-    fn resume_token_has_value(&self, token_idx: usize) -> bool {
-        match self.execution_mode {
-            lower::EffectExecutionMode::PortableFallback => self
-                .resume_tokens
-                .get(token_idx)
-                .is_some_and(|token| matches!(token.state, HandlerContinuationState::Resumed(_))),
-            lower::EffectExecutionMode::TypedContinuationOptimized => self
-                .optimized_resume_tokens
-                .get(token_idx)
-                .is_some_and(|token| matches!(token.state, HandlerContinuationState::Resumed(_))),
-        }
     }
 
     fn begin_handler_continuation_bridge(&mut self) -> usize {
@@ -3219,13 +3318,14 @@ impl<'m> RuntimeOutputResolver<'m> {
     fn resume_through_active_continuation_bridge(
         &mut self,
         resumed: RuntimeValue,
+        evaluators: &RuntimeEvaluators<'_, '_>,
     ) -> Option<RuntimeValue> {
         match self.execution_mode {
             lower::EffectExecutionMode::PortableFallback => {
-                self.resume_through_active_continuation_fallback(resumed)
+                self.resume_through_active_continuation_fallback(resumed, evaluators)
             }
             lower::EffectExecutionMode::TypedContinuationOptimized => {
-                self.resume_through_active_continuation_optimized(resumed)
+                self.resume_through_active_continuation_optimized(resumed, evaluators)
             }
         }
     }
@@ -3233,6 +3333,7 @@ impl<'m> RuntimeOutputResolver<'m> {
     fn resume_through_active_continuation_fallback(
         &mut self,
         resumed: RuntimeValue,
+        evaluators: &RuntimeEvaluators<'_, '_>,
     ) -> Option<RuntimeValue> {
         let Some(token_ro) = self.resume_tokens.last() else {
             self.set_runtime_error_once(ERR_RESUME_MISSING);
@@ -3246,14 +3347,20 @@ impl<'m> RuntimeOutputResolver<'m> {
             self.set_runtime_error_once(ERR_RESUME_MISSING);
             return None;
         };
+        let continuation = token.stmt_continuation.clone();
         token.continuation.consumed = true;
         token.state = HandlerContinuationState::Resumed(Box::new(resumed.clone()));
+        token.stmt_continuation = None;
+        if let Some(continuation) = continuation {
+            self.execute_saved_stmt_continuation(continuation, evaluators)?;
+        }
         Some(resumed)
     }
 
     fn resume_through_active_continuation_optimized(
         &mut self,
         resumed: RuntimeValue,
+        evaluators: &RuntimeEvaluators<'_, '_>,
     ) -> Option<RuntimeValue> {
         let Some(token_ro) = self.optimized_resume_tokens.last() else {
             self.set_runtime_error_once(ERR_RESUME_MISSING);
@@ -3267,9 +3374,35 @@ impl<'m> RuntimeOutputResolver<'m> {
             self.set_runtime_error_once(ERR_RESUME_MISSING);
             return None;
         };
+        let continuation = token.stmt_continuation.clone();
         token.consumed = true;
         token.state = HandlerContinuationState::Resumed(Box::new(resumed.clone()));
+        token.stmt_continuation = None;
+        if let Some(continuation) = continuation {
+            self.execute_saved_stmt_continuation(continuation, evaluators)?;
+        }
         Some(resumed)
+    }
+
+    fn execute_saved_stmt_continuation(
+        &mut self,
+        continuation: AstStmtContinuation,
+        evaluators: &RuntimeEvaluators<'_, '_>,
+    ) -> Option<()> {
+        let mut locals = continuation.locals;
+        let mut callables = continuation.callables;
+        self.replaying_stmt_continuation_depth += 1;
+        let result = self.execute_ast_stmt_sequence(
+            &continuation.remaining_stmts,
+            &mut locals,
+            &mut callables,
+            evaluators,
+            continuation.depth,
+        );
+        self.replaying_stmt_continuation_depth -= 1;
+        result?;
+        self.consumed_stmt_sequence_id = Some(continuation.owner_sequence_id);
+        Some(())
     }
 
     fn dispatch_handler_method_core(
@@ -3439,9 +3572,6 @@ impl<'m> RuntimeOutputResolver<'m> {
                         }
                     }
                 }
-                if self.resume_token_has_value(token_idx) {
-                    break;
-                }
             }
             Some(())
         })();
@@ -3534,22 +3664,25 @@ impl<'m> RuntimeOutputResolver<'m> {
             fn_locals.store(&param, arg_val);
         }
         let mut fn_callables = HashMap::new();
-        for stmt in &stmts {
-            // Bare value expressions at the end of an Int-returning fn: discard silently.
-            if let Stmt::Expr(
-                Expr::Var(_) | Expr::IntLit(_) | Expr::StringLit(_) | Expr::BoolLit(_),
-            ) = stmt
-            {
-                continue;
-            }
-            self.execute_unit_ast_stmt(
-                stmt,
-                &mut fn_locals,
-                &mut fn_callables,
-                evaluators,
-                depth + 1,
-            )?;
-        }
+        let filtered_stmts: Vec<Stmt> = stmts
+            .iter()
+            .filter(|stmt| {
+                !matches!(
+                    stmt,
+                    Stmt::Expr(
+                        Expr::Var(_) | Expr::IntLit(_) | Expr::StringLit(_) | Expr::BoolLit(_)
+                    )
+                )
+            })
+            .cloned()
+            .collect();
+        self.execute_ast_stmt_sequence(
+            &filtered_stmts,
+            &mut fn_locals,
+            &mut fn_callables,
+            evaluators,
+            depth + 1,
+        )?;
         Some(())
     }
 
@@ -3577,21 +3710,25 @@ impl<'m> RuntimeOutputResolver<'m> {
         let mut fn_callables = HashMap::new();
         let param = param_name?;
         fn_callables.insert(param, callable);
-        for stmt in &stmts {
-            if let Stmt::Expr(
-                Expr::Var(_) | Expr::IntLit(_) | Expr::StringLit(_) | Expr::BoolLit(_),
-            ) = stmt
-            {
-                continue;
-            }
-            self.execute_unit_ast_stmt(
-                stmt,
-                &mut fn_locals,
-                &mut fn_callables,
-                evaluators,
-                depth + 1,
-            )?;
-        }
+        let filtered_stmts: Vec<Stmt> = stmts
+            .iter()
+            .filter(|stmt| {
+                !matches!(
+                    stmt,
+                    Stmt::Expr(
+                        Expr::Var(_) | Expr::IntLit(_) | Expr::StringLit(_) | Expr::BoolLit(_)
+                    )
+                )
+            })
+            .cloned()
+            .collect();
+        self.execute_ast_stmt_sequence(
+            &filtered_stmts,
+            &mut fn_locals,
+            &mut fn_callables,
+            evaluators,
+            depth + 1,
+        )?;
         Some(())
     }
 
@@ -4580,7 +4717,6 @@ main =
             main_parsed_body(&module).is_some(),
             "main parsed_body should exist for case arm block source"
         );
-        eprintln!("parsed main body: {:#?}", main_parsed_body(&module));
         let output =
             resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
                 .expect("runtime output should resolve");
@@ -6499,6 +6635,69 @@ main =
         let module = parse_module(source).expect("parse should work");
         let typed = assert_mode_parity(&module, "double-resume deterministic error path");
         assert_eq!(typed.stdout, None);
+        assert_eq!(typed.runtime_error_kind, Some("continuation_consumed"));
+    }
+
+    #[test]
+    fn resume_replays_remaining_unit_statements_before_second_resume_error() {
+        use goby_core::parse_module;
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let source = r#"
+effect Log
+  log: String -> Unit
+
+main : Unit -> Unit
+main =
+  with
+    log msg ->
+      print "handled:${msg}"
+      resume ()
+      print "after-resume"
+      resume ()
+  in
+    log "hello"
+    print "continued"
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let output =
+            resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
+                .expect("runtime output should resolve");
+        assert!(
+            output.starts_with("handled:hellocontinuedafter-resume"),
+            "first resume should replay remaining unit statements before handler continues"
+        );
+        assert!(
+            output.contains("[E-RESUME-CONSUMED]"),
+            "second resume after replayed continuation completion should report exhaustion"
+        );
+    }
+
+    #[test]
+    fn typed_mode_matches_fallback_for_resume_replay_then_exhaustion() {
+        use goby_core::parse_module;
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let source = r#"
+effect Log
+  log: String -> Unit
+
+main : Unit -> Unit
+main =
+  with
+    log msg ->
+      print "handled:${msg}"
+      resume ()
+      print "after-resume"
+      resume ()
+  in
+    log "hello"
+    print "continued"
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let typed = assert_mode_parity(&module, "resume replay then exhaustion");
+        assert_eq!(
+            typed.stdout.as_deref(),
+            Some("handled:hellocontinuedafter-resume")
+        );
         assert_eq!(typed.runtime_error_kind, Some("continuation_consumed"));
     }
 
