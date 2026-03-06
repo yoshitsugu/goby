@@ -1,8 +1,41 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-06 (session 203)
+Last updated: 2026-03-06 (session 217)
 
 This file is a restart-safe snapshot for resuming work after context reset.
+
+## Restart Override
+
+If any older note in this file conflicts with the current restart direction,
+this section takes priority.
+
+- Current uncommitted work:
+  - [crates/goby-wasm/src/lib.rs](/home/yoshitsugu/src/gitlab.com/yoshitsugu/goby/crates/goby-wasm/src/lib.rs)
+  - [doc/PLAN.md](/home/yoshitsugu/src/gitlab.com/yoshitsugu/goby/doc/PLAN.md)
+  - [doc/STATE.md](/home/yoshitsugu/src/gitlab.com/yoshitsugu/goby/doc/STATE.md)
+- Current Step 3 status:
+  - unified suspended-frame replay already covers the main AST value-position
+    families that were migrated earlier (`single-arg`/multi-arg named calls,
+    receiver-method calls, pipeline, `BinOp`, `if`, `case`, nested `resume`).
+  - recent legacy-value bridges now also route through the same outcome
+    consumer for:
+    - `Expr::InterpolatedString`
+    - `Expr::TupleLit`
+    - `Expr::ListLit`
+    - `Expr::RecordConstruct`
+    - positional single-field constructor sugar in legacy `Expr::Call`
+- Required next restart point:
+  - start from the continuation of this exact work, not from older cleanup
+    notes.
+  - the next slice should inspect the remaining legacy direct-evaluation
+    branches inside `Expr::Call` and choose the smallest compact seam there,
+    with plain named-call fallback branches as the default next target unless a
+    clearly smaller isolated family is discovered.
+- External internal records:
+  - devflow notes live outside the repo under
+    `/home/yoshitsugu/.codex/devflow/goby-c372fa22bba4/`
+  - use that location for plan/review continuation; do not recreate repo-local
+    `docs/devflow` or `.codex-devflow`.
 
 ## 1. Current Architecture
 
@@ -106,9 +139,10 @@ Recent (detailed):
     - `BinOp`,
     - pipelines.
   - current restart focus:
+    - this snapshot is superseded by `Restart Override` above when there is any conflict.
     - cleanup slices are now paying less than before.
-    - prefer returning to semantic targets that move unit-position/control-flow execution onto the
-      same outcome path when they can be landed narrowly.
+    - prefer continuing from the remaining legacy `Expr::Call` direct-eval seams before inventing
+      broader new targets.
 
 - 2026-03-06 (session 179): Track 4.7 Step 1 and partial Step 2 completed.
   - Planning/devflow:
@@ -872,9 +906,50 @@ Recent (detailed):
       without spread is the next obvious candidate, but spread-related fallback rules still make it
       a larger slice than tuple/interpolation.
 
+- 2026-03-06 (session 215): Track 4.7 Step 3 moved legacy list-literal replay onto the outcome consumer.
+  - implementation:
+    - `crates/goby-wasm/src/lib.rs` now routes legacy `Expr::ListLit` value evaluation through
+      `eval_expr_ast_outcome(...)` plus `complete_ast_value_outcome(...)` instead of evaluating
+      list elements and spread tails only through the direct evaluator.
+    - this keeps list elements on the same suspended-frame boundary used by the migrated nested
+      expression shapes before the final list value flows into later statements or prints.
+  - coverage:
+    - added fallback regression for `xs = [next 0, 2]; print xs`.
+    - added typed/fallback parity coverage for the same list-literal replay shape.
   - immediate next step:
-    - return to the next semantic gap rather than more symmetry-only coverage unless a real
-      regression risk appears.
+    - continue shrinking remaining legacy direct-evaluation shapes one family at a time; record
+      construction is the next obvious value family with a similarly compact bridge.
+
+- 2026-03-06 (session 216): Track 4.7 Step 3 moved legacy record-constructor replay onto the outcome consumer.
+  - implementation:
+    - `crates/goby-wasm/src/lib.rs` now routes legacy `Expr::RecordConstruct` value evaluation
+      through `eval_expr_ast_outcome(...)` plus `complete_ast_value_outcome(...)` instead of
+      evaluating named fields only through the direct evaluator.
+    - this keeps named record fields on the same suspended-frame boundary used by the migrated
+      nested expression shapes before later record-field access.
+  - coverage:
+    - added fallback regression for `box = Box(value: next 0); print box.value`.
+    - added typed/fallback parity coverage for the same record-constructor replay shape.
+  - immediate next step:
+    - inspect whether positional single-field constructor sugar in legacy `Expr::Call` should be
+      bridged next, or whether another small direct-evaluation family remains cheaper to migrate.
+
+- 2026-03-06 (session 217): Track 4.7 Step 3 moved positional single-field constructor sugar onto the outcome consumer.
+  - implementation:
+    - `crates/goby-wasm/src/lib.rs` now routes legacy positional single-field constructor sugar
+      (`Ctor(value)` synthesized from `Expr::Call`) through `eval_expr_ast_outcome(...)` plus
+      `complete_ast_value_outcome(...)` instead of evaluating the single constructor argument only
+      through the direct evaluator.
+    - this keeps `Ctor(op ...)` on the same suspended-frame boundary before the synthesized record
+      reaches later field access or handler dispatch.
+  - coverage:
+    - added fallback regression for `raise Error(next ())`.
+    - added typed/fallback parity coverage for the same positional single-field constructor replay
+      shape.
+  - immediate next step:
+    - revisit the remaining legacy `Expr::Call` direct-evaluation branches and choose whether the
+      next compact slice should target plain named-call fallback seams or another still-isolated
+      value family.
 
 - 2026-03-06 (session 177): map consolidation Step 8-9 completed.
   - PLAN.md §4.5 checklist updated:

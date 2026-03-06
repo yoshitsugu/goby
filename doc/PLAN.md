@@ -817,6 +817,15 @@ Step-by-step checklist:
                 boundary, so `${...}` segments can replay handled values on the AST path.
               - legacy tuple-literal value evaluation now also reuses the outcome consumer
                 boundary, so tuple elements can replay handled values before later member access.
+              - legacy list-literal value evaluation now also reuses the same outcome consumer
+                boundary, so list elements and spread tails can replay handled values before the
+                list flows into later statements or prints.
+              - legacy record-constructor value evaluation now also reuses the same outcome
+                consumer boundary, so named field values can replay handled values before later
+                record-field access.
+              - positional single-field constructor sugar in legacy `Expr::Call` now also reuses
+                the same outcome consumer boundary, so `Ctor(op ...)` can replay handled values
+                before the synthesized record reaches later field access or handler dispatch.
             - broader call-shape migration has started:
               - direct named multi-arg call chains can now suspend while evaluating their argument
                 list and resume through the same frame consumer boundary.
@@ -894,6 +903,9 @@ Step-by-step checklist:
         - added fallback + typed parity regression for direct binop operand replay.
         - added fallback + typed parity regression for `if` condition replay.
         - added fallback + typed parity regression for `case` scrutinee replay.
+        - added fallback + typed parity regression for legacy list-literal replay.
+        - added fallback + typed parity regression for legacy record-constructor field replay.
+        - added fallback + typed parity regression for positional single-field constructor replay.
         - broader matrix for nested value-position progression is still open.
       - next acceptance target:
         - add the first tests that specifically lock the unified `Suspended(frame)` path, not only

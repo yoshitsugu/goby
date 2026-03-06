@@ -1537,58 +1537,10 @@ impl<'m> RuntimeOutputResolver<'m> {
                 let rv = self.eval_expr_ast(right, locals, callables, evaluators, depth + 1);
                 self.apply_binop_runtime_value(op.clone(), lv, rv?)
             }
-            Expr::ListLit { elements, spread } => {
-                let mut int_items = Vec::with_capacity(elements.len());
-                let mut string_items = Vec::with_capacity(elements.len());
-                let mut list_kind: Option<&'static str> = None;
-                for item in elements {
-                    match self.eval_expr_ast(item, locals, callables, evaluators, depth + 1)? {
-                        RuntimeValue::Int(n) => {
-                            if list_kind == Some("string") {
-                                return None;
-                            }
-                            list_kind = Some("int");
-                            int_items.push(n);
-                        }
-                        RuntimeValue::String(text) => {
-                            if list_kind == Some("int") {
-                                return None;
-                            }
-                            list_kind = Some("string");
-                            string_items.push(text);
-                        }
-                        _ => return None,
-                    }
-                }
-                if let Some(tail) = spread {
-                    match self.eval_expr_ast(tail, locals, callables, evaluators, depth + 1)? {
-                        RuntimeValue::ListInt(mut values) => {
-                            if list_kind == Some("string") {
-                                if values.is_empty() {
-                                    return Some(RuntimeValue::ListString(string_items));
-                                }
-                                return None;
-                            }
-                            int_items.append(&mut values);
-                            return Some(RuntimeValue::ListInt(int_items));
-                        }
-                        RuntimeValue::ListString(mut values) => {
-                            if list_kind == Some("int") {
-                                if values.is_empty() {
-                                    return Some(RuntimeValue::ListInt(int_items));
-                                }
-                                return None;
-                            }
-                            string_items.append(&mut values);
-                            return Some(RuntimeValue::ListString(string_items));
-                        }
-                        _ => return None,
-                    }
-                }
-                match list_kind {
-                    Some("string") => Some(RuntimeValue::ListString(string_items)),
-                    _ => Some(RuntimeValue::ListInt(int_items)),
-                }
+            Expr::ListLit { .. } => {
+                let outcome =
+                    self.eval_expr_ast_outcome(expr, locals, callables, evaluators, depth);
+                self.complete_ast_value_outcome(outcome, evaluators)
             }
             Expr::TupleLit(_) => {
                 let outcome =
@@ -1596,6 +1548,14 @@ impl<'m> RuntimeOutputResolver<'m> {
                 self.complete_ast_value_outcome(outcome, evaluators)
             }
             Expr::Call { callee, arg } => {
+                if let Expr::Var(ctor_name) = callee.as_ref()
+                    && self.single_field_constructor_field(ctor_name).is_some()
+                {
+                    let outcome =
+                        self.eval_expr_ast_outcome(expr, locals, callables, evaluators, depth);
+                    return self.complete_ast_value_outcome(outcome, evaluators);
+                }
+
                 if let Some((fn_name, args)) = flatten_named_call(expr) {
                     let arg_values: Option<Vec<RuntimeValue>> = args
                         .iter()
@@ -1684,33 +1644,10 @@ impl<'m> RuntimeOutputResolver<'m> {
                     self.eval_expr_ast_outcome(expr, locals, callables, evaluators, depth);
                 self.complete_ast_value_outcome(outcome, evaluators)
             }
-            // Record construction: evaluate each field, build RuntimeValue::Record.
-            Expr::RecordConstruct {
-                constructor,
-                fields,
-            } => {
-                if fields.is_empty()
-                    && let Some(value) = self.try_apply_bare_runtime_bridge_value(
-                        constructor,
-                        RuntimeValue::Unit,
-                        locals,
-                        callables,
-                        evaluators,
-                        depth + 1,
-                    )
-                {
-                    return Some(value);
-                }
-                let mut field_map = HashMap::new();
-                for (field_name, field_expr) in fields {
-                    let field_val =
-                        self.eval_expr_ast(field_expr, locals, callables, evaluators, depth + 1)?;
-                    field_map.insert(field_name.clone(), field_val);
-                }
-                Some(RuntimeValue::Record {
-                    constructor: constructor.clone(),
-                    fields: field_map,
-                })
+            Expr::RecordConstruct { .. } => {
+                let outcome =
+                    self.eval_expr_ast_outcome(expr, locals, callables, evaluators, depth);
+                self.complete_ast_value_outcome(outcome, evaluators)
             }
             // Qualified access: `receiver.member`
             // If `receiver` is a local record variable, return the field value.
@@ -2426,6 +2363,30 @@ impl<'m> RuntimeOutputResolver<'m> {
                         depth + 1,
                     );
                 }
+                if let Expr::Var(ctor_name) = callee.as_ref()
+                    && let Some(field_name) = self.single_field_constructor_field(ctor_name)
+                {
+                    let field_value = match self.eval_expr_ast_outcome(
+                        arg,
+                        locals,
+                        callables,
+                        evaluators,
+                        depth + 1,
+                    ) {
+                        AstEvalOutcome::Complete(value) => value,
+                        AstEvalOutcome::Suspended(continuation) => {
+                            return AstEvalOutcome::Suspended(continuation);
+                        }
+                        AstEvalOutcome::Aborted => return AstEvalOutcome::Aborted,
+                        AstEvalOutcome::Unsupported => return AstEvalOutcome::Unsupported,
+                    };
+                    let mut fields = HashMap::new();
+                    fields.insert(field_name, field_value);
+                    return AstEvalOutcome::Complete(RuntimeValue::Record {
+                        constructor: ctor_name.clone(),
+                        fields,
+                    });
+                }
                 if let Expr::Var(fn_name) = callee.as_ref() {
                     let capture_single_arg_frame =
                         self.find_handler_method_by_name(fn_name).is_none();
@@ -2525,6 +2486,45 @@ impl<'m> RuntimeOutputResolver<'m> {
                     evaluators,
                     depth + 1,
                 )
+            }
+            Expr::RecordConstruct {
+                constructor,
+                fields,
+            } => {
+                if fields.is_empty()
+                    && let Some(value) = self.try_apply_bare_runtime_bridge_value(
+                        constructor,
+                        RuntimeValue::Unit,
+                        locals,
+                        callables,
+                        evaluators,
+                        depth + 1,
+                    )
+                {
+                    return AstEvalOutcome::Complete(value);
+                }
+                let mut field_map = HashMap::new();
+                for (field_name, field_expr) in fields {
+                    let field_val = match self.eval_expr_ast_outcome(
+                        field_expr,
+                        locals,
+                        callables,
+                        evaluators,
+                        depth + 1,
+                    ) {
+                        AstEvalOutcome::Complete(value) => value,
+                        AstEvalOutcome::Suspended(continuation) => {
+                            return AstEvalOutcome::Suspended(continuation);
+                        }
+                        AstEvalOutcome::Aborted => return AstEvalOutcome::Aborted,
+                        AstEvalOutcome::Unsupported => return AstEvalOutcome::Unsupported,
+                    };
+                    field_map.insert(field_name.clone(), field_val);
+                }
+                AstEvalOutcome::Complete(RuntimeValue::Record {
+                    constructor: constructor.clone(),
+                    fields: field_map,
+                })
             }
             Expr::Resume { value } => {
                 self.pending_value_continuations.push(AstValueContinuation {
@@ -9315,6 +9315,169 @@ main =
             resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
                 .expect("runtime output should resolve");
         assert_eq!(output, "[\"a\", \"b\", \"c\"]");
+    }
+
+    #[test]
+    fn list_literal_replays_handled_value() {
+        use goby_core::parse_module;
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let source = r#"
+effect Iter
+  next: Int -> Int
+
+main : Unit -> Unit
+main =
+  with
+    next n ->
+      resume (n + 1)
+  in
+    xs = [next 0, 2]
+    print xs
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let output =
+            resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
+                .expect("runtime output should resolve");
+        assert_eq!(output, "[1, 2]");
+    }
+
+    #[test]
+    fn typed_mode_matches_fallback_for_list_literal_replay() {
+        use goby_core::parse_module;
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let source = r#"
+effect Iter
+  next: Int -> Int
+
+main : Unit -> Unit
+main =
+  with
+    next n ->
+      resume (n + 2)
+  in
+    xs = [next 0, 2]
+    print xs
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let typed = assert_mode_parity(&module, "list literal replay");
+        assert_eq!(typed.stdout.as_deref(), Some("[2, 2]"));
+        assert_eq!(typed.runtime_error_kind, None);
+    }
+
+    #[test]
+    fn record_constructor_replays_handled_field_value() {
+        use goby_core::parse_module;
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let source = r#"
+type Box = Box(value: Int)
+
+effect Iter
+  next: Int -> Int
+
+main : Unit -> Unit
+main =
+  with
+    next n ->
+      resume (n + 1)
+  in
+    box = Box(value: next 0)
+    print box.value
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let output =
+            resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
+                .expect("runtime output should resolve");
+        assert_eq!(output, "1");
+    }
+
+    #[test]
+    fn typed_mode_matches_fallback_for_record_constructor_replay() {
+        use goby_core::parse_module;
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let source = r#"
+type Box = Box(value: Int)
+
+effect Iter
+  next: Int -> Int
+
+main : Unit -> Unit
+main =
+  with
+    next n ->
+      resume (n + 2)
+  in
+    box = Box(value: next 0)
+    print box.value
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let typed = assert_mode_parity(&module, "record constructor replay");
+        assert_eq!(typed.stdout.as_deref(), Some("2"));
+        assert_eq!(typed.runtime_error_kind, None);
+    }
+
+    #[test]
+    fn positional_single_field_constructor_replays_handled_value() {
+        use goby_core::parse_module;
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let source = r#"
+type Error = Error(message: String)
+
+effect Msg
+  next: Unit -> String
+
+effect RaiseError
+  raise: Error -> Unit
+
+main : Unit -> Unit
+main =
+  with
+    next _ ->
+      resume "oops"
+  in
+    with
+      raise e ->
+        print e.message
+        resume ()
+    in
+      raise Error(next ())
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let output =
+            resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
+                .expect("runtime output should resolve");
+        assert_eq!(output, "oops");
+    }
+
+    #[test]
+    fn typed_mode_matches_fallback_for_positional_single_field_constructor_replay() {
+        use goby_core::parse_module;
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let source = r#"
+type Error = Error(message: String)
+
+effect Msg
+  next: Unit -> String
+
+effect RaiseError
+  raise: Error -> Unit
+
+main : Unit -> Unit
+main =
+  with
+    next _ ->
+      resume "later"
+  in
+    with
+      raise e ->
+        print e.message
+        resume ()
+    in
+      raise Error(next ())
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let typed = assert_mode_parity(&module, "positional single-field constructor replay");
+        assert_eq!(typed.stdout.as_deref(), Some("later"));
+        assert_eq!(typed.runtime_error_kind, None);
     }
 
     #[test]
