@@ -778,8 +778,10 @@ Step-by-step checklist:
               checkpoints either.
             - single-arg call replay now depends on the outcome-aware path, with only a narrow
               legacy guard remaining inside shared continuation replay.
-            - `BinOp` replay now also depends on the outcome-aware path for checkpoint capture,
-              while its shared replay fallback remains temporarily in place.
+            - `BinOp` replay now also depends on the outcome-aware path end-to-end:
+              shared continuation replay evaluates the right operand through
+              `eval_expr_ast_outcome(...)` and `complete_ast_value_outcome(...)` instead of the
+              old direct-eval seam.
           - done when:
             - the old replay branch for that shape is removed or no longer reachable,
             - tests still pass without relying on dual paths.
@@ -815,6 +817,8 @@ Step-by-step checklist:
             - shared replay cleanup also progressed:
               - the remaining single-arg named-call replay seam no longer treats `Suspended(...)`
                 as an internal error and now reuses the same continuation consumer path.
+              - the remaining `BinOp` shared replay seam now does the same for right-operand
+                evaluation instead of dropping back to `eval_expr_ast(...)`.
             - string-fallback execution is still intentionally out of scope for Step 3.
           - done when:
             - branch/control-flow suspension is proven on both `if` and `case` AST paths,

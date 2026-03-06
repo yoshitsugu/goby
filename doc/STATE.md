@@ -628,6 +628,25 @@ Recent (detailed):
     - continue shrinking remaining compatibility seams, especially around `BinOp` and any other
       path still described as temporary/shared replay fallback in the plan.
 
+- 2026-03-06 (session 202): Track 4.7 Step 3 cleanup trimmed the remaining `BinOp` replay seam.
+  - runtime:
+    - `AstValueContinuationKind::BinOpLeft` no longer evaluates the right operand through
+      legacy `eval_expr_ast(...)` during shared continuation replay.
+    - the right operand now runs through `eval_expr_ast_outcome(...)` and
+      `complete_ast_value_outcome(...)`, so suspended outcomes re-enter the same unified frame
+      consumer boundary used by the migrated shapes.
+  - result:
+    - another old/new split was collapsed without introducing a new continuation kind.
+    - `BinOp` replay now uses the outcome-aware path both for checkpoint capture and replay-time
+      right-operand evaluation.
+  - validation completed:
+    - `cargo fmt`
+    - `cargo test -p goby-wasm binop_operand_replay -- --nocapture`
+    - `cargo test -p goby-wasm`
+  - immediate next step:
+    - inspect whether any other shared replay branch still drops to legacy direct evaluation, then
+      either trim it the same way or move to the next remaining expression family.
+
 - 2026-03-06 (session 177): map consolidation Step 8-9 completed.
   - PLAN.md §4.5 checklist updated:
     - completed: Step 8-9 (map callsite migration + builtin-path trim).
