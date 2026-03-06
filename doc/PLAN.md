@@ -547,52 +547,54 @@ Step-by-step checklist:
   - each `resume` continues from the next resumable point; exhausted continuation raises runtime error.
   - keep guardrails for clearly invalid continuation state transitions.
   - implementation status (2026-03-06):
-    - this step is not a token-only change; the current runtime must be made continuation-aware at
-      the AST evaluator boundary.
-    - a direct one-line change from one-shot to multi-shot would be incorrect because `resume`
-      currently only returns a value to the handler body and does not reify the caller continuation.
-    - groundwork landed in `crates/goby-wasm/src/lib.rs`:
-      - introduced `AstEvalOutcome<T>` as the Step 3 runtime-shape carrier.
-      - handler-dispatch statement execution now branches on explicit AST outcomes instead of
-        relying only on `Option` + token-state probing.
-      - `Suspended(...)` is not emitted yet; real checkpoints still need to be implemented.
-    - first progression slice landed in `crates/goby-wasm/src/lib.rs`:
-      - resume tokens can now carry an AST statement-tail continuation snapshot.
-      - top-level `with` bodies and unit-position AST statement sequences now register
-        continuation checkpoints for remaining statements.
-      - when `resume` consumes such a checkpoint, the remaining unit-position statements execute
-        before the handler body continues, enabling handler-local code after the first `resume`.
-      - continuation exhaustion after that replay still reports the existing deterministic
-        consumed-continuation runtime error.
-    - remaining gap after this slice:
-      - value-position continuation checkpoints are still not implemented.
-      - no explicit `Suspended(...)` result is emitted yet; progression is currently modeled
-        through statement-tail replay only.
-    - latest groundwork slice after the unit-tail replay:
-      - `eval_expr_ast_outcome` now evaluates key composite AST forms recursively instead of
-        only wrapping `eval_expr_ast`.
-      - `InterpolatedString`, `BinOp`, `ListLit`, `TupleLit`, `Block`, `Case`, and `If`
-        can now propagate a future `Suspended(...)` outcome from child expressions without another
-        large refactor.
-      - this slice intentionally preserves current behavior; it is a preparation step for
-        value-position continuation checkpoints, not the checkpoint implementation itself.
-    - latest progression slice after the recursive outcome groundwork:
-      - resume tokens can now also carry binding / assignment continuation checkpoints for
-        AST statement sequences.
-      - when a direct handled operation is used as the RHS of `x = op ...` or `x <- op ...`
-        style assignment, `resume` now restores the resumed value into that local before running
-        the remaining statements.
-      - top-level / `with`-body direct RHS bindings are covered in both fallback and typed mode.
-      - nested deeper value-position checkpoints inside arbitrary expression trees are still open;
-        the current capture is intentionally limited to direct statement RHS replay.
-    - latest declaration/value-expression slice:
-      - AST value evaluation now supports `with ... in <expr>` in value position by evaluating the
-        body as a handler-scoped block expression.
-      - AST value evaluation now supports general declaration calls as values, including:
-        - zero-arity declarations invoked as `f ()`,
-        - multi-argument declarations represented by flattened named calls.
-      - this is sufficient to resolve `examples/iterator_unified.gb` through the fallback runtime
-        and keep typed/fallback parity for that progression shape.
+    - locked premise:
+      - this step is not a token-only change; the runtime must be continuation-aware at the AST
+        evaluator boundary.
+      - a direct one-line change from one-shot to multi-shot would be incorrect because `resume`
+        currently only returns a value to the handler body and does not itself reify the caller
+        continuation.
+    - completed slices:
+      - AST runtime outcome groundwork:
+        - introduced `AstEvalOutcome<T>` as the Step 3 runtime-shape carrier.
+        - handler-dispatch statement execution now branches on explicit AST outcomes instead of
+          relying only on `Option` + token-state probing.
+      - unit-position replay:
+        - resume tokens can carry an AST statement-tail continuation snapshot.
+        - top-level `with` bodies and unit-position AST statement sequences register checkpoints
+          for remaining statements.
+        - `resume` can replay those remaining unit statements before handler-body execution
+          continues.
+      - recursive value-expression groundwork:
+        - `eval_expr_ast_outcome` now evaluates composite AST forms recursively instead of only
+          wrapping `eval_expr_ast`.
+        - covered composite forms: `InterpolatedString`, `BinOp`, `ListLit`, `TupleLit`, `Block`,
+          `Case`, `If`.
+      - direct statement-RHS replay:
+        - resume tokens can also carry binding / assignment continuation checkpoints for AST
+          statement sequences.
+        - when a direct handled operation is used as the RHS of `x = op ...` or assignment,
+          `resume` restores the resumed value into that local before running later statements.
+        - top-level / `with`-body direct RHS bindings are covered in both fallback and typed mode.
+      - AST value-path retention:
+        - AST value evaluation now supports `with ... in <expr>` in value position.
+        - AST value evaluation now supports general declaration calls as values, including
+          zero-arity `f ()` and flattened multi-arg named calls.
+        - `examples/iterator_unified.gb` now resolves through the fallback runtime and matches
+          typed-mode parity for its locked progression shape.
+    - remaining gaps:
+      - no explicit `Suspended(...)` result is emitted yet; progression is still modeled through
+        captured statement/declaration replay.
+      - nested intermediate checkpoints inside arbitrary expression trees are still open:
+        - `resume (op ...)`
+        - call-argument subexpressions
+        - arithmetic / branch subexpressions
+        - deeper `if` / `case` re-entry points
+      - current value-position support is therefore still partial and biased toward statement-level
+        progression shapes.
+    - next implementation target:
+      - introduce the first true nested expression checkpoint producer, most likely from a direct
+        call-argument or branch-subexpression boundary, and thread it through the same
+        fallback/typed contract.
   - confirmed investigation findings:
     - current runtime anchor points:
       - `crates/goby-wasm/src/lib.rs`: `dispatch_handler_method_core`
@@ -652,8 +654,12 @@ Step-by-step checklist:
         - local/callable environment snapshot,
         - pending expression shape where value-position resumption must re-enter.
       - current status:
-        - implemented for AST-backed unit-position statement tails only.
-        - not yet implemented for value-position resumptions or inner expression checkpoints.
+        - implemented for:
+          - AST-backed unit-position statement tails,
+          - direct binding / assignment RHS replay,
+          - declaration/value-expression AST paths needed by `iterator_unified`.
+        - not yet implemented for inner expression checkpoints or general nested value-position
+          resumptions.
       - start with AST-backed paths only; string-fallback paths are not the target for Step 3.
     - [~] Step 3.3: implement progression in fallback mode first
       - make one handler invocation able to call `resume` repeatedly.
@@ -666,13 +672,15 @@ Step-by-step checklist:
         - declaration value calls and value-position `with` expressions now stay on the AST path
           for covered shapes instead of dropping to the old string fallback.
         - repeated `resume` after that completion is covered by regression tests.
-        - progression to intermediate value-position resumable points is still pending.
+        - progression to intermediate nested value-position resumable points is still pending.
       - preserve deterministic `continuation_missing` / `continuation_consumed` style runtime errors.
     - [~] Step 3.4: mirror the same contract in typed-continuation mode
       - keep the current mode-parity harness green while reusing the same externally visible
         behavior.
       - current status:
         - typed mode mirrors the new unit-position replay + exhaustion slice.
+        - typed mode also mirrors direct binding replay, declaration-call progression, and the
+          `iterator_unified` example shape.
       - implementation may still use separate token storage, but not separate semantics.
     - [~] Step 3.5: cover the progression matrix with tests
       - fallback success: one handler invocation resumes through multiple operation sites.
@@ -684,7 +692,7 @@ Step-by-step checklist:
         - added fallback + typed parity regression for direct binding-value replay.
         - added regression/parity coverage for declaration-call progression and
           `iterator_unified.gb`.
-        - broader matrix for value-position progression is still open.
+        - broader matrix for nested value-position progression is still open.
   - restart checklist:
     - begin from `crates/goby-wasm/src/lib.rs`; no parser or typecheck blocker remains for Step 3.
     - preserve existing error-kind mapping in `parity_outcome_from_runtime_output`.
