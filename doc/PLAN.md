@@ -568,6 +568,14 @@ Step-by-step checklist:
       - value-position continuation checkpoints are still not implemented.
       - no explicit `Suspended(...)` result is emitted yet; progression is currently modeled
         through statement-tail replay only.
+    - latest groundwork slice after the unit-tail replay:
+      - `eval_expr_ast_outcome` now evaluates key composite AST forms recursively instead of
+        only wrapping `eval_expr_ast`.
+      - `InterpolatedString`, `BinOp`, `ListLit`, `TupleLit`, `Block`, `Case`, and `If`
+        can now propagate a future `Suspended(...)` outcome from child expressions without another
+        large refactor.
+      - this slice intentionally preserves current behavior; it is a preparation step for
+        value-position continuation checkpoints, not the checkpoint implementation itself.
   - confirmed investigation findings:
     - current runtime anchor points:
       - `crates/goby-wasm/src/lib.rs`: `dispatch_handler_method_core`

@@ -2020,6 +2020,14 @@ impl<'m> RuntimeOutputResolver<'m> {
         }
     }
 
+    fn ast_outcome_from_option<T>(&self, value: Option<T>) -> AstEvalOutcome<T> {
+        match value {
+            Some(value) => AstEvalOutcome::Complete(value),
+            None if self.has_abort_without_error() => AstEvalOutcome::Aborted,
+            None => AstEvalOutcome::Unsupported,
+        }
+    }
+
     fn eval_expr_ast_outcome(
         &mut self,
         expr: &Expr,
@@ -2028,10 +2036,412 @@ impl<'m> RuntimeOutputResolver<'m> {
         evaluators: &RuntimeEvaluators<'_, '_>,
         depth: usize,
     ) -> AstEvalOutcome<RuntimeValue> {
-        match self.eval_expr_ast(expr, locals, callables, evaluators, depth) {
-            Some(value) => AstEvalOutcome::Complete(value),
-            None if self.has_abort_without_error() => AstEvalOutcome::Aborted,
-            None => AstEvalOutcome::Unsupported,
+        if depth >= MAX_EVAL_DEPTH {
+            return AstEvalOutcome::Unsupported;
+        }
+
+        match expr {
+            Expr::InterpolatedString(parts) => {
+                let mut out = String::new();
+                for part in parts {
+                    match part {
+                        InterpolatedPart::Text(text) => out.push_str(text),
+                        InterpolatedPart::Expr(expr) => {
+                            let value = match self.eval_expr_ast_outcome(
+                                expr,
+                                locals,
+                                callables,
+                                evaluators,
+                                depth + 1,
+                            ) {
+                                AstEvalOutcome::Complete(value) => value,
+                                AstEvalOutcome::Suspended(continuation) => {
+                                    return AstEvalOutcome::Suspended(continuation);
+                                }
+                                AstEvalOutcome::Aborted => return AstEvalOutcome::Aborted,
+                                AstEvalOutcome::Unsupported => {
+                                    return AstEvalOutcome::Unsupported;
+                                }
+                            };
+                            out.push_str(&value.to_output_text());
+                        }
+                    }
+                }
+                AstEvalOutcome::Complete(RuntimeValue::String(out))
+            }
+            Expr::BinOp { op, left, right } => {
+                let lv = match self.eval_expr_ast_outcome(
+                    left,
+                    locals,
+                    callables,
+                    evaluators,
+                    depth + 1,
+                ) {
+                    AstEvalOutcome::Complete(value) => value,
+                    AstEvalOutcome::Suspended(continuation) => {
+                        return AstEvalOutcome::Suspended(continuation);
+                    }
+                    AstEvalOutcome::Aborted => return AstEvalOutcome::Aborted,
+                    AstEvalOutcome::Unsupported => return AstEvalOutcome::Unsupported,
+                };
+                let rv = match self.eval_expr_ast_outcome(
+                    right,
+                    locals,
+                    callables,
+                    evaluators,
+                    depth + 1,
+                ) {
+                    AstEvalOutcome::Complete(value) => value,
+                    AstEvalOutcome::Suspended(continuation) => {
+                        return AstEvalOutcome::Suspended(continuation);
+                    }
+                    AstEvalOutcome::Aborted => return AstEvalOutcome::Aborted,
+                    AstEvalOutcome::Unsupported => return AstEvalOutcome::Unsupported,
+                };
+                match (lv, rv) {
+                    (RuntimeValue::Int(l), RuntimeValue::Int(r)) => match op {
+                        goby_core::BinOpKind::Add => match l.checked_add(r) {
+                            Some(value) => AstEvalOutcome::Complete(RuntimeValue::Int(value)),
+                            None => AstEvalOutcome::Unsupported,
+                        },
+                        goby_core::BinOpKind::Mul => match l.checked_mul(r) {
+                            Some(value) => AstEvalOutcome::Complete(RuntimeValue::Int(value)),
+                            None => AstEvalOutcome::Unsupported,
+                        },
+                        goby_core::BinOpKind::Eq => {
+                            AstEvalOutcome::Complete(RuntimeValue::Bool(l == r))
+                        }
+                    },
+                    (RuntimeValue::String(l), RuntimeValue::String(r))
+                        if matches!(op, goby_core::BinOpKind::Eq) =>
+                    {
+                        AstEvalOutcome::Complete(RuntimeValue::Bool(l == r))
+                    }
+                    _ => AstEvalOutcome::Unsupported,
+                }
+            }
+            Expr::ListLit { elements, spread } => {
+                let mut int_items = Vec::with_capacity(elements.len());
+                let mut string_items = Vec::with_capacity(elements.len());
+                let mut list_kind: Option<&'static str> = None;
+                for item in elements {
+                    let value = match self.eval_expr_ast_outcome(
+                        item,
+                        locals,
+                        callables,
+                        evaluators,
+                        depth + 1,
+                    ) {
+                        AstEvalOutcome::Complete(value) => value,
+                        AstEvalOutcome::Suspended(continuation) => {
+                            return AstEvalOutcome::Suspended(continuation);
+                        }
+                        AstEvalOutcome::Aborted => return AstEvalOutcome::Aborted,
+                        AstEvalOutcome::Unsupported => return AstEvalOutcome::Unsupported,
+                    };
+                    match value {
+                        RuntimeValue::Int(n) => {
+                            if list_kind == Some("string") {
+                                return AstEvalOutcome::Unsupported;
+                            }
+                            list_kind = Some("int");
+                            int_items.push(n);
+                        }
+                        RuntimeValue::String(text) => {
+                            if list_kind == Some("int") {
+                                return AstEvalOutcome::Unsupported;
+                            }
+                            list_kind = Some("string");
+                            string_items.push(text);
+                        }
+                        _ => return AstEvalOutcome::Unsupported,
+                    }
+                }
+                if let Some(tail) = spread {
+                    let tail_value = match self.eval_expr_ast_outcome(
+                        tail,
+                        locals,
+                        callables,
+                        evaluators,
+                        depth + 1,
+                    ) {
+                        AstEvalOutcome::Complete(value) => value,
+                        AstEvalOutcome::Suspended(continuation) => {
+                            return AstEvalOutcome::Suspended(continuation);
+                        }
+                        AstEvalOutcome::Aborted => return AstEvalOutcome::Aborted,
+                        AstEvalOutcome::Unsupported => return AstEvalOutcome::Unsupported,
+                    };
+                    return match tail_value {
+                        RuntimeValue::ListInt(mut values) => {
+                            if list_kind == Some("string") {
+                                if values.is_empty() {
+                                    AstEvalOutcome::Complete(RuntimeValue::ListString(string_items))
+                                } else {
+                                    AstEvalOutcome::Unsupported
+                                }
+                            } else {
+                                int_items.append(&mut values);
+                                AstEvalOutcome::Complete(RuntimeValue::ListInt(int_items))
+                            }
+                        }
+                        RuntimeValue::ListString(mut values) => {
+                            if list_kind == Some("int") {
+                                if values.is_empty() {
+                                    AstEvalOutcome::Complete(RuntimeValue::ListInt(int_items))
+                                } else {
+                                    AstEvalOutcome::Unsupported
+                                }
+                            } else {
+                                string_items.append(&mut values);
+                                AstEvalOutcome::Complete(RuntimeValue::ListString(string_items))
+                            }
+                        }
+                        _ => AstEvalOutcome::Unsupported,
+                    };
+                }
+                match list_kind {
+                    Some("string") => {
+                        AstEvalOutcome::Complete(RuntimeValue::ListString(string_items))
+                    }
+                    _ => AstEvalOutcome::Complete(RuntimeValue::ListInt(int_items)),
+                }
+            }
+            Expr::TupleLit(items) => {
+                if items.is_empty() {
+                    return AstEvalOutcome::Complete(RuntimeValue::Unit);
+                }
+                let mut values = Vec::with_capacity(items.len());
+                for item in items {
+                    match self.eval_expr_ast_outcome(item, locals, callables, evaluators, depth + 1)
+                    {
+                        AstEvalOutcome::Complete(value) => values.push(value),
+                        AstEvalOutcome::Suspended(continuation) => {
+                            return AstEvalOutcome::Suspended(continuation);
+                        }
+                        AstEvalOutcome::Aborted => return AstEvalOutcome::Aborted,
+                        AstEvalOutcome::Unsupported => return AstEvalOutcome::Unsupported,
+                    }
+                }
+                AstEvalOutcome::Complete(RuntimeValue::Tuple(values))
+            }
+            Expr::Block(stmts) => {
+                let mut block_locals = locals.clone();
+                let mut block_callables = callables.clone();
+                let mut last_value: Option<RuntimeValue> = None;
+                for stmt in stmts {
+                    match stmt {
+                        Stmt::Binding { name, value } | Stmt::MutBinding { name, value } => {
+                            let v = match self.eval_expr_ast_outcome(
+                                value,
+                                &block_locals,
+                                &block_callables,
+                                evaluators,
+                                depth + 1,
+                            ) {
+                                AstEvalOutcome::Complete(value) => value,
+                                AstEvalOutcome::Suspended(continuation) => {
+                                    return AstEvalOutcome::Suspended(continuation);
+                                }
+                                AstEvalOutcome::Aborted => return AstEvalOutcome::Aborted,
+                                AstEvalOutcome::Unsupported => return AstEvalOutcome::Unsupported,
+                            };
+                            block_locals.store(name, v);
+                            last_value = None;
+                        }
+                        Stmt::Assign { name, value } => {
+                            if block_locals.get(name).is_none() {
+                                return AstEvalOutcome::Unsupported;
+                            }
+                            let v = match self.eval_expr_ast_outcome(
+                                value,
+                                &block_locals,
+                                &block_callables,
+                                evaluators,
+                                depth + 1,
+                            ) {
+                                AstEvalOutcome::Complete(value) => value,
+                                AstEvalOutcome::Suspended(continuation) => {
+                                    return AstEvalOutcome::Suspended(continuation);
+                                }
+                                AstEvalOutcome::Aborted => return AstEvalOutcome::Aborted,
+                                AstEvalOutcome::Unsupported => return AstEvalOutcome::Unsupported,
+                            };
+                            block_locals.store(name, v);
+                            last_value = None;
+                        }
+                        Stmt::Expr(expr) => {
+                            let value = self.eval_expr_ast_outcome(
+                                expr,
+                                &block_locals,
+                                &block_callables,
+                                evaluators,
+                                depth + 1,
+                            );
+                            match value {
+                                AstEvalOutcome::Complete(value) => last_value = Some(value),
+                                AstEvalOutcome::Suspended(continuation) => {
+                                    return AstEvalOutcome::Suspended(continuation);
+                                }
+                                AstEvalOutcome::Aborted => return AstEvalOutcome::Aborted,
+                                AstEvalOutcome::Unsupported => {
+                                    if self
+                                        .execute_unit_expr_ast(
+                                            expr,
+                                            &mut block_locals,
+                                            &mut block_callables,
+                                            evaluators,
+                                            depth + 1,
+                                        )
+                                        .is_none()
+                                    {
+                                        return self.ast_outcome_from_option(None::<RuntimeValue>);
+                                    }
+                                    last_value = Some(RuntimeValue::Unit);
+                                }
+                            }
+                        }
+                    }
+                }
+                self.ast_outcome_from_option(last_value)
+            }
+            Expr::Case { scrutinee, arms } => {
+                let scrutinee_val = match self.eval_expr_ast_outcome(
+                    scrutinee,
+                    locals,
+                    callables,
+                    evaluators,
+                    depth + 1,
+                ) {
+                    AstEvalOutcome::Complete(value) => value,
+                    AstEvalOutcome::Suspended(continuation) => {
+                        return AstEvalOutcome::Suspended(continuation);
+                    }
+                    AstEvalOutcome::Aborted => return AstEvalOutcome::Aborted,
+                    AstEvalOutcome::Unsupported => return AstEvalOutcome::Unsupported,
+                };
+                for arm in arms {
+                    let mut arm_locals = locals.clone();
+                    let matched = match (&arm.pattern, &scrutinee_val) {
+                        (CasePattern::Wildcard, _) => true,
+                        (CasePattern::IntLit(n), RuntimeValue::Int(v)) => n == v,
+                        (CasePattern::StringLit(s), RuntimeValue::String(v)) => s == v,
+                        (CasePattern::BoolLit(b), RuntimeValue::Bool(v)) => b == v,
+                        (CasePattern::EmptyList, RuntimeValue::ListInt(values)) => {
+                            values.is_empty()
+                        }
+                        (CasePattern::EmptyList, RuntimeValue::ListString(values)) => {
+                            values.is_empty()
+                        }
+                        (
+                            CasePattern::ListPattern { items, tail },
+                            RuntimeValue::ListInt(values),
+                        ) => self.match_list_pattern_int(
+                            items,
+                            tail.as_ref(),
+                            values,
+                            &mut arm_locals,
+                        ),
+                        (
+                            CasePattern::ListPattern { items, tail },
+                            RuntimeValue::ListString(values),
+                        ) => self.match_list_pattern_string(
+                            items,
+                            tail.as_ref(),
+                            values,
+                            &mut arm_locals,
+                        ),
+                        _ => false,
+                    };
+                    if matched {
+                        let evaluated = self.eval_expr_ast_outcome(
+                            &arm.body,
+                            &arm_locals,
+                            callables,
+                            evaluators,
+                            depth + 1,
+                        );
+                        return match evaluated {
+                            AstEvalOutcome::Complete(value) => AstEvalOutcome::Complete(value),
+                            AstEvalOutcome::Suspended(continuation) => {
+                                AstEvalOutcome::Suspended(continuation)
+                            }
+                            AstEvalOutcome::Aborted => AstEvalOutcome::Aborted,
+                            AstEvalOutcome::Unsupported => {
+                                let mut arm_callables = callables.clone();
+                                let mut arm_locals_for_unit = arm_locals;
+                                if self
+                                    .execute_unit_expr_ast(
+                                        &arm.body,
+                                        &mut arm_locals_for_unit,
+                                        &mut arm_callables,
+                                        evaluators,
+                                        depth + 1,
+                                    )
+                                    .is_none()
+                                {
+                                    return self.ast_outcome_from_option(None::<RuntimeValue>);
+                                }
+                                AstEvalOutcome::Complete(RuntimeValue::Unit)
+                            }
+                        };
+                    }
+                }
+                AstEvalOutcome::Unsupported
+            }
+            Expr::If {
+                condition,
+                then_expr,
+                else_expr,
+            } => {
+                let cond_val = match self.eval_expr_ast_outcome(
+                    condition,
+                    locals,
+                    callables,
+                    evaluators,
+                    depth + 1,
+                ) {
+                    AstEvalOutcome::Complete(value) => value,
+                    AstEvalOutcome::Suspended(continuation) => {
+                        return AstEvalOutcome::Suspended(continuation);
+                    }
+                    AstEvalOutcome::Aborted => return AstEvalOutcome::Aborted,
+                    AstEvalOutcome::Unsupported => return AstEvalOutcome::Unsupported,
+                };
+                let branch = match cond_val {
+                    RuntimeValue::Bool(true) => then_expr,
+                    RuntimeValue::Bool(false) => else_expr,
+                    _ => return AstEvalOutcome::Unsupported,
+                };
+                match self.eval_expr_ast_outcome(branch, locals, callables, evaluators, depth + 1) {
+                    AstEvalOutcome::Complete(value) => AstEvalOutcome::Complete(value),
+                    AstEvalOutcome::Suspended(continuation) => {
+                        AstEvalOutcome::Suspended(continuation)
+                    }
+                    AstEvalOutcome::Aborted => AstEvalOutcome::Aborted,
+                    AstEvalOutcome::Unsupported => {
+                        let mut branch_locals = locals.clone();
+                        let mut branch_callables = callables.clone();
+                        if self
+                            .execute_unit_expr_ast(
+                                branch,
+                                &mut branch_locals,
+                                &mut branch_callables,
+                                evaluators,
+                                depth + 1,
+                            )
+                            .is_none()
+                        {
+                            return self.ast_outcome_from_option(None::<RuntimeValue>);
+                        }
+                        AstEvalOutcome::Complete(RuntimeValue::Unit)
+                    }
+                }
+            }
+            _ => {
+                let value = self.eval_expr_ast(expr, locals, callables, evaluators, depth);
+                self.ast_outcome_from_option(value)
+            }
         }
     }
 

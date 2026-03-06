@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-06 (session 184)
+Last updated: 2026-03-06 (session 185)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -209,6 +209,33 @@ Recent (detailed):
     - `cargo fmt`
     - `cargo check`
     - `cargo test -p goby-wasm`
+
+- 2026-03-06 (session 185): Track 4.7 Step 3 recursive AST-outcome groundwork.
+  - runtime:
+    - `crates/goby-wasm/src/lib.rs` `eval_expr_ast_outcome` now evaluates
+      composite AST forms recursively instead of only wrapping `eval_expr_ast`.
+    - covered composite forms:
+      - interpolated strings,
+      - binary operators,
+      - list / tuple literals,
+      - block expressions,
+      - `case`,
+      - `if`.
+    - this does not emit `Suspended(...)` yet, but it establishes the control-flow
+      shape needed for future value-position checkpoint propagation.
+  - reason for landing this slice:
+    - the current Step 3 blocker is not only token storage; value-position
+      progression needs child-expression outcomes to bubble through composite AST
+      nodes without collapsing back to `Option`.
+    - the previous wrapper-only `eval_expr_ast_outcome` would have forced another
+      large refactor before any value-position suspension producer could be added.
+  - validation completed:
+    - `cargo test -p goby-wasm`
+  - immediate next step:
+    - introduce the first real value-position suspension producer/checkpoint,
+      likely starting from a narrowly scoped composite expression boundary
+      (`BinOp`, call-argument chain, or `if` branch progression) and mirror the
+      same external behavior in typed mode.
 
 - 2026-03-06 (session 177): map consolidation Step 8-9 completed.
   - PLAN.md §4.5 checklist updated:

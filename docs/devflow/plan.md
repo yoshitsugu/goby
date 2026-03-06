@@ -116,3 +116,7 @@
 - 2026-03-06: Step 3 gained a first runtime slice limited to AST-backed
   unit-position statement-tail replay; value-position continuation checkpoints
   remain deferred and are tracked explicitly in `doc/PLAN.md`.
+- 2026-03-06: Step 3 follow-up refactored `eval_expr_ast_outcome` into a
+  recursive evaluator for composite AST forms so future `Suspended(...)`
+  checkpoints can propagate through value-position constructs without another
+  wrapper-only rewrite.
