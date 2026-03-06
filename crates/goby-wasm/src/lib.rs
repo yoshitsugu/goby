@@ -4541,7 +4541,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                     continuation.depth,
                 );
                 self.pending_value_continuations.pop();
-                let right_value = self.complete_ast_value_outcome(right_outcome, evaluators)?;
+                let right_value = self.consume_saved_value_outcome(right_outcome, evaluators)?;
                 self.apply_binop_runtime_value(op, left_value, right_value)
             }
             AstValueContinuationKind::BinOpRight { op, left_value } => {
