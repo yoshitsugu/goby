@@ -154,6 +154,9 @@
 - 2026-03-06: Step 3 cleanup then trimmed the remaining `BinOp` shared replay
   seam too: replay-time right-operand evaluation now also stays on
   `eval_expr_ast_outcome(...)` plus `complete_ast_value_outcome(...)`.
+- 2026-03-06: Step 3 cleanup also trimmed the remaining pipeline replay seam:
+  pipeline replay now uses an outcome-aware helper instead of rebuilding a
+  string expression and re-entering `apply_pipeline(...)`.
 - 2026-03-06: Step 3.2d also crossed the first branch/control-flow boundary:
   `AstContinuation` now carries the resumed value payload directly, the runtime
   can consume suspended frames through `complete_ast_value_outcome(...)`, and

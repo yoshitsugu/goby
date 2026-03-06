@@ -1294,6 +1294,18 @@ impl<'m> RuntimeOutputResolver<'m> {
         self.eval_value_with_context(&call_expr, locals, callables, evaluators)
     }
 
+    fn apply_pipeline_ast_outcome(
+        &mut self,
+        callee: &str,
+        value: RuntimeValue,
+        locals: &RuntimeLocals,
+        callables: &HashMap<String, IntCallable>,
+        evaluators: &RuntimeEvaluators<'_, '_>,
+        depth: usize,
+    ) -> AstEvalOutcome<RuntimeValue> {
+        self.apply_named_value_call_ast_outcome(callee, value, locals, callables, evaluators, depth)
+    }
+
     fn apply_runtime_intrinsic_ast(
         &mut self,
         name: &str,
@@ -2628,15 +2640,14 @@ impl<'m> RuntimeOutputResolver<'m> {
                     AstEvalOutcome::Aborted => return AstEvalOutcome::Aborted,
                     AstEvalOutcome::Unsupported => return AstEvalOutcome::Unsupported,
                 };
-                let value = self.apply_pipeline(
+                self.apply_pipeline_ast_outcome(
                     callee,
                     pipeline_value,
                     locals,
                     callables,
                     evaluators,
                     depth + 1,
-                );
-                self.ast_outcome_from_option(value)
+                )
             }
             Expr::Resume { value } => {
                 self.pending_value_continuations.push(AstValueContinuation {
@@ -4403,14 +4414,23 @@ impl<'m> RuntimeOutputResolver<'m> {
                     AstEvalOutcome::Aborted | AstEvalOutcome::Unsupported => None,
                 }
             }
-            AstValueContinuationKind::PipelineCall { callee } => self.apply_pipeline(
-                &callee,
-                resumed,
-                &continuation.locals,
-                &continuation.callables,
-                evaluators,
-                continuation.depth,
-            ),
+            AstValueContinuationKind::PipelineCall { callee } => {
+                match self.apply_pipeline_ast_outcome(
+                    &callee,
+                    resumed,
+                    &continuation.locals,
+                    &continuation.callables,
+                    evaluators,
+                    continuation.depth,
+                ) {
+                    AstEvalOutcome::Complete(value) => Some(value),
+                    AstEvalOutcome::Suspended(continuation) => self.complete_ast_value_outcome(
+                        AstEvalOutcome::Suspended(continuation),
+                        evaluators,
+                    ),
+                    AstEvalOutcome::Aborted | AstEvalOutcome::Unsupported => None,
+                }
+            }
             AstValueContinuationKind::ReceiverMethodCall { receiver, member } => {
                 match self.apply_receiver_method_value_call_ast_outcome(
                     &receiver,

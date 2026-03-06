@@ -647,6 +647,24 @@ Recent (detailed):
     - inspect whether any other shared replay branch still drops to legacy direct evaluation, then
       either trim it the same way or move to the next remaining expression family.
 
+- 2026-03-06 (session 203): Track 4.7 Step 3 cleanup trimmed the remaining pipeline replay seam.
+  - runtime:
+    - `PipelineCall` replay no longer routes back through `apply_pipeline(...)` string
+      reconstruction.
+    - both `Expr::Pipeline` and replay-time pipeline continuation application now use an
+      outcome-aware helper that delegates to the named-call AST path directly.
+  - result:
+    - another compatibility seam was removed without adding a new continuation kind.
+    - pipeline replay now follows the same suspended-frame consumer boundary as the other migrated
+      call-like shapes.
+  - validation completed:
+    - `cargo fmt`
+    - `cargo test -p goby-wasm pipeline_value_replay -- --nocapture`
+    - `cargo test -p goby-wasm`
+  - immediate next step:
+    - keep checking whether any remaining replay branch still depends on string reconstruction or
+      legacy direct evaluation before moving on to larger cleanup.
+
 - 2026-03-06 (session 177): map consolidation Step 8-9 completed.
   - PLAN.md §4.5 checklist updated:
     - completed: Step 8-9 (map callsite migration + builtin-path trim).

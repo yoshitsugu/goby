@@ -819,6 +819,8 @@ Step-by-step checklist:
                 as an internal error and now reuses the same continuation consumer path.
               - the remaining `BinOp` shared replay seam now does the same for right-operand
                 evaluation instead of dropping back to `eval_expr_ast(...)`.
+              - `PipelineCall` now also reuses the outcome-aware named-call helper instead of
+                replay-time string reconstruction through `apply_pipeline(...)`.
             - string-fallback execution is still intentionally out of scope for Step 3.
           - done when:
             - branch/control-flow suspension is proven on both `if` and `case` AST paths,
