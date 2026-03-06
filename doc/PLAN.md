@@ -541,10 +541,19 @@ Goal: align runtime/typecheck behavior with the current `LANGUAGE_SPEC` contract
 
 Step-by-step checklist:
 
-- [ ] Step 1: semantic alignment audit
+- [x] Step 1: semantic alignment audit
   - identify all runtime paths where handler operation calls are evaluated
     (fallback runtime + typed mode runtime bridge).
   - confirm current no-`resume` behavior for both value-position and unit-position operation calls.
+  - audit result (2026-03-06):
+    - handled operation dispatch currently enters through `eval_ast_side_effect`,
+      `eval_expr_ast`, and `execute_unit_expr_ast`, converging on
+      `dispatch_handler_method_core`.
+    - value-position no-`resume` calls already behave abortively through the
+      absence of a resumed value.
+    - unit-position no-`resume` calls still return success from
+      `dispatch_handler_method`, so execution may continue past the handled
+      operation boundary.
 - [ ] Step 2: runtime abort contract implementation
   - add explicit abort signal/state in runtime dispatch core.
   - ensure no-`resume` handler completion triggers immediate program stop at operation boundary
