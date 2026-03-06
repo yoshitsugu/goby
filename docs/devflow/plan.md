@@ -159,3 +159,7 @@
 - 2026-03-06: Step 3.2d extended the same branch/control-flow consumer boundary
   to `case`: scrutinee replay now suspends via the unified frame path on AST
   declaration bodies, with fallback / typed parity coverage.
+- 2026-03-06: Step 3.2d then moved back to broader call shapes narrowly:
+  multi-arg direct named-call argument lists now suspend through a unified
+  `MultiArgNamedCall` frame on the AST path, with fallback / typed parity
+  coverage.

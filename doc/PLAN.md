@@ -729,6 +729,7 @@ Step-by-step checklist:
           - declaration/value-expression AST paths needed by `iterator_unified`.
           - shared resume transport via `AstContinuationFrame`.
           - first evaluator-produced suspended frame for value-only single-arg named calls.
+          - multi-arg direct named-call argument replay on the AST path.
           - first branch/control-flow suspended frame for `if` condition replay on the AST path.
           - `case` scrutinee suspended frame on the AST declaration path.
         - not yet unified:
@@ -795,6 +796,9 @@ Step-by-step checklist:
                 parity tests,
               - `case` scrutinee replay is covered on the AST declaration path with fallback/typed
                 parity tests.
+            - broader call-shape migration has started:
+              - direct named multi-arg call chains can now suspend while evaluating their argument
+                list and resume through the same frame consumer boundary.
             - string-fallback execution is still intentionally out of scope for Step 3.
           - done when:
             - branch/control-flow suspension is proven on both `if` and `case` AST paths,
@@ -824,6 +828,7 @@ Step-by-step checklist:
           `iterator_unified` example shape.
         - typed mode also mirrors the current migrated nested replay slices:
           - single-arg call,
+          - multi-arg direct named call arguments,
           - direct binop operand replay,
           - `if` condition replay on the AST declaration path,
           - `case` scrutinee replay on the AST declaration path.
@@ -839,6 +844,7 @@ Step-by-step checklist:
         - added regression/parity coverage for declaration-call progression and
           `iterator_unified.gb`.
         - added fallback + typed parity regression for single-arg call-argument replay.
+        - added fallback + typed parity regression for multi-arg named call-argument replay.
         - added fallback + typed parity regression for direct binop operand replay.
         - added fallback + typed parity regression for `if` condition replay.
         - added fallback + typed parity regression for `case` scrutinee replay.

@@ -584,6 +584,11 @@ enum AstValueContinuationKind {
     SingleArgNamedCall {
         fn_name: String,
     },
+    MultiArgNamedCall {
+        fn_name: String,
+        evaluated_args: Vec<RuntimeValue>,
+        remaining_args: Vec<Expr>,
+    },
     CaseScrutinee {
         arms: Vec<goby_core::CaseArm>,
     },
@@ -1953,6 +1958,42 @@ impl<'m> RuntimeOutputResolver<'m> {
         None
     }
 
+    fn eval_named_call_args_outcome(
+        &mut self,
+        fn_name: &str,
+        args: &[&Expr],
+        already_evaluated: &[RuntimeValue],
+        context: (&RuntimeLocals, &HashMap<String, IntCallable>, usize),
+        evaluators: &RuntimeEvaluators<'_, '_>,
+    ) -> AstEvalOutcome<Vec<RuntimeValue>> {
+        let (locals, callables, depth) = context;
+        let mut evaluated_args = already_evaluated.to_vec();
+        for (idx, arg_expr) in args.iter().enumerate() {
+            self.pending_value_continuations.push(AstValueContinuation {
+                kind: AstValueContinuationKind::MultiArgNamedCall {
+                    fn_name: fn_name.to_string(),
+                    evaluated_args: evaluated_args.clone(),
+                    remaining_args: args[idx + 1..].iter().map(|expr| (*expr).clone()).collect(),
+                },
+                locals: locals.clone(),
+                callables: callables.clone(),
+                depth: depth + 1,
+            });
+            let outcome =
+                self.eval_expr_ast_outcome(arg_expr, locals, callables, evaluators, depth + 1);
+            self.pending_value_continuations.pop();
+            match outcome {
+                AstEvalOutcome::Complete(value) => evaluated_args.push(value),
+                AstEvalOutcome::Suspended(continuation) => {
+                    return AstEvalOutcome::Suspended(continuation);
+                }
+                AstEvalOutcome::Aborted => return AstEvalOutcome::Aborted,
+                AstEvalOutcome::Unsupported => return AstEvalOutcome::Unsupported,
+            }
+        }
+        AstEvalOutcome::Complete(evaluated_args)
+    }
+
     fn eval_expr_ast_outcome(
         &mut self,
         expr: &Expr,
@@ -2397,6 +2438,33 @@ impl<'m> RuntimeOutputResolver<'m> {
                 }
             }
             Expr::Call { callee, arg } => {
+                if let Some((fn_name, args)) = flatten_named_call(expr)
+                    && args.len() > 1
+                {
+                    let arg_values = match self.eval_named_call_args_outcome(
+                        fn_name,
+                        args.as_slice(),
+                        &[],
+                        (locals, callables, depth),
+                        evaluators,
+                    ) {
+                        AstEvalOutcome::Complete(values) => values,
+                        AstEvalOutcome::Suspended(continuation) => {
+                            return AstEvalOutcome::Suspended(continuation);
+                        }
+                        AstEvalOutcome::Aborted => return AstEvalOutcome::Aborted,
+                        AstEvalOutcome::Unsupported => return AstEvalOutcome::Unsupported,
+                    };
+                    let value = self.apply_named_value_call_ast(
+                        fn_name,
+                        &arg_values,
+                        locals,
+                        callables,
+                        evaluators,
+                        depth + 1,
+                    );
+                    return self.ast_outcome_from_option(value);
+                }
                 if let Expr::Var(fn_name) = callee.as_ref() {
                     let capture_single_arg_frame =
                         self.find_handler_method_by_name(fn_name).is_none();
@@ -4173,6 +4241,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                 frame.value.as_ref().map(|continuation| &continuation.kind),
                 Some(
                     AstValueContinuationKind::SingleArgNamedCall { .. }
+                        | AstValueContinuationKind::MultiArgNamedCall { .. }
                         | AstValueContinuationKind::CaseScrutinee { .. }
                         | AstValueContinuationKind::IfCondition { .. }
                         | AstValueContinuationKind::BinOpLeft { .. }
@@ -4272,6 +4341,43 @@ impl<'m> RuntimeOutputResolver<'m> {
                 }
                 AstEvalOutcome::Aborted | AstEvalOutcome::Unsupported => None,
             },
+            AstValueContinuationKind::MultiArgNamedCall {
+                fn_name,
+                evaluated_args,
+                remaining_args,
+            } => {
+                let mut evaluated_args = evaluated_args;
+                evaluated_args.push(resumed);
+                let remaining_args = remaining_args.iter().collect::<Vec<_>>();
+                let arg_values = match self.eval_named_call_args_outcome(
+                    &fn_name,
+                    remaining_args.as_slice(),
+                    &evaluated_args,
+                    (
+                        &continuation.locals,
+                        &continuation.callables,
+                        continuation.depth,
+                    ),
+                    evaluators,
+                ) {
+                    AstEvalOutcome::Complete(values) => values,
+                    AstEvalOutcome::Suspended(continuation) => {
+                        return self.complete_ast_value_outcome(
+                            AstEvalOutcome::Suspended(continuation),
+                            evaluators,
+                        );
+                    }
+                    AstEvalOutcome::Aborted | AstEvalOutcome::Unsupported => return None,
+                };
+                self.apply_named_value_call_ast(
+                    &fn_name,
+                    &arg_values,
+                    &continuation.locals,
+                    &continuation.callables,
+                    evaluators,
+                    continuation.depth,
+                )
+            }
             AstValueContinuationKind::CaseScrutinee { arms } => {
                 let (arm_body, arm_locals) =
                     self.select_case_arm(&resumed, &arms, &continuation.locals)?;
@@ -8067,6 +8173,59 @@ main =
         let module = parse_module(source).expect("parse should work");
         let typed = assert_mode_parity(&module, "case scrutinee replay");
         assert_eq!(typed.stdout.as_deref(), Some("20"));
+        assert_eq!(typed.runtime_error_kind, None);
+    }
+
+    #[test]
+    fn resume_replays_multi_arg_named_call_arguments() {
+        use goby_core::parse_module;
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let source = r#"
+effect Iter
+  next: Int -> Int
+
+sum3 : Int -> Int -> Int -> Int
+sum3 a b c = a + b + c
+
+main : Unit -> Unit
+main =
+  with
+    next n ->
+      resume (n + 1)
+  in
+    print (sum3 (next 0) 2 3)
+    print (sum3 1 (next 0) 3)
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let output =
+            resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
+                .expect("runtime output should resolve");
+        assert_eq!(output, "65");
+    }
+
+    #[test]
+    fn typed_mode_matches_fallback_for_multi_arg_named_call_replay() {
+        use goby_core::parse_module;
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let source = r#"
+effect Iter
+  next: Int -> Int
+
+sum3 : Int -> Int -> Int -> Int
+sum3 a b c = a + b + c
+
+main : Unit -> Unit
+main =
+  with
+    next n ->
+      resume (n + 2)
+  in
+    print (sum3 (next 0) 2 3)
+    print (sum3 1 (next 0) 3)
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let typed = assert_mode_parity(&module, "multi-arg named call replay");
+        assert_eq!(typed.stdout.as_deref(), Some("76"));
         assert_eq!(typed.runtime_error_kind, None);
     }
 

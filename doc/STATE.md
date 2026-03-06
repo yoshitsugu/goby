@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-06 (session 196)
+Last updated: 2026-03-06 (session 197)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -521,6 +521,32 @@ Recent (detailed):
   - immediate next step:
     - reuse the same consumer boundary for broader call shapes / nested call chains.
     - after that, revisit `resume (op ...)` as the remaining nested progression gap.
+
+- 2026-03-06 (session 197): Track 4.7 Step 3.2d multi-arg named-call replay slice landed.
+  - runtime:
+    - added `MultiArgNamedCall` as a unified value continuation shape for direct named-call
+      argument lists.
+    - `eval_named_call_args_outcome(...)` now evaluates flattened multi-arg call chains
+      incrementally and suspends through the shared frame path when an argument hits a handled
+      operation.
+    - resumed multi-arg argument evaluation now returns to existing
+      `apply_named_value_call_ast(...)`, so the slice changes checkpoint transport without widening
+      call semantics.
+  - result:
+    - broader call-shape migration has started without reopening token-only replay.
+    - Step 3 now covers nested progression on:
+      - single-arg named calls,
+      - multi-arg named-call argument lists,
+      - `BinOp`,
+      - `if`,
+      - `case`.
+  - validation completed:
+    - `cargo fmt`
+    - `cargo test -p goby-wasm multi_arg_named_call_replay -- --nocapture`
+    - `cargo test -p goby-wasm`
+  - immediate next step:
+    - revisit `resume (op ...)` as the remaining high-value nested progression gap.
+    - if call-shape work continues first, target non-direct callees or mixed call/effect chains.
 
 - 2026-03-06 (session 177): map consolidation Step 8-9 completed.
   - PLAN.md §4.5 checklist updated:
