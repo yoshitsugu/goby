@@ -793,6 +793,23 @@ Recent (detailed):
     - decide whether the next high-value seam is assignment-specific coverage or a broader
       expression family such as value-position `case` arm bodies.
 
+- 2026-03-06 (session 210): Track 4.7 Step 3 locked assignment-RHS parity on the new path.
+  - coverage:
+    - added fallback regression for `value = if flag 0 ... else ...` reassignment with nested
+      handled value replay in the selected branch.
+    - added typed/fallback parity coverage for the same assignment-RHS shape.
+  - result:
+    - the statement-RHS outcome path now has both binding and assignment regression coverage.
+    - no runtime semantics changed in this slice; it locks the already migrated path.
+  - validation completed:
+    - `cargo fmt`
+    - `cargo test -p goby-wasm assignment_rhs_if_replays_through_outcome_path -- --nocapture`
+    - `cargo test -p goby-wasm typed_mode_matches_fallback_for_assignment_rhs_if_outcome_path -- --nocapture`
+    - `cargo test -p goby-wasm`
+  - immediate next step:
+    - return to the next semantic gap rather than more symmetry-only coverage unless a real
+      regression risk appears.
+
 - 2026-03-06 (session 177): map consolidation Step 8-9 completed.
   - PLAN.md §4.5 checklist updated:
     - completed: Step 8-9 (map callsite migration + builtin-path trim).

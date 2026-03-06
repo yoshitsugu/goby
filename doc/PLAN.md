@@ -804,6 +804,7 @@ Step-by-step checklist:
                 falling back to unit execution,
               - statement-level binding / assignment RHS now also consumes outcome-based values
                 before storing them,
+              - assignment-specific parity is now also covered for the same RHS path,
               - `case` scrutinee replay is covered on the AST declaration path with fallback/typed
                 parity tests.
             - broader call-shape migration has started:

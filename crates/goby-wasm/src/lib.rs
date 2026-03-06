@@ -8444,6 +8444,71 @@ main =
     }
 
     #[test]
+    fn assignment_rhs_if_replays_through_outcome_path() {
+        use goby_core::parse_module;
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let source = r#"
+effect Pred
+  flag: Int -> Bool
+
+effect Iter
+  next: Int -> Int
+
+main : Unit -> Unit
+main =
+  with
+    flag n ->
+      resume True
+    next n ->
+      resume (n + 1)
+  in
+    value = 0
+    value = if flag 0
+      next 0
+    else
+      99
+    print value
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let output =
+            resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
+                .expect("runtime output should resolve");
+        assert_eq!(output, "1");
+    }
+
+    #[test]
+    fn typed_mode_matches_fallback_for_assignment_rhs_if_outcome_path() {
+        use goby_core::parse_module;
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let source = r#"
+effect Pred
+  flag: Int -> Bool
+
+effect Iter
+  next: Int -> Int
+
+main : Unit -> Unit
+main =
+  with
+    flag n ->
+      resume False
+    next n ->
+      resume (n + 3)
+  in
+    value = 0
+    value = if flag 0
+      99
+    else
+      next 0
+    print value
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let typed = assert_mode_parity(&module, "assignment rhs if outcome path");
+        assert_eq!(typed.stdout.as_deref(), Some("3"));
+        assert_eq!(typed.runtime_error_kind, None);
+    }
+
+    #[test]
     fn resume_replays_case_scrutinee_continuation() {
         use goby_core::parse_module;
         let _guard = ENV_MUTEX.lock().unwrap();
