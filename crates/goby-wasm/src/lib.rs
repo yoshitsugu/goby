@@ -1547,7 +1547,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                     self.eval_expr_ast_outcome(expr, locals, callables, evaluators, depth);
                 self.complete_ast_value_outcome(outcome, evaluators)
             }
-            Expr::Call { callee, arg } => {
+            Expr::Call { callee, arg: _ } => {
                 if let Expr::Var(ctor_name) = callee.as_ref()
                     && self.single_field_constructor_field(ctor_name).is_some()
                 {
@@ -1562,20 +1562,6 @@ impl<'m> RuntimeOutputResolver<'m> {
                     let outcome =
                         self.eval_expr_ast_outcome(expr, locals, callables, evaluators, depth);
                     return self.complete_ast_value_outcome(outcome, evaluators);
-                }
-
-                // Positional single-field record constructor sugar: `Ctor(value)` → `Ctor(field: value)`.
-                // Apply when callee is a bare name that matches a known single-field record constructor.
-                if let Expr::Var(ctor_name) = callee.as_ref()
-                    && let Some(field_name) = self.single_field_constructor_field(ctor_name)
-                {
-                    let val = self.eval_expr_ast(arg, locals, callables, evaluators, depth + 1)?;
-                    let mut fields = HashMap::new();
-                    fields.insert(field_name, val);
-                    return Some(RuntimeValue::Record {
-                        constructor: ctor_name.clone(),
-                        fields,
-                    });
                 }
 
                 if let Expr::Var(_) = callee.as_ref() {
