@@ -3180,13 +3180,17 @@ impl<'m> RuntimeOutputResolver<'m> {
     ) -> Option<()> {
         match stmt {
             Stmt::Binding { name, value } | Stmt::MutBinding { name, value } => {
-                let v = self.eval_expr_ast(value, locals, callables, evaluators, depth)?;
+                let outcome =
+                    self.eval_expr_ast_outcome(value, locals, callables, evaluators, depth);
+                let v = self.complete_ast_value_outcome(outcome, evaluators)?;
                 locals.store(name, v);
                 Some(())
             }
             Stmt::Assign { name, value } => {
                 locals.get(name)?;
-                let v = self.eval_expr_ast(value, locals, callables, evaluators, depth)?;
+                let outcome =
+                    self.eval_expr_ast_outcome(value, locals, callables, evaluators, depth);
+                let v = self.complete_ast_value_outcome(outcome, evaluators)?;
                 locals.store(name, v);
                 Some(())
             }
@@ -8373,6 +8377,69 @@ main =
         let module = parse_module(source).expect("parse should work");
         let typed = assert_mode_parity(&module, "unit-position if branch value replay");
         assert_eq!(typed.stdout.as_deref(), Some("1"));
+        assert_eq!(typed.runtime_error_kind, None);
+    }
+
+    #[test]
+    fn binding_rhs_if_replays_through_outcome_path() {
+        use goby_core::parse_module;
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let source = r#"
+effect Pred
+  flag: Int -> Bool
+
+effect Iter
+  next: Int -> Int
+
+main : Unit -> Unit
+main =
+  with
+    flag n ->
+      resume True
+    next n ->
+      resume (n + 1)
+  in
+    value = if flag 0
+      next 0
+    else
+      99
+    print value
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let output =
+            resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
+                .expect("runtime output should resolve");
+        assert_eq!(output, "1");
+    }
+
+    #[test]
+    fn typed_mode_matches_fallback_for_binding_rhs_if_outcome_path() {
+        use goby_core::parse_module;
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let source = r#"
+effect Pred
+  flag: Int -> Bool
+
+effect Iter
+  next: Int -> Int
+
+main : Unit -> Unit
+main =
+  with
+    flag n ->
+      resume False
+    next n ->
+      resume (n + 2)
+  in
+    value = if flag 0
+      99
+    else
+      next 0
+    print value
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let typed = assert_mode_parity(&module, "binding rhs if outcome path");
+        assert_eq!(typed.stdout.as_deref(), Some("2"));
         assert_eq!(typed.runtime_error_kind, None);
     }
 

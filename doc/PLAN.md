@@ -802,6 +802,8 @@ Step-by-step checklist:
               - unit-position `if` condition replay now also uses the same suspended-frame path,
               - selected unit-position `if` branches now probe the same outcome path before
                 falling back to unit execution,
+              - statement-level binding / assignment RHS now also consumes outcome-based values
+                before storing them,
               - `case` scrutinee replay is covered on the AST declaration path with fallback/typed
                 parity tests.
             - broader call-shape migration has started:

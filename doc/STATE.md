@@ -774,6 +774,25 @@ Recent (detailed):
     - inspect whether `case` in unit position has an analogous remaining seam; otherwise move on to
       the next semantic gap rather than continuing small cleanup slices indefinitely.
 
+- 2026-03-06 (session 209): Track 4.7 Step 3 widened statement-level RHS evaluation.
+  - runtime:
+    - `execute_unit_ast_stmt(...)` now evaluates binding/assignment RHS expressions through
+      `eval_expr_ast_outcome(...)` plus `complete_ast_value_outcome(...)` before storing them.
+    - this keeps statement-level value production closer to the same suspended-frame contract used
+      by migrated expression paths.
+  - coverage:
+    - added fallback regression for `value = if flag 0 ... else ...` with nested handled value
+      replay in the selected branch.
+    - added typed/fallback parity coverage for the same binding-RHS shape.
+  - validation completed:
+    - `cargo fmt`
+    - `cargo test -p goby-wasm binding_rhs_if_replays_through_outcome_path -- --nocapture`
+    - `cargo test -p goby-wasm typed_mode_matches_fallback_for_binding_rhs_if_outcome_path -- --nocapture`
+    - `cargo test -p goby-wasm`
+  - immediate next step:
+    - decide whether the next high-value seam is assignment-specific coverage or a broader
+      expression family such as value-position `case` arm bodies.
+
 - 2026-03-06 (session 177): map consolidation Step 8-9 completed.
   - PLAN.md §4.5 checklist updated:
     - completed: Step 8-9 (map callsite migration + builtin-path trim).
