@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-07 (session 218)
+Last updated: 2026-03-07 (session 219)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -17,20 +17,24 @@ this section takes priority.
     families (single-arg/multi-arg named calls, receiver-method calls, pipeline,
     `BinOp`, `if`, `case`, nested `resume`, `InterpolatedString`, `TupleLit`,
     `ListLit`, `RecordConstruct`, positional single-field constructor sugar).
-  - legacy `eval_expr_ast` `Expr::Call` named-call seams are now also bridged:
-    - `flatten_named_call` multi-arg arm routes through outcome consumer
-    - `Expr::Var` single-arg arm routes through outcome consumer
-    - `flatten_named_call` gained `args.len() > 1` guard to match outcome-path split
-  - committed: `Route legacy Expr::Call named-call seams through outcome consumer`
-    (commit b9e332a)
+  - legacy `eval_expr_ast` `Expr::Call` seams are now fully bridged:
+    - multi-arg named-call arm → outcome consumer
+    - single-arg `Expr::Var` arm → outcome consumer
+    - `Expr::Qualified` callee arm → outcome consumer (session 219)
+  - the only remaining legacy `eval_expr_ast` arm in `Expr::Call` is the
+    positional single-field ctor arm (later arm, approx lines 1567-1579) —
+    the early guard (1551-1557) already routes outcome path first, so this
+    arm is effectively unreachable after migration.
 - Required next restart point:
-  - the remaining `Expr::Call` legacy direct-eval branches in `eval_expr_ast` are now:
-    - positional single-field ctor arm (1581-1591) — still uses `eval_expr_ast` directly,
-      but the early guard (1551-1557) already routes outcome path first
-    - `Expr::Qualified` callee arm (1609+) — still uses `eval_expr_ast` directly
-  - next candidate: inspect `Expr::Qualified` callee arm in `eval_expr_ast` for
-    migration to outcome path, or assess whether remaining ctor/qualified seams
-    are worth a further slice vs moving to a new semantic target.
+  - the value-position `Expr::Call` migration is essentially complete.
+  - next slice options:
+    1. Inspect and clean up the now-unreachable positional ctor later arm
+       (remove or verify dead-code status).
+    2. Extend outcome-path coverage to unit-position qualified-call branch
+       in `execute_unit_expr_ast` (~line 2595), noted by Codex as a
+       non-blocking remaining gap.
+    3. Assess whether a new semantic target is more valuable than further
+       cleanup of these residual seams.
 - External internal records:
   - devflow notes live outside the repo under
     `/home/yoshitsugu/.codex/devflow/goby-c372fa22bba4/`
@@ -123,6 +127,19 @@ this section takes priority.
 ## 4. Recent Milestones
 
 Recent (detailed):
+
+- 2026-03-07 (session 219): Track 4.7 Step 3 legacy `Expr::Qualified` callee arm bridged.
+  - runtime:
+    - `eval_expr_ast` `Expr::Call` / `Expr::Qualified` arm no longer evaluates arg via
+      `eval_expr_ast` directly; now delegates to `eval_expr_ast_outcome` +
+      `complete_ast_value_outcome`.
+    - dispatch precedence (`runtime bridge → handler match → member-name fallback →
+      embedded default`) is preserved through `apply_receiver_method_value_call_ast_outcome`.
+    - all value-position `Expr::Call` legacy direct-eval arms are now bridged.
+  - validation completed:
+    - `cargo fmt`
+    - `cargo clippy -p goby-wasm -- -D warnings`
+    - `cargo test -p goby-wasm` (183 passed)
 
 - 2026-03-07 (session 218): Track 4.7 Step 3 legacy `Expr::Call` named-call seams bridged.
   - runtime:
