@@ -1556,24 +1556,12 @@ impl<'m> RuntimeOutputResolver<'m> {
                     return self.complete_ast_value_outcome(outcome, evaluators);
                 }
 
-                if let Some((fn_name, args)) = flatten_named_call(expr) {
-                    let arg_values: Option<Vec<RuntimeValue>> = args
-                        .iter()
-                        .map(|arg_expr| {
-                            self.eval_expr_ast(arg_expr, locals, callables, evaluators, depth + 1)
-                        })
-                        .collect();
-                    let arg_values = arg_values?;
-                    if let Some(value) = self.apply_named_value_call_ast(
-                        fn_name,
-                        &arg_values,
-                        locals,
-                        callables,
-                        evaluators,
-                        depth + 1,
-                    ) {
-                        return Some(value);
-                    }
+                if let Some((_fn_name, args)) = flatten_named_call(expr)
+                    && args.len() > 1
+                {
+                    let outcome =
+                        self.eval_expr_ast_outcome(expr, locals, callables, evaluators, depth);
+                    return self.complete_ast_value_outcome(outcome, evaluators);
                 }
 
                 // Positional single-field record constructor sugar: `Ctor(value)` → `Ctor(field: value)`.
@@ -1590,19 +1578,10 @@ impl<'m> RuntimeOutputResolver<'m> {
                     });
                 }
 
-                if let Expr::Var(fn_name) = callee.as_ref() {
-                    let arg_val = self.eval_expr_ast(arg, locals, callables, evaluators, depth + 1);
-                    let arg_val = arg_val?;
-                    if let Some(value) = self.apply_named_value_call_ast(
-                        fn_name,
-                        &[arg_val],
-                        locals,
-                        callables,
-                        evaluators,
-                        depth + 1,
-                    ) {
-                        return Some(value);
-                    }
+                if let Expr::Var(_) = callee.as_ref() {
+                    let outcome =
+                        self.eval_expr_ast_outcome(expr, locals, callables, evaluators, depth);
+                    return self.complete_ast_value_outcome(outcome, evaluators);
                 }
                 // Qualified callee: Effect.method arg  (e.g. Log.log result, env.from_env name)
                 // Try exact effect-name match first, then member-name-only scan.
