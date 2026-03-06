@@ -372,12 +372,21 @@ Recent (detailed):
     - make `AstEvalOutcome::Suspended(Box<...>)` a real runtime result.
     - shift Step 3 toward unified continuation frames that model "what to do
       next" rather than AST-shape-specific replay enums.
-    - prove the new model first by converting one existing nested value-position
-      slice (`single-arg call` or direct `BinOp`) to the suspended-frame path.
+    - keep the refactor compact:
+      - define the frame interface first,
+      - convert exactly one small nested value-position shape,
+      - then shrink/remove the replaced old replay path before moving on.
+    - prefer `single-arg call` as the first suspended-frame conversion because
+      it is smaller than `BinOp`.
   - immediate next step:
-    - update `docs/devflow/plan.md` to reflect the same pivot, then begin the
-      continuation-model refactor in `crates/goby-wasm/src/lib.rs` instead of
-      adding another ad hoc checkpoint shape.
+    - begin Step 3.2a in `crates/goby-wasm/src/lib.rs`:
+      - define the minimal unified continuation-frame interface,
+      - keep handler/token state as transport only,
+      - avoid adding any new ad hoc replay variant in the same slice.
+    - restart reading order:
+      - `doc/PLAN.md` Step 3 quick view
+      - `doc/PLAN.md` Step 3.2 implementation order
+      - then this session note
 
 - 2026-03-06 (session 177): map consolidation Step 8-9 completed.
   - PLAN.md §4.5 checklist updated:

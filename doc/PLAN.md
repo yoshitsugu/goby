@@ -546,6 +546,18 @@ Step-by-step checklist:
   - replace one-shot token consumption model with resumable progression model for one handler invocation.
   - each `resume` continues from the next resumable point; exhausted continuation raises runtime error.
   - keep guardrails for clearly invalid continuation state transitions.
+  - quick view:
+    - target design:
+      - real `AstEvalOutcome::Suspended(Box<...>)`
+      - unified continuation frames
+      - compact migration slices (`define frame` -> `migrate one shape` -> `remove old path`)
+    - next concrete action:
+      - Step 3.2a: define the minimal unified continuation-frame interface in
+        `crates/goby-wasm/src/lib.rs`
+    - first migration target after that:
+      - `single-arg call`
+    - do not do next:
+      - add another new ad hoc `AstValueContinuationKind::*` shape
   - implementation status (2026-03-06):
     - locked premise:
       - this step is not a token-only change; the runtime must be continuation-aware at the AST
@@ -621,11 +633,13 @@ Step-by-step checklist:
       - stop adding new shape-specific replay slices first.
       - refactor the AST runtime so `AstEvalOutcome::Suspended(Box<...>)` is emitted by real
         evaluator checkpoints and resumed through unified continuation frames.
-      - start with a narrow but architectural slice:
-        - convert one existing nested value-position case (`single-arg call` or direct `BinOp`) to
-          the new suspended-frame path,
-        - prove that the same frame model can flow back into outer statement continuation without a
-          separate token-only replay mechanism.
+      - keep each implementation turn compact:
+        - define the minimal frame interface first,
+        - migrate exactly one existing nested value-position shape,
+        - delete or shrink the replaced old replay path before moving on.
+      - initial migration target:
+        - prefer `single-arg call` over `BinOp` as the first suspended-frame conversion because it
+          is the smaller nested shape.
   - confirmed investigation findings:
     - current runtime anchor points:
       - `crates/goby-wasm/src/lib.rs`: `dispatch_handler_method_core`
@@ -665,6 +679,10 @@ Step-by-step checklist:
       suspend and later continue.
     - prefer a unified frame model over growing `AstValueContinuationKind` / statement-specific
       replay enums indefinitely.
+    - define continuation frames by resume behavior ("take resumed value and perform the next
+      evaluator step"), not by mirroring every AST node shape 1:1.
+    - do not preserve old and new continuation systems in parallel longer than necessary; once a
+      shape is migrated to the frame path, shrink or remove the corresponding old replay variant.
     - if a current exploratory replay slice conflicts with that refactor, simplify or replace it
       instead of preserving it for compatibility.
     - keep fallback and typed-continuation modes on the same semantic contract even if the internal
@@ -700,6 +718,38 @@ Step-by-step checklist:
       - next acceptance target:
         - replace at least one existing nested replay slice with a real suspended frame that can be
           resumed without introducing another expression-form-specific enum variant.
+      - implementation order:
+        - Step 3.2a:
+          - define the minimal unified continuation-frame interface.
+          - lock one responsibility boundary:
+            - frame receives the resumed value,
+            - frame returns the next `AstEvalOutcome`,
+            - handler/token state is only transport, not where evaluation logic accumulates.
+          - done when:
+            - one concrete frame type exists for the new path,
+            - `resume` can route through the frame entrypoint,
+            - no new ad hoc replay variant was added in this slice.
+        - Step 3.2b:
+          - migrate one small nested value-position shape to the new frame path.
+          - preferred first target: `single-arg call`.
+          - done when:
+            - the chosen shape suspends via `AstEvalOutcome::Suspended(...)`,
+            - resume returns through the frame path instead of the old token-only replay path,
+            - fallback and typed parity tests exist for that migrated shape.
+        - Step 3.2c:
+          - delete or collapse the replaced old replay machinery for that migrated shape before
+            expanding coverage.
+          - done when:
+            - the old replay branch for that shape is removed or no longer reachable,
+            - tests still pass without relying on dual paths.
+        - Step 3.2d:
+          - repeat the same pattern for the next shape (`BinOp`, then branch/control-flow
+            boundaries).
+          - order after first migration:
+            - `BinOp`
+            - branch/control-flow boundaries (`if`, `case`)
+            - broader call shapes
+            - `resume (op ...)`
     - [~] Step 3.3: implement progression in fallback mode first
       - make one handler invocation able to call `resume` repeatedly.
       - each `resume` should drive the captured caller continuation until:
@@ -741,6 +791,10 @@ Step-by-step checklist:
         - add the first tests that specifically lock the unified `Suspended(frame)` path, not only
           the current token replay behavior.
   - restart checklist:
+    - read in this order:
+      - this Step 3 quick view
+      - Step 3.2 implementation order
+      - `doc/STATE.md` latest session note
     - begin from `crates/goby-wasm/src/lib.rs`; no parser or typecheck blocker remains for Step 3.
     - preserve existing error-kind mapping in `parity_outcome_from_runtime_output`.
     - preserve Step 2 behavior:
@@ -763,6 +817,9 @@ Step-by-step checklist:
         checkpoints instead of existing only as scaffolding.
       - suspension state is represented by unified continuation frames centered on "next evaluator
         step", not by an open-ended list of expression-shape-specific replay variants.
+      - migration is kept compact:
+        - each landed slice introduces at most one new frame-backed checkpoint shape,
+        - and removes or shrinks the corresponding old replay path in the same slice.
       - AST runtime paths retain enough checkpoint information to resume both:
         - unit-position handled operations,
         - value-position handled operations used in bindings, conditionals, blocks, and call chains.
