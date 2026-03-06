@@ -406,6 +406,17 @@ fn parse_stmts_from_lines(lines: &[&str], start: usize) -> Option<(Vec<Stmt>, us
             }
         }
 
+        if let Some(callee_src) = trimmed.strip_suffix('(')
+            && !callee_src.trim().is_empty()
+            && (is_identifier(callee_src.trim()) || is_qualified_name(callee_src.trim()))
+            && let Some((call_expr, next_i)) =
+                parse_parenthesized_multiline_call(lines, i, this_indent, callee_src.trim())
+        {
+            stmts.push(call_expr);
+            i = next_i;
+            continue;
+        }
+
         // Standalone multiline `case` / `if` expression statement.
         if (trimmed.starts_with("case ") || trimmed.starts_with("if "))
             && let Some((multi_expr, consumed)) = parse_multiline_expr(lines, i)
@@ -458,6 +469,55 @@ fn parse_stmts_from_lines(lines: &[&str], start: usize) -> Option<(Vec<Stmt>, us
     }
 
     Some((stmts, i - start))
+}
+
+fn parse_parenthesized_multiline_call(
+    lines: &[&str],
+    line_idx: usize,
+    line_indent: usize,
+    callee_src: &str,
+) -> Option<(Stmt, usize)> {
+    let mut close_idx = line_idx + 1;
+    while close_idx < lines.len() {
+        let stripped = strip_line_comment(lines[close_idx]).trim_end();
+        let trimmed = stripped.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            close_idx += 1;
+            continue;
+        }
+        let indent = indent_len(stripped);
+        if indent == line_indent && trimmed == ")" {
+            break;
+        }
+        if indent <= line_indent {
+            return None;
+        }
+        close_idx += 1;
+    }
+    if close_idx >= lines.len() {
+        return None;
+    }
+
+    let inner_lines = &lines[line_idx + 1..close_idx];
+    let next_nonblank = find_next_nonblank(inner_lines, 0)?;
+    let inner_trimmed = strip_line_comment(inner_lines[next_nonblank])
+        .trim_end()
+        .trim();
+    if !(inner_trimmed.starts_with("case ") || inner_trimmed.starts_with("if ")) {
+        return None;
+    }
+    let (arg, consumed) = parse_multiline_expr(inner_lines, next_nonblank)?;
+    if close_idx != line_idx + 1 + consumed {
+        return None;
+    }
+
+    Some((
+        Stmt::Expr(Expr::Call {
+            callee: Box::new(parse_expr(callee_src)?),
+            arg: Box::new(arg),
+        }),
+        close_idx + 1,
+    ))
 }
 
 fn parse_multiline_rhs_expr(
@@ -3494,6 +3554,32 @@ main =
                 assert_eq!(arms.len(), 2);
                 assert!(matches!(arms[0].body.as_ref(), Expr::Call { .. }));
                 assert!(matches!(arms[1].body.as_ref(), Expr::Call { .. }));
+            }
+            other => panic!("unexpected statement: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_parenthesized_multiline_case_call_argument() {
+        let body = "print (\n  case x\n    0 -> 1\n    _ -> 2\n)";
+        let stmts = parse_body_stmts(body).expect("should parse");
+        assert_eq!(stmts.len(), 1);
+        match &stmts[0] {
+            Stmt::Expr(Expr::Call { arg, .. }) => {
+                assert!(matches!(arg.as_ref(), Expr::Case { .. }));
+            }
+            other => panic!("unexpected statement: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_parenthesized_multiline_if_call_argument() {
+        let body = "print (\n  if True\n    1\n  else\n    2\n)";
+        let stmts = parse_body_stmts(body).expect("should parse");
+        assert_eq!(stmts.len(), 1);
+        match &stmts[0] {
+            Stmt::Expr(Expr::Call { arg, .. }) => {
+                assert!(matches!(arg.as_ref(), Expr::If { .. }));
             }
             other => panic!("unexpected statement: {other:?}"),
         }

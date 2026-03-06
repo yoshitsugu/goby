@@ -8566,6 +8566,67 @@ main =
     }
 
     #[test]
+    fn parenthesized_multiline_case_call_uses_parsed_body() {
+        use goby_core::parse_module;
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let source = r#"
+effect Iter
+  next: Int -> Int
+
+main : Unit -> Unit
+main =
+  with
+    next n ->
+      resume (n + 1)
+  in
+    print (
+      case 0
+        0 -> next 0
+        _ -> 99
+    )
+"#;
+        let module = parse_module(source).expect("parse should work");
+        assert!(
+            main_parsed_body(&module).is_some(),
+            "main parsed_body should exist for parenthesized multiline case call"
+        );
+        let output =
+            resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
+                .expect("runtime output should resolve");
+        assert_eq!(output, "1");
+    }
+
+    #[test]
+    fn typed_mode_matches_fallback_for_parenthesized_multiline_case_call() {
+        use goby_core::parse_module;
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let source = r#"
+effect Iter
+  next: Int -> Int
+
+main : Unit -> Unit
+main =
+  with
+    next n ->
+      resume (n + 2)
+  in
+    print (
+      case 0
+        0 -> next 0
+        _ -> 99
+    )
+"#;
+        let module = parse_module(source).expect("parse should work");
+        assert!(
+            main_parsed_body(&module).is_some(),
+            "main parsed_body should exist for parenthesized multiline case call"
+        );
+        let typed = assert_mode_parity(&module, "parenthesized multiline case call");
+        assert_eq!(typed.stdout.as_deref(), Some("2"));
+        assert_eq!(typed.runtime_error_kind, None);
+    }
+
+    #[test]
     fn resume_replays_multi_arg_named_call_arguments() {
         use goby_core::parse_module;
         let _guard = ENV_MUTEX.lock().unwrap();

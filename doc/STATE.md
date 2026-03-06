@@ -806,6 +806,26 @@ Recent (detailed):
     - `cargo test -p goby-wasm assignment_rhs_if_replays_through_outcome_path -- --nocapture`
     - `cargo test -p goby-wasm typed_mode_matches_fallback_for_assignment_rhs_if_outcome_path -- --nocapture`
     - `cargo test -p goby-wasm`
+
+- 2026-03-06 (session 211): Track 4.7 Step 3 unlocked AST parsing for parenthesized multiline call args.
+  - root cause found:
+    - the attempted `case` arm-body replay regression was not failing in the Step 3 runtime layer.
+    - `main.parsed_body` was `None` for sources like `print (\n  case ...\n)` so execution fell
+      straight to the string fallback path before any suspended-frame machinery could run.
+  - implementation:
+    - `crates/goby-core/src/parser.rs` now parses parenthesized multiline call arguments when the
+      inner expression is a multiline `case` or `if`.
+    - this keeps sources such as `print (\n  case 0\n    ...\n)` on the AST-backed declaration path.
+  - coverage:
+    - added parser regressions for parenthesized multiline `case` and `if` call arguments.
+    - added fallback runtime regression showing `main.parsed_body` exists and
+      `print (\n  case ...\n)` resolves through the AST path.
+    - added typed/fallback parity coverage for the same `case` shape with handled replay in the
+      selected arm.
+  - immediate next step:
+    - revisit the remaining semantic gap after this parser unlock, starting with whether
+      parenthesized multiline forms expose any new true runtime seams or whether the next target is
+      still value-position `case` arm bodies beyond direct-arm calls.
   - immediate next step:
     - return to the next semantic gap rather than more symmetry-only coverage unless a real
       regression risk appears.

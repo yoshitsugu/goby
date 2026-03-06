@@ -180,3 +180,6 @@
 - 2026-03-06: Step 3.2d also crossed the first mixed pipeline chain:
   `value |> callee` now suspends through a unified `PipelineCall` frame on the
   AST path, with fallback / typed parity coverage.
+- 2026-03-06: A parser-side unlock landed for Step 3 reachability: parenthesized
+  multiline call arguments like `print (\n  case ...\n)` now keep declarations on
+  the AST-backed path instead of dropping straight to string fallback.

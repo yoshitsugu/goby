@@ -807,6 +807,9 @@ Step-by-step checklist:
               - assignment-specific parity is now also covered for the same RHS path,
               - `case` scrutinee replay is covered on the AST declaration path with fallback/typed
                 parity tests.
+              - parser coverage now also keeps parenthesized multiline call arguments such as
+                `print (\n  case ...\n)` on the AST-backed declaration path, so these Step 3
+                runtime slices are reachable instead of dropping straight to string fallback.
             - broader call-shape migration has started:
               - direct named multi-arg call chains can now suspend while evaluating their argument
                 list and resume through the same frame consumer boundary.
