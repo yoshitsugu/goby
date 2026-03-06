@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-06 (session 178)
+Last updated: 2026-03-06 (session 179)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -90,6 +90,32 @@ This file is a restart-safe snapshot for resuming work after context reset.
 ## 4. Recent Milestones
 
 Recent (detailed):
+
+- 2026-03-06 (session 179): Track 4.7 Step 1 and partial Step 2 completed.
+  - Planning/devflow:
+    - initialized `.codex-devflow/` and `docs/devflow/` artifacts.
+    - added Track 4.7 execution plan and committed plan/audit checkpoints.
+  - Step 1 semantic audit:
+    - confirmed handled operation dispatch currently enters through
+      `eval_ast_side_effect`, `eval_expr_ast`, and `execute_unit_expr_ast`,
+      converging on `dispatch_handler_method_core`.
+    - confirmed value-position no-`resume` already behaved abortively via
+      implicit `None`, while unit-position no-`resume` still continued.
+  - Step 2 partial implementation:
+    - added explicit handler continuation/completion state in
+      `crates/goby-wasm/src/lib.rs`.
+    - added resolver-level `runtime_aborted` propagation so no-`resume`
+      handlers stop execution at the handled operation boundary in both
+      value-position and unit-position calls.
+    - preserved existing deterministic runtime errors for invalid resume usage.
+  - Tests/examples:
+    - added runtime + typed-mode parity tests for value-position/unit-position
+      abortive handlers.
+    - updated continuation-intended fixtures/examples to use explicit
+      `resume Unit` (including `examples/effect.gb` and list-each runtime tests).
+  - Remaining within Step 2:
+    - nested-handler abort propagation review/coverage is still open
+      (`doc/PLAN.md` Step 2.10 / 2.11 follow-up).
 
 - 2026-03-06 (session 177): map consolidation Step 8-9 completed.
   - PLAN.md §4.5 checklist updated:

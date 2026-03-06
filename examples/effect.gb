@@ -29,6 +29,7 @@ main =
   h = handler
     log str ->
       print str
+      resume Unit
   with h
   in
     plus_ten_with_log 3
@@ -37,5 +38,6 @@ main =
   with
     log str ->
       print str
+      resume Unit
   in
     log "done"
