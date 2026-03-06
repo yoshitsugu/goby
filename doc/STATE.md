@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-06 (session 200)
+Last updated: 2026-03-06 (session 201)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -609,6 +609,24 @@ Recent (detailed):
     - revisit any remaining legacy token-only replay seams and decide whether the next cut should
       be cleanup or additional mixed expression shapes.
     - if another shape is added, keep it as narrow as the slices above.
+
+- 2026-03-06 (session 201): Track 4.7 Step 3 cleanup trimmed the remaining single-arg replay seam.
+  - runtime:
+    - `SingleArgNamedCall` replay no longer treats a suspended outcome as an internal-error-only
+      legacy path.
+    - the shared continuation replay path now reuses `complete_ast_value_outcome(...)` for that
+      shape as well.
+  - result:
+    - one more leftover old/new split was collapsed without adding a new continuation kind.
+    - the remaining cleanup work is now more about deleting redundant transport seams than fixing
+      correctness gaps.
+  - validation completed:
+    - `cargo fmt`
+    - `cargo test -p goby-wasm single_arg_call_value_replay -- --nocapture`
+    - `cargo test -p goby-wasm`
+  - immediate next step:
+    - continue shrinking remaining compatibility seams, especially around `BinOp` and any other
+      path still described as temporary/shared replay fallback in the plan.
 
 - 2026-03-06 (session 177): map consolidation Step 8-9 completed.
   - PLAN.md §4.5 checklist updated:

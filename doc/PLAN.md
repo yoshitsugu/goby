@@ -812,6 +812,9 @@ Step-by-step checklist:
             - mixed call/effect chains have started to migrate too:
               - `value |> callee` now suspends while evaluating the left-hand value and resumes
                 through a dedicated pipeline continuation.
+            - shared replay cleanup also progressed:
+              - the remaining single-arg named-call replay seam no longer treats `Suspended(...)`
+                as an internal error and now reuses the same continuation consumer path.
             - string-fallback execution is still intentionally out of scope for Step 3.
           - done when:
             - branch/control-flow suspension is proven on both `if` and `case` AST paths,

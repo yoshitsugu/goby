@@ -4437,12 +4437,10 @@ impl<'m> RuntimeOutputResolver<'m> {
                     continuation.depth,
                 ) {
                 AstEvalOutcome::Complete(value) => Some(value),
-                AstEvalOutcome::Suspended(_continuation) => {
-                    self.set_runtime_error_once(
-                            "internal error: single-arg continuation replay should not suspend on legacy path",
-                        );
-                    None
-                }
+                AstEvalOutcome::Suspended(continuation) => self.complete_ast_value_outcome(
+                    AstEvalOutcome::Suspended(continuation),
+                    evaluators,
+                ),
                 AstEvalOutcome::Aborted | AstEvalOutcome::Unsupported => None,
             },
             AstValueContinuationKind::MultiArgNamedCall {
