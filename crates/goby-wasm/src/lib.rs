@@ -1584,39 +1584,15 @@ impl<'m> RuntimeOutputResolver<'m> {
                     return self.complete_ast_value_outcome(outcome, evaluators);
                 }
                 // Qualified callee: Effect.method arg  (e.g. Log.log result, env.from_env name)
-                // Try exact effect-name match first, then member-name-only scan.
-                if let Expr::Qualified { receiver, member } = callee.as_ref() {
-                    let arg_val =
-                        self.eval_expr_ast(arg, locals, callables, evaluators, depth + 1)?;
-                    if let Some(value) = self.try_apply_receiver_runtime_bridge_value(
-                        receiver,
-                        member,
-                        arg_val.clone(),
-                        evaluators,
-                        depth + 1,
-                    ) {
-                        return Some(value);
-                    }
-                    let method = self
-                        .find_handler_method_for_effect(receiver, member)
-                        .or_else(|| self.find_handler_method_by_name(member));
-                    if let Some(method) = method {
-                        return self.dispatch_handler_method_as_value(
-                            &method,
-                            arg_val,
-                            evaluators,
-                            depth + 1,
-                        );
-                    }
-                    if let Some(value) =
-                        self.apply_embedded_default_handler(receiver, member, arg_val)
-                    {
-                        return Some(value);
-                    }
+                // Route through the outcome-aware path so suspended arg values can replay.
+                if let Expr::Qualified { .. } = callee.as_ref() {
+                    let outcome =
+                        self.eval_expr_ast_outcome(expr, locals, callables, evaluators, depth);
+                    return self.complete_ast_value_outcome(outcome, evaluators);
                 }
-                // callee is not a plain Var (e.g. a curried call or lambda
+                // callee is not a plain Var or Qualified (e.g. a curried call or lambda
                 // application) — not yet supported by the native evaluator.
-                None // NOTE: qualified callee dispatch is handled above
+                None
             }
             Expr::Pipeline { .. } => {
                 let outcome =
