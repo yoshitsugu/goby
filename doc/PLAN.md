@@ -810,6 +810,11 @@ Step-by-step checklist:
               - parser coverage now also keeps parenthesized multiline call arguments such as
                 `print (\n  case ...\n)` on the AST-backed declaration path, so these Step 3
                 runtime slices are reachable instead of dropping straight to string fallback.
+              - legacy value evaluation for `Expr::Block` / `Expr::Case` now reuses the same
+                outcome consumer boundary, so selected `case` arm block bodies can replay nested
+                handled values without depending on a separate direct evaluator path.
+              - legacy interpolated-string value evaluation now also reuses the outcome consumer
+                boundary, so `${...}` segments can replay handled values on the AST path.
             - broader call-shape migration has started:
               - direct named multi-arg call chains can now suspend while evaluating their argument
                 list and resume through the same frame consumer boundary.

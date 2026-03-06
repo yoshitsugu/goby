@@ -183,3 +183,9 @@
 - 2026-03-06: A parser-side unlock landed for Step 3 reachability: parenthesized
   multiline call arguments like `print (\n  case ...\n)` now keep declarations on
   the AST-backed path instead of dropping straight to string fallback.
+- 2026-03-06: Legacy `Expr::Block` and `Expr::Case` value evaluation now also
+  reuses the outcome consumer boundary, which makes selected `case` arm block
+  bodies replay nested handled values on the same suspended-frame path.
+- 2026-03-06: Legacy interpolated-string value evaluation now also reuses the
+  outcome consumer boundary, so `${...}` segments can replay handled values on
+  the AST path.

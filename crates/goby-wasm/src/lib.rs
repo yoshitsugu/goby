@@ -1522,19 +1522,10 @@ impl<'m> RuntimeOutputResolver<'m> {
             Expr::IntLit(n) => Some(RuntimeValue::Int(*n)),
             Expr::BoolLit(b) => Some(RuntimeValue::Bool(*b)),
             Expr::StringLit(s) => Some(RuntimeValue::String(s.clone())),
-            Expr::InterpolatedString(parts) => {
-                let mut out = String::new();
-                for part in parts {
-                    match part {
-                        InterpolatedPart::Text(text) => out.push_str(text),
-                        InterpolatedPart::Expr(expr) => {
-                            let value =
-                                self.eval_expr_ast(expr, locals, callables, evaluators, depth + 1)?;
-                            out.push_str(&value.to_output_text());
-                        }
-                    }
-                }
-                Some(RuntimeValue::String(out))
+            Expr::InterpolatedString(_) => {
+                let outcome =
+                    self.eval_expr_ast_outcome(expr, locals, callables, evaluators, depth);
+                self.complete_ast_value_outcome(outcome, evaluators)
             }
             Expr::Var(name) => locals.get(name),
             Expr::Handler { clauses } => Some(RuntimeValue::Handler(
@@ -1749,118 +1740,10 @@ impl<'m> RuntimeOutputResolver<'m> {
                     Some(_) => None,
                 }
             }
-            Expr::Block(stmts) => {
-                let mut block_locals = locals.clone();
-                let mut block_callables = callables.clone();
-                let mut last_value: Option<RuntimeValue> = None;
-                for stmt in stmts {
-                    match stmt {
-                        Stmt::Binding { name, value } | Stmt::MutBinding { name, value } => {
-                            let v = self.eval_expr_ast(
-                                value,
-                                &block_locals,
-                                &block_callables,
-                                evaluators,
-                                depth + 1,
-                            )?;
-                            block_locals.store(name, v);
-                            last_value = None;
-                        }
-                        Stmt::Assign { name, value } => {
-                            block_locals.get(name)?;
-                            let v = self.eval_expr_ast(
-                                value,
-                                &block_locals,
-                                &block_callables,
-                                evaluators,
-                                depth + 1,
-                            )?;
-                            block_locals.store(name, v);
-                            last_value = None;
-                        }
-                        Stmt::Expr(expr) => {
-                            if let Some(v) = self.eval_expr_ast(
-                                expr,
-                                &block_locals,
-                                &block_callables,
-                                evaluators,
-                                depth + 1,
-                            ) {
-                                last_value = Some(v);
-                            } else {
-                                self.execute_unit_expr_ast(
-                                    expr,
-                                    &mut block_locals,
-                                    &mut block_callables,
-                                    evaluators,
-                                    depth + 1,
-                                )?;
-                                last_value = Some(RuntimeValue::Unit);
-                            }
-                        }
-                    }
-                }
-                last_value
-            }
-            Expr::Case { scrutinee, arms } => {
-                let scrutinee_val =
-                    self.eval_expr_ast(scrutinee, locals, callables, evaluators, depth + 1)?;
-                for arm in arms {
-                    let mut arm_locals = locals.clone();
-                    let matched = match (&arm.pattern, &scrutinee_val) {
-                        (CasePattern::Wildcard, _) => true,
-                        (CasePattern::IntLit(n), RuntimeValue::Int(v)) => n == v,
-                        (CasePattern::StringLit(s), RuntimeValue::String(v)) => s == v,
-                        (CasePattern::BoolLit(b), RuntimeValue::Bool(v)) => b == v,
-                        (CasePattern::EmptyList, RuntimeValue::ListInt(values)) => {
-                            values.is_empty()
-                        }
-                        (CasePattern::EmptyList, RuntimeValue::ListString(values)) => {
-                            values.is_empty()
-                        }
-                        (
-                            CasePattern::ListPattern { items, tail },
-                            RuntimeValue::ListInt(values),
-                        ) => self.match_list_pattern_int(
-                            items,
-                            tail.as_ref(),
-                            values,
-                            &mut arm_locals,
-                        ),
-                        (
-                            CasePattern::ListPattern { items, tail },
-                            RuntimeValue::ListString(values),
-                        ) => self.match_list_pattern_string(
-                            items,
-                            tail.as_ref(),
-                            values,
-                            &mut arm_locals,
-                        ),
-                        _ => false,
-                    };
-                    if matched {
-                        if let Some(v) = self.eval_expr_ast(
-                            &arm.body,
-                            &arm_locals,
-                            callables,
-                            evaluators,
-                            depth + 1,
-                        ) {
-                            return Some(v);
-                        }
-                        let mut arm_callables = callables.clone();
-                        let mut arm_locals_for_unit = arm_locals;
-                        self.execute_unit_expr_ast(
-                            &arm.body,
-                            &mut arm_locals_for_unit,
-                            &mut arm_callables,
-                            evaluators,
-                            depth + 1,
-                        )?;
-                        return Some(RuntimeValue::Unit);
-                    }
-                }
-                None
+            Expr::Block(_) | Expr::Case { .. } => {
+                let outcome =
+                    self.eval_expr_ast_outcome(expr, locals, callables, evaluators, depth);
+                self.complete_ast_value_outcome(outcome, evaluators)
             }
             Expr::If { .. } => {
                 let outcome =
@@ -5977,6 +5860,51 @@ main =
     }
 
     #[test]
+    fn interpolated_string_replays_handled_value() {
+        use goby_core::parse_module;
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let source = r#"
+effect Iter
+  next: Int -> Int
+
+main : Unit -> Unit
+main =
+  with
+    next n ->
+      resume (n + 1)
+  in
+    print "value=${next 0}"
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let output =
+            resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
+                .expect("runtime output should resolve");
+        assert_eq!(output, "value=1");
+    }
+
+    #[test]
+    fn typed_mode_matches_fallback_for_interpolated_string_replay() {
+        use goby_core::parse_module;
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let source = r#"
+effect Iter
+  next: Int -> Int
+
+main : Unit -> Unit
+main =
+  with
+    next n ->
+      resume (n + 2)
+  in
+    print "value=${next 0}"
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let typed = assert_mode_parity(&module, "interpolated string replay");
+        assert_eq!(typed.stdout.as_deref(), Some("value=2"));
+        assert_eq!(typed.runtime_error_kind, None);
+    }
+
+    #[test]
     fn locks_runtime_output_for_function_example() {
         let _guard = ENV_MUTEX.lock().unwrap();
         let source = read_example("function.gb");
@@ -8623,6 +8551,71 @@ main =
         );
         let typed = assert_mode_parity(&module, "parenthesized multiline case call");
         assert_eq!(typed.stdout.as_deref(), Some("2"));
+        assert_eq!(typed.runtime_error_kind, None);
+    }
+
+    #[test]
+    fn parenthesized_multiline_case_block_body_replays_value_path() {
+        use goby_core::parse_module;
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let source = r#"
+effect Iter
+  next: Int -> Int
+
+main : Unit -> Unit
+main =
+  with
+    next n ->
+      resume (n + 1)
+  in
+    print (
+      case 0
+        0 ->
+          x = next 0
+          x + 10
+        _ -> 99
+    )
+"#;
+        let module = parse_module(source).expect("parse should work");
+        assert!(
+            main_parsed_body(&module).is_some(),
+            "main parsed_body should exist for parenthesized multiline case block call"
+        );
+        let output =
+            resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
+                .expect("runtime output should resolve");
+        assert_eq!(output, "11");
+    }
+
+    #[test]
+    fn typed_mode_matches_fallback_for_parenthesized_multiline_case_block_call() {
+        use goby_core::parse_module;
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let source = r#"
+effect Iter
+  next: Int -> Int
+
+main : Unit -> Unit
+main =
+  with
+    next n ->
+      resume (n + 2)
+  in
+    print (
+      case 0
+        0 ->
+          x = next 0
+          x + 10
+        _ -> 99
+    )
+"#;
+        let module = parse_module(source).expect("parse should work");
+        assert!(
+            main_parsed_body(&module).is_some(),
+            "main parsed_body should exist for parenthesized multiline case block call"
+        );
+        let typed = assert_mode_parity(&module, "parenthesized multiline case block call");
+        assert_eq!(typed.stdout.as_deref(), Some("12"));
         assert_eq!(typed.runtime_error_kind, None);
     }
 

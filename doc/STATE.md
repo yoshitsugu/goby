@@ -826,6 +826,37 @@ Recent (detailed):
     - revisit the remaining semantic gap after this parser unlock, starting with whether
       parenthesized multiline forms expose any new true runtime seams or whether the next target is
       still value-position `case` arm bodies beyond direct-arm calls.
+
+- 2026-03-06 (session 212): Track 4.7 Step 3 moved legacy `case` / block value replay onto the outcome consumer.
+  - implementation:
+    - `crates/goby-wasm/src/lib.rs` now routes legacy `eval_expr_ast(...)` handling for
+      `Expr::Block` and `Expr::Case` through `eval_expr_ast_outcome(...)` plus
+      `complete_ast_value_outcome(...)` instead of maintaining a separate direct evaluator path.
+    - this keeps selected `case` arm block bodies on the same suspended-frame consumer boundary
+      already used by migrated control-flow slices.
+  - coverage:
+    - added fallback regression for a parenthesized multiline `case` call whose selected arm is a
+      block body binding `x = next 0` and returning `x + 10`.
+    - added typed/fallback parity coverage for the same block-arm value replay shape.
+  - immediate next step:
+    - inspect the remaining non-control-flow legacy value seams and decide whether the next slice
+      should target top-level AST value entrypoints more broadly or another still-unmigrated
+      expression family.
+
+- 2026-03-06 (session 213): Track 4.7 Step 3 moved legacy interpolated-string replay onto the outcome consumer.
+  - implementation:
+    - `crates/goby-wasm/src/lib.rs` now routes legacy `Expr::InterpolatedString` value evaluation
+      through `eval_expr_ast_outcome(...)` plus `complete_ast_value_outcome(...)` instead of
+      concatenating `${...}` segments only through the direct evaluator.
+    - this lets interpolation segments replay handled values on the same suspended-frame boundary
+      already used by migrated nested expression paths.
+  - coverage:
+    - added fallback regression for `print "value=${next 0}"`.
+    - added typed/fallback parity coverage for the same interpolation replay shape.
+  - immediate next step:
+    - continue auditing remaining legacy direct-evaluation shapes with the same bias toward small
+      expression families rather than another broad entrypoint swap.
+
   - immediate next step:
     - return to the next semantic gap rather than more symmetry-only coverage unless a real
       regression risk appears.
