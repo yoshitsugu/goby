@@ -941,6 +941,11 @@ impl<'m> RuntimeOutputResolver<'m> {
                 if let Some(arg_val) = self.eval_ast_value(arg, evaluators) {
                     // Bare effect method call (e.g. `log "msg"`) — check active handlers first.
                     let bare_method = self.find_handler_method_by_name(fn_name);
+                    eprintln!(
+                        "eval_ast_side_effect bare call fn={} handler_found={}",
+                        fn_name,
+                        bare_method.is_some()
+                    );
                     if let Some(method) = bare_method {
                         // depth=0: top-level call; dispatch_handler_method adds 1 internally.
                         return self.dispatch_handler_method(&method, arg_val, evaluators, 0);
@@ -3086,6 +3091,10 @@ impl<'m> RuntimeOutputResolver<'m> {
         }
     }
 
+    fn has_abort_without_error(&self) -> bool {
+        self.runtime_aborted && self.runtime_error.is_none()
+    }
+
     fn push_resume_token_for_handler(&mut self) -> usize {
         self.resume_tokens.push(ResumeToken {
             continuation: Continuation { consumed: false },
@@ -3365,7 +3374,12 @@ impl<'m> RuntimeOutputResolver<'m> {
             Some(())
         })();
         let completion = self.finish_handler_continuation_bridge(token_idx)?;
-        run_result?;
+        if run_result.is_none() {
+            if self.has_abort_without_error() {
+                return Some(HandlerCompletion::Aborted);
+            }
+            return None;
+        }
         Some(completion)
     }
 
@@ -6067,6 +6081,42 @@ main =
     }
 
     #[test]
+    fn nested_abortive_handler_stops_outer_continuations() {
+        use goby_core::parse_module;
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let source = r#"
+effect Outer
+  op: String -> Unit
+
+effect Inner
+  boom: String -> Unit
+
+main : Unit -> Unit
+main =
+  with
+    op msg ->
+      with
+        boom inner ->
+          print "inner:${inner}"
+      in
+        boom msg
+      print "outer-after"
+      resume Unit
+  in
+    op "x"
+    print "main-after"
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let output =
+            resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module));
+        assert_eq!(
+            output.as_deref(),
+            Some("inner:x"),
+            "abortive inner handler should stop outer handler and main continuations at the handled boundary"
+        );
+    }
+
+    #[test]
     fn resume_outside_handler_surfaces_runtime_error() {
         use goby_core::parse_module;
         let _guard = ENV_MUTEX.lock().unwrap();
@@ -6323,6 +6373,38 @@ main =
         let module = parse_module(source).expect("parse should work");
         let typed = assert_mode_parity(&module, "no-resume unit-position abort path");
         assert_eq!(typed.stdout.as_deref(), Some("handled:hello"));
+        assert_eq!(typed.runtime_error_kind, None);
+    }
+
+    #[test]
+    fn typed_mode_matches_fallback_for_nested_abortive_handlers() {
+        use goby_core::parse_module;
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let source = r#"
+effect Outer
+  op: String -> Unit
+
+effect Inner
+  boom: String -> Unit
+
+main : Unit -> Unit
+main =
+  with
+    op msg ->
+      with
+        boom inner ->
+          print "inner:${inner}"
+      in
+        boom msg
+      print "outer-after"
+      resume Unit
+  in
+    op "x"
+    print "main-after"
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let typed = assert_mode_parity(&module, "nested abortive handler path");
+        assert_eq!(typed.stdout.as_deref(), Some("inner:x"));
         assert_eq!(typed.runtime_error_kind, None);
     }
 

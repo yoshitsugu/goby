@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-06 (session 179)
+Last updated: 2026-03-06 (session 180)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -116,6 +116,26 @@ Recent (detailed):
   - Remaining within Step 2:
     - nested-handler abort propagation review/coverage is still open
       (`doc/PLAN.md` Step 2.10 / 2.11 follow-up).
+
+- 2026-03-06 (session 180): Track 4.7 Step 2 follow-up and Step 4 completed.
+  - Parser/runtime alignment:
+    - fixed handler-clause body parsing to preserve relative indentation for
+      nested blocks (`with`, `if`, `case`) instead of trimming it away.
+    - added parser regression `parses_nested_with_inside_handler_clause_body`.
+  - Runtime:
+    - nested abortive handlers now propagate as explicit abortive completion
+      through enclosing handler dispatch instead of collapsing to generic `None`.
+    - added fallback + typed-mode parity tests for nested abortive handler
+      propagation.
+  - Typecheck:
+    - removed the conservative syntactic "multiple `resume`" rejection.
+    - retained `resume` placement and type-compatibility checks.
+    - `examples/iterator_unified.gb` now typechecks via the normal path because
+      valid multi-branch handler bodies are no longer blocked.
+  - Quality gates:
+    - `cargo fmt`, `cargo clippy -- -D warnings`, and `cargo test` all pass.
+  - Remaining within Track 4.7:
+    - Step 3 multi-resume progression runtime semantics is still pending.
 
 - 2026-03-06 (session 177): map consolidation Step 8-9 completed.
   - PLAN.md §4.5 checklist updated:
