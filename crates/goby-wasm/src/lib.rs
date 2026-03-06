@@ -512,6 +512,7 @@ struct RuntimeOutputResolver<'m> {
     resume_tokens: Vec<ResumeToken>,
     optimized_resume_tokens: Vec<OptimizedResumeToken>,
     runtime_error: Option<String>,
+    runtime_aborted: bool,
     execution_mode: lower::EffectExecutionMode,
     stdin_buffer: Option<String>,
     stdin_cursor: usize,
@@ -525,13 +526,24 @@ struct Continuation {
 #[derive(Clone)]
 struct ResumeToken {
     continuation: Continuation,
-    resumed_value: Option<RuntimeValue>,
+    state: HandlerContinuationState,
 }
 
 #[derive(Clone)]
 struct OptimizedResumeToken {
     consumed: bool,
-    resumed_value: Option<RuntimeValue>,
+    state: HandlerContinuationState,
+}
+
+#[derive(Clone)]
+enum HandlerContinuationState {
+    Pending,
+    Resumed(Box<RuntimeValue>),
+}
+
+enum HandlerCompletion {
+    Aborted,
+    Resumed(Box<RuntimeValue>),
 }
 
 #[derive(Clone)]
@@ -740,6 +752,7 @@ impl<'m> RuntimeOutputResolver<'m> {
             resume_tokens: Vec::new(),
             optimized_resume_tokens: Vec::new(),
             runtime_error: None,
+            runtime_aborted: false,
             execution_mode,
             stdin_buffer: stdin_seed,
             stdin_cursor: 0,
@@ -749,7 +762,7 @@ impl<'m> RuntimeOutputResolver<'m> {
             // AST-based path (preferred when parsed_body is available)
             for stmt in stmts {
                 if resolver.ingest_ast_statement(stmt, evaluators).is_none() {
-                    if resolver.runtime_error.is_some() {
+                    if resolver.runtime_error.is_some() || resolver.runtime_aborted {
                         break;
                     }
                     return None;
@@ -759,7 +772,7 @@ impl<'m> RuntimeOutputResolver<'m> {
             // String-based fallback path
             for statement in statements(body) {
                 if resolver.ingest_statement(statement, evaluators).is_none() {
-                    if resolver.runtime_error.is_some() {
+                    if resolver.runtime_error.is_some() || resolver.runtime_aborted {
                         break;
                     }
                     return None;
@@ -778,6 +791,14 @@ impl<'m> RuntimeOutputResolver<'m> {
             }
             out.push_str(&err_line);
             return Some(out);
+        }
+
+        if resolver.runtime_aborted {
+            return if resolver.outputs.is_empty() {
+                None
+            } else {
+                Some(resolver.outputs.concat())
+            };
         }
 
         if resolver.outputs.is_empty() {
@@ -3059,21 +3080,30 @@ impl<'m> RuntimeOutputResolver<'m> {
         }
     }
 
+    fn set_runtime_abort_once(&mut self) {
+        if self.runtime_error.is_none() {
+            self.runtime_aborted = true;
+        }
+    }
+
     fn push_resume_token_for_handler(&mut self) -> usize {
         self.resume_tokens.push(ResumeToken {
             continuation: Continuation { consumed: false },
-            resumed_value: None,
+            state: HandlerContinuationState::Pending,
         });
         self.resume_tokens.len() - 1
     }
 
-    fn take_resume_token_result(&mut self, token_idx: usize) -> Option<Option<RuntimeValue>> {
+    fn take_resume_token_result(&mut self, token_idx: usize) -> Option<HandlerCompletion> {
         if token_idx + 1 != self.resume_tokens.len() {
             self.set_runtime_error_once(ERR_RESUME_STACK_MISMATCH);
             return None;
         }
         let token = self.resume_tokens.pop()?;
-        Some(token.resumed_value)
+        Some(match token.state {
+            HandlerContinuationState::Pending => HandlerCompletion::Aborted,
+            HandlerContinuationState::Resumed(value) => HandlerCompletion::Resumed(value),
+        })
     }
 
     fn current_resume_token_mut(&mut self) -> Option<&mut ResumeToken> {
@@ -3083,7 +3113,7 @@ impl<'m> RuntimeOutputResolver<'m> {
     fn push_optimized_resume_token_for_handler(&mut self) -> usize {
         self.optimized_resume_tokens.push(OptimizedResumeToken {
             consumed: false,
-            resumed_value: None,
+            state: HandlerContinuationState::Pending,
         });
         self.optimized_resume_tokens.len() - 1
     }
@@ -3091,13 +3121,16 @@ impl<'m> RuntimeOutputResolver<'m> {
     fn take_optimized_resume_token_result(
         &mut self,
         token_idx: usize,
-    ) -> Option<Option<RuntimeValue>> {
+    ) -> Option<HandlerCompletion> {
         if token_idx + 1 != self.optimized_resume_tokens.len() {
             self.set_runtime_error_once(ERR_RESUME_STACK_MISMATCH);
             return None;
         }
         let token = self.optimized_resume_tokens.pop()?;
-        Some(token.resumed_value)
+        Some(match token.state {
+            HandlerContinuationState::Pending => HandlerCompletion::Aborted,
+            HandlerContinuationState::Resumed(value) => HandlerCompletion::Resumed(value),
+        })
     }
 
     fn current_optimized_resume_token_mut(&mut self) -> Option<&mut OptimizedResumeToken> {
@@ -3109,13 +3142,11 @@ impl<'m> RuntimeOutputResolver<'m> {
             lower::EffectExecutionMode::PortableFallback => self
                 .resume_tokens
                 .get(token_idx)
-                .and_then(|token| token.resumed_value.as_ref())
-                .is_some(),
+                .is_some_and(|token| matches!(token.state, HandlerContinuationState::Resumed(_))),
             lower::EffectExecutionMode::TypedContinuationOptimized => self
                 .optimized_resume_tokens
                 .get(token_idx)
-                .and_then(|token| token.resumed_value.as_ref())
-                .is_some(),
+                .is_some_and(|token| matches!(token.state, HandlerContinuationState::Resumed(_))),
         }
     }
 
@@ -3131,7 +3162,7 @@ impl<'m> RuntimeOutputResolver<'m> {
     fn finish_handler_continuation_bridge(
         &mut self,
         token_idx: usize,
-    ) -> Option<Option<RuntimeValue>> {
+    ) -> Option<HandlerCompletion> {
         match self.execution_mode {
             lower::EffectExecutionMode::PortableFallback => {
                 self.take_resume_token_result(token_idx)
@@ -3173,7 +3204,7 @@ impl<'m> RuntimeOutputResolver<'m> {
             return None;
         };
         token.continuation.consumed = true;
-        token.resumed_value = Some(resumed.clone());
+        token.state = HandlerContinuationState::Resumed(Box::new(resumed.clone()));
         Some(resumed)
     }
 
@@ -3194,7 +3225,7 @@ impl<'m> RuntimeOutputResolver<'m> {
             return None;
         };
         token.consumed = true;
-        token.resumed_value = Some(resumed.clone());
+        token.state = HandlerContinuationState::Resumed(Box::new(resumed.clone()));
         Some(resumed)
     }
 
@@ -3205,7 +3236,7 @@ impl<'m> RuntimeOutputResolver<'m> {
         evaluators: &RuntimeEvaluators<'_, '_>,
         depth: usize,
         produce_value: bool,
-    ) -> Option<Option<RuntimeValue>> {
+    ) -> Option<HandlerCompletion> {
         if depth >= MAX_EVAL_DEPTH {
             return None;
         }
@@ -3214,7 +3245,7 @@ impl<'m> RuntimeOutputResolver<'m> {
             return None;
         }
         let token_idx = self.begin_handler_continuation_bridge();
-        let run_result = (|| -> Option<Option<RuntimeValue>> {
+        let run_result = (|| -> Option<()> {
             let mut handler_locals = self
                 .active_inline_handler_stack
                 .iter()
@@ -3250,7 +3281,6 @@ impl<'m> RuntimeOutputResolver<'m> {
                         .map(|_| inline.captured_callables.clone())
                 })
                 .unwrap_or_default();
-            let mut last_val: Option<RuntimeValue> = None;
             for stmt in stmts {
                 if produce_value {
                     match stmt {
@@ -3276,14 +3306,14 @@ impl<'m> RuntimeOutputResolver<'m> {
                             handler_locals.store(name, v);
                         }
                         Stmt::Expr(expr) => {
-                            last_val = self.eval_expr_ast(
+                            let value = self.eval_expr_ast(
                                 expr,
                                 &handler_locals,
                                 &handler_callables,
                                 evaluators,
                                 depth + 1,
                             );
-                            if last_val.is_none() {
+                            if value.is_none() {
                                 // Side-effect stmt — try as unit side effect.
                                 self.execute_unit_ast_stmt(
                                     stmt,
@@ -3292,7 +3322,6 @@ impl<'m> RuntimeOutputResolver<'m> {
                                     evaluators,
                                     depth + 1,
                                 )?;
-                                last_val = None;
                             }
                         }
                     }
@@ -3333,20 +3362,11 @@ impl<'m> RuntimeOutputResolver<'m> {
                     break;
                 }
             }
-            if produce_value {
-                Some(last_val)
-            } else {
-                Some(None)
-            }
+            Some(())
         })();
-        let resumed = self.finish_handler_continuation_bridge(token_idx);
-        let resumed = resumed?;
-        let run_result = run_result?;
-        if produce_value {
-            Some(resumed.or(run_result))
-        } else {
-            Some(None)
-        }
+        let completion = self.finish_handler_continuation_bridge(token_idx)?;
+        run_result?;
+        Some(completion)
     }
 
     /// Execute a handler method and return the last evaluated value.
@@ -3358,7 +3378,13 @@ impl<'m> RuntimeOutputResolver<'m> {
         evaluators: &RuntimeEvaluators<'_, '_>,
         depth: usize,
     ) -> Option<RuntimeValue> {
-        self.dispatch_handler_method_core(method, &[arg_val], evaluators, depth, true)?
+        match self.dispatch_handler_method_core(method, &[arg_val], evaluators, depth, true)? {
+            HandlerCompletion::Resumed(value) => Some(*value),
+            HandlerCompletion::Aborted => {
+                self.set_runtime_abort_once();
+                None
+            }
+        }
     }
 
     fn dispatch_handler_method_as_value_with_args(
@@ -3368,7 +3394,13 @@ impl<'m> RuntimeOutputResolver<'m> {
         evaluators: &RuntimeEvaluators<'_, '_>,
         depth: usize,
     ) -> Option<RuntimeValue> {
-        self.dispatch_handler_method_core(method, args, evaluators, depth, true)?
+        match self.dispatch_handler_method_core(method, args, evaluators, depth, true)? {
+            HandlerCompletion::Resumed(value) => Some(*value),
+            HandlerCompletion::Aborted => {
+                self.set_runtime_abort_once();
+                None
+            }
+        }
     }
 
     /// Execute a handler method body with the given argument.
@@ -3379,8 +3411,13 @@ impl<'m> RuntimeOutputResolver<'m> {
         evaluators: &RuntimeEvaluators<'_, '_>,
         depth: usize,
     ) -> Option<()> {
-        let _ = self.dispatch_handler_method_core(method, &[arg_val], evaluators, depth, false)?;
-        Some(())
+        match self.dispatch_handler_method_core(method, &[arg_val], evaluators, depth, false)? {
+            HandlerCompletion::Resumed(_) => Some(()),
+            HandlerCompletion::Aborted => {
+                self.set_runtime_abort_once();
+                None
+            }
+        }
     }
 
     /// Execute any declaration (including Int-returning ones) as a side-effect call.
@@ -4709,6 +4746,7 @@ main =
   with
     log n ->
       print "${n}"
+      resume Unit
   in
     list.each [1, 3] (|n| -> log n)
 "#;
@@ -4733,6 +4771,7 @@ main =
   with
     log n ->
       print "${n}"
+      resume Unit
   in
     l.each [5, 7] (|n| -> log n)
 "#;
@@ -4757,6 +4796,7 @@ main =
   with
     log n ->
       print "${n}"
+      resume Unit
   in
     each [9, 11] (|n| -> log n)
 "#;
@@ -5993,8 +6033,36 @@ main =
         let output =
             resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module));
         assert_eq!(
-            output, None,
-            "when a value-position operation is handled without `resume`, evaluation follows the abortive path"
+            output.as_deref(),
+            Some("handled"),
+            "handler side effects before abort should be preserved, while caller continuation does not run"
+        );
+    }
+
+    #[test]
+    fn no_resume_in_unit_position_aborts_following_statements() {
+        use goby_core::parse_module;
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let source = r#"
+effect Log
+  log: String -> Unit
+
+main : Unit -> Unit
+main =
+  with
+    log msg ->
+      print "handled:${msg}"
+  in
+    log "hello"
+    print "after"
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let output =
+            resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module));
+        assert_eq!(
+            output.as_deref(),
+            Some("handled:hello"),
+            "unit-position handled operation should abort before later statements execute"
         );
     }
 
@@ -6231,9 +6299,30 @@ main =
 "#;
         let module = parse_module(source).expect("parse should work");
         let typed = assert_mode_parity(&module, "no-resume abortive path");
-        // Current runtime contract: no `resume` in value-position operation takes the abortive
-        // path, so handler-body print output is not emitted as final program output.
-        assert_eq!(typed.stdout, None);
+        assert_eq!(typed.stdout.as_deref(), Some("handled"));
+        assert_eq!(typed.runtime_error_kind, None);
+    }
+
+    #[test]
+    fn typed_mode_matches_fallback_for_no_resume_unit_position_abort() {
+        use goby_core::parse_module;
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let source = r#"
+effect Log
+  log: String -> Unit
+
+main : Unit -> Unit
+main =
+  with
+    log msg ->
+      print "handled:${msg}"
+  in
+    log "hello"
+    print "after"
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let typed = assert_mode_parity(&module, "no-resume unit-position abort path");
+        assert_eq!(typed.stdout.as_deref(), Some("handled:hello"));
         assert_eq!(typed.runtime_error_kind, None);
     }
 

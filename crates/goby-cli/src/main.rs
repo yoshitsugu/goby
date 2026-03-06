@@ -305,8 +305,8 @@ mod tests {
 
     #[test]
     fn rejects_missing_file() {
-        let err = parse_args_from(to_args(&["goby", "run"]))
-            .expect_err("missing input file should fail");
+        let err =
+            parse_args_from(to_args(&["goby", "run"])).expect_err("missing input file should fail");
         match err {
             CliError::Usage(message) => assert!(message.contains("missing input file")),
             CliError::Runtime(_) => panic!("expected usage error"),

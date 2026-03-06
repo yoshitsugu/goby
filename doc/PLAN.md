@@ -560,45 +560,45 @@ Step-by-step checklist:
     (including unit-position operation calls).
   - preserve existing deterministic runtime error reporting for invalid resume usage.
   - Detailed checklist:
-    - [ ] Step 2.1: runtime dispatch path inventory
+    - [x] Step 2.1: runtime dispatch path inventory
       - identify every effect-operation execution entrypoint in `crates/goby-wasm/src/lib.rs`.
       - separate value-position dispatch paths from unit-position dispatch paths.
       - mark which paths currently rely on `dispatch_handler_method_core`.
-    - [ ] Step 2.2: current continuation token semantics audit
+    - [x] Step 2.2: current continuation token semantics audit
       - document how `resume_tokens` / `optimized_resume_tokens` currently encode:
         - resume success,
         - no-resume completion,
         - invalid double-resume error.
       - identify where `Option<Option<RuntimeValue>>` is overloading multiple meanings.
-    - [ ] Step 2.3: explicit abort result shape design
+    - [x] Step 2.3: explicit abort result shape design
       - introduce a dedicated internal result/bridge state for handler completion outcomes.
       - require the representation to distinguish at least:
         - resumed continuation value,
         - abortive completion without `resume`,
         - runtime error / invalid continuation state.
       - keep fallback mode and typed-continuation mode on the same semantic contract.
-    - [ ] Step 2.4: continuation bridge API refactor
+    - [x] Step 2.4: continuation bridge API refactor
       - update `begin_handler_continuation_bridge` / `finish_handler_continuation_bridge`
         and related helpers to return the new explicit outcome.
       - remove reliance on implicit `None` / nested `Option` meaning for abort detection.
       - preserve stack-balance checks and existing internal mismatch diagnostics.
-    - [ ] Step 2.5: fallback resume path alignment
+    - [x] Step 2.5: fallback resume path alignment
       - update `resume_through_active_continuation_fallback` to write the new outcome state.
       - ensure missing continuation and consumed continuation still map to the current
         deterministic runtime errors.
-    - [ ] Step 2.6: optimized resume path alignment
+    - [x] Step 2.6: optimized resume path alignment
       - update `resume_through_active_continuation_optimized` to mirror fallback semantics.
       - confirm both execution modes expose the same observable abort/resume behavior.
-    - [ ] Step 2.7: handler body execution contract
+    - [x] Step 2.7: handler body execution contract
       - update `dispatch_handler_method_core` so handler completion without `resume`
         produces explicit abortive completion rather than implicit fallthrough.
       - keep handler-local statement execution order unchanged.
       - ensure the "break when continuation resumes" logic still short-circuits correctly.
-    - [ ] Step 2.8: value-position operation propagation
+    - [x] Step 2.8: value-position operation propagation
       - update value-returning effect call sites so abortive completion stops surrounding
         expression evaluation immediately.
       - verify no synthetic fallback value is produced for aborted operation calls.
-    - [ ] Step 2.9: unit-position operation propagation
+    - [x] Step 2.9: unit-position operation propagation
       - update side-effect operation call sites so abortive completion stops the enclosing
         statement/declaration execution immediately.
       - ensure statements after an aborted handled operation are not executed.
@@ -608,14 +608,16 @@ Step-by-step checklist:
         in the same continuation bridge.
       - review nested handlers to ensure abort stops at the handled operation boundary and
         does not corrupt outer handler stacks.
-    - [ ] Step 2.11: regression tests for abort contract
+    - [x] Step 2.11: regression tests for abort contract
       - add fallback runtime coverage for:
         - no-resume abort in value position,
         - no-resume abort in unit position,
         - nested handler abort propagation.
       - add typed-mode parity coverage for the same cases.
       - keep existing invalid resume runtime error tests passing unchanged.
-    - [ ] Step 2.12: post-implementation validation
+      - current status: value/unit abort coverage and parity are added; nested-handler abort
+        coverage remains pending under Step 2.10 review follow-up.
+    - [x] Step 2.12: post-implementation validation
       - run `cargo fmt`.
       - run targeted `cargo test` for effect-runtime cases first.
       - if green, run full project quality gates tracked in Step 7.
