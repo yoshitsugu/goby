@@ -313,54 +313,11 @@ Status: completed (2026-03-05)
 
 Goal: unify handler application syntax on `with` only.
 
-- Target syntax:
-  - inline handler form:
-    - `with`
-    - indented handler clauses
-    - `in`
-    - body block
-  - handler value form: `with <handler_expr> in <body>`
-- Scope and placement rules:
-  - `with` statement form is supported.
-  - multiline RHS `with` is supported for bindings/assignments.
-  - parser multiline RHS handling treats `with` similarly to multiline `case` / `if`.
-- Parser disambiguation rule:
-  - if the statement line is exactly `with`, parse inline handler clauses from the next indented block.
-  - if the statement line starts with `with `, parse the remainder as `<handler_expr>`.
-  - do not rely on fixed token-count lookahead before `->` (handler clauses allow variable arity).
-- Compatibility/migration result:
-  - parser support for the legacy inline-handler keyword is removed.
-  - parse/typecheck diagnostics now use `with`-only guidance.
-  - language/docs/examples/tests are synced to `with` syntax.
-- Step-by-step implementation checklist:
-  - [x] Step 1: parser statement-path update
-    - add `with` exact-line inline-handler branch.
-    - keep existing `with <handler_expr>` statement parsing.
-    - remove legacy statement parse branch.
-  - [x] Step 2: parser multiline-RHS update
-    - extend multiline RHS parser path to support `with` (in addition to `case`/`if`).
-    - cover both binding and assignment RHS forms.
-  - [x] Step 3: parser diagnostics and keywords
-    - change parse errors to suggest `with` only.
-    - remove legacy keyword from reserved keyword set.
-  - [x] Step 4: typecheck diagnostics wording
-    - replace user-facing mixed guidance with `with`-only guidance.
-  - [x] Step 5: language docs sync
-    - `doc/LANGUAGE_SPEC.md`: update reserved tokens and handler syntax section.
-    - `doc/PLAN.md`/`doc/STATE.md`: mark completion and remove transitional wording.
-  - [x] Step 6: examples migration
-    - migrate all `examples/*.gb` to `with`.
-    - verify iterator examples keep multiline RHS behavior.
-  - [x] Step 7: tests migration
-    - update parser tests for `with` inline/value forms.
-    - update typecheck/CLI tests and add legacy keyword rejection coverage.
-  - [x] Step 8: quality gate
-    - run `cargo fmt`.
-    - run `cargo check`.
-    - run `cargo test`.
-    - run `cargo clippy -- -D warnings`.
-- Completion note:
-  - migration landed as one coherent change to avoid partial-state breakage.
+- Implemented summary:
+  - canonical syntax is `with` only, for both inline handlers and handler-value form.
+  - multiline RHS parsing supports `with` in bindings/assignments.
+  - legacy inline-handler syntax is removed and diagnostics now point only to `with`.
+  - docs, examples, tests, and quality gates were completed together as one migration slice.
 
 Note: detailed step-by-step renewal history is intentionally omitted here; use
 `doc/STATE.md` and git history for chronological implementation records.
@@ -375,6 +332,70 @@ Note: detailed step-by-step renewal history is intentionally omitted here; use
   - keep canonical map behavior in `stdlib/goby/list.gb` (`list.map` export path).
   - replace internal/builtin-path map callsites with stdlib module usage where possible.
   - after migration, trim builtin-only `map` special handling so runtime/compiler has a single semantics source.
+
+#### Compatibility Cleanup Backlog (Survey: 2026-03-06)
+
+Goal: record remaining implementation-side compatibility bridges so they can be
+removed in a deliberate order after active language/runtime work.
+
+- Confirmed already removed from parser/runtime/typecheck acceptance paths:
+  - legacy top-level `handler ... for ...`
+  - legacy `using`
+  - legacy `with_handler`
+  - expression-form `Unit` value
+  - legacy `@embed effect <EffectName>`
+- Remaining compatibility bridges to remove later:
+  - [ ] C1. stdlib import builtin fallback
+    - current status:
+      - `validate_imports` and import-type resolution still fall back to
+        `builtin_module_exports(...)` when stdlib files are missing.
+      - current fallback-covered modules are `goby/string`, `goby/list`, and `goby/env`.
+    - code anchors:
+      - `crates/goby-core/src/typecheck.rs`:
+        `validate_imports`, `module_exports_for_import_with_resolver`,
+        `builtin_module_exports`
+    - removal target:
+      - make stdlib file resolution the single source of truth for import/export visibility.
+      - fail clearly when a stdlib module file is missing instead of silently using builtin exports.
+  - [ ] C2. bare builtin `print` availability without import
+    - current status:
+      - typecheck still treats bare `print` as available without explicit stdlib import.
+      - tests currently lock this behavior as intentional compatibility.
+    - code anchors:
+      - `crates/goby-core/src/typecheck.rs`
+        (`baseline_bare_print_builtin_is_available_without_import`)
+      - runtime fallback bridge paths in `crates/goby-wasm/src/lib.rs`
+    - removal target:
+      - decide whether `print` remains permanent prelude sugar or becomes import/prelude-only.
+      - if removed, replace compatibility tests with explicit-prelude/import coverage.
+  - [ ] C3. builtin fallback tests and migration assumptions
+    - current status:
+      - tests explicitly assert resolver fallback when stdlib files are absent.
+      - planning docs still describe builtin fallback as part of migration strategy.
+    - code anchors:
+      - `crates/goby-core/src/typecheck.rs`
+        (`resolver_falls_back_to_builtin_exports_when_file_missing`)
+      - `doc/PLAN_STANDARD_LIBRARY.md`
+    - removal target:
+      - flip tests from "fallback works" to "missing stdlib fails clearly" once C1 is removed.
+      - trim obsolete migration wording from standard-library planning docs.
+  - [ ] C4. embedded default handler / runtime bridge revalidation after C1-C3
+    - current status:
+      - embedded default handlers are current semantics, not legacy syntax.
+      - however, runtime behavior still relies on bridge-style stdlib/default-handler plumbing.
+    - removal target:
+      - re-evaluate after stdlib fallback cleanup whether any remaining bridge code is
+        accidental compatibility debt or intentional permanent runtime architecture.
+      - keep this item scoped as a review step, not an automatic deletion.
+- Recommended removal order:
+  - 1. C1 stdlib import builtin fallback
+  - 2. C3 fallback-oriented tests/docs
+  - 3. C2 bare builtin `print` policy decision and cleanup
+  - 4. C4 embedded default handler bridge revalidation
+- Out of scope for this backlog:
+  - `Unit` as a type name and internal runtime representation (`RuntimeValue::Unit`) is not
+    compatibility debt.
+  - historical notes in `doc/STATE.md` are execution history, not active compatibility behavior.
 
 ### 2.5 Runtime / Compiler Scope (MVP)
 
@@ -486,42 +507,12 @@ Note:
 Goal: enable `stdlib/goby/list.gb` `map` implementation (`[f(x), ..ys]`) and
 consolidate map semantics in stdlib.
 
-Step-by-step checklist:
+Implemented summary:
 
-- [x] Step 1: parser grammar update for list spread expressions
-  - accept `[a, b, ..xs]` and `[f(x), ..ys]` in expression position.
-  - allow zero or more prefix elements, with one trailing spread segment only.
-- [x] Step 2: parser validation and diagnostics
-  - reject malformed forms (multiple `..`, non-trailing `..`, missing spread expression).
-  - keep `case` list-pattern parsing rules unchanged.
-- [x] Step 3: AST extension for spread list literals
-  - represent list prefix elements and optional spread tail in AST explicitly.
-  - update parser tests to lock AST shape for valid inputs.
-- [x] Step 4: typecheck rule for prefix element unification
-  - unify all prefix element types to one element type `a`.
-  - surface type mismatch diagnostics when prefix elements disagree.
-- [x] Step 5: typecheck rule for spread tail
-  - require spread tail type to be `List a` where `a` is the unified element type.
-  - report explicit `List <type>` expectation on tail mismatch/non-list tail.
-- [x] Step 6: runtime/fallback evaluation support
-  - evaluate prefix elements and spread tail in deterministic order.
-  - concatenate into one list value with current list runtime semantics.
-- [x] Step 7: native lowering parity
-  - add lowering support or route safely to fallback path.
-  - ensure observable behavior parity between native and fallback execution.
-- [x] Step 8: migrate map callsites to stdlib
-  - identify existing builtin/internal `map` callsites.
-  - switch each to `goby/list` `map` where semantics are equivalent.
-- [x] Step 9: trim builtin-only map path
-  - remove or narrow redundant builtin `map` special handling after migration.
-  - keep one canonical map semantics source in stdlib.
-- [x] Step 10: docs sync
-  - update `doc/LANGUAGE_SPEC.md` for expression-side `..` list syntax.
-  - add one canonical example using `[a, b, ..xs]`.
-- [x] Step 11: regression tests
-  - parser: valid/invalid spread forms.
-  - typecheck: prefix mismatch, tail non-list, tail element mismatch.
-  - runtime/CLI: end-to-end behavior for list spread + stdlib `map`.
+- list spread expressions are implemented in parser, AST, typecheck, and runtime.
+- canonical source form is `[a, b, ..xs]` with one trailing spread segment.
+- `List.map` semantics were consolidated onto stdlib-backed behavior and redundant builtin-only map handling was trimmed.
+- docs/examples/tests were updated and parity was validated across runtime paths.
 
 ### 4.6 Parking Lot (Needs Revalidation Before Implementation)
 
@@ -541,100 +532,22 @@ Goal: align runtime/typecheck behavior with the current `LANGUAGE_SPEC` contract
 
 Step-by-step checklist:
 
-- [x] Step 1: semantic alignment audit
-  - identify all runtime paths where handler operation calls are evaluated
-    (fallback runtime + typed mode runtime bridge).
-  - confirm current no-`resume` behavior for both value-position and unit-position operation calls.
-  - audit result (2026-03-06):
-    - handled operation dispatch currently enters through `eval_ast_side_effect`,
-      `eval_expr_ast`, and `execute_unit_expr_ast`, converging on
-      `dispatch_handler_method_core`.
-    - value-position no-`resume` calls already behave abortively through the
-      absence of a resumed value.
-    - unit-position no-`resume` calls still return success from
-      `dispatch_handler_method`, so execution may continue past the handled
-      operation boundary.
-- [ ] Step 2: runtime abort contract implementation
-  - add explicit abort signal/state in runtime dispatch core.
-  - ensure no-`resume` handler completion triggers immediate program stop at operation boundary
-    (including unit-position operation calls).
-  - preserve existing deterministic runtime error reporting for invalid resume usage.
-  - Detailed checklist:
-    - [x] Step 2.1: runtime dispatch path inventory
-      - identify every effect-operation execution entrypoint in `crates/goby-wasm/src/lib.rs`.
-      - separate value-position dispatch paths from unit-position dispatch paths.
-      - mark which paths currently rely on `dispatch_handler_method_core`.
-    - [x] Step 2.2: current continuation token semantics audit
-      - document how `resume_tokens` / `optimized_resume_tokens` currently encode:
-        - resume success,
-        - no-resume completion,
-        - invalid double-resume error.
-      - identify where `Option<Option<RuntimeValue>>` is overloading multiple meanings.
-    - [x] Step 2.3: explicit abort result shape design
-      - introduce a dedicated internal result/bridge state for handler completion outcomes.
-      - require the representation to distinguish at least:
-        - resumed continuation value,
-        - abortive completion without `resume`,
-        - runtime error / invalid continuation state.
-      - keep fallback mode and typed-continuation mode on the same semantic contract.
-    - [x] Step 2.4: continuation bridge API refactor
-      - update `begin_handler_continuation_bridge` / `finish_handler_continuation_bridge`
-        and related helpers to return the new explicit outcome.
-      - remove reliance on implicit `None` / nested `Option` meaning for abort detection.
-      - preserve stack-balance checks and existing internal mismatch diagnostics.
-    - [x] Step 2.5: fallback resume path alignment
-      - update `resume_through_active_continuation_fallback` to write the new outcome state.
-      - ensure missing continuation and consumed continuation still map to the current
-        deterministic runtime errors.
-    - [x] Step 2.6: optimized resume path alignment
-      - update `resume_through_active_continuation_optimized` to mirror fallback semantics.
-      - confirm both execution modes expose the same observable abort/resume behavior.
-    - [x] Step 2.7: handler body execution contract
-      - update `dispatch_handler_method_core` so handler completion without `resume`
-        produces explicit abortive completion rather than implicit fallthrough.
-      - keep handler-local statement execution order unchanged.
-      - ensure the "break when continuation resumes" logic still short-circuits correctly.
-    - [x] Step 2.8: value-position operation propagation
-      - update value-returning effect call sites so abortive completion stops surrounding
-        expression evaluation immediately.
-      - verify no synthetic fallback value is produced for aborted operation calls.
-    - [x] Step 2.9: unit-position operation propagation
-      - update side-effect operation call sites so abortive completion stops the enclosing
-        statement/declaration execution immediately.
-      - ensure statements after an aborted handled operation are not executed.
-    - [x] Step 2.10: bridge parity and edge-case review
-      - confirm `with` inline handler and handler-value forms both use the same abort contract.
-      - confirm embedded default handlers are unaffected unless they explicitly participate
-        in the same continuation bridge.
-      - review nested handlers to ensure abort stops at the handled operation boundary and
-        does not corrupt outer handler stacks.
-    - [x] Step 2.11: regression tests for abort contract
-      - add fallback runtime coverage for:
-        - no-resume abort in value position,
-        - no-resume abort in unit position,
-        - nested handler abort propagation.
-      - add typed-mode parity coverage for the same cases.
-      - keep existing invalid resume runtime error tests passing unchanged.
-    - [x] Step 2.12: post-implementation validation
-      - run `cargo fmt`.
-      - run targeted `cargo test` for effect-runtime cases first.
-      - if green, run full project quality gates tracked in Step 7.
+- Completed summary:
+  - [x] Step 1: semantic alignment audit
+    - runtime handler dispatch entrypoints were audited across fallback and typed mode.
+    - the audit confirmed the pre-fix gap was unit-position no-`resume` continuation.
+  - [x] Step 2: runtime abort contract implementation
+    - runtime dispatch now carries explicit abort/completion state instead of overloading nested `Option` meanings.
+    - no-`resume` handler completion now aborts at the handled operation boundary in both value and unit positions.
+    - nested-handler propagation and fallback/typed parity coverage were added.
 - [ ] Step 3: multi-resume progression support
   - replace one-shot token consumption model with resumable progression model for one handler invocation.
   - each `resume` continues from the next resumable point; exhausted continuation raises runtime error.
   - keep guardrails for clearly invalid continuation state transitions.
 - [x] Step 4: typecheck rule update
-  - remove conservative "multiple syntactic `resume` is always rejected" rule.
-  - retain checks for:
-    - `resume` outside handler rejection,
-    - `resume` argument type compatibility with operation return type,
-    - unresolved generic constraint diagnostics.
-  - note:
-    - parser support for nested handler-clause blocks now exposes previously hidden
-      valid multi-branch `resume` cases (for example `examples/iterator_unified.gb`),
-      so the conservative syntactic rejection has been removed.
-    - runtime progression semantics beyond one-shot nested re-entry remain tracked
-      in Step 3.
+  - conservative syntactic multi-`resume` rejection was removed.
+  - retained checks are `resume` placement, resumed-value type compatibility, and unresolved generic diagnostics.
+  - nested handler-clause parsing now exposes valid multi-branch `resume` cases; runtime progression semantics remain tracked in Step 3.
 - [ ] Step 5: tests and parity locks
   - add/update fallback runtime tests for:
     - no-`resume` immediate abort in value and unit position,
