@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-07 (session 219)
+Last updated: 2026-03-07 (session 220)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -17,24 +17,21 @@ this section takes priority.
     families (single-arg/multi-arg named calls, receiver-method calls, pipeline,
     `BinOp`, `if`, `case`, nested `resume`, `InterpolatedString`, `TupleLit`,
     `ListLit`, `RecordConstruct`, positional single-field constructor sugar).
-  - legacy `eval_expr_ast` `Expr::Call` seams are now fully bridged:
-    - multi-arg named-call arm → outcome consumer
-    - single-arg `Expr::Var` arm → outcome consumer
-    - `Expr::Qualified` callee arm → outcome consumer (session 219)
-  - the only remaining legacy `eval_expr_ast` arm in `Expr::Call` is the
-    positional single-field ctor arm (later arm, approx lines 1567-1579) —
-    the early guard (1551-1557) already routes outcome path first, so this
-    arm is effectively unreachable after migration.
+  - `eval_expr_ast` `Expr::Call` branch is now fully outcome-bridged (session 218-219):
+    all named-call and qualified callee arms route through outcome consumer.
+    Dead-code ctor later arm removed.
+  - unit-position qualified-call arg evaluation migrated (session 220):
+    - `execute_unit_expr_ast` Expr::Qualified arm → outcome consumer
+    - `eval_ast_side_effect` Expr::Qualified arm → outcome consumer
 - Required next restart point:
-  - the value-position `Expr::Call` migration is essentially complete.
-  - next slice options:
-    1. Inspect and clean up the now-unreachable positional ctor later arm
-       (remove or verify dead-code status).
-    2. Extend outcome-path coverage to unit-position qualified-call branch
-       in `execute_unit_expr_ast` (~line 2595), noted by Codex as a
-       non-blocking remaining gap.
-    3. Assess whether a new semantic target is more valuable than further
-       cleanup of these residual seams.
+  - all major `Expr::Call` legacy direct-eval seams are now on the outcome path.
+  - remaining open items for Step 3 cleanup:
+    1. `eval_ast_side_effect` plain `Expr::Var` arm (~line 1000): still uses
+       `eval_expr_ast` directly for arg; could be bridged to outcome consumer.
+    2. New semantic target: assess whether the next work should be continuation
+       exhaustion / error semantics, or a new language feature.
+  - default next: inspect `eval_ast_side_effect` `Expr::Var` arm for migration,
+    then decide on new semantic target.
 - External internal records:
   - devflow notes live outside the repo under
     `/home/yoshitsugu/.codex/devflow/goby-c372fa22bba4/`
@@ -127,6 +124,17 @@ this section takes priority.
 ## 4. Recent Milestones
 
 Recent (detailed):
+
+- 2026-03-07 (session 220): Track 4.7 Step 3 unit-position qualified-call arg migrated.
+  - runtime:
+    - `execute_unit_expr_ast` and `eval_ast_side_effect` Expr::Qualified call arms now
+      evaluate arg via `eval_expr_ast_outcome` + `complete_ast_value_outcome` instead of
+      legacy `eval_ast_value` / `eval_expr_ast`.
+    - all qualified-call arg evaluation paths are now outcome-aware.
+  - validation completed:
+    - `cargo fmt`
+    - `cargo clippy -p goby-wasm -- -D warnings`
+    - `cargo test -p goby-wasm` (183 passed)
 
 - 2026-03-07 (session 219): Track 4.7 Step 3 legacy `Expr::Qualified` callee arm bridged.
   - runtime:
