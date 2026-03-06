@@ -2023,6 +2023,15 @@ impl<'m> RuntimeOutputResolver<'m> {
                 AstEvalOutcome::Complete(RuntimeValue::String(out))
             }
             Expr::BinOp { op, left, right } => {
+                self.pending_value_continuations.push(AstValueContinuation {
+                    kind: AstValueContinuationKind::BinOpLeft {
+                        op: op.clone(),
+                        right: (*right.clone()),
+                    },
+                    locals: locals.clone(),
+                    callables: callables.clone(),
+                    depth: depth + 1,
+                });
                 let lv = match self.eval_expr_ast_outcome(
                     left,
                     locals,
@@ -2032,11 +2041,28 @@ impl<'m> RuntimeOutputResolver<'m> {
                 ) {
                     AstEvalOutcome::Complete(value) => value,
                     AstEvalOutcome::Suspended(continuation) => {
+                        self.pending_value_continuations.pop();
                         return AstEvalOutcome::Suspended(continuation);
                     }
-                    AstEvalOutcome::Aborted => return AstEvalOutcome::Aborted,
-                    AstEvalOutcome::Unsupported => return AstEvalOutcome::Unsupported,
+                    AstEvalOutcome::Aborted => {
+                        self.pending_value_continuations.pop();
+                        return AstEvalOutcome::Aborted;
+                    }
+                    AstEvalOutcome::Unsupported => {
+                        self.pending_value_continuations.pop();
+                        return AstEvalOutcome::Unsupported;
+                    }
                 };
+                self.pending_value_continuations.pop();
+                self.pending_value_continuations.push(AstValueContinuation {
+                    kind: AstValueContinuationKind::BinOpRight {
+                        op: op.clone(),
+                        left_value: lv.clone(),
+                    },
+                    locals: locals.clone(),
+                    callables: callables.clone(),
+                    depth: depth + 1,
+                });
                 let rv = match self.eval_expr_ast_outcome(
                     right,
                     locals,
@@ -2046,11 +2072,19 @@ impl<'m> RuntimeOutputResolver<'m> {
                 ) {
                     AstEvalOutcome::Complete(value) => value,
                     AstEvalOutcome::Suspended(continuation) => {
+                        self.pending_value_continuations.pop();
                         return AstEvalOutcome::Suspended(continuation);
                     }
-                    AstEvalOutcome::Aborted => return AstEvalOutcome::Aborted,
-                    AstEvalOutcome::Unsupported => return AstEvalOutcome::Unsupported,
+                    AstEvalOutcome::Aborted => {
+                        self.pending_value_continuations.pop();
+                        return AstEvalOutcome::Aborted;
+                    }
+                    AstEvalOutcome::Unsupported => {
+                        self.pending_value_continuations.pop();
+                        return AstEvalOutcome::Unsupported;
+                    }
                 };
+                self.pending_value_continuations.pop();
                 match (lv, rv) {
                     (RuntimeValue::Int(l), RuntimeValue::Int(r)) => match op {
                         goby_core::BinOpKind::Add => match l.checked_add(r) {
@@ -4199,7 +4233,11 @@ impl<'m> RuntimeOutputResolver<'m> {
         frame.stmt.is_none()
             && matches!(
                 frame.value.as_ref().map(|continuation| &continuation.kind),
-                Some(AstValueContinuationKind::SingleArgNamedCall { .. })
+                Some(
+                    AstValueContinuationKind::SingleArgNamedCall { .. }
+                        | AstValueContinuationKind::BinOpLeft { .. }
+                        | AstValueContinuationKind::BinOpRight { .. }
+                )
             )
     }
 
