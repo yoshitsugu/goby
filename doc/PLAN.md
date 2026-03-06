@@ -766,9 +766,10 @@ Step-by-step checklist:
         - Step 3.2c:
           - delete or collapse the replaced old replay machinery for that migrated shape before
             expanding coverage.
-          - next target:
-            - remove the remaining token-only `SingleArgNamedCall` replay dependency now that the
-              outcome path can suspend that shape directly.
+          - current status:
+            - legacy `eval_expr_ast` no longer captures `SingleArgNamedCall` replay checkpoints.
+            - single-arg call replay now depends on the outcome-aware path, with only a narrow
+              legacy guard remaining inside shared continuation replay.
           - done when:
             - the old replay branch for that shape is removed or no longer reachable,
             - tests still pass without relying on dual paths.

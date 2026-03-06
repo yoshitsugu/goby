@@ -145,3 +145,6 @@
   suspended-frame path: value-only `single-arg named call` now suspends via
   `AstEvalOutcome::Suspended(...)`, while statement and mixed-frame cases remain
   on the old replay path temporarily.
+- 2026-03-06: Step 3.2c collapsed the old single-arg replay overlap by removing
+  legacy `eval_expr_ast` checkpoint capture for plain named calls and routing the
+  remaining shared replay guard back through the outcome-aware named-call path.

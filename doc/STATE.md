@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-06 (session 192)
+Last updated: 2026-03-06 (session 193)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -436,6 +436,26 @@ Recent (detailed):
     - start Step 3.2c by deleting or collapsing the remaining old
       `SingleArgNamedCall` token-only replay path now that the outcome path can suspend it
       directly.
+
+- 2026-03-06 (session 193): Track 4.7 Step 3.2c single-arg legacy replay cleanup landed.
+  - runtime:
+    - legacy `eval_expr_ast` no longer pushes `SingleArgNamedCall` replay checkpoints for plain
+      named calls.
+    - shared continuation replay still keeps a narrow guard for `SingleArgNamedCall`, but that path
+      now delegates back through the outcome-aware named-call application instead of duplicating the
+      old direct replay behavior.
+  - result:
+    - the single-arg migrated shape now depends on the new outcome/suspension path for checkpoint
+      capture.
+    - old/new dual-path overlap for that shape is smaller, while broader continuation shapes remain
+      unchanged.
+  - validation completed:
+    - `cargo fmt`
+    - `cargo test -p goby-wasm`
+  - immediate next step:
+    - choose the next migrated shape for Step 3.2d.
+    - `BinOp` is the natural next target because it already has a bounded continuation shape and
+      existing parity tests.
 
 - 2026-03-06 (session 177): map consolidation Step 8-9 completed.
   - PLAN.md §4.5 checklist updated:

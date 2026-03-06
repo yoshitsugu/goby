@@ -1599,27 +1599,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                     let arg_values: Option<Vec<RuntimeValue>> = args
                         .iter()
                         .map(|arg_expr| {
-                            if args.len() == 1 {
-                                self.pending_value_continuations.push(AstValueContinuation {
-                                    kind: AstValueContinuationKind::SingleArgNamedCall {
-                                        fn_name: fn_name.to_string(),
-                                    },
-                                    locals: locals.clone(),
-                                    callables: callables.clone(),
-                                    depth: depth + 1,
-                                });
-                            }
-                            let value = self.eval_expr_ast(
-                                arg_expr,
-                                locals,
-                                callables,
-                                evaluators,
-                                depth + 1,
-                            );
-                            if args.len() == 1 {
-                                self.pending_value_continuations.pop();
-                            }
-                            value
+                            self.eval_expr_ast(arg_expr, locals, callables, evaluators, depth + 1)
                         })
                         .collect();
                     let arg_values = arg_values?;
@@ -1650,16 +1630,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                 }
 
                 if let Expr::Var(fn_name) = callee.as_ref() {
-                    self.pending_value_continuations.push(AstValueContinuation {
-                        kind: AstValueContinuationKind::SingleArgNamedCall {
-                            fn_name: fn_name.clone(),
-                        },
-                        locals: locals.clone(),
-                        callables: callables.clone(),
-                        depth: depth + 1,
-                    });
                     let arg_val = self.eval_expr_ast(arg, locals, callables, evaluators, depth + 1);
-                    self.pending_value_continuations.pop();
                     let arg_val = arg_val?;
                     if let Some(value) = self.apply_named_value_call_ast(
                         fn_name,
@@ -4289,15 +4260,24 @@ impl<'m> RuntimeOutputResolver<'m> {
         evaluators: &RuntimeEvaluators<'_, '_>,
     ) -> Option<RuntimeValue> {
         match continuation.kind {
-            AstValueContinuationKind::SingleArgNamedCall { fn_name } => self
-                .apply_named_value_call_ast(
+            AstValueContinuationKind::SingleArgNamedCall { fn_name } => match self
+                .apply_named_value_call_ast_outcome(
                     &fn_name,
-                    &[resumed],
+                    resumed,
                     &continuation.locals,
                     &continuation.callables,
                     evaluators,
                     continuation.depth,
-                ),
+                ) {
+                AstEvalOutcome::Complete(value) => Some(value),
+                AstEvalOutcome::Suspended(_continuation) => {
+                    self.set_runtime_error_once(
+                            "internal error: single-arg continuation replay should not suspend on legacy path",
+                        );
+                    None
+                }
+                AstEvalOutcome::Aborted | AstEvalOutcome::Unsupported => None,
+            },
             AstValueContinuationKind::BinOpLeft { op, right } => {
                 let left_value = resumed;
                 self.pending_value_continuations.push(AstValueContinuation {
