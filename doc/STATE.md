@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-06 (session 194)
+Last updated: 2026-03-06 (session 195)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -475,6 +475,31 @@ Recent (detailed):
     - migrate the first branch/control-flow boundary.
     - `if` is the smallest next target because it has one condition checkpoint and two branch-entry
       checkpoints, without `case` arm matching complexity.
+
+- 2026-03-06 (session 195): Track 4.7 Step 3.2d `if` condition suspended-frame slice landed.
+  - runtime:
+    - `AstContinuation` now carries the resumed value payload directly instead of relying on an
+      external argument at consume time.
+    - `complete_ast_value_outcome(...)` now acts as the first real suspended-frame consumer on the
+      AST value path.
+    - `eval_expr_ast_outcome` / `execute_saved_value_continuation(...)` cover `if` condition replay
+      through the unified frame path.
+  - result:
+    - the first branch/control-flow boundary now suspends and resumes through the new model.
+    - Step 3 no longer relies on token-only transport for this slice; the continuation payload is
+      self-contained enough to re-enter evaluation.
+    - regression coverage now locks fallback/typed parity for `if` condition replay on an AST
+      declaration path.
+  - validation completed:
+    - `cargo fmt`
+    - `cargo test -p goby-wasm if_condition_replay -- --nocapture`
+    - `cargo test -p goby-wasm single_arg_call_value_replay -- --nocapture`
+    - `cargo test -p goby-wasm binop_operand_replay -- --nocapture`
+    - `cargo test -p goby-wasm`
+  - immediate next step:
+    - extend the same consumer boundary to the next branch/control-flow shape.
+    - `case` is the natural next target; after that, revisit broader call shapes and
+      `resume (op ...)`.
 
 - 2026-03-06 (session 177): map consolidation Step 8-9 completed.
   - PLAN.md §4.5 checklist updated:

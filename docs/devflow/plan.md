@@ -151,3 +151,8 @@
 - 2026-03-06: Step 3.2d began migrating `BinOp` the same way: suspended-frame
   support now comes from `eval_expr_ast_outcome`, and legacy `eval_expr_ast`
   operand checkpoint capture was removed.
+- 2026-03-06: Step 3.2d also crossed the first branch/control-flow boundary:
+  `AstContinuation` now carries the resumed value payload directly, the runtime
+  can consume suspended frames through `complete_ast_value_outcome(...)`, and
+  `if` condition replay is covered on the AST declaration path with fallback /
+  typed parity tests.

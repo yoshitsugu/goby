@@ -559,7 +559,10 @@ enum HandlerCompletion {
 #[allow(dead_code)]
 #[derive(Clone)]
 enum AstContinuation {
-    Frame(AstContinuationFrame),
+    Frame {
+        frame: AstContinuationFrame,
+        resumed: RuntimeValue,
+    },
 }
 
 #[derive(Clone)]
@@ -580,6 +583,10 @@ struct AstValueContinuation {
 enum AstValueContinuationKind {
     SingleArgNamedCall {
         fn_name: String,
+    },
+    IfCondition {
+        then_expr: Expr,
+        else_expr: Expr,
     },
     BinOpLeft {
         op: goby_core::BinOpKind,
@@ -1826,58 +1833,10 @@ impl<'m> RuntimeOutputResolver<'m> {
                 }
                 None
             }
-            Expr::If {
-                condition,
-                then_expr,
-                else_expr,
-            } => {
-                let cond_val =
-                    self.eval_expr_ast(condition, locals, callables, evaluators, depth + 1)?;
-                match cond_val {
-                    RuntimeValue::Bool(true) => match self.eval_expr_ast(
-                        then_expr,
-                        locals,
-                        callables,
-                        evaluators,
-                        depth + 1,
-                    ) {
-                        Some(v) => Some(v),
-                        None => {
-                            let mut branch_locals = locals.clone();
-                            let mut branch_callables = callables.clone();
-                            self.execute_unit_expr_ast(
-                                then_expr,
-                                &mut branch_locals,
-                                &mut branch_callables,
-                                evaluators,
-                                depth + 1,
-                            )?;
-                            Some(RuntimeValue::Unit)
-                        }
-                    },
-                    RuntimeValue::Bool(false) => match self.eval_expr_ast(
-                        else_expr,
-                        locals,
-                        callables,
-                        evaluators,
-                        depth + 1,
-                    ) {
-                        Some(v) => Some(v),
-                        None => {
-                            let mut branch_locals = locals.clone();
-                            let mut branch_callables = callables.clone();
-                            self.execute_unit_expr_ast(
-                                else_expr,
-                                &mut branch_locals,
-                                &mut branch_callables,
-                                evaluators,
-                                depth + 1,
-                            )?;
-                            Some(RuntimeValue::Unit)
-                        }
-                    },
-                    _ => None,
-                }
+            Expr::If { .. } => {
+                let outcome =
+                    self.eval_expr_ast_outcome(expr, locals, callables, evaluators, depth);
+                self.complete_ast_value_outcome(outcome, evaluators)
             }
             Expr::With { handler, body } => {
                 let RuntimeValue::Handler(inline_handler) =
@@ -2361,6 +2320,15 @@ impl<'m> RuntimeOutputResolver<'m> {
                 then_expr,
                 else_expr,
             } => {
+                self.pending_value_continuations.push(AstValueContinuation {
+                    kind: AstValueContinuationKind::IfCondition {
+                        then_expr: (**then_expr).clone(),
+                        else_expr: (**else_expr).clone(),
+                    },
+                    locals: locals.clone(),
+                    callables: callables.clone(),
+                    depth: depth + 1,
+                });
                 let cond_val = match self.eval_expr_ast_outcome(
                     condition,
                     locals,
@@ -2370,11 +2338,19 @@ impl<'m> RuntimeOutputResolver<'m> {
                 ) {
                     AstEvalOutcome::Complete(value) => value,
                     AstEvalOutcome::Suspended(continuation) => {
+                        self.pending_value_continuations.pop();
                         return AstEvalOutcome::Suspended(continuation);
                     }
-                    AstEvalOutcome::Aborted => return AstEvalOutcome::Aborted,
-                    AstEvalOutcome::Unsupported => return AstEvalOutcome::Unsupported,
+                    AstEvalOutcome::Aborted => {
+                        self.pending_value_continuations.pop();
+                        return AstEvalOutcome::Aborted;
+                    }
+                    AstEvalOutcome::Unsupported => {
+                        self.pending_value_continuations.pop();
+                        return AstEvalOutcome::Unsupported;
+                    }
                 };
+                self.pending_value_continuations.pop();
                 let branch = match cond_val {
                     RuntimeValue::Bool(true) => then_expr,
                     RuntimeValue::Bool(false) => else_expr,
@@ -4112,7 +4088,10 @@ impl<'m> RuntimeOutputResolver<'m> {
         let outcome = if let Some(frame_ref) = frame.as_ref()
             && Self::should_suspend_resume_outcome(frame_ref)
         {
-            AstEvalOutcome::Suspended(Box::new(AstContinuation::Frame(frame_ref.clone())))
+            AstEvalOutcome::Suspended(Box::new(AstContinuation::Frame {
+                frame: frame_ref.clone(),
+                resumed: resumed.clone(),
+            }))
         } else {
             self.resume_through_ast_continuation_frame(frame, resumed, _evaluators)
         };
@@ -4189,7 +4168,10 @@ impl<'m> RuntimeOutputResolver<'m> {
         let outcome = if let Some(frame_ref) = frame.as_ref()
             && Self::should_suspend_resume_outcome(frame_ref)
         {
-            AstEvalOutcome::Suspended(Box::new(AstContinuation::Frame(frame_ref.clone())))
+            AstEvalOutcome::Suspended(Box::new(AstContinuation::Frame {
+                frame: frame_ref.clone(),
+                resumed: resumed.clone(),
+            }))
         } else {
             self.resume_through_ast_continuation_frame(frame, resumed, _evaluators)
         };
@@ -4215,10 +4197,28 @@ impl<'m> RuntimeOutputResolver<'m> {
                 frame.value.as_ref().map(|continuation| &continuation.kind),
                 Some(
                     AstValueContinuationKind::SingleArgNamedCall { .. }
+                        | AstValueContinuationKind::IfCondition { .. }
                         | AstValueContinuationKind::BinOpLeft { .. }
                         | AstValueContinuationKind::BinOpRight { .. }
                 )
             )
+    }
+
+    fn complete_ast_value_outcome(
+        &mut self,
+        mut outcome: AstEvalOutcome<RuntimeValue>,
+        evaluators: &RuntimeEvaluators<'_, '_>,
+    ) -> Option<RuntimeValue> {
+        loop {
+            match outcome {
+                AstEvalOutcome::Complete(value) => return Some(value),
+                AstEvalOutcome::Suspended(continuation) => {
+                    outcome = self.execute_ast_continuation(*continuation, evaluators);
+                }
+                AstEvalOutcome::Aborted => return None,
+                AstEvalOutcome::Unsupported => return None,
+            }
+        }
     }
 
     fn resume_through_ast_continuation_frame(
@@ -4230,17 +4230,16 @@ impl<'m> RuntimeOutputResolver<'m> {
         let Some(frame) = frame else {
             return AstEvalOutcome::Complete(resumed);
         };
-        self.execute_ast_continuation(AstContinuation::Frame(frame), resumed, evaluators)
+        self.execute_ast_continuation(AstContinuation::Frame { frame, resumed }, evaluators)
     }
 
     fn execute_ast_continuation(
         &mut self,
         continuation: AstContinuation,
-        resumed: RuntimeValue,
         evaluators: &RuntimeEvaluators<'_, '_>,
     ) -> AstEvalOutcome<RuntimeValue> {
         match continuation {
-            AstContinuation::Frame(frame) => {
+            AstContinuation::Frame { frame, resumed } => {
                 self.execute_ast_continuation_frame(frame, resumed, evaluators)
             }
         }
@@ -4296,6 +4295,24 @@ impl<'m> RuntimeOutputResolver<'m> {
                 }
                 AstEvalOutcome::Aborted | AstEvalOutcome::Unsupported => None,
             },
+            AstValueContinuationKind::IfCondition {
+                then_expr,
+                else_expr,
+            } => {
+                let branch = match resumed {
+                    RuntimeValue::Bool(true) => then_expr,
+                    RuntimeValue::Bool(false) => else_expr,
+                    _ => return None,
+                };
+                let outcome = self.eval_expr_ast_outcome(
+                    &branch,
+                    &continuation.locals,
+                    &continuation.callables,
+                    evaluators,
+                    continuation.depth,
+                );
+                self.complete_ast_value_outcome(outcome, evaluators)
+            }
             AstValueContinuationKind::BinOpLeft { op, right } => {
                 let left_value = resumed;
                 self.pending_value_continuations.push(AstValueContinuation {
@@ -7945,6 +7962,65 @@ main =
         let module = parse_module(source).expect("parse should work");
         let typed = assert_mode_parity(&module, "binop operand replay");
         assert_eq!(typed.stdout.as_deref(), Some("55"));
+        assert_eq!(typed.runtime_error_kind, None);
+    }
+
+    #[test]
+    fn resume_replays_if_condition_continuation() {
+        use goby_core::parse_module;
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let source = r#"
+effect Pred
+  flag: Int -> Bool
+
+choose : Int -> Int
+choose n =
+  if flag n
+    10
+  else
+    20
+
+main : Unit -> Unit
+main =
+  with
+    flag n ->
+      resume True
+  in
+    print (choose 0)
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let output =
+            resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
+                .expect("runtime output should resolve");
+        assert_eq!(output, "10");
+    }
+
+    #[test]
+    fn typed_mode_matches_fallback_for_if_condition_replay() {
+        use goby_core::parse_module;
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let source = r#"
+effect Pred
+  flag: Int -> Bool
+
+choose : Int -> Int
+choose n =
+  if flag n
+    10
+  else
+    20
+
+main : Unit -> Unit
+main =
+  with
+    flag n ->
+      resume False
+  in
+    print (choose 0)
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let typed = assert_mode_parity(&module, "if condition replay");
+        assert_eq!(typed.stdout.as_deref(), Some("20"));
         assert_eq!(typed.runtime_error_kind, None);
     }
 

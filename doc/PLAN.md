@@ -729,6 +729,7 @@ Step-by-step checklist:
           - declaration/value-expression AST paths needed by `iterator_unified`.
           - shared resume transport via `AstContinuationFrame`.
           - first evaluator-produced suspended frame for value-only single-arg named calls.
+          - first branch/control-flow suspended frame for `if` condition replay on the AST path.
         - not yet unified:
           - most inner expression checkpoints are still represented by ad hoc replay shapes,
           - statement/value replay are still split across token-side structures.
@@ -781,9 +782,23 @@ Step-by-step checklist:
           - repeat the same pattern for the next shape (`BinOp`, then branch/control-flow
             boundaries).
           - order after first migration:
-            - branch/control-flow boundaries (`if`, `case`)
-            - broader call shapes
+            - branch/control-flow boundaries (`if`, then `case`)
+            - broader call shapes / multi-arg call shapes
             - `resume (op ...)`
+          - current status:
+            - `BinOp` migration landed and legacy operand checkpoint capture was removed.
+            - the first branch/control-flow boundary also landed narrowly:
+              - `AstContinuation` now carries the resumed value payload directly,
+              - `complete_ast_value_outcome(...)` consumes real suspended frames,
+              - `if` condition replay is covered on the AST declaration path with fallback/typed
+                parity tests.
+            - string-fallback execution is still intentionally out of scope for Step 3.
+          - done when:
+            - at least one branch/control-flow boundary suspends and resumes through the unified
+              frame path,
+            - the resumed value is transported by the continuation payload itself,
+            - the next target can build on the same consumer boundary instead of adding another
+              token-only replay detour.
     - [~] Step 3.3: implement progression in fallback mode first
       - make one handler invocation able to call `resume` repeatedly.
       - each `resume` should drive the captured caller continuation until:
@@ -805,8 +820,10 @@ Step-by-step checklist:
         - typed mode mirrors the new unit-position replay + exhaustion slice.
         - typed mode also mirrors direct binding replay, declaration-call progression, and the
           `iterator_unified` example shape.
-        - typed mode also mirrors the current exploratory nested replay slices (single-arg call and
-          direct binop operand replay).
+        - typed mode also mirrors the current migrated nested replay slices:
+          - single-arg call,
+          - direct binop operand replay,
+          - `if` condition replay on the AST declaration path.
       - implementation may still use separate token storage, but not separate semantics.
     - [~] Step 3.5: cover the progression matrix with tests
       - fallback success: one handler invocation resumes through multiple operation sites.
@@ -820,6 +837,7 @@ Step-by-step checklist:
           `iterator_unified.gb`.
         - added fallback + typed parity regression for single-arg call-argument replay.
         - added fallback + typed parity regression for direct binop operand replay.
+        - added fallback + typed parity regression for `if` condition replay.
         - broader matrix for nested value-position progression is still open.
       - next acceptance target:
         - add the first tests that specifically lock the unified `Suspended(frame)` path, not only
