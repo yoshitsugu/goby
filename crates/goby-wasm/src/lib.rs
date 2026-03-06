@@ -582,6 +582,9 @@ struct AstValueContinuation {
 #[derive(Clone)]
 enum AstValueContinuationKind {
     ResumeValue,
+    PipelineCall {
+        callee: String,
+    },
     SingleArgNamedCall {
         fn_name: String,
     },
@@ -1678,9 +1681,10 @@ impl<'m> RuntimeOutputResolver<'m> {
                 // application) — not yet supported by the native evaluator.
                 None // NOTE: qualified callee dispatch is handled above
             }
-            Expr::Pipeline { value, callee } => {
-                let v = self.eval_expr_ast(value, locals, callables, evaluators, depth + 1)?;
-                self.apply_pipeline(callee, v, locals, callables, evaluators, depth + 1)
+            Expr::Pipeline { .. } => {
+                let outcome =
+                    self.eval_expr_ast_outcome(expr, locals, callables, evaluators, depth);
+                self.complete_ast_value_outcome(outcome, evaluators)
             }
             // Record construction: evaluate each field, build RuntimeValue::Record.
             Expr::RecordConstruct {
@@ -2603,6 +2607,36 @@ impl<'m> RuntimeOutputResolver<'m> {
                     evaluators,
                     depth + 1,
                 )
+            }
+            Expr::Pipeline { value, callee } => {
+                self.pending_value_continuations.push(AstValueContinuation {
+                    kind: AstValueContinuationKind::PipelineCall {
+                        callee: callee.clone(),
+                    },
+                    locals: locals.clone(),
+                    callables: callables.clone(),
+                    depth: depth + 1,
+                });
+                let pipeline_value =
+                    self.eval_expr_ast_outcome(value, locals, callables, evaluators, depth + 1);
+                self.pending_value_continuations.pop();
+                let pipeline_value = match pipeline_value {
+                    AstEvalOutcome::Complete(value) => value,
+                    AstEvalOutcome::Suspended(continuation) => {
+                        return AstEvalOutcome::Suspended(continuation);
+                    }
+                    AstEvalOutcome::Aborted => return AstEvalOutcome::Aborted,
+                    AstEvalOutcome::Unsupported => return AstEvalOutcome::Unsupported,
+                };
+                let value = self.apply_pipeline(
+                    callee,
+                    pipeline_value,
+                    locals,
+                    callables,
+                    evaluators,
+                    depth + 1,
+                );
+                self.ast_outcome_from_option(value)
             }
             Expr::Resume { value } => {
                 self.pending_value_continuations.push(AstValueContinuation {
@@ -4274,6 +4308,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                 frame.value.as_ref().map(|continuation| &continuation.kind),
                 Some(
                     AstValueContinuationKind::ResumeValue
+                        | AstValueContinuationKind::PipelineCall { .. }
                         | AstValueContinuationKind::SingleArgNamedCall { .. }
                         | AstValueContinuationKind::ReceiverMethodCall { .. }
                         | AstValueContinuationKind::MultiArgNamedCall { .. }
@@ -4368,6 +4403,14 @@ impl<'m> RuntimeOutputResolver<'m> {
                     AstEvalOutcome::Aborted | AstEvalOutcome::Unsupported => None,
                 }
             }
+            AstValueContinuationKind::PipelineCall { callee } => self.apply_pipeline(
+                &callee,
+                resumed,
+                &continuation.locals,
+                &continuation.callables,
+                evaluators,
+                continuation.depth,
+            ),
             AstValueContinuationKind::ReceiverMethodCall { receiver, member } => {
                 match self.apply_receiver_method_value_call_ast_outcome(
                     &receiver,
@@ -8350,6 +8393,57 @@ main =
         let module = parse_module(source).expect("parse should work");
         let typed = assert_mode_parity(&module, "receiver method call argument replay");
         assert_eq!(typed.stdout.as_deref(), Some("22"));
+        assert_eq!(typed.runtime_error_kind, None);
+    }
+
+    #[test]
+    fn resume_replays_pipeline_value_continuation() {
+        use goby_core::parse_module;
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let source = r#"
+effect Iter
+  next: Int -> Int
+
+id : Int -> Int
+id x = x
+
+main : Unit -> Unit
+main =
+  with
+    next n ->
+      resume (n + 1)
+  in
+    print (next 0 |> id)
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let output =
+            resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
+                .expect("runtime output should resolve");
+        assert_eq!(output, "1");
+    }
+
+    #[test]
+    fn typed_mode_matches_fallback_for_pipeline_value_replay() {
+        use goby_core::parse_module;
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let source = r#"
+effect Iter
+  next: Int -> Int
+
+id : Int -> Int
+id x = x
+
+main : Unit -> Unit
+main =
+  with
+    next n ->
+      resume (n + 2)
+  in
+    print (next 0 |> id)
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let typed = assert_mode_parity(&module, "pipeline value replay");
+        assert_eq!(typed.stdout.as_deref(), Some("2"));
         assert_eq!(typed.runtime_error_kind, None);
     }
 

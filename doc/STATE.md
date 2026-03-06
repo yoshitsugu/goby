@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-06 (session 199)
+Last updated: 2026-03-06 (session 200)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -587,6 +587,28 @@ Recent (detailed):
   - immediate next step:
     - revisit pipeline or other mixed call/effect chains as the next non-direct nested gap.
     - continue shrinking any remaining legacy direct-eval seams that are no longer needed.
+
+- 2026-03-06 (session 200): Track 4.7 Step 3.2d pipeline-value slice landed.
+  - runtime:
+    - added `PipelineCall` as a unified continuation shape for `value |> callee`.
+    - `Expr::Pipeline` on the AST value path now routes through `eval_expr_ast_outcome(...)` /
+      `complete_ast_value_outcome(...)` instead of the old direct evaluator path.
+    - resumed pipeline values re-enter through the same consumer boundary already used by named
+      calls, receiver/method calls, and `resume (...)`.
+  - result:
+    - the first mixed call/effect chain now uses the unified suspended-frame model.
+    - Step 3 covers the main AST value-position families that previously forced immediate
+      token-side replay: named calls, receiver-method calls, pipelines, `BinOp`, `if`, `case`,
+      and nested `resume`.
+  - validation completed:
+    - `cargo fmt`
+    - `cargo test -p goby-wasm pipeline_value_replay -- --nocapture`
+    - `cargo test -p goby-wasm receiver_method_call_argument_replay -- --nocapture`
+    - `cargo test -p goby-wasm`
+  - immediate next step:
+    - revisit any remaining legacy token-only replay seams and decide whether the next cut should
+      be cleanup or additional mixed expression shapes.
+    - if another shape is added, keep it as narrow as the slices above.
 
 - 2026-03-06 (session 177): map consolidation Step 8-9 completed.
   - PLAN.md §4.5 checklist updated:

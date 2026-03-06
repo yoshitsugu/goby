@@ -171,3 +171,6 @@
   one-argument receiver/method calls now suspend through a unified
   `ReceiverMethodCall` frame on the AST path, with fallback / typed parity
   coverage.
+- 2026-03-06: Step 3.2d also crossed the first mixed pipeline chain:
+  `value |> callee` now suspends through a unified `PipelineCall` frame on the
+  AST path, with fallback / typed parity coverage.
