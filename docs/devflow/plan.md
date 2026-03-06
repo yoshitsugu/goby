@@ -120,3 +120,6 @@
   recursive evaluator for composite AST forms so future `Suspended(...)`
   checkpoints can propagate through value-position constructs without another
   wrapper-only rewrite.
+- 2026-03-06: Step 3 added a narrow value-position replay slice for direct
+  binding / assignment RHS handled operations in AST statement sequences while
+  explicitly keeping deeper expression-tree checkpoints deferred.

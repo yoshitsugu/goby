@@ -576,6 +576,15 @@ Step-by-step checklist:
         large refactor.
       - this slice intentionally preserves current behavior; it is a preparation step for
         value-position continuation checkpoints, not the checkpoint implementation itself.
+    - latest progression slice after the recursive outcome groundwork:
+      - resume tokens can now also carry binding / assignment continuation checkpoints for
+        AST statement sequences.
+      - when a direct handled operation is used as the RHS of `x = op ...` or `x <- op ...`
+        style assignment, `resume` now restores the resumed value into that local before running
+        the remaining statements.
+      - top-level / `with`-body direct RHS bindings are covered in both fallback and typed mode.
+      - nested deeper value-position checkpoints inside arbitrary expression trees are still open;
+        the current capture is intentionally limited to direct statement RHS replay.
   - confirmed investigation findings:
     - current runtime anchor points:
       - `crates/goby-wasm/src/lib.rs`: `dispatch_handler_method_core`
@@ -645,6 +654,7 @@ Step-by-step checklist:
         - the continuation completes, after which the invocation is exhausted.
       - current status:
         - continuation completion path now works for saved unit-position statement tails.
+        - direct binding / assignment RHS replay now works for AST statement sequences.
         - repeated `resume` after that completion is covered by regression tests.
         - progression to intermediate value-position resumable points is still pending.
       - preserve deterministic `continuation_missing` / `continuation_consumed` style runtime errors.
@@ -661,6 +671,7 @@ Step-by-step checklist:
       - typed/fallback parity for the same cases.
       - current status:
         - added fallback + typed parity regression for unit-position replay then exhaustion.
+        - added fallback + typed parity regression for direct binding-value replay.
         - broader matrix for value-position progression is still open.
   - restart checklist:
     - begin from `crates/goby-wasm/src/lib.rs`; no parser or typecheck blocker remains for Step 3.

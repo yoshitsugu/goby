@@ -559,11 +559,19 @@ struct AstContinuation;
 
 #[derive(Clone)]
 struct AstStmtContinuation {
+    kind: AstStmtContinuationKind,
     remaining_stmts: Vec<Stmt>,
     locals: RuntimeLocals,
     callables: HashMap<String, IntCallable>,
     depth: usize,
     owner_sequence_id: usize,
+}
+
+#[derive(Clone)]
+enum AstStmtContinuationKind {
+    UnitTail,
+    BindValue { name: String },
+    AssignValue { name: String },
 }
 
 #[allow(dead_code)]
@@ -3002,6 +3010,21 @@ impl<'m> RuntimeOutputResolver<'m> {
         )
     }
 
+    fn stmt_continuation_kind(stmt: &Stmt) -> Option<AstStmtContinuationKind> {
+        match stmt {
+            Stmt::Binding { name, .. } | Stmt::MutBinding { name, .. } => {
+                Some(AstStmtContinuationKind::BindValue { name: name.clone() })
+            }
+            Stmt::Assign { name, .. } => {
+                Some(AstStmtContinuationKind::AssignValue { name: name.clone() })
+            }
+            _ if Self::stmt_is_unit_effect_continuation_candidate(stmt) => {
+                Some(AstStmtContinuationKind::UnitTail)
+            }
+            _ => None,
+        }
+    }
+
     fn execute_ingest_ast_stmt_sequence(
         &mut self,
         stmts: &[Stmt],
@@ -3011,10 +3034,12 @@ impl<'m> RuntimeOutputResolver<'m> {
         self.next_stmt_sequence_id += 1;
         self.active_stmt_sequence_ids.push(sequence_id);
         for (idx, stmt) in stmts.iter().enumerate() {
-            let should_capture =
-                idx + 1 < stmts.len() && Self::stmt_is_unit_effect_continuation_candidate(stmt);
-            if should_capture {
+            let continuation_kind = (idx + 1 < stmts.len())
+                .then(|| Self::stmt_continuation_kind(stmt))
+                .flatten();
+            if let Some(kind) = continuation_kind.clone() {
                 self.pending_stmt_continuations.push(AstStmtContinuation {
+                    kind,
                     remaining_stmts: stmts[idx + 1..].to_vec(),
                     locals: self.locals.clone(),
                     callables: HashMap::new(),
@@ -3023,7 +3048,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                 });
             }
             let result = self.ingest_ast_statement(stmt, evaluators);
-            if should_capture {
+            if continuation_kind.is_some() {
                 self.pending_stmt_continuations.pop();
             }
             if result.is_none() {
@@ -3054,10 +3079,12 @@ impl<'m> RuntimeOutputResolver<'m> {
         self.next_stmt_sequence_id += 1;
         self.active_stmt_sequence_ids.push(sequence_id);
         for (idx, stmt) in stmts.iter().enumerate() {
-            let should_capture =
-                idx + 1 < stmts.len() && Self::stmt_is_unit_effect_continuation_candidate(stmt);
-            if should_capture {
+            let continuation_kind = (idx + 1 < stmts.len())
+                .then(|| Self::stmt_continuation_kind(stmt))
+                .flatten();
+            if let Some(kind) = continuation_kind.clone() {
                 self.pending_stmt_continuations.push(AstStmtContinuation {
+                    kind,
                     remaining_stmts: stmts[idx + 1..].to_vec(),
                     locals: locals.clone(),
                     callables: callables.clone(),
@@ -3066,7 +3093,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                 });
             }
             let result = self.execute_unit_ast_stmt(stmt, locals, callables, evaluators, depth);
-            if should_capture {
+            if continuation_kind.is_some() {
                 self.pending_stmt_continuations.pop();
             }
             if result.is_none() {
@@ -3641,15 +3668,26 @@ impl<'m> RuntimeOutputResolver<'m> {
         self.runtime_aborted && self.runtime_error.is_none()
     }
 
-    fn push_resume_token_for_handler(&mut self) -> usize {
+    fn current_pending_stmt_continuation_for_dispatch(
+        &self,
+        dispatch_depth: usize,
+    ) -> Option<AstStmtContinuation> {
+        if self.replaying_stmt_continuation_depth != 0 {
+            return None;
+        }
+        let continuation = self.pending_stmt_continuations.last()?.clone();
+        if continuation.depth == dispatch_depth || continuation.depth + 1 == dispatch_depth {
+            Some(continuation)
+        } else {
+            None
+        }
+    }
+
+    fn push_resume_token_for_handler(&mut self, dispatch_depth: usize) -> usize {
         self.resume_tokens.push(ResumeToken {
             continuation: Continuation { consumed: false },
             state: HandlerContinuationState::Pending,
-            stmt_continuation: if self.replaying_stmt_continuation_depth == 0 {
-                self.pending_stmt_continuations.last().cloned()
-            } else {
-                None
-            },
+            stmt_continuation: self.current_pending_stmt_continuation_for_dispatch(dispatch_depth),
         });
         self.resume_tokens.len() - 1
     }
@@ -3670,15 +3708,11 @@ impl<'m> RuntimeOutputResolver<'m> {
         self.resume_tokens.last_mut()
     }
 
-    fn push_optimized_resume_token_for_handler(&mut self) -> usize {
+    fn push_optimized_resume_token_for_handler(&mut self, dispatch_depth: usize) -> usize {
         self.optimized_resume_tokens.push(OptimizedResumeToken {
             consumed: false,
             state: HandlerContinuationState::Pending,
-            stmt_continuation: if self.replaying_stmt_continuation_depth == 0 {
-                self.pending_stmt_continuations.last().cloned()
-            } else {
-                None
-            },
+            stmt_continuation: self.current_pending_stmt_continuation_for_dispatch(dispatch_depth),
         });
         self.optimized_resume_tokens.len() - 1
     }
@@ -3702,11 +3736,13 @@ impl<'m> RuntimeOutputResolver<'m> {
         self.optimized_resume_tokens.last_mut()
     }
 
-    fn begin_handler_continuation_bridge(&mut self) -> usize {
+    fn begin_handler_continuation_bridge(&mut self, dispatch_depth: usize) -> usize {
         match self.execution_mode {
-            lower::EffectExecutionMode::PortableFallback => self.push_resume_token_for_handler(),
+            lower::EffectExecutionMode::PortableFallback => {
+                self.push_resume_token_for_handler(dispatch_depth)
+            }
             lower::EffectExecutionMode::TypedContinuationOptimized => {
-                self.push_optimized_resume_token_for_handler()
+                self.push_optimized_resume_token_for_handler(dispatch_depth)
             }
         }
     }
@@ -3762,7 +3798,7 @@ impl<'m> RuntimeOutputResolver<'m> {
         token.state = HandlerContinuationState::Resumed(Box::new(resumed.clone()));
         token.stmt_continuation = None;
         if let Some(continuation) = continuation {
-            self.execute_saved_stmt_continuation(continuation, evaluators)?;
+            self.execute_saved_stmt_continuation(continuation, resumed.clone(), evaluators)?;
         }
         Some(resumed)
     }
@@ -3789,7 +3825,7 @@ impl<'m> RuntimeOutputResolver<'m> {
         token.state = HandlerContinuationState::Resumed(Box::new(resumed.clone()));
         token.stmt_continuation = None;
         if let Some(continuation) = continuation {
-            self.execute_saved_stmt_continuation(continuation, evaluators)?;
+            self.execute_saved_stmt_continuation(continuation, resumed.clone(), evaluators)?;
         }
         Some(resumed)
     }
@@ -3797,9 +3833,20 @@ impl<'m> RuntimeOutputResolver<'m> {
     fn execute_saved_stmt_continuation(
         &mut self,
         continuation: AstStmtContinuation,
+        resumed: RuntimeValue,
         evaluators: &RuntimeEvaluators<'_, '_>,
     ) -> Option<()> {
         let mut locals = continuation.locals;
+        match continuation.kind {
+            AstStmtContinuationKind::UnitTail => {}
+            AstStmtContinuationKind::BindValue { name } => {
+                locals.store(&name, resumed);
+            }
+            AstStmtContinuationKind::AssignValue { name } => {
+                locals.get(&name)?;
+                locals.store(&name, resumed);
+            }
+        }
         let mut callables = continuation.callables;
         self.replaying_stmt_continuation_depth += 1;
         let result = self.execute_ast_stmt_sequence(
@@ -3830,7 +3877,7 @@ impl<'m> RuntimeOutputResolver<'m> {
         if args.len() != method.method.params.len() {
             return None;
         }
-        let token_idx = self.begin_handler_continuation_bridge();
+        let token_idx = self.begin_handler_continuation_bridge(depth);
         let run_result = (|| -> Option<()> {
             let mut handler_locals = self
                 .active_inline_handler_stack
@@ -7109,6 +7156,58 @@ main =
             Some("handled:hellocontinuedafter-resume")
         );
         assert_eq!(typed.runtime_error_kind, Some("continuation_consumed"));
+    }
+
+    #[test]
+    fn resume_replays_binding_value_continuation_into_following_statements() {
+        use goby_core::parse_module;
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let source = r#"
+effect Iter
+  next: Int -> Int
+
+main : Unit -> Unit
+main =
+  with
+    next n ->
+      resume (n + 1)
+  in
+    x = next 0
+    y = next x
+    print y
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let output =
+            resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
+                .expect("runtime output should resolve");
+        assert_eq!(
+            output, "2",
+            "resume should bind the resumed value and continue through later statements"
+        );
+    }
+
+    #[test]
+    fn typed_mode_matches_fallback_for_binding_value_replay() {
+        use goby_core::parse_module;
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let source = r#"
+effect Iter
+  next: Int -> Int
+
+main : Unit -> Unit
+main =
+  with
+    next n ->
+      resume (n + 1)
+  in
+    x = next 0
+    y = next x
+    print y
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let typed = assert_mode_parity(&module, "binding value replay");
+        assert_eq!(typed.stdout.as_deref(), Some("2"));
+        assert_eq!(typed.runtime_error_kind, None);
     }
 
     #[test]

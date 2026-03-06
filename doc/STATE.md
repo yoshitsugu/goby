@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-06 (session 185)
+Last updated: 2026-03-06 (session 186)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -236,6 +236,34 @@ Recent (detailed):
       likely starting from a narrowly scoped composite expression boundary
       (`BinOp`, call-argument chain, or `if` branch progression) and mirror the
       same external behavior in typed mode.
+
+- 2026-03-06 (session 186): Track 4.7 Step 3 direct binding-value replay slice.
+  - runtime:
+    - `AstStmtContinuation` now distinguishes:
+      - plain unit tail replay,
+      - binding-value replay,
+      - assignment-value replay.
+    - `resume` can restore the resumed value into a direct statement RHS binding /
+      assignment and then execute the remaining AST statements.
+    - continuation capture is now filtered by dispatch depth so inner helper
+      dispatches (for example intrinsic-driven handler calls inside a larger RHS)
+      do not incorrectly steal the outer statement continuation.
+  - coverage:
+    - added fallback regression for:
+      - `x = next 0; y = next x; print y` style replay through later statements.
+    - added typed/fallback parity coverage for the same direct binding-value replay.
+  - still open within Step 3:
+    - deeper value-position checkpoints inside nested expression trees are still
+      not implemented.
+    - no general `Suspended(...)` producer exists yet; replay is still driven by
+      captured statement continuations.
+  - validation completed:
+    - `cargo test -p goby-wasm binding_value`
+    - `cargo test -p goby-wasm`
+  - immediate next step:
+    - extend value-position progression beyond direct statement RHS into nested
+      composite expressions (`if`, `case`, call chains, etc.) using the recursive
+      `AstEvalOutcome` groundwork from session 185.
 
 - 2026-03-06 (session 177): map consolidation Step 8-9 completed.
   - PLAN.md §4.5 checklist updated:
