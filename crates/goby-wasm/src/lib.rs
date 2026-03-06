@@ -2949,8 +2949,15 @@ impl<'m> RuntimeOutputResolver<'m> {
             let cond_val = self.complete_ast_value_outcome(cond_outcome, evaluators)?;
             match cond_val {
                 RuntimeValue::Bool(true) => {
+                    let branch_outcome = self.eval_expr_ast_outcome(
+                        then_expr,
+                        locals,
+                        callables,
+                        evaluators,
+                        depth + 1,
+                    );
                     if self
-                        .eval_expr_ast(then_expr, locals, callables, evaluators, depth + 1)
+                        .complete_ast_value_outcome(branch_outcome, evaluators)
                         .is_some()
                     {
                         return Some(());
@@ -2964,8 +2971,15 @@ impl<'m> RuntimeOutputResolver<'m> {
                     );
                 }
                 RuntimeValue::Bool(false) => {
+                    let branch_outcome = self.eval_expr_ast_outcome(
+                        else_expr,
+                        locals,
+                        callables,
+                        evaluators,
+                        depth + 1,
+                    );
                     if self
-                        .eval_expr_ast(else_expr, locals, callables, evaluators, depth + 1)
+                        .complete_ast_value_outcome(branch_outcome, evaluators)
                         .is_some()
                     {
                         return Some(());
@@ -8298,6 +8312,67 @@ main =
         let module = parse_module(source).expect("parse should work");
         let typed = assert_mode_parity(&module, "unit-position if condition replay");
         assert_eq!(typed.stdout.as_deref(), Some("20"));
+        assert_eq!(typed.runtime_error_kind, None);
+    }
+
+    #[test]
+    fn unit_position_if_selected_branch_replays_value_path() {
+        use goby_core::parse_module;
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let source = r#"
+effect Pred
+  flag: Int -> Bool
+
+effect Iter
+  next: Int -> Int
+
+main : Unit -> Unit
+main =
+  with
+    flag n ->
+      resume True
+    next n ->
+      resume (n + 1)
+  in
+    if flag 0
+      print (next 0)
+    else
+      print 99
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let output =
+            resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
+                .expect("runtime output should resolve");
+        assert_eq!(output, "1");
+    }
+
+    #[test]
+    fn typed_mode_matches_fallback_for_unit_position_if_branch_value_replay() {
+        use goby_core::parse_module;
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let source = r#"
+effect Pred
+  flag: Int -> Bool
+
+effect Iter
+  next: Int -> Int
+
+main : Unit -> Unit
+main =
+  with
+    flag n ->
+      resume False
+    next n ->
+      resume (n + 1)
+  in
+    if flag 0
+      print 99
+    else
+      print (next 0)
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let typed = assert_mode_parity(&module, "unit-position if branch value replay");
+        assert_eq!(typed.stdout.as_deref(), Some("1"));
         assert_eq!(typed.runtime_error_kind, None);
     }
 

@@ -754,6 +754,26 @@ Recent (detailed):
     - extend the same unit-position outcome-path treatment to the next narrow control-flow seam if
       it is still reachable, or move to the next remaining semantic gap.
 
+- 2026-03-06 (session 208): Track 4.7 Step 3 widened unit-position `if` branch execution.
+  - runtime:
+    - after selecting a unit-position `if` branch, `execute_unit_expr_ast(...)` now probes
+      `eval_expr_ast_outcome(...)` plus `complete_ast_value_outcome(...)` before falling back to
+      recursive unit execution.
+    - this keeps unit-position branch bodies closer to the same suspended-frame path already used
+      by value-position expressions.
+  - coverage:
+    - added fallback regression where the selected unit-position branch prints through a nested
+      handled value expression.
+    - added typed/fallback parity coverage for the same branch-value replay shape.
+  - validation completed:
+    - `cargo fmt`
+    - `cargo test -p goby-wasm unit_position_if_selected_branch_replays_value_path -- --nocapture`
+    - `cargo test -p goby-wasm typed_mode_matches_fallback_for_unit_position_if_branch_value_replay -- --nocapture`
+    - `cargo test -p goby-wasm`
+  - immediate next step:
+    - inspect whether `case` in unit position has an analogous remaining seam; otherwise move on to
+      the next semantic gap rather than continuing small cleanup slices indefinitely.
+
 - 2026-03-06 (session 177): map consolidation Step 8-9 completed.
   - PLAN.md §4.5 checklist updated:
     - completed: Step 8-9 (map callsite migration + builtin-path trim).
