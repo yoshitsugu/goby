@@ -683,6 +683,23 @@ Recent (detailed):
     - keep checking whether any remaining replay branch still depends on string reconstruction or
       legacy direct evaluation before moving on to larger cleanup.
 
+- 2026-03-06 (session 204): Track 4.7 Step 3 cleanup aligned multi-arg named-call exit paths.
+  - runtime:
+    - added an outcome-aware helper for applying named calls with an already evaluated argument
+      slice.
+    - both `Expr::Call` multi-arg direct named calls and `MultiArgNamedCall` replay now finish
+      through that shared outcome helper instead of using a separate direct wrapper path.
+  - result:
+    - call-like migrated shapes now leave evaluation through fewer bespoke helper edges.
+    - this is mostly a structural cleanup; no new continuation kind or semantic branch was added.
+  - validation completed:
+    - `cargo fmt`
+    - `cargo test -p goby-wasm multi_arg_named_call_replay -- --nocapture`
+    - `cargo test -p goby-wasm`
+  - immediate next step:
+    - continue checking whether any replay/apply branch can be collapsed into the same
+      outcome-aware helper style before moving back to larger semantic work.
+
 - 2026-03-06 (session 177): map consolidation Step 8-9 completed.
   - PLAN.md §4.5 checklist updated:
     - completed: Step 8-9 (map callsite migration + builtin-path trim).

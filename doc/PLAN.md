@@ -804,6 +804,8 @@ Step-by-step checklist:
             - broader call-shape migration has started:
               - direct named multi-arg call chains can now suspend while evaluating their argument
                 list and resume through the same frame consumer boundary.
+              - the final multi-arg named-call application step now also exits through an
+                outcome-aware helper instead of a separate direct wrapper path.
             - nested resume-value replay also now uses the same boundary:
               - `Expr::Resume` is routed through the outcome consumer path,
               - inner handled operations inside `resume (...)` re-enter through a dedicated

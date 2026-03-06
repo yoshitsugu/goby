@@ -2510,7 +2510,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                         AstEvalOutcome::Aborted => return AstEvalOutcome::Aborted,
                         AstEvalOutcome::Unsupported => return AstEvalOutcome::Unsupported,
                     };
-                    let value = self.apply_named_value_call_ast(
+                    return self.apply_named_value_call_args_ast_outcome(
                         fn_name,
                         &arg_values,
                         locals,
@@ -2518,7 +2518,6 @@ impl<'m> RuntimeOutputResolver<'m> {
                         evaluators,
                         depth + 1,
                     );
-                    return self.ast_outcome_from_option(value);
                 }
                 if let Expr::Qualified { receiver, member } = callee.as_ref() {
                     self.pending_value_continuations.push(AstValueContinuation {
@@ -3790,6 +3789,20 @@ impl<'m> RuntimeOutputResolver<'m> {
         self.ast_outcome_from_option(value)
     }
 
+    fn apply_named_value_call_args_ast_outcome(
+        &mut self,
+        fn_name: &str,
+        arg_values: &[RuntimeValue],
+        locals: &RuntimeLocals,
+        callables: &HashMap<String, IntCallable>,
+        evaluators: &RuntimeEvaluators<'_, '_>,
+        depth: usize,
+    ) -> AstEvalOutcome<RuntimeValue> {
+        let value = self
+            .apply_named_value_call_ast(fn_name, arg_values, locals, callables, evaluators, depth);
+        self.ast_outcome_from_option(value)
+    }
+
     fn apply_binop_runtime_value(
         &self,
         op: goby_core::BinOpKind,
@@ -4491,14 +4504,21 @@ impl<'m> RuntimeOutputResolver<'m> {
                     }
                     AstEvalOutcome::Aborted | AstEvalOutcome::Unsupported => return None,
                 };
-                self.apply_named_value_call_ast(
+                match self.apply_named_value_call_args_ast_outcome(
                     &fn_name,
                     &arg_values,
                     &continuation.locals,
                     &continuation.callables,
                     evaluators,
                     continuation.depth,
-                )
+                ) {
+                    AstEvalOutcome::Complete(value) => Some(value),
+                    AstEvalOutcome::Suspended(continuation) => self.complete_ast_value_outcome(
+                        AstEvalOutcome::Suspended(continuation),
+                        evaluators,
+                    ),
+                    AstEvalOutcome::Aborted | AstEvalOutcome::Unsupported => None,
+                }
             }
             AstValueContinuationKind::CaseScrutinee { arms } => {
                 let (arm_body, arm_locals) =
