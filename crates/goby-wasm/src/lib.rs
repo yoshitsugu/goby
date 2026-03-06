@@ -584,6 +584,9 @@ enum AstValueContinuationKind {
     SingleArgNamedCall {
         fn_name: String,
     },
+    CaseScrutinee {
+        arms: Vec<goby_core::CaseArm>,
+    },
     IfCondition {
         then_expr: Expr,
         else_expr: Expr,
@@ -1920,6 +1923,36 @@ impl<'m> RuntimeOutputResolver<'m> {
         }
     }
 
+    fn select_case_arm(
+        &mut self,
+        scrutinee_val: &RuntimeValue,
+        arms: &[goby_core::CaseArm],
+        locals: &RuntimeLocals,
+    ) -> Option<(Expr, RuntimeLocals)> {
+        for arm in arms {
+            let mut arm_locals = locals.clone();
+            let matched = match (&arm.pattern, scrutinee_val) {
+                (CasePattern::Wildcard, _) => true,
+                (CasePattern::IntLit(n), RuntimeValue::Int(v)) => n == v,
+                (CasePattern::StringLit(s), RuntimeValue::String(v)) => s == v,
+                (CasePattern::BoolLit(b), RuntimeValue::Bool(v)) => b == v,
+                (CasePattern::EmptyList, RuntimeValue::ListInt(values)) => values.is_empty(),
+                (CasePattern::EmptyList, RuntimeValue::ListString(values)) => values.is_empty(),
+                (CasePattern::ListPattern { items, tail }, RuntimeValue::ListInt(values)) => {
+                    self.match_list_pattern_int(items, tail.as_ref(), values, &mut arm_locals)
+                }
+                (CasePattern::ListPattern { items, tail }, RuntimeValue::ListString(values)) => {
+                    self.match_list_pattern_string(items, tail.as_ref(), values, &mut arm_locals)
+                }
+                _ => false,
+            };
+            if matched {
+                return Some(((*arm.body).clone(), arm_locals));
+            }
+        }
+        None
+    }
+
     fn eval_expr_ast_outcome(
         &mut self,
         expr: &Expr,
@@ -2232,6 +2265,12 @@ impl<'m> RuntimeOutputResolver<'m> {
                 self.ast_outcome_from_option(last_value)
             }
             Expr::Case { scrutinee, arms } => {
+                self.pending_value_continuations.push(AstValueContinuation {
+                    kind: AstValueContinuationKind::CaseScrutinee { arms: arms.clone() },
+                    locals: locals.clone(),
+                    callables: callables.clone(),
+                    depth: depth + 1,
+                });
                 let scrutinee_val = match self.eval_expr_ast_outcome(
                     scrutinee,
                     locals,
@@ -2241,79 +2280,55 @@ impl<'m> RuntimeOutputResolver<'m> {
                 ) {
                     AstEvalOutcome::Complete(value) => value,
                     AstEvalOutcome::Suspended(continuation) => {
+                        self.pending_value_continuations.pop();
                         return AstEvalOutcome::Suspended(continuation);
                     }
-                    AstEvalOutcome::Aborted => return AstEvalOutcome::Aborted,
-                    AstEvalOutcome::Unsupported => return AstEvalOutcome::Unsupported,
+                    AstEvalOutcome::Aborted => {
+                        self.pending_value_continuations.pop();
+                        return AstEvalOutcome::Aborted;
+                    }
+                    AstEvalOutcome::Unsupported => {
+                        self.pending_value_continuations.pop();
+                        return AstEvalOutcome::Unsupported;
+                    }
                 };
-                for arm in arms {
-                    let mut arm_locals = locals.clone();
-                    let matched = match (&arm.pattern, &scrutinee_val) {
-                        (CasePattern::Wildcard, _) => true,
-                        (CasePattern::IntLit(n), RuntimeValue::Int(v)) => n == v,
-                        (CasePattern::StringLit(s), RuntimeValue::String(v)) => s == v,
-                        (CasePattern::BoolLit(b), RuntimeValue::Bool(v)) => b == v,
-                        (CasePattern::EmptyList, RuntimeValue::ListInt(values)) => {
-                            values.is_empty()
+                self.pending_value_continuations.pop();
+                let Some((arm_body, arm_locals)) =
+                    self.select_case_arm(&scrutinee_val, arms, locals)
+                else {
+                    return AstEvalOutcome::Unsupported;
+                };
+                let evaluated = self.eval_expr_ast_outcome(
+                    &arm_body,
+                    &arm_locals,
+                    callables,
+                    evaluators,
+                    depth + 1,
+                );
+                match evaluated {
+                    AstEvalOutcome::Complete(value) => AstEvalOutcome::Complete(value),
+                    AstEvalOutcome::Suspended(continuation) => {
+                        AstEvalOutcome::Suspended(continuation)
+                    }
+                    AstEvalOutcome::Aborted => AstEvalOutcome::Aborted,
+                    AstEvalOutcome::Unsupported => {
+                        let mut arm_callables = callables.clone();
+                        let mut arm_locals_for_unit = arm_locals;
+                        if self
+                            .execute_unit_expr_ast(
+                                &arm_body,
+                                &mut arm_locals_for_unit,
+                                &mut arm_callables,
+                                evaluators,
+                                depth + 1,
+                            )
+                            .is_none()
+                        {
+                            return self.ast_outcome_from_option(None::<RuntimeValue>);
                         }
-                        (CasePattern::EmptyList, RuntimeValue::ListString(values)) => {
-                            values.is_empty()
-                        }
-                        (
-                            CasePattern::ListPattern { items, tail },
-                            RuntimeValue::ListInt(values),
-                        ) => self.match_list_pattern_int(
-                            items,
-                            tail.as_ref(),
-                            values,
-                            &mut arm_locals,
-                        ),
-                        (
-                            CasePattern::ListPattern { items, tail },
-                            RuntimeValue::ListString(values),
-                        ) => self.match_list_pattern_string(
-                            items,
-                            tail.as_ref(),
-                            values,
-                            &mut arm_locals,
-                        ),
-                        _ => false,
-                    };
-                    if matched {
-                        let evaluated = self.eval_expr_ast_outcome(
-                            &arm.body,
-                            &arm_locals,
-                            callables,
-                            evaluators,
-                            depth + 1,
-                        );
-                        return match evaluated {
-                            AstEvalOutcome::Complete(value) => AstEvalOutcome::Complete(value),
-                            AstEvalOutcome::Suspended(continuation) => {
-                                AstEvalOutcome::Suspended(continuation)
-                            }
-                            AstEvalOutcome::Aborted => AstEvalOutcome::Aborted,
-                            AstEvalOutcome::Unsupported => {
-                                let mut arm_callables = callables.clone();
-                                let mut arm_locals_for_unit = arm_locals;
-                                if self
-                                    .execute_unit_expr_ast(
-                                        &arm.body,
-                                        &mut arm_locals_for_unit,
-                                        &mut arm_callables,
-                                        evaluators,
-                                        depth + 1,
-                                    )
-                                    .is_none()
-                                {
-                                    return self.ast_outcome_from_option(None::<RuntimeValue>);
-                                }
-                                AstEvalOutcome::Complete(RuntimeValue::Unit)
-                            }
-                        };
+                        AstEvalOutcome::Complete(RuntimeValue::Unit)
                     }
                 }
-                AstEvalOutcome::Unsupported
             }
             Expr::If {
                 condition,
@@ -2689,50 +2704,11 @@ impl<'m> RuntimeOutputResolver<'m> {
             return Some(());
         }
 
-        if let Expr::Case { scrutinee, arms } = expr {
-            let scrutinee_val =
-                self.eval_expr_ast(scrutinee, locals, callables, evaluators, depth)?;
-            for arm in arms {
-                let mut arm_locals = locals.clone();
-                let matched = match (&arm.pattern, &scrutinee_val) {
-                    (CasePattern::Wildcard, _) => true,
-                    (CasePattern::IntLit(n), RuntimeValue::Int(v)) => n == v,
-                    (CasePattern::StringLit(s), RuntimeValue::String(v)) => s == v,
-                    (CasePattern::BoolLit(b), RuntimeValue::Bool(v)) => b == v,
-                    (CasePattern::EmptyList, RuntimeValue::ListInt(values)) => values.is_empty(),
-                    (CasePattern::EmptyList, RuntimeValue::ListString(values)) => values.is_empty(),
-                    (CasePattern::ListPattern { items, tail }, RuntimeValue::ListInt(values)) => {
-                        self.match_list_pattern_int(items, tail.as_ref(), values, &mut arm_locals)
-                    }
-                    (
-                        CasePattern::ListPattern { items, tail },
-                        RuntimeValue::ListString(values),
-                    ) => self.match_list_pattern_string(
-                        items,
-                        tail.as_ref(),
-                        values,
-                        &mut arm_locals,
-                    ),
-                    _ => false,
-                };
-                if matched {
-                    if self
-                        .eval_expr_ast(&arm.body, &arm_locals, callables, evaluators, depth + 1)
-                        .is_some()
-                    {
-                        return Some(());
-                    }
-                    let mut arm_callables = callables.clone();
-                    return self.execute_unit_expr_ast(
-                        &arm.body,
-                        &mut arm_locals,
-                        &mut arm_callables,
-                        evaluators,
-                        depth + 1,
-                    );
-                }
-            }
-            return Some(());
+        if let Expr::Case { .. } = expr {
+            let outcome = self.eval_expr_ast_outcome(expr, locals, callables, evaluators, depth);
+            return self
+                .complete_ast_value_outcome(outcome, evaluators)
+                .map(|_| ());
         }
 
         if let Expr::If {
@@ -4197,6 +4173,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                 frame.value.as_ref().map(|continuation| &continuation.kind),
                 Some(
                     AstValueContinuationKind::SingleArgNamedCall { .. }
+                        | AstValueContinuationKind::CaseScrutinee { .. }
                         | AstValueContinuationKind::IfCondition { .. }
                         | AstValueContinuationKind::BinOpLeft { .. }
                         | AstValueContinuationKind::BinOpRight { .. }
@@ -4295,6 +4272,18 @@ impl<'m> RuntimeOutputResolver<'m> {
                 }
                 AstEvalOutcome::Aborted | AstEvalOutcome::Unsupported => None,
             },
+            AstValueContinuationKind::CaseScrutinee { arms } => {
+                let (arm_body, arm_locals) =
+                    self.select_case_arm(&resumed, &arms, &continuation.locals)?;
+                let outcome = self.eval_expr_ast_outcome(
+                    &arm_body,
+                    &arm_locals,
+                    &continuation.callables,
+                    evaluators,
+                    continuation.depth,
+                );
+                self.complete_ast_value_outcome(outcome, evaluators)
+            }
             AstValueContinuationKind::IfCondition {
                 then_expr,
                 else_expr,
@@ -8020,6 +8009,63 @@ main =
 "#;
         let module = parse_module(source).expect("parse should work");
         let typed = assert_mode_parity(&module, "if condition replay");
+        assert_eq!(typed.stdout.as_deref(), Some("20"));
+        assert_eq!(typed.runtime_error_kind, None);
+    }
+
+    #[test]
+    fn resume_replays_case_scrutinee_continuation() {
+        use goby_core::parse_module;
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let source = r#"
+effect Pred
+  flag: Int -> Bool
+
+choose : Int -> Int
+choose n =
+  case flag n
+    True -> 10
+    False -> 20
+
+main : Unit -> Unit
+main =
+  with
+    flag n ->
+      resume True
+  in
+    print (choose 0)
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let output =
+            resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
+                .expect("runtime output should resolve");
+        assert_eq!(output, "10");
+    }
+
+    #[test]
+    fn typed_mode_matches_fallback_for_case_scrutinee_replay() {
+        use goby_core::parse_module;
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let source = r#"
+effect Pred
+  flag: Int -> Bool
+
+choose : Int -> Int
+choose n =
+  case flag n
+    True -> 10
+    False -> 20
+
+main : Unit -> Unit
+main =
+  with
+    flag n ->
+      resume False
+  in
+    print (choose 0)
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let typed = assert_mode_parity(&module, "case scrutinee replay");
         assert_eq!(typed.stdout.as_deref(), Some("20"));
         assert_eq!(typed.runtime_error_kind, None);
     }

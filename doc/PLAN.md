@@ -730,6 +730,7 @@ Step-by-step checklist:
           - shared resume transport via `AstContinuationFrame`.
           - first evaluator-produced suspended frame for value-only single-arg named calls.
           - first branch/control-flow suspended frame for `if` condition replay on the AST path.
+          - `case` scrutinee suspended frame on the AST declaration path.
         - not yet unified:
           - most inner expression checkpoints are still represented by ad hoc replay shapes,
           - statement/value replay are still split across token-side structures.
@@ -787,15 +788,16 @@ Step-by-step checklist:
             - `resume (op ...)`
           - current status:
             - `BinOp` migration landed and legacy operand checkpoint capture was removed.
-            - the first branch/control-flow boundary also landed narrowly:
+            - the first branch/control-flow boundaries also landed narrowly:
               - `AstContinuation` now carries the resumed value payload directly,
               - `complete_ast_value_outcome(...)` consumes real suspended frames,
               - `if` condition replay is covered on the AST declaration path with fallback/typed
+                parity tests,
+              - `case` scrutinee replay is covered on the AST declaration path with fallback/typed
                 parity tests.
             - string-fallback execution is still intentionally out of scope for Step 3.
           - done when:
-            - at least one branch/control-flow boundary suspends and resumes through the unified
-              frame path,
+            - branch/control-flow suspension is proven on both `if` and `case` AST paths,
             - the resumed value is transported by the continuation payload itself,
             - the next target can build on the same consumer boundary instead of adding another
               token-only replay detour.
@@ -823,7 +825,8 @@ Step-by-step checklist:
         - typed mode also mirrors the current migrated nested replay slices:
           - single-arg call,
           - direct binop operand replay,
-          - `if` condition replay on the AST declaration path.
+          - `if` condition replay on the AST declaration path,
+          - `case` scrutinee replay on the AST declaration path.
       - implementation may still use separate token storage, but not separate semantics.
     - [~] Step 3.5: cover the progression matrix with tests
       - fallback success: one handler invocation resumes through multiple operation sites.
@@ -838,6 +841,7 @@ Step-by-step checklist:
         - added fallback + typed parity regression for single-arg call-argument replay.
         - added fallback + typed parity regression for direct binop operand replay.
         - added fallback + typed parity regression for `if` condition replay.
+        - added fallback + typed parity regression for `case` scrutinee replay.
         - broader matrix for nested value-position progression is still open.
       - next acceptance target:
         - add the first tests that specifically lock the unified `Suspended(frame)` path, not only

@@ -156,3 +156,6 @@
   can consume suspended frames through `complete_ast_value_outcome(...)`, and
   `if` condition replay is covered on the AST declaration path with fallback /
   typed parity tests.
+- 2026-03-06: Step 3.2d extended the same branch/control-flow consumer boundary
+  to `case`: scrutinee replay now suspends via the unified frame path on AST
+  declaration bodies, with fallback / typed parity coverage.

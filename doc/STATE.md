@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-06 (session 195)
+Last updated: 2026-03-06 (session 196)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -500,6 +500,27 @@ Recent (detailed):
     - extend the same consumer boundary to the next branch/control-flow shape.
     - `case` is the natural next target; after that, revisit broader call shapes and
       `resume (op ...)`.
+
+- 2026-03-06 (session 196): Track 4.7 Step 3.2d `case` scrutinee suspended-frame slice landed.
+  - runtime:
+    - added `CaseScrutinee` as the next unified frame-backed value continuation shape.
+    - `case` arm selection is now shared through `select_case_arm(...)` instead of duplicated
+      across legacy and outcome-aware paths.
+    - legacy `eval_expr_ast` for `Expr::Case` now completes through `complete_ast_value_outcome(...)`,
+      so the AST value path uses the same suspended-frame consumer boundary as `if`.
+  - result:
+    - both branch/control-flow entry points currently targeted by Step 3 (`if` condition and
+      `case` scrutinee) now suspend and resume through the unified frame path.
+    - the next migration target can move away from control-flow and focus on broader call shapes or
+      `resume (op ...)` without reopening token-only transport just for branching.
+  - validation completed:
+    - `cargo fmt`
+    - `cargo test -p goby-wasm case_scrutinee_replay -- --nocapture`
+    - `cargo test -p goby-wasm if_condition_replay -- --nocapture`
+    - `cargo test -p goby-wasm`
+  - immediate next step:
+    - reuse the same consumer boundary for broader call shapes / nested call chains.
+    - after that, revisit `resume (op ...)` as the remaining nested progression gap.
 
 - 2026-03-06 (session 177): map consolidation Step 8-9 completed.
   - PLAN.md §4.5 checklist updated:
