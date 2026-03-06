@@ -123,7 +123,13 @@ syntax/semantics.
 - `resume`:
   - expression form: `resume <expr>`
   - valid only inside handler operation bodies
-  - one-shot continuation semantics
+  - operation call returns the value passed to `resume`.
+  - if a handler clause finishes without any `resume`, evaluation aborts immediately at that
+    operation boundary (no caller continuation is executed after the operation call).
+    - this abortive path is the basis for exception-like effects (`raise`-style behavior).
+  - when a handler invocation calls `resume` multiple times, each `resume` restarts the
+    continuation from the next resumable point (multi-resume progression contract).
+    - once the continuation is fully consumed, further `resume` from the same invocation is a runtime error.
 - Legacy syntax removed:
   - top-level `handler ... for ...`
   - `using`

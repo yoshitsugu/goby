@@ -530,6 +530,52 @@ Step-by-step checklist:
 
 These items are intentionally kept as short placeholders until they become active.
 
+### 4.7 Active Language Task: Abortive Handlers and Multi-Resume Progression
+
+Goal: align runtime/typecheck behavior with the current `LANGUAGE_SPEC` contract:
+
+- handler clause without `resume` aborts immediately at the handled operation boundary,
+- `resume` returns a value to the operation call site,
+- repeated `resume` in one handler invocation progresses continuation to next resumable point,
+  and raises runtime error only after continuation is consumed.
+
+Step-by-step checklist:
+
+- [ ] Step 1: semantic alignment audit
+  - identify all runtime paths where handler operation calls are evaluated
+    (fallback runtime + typed mode runtime bridge).
+  - confirm current no-`resume` behavior for both value-position and unit-position operation calls.
+- [ ] Step 2: runtime abort contract implementation
+  - add explicit abort signal/state in runtime dispatch core.
+  - ensure no-`resume` handler completion triggers immediate program stop at operation boundary
+    (including unit-position operation calls).
+  - preserve existing deterministic runtime error reporting for invalid resume usage.
+- [ ] Step 3: multi-resume progression support
+  - replace one-shot token consumption model with resumable progression model for one handler invocation.
+  - each `resume` continues from the next resumable point; exhausted continuation raises runtime error.
+  - keep guardrails for clearly invalid continuation state transitions.
+- [ ] Step 4: typecheck rule update
+  - remove conservative "multiple syntactic `resume` is always rejected" rule.
+  - retain checks for:
+    - `resume` outside handler rejection,
+    - `resume` argument type compatibility with operation return type,
+    - unresolved generic constraint diagnostics.
+- [ ] Step 5: tests and parity locks
+  - add/update fallback runtime tests for:
+    - no-`resume` immediate abort in value and unit position,
+    - multi-resume progression success path,
+    - resume-after-consumption runtime error path.
+  - add typed-mode parity tests for the same scenarios.
+- [ ] Step 6: docs sync
+  - keep `doc/LANGUAGE_SPEC.md` and `doc/PLAN.md` in sync with final behavior wording.
+  - add/refresh one effect example showing exception-style abortive handler semantics.
+- [ ] Step 7: quality gate
+  - run:
+    - `cargo fmt`
+    - `cargo check`
+    - `cargo test`
+    - `cargo clippy -- -D warnings`
+
 ## 5. Spec Detail Notes
 
 ### Still Open (Post-MVP)
