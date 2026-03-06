@@ -976,11 +976,19 @@ impl<'m> RuntimeOutputResolver<'m> {
             }
             // Qualified effect call: Effect.method arg  (e.g. Log.log "msg")
             // Must come before the bare-Var arm so the Qualified guard takes precedence.
+            // Evaluate the argument through the outcome-aware path so suspended values can replay.
             Expr::Call { callee, arg } if matches!(callee.as_ref(), Expr::Qualified { .. }) => {
                 let Expr::Qualified { receiver, member } = callee.as_ref() else {
                     unreachable!()
                 };
-                let arg_val = self.eval_ast_value(arg, evaluators)?;
+                let arg_outcome = self.eval_expr_ast_outcome(
+                    arg,
+                    &self.locals.clone(),
+                    &HashMap::new(),
+                    evaluators,
+                    1,
+                );
+                let arg_val = self.complete_ast_value_outcome(arg_outcome, evaluators)?;
                 let method = self.find_handler_method_for_effect(receiver, member);
                 if let Some(method) = method {
                     // depth=0: this is a top-level call; dispatch_handler_method adds 1 internally.
@@ -2579,10 +2587,13 @@ impl<'m> RuntimeOutputResolver<'m> {
         }
 
         // Qualified effect call: Effect.method arg  (e.g. Log.log result)
+        // Evaluate the argument through the outcome-aware path so suspended values can replay.
         if let Expr::Call { callee, arg } = expr
             && let Expr::Qualified { receiver, member } = callee.as_ref()
         {
-            let arg_val = self.eval_expr_ast(arg, locals, callables, evaluators, depth)?;
+            let arg_outcome =
+                self.eval_expr_ast_outcome(arg, locals, callables, evaluators, depth + 1);
+            let arg_val = self.complete_ast_value_outcome(arg_outcome, evaluators)?;
             let method = self.find_handler_method_for_effect(receiver, member);
             if let Some(method) = method {
                 return self.dispatch_handler_method(&method, arg_val, evaluators, depth + 1);
