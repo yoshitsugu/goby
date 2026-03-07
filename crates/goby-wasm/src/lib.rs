@@ -9982,4 +9982,49 @@ main =
         assert_eq!(typed.stdout.as_deref(), Some("15"));
         assert_eq!(typed.runtime_error_kind, None);
     }
+
+    #[test]
+    fn declaration_body_two_binding_progression_value_combination() {
+        use goby_core::parse_module;
+        let _guard = ENV_MUTEX.lock().unwrap();
+        // Shape C: declaration body with two sequential value-position bindings
+        // both suspending at effect calls, whose results are combined in the
+        // final expression.
+        //
+        // `sum_two`: a = next(0) → 1, b = next(a) → 2, returns a + b = 3.
+        //
+        // This exercises two sequential Stmt::Binding suspensions in a
+        // declaration body. Each binding goes through the stmt continuation
+        // mechanism:
+        //   1st: push BindValue{a}, eval next(n) suspends, stmt cont captures
+        //        remaining [b=next(a), a+b]. Resume → a=1 stored, remaining runs.
+        //   2nd: push BindValue{b}, eval next(a) suspends, stmt cont captures
+        //        remaining [a+b]. Resume → b=2 stored, a+b=3 returned.
+        let source = r#"
+effect Iter
+  next: Int -> Int
+
+sum_two : Int -> Int
+sum_two n =
+  a = next n
+  b = next a
+  a + b
+
+main : Unit -> Unit
+main =
+  with
+    next n ->
+      resume (n + 1)
+  in
+    print (sum_two 0)
+"#;
+        let module = parse_module(source).expect("parse should work");
+        // sum_two 0: a=next(0)=1, b=next(1)=2, a+b=3
+        let typed = assert_mode_parity(
+            &module,
+            "declaration body two binding progression value combination",
+        );
+        assert_eq!(typed.stdout.as_deref(), Some("3"));
+        assert_eq!(typed.runtime_error_kind, None);
+    }
 }
