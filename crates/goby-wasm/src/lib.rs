@@ -2515,6 +2515,28 @@ impl<'m> RuntimeOutputResolver<'m> {
                 self.pending_value_continuations.pop();
                 self.resume_through_active_continuation_bridge_outcome(resumed, evaluators)
             }
+            Expr::With { handler, body } => {
+                let Some(RuntimeValue::Handler(inline_handler)) =
+                    self.eval_expr_ast(handler, locals, callables, evaluators, depth + 1)
+                else {
+                    return AstEvalOutcome::Unsupported;
+                };
+                self.active_inline_handler_stack.push(inline_handler);
+                let body_expr = Expr::Block(body.clone());
+                let result = self.eval_expr_ast_outcome(
+                    &body_expr,
+                    locals,
+                    callables,
+                    evaluators,
+                    depth + 1,
+                );
+                // TODO: if result is Suspended, the handler is popped before the
+                // continuation is replayed, which may break handler-stack lookups
+                // on resume. This matches the same limitation in execute_unit_expr_ast.
+                // A fix requires persisting the handler stack across suspension.
+                self.active_inline_handler_stack.pop();
+                result
+            }
             _ => {
                 let value = self.eval_expr_ast(expr, locals, callables, evaluators, depth);
                 self.ast_outcome_from_option(value)
@@ -10056,6 +10078,47 @@ main =
         let module = parse_module(source).expect("parse should work");
         let typed = assert_mode_parity(&module, "three-step in-block binding progression");
         assert_eq!(typed.stdout.as_deref(), Some("3"));
+        assert_eq!(typed.runtime_error_kind, None);
+    }
+
+    #[test]
+    fn handler_body_with_inner_with_block_value() {
+        use goby_core::parse_module;
+        let _guard = ENV_MUTEX.lock().unwrap();
+        // Shape F: nested `with` block in statement position inside a handler body.
+        // The outer handler for `run` contains an inner `with` for `step`.
+        // The inner handler drives two sequential bindings; the final `resume (a + b)`
+        // resumes the outer continuation with the combined value.
+        //
+        // a=step(1)=2, b=step(2)=4. resume (a+b)=resume 6. Output: "6".
+        //
+        // Note: `result = with ... in ...` in binding-RHS position is not yet parsed
+        // by the Goby parser when `with` appears on the next indented line; the inner
+        // `with` is therefore placed in statement position with `resume` inside it.
+        let source = r#"
+effect Outer
+  run: Unit -> Int
+
+effect Inner
+  step: Int -> Int
+
+main : Unit -> Unit
+main =
+  with
+    run _ ->
+      with
+        step n ->
+          resume (n * 2)
+      in
+        a = step 1
+        b = step a
+        resume (a + b)
+  in
+    print (run ())
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let typed = assert_mode_parity(&module, "handler body with inner with block value");
+        assert_eq!(typed.stdout.as_deref(), Some("6"));
         assert_eq!(typed.runtime_error_kind, None);
     }
 }
