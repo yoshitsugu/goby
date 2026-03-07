@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-08 (session 228)
+Last updated: 2026-03-08 (session 229)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -72,6 +72,14 @@ this section takes priority.
     - New branch in parse_stmts_from_lines using split_once(":=") + is_non_reserved_identifier guard.
     - Parser test `parses_next_line_with_rhs_in_assignment` added.
     - All parser gaps for next-line `with` binding RHS are now resolved.
+  - Session 229: Step 3.5 matrix coverage extended:
+    - Shape G: `assignment_rhs_next_line_with_block_value` — `name :=\n  with ...` runtime test (commit 4a7d921).
+    - Shape H: `case_arm_body_calls_effect_operation` — effect call in case arm body (commit fb5be59).
+    - Discovered and fixed: `eval_ast_side_effect` evaluated `print`/`println`/`|> print` args via
+      `eval_ast_value` (non-outcome path). Declaration bodies calling effects inside print args
+      produced None. Migrated to `eval_expr_ast_outcome` + `complete_ast_value_outcome` at depth=1.
+    - Shape I: `declaration_block_body_with_binding_and_effect_call` — exercises the fixed path (commit 00e3e00).
+    - goby-wasm tests: 192 → 195 passing.
   - Next: dispatch_handler_method_core for-loop replacement (Step 3 architecture), or more Step 3.5 coverage.
 - External internal records:
   - devflow notes live outside the repo under
