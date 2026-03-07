@@ -951,16 +951,32 @@ impl<'m> RuntimeOutputResolver<'m> {
             }
             // print <arg>  —  handle before delegating to string path because
             // `eval_side_effect` routes through `execute_unit_call` which does not
-            // know about the `print` builtin.
+            // know about the `print` builtin. Use eval_expr_ast_outcome so that args
+            // that themselves call effect operations (e.g. `print (f x)` where `f`
+            // invokes an effect) are evaluated through the suspension-aware path.
             Expr::Call { callee, arg } if matches!(callee.as_ref(), Expr::Var(n) if n == BUILTIN_PRINT) =>
             {
-                let value = self.eval_ast_value(arg, evaluators)?;
+                let outcome = self.eval_expr_ast_outcome(
+                    arg,
+                    &self.locals.clone(),
+                    &HashMap::new(),
+                    evaluators,
+                    1,
+                );
+                let value = self.complete_ast_value_outcome(outcome, evaluators)?;
                 self.outputs.push(value.to_output_text());
                 Some(())
             }
             Expr::Call { callee, arg } if matches!(callee.as_ref(), Expr::Var(n) if n == "println") =>
             {
-                let value = self.eval_ast_value(arg, evaluators)?;
+                let outcome = self.eval_expr_ast_outcome(
+                    arg,
+                    &self.locals.clone(),
+                    &HashMap::new(),
+                    evaluators,
+                    1,
+                );
+                let value = self.complete_ast_value_outcome(outcome, evaluators)?;
                 let mut text = value.to_output_text();
                 if !text.ends_with('\n') {
                     text.push('\n');
@@ -970,7 +986,14 @@ impl<'m> RuntimeOutputResolver<'m> {
             }
             // value |> print
             Expr::Pipeline { value, callee } if callee == BUILTIN_PRINT => {
-                let v = self.eval_ast_value(value, evaluators)?;
+                let outcome = self.eval_expr_ast_outcome(
+                    value,
+                    &self.locals.clone(),
+                    &HashMap::new(),
+                    evaluators,
+                    1,
+                );
+                let v = self.complete_ast_value_outcome(outcome, evaluators)?;
                 self.outputs.push(v.to_output_text());
                 Some(())
             }
@@ -10191,6 +10214,42 @@ main =
         let module = parse_module(source).expect("parse should work");
         let typed = assert_mode_parity(&module, "case arm body calls effect operation");
         assert_eq!(typed.stdout.as_deref(), Some("1015"));
+        assert_eq!(typed.runtime_error_kind, None);
+    }
+
+    #[test]
+    fn declaration_block_body_with_binding_and_effect_call() {
+        use goby_core::parse_module;
+        let _guard = ENV_MUTEX.lock().unwrap();
+        // Shape I: declaration body (Expr::Block) has a Binding + effect call, called via
+        // `print (get_advanced 5)`. Exercises eval_expr_ast_outcome in the print arg path
+        // (migrated from eval_ast_value so declaration-body effect calls are supported).
+        //
+        // get_advanced n: a = next(n) = n+1, returns a+10. With n=5: a=6, a+10=16.
+        let source = r#"
+effect Iter
+  next: Int -> Int
+
+get_advanced : Int -> Int
+get_advanced n =
+  a = next n
+  a + 10
+
+main : Unit -> Unit
+main =
+  with
+    next n ->
+      resume (n + 1)
+  in
+    print (get_advanced 5)
+"#;
+        let module = parse_module(source).expect("parse should work");
+        // a=next(5)=6, a+10=16. Output: "16".
+        let typed = assert_mode_parity(
+            &module,
+            "declaration block body with binding and effect call",
+        );
+        assert_eq!(typed.stdout.as_deref(), Some("16"));
         assert_eq!(typed.runtime_error_kind, None);
     }
 }
