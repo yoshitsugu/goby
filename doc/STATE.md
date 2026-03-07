@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-07 (session 220)
+Last updated: 2026-03-07 (session 221)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -23,15 +23,15 @@ this section takes priority.
   - unit-position qualified-call arg evaluation migrated (session 220):
     - `execute_unit_expr_ast` Expr::Qualified arm → outcome consumer
     - `eval_ast_side_effect` Expr::Qualified arm → outcome consumer
+  - unit-position Expr::Var call arg evaluation migrated (session 221):
+    - `eval_ast_side_effect` Expr::Var arm → outcome consumer (depth=1)
+    - `execute_unit_expr_ast` Expr::Var arm → outcome consumer (depth unchanged)
+    - regression test added: `resume_replays_bare_var_call_arg_in_side_effect_position`
 - Required next restart point:
-  - all major `Expr::Call` legacy direct-eval seams are now on the outcome path.
-  - remaining open items for Step 3 cleanup:
-    1. `eval_ast_side_effect` plain `Expr::Var` arm (~line 1000): still uses
-       `eval_expr_ast` directly for arg; could be bridged to outcome consumer.
-    2. New semantic target: assess whether the next work should be continuation
-       exhaustion / error semantics, or a new language feature.
-  - default next: inspect `eval_ast_side_effect` `Expr::Var` arm for migration,
-    then decide on new semantic target.
+  - all major unit-position and value-position Expr::Call legacy direct-eval seams are
+    now on the outcome-aware path.
+  - Step 3 unit-position migration is complete.
+  - Next: decide new semantic target (continuation exhaustion, error semantics, or new feature).
 - External internal records:
   - devflow notes live outside the repo under
     `/home/yoshitsugu/.codex/devflow/goby-c372fa22bba4/`
@@ -124,6 +124,20 @@ this section takes priority.
 ## 4. Recent Milestones
 
 Recent (detailed):
+
+- 2026-03-07 (session 221): Track 4.7 Step 3 unit-position Expr::Var call arg migrated.
+  - runtime:
+    - `eval_ast_side_effect` Expr::Var arm: replaced `eval_ast_value(arg)` with
+      `eval_expr_ast_outcome + complete_ast_value_outcome` (depth=1, matching Qualified arm).
+    - `execute_unit_expr_ast` Expr::Var arm: replaced `eval_expr_ast(arg, ...)` with
+      `eval_expr_ast_outcome + complete_ast_value_outcome` (same depth, locals, callables).
+  - added regression test: `resume_replays_bare_var_call_arg_in_side_effect_position`
+    — exercises `log (next 0)` pattern with suspension and replay.
+  - validation completed:
+    - `cargo fmt`
+    - `cargo clippy -p goby-wasm -- -D warnings`
+    - `cargo test --workspace` (184 goby-wasm, 332 others)
+  - commits: 2cd398f (Step 1), 876295f (Step 2)
 
 - 2026-03-07 (session 220): Track 4.7 Step 3 unit-position qualified-call arg migrated.
   - runtime:
