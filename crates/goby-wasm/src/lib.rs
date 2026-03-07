@@ -1042,7 +1042,16 @@ impl<'m> RuntimeOutputResolver<'m> {
                     self.set_runtime_error_once(ERR_CALLABLE_DISPATCH_DECL_PARAM);
                     return None;
                 }
-                if let Some(arg_val) = self.eval_ast_value(arg, evaluators) {
+                // depth=1: arg is one call-level below the top-level statement.
+                // Matches the convention used by the Qualified arm above.
+                let arg_outcome = self.eval_expr_ast_outcome(
+                    arg,
+                    &self.locals.clone(),
+                    &HashMap::new(),
+                    evaluators,
+                    1,
+                );
+                if let Some(arg_val) = self.complete_ast_value_outcome(arg_outcome, evaluators) {
                     // Bare effect method call (e.g. `log "msg"`) — check active handlers first.
                     let bare_method = self.find_handler_method_by_name(fn_name);
                     if let Some(method) = bare_method {
@@ -8753,6 +8762,36 @@ main =
             resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
                 .expect("runtime output should resolve");
         assert_eq!(output, "1");
+    }
+
+    #[test]
+    fn resume_replays_bare_var_call_arg_in_side_effect_position() {
+        use goby_core::parse_module;
+        let _guard = ENV_MUTEX.lock().unwrap();
+        // Exercises the bare var-callee call arm in eval_ast_side_effect:
+        // `log (next 0)` is a statement-position call whose argument suspends through a resume.
+        let source = r#"
+effect Iter
+  next: Int -> Int
+
+effect Log
+  log: Int -> Unit
+
+main : Unit -> Unit
+main =
+  with
+    next n ->
+      resume (n + 5)
+    log v ->
+      print v
+      resume ()
+  in
+    log (next 0)
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let typed = assert_mode_parity(&module, "bare var call arg replay in side-effect position");
+        assert_eq!(typed.stdout.as_deref(), Some("5"));
+        assert_eq!(typed.runtime_error_kind, None);
     }
 
     #[test]
