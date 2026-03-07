@@ -10027,4 +10027,35 @@ main =
         assert_eq!(typed.stdout.as_deref(), Some("3"));
         assert_eq!(typed.runtime_error_kind, None);
     }
+
+    #[test]
+    fn three_step_in_block_binding_progression() {
+        use goby_core::parse_module;
+        let _guard = ENV_MUTEX.lock().unwrap();
+        // Shape E: 3 sequential in-block binding suspensions driven by the same handler.
+        // (Shape D = handler_body_binding_resumes_via_outer_with_block_synchronous_dispatch.)
+        // Extends `typed_mode_matches_fallback_for_binding_value_replay` (2-step) to confirm
+        // the stmt continuation mechanism handles an arbitrary chain of suspensions.
+        //
+        // x=next(0)=1, y=next(1)=2, z=next(2)=3. print z. Output: "3".
+        let source = r#"
+effect Iter
+  next: Int -> Int
+
+main : Unit -> Unit
+main =
+  with
+    next n ->
+      resume (n + 1)
+  in
+    x = next 0
+    y = next x
+    z = next y
+    print z
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let typed = assert_mode_parity(&module, "three-step in-block binding progression");
+        assert_eq!(typed.stdout.as_deref(), Some("3"));
+        assert_eq!(typed.runtime_error_kind, None);
+    }
 }
