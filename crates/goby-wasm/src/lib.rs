@@ -10158,4 +10158,39 @@ main =
         assert_eq!(typed.stdout.as_deref(), Some("8"));
         assert_eq!(typed.runtime_error_kind, None);
     }
+
+    #[test]
+    fn case_arm_body_calls_effect_operation() {
+        use goby_core::parse_module;
+        let _guard = ENV_MUTEX.lock().unwrap();
+        // Shape H: effect call inside a `case` arm body (not the scrutinee).
+        // Covers the arm-body effect-call path in the AST evaluator, which is distinct
+        // from the scrutinee-replay path tested by resume_replays_case_scrutinee_continuation.
+        //
+        // get_next_from_case 0 → case arm `0 -> next 0` → next(0)=10. Output: "10".
+        // get_next_from_case 5 → case arm `_ -> next n` → next(5)=15. Output: "15".
+        let source = r#"
+effect Iter
+  next: Int -> Int
+
+get_next_from_case : Int -> Int
+get_next_from_case n =
+  case n
+    0 -> next 0
+    _ -> next n
+
+main : Unit -> Unit
+main =
+  with
+    next n ->
+      resume (n + 10)
+  in
+    print (get_next_from_case 0)
+    print (get_next_from_case 5)
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let typed = assert_mode_parity(&module, "case arm body calls effect operation");
+        assert_eq!(typed.stdout.as_deref(), Some("1015"));
+        assert_eq!(typed.runtime_error_kind, None);
+    }
 }
