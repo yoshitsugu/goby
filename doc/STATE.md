@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-07 (session 221)
+Last updated: 2026-03-07 (session 222)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -30,8 +30,14 @@ this section takes priority.
 - Required next restart point:
   - all major unit-position and value-position Expr::Call legacy direct-eval seams are
     now on the outcome-aware path.
-  - Step 3 unit-position migration is complete.
-  - Next: decide new semantic target (continuation exhaustion, error semantics, or new feature).
+  - Step 3 unit-position migration is complete (session 221).
+  - Step 3.5 regression test coverage extended (session 222):
+    - execute_unit_expr_ast Var arm: locked by `resume_replays_bare_var_call_arg_in_execute_unit_expr_ast_path`
+    - BinOpLeft -> BinOpRight nested suspension: locked by `typed_mode_matches_fallback_for_binop_both_operands_suspend`
+    - `pending_value_continuations` is still a necessary snapshot mechanism (not dead code)
+  - Next: Step 3.5 coverage is now solid. Next target should be either:
+    (a) additional Step 3.5 coverage for remaining shapes (qualified call in declaration body), or
+    (b) Step 3.3/3.4 architecture work: multi-resume progression in dispatch_handler_method_core.
 - External internal records:
   - devflow notes live outside the repo under
     `/home/yoshitsugu/.codex/devflow/goby-c372fa22bba4/`
@@ -124,6 +130,17 @@ this section takes priority.
 ## 4. Recent Milestones
 
 Recent (detailed):
+
+- 2026-03-07 (session 222): Track 4.7 Step 3.5 suspension-path regression tests added.
+  - Audit finding: `pending_value_continuations` is a necessary snapshot mechanism, not dead code.
+    BinOpLeft replay itself re-pushes BinOpRight continuation during right-operand evaluation.
+  - New tests:
+    - `resume_replays_bare_var_call_arg_in_execute_unit_expr_ast_path`: locks execute_unit_expr_ast
+      Var arm via declaration body route (not eval_ast_side_effect).
+    - `typed_mode_matches_fallback_for_binop_both_operands_suspend`: locks BinOpLeft -> BinOpRight
+      nested suspension with order-sensitive oracle (output "01016").
+  - validation: `cargo test --workspace` (186 goby-wasm, 332 others)
+  - commit: f8b1866
 
 - 2026-03-07 (session 221): Track 4.7 Step 3 unit-position Expr::Var call arg migrated.
   - runtime:
