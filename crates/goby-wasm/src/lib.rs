@@ -4521,6 +4521,14 @@ impl<'m> RuntimeOutputResolver<'m> {
                             ) {
                                 AstEvalOutcome::Complete(value) => value,
                                 AstEvalOutcome::Suspended(_continuation) => {
+                                    // TODO: the continuation and remaining handler body
+                                    // statements are silently abandoned here. If the inner
+                                    // eval truly suspends (e.g. the inner handler lives in
+                                    // an outer `with` block), `name = <value>` and all
+                                    // subsequent stmts are lost. Fixing this requires
+                                    // registering a handler-body statement-sequence
+                                    // continuation so that replay can resume from the
+                                    // correct binding site.
                                     return Some(());
                                 }
                                 AstEvalOutcome::Aborted => return None,
@@ -4539,6 +4547,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                             ) {
                                 AstEvalOutcome::Complete(value) => value,
                                 AstEvalOutcome::Suspended(_continuation) => {
+                                    // TODO: same as Binding case above — remaining stmts lost.
                                     return Some(());
                                 }
                                 AstEvalOutcome::Aborted => return None,
@@ -9826,5 +9835,54 @@ main =
             let wasm = compile_module(&module).expect("codegen should succeed");
             assert_valid_wasm_module(&wasm);
         }
+    }
+
+    #[test]
+    fn handler_body_sequential_value_binding_with_inner_effect_call() {
+        use goby_core::parse_module;
+        let _guard = ENV_MUTEX.lock().unwrap();
+        // Shape A: handler body has a sequential value-position binding where
+        // the RHS calls a different effect whose handler also lives in the same
+        // `with` block.
+        //
+        //   outer `next _ ->` handler body:
+        //     x = get ()     <- calls the `get` handler; resolves synchronously
+        //     resume (x + 10)
+        //
+        // Because `get _ -> resume 5` resolves inline, dispatch_handler_method_core
+        // returns HandlerCompletion::Resumed(5), which is converted to
+        // AstEvalOutcome::Complete(5) at the call site. The Suspended branch inside
+        // the Stmt::Binding arm is NOT reached here. This test locks the happy-path
+        // where both effects coexist in one `with` block and the inner one completes
+        // synchronously.
+        //
+        // Two different effects (and therefore two distinct handler methods) are used
+        // so that the outer `next` handler body does not invoke itself.
+        let source = r#"
+effect Source
+  next: Unit -> Int
+
+effect Store
+  get: Unit -> Int
+
+main : Unit -> Unit
+main =
+  with
+    next _ ->
+      x = get ()
+      resume (x + 10)
+    get _ ->
+      resume 5
+  in
+    print (next ())
+"#;
+        let module = parse_module(source).expect("parse should work");
+        // get() resolves to 5, then next resumes with 5+10=15
+        let typed = assert_mode_parity(
+            &module,
+            "handler body sequential value binding with inner effect call",
+        );
+        assert_eq!(typed.stdout.as_deref(), Some("15"));
+        assert_eq!(typed.runtime_error_kind, None);
     }
 }
