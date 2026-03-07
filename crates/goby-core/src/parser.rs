@@ -426,8 +426,58 @@ fn parse_stmts_from_lines(lines: &[&str], start: usize) -> Option<(Vec<Stmt>, us
             continue;
         }
 
-        // `name = case ...` / `name = if ...` multiline RHS binding.
+        // `name =\n  with ...` — binding where `with` is on the next indented line.
         if let Some((name, rhs)) = try_split_binding(trimmed)
+            && rhs.is_empty()
+            && let Some(next_i) = find_next_nonblank(lines, i + 1)
+        {
+            let next_stripped = strip_line_comment(lines[next_i]).trim_end();
+            let next_trimmed = next_stripped.trim();
+            let next_indent = indent_len(next_stripped);
+            if next_indent > this_indent
+                && (next_trimmed == "with" || next_trimmed.starts_with("with "))
+                && let Some((value, after)) =
+                    parse_multiline_rhs_expr(lines, next_i, next_indent, next_trimmed)
+            {
+                stmts.push(Stmt::Binding {
+                    name: name.to_string(),
+                    value,
+                });
+                i = after;
+                continue;
+            }
+        }
+
+        // `mut name =\n  with ...` — mutable binding where `with` is on the next indented line.
+        if let Some(rest) = trimmed.strip_prefix("mut ")
+            && let Some((name, rhs)) = try_split_binding(rest)
+            && rhs.is_empty()
+            && let Some(next_i) = find_next_nonblank(lines, i + 1)
+        {
+            let next_stripped = strip_line_comment(lines[next_i]).trim_end();
+            let next_trimmed = next_stripped.trim();
+            let next_indent = indent_len(next_stripped);
+            if next_indent > this_indent
+                && (next_trimmed == "with" || next_trimmed.starts_with("with "))
+                && let Some((value, after)) =
+                    parse_multiline_rhs_expr(lines, next_i, next_indent, next_trimmed)
+            {
+                stmts.push(Stmt::MutBinding {
+                    name: name.to_string(),
+                    value,
+                });
+                i = after;
+                continue;
+            }
+        }
+
+        // `name = case ...` / `name = if ...` / `name = with ...` same-line multiline RHS binding.
+        // Note: `!rhs.is_empty()` guards against empty-RHS lines (`name =\n  with ...`)
+        // which are already handled by the next-line `with` branches above.
+        // `name :=\n  with ...` (Assign) is not currently supported; try_split_assignment
+        // rejects empty RHS, so such lines fall through to parse_stmt and fail.
+        if let Some((name, rhs)) = try_split_binding(trimmed)
+            && !rhs.is_empty()
             && let Some((value, next_i)) = parse_multiline_rhs_expr(lines, i, this_indent, rhs)
         {
             stmts.push(Stmt::Binding {
@@ -438,9 +488,10 @@ fn parse_stmts_from_lines(lines: &[&str], start: usize) -> Option<(Vec<Stmt>, us
             continue;
         }
 
-        // `mut name = case ...` / `mut name = if ...` multiline RHS binding.
+        // `mut name = case ...` / `mut name = if ...` / `mut name = with ...` same-line multiline RHS.
         if let Some(rest) = trimmed.strip_prefix("mut ")
             && let Some((name, rhs)) = try_split_binding(rest)
+            && !rhs.is_empty()
             && let Some((value, next_i)) = parse_multiline_rhs_expr(lines, i, this_indent, rhs)
         {
             stmts.push(Stmt::MutBinding {
@@ -3454,6 +3505,51 @@ main =
         assert_eq!(stmts.len(), 3);
         match &stmts[1] {
             Stmt::Assign { name, value } => {
+                assert_eq!(name, "x");
+                assert!(matches!(value, Expr::With { .. }));
+            }
+            other => panic!("unexpected statement: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_next_line_with_rhs_in_binding() {
+        // `name =\n  with ...` where `with` appears on the next indented line.
+        let body = "x =\n  with\n    emit v ->\n      resume v\n  in\n    emit 1\nprint x";
+        let stmts = parse_body_stmts(body).expect("should parse");
+        assert_eq!(stmts.len(), 2);
+        match &stmts[0] {
+            Stmt::Binding { name, value } => {
+                assert_eq!(name, "x");
+                assert!(matches!(value, Expr::With { .. }));
+            }
+            other => panic!("unexpected statement: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_next_line_with_rhs_in_mut_binding() {
+        // `mut name =\n  with ...` where `with` appears on the next indented line.
+        let body = "mut x =\n  with\n    emit v ->\n      resume v\n  in\n    emit 1\nprint x";
+        let stmts = parse_body_stmts(body).expect("should parse");
+        assert_eq!(stmts.len(), 2);
+        match &stmts[0] {
+            Stmt::MutBinding { name, value } => {
+                assert_eq!(name, "x");
+                assert!(matches!(value, Expr::With { .. }));
+            }
+            other => panic!("unexpected statement: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_next_line_with_inline_handler_rhs_in_binding() {
+        // `name =\n  with inlineHandler\n  in\n    body` — inline handler on the next-line `with`.
+        let body = "x =\n  with h\n  in\n    emit 1\nprint x";
+        let stmts = parse_body_stmts(body).expect("should parse");
+        assert_eq!(stmts.len(), 2);
+        match &stmts[0] {
+            Stmt::Binding { name, value } => {
                 assert_eq!(name, "x");
                 assert!(matches!(value, Expr::With { .. }));
             }

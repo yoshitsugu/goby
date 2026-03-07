@@ -10085,16 +10085,12 @@ main =
     fn handler_body_with_inner_with_block_value() {
         use goby_core::parse_module;
         let _guard = ENV_MUTEX.lock().unwrap();
-        // Shape F: nested `with` block in statement position inside a handler body.
-        // The outer handler for `run` contains an inner `with` for `step`.
-        // The inner handler drives two sequential bindings; the final `resume (a + b)`
-        // resumes the outer continuation with the combined value.
+        // Shape F: nested `with` as the binding-RHS inside a handler body.
+        // The outer handler for `run` binds `result` to the value produced by an inner
+        // `with` block that handles `step`. The inner handler drives two sequential
+        // bindings; `resume result` delivers the combined value to the outer continuation.
         //
-        // a=step(1)=2, b=step(2)=4. resume (a+b)=resume 6. Output: "6".
-        //
-        // Note: `result = with ... in ...` in binding-RHS position is not yet parsed
-        // by the Goby parser when `with` appears on the next indented line; the inner
-        // `with` is therefore placed in statement position with `resume` inside it.
+        // a=step(1)=2, b=step(2)=4. result=a+b=6. resume 6. Output: "6".
         let source = r#"
 effect Outer
   run: Unit -> Int
@@ -10106,13 +10102,15 @@ main : Unit -> Unit
 main =
   with
     run _ ->
-      with
-        step n ->
-          resume (n * 2)
-      in
-        a = step 1
-        b = step a
-        resume (a + b)
+      result =
+        with
+          step n ->
+            resume (n * 2)
+        in
+          a = step 1
+          b = step a
+          a + b
+      resume result
   in
     print (run ())
 "#;
