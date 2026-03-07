@@ -2659,8 +2659,9 @@ impl<'m> RuntimeOutputResolver<'m> {
                 self.set_runtime_error_once(ERR_CALLABLE_DISPATCH_DECL_PARAM);
                 return None;
             }
-            // Evaluate arg once.
-            let arg_val = self.eval_expr_ast(arg, locals, callables, evaluators, depth)?;
+            // Evaluate arg through the outcome-aware path so suspended values can replay.
+            let arg_outcome = self.eval_expr_ast_outcome(arg, locals, callables, evaluators, depth);
+            let arg_val = self.complete_ast_value_outcome(arg_outcome, evaluators)?;
             if let Some(callable) = callables.get(fn_name)
                 && self
                     .dispatch_callable_side_effect(
