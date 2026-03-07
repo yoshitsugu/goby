@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-07 (session 227)
+Last updated: 2026-03-08 (session 228)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -67,7 +67,11 @@ this section takes priority.
     - `next_indent` passed to parse_multiline_rhs_expr so `in` aligns with `with`.
     - `!rhs.is_empty()` guard added to existing same-line branches for safety.
     - 3 parser tests added; Shape F test updated to use binding-RHS design.
-    - `name :=\n  with ...` (Assign) remains unsupported (try_split_assignment rejects empty RHS).
+    - All three binding/assignment forms (`name =`, `mut name =`, `name :=`) now support next-line `with` RHS.
+  - Session 228: `name :=\n  with ...` (Assign) parser gap closed (commit 314adcf):
+    - New branch in parse_stmts_from_lines using split_once(":=") + is_non_reserved_identifier guard.
+    - Parser test `parses_next_line_with_rhs_in_assignment` added.
+    - All parser gaps for next-line `with` binding RHS are now resolved.
   - Next: dispatch_handler_method_core for-loop replacement (Step 3 architecture), or more Step 3.5 coverage.
 - External internal records:
   - devflow notes live outside the repo under

@@ -910,7 +910,9 @@ Step-by-step checklist:
           - Shape E: `three_step_in_block_binding_progression` (3 sequential in-block bindings)
           - Shape F: `handler_body_with_inner_with_block_value` (inner `with` in handler body)
           - `eval_expr_ast_outcome` now has `Expr::With` arm for value-position `with` exprs.
-        - parser limitation: `name =\n  with ...` (next-line `with` in binding RHS) not parsed.
+        - parser limitation resolved (session 227–228): `name =\n  with ...`, `mut name =\n  with ...`,
+          and `name :=\n  with ...` all now parse correctly. All three binding/assignment forms
+          support next-line `with` RHS.
       - next acceptance target:
         - replace `dispatch_handler_method_core` plain for-loop with suspension-aware execution
           so handler body stmts can properly suspend and resume.
