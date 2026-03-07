@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-07 (session 226)
+Last updated: 2026-03-07 (session 227)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -62,7 +62,13 @@ this section takes priority.
     - Parser limitation discovered: `result = with ... in ...` where `with` is on next indented
       line is NOT parsed (parse_multiline_rhs_expr returns None when rhs=""). Shape F test uses
       statement-position inner with to work around this.
-  - Next: parser fix for `name =\n  with ...` multiline binding RHS, or continue Step 3.5 coverage.
+  - Session 227: parser fix for `name =\n  with ...` binding RHS (commit d8f0d2f):
+    - Added `name =\n  with ...` and `mut name =\n  with ...` branches in parse_stmts_from_lines.
+    - `next_indent` passed to parse_multiline_rhs_expr so `in` aligns with `with`.
+    - `!rhs.is_empty()` guard added to existing same-line branches for safety.
+    - 3 parser tests added; Shape F test updated to use binding-RHS design.
+    - `name :=\n  with ...` (Assign) remains unsupported (try_split_assignment rejects empty RHS).
+  - Next: dispatch_handler_method_core for-loop replacement (Step 3 architecture), or more Step 3.5 coverage.
 - External internal records:
   - devflow notes live outside the repo under
     `/home/yoshitsugu/.codex/devflow/goby-c372fa22bba4/`
