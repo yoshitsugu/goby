@@ -10119,4 +10119,43 @@ main =
         assert_eq!(typed.stdout.as_deref(), Some("6"));
         assert_eq!(typed.runtime_error_kind, None);
     }
+
+    #[test]
+    fn assignment_rhs_next_line_with_block_value() {
+        use goby_core::parse_module;
+        let _guard = ENV_MUTEX.lock().unwrap();
+        // Shape G: `name :=\n  with ...` (assignment from next-line with block).
+        // Exercises the Assign branch in parse_stmts_from_lines for next-line `with` RHS,
+        // plus runtime evaluation of Stmt::Assign where the value comes from a with block.
+        //
+        // mut result = 0
+        // result :=
+        //   with step n -> resume (n * 3)
+        //   in a = step 1; a + 5
+        // a = step(1) = 3; result = 3 + 5 = 8. Output: "8".
+        let source = r#"
+effect Iter
+  step: Int -> Int
+
+main : Unit -> Unit
+main =
+  with
+    step n ->
+      resume (n * 3)
+  in
+    mut result = 0
+    result :=
+      with
+        step n ->
+          resume (n * 3)
+      in
+        a = step 1
+        a + 5
+    print result
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let typed = assert_mode_parity(&module, "assignment rhs next-line with block value");
+        assert_eq!(typed.stdout.as_deref(), Some("8"));
+        assert_eq!(typed.runtime_error_kind, None);
+    }
 }
