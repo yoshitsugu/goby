@@ -9929,4 +9929,57 @@ main =
         assert_eq!(typed.stdout.as_deref(), Some("10"));
         assert_eq!(typed.runtime_error_kind, None);
     }
+
+    #[test]
+    fn handler_body_binding_resumes_via_outer_with_block_synchronous_dispatch() {
+        use goby_core::parse_module;
+        let _guard = ENV_MUTEX.lock().unwrap();
+        // Handler body sequential value binding where the inner effect is
+        // handled by an OUTER `with` block (nested `with` blocks).
+        //
+        // Inner `next` handler body: `x = get (); resume (x + 10)`.
+        // Outer handler for `get` resumes with 5.
+        //
+        // When the handler body calls `get ()`, dispatch_handler_method_core
+        // for `get` runs synchronously within the call stack. The resume token
+        // created for the `get` handler dispatch has frame=None (no pending
+        // stmt/value continuation at that dispatch depth), so the resume path
+        // takes the synchronous branch:
+        //   resume_through_ast_continuation_frame(None, 5, ...) → Complete(5).
+        // Thus eval_expr_ast_outcome(get ()) inside the handler body returns
+        // Complete(5), x=5 is stored, then resume(5+10)=15.
+        //
+        // The Suspended branch of Stmt::Binding in dispatch_handler_method_core
+        // is NOT reached here (synchronous dispatch only; the async suspension
+        // path where Suspended is returned is a known TODO at that site).
+        //
+        // Expected output: "15".
+        let source = r#"
+effect Source
+  next: Unit -> Int
+
+effect Store
+  get: Unit -> Int
+
+main : Unit -> Unit
+main =
+  with
+    get _ ->
+      resume 5
+  in
+    with
+      next _ ->
+        x = get ()
+        resume (x + 10)
+    in
+      print (next ())
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let typed = assert_mode_parity(
+            &module,
+            "handler body binding resumes via outer with block (synchronous dispatch)",
+        );
+        assert_eq!(typed.stdout.as_deref(), Some("15"));
+        assert_eq!(typed.runtime_error_kind, None);
+    }
 }
