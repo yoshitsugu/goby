@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-07 (session 222)
+Last updated: 2026-03-07 (session 226)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -35,9 +35,34 @@ this section takes priority.
     - execute_unit_expr_ast Var arm: locked by `resume_replays_bare_var_call_arg_in_execute_unit_expr_ast_path`
     - BinOpLeft -> BinOpRight nested suspension: locked by `typed_mode_matches_fallback_for_binop_both_operands_suspend`
     - `pending_value_continuations` is still a necessary snapshot mechanism (not dead code)
-  - Next: Step 3.5 coverage is now solid. Next target should be either:
-    (a) additional Step 3.5 coverage for remaining shapes (qualified call in declaration body), or
-    (b) Step 3.3/3.4 architecture work: multi-resume progression in dispatch_handler_method_core.
+  - Step 3.5 broader matrix coverage added (session 223):
+    - Shape A: handler body sequential value binding with synchronous inner effect call
+      (`handler_body_sequential_value_binding_with_inner_effect_call`)
+    - Shape B (in-block): declaration called from `in` block that invokes effect
+      (`in_block_calls_declaration_that_invokes_effect`)
+    - TODO comments added at two Suspended drop sites in dispatch_handler_method_core
+      (Stmt::Binding and Stmt::Assign arms) — remaining handler body stmts are silently
+      lost when the inner eval truly suspends.
+  - Session 224: nested-with handler body binding test added (synchronous dispatch path):
+    `handler_body_binding_resumes_via_outer_with_block_synchronous_dispatch`
+    Investigation: TODO Suspended drop sites in dispatch_handler_method_core are not
+    reachable via normal Goby programs in the current runtime. The async suspension
+    path requires should_suspend_resume_outcome(frame)=true inside inner dispatch,
+    which needs frame.stmt=None && value continuation present — not triggered here.
+  - Session 225: Shape C added — declaration body two-binding progression with value combination:
+    `declaration_body_two_binding_progression_value_combination`
+    (sum_two n: a=next(n), b=next(a), a+b=3 with n=0)
+  - Session 226: Shape E and Shape F added:
+    - Shape E: `three_step_in_block_binding_progression` — 3 sequential in-block bindings via
+      same handler (x=next(0)=1, y=next(1)=2, z=next(2)=3, output "3")
+    - `eval_expr_ast_outcome` now has `Expr::With` arm — handler push/eval-block/pop,
+      matching `execute_unit_expr_ast` pattern (TODO: pop before replay is a known limitation)
+    - Shape F: `handler_body_with_inner_with_block_value` — inner `with` in statement position
+      inside outer handler body; inner step drives 2 bindings; resume(a+b)=6, output "6"
+    - Parser limitation discovered: `result = with ... in ...` where `with` is on next indented
+      line is NOT parsed (parse_multiline_rhs_expr returns None when rhs=""). Shape F test uses
+      statement-position inner with to work around this.
+  - Next: parser fix for `name =\n  with ...` multiline binding RHS, or continue Step 3.5 coverage.
 - External internal records:
   - devflow notes live outside the repo under
     `/home/yoshitsugu/.codex/devflow/goby-c372fa22bba4/`
