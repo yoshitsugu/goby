@@ -9885,4 +9885,48 @@ main =
         assert_eq!(typed.stdout.as_deref(), Some("15"));
         assert_eq!(typed.runtime_error_kind, None);
     }
+
+    #[test]
+    fn in_block_calls_declaration_that_invokes_effect() {
+        use goby_core::parse_module;
+        let _guard = ENV_MUTEX.lock().unwrap();
+        // Shape B (in-block variant): the `in` block calls a declaration
+        // `get_plus` whose body calls an effect and adds to the result.
+        // (See `handler_body_sequential_value_binding_with_inner_effect_call`
+        // for Shape A.)
+        //
+        // `get_plus n = next n + 5`, handler resumes with `n + 5`.
+        // `get_plus 0`: next(0) fires handler → resumes 5 →
+        //   declaration continues 5 + 5 = 10. Output: "10".
+        //
+        // This exercises the path where a declaration called from the `in`
+        // block suspends at an inner effect call, then resumes and continues
+        // with the remaining computation.
+        //
+        // Note: calling get_plus from the handler body itself (not the `in`
+        // block) currently does not work because the handler body statement
+        // executor drops the continuation when an inner eval suspends (see
+        // TODO comments in dispatch_handler_method_core). This test covers
+        // the supported in-block variant.
+        let source = r#"
+effect Eff
+  next: Int -> Int
+
+get_plus : Int -> Int
+get_plus n = next n + 5
+
+main : Unit -> Unit
+main =
+  with
+    next n ->
+      resume (n + 5)
+  in
+    print (get_plus 0)
+"#;
+        let module = parse_module(source).expect("parse should work");
+        // get_plus 0 -> next 0 (handler resumes 5) -> 5 + 5 = 10
+        let typed = assert_mode_parity(&module, "in-block call to declaration that invokes effect");
+        assert_eq!(typed.stdout.as_deref(), Some("10"));
+        assert_eq!(typed.runtime_error_kind, None);
+    }
 }
