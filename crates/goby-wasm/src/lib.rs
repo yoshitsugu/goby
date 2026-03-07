@@ -8142,6 +8142,39 @@ main =
     }
 
     #[test]
+    fn typed_mode_matches_fallback_for_binop_both_operands_suspend() {
+        use goby_core::parse_module;
+        let _guard = ENV_MUTEX.lock().unwrap();
+        // Exercises BinOpLeft -> BinOpRight replay: left operand suspends first,
+        // then during BinOpLeft replay the right operand also suspends.
+        // This confirms that the BinOpRight continuation pushed during BinOpLeft replay
+        // is correctly captured and resumed.
+        //
+        // The handler prints the input `n` before resuming, so we can observe
+        // evaluation order: left (next 0, n=0) then right (next 10, n=10).
+        // A bug that swapped operands or reused the wrong resumed value would
+        // produce wrong output or wrong order.
+        let source = r#"
+effect Iter
+  next: Int -> Int
+
+main : Unit -> Unit
+main =
+  with
+    next n ->
+      print n
+      resume (n + 3)
+  in
+    print (next 0 + next 10)
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let typed = assert_mode_parity(&module, "binop both operands suspend");
+        // Evaluation order: next 0 (prints 0, resumes 3), next 10 (prints 10, resumes 13), result 16
+        assert_eq!(typed.stdout.as_deref(), Some("01016"));
+        assert_eq!(typed.runtime_error_kind, None);
+    }
+
+    #[test]
     fn resume_replays_if_condition_continuation() {
         use goby_core::parse_module;
         let _guard = ENV_MUTEX.lock().unwrap();
@@ -8792,6 +8825,44 @@ main =
         let module = parse_module(source).expect("parse should work");
         let typed = assert_mode_parity(&module, "bare var call arg replay in side-effect position");
         assert_eq!(typed.stdout.as_deref(), Some("5"));
+        assert_eq!(typed.runtime_error_kind, None);
+    }
+
+    #[test]
+    fn resume_replays_bare_var_call_arg_in_execute_unit_expr_ast_path() {
+        use goby_core::parse_module;
+        let _guard = ENV_MUTEX.lock().unwrap();
+        // Exercises the bare var-callee call arm in execute_unit_expr_ast (not eval_ast_side_effect).
+        // `log (next 0)` appears inside a declaration body, so it is evaluated via
+        // execute_unit_ast_stmt -> execute_unit_expr_ast rather than eval_ast_side_effect.
+        let source = r#"
+effect Iter
+  next: Int -> Int
+
+effect Log
+  log: Int -> Unit
+
+run_log : Unit -> Unit
+run_log _ =
+  log (next 0)
+
+main : Unit -> Unit
+main =
+  with
+    next n ->
+      resume (n + 7)
+    log v ->
+      print v
+      resume ()
+  in
+    run_log ()
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let typed = assert_mode_parity(
+            &module,
+            "bare var call arg replay in execute_unit_expr_ast path",
+        );
+        assert_eq!(typed.stdout.as_deref(), Some("7"));
         assert_eq!(typed.runtime_error_kind, None);
     }
 
