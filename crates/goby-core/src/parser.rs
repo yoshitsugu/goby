@@ -502,7 +502,31 @@ fn parse_stmts_from_lines(lines: &[&str], start: usize) -> Option<(Vec<Stmt>, us
             continue;
         }
 
-        // `name := case ...` / `name := if ...` multiline RHS assignment.
+        // `name :=\n  with ...` — assignment where `with` is on the next indented line.
+        // try_split_assignment rejects empty RHS, so we detect this case separately.
+        if let Some((lhs, rhs)) = trimmed.split_once(":=")
+            && rhs.trim().is_empty()
+            && is_non_reserved_identifier(lhs.trim())
+            && let Some(next_i) = find_next_nonblank(lines, i + 1)
+        {
+            let next_stripped = strip_line_comment(lines[next_i]).trim_end();
+            let next_trimmed = next_stripped.trim();
+            let next_indent = indent_len(next_stripped);
+            if next_indent > this_indent
+                && (next_trimmed == "with" || next_trimmed.starts_with("with "))
+                && let Some((value, after)) =
+                    parse_multiline_rhs_expr(lines, next_i, next_indent, next_trimmed)
+            {
+                stmts.push(Stmt::Assign {
+                    name: lhs.trim().to_string(),
+                    value,
+                });
+                i = after;
+                continue;
+            }
+        }
+
+        // `name := case ...` / `name := if ...` / `name := with ...` same-line multiline RHS assignment.
         if let Some((name, rhs)) = try_split_assignment(trimmed)
             && let Some((value, next_i)) = parse_multiline_rhs_expr(lines, i, this_indent, rhs)
         {
@@ -3550,6 +3574,22 @@ main =
         assert_eq!(stmts.len(), 2);
         match &stmts[0] {
             Stmt::Binding { name, value } => {
+                assert_eq!(name, "x");
+                assert!(matches!(value, Expr::With { .. }));
+            }
+            other => panic!("unexpected statement: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_next_line_with_rhs_in_assignment() {
+        // `name :=\n  with ...` where `with` appears on the next indented line.
+        let body =
+            "mut x = 0\nx :=\n  with\n    emit v ->\n      resume v\n  in\n    emit 1\nprint x";
+        let stmts = parse_body_stmts(body).expect("should parse");
+        assert_eq!(stmts.len(), 3);
+        match &stmts[1] {
+            Stmt::Assign { name, value } => {
                 assert_eq!(name, "x");
                 assert!(matches!(value, Expr::With { .. }));
             }
