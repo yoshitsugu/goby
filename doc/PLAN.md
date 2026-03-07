@@ -906,10 +906,18 @@ Step-by-step checklist:
         - added fallback + typed parity regression for legacy list-literal replay.
         - added fallback + typed parity regression for legacy record-constructor field replay.
         - added fallback + typed parity regression for positional single-field constructor replay.
-        - broader matrix for nested value-position progression is still open.
+        - broader matrix for nested value-position progression covered (session 226):
+          - Shape E: `three_step_in_block_binding_progression` (3 sequential in-block bindings)
+          - Shape F: `handler_body_with_inner_with_block_value` (inner `with` in handler body)
+          - `eval_expr_ast_outcome` now has `Expr::With` arm for value-position `with` exprs.
+        - parser limitation: `name =\n  with ...` (next-line `with` in binding RHS) not parsed.
       - next acceptance target:
-        - add the first tests that specifically lock the unified `Suspended(frame)` path, not only
-          the current token replay behavior.
+        - replace `dispatch_handler_method_core` plain for-loop with suspension-aware execution
+          so handler body stmts can properly suspend and resume.
+        - prerequisite: resolve grlobal stack interference (pending_stmt_continuations shared
+          with outer in-block), frame capture timing, and produce_value=false semantics.
+        - interim: add tests that lock the `Suspended(frame)` path explicitly (currently only
+          output is asserted, not which path was taken).
   - restart checklist:
     - read in this order:
       - this Step 3 quick view
