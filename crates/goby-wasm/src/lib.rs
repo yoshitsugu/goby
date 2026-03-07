@@ -10252,4 +10252,38 @@ main =
         assert_eq!(typed.stdout.as_deref(), Some("16"));
         assert_eq!(typed.runtime_error_kind, None);
     }
+
+    #[test]
+    fn interpolated_string_with_declaration_body_effect_call() {
+        use goby_core::parse_module;
+        let _guard = ENV_MUTEX.lock().unwrap();
+        // Shape J: string interpolation embeds a declaration call that invokes an effect.
+        // `get_val n` returns next(n). `print "result=${get_val 3}"` → "result=4".
+        // Exercises eval_expr_ast_outcome for InterpolatedString segment evaluation
+        // when the segment is a call whose declaration body calls an effect operation.
+        let source = r#"
+effect Iter
+  next: Int -> Int
+
+get_val : Int -> Int
+get_val n =
+  next n
+
+main : Unit -> Unit
+main =
+  with
+    next n ->
+      resume (n + 1)
+  in
+    print "result=${get_val 3}"
+"#;
+        let module = parse_module(source).expect("parse should work");
+        // get_val(3) = next(3) = 4. Output: "result=4".
+        let typed = assert_mode_parity(
+            &module,
+            "interpolated string with declaration body effect call",
+        );
+        assert_eq!(typed.stdout.as_deref(), Some("result=4"));
+        assert_eq!(typed.runtime_error_kind, None);
+    }
 }
