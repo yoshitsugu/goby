@@ -10509,4 +10509,20 @@ main =
         assert_eq!(typed.stdout.as_deref(), Some("hello"));
         assert_eq!(typed.runtime_error_kind, None);
     }
+
+    #[test]
+    fn typed_mode_matches_fallback_for_resume_outside_handler_error() {
+        use goby_core::parse_module;
+        let _guard = ENV_MUTEX.lock().unwrap();
+        // Parity test for `resume` used outside any handler context.
+        // Both modes should surface a deterministic runtime error (E-RESUME-MISSING).
+        let source = r#"
+main : Unit -> Unit
+main =
+  print (resume 1)
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let typed = assert_mode_parity(&module, "resume outside handler error");
+        assert_eq!(typed.runtime_error_kind, Some("continuation_missing"));
+    }
 }
