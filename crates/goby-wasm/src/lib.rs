@@ -511,12 +511,7 @@ struct RuntimeOutputResolver<'m> {
     active_inline_handler_stack: Vec<InlineHandlerValue>,
     resume_tokens: Vec<ResumeToken>,
     optimized_resume_tokens: Vec<OptimizedResumeToken>,
-    pending_stmt_continuations: Vec<AstStmtContinuation>,
     pending_value_continuations: Vec<AstValueContinuation>,
-    active_stmt_sequence_ids: Vec<usize>,
-    next_stmt_sequence_id: usize,
-    consumed_stmt_sequence_id: Option<usize>,
-    replaying_stmt_continuation_depth: usize,
     runtime_error: Option<String>,
     runtime_aborted: bool,
     execution_mode: lower::EffectExecutionMode,
@@ -752,12 +747,6 @@ enum TokenState {
     Suspended(Cont),
 }
 
-/// Stub — to be implemented in Phase 2.
-#[allow(dead_code)]
-fn apply_cont(_cont: Cont, _value: RuntimeValue) -> Out<RuntimeValue> {
-    Out::Err(RuntimeError::Unsupported)
-}
-
 // ── End Phase 1 ───────────────────────────────────────────────────────────────
 
 #[derive(Clone)]
@@ -965,12 +954,7 @@ impl<'m> RuntimeOutputResolver<'m> {
             active_inline_handler_stack: Vec::new(),
             resume_tokens: Vec::new(),
             optimized_resume_tokens: Vec::new(),
-            pending_stmt_continuations: Vec::new(),
             pending_value_continuations: Vec::new(),
-            active_stmt_sequence_ids: Vec::new(),
-            next_stmt_sequence_id: 0,
-            consumed_stmt_sequence_id: None,
-            replaying_stmt_continuation_depth: 0,
             runtime_error: None,
             runtime_aborted: false,
             execution_mode,
@@ -3922,40 +3906,9 @@ impl<'m> RuntimeOutputResolver<'m> {
         stmts: &[Stmt],
         evaluators: &RuntimeEvaluators<'_, '_>,
     ) -> Option<()> {
-        let sequence_id = self.next_stmt_sequence_id;
-        self.next_stmt_sequence_id += 1;
-        self.active_stmt_sequence_ids.push(sequence_id);
-        for (idx, stmt) in stmts.iter().enumerate() {
-            let continuation_kind = (idx + 1 < stmts.len())
-                .then(|| Self::stmt_continuation_kind(stmt))
-                .flatten();
-            if let Some(kind) = continuation_kind.clone() {
-                self.pending_stmt_continuations.push(AstStmtContinuation {
-                    kind,
-                    remaining_stmts: stmts[idx + 1..].to_vec(),
-                    locals: self.locals.clone(),
-                    callables: HashMap::new(),
-                    depth: 0,
-                    owner_sequence_id: sequence_id,
-                });
-            }
-            let result = self.ingest_ast_statement(stmt, evaluators);
-            if continuation_kind.is_some() {
-                self.pending_stmt_continuations.pop();
-            }
-            if result.is_none() {
-                self.active_stmt_sequence_ids.pop();
-                return None;
-            }
-            if let Some(target_sequence_id) = self.consumed_stmt_sequence_id {
-                self.active_stmt_sequence_ids.pop();
-                if target_sequence_id == sequence_id {
-                    self.consumed_stmt_sequence_id = None;
-                }
-                return Some(());
-            }
+        for stmt in stmts {
+            self.ingest_ast_statement(stmt, evaluators)?;
         }
-        self.active_stmt_sequence_ids.pop();
         Some(())
     }
 
@@ -3967,42 +3920,164 @@ impl<'m> RuntimeOutputResolver<'m> {
         evaluators: &RuntimeEvaluators<'_, '_>,
         depth: usize,
     ) -> Option<()> {
-        let sequence_id = self.next_stmt_sequence_id;
-        self.next_stmt_sequence_id += 1;
-        self.active_stmt_sequence_ids.push(sequence_id);
-        for (idx, stmt) in stmts.iter().enumerate() {
-            let continuation_kind = (idx + 1 < stmts.len())
-                .then(|| Self::stmt_continuation_kind(stmt))
-                .flatten();
-            if let Some(kind) = continuation_kind.clone() {
-                self.pending_stmt_continuations.push(AstStmtContinuation {
-                    kind,
-                    remaining_stmts: stmts[idx + 1..].to_vec(),
-                    locals: locals.clone(),
-                    callables: callables.clone(),
-                    depth,
-                    owner_sequence_id: sequence_id,
-                });
-            }
-            let result = self.execute_unit_ast_stmt(stmt, locals, callables, evaluators, depth);
-            if continuation_kind.is_some() {
-                self.pending_stmt_continuations.pop();
-            }
-            if result.is_none() {
-                self.active_stmt_sequence_ids.pop();
-                return None;
-            }
-            if let Some(target_sequence_id) = self.consumed_stmt_sequence_id {
-                self.active_stmt_sequence_ids.pop();
-                if target_sequence_id == sequence_id {
-                    self.consumed_stmt_sequence_id = None;
-                }
-                return Some(());
-            }
+        for stmt in stmts {
+            self.execute_unit_ast_stmt(stmt, locals, callables, evaluators, depth)?;
         }
-        self.active_stmt_sequence_ids.pop();
         Some(())
     }
+
+    // ── Phase 3: new unified statement sequence evaluator ─────────────────────
+
+    fn eval_stmts(
+        &mut self,
+        stmts: &[Stmt],
+        mut locals: RuntimeLocals,
+        mut callables: HashMap<String, IntCallable>,
+        evaluators: &RuntimeEvaluators<'_, '_>,
+        depth: usize,
+        finish: FinishKind,
+    ) -> Out<(Option<RuntimeValue>, RuntimeLocals)> {
+        let mut last_value: Option<RuntimeValue> = None;
+        for (i, stmt) in stmts.iter().enumerate() {
+            let remaining = stmts[i + 1..].to_vec();
+            match stmt {
+                Stmt::Binding { name, value } | Stmt::MutBinding { name, value } => {
+                    match self.eval_expr(value, &locals, &callables, evaluators, depth + 1) {
+                        Out::Done(v) => {
+                            locals.store(name, v);
+                        }
+                        Out::Suspend(_cont) => {
+                            return Out::Suspend(Cont::StmtSeq {
+                                store: Some(StoreOp::Bind { name: name.clone() }),
+                                remaining,
+                                locals,
+                                callables,
+                                depth,
+                                handler_stack: self.active_inline_handler_stack.clone(),
+                                finish,
+                            });
+                        }
+                        Out::Err(e) => return Out::Err(e),
+                    }
+                }
+                Stmt::Assign { name, value } => {
+                    if locals.get(name).is_none() {
+                        return Out::Err(RuntimeError::Abort {
+                            kind: "assign_missing_var".into(),
+                        });
+                    }
+                    match self.eval_expr(value, &locals, &callables, evaluators, depth + 1) {
+                        Out::Done(v) => {
+                            locals.store(name, v);
+                        }
+                        Out::Suspend(_cont) => {
+                            return Out::Suspend(Cont::StmtSeq {
+                                store: Some(StoreOp::Assign { name: name.clone() }),
+                                remaining,
+                                locals,
+                                callables,
+                                depth,
+                                handler_stack: self.active_inline_handler_stack.clone(),
+                                finish,
+                            });
+                        }
+                        Out::Err(e) => return Out::Err(e),
+                    }
+                }
+                Stmt::Expr(expr) => {
+                    match self.eval_expr(expr, &locals, &callables, evaluators, depth + 1) {
+                        Out::Done(v) => {
+                            if remaining.is_empty() {
+                                last_value = Some(v);
+                            }
+                        }
+                        Out::Suspend(_cont) => {
+                            return Out::Suspend(Cont::StmtSeq {
+                                store: None,
+                                remaining,
+                                locals,
+                                callables,
+                                depth,
+                                handler_stack: self.active_inline_handler_stack.clone(),
+                                finish,
+                            });
+                        }
+                        Out::Err(RuntimeError::Unsupported) => {
+                            let mut loc = locals.clone();
+                            let mut call = callables.clone();
+                            if self
+                                .execute_unit_expr_ast(expr, &mut loc, &mut call, evaluators, depth + 1)
+                                .is_some()
+                            {
+                                locals = loc;
+                                callables = call;
+                            }
+                        }
+                        Out::Err(e) => return Out::Err(e),
+                    }
+                }
+            }
+        }
+        Out::Done((last_value, locals))
+    }
+
+    fn apply_cont(
+        &mut self,
+        cont: Cont,
+        value: RuntimeValue,
+        evaluators: &RuntimeEvaluators<'_, '_>,
+    ) -> Out<RuntimeValue> {
+        match cont {
+            Cont::StmtSeq {
+                store,
+                remaining,
+                mut locals,
+                callables,
+                depth,
+                handler_stack,
+                finish,
+            } => {
+                self.active_inline_handler_stack = handler_stack;
+                if let Some(store_op) = store {
+                    match store_op {
+                        StoreOp::Bind { name } => locals.store(&name, value),
+                        StoreOp::Assign { name } => {
+                            if locals.get(&name).is_none() {
+                                return Out::Err(RuntimeError::Abort {
+                                    kind: "assign_missing_var".into(),
+                                });
+                            }
+                            locals.store(&name, value);
+                        }
+                    }
+                }
+                match self.eval_stmts(&remaining, locals, callables, evaluators, depth, finish) {
+                    Out::Done((last_val, _final_locals)) => {
+                        Out::Done(last_val.unwrap_or(RuntimeValue::Unit))
+                    }
+                    Out::Suspend(c) => Out::Suspend(c),
+                    Out::Err(e) => Out::Err(e),
+                }
+            }
+            Cont::Apply {
+                step: _,
+                locals: _,
+                callables: _,
+                depth: _,
+                handler_stack,
+            } => {
+                self.active_inline_handler_stack = handler_stack;
+                // Apply steps — implemented in Phase 2 (placeholder for now)
+                Out::Err(RuntimeError::Unsupported)
+            }
+            Cont::Resume => {
+                // Handled in Phase 4
+                Out::Err(RuntimeError::Unsupported)
+            }
+        }
+    }
+
+    // ── End Phase 3 ───────────────────────────────────────────────────────────
 
     fn execute_unit_call(
         &mut self,
@@ -4793,21 +4868,6 @@ impl<'m> RuntimeOutputResolver<'m> {
         self.runtime_aborted && self.runtime_error.is_none()
     }
 
-    fn current_pending_stmt_continuation_for_dispatch(
-        &self,
-        dispatch_depth: usize,
-    ) -> Option<AstStmtContinuation> {
-        if self.replaying_stmt_continuation_depth != 0 {
-            return None;
-        }
-        let continuation = self.pending_stmt_continuations.last()?.clone();
-        if continuation.depth == dispatch_depth || continuation.depth + 1 == dispatch_depth {
-            Some(continuation)
-        } else {
-            None
-        }
-    }
-
     fn current_pending_value_continuation_for_dispatch(
         &self,
         dispatch_depth: usize,
@@ -4824,12 +4884,11 @@ impl<'m> RuntimeOutputResolver<'m> {
         &self,
         dispatch_depth: usize,
     ) -> Option<AstContinuationFrame> {
-        let stmt = self.current_pending_stmt_continuation_for_dispatch(dispatch_depth);
         let value = self.current_pending_value_continuation_for_dispatch(dispatch_depth);
-        if stmt.is_none() && value.is_none() {
+        if value.is_none() {
             None
         } else {
-            Some(AstContinuationFrame { value, stmt })
+            Some(AstContinuationFrame { value, stmt: None })
         }
     }
 
@@ -4952,16 +5011,7 @@ impl<'m> RuntimeOutputResolver<'m> {
         let frame = token.frame.clone();
         token.continuation.consumed = true;
         token.frame = None;
-        let outcome = if let Some(frame_ref) = frame.as_ref()
-            && Self::should_suspend_resume_outcome(frame_ref)
-        {
-            AstEvalOutcome::Suspended(Box::new(AstContinuation::Frame {
-                frame: frame_ref.clone(),
-                resumed: resumed.clone(),
-            }))
-        } else {
-            self.resume_through_ast_continuation_frame(frame, resumed, _evaluators)
-        };
+        let outcome = self.resume_through_ast_continuation_frame(frame, resumed, _evaluators);
         let Some(token) = self.current_resume_token_mut() else {
             self.set_runtime_error_once(ERR_RESUME_MISSING);
             return AstEvalOutcome::Unsupported;
@@ -4998,16 +5048,7 @@ impl<'m> RuntimeOutputResolver<'m> {
         let frame = token.frame.clone();
         token.consumed = true;
         token.frame = None;
-        let outcome = if let Some(frame_ref) = frame.as_ref()
-            && Self::should_suspend_resume_outcome(frame_ref)
-        {
-            AstEvalOutcome::Suspended(Box::new(AstContinuation::Frame {
-                frame: frame_ref.clone(),
-                resumed: resumed.clone(),
-            }))
-        } else {
-            self.resume_through_ast_continuation_frame(frame, resumed, _evaluators)
-        };
+        let outcome = self.resume_through_ast_continuation_frame(frame, resumed, _evaluators);
         let Some(token) = self.current_optimized_resume_token_mut() else {
             self.set_runtime_error_once(ERR_RESUME_MISSING);
             return AstEvalOutcome::Unsupported;
@@ -5022,24 +5063,6 @@ impl<'m> RuntimeOutputResolver<'m> {
             AstEvalOutcome::Aborted | AstEvalOutcome::Unsupported => {}
         }
         outcome
-    }
-
-    fn should_suspend_resume_outcome(frame: &AstContinuationFrame) -> bool {
-        frame.stmt.is_none()
-            && matches!(
-                frame.value.as_ref().map(|continuation| &continuation.kind),
-                Some(
-                    AstValueContinuationKind::ResumeValue
-                        | AstValueContinuationKind::PipelineCall { .. }
-                        | AstValueContinuationKind::SingleArgNamedCall { .. }
-                        | AstValueContinuationKind::ReceiverMethodCall { .. }
-                        | AstValueContinuationKind::MultiArgNamedCall { .. }
-                        | AstValueContinuationKind::CaseScrutinee { .. }
-                        | AstValueContinuationKind::IfCondition { .. }
-                        | AstValueContinuationKind::BinOpLeft { .. }
-                        | AstValueContinuationKind::BinOpRight { .. }
-                )
-            )
     }
 
     fn complete_ast_value_outcome(
@@ -5280,18 +5303,13 @@ impl<'m> RuntimeOutputResolver<'m> {
             }
         }
         let mut callables = continuation.callables;
-        self.replaying_stmt_continuation_depth += 1;
-        let result = self.execute_ast_stmt_sequence(
+        self.execute_ast_stmt_sequence(
             &continuation.remaining_stmts,
             &mut locals,
             &mut callables,
             evaluators,
             continuation.depth,
-        );
-        self.replaying_stmt_continuation_depth -= 1;
-        result?;
-        self.consumed_stmt_sequence_id = Some(continuation.owner_sequence_id);
-        Some(())
+        )
     }
 
     fn dispatch_handler_method_core(
