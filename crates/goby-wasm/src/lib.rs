@@ -10324,4 +10324,32 @@ main =
         assert_eq!(typed.stdout.as_deref(), Some("5"));
         assert_eq!(typed.runtime_error_kind, None);
     }
+
+    #[test]
+    fn typed_mode_matches_fallback_for_list_each_with_effect_callback() {
+        use goby_core::parse_module;
+        let _guard = ENV_MUTEX.lock().unwrap();
+        // Parity test for list.each with effectful lambda callback.
+        // Covers the typed-mode path for execute_decl_with_callable_as_side_effect
+        // when the callable invokes an effect operation inside the lambda body.
+        let source = r#"
+import goby/list
+
+effect Log
+  log : Int -> Unit
+
+main : Unit -> Unit
+main =
+  with
+    log n ->
+      print "${n}"
+      resume ()
+  in
+    list.each [2, 4, 6] (|n| -> log n)
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let typed = assert_mode_parity(&module, "list each with effect callback");
+        assert_eq!(typed.stdout.as_deref(), Some("246"));
+        assert_eq!(typed.runtime_error_kind, None);
+    }
 }
