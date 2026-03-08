@@ -512,6 +512,10 @@ struct RuntimeOutputResolver<'m> {
     resume_tokens: Vec<ResumeToken>,
     optimized_resume_tokens: Vec<OptimizedResumeToken>,
     pending_value_continuations: Vec<AstValueContinuation>,
+    /// Phase 4: stack of caller's remaining continuations, one entry per active
+    /// execute_ast_stmt_sequence invocation. Top entry is consumed by
+    /// begin_handler_continuation_bridge during handler dispatch.
+    pending_caller_cont_stack: Vec<Option<Cont>>,
     runtime_error: Option<String>,
     runtime_aborted: bool,
     execution_mode: lower::EffectExecutionMode,
@@ -529,6 +533,8 @@ struct ResumeToken {
     continuation: Continuation,
     state: HandlerContinuationState,
     frame: Option<AstContinuationFrame>,
+    /// Phase 4: unified continuation from eval_stmts; takes priority over `frame`.
+    cont: Option<Cont>,
 }
 
 #[derive(Clone)]
@@ -536,6 +542,8 @@ struct OptimizedResumeToken {
     consumed: bool,
     state: HandlerContinuationState,
     frame: Option<AstContinuationFrame>,
+    /// Phase 4: unified continuation from eval_stmts; takes priority over `frame`.
+    cont: Option<Cont>,
 }
 
 #[derive(Clone)]
@@ -662,6 +670,9 @@ enum FinishKind {
     Block,
     /// Store the result into the active resume token (handler body).
     HandlerBody { token_idx: usize, produce_value: bool },
+    /// Execute remaining stmts via ingest_ast_statement (with body via eval_ast_side_effect).
+    /// The `locals` field in StmtSeq is ignored; self.locals is used instead.
+    Ingest,
 }
 
 /// Unified continuation — pure data, no global mutable stacks.
@@ -955,6 +966,7 @@ impl<'m> RuntimeOutputResolver<'m> {
             resume_tokens: Vec::new(),
             optimized_resume_tokens: Vec::new(),
             pending_value_continuations: Vec::new(),
+            pending_caller_cont_stack: Vec::new(),
             runtime_error: None,
             runtime_aborted: false,
             execution_mode,
@@ -3906,9 +3918,47 @@ impl<'m> RuntimeOutputResolver<'m> {
         stmts: &[Stmt],
         evaluators: &RuntimeEvaluators<'_, '_>,
     ) -> Option<()> {
-        for stmt in stmts {
-            self.ingest_ast_statement(stmt, evaluators)?;
+        // Phase 4: push a slot for pending_caller_cont.
+        // Only Stmt::Expr (direct effect call sites) set the slot; dispatch_handler_method
+        // (take_caller_cont=true) will pick it up. Stmt::Binding / Stmt::Assign use the old
+        // frame replay path (take_caller_cont=false) so their slot stays None.
+        self.pending_caller_cont_stack.push(None);
+        let mut i = 0;
+        while i < stmts.len() {
+            let remaining = &stmts[i + 1..];
+            let did_set_slot = !remaining.is_empty() && matches!(&stmts[i], Stmt::Expr(_));
+            if did_set_slot {
+                if let Some(slot) = self.pending_caller_cont_stack.last_mut() {
+                    *slot = Some(Cont::StmtSeq {
+                        store: None,
+                        remaining: remaining.to_vec(),
+                        locals: RuntimeLocals::default(), // ignored for FinishKind::Ingest
+                        callables: HashMap::new(),
+                        depth: 0,
+                        handler_stack: self.active_inline_handler_stack.clone(),
+                        finish: FinishKind::Ingest,
+                    });
+                }
+            }
+            let ok = self.ingest_ast_statement(&stmts[i], evaluators);
+            if ok.is_none() {
+                self.pending_caller_cont_stack.pop();
+                return None;
+            }
+            // If we set a slot and dispatch_handler_method consumed it (take_caller_cont=true),
+            // remaining stmts were already executed via FinishKind::Ingest; skip them.
+            let consumed = did_set_slot
+                && self.pending_caller_cont_stack.last().map_or(false, |s| s.is_none());
+            if consumed {
+                self.pending_caller_cont_stack.pop();
+                return Some(());
+            }
+            if let Some(slot) = self.pending_caller_cont_stack.last_mut() {
+                *slot = None;
+            }
+            i += 1;
         }
+        self.pending_caller_cont_stack.pop();
         Some(())
     }
 
@@ -3920,9 +3970,41 @@ impl<'m> RuntimeOutputResolver<'m> {
         evaluators: &RuntimeEvaluators<'_, '_>,
         depth: usize,
     ) -> Option<()> {
-        for stmt in stmts {
-            self.execute_unit_ast_stmt(stmt, locals, callables, evaluators, depth)?;
+        // Phase 4: push a new slot onto the caller-cont stack for this invocation.
+        // Nested calls (e.g., Expr::Block) push their own slot without disturbing this one.
+        self.pending_caller_cont_stack.push(None);
+        let mut i = 0;
+        while i < stmts.len() {
+            let remaining = &stmts[i + 1..];
+            // Phase 4: set the top slot so that handler dispatch picks up caller's remaining.
+            if !remaining.is_empty() {
+                if let Some(slot) = self.pending_caller_cont_stack.last_mut() {
+                    *slot = Some(Cont::StmtSeq {
+                        store: None,
+                        remaining: remaining.to_vec(),
+                        locals: locals.clone(),
+                        callables: callables.clone(),
+                        depth,
+                        handler_stack: self.active_inline_handler_stack.clone(),
+                        finish: FinishKind::Block,
+                    });
+                }
+            }
+            let ok = self.execute_unit_ast_stmt(&stmts[i], locals, callables, evaluators, depth)?;
+            // After stmt: if the top slot was consumed (→None) by a handler dispatch, the
+            // remaining stmts were already executed inside apply_cont; skip them.
+            let consumed = self.pending_caller_cont_stack.last().map_or(false, |s| s.is_none());
+            if consumed && !remaining.is_empty() {
+                self.pending_caller_cont_stack.pop();
+                return Some(ok);
+            }
+            // Clear the slot for the next iteration.
+            if let Some(slot) = self.pending_caller_cont_stack.last_mut() {
+                *slot = None;
+            }
+            i += 1;
         }
+        self.pending_caller_cont_stack.pop();
         Some(())
     }
 
@@ -4051,6 +4133,16 @@ impl<'m> RuntimeOutputResolver<'m> {
                         }
                     }
                 }
+                // FinishKind::Ingest: execute remaining via ingest_ast_statement so that
+                // self.locals is used (correct for the top-level ingest path).
+                if matches!(finish, FinishKind::Ingest) {
+                    for stmt in &remaining {
+                        if self.ingest_ast_statement(stmt, evaluators).is_none() {
+                            return Out::Err(RuntimeError::Unsupported);
+                        }
+                    }
+                    return Out::Done(RuntimeValue::Unit);
+                }
                 match self.eval_stmts(&remaining, locals, callables, evaluators, depth, finish) {
                     Out::Done((last_val, _final_locals)) => {
                         Out::Done(last_val.unwrap_or(RuntimeValue::Unit))
@@ -4071,8 +4163,9 @@ impl<'m> RuntimeOutputResolver<'m> {
                 Out::Err(RuntimeError::Unsupported)
             }
             Cont::Resume => {
-                // Handled in Phase 4
-                Out::Err(RuntimeError::Unsupported)
+                // resume's own continuation value is Unit; the surrounding StmtSeq cont
+                // carries the remaining handler-body stmts after the resume call site.
+                Out::Done(RuntimeValue::Unit)
             }
         }
     }
@@ -4892,11 +4985,17 @@ impl<'m> RuntimeOutputResolver<'m> {
         }
     }
 
-    fn push_resume_token_for_handler(&mut self, dispatch_depth: usize) -> usize {
+    fn push_resume_token_for_handler(&mut self, dispatch_depth: usize, take_caller_cont: bool) -> usize {
+        let caller_cont = if take_caller_cont {
+            self.pending_caller_cont_stack.last_mut().and_then(|s| s.take())
+        } else {
+            None
+        };
         self.resume_tokens.push(ResumeToken {
             continuation: Continuation { consumed: false },
             state: HandlerContinuationState::Pending,
             frame: self.current_pending_resume_frame_for_dispatch(dispatch_depth),
+            cont: caller_cont,
         });
         self.resume_tokens.len() - 1
     }
@@ -4920,11 +5019,17 @@ impl<'m> RuntimeOutputResolver<'m> {
         self.resume_tokens.last_mut()
     }
 
-    fn push_optimized_resume_token_for_handler(&mut self, dispatch_depth: usize) -> usize {
+    fn push_optimized_resume_token_for_handler(&mut self, dispatch_depth: usize, take_caller_cont: bool) -> usize {
+        let caller_cont = if take_caller_cont {
+            self.pending_caller_cont_stack.last_mut().and_then(|s| s.take())
+        } else {
+            None
+        };
         self.optimized_resume_tokens.push(OptimizedResumeToken {
             consumed: false,
             state: HandlerContinuationState::Pending,
             frame: self.current_pending_resume_frame_for_dispatch(dispatch_depth),
+            cont: caller_cont,
         });
         self.optimized_resume_tokens.len() - 1
     }
@@ -4951,13 +5056,49 @@ impl<'m> RuntimeOutputResolver<'m> {
         self.optimized_resume_tokens.last_mut()
     }
 
-    fn begin_handler_continuation_bridge(&mut self, dispatch_depth: usize) -> usize {
+    /// Return a tag (u8) for the current handler token state: 0=Pending, 1=Resumed, 2=Suspended.
+    /// Used to detect whether resume was called during handler-body stmt execution.
+    fn handler_token_state_tag(&self, token_idx: usize) -> u8 {
+        let state = match self.execution_mode {
+            lower::EffectExecutionMode::PortableFallback => self
+                .resume_tokens
+                .get(token_idx)
+                .map(|t| &t.state),
+            lower::EffectExecutionMode::TypedContinuationOptimized => self
+                .optimized_resume_tokens
+                .get(token_idx)
+                .map(|t| &t.state),
+        };
+        match state {
+            Some(HandlerContinuationState::Pending) | None => 0,
+            Some(HandlerContinuationState::Resumed(_)) => 1,
+            Some(HandlerContinuationState::Suspended(_)) => 2,
+        }
+    }
+
+    /// Store a unified Cont into the active resume token (Phase 4).
+    fn set_handler_token_cont(&mut self, token_idx: usize, cont: Cont) {
         match self.execution_mode {
             lower::EffectExecutionMode::PortableFallback => {
-                self.push_resume_token_for_handler(dispatch_depth)
+                if let Some(token) = self.resume_tokens.get_mut(token_idx) {
+                    token.cont = Some(cont);
+                }
             }
             lower::EffectExecutionMode::TypedContinuationOptimized => {
-                self.push_optimized_resume_token_for_handler(dispatch_depth)
+                if let Some(token) = self.optimized_resume_tokens.get_mut(token_idx) {
+                    token.cont = Some(cont);
+                }
+            }
+        }
+    }
+
+    fn begin_handler_continuation_bridge(&mut self, dispatch_depth: usize, take_caller_cont: bool) -> usize {
+        match self.execution_mode {
+            lower::EffectExecutionMode::PortableFallback => {
+                self.push_resume_token_for_handler(dispatch_depth, take_caller_cont)
+            }
+            lower::EffectExecutionMode::TypedContinuationOptimized => {
+                self.push_optimized_resume_token_for_handler(dispatch_depth, take_caller_cont)
             }
         }
     }
@@ -4994,13 +5135,14 @@ impl<'m> RuntimeOutputResolver<'m> {
     fn resume_through_active_continuation_fallback_outcome(
         &mut self,
         resumed: RuntimeValue,
-        _evaluators: &RuntimeEvaluators<'_, '_>,
+        evaluators: &RuntimeEvaluators<'_, '_>,
     ) -> AstEvalOutcome<RuntimeValue> {
         let Some(token_ro) = self.resume_tokens.last() else {
             self.set_runtime_error_once(ERR_RESUME_MISSING);
             return AstEvalOutcome::Unsupported;
         };
-        if token_ro.continuation.consumed {
+        // Token is exhausted when consumed AND no pending cont.
+        if token_ro.continuation.consumed && token_ro.cont.is_none() {
             self.set_runtime_error_once(ERR_RESUME_CONSUMED);
             return AstEvalOutcome::Unsupported;
         }
@@ -5008,10 +5150,39 @@ impl<'m> RuntimeOutputResolver<'m> {
             self.set_runtime_error_once(ERR_RESUME_MISSING);
             return AstEvalOutcome::Unsupported;
         };
+        // Phase 4: if a unified Cont is available, use apply_cont instead of old frame path.
+        if let Some(cont) = token.cont.take() {
+            token.continuation.consumed = true;
+            let out = self.apply_cont(cont, resumed, evaluators);
+            let outcome = match out {
+                Out::Done(v) => AstEvalOutcome::Complete(v),
+                Out::Suspend(c) => {
+                    // Store continuation back for next resume.
+                    if let Some(token) = self.current_resume_token_mut() {
+                        token.cont = Some(c);
+                    }
+                    return AstEvalOutcome::Suspended(Box::new(AstContinuation::Frame {
+                        frame: AstContinuationFrame { value: None, stmt: None },
+                        resumed: RuntimeValue::Unit,
+                    }));
+                }
+                Out::Err(RuntimeError::Abort { .. }) => AstEvalOutcome::Aborted,
+                Out::Err(_) => AstEvalOutcome::Unsupported,
+            };
+            if let Some(token) = self.current_resume_token_mut() {
+                match &outcome {
+                    AstEvalOutcome::Complete(value) => {
+                        token.state = HandlerContinuationState::Resumed(Box::new(value.clone()));
+                    }
+                    _ => {}
+                }
+            }
+            return outcome;
+        }
         let frame = token.frame.clone();
         token.continuation.consumed = true;
         token.frame = None;
-        let outcome = self.resume_through_ast_continuation_frame(frame, resumed, _evaluators);
+        let outcome = self.resume_through_ast_continuation_frame(frame, resumed, evaluators);
         let Some(token) = self.current_resume_token_mut() else {
             self.set_runtime_error_once(ERR_RESUME_MISSING);
             return AstEvalOutcome::Unsupported;
@@ -5031,13 +5202,14 @@ impl<'m> RuntimeOutputResolver<'m> {
     fn resume_through_active_continuation_optimized_outcome(
         &mut self,
         resumed: RuntimeValue,
-        _evaluators: &RuntimeEvaluators<'_, '_>,
+        evaluators: &RuntimeEvaluators<'_, '_>,
     ) -> AstEvalOutcome<RuntimeValue> {
         let Some(token_ro) = self.optimized_resume_tokens.last() else {
             self.set_runtime_error_once(ERR_RESUME_MISSING);
             return AstEvalOutcome::Unsupported;
         };
-        if token_ro.consumed {
+        // Token is exhausted when consumed AND no pending cont.
+        if token_ro.consumed && token_ro.cont.is_none() {
             self.set_runtime_error_once(ERR_RESUME_CONSUMED);
             return AstEvalOutcome::Unsupported;
         }
@@ -5045,10 +5217,39 @@ impl<'m> RuntimeOutputResolver<'m> {
             self.set_runtime_error_once(ERR_RESUME_MISSING);
             return AstEvalOutcome::Unsupported;
         };
+        // Phase 4: if a unified Cont is available, use apply_cont instead of old frame path.
+        if let Some(cont) = token.cont.take() {
+            token.consumed = true;
+            let out = self.apply_cont(cont, resumed, evaluators);
+            let outcome = match out {
+                Out::Done(v) => AstEvalOutcome::Complete(v),
+                Out::Suspend(c) => {
+                    // Store continuation back for next resume.
+                    if let Some(token) = self.current_optimized_resume_token_mut() {
+                        token.cont = Some(c);
+                    }
+                    return AstEvalOutcome::Suspended(Box::new(AstContinuation::Frame {
+                        frame: AstContinuationFrame { value: None, stmt: None },
+                        resumed: RuntimeValue::Unit,
+                    }));
+                }
+                Out::Err(RuntimeError::Abort { .. }) => AstEvalOutcome::Aborted,
+                Out::Err(_) => AstEvalOutcome::Unsupported,
+            };
+            if let Some(token) = self.current_optimized_resume_token_mut() {
+                match &outcome {
+                    AstEvalOutcome::Complete(value) => {
+                        token.state = HandlerContinuationState::Resumed(Box::new(value.clone()));
+                    }
+                    _ => {}
+                }
+            }
+            return outcome;
+        }
         let frame = token.frame.clone();
         token.consumed = true;
         token.frame = None;
-        let outcome = self.resume_through_ast_continuation_frame(frame, resumed, _evaluators);
+        let outcome = self.resume_through_ast_continuation_frame(frame, resumed, evaluators);
         let Some(token) = self.current_optimized_resume_token_mut() else {
             self.set_runtime_error_once(ERR_RESUME_MISSING);
             return AstEvalOutcome::Unsupported;
@@ -5319,188 +5520,174 @@ impl<'m> RuntimeOutputResolver<'m> {
         evaluators: &RuntimeEvaluators<'_, '_>,
         depth: usize,
         produce_value: bool,
+        // take_caller_cont: true for direct unit-position calls; false for value-position calls.
+        take_caller_cont: bool,
     ) -> Option<HandlerCompletion> {
         if depth >= MAX_EVAL_DEPTH {
             return None;
         }
-        let stmts = method.method.parsed_body.as_deref()?;
+        let stmts = method.method.parsed_body.as_deref()?.to_vec();
         if args.len() != method.method.params.len() {
             return None;
         }
-        let token_idx = self.begin_handler_continuation_bridge(depth);
-        let run_result = (|| -> Option<()> {
-            let mut handler_locals = self
-                .active_inline_handler_stack
-                .iter()
-                .rev()
-                .find_map(|inline| {
-                    inline
-                        .methods
-                        .iter()
-                        .find(|m| {
-                            m.method.name == method.method.name
-                                && m.method.params == method.method.params
-                                && m.method.body == method.method.body
-                        })
-                        .map(|_| inline.captured_locals.clone())
-                })
-                .unwrap_or_default();
-            for (param, arg) in method.method.params.iter().zip(args.iter()) {
-                handler_locals.store(param, arg.clone());
-            }
-            let mut handler_callables = self
-                .active_inline_handler_stack
-                .iter()
-                .rev()
-                .find_map(|inline| {
-                    inline
-                        .methods
-                        .iter()
-                        .find(|m| {
-                            m.method.name == method.method.name
-                                && m.method.params == method.method.params
-                                && m.method.body == method.method.body
-                        })
-                        .map(|_| inline.captured_callables.clone())
-                })
-                .unwrap_or_default();
-            for stmt in stmts {
-                if produce_value {
-                    match stmt {
-                        Stmt::Binding { name, value } | Stmt::MutBinding { name, value } => {
-                            let v = match self.eval_expr_ast_outcome(
-                                value,
-                                &handler_locals,
-                                &handler_callables,
-                                evaluators,
-                                depth + 1,
-                            ) {
-                                AstEvalOutcome::Complete(value) => value,
-                                AstEvalOutcome::Suspended(_continuation) => {
-                                    // TODO: the continuation and remaining handler body
-                                    // statements are silently abandoned here. If the inner
-                                    // eval truly suspends (e.g. the inner handler lives in
-                                    // an outer `with` block), `name = <value>` and all
-                                    // subsequent stmts are lost. Fixing this requires
-                                    // registering a handler-body statement-sequence
-                                    // continuation so that replay can resume from the
-                                    // correct binding site.
-                                    return Some(());
-                                }
-                                AstEvalOutcome::Aborted => return None,
-                                AstEvalOutcome::Unsupported => return None,
-                            };
-                            handler_locals.store(name, v);
+        let token_idx = self.begin_handler_continuation_bridge(depth, take_caller_cont);
+        let mut handler_locals = self
+            .active_inline_handler_stack
+            .iter()
+            .rev()
+            .find_map(|inline| {
+                inline
+                    .methods
+                    .iter()
+                    .find(|m| {
+                        m.method.name == method.method.name
+                            && m.method.params == method.method.params
+                            && m.method.body == method.method.body
+                    })
+                    .map(|_| inline.captured_locals.clone())
+            })
+            .unwrap_or_default();
+        for (param, arg) in method.method.params.iter().zip(args.iter()) {
+            handler_locals.store(param, arg.clone());
+        }
+        let handler_callables = self
+            .active_inline_handler_stack
+            .iter()
+            .rev()
+            .find_map(|inline| {
+                inline
+                    .methods
+                    .iter()
+                    .find(|m| {
+                        m.method.name == method.method.name
+                            && m.method.params == method.method.params
+                            && m.method.body == method.method.body
+                    })
+                    .map(|_| inline.captured_callables.clone())
+            })
+            .unwrap_or_default();
+
+        // Execute handler body stmts sequentially.
+        // When eval_expr returns Out::Suspend for a resume expression, that means the caller's
+        // continuation is itself suspended (waiting for another effect). In that case we break
+        // and store the remaining stmts in token.cont for the next resume call.
+        // When eval_expr returns Out::Done for a resume expression, the caller's continuation
+        // completed synchronously; continue executing the remaining handler stmts.
+        let mut current_locals = handler_locals;
+        let mut current_callables = handler_callables;
+        let mut aborted = false;
+        let mut i = 0;
+        while i < stmts.len() {
+            let stmt = &stmts[i];
+
+            // Returns true = continue, false = aborted, None = suspended (save remaining & break)
+            enum StmtResult { Continue, Abort, Suspend }
+
+            let result = if produce_value {
+                match stmt {
+                    Stmt::Binding { name, value } | Stmt::MutBinding { name, value } => {
+                        match self.eval_expr(value, &current_locals, &current_callables, evaluators, depth + 1) {
+                            Out::Done(v) => { current_locals.store(name, v); StmtResult::Continue }
+                            Out::Suspend(_) => StmtResult::Suspend,
+                            Out::Err(RuntimeError::Unsupported) => StmtResult::Continue,
+                            Out::Err(_) => { aborted = true; StmtResult::Abort }
                         }
-                        Stmt::Assign { name, value } => {
-                            handler_locals.get(name)?;
-                            let v = match self.eval_expr_ast_outcome(
-                                value,
-                                &handler_locals,
-                                &handler_callables,
-                                evaluators,
-                                depth + 1,
-                            ) {
-                                AstEvalOutcome::Complete(value) => value,
-                                AstEvalOutcome::Suspended(_continuation) => {
-                                    // TODO: same as Binding case above — remaining stmts lost.
-                                    return Some(());
-                                }
-                                AstEvalOutcome::Aborted => return None,
-                                AstEvalOutcome::Unsupported => return None,
-                            };
-                            handler_locals.store(name, v);
-                        }
-                        Stmt::Expr(expr) => {
-                            let value = self.eval_expr_ast_outcome(
-                                expr,
-                                &handler_locals,
-                                &handler_callables,
-                                evaluators,
-                                depth + 1,
-                            );
-                            match value {
-                                AstEvalOutcome::Complete(_) => {}
-                                AstEvalOutcome::Suspended(_continuation) => return Some(()),
-                                AstEvalOutcome::Aborted => return None,
-                                AstEvalOutcome::Unsupported => {
-                                    // Side-effect stmt — try as unit side effect.
-                                    match self.execute_unit_ast_stmt_outcome(
-                                        stmt,
-                                        &mut handler_locals,
-                                        &mut handler_callables,
-                                        evaluators,
-                                        depth + 1,
-                                    ) {
-                                        AstEvalOutcome::Complete(()) => {}
-                                        AstEvalOutcome::Suspended(_continuation) => {
-                                            return Some(());
-                                        }
-                                        AstEvalOutcome::Aborted => return None,
-                                        AstEvalOutcome::Unsupported => return None,
-                                    }
-                                }
+                    }
+                    Stmt::Assign { name, value } => {
+                        if current_locals.get(name).is_none() { aborted = true; StmtResult::Abort }
+                        else {
+                            match self.eval_expr(value, &current_locals, &current_callables, evaluators, depth + 1) {
+                                Out::Done(v) => { current_locals.store(name, v); StmtResult::Continue }
+                                Out::Suspend(_) => StmtResult::Suspend,
+                                Out::Err(RuntimeError::Unsupported) => StmtResult::Continue,
+                                Out::Err(_) => { aborted = true; StmtResult::Abort }
                             }
                         }
                     }
-                } else {
-                    match stmt {
-                        // In unit-position handler execution, still evaluate expressions via AST first
-                        // so `resume` works for bare operation statements like `yield "x"`.
-                        Stmt::Expr(expr) => {
-                            let evaluated = self.eval_expr_ast_outcome(
-                                expr,
-                                &handler_locals,
-                                &handler_callables,
-                                evaluators,
-                                depth + 1,
-                            );
-                            match evaluated {
-                                AstEvalOutcome::Complete(_) => {}
-                                AstEvalOutcome::Suspended(_continuation) => return Some(()),
-                                AstEvalOutcome::Aborted => return None,
-                                AstEvalOutcome::Unsupported => match self
-                                    .execute_unit_ast_stmt_outcome(
-                                        stmt,
-                                        &mut handler_locals,
-                                        &mut handler_callables,
-                                        evaluators,
-                                        depth + 1,
-                                    ) {
-                                    AstEvalOutcome::Complete(()) => {}
-                                    AstEvalOutcome::Suspended(_continuation) => return Some(()),
-                                    AstEvalOutcome::Aborted => return None,
-                                    AstEvalOutcome::Unsupported => return None,
-                                },
+                    Stmt::Expr(expr) => {
+                        match self.eval_expr(expr, &current_locals, &current_callables, evaluators, depth + 1) {
+                            Out::Done(_) => StmtResult::Continue,
+                            Out::Suspend(_) => StmtResult::Suspend,
+                            Out::Err(RuntimeError::Unsupported) if self.runtime_error.is_none() => {
+                                // Try as unit side-effect (only if no runtime error was set by eval_expr)
+                                let mut loc = current_locals.clone();
+                                let mut call = current_callables.clone();
+                                match self.execute_unit_ast_stmt_outcome(stmt, &mut loc, &mut call, evaluators, depth + 1) {
+                                    AstEvalOutcome::Complete(()) => { current_locals = loc; current_callables = call; StmtResult::Continue }
+                                    AstEvalOutcome::Suspended(_) => StmtResult::Suspend,
+                                    AstEvalOutcome::Aborted | AstEvalOutcome::Unsupported => { aborted = true; StmtResult::Abort }
+                                }
                             }
-                        }
-                        _ => {
-                            match self.execute_unit_ast_stmt_outcome(
-                                stmt,
-                                &mut handler_locals,
-                                &mut handler_callables,
-                                evaluators,
-                                depth + 1,
-                            ) {
-                                AstEvalOutcome::Complete(()) => {}
-                                AstEvalOutcome::Suspended(_continuation) => return Some(()),
-                                AstEvalOutcome::Aborted => return None,
-                                AstEvalOutcome::Unsupported => return None,
-                            }
+                            Out::Err(_) => { aborted = true; StmtResult::Abort }
                         }
                     }
                 }
+            } else {
+                // Unit-position handler body
+                match stmt {
+                    Stmt::Expr(expr) => {
+                        match self.eval_expr(expr, &current_locals, &current_callables, evaluators, depth + 1) {
+                            Out::Done(_) => StmtResult::Continue,
+                            Out::Suspend(_) => StmtResult::Suspend,
+                            Out::Err(RuntimeError::Unsupported) if self.runtime_error.is_none() => {
+                                let mut loc = current_locals.clone();
+                                let mut call = current_callables.clone();
+                                match self.execute_unit_ast_stmt_outcome(stmt, &mut loc, &mut call, evaluators, depth + 1) {
+                                    AstEvalOutcome::Complete(()) => { current_locals = loc; current_callables = call; StmtResult::Continue }
+                                    AstEvalOutcome::Suspended(_) => StmtResult::Suspend,
+                                    AstEvalOutcome::Aborted | AstEvalOutcome::Unsupported => { aborted = true; StmtResult::Abort }
+                                }
+                            }
+                            Out::Err(_) => { aborted = true; StmtResult::Abort }
+                        }
+                    }
+                    _ => {
+                        let mut loc = current_locals.clone();
+                        let mut call = current_callables.clone();
+                        match self.execute_unit_ast_stmt_outcome(stmt, &mut loc, &mut call, evaluators, depth + 1) {
+                            AstEvalOutcome::Complete(()) => { current_locals = loc; current_callables = call; StmtResult::Continue }
+                            AstEvalOutcome::Suspended(_) => StmtResult::Suspend,
+                            AstEvalOutcome::Aborted | AstEvalOutcome::Unsupported => { aborted = true; StmtResult::Abort }
+                        }
+                    }
+                }
+            };
+
+            match result {
+                StmtResult::Abort => break,
+                StmtResult::Suspend => {
+                    // Caller's continuation is itself suspended; save remaining handler stmts.
+                    let remaining = stmts[i + 1..].to_vec();
+                    if !remaining.is_empty() {
+                        let cont = Cont::StmtSeq {
+                            store: None,
+                            remaining,
+                            locals: current_locals,
+                            callables: current_callables,
+                            depth,
+                            handler_stack: self.active_inline_handler_stack.clone(),
+                            finish: FinishKind::HandlerBody { token_idx, produce_value },
+                        };
+                        self.set_handler_token_cont(token_idx, cont);
+                    }
+                    break;
+                }
+                StmtResult::Continue => {
+                    // Normal continue; also check if resume was called and completed sync.
+                    // If token is now Resumed, it means resume() completed; continue handler stmts.
+                    i += 1;
+                }
             }
-            Some(())
-        })();
-        let completion = self.finish_handler_continuation_bridge(token_idx)?;
-        if run_result.is_none() {
+        }
+
+        if aborted {
             if self.has_abort_without_error() {
                 return Some(HandlerCompletion::Aborted);
             }
             return None;
         }
-        Some(completion)
+
+        self.finish_handler_continuation_bridge(token_idx)
     }
 
     /// Execute a handler method and return the last evaluated value.
@@ -5512,7 +5699,7 @@ impl<'m> RuntimeOutputResolver<'m> {
         evaluators: &RuntimeEvaluators<'_, '_>,
         depth: usize,
     ) -> Option<RuntimeValue> {
-        match self.dispatch_handler_method_core(method, &[arg_val], evaluators, depth, true)? {
+        match self.dispatch_handler_method_core(method, &[arg_val], evaluators, depth, true, false)? {
             HandlerCompletion::Resumed(value) => Some(*value),
             HandlerCompletion::Suspended(_continuation) => None,
             HandlerCompletion::Aborted => {
@@ -5529,7 +5716,7 @@ impl<'m> RuntimeOutputResolver<'m> {
         evaluators: &RuntimeEvaluators<'_, '_>,
         depth: usize,
     ) -> AstEvalOutcome<RuntimeValue> {
-        match self.dispatch_handler_method_core(method, &[arg_val], evaluators, depth, true) {
+        match self.dispatch_handler_method_core(method, &[arg_val], evaluators, depth, true, false) {
             Some(HandlerCompletion::Resumed(value)) => AstEvalOutcome::Complete(*value),
             Some(HandlerCompletion::Suspended(continuation)) => {
                 AstEvalOutcome::Suspended(continuation)
@@ -5549,7 +5736,7 @@ impl<'m> RuntimeOutputResolver<'m> {
         evaluators: &RuntimeEvaluators<'_, '_>,
         depth: usize,
     ) -> Option<RuntimeValue> {
-        match self.dispatch_handler_method_core(method, args, evaluators, depth, true)? {
+        match self.dispatch_handler_method_core(method, args, evaluators, depth, true, false)? {
             HandlerCompletion::Resumed(value) => Some(*value),
             HandlerCompletion::Suspended(_continuation) => None,
             HandlerCompletion::Aborted => {
@@ -5567,7 +5754,8 @@ impl<'m> RuntimeOutputResolver<'m> {
         evaluators: &RuntimeEvaluators<'_, '_>,
         depth: usize,
     ) -> Option<()> {
-        match self.dispatch_handler_method_core(method, &[arg_val], evaluators, depth, false)? {
+        // take_caller_cont=true: direct unit-position call, may pick up pending caller cont.
+        match self.dispatch_handler_method_core(method, &[arg_val], evaluators, depth, false, true)? {
             HandlerCompletion::Resumed(_) => Some(()),
             HandlerCompletion::Suspended(_continuation) => None,
             HandlerCompletion::Aborted => {
