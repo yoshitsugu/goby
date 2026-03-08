@@ -97,7 +97,19 @@ this section takes priority.
     - typed_mode_matches_fallback_for_multi_arg_effect_op_call
     - goby-wasm tests: 197 → 206 passing.
     - All Shape A–K tests confirmed to use assert_mode_parity already.
-  - Next: dispatch_handler_method_core for-loop replacement (Step 3 architecture), or more Step 3.5 coverage.
+  - Session 235: Phase 5a completed (commit e0d1b01):
+    - Removed 3 execute_unit_expr_ast fallback call sites from new eval_expr / eval_stmts.
+    - eval_expr Expr::Block / Expr::If: Out::Err now propagates directly (no unit fallback).
+    - eval_stmts Stmt::Expr: Out::Err(Unsupported) no longer silently skips via execute_unit_expr_ast.
+    - Removed spurious `mut` from block_callables and callables.
+    - All 209 tests pass.
+  - Phase 5b-inner blocked: eval_expr_ast_outcome thin wrapper requires value-position cont handoff.
+    - pending_value_continuations → token.frame is used by dispatch_handler_method_as_value_outcome.
+    - dispatch_handler_method_as_value_outcome calls with take_caller_cont=false, so token.cont=None,
+      and resume falls back to token.frame (old pending_value_continuations path).
+    - Before 5c (thin wrapper), value-position effect call must route through pending_caller_cont_stack
+      or dispatch_handler_method_as_value_outcome must switch to take_caller_cont=true.
+  - Next: design value-position cont handoff, then attempt 5b-inner.
 - External internal records:
   - devflow notes live outside the repo under
     `/home/yoshitsugu/.codex/devflow/goby-c372fa22bba4/`
