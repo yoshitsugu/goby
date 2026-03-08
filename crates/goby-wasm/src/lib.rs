@@ -10549,4 +10549,24 @@ main =
         assert_eq!(typed.stdout.as_deref(), Some("(True, 42)"));
         assert_eq!(typed.runtime_error_kind, None);
     }
+
+    #[test]
+    fn typed_mode_matches_fallback_for_qualified_call_without_active_handler() {
+        use goby_core::parse_module;
+        let _guard = ENV_MUTEX.lock().unwrap();
+        // Parity test: `Log.log "x"` with no active handler for `Log` should produce no
+        // output and no runtime error in both modes (silent fall-through).
+        let source = r#"
+effect Log
+  log: String -> Unit
+
+main : Unit -> Unit
+main =
+  Log.log "unreachable"
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let typed = assert_mode_parity(&module, "qualified call without active handler");
+        assert_eq!(typed.stdout, None);
+        assert_eq!(typed.runtime_error_kind, None);
+    }
 }
