@@ -10485,4 +10485,28 @@ main =
         assert_eq!(typed.stdout.as_deref(), Some("piped"));
         assert_eq!(typed.runtime_error_kind, None);
     }
+
+    #[test]
+    fn typed_mode_matches_fallback_for_basic_with_inline_handler_dispatch() {
+        use goby_core::parse_module;
+        let _guard = ENV_MUTEX.lock().unwrap();
+        // Parity test for the most basic `with` form: inline handler, single operation call.
+        let source = r#"
+effect Log
+  log: String -> Unit
+
+main : Unit -> Unit
+main =
+  with
+    log msg ->
+      print msg
+      resume ()
+  in
+    log "hello"
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let typed = assert_mode_parity(&module, "basic with inline handler dispatch");
+        assert_eq!(typed.stdout.as_deref(), Some("hello"));
+        assert_eq!(typed.runtime_error_kind, None);
+    }
 }
