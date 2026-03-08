@@ -639,6 +639,127 @@ enum AstEvalOutcome<T> {
     Unsupported,
 }
 
+// ── Phase 1: New unified continuation types ───────────────────────────────────
+
+/// Runtime error — replaces the ambiguous Out::Abort split.
+#[allow(dead_code)]
+#[derive(Clone, Debug)]
+enum RuntimeError {
+    /// User-visible runtime failure (abort at handled boundary, token consumed, etc.).
+    Abort { kind: String },
+    /// Evaluator reached a code path not yet supported by the new eval_expr.
+    Unsupported,
+}
+
+/// Evaluation result — replaces AstEvalOutcome<T>.
+#[allow(dead_code)]
+enum Out<T> {
+    Done(T),
+    Suspend(Cont),
+    Err(RuntimeError),
+}
+
+/// What happens after the final statement in a StmtSeq.
+#[allow(dead_code)]
+#[derive(Clone)]
+enum FinishKind {
+    /// Return the last expression value to the enclosing expression (block body).
+    Block,
+    /// Store the result into the active resume token (handler body).
+    HandlerBody { token_idx: usize, produce_value: bool },
+}
+
+/// Unified continuation — pure data, no global mutable stacks.
+#[allow(dead_code)]
+#[derive(Clone)]
+enum Cont {
+    /// Remaining statements in a block or handler body after a suspension.
+    StmtSeq {
+        store: Option<StoreOp>,
+        remaining: Vec<Stmt>,
+        locals: RuntimeLocals,
+        callables: HashMap<String, IntCallable>,
+        depth: usize,
+        handler_stack: Vec<InlineHandlerValue>,
+        finish: FinishKind,
+    },
+    /// Apply the suspended value to the next expression-level computation step.
+    Apply {
+        step: ApplyStep,
+        locals: RuntimeLocals,
+        callables: HashMap<String, IntCallable>,
+        depth: usize,
+        handler_stack: Vec<InlineHandlerValue>,
+    },
+    /// Cross-handler-boundary resume: invoke the active resume token's continuation.
+    Resume,
+}
+
+/// Binding operation to apply when a StmtSeq continuation is resumed.
+#[allow(dead_code)]
+#[derive(Clone)]
+enum StoreOp {
+    /// `name = expr` — covers both Stmt::Binding and Stmt::MutBinding.
+    Bind { name: String },
+    /// `name := expr` — mutable reassignment.
+    Assign { name: String },
+}
+
+/// Expression-level continuation step (what to do with the resumed value).
+#[allow(dead_code)]
+#[derive(Clone)]
+enum ApplyStep {
+    WithBody { body: Vec<Stmt> },
+    Pipeline { callee: String },
+    SingleArgCall { fn_name: String },
+    ReceiverMethod { receiver: String, member: String },
+    MultiArgCall {
+        fn_name: String,
+        evaluated: Vec<RuntimeValue>,
+        remaining: Vec<Expr>,
+    },
+    CaseSelect { arms: Vec<goby_core::CaseArm> },
+    IfBranch { then_expr: Expr, else_expr: Expr },
+    BinOpLeft { op: goby_core::BinOpKind, right: Expr },
+    BinOpRight { op: goby_core::BinOpKind, left: RuntimeValue },
+    // Literal/composite element loops
+    ListLitElement {
+        evaluated: Vec<RuntimeValue>,
+        remaining: Vec<Expr>,
+        spread: Option<Expr>,
+    },
+    TupleLitElement {
+        evaluated: Vec<RuntimeValue>,
+        remaining: Vec<Expr>,
+    },
+    RecordField {
+        constructor: String,
+        evaluated: Vec<(String, RuntimeValue)>,
+        remaining: Vec<(String, Expr)>,
+    },
+    InterpolatedPart {
+        accumulated: String,
+        remaining: Vec<InterpolatedPart>,
+    },
+}
+
+/// New unified resume token state — replaces HandlerContinuationState.
+#[allow(dead_code)]
+#[derive(Clone)]
+enum TokenState {
+    Pending,
+    Done(RuntimeValue),
+    Suspended(Cont),
+}
+
+/// Stub — to be implemented in Phase 2.
+#[allow(dead_code)]
+fn apply_cont(_cont: Cont, _value: RuntimeValue) -> Out<RuntimeValue> {
+    Out::Err(RuntimeError::Unsupported)
+}
+
+// ── End Phase 1 ───────────────────────────────────────────────────────────────
+
 #[derive(Clone)]
 struct ResolvedHandlerMethod {
     method: RuntimeHandlerMethod,
