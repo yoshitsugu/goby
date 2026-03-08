@@ -10569,4 +10569,27 @@ main =
         assert_eq!(typed.stdout, None);
         assert_eq!(typed.runtime_error_kind, None);
     }
+
+    #[test]
+    fn typed_mode_matches_fallback_for_lambda_closure_capture() {
+        use goby_core::parse_module;
+        let _guard = ENV_MUTEX.lock().unwrap();
+        // Parity test for inline lambda that captures a lexical local from the enclosing scope.
+        // `each_two (|n| -> print "${n + base}")` where `base = 40`.
+        let source = r#"
+each_two : (Int -> Unit) -> Unit
+each_two f =
+  f 1
+  f 2
+
+main : Unit -> Unit
+main =
+  base = 40
+  each_two (|n| -> print "${n + base}")
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let typed = assert_mode_parity(&module, "lambda closure capture");
+        assert_eq!(typed.stdout.as_deref(), Some("4142"));
+        assert_eq!(typed.runtime_error_kind, None);
+    }
 }
