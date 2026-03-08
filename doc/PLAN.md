@@ -542,441 +542,156 @@ Step-by-step checklist:
     - runtime dispatch now carries explicit abort/completion state instead of overloading nested `Option` meanings.
     - no-`resume` handler completion now aborts at the handled operation boundary in both value and unit positions.
     - nested-handler propagation and fallback/typed parity coverage were added.
-- [ ] Step 3: multi-resume progression support
-  - replace one-shot token consumption model with resumable progression model for one handler invocation.
-  - each `resume` continues from the next resumable point; exhausted continuation raises runtime error.
-  - keep guardrails for clearly invalid continuation state transitions.
-  - quick view:
-    - target design:
-      - real `AstEvalOutcome::Suspended(Box<...>)`
-      - unified continuation frames
-      - compact migration slices (`define frame` -> `migrate one shape` -> `remove old path`)
-    - next concrete action:
-      - Step 3.2a: define the minimal unified continuation-frame interface in
-        `crates/goby-wasm/src/lib.rs`
-    - first migration target after that:
-      - `single-arg call`
-    - do not do next:
-      - add another new ad hoc `AstValueContinuationKind::*` shape
-  - implementation status (2026-03-06):
-    - locked premise:
-      - this step is not a token-only change; the runtime must be continuation-aware at the AST
-        evaluator boundary.
-      - a direct one-line change from one-shot to multi-shot would be incorrect because `resume`
-        currently only returns a value to the handler body and does not itself reify the caller
-        continuation.
-    - strategy pivot (locked 2026-03-06):
-      - Step 3 should no longer be completed by extending ad hoc continuation shapes one AST form
-        at a time.
-      - the recent replay slices proved the semantic direction, but they also showed that
-        token-side `AstStmtContinuation` / `AstValueContinuationKind::*` growth will scatter future
-        language changes across many shape-specific branches.
-      - because Goby is still in a personal concept-validation phase and breaking changes are
-        acceptable, the preferred direction is now a cleaner destructive refactor:
-        - make `AstEvalOutcome::Suspended(...)` a real evaluator result,
-        - represent suspension as unified continuation frames for "what to do next",
-        - converge statement-position and value-position replay on the same resume contract.
-      - implication:
-        - the current replay slices are kept as working exploration/proof of semantics, not as the
-          final Step 3 architecture.
-        - future Step 3 work may replace or delete parts of the current token replay machinery if
-          that yields a smaller long-term change surface.
-    - completed slices:
-      - AST runtime outcome groundwork:
-        - introduced `AstEvalOutcome<T>` as the Step 3 runtime-shape carrier.
-        - handler-dispatch statement execution now branches on explicit AST outcomes instead of
-          relying only on `Option` + token-state probing.
-      - frame-entry groundwork:
-        - resume tokens now carry one transport field for AST continuation replay
-          (`AstContinuationFrame`) instead of separate statement/value fields.
-        - `resume` now routes through a single AST continuation entrypoint before returning to the
-          handler body.
-        - this does not emit `Suspended(...)` yet, but it establishes the minimal frame boundary
-          required for Step 3.2a.
-      - first real suspended-frame slice:
-        - `eval_expr_ast_outcome` now handles `single-arg named call` through an outcome-aware path.
-        - when `resume` sees a value-only `SingleArgNamedCall` frame, it now returns
-          `AstEvalOutcome::Suspended(...)` instead of immediately replaying that frame inside the
-          token bridge.
-        - handler dispatch can surface that suspension back through
-          `dispatch_handler_method_as_value_outcome`.
-        - the slice is intentionally narrow: statement continuations and broader value shapes still
-          complete through the old replay path.
-      - unit-position replay:
-        - resume tokens can carry an AST statement-tail continuation snapshot.
-        - top-level `with` bodies and unit-position AST statement sequences register checkpoints
-          for remaining statements.
-        - `resume` can replay those remaining unit statements before handler-body execution
-          continues.
-      - recursive value-expression groundwork:
-        - `eval_expr_ast_outcome` now evaluates composite AST forms recursively instead of only
-          wrapping `eval_expr_ast`.
-        - covered composite forms: `InterpolatedString`, `BinOp`, `ListLit`, `TupleLit`, `Block`,
-          `Case`, `If`.
-      - direct statement-RHS replay:
-        - resume tokens can also carry binding / assignment continuation checkpoints for AST
-          statement sequences.
-        - when a direct handled operation is used as the RHS of `x = op ...` or assignment,
-          `resume` restores the resumed value into that local before running later statements.
-        - top-level / `with`-body direct RHS bindings are covered in both fallback and typed mode.
-      - AST value-path retention:
-        - AST value evaluation now supports `with ... in <expr>` in value position.
-        - AST value evaluation now supports general declaration calls as values, including
-          zero-arity `f ()` and flattened multi-arg named calls.
-        - `examples/iterator_unified.gb` now resolves through the fallback runtime and matches
-          typed-mode parity for its locked progression shape.
-      - first nested expression checkpoint:
-        - resume tokens can now carry a value continuation for single-argument named call sites.
-        - this allows value-position replay through shapes like `print (id (next 0))` instead of
-          returning the raw resumed value directly to the surrounding statement.
-        - fallback and typed mode parity are covered for this first nested call-argument slice.
-      - binop operand replay:
-        - value continuations now also cover `BinOp` operand progression.
-        - both left-operand and right-operand handled calls replay through the interrupted
-          arithmetic/equality expression before returning to outer statement flow.
-        - fallback and typed mode parity are covered for the first binop slice.
-    - remaining gaps:
-      - no explicit `Suspended(...)` result is emitted yet; progression is still modeled through
-        captured statement/declaration replay.
-      - nested intermediate checkpoints inside arbitrary expression trees are still open:
-        - `resume (op ...)`
-        - multi-arg / non-named call-argument subexpressions
-        - deeper arithmetic / branch subexpressions beyond the current direct binop operand slice
-        - deeper `if` / `case` re-entry points
-      - current value-position support is therefore still partial and biased toward statement-level
-        progression shapes.
-    - next implementation target:
-      - stop adding new shape-specific replay slices first.
-      - refactor the AST runtime so `AstEvalOutcome::Suspended(Box<...>)` is emitted by real
-        evaluator checkpoints and resumed through unified continuation frames.
-      - keep each implementation turn compact:
-        - define the minimal frame interface first,
-        - migrate exactly one existing nested value-position shape,
-        - delete or shrink the replaced old replay path before moving on.
-      - initial migration target:
-        - prefer `single-arg call` over `BinOp` as the first suspended-frame conversion because it
-          is the smaller nested shape.
-  - confirmed investigation findings:
-    - current runtime anchor points:
-      - `crates/goby-wasm/src/lib.rs`: `dispatch_handler_method_core`
-      - `crates/goby-wasm/src/lib.rs`: `resume_through_active_continuation_fallback`
-      - `crates/goby-wasm/src/lib.rs`: `resume_through_active_continuation_optimized`
-      - `crates/goby-wasm/src/lib.rs`: `eval_expr_ast`
-      - `crates/goby-wasm/src/lib.rs`: `execute_unit_expr_ast`
-      - `crates/goby-wasm/src/lib.rs`: `execute_unit_ast_stmt`
-    - current token model:
-      - fallback mode stores `ResumeToken { continuation: Continuation { consumed }, state }`.
-      - typed mode stores `OptimizedResumeToken { consumed, state }`.
-      - both modes mark the token consumed at the first `resume`.
-      - `dispatch_handler_method_core` breaks the handler-body loop as soon as a resumed value is observed.
-    - semantic gap:
-      - the current bridge can express:
-        - single `resume` success,
-        - no-`resume` abort,
-        - deterministic runtime error on second `resume`.
-      - the current bridge cannot express:
-        - "resume caller continuation until the next resumable point, then return control to the same handler invocation".
-      - this gap affects both value-position and unit-position operation calls.
-    - why the gap exists:
-      - `Expr::Resume` in `eval_expr_ast` currently calls `resume_through_active_continuation_bridge`
-        and receives only a plain `RuntimeValue`.
-      - no continuation frame, AST cursor, or statement-sequence checkpoint is stored for the
-        operation call site.
-      - `dispatch_handler_method_core` therefore has no way to continue from "the next resumable
-        point" after the caller resumes and later suspends again.
-    - concrete affected examples:
-      - state-threaded iterator flows such as `examples/iterator_unified.gb`
-        require progression across multiple `yield` operations from one enclosing handler invocation.
-      - nested value-position calls such as `resume (op ...)` must distinguish "resumed again later"
-        from true continuation exhaustion.
-  - required implementation direction (locked for restart):
-    - do not try to fake Step 3 by merely changing `consumed: bool` into a counter or queue.
-    - first introduce an explicit continuation result at the AST runtime layer so evaluation can
-      suspend and later continue.
-    - prefer a unified frame model over growing `AstValueContinuationKind` / statement-specific
-      replay enums indefinitely.
-    - define continuation frames by resume behavior ("take resumed value and perform the next
-      evaluator step"), not by mirroring every AST node shape 1:1.
-    - do not preserve old and new continuation systems in parallel longer than necessary; once a
-      shape is migrated to the frame path, shrink or remove the corresponding old replay variant.
-    - if a current exploratory replay slice conflicts with that refactor, simplify or replace it
-      instead of preserving it for compatibility.
-    - keep fallback and typed-continuation modes on the same semantic contract even if the internal
-      storage differs.
-  - staged execution plan:
-    - [x] Step 3.1: introduce continuation-aware runtime result types
-      - replace the current `Option<RuntimeValue>` / `Option<()>`-only bridge at handler-sensitive
-        paths with an explicit result that can represent:
-        - completed value,
-        - completed unit,
-        - suspended effect operation carrying the resumed payload / next checkpoint,
-        - abortive completion,
-        - runtime error.
-      - thread the new result through:
-        - `eval_expr_ast`
-        - `execute_unit_expr_ast`
-        - `execute_unit_ast_stmt`
-        - `dispatch_handler_method_core`
-    - [~] Step 3.2: model resumable caller checkpoints for AST execution
-      - capture enough information to continue evaluation after an effect operation:
-        - statement index within block/function/handler body,
-        - local/callable environment snapshot,
-        - pending expression shape where value-position resumption must re-enter.
-      - current status:
-        - implemented for:
-          - AST-backed unit-position statement tails,
-          - direct binding / assignment RHS replay,
-          - declaration/value-expression AST paths needed by `iterator_unified`.
-          - shared resume transport via `AstContinuationFrame`.
-          - first evaluator-produced suspended frame for value-only single-arg named calls.
-          - multi-arg direct named-call argument replay on the AST path.
-          - `resume (op ...)` / nested resume-value replay on the AST path.
-          - one-arg receiver/method call argument replay on the AST path.
-          - pipeline value replay on the AST path.
-          - first branch/control-flow suspended frame for `if` condition replay on the AST path.
-          - `case` scrutinee suspended frame on the AST declaration path.
-        - not yet unified:
-          - most inner expression checkpoints are still represented by ad hoc replay shapes,
-          - statement/value replay are still split across token-side structures.
-      - start with AST-backed paths only; string-fallback paths are not the target for Step 3.
-      - next acceptance target:
-        - replace at least one existing nested replay slice with a real suspended frame that can be
-          resumed without introducing another expression-form-specific enum variant.
-      - implementation order:
-        - Step 3.2a:
-          - define the minimal unified continuation-frame interface.
-          - lock one responsibility boundary:
-            - frame receives the resumed value,
-            - frame returns the next `AstEvalOutcome`,
-            - handler/token state is only transport, not where evaluation logic accumulates.
-          - current status:
-            - landed: `AstContinuationFrame` transport + `execute_ast_continuation(...)` entrypoint.
-            - still missing: evaluator-produced `AstEvalOutcome::Suspended(...)` frames.
-          - done when:
-            - one concrete frame type exists for the new path,
-            - `resume` can route through the frame entrypoint,
-            - no new ad hoc replay variant was added in this slice.
-        - Step 3.2b:
-          - migrate one small nested value-position shape to the new frame path.
-          - preferred first target: `single-arg call`.
-          - current status:
-            - landed narrowly for value-only `single-arg named call`.
-            - handler-body `resume` in outcome-aware paths can now surface
-              `AstEvalOutcome::Suspended(...)` for that shape.
-            - statement-tail and mixed frame shapes are intentionally left on the old replay path in
-              this slice.
-          - done when:
-            - the chosen shape suspends via `AstEvalOutcome::Suspended(...)`,
-            - resume returns through the frame path instead of the old token-only replay path,
-            - fallback and typed parity tests exist for that migrated shape.
-        - Step 3.2c:
-          - delete or collapse the replaced old replay machinery for that migrated shape before
-            expanding coverage.
-          - current status:
-            - legacy `eval_expr_ast` no longer captures `SingleArgNamedCall` replay checkpoints.
-            - legacy `eval_expr_ast` no longer captures `BinOpLeft` / `BinOpRight` replay
-              checkpoints either.
-            - single-arg call replay now reuses the same outcome consumer boundary during shared
-              continuation replay instead of treating `Suspended(...)` as a legacy-only internal
-              branch.
-            - `BinOp` replay now also depends on the outcome-aware path end-to-end:
-              shared continuation replay evaluates the right operand through
-              `eval_expr_ast_outcome(...)` and `complete_ast_value_outcome(...)`.
-          - done when:
-            - the old replay branch for that shape is removed or no longer reachable,
-            - tests still pass without relying on dual paths.
-        - Step 3.2d:
-          - repeat the same pattern for the next shape (`BinOp`, then branch/control-flow
-            boundaries).
-          - order after first migration:
-            - branch/control-flow boundaries (`if`, then `case`)
-            - broader call shapes / multi-arg call shapes
-            - `resume (op ...)`
-          - current status:
-            - `BinOp` migration landed and legacy operand checkpoint capture was removed.
-            - the first branch/control-flow boundaries also landed narrowly:
-              - `AstContinuation` now carries the resumed value payload directly,
-              - `complete_ast_value_outcome(...)` consumes real suspended frames,
-              - `if` condition replay is covered on the AST declaration path with fallback/typed
-                parity tests,
-              - unit-position `if` condition replay now also uses the same suspended-frame path,
-              - selected unit-position `if` branches now probe the same outcome path before
-                falling back to unit execution,
-              - statement-level binding / assignment RHS now also consumes outcome-based values
-                before storing them,
-              - assignment-specific parity is now also covered for the same RHS path,
-              - `case` scrutinee replay is covered on the AST declaration path with fallback/typed
-                parity tests.
-              - parser coverage now also keeps parenthesized multiline call arguments such as
-                `print (\n  case ...\n)` on the AST-backed declaration path, so these Step 3
-                runtime slices are reachable instead of dropping straight to string fallback.
-              - legacy value evaluation for `Expr::Block` / `Expr::Case` now reuses the same
-                outcome consumer boundary, so selected `case` arm block bodies can replay nested
-                handled values without depending on a separate direct evaluator path.
-              - legacy interpolated-string value evaluation now also reuses the outcome consumer
-                boundary, so `${...}` segments can replay handled values on the AST path.
-              - legacy tuple-literal value evaluation now also reuses the outcome consumer
-                boundary, so tuple elements can replay handled values before later member access.
-              - legacy list-literal value evaluation now also reuses the same outcome consumer
-                boundary, so list elements and spread tails can replay handled values before the
-                list flows into later statements or prints.
-              - legacy record-constructor value evaluation now also reuses the same outcome
-                consumer boundary, so named field values can replay handled values before later
-                record-field access.
-              - positional single-field constructor sugar in legacy `Expr::Call` now also reuses
-                the same outcome consumer boundary, so `Ctor(op ...)` can replay handled values
-                before the synthesized record reaches later field access or handler dispatch.
-            - broader call-shape migration has started:
-              - direct named multi-arg call chains can now suspend while evaluating their argument
-                list and resume through the same frame consumer boundary.
-              - the final multi-arg named-call application step now also exits through an
-                outcome-aware helper instead of a separate direct wrapper path.
-            - nested resume-value replay also now uses the same boundary:
-              - `Expr::Resume` is routed through the outcome consumer path,
-              - inner handled operations inside `resume (...)` re-enter through a dedicated
-                `ResumeValue` continuation.
-            - non-direct callee migration has started narrowly:
-              - one-argument receiver/method calls now suspend while evaluating their argument and
-                resume through the same frame consumer boundary.
-            - mixed call/effect chains have started to migrate too:
-              - `value |> callee` now suspends while evaluating the left-hand value and resumes
-                through a dedicated pipeline continuation.
-            - shared replay cleanup also progressed:
-              - single-arg named-call replay no longer treats `Suspended(...)` as an internal
-                error and reuses the same continuation consumer path.
-              - `BinOp` shared replay now also evaluates the right operand through the same
-                outcome-aware boundary.
-              - `PipelineCall` now reuses the outcome-aware named-call helper instead of
-                replay-time string reconstruction through `apply_pipeline(...)`.
-            - string-fallback execution is still intentionally out of scope for Step 3.
-          - done when:
-            - branch/control-flow suspension is proven on both `if` and `case` AST paths,
-            - the resumed value is transported by the continuation payload itself,
-            - the next target can build on the same consumer boundary instead of adding another
-              token-only replay detour.
-    - [~] Step 3.3: implement progression in fallback mode first
-      - make one handler invocation able to call `resume` repeatedly.
-      - each `resume` should drive the captured caller continuation until:
-        - another handled operation suspends back to the same handler invocation, or
-        - the continuation completes, after which the invocation is exhausted.
-      - current status:
-        - continuation completion path now works for saved unit-position statement tails.
-        - direct binding / assignment RHS replay now works for AST statement sequences.
-        - declaration value calls and value-position `with` expressions now stay on the AST path
-          for covered shapes instead of dropping to the old string fallback.
-        - repeated `resume` after that completion is covered by regression tests.
-        - progression to intermediate nested value-position resumable points is only partially
-          covered via exploratory ad hoc replay slices and is not yet in the desired final shape.
-      - preserve deterministic `continuation_missing` / `continuation_consumed` style runtime errors.
-    - [~] Step 3.4: mirror the same contract in typed-continuation mode
-      - keep the current mode-parity harness green while reusing the same externally visible
-        behavior.
-      - current status:
-        - typed mode mirrors the new unit-position replay + exhaustion slice.
-        - typed mode also mirrors direct binding replay, declaration-call progression, and the
-          `iterator_unified` example shape.
-        - typed mode also mirrors the current migrated nested replay slices:
-          - single-arg call,
-          - multi-arg direct named call arguments,
-          - nested resume-value replay,
-          - one-arg receiver/method call arguments,
-          - pipeline value replay,
-          - direct binop operand replay,
-          - `if` condition replay on the AST declaration path,
-          - `case` scrutinee replay on the AST declaration path.
-      - implementation may still use separate token storage, but not separate semantics.
-    - [~] Step 3.5: cover the progression matrix with tests
-      - fallback success: one handler invocation resumes through multiple operation sites.
-      - fallback exhaustion: extra `resume` after continuation completion fails deterministically.
-      - nested handlers: inner suspension returns control to the correct enclosing invocation.
-      - typed/fallback parity for the same cases.
-      - current status:
-        - added fallback + typed parity regression for unit-position replay then exhaustion.
-        - added fallback + typed parity regression for direct binding-value replay.
-        - added regression/parity coverage for declaration-call progression and
-          `iterator_unified.gb`.
-        - added fallback + typed parity regression for single-arg call-argument replay.
-        - added fallback + typed parity regression for multi-arg named call-argument replay.
-        - existing double-resume parity coverage now exercises the unified nested resume-value path.
-        - added fallback + typed parity regression for one-arg receiver/method call replay.
-        - added fallback + typed parity regression for pipeline value replay.
-        - added fallback + typed parity regression for direct binop operand replay.
-        - added fallback + typed parity regression for `if` condition replay.
-        - added fallback + typed parity regression for `case` scrutinee replay.
-        - added fallback + typed parity regression for legacy list-literal replay.
-        - added fallback + typed parity regression for legacy record-constructor field replay.
-        - added fallback + typed parity regression for positional single-field constructor replay.
-        - broader matrix for nested value-position progression covered (session 226):
-          - Shape E: `three_step_in_block_binding_progression` (3 sequential in-block bindings)
-          - Shape F: `handler_body_with_inner_with_block_value` (inner `with` in handler body)
-          - `eval_expr_ast_outcome` now has `Expr::With` arm for value-position `with` exprs.
-        - parser limitation resolved (session 227–228): `name =\n  with ...`, `mut name =\n  with ...`,
-          and `name :=\n  with ...` all now parse correctly. All three binding/assignment forms
-          support next-line `with` RHS.
-        - Shape G: `assignment_rhs_next_line_with_block_value` (`:=\n  with ...` runtime)
-        - Shape H: `case_arm_body_calls_effect_operation` (effect in case arm body)
-        - eval_ast_side_effect arg evaluation migrated to eval_expr_ast_outcome (session 229–230):
-          - print/println/pipeline-print args
-          - unit-position Pipeline value (expr |> callee)
-        - Shape I: `declaration_block_body_with_binding_and_effect_call`
-        - Shape J: `interpolated_string_with_declaration_body_effect_call`
-        - Shape K: `pipeline_value_with_declaration_body_effect_call`
-        - goby-wasm tests: 192 → 197 passing (session 228 → 230).
-      - next acceptance target:
-        - replace `dispatch_handler_method_core` plain for-loop with suspension-aware execution
-          so handler body stmts can properly suspend and resume.
-        - prerequisite: resolve global stack interference (pending_stmt_continuations shared
-          with outer in-block), frame capture timing, and produce_value=false semantics.
-        - interim: add tests that lock the `Suspended(frame)` path explicitly (currently only
-          output is asserted, not which path was taken).
-  - restart checklist:
-    - read in this order:
-      - this Step 3 quick view
-      - Step 3.2 implementation order
-      - `doc/STATE.md` latest session note
-    - begin from `crates/goby-wasm/src/lib.rs`; no parser or typecheck blocker remains for Step 3.
-    - preserve existing error-kind mapping in `parity_outcome_from_runtime_output`.
-    - preserve Step 2 behavior:
-      - no-`resume` remains abortive,
-      - nested abort propagation remains explicit,
-      - nearest lexical handler resolution must not regress.
-    - after Step 3 lands, update this section, `doc/LANGUAGE_SPEC.md`, and `doc/STATE.md` together.
-  - success criteria:
-    - semantic acceptance:
-      - one handler invocation can `resume` more than once and each `resume` advances from the
-        next resumable point instead of restarting from the beginning.
-      - when the resumed continuation finishes, any further `resume` from that same handler
-        invocation reports the deterministic consumed-continuation runtime error.
-      - no-`resume` handler completion still aborts immediately at the handled boundary.
-      - nested handlers still route control to the nearest matching lexical handler.
-    - runtime architecture acceptance:
-      - Step 3 no longer depends on the current "set resumed value and break" one-shot loop in
-        `dispatch_handler_method_core`.
-      - `AstEvalOutcome::Suspended(...)` is emitted by the AST evaluator for real resumable
-        checkpoints instead of existing only as scaffolding.
-      - suspension state is represented by unified continuation frames centered on "next evaluator
-        step", not by an open-ended list of expression-shape-specific replay variants.
-      - migration is kept compact:
-        - each landed slice introduces at most one new frame-backed checkpoint shape,
-        - and removes or shrinks the corresponding old replay path in the same slice.
-      - AST runtime paths retain enough checkpoint information to resume both:
-        - unit-position handled operations,
-        - value-position handled operations used in bindings, conditionals, blocks, and call chains.
-      - fallback and typed modes share the same externally visible continuation contract.
-    - regression acceptance:
-      - `examples/iterator_unified.gb` typechecks and its runtime-relevant progression shape is
-        covered by tests.
-      - dedicated runtime tests exist for:
-        - multi-resume progression success,
-        - continuation exhaustion error,
-        - nested handler progression/dispatch correctness,
-        - fallback/typed parity for the same matrix.
-    - quality gate acceptance:
-      - `cargo fmt`
-      - `cargo check`
-      - `cargo test`
-      - `cargo clippy -- -D warnings`
-      all pass after the Step 3 implementation.
+- [ ] Step 3: continuation system overhaul
+  - Goal: replace the ad hoc split continuation system with a single unified `Cont` enum and
+    `apply_cont` re-entry function. Temporary test breakage is acceptable.
+  - Archived Step 3 incremental history (Steps 3.1–3.5) is in
+    `doc/old/PLAN_MULTIRESUME_PROGRESSION_SUPPORT.md`.
+  - Full plan detail: `~/.claude/workspaces/.../implementation-plan.md`
+
+  ### Architecture
+
+  The previous system accumulated three parallel structures for the same concept:
+  - `pending_value_continuations` — expression-level suspension
+  - `pending_stmt_continuations` — statement-sequence suspension
+  - `AstContinuationFrame { value, stmt }` — mixed token transport
+
+  These are replaced by a single `Cont` enum with three variants:
+
+  ```rust
+  enum Cont {
+      StmtSeq {
+          store:         Option<StoreOp>,
+          remaining:     Vec<Stmt>,
+          locals:        RuntimeLocals,
+          callables:     HashMap<String, IntCallable>,
+          depth:         usize,
+          handler_stack: Vec<InlineHandlerValue>,
+          finish:        FinishKind,   // Block | HandlerBody { token_idx, produce_value }
+      },
+      Apply {
+          step:          ApplyStep,    // expression-level continuation step
+          locals:        RuntimeLocals,
+          callables:     HashMap<String, IntCallable>,
+          depth:         usize,
+          handler_stack: Vec<InlineHandlerValue>,
+          // no `then` field: val→stmt chaining via StmtSeq.store instead
+      },
+      Resume,   // cross-handler-boundary resume (not an ApplyStep)
+  }
+
+  enum FinishKind {
+      Block,
+      HandlerBody { token_idx: usize, produce_value: bool },
+  }
+
+  enum ApplyStep {
+      WithBody, Pipeline, SingleArgCall, ReceiverMethod, MultiArgCall,
+      CaseSelect, IfBranch, BinOpLeft, BinOpRight,
+      ListLitElement, TupleLitElement, RecordField, InterpolatedPart,
+      // Resume is NOT here — it is a top-level Cont variant
+  }
+
+  enum Out<T> { Done(T), Suspend(Cont), Err(RuntimeError) }
+  ```
+
+  Key design decisions:
+  - `StmtSeq.finish` unifies block and handler body via `FinishKind`; `HandlerSeq` is eliminated.
+  - `Apply` has no `then` chain; value→stmt sequencing is `StmtSeq { store: Some(...) }`.
+  - `Cont::Resume` is top-level (not `ApplyStep`) because it crosses the handler-body boundary.
+  - `handler_stack` snapshot in every `Cont` variant — before entering any continuation body,
+    `apply_cont` sets `self.active_inline_handler_stack = cont.handler_stack.clone()`.
+  - `Out::Err(RuntimeError)` replaces the ambiguous `Abort`; carries both runtime errors
+    and unsupported-construct diagnostics.
+  - `Stmt::MutBinding` and `Stmt::Binding` both map to `StoreOp::Bind`; mutability is a
+    parser/typecheck concern with no runtime distinction.
+  - `eval_stmts` returns final `RuntimeLocals` in `Out::Done` so the ingest caller can
+    write mutations back to `self.locals` explicitly.
+  - Handler dispatch loop is the sole site that writes `TokenState::Suspended(cont)`.
+
+  ### Types / functions removed
+
+  - `AstContinuation`, `AstContinuationFrame`
+  - `AstValueContinuation` / `AstValueContinuationKind`
+  - `AstStmtContinuation` / `AstStmtContinuationKind`
+  - `AstEvalOutcome<T>`, `HandlerCompletion`, `HandlerContinuationState`
+  - `Continuation` (old `consumed: bool` struct)
+  - `should_suspend_resume_outcome`
+  - `eval_expr_ast_outcome`, `eval_expr_ast` (replaced by `eval_expr`)
+  - `execute_unit_ast_stmt`, `execute_unit_ast_stmt_outcome`, `execute_unit_expr_ast`
+  - `complete_ast_value_outcome`
+  - `execute_saved_value_continuation`, `execute_saved_stmt_continuation`
+  - `RuntimeOutputResolver` fields: `pending_stmt_continuations`, `pending_value_continuations`,
+    `active_stmt_sequence_ids`, `next_stmt_sequence_id`, `consumed_stmt_sequence_id`,
+    `replaying_stmt_continuation_depth`
+
+  ### Implementation phases
+
+  - [ ] Phase 1 — Define new types alongside old
+    - Add `Cont`, `StoreOp`, `ApplyStep`, `FinishKind`, `Out<T>`, `TokenState`, `RuntimeError`.
+    - Add `apply_cont` stub returning `Out::Err(RuntimeError::Unsupported)`.
+    - All existing code compiles (`#[allow(dead_code)]` as needed).
+    - checks: `cargo build -p goby-wasm`
+
+  - [ ] Phase 2 — Rewrite eval_expr → Out<RuntimeValue>
+    - New `eval_expr(...) -> Out<RuntimeValue>` replaces `eval_expr_ast_outcome` + `eval_expr_ast`.
+    - All `ApplyStep` variants implemented (including `ListLitElement`, `TupleLitElement`,
+      `RecordField`, `InterpolatedPart`). `Expr::Qualified` callee migrated in same phase.
+    - `Expr::Resume` → `Out::Suspend(Cont::Resume)`.
+    - `apply_cont` for `Cont::Resume` calls `resume_through_active_continuation_bridge`.
+    - `apply_cont` sets `self.active_inline_handler_stack = cont.handler_stack.clone()` before
+      entering any continuation body.
+    - Old functions removed: `eval_expr_ast_outcome`, `eval_expr_ast`,
+      `complete_ast_value_outcome`, `execute_saved_value_continuation`,
+      `should_suspend_resume_outcome`.
+    - checks: `cargo build -p goby-wasm`, `cargo test -p goby-wasm`
+
+  - [ ] Phase 3 — Rewrite stmt sequence evaluation
+    - New `eval_stmts(stmts, locals, callables, evaluators, depth, finish) -> Out<(Option<RuntimeValue>, RuntimeLocals)>`.
+    - Suspension → `Cont::StmtSeq { store, remaining, locals, ..., finish }`.
+    - `apply_cont` for `StmtSeq`: restore handler stack, apply store, call `eval_stmts` on remaining.
+    - Replaces `execute_ast_stmt_sequence`, `execute_ingest_ast_stmt_sequence`,
+      `execute_unit_ast_stmt`, `execute_unit_ast_stmt_outcome`, `execute_unit_expr_ast`,
+      `execute_saved_stmt_continuation`.
+    - Remove all `pending_stmt_continuations` / sequence-id fields from `RuntimeOutputResolver`.
+    - checks: `cargo build -p goby-wasm`, `cargo test -p goby-wasm`
+
+  - [ ] Phase 4 — Rewrite dispatch_handler_method_core
+    - `eval_handler_body` = thin wrapper calling `eval_stmts(..., FinishKind::HandlerBody { token_idx, produce_value })`.
+    - `dispatch_handler_method_core` → thin caller of `eval_handler_body`.
+    - `begin/finish_handler_continuation_bridge` updated on both fallback and optimized paths
+      to store/restore `Cont` via `TokenState::Suspended`.
+    - Integration test: nested handler bodies with multiple `resume` calls including
+      nested-token routing and `handler_stack` restoration.
+    - checks: `cargo build -p goby-wasm`, `cargo test -p goby-wasm`
+
+  - [ ] Phase 5 — Unify resume tokens and remove all old types
+    - Merge `ResumeToken` / `OptimizedResumeToken` → single `ResumeToken` with `TokenState`.
+    - Remove `execution_mode` branching in bridge functions.
+    - All types/functions in "Types / functions removed" deleted.
+    - checks: `cargo fmt`, `cargo clippy -p goby-wasm -- -D warnings`, `cargo test --workspace`
+
+  ### Restart checklist
+
+  - Read this section + `doc/STATE.md` latest session note.
+  - Begin from `crates/goby-wasm/src/lib.rs`.
+  - Preserve Step 2 behavior: no-`resume` abortive, nested abort propagation, nearest lexical handler wins.
+  - After Step 3 lands, update this section, `doc/LANGUAGE_SPEC.md`, and `doc/STATE.md` together.
+
+  ### Success criteria
+
+  - Semantic:
+    - one handler invocation can `resume` more than once; each advances from the next resumable point.
+    - extra `resume` after exhaustion → deterministic `continuation_consumed` error.
+    - no-`resume` completion still aborts immediately.
+    - nested handlers route to nearest matching lexical handler.
+  - Architecture:
+    - `pending_value_continuations`, `pending_stmt_continuations` fields gone.
+    - all types/functions in removal list gone.
+    - `apply_cont` is the only re-entry point.
+    - `Cont::Resume` is top-level; `ApplyStep::Resume` does not exist.
+    - `Apply` has no `then` field.
+  - Quality gate: `cargo fmt`, `cargo check`, `cargo test --workspace`, `cargo clippy -- -D warnings`.
 - [x] Step 4: typecheck rule update
   - conservative syntactic multi-`resume` rejection was removed.
   - retained checks are `resume` placement, resumed-value type compatibility, and unresolved generic diagnostics.
