@@ -10460,4 +10460,29 @@ main =
         assert_eq!(typed.stdout.as_deref(), Some("qualified"));
         assert_eq!(typed.runtime_error_kind, None);
     }
+
+    #[test]
+    fn typed_mode_matches_fallback_for_pipeline_effect_call_dispatch() {
+        use goby_core::parse_module;
+        let _guard = ENV_MUTEX.lock().unwrap();
+        // Parity test for `value |> effect_op` (pipeline into an effect operation)
+        // dispatching to the active handler in both modes.
+        let source = r#"
+effect Log
+  log: String -> Unit
+
+main : Unit -> Unit
+main =
+  with
+    log msg ->
+      print msg
+      resume ()
+  in
+    "piped" |> log
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let typed = assert_mode_parity(&module, "pipeline effect call dispatch");
+        assert_eq!(typed.stdout.as_deref(), Some("piped"));
+        assert_eq!(typed.runtime_error_kind, None);
+    }
 }
