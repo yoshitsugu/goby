@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-08 (session 229)
+Last updated: 2026-03-08 (session 230)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -80,6 +80,13 @@ this section takes priority.
       produced None. Migrated to `eval_expr_ast_outcome` + `complete_ast_value_outcome` at depth=1.
     - Shape I: `declaration_block_body_with_binding_and_effect_call` — exercises the fixed path (commit 00e3e00).
     - goby-wasm tests: 192 → 195 passing.
+  - Session 230: eval_ast_side_effect arg evaluation paths migrated:
+    - Shape J: `interpolated_string_with_declaration_body_effect_call` (commit 9dfd496).
+    - Pipeline `value` arm in `eval_ast_side_effect` migrated to `eval_expr_ast_outcome` (commit 8024716).
+    - Shape K: `pipeline_value_with_declaration_body_effect_call` (commit 8024716).
+    - Remaining `eval_ast_value` calls in `eval_ast_side_effect`: Binding/Assign value (frame-covered)
+      and `Expr::With` handler expr (no effect call needed) — both correct as-is.
+    - goby-wasm tests: 195 → 197 passing.
   - Next: dispatch_handler_method_core for-loop replacement (Step 3 architecture), or more Step 3.5 coverage.
 - External internal records:
   - devflow notes live outside the repo under
