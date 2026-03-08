@@ -10352,4 +10352,112 @@ main =
         assert_eq!(typed.stdout.as_deref(), Some("246"));
         assert_eq!(typed.runtime_error_kind, None);
     }
+
+    #[test]
+    fn typed_mode_matches_fallback_for_with_handler_variable() {
+        use goby_core::parse_module;
+        let _guard = ENV_MUTEX.lock().unwrap();
+        // Parity test for `with <handler-var> in ...` where the handler is stored
+        // in a local variable before being installed. Covers the handler-value path
+        // in both PortableFallback and TypedContinuationOptimized modes.
+        let source = r#"
+effect Log
+  log: String -> Unit
+
+main : Unit -> Unit
+main =
+  h = handler
+    log msg ->
+      print msg
+      resume ()
+  with h
+  in
+    log "parity"
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let typed = assert_mode_parity(&module, "with handler variable");
+        assert_eq!(typed.stdout.as_deref(), Some("parity"));
+        assert_eq!(typed.runtime_error_kind, None);
+    }
+
+    #[test]
+    fn typed_mode_matches_fallback_for_with_captures_lexical_local() {
+        use goby_core::parse_module;
+        let _guard = ENV_MUTEX.lock().unwrap();
+        // Parity test for handler clause that captures a lexical local (`prefix`)
+        // defined before the `with` block. Covers closure-capture in both modes.
+        let source = r#"
+effect Log
+  log: String -> Unit
+
+main : Unit -> Unit
+main =
+  prefix = "pre:"
+  with
+    log msg ->
+      print "${prefix}${msg}"
+      resume ()
+  in
+    log "hello"
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let typed = assert_mode_parity(&module, "with captures lexical local");
+        assert_eq!(typed.stdout.as_deref(), Some("pre:hello"));
+        assert_eq!(typed.runtime_error_kind, None);
+    }
+
+    #[test]
+    fn typed_mode_matches_fallback_for_nested_with_nearest_handler_wins() {
+        use goby_core::parse_module;
+        let _guard = ENV_MUTEX.lock().unwrap();
+        // Parity test for nested `with` blocks on the same effect: the inner handler
+        // should win over the outer one in both modes.
+        let source = r#"
+effect Log
+  log: String -> Unit
+
+main : Unit -> Unit
+main =
+  with
+    log msg ->
+      print "outer"
+      resume ()
+  in
+    with
+      log msg ->
+        print "inner"
+        resume ()
+    in
+      log "x"
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let typed = assert_mode_parity(&module, "nested with nearest handler wins");
+        assert_eq!(typed.stdout.as_deref(), Some("inner"));
+        assert_eq!(typed.runtime_error_kind, None);
+    }
+
+    #[test]
+    fn typed_mode_matches_fallback_for_qualified_effect_call_dispatch() {
+        use goby_core::parse_module;
+        let _guard = ENV_MUTEX.lock().unwrap();
+        // Parity test for `Effect.op arg` (qualified call) dispatching to an active
+        // inline handler in both PortableFallback and TypedContinuationOptimized modes.
+        let source = r#"
+effect Log
+  log: String -> Unit
+
+main : Unit -> Unit
+main =
+  with
+    log msg ->
+      print msg
+      resume ()
+  in
+    Log.log "qualified"
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let typed = assert_mode_parity(&module, "qualified effect call dispatch");
+        assert_eq!(typed.stdout.as_deref(), Some("qualified"));
+        assert_eq!(typed.runtime_error_kind, None);
+    }
 }
