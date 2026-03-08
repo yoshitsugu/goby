@@ -10592,4 +10592,44 @@ main =
         assert_eq!(typed.stdout.as_deref(), Some("4142"));
         assert_eq!(typed.runtime_error_kind, None);
     }
+
+    #[test]
+    fn typed_mode_matches_fallback_for_list_each_style_callback_dispatch() {
+        use goby_core::parse_module;
+        let _guard = ENV_MUTEX.lock().unwrap();
+        // Parity test for list-each-style iteration using a custom `each` that installs a
+        // handler variable internally. Covers recursive `iter` + handler-variable `with` path.
+        let source = r#"
+effect ListYield
+  yield : Int -> Bool
+
+iter : List Int -> Unit can ListYield
+iter xs =
+  case xs
+    [] -> ()
+    [x, ..xxs] ->
+      if yield x
+        iter xxs
+      else
+        ()
+
+each : List Int -> (Int -> Unit) -> Unit
+each xs f =
+  emit_handler = handler
+    yield x ->
+      f x
+      resume True
+  with emit_handler
+  in
+    iter xs
+
+main : Unit -> Unit
+main =
+  each [3, 5] (|n| -> print "${n}")
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let typed = assert_mode_parity(&module, "list each style callback dispatch");
+        assert_eq!(typed.stdout.as_deref(), Some("35"));
+        assert_eq!(typed.runtime_error_kind, None);
+    }
 }
