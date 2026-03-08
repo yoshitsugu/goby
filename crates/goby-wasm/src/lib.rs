@@ -669,7 +669,10 @@ enum FinishKind {
     /// Return the last expression value to the enclosing expression (block body).
     Block,
     /// Store the result into the active resume token (handler body).
-    HandlerBody { token_idx: usize, produce_value: bool },
+    HandlerBody {
+        token_idx: usize,
+        produce_value: bool,
+    },
     /// Execute remaining stmts via ingest_ast_statement (with body via eval_ast_side_effect).
     /// The `locals` field in StmtSeq is ignored; self.locals is used instead.
     Ingest,
@@ -715,19 +718,39 @@ enum StoreOp {
 #[allow(dead_code)]
 #[derive(Clone)]
 enum ApplyStep {
-    WithBody { body: Vec<Stmt> },
-    Pipeline { callee: String },
-    SingleArgCall { fn_name: String },
-    ReceiverMethod { receiver: String, member: String },
+    WithBody {
+        body: Vec<Stmt>,
+    },
+    Pipeline {
+        callee: String,
+    },
+    SingleArgCall {
+        fn_name: String,
+    },
+    ReceiverMethod {
+        receiver: String,
+        member: String,
+    },
     MultiArgCall {
         fn_name: String,
         evaluated: Vec<RuntimeValue>,
         remaining: Vec<Expr>,
     },
-    CaseSelect { arms: Vec<goby_core::CaseArm> },
-    IfBranch { then_expr: Expr, else_expr: Expr },
-    BinOpLeft { op: goby_core::BinOpKind, right: Expr },
-    BinOpRight { op: goby_core::BinOpKind, left: RuntimeValue },
+    CaseSelect {
+        arms: Vec<goby_core::CaseArm>,
+    },
+    IfBranch {
+        then_expr: Expr,
+        else_expr: Expr,
+    },
+    BinOpLeft {
+        op: goby_core::BinOpKind,
+        right: Expr,
+    },
+    BinOpRight {
+        op: goby_core::BinOpKind,
+        left: RuntimeValue,
+    },
     // Literal/composite element loops
     ListLitElement {
         evaluated: Vec<RuntimeValue>,
@@ -2698,7 +2721,9 @@ impl<'m> RuntimeOutputResolver<'m> {
         match outcome {
             AstEvalOutcome::Complete(v) => Out::Done(v),
             AstEvalOutcome::Suspended(_c) => Out::Suspend(Cont::Resume), // placeholder — real conversion in Phase 5
-            AstEvalOutcome::Aborted => Out::Err(RuntimeError::Abort { kind: "aborted".into() }),
+            AstEvalOutcome::Aborted => Out::Err(RuntimeError::Abort {
+                kind: "aborted".into(),
+            }),
             AstEvalOutcome::Unsupported => Out::Err(RuntimeError::Unsupported),
         }
     }
@@ -2728,7 +2753,13 @@ impl<'m> RuntimeOutputResolver<'m> {
                             i += 1;
                         }
                         InterpolatedPart::Expr(inner_expr) => {
-                            match self.eval_expr(inner_expr, locals, callables, evaluators, depth + 1) {
+                            match self.eval_expr(
+                                inner_expr,
+                                locals,
+                                callables,
+                                evaluators,
+                                depth + 1,
+                            ) {
                                 Out::Done(value) => {
                                     out_so_far.push_str(&value.to_output_text());
                                     i += 1;
@@ -2775,7 +2806,10 @@ impl<'m> RuntimeOutputResolver<'m> {
                     Out::Done(v) => v,
                     Out::Suspend(_) => {
                         return Out::Suspend(Cont::Apply {
-                            step: ApplyStep::BinOpRight { op: op.clone(), left: lv },
+                            step: ApplyStep::BinOpRight {
+                                op: op.clone(),
+                                left: lv,
+                            },
                             locals: locals.clone(),
                             callables: callables.clone(),
                             depth,
@@ -2797,7 +2831,8 @@ impl<'m> RuntimeOutputResolver<'m> {
                 let elems_slice = elements.as_slice();
                 let mut i = 0;
                 while i < elems_slice.len() {
-                    match self.eval_expr(&elems_slice[i], locals, callables, evaluators, depth + 1) {
+                    match self.eval_expr(&elems_slice[i], locals, callables, evaluators, depth + 1)
+                    {
                         Out::Done(value) => {
                             match &value {
                                 RuntimeValue::Int(n) => {
@@ -2821,7 +2856,10 @@ impl<'m> RuntimeOutputResolver<'m> {
                         Out::Suspend(_) => {
                             // Collect currently evaluated items
                             let evaluated: Vec<RuntimeValue> = if list_kind == Some("string") {
-                                string_items.iter().map(|s| RuntimeValue::String(s.clone())).collect()
+                                string_items
+                                    .iter()
+                                    .map(|s| RuntimeValue::String(s.clone()))
+                                    .collect()
                             } else {
                                 int_items.iter().map(|n| RuntimeValue::Int(*n)).collect()
                             };
@@ -2874,7 +2912,10 @@ impl<'m> RuntimeOutputResolver<'m> {
                         }
                         Out::Suspend(_) => {
                             let evaluated: Vec<RuntimeValue> = if list_kind == Some("string") {
-                                string_items.iter().map(|s| RuntimeValue::String(s.clone())).collect()
+                                string_items
+                                    .iter()
+                                    .map(|s| RuntimeValue::String(s.clone()))
+                                    .collect()
                             } else {
                                 int_items.iter().map(|n| RuntimeValue::Int(*n)).collect()
                             };
@@ -2907,7 +2948,8 @@ impl<'m> RuntimeOutputResolver<'m> {
                 let items_slice = items.as_slice();
                 let mut i = 0;
                 while i < items_slice.len() {
-                    match self.eval_expr(&items_slice[i], locals, callables, evaluators, depth + 1) {
+                    match self.eval_expr(&items_slice[i], locals, callables, evaluators, depth + 1)
+                    {
                         Out::Done(v) => {
                             values.push(v);
                             i += 1;
@@ -2933,7 +2975,7 @@ impl<'m> RuntimeOutputResolver<'m> {
 
             Expr::Block(stmts) => {
                 let mut block_locals = locals.clone();
-                let mut block_callables = callables.clone();
+                let block_callables = callables.clone();
                 let mut last_value: Option<RuntimeValue> = None;
                 let stmts_slice = stmts.as_slice();
                 let mut i = 0;
@@ -2941,7 +2983,13 @@ impl<'m> RuntimeOutputResolver<'m> {
                     let stmt = &stmts_slice[i];
                     match stmt {
                         Stmt::Binding { name, value } | Stmt::MutBinding { name, value } => {
-                            match self.eval_expr(value, &block_locals, &block_callables, evaluators, depth + 1) {
+                            match self.eval_expr(
+                                value,
+                                &block_locals,
+                                &block_callables,
+                                evaluators,
+                                depth + 1,
+                            ) {
                                 Out::Done(v) => {
                                     block_locals.store(name, v);
                                     last_value = None;
@@ -2966,7 +3014,13 @@ impl<'m> RuntimeOutputResolver<'m> {
                             if block_locals.get(name).is_none() {
                                 return Out::Err(RuntimeError::Unsupported);
                             }
-                            match self.eval_expr(value, &block_locals, &block_callables, evaluators, depth + 1) {
+                            match self.eval_expr(
+                                value,
+                                &block_locals,
+                                &block_callables,
+                                evaluators,
+                                depth + 1,
+                            ) {
                                 Out::Done(v) => {
                                     block_locals.store(name, v);
                                     last_value = None;
@@ -2988,7 +3042,13 @@ impl<'m> RuntimeOutputResolver<'m> {
                             }
                         }
                         Stmt::Expr(inner_expr) => {
-                            match self.eval_expr(inner_expr, &block_locals, &block_callables, evaluators, depth + 1) {
+                            match self.eval_expr(
+                                inner_expr,
+                                &block_locals,
+                                &block_callables,
+                                evaluators,
+                                depth + 1,
+                            ) {
                                 Out::Done(v) => {
                                     last_value = Some(v);
                                     i += 1;
@@ -3005,18 +3065,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                                         finish: FinishKind::Block,
                                     });
                                 }
-                                Out::Err(_) => {
-                                    // Try unit path (same as eval_expr_ast_outcome)
-                                    let mut ml = block_locals.clone();
-                                    let mut mc = block_callables.clone();
-                                    if self.execute_unit_expr_ast(inner_expr, &mut ml, &mut mc, evaluators, depth + 1).is_none() {
-                                        return Out::Err(RuntimeError::Abort { kind: "unit_eval_failed".into() });
-                                    }
-                                    block_locals = ml;
-                                    block_callables = mc;
-                                    last_value = Some(RuntimeValue::Unit);
-                                    i += 1;
-                                }
+                                Out::Err(e) => return Out::Err(e),
                             }
                         }
                     }
@@ -3028,42 +3077,50 @@ impl<'m> RuntimeOutputResolver<'m> {
             }
 
             Expr::Case { scrutinee, arms } => {
-                let scrutinee_val = match self.eval_expr(scrutinee, locals, callables, evaluators, depth + 1) {
-                    Out::Done(v) => v,
-                    Out::Suspend(_) => {
-                        return Out::Suspend(Cont::Apply {
-                            step: ApplyStep::CaseSelect { arms: arms.clone() },
-                            locals: locals.clone(),
-                            callables: callables.clone(),
-                            depth,
-                            handler_stack: self.active_inline_handler_stack.clone(),
-                        });
-                    }
-                    Out::Err(e) => return Out::Err(e),
-                };
-                let Some((arm_body, arm_locals)) = self.select_case_arm(&scrutinee_val, arms, locals) else {
+                let scrutinee_val =
+                    match self.eval_expr(scrutinee, locals, callables, evaluators, depth + 1) {
+                        Out::Done(v) => v,
+                        Out::Suspend(_) => {
+                            return Out::Suspend(Cont::Apply {
+                                step: ApplyStep::CaseSelect { arms: arms.clone() },
+                                locals: locals.clone(),
+                                callables: callables.clone(),
+                                depth,
+                                handler_stack: self.active_inline_handler_stack.clone(),
+                            });
+                        }
+                        Out::Err(e) => return Out::Err(e),
+                    };
+                let Some((arm_body, arm_locals)) =
+                    self.select_case_arm(&scrutinee_val, arms, locals)
+                else {
                     return Out::Err(RuntimeError::Unsupported);
                 };
                 self.eval_expr(&arm_body, &arm_locals, callables, evaluators, depth + 1)
             }
 
-            Expr::If { condition, then_expr, else_expr } => {
-                let cond_val = match self.eval_expr(condition, locals, callables, evaluators, depth + 1) {
-                    Out::Done(v) => v,
-                    Out::Suspend(_) => {
-                        return Out::Suspend(Cont::Apply {
-                            step: ApplyStep::IfBranch {
-                                then_expr: (**then_expr).clone(),
-                                else_expr: (**else_expr).clone(),
-                            },
-                            locals: locals.clone(),
-                            callables: callables.clone(),
-                            depth,
-                            handler_stack: self.active_inline_handler_stack.clone(),
-                        });
-                    }
-                    Out::Err(e) => return Out::Err(e),
-                };
+            Expr::If {
+                condition,
+                then_expr,
+                else_expr,
+            } => {
+                let cond_val =
+                    match self.eval_expr(condition, locals, callables, evaluators, depth + 1) {
+                        Out::Done(v) => v,
+                        Out::Suspend(_) => {
+                            return Out::Suspend(Cont::Apply {
+                                step: ApplyStep::IfBranch {
+                                    then_expr: (**then_expr).clone(),
+                                    else_expr: (**else_expr).clone(),
+                                },
+                                locals: locals.clone(),
+                                callables: callables.clone(),
+                                depth,
+                                handler_stack: self.active_inline_handler_stack.clone(),
+                            });
+                        }
+                        Out::Err(e) => return Out::Err(e),
+                    };
                 let branch: &Expr = match cond_val {
                     RuntimeValue::Bool(true) => then_expr,
                     RuntimeValue::Bool(false) => else_expr,
@@ -3072,14 +3129,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                 match self.eval_expr(branch, locals, callables, evaluators, depth + 1) {
                     Out::Done(v) => Out::Done(v),
                     Out::Suspend(s) => Out::Suspend(s),
-                    Out::Err(_) => {
-                        let mut branch_locals = locals.clone();
-                        let mut branch_callables = callables.clone();
-                        if self.execute_unit_expr_ast(branch, &mut branch_locals, &mut branch_callables, evaluators, depth + 1).is_none() {
-                            return Out::Err(RuntimeError::Abort { kind: "unit_eval_failed".into() });
-                        }
-                        Out::Done(RuntimeValue::Unit)
-                    }
+                    Out::Err(e) => Out::Err(e),
                 }
             }
 
@@ -3092,8 +3142,16 @@ impl<'m> RuntimeOutputResolver<'m> {
                     let args_owned: Vec<Expr> = args.into_iter().map(|e| e.clone()).collect();
                     let mut i = 0;
                     loop {
-                        if i >= args_owned.len() { break; }
-                        match self.eval_expr(&args_owned[i], locals, callables, evaluators, depth + 1) {
+                        if i >= args_owned.len() {
+                            break;
+                        }
+                        match self.eval_expr(
+                            &args_owned[i],
+                            locals,
+                            callables,
+                            evaluators,
+                            depth + 1,
+                        ) {
                             Out::Done(v) => {
                                 evaluated.push(v);
                                 i += 1;
@@ -3128,22 +3186,23 @@ impl<'m> RuntimeOutputResolver<'m> {
 
                 // Qualified receiver method call
                 if let Expr::Qualified { receiver, member } = callee.as_ref() {
-                    let arg_value = match self.eval_expr(arg, locals, callables, evaluators, depth + 1) {
-                        Out::Done(v) => v,
-                        Out::Suspend(_) => {
-                            return Out::Suspend(Cont::Apply {
-                                step: ApplyStep::ReceiverMethod {
-                                    receiver: receiver.clone(),
-                                    member: member.clone(),
-                                },
-                                locals: locals.clone(),
-                                callables: callables.clone(),
-                                depth,
-                                handler_stack: self.active_inline_handler_stack.clone(),
-                            });
-                        }
-                        Out::Err(e) => return Out::Err(e),
-                    };
+                    let arg_value =
+                        match self.eval_expr(arg, locals, callables, evaluators, depth + 1) {
+                            Out::Done(v) => v,
+                            Out::Suspend(_) => {
+                                return Out::Suspend(Cont::Apply {
+                                    step: ApplyStep::ReceiverMethod {
+                                        receiver: receiver.clone(),
+                                        member: member.clone(),
+                                    },
+                                    locals: locals.clone(),
+                                    callables: callables.clone(),
+                                    depth,
+                                    handler_stack: self.active_inline_handler_stack.clone(),
+                                });
+                            }
+                            Out::Err(e) => return Out::Err(e),
+                        };
                     let outcome = self.apply_receiver_method_value_call_ast_outcome(
                         receiver,
                         member,
@@ -3158,11 +3217,12 @@ impl<'m> RuntimeOutputResolver<'m> {
                 if let Expr::Var(ctor_name) = callee.as_ref()
                     && let Some(field_name) = self.single_field_constructor_field(ctor_name)
                 {
-                    let field_value = match self.eval_expr(arg, locals, callables, evaluators, depth + 1) {
-                        Out::Done(v) => v,
-                        Out::Suspend(s) => return Out::Suspend(s),
-                        Out::Err(e) => return Out::Err(e),
-                    };
+                    let field_value =
+                        match self.eval_expr(arg, locals, callables, evaluators, depth + 1) {
+                            Out::Done(v) => v,
+                            Out::Suspend(s) => return Out::Suspend(s),
+                            Out::Err(e) => return Out::Err(e),
+                        };
                     let mut fields = HashMap::new();
                     fields.insert(field_name, field_value);
                     return Out::Done(RuntimeValue::Record {
@@ -3173,19 +3233,22 @@ impl<'m> RuntimeOutputResolver<'m> {
 
                 // Single-arg named call
                 if let Expr::Var(fn_name) = callee.as_ref() {
-                    let arg_value = match self.eval_expr(arg, locals, callables, evaluators, depth + 1) {
-                        Out::Done(v) => v,
-                        Out::Suspend(_) => {
-                            return Out::Suspend(Cont::Apply {
-                                step: ApplyStep::SingleArgCall { fn_name: fn_name.clone() },
-                                locals: locals.clone(),
-                                callables: callables.clone(),
-                                depth,
-                                handler_stack: self.active_inline_handler_stack.clone(),
-                            });
-                        }
-                        Out::Err(e) => return Out::Err(e),
-                    };
+                    let arg_value =
+                        match self.eval_expr(arg, locals, callables, evaluators, depth + 1) {
+                            Out::Done(v) => v,
+                            Out::Suspend(_) => {
+                                return Out::Suspend(Cont::Apply {
+                                    step: ApplyStep::SingleArgCall {
+                                        fn_name: fn_name.clone(),
+                                    },
+                                    locals: locals.clone(),
+                                    callables: callables.clone(),
+                                    depth,
+                                    handler_stack: self.active_inline_handler_stack.clone(),
+                                });
+                            }
+                            Out::Err(e) => return Out::Err(e),
+                        };
                     let outcome = self.apply_named_value_call_ast_outcome(
                         fn_name,
                         arg_value,
@@ -3205,23 +3268,28 @@ impl<'m> RuntimeOutputResolver<'m> {
                 }
             }
 
-            Expr::MethodCall { receiver, method, args } if args.len() == 1 => {
-                let arg_value = match self.eval_expr(&args[0], locals, callables, evaluators, depth + 1) {
-                    Out::Done(v) => v,
-                    Out::Suspend(_) => {
-                        return Out::Suspend(Cont::Apply {
-                            step: ApplyStep::ReceiverMethod {
-                                receiver: receiver.clone(),
-                                member: method.clone(),
-                            },
-                            locals: locals.clone(),
-                            callables: callables.clone(),
-                            depth,
-                            handler_stack: self.active_inline_handler_stack.clone(),
-                        });
-                    }
-                    Out::Err(e) => return Out::Err(e),
-                };
+            Expr::MethodCall {
+                receiver,
+                method,
+                args,
+            } if args.len() == 1 => {
+                let arg_value =
+                    match self.eval_expr(&args[0], locals, callables, evaluators, depth + 1) {
+                        Out::Done(v) => v,
+                        Out::Suspend(_) => {
+                            return Out::Suspend(Cont::Apply {
+                                step: ApplyStep::ReceiverMethod {
+                                    receiver: receiver.clone(),
+                                    member: method.clone(),
+                                },
+                                locals: locals.clone(),
+                                callables: callables.clone(),
+                                depth,
+                                handler_stack: self.active_inline_handler_stack.clone(),
+                            });
+                        }
+                        Out::Err(e) => return Out::Err(e),
+                    };
                 let outcome = self.apply_receiver_method_value_call_ast_outcome(
                     receiver,
                     method,
@@ -3233,19 +3301,22 @@ impl<'m> RuntimeOutputResolver<'m> {
             }
 
             Expr::Pipeline { value, callee } => {
-                let pipeline_value = match self.eval_expr(value, locals, callables, evaluators, depth + 1) {
-                    Out::Done(v) => v,
-                    Out::Suspend(_) => {
-                        return Out::Suspend(Cont::Apply {
-                            step: ApplyStep::Pipeline { callee: callee.clone() },
-                            locals: locals.clone(),
-                            callables: callables.clone(),
-                            depth,
-                            handler_stack: self.active_inline_handler_stack.clone(),
-                        });
-                    }
-                    Out::Err(e) => return Out::Err(e),
-                };
+                let pipeline_value =
+                    match self.eval_expr(value, locals, callables, evaluators, depth + 1) {
+                        Out::Done(v) => v,
+                        Out::Suspend(_) => {
+                            return Out::Suspend(Cont::Apply {
+                                step: ApplyStep::Pipeline {
+                                    callee: callee.clone(),
+                                },
+                                locals: locals.clone(),
+                                callables: callables.clone(),
+                                depth,
+                                handler_stack: self.active_inline_handler_stack.clone(),
+                            });
+                        }
+                        Out::Err(e) => return Out::Err(e),
+                    };
                 let outcome = self.apply_pipeline_ast_outcome(
                     callee,
                     pipeline_value,
@@ -3257,7 +3328,10 @@ impl<'m> RuntimeOutputResolver<'m> {
                 Self::ast_outcome_to_out(outcome)
             }
 
-            Expr::RecordConstruct { constructor, fields } => {
+            Expr::RecordConstruct {
+                constructor,
+                fields,
+            } => {
                 if fields.is_empty() {
                     if let Some(value) = self.try_apply_bare_runtime_bridge_value(
                         constructor,
@@ -3271,7 +3345,8 @@ impl<'m> RuntimeOutputResolver<'m> {
                     }
                 }
                 let mut field_map: HashMap<String, RuntimeValue> = HashMap::new();
-                let fields_vec: Vec<(String, Expr)> = fields.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+                let fields_vec: Vec<(String, Expr)> =
+                    fields.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
                 let mut i = 0;
                 while i < fields_vec.len() {
                     let (field_name, field_expr) = &fields_vec[i];
@@ -3281,7 +3356,8 @@ impl<'m> RuntimeOutputResolver<'m> {
                             i += 1;
                         }
                         Out::Suspend(_) => {
-                            let evaluated: Vec<(String, RuntimeValue)> = field_map.into_iter().collect();
+                            let evaluated: Vec<(String, RuntimeValue)> =
+                                field_map.into_iter().collect();
                             let remaining = fields_vec[i + 1..].to_vec();
                             return Out::Suspend(Cont::Apply {
                                 step: ApplyStep::RecordField {
@@ -3305,17 +3381,21 @@ impl<'m> RuntimeOutputResolver<'m> {
             }
 
             Expr::Resume { value } => {
-                let resumed = match self.eval_expr(value, locals, callables, evaluators, depth + 1) {
+                let resumed = match self.eval_expr(value, locals, callables, evaluators, depth + 1)
+                {
                     Out::Done(v) => v,
                     Out::Suspend(s) => return Out::Suspend(s),
                     Out::Err(e) => return Out::Err(e),
                 };
-                let outcome = self.resume_through_active_continuation_bridge_outcome(resumed, evaluators);
+                let outcome =
+                    self.resume_through_active_continuation_bridge_outcome(resumed, evaluators);
                 // After eval, signal caller via Cont::Resume (bridge call happened synchronously above)
                 match outcome {
                     AstEvalOutcome::Complete(v) => Out::Done(v),
                     AstEvalOutcome::Suspended(_) => Out::Suspend(Cont::Resume),
-                    AstEvalOutcome::Aborted => Out::Err(RuntimeError::Abort { kind: "aborted".into() }),
+                    AstEvalOutcome::Aborted => Out::Err(RuntimeError::Abort {
+                        kind: "aborted".into(),
+                    }),
                     AstEvalOutcome::Unsupported => Out::Err(RuntimeError::Unsupported),
                 }
             }
@@ -3948,7 +4028,10 @@ impl<'m> RuntimeOutputResolver<'m> {
             // If we set a slot and dispatch_handler_method consumed it (take_caller_cont=true),
             // remaining stmts were already executed via FinishKind::Ingest; skip them.
             let consumed = did_set_slot
-                && self.pending_caller_cont_stack.last().map_or(false, |s| s.is_none());
+                && self
+                    .pending_caller_cont_stack
+                    .last()
+                    .map_or(false, |s| s.is_none());
             if consumed {
                 self.pending_caller_cont_stack.pop();
                 return Some(());
@@ -3993,7 +4076,10 @@ impl<'m> RuntimeOutputResolver<'m> {
             let ok = self.execute_unit_ast_stmt(&stmts[i], locals, callables, evaluators, depth)?;
             // After stmt: if the top slot was consumed (→None) by a handler dispatch, the
             // remaining stmts were already executed inside apply_cont; skip them.
-            let consumed = self.pending_caller_cont_stack.last().map_or(false, |s| s.is_none());
+            let consumed = self
+                .pending_caller_cont_stack
+                .last()
+                .map_or(false, |s| s.is_none());
             if consumed && !remaining.is_empty() {
                 self.pending_caller_cont_stack.pop();
                 return Some(ok);
@@ -4014,7 +4100,7 @@ impl<'m> RuntimeOutputResolver<'m> {
         &mut self,
         stmts: &[Stmt],
         mut locals: RuntimeLocals,
-        mut callables: HashMap<String, IntCallable>,
+        callables: HashMap<String, IntCallable>,
         evaluators: &RuntimeEvaluators<'_, '_>,
         depth: usize,
         finish: FinishKind,
@@ -4083,17 +4169,6 @@ impl<'m> RuntimeOutputResolver<'m> {
                                 handler_stack: self.active_inline_handler_stack.clone(),
                                 finish,
                             });
-                        }
-                        Out::Err(RuntimeError::Unsupported) => {
-                            let mut loc = locals.clone();
-                            let mut call = callables.clone();
-                            if self
-                                .execute_unit_expr_ast(expr, &mut loc, &mut call, evaluators, depth + 1)
-                                .is_some()
-                            {
-                                locals = loc;
-                                callables = call;
-                            }
                         }
                         Out::Err(e) => return Out::Err(e),
                     }
@@ -4985,9 +5060,15 @@ impl<'m> RuntimeOutputResolver<'m> {
         }
     }
 
-    fn push_resume_token_for_handler(&mut self, dispatch_depth: usize, take_caller_cont: bool) -> usize {
+    fn push_resume_token_for_handler(
+        &mut self,
+        dispatch_depth: usize,
+        take_caller_cont: bool,
+    ) -> usize {
         let caller_cont = if take_caller_cont {
-            self.pending_caller_cont_stack.last_mut().and_then(|s| s.take())
+            self.pending_caller_cont_stack
+                .last_mut()
+                .and_then(|s| s.take())
         } else {
             None
         };
@@ -5019,9 +5100,15 @@ impl<'m> RuntimeOutputResolver<'m> {
         self.resume_tokens.last_mut()
     }
 
-    fn push_optimized_resume_token_for_handler(&mut self, dispatch_depth: usize, take_caller_cont: bool) -> usize {
+    fn push_optimized_resume_token_for_handler(
+        &mut self,
+        dispatch_depth: usize,
+        take_caller_cont: bool,
+    ) -> usize {
         let caller_cont = if take_caller_cont {
-            self.pending_caller_cont_stack.last_mut().and_then(|s| s.take())
+            self.pending_caller_cont_stack
+                .last_mut()
+                .and_then(|s| s.take())
         } else {
             None
         };
@@ -5060,10 +5147,9 @@ impl<'m> RuntimeOutputResolver<'m> {
     /// Used to detect whether resume was called during handler-body stmt execution.
     fn handler_token_state_tag(&self, token_idx: usize) -> u8 {
         let state = match self.execution_mode {
-            lower::EffectExecutionMode::PortableFallback => self
-                .resume_tokens
-                .get(token_idx)
-                .map(|t| &t.state),
+            lower::EffectExecutionMode::PortableFallback => {
+                self.resume_tokens.get(token_idx).map(|t| &t.state)
+            }
             lower::EffectExecutionMode::TypedContinuationOptimized => self
                 .optimized_resume_tokens
                 .get(token_idx)
@@ -5092,7 +5178,11 @@ impl<'m> RuntimeOutputResolver<'m> {
         }
     }
 
-    fn begin_handler_continuation_bridge(&mut self, dispatch_depth: usize, take_caller_cont: bool) -> usize {
+    fn begin_handler_continuation_bridge(
+        &mut self,
+        dispatch_depth: usize,
+        take_caller_cont: bool,
+    ) -> usize {
         match self.execution_mode {
             lower::EffectExecutionMode::PortableFallback => {
                 self.push_resume_token_for_handler(dispatch_depth, take_caller_cont)
@@ -5162,7 +5252,10 @@ impl<'m> RuntimeOutputResolver<'m> {
                         token.cont = Some(c);
                     }
                     return AstEvalOutcome::Suspended(Box::new(AstContinuation::Frame {
-                        frame: AstContinuationFrame { value: None, stmt: None },
+                        frame: AstContinuationFrame {
+                            value: None,
+                            stmt: None,
+                        },
                         resumed: RuntimeValue::Unit,
                     }));
                 }
@@ -5229,7 +5322,10 @@ impl<'m> RuntimeOutputResolver<'m> {
                         token.cont = Some(c);
                     }
                     return AstEvalOutcome::Suspended(Box::new(AstContinuation::Frame {
-                        frame: AstContinuationFrame { value: None, stmt: None },
+                        frame: AstContinuationFrame {
+                            value: None,
+                            stmt: None,
+                        },
                         resumed: RuntimeValue::Unit,
                     }));
                 }
@@ -5581,44 +5677,96 @@ impl<'m> RuntimeOutputResolver<'m> {
             let stmt = &stmts[i];
 
             // Returns true = continue, false = aborted, None = suspended (save remaining & break)
-            enum StmtResult { Continue, Abort, Suspend }
+            enum StmtResult {
+                Continue,
+                Abort,
+                Suspend,
+            }
 
             let result = if produce_value {
                 match stmt {
                     Stmt::Binding { name, value } | Stmt::MutBinding { name, value } => {
-                        match self.eval_expr(value, &current_locals, &current_callables, evaluators, depth + 1) {
-                            Out::Done(v) => { current_locals.store(name, v); StmtResult::Continue }
+                        match self.eval_expr(
+                            value,
+                            &current_locals,
+                            &current_callables,
+                            evaluators,
+                            depth + 1,
+                        ) {
+                            Out::Done(v) => {
+                                current_locals.store(name, v);
+                                StmtResult::Continue
+                            }
                             Out::Suspend(_) => StmtResult::Suspend,
                             Out::Err(RuntimeError::Unsupported) => StmtResult::Continue,
-                            Out::Err(_) => { aborted = true; StmtResult::Abort }
+                            Out::Err(_) => {
+                                aborted = true;
+                                StmtResult::Abort
+                            }
                         }
                     }
                     Stmt::Assign { name, value } => {
-                        if current_locals.get(name).is_none() { aborted = true; StmtResult::Abort }
-                        else {
-                            match self.eval_expr(value, &current_locals, &current_callables, evaluators, depth + 1) {
-                                Out::Done(v) => { current_locals.store(name, v); StmtResult::Continue }
+                        if current_locals.get(name).is_none() {
+                            aborted = true;
+                            StmtResult::Abort
+                        } else {
+                            match self.eval_expr(
+                                value,
+                                &current_locals,
+                                &current_callables,
+                                evaluators,
+                                depth + 1,
+                            ) {
+                                Out::Done(v) => {
+                                    current_locals.store(name, v);
+                                    StmtResult::Continue
+                                }
                                 Out::Suspend(_) => StmtResult::Suspend,
                                 Out::Err(RuntimeError::Unsupported) => StmtResult::Continue,
-                                Out::Err(_) => { aborted = true; StmtResult::Abort }
+                                Out::Err(_) => {
+                                    aborted = true;
+                                    StmtResult::Abort
+                                }
                             }
                         }
                     }
                     Stmt::Expr(expr) => {
-                        match self.eval_expr(expr, &current_locals, &current_callables, evaluators, depth + 1) {
+                        match self.eval_expr(
+                            expr,
+                            &current_locals,
+                            &current_callables,
+                            evaluators,
+                            depth + 1,
+                        ) {
                             Out::Done(_) => StmtResult::Continue,
                             Out::Suspend(_) => StmtResult::Suspend,
                             Out::Err(RuntimeError::Unsupported) if self.runtime_error.is_none() => {
                                 // Try as unit side-effect (only if no runtime error was set by eval_expr)
                                 let mut loc = current_locals.clone();
                                 let mut call = current_callables.clone();
-                                match self.execute_unit_ast_stmt_outcome(stmt, &mut loc, &mut call, evaluators, depth + 1) {
-                                    AstEvalOutcome::Complete(()) => { current_locals = loc; current_callables = call; StmtResult::Continue }
+                                match self.execute_unit_ast_stmt_outcome(
+                                    stmt,
+                                    &mut loc,
+                                    &mut call,
+                                    evaluators,
+                                    depth + 1,
+                                ) {
+                                    AstEvalOutcome::Complete(()) => {
+                                        current_locals = loc;
+                                        current_callables = call;
+                                        StmtResult::Continue
+                                    }
                                     AstEvalOutcome::Suspended(_) => StmtResult::Suspend,
-                                    AstEvalOutcome::Aborted | AstEvalOutcome::Unsupported => { aborted = true; StmtResult::Abort }
+                                    AstEvalOutcome::Aborted | AstEvalOutcome::Unsupported => {
+                                        aborted = true;
+                                        StmtResult::Abort
+                                    }
                                 }
                             }
-                            Out::Err(_) => { aborted = true; StmtResult::Abort }
+                            Out::Err(_) => {
+                                aborted = true;
+                                StmtResult::Abort
+                            }
                         }
                     }
                 }
@@ -5626,28 +5774,63 @@ impl<'m> RuntimeOutputResolver<'m> {
                 // Unit-position handler body
                 match stmt {
                     Stmt::Expr(expr) => {
-                        match self.eval_expr(expr, &current_locals, &current_callables, evaluators, depth + 1) {
+                        match self.eval_expr(
+                            expr,
+                            &current_locals,
+                            &current_callables,
+                            evaluators,
+                            depth + 1,
+                        ) {
                             Out::Done(_) => StmtResult::Continue,
                             Out::Suspend(_) => StmtResult::Suspend,
                             Out::Err(RuntimeError::Unsupported) if self.runtime_error.is_none() => {
                                 let mut loc = current_locals.clone();
                                 let mut call = current_callables.clone();
-                                match self.execute_unit_ast_stmt_outcome(stmt, &mut loc, &mut call, evaluators, depth + 1) {
-                                    AstEvalOutcome::Complete(()) => { current_locals = loc; current_callables = call; StmtResult::Continue }
+                                match self.execute_unit_ast_stmt_outcome(
+                                    stmt,
+                                    &mut loc,
+                                    &mut call,
+                                    evaluators,
+                                    depth + 1,
+                                ) {
+                                    AstEvalOutcome::Complete(()) => {
+                                        current_locals = loc;
+                                        current_callables = call;
+                                        StmtResult::Continue
+                                    }
                                     AstEvalOutcome::Suspended(_) => StmtResult::Suspend,
-                                    AstEvalOutcome::Aborted | AstEvalOutcome::Unsupported => { aborted = true; StmtResult::Abort }
+                                    AstEvalOutcome::Aborted | AstEvalOutcome::Unsupported => {
+                                        aborted = true;
+                                        StmtResult::Abort
+                                    }
                                 }
                             }
-                            Out::Err(_) => { aborted = true; StmtResult::Abort }
+                            Out::Err(_) => {
+                                aborted = true;
+                                StmtResult::Abort
+                            }
                         }
                     }
                     _ => {
                         let mut loc = current_locals.clone();
                         let mut call = current_callables.clone();
-                        match self.execute_unit_ast_stmt_outcome(stmt, &mut loc, &mut call, evaluators, depth + 1) {
-                            AstEvalOutcome::Complete(()) => { current_locals = loc; current_callables = call; StmtResult::Continue }
+                        match self.execute_unit_ast_stmt_outcome(
+                            stmt,
+                            &mut loc,
+                            &mut call,
+                            evaluators,
+                            depth + 1,
+                        ) {
+                            AstEvalOutcome::Complete(()) => {
+                                current_locals = loc;
+                                current_callables = call;
+                                StmtResult::Continue
+                            }
                             AstEvalOutcome::Suspended(_) => StmtResult::Suspend,
-                            AstEvalOutcome::Aborted | AstEvalOutcome::Unsupported => { aborted = true; StmtResult::Abort }
+                            AstEvalOutcome::Aborted | AstEvalOutcome::Unsupported => {
+                                aborted = true;
+                                StmtResult::Abort
+                            }
                         }
                     }
                 }
@@ -5666,7 +5849,10 @@ impl<'m> RuntimeOutputResolver<'m> {
                             callables: current_callables,
                             depth,
                             handler_stack: self.active_inline_handler_stack.clone(),
-                            finish: FinishKind::HandlerBody { token_idx, produce_value },
+                            finish: FinishKind::HandlerBody {
+                                token_idx,
+                                produce_value,
+                            },
                         };
                         self.set_handler_token_cont(token_idx, cont);
                     }
@@ -5699,7 +5885,14 @@ impl<'m> RuntimeOutputResolver<'m> {
         evaluators: &RuntimeEvaluators<'_, '_>,
         depth: usize,
     ) -> Option<RuntimeValue> {
-        match self.dispatch_handler_method_core(method, &[arg_val], evaluators, depth, true, false)? {
+        match self.dispatch_handler_method_core(
+            method,
+            &[arg_val],
+            evaluators,
+            depth,
+            true,
+            false,
+        )? {
             HandlerCompletion::Resumed(value) => Some(*value),
             HandlerCompletion::Suspended(_continuation) => None,
             HandlerCompletion::Aborted => {
@@ -5716,7 +5909,8 @@ impl<'m> RuntimeOutputResolver<'m> {
         evaluators: &RuntimeEvaluators<'_, '_>,
         depth: usize,
     ) -> AstEvalOutcome<RuntimeValue> {
-        match self.dispatch_handler_method_core(method, &[arg_val], evaluators, depth, true, false) {
+        match self.dispatch_handler_method_core(method, &[arg_val], evaluators, depth, true, false)
+        {
             Some(HandlerCompletion::Resumed(value)) => AstEvalOutcome::Complete(*value),
             Some(HandlerCompletion::Suspended(continuation)) => {
                 AstEvalOutcome::Suspended(continuation)
@@ -5755,7 +5949,14 @@ impl<'m> RuntimeOutputResolver<'m> {
         depth: usize,
     ) -> Option<()> {
         // take_caller_cont=true: direct unit-position call, may pick up pending caller cont.
-        match self.dispatch_handler_method_core(method, &[arg_val], evaluators, depth, false, true)? {
+        match self.dispatch_handler_method_core(
+            method,
+            &[arg_val],
+            evaluators,
+            depth,
+            false,
+            true,
+        )? {
             HandlerCompletion::Resumed(_) => Some(()),
             HandlerCompletion::Suspended(_continuation) => None,
             HandlerCompletion::Aborted => {
