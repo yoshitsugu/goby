@@ -2695,6 +2695,671 @@ impl<'m> RuntimeOutputResolver<'m> {
         }
     }
 
+    // ── Phase 2: New continuation-based eval_expr ─────────────────────────────
+
+    #[allow(dead_code)]
+    fn ast_outcome_to_out(outcome: AstEvalOutcome<RuntimeValue>) -> Out<RuntimeValue> {
+        match outcome {
+            AstEvalOutcome::Complete(v) => Out::Done(v),
+            AstEvalOutcome::Suspended(_c) => Out::Suspend(Cont::Resume), // placeholder — real conversion in Phase 5
+            AstEvalOutcome::Aborted => Out::Err(RuntimeError::Abort { kind: "aborted".into() }),
+            AstEvalOutcome::Unsupported => Out::Err(RuntimeError::Unsupported),
+        }
+    }
+
+    #[allow(dead_code)]
+    fn eval_expr(
+        &mut self,
+        expr: &Expr,
+        locals: &RuntimeLocals,
+        callables: &HashMap<String, IntCallable>,
+        evaluators: &RuntimeEvaluators<'_, '_>,
+        depth: usize,
+    ) -> Out<RuntimeValue> {
+        if depth >= MAX_EVAL_DEPTH {
+            return Out::Err(RuntimeError::Unsupported);
+        }
+
+        match expr {
+            Expr::InterpolatedString(parts) => {
+                let mut out_so_far = String::new();
+                let parts_slice = parts.as_slice();
+                let mut i = 0;
+                while i < parts_slice.len() {
+                    match &parts_slice[i] {
+                        InterpolatedPart::Text(text) => {
+                            out_so_far.push_str(text);
+                            i += 1;
+                        }
+                        InterpolatedPart::Expr(inner_expr) => {
+                            match self.eval_expr(inner_expr, locals, callables, evaluators, depth + 1) {
+                                Out::Done(value) => {
+                                    out_so_far.push_str(&value.to_output_text());
+                                    i += 1;
+                                }
+                                Out::Suspend(_) => {
+                                    let remaining = parts_slice[i + 1..].to_vec();
+                                    return Out::Suspend(Cont::Apply {
+                                        step: ApplyStep::InterpolatedPart {
+                                            accumulated: out_so_far,
+                                            remaining,
+                                        },
+                                        locals: locals.clone(),
+                                        callables: callables.clone(),
+                                        depth,
+                                        handler_stack: self.active_inline_handler_stack.clone(),
+                                    });
+                                }
+                                Out::Err(e) => return Out::Err(e),
+                            }
+                        }
+                    }
+                }
+                Out::Done(RuntimeValue::String(out_so_far))
+            }
+
+            Expr::BinOp { op, left, right } => {
+                let lv = match self.eval_expr(left, locals, callables, evaluators, depth + 1) {
+                    Out::Done(v) => v,
+                    Out::Suspend(_) => {
+                        return Out::Suspend(Cont::Apply {
+                            step: ApplyStep::BinOpLeft {
+                                op: op.clone(),
+                                right: (**right).clone(),
+                            },
+                            locals: locals.clone(),
+                            callables: callables.clone(),
+                            depth,
+                            handler_stack: self.active_inline_handler_stack.clone(),
+                        });
+                    }
+                    Out::Err(e) => return Out::Err(e),
+                };
+                let rv = match self.eval_expr(right, locals, callables, evaluators, depth + 1) {
+                    Out::Done(v) => v,
+                    Out::Suspend(_) => {
+                        return Out::Suspend(Cont::Apply {
+                            step: ApplyStep::BinOpRight { op: op.clone(), left: lv },
+                            locals: locals.clone(),
+                            callables: callables.clone(),
+                            depth,
+                            handler_stack: self.active_inline_handler_stack.clone(),
+                        });
+                    }
+                    Out::Err(e) => return Out::Err(e),
+                };
+                match self.apply_binop_runtime_value(op.clone(), lv, rv) {
+                    Some(v) => Out::Done(v),
+                    None => Out::Err(RuntimeError::Unsupported),
+                }
+            }
+
+            Expr::ListLit { elements, spread } => {
+                let mut int_items: Vec<i64> = Vec::with_capacity(elements.len());
+                let mut string_items: Vec<String> = Vec::with_capacity(elements.len());
+                let mut list_kind: Option<&'static str> = None;
+                let elems_slice = elements.as_slice();
+                let mut i = 0;
+                while i < elems_slice.len() {
+                    match self.eval_expr(&elems_slice[i], locals, callables, evaluators, depth + 1) {
+                        Out::Done(value) => {
+                            match &value {
+                                RuntimeValue::Int(n) => {
+                                    if list_kind == Some("string") {
+                                        return Out::Err(RuntimeError::Unsupported);
+                                    }
+                                    list_kind = Some("int");
+                                    int_items.push(*n);
+                                }
+                                RuntimeValue::String(text) => {
+                                    if list_kind == Some("int") {
+                                        return Out::Err(RuntimeError::Unsupported);
+                                    }
+                                    list_kind = Some("string");
+                                    string_items.push(text.clone());
+                                }
+                                _ => return Out::Err(RuntimeError::Unsupported),
+                            }
+                            i += 1;
+                        }
+                        Out::Suspend(_) => {
+                            // Collect currently evaluated items
+                            let evaluated: Vec<RuntimeValue> = if list_kind == Some("string") {
+                                string_items.iter().map(|s| RuntimeValue::String(s.clone())).collect()
+                            } else {
+                                int_items.iter().map(|n| RuntimeValue::Int(*n)).collect()
+                            };
+                            let remaining = elems_slice[i + 1..].to_vec();
+                            return Out::Suspend(Cont::Apply {
+                                step: ApplyStep::ListLitElement {
+                                    evaluated,
+                                    remaining,
+                                    spread: spread.clone().map(|s| *s),
+                                },
+                                locals: locals.clone(),
+                                callables: callables.clone(),
+                                depth,
+                                handler_stack: self.active_inline_handler_stack.clone(),
+                            });
+                        }
+                        Out::Err(e) => return Out::Err(e),
+                    }
+                }
+                if let Some(tail) = spread {
+                    match self.eval_expr(tail, locals, callables, evaluators, depth + 1) {
+                        Out::Done(tail_value) => {
+                            return match tail_value {
+                                RuntimeValue::ListInt(mut values) => {
+                                    if list_kind == Some("string") {
+                                        if values.is_empty() {
+                                            Out::Done(RuntimeValue::ListString(string_items))
+                                        } else {
+                                            Out::Err(RuntimeError::Unsupported)
+                                        }
+                                    } else {
+                                        int_items.append(&mut values);
+                                        Out::Done(RuntimeValue::ListInt(int_items))
+                                    }
+                                }
+                                RuntimeValue::ListString(mut values) => {
+                                    if list_kind == Some("int") {
+                                        if values.is_empty() {
+                                            Out::Done(RuntimeValue::ListInt(int_items))
+                                        } else {
+                                            Out::Err(RuntimeError::Unsupported)
+                                        }
+                                    } else {
+                                        string_items.append(&mut values);
+                                        Out::Done(RuntimeValue::ListString(string_items))
+                                    }
+                                }
+                                _ => Out::Err(RuntimeError::Unsupported),
+                            };
+                        }
+                        Out::Suspend(_) => {
+                            let evaluated: Vec<RuntimeValue> = if list_kind == Some("string") {
+                                string_items.iter().map(|s| RuntimeValue::String(s.clone())).collect()
+                            } else {
+                                int_items.iter().map(|n| RuntimeValue::Int(*n)).collect()
+                            };
+                            return Out::Suspend(Cont::Apply {
+                                step: ApplyStep::ListLitElement {
+                                    evaluated,
+                                    remaining: vec![],
+                                    spread: Some((**tail).clone()),
+                                },
+                                locals: locals.clone(),
+                                callables: callables.clone(),
+                                depth,
+                                handler_stack: self.active_inline_handler_stack.clone(),
+                            });
+                        }
+                        Out::Err(e) => return Out::Err(e),
+                    }
+                }
+                match list_kind {
+                    Some("string") => Out::Done(RuntimeValue::ListString(string_items)),
+                    _ => Out::Done(RuntimeValue::ListInt(int_items)),
+                }
+            }
+
+            Expr::TupleLit(items) => {
+                if items.is_empty() {
+                    return Out::Done(RuntimeValue::Unit);
+                }
+                let mut values: Vec<RuntimeValue> = Vec::with_capacity(items.len());
+                let items_slice = items.as_slice();
+                let mut i = 0;
+                while i < items_slice.len() {
+                    match self.eval_expr(&items_slice[i], locals, callables, evaluators, depth + 1) {
+                        Out::Done(v) => {
+                            values.push(v);
+                            i += 1;
+                        }
+                        Out::Suspend(_) => {
+                            let remaining = items_slice[i + 1..].to_vec();
+                            return Out::Suspend(Cont::Apply {
+                                step: ApplyStep::TupleLitElement {
+                                    evaluated: values,
+                                    remaining,
+                                },
+                                locals: locals.clone(),
+                                callables: callables.clone(),
+                                depth,
+                                handler_stack: self.active_inline_handler_stack.clone(),
+                            });
+                        }
+                        Out::Err(e) => return Out::Err(e),
+                    }
+                }
+                Out::Done(RuntimeValue::Tuple(values))
+            }
+
+            Expr::Block(stmts) => {
+                let mut block_locals = locals.clone();
+                let mut block_callables = callables.clone();
+                let mut last_value: Option<RuntimeValue> = None;
+                let stmts_slice = stmts.as_slice();
+                let mut i = 0;
+                while i < stmts_slice.len() {
+                    let stmt = &stmts_slice[i];
+                    match stmt {
+                        Stmt::Binding { name, value } | Stmt::MutBinding { name, value } => {
+                            match self.eval_expr(value, &block_locals, &block_callables, evaluators, depth + 1) {
+                                Out::Done(v) => {
+                                    block_locals.store(name, v);
+                                    last_value = None;
+                                    i += 1;
+                                }
+                                Out::Suspend(_) => {
+                                    let remaining = stmts_slice[i + 1..].to_vec();
+                                    return Out::Suspend(Cont::StmtSeq {
+                                        store: Some(StoreOp::Bind { name: name.clone() }),
+                                        remaining,
+                                        locals: block_locals,
+                                        callables: block_callables,
+                                        depth,
+                                        handler_stack: self.active_inline_handler_stack.clone(),
+                                        finish: FinishKind::Block,
+                                    });
+                                }
+                                Out::Err(e) => return Out::Err(e),
+                            }
+                        }
+                        Stmt::Assign { name, value } => {
+                            if block_locals.get(name).is_none() {
+                                return Out::Err(RuntimeError::Unsupported);
+                            }
+                            match self.eval_expr(value, &block_locals, &block_callables, evaluators, depth + 1) {
+                                Out::Done(v) => {
+                                    block_locals.store(name, v);
+                                    last_value = None;
+                                    i += 1;
+                                }
+                                Out::Suspend(_) => {
+                                    let remaining = stmts_slice[i + 1..].to_vec();
+                                    return Out::Suspend(Cont::StmtSeq {
+                                        store: Some(StoreOp::Assign { name: name.clone() }),
+                                        remaining,
+                                        locals: block_locals,
+                                        callables: block_callables,
+                                        depth,
+                                        handler_stack: self.active_inline_handler_stack.clone(),
+                                        finish: FinishKind::Block,
+                                    });
+                                }
+                                Out::Err(e) => return Out::Err(e),
+                            }
+                        }
+                        Stmt::Expr(inner_expr) => {
+                            match self.eval_expr(inner_expr, &block_locals, &block_callables, evaluators, depth + 1) {
+                                Out::Done(v) => {
+                                    last_value = Some(v);
+                                    i += 1;
+                                }
+                                Out::Suspend(_) => {
+                                    let remaining = stmts_slice[i + 1..].to_vec();
+                                    return Out::Suspend(Cont::StmtSeq {
+                                        store: None,
+                                        remaining,
+                                        locals: block_locals,
+                                        callables: block_callables,
+                                        depth,
+                                        handler_stack: self.active_inline_handler_stack.clone(),
+                                        finish: FinishKind::Block,
+                                    });
+                                }
+                                Out::Err(_) => {
+                                    // Try unit path (same as eval_expr_ast_outcome)
+                                    let mut ml = block_locals.clone();
+                                    let mut mc = block_callables.clone();
+                                    if self.execute_unit_expr_ast(inner_expr, &mut ml, &mut mc, evaluators, depth + 1).is_none() {
+                                        return Out::Err(RuntimeError::Abort { kind: "unit_eval_failed".into() });
+                                    }
+                                    block_locals = ml;
+                                    block_callables = mc;
+                                    last_value = Some(RuntimeValue::Unit);
+                                    i += 1;
+                                }
+                            }
+                        }
+                    }
+                }
+                match last_value {
+                    Some(v) => Out::Done(v),
+                    None => Out::Done(RuntimeValue::Unit),
+                }
+            }
+
+            Expr::Case { scrutinee, arms } => {
+                let scrutinee_val = match self.eval_expr(scrutinee, locals, callables, evaluators, depth + 1) {
+                    Out::Done(v) => v,
+                    Out::Suspend(_) => {
+                        return Out::Suspend(Cont::Apply {
+                            step: ApplyStep::CaseSelect { arms: arms.clone() },
+                            locals: locals.clone(),
+                            callables: callables.clone(),
+                            depth,
+                            handler_stack: self.active_inline_handler_stack.clone(),
+                        });
+                    }
+                    Out::Err(e) => return Out::Err(e),
+                };
+                let Some((arm_body, arm_locals)) = self.select_case_arm(&scrutinee_val, arms, locals) else {
+                    return Out::Err(RuntimeError::Unsupported);
+                };
+                self.eval_expr(&arm_body, &arm_locals, callables, evaluators, depth + 1)
+            }
+
+            Expr::If { condition, then_expr, else_expr } => {
+                let cond_val = match self.eval_expr(condition, locals, callables, evaluators, depth + 1) {
+                    Out::Done(v) => v,
+                    Out::Suspend(_) => {
+                        return Out::Suspend(Cont::Apply {
+                            step: ApplyStep::IfBranch {
+                                then_expr: (**then_expr).clone(),
+                                else_expr: (**else_expr).clone(),
+                            },
+                            locals: locals.clone(),
+                            callables: callables.clone(),
+                            depth,
+                            handler_stack: self.active_inline_handler_stack.clone(),
+                        });
+                    }
+                    Out::Err(e) => return Out::Err(e),
+                };
+                let branch: &Expr = match cond_val {
+                    RuntimeValue::Bool(true) => then_expr,
+                    RuntimeValue::Bool(false) => else_expr,
+                    _ => return Out::Err(RuntimeError::Unsupported),
+                };
+                match self.eval_expr(branch, locals, callables, evaluators, depth + 1) {
+                    Out::Done(v) => Out::Done(v),
+                    Out::Suspend(s) => Out::Suspend(s),
+                    Out::Err(_) => {
+                        let mut branch_locals = locals.clone();
+                        let mut branch_callables = callables.clone();
+                        if self.execute_unit_expr_ast(branch, &mut branch_locals, &mut branch_callables, evaluators, depth + 1).is_none() {
+                            return Out::Err(RuntimeError::Abort { kind: "unit_eval_failed".into() });
+                        }
+                        Out::Done(RuntimeValue::Unit)
+                    }
+                }
+            }
+
+            Expr::Call { callee, arg } => {
+                // Multi-arg named call
+                if let Some((fn_name, args)) = flatten_named_call(expr)
+                    && args.len() > 1
+                {
+                    let mut evaluated: Vec<RuntimeValue> = Vec::new();
+                    let args_owned: Vec<Expr> = args.into_iter().map(|e| e.clone()).collect();
+                    let mut i = 0;
+                    loop {
+                        if i >= args_owned.len() { break; }
+                        match self.eval_expr(&args_owned[i], locals, callables, evaluators, depth + 1) {
+                            Out::Done(v) => {
+                                evaluated.push(v);
+                                i += 1;
+                            }
+                            Out::Suspend(_) => {
+                                let remaining = args_owned[i + 1..].to_vec();
+                                return Out::Suspend(Cont::Apply {
+                                    step: ApplyStep::MultiArgCall {
+                                        fn_name: fn_name.to_string(),
+                                        evaluated,
+                                        remaining,
+                                    },
+                                    locals: locals.clone(),
+                                    callables: callables.clone(),
+                                    depth,
+                                    handler_stack: self.active_inline_handler_stack.clone(),
+                                });
+                            }
+                            Out::Err(e) => return Out::Err(e),
+                        }
+                    }
+                    let outcome = self.apply_named_value_call_args_ast_outcome(
+                        fn_name,
+                        &evaluated,
+                        locals,
+                        callables,
+                        evaluators,
+                        depth + 1,
+                    );
+                    return Self::ast_outcome_to_out(outcome);
+                }
+
+                // Qualified receiver method call
+                if let Expr::Qualified { receiver, member } = callee.as_ref() {
+                    let arg_value = match self.eval_expr(arg, locals, callables, evaluators, depth + 1) {
+                        Out::Done(v) => v,
+                        Out::Suspend(_) => {
+                            return Out::Suspend(Cont::Apply {
+                                step: ApplyStep::ReceiverMethod {
+                                    receiver: receiver.clone(),
+                                    member: member.clone(),
+                                },
+                                locals: locals.clone(),
+                                callables: callables.clone(),
+                                depth,
+                                handler_stack: self.active_inline_handler_stack.clone(),
+                            });
+                        }
+                        Out::Err(e) => return Out::Err(e),
+                    };
+                    let outcome = self.apply_receiver_method_value_call_ast_outcome(
+                        receiver,
+                        member,
+                        arg_value,
+                        evaluators,
+                        depth + 1,
+                    );
+                    return Self::ast_outcome_to_out(outcome);
+                }
+
+                // Single-field constructor
+                if let Expr::Var(ctor_name) = callee.as_ref()
+                    && let Some(field_name) = self.single_field_constructor_field(ctor_name)
+                {
+                    let field_value = match self.eval_expr(arg, locals, callables, evaluators, depth + 1) {
+                        Out::Done(v) => v,
+                        Out::Suspend(s) => return Out::Suspend(s),
+                        Out::Err(e) => return Out::Err(e),
+                    };
+                    let mut fields = HashMap::new();
+                    fields.insert(field_name, field_value);
+                    return Out::Done(RuntimeValue::Record {
+                        constructor: ctor_name.clone(),
+                        fields,
+                    });
+                }
+
+                // Single-arg named call
+                if let Expr::Var(fn_name) = callee.as_ref() {
+                    let arg_value = match self.eval_expr(arg, locals, callables, evaluators, depth + 1) {
+                        Out::Done(v) => v,
+                        Out::Suspend(_) => {
+                            return Out::Suspend(Cont::Apply {
+                                step: ApplyStep::SingleArgCall { fn_name: fn_name.clone() },
+                                locals: locals.clone(),
+                                callables: callables.clone(),
+                                depth,
+                                handler_stack: self.active_inline_handler_stack.clone(),
+                            });
+                        }
+                        Out::Err(e) => return Out::Err(e),
+                    };
+                    let outcome = self.apply_named_value_call_ast_outcome(
+                        fn_name,
+                        arg_value,
+                        locals,
+                        callables,
+                        evaluators,
+                        depth + 1,
+                    );
+                    return Self::ast_outcome_to_out(outcome);
+                }
+
+                // Fallback
+                let value = self.eval_expr_ast(expr, locals, callables, evaluators, depth);
+                match value {
+                    Some(v) => Out::Done(v),
+                    None => Out::Err(RuntimeError::Unsupported),
+                }
+            }
+
+            Expr::MethodCall { receiver, method, args } if args.len() == 1 => {
+                let arg_value = match self.eval_expr(&args[0], locals, callables, evaluators, depth + 1) {
+                    Out::Done(v) => v,
+                    Out::Suspend(_) => {
+                        return Out::Suspend(Cont::Apply {
+                            step: ApplyStep::ReceiverMethod {
+                                receiver: receiver.clone(),
+                                member: method.clone(),
+                            },
+                            locals: locals.clone(),
+                            callables: callables.clone(),
+                            depth,
+                            handler_stack: self.active_inline_handler_stack.clone(),
+                        });
+                    }
+                    Out::Err(e) => return Out::Err(e),
+                };
+                let outcome = self.apply_receiver_method_value_call_ast_outcome(
+                    receiver,
+                    method,
+                    arg_value,
+                    evaluators,
+                    depth + 1,
+                );
+                Self::ast_outcome_to_out(outcome)
+            }
+
+            Expr::Pipeline { value, callee } => {
+                let pipeline_value = match self.eval_expr(value, locals, callables, evaluators, depth + 1) {
+                    Out::Done(v) => v,
+                    Out::Suspend(_) => {
+                        return Out::Suspend(Cont::Apply {
+                            step: ApplyStep::Pipeline { callee: callee.clone() },
+                            locals: locals.clone(),
+                            callables: callables.clone(),
+                            depth,
+                            handler_stack: self.active_inline_handler_stack.clone(),
+                        });
+                    }
+                    Out::Err(e) => return Out::Err(e),
+                };
+                let outcome = self.apply_pipeline_ast_outcome(
+                    callee,
+                    pipeline_value,
+                    locals,
+                    callables,
+                    evaluators,
+                    depth + 1,
+                );
+                Self::ast_outcome_to_out(outcome)
+            }
+
+            Expr::RecordConstruct { constructor, fields } => {
+                if fields.is_empty() {
+                    if let Some(value) = self.try_apply_bare_runtime_bridge_value(
+                        constructor,
+                        RuntimeValue::Unit,
+                        locals,
+                        callables,
+                        evaluators,
+                        depth + 1,
+                    ) {
+                        return Out::Done(value);
+                    }
+                }
+                let mut field_map: HashMap<String, RuntimeValue> = HashMap::new();
+                let fields_vec: Vec<(String, Expr)> = fields.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+                let mut i = 0;
+                while i < fields_vec.len() {
+                    let (field_name, field_expr) = &fields_vec[i];
+                    match self.eval_expr(field_expr, locals, callables, evaluators, depth + 1) {
+                        Out::Done(v) => {
+                            field_map.insert(field_name.clone(), v);
+                            i += 1;
+                        }
+                        Out::Suspend(_) => {
+                            let evaluated: Vec<(String, RuntimeValue)> = field_map.into_iter().collect();
+                            let remaining = fields_vec[i + 1..].to_vec();
+                            return Out::Suspend(Cont::Apply {
+                                step: ApplyStep::RecordField {
+                                    constructor: constructor.clone(),
+                                    evaluated,
+                                    remaining,
+                                },
+                                locals: locals.clone(),
+                                callables: callables.clone(),
+                                depth,
+                                handler_stack: self.active_inline_handler_stack.clone(),
+                            });
+                        }
+                        Out::Err(e) => return Out::Err(e),
+                    }
+                }
+                Out::Done(RuntimeValue::Record {
+                    constructor: constructor.clone(),
+                    fields: field_map,
+                })
+            }
+
+            Expr::Resume { value } => {
+                let resumed = match self.eval_expr(value, locals, callables, evaluators, depth + 1) {
+                    Out::Done(v) => v,
+                    Out::Suspend(s) => return Out::Suspend(s),
+                    Out::Err(e) => return Out::Err(e),
+                };
+                let outcome = self.resume_through_active_continuation_bridge_outcome(resumed, evaluators);
+                // After eval, signal caller via Cont::Resume (bridge call happened synchronously above)
+                match outcome {
+                    AstEvalOutcome::Complete(v) => Out::Done(v),
+                    AstEvalOutcome::Suspended(_) => Out::Suspend(Cont::Resume),
+                    AstEvalOutcome::Aborted => Out::Err(RuntimeError::Abort { kind: "aborted".into() }),
+                    AstEvalOutcome::Unsupported => Out::Err(RuntimeError::Unsupported),
+                }
+            }
+
+            Expr::With { handler, body } => {
+                let snapshot_before_push = self.active_inline_handler_stack.clone();
+                let Some(RuntimeValue::Handler(inline_handler)) =
+                    self.eval_expr_ast(handler, locals, callables, evaluators, depth + 1)
+                else {
+                    return Out::Err(RuntimeError::Unsupported);
+                };
+                self.active_inline_handler_stack.push(inline_handler);
+                let body_expr = Expr::Block(body.clone());
+                let result = self.eval_expr(&body_expr, locals, callables, evaluators, depth + 1);
+                self.active_inline_handler_stack.pop();
+                match result {
+                    Out::Done(v) => Out::Done(v),
+                    Out::Suspend(_) => Out::Suspend(Cont::Apply {
+                        step: ApplyStep::WithBody { body: body.clone() },
+                        locals: locals.clone(),
+                        callables: callables.clone(),
+                        depth,
+                        handler_stack: snapshot_before_push,
+                    }),
+                    Out::Err(e) => Out::Err(e),
+                }
+            }
+
+            _ => {
+                let value = self.eval_expr_ast(expr, locals, callables, evaluators, depth);
+                match value {
+                    Some(v) => Out::Done(v),
+                    None => Out::Err(RuntimeError::Unsupported),
+                }
+            }
+        }
+    }
+
+    // ── End Phase 2 ───────────────────────────────────────────────────────────
+
     fn execute_unit_expr_ast(
         &mut self,
         expr: &Expr,
