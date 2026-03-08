@@ -913,10 +913,19 @@ Step-by-step checklist:
         - parser limitation resolved (session 227–228): `name =\n  with ...`, `mut name =\n  with ...`,
           and `name :=\n  with ...` all now parse correctly. All three binding/assignment forms
           support next-line `with` RHS.
+        - Shape G: `assignment_rhs_next_line_with_block_value` (`:=\n  with ...` runtime)
+        - Shape H: `case_arm_body_calls_effect_operation` (effect in case arm body)
+        - eval_ast_side_effect arg evaluation migrated to eval_expr_ast_outcome (session 229–230):
+          - print/println/pipeline-print args
+          - unit-position Pipeline value (expr |> callee)
+        - Shape I: `declaration_block_body_with_binding_and_effect_call`
+        - Shape J: `interpolated_string_with_declaration_body_effect_call`
+        - Shape K: `pipeline_value_with_declaration_body_effect_call`
+        - goby-wasm tests: 192 → 197 passing (session 228 → 230).
       - next acceptance target:
         - replace `dispatch_handler_method_core` plain for-loop with suspension-aware execution
           so handler body stmts can properly suspend and resume.
-        - prerequisite: resolve grlobal stack interference (pending_stmt_continuations shared
+        - prerequisite: resolve global stack interference (pending_stmt_continuations shared
           with outer in-block), frame capture timing, and produce_value=false semantics.
         - interim: add tests that lock the `Suspended(frame)` path explicitly (currently only
           output is asserted, not which path was taken).
