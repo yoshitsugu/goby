@@ -1134,7 +1134,14 @@ impl<'m> RuntimeOutputResolver<'m> {
                 self.eval_side_effect(&repr, evaluators)
             }
             Expr::Pipeline { value, callee } => {
-                if let Some(v) = self.eval_ast_value(value, evaluators) {
+                let value_outcome = self.eval_expr_ast_outcome(
+                    value,
+                    &self.locals.clone(),
+                    &HashMap::new(),
+                    evaluators,
+                    1,
+                );
+                if let Some(v) = self.complete_ast_value_outcome(value_outcome, evaluators) {
                     // Pipeline into bare effect method call: e.g. `"msg" |> log`.
                     let bare_method = self.find_handler_method_by_name(callee);
                     if let Some(method) = bare_method {
@@ -10284,6 +10291,37 @@ main =
             "interpolated string with declaration body effect call",
         );
         assert_eq!(typed.stdout.as_deref(), Some("result=4"));
+        assert_eq!(typed.runtime_error_kind, None);
+    }
+
+    #[test]
+    fn pipeline_value_with_declaration_body_effect_call() {
+        use goby_core::parse_module;
+        let _guard = ENV_MUTEX.lock().unwrap();
+        // Shape K: pipeline left-hand side is a declaration call whose body invokes an effect.
+        // Exercises eval_expr_ast_outcome for the Pipeline value arm in eval_ast_side_effect
+        // (migrated from eval_ast_value).
+        //
+        // `(get_val 3) |> log` where get_val n = next n. next(3)=4. log("4") prints "4".
+        let source = r#"
+effect Iter
+  next: Int -> Int
+
+get_val : Int -> Int
+get_val n =
+  next n
+
+main : Unit -> Unit
+main =
+  with
+    next n -> resume (n + 1)
+  in
+    print (get_val 3 |> get_val)
+"#;
+        let module = parse_module(source).expect("parse should work");
+        // get_val(3) = next(3) = 4, get_val(4) = next(4) = 5. Output: "5".
+        let typed = assert_mode_parity(&module, "pipeline value with declaration body effect call");
+        assert_eq!(typed.stdout.as_deref(), Some("5"));
         assert_eq!(typed.runtime_error_kind, None);
     }
 }
