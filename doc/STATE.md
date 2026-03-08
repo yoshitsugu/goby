@@ -87,6 +87,16 @@ this section takes priority.
     - Remaining `eval_ast_value` calls in `eval_ast_side_effect`: Binding/Assign value (frame-covered)
       and `Expr::With` handler expr (no effect call needed) — both correct as-is.
     - goby-wasm tests: 195 → 197 passing.
+  - Session 231: parity test batch (commits d3271dd, d42b20f, 77f1812, 05c86a7, 0091bd4):
+    - typed_mode_matches_fallback_for_with_captures_lexical_local
+    - typed_mode_matches_fallback_for_nested_with_nearest_handler_wins
+    - typed_mode_matches_fallback_for_qualified_effect_call_dispatch
+    - typed_mode_matches_fallback_for_pipeline_effect_call_dispatch
+    - typed_mode_matches_fallback_for_basic_with_inline_handler_dispatch
+    - typed_mode_matches_fallback_for_resume_outside_handler_error
+    - typed_mode_matches_fallback_for_multi_arg_effect_op_call
+    - goby-wasm tests: 197 → 206 passing.
+    - All Shape A–K tests confirmed to use assert_mode_parity already.
   - Next: dispatch_handler_method_core for-loop replacement (Step 3 architecture), or more Step 3.5 coverage.
 - External internal records:
   - devflow notes live outside the repo under
