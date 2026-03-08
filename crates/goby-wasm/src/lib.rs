@@ -10525,4 +10525,28 @@ main =
         let typed = assert_mode_parity(&module, "resume outside handler error");
         assert_eq!(typed.runtime_error_kind, Some("continuation_missing"));
     }
+
+    #[test]
+    fn typed_mode_matches_fallback_for_multi_arg_effect_op_call() {
+        use goby_core::parse_module;
+        let _guard = ENV_MUTEX.lock().unwrap();
+        // Parity test for a multi-argument effect operation: `yield _ step -> resume (True, step+1)`.
+        // Exercises the named-call path with two-arg dispatch in both modes.
+        let source = r#"
+effect Iterator a b
+  yield : a -> b -> (Bool, b)
+
+main : Unit -> Unit
+main =
+  with
+    yield _ step ->
+      resume (True, step + 1)
+  in
+    print (yield "x" 41)
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let typed = assert_mode_parity(&module, "multi-arg effect op call");
+        assert_eq!(typed.stdout.as_deref(), Some("(True, 42)"));
+        assert_eq!(typed.runtime_error_kind, None);
+    }
 }
