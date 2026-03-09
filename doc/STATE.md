@@ -67,6 +67,14 @@ This file is a restart-safe snapshot for resuming work after context reset.
         at call sites instead of `None` + `has_abort_without_error` checks.
       - `eval_ast_side_effect` top-level handler-dispatch call sites now bridge
         `Out<()>` back to `Option<()>` locally.
+    - Added thin conversion helpers to reduce repeated legacy abort checks:
+      - `execute_unit_call_out` centralizes `execute_unit_call` `Option -> Out`
+        conversion with abort/unsupported mapping.
+      - `apply_named_value_call_ast` is now `Out<RuntimeValue>`-native, so the
+        previous AST value fallback `Option -> Out` conversion helper was
+        removed.
+    - `dispatch_handler_method_as_value*` `Option` wrappers now delegate to
+      `*_flow` variants (single source for handler-core mapping).
   - Validation:
     - `cargo fmt`
     - `cargo check`

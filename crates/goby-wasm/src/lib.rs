@@ -2944,13 +2944,7 @@ impl<'m> RuntimeOutputResolver<'m> {
             let Some(repr) = expr.to_str_repr() else {
                 return Out::Err(RuntimeError::Unsupported);
             };
-            return match self.execute_unit_call(&repr, locals, callables, evaluators) {
-                Some(()) => Out::Done(()),
-                None if self.has_abort_without_error() => Out::Err(RuntimeError::Abort {
-                    kind: "aborted".into(),
-                }),
-                None => Out::Err(RuntimeError::Unsupported),
-            };
+            return self.execute_unit_call_out(&repr, locals, callables, evaluators);
         }
 
         if let Expr::Pipeline { value, callee } = expr {
@@ -2997,13 +2991,7 @@ impl<'m> RuntimeOutputResolver<'m> {
             let Some(repr) = expr.to_str_repr() else {
                 return Out::Err(RuntimeError::Unsupported);
             };
-            return match self.execute_unit_call(&repr, locals, callables, evaluators) {
-                Some(()) => Out::Done(()),
-                None if self.has_abort_without_error() => Out::Err(RuntimeError::Abort {
-                    kind: "aborted".into(),
-                }),
-                None => Out::Err(RuntimeError::Unsupported),
-            };
+            return self.execute_unit_call_out(&repr, locals, callables, evaluators);
         }
 
         // Bare literal/var expression: evaluate and discard.
@@ -3098,13 +3086,7 @@ impl<'m> RuntimeOutputResolver<'m> {
             let Some(repr) = expr.to_str_repr() else {
                 return Out::Err(RuntimeError::Unsupported);
             };
-            return match self.execute_unit_call(&repr, locals, callables, evaluators) {
-                Some(()) => Out::Done(()),
-                None if self.has_abort_without_error() => Out::Err(RuntimeError::Abort {
-                    kind: "aborted".into(),
-                }),
-                None => Out::Err(RuntimeError::Unsupported),
-            };
+            return self.execute_unit_call_out(&repr, locals, callables, evaluators);
         }
 
         Out::Err(RuntimeError::Unsupported)
@@ -4095,6 +4077,22 @@ impl<'m> RuntimeOutputResolver<'m> {
         Some(())
     }
 
+    fn execute_unit_call_out(
+        &mut self,
+        expr: &str,
+        caller_locals: &RuntimeLocals,
+        caller_callables: &HashMap<String, IntCallable>,
+        evaluators: &RuntimeEvaluators<'_, '_>,
+    ) -> Out<()> {
+        match self.execute_unit_call(expr, caller_locals, caller_callables, evaluators) {
+            Some(()) => Out::Done(()),
+            None if self.has_abort_without_error() => Out::Err(RuntimeError::Abort {
+                kind: "aborted".into(),
+            }),
+            None => Out::Err(RuntimeError::Unsupported),
+        }
+    }
+
     /// Execute a unit-returning function call from the AST path.
     ///
     /// `fn_name` is the callee name; `arg_val` is the already-evaluated argument
@@ -4388,14 +4386,16 @@ impl<'m> RuntimeOutputResolver<'m> {
         callables: &HashMap<String, IntCallable>,
         evaluators: &RuntimeEvaluators<'_, '_>,
         depth: usize,
-    ) -> Option<RuntimeValue> {
+    ) -> Out<RuntimeValue> {
         if fn_name.starts_with("__goby_") {
-            return self.apply_runtime_intrinsic_ast(fn_name, arg_values, evaluators, depth + 1);
+            return self
+                .apply_runtime_intrinsic_ast(fn_name, arg_values, evaluators, depth + 1)
+                .map_or(Out::Err(RuntimeError::Unsupported), Out::Done);
         }
         if arg_values.len() > 1
             && let Some(method) = self.find_handler_method_by_name(fn_name)
         {
-            return self.dispatch_handler_method_as_value_with_args(
+            return self.dispatch_handler_method_as_value_with_args_flow(
                 &method,
                 arg_values,
                 evaluators,
@@ -4405,38 +4405,49 @@ impl<'m> RuntimeOutputResolver<'m> {
         if let Some(value) =
             self.eval_decl_as_value_with_args_ast(fn_name, arg_values, evaluators, depth + 1)
         {
-            return Some(value);
+            return Out::Done(value);
         }
         if arg_values.len() != 1 {
-            return None;
+            return Out::Err(RuntimeError::Unsupported);
         }
         let arg_val = arg_values[0].clone();
         if fn_name == "__goby_env_fetch_env_var" {
-            return self.apply_runtime_intrinsic_ast(
-                "__goby_env_fetch_env_var",
-                &[arg_val],
-                evaluators,
-                depth + 1,
-            );
+            return self
+                .apply_runtime_intrinsic_ast(
+                    "__goby_env_fetch_env_var",
+                    &[arg_val],
+                    evaluators,
+                    depth + 1,
+                )
+                .map_or(Out::Err(RuntimeError::Unsupported), Out::Done);
         }
         if fn_name == "__goby_string_length" {
-            return self.apply_runtime_intrinsic_ast(
-                "__goby_string_length",
-                &[arg_val],
-                evaluators,
-                depth + 1,
-            );
+            return self
+                .apply_runtime_intrinsic_ast(
+                    "__goby_string_length",
+                    &[arg_val],
+                    evaluators,
+                    depth + 1,
+                )
+                .map_or(Out::Err(RuntimeError::Unsupported), Out::Done);
         }
         if fn_name == "__goby_string_each_grapheme" {
-            return self.apply_runtime_intrinsic_ast(
-                "__goby_string_each_grapheme",
-                &[arg_val],
+            return self
+                .apply_runtime_intrinsic_ast(
+                    "__goby_string_each_grapheme",
+                    &[arg_val],
+                    evaluators,
+                    depth + 1,
+                )
+                .map_or(Out::Err(RuntimeError::Unsupported), Out::Done);
+        }
+        if let Some(method) = self.find_handler_method_by_name(fn_name) {
+            return self.dispatch_handler_method_as_value_flow(
+                &method,
+                arg_val,
                 evaluators,
                 depth + 1,
             );
-        }
-        if let Some(method) = self.find_handler_method_by_name(fn_name) {
-            return self.dispatch_handler_method_as_value(&method, arg_val, evaluators, depth + 1);
         }
         if fn_name == "println" {
             let mut text = arg_val.to_output_text();
@@ -4444,13 +4455,13 @@ impl<'m> RuntimeOutputResolver<'m> {
                 text.push('\n');
             }
             self.outputs.push(text);
-            return Some(RuntimeValue::Unit);
+            return Out::Done(RuntimeValue::Unit);
         }
         if let Some(effect_name) = self.unique_effect_name_for_operation(fn_name)
             && let Some(value) =
                 self.apply_embedded_default_handler(&effect_name, fn_name, arg_val.clone())
         {
-            return Some(value);
+            return Out::Done(value);
         }
         if let Some(value) = self.try_apply_bare_runtime_bridge_value(
             fn_name,
@@ -4460,7 +4471,7 @@ impl<'m> RuntimeOutputResolver<'m> {
             evaluators,
             depth + 1,
         ) {
-            return Some(value);
+            return Out::Done(value);
         }
         if let RuntimeValue::Int(arg_int) = arg_val.clone() {
             if let Some(callable) = callables.get(fn_name).cloned() {
@@ -4481,14 +4492,16 @@ impl<'m> RuntimeOutputResolver<'m> {
                             evaluators,
                             depth + 1,
                         ) {
-                            return Some(RuntimeValue::Int(value));
+                            return Out::Done(RuntimeValue::Int(value));
                         }
                     }
                     other => {
                         return evaluators
                             .int
                             .eval_callable(&other, arg_int, callables)
-                            .map(RuntimeValue::Int);
+                            .map_or(Out::Err(RuntimeError::Unsupported), |value| {
+                                Out::Done(RuntimeValue::Int(value))
+                            });
                     }
                 }
             }
@@ -4496,7 +4509,9 @@ impl<'m> RuntimeOutputResolver<'m> {
                 return evaluators
                     .int
                     .eval_function(function, Some(arg_int))
-                    .map(RuntimeValue::Int);
+                    .map_or(Out::Err(RuntimeError::Unsupported), |value| {
+                        Out::Done(RuntimeValue::Int(value))
+                    });
             }
         } else if let RuntimeValue::ListInt(arg_list) = arg_val
             && let Some(function) = evaluators.list.functions.get(fn_name)
@@ -4504,9 +4519,11 @@ impl<'m> RuntimeOutputResolver<'m> {
             return evaluators
                 .list
                 .eval_function(function, Some(arg_list))
-                .map(RuntimeValue::ListInt);
+                .map_or(Out::Err(RuntimeError::Unsupported), |values| {
+                    Out::Done(RuntimeValue::ListInt(values))
+                });
         }
-        None
+        Out::Err(RuntimeError::Unsupported)
     }
 
     fn apply_named_value_call_out(
@@ -4545,21 +4562,7 @@ impl<'m> RuntimeOutputResolver<'m> {
             Out::Err(RuntimeError::Unsupported) => {}
             other => return other,
         }
-        let value = self.apply_named_value_call_ast(
-            fn_name,
-            &[arg_value],
-            locals,
-            callables,
-            evaluators,
-            depth,
-        );
-        match value {
-            Some(v) => Out::Done(v),
-            None if self.has_abort_without_error() => Out::Err(RuntimeError::Abort {
-                kind: "aborted".into(),
-            }),
-            None => Out::Err(RuntimeError::Unsupported),
-        }
+        self.apply_named_value_call_ast(fn_name, &[arg_value], locals, callables, evaluators, depth)
     }
 
     fn apply_named_value_call_args_out(
@@ -4600,15 +4603,7 @@ impl<'m> RuntimeOutputResolver<'m> {
             other => return other,
         }
         // 4. AST fallback
-        let value = self
-            .apply_named_value_call_ast(fn_name, arg_values, locals, callables, evaluators, depth);
-        match value {
-            Some(v) => Out::Done(v),
-            None if self.has_abort_without_error() => Out::Err(RuntimeError::Abort {
-                kind: "aborted".into(),
-            }),
-            None => Out::Err(RuntimeError::Unsupported),
-        }
+        self.apply_named_value_call_ast(fn_name, arg_values, locals, callables, evaluators, depth)
     }
 
     fn apply_binop_runtime_value(
@@ -5298,21 +5293,13 @@ impl<'m> RuntimeOutputResolver<'m> {
         evaluators: &RuntimeEvaluators<'_, '_>,
         depth: usize,
     ) -> Option<RuntimeValue> {
-        match self.dispatch_handler_method_core(
-            method,
-            &[arg_val],
-            evaluators,
-            depth,
-            true,
-            false,
-        )? {
-            HandlerCompletion::Resumed(value) => Some(*value),
-            HandlerCompletion::Escaped(_escape) => None,
-            HandlerCompletion::Suspended => None,
-            HandlerCompletion::Aborted => {
+        match self.dispatch_handler_method_as_value_flow(method, arg_val, evaluators, depth) {
+            Out::Done(value) => Some(value),
+            Out::Err(RuntimeError::Abort { .. }) => {
                 self.set_runtime_abort_once();
                 None
             }
+            Out::Suspend(_) | Out::Escape(_) | Out::Err(RuntimeError::Unsupported) => None,
         }
     }
 
@@ -5341,14 +5328,14 @@ impl<'m> RuntimeOutputResolver<'m> {
         evaluators: &RuntimeEvaluators<'_, '_>,
         depth: usize,
     ) -> Option<RuntimeValue> {
-        match self.dispatch_handler_method_core(method, args, evaluators, depth, true, false)? {
-            HandlerCompletion::Resumed(value) => Some(*value),
-            HandlerCompletion::Escaped(_escape) => None,
-            HandlerCompletion::Suspended => None,
-            HandlerCompletion::Aborted => {
+        match self.dispatch_handler_method_as_value_with_args_flow(method, args, evaluators, depth)
+        {
+            Out::Done(value) => Some(value),
+            Out::Err(RuntimeError::Abort { .. }) => {
                 self.set_runtime_abort_once();
                 None
             }
+            Out::Suspend(_) | Out::Escape(_) | Out::Err(RuntimeError::Unsupported) => None,
         }
     }
 
