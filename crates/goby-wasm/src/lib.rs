@@ -3901,16 +3901,17 @@ impl<'m> RuntimeOutputResolver<'m> {
         }
 
         if let Expr::Block(stmts) = expr {
-            let mut block_locals = locals.clone();
-            let mut block_callables = callables.clone();
-            self.execute_ast_stmt_sequence(
+            return match self.eval_stmts(
                 stmts,
-                &mut block_locals,
-                &mut block_callables,
+                locals.clone(),
+                callables.clone(),
                 evaluators,
                 depth + 1,
-            )?;
-            return Some(());
+                FinishKind::Block,
+            ) {
+                Out::Done(_) => Some(()),
+                Out::Suspend(_) | Out::Escape(_) | Out::Err(_) => None,
+            };
         }
 
         // Fallback: evaluating to a value is fine in unit position (discarded).
