@@ -6303,7 +6303,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                 self.consume_saved_value_outcome(outcome, evaluators)
             }
             AstValueContinuationKind::PipelineCall { callee } => {
-                let outcome = self.apply_pipeline_ast_outcome(
+                let out = self.apply_pipeline_out(
                     &callee,
                     resumed,
                     &continuation.locals,
@@ -6311,20 +6311,20 @@ impl<'m> RuntimeOutputResolver<'m> {
                     evaluators,
                     continuation.depth,
                 );
-                self.consume_saved_value_outcome(outcome, evaluators)
+                self.out_to_option(out)
             }
             AstValueContinuationKind::ReceiverMethodCall { receiver, member } => {
-                let outcome = self.apply_receiver_method_value_call_ast_outcome(
+                let out = self.apply_receiver_method_value_call_out(
                     &receiver,
                     &member,
                     resumed,
                     evaluators,
                     continuation.depth,
                 );
-                self.consume_saved_value_outcome(outcome, evaluators)
+                self.out_to_option(out)
             }
             AstValueContinuationKind::SingleArgNamedCall { fn_name } => {
-                let outcome = self.apply_named_value_call_ast_outcome(
+                let out = self.apply_named_value_call_out(
                     &fn_name,
                     resumed,
                     &continuation.locals,
@@ -6332,7 +6332,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                     evaluators,
                     continuation.depth,
                 );
-                self.consume_saved_value_outcome(outcome, evaluators)
+                self.out_to_option(out)
             }
             AstValueContinuationKind::MultiArgNamedCall {
                 fn_name,
@@ -6375,14 +6375,14 @@ impl<'m> RuntimeOutputResolver<'m> {
             AstValueContinuationKind::CaseScrutinee { arms } => {
                 let (arm_body, arm_locals) =
                     self.select_case_arm(&resumed, &arms, &continuation.locals)?;
-                let outcome = self.eval_expr_ast_outcome(
+                let out = self.eval_expr(
                     &arm_body,
                     &arm_locals,
                     &continuation.callables,
                     evaluators,
                     continuation.depth,
                 );
-                self.consume_saved_value_outcome(outcome, evaluators)
+                self.out_to_option(out)
             }
             AstValueContinuationKind::IfCondition {
                 then_expr,
@@ -6393,35 +6393,30 @@ impl<'m> RuntimeOutputResolver<'m> {
                     RuntimeValue::Bool(false) => else_expr,
                     _ => return None,
                 };
-                let outcome = self.eval_expr_ast_outcome(
+                let out = self.eval_expr(
                     &branch,
                     &continuation.locals,
                     &continuation.callables,
                     evaluators,
                     continuation.depth,
                 );
-                self.consume_saved_value_outcome(outcome, evaluators)
+                self.out_to_option(out)
             }
             AstValueContinuationKind::BinOpLeft { op, right } => {
                 let left_value = resumed;
-                self.pending_value_continuations.push(AstValueContinuation {
-                    kind: AstValueContinuationKind::BinOpRight {
-                        op: op.clone(),
-                        left_value: left_value.clone(),
-                    },
-                    locals: continuation.locals.clone(),
-                    callables: continuation.callables.clone(),
-                    depth: continuation.depth,
-                });
-                let right_outcome = self.eval_expr_ast_outcome(
+                // `pending_value_continuations` is always empty when
+                // `execute_saved_value_continuation` runs (suspension pops frames before
+                // returning). `eval_expr` uses the Out path; if the right operand contains an
+                // effect call that would suspend, `out_to_option` returns None (treated as
+                // unsupported). No push/pop of a BinOpRight frame is needed.
+                let right_out = self.eval_expr(
                     &right,
                     &continuation.locals,
                     &continuation.callables,
                     evaluators,
                     continuation.depth,
                 );
-                self.pending_value_continuations.pop();
-                let right_value = self.consume_saved_value_outcome(right_outcome, evaluators)?;
+                let right_value = self.out_to_option(right_out)?;
                 self.apply_binop_runtime_value(op, left_value, right_value)
             }
             AstValueContinuationKind::BinOpRight { op, left_value } => {
@@ -6441,6 +6436,21 @@ impl<'m> RuntimeOutputResolver<'m> {
                 self.complete_ast_value_outcome(AstEvalOutcome::Suspended(continuation), evaluators)
             }
             AstEvalOutcome::Aborted | AstEvalOutcome::Unsupported => None,
+        }
+    }
+
+    /// Convert `Out<RuntimeValue>` to `Option<RuntimeValue>` for use in the legacy
+    /// `execute_saved_value_continuation` context.
+    ///
+    /// `Out::Suspend` only arises here if a handler body itself suspends (nested effect call
+    /// inside a handler — a known unsupported TODO path). `Out::Escape` from a scoped-with exit
+    /// maps to `None`, matching the old `AstEvalOutcome::Unsupported` behaviour. `Out::Err`
+    /// (Abort) is also `None`; the caller's context (`execute_ast_continuation_frame`) detects
+    /// `has_abort_without_error()` to propagate the abort upwards.
+    fn out_to_option(&mut self, out: Out<RuntimeValue>) -> Option<RuntimeValue> {
+        match out {
+            Out::Done(v) => Some(v),
+            Out::Suspend(_) | Out::Escape(_) | Out::Err(_) => None,
         }
     }
 
@@ -12566,6 +12576,79 @@ main =
         let module = parse_module(source).expect("parse should work");
         let typed = assert_mode_parity(&module, "list each style callback dispatch");
         assert_eq!(typed.stdout.as_deref(), Some("35"));
+        assert_eq!(typed.runtime_error_kind, None);
+    }
+
+    #[test]
+    fn case_scrutinee_suspends_and_arm_body_calls_effect() {
+        use goby_core::parse_module;
+        let _guard = ENV_MUTEX.lock().unwrap();
+        // Double-suspension pattern: the case scrutinee is an effect call (suspends), then
+        // the selected arm body is also an effect call (suspends again).
+        // Exercises the Out-path `ApplyStep::CaseSelect` continuation (eval_expr path),
+        // which is the active path for declarations supported by eval_decl_as_value_with_args_out.
+        //
+        // flag 0 → resume True; case arm `True -> next 5`; next 5 → resume 6. Output: "6".
+        let source = r#"
+effect Pred
+  flag: Int -> Bool
+effect Iter
+  next: Int -> Int
+
+choose : Int -> Int
+choose n =
+  case flag n
+    True  -> next 5
+    False -> next 0
+
+main : Unit -> Unit
+main =
+  with
+    flag _ -> resume True
+    next n -> resume (n + 1)
+  in
+    print (choose 0)
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let typed = assert_mode_parity(&module, "case scrutinee suspends and arm body calls effect");
+        assert_eq!(typed.stdout.as_deref(), Some("6"));
+        assert_eq!(typed.runtime_error_kind, None);
+    }
+
+    #[test]
+    fn if_condition_suspends_and_branch_body_calls_effect() {
+        use goby_core::parse_module;
+        let _guard = ENV_MUTEX.lock().unwrap();
+        // Double-suspension pattern: the if condition is an effect call (suspends), then
+        // the selected branch body is also an effect call (suspends again).
+        // Exercises the Out-path `ApplyStep::IfBranch` continuation (eval_expr path),
+        // which is the active path for declarations supported by eval_decl_as_value_with_args_out.
+        //
+        // flag 0 → resume True; then-branch `next 5`; next 5 → resume 6. Output: "6".
+        let source = r#"
+effect Pred
+  flag: Int -> Bool
+effect Iter
+  next: Int -> Int
+
+choose : Int -> Int
+choose n =
+  if flag n
+    next 5
+  else
+    next 0
+
+main : Unit -> Unit
+main =
+  with
+    flag _ -> resume True
+    next n -> resume (n + 1)
+  in
+    print (choose 0)
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let typed = assert_mode_parity(&module, "if condition suspends and branch body calls effect");
+        assert_eq!(typed.stdout.as_deref(), Some("6"));
         assert_eq!(typed.runtime_error_kind, None);
     }
 }
