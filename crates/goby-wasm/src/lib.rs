@@ -5528,6 +5528,35 @@ impl<'m> RuntimeOutputResolver<'m> {
         evaluators: &RuntimeEvaluators<'_, '_>,
         depth: usize,
     ) -> Out<RuntimeValue> {
+        // Called only when args.len() >= 2 (single-arg paths use apply_named_value_call_out).
+        debug_assert!(
+            arg_values.len() >= 2,
+            "use apply_named_value_call_out for single-arg calls"
+        );
+        // Out-first path mirrors apply_named_value_call_out ordering.
+        // handler dispatch takes priority over __goby_ intrinsics (consistent with single-arg version).
+        // 1. handler dispatch
+        if let Some(method) = self.find_handler_method_by_name(fn_name) {
+            return self.dispatch_handler_method_as_value_with_args_flow(
+                &method,
+                arg_values,
+                evaluators,
+                depth + 1,
+            );
+        }
+        // 2. __goby_ intrinsic
+        if fn_name.starts_with("__goby_")
+            && let Some(value) =
+                self.apply_runtime_intrinsic_ast(fn_name, arg_values, evaluators, depth + 1)
+        {
+            return Out::Done(value);
+        }
+        // 3. declaration body via Out path
+        match self.eval_decl_as_value_with_args_out(fn_name, arg_values, evaluators, depth + 1) {
+            Out::Err(RuntimeError::Unsupported) => {}
+            other => return other,
+        }
+        // 4. AST fallback
         let value = self
             .apply_named_value_call_ast(fn_name, arg_values, locals, callables, evaluators, depth);
         Self::ast_outcome_to_out(self.ast_outcome_from_option(value))
@@ -6569,6 +6598,24 @@ impl<'m> RuntimeOutputResolver<'m> {
                 AstEvalOutcome::Aborted
             }
             None => self.ast_outcome_from_option(None::<RuntimeValue>),
+        }
+    }
+
+    fn dispatch_handler_method_as_value_with_args_flow(
+        &mut self,
+        method: &ResolvedHandlerMethod,
+        args: &[RuntimeValue],
+        evaluators: &RuntimeEvaluators<'_, '_>,
+        depth: usize,
+    ) -> Out<RuntimeValue> {
+        match self.dispatch_handler_method_core(method, args, evaluators, depth, true, false) {
+            Some(HandlerCompletion::Resumed(value)) => Out::Done(*value),
+            Some(HandlerCompletion::Escaped(escape)) => Out::Escape(escape),
+            Some(HandlerCompletion::Suspended(_continuation)) => Out::Suspend(Cont::Resume),
+            Some(HandlerCompletion::Aborted) => Out::Err(RuntimeError::Abort {
+                kind: "aborted".into(),
+            }),
+            None => Out::Err(RuntimeError::Unsupported),
         }
     }
 
