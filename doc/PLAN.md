@@ -298,10 +298,12 @@ Based on `examples/*.gb`:
 - `resume` support is active with partial 4.7 alignment:
   - outside-handler `resume` is rejected,
   - type mismatch for resumed value is rejected,
-  - no-`resume` handler completion aborts at the handled operation boundary,
-  - nested abortive handler propagation is implemented,
   - conservative syntactic multi-`resume` rejection is removed,
   - runtime multi-resume progression is still incomplete.
+  - no-`resume` runtime behavior is being redesigned away from "program-abort"
+    semantics toward "`with ... in ...` scope exit" semantics; the old abortive
+    wording below should be treated as historical context unless explicitly
+    marked as locked.
 - Runtime dispatch semantics:
   - nearest lexical handler wins,
   - embedded/default-handler fallback applies only when no explicit handler captures the operation.
@@ -523,14 +525,94 @@ Implemented summary:
 
 These items are intentionally kept as short placeholders until they become active.
 
-### 4.7 Active Language Task: Abortive Handlers and Multi-Resume Progression
+### 4.7 Active Language Task: Scoped Handler Exit and Multi-Resume Progression
 
-Goal: align runtime/typecheck behavior with the current `LANGUAGE_SPEC` contract:
+Goal: redefine no-`resume` handler completion so it exits the enclosing
+`with ... in ...` scope instead of aborting the whole program, while preserving
+the existing `resume` contract for resumptive handlers.
 
-- handler clause without `resume` aborts immediately at the handled operation boundary,
-- `resume` returns a value to the operation call site,
-- repeated `resume` in one handler invocation progresses continuation to next resumable point,
-  and raises runtime error only after continuation is consumed.
+Target semantics:
+
+- `resume v` returns `v` to the operation call site and continues normally.
+- if a handler clause finishes without any `resume`, evaluation exits the
+  current `with ... in ...` scope immediately.
+- the handler clause's final expression becomes the value of the whole
+  `with ... in ...` expression.
+- repeated `resume` in one handler invocation still progresses continuation to
+  the next resumable point, and raises runtime error only after continuation is
+  consumed.
+- nested handlers still route to the nearest matching lexical handler.
+
+Canonical examples for the new semantics:
+
+```goby
+effect Fail
+  fail : String -> Int
+
+main : Unit -> Unit
+main =
+  result =
+    with
+      fail msg ->
+        0
+    in
+      x = fail "bad"
+      x + 10
+  print result
+```
+
+Expected behavior:
+- prints `0`
+- `x + 10` is not executed
+- only the innermost `with ... in ...` is exited; outer program execution continues
+
+```goby
+effect Log
+  stop : String -> Unit
+
+main : Unit -> Unit
+main =
+  print "before"
+  with
+    stop msg ->
+      print "handled:${msg}"
+      ()
+  in
+    stop "done"
+    print "after"
+  print "outside"
+```
+
+Expected behavior:
+- prints `before`
+- prints `handled:done`
+- does not print `after`
+- prints `outside`
+
+```goby
+effect Escape
+  next : Int -> Int
+
+main : Unit -> Unit
+main =
+  result =
+    with
+      next n ->
+        if n == 0
+          99
+        else
+          resume (n + 1)
+    in
+      a = next 0
+      b = next 1
+      a + b
+  print result
+```
+
+Expected behavior:
+- first `next 0` exits the `with` scope with value `99`
+- `b = next 1` and `a + b` are skipped
+- prints `99`
 
 Step-by-step checklist:
 
@@ -538,27 +620,45 @@ Step-by-step checklist:
   - [x] Step 1: semantic alignment audit
     - runtime handler dispatch entrypoints were audited across fallback and typed mode.
     - the audit confirmed the pre-fix gap was unit-position no-`resume` continuation.
-  - [x] Step 2: runtime abort contract implementation
-    - runtime dispatch now carries explicit abort/completion state instead of overloading nested `Option` meanings.
-    - no-`resume` handler completion now aborts at the handled operation boundary in both value and unit positions.
-    - nested-handler propagation and fallback/typed parity coverage were added.
-- [ ] Step 3: continuation system overhaul
-  - Goal: replace the ad hoc split continuation system with a single unified `Cont` enum and
-    `apply_cont` re-entry function. Temporary test breakage is acceptable.
+  - [x] Step 2: continuation runtime consolidation groundwork
+    - runtime dispatch now carries explicit completion/suspension state instead of overloading nested `Option` meanings.
+    - the active execution path is centralized on `Cont`, `Out`, `eval_expr`, and `eval_stmts`.
+    - this step is treated as groundwork for the new scoped-exit semantics, not as a locked semantic endpoint.
+- [ ] Step 3: redesign no-`resume` semantics around scoped `with` exit
+  - Goal: rebuild Step 3 around an explicit `with`-scope exit contract rather than preserving
+    the previous abortive-handler behavior.
   - Archived Step 3 incremental history (Steps 3.1–3.5) is in
     `doc/old/PLAN_MULTIRESUME_PROGRESSION_SUPPORT.md`.
-  - Full plan detail: `~/.claude/workspaces/.../implementation-plan.md`
+  - Note:
+    - the currently landed `Cont` / `Out` / `eval_stmts` architecture is useful groundwork,
+      but this plan intentionally re-evaluates the runtime shape from first principles instead of
+      assuming every existing type boundary is final.
 
-  ### Architecture
+  ### Fresh Runtime Shape
 
-  The previous system accumulated three parallel structures for the same concept:
-  - `pending_value_continuations` — expression-level suspension
-  - `pending_stmt_continuations` — statement-sequence suspension
-  - `AstContinuationFrame { value, stmt }` — mixed token transport
+  If this were designed from scratch for the new semantics, the runtime should
+  model three distinct outcomes instead of collapsing them into "value vs abort":
 
-  These are replaced by a single `Cont` enum with three variants:
+  1. normal completion with a value,
+  2. suspension for `resume`,
+  3. non-resumptive escape from the current `with` scope.
 
   ```rust
+  enum Flow<T> {
+      Done(T),
+      Suspend(Cont),
+      Escape(Escape),
+      Err(RuntimeError),
+  }
+
+  enum Escape {
+      WithScope {
+          with_id:        WithId,
+          value:          RuntimeValue,
+          handler_stack:  Vec<InlineHandlerValue>,
+      },
+  }
+
   enum Cont {
       StmtSeq {
           store:         Option<StoreOp>,
@@ -567,115 +667,92 @@ Step-by-step checklist:
           callables:     HashMap<String, IntCallable>,
           depth:         usize,
           handler_stack: Vec<InlineHandlerValue>,
-          finish:        FinishKind,   // Block | HandlerBody { token_idx, produce_value }
+          finish:        FinishKind,
       },
       Apply {
-          step:          ApplyStep,    // expression-level continuation step
+          step:          ApplyStep,
           locals:        RuntimeLocals,
           callables:     HashMap<String, IntCallable>,
           depth:         usize,
           handler_stack: Vec<InlineHandlerValue>,
-          // no `then` field: val→stmt chaining via StmtSeq.store instead
       },
-      Resume,   // cross-handler-boundary resume (not an ApplyStep)
+      Resume,
   }
 
   enum FinishKind {
       Block,
-      HandlerBody { token_idx: usize, produce_value: bool },
+      WithBody { with_id: WithId },
+      HandlerBody { token_idx: usize, produce_value: bool, with_id: WithId },
+      Ingest,
   }
-
-  enum ApplyStep {
-      WithBody, Pipeline, SingleArgCall, ReceiverMethod, MultiArgCall,
-      CaseSelect, IfBranch, BinOpLeft, BinOpRight,
-      ListLitElement, TupleLitElement, RecordField, InterpolatedPart,
-      // Resume is NOT here — it is a top-level Cont variant
-  }
-
-  enum Out<T> { Done(T), Suspend(Cont), Err(RuntimeError) }
   ```
 
   Key design decisions:
-  - `StmtSeq.finish` unifies block and handler body via `FinishKind`; `HandlerSeq` is eliminated.
-  - `Apply` has no `then` chain; value→stmt sequencing is `StmtSeq { store: Some(...) }`.
-  - `Cont::Resume` is top-level (not `ApplyStep`) because it crosses the handler-body boundary.
-  - `handler_stack` snapshot in every `Cont` variant — before entering any continuation body,
-    `apply_cont` sets `self.active_inline_handler_stack = cont.handler_stack.clone()`.
-  - `Out::Err(RuntimeError)` replaces the ambiguous `Abort`; carries both runtime errors
-    and unsupported-construct diagnostics.
-  - `Stmt::MutBinding` and `Stmt::Binding` both map to `StoreOp::Bind`; mutability is a
-    parser/typecheck concern with no runtime distinction.
-  - `eval_stmts` returns final `RuntimeLocals` in `Out::Done` so the ingest caller can
-    write mutations back to `self.locals` explicitly.
-  - Handler dispatch loop is the sole site that writes `TokenState::Suspended(cont)`.
-
-  ### Types / functions removed
-
-  - `AstContinuation`, `AstContinuationFrame`
-  - `AstValueContinuation` / `AstValueContinuationKind`
-  - `AstStmtContinuation` / `AstStmtContinuationKind`
-  - `AstEvalOutcome<T>`, `HandlerCompletion`, `HandlerContinuationState`
-  - `Continuation` (old `consumed: bool` struct)
-  - `should_suspend_resume_outcome`
-  - `eval_expr_ast_outcome`, `eval_expr_ast` (replaced by `eval_expr`)
-  - `execute_unit_ast_stmt`, `execute_unit_ast_stmt_outcome`, `execute_unit_expr_ast`
-  - `complete_ast_value_outcome`
-  - `execute_saved_value_continuation`, `execute_saved_stmt_continuation`
-  - `RuntimeOutputResolver` fields: `pending_stmt_continuations`, `pending_value_continuations`,
-    `active_stmt_sequence_ids`, `next_stmt_sequence_id`, `consumed_stmt_sequence_id`,
-    `replaying_stmt_continuation_depth`
+  - "escaping a `with` scope" is neither a normal value return nor a runtime error;
+    it needs its own flow variant.
+  - `Escape::WithScope` carries the target `with_id`; outer evaluation frames must rethrow the
+    escape until that specific `with` body boundary is reached.
+  - the handler clause's final expression becomes the escaped value.
+  - `FinishKind::WithBody { with_id }` is the only place that consumes a matching
+    `Escape::WithScope { with_id, .. }` and turns it into a normal `Done(value)`.
+  - `resume` remains explicit and separate from scope escape; these two paths must not share
+    one overloaded "abort" representation.
+  - `RuntimeError` is reserved for actual runtime errors (`resume` outside handler,
+    continuation exhaustion, invalid state transitions), not for structured handler control flow.
 
   ### Implementation phases
 
-  - [ ] Phase 1 — Define new types alongside old
-    - Add `Cont`, `StoreOp`, `ApplyStep`, `FinishKind`, `Out<T>`, `TokenState`, `RuntimeError`.
-    - Add `apply_cont` stub returning `Out::Err(RuntimeError::Unsupported)`.
-    - All existing code compiles (`#[allow(dead_code)]` as needed).
-    - checks: `cargo build -p goby-wasm`
+  - [ ] Phase 1 — Lock the new semantics before more cleanup
+    - Update `doc/LANGUAGE_SPEC.md` wording from "abortive no-`resume`" to
+      "`with`-scope exit on no-`resume`".
+    - Add the canonical examples above (or reduced equivalents) to tests/examples/docs.
+    - Explicitly define value-position behavior: no-`resume` clause result becomes the value
+      of the whole `with ... in ...` expression.
+    - checks: doc review + targeted parser/typecheck/runtime tests
 
-  - [ ] Phase 2 — Rewrite eval_expr → Out<RuntimeValue>
-    - New `eval_expr(...) -> Out<RuntimeValue>` replaces `eval_expr_ast_outcome` + `eval_expr_ast`.
-    - All `ApplyStep` variants implemented (including `ListLitElement`, `TupleLitElement`,
-      `RecordField`, `InterpolatedPart`). `Expr::Qualified` callee migrated in same phase.
-    - `Expr::Resume` → `Out::Suspend(Cont::Resume)`.
-    - `apply_cont` for `Cont::Resume` calls `resume_through_active_continuation_bridge`.
-    - `apply_cont` sets `self.active_inline_handler_stack = cont.handler_stack.clone()` before
-      entering any continuation body.
-    - Old functions removed: `eval_expr_ast_outcome`, `eval_expr_ast`,
-      `complete_ast_value_outcome`, `execute_saved_value_continuation`,
-      `should_suspend_resume_outcome`.
+  - [ ] Phase 2 — Introduce first-class scope-exit flow
+    - Add an explicit escape outcome (`Escape::WithScope`) to the active runtime result type.
+    - Thread `with_id` / scope identity through `Expr::With`, `eval_stmts`, and handler dispatch.
+    - Make `FinishKind::WithBody { with_id }` consume matching escapes and rethrow non-matching ones.
+    - Remove the use of runtime "abort" for structured no-`resume` control flow.
+    - checks: `cargo build -p goby-wasm`, targeted runtime tests
+
+  - [ ] Phase 3 — Rebuild handler dispatch around escape vs resume
+    - handler clause without `resume`:
+      - evaluate clause body to a value,
+      - package it as `Escape::WithScope { with_id, value, ... }`,
+      - do not mark the event as runtime error / global abort.
+    - handler clause with `resume`:
+      - keep the continuation progression semantics already under construction.
+    - nearest lexical handler wins remains unchanged.
     - checks: `cargo build -p goby-wasm`, `cargo test -p goby-wasm`
 
-  - [ ] Phase 3 — Rewrite stmt sequence evaluation
-    - New `eval_stmts(stmts, locals, callables, evaluators, depth, finish) -> Out<(Option<RuntimeValue>, RuntimeLocals)>`.
-    - Suspension → `Cont::StmtSeq { store, remaining, locals, ..., finish }`.
-    - `apply_cont` for `StmtSeq`: restore handler stack, apply store, call `eval_stmts` on remaining.
-    - Replaces `execute_ast_stmt_sequence`, `execute_ingest_ast_stmt_sequence`,
-      `execute_unit_ast_stmt`, `execute_unit_ast_stmt_outcome`, `execute_unit_expr_ast`,
-      `execute_saved_stmt_continuation`.
-    - Remove all `pending_stmt_continuations` / sequence-id fields from `RuntimeOutputResolver`.
-    - checks: `cargo build -p goby-wasm`, `cargo test -p goby-wasm`
+  - [ ] Phase 4 — Rewrite tests around scoped exit semantics
+    - replace old "no-`resume` aborts program" assertions with:
+      - exits only the current `with` body,
+      - outer program continues,
+      - body remainder is skipped,
+      - escaped clause result becomes whole-`with` result.
+    - add nested-with tests:
+      - inner handler exits inner `with` only,
+      - outer `with` can continue unless it is the escaped target.
+    - keep existing multi-`resume` progression and exhaustion tests.
+    - checks: `cargo test -p goby-wasm`
 
-  - [ ] Phase 4 — Rewrite dispatch_handler_method_core
-    - `eval_handler_body` = thin wrapper calling `eval_stmts(..., FinishKind::HandlerBody { token_idx, produce_value })`.
-    - `dispatch_handler_method_core` → thin caller of `eval_handler_body`.
-    - `begin/finish_handler_continuation_bridge` updated on both fallback and optimized paths
-      to store/restore `Cont` via `TokenState::Suspended`.
-    - Integration test: nested handler bodies with multiple `resume` calls including
-      nested-token routing and `handler_stack` restoration.
-    - checks: `cargo build -p goby-wasm`, `cargo test -p goby-wasm`
-
-  - [ ] Phase 5 — Unify resume tokens and remove all old types
-    - Merge `ResumeToken` / `OptimizedResumeToken` → single `ResumeToken` with `TokenState`.
-    - Remove `execution_mode` branching in bridge functions.
-    - All types/functions in "Types / functions removed" deleted.
+  - [ ] Phase 5 — Cleanup around the new semantics, not the old ones
+    - after scoped-exit flow is stable, remove old AST continuation compatibility types/functions.
+    - unify resume-token state on the final semantics, not on the old abortive contract.
     - checks: `cargo fmt`, `cargo clippy -p goby-wasm -- -D warnings`, `cargo test --workspace`
 
   ### Restart checklist
 
   - Read this section + `doc/STATE.md` latest session note.
   - Begin from `crates/goby-wasm/src/lib.rs`.
-  - Preserve Step 2 behavior: no-`resume` abortive, nested abort propagation, nearest lexical handler wins.
+  - Do not preserve the old no-`resume` abortive behavior by default; it is now the thing being replaced.
+  - Preserve only:
+    - nearest lexical handler wins,
+    - explicit `resume` progression semantics,
+    - runtime errors for invalid `resume` state transitions.
   - After Step 3 lands, update this section, `doc/LANGUAGE_SPEC.md`, and `doc/STATE.md` together.
 
   ### Success criteria
@@ -683,14 +760,15 @@ Step-by-step checklist:
   - Semantic:
     - one handler invocation can `resume` more than once; each advances from the next resumable point.
     - extra `resume` after exhaustion → deterministic `continuation_consumed` error.
-    - no-`resume` completion still aborts immediately.
+    - no-`resume` completion exits only the current `with ... in ...` scope.
+    - the no-`resume` clause result becomes the whole-`with` result.
+    - outer program execution continues after the `with` expression finishes.
     - nested handlers route to nearest matching lexical handler.
   - Architecture:
-    - `pending_value_continuations`, `pending_stmt_continuations` fields gone.
-    - all types/functions in removal list gone.
-    - `apply_cont` is the only re-entry point.
-    - `Cont::Resume` is top-level; `ApplyStep::Resume` does not exist.
-    - `Apply` has no `then` field.
+    - structured `with`-scope exit has a first-class runtime representation
+      (not encoded as runtime abort/error).
+    - `with` scope identity is explicit in the runtime flow.
+    - cleanup happens after the new semantics is stable, not before.
   - Quality gate: `cargo fmt`, `cargo check`, `cargo test --workspace`, `cargo clippy -- -D warnings`.
 - [x] Step 4: typecheck rule update
   - conservative syntactic multi-`resume` rejection was removed.
@@ -698,13 +776,13 @@ Step-by-step checklist:
   - nested handler-clause parsing now exposes valid multi-branch `resume` cases; runtime progression semantics remain tracked in Step 3.
 - [ ] Step 5: tests and parity locks
   - add/update fallback runtime tests for:
-    - no-`resume` immediate abort in value and unit position,
+    - no-`resume` immediate `with`-scope exit in value and unit position,
     - multi-resume progression success path,
     - resume-after-consumption runtime error path.
   - add typed-mode parity tests for the same scenarios.
 - [ ] Step 6: docs sync
   - keep `doc/LANGUAGE_SPEC.md` and `doc/PLAN.md` in sync with final behavior wording.
-  - add/refresh one effect example showing exception-style abortive handler semantics.
+  - add/refresh one effect example showing scoped-exit handler semantics.
 - [ ] Step 7: quality gate
   - run:
     - `cargo fmt`
