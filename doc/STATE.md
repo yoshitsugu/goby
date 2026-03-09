@@ -50,6 +50,19 @@ this section takes priority.
     - `execute_unit_expr_ast` Expr::Var arm → outcome consumer (depth unchanged)
     - regression test added: `resume_replays_bare_var_call_arg_in_side_effect_position`
 - Required next restart point:
+  - primary restart target: implement `doc/PLAN.md` section 4.7 scoped-exit
+    redesign before any more pre-redesign Phase 5 cleanup work.
+  - treat the detailed Step 3 / session notes below as historical background,
+    not as the active execution plan.
+  - likely runtime direction: extend `Out<T>` with explicit scoped-exit state
+    such as `Escape::WithScope`, so a handler clause that never calls `resume`
+    exits the current `with ... in ...` region instead of aborting the whole
+    program.
+  - the redesign should preserve the current active `Cont` / `Out` evaluator
+    path, and then remove legacy wrapper/type cleanup only after the new
+    semantics is stable.
+  - handler clause result typing must unify with the enclosing `with ... in
+    ...` expression type once the redesign lands.
   - all major unit-position and value-position Expr::Call legacy direct-eval seams are
     now on the outcome-aware path.
   - Step 3 unit-position migration is complete (session 221).

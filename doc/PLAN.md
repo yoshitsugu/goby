@@ -547,6 +547,8 @@ Target semantics:
   current `with ... in ...` scope immediately.
 - the handler clause's final expression becomes the value of the whole
   `with ... in ...` expression.
+- the handler clause's final expression type must unify with the enclosing
+  `with ... in ...` expression type.
 - repeated `resume` in one handler invocation still progresses continuation to
   the next resumable point, and raises runtime error only after continuation is
   consumed.
