@@ -1514,19 +1514,6 @@ impl<'m> RuntimeOutputResolver<'m> {
         self.eval_value_with_context(&call_expr, locals, callables, evaluators)
     }
 
-    #[allow(dead_code)]
-    fn apply_pipeline_ast_outcome(
-        &mut self,
-        callee: &str,
-        value: RuntimeValue,
-        locals: &RuntimeLocals,
-        callables: &HashMap<String, IntCallable>,
-        evaluators: &RuntimeEvaluators<'_, '_>,
-        depth: usize,
-    ) -> AstEvalOutcome<RuntimeValue> {
-        self.apply_named_value_call_ast_outcome(callee, value, locals, callables, evaluators, depth)
-    }
-
     fn apply_pipeline_out(
         &mut self,
         callee: &str,
@@ -1930,14 +1917,6 @@ impl<'m> RuntimeOutputResolver<'m> {
         }
     }
 
-    fn ast_outcome_from_option<T>(&self, value: Option<T>) -> AstEvalOutcome<T> {
-        match value {
-            Some(value) => AstEvalOutcome::Complete(value),
-            None if self.has_abort_without_error() => AstEvalOutcome::Aborted,
-            None => AstEvalOutcome::Unsupported,
-        }
-    }
-
     fn select_case_arm(
         &mut self,
         scrutinee_val: &RuntimeValue,
@@ -2004,41 +1983,6 @@ impl<'m> RuntimeOutputResolver<'m> {
         AstEvalOutcome::Complete(evaluated_args)
     }
 
-    #[allow(dead_code)]
-    fn apply_receiver_method_value_call_ast_outcome(
-        &mut self,
-        receiver: &str,
-        member: &str,
-        arg_value: RuntimeValue,
-        evaluators: &RuntimeEvaluators<'_, '_>,
-        depth: usize,
-    ) -> AstEvalOutcome<RuntimeValue> {
-        if let Some(value) = self.try_apply_receiver_runtime_bridge_value(
-            receiver,
-            member,
-            arg_value.clone(),
-            evaluators,
-            depth + 1,
-        ) {
-            return AstEvalOutcome::Complete(value);
-        }
-        let method = self
-            .find_handler_method_for_effect(receiver, member)
-            .or_else(|| self.find_handler_method_by_name(member));
-        if let Some(method) = method {
-            return self.dispatch_handler_method_as_value_outcome(
-                &method,
-                arg_value,
-                evaluators,
-                depth + 1,
-            );
-        }
-        if let Some(value) = self.apply_embedded_default_handler(receiver, member, arg_value) {
-            return AstEvalOutcome::Complete(value);
-        }
-        AstEvalOutcome::Unsupported
-    }
-
     fn apply_receiver_method_value_call_out(
         &mut self,
         receiver: &str,
@@ -2100,18 +2044,6 @@ impl<'m> RuntimeOutputResolver<'m> {
     }
 
     // ── Phase 2: New continuation-based eval_expr ─────────────────────────────
-
-    #[allow(dead_code)]
-    fn ast_outcome_to_out(outcome: AstEvalOutcome<RuntimeValue>) -> Out<RuntimeValue> {
-        match outcome {
-            AstEvalOutcome::Complete(v) => Out::Done(v),
-            AstEvalOutcome::Suspended(_c) => Out::Suspend(Cont::Resume), // placeholder — real conversion in Phase 5
-            AstEvalOutcome::Aborted => Out::Err(RuntimeError::Abort {
-                kind: "aborted".into(),
-            }),
-            AstEvalOutcome::Unsupported => Out::Err(RuntimeError::Unsupported),
-        }
-    }
 
     #[allow(dead_code)]
     fn eval_expr(
@@ -4217,9 +4149,16 @@ impl<'m> RuntimeOutputResolver<'m> {
                     ApplyStep::WithBody { .. } => Out::Err(RuntimeError::Unsupported),
                 }
             }
-            Cont::Resume => Self::ast_outcome_to_out(
-                self.resume_through_active_continuation_bridge_outcome(value, evaluators),
-            ),
+            Cont::Resume => {
+                match self.resume_through_active_continuation_bridge_outcome(value, evaluators) {
+                    AstEvalOutcome::Complete(v) => Out::Done(v),
+                    AstEvalOutcome::Suspended(_) => Out::Suspend(Cont::Resume),
+                    AstEvalOutcome::Aborted => Out::Err(RuntimeError::Abort {
+                        kind: "aborted".into(),
+                    }),
+                    AstEvalOutcome::Unsupported => Out::Err(RuntimeError::Unsupported),
+                }
+            }
         }
     }
 
@@ -4733,42 +4672,6 @@ impl<'m> RuntimeOutputResolver<'m> {
         None
     }
 
-    #[allow(dead_code)]
-    fn apply_named_value_call_ast_outcome(
-        &mut self,
-        fn_name: &str,
-        arg_value: RuntimeValue,
-        locals: &RuntimeLocals,
-        callables: &HashMap<String, IntCallable>,
-        evaluators: &RuntimeEvaluators<'_, '_>,
-        depth: usize,
-    ) -> AstEvalOutcome<RuntimeValue> {
-        // Thin wrapper around apply_named_value_call_out so that handler dispatch,
-        // __goby_ intrinsics, and declaration bodies all use the Out path.
-        match self
-            .apply_named_value_call_out(fn_name, arg_value, locals, callables, evaluators, depth)
-        {
-            Out::Done(v) => AstEvalOutcome::Complete(v),
-            Out::Suspend(_) => {
-                // Out::Suspend can only reach here if a handler body or declaration body
-                // itself suspends (inner effect call). Both are known unsupported cases on
-                // the legacy AST path (dispatch_handler_method_core TODO sites, and
-                // apply_named_value_call_ast_outcome is only called from eval_expr_ast_outcome
-                // which does not propagate Out continuations). No current test reaches this.
-                unreachable!(
-                    "apply_named_value_call_ast_outcome: unexpected Out::Suspend \
-                     (handler/decl body nested suspension not supported via AST path)"
-                )
-            }
-            Out::Escape(_) => AstEvalOutcome::Unsupported,
-            Out::Err(RuntimeError::Abort { .. }) => {
-                self.set_runtime_abort_once();
-                AstEvalOutcome::Aborted
-            }
-            Out::Err(RuntimeError::Unsupported) => AstEvalOutcome::Unsupported,
-        }
-    }
-
     fn apply_named_value_call_out(
         &mut self,
         fn_name: &str,
@@ -4813,7 +4716,13 @@ impl<'m> RuntimeOutputResolver<'m> {
             evaluators,
             depth,
         );
-        Self::ast_outcome_to_out(self.ast_outcome_from_option(value))
+        match value {
+            Some(v) => Out::Done(v),
+            None if self.has_abort_without_error() => Out::Err(RuntimeError::Abort {
+                kind: "aborted".into(),
+            }),
+            None => Out::Err(RuntimeError::Unsupported),
+        }
     }
 
     fn apply_named_value_call_args_out(
@@ -4856,7 +4765,13 @@ impl<'m> RuntimeOutputResolver<'m> {
         // 4. AST fallback
         let value = self
             .apply_named_value_call_ast(fn_name, arg_values, locals, callables, evaluators, depth);
-        Self::ast_outcome_to_out(self.ast_outcome_from_option(value))
+        match value {
+            Some(v) => Out::Done(v),
+            None if self.has_abort_without_error() => Out::Err(RuntimeError::Abort {
+                kind: "aborted".into(),
+            }),
+            None => Out::Err(RuntimeError::Unsupported),
+        }
     }
 
     fn apply_named_value_call_args_ast_outcome(
@@ -5911,29 +5826,6 @@ impl<'m> RuntimeOutputResolver<'m> {
                 self.set_runtime_abort_once();
                 None
             }
-        }
-    }
-
-    #[allow(dead_code)]
-    fn dispatch_handler_method_as_value_outcome(
-        &mut self,
-        method: &ResolvedHandlerMethod,
-        arg_val: RuntimeValue,
-        evaluators: &RuntimeEvaluators<'_, '_>,
-        depth: usize,
-    ) -> AstEvalOutcome<RuntimeValue> {
-        match self.dispatch_handler_method_core(method, &[arg_val], evaluators, depth, true, false)
-        {
-            Some(HandlerCompletion::Resumed(value)) => AstEvalOutcome::Complete(*value),
-            Some(HandlerCompletion::Escaped(_escape)) => AstEvalOutcome::Unsupported,
-            Some(HandlerCompletion::Suspended(continuation)) => {
-                AstEvalOutcome::Suspended(continuation)
-            }
-            Some(HandlerCompletion::Aborted) => {
-                self.set_runtime_abort_once();
-                AstEvalOutcome::Aborted
-            }
-            None => self.ast_outcome_from_option(None::<RuntimeValue>),
         }
     }
 

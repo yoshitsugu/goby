@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-09 (session 239)
+Last updated: 2026-03-09 (session 240)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -42,6 +42,9 @@ This file is a restart-safe snapshot for resuming work after context reset.
 
 - Continue from `doc/PLAN.md` Step 3 Phase 5.
 - Remaining Phase 5 targets:
+  - `AstEvalOutcome` / `AstContinuation` compatibility path still active around
+    `resume_through_active_continuation_*_outcome`,
+    `complete_ast_value_outcome`, and `execute_ast_continuation*`.
   - `complete_ast_value_outcome` / `execute_ast_continuation` bridge logic still
     active to adapt `AstEvalOutcome` callers to unified `Out` continuations.
   - Old types `AstContinuation`, `AstContinuationFrame`, `AstValueContinuation`,
@@ -50,19 +53,37 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - `runtime_aborted` / `set_runtime_abort_once` / `has_abort_without_error`
     still used in legacy `eval_ast_side_effect` / ingest path.
 - Next restart point:
-  - Assessed and completed: `eval_expr_ast_outcome` is now a pure thin wrapper
-    over `eval_expr`; legacy AST fallback body removed.
-  - Next target: remove `AstEvalOutcome` continuation bridge layers
-    incrementally (`complete_ast_value_outcome`, `execute_ast_continuation`,
-    and dead AST-only wrapper helpers), while keeping resume semantics and
-    one-shot guard behavior unchanged.
+  - Assessed and completed:
+    - removed dead AST outcome wrappers no longer referenced:
+      `apply_pipeline_ast_outcome`,
+      `apply_receiver_method_value_call_ast_outcome`,
+      `apply_named_value_call_ast_outcome`,
+      `dispatch_handler_method_as_value_outcome`.
+    - inlined `AstEvalOutcome`→`Out` conversions at call sites and removed
+      helper conversions `ast_outcome_from_option` / `ast_outcome_to_out`.
+  - Next target:
+    - migrate `eval_named_call_args_outcome` / `apply_named_value_call_args_ast_outcome`
+      and resume bridge outcome functions to Out-native flow, then delete
+      `pending_value_continuations` + `AstContinuationFrame` path.
   - Same execution flow rule: record expected breakages before code changes;
     roll back if breakages are not controllable within a narrow scope.
   - implementation rule:
     - add/route via `Out` helper first,
     - keep legacy AST/Option fallback until tests prove parity.
 
-## Completed in Last Session (2026-03-09, session 239)
+## Completed in Last Session (2026-03-09, session 240)
+
+  - Removed dead AST compatibility wrappers that were no longer called:
+    `apply_pipeline_ast_outcome`,
+    `apply_receiver_method_value_call_ast_outcome`,
+    `apply_named_value_call_ast_outcome`,
+    `dispatch_handler_method_as_value_outcome`.
+  - Removed `ast_outcome_from_option` and `ast_outcome_to_out`; replaced
+    with explicit conversion matches at call sites.
+  - Quality gate passing: `cargo fmt`, `cargo clippy -p goby-wasm -- -D warnings`,
+    `cargo check`, `cargo test --workspace`.
+
+## Completed in Previous Session (2026-03-09, session 239)
 
   - `eval_expr_ast_outcome` fully migrated to a thin wrapper around
     `eval_expr`; the unreachable legacy AST fallback body (internal self-calls,
