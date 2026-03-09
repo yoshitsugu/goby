@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-09 (session 242)
+Last updated: 2026-03-09 (session 243)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -37,49 +37,34 @@ This file is a restart-safe snapshot for resuming work after context reset.
 - `cargo clippy -p goby-wasm -- -D warnings`
 - `cargo test -p goby-wasm`
 - `cargo check`
-- latest focused re-check (session 242):
+- latest focused re-check (session 243):
   - `cargo fmt`
-  - `cargo check -p goby-wasm`
-  - `cargo test -p goby-wasm`
+  - `cargo clippy -p goby-wasm -- -D warnings`
+  - `cargo check`
+  - `cargo test --workspace`
 
 ## Next Work
 
-- Continue from `doc/PLAN.md` Step 3 Phase 5.
-- Remaining Phase 5 targets:
-  - `AstEvalOutcome` / `AstContinuation` compatibility path still active around
-    `resume_through_active_continuation_*_outcome`,
-    `complete_ast_value_outcome`, and `execute_ast_continuation*`.
-  - `complete_ast_value_outcome` / `execute_ast_continuation` bridge logic still
-    active to adapt `AstEvalOutcome` callers to unified `Out` continuations.
-  - Old types `AstContinuation`, `AstContinuationFrame`, `AstValueContinuation`,
-    `AstEvalOutcome`, `HandlerContinuationState` still present.
-  - `pending_value_continuations` field still in RuntimeOutputResolver.
+- Phase 5 is substantially complete. Remaining legacy items:
+  - `eval_ast_side_effect` / `eval_expr_ast` legacy path still active for
+    `Expr::With`, `Expr::Case`, `Expr::If`, `Expr::Pipeline`, `Expr::InterpolatedString`
+    statement-position and unsupported branches.
   - `runtime_aborted` / `set_runtime_abort_once` / `has_abort_without_error`
-    still used in legacy `eval_ast_side_effect` / ingest path.
-- Next restart point:
-  - Assessed and completed:
-    - removed dead AST outcome wrappers no longer referenced:
-      `apply_pipeline_ast_outcome`,
-      `apply_receiver_method_value_call_ast_outcome`,
-      `apply_named_value_call_ast_outcome`,
-      `dispatch_handler_method_as_value_outcome`.
-    - inlined `AstEvalOutcome`→`Out` conversions at call sites and removed
-      helper conversions `ast_outcome_from_option` / `ast_outcome_to_out`.
-  - Next target:
-    - migrate `eval_named_call_args_outcome` to Out-native flow and then delete
-      `pending_value_continuations` + `AstContinuationFrame` path.
-    - migrate resume bridge outcome functions (`resume_through_active_continuation_*_outcome`)
-      to Out-native return values.
-    - then remove now-dead compatibility types/functions:
-      - `AstEvalOutcome`, `AstContinuation`, `AstValueContinuation`,
-        `complete_ast_value_outcome`, `execute_ast_continuation*`.
-  - Same execution flow rule: record expected breakages before code changes;
-    roll back if breakages are not controllable within a narrow scope.
-  - implementation rule:
-    - add/route via `Out` helper first,
-    - keep legacy AST/Option fallback until tests prove parity.
+    still used by legacy `eval_ast_side_effect` / ingest path.
+  - These are lower priority — migrate only when needed for new functionality.
+- Next restart point: continue Phase 5 Step 4 (full workspace gate) or begin
+  next feature work.
 
-## Completed in Last Session (2026-03-09, session 242)
+## Completed in Last Session (2026-03-09, session 243)
+
+  - Phase 5 Steps 1–3b complete:
+    - Step 1: `resume_through_active_continuation_*_outcome` → `resume_through_active_continuation_out`
+    - Step 2: `eval_named_call_args_outcome` → `eval_named_call_args_out`; `pending_value_continuations` removed
+    - Step 3a: `AstContinuationFrame` / `AstContinuation::Frame` removed; `HandlerContinuationState::Suspended` simplified to unit variant; `dispatch_depth` argument removed from push_resume_token functions
+    - Step 3b: All `eval_expr_ast_outcome` + `complete_ast_value_outcome` pairs replaced with `eval_expr_to_option`; `eval_expr_ast_outcome`, `complete_ast_value_outcome`, `execute_ast_continuation` deleted; `AstContinuation` and `AstEvalOutcome<T>` types deleted
+  - Quality gate: `cargo fmt`, `cargo clippy -p goby-wasm -- -D warnings`, `cargo check`, `cargo test --workspace` all pass (211 unit + 6 integration tests)
+
+## Completed in Previous Session (2026-03-09, session 242)
 
   - Synchronized restart docs for immediate continuation:
     - `doc/PLAN.md` Phase 5 now includes an explicit progress checkpoint
