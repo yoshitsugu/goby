@@ -551,31 +551,12 @@ enum HandlerContinuationState {
     Suspended,
 }
 
+#[allow(clippy::large_enum_variant)]
 enum HandlerCompletion {
     Aborted,
     Escaped(Escape),
     Resumed(Box<RuntimeValue>),
     Suspended,
-}
-
-#[allow(dead_code)]
-#[allow(clippy::large_enum_variant)]
-#[derive(Clone)]
-/// Bridge from the old AstEvalOutcome path to the new Out/Cont path.
-/// Used only by `complete_ast_value_outcome`/`execute_ast_continuation`.
-enum AstContinuation {
-    ContBridge {
-        cont: Box<Cont>,
-        resumed: RuntimeValue,
-    },
-}
-
-#[allow(dead_code)]
-enum AstEvalOutcome<T> {
-    Complete(T),
-    Suspended(Box<AstContinuation>),
-    Aborted,
-    Unsupported,
 }
 
 // ── Phase 1: New unified continuation types ───────────────────────────────────
@@ -1682,9 +1663,7 @@ impl<'m> RuntimeOutputResolver<'m> {
             Expr::BoolLit(b) => Some(RuntimeValue::Bool(*b)),
             Expr::StringLit(s) => Some(RuntimeValue::String(s.clone())),
             Expr::InterpolatedString(_) => {
-                let outcome =
-                    self.eval_expr_ast_outcome(expr, locals, callables, evaluators, depth);
-                self.complete_ast_value_outcome(outcome, evaluators)
+                self.eval_expr_to_option(expr, locals, callables, evaluators, depth)
             }
             Expr::Var(name) => locals.get(name),
             Expr::Handler { clauses } => Some(RuntimeValue::Handler(
@@ -1697,57 +1676,41 @@ impl<'m> RuntimeOutputResolver<'m> {
                 self.apply_binop_runtime_value(op.clone(), lv, rv?)
             }
             Expr::ListLit { .. } => {
-                let outcome =
-                    self.eval_expr_ast_outcome(expr, locals, callables, evaluators, depth);
-                self.complete_ast_value_outcome(outcome, evaluators)
+                self.eval_expr_to_option(expr, locals, callables, evaluators, depth)
             }
             Expr::TupleLit(_) => {
-                let outcome =
-                    self.eval_expr_ast_outcome(expr, locals, callables, evaluators, depth);
-                self.complete_ast_value_outcome(outcome, evaluators)
+                self.eval_expr_to_option(expr, locals, callables, evaluators, depth)
             }
             Expr::Call { callee, arg: _ } => {
                 if let Expr::Var(ctor_name) = callee.as_ref()
                     && self.single_field_constructor_field(ctor_name).is_some()
                 {
-                    let outcome =
-                        self.eval_expr_ast_outcome(expr, locals, callables, evaluators, depth);
-                    return self.complete_ast_value_outcome(outcome, evaluators);
+                    return self.eval_expr_to_option(expr, locals, callables, evaluators, depth);
                 }
 
                 if let Some((_fn_name, args)) = flatten_named_call(expr)
                     && args.len() > 1
                 {
-                    let outcome =
-                        self.eval_expr_ast_outcome(expr, locals, callables, evaluators, depth);
-                    return self.complete_ast_value_outcome(outcome, evaluators);
+                    return self.eval_expr_to_option(expr, locals, callables, evaluators, depth);
                 }
 
                 if let Expr::Var(_) = callee.as_ref() {
-                    let outcome =
-                        self.eval_expr_ast_outcome(expr, locals, callables, evaluators, depth);
-                    return self.complete_ast_value_outcome(outcome, evaluators);
+                    return self.eval_expr_to_option(expr, locals, callables, evaluators, depth);
                 }
                 // Qualified callee: Effect.method arg  (e.g. Log.log result, env.from_env name)
                 // Route through the outcome-aware path so suspended arg values can replay.
                 if let Expr::Qualified { .. } = callee.as_ref() {
-                    let outcome =
-                        self.eval_expr_ast_outcome(expr, locals, callables, evaluators, depth);
-                    return self.complete_ast_value_outcome(outcome, evaluators);
+                    return self.eval_expr_to_option(expr, locals, callables, evaluators, depth);
                 }
                 // callee is not a plain Var or Qualified (e.g. a curried call or lambda
                 // application) — not yet supported by the native evaluator.
                 None
             }
             Expr::Pipeline { .. } => {
-                let outcome =
-                    self.eval_expr_ast_outcome(expr, locals, callables, evaluators, depth);
-                self.complete_ast_value_outcome(outcome, evaluators)
+                self.eval_expr_to_option(expr, locals, callables, evaluators, depth)
             }
             Expr::RecordConstruct { .. } => {
-                let outcome =
-                    self.eval_expr_ast_outcome(expr, locals, callables, evaluators, depth);
-                self.complete_ast_value_outcome(outcome, evaluators)
+                self.eval_expr_to_option(expr, locals, callables, evaluators, depth)
             }
             // Qualified access: `receiver.member`
             // If `receiver` is a local record variable, return the field value.
@@ -1773,15 +1736,9 @@ impl<'m> RuntimeOutputResolver<'m> {
                 }
             }
             Expr::Block(_) | Expr::Case { .. } => {
-                let outcome =
-                    self.eval_expr_ast_outcome(expr, locals, callables, evaluators, depth);
-                self.complete_ast_value_outcome(outcome, evaluators)
+                self.eval_expr_to_option(expr, locals, callables, evaluators, depth)
             }
-            Expr::If { .. } => {
-                let outcome =
-                    self.eval_expr_ast_outcome(expr, locals, callables, evaluators, depth);
-                self.complete_ast_value_outcome(outcome, evaluators)
-            }
+            Expr::If { .. } => self.eval_expr_to_option(expr, locals, callables, evaluators, depth),
             Expr::With { handler, body } => {
                 let RuntimeValue::Handler(inline_handler) =
                     self.eval_expr_ast(handler, locals, callables, evaluators, depth + 1)?
@@ -1796,9 +1753,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                 result
             }
             Expr::Resume { .. } => {
-                let outcome =
-                    self.eval_expr_ast_outcome(expr, locals, callables, evaluators, depth);
-                self.complete_ast_value_outcome(outcome, evaluators)
+                self.eval_expr_to_option(expr, locals, callables, evaluators, depth)
             }
             // string.split(s, delim) -> ListString
             Expr::MethodCall {
@@ -1920,29 +1875,30 @@ impl<'m> RuntimeOutputResolver<'m> {
         Out::Err(RuntimeError::Unsupported)
     }
 
-    fn eval_expr_ast_outcome(
+    /// Evaluate `expr` and run any suspended `Cont` to completion, returning the result as
+    /// `Option<RuntimeValue>`. Replaces `eval_expr_ast_outcome` + `complete_ast_value_outcome`.
+    fn eval_expr_to_option(
         &mut self,
         expr: &Expr,
         locals: &RuntimeLocals,
         callables: &HashMap<String, IntCallable>,
         evaluators: &RuntimeEvaluators<'_, '_>,
         depth: usize,
-    ) -> AstEvalOutcome<RuntimeValue> {
-        // Thin wrapper: bridge unified Out-path results for remaining AstEvalOutcome callers.
-        match self.eval_expr(expr, locals, callables, evaluators, depth) {
-            Out::Done(value) => AstEvalOutcome::Complete(value),
-            Out::Suspend(cont) => {
-                AstEvalOutcome::Suspended(Box::new(AstContinuation::ContBridge {
-                    cont: Box::new(cont),
-                    resumed: RuntimeValue::Unit,
-                }))
+    ) -> Option<RuntimeValue> {
+        let mut out = self.eval_expr(expr, locals, callables, evaluators, depth);
+        loop {
+            match out {
+                Out::Done(v) => return Some(v),
+                Out::Suspend(cont) => {
+                    out = self.apply_cont(cont, RuntimeValue::Unit, evaluators);
+                }
+                Out::Escape(_) => return None,
+                Out::Err(RuntimeError::Abort { .. }) => {
+                    self.set_runtime_abort_once();
+                    return None;
+                }
+                Out::Err(RuntimeError::Unsupported) => return None,
             }
-            Out::Escape(_) => AstEvalOutcome::Unsupported,
-            Out::Err(RuntimeError::Abort { .. }) => {
-                self.set_runtime_abort_once();
-                AstEvalOutcome::Aborted
-            }
-            Out::Err(RuntimeError::Unsupported) => AstEvalOutcome::Unsupported,
         }
     }
 
@@ -4367,14 +4323,13 @@ impl<'m> RuntimeOutputResolver<'m> {
             }
         }
         let fn_callables = HashMap::new();
-        let outcome = self.eval_expr_ast_outcome(
+        self.eval_expr_to_option(
             &Expr::Block(stmts),
             &fn_locals,
             &fn_callables,
             evaluators,
             depth + 1,
-        );
-        self.complete_ast_value_outcome(outcome, evaluators)
+        )
     }
 
     fn eval_decl_as_value_with_args_out(
@@ -5199,39 +5154,6 @@ impl<'m> RuntimeOutputResolver<'m> {
             token.state = HandlerContinuationState::Resumed(Box::new(resumed.clone()));
         }
         Out::Done(resumed)
-    }
-
-    fn complete_ast_value_outcome(
-        &mut self,
-        mut outcome: AstEvalOutcome<RuntimeValue>,
-        evaluators: &RuntimeEvaluators<'_, '_>,
-    ) -> Option<RuntimeValue> {
-        loop {
-            match outcome {
-                AstEvalOutcome::Complete(value) => return Some(value),
-                AstEvalOutcome::Suspended(continuation) => {
-                    outcome = self.execute_ast_continuation(*continuation, evaluators);
-                }
-                AstEvalOutcome::Aborted => return None,
-                AstEvalOutcome::Unsupported => return None,
-            }
-        }
-    }
-
-    fn execute_ast_continuation(
-        &mut self,
-        continuation: AstContinuation,
-        evaluators: &RuntimeEvaluators<'_, '_>,
-    ) -> AstEvalOutcome<RuntimeValue> {
-        let AstContinuation::ContBridge { cont, resumed } = continuation;
-        match self.apply_cont(*cont, resumed, evaluators) {
-            Out::Done(v) => AstEvalOutcome::Complete(v),
-            Out::Suspend(c) => AstEvalOutcome::Suspended(Box::new(AstContinuation::ContBridge {
-                cont: Box::new(c),
-                resumed: RuntimeValue::Unit,
-            })),
-            Out::Escape(_) | Out::Err(_) => AstEvalOutcome::Aborted,
-        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -10701,9 +10623,9 @@ main =
         // created for the `get` handler dispatch has frame=None (no pending
         // stmt/value continuation at that dispatch depth), so the resume path
         // takes the synchronous branch:
-        //   resume_through_ast_continuation_frame(None, 5, ...) → Complete(5).
-        // Thus eval_expr_ast_outcome(get ()) inside the handler body returns
-        // Complete(5), x=5 is stored, then resume(5+10)=15.
+        //   resume_through_active_continuation_out returns Out::Done(5).
+        // Thus eval_expr_to_option(get ()) inside the handler body returns
+        // Some(5), x=5 is stored, then resume(5+10)=15.
         //
         // The Suspended branch of Stmt::Binding in dispatch_handler_method_core
         // is NOT reached here (synchronous dispatch only; the async suspension
@@ -10933,7 +10855,7 @@ main =
         use goby_core::parse_module;
         let _guard = ENV_MUTEX.lock().unwrap();
         // Shape I: declaration body (Expr::Block) has a Binding + effect call, called via
-        // `print (get_advanced 5)`. Exercises eval_expr_ast_outcome in the print arg path
+        // `print (get_advanced 5)`. Exercises eval_expr_to_option in the print arg path
         // (migrated from eval_ast_value so declaration-body effect calls are supported).
         //
         // get_advanced n: a = next(n) = n+1, returns a+10. With n=5: a=6, a+10=16.
@@ -10970,7 +10892,7 @@ main =
         let _guard = ENV_MUTEX.lock().unwrap();
         // Shape J: string interpolation embeds a declaration call that invokes an effect.
         // `get_val n` returns next(n). `print "result=${get_val 3}"` → "result=4".
-        // Exercises eval_expr_ast_outcome for InterpolatedString segment evaluation
+        // Exercises eval_expr_to_option for InterpolatedString segment evaluation
         // when the segment is a call whose declaration body calls an effect operation.
         let source = r#"
 effect Iter
@@ -11003,7 +10925,7 @@ main =
         use goby_core::parse_module;
         let _guard = ENV_MUTEX.lock().unwrap();
         // Shape K: pipeline left-hand side is a declaration call whose body invokes an effect.
-        // Exercises eval_expr_ast_outcome for the Pipeline value arm in eval_ast_side_effect
+        // Exercises eval_expr_to_option for the Pipeline value arm in eval_ast_side_effect
         // (migrated from eval_ast_value).
         //
         // `(get_val 3) |> log` where get_val n = next n. next(3)=4. log("4") prints "4".
