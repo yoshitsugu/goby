@@ -1120,7 +1120,10 @@ impl<'m> RuntimeOutputResolver<'m> {
                 let method = self.find_handler_method_for_effect(receiver, member);
                 if let Some(method) = method {
                     // depth=0: this is a top-level call; dispatch_handler_method adds 1 internally.
-                    return self.dispatch_handler_method(&method, arg_val, evaluators, 0);
+                    return match self.dispatch_handler_method(&method, arg_val, evaluators, 0) {
+                        Out::Done(()) => Some(()),
+                        Out::Suspend(_) | Out::Escape(_) | Out::Err(_) => None,
+                    };
                 }
                 if self
                     .apply_embedded_default_handler(receiver, member, arg_val.clone())
@@ -1179,7 +1182,10 @@ impl<'m> RuntimeOutputResolver<'m> {
                     let bare_method = self.find_handler_method_by_name(fn_name);
                     if let Some(method) = bare_method {
                         // depth=0: top-level call; dispatch_handler_method adds 1 internally.
-                        return self.dispatch_handler_method(&method, arg_val, evaluators, 0);
+                        return match self.dispatch_handler_method(&method, arg_val, evaluators, 0) {
+                            Out::Done(()) => Some(()),
+                            Out::Suspend(_) | Out::Escape(_) | Out::Err(_) => None,
+                        };
                     }
                     if fn_name == "println" {
                         let mut text = arg_val.to_output_text();
@@ -1241,7 +1247,10 @@ impl<'m> RuntimeOutputResolver<'m> {
                     let bare_method = self.find_handler_method_by_name(callee);
                     if let Some(method) = bare_method {
                         // depth=0: top-level call; dispatch_handler_method adds 1 internally.
-                        return self.dispatch_handler_method(&method, v, evaluators, 0);
+                        return match self.dispatch_handler_method(&method, v, evaluators, 0) {
+                            Out::Done(()) => Some(()),
+                            Out::Suspend(_) | Out::Escape(_) | Out::Err(_) => None,
+                        };
                     }
                     if let Some(effect_name) = self.unique_effect_name_for_operation(callee)
                         && self
@@ -2714,7 +2723,12 @@ impl<'m> RuntimeOutputResolver<'m> {
             return match result {
                 Out::Done(_) => Out::Done(()),
                 Out::Suspend(cont) => Out::Suspend(cont),
-                Out::Escape(escape) => Out::Escape(escape),
+                Out::Escape(escape) => match escape {
+                    Escape::WithScope {
+                        with_id: target_id, ..
+                    } if target_id == with_id => Out::Done(()),
+                    other => Out::Escape(other),
+                },
                 Out::Err(e) => Out::Err(e),
             };
         }
@@ -2799,13 +2813,7 @@ impl<'m> RuntimeOutputResolver<'m> {
             };
             let method = self.find_handler_method_for_effect(receiver, member);
             if let Some(method) = method {
-                return match self.dispatch_handler_method(&method, arg_val, evaluators, depth + 1) {
-                    Some(()) => Out::Done(()),
-                    None if self.has_abort_without_error() => Out::Err(RuntimeError::Abort {
-                        kind: "aborted".into(),
-                    }),
-                    None => Out::Err(RuntimeError::Unsupported),
-                };
+                return self.dispatch_handler_method(&method, arg_val, evaluators, depth + 1);
             }
             if self
                 .apply_embedded_default_handler(receiver, member, arg_val.clone())
@@ -2883,13 +2891,7 @@ impl<'m> RuntimeOutputResolver<'m> {
             // Bare effect method call: e.g. `log env_var`.
             let bare_method = self.find_handler_method_by_name(fn_name);
             if let Some(method) = bare_method {
-                return match self.dispatch_handler_method(&method, arg_val, evaluators, depth + 1) {
-                    Some(()) => Out::Done(()),
-                    None if self.has_abort_without_error() => Out::Err(RuntimeError::Abort {
-                        kind: "aborted".into(),
-                    }),
-                    None => Out::Err(RuntimeError::Unsupported),
-                };
+                return self.dispatch_handler_method(&method, arg_val, evaluators, depth + 1);
             }
             if fn_name == "println" {
                 let mut text = arg_val.to_output_text();
@@ -5357,23 +5359,17 @@ impl<'m> RuntimeOutputResolver<'m> {
         arg_val: RuntimeValue,
         evaluators: &RuntimeEvaluators<'_, '_>,
         depth: usize,
-    ) -> Option<()> {
+    ) -> Out<()> {
         // take_caller_cont=true: direct unit-position call, may pick up pending caller cont.
-        match self.dispatch_handler_method_core(
-            method,
-            &[arg_val],
-            evaluators,
-            depth,
-            false,
-            true,
-        )? {
-            HandlerCompletion::Resumed(_) => Some(()),
-            HandlerCompletion::Escaped(_escape) => Some(()),
-            HandlerCompletion::Suspended => None,
-            HandlerCompletion::Aborted => {
-                self.set_runtime_abort_once();
-                None
-            }
+        match self.dispatch_handler_method_core(method, &[arg_val], evaluators, depth, false, true)
+        {
+            Some(HandlerCompletion::Resumed(_)) => Out::Done(()),
+            Some(HandlerCompletion::Escaped(_escape)) => Out::Done(()),
+            Some(HandlerCompletion::Suspended) => Out::Suspend(Cont::Resume),
+            Some(HandlerCompletion::Aborted) => Out::Err(RuntimeError::Abort {
+                kind: "aborted".into(),
+            }),
+            None => Out::Err(RuntimeError::Unsupported),
         }
     }
 

@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-09 (session 243)
+Last updated: 2026-03-10
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -54,6 +54,25 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - These are lower priority — migrate only when needed for new functionality.
 - Next restart point: continue Phase 5 Step 4 (full workspace gate) or begin
   next feature work.
+
+## Completed in Current Session (2026-03-10)
+
+  - Phase 5 cleanup (small safe slices):
+    - `execute_unit_expr_ast` now consumes matching `Escape::WithScope` at the
+      unit-position `with` boundary (mirrors value-position scoped-exit
+      handling).
+    - `dispatch_handler_method` return type migrated from `Option<()>` to
+      `Out<()>`.
+      - direct `Abort`/`Unsupported` mapping now flows through `Out::Err(...)`
+        at call sites instead of `None` + `has_abort_without_error` checks.
+      - `eval_ast_side_effect` top-level handler-dispatch call sites now bridge
+        `Out<()>` back to `Option<()>` locally.
+  - Validation:
+    - `cargo fmt`
+    - `cargo check`
+    - `cargo test -p goby-wasm`
+    - `cargo test --workspace`
+    - `cargo clippy -p goby-wasm -- -D warnings`
 
 ## Completed in Last Session (2026-03-09, session 243)
 
