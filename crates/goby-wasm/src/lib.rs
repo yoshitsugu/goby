@@ -5578,9 +5578,25 @@ impl<'m> RuntimeOutputResolver<'m> {
         evaluators: &RuntimeEvaluators<'_, '_>,
         depth: usize,
     ) -> AstEvalOutcome<RuntimeValue> {
-        let value = self
-            .apply_named_value_call_ast(fn_name, arg_values, locals, callables, evaluators, depth);
-        self.ast_outcome_from_option(value)
+        // Thin wrapper around apply_named_value_call_args_out (Out path).
+        match self.apply_named_value_call_args_out(
+            fn_name, arg_values, locals, callables, evaluators, depth,
+        ) {
+            Out::Done(v) => AstEvalOutcome::Complete(v),
+            Out::Suspend(_) => {
+                // handler/decl body nested suspension not supported via AST path.
+                unreachable!(
+                    "apply_named_value_call_args_ast_outcome: unexpected Out::Suspend \
+                     (handler/decl body nested suspension not supported via AST path)"
+                )
+            }
+            Out::Escape(_) => AstEvalOutcome::Unsupported,
+            Out::Err(RuntimeError::Abort { .. }) => {
+                self.set_runtime_abort_once();
+                AstEvalOutcome::Aborted
+            }
+            Out::Err(RuntimeError::Unsupported) => AstEvalOutcome::Unsupported,
+        }
     }
 
     fn apply_binop_runtime_value(
