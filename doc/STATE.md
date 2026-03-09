@@ -57,6 +57,8 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - `execute_unit_ast_stmt` return type migrated to `Out<()>`; legacy
     `execute_unit_ast_stmt_outcome` removed and `eval_stmts` fallback now consumes
     `Out<()>` directly.
+  - `execute_unit_expr_ast` return type migrated to `Out<()>`; key call sites and
+    legacy fallback branches now consume `Out` instead of `Option`.
 - Quality gate passing: `cargo fmt`, `cargo clippy -p goby-wasm -- -D warnings`,
   `cargo test -p goby-wasm` (unit 209 passed, integration 6 passed), `cargo check`.
 
