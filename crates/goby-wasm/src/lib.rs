@@ -3218,7 +3218,28 @@ impl<'m> RuntimeOutputResolver<'m> {
                 else {
                     return Out::Err(RuntimeError::Unsupported);
                 };
-                self.eval_expr(&arm_body, &arm_locals, callables, evaluators, depth + 1)
+                match self.eval_expr(&arm_body, &arm_locals, callables, evaluators, depth + 1) {
+                    Out::Done(v) => Out::Done(v),
+                    Out::Suspend(s) => Out::Suspend(s),
+                    Out::Escape(escape) => Out::Escape(escape),
+                    Out::Err(RuntimeError::Unsupported) => {
+                        let mut arm_locals_for_unit = arm_locals;
+                        let mut arm_callables = callables.clone();
+                        match self.execute_unit_expr_ast(
+                            &arm_body,
+                            &mut arm_locals_for_unit,
+                            &mut arm_callables,
+                            evaluators,
+                            depth + 1,
+                        ) {
+                            Out::Done(()) => Out::Done(RuntimeValue::Unit),
+                            Out::Suspend(s) => Out::Suspend(s),
+                            Out::Escape(escape) => Out::Escape(escape),
+                            Out::Err(e) => Out::Err(e),
+                        }
+                    }
+                    Out::Err(e) => Out::Err(e),
+                }
             }
 
             Expr::If {
@@ -3253,6 +3274,22 @@ impl<'m> RuntimeOutputResolver<'m> {
                     Out::Done(v) => Out::Done(v),
                     Out::Suspend(s) => Out::Suspend(s),
                     Out::Escape(escape) => Out::Escape(escape),
+                    Out::Err(RuntimeError::Unsupported) => {
+                        let mut branch_locals = locals.clone();
+                        let mut branch_callables = callables.clone();
+                        match self.execute_unit_expr_ast(
+                            branch,
+                            &mut branch_locals,
+                            &mut branch_callables,
+                            evaluators,
+                            depth + 1,
+                        ) {
+                            Out::Done(()) => Out::Done(RuntimeValue::Unit),
+                            Out::Suspend(s) => Out::Suspend(s),
+                            Out::Escape(escape) => Out::Escape(escape),
+                            Out::Err(e) => Out::Err(e),
+                        }
+                    }
                     Out::Err(e) => Out::Err(e),
                 }
             }
@@ -3639,8 +3676,11 @@ impl<'m> RuntimeOutputResolver<'m> {
         if let Expr::Call { callee, arg } = expr
             && matches!(callee.as_ref(), Expr::Var(n) if n == BUILTIN_PRINT)
         {
-            let Some(value) = self.eval_expr_ast(arg, locals, callables, evaluators, depth) else {
-                return Out::Err(RuntimeError::Unsupported);
+            let value = match self.eval_expr(arg, locals, callables, evaluators, depth) {
+                Out::Done(v) => v,
+                Out::Suspend(cont) => return Out::Suspend(cont),
+                Out::Escape(escape) => return Out::Escape(escape),
+                Out::Err(e) => return Out::Err(e),
             };
             self.outputs.push(value.to_output_text());
             return Out::Done(());
@@ -3648,8 +3688,11 @@ impl<'m> RuntimeOutputResolver<'m> {
         if let Expr::Call { callee, arg } = expr
             && matches!(callee.as_ref(), Expr::Var(n) if n == "println")
         {
-            let Some(value) = self.eval_expr_ast(arg, locals, callables, evaluators, depth) else {
-                return Out::Err(RuntimeError::Unsupported);
+            let value = match self.eval_expr(arg, locals, callables, evaluators, depth) {
+                Out::Done(v) => v,
+                Out::Suspend(cont) => return Out::Suspend(cont),
+                Out::Escape(escape) => return Out::Escape(escape),
+                Out::Err(e) => return Out::Err(e),
             };
             let mut text = value.to_output_text();
             if !text.ends_with('\n') {
@@ -3663,8 +3706,11 @@ impl<'m> RuntimeOutputResolver<'m> {
         if let Expr::Pipeline { value, callee } = expr
             && callee == BUILTIN_PRINT
         {
-            let Some(v) = self.eval_expr_ast(value, locals, callables, evaluators, depth) else {
-                return Out::Err(RuntimeError::Unsupported);
+            let v = match self.eval_expr(value, locals, callables, evaluators, depth) {
+                Out::Done(v) => v,
+                Out::Suspend(cont) => return Out::Suspend(cont),
+                Out::Escape(escape) => return Out::Escape(escape),
+                Out::Err(e) => return Out::Err(e),
             };
             self.outputs.push(v.to_output_text());
             return Out::Done(());
@@ -3836,34 +3882,46 @@ impl<'m> RuntimeOutputResolver<'m> {
         }
 
         if let Expr::Pipeline { value, callee } = expr {
-            if let Some(v) = self.eval_expr_ast(value, locals, callables, evaluators, depth) {
-                if let Some(effect_name) = self.unique_effect_name_for_operation(callee)
-                    && self
-                        .apply_embedded_default_handler(&effect_name, callee, v.clone())
+            match self.eval_expr(value, locals, callables, evaluators, depth) {
+                Out::Done(v) => {
+                    if let Some(effect_name) = self.unique_effect_name_for_operation(callee)
+                        && self
+                            .apply_embedded_default_handler(&effect_name, callee, v.clone())
+                            .is_some()
+                    {
+                        return Out::Done(());
+                    }
+                    if self
+                        .execute_unit_call_ast(
+                            callee,
+                            v.clone(),
+                            locals,
+                            callables,
+                            evaluators,
+                            depth,
+                        )
                         .is_some()
-                {
-                    return Out::Done(());
+                    {
+                        return Out::Done(());
+                    }
+                    if self
+                        .try_apply_bare_runtime_bridge_side_effect(
+                            callee,
+                            v,
+                            locals,
+                            callables,
+                            evaluators,
+                            depth + 1,
+                        )
+                        .is_some()
+                    {
+                        return Out::Done(());
+                    }
                 }
-                if self
-                    .execute_unit_call_ast(callee, v.clone(), locals, callables, evaluators, depth)
-                    .is_some()
-                {
-                    return Out::Done(());
-                }
-                if self
-                    .try_apply_bare_runtime_bridge_side_effect(
-                        callee,
-                        v,
-                        locals,
-                        callables,
-                        evaluators,
-                        depth + 1,
-                    )
-                    .is_some()
-                {
-                    return Out::Done(());
-                }
-            }
+                Out::Suspend(cont) => return Out::Suspend(cont),
+                Out::Escape(escape) => return Out::Escape(escape),
+                Out::Err(_) => {} // fall through to execute_unit_call string-repr path
+            };
             let Some(repr) = expr.to_str_repr() else {
                 return Out::Err(RuntimeError::Unsupported);
             };
@@ -3882,10 +3940,11 @@ impl<'m> RuntimeOutputResolver<'m> {
         }
 
         if let Expr::Case { .. } = expr {
-            let outcome = self.eval_expr_ast_outcome(expr, locals, callables, evaluators, depth);
-            return match self.complete_ast_value_outcome(outcome, evaluators) {
-                Some(_) => Out::Done(()),
-                None => Out::Err(RuntimeError::Unsupported),
+            return match self.eval_expr(expr, locals, callables, evaluators, depth) {
+                Out::Done(_) => Out::Done(()),
+                Out::Suspend(cont) => Out::Suspend(cont),
+                Out::Escape(escape) => Out::Escape(escape),
+                Out::Err(e) => Out::Err(e),
             };
         }
 
@@ -3895,55 +3954,44 @@ impl<'m> RuntimeOutputResolver<'m> {
             else_expr,
         } = expr
         {
-            let cond_outcome =
-                self.eval_expr_ast_outcome(condition, locals, callables, evaluators, depth);
-            let Some(cond_val) = self.complete_ast_value_outcome(cond_outcome, evaluators) else {
-                return Out::Err(RuntimeError::Unsupported);
+            let cond_val = match self.eval_expr(condition, locals, callables, evaluators, depth) {
+                Out::Done(v) => v,
+                Out::Suspend(cont) => return Out::Suspend(cont),
+                Out::Escape(escape) => return Out::Escape(escape),
+                Out::Err(e) => return Out::Err(e),
             };
             match cond_val {
                 RuntimeValue::Bool(true) => {
-                    let branch_outcome = self.eval_expr_ast_outcome(
-                        then_expr,
-                        locals,
-                        callables,
-                        evaluators,
-                        depth + 1,
-                    );
-                    if self
-                        .complete_ast_value_outcome(branch_outcome, evaluators)
-                        .is_some()
+                    return match self.eval_expr(then_expr, locals, callables, evaluators, depth + 1)
                     {
-                        return Out::Done(());
-                    }
-                    return self.execute_unit_expr_ast(
-                        then_expr,
-                        locals,
-                        callables,
-                        evaluators,
-                        depth + 1,
-                    );
+                        Out::Done(_) => Out::Done(()),
+                        Out::Suspend(cont) => Out::Suspend(cont),
+                        Out::Escape(escape) => Out::Escape(escape),
+                        Out::Err(RuntimeError::Unsupported) => self.execute_unit_expr_ast(
+                            then_expr,
+                            locals,
+                            callables,
+                            evaluators,
+                            depth + 1,
+                        ),
+                        Out::Err(e) => Out::Err(e),
+                    };
                 }
                 RuntimeValue::Bool(false) => {
-                    let branch_outcome = self.eval_expr_ast_outcome(
-                        else_expr,
-                        locals,
-                        callables,
-                        evaluators,
-                        depth + 1,
-                    );
-                    if self
-                        .complete_ast_value_outcome(branch_outcome, evaluators)
-                        .is_some()
+                    return match self.eval_expr(else_expr, locals, callables, evaluators, depth + 1)
                     {
-                        return Out::Done(());
-                    }
-                    return self.execute_unit_expr_ast(
-                        else_expr,
-                        locals,
-                        callables,
-                        evaluators,
-                        depth + 1,
-                    );
+                        Out::Done(_) => Out::Done(()),
+                        Out::Suspend(cont) => Out::Suspend(cont),
+                        Out::Escape(escape) => Out::Escape(escape),
+                        Out::Err(RuntimeError::Unsupported) => self.execute_unit_expr_ast(
+                            else_expr,
+                            locals,
+                            callables,
+                            evaluators,
+                            depth + 1,
+                        ),
+                        Out::Err(e) => Out::Err(e),
+                    };
                 }
                 _ => return Out::Err(RuntimeError::Unsupported),
             }
@@ -3966,11 +4014,11 @@ impl<'m> RuntimeOutputResolver<'m> {
         }
 
         // Fallback: evaluating to a value is fine in unit position (discarded).
-        if self
-            .eval_expr_ast(expr, locals, callables, evaluators, depth + 1)
-            .is_some()
-        {
-            return Out::Done(());
+        match self.eval_expr(expr, locals, callables, evaluators, depth + 1) {
+            Out::Done(_) => return Out::Done(()),
+            Out::Suspend(cont) => return Out::Suspend(cont),
+            Out::Escape(escape) => return Out::Escape(escape),
+            Out::Err(_) => {}
         }
 
         // Preserve existing call/pipeline string fallback behavior for uncovered forms.

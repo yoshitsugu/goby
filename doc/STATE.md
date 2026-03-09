@@ -59,6 +59,16 @@ This file is a restart-safe snapshot for resuming work after context reset.
     `Out<()>` directly.
   - `execute_unit_expr_ast` return type migrated to `Out<()>`; key call sites and
     legacy fallback branches now consume `Out` instead of `Option`.
+  - `eval_ast_side_effect` print/println/pipeline side-effect branches now use
+    `eval_expr` (`Out` path) instead of `eval_expr_ast` (`Option` path), so
+    `Suspend` / `Escape` / runtime error propagation is preserved on the active
+    runtime path.
+  - `eval_ast_side_effect` `Case` / `If` handling now evaluates condition and
+    selected branch via `eval_expr` (`Out` path), while preserving unit-position
+    fallback execution for unsupported selected branches.
+  - `eval_expr` `Case` / `If` now preserve legacy parity by falling back to
+    `execute_unit_expr_ast` for unsupported selected branches and returning
+    `RuntimeValue::Unit` on success.
 - Quality gate passing: `cargo fmt`, `cargo clippy -p goby-wasm -- -D warnings`,
   `cargo test -p goby-wasm` (unit 209 passed, integration 6 passed), `cargo check`.
 
