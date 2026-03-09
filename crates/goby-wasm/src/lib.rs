@@ -1164,7 +1164,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                     1,
                 ) {
                     Out::Done(v) => v,
-                    _ => return None,
+                    Out::Suspend(_) | Out::Escape(_) | Out::Err(_) => return None,
                 };
                 self.outputs.push(value.to_output_text());
                 Some(())
@@ -1179,7 +1179,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                     1,
                 ) {
                     Out::Done(v) => v,
-                    _ => return None,
+                    Out::Suspend(_) | Out::Escape(_) | Out::Err(_) => return None,
                 };
                 let mut text = value.to_output_text();
                 if !text.ends_with('\n') {
@@ -1198,7 +1198,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                     1,
                 ) {
                     Out::Done(v) => v,
-                    _ => return None,
+                    Out::Suspend(_) | Out::Escape(_) | Out::Err(_) => return None,
                 };
                 self.outputs.push(v.to_output_text());
                 Some(())
@@ -1218,7 +1218,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                     1,
                 ) {
                     Out::Done(v) => v,
-                    _ => return None,
+                    Out::Suspend(_) | Out::Escape(_) | Out::Err(_) => return None,
                 };
                 let method = self.find_handler_method_for_effect(receiver, member);
                 if let Some(method) = method {
@@ -3663,7 +3663,7 @@ impl<'m> RuntimeOutputResolver<'m> {
         {
             let arg_val = match self.eval_expr(arg, locals, callables, evaluators, depth + 1) {
                 Out::Done(v) => v,
-                _ => return None,
+                Out::Suspend(_) | Out::Escape(_) | Out::Err(_) => return None,
             };
             let method = self.find_handler_method_for_effect(receiver, member);
             if let Some(method) = method {
@@ -3724,7 +3724,7 @@ impl<'m> RuntimeOutputResolver<'m> {
             // Evaluate arg through the new Out path so suspended values can replay.
             let arg_val = match self.eval_expr(arg, locals, callables, evaluators, depth) {
                 Out::Done(v) => v,
-                _ => return None,
+                Out::Suspend(_) | Out::Escape(_) | Out::Err(_) => return None,
             };
             if let Some(callable) = callables.get(fn_name)
                 && self
