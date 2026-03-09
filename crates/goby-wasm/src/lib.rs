@@ -5453,23 +5453,30 @@ impl<'m> RuntimeOutputResolver<'m> {
         evaluators: &RuntimeEvaluators<'_, '_>,
         depth: usize,
     ) -> AstEvalOutcome<RuntimeValue> {
-        if let Some(method) = self.find_handler_method_by_name(fn_name) {
-            return self.dispatch_handler_method_as_value_outcome(
-                &method,
-                arg_value,
-                evaluators,
-                depth + 1,
-            );
+        // Thin wrapper around apply_named_value_call_out so that handler dispatch,
+        // __goby_ intrinsics, and declaration bodies all use the Out path.
+        match self
+            .apply_named_value_call_out(fn_name, arg_value, locals, callables, evaluators, depth)
+        {
+            Out::Done(v) => AstEvalOutcome::Complete(v),
+            Out::Suspend(_) => {
+                // Out::Suspend can only reach here if a handler body or declaration body
+                // itself suspends (inner effect call). Both are known unsupported cases on
+                // the legacy AST path (dispatch_handler_method_core TODO sites, and
+                // apply_named_value_call_ast_outcome is only called from eval_expr_ast_outcome
+                // which does not propagate Out continuations). No current test reaches this.
+                unreachable!(
+                    "apply_named_value_call_ast_outcome: unexpected Out::Suspend \
+                     (handler/decl body nested suspension not supported via AST path)"
+                )
+            }
+            Out::Escape(_) => AstEvalOutcome::Unsupported,
+            Out::Err(RuntimeError::Abort { .. }) => {
+                self.set_runtime_abort_once();
+                AstEvalOutcome::Aborted
+            }
+            Out::Err(RuntimeError::Unsupported) => AstEvalOutcome::Unsupported,
         }
-        let value = self.apply_named_value_call_ast(
-            fn_name,
-            &[arg_value],
-            locals,
-            callables,
-            evaluators,
-            depth,
-        );
-        self.ast_outcome_from_option(value)
     }
 
     fn apply_named_value_call_out(
