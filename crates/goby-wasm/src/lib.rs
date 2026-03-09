@@ -4063,14 +4063,17 @@ impl<'m> RuntimeOutputResolver<'m> {
             })
             .cloned()
             .collect();
-        self.execute_ast_stmt_sequence(
+        match self.eval_stmts(
             &filtered_stmts,
-            &mut fn_locals,
-            &mut fn_callables,
+            fn_locals,
+            fn_callables,
             evaluators,
             depth + 1,
-        )?;
-        Some(())
+            FinishKind::Block,
+        ) {
+            Out::Done(_) => Some(()),
+            Out::Suspend(_) | Out::Escape(_) | Out::Err(_) => None,
+        }
     }
 
     /// Execute a single AST statement inside a unit-returning function body.
@@ -5014,21 +5017,24 @@ impl<'m> RuntimeOutputResolver<'m> {
     ) -> Option<()> {
         let function = evaluators.unit.get(fn_name)?;
         let mut function_locals = RuntimeLocals::default();
-        let mut function_callables = HashMap::new();
+        let function_callables = HashMap::new();
 
         if let Some(stmts) = function.parsed_stmts {
             // AST path: move arg_val directly into locals (no clone needed).
             if let Some(parameter) = function.parameter {
                 function_locals.store(parameter, arg_val);
             }
-            self.execute_ast_stmt_sequence(
+            match self.eval_stmts(
                 stmts,
-                &mut function_locals,
-                &mut function_callables,
+                function_locals,
+                function_callables,
                 evaluators,
                 depth + 1,
-            )?;
-            Some(())
+                FinishKind::Block,
+            ) {
+                Out::Done(_) => Some(()),
+                Out::Suspend(_) | Out::Escape(_) | Out::Err(_) => None,
+            }
         } else {
             // Fall back to the string-based path for functions without parsed AST.
             // arg_text is computed here only, not on the hot AST path.
@@ -6591,7 +6597,7 @@ impl<'m> RuntimeOutputResolver<'m> {
         if let Some(param) = param_name {
             fn_locals.store(&param, arg_val);
         }
-        let mut fn_callables = HashMap::new();
+        let fn_callables = HashMap::new();
         let filtered_stmts: Vec<Stmt> = stmts
             .iter()
             .filter(|stmt| {
@@ -6604,14 +6610,17 @@ impl<'m> RuntimeOutputResolver<'m> {
             })
             .cloned()
             .collect();
-        self.execute_ast_stmt_sequence(
+        match self.eval_stmts(
             &filtered_stmts,
-            &mut fn_locals,
-            &mut fn_callables,
+            fn_locals,
+            fn_callables,
             evaluators,
             depth + 1,
-        )?;
-        Some(())
+            FinishKind::Block,
+        ) {
+            Out::Done(_) => Some(()),
+            Out::Suspend(_) | Out::Escape(_) | Out::Err(_) => None,
+        }
     }
 
     fn execute_decl_with_callable_as_side_effect(
@@ -6634,7 +6643,7 @@ impl<'m> RuntimeOutputResolver<'m> {
             let param = decl.params.first().cloned();
             (param, stmts)
         };
-        let mut fn_locals = RuntimeLocals::default();
+        let fn_locals = RuntimeLocals::default();
         let mut fn_callables = HashMap::new();
         let param = param_name?;
         fn_callables.insert(param, callable);
@@ -6650,14 +6659,17 @@ impl<'m> RuntimeOutputResolver<'m> {
             })
             .cloned()
             .collect();
-        self.execute_ast_stmt_sequence(
+        match self.eval_stmts(
             &filtered_stmts,
-            &mut fn_locals,
-            &mut fn_callables,
+            fn_locals,
+            fn_callables,
             evaluators,
             depth + 1,
-        )?;
-        Some(())
+            FinishKind::Block,
+        ) {
+            Out::Done(_) => Some(()),
+            Out::Suspend(_) | Out::Escape(_) | Out::Err(_) => None,
+        }
     }
 
     fn dispatch_callable_side_effect(
