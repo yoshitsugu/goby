@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-09
+Last updated: 2026-03-09 (session 237)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -49,27 +49,30 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - `pending_value_continuations` field still in RuntimeOutputResolver.
   - `runtime_aborted` / `set_runtime_abort_once` / `has_abort_without_error`
     still used in legacy `eval_ast_side_effect` / ingest path.
-- Next restart point (first step):
-  - target only `apply_named_value_call_args_out` migration to `Out` path
-    (no broad `eval_expr_ast` rewrite in the same step).
-  - execution flow for the next step:
-    - record expected breakages under this file as:
-      `## Expected breakages (current step)` before code changes.
-    - first write down "what is expected to break" (tests, paths, runtime behavior).
-    - then implement the design-oriented change.
-    - if breakages are not controllable/understandable, roll back immediately to the
-      last stable commit and split into a smaller change.
+- Next restart point:
+  - Assess next migration target: `apply_named_value_call_args_ast_outcome` or
+    `apply_named_value_call_ast_outcome` migration to Out path, OR
+    begin 5b-inner (`eval_expr_ast_outcome` internal self-calls → `eval_expr`).
+  - Same execution flow rule: record expected breakages before code changes;
+    roll back if breakages are not controllable within a narrow scope.
   - implementation rule:
     - add/route via `Out` helper first,
     - keep legacy AST/Option fallback until tests prove parity.
-  - run these focused tests before full suite:
-    - `declaration_value_call_replays_nested_binding_progression`
-    - `typed_mode_matches_fallback_for_declaration_value_call_progression`
-    - `resolves_runtime_output_for_standalone_case_with_effectful_arm_bodies`
-    - `typed_mode_matches_fallback_for_resume_success_path`
-    - `resume_replays_binding_value_continuation_into_following_statements`
-    - `resume_replays_multi_arg_named_call_arguments`
-- Completed in this session:
+
+## Completed in Last Session (2026-03-09)
+
+  - `apply_named_value_call_args_out` now uses an Out-first path that mirrors
+    `apply_named_value_call_out` ordering:
+    handler dispatch → `__goby_` intrinsic → `eval_decl_as_value_with_args_out`
+    → legacy AST fallback. Multi-arg calls now properly propagate
+    Suspend/Escape instead of silently discarding them via the Option path.
+  - Added `dispatch_handler_method_as_value_with_args_flow` (Out-returning
+    multi-arg handler dispatch, mirrors single-arg `_flow` version).
+  - Added `debug_assert!(arg_values.len() >= 2)` to document call invariant.
+  - commit: bef7b9a
+
+## Previously Completed
+
   - `execute_unit_expr_ast` `Expr::With` migrated to `eval_stmts` +
     `FinishKind::WithBody`; legacy `execute_ast_stmt_sequence` removed.
   - `execute_unit_ast_stmt` Binding/Assign arms migrated from
@@ -80,19 +83,13 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - `execute_unit_expr_ast` return type migrated to `Out<()>`; key call sites and
     legacy fallback branches now consume `Out` instead of `Option`.
   - `eval_ast_side_effect` print/println/pipeline side-effect branches now use
-    `eval_expr` (`Out` path) instead of `eval_expr_ast` (`Option` path), so
-    `Suspend` / `Escape` / runtime error propagation is preserved on the active
-    runtime path.
-  - `eval_ast_side_effect` `Case` / `If` handling now evaluates condition and
-    selected branch via `eval_expr` (`Out` path), while preserving unit-position
-    fallback execution for unsupported selected branches.
-  - `eval_expr` `Case` / `If` now preserve legacy parity by falling back to
-    `execute_unit_expr_ast` for unsupported selected branches and returning
-    `RuntimeValue::Unit` on success.
-  - `apply_named_value_call_out` now evaluates declaration bodies via
-    `eval_stmts` (`Out` path) through `eval_decl_as_value_with_args_out` before
-    falling back to legacy AST `Option` path, improving continuation-safe value
-    call behavior on the active runtime path.
+    `eval_expr` (`Out` path) instead of `eval_expr_ast` (`Option` path).
+  - `eval_ast_side_effect` `Case` / `If` handling now uses `eval_expr` (`Out` path).
+  - `eval_expr` `Case` / `If` fall back to `execute_unit_expr_ast` for unsupported
+    selected branches.
+  - `apply_named_value_call_out` evaluates declaration bodies via
+    `eval_decl_as_value_with_args_out` before falling back to legacy AST path.
+
 - Quality gate passing: `cargo fmt`, `cargo clippy -p goby-wasm -- -D warnings`,
   `cargo test -p goby-wasm` (unit 209 passed, integration 6 passed), `cargo check`.
 
