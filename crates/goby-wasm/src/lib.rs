@@ -5269,6 +5269,52 @@ impl<'m> RuntimeOutputResolver<'m> {
         self.complete_ast_value_outcome(outcome, evaluators)
     }
 
+    fn eval_decl_as_value_with_args_out(
+        &mut self,
+        fn_name: &str,
+        args: &[RuntimeValue],
+        evaluators: &RuntimeEvaluators<'_, '_>,
+        depth: usize,
+    ) -> Out<RuntimeValue> {
+        if depth >= MAX_EVAL_DEPTH {
+            return Out::Err(RuntimeError::Unsupported);
+        }
+        let (params, stmts) = {
+            let Some(decl) = self.module.declarations.iter().find(|d| d.name == fn_name) else {
+                return Out::Err(RuntimeError::Unsupported);
+            };
+            let Some(stmts) = decl.parsed_body.as_ref() else {
+                return Out::Err(RuntimeError::Unsupported);
+            };
+            (decl.params.clone(), stmts.clone())
+        };
+        let accepts_unit_arg_as_zero_arity =
+            params.is_empty() && matches!(args, [RuntimeValue::Unit]);
+        if params.len() != args.len() && !accepts_unit_arg_as_zero_arity {
+            return Out::Err(RuntimeError::Unsupported);
+        }
+        let mut fn_locals = RuntimeLocals::default();
+        if !accepts_unit_arg_as_zero_arity {
+            for (param, arg) in params.iter().zip(args.iter()) {
+                fn_locals.store(param, arg.clone());
+            }
+        }
+        let fn_callables = HashMap::new();
+        match self.eval_stmts(
+            &stmts,
+            fn_locals,
+            fn_callables,
+            evaluators,
+            depth + 1,
+            FinishKind::Block,
+        ) {
+            Out::Done((value, _locals)) => Out::Done(value.unwrap_or(RuntimeValue::Unit)),
+            Out::Suspend(cont) => Out::Suspend(cont),
+            Out::Escape(escape) => Out::Escape(escape),
+            Out::Err(e) => Out::Err(e),
+        }
+    }
+
     fn apply_named_value_call_ast(
         &mut self,
         fn_name: &str,
@@ -5442,6 +5488,25 @@ impl<'m> RuntimeOutputResolver<'m> {
                 evaluators,
                 depth + 1,
             );
+        }
+        if fn_name.starts_with("__goby_")
+            && let Some(value) = self.apply_runtime_intrinsic_ast(
+                fn_name,
+                std::slice::from_ref(&arg_value),
+                evaluators,
+                depth + 1,
+            )
+        {
+            return Out::Done(value);
+        }
+        match self.eval_decl_as_value_with_args_out(
+            fn_name,
+            std::slice::from_ref(&arg_value),
+            evaluators,
+            depth + 1,
+        ) {
+            Out::Err(RuntimeError::Unsupported) => {}
+            other => return other,
         }
         let value = self.apply_named_value_call_ast(
             fn_name,

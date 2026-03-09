@@ -69,6 +69,10 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - `eval_expr` `Case` / `If` now preserve legacy parity by falling back to
     `execute_unit_expr_ast` for unsupported selected branches and returning
     `RuntimeValue::Unit` on success.
+  - `apply_named_value_call_out` now evaluates declaration bodies via
+    `eval_stmts` (`Out` path) through `eval_decl_as_value_with_args_out` before
+    falling back to legacy AST `Option` path, improving continuation-safe value
+    call behavior on the active runtime path.
 - Quality gate passing: `cargo fmt`, `cargo clippy -p goby-wasm -- -D warnings`,
   `cargo test -p goby-wasm` (unit 209 passed, integration 6 passed), `cargo check`.
 
