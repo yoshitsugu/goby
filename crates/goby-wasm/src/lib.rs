@@ -1497,12 +1497,22 @@ impl<'m> RuntimeOutputResolver<'m> {
                         let mut yielded_count: i64 = 0;
                         let mut state = RuntimeValue::Unit;
                         for grapheme in value.graphemes(true) {
-                            let resumed = self.dispatch_handler_method_as_value_with_args(
-                                &method,
-                                &[RuntimeValue::String(grapheme.to_string()), state],
-                                evaluators,
-                                depth + 1,
-                            )?;
+                            let resumed = match self
+                                .dispatch_handler_method_as_value_with_args_flow(
+                                    &method,
+                                    &[RuntimeValue::String(grapheme.to_string()), state],
+                                    evaluators,
+                                    depth + 1,
+                                ) {
+                                Out::Done(value) => value,
+                                Out::Err(RuntimeError::Abort { .. }) => {
+                                    self.set_runtime_abort_once();
+                                    return None;
+                                }
+                                Out::Suspend(_)
+                                | Out::Escape(_)
+                                | Out::Err(RuntimeError::Unsupported) => return None,
+                            };
                             let RuntimeValue::Tuple(items) = resumed else {
                                 return None;
                             };
@@ -1530,12 +1540,22 @@ impl<'m> RuntimeOutputResolver<'m> {
                         }
                         let mut state = initial_state.clone();
                         for grapheme in value.graphemes(true) {
-                            let resumed = self.dispatch_handler_method_as_value_with_args(
-                                &method,
-                                &[RuntimeValue::String(grapheme.to_string()), state],
-                                evaluators,
-                                depth + 1,
-                            )?;
+                            let resumed = match self
+                                .dispatch_handler_method_as_value_with_args_flow(
+                                    &method,
+                                    &[RuntimeValue::String(grapheme.to_string()), state],
+                                    evaluators,
+                                    depth + 1,
+                                ) {
+                                Out::Done(value) => value,
+                                Out::Err(RuntimeError::Abort { .. }) => {
+                                    self.set_runtime_abort_once();
+                                    return None;
+                                }
+                                Out::Suspend(_)
+                                | Out::Escape(_)
+                                | Out::Err(RuntimeError::Unsupported) => return None,
+                            };
                             let RuntimeValue::Tuple(items) = resumed else {
                                 return None;
                             };
@@ -4670,22 +4690,40 @@ impl<'m> RuntimeOutputResolver<'m> {
                 if let Some(method) =
                     self.find_handler_method_for_effect("StringParseError", "invalid_integer")
                 {
-                    return self.dispatch_handler_method_as_value(
+                    return match self.dispatch_handler_method_as_value_flow(
                         &method,
                         RuntimeValue::String(input),
                         evaluators,
                         depth + 1,
-                    );
+                    ) {
+                        Out::Done(value) => Some(value),
+                        Out::Err(RuntimeError::Abort { .. }) => {
+                            self.set_runtime_abort_once();
+                            None
+                        }
+                        Out::Suspend(_) | Out::Escape(_) | Out::Err(RuntimeError::Unsupported) => {
+                            None
+                        }
+                    };
                 }
                 if !self.operation_has_conflicting_effect("invalid_integer", "StringParseError")
                     && let Some(method) = self.find_handler_method_by_name("invalid_integer")
                 {
-                    return self.dispatch_handler_method_as_value(
+                    return match self.dispatch_handler_method_as_value_flow(
                         &method,
                         RuntimeValue::String(input),
                         evaluators,
                         depth + 1,
-                    );
+                    ) {
+                        Out::Done(value) => Some(value),
+                        Out::Err(RuntimeError::Abort { .. }) => {
+                            self.set_runtime_abort_once();
+                            None
+                        }
+                        Out::Suspend(_) | Out::Escape(_) | Out::Err(RuntimeError::Unsupported) => {
+                            None
+                        }
+                    };
                 }
                 self.set_runtime_error_once(
                     "unhandled effect operation `invalid_integer` from goby/int.parse",
@@ -5284,25 +5322,6 @@ impl<'m> RuntimeOutputResolver<'m> {
         }
     }
 
-    /// Execute a handler method and return the last evaluated value.
-    /// Used when the handler method produces a value (e.g. `env.from_env`).
-    fn dispatch_handler_method_as_value(
-        &mut self,
-        method: &ResolvedHandlerMethod,
-        arg_val: RuntimeValue,
-        evaluators: &RuntimeEvaluators<'_, '_>,
-        depth: usize,
-    ) -> Option<RuntimeValue> {
-        match self.dispatch_handler_method_as_value_flow(method, arg_val, evaluators, depth) {
-            Out::Done(value) => Some(value),
-            Out::Err(RuntimeError::Abort { .. }) => {
-                self.set_runtime_abort_once();
-                None
-            }
-            Out::Suspend(_) | Out::Escape(_) | Out::Err(RuntimeError::Unsupported) => None,
-        }
-    }
-
     fn dispatch_handler_method_as_value_with_args_flow(
         &mut self,
         method: &ResolvedHandlerMethod,
@@ -5318,24 +5337,6 @@ impl<'m> RuntimeOutputResolver<'m> {
                 kind: "aborted".into(),
             }),
             None => Out::Err(RuntimeError::Unsupported),
-        }
-    }
-
-    fn dispatch_handler_method_as_value_with_args(
-        &mut self,
-        method: &ResolvedHandlerMethod,
-        args: &[RuntimeValue],
-        evaluators: &RuntimeEvaluators<'_, '_>,
-        depth: usize,
-    ) -> Option<RuntimeValue> {
-        match self.dispatch_handler_method_as_value_with_args_flow(method, args, evaluators, depth)
-        {
-            Out::Done(value) => Some(value),
-            Out::Err(RuntimeError::Abort { .. }) => {
-                self.set_runtime_abort_once();
-                None
-            }
-            Out::Suspend(_) | Out::Escape(_) | Out::Err(RuntimeError::Unsupported) => None,
         }
     }
 

@@ -75,6 +75,9 @@ This file is a restart-safe snapshot for resuming work after context reset.
         removed.
     - `dispatch_handler_method_as_value*` `Option` wrappers now delegate to
       `*_flow` variants (single source for handler-core mapping).
+    - Removed `dispatch_handler_method_as_value*` `Option` wrapper functions;
+      call sites now use `*_flow` directly and locally map `Abort` into the
+      legacy `runtime_aborted` flag only where Option-API boundaries remain.
   - Validation:
     - `cargo fmt`
     - `cargo check`
