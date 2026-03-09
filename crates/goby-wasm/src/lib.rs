@@ -1156,31 +1156,23 @@ impl<'m> RuntimeOutputResolver<'m> {
             // invokes an effect) are evaluated through the suspension-aware path.
             Expr::Call { callee, arg } if matches!(callee.as_ref(), Expr::Var(n) if n == BUILTIN_PRINT) =>
             {
-                let value = match self.eval_expr(
-                    arg,
-                    &self.locals.clone(),
-                    &HashMap::new(),
-                    evaluators,
-                    1,
-                ) {
-                    Out::Done(v) => v,
-                    Out::Suspend(_) | Out::Escape(_) | Out::Err(_) => return None,
-                };
+                let value =
+                    match self.eval_expr(arg, &self.locals.clone(), &HashMap::new(), evaluators, 1)
+                    {
+                        Out::Done(v) => v,
+                        Out::Suspend(_) | Out::Escape(_) | Out::Err(_) => return None,
+                    };
                 self.outputs.push(value.to_output_text());
                 Some(())
             }
             Expr::Call { callee, arg } if matches!(callee.as_ref(), Expr::Var(n) if n == "println") =>
             {
-                let value = match self.eval_expr(
-                    arg,
-                    &self.locals.clone(),
-                    &HashMap::new(),
-                    evaluators,
-                    1,
-                ) {
-                    Out::Done(v) => v,
-                    Out::Suspend(_) | Out::Escape(_) | Out::Err(_) => return None,
-                };
+                let value =
+                    match self.eval_expr(arg, &self.locals.clone(), &HashMap::new(), evaluators, 1)
+                    {
+                        Out::Done(v) => v,
+                        Out::Suspend(_) | Out::Escape(_) | Out::Err(_) => return None,
+                    };
                 let mut text = value.to_output_text();
                 if !text.ends_with('\n') {
                     text.push('\n');
@@ -1210,16 +1202,12 @@ impl<'m> RuntimeOutputResolver<'m> {
                 let Expr::Qualified { receiver, member } = callee.as_ref() else {
                     unreachable!()
                 };
-                let arg_val = match self.eval_expr(
-                    arg,
-                    &self.locals.clone(),
-                    &HashMap::new(),
-                    evaluators,
-                    1,
-                ) {
-                    Out::Done(v) => v,
-                    Out::Suspend(_) | Out::Escape(_) | Out::Err(_) => return None,
-                };
+                let arg_val =
+                    match self.eval_expr(arg, &self.locals.clone(), &HashMap::new(), evaluators, 1)
+                    {
+                        Out::Done(v) => v,
+                        Out::Suspend(_) | Out::Escape(_) | Out::Err(_) => return None,
+                    };
                 let method = self.find_handler_method_for_effect(receiver, member);
                 if let Some(method) = method {
                     // depth=0: this is a top-level call; dispatch_handler_method adds 1 internally.
@@ -1275,13 +1263,9 @@ impl<'m> RuntimeOutputResolver<'m> {
                 }
                 // depth=1: arg is one call-level below the top-level statement.
                 // Matches the convention used by the Qualified arm above.
-                if let Out::Done(arg_val) = self.eval_expr(
-                    arg,
-                    &self.locals.clone(),
-                    &HashMap::new(),
-                    evaluators,
-                    1,
-                ) {
+                if let Out::Done(arg_val) =
+                    self.eval_expr(arg, &self.locals.clone(), &HashMap::new(), evaluators, 1)
+                {
                     // Bare effect method call (e.g. `log "msg"`) — check active handlers first.
                     let bare_method = self.find_handler_method_by_name(fn_name);
                     if let Some(method) = bare_method {
@@ -1341,13 +1325,9 @@ impl<'m> RuntimeOutputResolver<'m> {
                 self.eval_side_effect(&repr, evaluators)
             }
             Expr::Pipeline { value, callee } => {
-                if let Out::Done(v) = self.eval_expr(
-                    value,
-                    &self.locals.clone(),
-                    &HashMap::new(),
-                    evaluators,
-                    1,
-                ) {
+                if let Out::Done(v) =
+                    self.eval_expr(value, &self.locals.clone(), &HashMap::new(), evaluators, 1)
+                {
                     // Pipeline into bare effect method call: e.g. `"msg" |> log`.
                     let bare_method = self.find_handler_method_by_name(callee);
                     if let Some(method) = bare_method {
