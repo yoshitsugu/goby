@@ -1151,32 +1151,36 @@ impl<'m> RuntimeOutputResolver<'m> {
             }
             // print <arg>  —  handle before delegating to string path because
             // `eval_side_effect` routes through `execute_unit_call` which does not
-            // know about the `print` builtin. Use eval_expr_ast_outcome so that args
-            // that themselves call effect operations (e.g. `print (f x)` where `f`
+            // know about the `print` builtin. Use eval_expr so that args that
+            // themselves call effect operations (e.g. `print (f x)` where `f`
             // invokes an effect) are evaluated through the suspension-aware path.
             Expr::Call { callee, arg } if matches!(callee.as_ref(), Expr::Var(n) if n == BUILTIN_PRINT) =>
             {
-                let outcome = self.eval_expr_ast_outcome(
+                let value = match self.eval_expr(
                     arg,
                     &self.locals.clone(),
                     &HashMap::new(),
                     evaluators,
                     1,
-                );
-                let value = self.complete_ast_value_outcome(outcome, evaluators)?;
+                ) {
+                    Out::Done(v) => v,
+                    _ => return None,
+                };
                 self.outputs.push(value.to_output_text());
                 Some(())
             }
             Expr::Call { callee, arg } if matches!(callee.as_ref(), Expr::Var(n) if n == "println") =>
             {
-                let outcome = self.eval_expr_ast_outcome(
+                let value = match self.eval_expr(
                     arg,
                     &self.locals.clone(),
                     &HashMap::new(),
                     evaluators,
                     1,
-                );
-                let value = self.complete_ast_value_outcome(outcome, evaluators)?;
+                ) {
+                    Out::Done(v) => v,
+                    _ => return None,
+                };
                 let mut text = value.to_output_text();
                 if !text.ends_with('\n') {
                     text.push('\n');
@@ -1186,32 +1190,36 @@ impl<'m> RuntimeOutputResolver<'m> {
             }
             // value |> print
             Expr::Pipeline { value, callee } if callee == BUILTIN_PRINT => {
-                let outcome = self.eval_expr_ast_outcome(
+                let v = match self.eval_expr(
                     value,
                     &self.locals.clone(),
                     &HashMap::new(),
                     evaluators,
                     1,
-                );
-                let v = self.complete_ast_value_outcome(outcome, evaluators)?;
+                ) {
+                    Out::Done(v) => v,
+                    _ => return None,
+                };
                 self.outputs.push(v.to_output_text());
                 Some(())
             }
             // Qualified effect call: Effect.method arg  (e.g. Log.log "msg")
             // Must come before the bare-Var arm so the Qualified guard takes precedence.
-            // Evaluate the argument through the outcome-aware path so suspended values can replay.
+            // Evaluate the argument through the new Out path so suspended values can replay.
             Expr::Call { callee, arg } if matches!(callee.as_ref(), Expr::Qualified { .. }) => {
                 let Expr::Qualified { receiver, member } = callee.as_ref() else {
                     unreachable!()
                 };
-                let arg_outcome = self.eval_expr_ast_outcome(
+                let arg_val = match self.eval_expr(
                     arg,
                     &self.locals.clone(),
                     &HashMap::new(),
                     evaluators,
                     1,
-                );
-                let arg_val = self.complete_ast_value_outcome(arg_outcome, evaluators)?;
+                ) {
+                    Out::Done(v) => v,
+                    _ => return None,
+                };
                 let method = self.find_handler_method_for_effect(receiver, member);
                 if let Some(method) = method {
                     // depth=0: this is a top-level call; dispatch_handler_method adds 1 internally.
@@ -1267,14 +1275,13 @@ impl<'m> RuntimeOutputResolver<'m> {
                 }
                 // depth=1: arg is one call-level below the top-level statement.
                 // Matches the convention used by the Qualified arm above.
-                let arg_outcome = self.eval_expr_ast_outcome(
+                if let Out::Done(arg_val) = self.eval_expr(
                     arg,
                     &self.locals.clone(),
                     &HashMap::new(),
                     evaluators,
                     1,
-                );
-                if let Some(arg_val) = self.complete_ast_value_outcome(arg_outcome, evaluators) {
+                ) {
                     // Bare effect method call (e.g. `log "msg"`) — check active handlers first.
                     let bare_method = self.find_handler_method_by_name(fn_name);
                     if let Some(method) = bare_method {
@@ -1334,14 +1341,13 @@ impl<'m> RuntimeOutputResolver<'m> {
                 self.eval_side_effect(&repr, evaluators)
             }
             Expr::Pipeline { value, callee } => {
-                let value_outcome = self.eval_expr_ast_outcome(
+                if let Out::Done(v) = self.eval_expr(
                     value,
                     &self.locals.clone(),
                     &HashMap::new(),
                     evaluators,
                     1,
-                );
-                if let Some(v) = self.complete_ast_value_outcome(value_outcome, evaluators) {
+                ) {
                     // Pipeline into bare effect method call: e.g. `"msg" |> log`.
                     let bare_method = self.find_handler_method_by_name(callee);
                     if let Some(method) = bare_method {
@@ -3651,13 +3657,14 @@ impl<'m> RuntimeOutputResolver<'m> {
         }
 
         // Qualified effect call: Effect.method arg  (e.g. Log.log result)
-        // Evaluate the argument through the outcome-aware path so suspended values can replay.
+        // Evaluate the argument through the new Out path so suspended values can replay.
         if let Expr::Call { callee, arg } = expr
             && let Expr::Qualified { receiver, member } = callee.as_ref()
         {
-            let arg_outcome =
-                self.eval_expr_ast_outcome(arg, locals, callables, evaluators, depth + 1);
-            let arg_val = self.complete_ast_value_outcome(arg_outcome, evaluators)?;
+            let arg_val = match self.eval_expr(arg, locals, callables, evaluators, depth + 1) {
+                Out::Done(v) => v,
+                _ => return None,
+            };
             let method = self.find_handler_method_for_effect(receiver, member);
             if let Some(method) = method {
                 return self.dispatch_handler_method(&method, arg_val, evaluators, depth + 1);
@@ -3714,9 +3721,11 @@ impl<'m> RuntimeOutputResolver<'m> {
                 self.set_runtime_error_once(ERR_CALLABLE_DISPATCH_DECL_PARAM);
                 return None;
             }
-            // Evaluate arg through the outcome-aware path so suspended values can replay.
-            let arg_outcome = self.eval_expr_ast_outcome(arg, locals, callables, evaluators, depth);
-            let arg_val = self.complete_ast_value_outcome(arg_outcome, evaluators)?;
+            // Evaluate arg through the new Out path so suspended values can replay.
+            let arg_val = match self.eval_expr(arg, locals, callables, evaluators, depth) {
+                Out::Done(v) => v,
+                _ => return None,
+            };
             if let Some(callable) = callables.get(fn_name)
                 && self
                     .dispatch_callable_side_effect(
