@@ -576,7 +576,6 @@ enum AstContinuation {
 #[derive(Clone)]
 struct AstContinuationFrame {
     value: Option<AstValueContinuation>,
-    stmt: Option<AstStmtContinuation>,
 }
 
 #[derive(Clone)]
@@ -622,24 +621,6 @@ enum AstValueContinuationKind {
     },
 }
 
-#[allow(dead_code)]
-#[derive(Clone)]
-struct AstStmtContinuation {
-    kind: AstStmtContinuationKind,
-    remaining_stmts: Vec<Stmt>,
-    locals: RuntimeLocals,
-    callables: HashMap<String, IntCallable>,
-    depth: usize,
-    owner_sequence_id: usize,
-}
-
-#[allow(dead_code)]
-#[derive(Clone)]
-enum AstStmtContinuationKind {
-    UnitTail,
-    BindValue { name: String },
-    AssignValue { name: String },
-}
 
 #[allow(dead_code)]
 enum AstEvalOutcome<T> {
@@ -4104,32 +4085,6 @@ impl<'m> RuntimeOutputResolver<'m> {
     }
 
     #[allow(dead_code)]
-    fn stmt_is_unit_effect_continuation_candidate(stmt: &Stmt) -> bool {
-        matches!(
-            stmt,
-            Stmt::Expr(
-                Expr::Call { .. } | Expr::Pipeline { .. } | Expr::With { .. } | Expr::Block(_)
-            )
-        )
-    }
-
-    #[allow(dead_code)]
-    fn stmt_continuation_kind(stmt: &Stmt) -> Option<AstStmtContinuationKind> {
-        match stmt {
-            Stmt::Binding { name, .. } | Stmt::MutBinding { name, .. } => {
-                Some(AstStmtContinuationKind::BindValue { name: name.clone() })
-            }
-            Stmt::Assign { name, .. } => {
-                Some(AstStmtContinuationKind::AssignValue { name: name.clone() })
-            }
-            _ if Self::stmt_is_unit_effect_continuation_candidate(stmt) => {
-                Some(AstStmtContinuationKind::UnitTail)
-            }
-            _ => None,
-        }
-    }
-
-    #[allow(dead_code)]
     fn execute_ingest_ast_stmt_sequence(
         &mut self,
         stmts: &[Stmt],
@@ -4420,7 +4375,6 @@ impl<'m> RuntimeOutputResolver<'m> {
         let continuation = Box::new(AstContinuation::Frame {
             frame: AstContinuationFrame {
                 value: None,
-                stmt: None,
             },
             resumed: RuntimeValue::Unit,
         });
@@ -5756,7 +5710,7 @@ impl<'m> RuntimeOutputResolver<'m> {
         if value.is_none() {
             None
         } else {
-            Some(AstContinuationFrame { value, stmt: None })
+            Some(AstContinuationFrame { value })
         }
     }
 
@@ -5794,7 +5748,6 @@ impl<'m> RuntimeOutputResolver<'m> {
                 HandlerCompletion::Suspended(Box::new(AstContinuation::Frame {
                     frame: AstContinuationFrame {
                         value: None,
-                        stmt: None,
                     },
                     resumed: RuntimeValue::Unit,
                 }))
@@ -5846,7 +5799,6 @@ impl<'m> RuntimeOutputResolver<'m> {
                 HandlerCompletion::Suspended(Box::new(AstContinuation::Frame {
                     frame: AstContinuationFrame {
                         value: None,
-                        stmt: None,
                     },
                     resumed: RuntimeValue::Unit,
                 }))
@@ -5975,7 +5927,6 @@ impl<'m> RuntimeOutputResolver<'m> {
                     return AstEvalOutcome::Suspended(Box::new(AstContinuation::Frame {
                         frame: AstContinuationFrame {
                             value: None,
-                            stmt: None,
                         },
                         resumed: RuntimeValue::Unit,
                     }));
@@ -6043,7 +5994,6 @@ impl<'m> RuntimeOutputResolver<'m> {
                     return AstEvalOutcome::Suspended(Box::new(AstContinuation::Frame {
                         frame: AstContinuationFrame {
                             value: None,
-                            stmt: None,
                         },
                         resumed: RuntimeValue::Unit,
                     }));
@@ -6135,13 +6085,7 @@ impl<'m> RuntimeOutputResolver<'m> {
         } else {
             resumed
         };
-        if let Some(continuation) = frame.stmt {
-            match self.execute_saved_stmt_continuation(continuation, resumed.clone(), evaluators) {
-                Some(()) => {}
-                None if self.has_abort_without_error() => return AstEvalOutcome::Aborted,
-                None => return AstEvalOutcome::Unsupported,
-            }
-        }
+        // frame.stmt is always None (AstStmtContinuation path is retired).
         AstEvalOutcome::Complete(resumed)
     }
 
@@ -6297,33 +6241,6 @@ impl<'m> RuntimeOutputResolver<'m> {
             }
             AstEvalOutcome::Aborted | AstEvalOutcome::Unsupported => None,
         }
-    }
-
-    fn execute_saved_stmt_continuation(
-        &mut self,
-        continuation: AstStmtContinuation,
-        resumed: RuntimeValue,
-        evaluators: &RuntimeEvaluators<'_, '_>,
-    ) -> Option<()> {
-        let mut locals = continuation.locals;
-        match continuation.kind {
-            AstStmtContinuationKind::UnitTail => {}
-            AstStmtContinuationKind::BindValue { name } => {
-                locals.store(&name, resumed);
-            }
-            AstStmtContinuationKind::AssignValue { name } => {
-                locals.get(&name)?;
-                locals.store(&name, resumed);
-            }
-        }
-        let mut callables = continuation.callables;
-        self.execute_ast_stmt_sequence(
-            &continuation.remaining_stmts,
-            &mut locals,
-            &mut callables,
-            evaluators,
-            continuation.depth,
-        )
     }
 
     #[allow(clippy::too_many_arguments)]
