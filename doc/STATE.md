@@ -13,8 +13,9 @@ this section takes priority.
   - [doc/PLAN.md](/home/yoshitsugu/src/gitlab.com/yoshitsugu/goby/doc/PLAN.md)
   - [doc/STATE.md](/home/yoshitsugu/src/gitlab.com/yoshitsugu/goby/doc/STATE.md)
 - Current Step 3 status:
-  - Phase 1-4 of the redesigned `Cont`/`Out` architecture are complete as active execution paths.
-  - Session 236-237 (2026-03-09): Step 3 Phase 2-4 completion landed:
+  - Phase 1-4 of the pre-scoped-exit `Cont`/`Out` architecture are complete as active execution paths.
+  - Session 236-237 (2026-03-09): Step 3 Phase 2-4 completion landed on the old no-`resume`
+    contract as groundwork for the next redesign:
     - `apply_cont` executes the active `ApplyStep` replay set covered by current goby-wasm
       regression tests (`Pipeline`, single/multi-arg call, receiver method, `case`, `if`,
       `BinOp`, tuple/list/record/interpolated replay).
@@ -28,6 +29,12 @@ this section takes priority.
       and `dispatch_handler_method_core` is now a thin caller.
     - resume-token finish logic treats `Pending + cont` as suspended only after the token
       was actually consumed by a prior `resume`; plain no-`resume` abortive handlers still abort.
+  - Plan direction changed after session 237:
+    - do not continue directly into Phase 5 cleanup on the old abortive semantics.
+    - next work is 4.7 scoped-exit redesign: no-`resume` should exit the current
+      `with ... in ...` scope instead of aborting the whole program.
+    - `doc/LANGUAGE_SPEC.md` is still the source of truth for current behavior until
+      that redesign's Phase 1 doc sync lands.
   - unified suspended-frame replay covers all previously migrated AST value-position
     families (single-arg/multi-arg named calls, receiver-method calls, pipeline,
     `BinOp`, `if`, `case`, nested `resume`, `InterpolatedString`, `TupleLit`,
@@ -125,9 +132,10 @@ this section takes priority.
     - Before 5c (thin wrapper), value-position effect call must route through pending_caller_cont_stack
       or dispatch_handler_method_as_value_outcome must switch to take_caller_cont=true.
   - Next:
-    - Phase 5 cleanup: remove legacy AST continuation compatibility wrappers/types
-      (`AstEvalOutcome`, `AstContinuationFrame`, old stmt/value continuation helpers,
-      split resume-token structs) now that Phase 2-4 active paths are closed.
+    - implement 4.7 scoped-exit redesign before Phase 5 cleanup.
+    - likely runtime shape: extend `Out<T>` with explicit `Escape::WithScope`
+      rather than treating no-`resume` as runtime abort.
+    - defer legacy wrapper/type cleanup until the new semantics is stable.
   - Validation for session 236-237:
     - `cargo fmt`
     - `cargo clippy -p goby-wasm -- -D warnings`

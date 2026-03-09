@@ -304,6 +304,9 @@ Based on `examples/*.gb`:
     semantics toward "`with ... in ...` scope exit" semantics; the old abortive
     wording below should be treated as historical context unless explicitly
     marked as locked.
+  - until 4.7 Phase 1 lands, `doc/LANGUAGE_SPEC.md` remains the source of truth
+    for current shipped behavior; the scoped-exit semantics below are target
+    behavior, not yet current behavior.
 - Runtime dispatch semantics:
   - nearest lexical handler wins,
   - embedded/default-handler fallback applies only when no explicit handler captures the operation.
@@ -531,6 +534,12 @@ Goal: redefine no-`resume` handler completion so it exits the enclosing
 `with ... in ...` scope instead of aborting the whole program, while preserving
 the existing `resume` contract for resumptive handlers.
 
+Status note:
+
+- this section describes the target redesign.
+- current shipped/spec behavior is still the abortive contract described in
+  `doc/LANGUAGE_SPEC.md` until this track's Phase 1 doc sync lands.
+
 Target semantics:
 
 - `resume v` returns `v` to the operation call site and continues normally.
@@ -544,6 +553,9 @@ Target semantics:
 - nested handlers still route to the nearest matching lexical handler.
 
 Canonical examples for the new semantics:
+
+These examples are target semantics examples for the redesign, not examples of
+current shipped behavior.
 
 ```goby
 effect Fail
@@ -644,7 +656,7 @@ Step-by-step checklist:
   3. non-resumptive escape from the current `with` scope.
 
   ```rust
-  enum Flow<T> {
+  enum Out<T> {
       Done(T),
       Suspend(Cont),
       Escape(Escape),
@@ -699,6 +711,8 @@ Step-by-step checklist:
     one overloaded "abort" representation.
   - `RuntimeError` is reserved for actual runtime errors (`resume` outside handler,
     continuation exhaustion, invalid state transitions), not for structured handler control flow.
+  - to keep migration cost bounded, prefer extending the current active `Out<T>`
+    with `Escape(Escape)` rather than renaming the runtime result type mid-refactor.
 
   ### Implementation phases
 
