@@ -1947,40 +1947,25 @@ impl<'m> RuntimeOutputResolver<'m> {
         None
     }
 
-    fn eval_named_call_args_outcome(
+    fn eval_named_call_args_out(
         &mut self,
-        fn_name: &str,
         args: &[&Expr],
         already_evaluated: &[RuntimeValue],
-        context: (&RuntimeLocals, &HashMap<String, IntCallable>, usize),
+        locals: &RuntimeLocals,
+        callables: &HashMap<String, IntCallable>,
         evaluators: &RuntimeEvaluators<'_, '_>,
-    ) -> AstEvalOutcome<Vec<RuntimeValue>> {
-        let (locals, callables, depth) = context;
+        depth: usize,
+    ) -> Out<Vec<RuntimeValue>> {
         let mut evaluated_args = already_evaluated.to_vec();
-        for (idx, arg_expr) in args.iter().enumerate() {
-            self.pending_value_continuations.push(AstValueContinuation {
-                kind: AstValueContinuationKind::MultiArgNamedCall {
-                    fn_name: fn_name.to_string(),
-                    evaluated_args: evaluated_args.clone(),
-                    remaining_args: args[idx + 1..].iter().map(|expr| (*expr).clone()).collect(),
-                },
-                locals: locals.clone(),
-                callables: callables.clone(),
-                depth: depth + 1,
-            });
-            let outcome =
-                self.eval_expr_ast_outcome(arg_expr, locals, callables, evaluators, depth + 1);
-            self.pending_value_continuations.pop();
-            match outcome {
-                AstEvalOutcome::Complete(value) => evaluated_args.push(value),
-                AstEvalOutcome::Suspended(continuation) => {
-                    return AstEvalOutcome::Suspended(continuation);
-                }
-                AstEvalOutcome::Aborted => return AstEvalOutcome::Aborted,
-                AstEvalOutcome::Unsupported => return AstEvalOutcome::Unsupported,
+        for arg_expr in args.iter() {
+            match self.eval_expr(arg_expr, locals, callables, evaluators, depth + 1) {
+                Out::Done(value) => evaluated_args.push(value),
+                Out::Suspend(c) => return Out::Suspend(c),
+                Out::Escape(escape) => return Out::Escape(escape),
+                Out::Err(e) => return Out::Err(e),
             }
         }
-        AstEvalOutcome::Complete(evaluated_args)
+        Out::Done(evaluated_args)
     }
 
     fn apply_receiver_method_value_call_out(
@@ -5509,25 +5494,21 @@ impl<'m> RuntimeOutputResolver<'m> {
                 let mut evaluated_args = evaluated_args;
                 evaluated_args.push(resumed);
                 let remaining_args = remaining_args.iter().collect::<Vec<_>>();
-                let arg_values = match self.eval_named_call_args_outcome(
-                    &fn_name,
+                let arg_values = match self.eval_named_call_args_out(
                     remaining_args.as_slice(),
                     &evaluated_args,
-                    (
-                        &continuation.locals,
-                        &continuation.callables,
-                        continuation.depth,
-                    ),
+                    &continuation.locals,
+                    &continuation.callables,
                     evaluators,
+                    continuation.depth,
                 ) {
-                    AstEvalOutcome::Complete(values) => values,
-                    AstEvalOutcome::Suspended(continuation) => {
-                        return self.complete_ast_value_outcome(
-                            AstEvalOutcome::Suspended(continuation),
-                            evaluators,
-                        );
+                    Out::Done(values) => values,
+                    Out::Suspend(_) | Out::Escape(_) => return None,
+                    Out::Err(RuntimeError::Abort { .. }) => {
+                        self.set_runtime_abort_once();
+                        return None;
                     }
-                    AstEvalOutcome::Aborted | AstEvalOutcome::Unsupported => return None,
+                    Out::Err(_) => return None,
                 };
                 let out = self.apply_named_value_call_args_out(
                     &fn_name,
