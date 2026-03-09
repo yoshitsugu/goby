@@ -511,7 +511,6 @@ struct RuntimeOutputResolver<'m> {
     active_inline_handler_stack: Vec<InlineHandlerValue>,
     resume_tokens: Vec<ResumeToken>,
     optimized_resume_tokens: Vec<OptimizedResumeToken>,
-    pending_value_continuations: Vec<AstValueContinuation>,
     /// Phase 4: stack of caller's remaining continuations, one entry per active
     /// execute_ast_stmt_sequence invocation. Top entry is consumed by
     /// begin_handler_continuation_bridge during handler dispatch.
@@ -535,8 +534,6 @@ struct Continuation {
 struct ResumeToken {
     continuation: Continuation,
     state: HandlerContinuationState,
-    frame: Option<AstContinuationFrame>,
-    /// Phase 4: unified continuation from eval_stmts; takes priority over `frame`.
     cont: Option<Cont>,
 }
 
@@ -544,8 +541,6 @@ struct ResumeToken {
 struct OptimizedResumeToken {
     consumed: bool,
     state: HandlerContinuationState,
-    frame: Option<AstContinuationFrame>,
-    /// Phase 4: unified continuation from eval_stmts; takes priority over `frame`.
     cont: Option<Cont>,
 }
 
@@ -553,80 +548,25 @@ struct OptimizedResumeToken {
 enum HandlerContinuationState {
     Pending,
     Resumed(Box<RuntimeValue>),
-    Suspended(Box<AstContinuation>),
+    Suspended,
 }
 
-#[allow(clippy::large_enum_variant)]
 enum HandlerCompletion {
     Aborted,
     Escaped(Escape),
     Resumed(Box<RuntimeValue>),
-    Suspended(Box<AstContinuation>),
+    Suspended,
 }
 
 #[allow(dead_code)]
 #[allow(clippy::large_enum_variant)]
 #[derive(Clone)]
+/// Bridge from the old AstEvalOutcome path to the new Out/Cont path.
+/// Used only by `complete_ast_value_outcome`/`execute_ast_continuation`.
 enum AstContinuation {
-    Frame {
-        frame: AstContinuationFrame,
-        resumed: RuntimeValue,
-    },
-    /// Bridge from the old AstEvalOutcome path to the new Out/Cont path.
-    /// When `complete_ast_value_outcome` encounters this variant, it calls
-    /// `apply_cont(cont, resumed, evaluators)` instead of the old frame replay.
     ContBridge {
         cont: Box<Cont>,
         resumed: RuntimeValue,
-    },
-}
-
-#[derive(Clone)]
-struct AstContinuationFrame {
-    value: Option<AstValueContinuation>,
-}
-
-#[derive(Clone)]
-struct AstValueContinuation {
-    kind: AstValueContinuationKind,
-    locals: RuntimeLocals,
-    callables: HashMap<String, IntCallable>,
-    depth: usize,
-}
-
-#[derive(Clone)]
-#[allow(dead_code)]
-enum AstValueContinuationKind {
-    ResumeValue,
-    PipelineCall {
-        callee: String,
-    },
-    SingleArgNamedCall {
-        fn_name: String,
-    },
-    ReceiverMethodCall {
-        receiver: String,
-        member: String,
-    },
-    MultiArgNamedCall {
-        fn_name: String,
-        evaluated_args: Vec<RuntimeValue>,
-        remaining_args: Vec<Expr>,
-    },
-    CaseScrutinee {
-        arms: Vec<goby_core::CaseArm>,
-    },
-    IfCondition {
-        then_expr: Expr,
-        else_expr: Expr,
-    },
-    BinOpLeft {
-        op: goby_core::BinOpKind,
-        right: Expr,
-    },
-    BinOpRight {
-        op: goby_core::BinOpKind,
-        left_value: RuntimeValue,
     },
 }
 
@@ -1004,7 +944,6 @@ impl<'m> RuntimeOutputResolver<'m> {
             active_inline_handler_stack: Vec::new(),
             resume_tokens: Vec::new(),
             optimized_resume_tokens: Vec::new(),
-            pending_value_continuations: Vec::new(),
             pending_caller_cont_stack: Vec::new(),
             runtime_error: None,
             runtime_aborted: false,
@@ -1945,27 +1884,6 @@ impl<'m> RuntimeOutputResolver<'m> {
             }
         }
         None
-    }
-
-    fn eval_named_call_args_out(
-        &mut self,
-        args: &[&Expr],
-        already_evaluated: &[RuntimeValue],
-        locals: &RuntimeLocals,
-        callables: &HashMap<String, IntCallable>,
-        evaluators: &RuntimeEvaluators<'_, '_>,
-        depth: usize,
-    ) -> Out<Vec<RuntimeValue>> {
-        let mut evaluated_args = already_evaluated.to_vec();
-        for arg_expr in args.iter() {
-            match self.eval_expr(arg_expr, locals, callables, evaluators, depth + 1) {
-                Out::Done(value) => evaluated_args.push(value),
-                Out::Suspend(c) => return Out::Suspend(c),
-                Out::Escape(escape) => return Out::Escape(escape),
-                Out::Err(e) => return Out::Err(e),
-            }
-        }
-        Out::Done(evaluated_args)
     }
 
     fn apply_receiver_method_value_call_out(
@@ -3659,19 +3577,15 @@ impl<'m> RuntimeOutputResolver<'m> {
     }
 
     fn set_handler_token_state_suspended_placeholder(&mut self, token_idx: usize) {
-        let continuation = Box::new(AstContinuation::Frame {
-            frame: AstContinuationFrame { value: None },
-            resumed: RuntimeValue::Unit,
-        });
         match self.execution_mode {
             lower::EffectExecutionMode::PortableFallback => {
                 if let Some(token) = self.resume_tokens.get_mut(token_idx) {
-                    token.state = HandlerContinuationState::Suspended(continuation);
+                    token.state = HandlerContinuationState::Suspended;
                 }
             }
             lower::EffectExecutionMode::TypedContinuationOptimized => {
                 if let Some(token) = self.optimized_resume_tokens.get_mut(token_idx) {
-                    token.state = HandlerContinuationState::Suspended(continuation);
+                    token.state = HandlerContinuationState::Suspended;
                 }
             }
         }
@@ -5040,35 +4954,7 @@ impl<'m> RuntimeOutputResolver<'m> {
         self.runtime_aborted && self.runtime_error.is_none()
     }
 
-    fn current_pending_value_continuation_for_dispatch(
-        &self,
-        dispatch_depth: usize,
-    ) -> Option<AstValueContinuation> {
-        let continuation = self.pending_value_continuations.last()?.clone();
-        if continuation.depth + 1 == dispatch_depth {
-            Some(continuation)
-        } else {
-            None
-        }
-    }
-
-    fn current_pending_resume_frame_for_dispatch(
-        &self,
-        dispatch_depth: usize,
-    ) -> Option<AstContinuationFrame> {
-        let value = self.current_pending_value_continuation_for_dispatch(dispatch_depth);
-        if value.is_none() {
-            None
-        } else {
-            Some(AstContinuationFrame { value })
-        }
-    }
-
-    fn push_resume_token_for_handler(
-        &mut self,
-        dispatch_depth: usize,
-        take_caller_cont: bool,
-    ) -> usize {
+    fn push_resume_token_for_handler(&mut self, take_caller_cont: bool) -> usize {
         let caller_cont = if take_caller_cont {
             self.pending_caller_cont_stack
                 .last_mut()
@@ -5079,7 +4965,6 @@ impl<'m> RuntimeOutputResolver<'m> {
         self.resume_tokens.push(ResumeToken {
             continuation: Continuation { consumed: false },
             state: HandlerContinuationState::Pending,
-            frame: self.current_pending_resume_frame_for_dispatch(dispatch_depth),
             cont: caller_cont,
         });
         self.resume_tokens.len() - 1
@@ -5095,16 +4980,11 @@ impl<'m> RuntimeOutputResolver<'m> {
             HandlerContinuationState::Pending
                 if token.cont.is_some() && token.continuation.consumed =>
             {
-                HandlerCompletion::Suspended(Box::new(AstContinuation::Frame {
-                    frame: AstContinuationFrame { value: None },
-                    resumed: RuntimeValue::Unit,
-                }))
+                HandlerCompletion::Suspended
             }
             HandlerContinuationState::Pending => HandlerCompletion::Aborted,
             HandlerContinuationState::Resumed(value) => HandlerCompletion::Resumed(value),
-            HandlerContinuationState::Suspended(continuation) => {
-                HandlerCompletion::Suspended(continuation)
-            }
+            HandlerContinuationState::Suspended => HandlerCompletion::Suspended,
         })
     }
 
@@ -5112,11 +4992,7 @@ impl<'m> RuntimeOutputResolver<'m> {
         self.resume_tokens.last_mut()
     }
 
-    fn push_optimized_resume_token_for_handler(
-        &mut self,
-        dispatch_depth: usize,
-        take_caller_cont: bool,
-    ) -> usize {
+    fn push_optimized_resume_token_for_handler(&mut self, take_caller_cont: bool) -> usize {
         let caller_cont = if take_caller_cont {
             self.pending_caller_cont_stack
                 .last_mut()
@@ -5127,7 +5003,6 @@ impl<'m> RuntimeOutputResolver<'m> {
         self.optimized_resume_tokens.push(OptimizedResumeToken {
             consumed: false,
             state: HandlerContinuationState::Pending,
-            frame: self.current_pending_resume_frame_for_dispatch(dispatch_depth),
             cont: caller_cont,
         });
         self.optimized_resume_tokens.len() - 1
@@ -5144,16 +5019,11 @@ impl<'m> RuntimeOutputResolver<'m> {
         let token = self.optimized_resume_tokens.pop()?;
         Some(match token.state {
             HandlerContinuationState::Pending if token.cont.is_some() && token.consumed => {
-                HandlerCompletion::Suspended(Box::new(AstContinuation::Frame {
-                    frame: AstContinuationFrame { value: None },
-                    resumed: RuntimeValue::Unit,
-                }))
+                HandlerCompletion::Suspended
             }
             HandlerContinuationState::Pending => HandlerCompletion::Aborted,
             HandlerContinuationState::Resumed(value) => HandlerCompletion::Resumed(value),
-            HandlerContinuationState::Suspended(continuation) => {
-                HandlerCompletion::Suspended(continuation)
-            }
+            HandlerContinuationState::Suspended => HandlerCompletion::Suspended,
         })
     }
 
@@ -5177,7 +5047,7 @@ impl<'m> RuntimeOutputResolver<'m> {
         match state {
             Some(HandlerContinuationState::Pending) | None => 0,
             Some(HandlerContinuationState::Resumed(_)) => 1,
-            Some(HandlerContinuationState::Suspended(_)) => 2,
+            Some(HandlerContinuationState::Suspended) => 2,
         }
     }
 
@@ -5197,17 +5067,13 @@ impl<'m> RuntimeOutputResolver<'m> {
         }
     }
 
-    fn begin_handler_continuation_bridge(
-        &mut self,
-        dispatch_depth: usize,
-        take_caller_cont: bool,
-    ) -> usize {
+    fn begin_handler_continuation_bridge(&mut self, take_caller_cont: bool) -> usize {
         match self.execution_mode {
             lower::EffectExecutionMode::PortableFallback => {
-                self.push_resume_token_for_handler(dispatch_depth, take_caller_cont)
+                self.push_resume_token_for_handler(take_caller_cont)
             }
             lower::EffectExecutionMode::TypedContinuationOptimized => {
-                self.push_optimized_resume_token_for_handler(dispatch_depth, take_caller_cont)
+                self.push_optimized_resume_token_for_handler(take_caller_cont)
             }
         }
     }
@@ -5279,31 +5145,13 @@ impl<'m> RuntimeOutputResolver<'m> {
             }
             return out;
         }
-        let frame = token.frame.clone();
+        // token.cont was None; no AST frame either (pending_value_continuations always empty).
+        // Treat as a no-op frame: return the resumed value directly and mark as Resumed.
         token.continuation.consumed = true;
-        token.frame = None;
-        let outcome = self.resume_through_ast_continuation_frame(frame, resumed, evaluators);
-        let Some(token) = self.current_resume_token_mut() else {
-            self.set_runtime_error_once(ERR_RESUME_MISSING);
-            return Out::Err(RuntimeError::Unsupported);
-        };
-        match &outcome {
-            AstEvalOutcome::Complete(value) => {
-                token.state = HandlerContinuationState::Resumed(Box::new(value.clone()));
-            }
-            AstEvalOutcome::Suspended(continuation) => {
-                token.state = HandlerContinuationState::Suspended(continuation.clone());
-            }
-            AstEvalOutcome::Aborted | AstEvalOutcome::Unsupported => {}
+        if let Some(token) = self.current_resume_token_mut() {
+            token.state = HandlerContinuationState::Resumed(Box::new(resumed.clone()));
         }
-        match outcome {
-            AstEvalOutcome::Complete(v) => Out::Done(v),
-            AstEvalOutcome::Suspended(_) => Out::Suspend(Cont::Resume),
-            AstEvalOutcome::Aborted => Out::Err(RuntimeError::Abort {
-                kind: "aborted".into(),
-            }),
-            AstEvalOutcome::Unsupported => Out::Err(RuntimeError::Unsupported),
-        }
+        Out::Done(resumed)
     }
 
     fn resume_through_active_continuation_optimized_out(
@@ -5344,31 +5192,13 @@ impl<'m> RuntimeOutputResolver<'m> {
             }
             return out;
         }
-        let frame = token.frame.clone();
+        // token.cont was None; no AST frame either (pending_value_continuations always empty).
+        // Treat as a no-op frame: return the resumed value directly and mark as Resumed.
         token.consumed = true;
-        token.frame = None;
-        let outcome = self.resume_through_ast_continuation_frame(frame, resumed, evaluators);
-        let Some(token) = self.current_optimized_resume_token_mut() else {
-            self.set_runtime_error_once(ERR_RESUME_MISSING);
-            return Out::Err(RuntimeError::Unsupported);
-        };
-        match &outcome {
-            AstEvalOutcome::Complete(value) => {
-                token.state = HandlerContinuationState::Resumed(Box::new(value.clone()));
-            }
-            AstEvalOutcome::Suspended(continuation) => {
-                token.state = HandlerContinuationState::Suspended(continuation.clone());
-            }
-            AstEvalOutcome::Aborted | AstEvalOutcome::Unsupported => {}
+        if let Some(token) = self.current_optimized_resume_token_mut() {
+            token.state = HandlerContinuationState::Resumed(Box::new(resumed.clone()));
         }
-        match outcome {
-            AstEvalOutcome::Complete(v) => Out::Done(v),
-            AstEvalOutcome::Suspended(_) => Out::Suspend(Cont::Resume),
-            AstEvalOutcome::Aborted => Out::Err(RuntimeError::Abort {
-                kind: "aborted".into(),
-            }),
-            AstEvalOutcome::Unsupported => Out::Err(RuntimeError::Unsupported),
-        }
+        Out::Done(resumed)
     }
 
     fn complete_ast_value_outcome(
@@ -5388,215 +5218,19 @@ impl<'m> RuntimeOutputResolver<'m> {
         }
     }
 
-    fn resume_through_ast_continuation_frame(
-        &mut self,
-        frame: Option<AstContinuationFrame>,
-        resumed: RuntimeValue,
-        evaluators: &RuntimeEvaluators<'_, '_>,
-    ) -> AstEvalOutcome<RuntimeValue> {
-        let Some(frame) = frame else {
-            return AstEvalOutcome::Complete(resumed);
-        };
-        self.execute_ast_continuation(AstContinuation::Frame { frame, resumed }, evaluators)
-    }
-
     fn execute_ast_continuation(
         &mut self,
         continuation: AstContinuation,
         evaluators: &RuntimeEvaluators<'_, '_>,
     ) -> AstEvalOutcome<RuntimeValue> {
-        match continuation {
-            AstContinuation::Frame { frame, resumed } => {
-                self.execute_ast_continuation_frame(frame, resumed, evaluators)
-            }
-            AstContinuation::ContBridge { cont, resumed } => {
-                match self.apply_cont(*cont, resumed, evaluators) {
-                    Out::Done(v) => AstEvalOutcome::Complete(v),
-                    Out::Suspend(c) => {
-                        AstEvalOutcome::Suspended(Box::new(AstContinuation::ContBridge {
-                            cont: Box::new(c),
-                            resumed: RuntimeValue::Unit,
-                        }))
-                    }
-                    Out::Escape(_) | Out::Err(_) => AstEvalOutcome::Aborted,
-                }
-            }
-        }
-    }
-
-    fn execute_ast_continuation_frame(
-        &mut self,
-        frame: AstContinuationFrame,
-        resumed: RuntimeValue,
-        evaluators: &RuntimeEvaluators<'_, '_>,
-    ) -> AstEvalOutcome<RuntimeValue> {
-        let resumed = if let Some(continuation) = frame.value {
-            match self.execute_saved_value_continuation(continuation, resumed, evaluators) {
-                Some(value) => value,
-                None if self.has_abort_without_error() => return AstEvalOutcome::Aborted,
-                None => return AstEvalOutcome::Unsupported,
-            }
-        } else {
-            resumed
-        };
-        // frame.stmt is always None (AstStmtContinuation path is retired).
-        AstEvalOutcome::Complete(resumed)
-    }
-
-    fn execute_saved_value_continuation(
-        &mut self,
-        continuation: AstValueContinuation,
-        resumed: RuntimeValue,
-        evaluators: &RuntimeEvaluators<'_, '_>,
-    ) -> Option<RuntimeValue> {
-        match continuation.kind {
-            AstValueContinuationKind::ResumeValue => {
-                let out = self.resume_through_active_continuation_out(resumed, evaluators);
-                self.out_to_option(out)
-            }
-            AstValueContinuationKind::PipelineCall { callee } => {
-                let out = self.apply_pipeline_out(
-                    &callee,
-                    resumed,
-                    &continuation.locals,
-                    &continuation.callables,
-                    evaluators,
-                    continuation.depth,
-                );
-                self.out_to_option(out)
-            }
-            AstValueContinuationKind::ReceiverMethodCall { receiver, member } => {
-                let out = self.apply_receiver_method_value_call_out(
-                    &receiver,
-                    &member,
-                    resumed,
-                    evaluators,
-                    continuation.depth,
-                );
-                self.out_to_option(out)
-            }
-            AstValueContinuationKind::SingleArgNamedCall { fn_name } => {
-                let out = self.apply_named_value_call_out(
-                    &fn_name,
-                    resumed,
-                    &continuation.locals,
-                    &continuation.callables,
-                    evaluators,
-                    continuation.depth,
-                );
-                self.out_to_option(out)
-            }
-            AstValueContinuationKind::MultiArgNamedCall {
-                fn_name,
-                evaluated_args,
-                remaining_args,
-            } => {
-                let mut evaluated_args = evaluated_args;
-                evaluated_args.push(resumed);
-                let remaining_args = remaining_args.iter().collect::<Vec<_>>();
-                let arg_values = match self.eval_named_call_args_out(
-                    remaining_args.as_slice(),
-                    &evaluated_args,
-                    &continuation.locals,
-                    &continuation.callables,
-                    evaluators,
-                    continuation.depth,
-                ) {
-                    Out::Done(values) => values,
-                    Out::Suspend(_) | Out::Escape(_) => return None,
-                    Out::Err(RuntimeError::Abort { .. }) => {
-                        self.set_runtime_abort_once();
-                        return None;
-                    }
-                    Out::Err(_) => return None,
-                };
-                let out = self.apply_named_value_call_args_out(
-                    &fn_name,
-                    &arg_values,
-                    &continuation.locals,
-                    &continuation.callables,
-                    evaluators,
-                    continuation.depth,
-                );
-                match out {
-                    Out::Done(value) => Some(value),
-                    Out::Suspend(_) => unreachable!(
-                        "execute_saved_value_continuation: unexpected Out::Suspend \
-                         from apply_named_value_call_args_out on AST replay path"
-                    ),
-                    Out::Escape(_) => None,
-                    Out::Err(RuntimeError::Abort { .. }) => {
-                        self.set_runtime_abort_once();
-                        None
-                    }
-                    Out::Err(RuntimeError::Unsupported) => None,
-                }
-            }
-            AstValueContinuationKind::CaseScrutinee { arms } => {
-                let (arm_body, arm_locals) =
-                    self.select_case_arm(&resumed, &arms, &continuation.locals)?;
-                let out = self.eval_expr(
-                    &arm_body,
-                    &arm_locals,
-                    &continuation.callables,
-                    evaluators,
-                    continuation.depth,
-                );
-                self.out_to_option(out)
-            }
-            AstValueContinuationKind::IfCondition {
-                then_expr,
-                else_expr,
-            } => {
-                let branch = match resumed {
-                    RuntimeValue::Bool(true) => then_expr,
-                    RuntimeValue::Bool(false) => else_expr,
-                    _ => return None,
-                };
-                let out = self.eval_expr(
-                    &branch,
-                    &continuation.locals,
-                    &continuation.callables,
-                    evaluators,
-                    continuation.depth,
-                );
-                self.out_to_option(out)
-            }
-            AstValueContinuationKind::BinOpLeft { op, right } => {
-                let left_value = resumed;
-                // `pending_value_continuations` is always empty when
-                // `execute_saved_value_continuation` runs (suspension pops frames before
-                // returning). `eval_expr` uses the Out path; if the right operand contains an
-                // effect call that would suspend, `out_to_option` returns None (treated as
-                // unsupported). No push/pop of a BinOpRight frame is needed.
-                let right_out = self.eval_expr(
-                    &right,
-                    &continuation.locals,
-                    &continuation.callables,
-                    evaluators,
-                    continuation.depth,
-                );
-                let right_value = self.out_to_option(right_out)?;
-                self.apply_binop_runtime_value(op, left_value, right_value)
-            }
-            AstValueContinuationKind::BinOpRight { op, left_value } => {
-                self.apply_binop_runtime_value(op, left_value, resumed)
-            }
-        }
-    }
-
-    /// Convert `Out<RuntimeValue>` to `Option<RuntimeValue>` for use in the legacy
-    /// `execute_saved_value_continuation` context.
-    ///
-    /// `Out::Suspend` only arises here if a handler body itself suspends (nested effect call
-    /// inside a handler — a known unsupported TODO path). `Out::Escape` from a scoped-with exit
-    /// maps to `None`, matching the old `AstEvalOutcome::Unsupported` behaviour. `Out::Err`
-    /// (Abort) is also `None`; the caller's context (`execute_ast_continuation_frame`) detects
-    /// `has_abort_without_error()` to propagate the abort upwards.
-    fn out_to_option(&mut self, out: Out<RuntimeValue>) -> Option<RuntimeValue> {
-        match out {
-            Out::Done(v) => Some(v),
-            Out::Suspend(_) | Out::Escape(_) | Out::Err(_) => None,
+        let AstContinuation::ContBridge { cont, resumed } = continuation;
+        match self.apply_cont(*cont, resumed, evaluators) {
+            Out::Done(v) => AstEvalOutcome::Complete(v),
+            Out::Suspend(c) => AstEvalOutcome::Suspended(Box::new(AstContinuation::ContBridge {
+                cont: Box::new(c),
+                resumed: RuntimeValue::Unit,
+            })),
+            Out::Escape(_) | Out::Err(_) => AstEvalOutcome::Aborted,
         }
     }
 
@@ -5643,7 +5277,7 @@ impl<'m> RuntimeOutputResolver<'m> {
         if args.len() != method.method.params.len() {
             return None;
         }
-        let token_idx = self.begin_handler_continuation_bridge(depth, take_caller_cont);
+        let token_idx = self.begin_handler_continuation_bridge(take_caller_cont);
         let mut handler_locals = self
             .active_inline_handler_stack
             .iter()
@@ -5723,7 +5357,7 @@ impl<'m> RuntimeOutputResolver<'m> {
         {
             Some(HandlerCompletion::Resumed(value)) => Out::Done(*value),
             Some(HandlerCompletion::Escaped(escape)) => Out::Escape(escape),
-            Some(HandlerCompletion::Suspended(_continuation)) => Out::Suspend(Cont::Resume),
+            Some(HandlerCompletion::Suspended) => Out::Suspend(Cont::Resume),
             Some(HandlerCompletion::Aborted) => Out::Err(RuntimeError::Abort {
                 kind: "aborted".into(),
             }),
@@ -5750,7 +5384,7 @@ impl<'m> RuntimeOutputResolver<'m> {
         )? {
             HandlerCompletion::Resumed(value) => Some(*value),
             HandlerCompletion::Escaped(_escape) => None,
-            HandlerCompletion::Suspended(_continuation) => None,
+            HandlerCompletion::Suspended => None,
             HandlerCompletion::Aborted => {
                 self.set_runtime_abort_once();
                 None
@@ -5768,7 +5402,7 @@ impl<'m> RuntimeOutputResolver<'m> {
         match self.dispatch_handler_method_core(method, args, evaluators, depth, true, false) {
             Some(HandlerCompletion::Resumed(value)) => Out::Done(*value),
             Some(HandlerCompletion::Escaped(escape)) => Out::Escape(escape),
-            Some(HandlerCompletion::Suspended(_continuation)) => Out::Suspend(Cont::Resume),
+            Some(HandlerCompletion::Suspended) => Out::Suspend(Cont::Resume),
             Some(HandlerCompletion::Aborted) => Out::Err(RuntimeError::Abort {
                 kind: "aborted".into(),
             }),
@@ -5786,7 +5420,7 @@ impl<'m> RuntimeOutputResolver<'m> {
         match self.dispatch_handler_method_core(method, args, evaluators, depth, true, false)? {
             HandlerCompletion::Resumed(value) => Some(*value),
             HandlerCompletion::Escaped(_escape) => None,
-            HandlerCompletion::Suspended(_continuation) => None,
+            HandlerCompletion::Suspended => None,
             HandlerCompletion::Aborted => {
                 self.set_runtime_abort_once();
                 None
@@ -5813,7 +5447,7 @@ impl<'m> RuntimeOutputResolver<'m> {
         )? {
             HandlerCompletion::Resumed(_) => Some(()),
             HandlerCompletion::Escaped(_escape) => Some(()),
-            HandlerCompletion::Suspended(_continuation) => None,
+            HandlerCompletion::Suspended => None,
             HandlerCompletion::Aborted => {
                 self.set_runtime_abort_once();
                 None
