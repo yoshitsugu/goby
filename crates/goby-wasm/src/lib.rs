@@ -2838,6 +2838,20 @@ impl<'m> RuntimeOutputResolver<'m> {
         }
 
         match expr {
+            Expr::IntLit(n) => Out::Done(RuntimeValue::Int(*n)),
+            Expr::BoolLit(b) => Out::Done(RuntimeValue::Bool(*b)),
+            Expr::StringLit(s) => Out::Done(RuntimeValue::String(s.clone())),
+            Expr::Var(name) => match locals.get(name) {
+                Some(v) => Out::Done(v),
+                None if self.has_abort_without_error() => Out::Err(RuntimeError::Abort {
+                    kind: "aborted".into(),
+                }),
+                None => Out::Err(RuntimeError::Unsupported),
+            },
+            Expr::Handler { clauses } => Out::Done(RuntimeValue::Handler(
+                self.inline_handler_from_clauses(clauses, locals, callables),
+            )),
+            Expr::Lambda { .. } => Out::Err(RuntimeError::Unsupported),
             Expr::InterpolatedString(parts) => {
                 let mut out_so_far = String::new();
                 let parts_slice = parts.as_slice();
