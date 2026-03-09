@@ -565,10 +565,18 @@ enum HandlerCompletion {
 }
 
 #[allow(dead_code)]
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone)]
 enum AstContinuation {
     Frame {
         frame: AstContinuationFrame,
+        resumed: RuntimeValue,
+    },
+    /// Bridge from the old AstEvalOutcome path to the new Out/Cont path.
+    /// When `complete_ast_value_outcome` encounters this variant, it calls
+    /// `apply_cont(cont, resumed, evaluators)` instead of the old frame replay.
+    ContBridge {
+        cont: Box<Cont>,
         resumed: RuntimeValue,
     },
 }
@@ -587,6 +595,7 @@ struct AstValueContinuation {
 }
 
 #[derive(Clone)]
+#[allow(dead_code)]
 enum AstValueContinuationKind {
     ResumeValue,
     PipelineCall {
@@ -1505,6 +1514,7 @@ impl<'m> RuntimeOutputResolver<'m> {
         self.eval_value_with_context(&call_expr, locals, callables, evaluators)
     }
 
+    #[allow(dead_code)]
     fn apply_pipeline_ast_outcome(
         &mut self,
         callee: &str,
@@ -1994,6 +2004,7 @@ impl<'m> RuntimeOutputResolver<'m> {
         AstEvalOutcome::Complete(evaluated_args)
     }
 
+    #[allow(dead_code)]
     fn apply_receiver_method_value_call_ast_outcome(
         &mut self,
         receiver: &str,
@@ -2070,743 +2081,21 @@ impl<'m> RuntimeOutputResolver<'m> {
         evaluators: &RuntimeEvaluators<'_, '_>,
         depth: usize,
     ) -> AstEvalOutcome<RuntimeValue> {
-        if depth >= MAX_EVAL_DEPTH {
-            return AstEvalOutcome::Unsupported;
-        }
-
-        match expr {
-            Expr::InterpolatedString(parts) => {
-                let mut out = String::new();
-                for part in parts {
-                    match part {
-                        InterpolatedPart::Text(text) => out.push_str(text),
-                        InterpolatedPart::Expr(expr) => {
-                            let value = match self.eval_expr_ast_outcome(
-                                expr,
-                                locals,
-                                callables,
-                                evaluators,
-                                depth + 1,
-                            ) {
-                                AstEvalOutcome::Complete(value) => value,
-                                AstEvalOutcome::Suspended(continuation) => {
-                                    return AstEvalOutcome::Suspended(continuation);
-                                }
-                                AstEvalOutcome::Aborted => return AstEvalOutcome::Aborted,
-                                AstEvalOutcome::Unsupported => {
-                                    return AstEvalOutcome::Unsupported;
-                                }
-                            };
-                            out.push_str(&value.to_output_text());
-                        }
-                    }
-                }
-                AstEvalOutcome::Complete(RuntimeValue::String(out))
+        // Thin wrapper: bridge unified Out-path results for remaining AstEvalOutcome callers.
+        match self.eval_expr(expr, locals, callables, evaluators, depth) {
+            Out::Done(value) => AstEvalOutcome::Complete(value),
+            Out::Suspend(cont) => {
+                AstEvalOutcome::Suspended(Box::new(AstContinuation::ContBridge {
+                    cont: Box::new(cont),
+                    resumed: RuntimeValue::Unit,
+                }))
             }
-            Expr::BinOp { op, left, right } => {
-                self.pending_value_continuations.push(AstValueContinuation {
-                    kind: AstValueContinuationKind::BinOpLeft {
-                        op: op.clone(),
-                        right: (*right.clone()),
-                    },
-                    locals: locals.clone(),
-                    callables: callables.clone(),
-                    depth: depth + 1,
-                });
-                let lv = match self.eval_expr_ast_outcome(
-                    left,
-                    locals,
-                    callables,
-                    evaluators,
-                    depth + 1,
-                ) {
-                    AstEvalOutcome::Complete(value) => value,
-                    AstEvalOutcome::Suspended(continuation) => {
-                        self.pending_value_continuations.pop();
-                        return AstEvalOutcome::Suspended(continuation);
-                    }
-                    AstEvalOutcome::Aborted => {
-                        self.pending_value_continuations.pop();
-                        return AstEvalOutcome::Aborted;
-                    }
-                    AstEvalOutcome::Unsupported => {
-                        self.pending_value_continuations.pop();
-                        return AstEvalOutcome::Unsupported;
-                    }
-                };
-                self.pending_value_continuations.pop();
-                self.pending_value_continuations.push(AstValueContinuation {
-                    kind: AstValueContinuationKind::BinOpRight {
-                        op: op.clone(),
-                        left_value: lv.clone(),
-                    },
-                    locals: locals.clone(),
-                    callables: callables.clone(),
-                    depth: depth + 1,
-                });
-                let rv = match self.eval_expr_ast_outcome(
-                    right,
-                    locals,
-                    callables,
-                    evaluators,
-                    depth + 1,
-                ) {
-                    AstEvalOutcome::Complete(value) => value,
-                    AstEvalOutcome::Suspended(continuation) => {
-                        self.pending_value_continuations.pop();
-                        return AstEvalOutcome::Suspended(continuation);
-                    }
-                    AstEvalOutcome::Aborted => {
-                        self.pending_value_continuations.pop();
-                        return AstEvalOutcome::Aborted;
-                    }
-                    AstEvalOutcome::Unsupported => {
-                        self.pending_value_continuations.pop();
-                        return AstEvalOutcome::Unsupported;
-                    }
-                };
-                self.pending_value_continuations.pop();
-                match (lv, rv) {
-                    (RuntimeValue::Int(l), RuntimeValue::Int(r)) => match op {
-                        goby_core::BinOpKind::Add => match l.checked_add(r) {
-                            Some(value) => AstEvalOutcome::Complete(RuntimeValue::Int(value)),
-                            None => AstEvalOutcome::Unsupported,
-                        },
-                        goby_core::BinOpKind::Mul => match l.checked_mul(r) {
-                            Some(value) => AstEvalOutcome::Complete(RuntimeValue::Int(value)),
-                            None => AstEvalOutcome::Unsupported,
-                        },
-                        goby_core::BinOpKind::Eq => {
-                            AstEvalOutcome::Complete(RuntimeValue::Bool(l == r))
-                        }
-                    },
-                    (RuntimeValue::String(l), RuntimeValue::String(r))
-                        if matches!(op, goby_core::BinOpKind::Eq) =>
-                    {
-                        AstEvalOutcome::Complete(RuntimeValue::Bool(l == r))
-                    }
-                    _ => AstEvalOutcome::Unsupported,
-                }
+            Out::Escape(_) => AstEvalOutcome::Unsupported,
+            Out::Err(RuntimeError::Abort { .. }) => {
+                self.set_runtime_abort_once();
+                AstEvalOutcome::Aborted
             }
-            Expr::ListLit { elements, spread } => {
-                let mut int_items = Vec::with_capacity(elements.len());
-                let mut string_items = Vec::with_capacity(elements.len());
-                let mut list_kind: Option<&'static str> = None;
-                for item in elements {
-                    let value = match self.eval_expr_ast_outcome(
-                        item,
-                        locals,
-                        callables,
-                        evaluators,
-                        depth + 1,
-                    ) {
-                        AstEvalOutcome::Complete(value) => value,
-                        AstEvalOutcome::Suspended(continuation) => {
-                            return AstEvalOutcome::Suspended(continuation);
-                        }
-                        AstEvalOutcome::Aborted => return AstEvalOutcome::Aborted,
-                        AstEvalOutcome::Unsupported => return AstEvalOutcome::Unsupported,
-                    };
-                    match value {
-                        RuntimeValue::Int(n) => {
-                            if list_kind == Some("string") {
-                                return AstEvalOutcome::Unsupported;
-                            }
-                            list_kind = Some("int");
-                            int_items.push(n);
-                        }
-                        RuntimeValue::String(text) => {
-                            if list_kind == Some("int") {
-                                return AstEvalOutcome::Unsupported;
-                            }
-                            list_kind = Some("string");
-                            string_items.push(text);
-                        }
-                        _ => return AstEvalOutcome::Unsupported,
-                    }
-                }
-                if let Some(tail) = spread {
-                    let tail_value = match self.eval_expr_ast_outcome(
-                        tail,
-                        locals,
-                        callables,
-                        evaluators,
-                        depth + 1,
-                    ) {
-                        AstEvalOutcome::Complete(value) => value,
-                        AstEvalOutcome::Suspended(continuation) => {
-                            return AstEvalOutcome::Suspended(continuation);
-                        }
-                        AstEvalOutcome::Aborted => return AstEvalOutcome::Aborted,
-                        AstEvalOutcome::Unsupported => return AstEvalOutcome::Unsupported,
-                    };
-                    return match tail_value {
-                        RuntimeValue::ListInt(mut values) => {
-                            if list_kind == Some("string") {
-                                if values.is_empty() {
-                                    AstEvalOutcome::Complete(RuntimeValue::ListString(string_items))
-                                } else {
-                                    AstEvalOutcome::Unsupported
-                                }
-                            } else {
-                                int_items.append(&mut values);
-                                AstEvalOutcome::Complete(RuntimeValue::ListInt(int_items))
-                            }
-                        }
-                        RuntimeValue::ListString(mut values) => {
-                            if list_kind == Some("int") {
-                                if values.is_empty() {
-                                    AstEvalOutcome::Complete(RuntimeValue::ListInt(int_items))
-                                } else {
-                                    AstEvalOutcome::Unsupported
-                                }
-                            } else {
-                                string_items.append(&mut values);
-                                AstEvalOutcome::Complete(RuntimeValue::ListString(string_items))
-                            }
-                        }
-                        _ => AstEvalOutcome::Unsupported,
-                    };
-                }
-                match list_kind {
-                    Some("string") => {
-                        AstEvalOutcome::Complete(RuntimeValue::ListString(string_items))
-                    }
-                    _ => AstEvalOutcome::Complete(RuntimeValue::ListInt(int_items)),
-                }
-            }
-            Expr::TupleLit(items) => {
-                if items.is_empty() {
-                    return AstEvalOutcome::Complete(RuntimeValue::Unit);
-                }
-                let mut values = Vec::with_capacity(items.len());
-                for item in items {
-                    match self.eval_expr_ast_outcome(item, locals, callables, evaluators, depth + 1)
-                    {
-                        AstEvalOutcome::Complete(value) => values.push(value),
-                        AstEvalOutcome::Suspended(continuation) => {
-                            return AstEvalOutcome::Suspended(continuation);
-                        }
-                        AstEvalOutcome::Aborted => return AstEvalOutcome::Aborted,
-                        AstEvalOutcome::Unsupported => return AstEvalOutcome::Unsupported,
-                    }
-                }
-                AstEvalOutcome::Complete(RuntimeValue::Tuple(values))
-            }
-            Expr::Block(stmts) => {
-                let mut block_locals = locals.clone();
-                let mut block_callables = callables.clone();
-                let mut last_value: Option<RuntimeValue> = None;
-                for stmt in stmts {
-                    match stmt {
-                        Stmt::Binding { name, value } | Stmt::MutBinding { name, value } => {
-                            let v = match self.eval_expr_ast_outcome(
-                                value,
-                                &block_locals,
-                                &block_callables,
-                                evaluators,
-                                depth + 1,
-                            ) {
-                                AstEvalOutcome::Complete(value) => value,
-                                AstEvalOutcome::Suspended(continuation) => {
-                                    return AstEvalOutcome::Suspended(continuation);
-                                }
-                                AstEvalOutcome::Aborted => return AstEvalOutcome::Aborted,
-                                AstEvalOutcome::Unsupported => return AstEvalOutcome::Unsupported,
-                            };
-                            block_locals.store(name, v);
-                            last_value = None;
-                        }
-                        Stmt::Assign { name, value } => {
-                            if block_locals.get(name).is_none() {
-                                return AstEvalOutcome::Unsupported;
-                            }
-                            let v = match self.eval_expr_ast_outcome(
-                                value,
-                                &block_locals,
-                                &block_callables,
-                                evaluators,
-                                depth + 1,
-                            ) {
-                                AstEvalOutcome::Complete(value) => value,
-                                AstEvalOutcome::Suspended(continuation) => {
-                                    return AstEvalOutcome::Suspended(continuation);
-                                }
-                                AstEvalOutcome::Aborted => return AstEvalOutcome::Aborted,
-                                AstEvalOutcome::Unsupported => return AstEvalOutcome::Unsupported,
-                            };
-                            block_locals.store(name, v);
-                            last_value = None;
-                        }
-                        Stmt::Expr(expr) => {
-                            let value = self.eval_expr_ast_outcome(
-                                expr,
-                                &block_locals,
-                                &block_callables,
-                                evaluators,
-                                depth + 1,
-                            );
-                            match value {
-                                AstEvalOutcome::Complete(value) => last_value = Some(value),
-                                AstEvalOutcome::Suspended(continuation) => {
-                                    return AstEvalOutcome::Suspended(continuation);
-                                }
-                                AstEvalOutcome::Aborted => return AstEvalOutcome::Aborted,
-                                AstEvalOutcome::Unsupported => {
-                                    match self.execute_unit_expr_ast(
-                                        expr,
-                                        &mut block_locals,
-                                        &mut block_callables,
-                                        evaluators,
-                                        depth + 1,
-                                    ) {
-                                        Out::Done(()) => {}
-                                        Out::Suspend(_) => {
-                                            return AstEvalOutcome::Suspended(Box::new(
-                                                AstContinuation::Frame {
-                                                    frame: AstContinuationFrame { value: None },
-                                                    resumed: RuntimeValue::Unit,
-                                                },
-                                            ));
-                                        }
-                                        Out::Escape(_) | Out::Err(_) => {
-                                            return self
-                                                .ast_outcome_from_option(None::<RuntimeValue>);
-                                        }
-                                    }
-                                    last_value = Some(RuntimeValue::Unit);
-                                }
-                            }
-                        }
-                    }
-                }
-                self.ast_outcome_from_option(last_value)
-            }
-            Expr::Case { scrutinee, arms } => {
-                self.pending_value_continuations.push(AstValueContinuation {
-                    kind: AstValueContinuationKind::CaseScrutinee { arms: arms.clone() },
-                    locals: locals.clone(),
-                    callables: callables.clone(),
-                    depth: depth + 1,
-                });
-                let scrutinee_val = match self.eval_expr_ast_outcome(
-                    scrutinee,
-                    locals,
-                    callables,
-                    evaluators,
-                    depth + 1,
-                ) {
-                    AstEvalOutcome::Complete(value) => value,
-                    AstEvalOutcome::Suspended(continuation) => {
-                        self.pending_value_continuations.pop();
-                        return AstEvalOutcome::Suspended(continuation);
-                    }
-                    AstEvalOutcome::Aborted => {
-                        self.pending_value_continuations.pop();
-                        return AstEvalOutcome::Aborted;
-                    }
-                    AstEvalOutcome::Unsupported => {
-                        self.pending_value_continuations.pop();
-                        return AstEvalOutcome::Unsupported;
-                    }
-                };
-                self.pending_value_continuations.pop();
-                let Some((arm_body, arm_locals)) =
-                    self.select_case_arm(&scrutinee_val, arms, locals)
-                else {
-                    return AstEvalOutcome::Unsupported;
-                };
-                let evaluated = self.eval_expr_ast_outcome(
-                    &arm_body,
-                    &arm_locals,
-                    callables,
-                    evaluators,
-                    depth + 1,
-                );
-                match evaluated {
-                    AstEvalOutcome::Complete(value) => AstEvalOutcome::Complete(value),
-                    AstEvalOutcome::Suspended(continuation) => {
-                        AstEvalOutcome::Suspended(continuation)
-                    }
-                    AstEvalOutcome::Aborted => AstEvalOutcome::Aborted,
-                    AstEvalOutcome::Unsupported => {
-                        let mut arm_callables = callables.clone();
-                        let mut arm_locals_for_unit = arm_locals;
-                        match self.execute_unit_expr_ast(
-                            &arm_body,
-                            &mut arm_locals_for_unit,
-                            &mut arm_callables,
-                            evaluators,
-                            depth + 1,
-                        ) {
-                            Out::Done(()) => {}
-                            Out::Suspend(_) => {
-                                return AstEvalOutcome::Suspended(Box::new(
-                                    AstContinuation::Frame {
-                                        frame: AstContinuationFrame { value: None },
-                                        resumed: RuntimeValue::Unit,
-                                    },
-                                ));
-                            }
-                            Out::Escape(_) | Out::Err(_) => {
-                                return self.ast_outcome_from_option(None::<RuntimeValue>);
-                            }
-                        }
-                        AstEvalOutcome::Complete(RuntimeValue::Unit)
-                    }
-                }
-            }
-            Expr::If {
-                condition,
-                then_expr,
-                else_expr,
-            } => {
-                self.pending_value_continuations.push(AstValueContinuation {
-                    kind: AstValueContinuationKind::IfCondition {
-                        then_expr: (**then_expr).clone(),
-                        else_expr: (**else_expr).clone(),
-                    },
-                    locals: locals.clone(),
-                    callables: callables.clone(),
-                    depth: depth + 1,
-                });
-                let cond_val = match self.eval_expr_ast_outcome(
-                    condition,
-                    locals,
-                    callables,
-                    evaluators,
-                    depth + 1,
-                ) {
-                    AstEvalOutcome::Complete(value) => value,
-                    AstEvalOutcome::Suspended(continuation) => {
-                        self.pending_value_continuations.pop();
-                        return AstEvalOutcome::Suspended(continuation);
-                    }
-                    AstEvalOutcome::Aborted => {
-                        self.pending_value_continuations.pop();
-                        return AstEvalOutcome::Aborted;
-                    }
-                    AstEvalOutcome::Unsupported => {
-                        self.pending_value_continuations.pop();
-                        return AstEvalOutcome::Unsupported;
-                    }
-                };
-                self.pending_value_continuations.pop();
-                let branch = match cond_val {
-                    RuntimeValue::Bool(true) => then_expr,
-                    RuntimeValue::Bool(false) => else_expr,
-                    _ => return AstEvalOutcome::Unsupported,
-                };
-                match self.eval_expr_ast_outcome(branch, locals, callables, evaluators, depth + 1) {
-                    AstEvalOutcome::Complete(value) => AstEvalOutcome::Complete(value),
-                    AstEvalOutcome::Suspended(continuation) => {
-                        AstEvalOutcome::Suspended(continuation)
-                    }
-                    AstEvalOutcome::Aborted => AstEvalOutcome::Aborted,
-                    AstEvalOutcome::Unsupported => {
-                        let mut branch_locals = locals.clone();
-                        let mut branch_callables = callables.clone();
-                        match self.execute_unit_expr_ast(
-                            branch,
-                            &mut branch_locals,
-                            &mut branch_callables,
-                            evaluators,
-                            depth + 1,
-                        ) {
-                            Out::Done(()) => {}
-                            Out::Suspend(_) => {
-                                return AstEvalOutcome::Suspended(Box::new(
-                                    AstContinuation::Frame {
-                                        frame: AstContinuationFrame { value: None },
-                                        resumed: RuntimeValue::Unit,
-                                    },
-                                ));
-                            }
-                            Out::Escape(_) | Out::Err(_) => {
-                                return self.ast_outcome_from_option(None::<RuntimeValue>);
-                            }
-                        }
-                        AstEvalOutcome::Complete(RuntimeValue::Unit)
-                    }
-                }
-            }
-            Expr::Call { callee, arg } => {
-                if let Some((fn_name, args)) = flatten_named_call(expr)
-                    && args.len() > 1
-                {
-                    let arg_values = match self.eval_named_call_args_outcome(
-                        fn_name,
-                        args.as_slice(),
-                        &[],
-                        (locals, callables, depth),
-                        evaluators,
-                    ) {
-                        AstEvalOutcome::Complete(values) => values,
-                        AstEvalOutcome::Suspended(continuation) => {
-                            return AstEvalOutcome::Suspended(continuation);
-                        }
-                        AstEvalOutcome::Aborted => return AstEvalOutcome::Aborted,
-                        AstEvalOutcome::Unsupported => return AstEvalOutcome::Unsupported,
-                    };
-                    return self.apply_named_value_call_args_ast_outcome(
-                        fn_name,
-                        &arg_values,
-                        locals,
-                        callables,
-                        evaluators,
-                        depth + 1,
-                    );
-                }
-                if let Expr::Qualified { receiver, member } = callee.as_ref() {
-                    self.pending_value_continuations.push(AstValueContinuation {
-                        kind: AstValueContinuationKind::ReceiverMethodCall {
-                            receiver: receiver.clone(),
-                            member: member.clone(),
-                        },
-                        locals: locals.clone(),
-                        callables: callables.clone(),
-                        depth: depth + 1,
-                    });
-                    let arg_value =
-                        self.eval_expr_ast_outcome(arg, locals, callables, evaluators, depth + 1);
-                    self.pending_value_continuations.pop();
-                    let arg_value = match arg_value {
-                        AstEvalOutcome::Complete(value) => value,
-                        AstEvalOutcome::Suspended(continuation) => {
-                            return AstEvalOutcome::Suspended(continuation);
-                        }
-                        AstEvalOutcome::Aborted => return AstEvalOutcome::Aborted,
-                        AstEvalOutcome::Unsupported => return AstEvalOutcome::Unsupported,
-                    };
-                    return self.apply_receiver_method_value_call_ast_outcome(
-                        receiver,
-                        member,
-                        arg_value,
-                        evaluators,
-                        depth + 1,
-                    );
-                }
-                if let Expr::Var(ctor_name) = callee.as_ref()
-                    && let Some(field_name) = self.single_field_constructor_field(ctor_name)
-                {
-                    let field_value = match self.eval_expr_ast_outcome(
-                        arg,
-                        locals,
-                        callables,
-                        evaluators,
-                        depth + 1,
-                    ) {
-                        AstEvalOutcome::Complete(value) => value,
-                        AstEvalOutcome::Suspended(continuation) => {
-                            return AstEvalOutcome::Suspended(continuation);
-                        }
-                        AstEvalOutcome::Aborted => return AstEvalOutcome::Aborted,
-                        AstEvalOutcome::Unsupported => return AstEvalOutcome::Unsupported,
-                    };
-                    let mut fields = HashMap::new();
-                    fields.insert(field_name, field_value);
-                    return AstEvalOutcome::Complete(RuntimeValue::Record {
-                        constructor: ctor_name.clone(),
-                        fields,
-                    });
-                }
-                if let Expr::Var(fn_name) = callee.as_ref() {
-                    let capture_single_arg_frame =
-                        self.find_handler_method_by_name(fn_name).is_none();
-                    if capture_single_arg_frame {
-                        self.pending_value_continuations.push(AstValueContinuation {
-                            kind: AstValueContinuationKind::SingleArgNamedCall {
-                                fn_name: fn_name.clone(),
-                            },
-                            locals: locals.clone(),
-                            callables: callables.clone(),
-                            depth: depth + 1,
-                        });
-                    }
-                    let arg_value =
-                        self.eval_expr_ast_outcome(arg, locals, callables, evaluators, depth + 1);
-                    if capture_single_arg_frame {
-                        self.pending_value_continuations.pop();
-                    }
-                    let arg_value = match arg_value {
-                        AstEvalOutcome::Complete(value) => value,
-                        AstEvalOutcome::Suspended(continuation) => {
-                            return AstEvalOutcome::Suspended(continuation);
-                        }
-                        AstEvalOutcome::Aborted => return AstEvalOutcome::Aborted,
-                        AstEvalOutcome::Unsupported => return AstEvalOutcome::Unsupported,
-                    };
-                    return self.apply_named_value_call_ast_outcome(
-                        fn_name,
-                        arg_value,
-                        locals,
-                        callables,
-                        evaluators,
-                        depth + 1,
-                    );
-                }
-                let value = self.eval_expr_ast(expr, locals, callables, evaluators, depth);
-                self.ast_outcome_from_option(value)
-            }
-            Expr::MethodCall {
-                receiver,
-                method,
-                args,
-            } if args.len() == 1 => {
-                self.pending_value_continuations.push(AstValueContinuation {
-                    kind: AstValueContinuationKind::ReceiverMethodCall {
-                        receiver: receiver.clone(),
-                        member: method.clone(),
-                    },
-                    locals: locals.clone(),
-                    callables: callables.clone(),
-                    depth: depth + 1,
-                });
-                let arg_value =
-                    self.eval_expr_ast_outcome(&args[0], locals, callables, evaluators, depth + 1);
-                self.pending_value_continuations.pop();
-                let arg_value = match arg_value {
-                    AstEvalOutcome::Complete(value) => value,
-                    AstEvalOutcome::Suspended(continuation) => {
-                        return AstEvalOutcome::Suspended(continuation);
-                    }
-                    AstEvalOutcome::Aborted => return AstEvalOutcome::Aborted,
-                    AstEvalOutcome::Unsupported => return AstEvalOutcome::Unsupported,
-                };
-                self.apply_receiver_method_value_call_ast_outcome(
-                    receiver,
-                    method,
-                    arg_value,
-                    evaluators,
-                    depth + 1,
-                )
-            }
-            Expr::Pipeline { value, callee } => {
-                self.pending_value_continuations.push(AstValueContinuation {
-                    kind: AstValueContinuationKind::PipelineCall {
-                        callee: callee.clone(),
-                    },
-                    locals: locals.clone(),
-                    callables: callables.clone(),
-                    depth: depth + 1,
-                });
-                let pipeline_value =
-                    self.eval_expr_ast_outcome(value, locals, callables, evaluators, depth + 1);
-                self.pending_value_continuations.pop();
-                let pipeline_value = match pipeline_value {
-                    AstEvalOutcome::Complete(value) => value,
-                    AstEvalOutcome::Suspended(continuation) => {
-                        return AstEvalOutcome::Suspended(continuation);
-                    }
-                    AstEvalOutcome::Aborted => return AstEvalOutcome::Aborted,
-                    AstEvalOutcome::Unsupported => return AstEvalOutcome::Unsupported,
-                };
-                self.apply_pipeline_ast_outcome(
-                    callee,
-                    pipeline_value,
-                    locals,
-                    callables,
-                    evaluators,
-                    depth + 1,
-                )
-            }
-            Expr::RecordConstruct {
-                constructor,
-                fields,
-            } => {
-                if fields.is_empty()
-                    && let Some(value) = self.try_apply_bare_runtime_bridge_value(
-                        constructor,
-                        RuntimeValue::Unit,
-                        locals,
-                        callables,
-                        evaluators,
-                        depth + 1,
-                    )
-                {
-                    return AstEvalOutcome::Complete(value);
-                }
-                let mut field_map = HashMap::new();
-                for (field_name, field_expr) in fields {
-                    let field_val = match self.eval_expr_ast_outcome(
-                        field_expr,
-                        locals,
-                        callables,
-                        evaluators,
-                        depth + 1,
-                    ) {
-                        AstEvalOutcome::Complete(value) => value,
-                        AstEvalOutcome::Suspended(continuation) => {
-                            return AstEvalOutcome::Suspended(continuation);
-                        }
-                        AstEvalOutcome::Aborted => return AstEvalOutcome::Aborted,
-                        AstEvalOutcome::Unsupported => return AstEvalOutcome::Unsupported,
-                    };
-                    field_map.insert(field_name.clone(), field_val);
-                }
-                AstEvalOutcome::Complete(RuntimeValue::Record {
-                    constructor: constructor.clone(),
-                    fields: field_map,
-                })
-            }
-            Expr::Resume { value } => {
-                self.pending_value_continuations.push(AstValueContinuation {
-                    kind: AstValueContinuationKind::ResumeValue,
-                    locals: locals.clone(),
-                    callables: callables.clone(),
-                    depth: depth + 1,
-                });
-                let resumed = match self.eval_expr_ast_outcome(
-                    value,
-                    locals,
-                    callables,
-                    evaluators,
-                    depth + 1,
-                ) {
-                    AstEvalOutcome::Complete(value) => value,
-                    AstEvalOutcome::Suspended(continuation) => {
-                        self.pending_value_continuations.pop();
-                        return AstEvalOutcome::Suspended(continuation);
-                    }
-                    AstEvalOutcome::Aborted => {
-                        self.pending_value_continuations.pop();
-                        return AstEvalOutcome::Aborted;
-                    }
-                    AstEvalOutcome::Unsupported => {
-                        self.pending_value_continuations.pop();
-                        return AstEvalOutcome::Unsupported;
-                    }
-                };
-                self.pending_value_continuations.pop();
-                self.resume_through_active_continuation_bridge_outcome(resumed, evaluators)
-            }
-            Expr::With { handler, body } => {
-                let Some(RuntimeValue::Handler(mut inline_handler)) =
-                    self.eval_expr_ast(handler, locals, callables, evaluators, depth + 1)
-                else {
-                    return AstEvalOutcome::Unsupported;
-                };
-                inline_handler.with_id = Some(self.fresh_with_id());
-                self.active_inline_handler_stack.push(inline_handler);
-                let body_expr = Expr::Block(body.clone());
-                let result = self.eval_expr_ast_outcome(
-                    &body_expr,
-                    locals,
-                    callables,
-                    evaluators,
-                    depth + 1,
-                );
-                // TODO: if result is Suspended, the handler is popped before the
-                // continuation is replayed, which may break handler-stack lookups
-                // on resume. This matches the same limitation in execute_unit_expr_ast.
-                // A fix requires persisting the handler stack across suspension.
-                self.active_inline_handler_stack.pop();
-                result
-            }
-            _ => {
-                let value = self.eval_expr_ast(expr, locals, callables, evaluators, depth);
-                self.ast_outcome_from_option(value)
-            }
+            Out::Err(RuntimeError::Unsupported) => AstEvalOutcome::Unsupported,
         }
     }
 
@@ -5444,6 +4733,7 @@ impl<'m> RuntimeOutputResolver<'m> {
         None
     }
 
+    #[allow(dead_code)]
     fn apply_named_value_call_ast_outcome(
         &mut self,
         fn_name: &str,
@@ -6268,6 +5558,18 @@ impl<'m> RuntimeOutputResolver<'m> {
             AstContinuation::Frame { frame, resumed } => {
                 self.execute_ast_continuation_frame(frame, resumed, evaluators)
             }
+            AstContinuation::ContBridge { cont, resumed } => {
+                match self.apply_cont(*cont, resumed, evaluators) {
+                    Out::Done(v) => AstEvalOutcome::Complete(v),
+                    Out::Suspend(c) => {
+                        AstEvalOutcome::Suspended(Box::new(AstContinuation::ContBridge {
+                            cont: Box::new(c),
+                            resumed: RuntimeValue::Unit,
+                        }))
+                    }
+                    Out::Escape(_) | Out::Err(_) => AstEvalOutcome::Aborted,
+                }
+            }
         }
     }
 
@@ -6612,6 +5914,7 @@ impl<'m> RuntimeOutputResolver<'m> {
         }
     }
 
+    #[allow(dead_code)]
     fn dispatch_handler_method_as_value_outcome(
         &mut self,
         method: &ResolvedHandlerMethod,
@@ -12610,7 +11913,8 @@ main =
     print (choose 0)
 "#;
         let module = parse_module(source).expect("parse should work");
-        let typed = assert_mode_parity(&module, "case scrutinee suspends and arm body calls effect");
+        let typed =
+            assert_mode_parity(&module, "case scrutinee suspends and arm body calls effect");
         assert_eq!(typed.stdout.as_deref(), Some("6"));
         assert_eq!(typed.runtime_error_kind, None);
     }
@@ -12647,7 +11951,10 @@ main =
     print (choose 0)
 "#;
         let module = parse_module(source).expect("parse should work");
-        let typed = assert_mode_parity(&module, "if condition suspends and branch body calls effect");
+        let typed = assert_mode_parity(
+            &module,
+            "if condition suspends and branch body calls effect",
+        );
         assert_eq!(typed.stdout.as_deref(), Some("6"));
         assert_eq!(typed.runtime_error_kind, None);
     }
