@@ -617,6 +617,7 @@ enum AstValueContinuationKind {
     },
 }
 
+#[allow(dead_code)]
 #[derive(Clone)]
 struct AstStmtContinuation {
     kind: AstStmtContinuationKind,
@@ -627,6 +628,7 @@ struct AstStmtContinuation {
     owner_sequence_id: usize,
 }
 
+#[allow(dead_code)]
 #[derive(Clone)]
 enum AstStmtContinuationKind {
     UnitTail,
@@ -656,6 +658,7 @@ enum RuntimeError {
 
 /// Evaluation result — replaces AstEvalOutcome<T>.
 #[allow(dead_code)]
+#[allow(clippy::large_enum_variant)]
 enum Out<T> {
     Done(T),
     Suspend(Cont),
@@ -756,6 +759,7 @@ enum ApplyStep {
         evaluated: Vec<RuntimeValue>,
         remaining: Vec<Expr>,
         spread: Option<Expr>,
+        resuming_spread: bool,
     },
     TupleLitElement {
         evaluated: Vec<RuntimeValue>,
@@ -764,6 +768,7 @@ enum ApplyStep {
     RecordField {
         constructor: String,
         evaluated: Vec<(String, RuntimeValue)>,
+        pending_field: String,
         remaining: Vec<(String, Expr)>,
     },
     InterpolatedPart {
@@ -775,6 +780,7 @@ enum ApplyStep {
 /// New unified resume token state — replaces HandlerContinuationState.
 #[allow(dead_code)]
 #[derive(Clone)]
+#[allow(clippy::large_enum_variant)]
 enum TokenState {
     Pending,
     Done(RuntimeValue),
@@ -2869,6 +2875,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                                     evaluated,
                                     remaining,
                                     spread: spread.clone().map(|s| *s),
+                                    resuming_spread: false,
                                 },
                                 locals: locals.clone(),
                                 callables: callables.clone(),
@@ -2924,6 +2931,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                                     evaluated,
                                     remaining: vec![],
                                     spread: Some((**tail).clone()),
+                                    resuming_spread: true,
                                 },
                                 locals: locals.clone(),
                                 callables: callables.clone(),
@@ -3139,7 +3147,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                     && args.len() > 1
                 {
                     let mut evaluated: Vec<RuntimeValue> = Vec::new();
-                    let args_owned: Vec<Expr> = args.into_iter().map(|e| e.clone()).collect();
+                    let args_owned: Vec<Expr> = args.into_iter().cloned().collect();
                     let mut i = 0;
                     loop {
                         if i >= args_owned.len() {
@@ -3332,17 +3340,17 @@ impl<'m> RuntimeOutputResolver<'m> {
                 constructor,
                 fields,
             } => {
-                if fields.is_empty() {
-                    if let Some(value) = self.try_apply_bare_runtime_bridge_value(
+                if fields.is_empty()
+                    && let Some(value) = self.try_apply_bare_runtime_bridge_value(
                         constructor,
                         RuntimeValue::Unit,
                         locals,
                         callables,
                         evaluators,
                         depth + 1,
-                    ) {
-                        return Out::Done(value);
-                    }
+                    )
+                {
+                    return Out::Done(value);
                 }
                 let mut field_map: HashMap<String, RuntimeValue> = HashMap::new();
                 let fields_vec: Vec<(String, Expr)> =
@@ -3363,6 +3371,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                                 step: ApplyStep::RecordField {
                                     constructor: constructor.clone(),
                                     evaluated,
+                                    pending_field: field_name.clone(),
                                     remaining,
                                 },
                                 locals: locals.clone(),
@@ -3401,25 +3410,26 @@ impl<'m> RuntimeOutputResolver<'m> {
             }
 
             Expr::With { handler, body } => {
-                let snapshot_before_push = self.active_inline_handler_stack.clone();
-                let Some(RuntimeValue::Handler(inline_handler)) =
-                    self.eval_expr_ast(handler, locals, callables, evaluators, depth + 1)
-                else {
-                    return Out::Err(RuntimeError::Unsupported);
-                };
+                let inline_handler =
+                    match self.eval_expr(handler, locals, callables, evaluators, depth + 1) {
+                        Out::Done(RuntimeValue::Handler(inline_handler)) => inline_handler,
+                        Out::Done(_) => return Out::Err(RuntimeError::Unsupported),
+                        Out::Suspend(_) => return Out::Err(RuntimeError::Unsupported),
+                        Out::Err(e) => return Out::Err(e),
+                    };
                 self.active_inline_handler_stack.push(inline_handler);
-                let body_expr = Expr::Block(body.clone());
-                let result = self.eval_expr(&body_expr, locals, callables, evaluators, depth + 1);
+                let result = self.eval_stmts(
+                    body,
+                    locals.clone(),
+                    callables.clone(),
+                    evaluators,
+                    depth + 1,
+                    FinishKind::Block,
+                );
                 self.active_inline_handler_stack.pop();
                 match result {
-                    Out::Done(v) => Out::Done(v),
-                    Out::Suspend(_) => Out::Suspend(Cont::Apply {
-                        step: ApplyStep::WithBody { body: body.clone() },
-                        locals: locals.clone(),
-                        callables: callables.clone(),
-                        depth,
-                        handler_stack: snapshot_before_push,
-                    }),
+                    Out::Done((value, _locals)) => Out::Done(value.unwrap_or(RuntimeValue::Unit)),
+                    Out::Suspend(cont) => Out::Suspend(cont),
                     Out::Err(e) => Out::Err(e),
                 }
             }
@@ -3969,6 +3979,7 @@ impl<'m> RuntimeOutputResolver<'m> {
         }
     }
 
+    #[allow(dead_code)]
     fn stmt_is_unit_effect_continuation_candidate(stmt: &Stmt) -> bool {
         matches!(
             stmt,
@@ -3978,6 +3989,7 @@ impl<'m> RuntimeOutputResolver<'m> {
         )
     }
 
+    #[allow(dead_code)]
     fn stmt_continuation_kind(stmt: &Stmt) -> Option<AstStmtContinuationKind> {
         match stmt {
             Stmt::Binding { name, .. } | Stmt::MutBinding { name, .. } => {
@@ -4007,18 +4019,16 @@ impl<'m> RuntimeOutputResolver<'m> {
         while i < stmts.len() {
             let remaining = &stmts[i + 1..];
             let did_set_slot = !remaining.is_empty() && matches!(&stmts[i], Stmt::Expr(_));
-            if did_set_slot {
-                if let Some(slot) = self.pending_caller_cont_stack.last_mut() {
-                    *slot = Some(Cont::StmtSeq {
-                        store: None,
-                        remaining: remaining.to_vec(),
-                        locals: RuntimeLocals::default(), // ignored for FinishKind::Ingest
-                        callables: HashMap::new(),
-                        depth: 0,
-                        handler_stack: self.active_inline_handler_stack.clone(),
-                        finish: FinishKind::Ingest,
-                    });
-                }
+            if did_set_slot && let Some(slot) = self.pending_caller_cont_stack.last_mut() {
+                *slot = Some(Cont::StmtSeq {
+                    store: None,
+                    remaining: remaining.to_vec(),
+                    locals: RuntimeLocals::default(), // ignored for FinishKind::Ingest
+                    callables: HashMap::new(),
+                    depth: 0,
+                    handler_stack: self.active_inline_handler_stack.clone(),
+                    finish: FinishKind::Ingest,
+                });
             }
             let ok = self.ingest_ast_statement(&stmts[i], evaluators);
             if ok.is_none() {
@@ -4031,7 +4041,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                 && self
                     .pending_caller_cont_stack
                     .last()
-                    .map_or(false, |s| s.is_none());
+                    .is_some_and(|s| s.is_none());
             if consumed {
                 self.pending_caller_cont_stack.pop();
                 return Some(());
@@ -4060,29 +4070,29 @@ impl<'m> RuntimeOutputResolver<'m> {
         while i < stmts.len() {
             let remaining = &stmts[i + 1..];
             // Phase 4: set the top slot so that handler dispatch picks up caller's remaining.
-            if !remaining.is_empty() {
-                if let Some(slot) = self.pending_caller_cont_stack.last_mut() {
-                    *slot = Some(Cont::StmtSeq {
-                        store: None,
-                        remaining: remaining.to_vec(),
-                        locals: locals.clone(),
-                        callables: callables.clone(),
-                        depth,
-                        handler_stack: self.active_inline_handler_stack.clone(),
-                        finish: FinishKind::Block,
-                    });
-                }
+            if !remaining.is_empty()
+                && let Some(slot) = self.pending_caller_cont_stack.last_mut()
+            {
+                *slot = Some(Cont::StmtSeq {
+                    store: None,
+                    remaining: remaining.to_vec(),
+                    locals: locals.clone(),
+                    callables: callables.clone(),
+                    depth,
+                    handler_stack: self.active_inline_handler_stack.clone(),
+                    finish: FinishKind::Block,
+                });
             }
-            let ok = self.execute_unit_ast_stmt(&stmts[i], locals, callables, evaluators, depth)?;
+            self.execute_unit_ast_stmt(&stmts[i], locals, callables, evaluators, depth)?;
             // After stmt: if the top slot was consumed (→None) by a handler dispatch, the
             // remaining stmts were already executed inside apply_cont; skip them.
             let consumed = self
                 .pending_caller_cont_stack
                 .last()
-                .map_or(false, |s| s.is_none());
+                .is_some_and(|s| s.is_none());
             if consumed && !remaining.is_empty() {
                 self.pending_caller_cont_stack.pop();
-                return Some(ok);
+                return Some(());
             }
             // Clear the slot for the next iteration.
             if let Some(slot) = self.pending_caller_cont_stack.last_mut() {
@@ -4159,6 +4169,43 @@ impl<'m> RuntimeOutputResolver<'m> {
                                 last_value = Some(v);
                             }
                         }
+                        Out::Err(RuntimeError::Unsupported) if self.runtime_error.is_none() => {
+                            let mut fallback_locals = locals.clone();
+                            let mut fallback_callables = callables.clone();
+                            match self.execute_unit_ast_stmt_outcome(
+                                stmt,
+                                &mut fallback_locals,
+                                &mut fallback_callables,
+                                evaluators,
+                                depth + 1,
+                            ) {
+                                AstEvalOutcome::Complete(()) => {
+                                    locals = fallback_locals;
+                                    if remaining.is_empty() {
+                                        last_value = Some(RuntimeValue::Unit);
+                                    }
+                                }
+                                AstEvalOutcome::Suspended(_) => {
+                                    return Out::Suspend(Cont::StmtSeq {
+                                        store: None,
+                                        remaining,
+                                        locals,
+                                        callables,
+                                        depth,
+                                        handler_stack: self.active_inline_handler_stack.clone(),
+                                        finish,
+                                    });
+                                }
+                                AstEvalOutcome::Aborted => {
+                                    return Out::Err(RuntimeError::Abort {
+                                        kind: "aborted".into(),
+                                    });
+                                }
+                                AstEvalOutcome::Unsupported => {
+                                    return Out::Err(RuntimeError::Unsupported);
+                                }
+                            }
+                        }
                         Out::Suspend(_cont) => {
                             return Out::Suspend(Cont::StmtSeq {
                                 store: None,
@@ -4176,6 +4223,91 @@ impl<'m> RuntimeOutputResolver<'m> {
             }
         }
         Out::Done((last_value, locals))
+    }
+
+    fn build_runtime_list(&self, values: Vec<RuntimeValue>) -> Out<RuntimeValue> {
+        let mut ints = Vec::with_capacity(values.len());
+        let mut strings = Vec::with_capacity(values.len());
+        let mut kind: Option<&'static str> = None;
+        for value in values {
+            match value {
+                RuntimeValue::Int(n) => {
+                    if kind == Some("string") {
+                        return Out::Err(RuntimeError::Unsupported);
+                    }
+                    kind = Some("int");
+                    ints.push(n);
+                }
+                RuntimeValue::String(text) => {
+                    if kind == Some("int") {
+                        return Out::Err(RuntimeError::Unsupported);
+                    }
+                    kind = Some("string");
+                    strings.push(text);
+                }
+                _ => return Out::Err(RuntimeError::Unsupported),
+            }
+        }
+        match kind {
+            Some("string") => Out::Done(RuntimeValue::ListString(strings)),
+            _ => Out::Done(RuntimeValue::ListInt(ints)),
+        }
+    }
+
+    fn current_handler_resume_value(&self, token_idx: usize) -> Option<RuntimeValue> {
+        match self.execution_mode {
+            lower::EffectExecutionMode::PortableFallback => self
+                .resume_tokens
+                .get(token_idx)
+                .and_then(|token| match &token.state {
+                    HandlerContinuationState::Resumed(value) => Some((**value).clone()),
+                    _ => None,
+                }),
+            lower::EffectExecutionMode::TypedContinuationOptimized => self
+                .optimized_resume_tokens
+                .get(token_idx)
+                .and_then(|token| match &token.state {
+                    HandlerContinuationState::Resumed(value) => Some((**value).clone()),
+                    _ => None,
+                }),
+        }
+    }
+
+    fn handler_has_suspended_cont(&self, token_idx: usize) -> bool {
+        match self.execution_mode {
+            lower::EffectExecutionMode::PortableFallback => self
+                .resume_tokens
+                .get(token_idx)
+                .and_then(|token| token.cont.as_ref())
+                .is_some(),
+            lower::EffectExecutionMode::TypedContinuationOptimized => self
+                .optimized_resume_tokens
+                .get(token_idx)
+                .and_then(|token| token.cont.as_ref())
+                .is_some(),
+        }
+    }
+
+    fn set_handler_token_state_suspended_placeholder(&mut self, token_idx: usize) {
+        let continuation = Box::new(AstContinuation::Frame {
+            frame: AstContinuationFrame {
+                value: None,
+                stmt: None,
+            },
+            resumed: RuntimeValue::Unit,
+        });
+        match self.execution_mode {
+            lower::EffectExecutionMode::PortableFallback => {
+                if let Some(token) = self.resume_tokens.get_mut(token_idx) {
+                    token.state = HandlerContinuationState::Suspended(continuation);
+                }
+            }
+            lower::EffectExecutionMode::TypedContinuationOptimized => {
+                if let Some(token) = self.optimized_resume_tokens.get_mut(token_idx) {
+                    token.state = HandlerContinuationState::Suspended(continuation);
+                }
+            }
+        }
     }
 
     fn apply_cont(
@@ -4218,30 +4350,401 @@ impl<'m> RuntimeOutputResolver<'m> {
                     }
                     return Out::Done(RuntimeValue::Unit);
                 }
-                match self.eval_stmts(&remaining, locals, callables, evaluators, depth, finish) {
-                    Out::Done((last_val, _final_locals)) => {
-                        Out::Done(last_val.unwrap_or(RuntimeValue::Unit))
-                    }
+                match self.eval_stmts(
+                    &remaining,
+                    locals,
+                    callables,
+                    evaluators,
+                    depth,
+                    finish.clone(),
+                ) {
+                    Out::Done((last_val, _final_locals)) => match finish {
+                        FinishKind::Block | FinishKind::Ingest => {
+                            Out::Done(last_val.unwrap_or(RuntimeValue::Unit))
+                        }
+                        FinishKind::HandlerBody { token_idx, .. } => {
+                            if let Some(resumed) = self.current_handler_resume_value(token_idx) {
+                                Out::Done(resumed)
+                            } else if self.handler_has_suspended_cont(token_idx) {
+                                self.set_handler_token_state_suspended_placeholder(token_idx);
+                                Out::Suspend(Cont::Resume)
+                            } else {
+                                Out::Err(RuntimeError::Abort {
+                                    kind: "aborted".into(),
+                                })
+                            }
+                        }
+                    },
                     Out::Suspend(c) => Out::Suspend(c),
                     Out::Err(e) => Out::Err(e),
                 }
             }
             Cont::Apply {
-                step: _,
-                locals: _,
-                callables: _,
-                depth: _,
+                step,
+                locals,
+                callables,
+                depth,
                 handler_stack,
             } => {
                 self.active_inline_handler_stack = handler_stack;
-                // Apply steps — implemented in Phase 2 (placeholder for now)
-                Out::Err(RuntimeError::Unsupported)
+                match step {
+                    ApplyStep::Pipeline { callee } => {
+                        Self::ast_outcome_to_out(self.apply_pipeline_ast_outcome(
+                            &callee, value, &locals, &callables, evaluators, depth,
+                        ))
+                    }
+                    ApplyStep::SingleArgCall { fn_name } => {
+                        Self::ast_outcome_to_out(self.apply_named_value_call_ast_outcome(
+                            &fn_name, value, &locals, &callables, evaluators, depth,
+                        ))
+                    }
+                    ApplyStep::ReceiverMethod { receiver, member } => {
+                        Self::ast_outcome_to_out(self.apply_receiver_method_value_call_ast_outcome(
+                            &receiver, &member, value, evaluators, depth,
+                        ))
+                    }
+                    ApplyStep::MultiArgCall {
+                        fn_name,
+                        mut evaluated,
+                        remaining,
+                    } => {
+                        evaluated.push(value);
+                        let mut i = 0;
+                        while i < remaining.len() {
+                            match self.eval_expr(
+                                &remaining[i],
+                                &locals,
+                                &callables,
+                                evaluators,
+                                depth + 1,
+                            ) {
+                                Out::Done(v) => {
+                                    evaluated.push(v);
+                                    i += 1;
+                                }
+                                Out::Suspend(_) => {
+                                    return Out::Suspend(Cont::Apply {
+                                        step: ApplyStep::MultiArgCall {
+                                            fn_name,
+                                            evaluated,
+                                            remaining: remaining[i + 1..].to_vec(),
+                                        },
+                                        locals,
+                                        callables,
+                                        depth,
+                                        handler_stack: self.active_inline_handler_stack.clone(),
+                                    });
+                                }
+                                Out::Err(e) => return Out::Err(e),
+                            }
+                        }
+                        Self::ast_outcome_to_out(self.apply_named_value_call_args_ast_outcome(
+                            &fn_name, &evaluated, &locals, &callables, evaluators, depth,
+                        ))
+                    }
+                    ApplyStep::CaseSelect { arms } => {
+                        let Some((arm_body, arm_locals)) =
+                            self.select_case_arm(&value, &arms, &locals)
+                        else {
+                            return Out::Err(RuntimeError::Unsupported);
+                        };
+                        self.eval_expr(&arm_body, &arm_locals, &callables, evaluators, depth + 1)
+                    }
+                    ApplyStep::IfBranch {
+                        then_expr,
+                        else_expr,
+                    } => {
+                        let branch = match value {
+                            RuntimeValue::Bool(true) => then_expr,
+                            RuntimeValue::Bool(false) => else_expr,
+                            _ => return Out::Err(RuntimeError::Unsupported),
+                        };
+                        self.eval_expr(&branch, &locals, &callables, evaluators, depth + 1)
+                    }
+                    ApplyStep::BinOpLeft { op, right } => {
+                        let left = value;
+                        match self.eval_expr(&right, &locals, &callables, evaluators, depth + 1) {
+                            Out::Done(right_value) => {
+                                match self.apply_binop_runtime_value(op, left, right_value) {
+                                    Some(v) => Out::Done(v),
+                                    None => Out::Err(RuntimeError::Unsupported),
+                                }
+                            }
+                            Out::Suspend(_) => Out::Suspend(Cont::Apply {
+                                step: ApplyStep::BinOpRight { op, left },
+                                locals,
+                                callables,
+                                depth,
+                                handler_stack: self.active_inline_handler_stack.clone(),
+                            }),
+                            Out::Err(e) => Out::Err(e),
+                        }
+                    }
+                    ApplyStep::BinOpRight { op, left } => {
+                        match self.apply_binop_runtime_value(op, left, value) {
+                            Some(v) => Out::Done(v),
+                            None => Out::Err(RuntimeError::Unsupported),
+                        }
+                    }
+                    ApplyStep::InterpolatedPart {
+                        mut accumulated,
+                        remaining,
+                    } => {
+                        accumulated.push_str(&value.to_output_text());
+                        let mut idx = 0;
+                        while idx < remaining.len() {
+                            match &remaining[idx] {
+                                InterpolatedPart::Text(text) => {
+                                    accumulated.push_str(text);
+                                    idx += 1;
+                                }
+                                InterpolatedPart::Expr(expr) => {
+                                    match self.eval_expr(
+                                        expr,
+                                        &locals,
+                                        &callables,
+                                        evaluators,
+                                        depth + 1,
+                                    ) {
+                                        Out::Done(v) => {
+                                            accumulated.push_str(&v.to_output_text());
+                                            idx += 1;
+                                        }
+                                        Out::Suspend(_) => {
+                                            return Out::Suspend(Cont::Apply {
+                                                step: ApplyStep::InterpolatedPart {
+                                                    accumulated,
+                                                    remaining: remaining[idx + 1..].to_vec(),
+                                                },
+                                                locals,
+                                                callables,
+                                                depth,
+                                                handler_stack: self
+                                                    .active_inline_handler_stack
+                                                    .clone(),
+                                            });
+                                        }
+                                        Out::Err(e) => return Out::Err(e),
+                                    }
+                                }
+                            }
+                        }
+                        Out::Done(RuntimeValue::String(accumulated))
+                    }
+                    ApplyStep::TupleLitElement {
+                        mut evaluated,
+                        remaining,
+                    } => {
+                        evaluated.push(value);
+                        let mut idx = 0;
+                        while idx < remaining.len() {
+                            match self.eval_expr(
+                                &remaining[idx],
+                                &locals,
+                                &callables,
+                                evaluators,
+                                depth + 1,
+                            ) {
+                                Out::Done(v) => {
+                                    evaluated.push(v);
+                                    idx += 1;
+                                }
+                                Out::Suspend(_) => {
+                                    return Out::Suspend(Cont::Apply {
+                                        step: ApplyStep::TupleLitElement {
+                                            evaluated,
+                                            remaining: remaining[idx + 1..].to_vec(),
+                                        },
+                                        locals,
+                                        callables,
+                                        depth,
+                                        handler_stack: self.active_inline_handler_stack.clone(),
+                                    });
+                                }
+                                Out::Err(e) => return Out::Err(e),
+                            }
+                        }
+                        Out::Done(RuntimeValue::Tuple(evaluated))
+                    }
+                    ApplyStep::ListLitElement {
+                        mut evaluated,
+                        remaining,
+                        spread,
+                        resuming_spread,
+                    } => {
+                        if resuming_spread {
+                            match value {
+                                RuntimeValue::ListInt(mut ints) => {
+                                    for item in evaluated.into_iter().rev() {
+                                        match item {
+                                            RuntimeValue::Int(n) => ints.insert(0, n),
+                                            RuntimeValue::String(_) => {
+                                                return Out::Err(RuntimeError::Unsupported);
+                                            }
+                                            _ => return Out::Err(RuntimeError::Unsupported),
+                                        }
+                                    }
+                                    return Out::Done(RuntimeValue::ListInt(ints));
+                                }
+                                RuntimeValue::ListString(mut strings) => {
+                                    for item in evaluated.into_iter().rev() {
+                                        match item {
+                                            RuntimeValue::String(text) => strings.insert(0, text),
+                                            RuntimeValue::Int(_) => {
+                                                return Out::Err(RuntimeError::Unsupported);
+                                            }
+                                            _ => return Out::Err(RuntimeError::Unsupported),
+                                        }
+                                    }
+                                    return Out::Done(RuntimeValue::ListString(strings));
+                                }
+                                _ => return Out::Err(RuntimeError::Unsupported),
+                            }
+                        }
+
+                        evaluated.push(value);
+                        let mut idx = 0;
+                        while idx < remaining.len() {
+                            match self.eval_expr(
+                                &remaining[idx],
+                                &locals,
+                                &callables,
+                                evaluators,
+                                depth + 1,
+                            ) {
+                                Out::Done(v) => {
+                                    evaluated.push(v);
+                                    idx += 1;
+                                }
+                                Out::Suspend(_) => {
+                                    return Out::Suspend(Cont::Apply {
+                                        step: ApplyStep::ListLitElement {
+                                            evaluated,
+                                            remaining: remaining[idx + 1..].to_vec(),
+                                            spread,
+                                            resuming_spread: false,
+                                        },
+                                        locals,
+                                        callables,
+                                        depth,
+                                        handler_stack: self.active_inline_handler_stack.clone(),
+                                    });
+                                }
+                                Out::Err(e) => return Out::Err(e),
+                            }
+                        }
+                        if let Some(tail) = spread {
+                            match self.eval_expr(&tail, &locals, &callables, evaluators, depth + 1)
+                            {
+                                Out::Done(tail_value) => {
+                                    return match (self.build_runtime_list(evaluated), tail_value) {
+                                        (
+                                            Out::Done(RuntimeValue::ListInt(mut ints)),
+                                            RuntimeValue::ListInt(mut tail_ints),
+                                        ) => {
+                                            ints.append(&mut tail_ints);
+                                            Out::Done(RuntimeValue::ListInt(ints))
+                                        }
+                                        (
+                                            Out::Done(RuntimeValue::ListString(mut strings)),
+                                            RuntimeValue::ListString(mut tail_strings),
+                                        ) => {
+                                            strings.append(&mut tail_strings);
+                                            Out::Done(RuntimeValue::ListString(strings))
+                                        }
+                                        (
+                                            Out::Done(RuntimeValue::ListInt(ints)),
+                                            RuntimeValue::ListString(tail_strings),
+                                        ) => {
+                                            if ints.is_empty() && tail_strings.is_empty() {
+                                                Out::Done(RuntimeValue::ListInt(ints))
+                                            } else {
+                                                Out::Err(RuntimeError::Unsupported)
+                                            }
+                                        }
+                                        (
+                                            Out::Done(RuntimeValue::ListString(strings)),
+                                            RuntimeValue::ListInt(tail_ints),
+                                        ) => {
+                                            if strings.is_empty() && tail_ints.is_empty() {
+                                                Out::Done(RuntimeValue::ListString(strings))
+                                            } else {
+                                                Out::Err(RuntimeError::Unsupported)
+                                            }
+                                        }
+                                        (Out::Done(_), _) => Out::Err(RuntimeError::Unsupported),
+                                        (Out::Err(e), _) => Out::Err(e),
+                                        (Out::Suspend(_), _) => Out::Err(RuntimeError::Unsupported),
+                                    };
+                                }
+                                Out::Suspend(_) => {
+                                    return Out::Suspend(Cont::Apply {
+                                        step: ApplyStep::ListLitElement {
+                                            evaluated,
+                                            remaining: vec![],
+                                            spread: Some(tail),
+                                            resuming_spread: true,
+                                        },
+                                        locals,
+                                        callables,
+                                        depth,
+                                        handler_stack: self.active_inline_handler_stack.clone(),
+                                    });
+                                }
+                                Out::Err(e) => return Out::Err(e),
+                            }
+                        }
+                        self.build_runtime_list(evaluated)
+                    }
+                    ApplyStep::RecordField {
+                        constructor,
+                        mut evaluated,
+                        pending_field,
+                        remaining,
+                    } => {
+                        evaluated.push((pending_field, value));
+                        let mut idx = 0;
+                        while idx < remaining.len() {
+                            let (field_name, field_expr) = &remaining[idx];
+                            match self.eval_expr(
+                                field_expr,
+                                &locals,
+                                &callables,
+                                evaluators,
+                                depth + 1,
+                            ) {
+                                Out::Done(v) => {
+                                    evaluated.push((field_name.clone(), v));
+                                    idx += 1;
+                                }
+                                Out::Suspend(_) => {
+                                    return Out::Suspend(Cont::Apply {
+                                        step: ApplyStep::RecordField {
+                                            constructor,
+                                            evaluated,
+                                            pending_field: field_name.clone(),
+                                            remaining: remaining[idx + 1..].to_vec(),
+                                        },
+                                        locals,
+                                        callables,
+                                        depth,
+                                        handler_stack: self.active_inline_handler_stack.clone(),
+                                    });
+                                }
+                                Out::Err(e) => return Out::Err(e),
+                            }
+                        }
+                        Out::Done(RuntimeValue::Record {
+                            constructor,
+                            fields: evaluated.into_iter().collect(),
+                        })
+                    }
+                    ApplyStep::WithBody { .. } => Out::Err(RuntimeError::Unsupported),
+                }
             }
-            Cont::Resume => {
-                // resume's own continuation value is Unit; the surrounding StmtSeq cont
-                // carries the remaining handler-body stmts after the resume call site.
-                Out::Done(RuntimeValue::Unit)
-            }
+            Cont::Resume => Self::ast_outcome_to_out(
+                self.resume_through_active_continuation_bridge_outcome(value, evaluators),
+            ),
         }
     }
 
@@ -5088,6 +5591,17 @@ impl<'m> RuntimeOutputResolver<'m> {
         }
         let token = self.resume_tokens.pop()?;
         Some(match token.state {
+            HandlerContinuationState::Pending
+                if token.cont.is_some() && token.continuation.consumed =>
+            {
+                HandlerCompletion::Suspended(Box::new(AstContinuation::Frame {
+                    frame: AstContinuationFrame {
+                        value: None,
+                        stmt: None,
+                    },
+                    resumed: RuntimeValue::Unit,
+                }))
+            }
             HandlerContinuationState::Pending => HandlerCompletion::Aborted,
             HandlerContinuationState::Resumed(value) => HandlerCompletion::Resumed(value),
             HandlerContinuationState::Suspended(continuation) => {
@@ -5131,6 +5645,15 @@ impl<'m> RuntimeOutputResolver<'m> {
         }
         let token = self.optimized_resume_tokens.pop()?;
         Some(match token.state {
+            HandlerContinuationState::Pending if token.cont.is_some() && token.consumed => {
+                HandlerCompletion::Suspended(Box::new(AstContinuation::Frame {
+                    frame: AstContinuationFrame {
+                        value: None,
+                        stmt: None,
+                    },
+                    resumed: RuntimeValue::Unit,
+                }))
+            }
             HandlerContinuationState::Pending => HandlerCompletion::Aborted,
             HandlerContinuationState::Resumed(value) => HandlerCompletion::Resumed(value),
             HandlerContinuationState::Suspended(continuation) => {
@@ -5145,6 +5668,7 @@ impl<'m> RuntimeOutputResolver<'m> {
 
     /// Return a tag (u8) for the current handler token state: 0=Pending, 1=Resumed, 2=Suspended.
     /// Used to detect whether resume was called during handler-body stmt execution.
+    #[allow(dead_code)]
     fn handler_token_state_tag(&self, token_idx: usize) -> u8 {
         let state = match self.execution_mode {
             lower::EffectExecutionMode::PortableFallback => {
@@ -5262,13 +5786,10 @@ impl<'m> RuntimeOutputResolver<'m> {
                 Out::Err(RuntimeError::Abort { .. }) => AstEvalOutcome::Aborted,
                 Out::Err(_) => AstEvalOutcome::Unsupported,
             };
-            if let Some(token) = self.current_resume_token_mut() {
-                match &outcome {
-                    AstEvalOutcome::Complete(value) => {
-                        token.state = HandlerContinuationState::Resumed(Box::new(value.clone()));
-                    }
-                    _ => {}
-                }
+            if let Some(token) = self.current_resume_token_mut()
+                && let AstEvalOutcome::Complete(value) = &outcome
+            {
+                token.state = HandlerContinuationState::Resumed(Box::new(value.clone()));
             }
             return outcome;
         }
@@ -5332,13 +5853,10 @@ impl<'m> RuntimeOutputResolver<'m> {
                 Out::Err(RuntimeError::Abort { .. }) => AstEvalOutcome::Aborted,
                 Out::Err(_) => AstEvalOutcome::Unsupported,
             };
-            if let Some(token) = self.current_optimized_resume_token_mut() {
-                match &outcome {
-                    AstEvalOutcome::Complete(value) => {
-                        token.state = HandlerContinuationState::Resumed(Box::new(value.clone()));
-                    }
-                    _ => {}
-                }
+            if let Some(token) = self.current_optimized_resume_token_mut()
+                && let AstEvalOutcome::Complete(value) = &outcome
+            {
+                token.state = HandlerContinuationState::Resumed(Box::new(value.clone()));
             }
             return outcome;
         }
@@ -5609,6 +6127,30 @@ impl<'m> RuntimeOutputResolver<'m> {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
+    fn eval_handler_body(
+        &mut self,
+        stmts: &[Stmt],
+        locals: RuntimeLocals,
+        callables: HashMap<String, IntCallable>,
+        evaluators: &RuntimeEvaluators<'_, '_>,
+        depth: usize,
+        token_idx: usize,
+        produce_value: bool,
+    ) -> Out<(Option<RuntimeValue>, RuntimeLocals)> {
+        self.eval_stmts(
+            stmts,
+            locals,
+            callables,
+            evaluators,
+            depth,
+            FinishKind::HandlerBody {
+                token_idx,
+                produce_value,
+            },
+        )
+    }
+
     fn dispatch_handler_method_core(
         &mut self,
         method: &ResolvedHandlerMethod,
@@ -5662,218 +6204,23 @@ impl<'m> RuntimeOutputResolver<'m> {
                     .map(|_| inline.captured_callables.clone())
             })
             .unwrap_or_default();
-
-        // Execute handler body stmts sequentially.
-        // When eval_expr returns Out::Suspend for a resume expression, that means the caller's
-        // continuation is itself suspended (waiting for another effect). In that case we break
-        // and store the remaining stmts in token.cont for the next resume call.
-        // When eval_expr returns Out::Done for a resume expression, the caller's continuation
-        // completed synchronously; continue executing the remaining handler stmts.
-        let mut current_locals = handler_locals;
-        let mut current_callables = handler_callables;
-        let mut aborted = false;
-        let mut i = 0;
-        while i < stmts.len() {
-            let stmt = &stmts[i];
-
-            // Returns true = continue, false = aborted, None = suspended (save remaining & break)
-            enum StmtResult {
-                Continue,
-                Abort,
-                Suspend,
+        match self.eval_handler_body(
+            &stmts,
+            handler_locals,
+            handler_callables,
+            evaluators,
+            depth + 1,
+            token_idx,
+            produce_value,
+        ) {
+            Out::Done(_) => self.finish_handler_continuation_bridge(token_idx),
+            Out::Suspend(cont) => {
+                self.set_handler_token_cont(token_idx, cont);
+                self.finish_handler_continuation_bridge(token_idx)
             }
-
-            let result = if produce_value {
-                match stmt {
-                    Stmt::Binding { name, value } | Stmt::MutBinding { name, value } => {
-                        match self.eval_expr(
-                            value,
-                            &current_locals,
-                            &current_callables,
-                            evaluators,
-                            depth + 1,
-                        ) {
-                            Out::Done(v) => {
-                                current_locals.store(name, v);
-                                StmtResult::Continue
-                            }
-                            Out::Suspend(_) => StmtResult::Suspend,
-                            Out::Err(RuntimeError::Unsupported) => StmtResult::Continue,
-                            Out::Err(_) => {
-                                aborted = true;
-                                StmtResult::Abort
-                            }
-                        }
-                    }
-                    Stmt::Assign { name, value } => {
-                        if current_locals.get(name).is_none() {
-                            aborted = true;
-                            StmtResult::Abort
-                        } else {
-                            match self.eval_expr(
-                                value,
-                                &current_locals,
-                                &current_callables,
-                                evaluators,
-                                depth + 1,
-                            ) {
-                                Out::Done(v) => {
-                                    current_locals.store(name, v);
-                                    StmtResult::Continue
-                                }
-                                Out::Suspend(_) => StmtResult::Suspend,
-                                Out::Err(RuntimeError::Unsupported) => StmtResult::Continue,
-                                Out::Err(_) => {
-                                    aborted = true;
-                                    StmtResult::Abort
-                                }
-                            }
-                        }
-                    }
-                    Stmt::Expr(expr) => {
-                        match self.eval_expr(
-                            expr,
-                            &current_locals,
-                            &current_callables,
-                            evaluators,
-                            depth + 1,
-                        ) {
-                            Out::Done(_) => StmtResult::Continue,
-                            Out::Suspend(_) => StmtResult::Suspend,
-                            Out::Err(RuntimeError::Unsupported) if self.runtime_error.is_none() => {
-                                // Try as unit side-effect (only if no runtime error was set by eval_expr)
-                                let mut loc = current_locals.clone();
-                                let mut call = current_callables.clone();
-                                match self.execute_unit_ast_stmt_outcome(
-                                    stmt,
-                                    &mut loc,
-                                    &mut call,
-                                    evaluators,
-                                    depth + 1,
-                                ) {
-                                    AstEvalOutcome::Complete(()) => {
-                                        current_locals = loc;
-                                        current_callables = call;
-                                        StmtResult::Continue
-                                    }
-                                    AstEvalOutcome::Suspended(_) => StmtResult::Suspend,
-                                    AstEvalOutcome::Aborted | AstEvalOutcome::Unsupported => {
-                                        aborted = true;
-                                        StmtResult::Abort
-                                    }
-                                }
-                            }
-                            Out::Err(_) => {
-                                aborted = true;
-                                StmtResult::Abort
-                            }
-                        }
-                    }
-                }
-            } else {
-                // Unit-position handler body
-                match stmt {
-                    Stmt::Expr(expr) => {
-                        match self.eval_expr(
-                            expr,
-                            &current_locals,
-                            &current_callables,
-                            evaluators,
-                            depth + 1,
-                        ) {
-                            Out::Done(_) => StmtResult::Continue,
-                            Out::Suspend(_) => StmtResult::Suspend,
-                            Out::Err(RuntimeError::Unsupported) if self.runtime_error.is_none() => {
-                                let mut loc = current_locals.clone();
-                                let mut call = current_callables.clone();
-                                match self.execute_unit_ast_stmt_outcome(
-                                    stmt,
-                                    &mut loc,
-                                    &mut call,
-                                    evaluators,
-                                    depth + 1,
-                                ) {
-                                    AstEvalOutcome::Complete(()) => {
-                                        current_locals = loc;
-                                        current_callables = call;
-                                        StmtResult::Continue
-                                    }
-                                    AstEvalOutcome::Suspended(_) => StmtResult::Suspend,
-                                    AstEvalOutcome::Aborted | AstEvalOutcome::Unsupported => {
-                                        aborted = true;
-                                        StmtResult::Abort
-                                    }
-                                }
-                            }
-                            Out::Err(_) => {
-                                aborted = true;
-                                StmtResult::Abort
-                            }
-                        }
-                    }
-                    _ => {
-                        let mut loc = current_locals.clone();
-                        let mut call = current_callables.clone();
-                        match self.execute_unit_ast_stmt_outcome(
-                            stmt,
-                            &mut loc,
-                            &mut call,
-                            evaluators,
-                            depth + 1,
-                        ) {
-                            AstEvalOutcome::Complete(()) => {
-                                current_locals = loc;
-                                current_callables = call;
-                                StmtResult::Continue
-                            }
-                            AstEvalOutcome::Suspended(_) => StmtResult::Suspend,
-                            AstEvalOutcome::Aborted | AstEvalOutcome::Unsupported => {
-                                aborted = true;
-                                StmtResult::Abort
-                            }
-                        }
-                    }
-                }
-            };
-
-            match result {
-                StmtResult::Abort => break,
-                StmtResult::Suspend => {
-                    // Caller's continuation is itself suspended; save remaining handler stmts.
-                    let remaining = stmts[i + 1..].to_vec();
-                    if !remaining.is_empty() {
-                        let cont = Cont::StmtSeq {
-                            store: None,
-                            remaining,
-                            locals: current_locals,
-                            callables: current_callables,
-                            depth,
-                            handler_stack: self.active_inline_handler_stack.clone(),
-                            finish: FinishKind::HandlerBody {
-                                token_idx,
-                                produce_value,
-                            },
-                        };
-                        self.set_handler_token_cont(token_idx, cont);
-                    }
-                    break;
-                }
-                StmtResult::Continue => {
-                    // Normal continue; also check if resume was called and completed sync.
-                    // If token is now Resumed, it means resume() completed; continue handler stmts.
-                    i += 1;
-                }
-            }
+            Out::Err(RuntimeError::Abort { .. }) => Some(HandlerCompletion::Aborted),
+            Out::Err(RuntimeError::Unsupported) => None,
         }
-
-        if aborted {
-            if self.has_abort_without_error() {
-                return Some(HandlerCompletion::Aborted);
-            }
-            return None;
-        }
-
-        self.finish_handler_continuation_bridge(token_idx)
     }
 
     /// Execute a handler method and return the last evaluated value.

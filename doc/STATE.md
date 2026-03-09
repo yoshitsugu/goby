@@ -13,6 +13,21 @@ this section takes priority.
   - [doc/PLAN.md](/home/yoshitsugu/src/gitlab.com/yoshitsugu/goby/doc/PLAN.md)
   - [doc/STATE.md](/home/yoshitsugu/src/gitlab.com/yoshitsugu/goby/doc/STATE.md)
 - Current Step 3 status:
+  - Phase 1-4 of the redesigned `Cont`/`Out` architecture are complete as active execution paths.
+  - Session 236-237 (2026-03-09): Step 3 Phase 2-4 completion landed:
+    - `apply_cont` executes the active `ApplyStep` replay set covered by current goby-wasm
+      regression tests (`Pipeline`, single/multi-arg call, receiver method, `case`, `if`,
+      `BinOp`, tuple/list/record/interpolated replay).
+    - `Cont::Resume` re-enters `resume_through_active_continuation_bridge_outcome`
+      instead of returning placeholder `Unit`.
+    - `Cont::StmtSeq` respects `FinishKind::{Block, Ingest, HandlerBody}` when replaying.
+    - stmt-position fallback is now owned by `eval_stmts`, so active statement-sequence replay is
+      centered on `eval_stmts` rather than the old bespoke loops.
+    - `Expr::With` now evaluates through `eval_expr` + `eval_stmts`.
+    - `eval_handler_body` is a thin wrapper over `eval_stmts(..., FinishKind::HandlerBody { ... })`,
+      and `dispatch_handler_method_core` is now a thin caller.
+    - resume-token finish logic treats `Pending + cont` as suspended only after the token
+      was actually consumed by a prior `resume`; plain no-`resume` abortive handlers still abort.
   - unified suspended-frame replay covers all previously migrated AST value-position
     families (single-arg/multi-arg named calls, receiver-method calls, pipeline,
     `BinOp`, `if`, `case`, nested `resume`, `InterpolatedString`, `TupleLit`,
@@ -109,7 +124,15 @@ this section takes priority.
       and resume falls back to token.frame (old pending_value_continuations path).
     - Before 5c (thin wrapper), value-position effect call must route through pending_caller_cont_stack
       or dispatch_handler_method_as_value_outcome must switch to take_caller_cont=true.
-  - Next: design value-position cont handoff, then attempt 5b-inner.
+  - Next:
+    - Phase 5 cleanup: remove legacy AST continuation compatibility wrappers/types
+      (`AstEvalOutcome`, `AstContinuationFrame`, old stmt/value continuation helpers,
+      split resume-token structs) now that Phase 2-4 active paths are closed.
+  - Validation for session 236-237:
+    - `cargo fmt`
+    - `cargo clippy -p goby-wasm -- -D warnings`
+    - `cargo test -p goby-wasm`
+    - `cargo check`
 - External internal records:
   - devflow notes live outside the repo under
     `/home/yoshitsugu/.codex/devflow/goby-c372fa22bba4/`
