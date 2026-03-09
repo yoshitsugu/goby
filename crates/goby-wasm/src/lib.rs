@@ -3547,21 +3547,28 @@ impl<'m> RuntimeOutputResolver<'m> {
         depth: usize,
     ) -> Option<()> {
         if let Expr::With { handler, body } = expr {
-            let RuntimeValue::Handler(mut inline_handler) =
-                self.eval_expr_ast(handler, locals, callables, evaluators, depth)?
-            else {
-                return None;
-            };
-            inline_handler.with_id = Some(self.fresh_with_id());
+            let mut inline_handler =
+                match self.eval_expr(handler, locals, callables, evaluators, depth + 1) {
+                    Out::Done(RuntimeValue::Handler(inline_handler)) => inline_handler,
+                    Out::Done(_) => return None,
+                    Out::Suspend(_) | Out::Escape(_) | Out::Err(_) => return None,
+                };
+            let with_id = self.fresh_with_id();
+            inline_handler.with_id = Some(with_id);
             self.active_inline_handler_stack.push(inline_handler);
-            let result =
-                self.execute_ast_stmt_sequence(body, locals, callables, evaluators, depth + 1);
+            let result = self.eval_stmts(
+                body,
+                locals.clone(),
+                callables.clone(),
+                evaluators,
+                depth + 1,
+                FinishKind::WithBody { with_id },
+            );
             self.active_inline_handler_stack.pop();
-            if result.is_none() && self.has_abort_without_error() {
-                self.runtime_aborted = false;
-                return Some(());
-            }
-            return result;
+            return match result {
+                Out::Done(_) => Some(()),
+                Out::Suspend(_) | Out::Escape(_) | Out::Err(_) => None,
+            };
         }
 
         if self
@@ -4045,41 +4052,40 @@ impl<'m> RuntimeOutputResolver<'m> {
         callables: &mut HashMap<String, IntCallable>,
         evaluators: &RuntimeEvaluators<'_, '_>,
         depth: usize,
-    ) -> Option<()> {
+    ) -> Out<()> {
         match stmt {
             Stmt::Binding { name, value } | Stmt::MutBinding { name, value } => {
-                let outcome =
-                    self.eval_expr_ast_outcome(value, locals, callables, evaluators, depth);
-                let v = self.complete_ast_value_outcome(outcome, evaluators)?;
+                let v = match self.eval_expr(value, locals, callables, evaluators, depth) {
+                    Out::Done(v) => v,
+                    Out::Suspend(cont) => return Out::Suspend(cont),
+                    Out::Escape(escape) => return Out::Escape(escape),
+                    Out::Err(e) => return Out::Err(e),
+                };
                 locals.store(name, v);
-                Some(())
+                Out::Done(())
             }
             Stmt::Assign { name, value } => {
-                locals.get(name)?;
-                let outcome =
-                    self.eval_expr_ast_outcome(value, locals, callables, evaluators, depth);
-                let v = self.complete_ast_value_outcome(outcome, evaluators)?;
+                if locals.get(name).is_none() {
+                    return Out::Err(RuntimeError::Unsupported);
+                }
+                let v = match self.eval_expr(value, locals, callables, evaluators, depth) {
+                    Out::Done(v) => v,
+                    Out::Suspend(cont) => return Out::Suspend(cont),
+                    Out::Escape(escape) => return Out::Escape(escape),
+                    Out::Err(e) => return Out::Err(e),
+                };
                 locals.store(name, v);
-                Some(())
+                Out::Done(())
             }
             Stmt::Expr(expr) => {
-                self.execute_unit_expr_ast(expr, locals, callables, evaluators, depth)
+                match self.execute_unit_expr_ast(expr, locals, callables, evaluators, depth) {
+                    Some(()) => Out::Done(()),
+                    None if self.has_abort_without_error() => Out::Err(RuntimeError::Abort {
+                        kind: "aborted".into(),
+                    }),
+                    None => Out::Err(RuntimeError::Unsupported),
+                }
             }
-        }
-    }
-
-    fn execute_unit_ast_stmt_outcome(
-        &mut self,
-        stmt: &Stmt,
-        locals: &mut RuntimeLocals,
-        callables: &mut HashMap<String, IntCallable>,
-        evaluators: &RuntimeEvaluators<'_, '_>,
-        depth: usize,
-    ) -> AstEvalOutcome<()> {
-        match self.execute_unit_ast_stmt(stmt, locals, callables, evaluators, depth) {
-            Some(()) => AstEvalOutcome::Complete(()),
-            None if self.has_abort_without_error() => AstEvalOutcome::Aborted,
-            None => AstEvalOutcome::Unsupported,
         }
     }
 
@@ -4125,55 +4131,6 @@ impl<'m> RuntimeOutputResolver<'m> {
                 self.pending_caller_cont_stack.pop();
                 return Some(());
             }
-            if let Some(slot) = self.pending_caller_cont_stack.last_mut() {
-                *slot = None;
-            }
-            i += 1;
-        }
-        self.pending_caller_cont_stack.pop();
-        Some(())
-    }
-
-    fn execute_ast_stmt_sequence(
-        &mut self,
-        stmts: &[Stmt],
-        locals: &mut RuntimeLocals,
-        callables: &mut HashMap<String, IntCallable>,
-        evaluators: &RuntimeEvaluators<'_, '_>,
-        depth: usize,
-    ) -> Option<()> {
-        // Phase 4: push a new slot onto the caller-cont stack for this invocation.
-        // Nested calls (e.g., Expr::Block) push their own slot without disturbing this one.
-        self.pending_caller_cont_stack.push(None);
-        let mut i = 0;
-        while i < stmts.len() {
-            let remaining = &stmts[i + 1..];
-            // Phase 4: set the top slot so that handler dispatch picks up caller's remaining.
-            if !remaining.is_empty()
-                && let Some(slot) = self.pending_caller_cont_stack.last_mut()
-            {
-                *slot = Some(Cont::StmtSeq {
-                    store: None,
-                    remaining: remaining.to_vec(),
-                    locals: locals.clone(),
-                    callables: callables.clone(),
-                    depth,
-                    handler_stack: self.active_inline_handler_stack.clone(),
-                    finish: FinishKind::Block,
-                });
-            }
-            self.execute_unit_ast_stmt(&stmts[i], locals, callables, evaluators, depth)?;
-            // After stmt: if the top slot was consumed (→None) by a handler dispatch, the
-            // remaining stmts were already executed inside apply_cont; skip them.
-            let consumed = self
-                .pending_caller_cont_stack
-                .last()
-                .is_some_and(|s| s.is_none());
-            if consumed && !remaining.is_empty() {
-                self.pending_caller_cont_stack.pop();
-                return Some(());
-            }
-            // Clear the slot for the next iteration.
             if let Some(slot) = self.pending_caller_cont_stack.last_mut() {
                 *slot = None;
             }
@@ -4254,20 +4211,20 @@ impl<'m> RuntimeOutputResolver<'m> {
                         Out::Err(RuntimeError::Unsupported) if self.runtime_error.is_none() => {
                             let mut fallback_locals = locals.clone();
                             let mut fallback_callables = callables.clone();
-                            match self.execute_unit_ast_stmt_outcome(
+                            match self.execute_unit_ast_stmt(
                                 stmt,
                                 &mut fallback_locals,
                                 &mut fallback_callables,
                                 evaluators,
                                 depth + 1,
                             ) {
-                                AstEvalOutcome::Complete(()) => {
+                                Out::Done(()) => {
                                     locals = fallback_locals;
                                     if remaining.is_empty() {
                                         last_value = Some(RuntimeValue::Unit);
                                     }
                                 }
-                                AstEvalOutcome::Suspended(_) => {
+                                Out::Suspend(_) => {
                                     return Out::Suspend(Cont::StmtSeq {
                                         store: None,
                                         remaining,
@@ -4278,12 +4235,13 @@ impl<'m> RuntimeOutputResolver<'m> {
                                         finish,
                                     });
                                 }
-                                AstEvalOutcome::Aborted => {
+                                Out::Escape(escape) => return Out::Escape(escape),
+                                Out::Err(RuntimeError::Abort { .. }) => {
                                     return Out::Err(RuntimeError::Abort {
                                         kind: "aborted".into(),
                                     });
                                 }
-                                AstEvalOutcome::Unsupported => {
+                                Out::Err(RuntimeError::Unsupported) => {
                                     return Out::Err(RuntimeError::Unsupported);
                                 }
                             }
@@ -4878,13 +4836,16 @@ impl<'m> RuntimeOutputResolver<'m> {
 
         if let Some(stmts) = function.parsed_stmts {
             for (i, stmt) in stmts.iter().enumerate() {
-                self.execute_unit_ast_stmt(
+                match self.execute_unit_ast_stmt(
                     stmt,
                     &mut function_locals,
                     &mut function_callables,
                     evaluators,
                     i + 1,
-                )?;
+                ) {
+                    Out::Done(()) => {}
+                    Out::Suspend(_) | Out::Escape(_) | Out::Err(_) => return None,
+                }
             }
         } else {
             for statement in statements(function.body) {

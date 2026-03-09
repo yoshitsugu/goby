@@ -40,20 +40,25 @@ This file is a restart-safe snapshot for resuming work after context reset.
 
 ## Next Work
 
-- Continue from `doc/PLAN.md` Step 3 Phase 5 (sub-steps 5b-1/5b-2/5b-5/5b-6 done).
+- Continue from `doc/PLAN.md` Step 3 Phase 5.
 - Remaining Phase 5 targets:
-  - `execute_ast_stmt_sequence` still called from `execute_unit_expr_ast` Expr::With
-    body (line ~3598) — depends on `pending_caller_cont_stack`; migration requires
-    Option B (migrate execute_unit_expr_ast to return `Out<()>`).
   - `eval_expr_ast_outcome` and `complete_ast_value_outcome` still active in
-    `eval_expr_ast` internals and `execute_unit_ast_stmt` Binding/Assign arms.
+    `eval_expr_ast` internals and legacy fallback helper paths.
   - Old types `AstContinuation`, `AstContinuationFrame`, `AstValueContinuation`,
     `AstEvalOutcome`, `HandlerContinuationState` still present.
   - `pending_value_continuations` field still in RuntimeOutputResolver.
   - `runtime_aborted` / `set_runtime_abort_once` / `has_abort_without_error`
-    still used in execute_unit_expr_ast Expr::With arm.
-- Quality gate passing: cargo fmt, cargo clippy -p goby-wasm -- -D warnings,
-  cargo test --workspace all clean as of session 236.
+    still used in legacy `eval_ast_side_effect` / ingest path.
+- Completed in this session:
+  - `execute_unit_expr_ast` `Expr::With` migrated to `eval_stmts` +
+    `FinishKind::WithBody`; legacy `execute_ast_stmt_sequence` removed.
+  - `execute_unit_ast_stmt` Binding/Assign arms migrated from
+    `eval_expr_ast_outcome` to `eval_expr` (`Out` path).
+  - `execute_unit_ast_stmt` return type migrated to `Out<()>`; legacy
+    `execute_unit_ast_stmt_outcome` removed and `eval_stmts` fallback now consumes
+    `Out<()>` directly.
+- Quality gate passing: `cargo fmt`, `cargo clippy -p goby-wasm -- -D warnings`,
+  `cargo test -p goby-wasm` (unit 209 passed, integration 6 passed), `cargo check`.
 
 ## Notes
 
