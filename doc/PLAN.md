@@ -790,16 +790,16 @@ Step-by-step checklist:
   - conservative syntactic multi-`resume` rejection was removed.
   - retained checks are `resume` placement, resumed-value type compatibility, and unresolved generic diagnostics.
   - nested handler-clause parsing now exposes valid multi-branch `resume` cases; runtime progression semantics remain tracked in Step 3.
-- [ ] Step 5: tests and parity locks
+- [x] Step 5: tests and parity locks
   - add/update fallback runtime tests for:
     - no-`resume` immediate `with`-scope exit in value and unit position,
     - multi-resume progression success path,
     - resume-after-consumption runtime error path.
   - add typed-mode parity tests for the same scenarios.
-- [ ] Step 6: docs sync
+- [x] Step 6: docs sync
   - keep `doc/LANGUAGE_SPEC.md` and `doc/PLAN.md` in sync with final behavior wording.
   - add/refresh one effect example showing scoped-exit handler semantics.
-- [ ] Step 7: quality gate
+- [x] Step 7: quality gate
   - run:
     - `cargo fmt`
     - `cargo check`
