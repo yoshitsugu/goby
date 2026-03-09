@@ -49,6 +49,26 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - `pending_value_continuations` field still in RuntimeOutputResolver.
   - `runtime_aborted` / `set_runtime_abort_once` / `has_abort_without_error`
     still used in legacy `eval_ast_side_effect` / ingest path.
+- Next restart point (first step):
+  - target only `apply_named_value_call_args_out` migration to `Out` path
+    (no broad `eval_expr_ast` rewrite in the same step).
+  - execution flow for the next step:
+    - record expected breakages under this file as:
+      `## Expected breakages (current step)` before code changes.
+    - first write down "what is expected to break" (tests, paths, runtime behavior).
+    - then implement the design-oriented change.
+    - if breakages are not controllable/understandable, roll back immediately to the
+      last stable commit and split into a smaller change.
+  - implementation rule:
+    - add/route via `Out` helper first,
+    - keep legacy AST/Option fallback until tests prove parity.
+  - run these focused tests before full suite:
+    - `declaration_value_call_replays_nested_binding_progression`
+    - `typed_mode_matches_fallback_for_declaration_value_call_progression`
+    - `resolves_runtime_output_for_standalone_case_with_effectful_arm_bodies`
+    - `typed_mode_matches_fallback_for_resume_success_path`
+    - `resume_replays_binding_value_continuation_into_following_statements`
+    - `resume_replays_multi_arg_named_call_arguments`
 - Completed in this session:
   - `execute_unit_expr_ast` `Expr::With` migrated to `eval_stmts` +
     `FinishKind::WithBody`; legacy `execute_ast_stmt_sequence` removed.

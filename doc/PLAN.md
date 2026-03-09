@@ -45,6 +45,24 @@ Based on `examples/*.gb`:
   - However, avoid short-sighted shortcuts that are likely to become long-term design debt.
     Even if a change is breaking now, it should still align with plausible future
     language/tooling architecture.
+  - Phase 5 execution policy (locked 2026-03-09):
+    - optimize for architecture quality, but make progress in small reversible steps.
+    - prefer additive `Out`-path entrypoints first; keep legacy fallback until parity is proven.
+    - do not refactor `eval_expr_ast` broadly in one step; migrate one call path at a time.
+    - after each micro-step, run focused regression tests first, then full quality gate.
+    - if a step fails, revert that step and retry with a smaller scope.
+  - Intentional-break policy for design-first work (locked 2026-03-09):
+    - target is globally rational and healthy architecture over local short-term stability.
+    - temporary breakage is allowed when needed for the ideal design change.
+    - before changing code, explicitly list expected breakages and affected tests/paths.
+    - proceed only while breakages remain understandable and recoverable.
+    - operational rollback thresholds:
+      - if two consecutive attempts fail to narrow breakage to one subsystem/file group,
+        roll back to the last stable commit.
+      - if expected breakages cannot be converted into concrete failing tests/paths within
+        30 minutes, roll back and retry with a narrower change unit.
+    - if breakage becomes hard to reason about or cannot be handled, roll back to the
+      last stable point and retry with a narrower change unit.
 
 - Function calls support both `f x` and `f(x)`.
   - spaced application supports multiple args (`f a b c`) and is parsed left-associatively
