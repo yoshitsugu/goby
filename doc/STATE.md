@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-08 (session 230)
+Last updated: 2026-03-09 (session 238)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -10,12 +10,15 @@ If any older note in this file conflicts with the current restart direction,
 this section takes priority.
 
 - Current uncommitted work:
+  - [crates/goby-wasm/src/lib.rs](/home/yoshitsugu/src/gitlab.com/yoshitsugu/goby/crates/goby-wasm/src/lib.rs)
+  - [doc/LANGUAGE_SPEC.md](/home/yoshitsugu/src/gitlab.com/yoshitsugu/goby/doc/LANGUAGE_SPEC.md)
   - [doc/PLAN.md](/home/yoshitsugu/src/gitlab.com/yoshitsugu/goby/doc/PLAN.md)
   - [doc/STATE.md](/home/yoshitsugu/src/gitlab.com/yoshitsugu/goby/doc/STATE.md)
+  - [examples/effect.gb](/home/yoshitsugu/src/gitlab.com/yoshitsugu/goby/examples/effect.gb)
 - Current Step 3 status:
-  - Phase 1-4 of the pre-scoped-exit `Cont`/`Out` architecture are complete as active execution paths.
-  - Session 236-237 (2026-03-09): Step 3 Phase 2-4 completion landed on the old no-`resume`
-    contract as groundwork for the next redesign:
+  - Step 3 / 4.7 scoped-exit redesign is in progress on top of the already-landed
+    `Cont` / `Out` runtime path.
+  - Session 236-237 (2026-03-09): the pre-redesign Phase 2-4 continuation work landed as groundwork:
     - `apply_cont` executes the active `ApplyStep` replay set covered by current goby-wasm
       regression tests (`Pipeline`, single/multi-arg call, receiver method, `case`, `if`,
       `BinOp`, tuple/list/record/interpolated replay).
@@ -28,13 +31,17 @@ this section takes priority.
     - `eval_handler_body` is a thin wrapper over `eval_stmts(..., FinishKind::HandlerBody { ... })`,
       and `dispatch_handler_method_core` is now a thin caller.
     - resume-token finish logic treats `Pending + cont` as suspended only after the token
-      was actually consumed by a prior `resume`; plain no-`resume` abortive handlers still abort.
-  - Plan direction changed after session 237:
-    - do not continue directly into Phase 5 cleanup on the old abortive semantics.
-    - next work is 4.7 scoped-exit redesign: no-`resume` should exit the current
-      `with ... in ...` scope instead of aborting the whole program.
-    - `doc/LANGUAGE_SPEC.md` is still the source of truth for current behavior until
-      that redesign's Phase 1 doc sync lands.
+      was actually consumed by a prior `resume`.
+  - Session 238 (2026-03-09): scoped-exit redesign landed through Phase 4:
+    - `Out<T>` now includes explicit `Escape::WithScope { with_id, value }`.
+    - `Expr::With` assigns a runtime `with_id`, pushes the active handler with that scope id,
+      and consumes only matching escapes at the `with` boundary.
+    - `FinishKind::HandlerBody { with_id, .. }` turns no-`resume` completion into
+      `Escape::WithScope` instead of program abort.
+    - active value-position and replay paths use `Out`-based handler-call helpers, so
+      value-position no-`resume` exits the current `with` and yields the clause result.
+    - runtime tests now assert scoped exit in value position, unit position, and nested `with`.
+    - `doc/LANGUAGE_SPEC.md` and `examples/effect.gb` are updated to the new semantics.
   - unified suspended-frame replay covers all previously migrated AST value-position
     families (single-arg/multi-arg named calls, receiver-method calls, pipeline,
     `BinOp`, `if`, `case`, nested `resume`, `InterpolatedString`, `TupleLit`,
@@ -50,19 +57,14 @@ this section takes priority.
     - `execute_unit_expr_ast` Expr::Var arm → outcome consumer (depth unchanged)
     - regression test added: `resume_replays_bare_var_call_arg_in_side_effect_position`
 - Required next restart point:
-  - primary restart target: implement `doc/PLAN.md` section 4.7 scoped-exit
-    redesign before any more pre-redesign Phase 5 cleanup work.
-  - treat the detailed Step 3 / session notes below as historical background,
-    not as the active execution plan.
-  - likely runtime direction: extend `Out<T>` with explicit scoped-exit state
-    such as `Escape::WithScope`, so a handler clause that never calls `resume`
-    exits the current `with ... in ...` region instead of aborting the whole
-    program.
-  - the redesign should preserve the current active `Cont` / `Out` evaluator
-    path, and then remove legacy wrapper/type cleanup only after the new
-    semantics is stable.
-  - handler clause result typing must unify with the enclosing `with ... in
-    ...` expression type once the redesign lands.
+  - finish verification and review of the scoped-exit redesign, then move to
+    Phase 5 cleanup on the new semantics.
+  - first cleanup targets:
+    - remove old AST continuation compatibility helpers that are no longer needed
+      on the active path,
+    - revisit legacy fallback wrappers that still collapse `Escape` into
+      `Unsupported` outside the active `Out` path,
+    - tighten typecheck coverage for handler clause result typing if gaps remain.
   - all major unit-position and value-position Expr::Call legacy direct-eval seams are
     now on the outcome-aware path.
   - Step 3 unit-position migration is complete (session 221).

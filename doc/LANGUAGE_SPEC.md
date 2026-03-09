@@ -124,9 +124,12 @@ syntax/semantics.
   - expression form: `resume <expr>`
   - valid only inside handler operation bodies
   - operation call returns the value passed to `resume`.
-  - if a handler clause finishes without any `resume`, evaluation aborts immediately at that
-    operation boundary (no caller continuation is executed after the operation call).
-    - this abortive path is the basis for exception-like effects (`raise`-style behavior).
+  - if a handler clause finishes without any `resume`, evaluation exits the current
+    `with ... in ...` scope immediately.
+    - the handler clause's final expression becomes the value of the whole
+      `with ... in ...` expression.
+    - the handler clause's final expression type must unify with the enclosing
+      `with ... in ...` expression type.
   - when a handler invocation calls `resume` multiple times, each `resume` restarts the
     continuation from the next resumable point (multi-resume progression contract).
     - once the continuation is fully consumed, further `resume` from the same invocation is a runtime error.

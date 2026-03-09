@@ -518,10 +518,13 @@ struct RuntimeOutputResolver<'m> {
     pending_caller_cont_stack: Vec<Option<Cont>>,
     runtime_error: Option<String>,
     runtime_aborted: bool,
+    next_with_id: u64,
     execution_mode: lower::EffectExecutionMode,
     stdin_buffer: Option<String>,
     stdin_cursor: usize,
 }
+
+type WithId = u64;
 
 #[derive(Clone)]
 struct Continuation {
@@ -553,8 +556,10 @@ enum HandlerContinuationState {
     Suspended(Box<AstContinuation>),
 }
 
+#[allow(clippy::large_enum_variant)]
 enum HandlerCompletion {
     Aborted,
+    Escaped(Escape),
     Resumed(Box<RuntimeValue>),
     Suspended(Box<AstContinuation>),
 }
@@ -662,7 +667,17 @@ enum RuntimeError {
 enum Out<T> {
     Done(T),
     Suspend(Cont),
+    Escape(Escape),
     Err(RuntimeError),
+}
+
+#[allow(dead_code)]
+#[derive(Clone)]
+enum Escape {
+    WithScope {
+        with_id: WithId,
+        value: RuntimeValue,
+    },
 }
 
 /// What happens after the final statement in a StmtSeq.
@@ -671,10 +686,13 @@ enum Out<T> {
 enum FinishKind {
     /// Return the last expression value to the enclosing expression (block body).
     Block,
+    /// Consume matching scoped exits for the current `with ... in ...` body.
+    WithBody { with_id: WithId },
     /// Store the result into the active resume token (handler body).
     HandlerBody {
         token_idx: usize,
         produce_value: bool,
+        with_id: WithId,
     },
     /// Execute remaining stmts via ingest_ast_statement (with body via eval_ast_side_effect).
     /// The `locals` field in StmtSeq is ignored; self.locals is used instead.
@@ -684,6 +702,7 @@ enum FinishKind {
 /// Unified continuation — pure data, no global mutable stacks.
 #[allow(dead_code)]
 #[derive(Clone)]
+#[allow(clippy::large_enum_variant)]
 enum Cont {
     /// Remaining statements in a block or handler body after a suspension.
     StmtSeq {
@@ -792,6 +811,7 @@ enum TokenState {
 #[derive(Clone)]
 struct ResolvedHandlerMethod {
     method: RuntimeHandlerMethod,
+    with_id: Option<WithId>,
 }
 
 #[derive(Clone)]
@@ -805,6 +825,7 @@ struct InlineHandlerValue {
     methods: Vec<InlineHandlerMethod>,
     captured_locals: RuntimeLocals,
     captured_callables: HashMap<String, IntCallable>,
+    with_id: Option<WithId>,
 }
 
 #[derive(Clone)]
@@ -998,6 +1019,7 @@ impl<'m> RuntimeOutputResolver<'m> {
             pending_caller_cont_stack: Vec::new(),
             runtime_error: None,
             runtime_aborted: false,
+            next_with_id: 1,
             execution_mode,
             stdin_buffer: stdin_seed,
             stdin_cursor: 0,
@@ -1063,13 +1085,39 @@ impl<'m> RuntimeOutputResolver<'m> {
             Stmt::Binding { name, value } | Stmt::MutBinding { name, value } => {
                 // Propagate None so the caller can fall back to the string path
                 // rather than silently dropping the binding.
-                let runtime_val = self.eval_ast_value(value, evaluators)?;
+                let runtime_val = if matches!(value, Expr::With { .. }) {
+                    match self.eval_expr(
+                        value,
+                        &self.locals.clone(),
+                        &HashMap::new(),
+                        evaluators,
+                        1,
+                    ) {
+                        Out::Done(value) => value,
+                        Out::Suspend(_) | Out::Escape(_) | Out::Err(_) => return None,
+                    }
+                } else {
+                    self.eval_ast_value(value, evaluators)?
+                };
                 self.locals.store(name, runtime_val);
                 Some(())
             }
             Stmt::Assign { name, value } => {
                 self.locals.get(name)?;
-                let runtime_val = self.eval_ast_value(value, evaluators)?;
+                let runtime_val = if matches!(value, Expr::With { .. }) {
+                    match self.eval_expr(
+                        value,
+                        &self.locals.clone(),
+                        &HashMap::new(),
+                        evaluators,
+                        1,
+                    ) {
+                        Out::Done(value) => value,
+                        Out::Suspend(_) | Out::Escape(_) | Out::Err(_) => return None,
+                    }
+                } else {
+                    self.eval_ast_value(value, evaluators)?
+                };
                 self.locals.store(name, runtime_val);
                 Some(())
             }
@@ -1085,15 +1133,21 @@ impl<'m> RuntimeOutputResolver<'m> {
     ) -> Option<()> {
         match expr {
             Expr::With { handler, body } => {
-                let RuntimeValue::Handler(inline_handler) =
+                let RuntimeValue::Handler(mut inline_handler) =
                     self.eval_ast_value(handler, evaluators)?
                 else {
                     return None;
                 };
+                inline_handler.with_id = Some(self.fresh_with_id());
                 self.active_inline_handler_stack.push(inline_handler);
                 let result = self.execute_ingest_ast_stmt_sequence(body, evaluators);
                 self.active_inline_handler_stack.pop();
-                result
+                if result.is_none() && self.has_abort_without_error() {
+                    self.runtime_aborted = false;
+                    Some(())
+                } else {
+                    result
+                }
             }
             // print <arg>  —  handle before delegating to string path because
             // `eval_side_effect` routes through `execute_unit_call` which does not
@@ -1497,6 +1551,18 @@ impl<'m> RuntimeOutputResolver<'m> {
         depth: usize,
     ) -> AstEvalOutcome<RuntimeValue> {
         self.apply_named_value_call_ast_outcome(callee, value, locals, callables, evaluators, depth)
+    }
+
+    fn apply_pipeline_out(
+        &mut self,
+        callee: &str,
+        value: RuntimeValue,
+        locals: &RuntimeLocals,
+        callables: &HashMap<String, IntCallable>,
+        evaluators: &RuntimeEvaluators<'_, '_>,
+        depth: usize,
+    ) -> Out<RuntimeValue> {
+        self.apply_named_value_call_out(callee, value, locals, callables, evaluators, depth)
     }
 
     fn apply_runtime_intrinsic_ast(
@@ -1996,6 +2062,40 @@ impl<'m> RuntimeOutputResolver<'m> {
             return AstEvalOutcome::Complete(value);
         }
         AstEvalOutcome::Unsupported
+    }
+
+    fn apply_receiver_method_value_call_out(
+        &mut self,
+        receiver: &str,
+        member: &str,
+        arg_value: RuntimeValue,
+        evaluators: &RuntimeEvaluators<'_, '_>,
+        depth: usize,
+    ) -> Out<RuntimeValue> {
+        if let Some(value) = self.try_apply_receiver_runtime_bridge_value(
+            receiver,
+            member,
+            arg_value.clone(),
+            evaluators,
+            depth + 1,
+        ) {
+            return Out::Done(value);
+        }
+        let method = self
+            .find_handler_method_for_effect(receiver, member)
+            .or_else(|| self.find_handler_method_by_name(member));
+        if let Some(method) = method {
+            return self.dispatch_handler_method_as_value_flow(
+                &method,
+                arg_value,
+                evaluators,
+                depth + 1,
+            );
+        }
+        if let Some(value) = self.apply_embedded_default_handler(receiver, member, arg_value) {
+            return Out::Done(value);
+        }
+        Out::Err(RuntimeError::Unsupported)
     }
 
     fn eval_expr_ast_outcome(
@@ -2692,11 +2792,12 @@ impl<'m> RuntimeOutputResolver<'m> {
                 self.resume_through_active_continuation_bridge_outcome(resumed, evaluators)
             }
             Expr::With { handler, body } => {
-                let Some(RuntimeValue::Handler(inline_handler)) =
+                let Some(RuntimeValue::Handler(mut inline_handler)) =
                     self.eval_expr_ast(handler, locals, callables, evaluators, depth + 1)
                 else {
                     return AstEvalOutcome::Unsupported;
                 };
+                inline_handler.with_id = Some(self.fresh_with_id());
                 self.active_inline_handler_stack.push(inline_handler);
                 let body_expr = Expr::Block(body.clone());
                 let result = self.eval_expr_ast_outcome(
@@ -2783,6 +2884,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                                         handler_stack: self.active_inline_handler_stack.clone(),
                                     });
                                 }
+                                Out::Escape(escape) => return Out::Escape(escape),
                                 Out::Err(e) => return Out::Err(e),
                             }
                         }
@@ -2806,6 +2908,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                             handler_stack: self.active_inline_handler_stack.clone(),
                         });
                     }
+                    Out::Escape(escape) => return Out::Escape(escape),
                     Out::Err(e) => return Out::Err(e),
                 };
                 let rv = match self.eval_expr(right, locals, callables, evaluators, depth + 1) {
@@ -2822,6 +2925,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                             handler_stack: self.active_inline_handler_stack.clone(),
                         });
                     }
+                    Out::Escape(escape) => return Out::Escape(escape),
                     Out::Err(e) => return Out::Err(e),
                 };
                 match self.apply_binop_runtime_value(op.clone(), lv, rv) {
@@ -2883,6 +2987,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                                 handler_stack: self.active_inline_handler_stack.clone(),
                             });
                         }
+                        Out::Escape(escape) => return Out::Escape(escape),
                         Out::Err(e) => return Out::Err(e),
                     }
                 }
@@ -2939,6 +3044,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                                 handler_stack: self.active_inline_handler_stack.clone(),
                             });
                         }
+                        Out::Escape(escape) => return Out::Escape(escape),
                         Out::Err(e) => return Out::Err(e),
                     }
                 }
@@ -2975,6 +3081,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                                 handler_stack: self.active_inline_handler_stack.clone(),
                             });
                         }
+                        Out::Escape(escape) => return Out::Escape(escape),
                         Out::Err(e) => return Out::Err(e),
                     }
                 }
@@ -3015,6 +3122,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                                         finish: FinishKind::Block,
                                     });
                                 }
+                                Out::Escape(escape) => return Out::Escape(escape),
                                 Out::Err(e) => return Out::Err(e),
                             }
                         }
@@ -3046,6 +3154,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                                         finish: FinishKind::Block,
                                     });
                                 }
+                                Out::Escape(escape) => return Out::Escape(escape),
                                 Out::Err(e) => return Out::Err(e),
                             }
                         }
@@ -3073,6 +3182,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                                         finish: FinishKind::Block,
                                     });
                                 }
+                                Out::Escape(escape) => return Out::Escape(escape),
                                 Out::Err(e) => return Out::Err(e),
                             }
                         }
@@ -3097,6 +3207,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                                 handler_stack: self.active_inline_handler_stack.clone(),
                             });
                         }
+                        Out::Escape(escape) => return Out::Escape(escape),
                         Out::Err(e) => return Out::Err(e),
                     };
                 let Some((arm_body, arm_locals)) =
@@ -3127,6 +3238,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                                 handler_stack: self.active_inline_handler_stack.clone(),
                             });
                         }
+                        Out::Escape(escape) => return Out::Escape(escape),
                         Out::Err(e) => return Out::Err(e),
                     };
                 let branch: &Expr = match cond_val {
@@ -3137,6 +3249,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                 match self.eval_expr(branch, locals, callables, evaluators, depth + 1) {
                     Out::Done(v) => Out::Done(v),
                     Out::Suspend(s) => Out::Suspend(s),
+                    Out::Escape(escape) => Out::Escape(escape),
                     Out::Err(e) => Out::Err(e),
                 }
             }
@@ -3178,10 +3291,11 @@ impl<'m> RuntimeOutputResolver<'m> {
                                     handler_stack: self.active_inline_handler_stack.clone(),
                                 });
                             }
+                            Out::Escape(escape) => return Out::Escape(escape),
                             Out::Err(e) => return Out::Err(e),
                         }
                     }
-                    let outcome = self.apply_named_value_call_args_ast_outcome(
+                    return self.apply_named_value_call_args_out(
                         fn_name,
                         &evaluated,
                         locals,
@@ -3189,7 +3303,6 @@ impl<'m> RuntimeOutputResolver<'m> {
                         evaluators,
                         depth + 1,
                     );
-                    return Self::ast_outcome_to_out(outcome);
                 }
 
                 // Qualified receiver method call
@@ -3209,16 +3322,16 @@ impl<'m> RuntimeOutputResolver<'m> {
                                     handler_stack: self.active_inline_handler_stack.clone(),
                                 });
                             }
+                            Out::Escape(escape) => return Out::Escape(escape),
                             Out::Err(e) => return Out::Err(e),
                         };
-                    let outcome = self.apply_receiver_method_value_call_ast_outcome(
+                    return self.apply_receiver_method_value_call_out(
                         receiver,
                         member,
                         arg_value,
                         evaluators,
                         depth + 1,
                     );
-                    return Self::ast_outcome_to_out(outcome);
                 }
 
                 // Single-field constructor
@@ -3229,6 +3342,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                         match self.eval_expr(arg, locals, callables, evaluators, depth + 1) {
                             Out::Done(v) => v,
                             Out::Suspend(s) => return Out::Suspend(s),
+                            Out::Escape(escape) => return Out::Escape(escape),
                             Out::Err(e) => return Out::Err(e),
                         };
                     let mut fields = HashMap::new();
@@ -3255,9 +3369,10 @@ impl<'m> RuntimeOutputResolver<'m> {
                                     handler_stack: self.active_inline_handler_stack.clone(),
                                 });
                             }
+                            Out::Escape(escape) => return Out::Escape(escape),
                             Out::Err(e) => return Out::Err(e),
                         };
-                    let outcome = self.apply_named_value_call_ast_outcome(
+                    return self.apply_named_value_call_out(
                         fn_name,
                         arg_value,
                         locals,
@@ -3265,7 +3380,6 @@ impl<'m> RuntimeOutputResolver<'m> {
                         evaluators,
                         depth + 1,
                     );
-                    return Self::ast_outcome_to_out(outcome);
                 }
 
                 // Fallback
@@ -3296,16 +3410,16 @@ impl<'m> RuntimeOutputResolver<'m> {
                                 handler_stack: self.active_inline_handler_stack.clone(),
                             });
                         }
+                        Out::Escape(escape) => return Out::Escape(escape),
                         Out::Err(e) => return Out::Err(e),
                     };
-                let outcome = self.apply_receiver_method_value_call_ast_outcome(
+                self.apply_receiver_method_value_call_out(
                     receiver,
                     method,
                     arg_value,
                     evaluators,
                     depth + 1,
-                );
-                Self::ast_outcome_to_out(outcome)
+                )
             }
 
             Expr::Pipeline { value, callee } => {
@@ -3323,17 +3437,17 @@ impl<'m> RuntimeOutputResolver<'m> {
                                 handler_stack: self.active_inline_handler_stack.clone(),
                             });
                         }
+                        Out::Escape(escape) => return Out::Escape(escape),
                         Out::Err(e) => return Out::Err(e),
                     };
-                let outcome = self.apply_pipeline_ast_outcome(
+                self.apply_pipeline_out(
                     callee,
                     pipeline_value,
                     locals,
                     callables,
                     evaluators,
                     depth + 1,
-                );
-                Self::ast_outcome_to_out(outcome)
+                )
             }
 
             Expr::RecordConstruct {
@@ -3380,6 +3494,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                                 handler_stack: self.active_inline_handler_stack.clone(),
                             });
                         }
+                        Out::Escape(escape) => return Out::Escape(escape),
                         Out::Err(e) => return Out::Err(e),
                     }
                 }
@@ -3394,6 +3509,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                 {
                     Out::Done(v) => v,
                     Out::Suspend(s) => return Out::Suspend(s),
+                    Out::Escape(escape) => return Out::Escape(escape),
                     Out::Err(e) => return Out::Err(e),
                 };
                 let outcome =
@@ -3410,13 +3526,16 @@ impl<'m> RuntimeOutputResolver<'m> {
             }
 
             Expr::With { handler, body } => {
-                let inline_handler =
+                let mut inline_handler =
                     match self.eval_expr(handler, locals, callables, evaluators, depth + 1) {
                         Out::Done(RuntimeValue::Handler(inline_handler)) => inline_handler,
                         Out::Done(_) => return Out::Err(RuntimeError::Unsupported),
                         Out::Suspend(_) => return Out::Err(RuntimeError::Unsupported),
+                        Out::Escape(escape) => return Out::Escape(escape),
                         Out::Err(e) => return Out::Err(e),
                     };
+                let with_id = self.fresh_with_id();
+                inline_handler.with_id = Some(with_id);
                 self.active_inline_handler_stack.push(inline_handler);
                 let result = self.eval_stmts(
                     body,
@@ -3424,11 +3543,18 @@ impl<'m> RuntimeOutputResolver<'m> {
                     callables.clone(),
                     evaluators,
                     depth + 1,
-                    FinishKind::Block,
+                    FinishKind::WithBody { with_id },
                 );
                 self.active_inline_handler_stack.pop();
                 match result {
                     Out::Done((value, _locals)) => Out::Done(value.unwrap_or(RuntimeValue::Unit)),
+                    Out::Escape(escape) => match escape {
+                        Escape::WithScope {
+                            with_id: target_id,
+                            value,
+                        } if target_id == with_id => Out::Done(value),
+                        other => Out::Escape(other),
+                    },
                     Out::Suspend(cont) => Out::Suspend(cont),
                     Out::Err(e) => Out::Err(e),
                 }
@@ -3455,15 +3581,20 @@ impl<'m> RuntimeOutputResolver<'m> {
         depth: usize,
     ) -> Option<()> {
         if let Expr::With { handler, body } = expr {
-            let RuntimeValue::Handler(inline_handler) =
+            let RuntimeValue::Handler(mut inline_handler) =
                 self.eval_expr_ast(handler, locals, callables, evaluators, depth)?
             else {
                 return None;
             };
+            inline_handler.with_id = Some(self.fresh_with_id());
             self.active_inline_handler_stack.push(inline_handler);
             let result =
                 self.execute_ast_stmt_sequence(body, locals, callables, evaluators, depth + 1);
             self.active_inline_handler_stack.pop();
+            if result.is_none() && self.has_abort_without_error() {
+                self.runtime_aborted = false;
+                return Some(());
+            }
             return result;
         }
 
@@ -4005,6 +4136,7 @@ impl<'m> RuntimeOutputResolver<'m> {
         }
     }
 
+    #[allow(dead_code)]
     fn execute_ingest_ast_stmt_sequence(
         &mut self,
         stmts: &[Stmt],
@@ -4124,6 +4256,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                         Out::Done(v) => {
                             locals.store(name, v);
                         }
+                        Out::Escape(escape) => return Out::Escape(escape),
                         Out::Suspend(_cont) => {
                             return Out::Suspend(Cont::StmtSeq {
                                 store: Some(StoreOp::Bind { name: name.clone() }),
@@ -4148,6 +4281,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                         Out::Done(v) => {
                             locals.store(name, v);
                         }
+                        Out::Escape(escape) => return Out::Escape(escape),
                         Out::Suspend(_cont) => {
                             return Out::Suspend(Cont::StmtSeq {
                                 store: Some(StoreOp::Assign { name: name.clone() }),
@@ -4169,6 +4303,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                                 last_value = Some(v);
                             }
                         }
+                        Out::Escape(escape) => return Out::Escape(escape),
                         Out::Err(RuntimeError::Unsupported) if self.runtime_error.is_none() => {
                             let mut fallback_locals = locals.clone();
                             let mut fallback_callables = callables.clone();
@@ -4359,21 +4494,34 @@ impl<'m> RuntimeOutputResolver<'m> {
                     finish.clone(),
                 ) {
                     Out::Done((last_val, _final_locals)) => match finish {
-                        FinishKind::Block | FinishKind::Ingest => {
+                        FinishKind::Block | FinishKind::Ingest | FinishKind::WithBody { .. } => {
                             Out::Done(last_val.unwrap_or(RuntimeValue::Unit))
                         }
-                        FinishKind::HandlerBody { token_idx, .. } => {
+                        FinishKind::HandlerBody {
+                            token_idx, with_id, ..
+                        } => {
                             if let Some(resumed) = self.current_handler_resume_value(token_idx) {
                                 Out::Done(resumed)
                             } else if self.handler_has_suspended_cont(token_idx) {
                                 self.set_handler_token_state_suspended_placeholder(token_idx);
                                 Out::Suspend(Cont::Resume)
                             } else {
-                                Out::Err(RuntimeError::Abort {
-                                    kind: "aborted".into(),
+                                Out::Escape(Escape::WithScope {
+                                    with_id,
+                                    value: last_val.unwrap_or(RuntimeValue::Unit),
                                 })
                             }
                         }
+                    },
+                    Out::Escape(escape) => match finish {
+                        FinishKind::WithBody { with_id } => match escape {
+                            Escape::WithScope {
+                                with_id: target_id,
+                                value,
+                            } if target_id == with_id => Out::Done(value),
+                            other => Out::Escape(other),
+                        },
+                        _ => Out::Escape(escape),
                     },
                     Out::Suspend(c) => Out::Suspend(c),
                     Out::Err(e) => Out::Err(e),
@@ -4388,21 +4536,15 @@ impl<'m> RuntimeOutputResolver<'m> {
             } => {
                 self.active_inline_handler_stack = handler_stack;
                 match step {
-                    ApplyStep::Pipeline { callee } => {
-                        Self::ast_outcome_to_out(self.apply_pipeline_ast_outcome(
-                            &callee, value, &locals, &callables, evaluators, depth,
-                        ))
-                    }
-                    ApplyStep::SingleArgCall { fn_name } => {
-                        Self::ast_outcome_to_out(self.apply_named_value_call_ast_outcome(
-                            &fn_name, value, &locals, &callables, evaluators, depth,
-                        ))
-                    }
-                    ApplyStep::ReceiverMethod { receiver, member } => {
-                        Self::ast_outcome_to_out(self.apply_receiver_method_value_call_ast_outcome(
+                    ApplyStep::Pipeline { callee } => self
+                        .apply_pipeline_out(&callee, value, &locals, &callables, evaluators, depth),
+                    ApplyStep::SingleArgCall { fn_name } => self.apply_named_value_call_out(
+                        &fn_name, value, &locals, &callables, evaluators, depth,
+                    ),
+                    ApplyStep::ReceiverMethod { receiver, member } => self
+                        .apply_receiver_method_value_call_out(
                             &receiver, &member, value, evaluators, depth,
-                        ))
-                    }
+                        ),
                     ApplyStep::MultiArgCall {
                         fn_name,
                         mut evaluated,
@@ -4435,12 +4577,13 @@ impl<'m> RuntimeOutputResolver<'m> {
                                         handler_stack: self.active_inline_handler_stack.clone(),
                                     });
                                 }
+                                Out::Escape(escape) => return Out::Escape(escape),
                                 Out::Err(e) => return Out::Err(e),
                             }
                         }
-                        Self::ast_outcome_to_out(self.apply_named_value_call_args_ast_outcome(
+                        self.apply_named_value_call_args_out(
                             &fn_name, &evaluated, &locals, &callables, evaluators, depth,
-                        ))
+                        )
                     }
                     ApplyStep::CaseSelect { arms } => {
                         let Some((arm_body, arm_locals)) =
@@ -4477,6 +4620,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                                 depth,
                                 handler_stack: self.active_inline_handler_stack.clone(),
                             }),
+                            Out::Escape(escape) => Out::Escape(escape),
                             Out::Err(e) => Out::Err(e),
                         }
                     }
@@ -4524,6 +4668,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                                                     .clone(),
                                             });
                                         }
+                                        Out::Escape(escape) => return Out::Escape(escape),
                                         Out::Err(e) => return Out::Err(e),
                                     }
                                 }
@@ -4561,6 +4706,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                                         handler_stack: self.active_inline_handler_stack.clone(),
                                     });
                                 }
+                                Out::Escape(escape) => return Out::Escape(escape),
                                 Out::Err(e) => return Out::Err(e),
                             }
                         }
@@ -4630,6 +4776,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                                         handler_stack: self.active_inline_handler_stack.clone(),
                                     });
                                 }
+                                Out::Escape(escape) => return Out::Escape(escape),
                                 Out::Err(e) => return Out::Err(e),
                             }
                         }
@@ -4675,6 +4822,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                                         (Out::Done(_), _) => Out::Err(RuntimeError::Unsupported),
                                         (Out::Err(e), _) => Out::Err(e),
                                         (Out::Suspend(_), _) => Out::Err(RuntimeError::Unsupported),
+                                        (Out::Escape(escape), _) => Out::Escape(escape),
                                     };
                                 }
                                 Out::Suspend(_) => {
@@ -4691,6 +4839,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                                         handler_stack: self.active_inline_handler_stack.clone(),
                                     });
                                 }
+                                Out::Escape(escape) => return Out::Escape(escape),
                                 Out::Err(e) => return Out::Err(e),
                             }
                         }
@@ -4731,6 +4880,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                                         handler_stack: self.active_inline_handler_stack.clone(),
                                     });
                                 }
+                                Out::Escape(escape) => return Out::Escape(escape),
                                 Out::Err(e) => return Out::Err(e),
                             }
                         }
@@ -4895,6 +5045,7 @@ impl<'m> RuntimeOutputResolver<'m> {
             }) {
                 return Some(ResolvedHandlerMethod {
                     method: method.method.clone(),
+                    with_id: inline.with_id,
                 });
             }
         }
@@ -5233,6 +5384,48 @@ impl<'m> RuntimeOutputResolver<'m> {
         self.ast_outcome_from_option(value)
     }
 
+    fn apply_named_value_call_out(
+        &mut self,
+        fn_name: &str,
+        arg_value: RuntimeValue,
+        locals: &RuntimeLocals,
+        callables: &HashMap<String, IntCallable>,
+        evaluators: &RuntimeEvaluators<'_, '_>,
+        depth: usize,
+    ) -> Out<RuntimeValue> {
+        if let Some(method) = self.find_handler_method_by_name(fn_name) {
+            return self.dispatch_handler_method_as_value_flow(
+                &method,
+                arg_value,
+                evaluators,
+                depth + 1,
+            );
+        }
+        let value = self.apply_named_value_call_ast(
+            fn_name,
+            &[arg_value],
+            locals,
+            callables,
+            evaluators,
+            depth,
+        );
+        Self::ast_outcome_to_out(self.ast_outcome_from_option(value))
+    }
+
+    fn apply_named_value_call_args_out(
+        &mut self,
+        fn_name: &str,
+        arg_values: &[RuntimeValue],
+        locals: &RuntimeLocals,
+        callables: &HashMap<String, IntCallable>,
+        evaluators: &RuntimeEvaluators<'_, '_>,
+        depth: usize,
+    ) -> Out<RuntimeValue> {
+        let value = self
+            .apply_named_value_call_ast(fn_name, arg_values, locals, callables, evaluators, depth);
+        Self::ast_outcome_to_out(self.ast_outcome_from_option(value))
+    }
+
     fn apply_named_value_call_args_ast_outcome(
         &mut self,
         fn_name: &str,
@@ -5378,6 +5571,7 @@ impl<'m> RuntimeOutputResolver<'m> {
             if let Some(method) = inline.methods.iter().find(|m| m.method.name == method_name) {
                 return Some(ResolvedHandlerMethod {
                     method: method.method.clone(),
+                    with_id: inline.with_id,
                 });
             }
         }
@@ -5503,6 +5697,7 @@ impl<'m> RuntimeOutputResolver<'m> {
             methods,
             captured_locals: locals.clone(),
             captured_callables: callables.clone(),
+            with_id: None,
         }
     }
 
@@ -5533,6 +5728,12 @@ impl<'m> RuntimeOutputResolver<'m> {
         if self.runtime_error.is_none() {
             self.runtime_aborted = true;
         }
+    }
+
+    fn fresh_with_id(&mut self) -> WithId {
+        let with_id = self.next_with_id;
+        self.next_with_id += 1;
+        with_id
     }
 
     fn has_abort_without_error(&self) -> bool {
@@ -5784,6 +5985,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                     }));
                 }
                 Out::Err(RuntimeError::Abort { .. }) => AstEvalOutcome::Aborted,
+                Out::Escape(_) => AstEvalOutcome::Unsupported,
                 Out::Err(_) => AstEvalOutcome::Unsupported,
             };
             if let Some(token) = self.current_resume_token_mut()
@@ -5851,6 +6053,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                     }));
                 }
                 Out::Err(RuntimeError::Abort { .. }) => AstEvalOutcome::Aborted,
+                Out::Escape(_) => AstEvalOutcome::Unsupported,
                 Out::Err(_) => AstEvalOutcome::Unsupported,
             };
             if let Some(token) = self.current_optimized_resume_token_mut()
@@ -6137,6 +6340,7 @@ impl<'m> RuntimeOutputResolver<'m> {
         depth: usize,
         token_idx: usize,
         produce_value: bool,
+        with_id: WithId,
     ) -> Out<(Option<RuntimeValue>, RuntimeLocals)> {
         self.eval_stmts(
             stmts,
@@ -6147,6 +6351,7 @@ impl<'m> RuntimeOutputResolver<'m> {
             FinishKind::HandlerBody {
                 token_idx,
                 produce_value,
+                with_id,
             },
         )
     }
@@ -6212,14 +6417,47 @@ impl<'m> RuntimeOutputResolver<'m> {
             depth + 1,
             token_idx,
             produce_value,
+            method.with_id?,
         ) {
-            Out::Done(_) => self.finish_handler_continuation_bridge(token_idx),
+            Out::Done((last_value, _locals)) => {
+                if self.current_handler_resume_value(token_idx).is_some() {
+                    self.finish_handler_continuation_bridge(token_idx)
+                } else {
+                    let _ = self.finish_handler_continuation_bridge(token_idx);
+                    Some(HandlerCompletion::Escaped(Escape::WithScope {
+                        with_id: method.with_id?,
+                        value: last_value.unwrap_or(RuntimeValue::Unit),
+                    }))
+                }
+            }
+            Out::Escape(escape) => Some(HandlerCompletion::Escaped(escape)),
             Out::Suspend(cont) => {
                 self.set_handler_token_cont(token_idx, cont);
                 self.finish_handler_continuation_bridge(token_idx)
             }
             Out::Err(RuntimeError::Abort { .. }) => Some(HandlerCompletion::Aborted),
             Out::Err(RuntimeError::Unsupported) => None,
+        }
+    }
+
+    /// Execute a handler method and return the last evaluated value.
+    /// Used when the handler method produces a value (e.g. `env.from_env`).
+    fn dispatch_handler_method_as_value_flow(
+        &mut self,
+        method: &ResolvedHandlerMethod,
+        arg_val: RuntimeValue,
+        evaluators: &RuntimeEvaluators<'_, '_>,
+        depth: usize,
+    ) -> Out<RuntimeValue> {
+        match self.dispatch_handler_method_core(method, &[arg_val], evaluators, depth, true, false)
+        {
+            Some(HandlerCompletion::Resumed(value)) => Out::Done(*value),
+            Some(HandlerCompletion::Escaped(escape)) => Out::Escape(escape),
+            Some(HandlerCompletion::Suspended(_continuation)) => Out::Suspend(Cont::Resume),
+            Some(HandlerCompletion::Aborted) => Out::Err(RuntimeError::Abort {
+                kind: "aborted".into(),
+            }),
+            None => Out::Err(RuntimeError::Unsupported),
         }
     }
 
@@ -6241,6 +6479,7 @@ impl<'m> RuntimeOutputResolver<'m> {
             false,
         )? {
             HandlerCompletion::Resumed(value) => Some(*value),
+            HandlerCompletion::Escaped(_escape) => None,
             HandlerCompletion::Suspended(_continuation) => None,
             HandlerCompletion::Aborted => {
                 self.set_runtime_abort_once();
@@ -6259,6 +6498,7 @@ impl<'m> RuntimeOutputResolver<'m> {
         match self.dispatch_handler_method_core(method, &[arg_val], evaluators, depth, true, false)
         {
             Some(HandlerCompletion::Resumed(value)) => AstEvalOutcome::Complete(*value),
+            Some(HandlerCompletion::Escaped(_escape)) => AstEvalOutcome::Unsupported,
             Some(HandlerCompletion::Suspended(continuation)) => {
                 AstEvalOutcome::Suspended(continuation)
             }
@@ -6279,6 +6519,7 @@ impl<'m> RuntimeOutputResolver<'m> {
     ) -> Option<RuntimeValue> {
         match self.dispatch_handler_method_core(method, args, evaluators, depth, true, false)? {
             HandlerCompletion::Resumed(value) => Some(*value),
+            HandlerCompletion::Escaped(_escape) => None,
             HandlerCompletion::Suspended(_continuation) => None,
             HandlerCompletion::Aborted => {
                 self.set_runtime_abort_once();
@@ -6305,6 +6546,7 @@ impl<'m> RuntimeOutputResolver<'m> {
             true,
         )? {
             HandlerCompletion::Resumed(_) => Some(()),
+            HandlerCompletion::Escaped(_escape) => Some(()),
             HandlerCompletion::Suspended(_continuation) => None,
             HandlerCompletion::Aborted => {
                 self.set_runtime_abort_once();
@@ -6653,6 +6895,7 @@ impl RuntimeLocals {
 }
 
 #[derive(Clone)]
+#[allow(clippy::large_enum_variant)]
 enum RuntimeValue {
     String(String),
     Int(i64),
@@ -8165,7 +8408,7 @@ main =
                 .expect("runtime output should resolve");
         // Clean up before asserting so env is restored even if the assertion panics.
         unsafe { std::env::remove_var("GOBY_PATH") };
-        assert_eq!(output, "13done");
+        assert_eq!(output, "13donedevelopment");
     }
 
     #[test]
@@ -9017,7 +9260,7 @@ main =
     }
 
     #[test]
-    fn no_resume_in_value_position_takes_abortive_path() {
+    fn no_resume_in_value_position_exits_current_with_scope() {
         use goby_core::parse_module;
         let _guard = ENV_MUTEX.lock().unwrap();
         let source = r#"
@@ -9026,24 +9269,28 @@ effect Iter
 
 main : Unit -> Unit
 main =
-  with
-    next n ->
-      print "handled"
-  in
-    print (next 0)
+  result =
+    with
+      next n ->
+        print "handled"
+        42
+    in
+      next 0 + 1
+  print result
+  print "after"
 "#;
         let module = parse_module(source).expect("parse should work");
         let output =
             resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module));
         assert_eq!(
             output.as_deref(),
-            Some("handled"),
-            "handler side effects before abort should be preserved, while caller continuation does not run"
+            Some("handled42after"),
+            "no-resume in value position should exit only the current with body and yield the clause result"
         );
     }
 
     #[test]
-    fn no_resume_in_unit_position_aborts_following_statements() {
+    fn no_resume_in_unit_position_skips_remaining_with_body_only() {
         use goby_core::parse_module;
         let _guard = ENV_MUTEX.lock().unwrap();
         let source = r#"
@@ -9057,20 +9304,21 @@ main =
       print "handled:${msg}"
   in
     log "hello"
-    print "after"
+    print "inner-after"
+  print "outer-after"
 "#;
         let module = parse_module(source).expect("parse should work");
         let output =
             resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module));
         assert_eq!(
             output.as_deref(),
-            Some("handled:hello"),
-            "unit-position handled operation should abort before later statements execute"
+            Some("handled:helloouter-after"),
+            "no-resume in unit position should skip only the remaining statements in the current with body"
         );
     }
 
     #[test]
-    fn nested_abortive_handler_stops_outer_continuations() {
+    fn nested_scoped_exit_only_leaves_inner_with_scope() {
         use goby_core::parse_module;
         let _guard = ENV_MUTEX.lock().unwrap();
         let source = r#"
@@ -9078,18 +9326,20 @@ effect Outer
   op: String -> Unit
 
 effect Inner
-  boom: String -> Unit
+  boom: String -> Int
 
 main : Unit -> Unit
 main =
   with
     op msg ->
-      with
-        boom inner ->
-          print "inner:${inner}"
-      in
-        boom msg
-      print "outer-after"
+      inner =
+        with
+          boom inner ->
+            print "inner:${inner}"
+            7
+        in
+          boom msg + 1
+      print "outer:${inner}"
       resume ()
   in
     op "x"
@@ -9100,8 +9350,8 @@ main =
             resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module));
         assert_eq!(
             output.as_deref(),
-            Some("inner:x"),
-            "abortive inner handler should stop outer handler and main continuations at the handled boundary"
+            Some("inner:xouter:7main-after"),
+            "nested no-resume should exit only the targeted inner with scope and let outer execution continue"
         );
     }
 
@@ -9321,7 +9571,7 @@ main =
     }
 
     #[test]
-    fn typed_mode_matches_fallback_for_no_resume_abortive_path() {
+    fn typed_mode_matches_fallback_for_no_resume_value_scope_exit() {
         use goby_core::parse_module;
         let _guard = ENV_MUTEX.lock().unwrap();
         let source = r#"
@@ -9330,20 +9580,24 @@ effect Iter
 
 main : Unit -> Unit
 main =
-  with
-    next n ->
-      print "handled"
-  in
-    print (next 0)
+  result =
+    with
+      next n ->
+        print "handled"
+        42
+    in
+      next 0 + 1
+  print result
+  print "after"
 "#;
         let module = parse_module(source).expect("parse should work");
-        let typed = assert_mode_parity(&module, "no-resume abortive path");
-        assert_eq!(typed.stdout.as_deref(), Some("handled"));
+        let typed = assert_mode_parity(&module, "no-resume value scope exit");
+        assert_eq!(typed.stdout.as_deref(), Some("handled42after"));
         assert_eq!(typed.runtime_error_kind, None);
     }
 
     #[test]
-    fn typed_mode_matches_fallback_for_no_resume_unit_position_abort() {
+    fn typed_mode_matches_fallback_for_no_resume_unit_scope_exit() {
         use goby_core::parse_module;
         let _guard = ENV_MUTEX.lock().unwrap();
         let source = r#"
@@ -9357,16 +9611,17 @@ main =
       print "handled:${msg}"
   in
     log "hello"
-    print "after"
+    print "inner-after"
+  print "outer-after"
 "#;
         let module = parse_module(source).expect("parse should work");
-        let typed = assert_mode_parity(&module, "no-resume unit-position abort path");
-        assert_eq!(typed.stdout.as_deref(), Some("handled:hello"));
+        let typed = assert_mode_parity(&module, "no-resume unit scope exit");
+        assert_eq!(typed.stdout.as_deref(), Some("handled:helloouter-after"));
         assert_eq!(typed.runtime_error_kind, None);
     }
 
     #[test]
-    fn typed_mode_matches_fallback_for_nested_abortive_handlers() {
+    fn typed_mode_matches_fallback_for_nested_scoped_exit() {
         use goby_core::parse_module;
         let _guard = ENV_MUTEX.lock().unwrap();
         let source = r#"
@@ -9374,26 +9629,28 @@ effect Outer
   op: String -> Unit
 
 effect Inner
-  boom: String -> Unit
+  boom: String -> Int
 
 main : Unit -> Unit
 main =
   with
     op msg ->
-      with
-        boom inner ->
-          print "inner:${inner}"
-      in
-        boom msg
-      print "outer-after"
+      inner =
+        with
+          boom inner ->
+            print "inner:${inner}"
+            7
+        in
+          boom msg + 1
+      print "outer:${inner}"
       resume ()
   in
     op "x"
     print "main-after"
 "#;
         let module = parse_module(source).expect("parse should work");
-        let typed = assert_mode_parity(&module, "nested abortive handler path");
-        assert_eq!(typed.stdout.as_deref(), Some("inner:x"));
+        let typed = assert_mode_parity(&module, "nested scoped-exit handler path");
+        assert_eq!(typed.stdout.as_deref(), Some("inner:xouter:7main-after"));
         assert_eq!(typed.runtime_error_kind, None);
     }
 

@@ -718,7 +718,7 @@ Step-by-step checklist:
 
   ### Implementation phases
 
-  - [ ] Phase 1 — Lock the new semantics before more cleanup
+  - [x] Phase 1 — Lock the new semantics before more cleanup
     - Update `doc/LANGUAGE_SPEC.md` wording from "abortive no-`resume`" to
       "`with`-scope exit on no-`resume`".
     - Add the canonical examples above (or reduced equivalents) to tests/examples/docs.
@@ -726,14 +726,14 @@ Step-by-step checklist:
       of the whole `with ... in ...` expression.
     - checks: doc review + targeted parser/typecheck/runtime tests
 
-  - [ ] Phase 2 — Introduce first-class scope-exit flow
+  - [x] Phase 2 — Introduce first-class scope-exit flow
     - Add an explicit escape outcome (`Escape::WithScope`) to the active runtime result type.
     - Thread `with_id` / scope identity through `Expr::With`, `eval_stmts`, and handler dispatch.
     - Make `FinishKind::WithBody { with_id }` consume matching escapes and rethrow non-matching ones.
     - Remove the use of runtime "abort" for structured no-`resume` control flow.
     - checks: `cargo build -p goby-wasm`, targeted runtime tests
 
-  - [ ] Phase 3 — Rebuild handler dispatch around escape vs resume
+  - [x] Phase 3 — Rebuild handler dispatch around escape vs resume
     - handler clause without `resume`:
       - evaluate clause body to a value,
       - package it as `Escape::WithScope { with_id, value, ... }`,
@@ -743,7 +743,7 @@ Step-by-step checklist:
     - nearest lexical handler wins remains unchanged.
     - checks: `cargo build -p goby-wasm`, `cargo test -p goby-wasm`
 
-  - [ ] Phase 4 — Rewrite tests around scoped exit semantics
+  - [x] Phase 4 — Rewrite tests around scoped exit semantics
     - replace old "no-`resume` aborts program" assertions with:
       - exits only the current `with` body,
       - outer program continues,

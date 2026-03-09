@@ -41,3 +41,12 @@ main =
       resume ()
   in
     log "done"
+
+  # If a handler clause finishes without `resume`, only that `with` scope exits.
+  fallback =
+    with
+      from_env name ->
+        "development"
+    in
+      env.from_env "APP_ENV"
+  print fallback
