@@ -621,7 +621,6 @@ enum AstValueContinuationKind {
     },
 }
 
-
 #[allow(dead_code)]
 enum AstEvalOutcome<T> {
     Complete(T),
@@ -4373,9 +4372,7 @@ impl<'m> RuntimeOutputResolver<'m> {
 
     fn set_handler_token_state_suspended_placeholder(&mut self, token_idx: usize) {
         let continuation = Box::new(AstContinuation::Frame {
-            frame: AstContinuationFrame {
-                value: None,
-            },
+            frame: AstContinuationFrame { value: None },
             resumed: RuntimeValue::Unit,
         });
         match self.execution_mode {
@@ -5746,9 +5743,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                 if token.cont.is_some() && token.continuation.consumed =>
             {
                 HandlerCompletion::Suspended(Box::new(AstContinuation::Frame {
-                    frame: AstContinuationFrame {
-                        value: None,
-                    },
+                    frame: AstContinuationFrame { value: None },
                     resumed: RuntimeValue::Unit,
                 }))
             }
@@ -5797,9 +5792,7 @@ impl<'m> RuntimeOutputResolver<'m> {
         Some(match token.state {
             HandlerContinuationState::Pending if token.cont.is_some() && token.consumed => {
                 HandlerCompletion::Suspended(Box::new(AstContinuation::Frame {
-                    frame: AstContinuationFrame {
-                        value: None,
-                    },
+                    frame: AstContinuationFrame { value: None },
                     resumed: RuntimeValue::Unit,
                 }))
             }
@@ -5925,9 +5918,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                         token.cont = Some(c);
                     }
                     return AstEvalOutcome::Suspended(Box::new(AstContinuation::Frame {
-                        frame: AstContinuationFrame {
-                            value: None,
-                        },
+                        frame: AstContinuationFrame { value: None },
                         resumed: RuntimeValue::Unit,
                     }));
                 }
@@ -5992,9 +5983,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                         token.cont = Some(c);
                     }
                     return AstEvalOutcome::Suspended(Box::new(AstContinuation::Frame {
-                        frame: AstContinuationFrame {
-                            value: None,
-                        },
+                        frame: AstContinuationFrame { value: None },
                         resumed: RuntimeValue::Unit,
                     }));
                 }
