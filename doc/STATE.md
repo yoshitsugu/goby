@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-09 (session 240)
+Last updated: 2026-03-09 (session 242)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -37,6 +37,10 @@ This file is a restart-safe snapshot for resuming work after context reset.
 - `cargo clippy -p goby-wasm -- -D warnings`
 - `cargo test -p goby-wasm`
 - `cargo check`
+- latest focused re-check (session 242):
+  - `cargo fmt`
+  - `cargo check -p goby-wasm`
+  - `cargo test -p goby-wasm`
 
 ## Next Work
 
@@ -62,16 +66,42 @@ This file is a restart-safe snapshot for resuming work after context reset.
     - inlined `AstEvalOutcome`→`Out` conversions at call sites and removed
       helper conversions `ast_outcome_from_option` / `ast_outcome_to_out`.
   - Next target:
-    - migrate `eval_named_call_args_outcome` / `apply_named_value_call_args_ast_outcome`
-      and resume bridge outcome functions to Out-native flow, then delete
+    - migrate `eval_named_call_args_outcome` to Out-native flow and then delete
       `pending_value_continuations` + `AstContinuationFrame` path.
+    - migrate resume bridge outcome functions (`resume_through_active_continuation_*_outcome`)
+      to Out-native return values.
+    - then remove now-dead compatibility types/functions:
+      - `AstEvalOutcome`, `AstContinuation`, `AstValueContinuation`,
+        `complete_ast_value_outcome`, `execute_ast_continuation*`.
   - Same execution flow rule: record expected breakages before code changes;
     roll back if breakages are not controllable within a narrow scope.
   - implementation rule:
     - add/route via `Out` helper first,
     - keep legacy AST/Option fallback until tests prove parity.
 
-## Completed in Last Session (2026-03-09, session 240)
+## Completed in Last Session (2026-03-09, session 242)
+
+  - Synchronized restart docs for immediate continuation:
+    - `doc/PLAN.md` Phase 5 now includes an explicit progress checkpoint
+      (done vs remaining vs execution guard).
+    - `doc/STATE.md` updated restart target and focused validation snapshot.
+  - Working-tree resume note:
+    - current uncommitted code includes the post-session-241 step where
+      `apply_named_value_call_args_ast_outcome` has been removed and its
+      conversion logic inlined in `execute_saved_value_continuation`.
+    - run `git status --short` first when resuming to confirm expected 3-file diff
+      (`crates/goby-wasm/src/lib.rs`, `doc/PLAN.md`, `doc/STATE.md`).
+
+## Completed in Previous Session (2026-03-09, session 241)
+
+  - Removed `apply_named_value_call_args_ast_outcome` and inlined its conversion
+    logic into `execute_saved_value_continuation` (`MultiArgNamedCall` branch).
+  - Preserved existing abort propagation (`set_runtime_abort_once`) and unsupported
+    mapping behavior on that path.
+  - Quality gate passing: `cargo fmt`, `cargo check -p goby-wasm`,
+    `cargo test -p goby-wasm`.
+
+## Completed in Previous Session (2026-03-09, session 240)
 
   - Removed dead AST compatibility wrappers that were no longer called:
     `apply_pipeline_ast_outcome`,

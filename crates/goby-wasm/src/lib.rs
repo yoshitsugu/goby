@@ -4774,36 +4774,6 @@ impl<'m> RuntimeOutputResolver<'m> {
         }
     }
 
-    fn apply_named_value_call_args_ast_outcome(
-        &mut self,
-        fn_name: &str,
-        arg_values: &[RuntimeValue],
-        locals: &RuntimeLocals,
-        callables: &HashMap<String, IntCallable>,
-        evaluators: &RuntimeEvaluators<'_, '_>,
-        depth: usize,
-    ) -> AstEvalOutcome<RuntimeValue> {
-        // Thin wrapper around apply_named_value_call_args_out (Out path).
-        match self.apply_named_value_call_args_out(
-            fn_name, arg_values, locals, callables, evaluators, depth,
-        ) {
-            Out::Done(v) => AstEvalOutcome::Complete(v),
-            Out::Suspend(_) => {
-                // handler/decl body nested suspension not supported via AST path.
-                unreachable!(
-                    "apply_named_value_call_args_ast_outcome: unexpected Out::Suspend \
-                     (handler/decl body nested suspension not supported via AST path)"
-                )
-            }
-            Out::Escape(_) => AstEvalOutcome::Unsupported,
-            Out::Err(RuntimeError::Abort { .. }) => {
-                self.set_runtime_abort_once();
-                AstEvalOutcome::Aborted
-            }
-            Out::Err(RuntimeError::Unsupported) => AstEvalOutcome::Unsupported,
-        }
-    }
-
     fn apply_binop_runtime_value(
         &self,
         op: goby_core::BinOpKind,
@@ -5579,7 +5549,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                     }
                     AstEvalOutcome::Aborted | AstEvalOutcome::Unsupported => return None,
                 };
-                let outcome = self.apply_named_value_call_args_ast_outcome(
+                let out = self.apply_named_value_call_args_out(
                     &fn_name,
                     &arg_values,
                     &continuation.locals,
@@ -5587,7 +5557,19 @@ impl<'m> RuntimeOutputResolver<'m> {
                     evaluators,
                     continuation.depth,
                 );
-                self.consume_saved_value_outcome(outcome, evaluators)
+                match out {
+                    Out::Done(value) => Some(value),
+                    Out::Suspend(_) => unreachable!(
+                        "execute_saved_value_continuation: unexpected Out::Suspend \
+                         from apply_named_value_call_args_out on AST replay path"
+                    ),
+                    Out::Escape(_) => None,
+                    Out::Err(RuntimeError::Abort { .. }) => {
+                        self.set_runtime_abort_once();
+                        None
+                    }
+                    Out::Err(RuntimeError::Unsupported) => None,
+                }
             }
             AstValueContinuationKind::CaseScrutinee { arms } => {
                 let (arm_body, arm_locals) =

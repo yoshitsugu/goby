@@ -777,6 +777,28 @@ Step-by-step checklist:
     - after scoped-exit flow is stable, remove old AST continuation compatibility types/functions.
     - unify resume-token state on the final semantics, not on the old abortive contract.
     - checks: `cargo fmt`, `cargo clippy -p goby-wasm -- -D warnings`, `cargo test --workspace`
+    - Progress checkpoint (2026-03-09, sessions 239-241):
+      - done:
+        - `eval_expr_ast_outcome` reduced to a pure thin wrapper over `eval_expr`.
+        - dead AST wrapper paths removed:
+          - `apply_pipeline_ast_outcome`
+          - `apply_receiver_method_value_call_ast_outcome`
+          - `apply_named_value_call_ast_outcome`
+          - `dispatch_handler_method_as_value_outcome`
+        - helper conversions removed:
+          - `ast_outcome_from_option`
+          - `ast_outcome_to_out`
+        - `apply_named_value_call_args_ast_outcome` removed; conversion logic is now
+          inlined at the `execute_saved_value_continuation` multi-arg replay site.
+      - remaining:
+        - migrate `eval_named_call_args_outcome` to Out-native flow (remove
+          `AstEvalOutcome` dependency for multi-arg replay).
+        - migrate `resume_through_active_continuation_*_outcome` to Out return values.
+        - remove legacy `pending_value_continuations` / `AstContinuationFrame` path
+          and related compatibility structs/functions.
+      - execution guard:
+        - keep micro-step scope narrow; if blast radius grows, roll back the step and retry smaller.
+        - after each micro-step, run focused tests first, then full gate.
 
   ### Restart checklist
 
