@@ -40,14 +40,20 @@ This file is a restart-safe snapshot for resuming work after context reset.
 
 ## Next Work
 
-- Continue from `doc/PLAN.md` Step 3 Phase 5.
-- Main cleanup targets:
-  - remove old AST continuation compatibility helpers that are no longer needed
-    on the active path,
-  - reduce legacy wrappers that still collapse `Escape` into `Unsupported`
-    outside the active `Out` path,
-  - review whether extra typecheck coverage is needed for handler-clause result
-    typing under scoped exit.
+- Continue from `doc/PLAN.md` Step 3 Phase 5 (sub-steps 5b-1/5b-2/5b-5/5b-6 done).
+- Remaining Phase 5 targets:
+  - `execute_ast_stmt_sequence` still called from `execute_unit_expr_ast` Expr::With
+    body (line ~3598) — depends on `pending_caller_cont_stack`; migration requires
+    Option B (migrate execute_unit_expr_ast to return `Out<()>`).
+  - `eval_expr_ast_outcome` and `complete_ast_value_outcome` still active in
+    `eval_expr_ast` internals and `execute_unit_ast_stmt` Binding/Assign arms.
+  - Old types `AstContinuation`, `AstContinuationFrame`, `AstValueContinuation`,
+    `AstEvalOutcome`, `HandlerContinuationState` still present.
+  - `pending_value_continuations` field still in RuntimeOutputResolver.
+  - `runtime_aborted` / `set_runtime_abort_once` / `has_abort_without_error`
+    still used in execute_unit_expr_ast Expr::With arm.
+- Quality gate passing: cargo fmt, cargo clippy -p goby-wasm -- -D warnings,
+  cargo test --workspace all clean as of session 236.
 
 ## Notes
 
