@@ -4984,6 +4984,17 @@ impl<'m> RuntimeOutputResolver<'m> {
         }
     }
 
+    fn update_active_inline_handler_locals(&mut self, with_id: WithId, locals: RuntimeLocals) {
+        if let Some(inline) = self
+            .active_inline_handler_stack
+            .iter_mut()
+            .rev()
+            .find(|inline| inline.with_id == Some(with_id))
+        {
+            inline.captured_locals = locals;
+        }
+    }
+
     fn push_resume_token_for_handler(&mut self, take_caller_cont: bool) -> usize {
         let caller_cont = if take_caller_cont {
             self.pending_caller_cont_stack
@@ -5320,7 +5331,8 @@ impl<'m> RuntimeOutputResolver<'m> {
             produce_value,
             method.with_id?,
         ) {
-            Out::Done((last_value, _locals)) => {
+            Out::Done((last_value, updated_locals)) => {
+                self.update_active_inline_handler_locals(method.with_id?, updated_locals);
                 if self.current_handler_resume_value(token_idx).is_some() {
                     self.finish_handler_continuation_bridge(token_idx)
                 } else {
@@ -8599,6 +8611,35 @@ main =
             output.as_deref(),
             Some("pre:hello"),
             "handler value should capture lexical locals used inside clause body"
+        );
+    }
+
+    #[test]
+    fn handler_mutation_persists_across_repeated_calls_in_same_with() {
+        use goby_core::parse_module;
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let source = r#"
+effect Counter
+  next: Unit -> Int
+
+main : Unit -> Unit
+main =
+  mut counter = 0
+  with
+    next _ ->
+      counter := counter + 1
+      resume counter
+  in
+    print (next ())
+    print (next ())
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let output =
+            resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module));
+        assert_eq!(
+            output.as_deref(),
+            Some("12"),
+            "handler mutation should persist across repeated calls in the same with scope"
         );
     }
 
