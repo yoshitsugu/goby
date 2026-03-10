@@ -38,8 +38,12 @@ This file is a restart-safe snapshot for resuming work after context reset.
 
 ## Next Work
 
-- No required remaining task for former 4.5/4.7 tracks.
-- Optional cleanup only:
+- Immediate runtime parity fixes:
+  - make unit-argument call syntax `read ()` and `read()` both execute in fallback runtime paths.
+  - confirm zero-arg call parity is generic (not `read`-specific) by validating the same behavior on additional functions (for example `read_line`).
+  - confirm parity also holds for user-defined `Unit -> a` functions (`f ()` and `f()` both run).
+  - remove `List<Int>`-biased behavior in fallback `goby/list.each` / `goby/list.map` paths so generic stdlib intent (`Int`/`String` minimum) works at runtime.
+- Follow-up cleanup remains optional:
   - remove or shrink `eval_expr_ast` compatibility fallback incrementally if future refactors need it.
 
 ## Notes

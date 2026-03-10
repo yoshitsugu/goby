@@ -522,6 +522,34 @@ Note:
 - Critical correctness items from the same review batch were already fixed:
   parser explicit early-return clarity and planning `u16` overflow fail-fast behavior.
 
+### 4.5 Active Track E: Runtime Parity Bugfixes (Immediate)
+
+Goal: fix user-visible runtime mismatches where parse/typecheck accepts programs
+but `goby run` fails in fallback execution.
+
+Scope:
+
+1. Unit-argument call syntax parity (`read ()` vs `read()`):
+   - bug: `read()` currently can pass parse/typecheck but fail runtime execution in fallback mode.
+   - required fix:
+     - accept zero-arg call surface in fallback call parsing for builtin/prelude function calls.
+     - preserve existing behavior for spaced unit-call form (`f ()`).
+   - acceptance criteria:
+      - both `read ()` and `read()` run successfully in `goby-cli run`.
+      - verify this is not `read`-specific by adding/executing equivalent zero-arg-call runtime checks for at least one additional function (for example `read_line`).
+      - verify the same `f ()` / `f()` parity for at least one user-defined function with type `Unit -> a`.
+      - add regression tests in `crates/goby-wasm` to lock both forms.
+
+2. `goby/list` generic callback runtime support (`each`, `map`):
+   - bug: stdlib signatures are generic, but fallback runtime remains effectively `List<Int>`-biased in key paths.
+   - required fix:
+     - make fallback evaluation for imported `goby/list.each` and `goby/list.map` respect generic list item runtime values (at minimum `Int` and `String`, without regressing existing behavior).
+     - support effectful callbacks in `each` and pure mapping callbacks in `map` across supported item types.
+   - acceptance criteria:
+     - `list.each` works with `List String` callbacks (e.g., `println`).
+     - `map` works on `List String` and `List Int` with expected outputs.
+     - add/extend runtime parity tests in `crates/goby-wasm/src/lib.rs`.
+
 ### 4.6 Parking Lot (Needs Revalidation Before Implementation)
 
 - CLI `build` expansion details (`--target`, `--engine-compat`, verify modes).
