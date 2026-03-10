@@ -2153,6 +2153,16 @@ impl<'m> RuntimeOutputResolver<'m> {
             }
 
             Expr::Call { callee, arg } => {
+                if let Some(out) = self.try_eval_imported_list_map_call(
+                    expr,
+                    locals,
+                    callables,
+                    evaluators,
+                    depth + 1,
+                ) {
+                    return out;
+                }
+
                 // Multi-arg named call
                 if let Some((fn_name, args)) = flatten_named_call(expr)
                     && args.len() > 1
@@ -2873,6 +2883,100 @@ impl<'m> RuntimeOutputResolver<'m> {
         evaluators: &RuntimeEvaluators<'_, '_>,
         depth: usize,
     ) -> Option<()> {
+        let (list_arg, callback) = self.extract_imported_list_callback_call(expr, "each")?;
+        let Some(items) = self
+            .eval_expr_to_option(list_arg, locals, callables, evaluators, depth + 1)?
+            .into_list_items()
+        else {
+            return None;
+        };
+        let callback_callable = match callback {
+            Expr::Lambda { param, body } => IntCallable::AstLambda(Box::new(AstLambdaCallable {
+                parameter: param.clone(),
+                body: (*body.clone()),
+                captured_locals: locals.clone(),
+                captured_callables: callables.clone(),
+            })),
+            Expr::Var(name) => self.resolve_callable_argument(name, callables),
+            _ => {
+                self.set_runtime_error_once(ERR_CALLABLE_DISPATCH_LIST_EACH_CALLBACK);
+                return None;
+            }
+        };
+
+        for item in items {
+            self.dispatch_callable_side_effect(
+                &callback_callable,
+                item,
+                locals,
+                callables,
+                evaluators,
+                depth + 1,
+            )?;
+        }
+        Some(())
+    }
+
+    fn try_eval_imported_list_map_call(
+        &mut self,
+        expr: &Expr,
+        locals: &RuntimeLocals,
+        callables: &HashMap<String, IntCallable>,
+        evaluators: &RuntimeEvaluators<'_, '_>,
+        depth: usize,
+    ) -> Option<Out<RuntimeValue>> {
+        let (list_arg, callback) = self.extract_imported_list_callback_call(expr, "map")?;
+        let list_value = match self.eval_expr(list_arg, locals, callables, evaluators, depth + 1) {
+            Out::Done(value) => value,
+            Out::Suspend(cont) => return Some(Out::Suspend(cont)),
+            Out::Escape(escape) => return Some(Out::Escape(escape)),
+            Out::Err(err) => return Some(Out::Err(err)),
+        };
+        let Some(items) = list_value.into_list_items() else {
+            return Some(Out::Err(RuntimeError::Unsupported));
+        };
+        let callback_callable = match callback {
+            Expr::Lambda { param, body } => IntCallable::AstLambda(Box::new(AstLambdaCallable {
+                parameter: param.clone(),
+                body: (*body.clone()),
+                captured_locals: locals.clone(),
+                captured_callables: callables.clone(),
+            })),
+            Expr::Var(name) => self.resolve_callable_argument(name, callables),
+            _ => {
+                self.set_runtime_error_once(ERR_CALLABLE_DISPATCH_DECL_PARAM);
+                return Some(Out::Err(RuntimeError::Unsupported));
+            }
+        };
+
+        let mut mapped_items = Vec::with_capacity(items.len());
+        for item in items {
+            match self.eval_callable_value(
+                &callback_callable,
+                item,
+                locals,
+                callables,
+                evaluators,
+                depth + 1,
+            ) {
+                Out::Done(value) => mapped_items.push(value),
+                Out::Suspend(cont) => return Some(Out::Suspend(cont)),
+                Out::Escape(escape) => return Some(Out::Escape(escape)),
+                Out::Err(err) => return Some(Out::Err(err)),
+            }
+        }
+
+        Some(
+            RuntimeValue::list_from_items(mapped_items)
+                .map_or(Out::Err(RuntimeError::Unsupported), Out::Done),
+        )
+    }
+
+    fn extract_imported_list_callback_call<'a>(
+        &self,
+        expr: &'a Expr,
+        method_name: &str,
+    ) -> Option<(&'a Expr, &'a Expr)> {
         let Expr::Call {
             callee,
             arg: callback,
@@ -2888,49 +2992,16 @@ impl<'m> RuntimeOutputResolver<'m> {
             return None;
         };
 
-        let is_list_each = match head.as_ref() {
+        let matches_method = match head.as_ref() {
             Expr::Qualified { receiver, member } => {
-                member == "each" && self.resolves_module_receiver(receiver, "goby/list")
+                member == method_name && self.resolves_module_receiver(receiver, "goby/list")
             }
             Expr::Var(name) => {
-                name == "each" && self.has_selective_import_symbol("goby/list", "each")
+                name == method_name && self.has_selective_import_symbol("goby/list", method_name)
             }
             _ => false,
         };
-        if !is_list_each {
-            return None;
-        }
-
-        let RuntimeValue::ListInt(values) =
-            self.eval_expr_to_option(list_arg, locals, callables, evaluators, depth + 1)?
-        else {
-            return None;
-        };
-        let callback_callable = match callback.as_ref() {
-            Expr::Lambda { param, body } => IntCallable::AstLambda(Box::new(AstLambdaCallable {
-                parameter: param.clone(),
-                body: (*body.clone()),
-                captured_locals: locals.clone(),
-                captured_callables: callables.clone(),
-            })),
-            Expr::Var(name) => self.resolve_callable_argument(name, callables),
-            _ => {
-                self.set_runtime_error_once(ERR_CALLABLE_DISPATCH_LIST_EACH_CALLBACK);
-                return None;
-            }
-        };
-
-        for n in values {
-            self.dispatch_callable_side_effect(
-                &callback_callable,
-                RuntimeValue::Int(n),
-                locals,
-                callables,
-                evaluators,
-                depth + 1,
-            )?;
-        }
-        Some(())
+        matches_method.then_some((list_arg.as_ref(), callback.as_ref()))
     }
 
     fn execute_decl_call_chain_as_side_effect(
@@ -5336,6 +5407,50 @@ impl<'m> RuntimeOutputResolver<'m> {
         }
     }
 
+    fn eval_callable_value(
+        &mut self,
+        callable: &IntCallable,
+        arg_val: RuntimeValue,
+        locals: &RuntimeLocals,
+        callables: &HashMap<String, IntCallable>,
+        evaluators: &RuntimeEvaluators<'_, '_>,
+        depth: usize,
+    ) -> Out<RuntimeValue> {
+        match callable {
+            IntCallable::Named(name) => self.apply_named_value_call_out(
+                name,
+                arg_val,
+                locals,
+                callables,
+                evaluators,
+                depth + 1,
+            ),
+            IntCallable::Lambda(lambda) => {
+                let RuntimeValue::Int(arg_int) = arg_val else {
+                    return Out::Err(RuntimeError::Unsupported);
+                };
+                evaluators
+                    .int
+                    .eval_lambda(lambda, arg_int, callables)
+                    .map_or(Out::Err(RuntimeError::Unsupported), |value| {
+                        Out::Done(RuntimeValue::Int(value))
+                    })
+            }
+            IntCallable::AstLambda(callable) => {
+                let mut lambda_locals = callable.captured_locals.clone();
+                lambda_locals.store(&callable.parameter, arg_val);
+                let lambda_callables = callable.captured_callables.clone();
+                self.eval_expr(
+                    &callable.body,
+                    &lambda_locals,
+                    &lambda_callables,
+                    evaluators,
+                    depth + 1,
+                )
+            }
+        }
+    }
+
     fn resolve_callable_argument(
         &self,
         arg_name: &str,
@@ -5551,6 +5666,45 @@ enum RuntimeValue {
 }
 
 impl RuntimeValue {
+    fn into_list_items(self) -> Option<Vec<RuntimeValue>> {
+        match self {
+            Self::ListInt(values) => Some(values.into_iter().map(RuntimeValue::Int).collect()),
+            Self::ListString(values) => {
+                Some(values.into_iter().map(RuntimeValue::String).collect())
+            }
+            _ => None,
+        }
+    }
+
+    fn list_from_items(items: Vec<RuntimeValue>) -> Option<Self> {
+        let mut ints = Vec::with_capacity(items.len());
+        let mut strings = Vec::with_capacity(items.len());
+        let mut kind: Option<&'static str> = None;
+        for item in items {
+            match item {
+                RuntimeValue::Int(value) => {
+                    if kind == Some("string") {
+                        return None;
+                    }
+                    kind = Some("int");
+                    ints.push(value);
+                }
+                RuntimeValue::String(value) => {
+                    if kind == Some("int") {
+                        return None;
+                    }
+                    kind = Some("string");
+                    strings.push(value);
+                }
+                _ => return None,
+            }
+        }
+        Some(match kind {
+            Some("string") => RuntimeValue::ListString(strings),
+            _ => RuntimeValue::ListInt(ints),
+        })
+    }
+
     fn to_output_text(&self) -> String {
         match self {
             Self::String(text) => text.clone(),
@@ -6649,6 +6803,57 @@ main =
             resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
                 .expect("runtime output should resolve");
         assert_eq!(output, "10\n20\n30\n");
+    }
+
+    #[test]
+    fn resolves_runtime_output_for_list_each_with_string_callback() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let source = r#"
+import goby/list
+
+main : Unit -> Unit can Print
+main =
+  list.each ["go", "by"] (|s| -> println s)
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let output =
+            resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
+                .expect("runtime output should resolve");
+        assert_eq!(output, "go\nby\n");
+    }
+
+    #[test]
+    fn resolves_runtime_output_for_imported_list_map_with_ints() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let source = r#"
+import goby/list ( map )
+
+main : Unit -> Unit
+main =
+  print (map [1, 2, 3] (|n| -> n * 10))
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let output =
+            resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
+                .expect("runtime output should resolve");
+        assert_eq!(output, "[10, 20, 30]");
+    }
+
+    #[test]
+    fn resolves_runtime_output_for_imported_list_map_with_strings() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let source = r#"
+import goby/list
+
+main : Unit -> Unit
+main =
+  print (list.map ["go", "by"] (|s| -> "${s}!"))
+"#;
+        let module = parse_module(source).expect("parse should work");
+        let output =
+            resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
+                .expect("runtime output should resolve");
+        assert_eq!(output, "[\"go!\", \"by!\"]");
     }
 
     #[test]

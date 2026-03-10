@@ -9,6 +9,7 @@ This file is a restart-safe snapshot for resuming work after context reset.
 - Scoped handler exit + multi-resume progression (former 4.7 task) is implemented.
 - List spread + stdlib `List.map` consolidation (former 4.5 task) is implemented.
 - Unit-argument call parity (`f ()` / `f()`) is implemented for parser + fallback runtime paths.
+- Imported `goby/list.each` / `goby/list.map` fallback runtime paths now handle `Int` and `String` list items generically.
 - `doc/PLAN.md` has been pruned to remove completed active-task sections.
 - Active docs are aligned for current shipped behavior:
   - `doc/LANGUAGE_SPEC.md`
@@ -40,7 +41,8 @@ This file is a restart-safe snapshot for resuming work after context reset.
 ## Next Work
 
 - Immediate runtime parity fixes:
-  - remove `List<Int>`-biased behavior in fallback `goby/list.each` / `goby/list.map` paths so generic stdlib intent (`Int`/`String` minimum) works at runtime.
+- Runtime architecture cleanup:
+  - reduce imported-stdlib bridge special cases by moving toward generic stdlib declaration execution in fallback/runtime paths.
 - Follow-up cleanup remains optional:
   - remove or shrink `eval_expr_ast` compatibility fallback incrementally if future refactors need it.
 

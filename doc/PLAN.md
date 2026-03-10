@@ -540,14 +540,14 @@ Scope:
       - user-defined `Unit -> a` call parity (`f ()` / `f()`) is covered in `crates/goby-wasm`.
 
 2. `goby/list` generic callback runtime support (`each`, `map`):
-   - bug: stdlib signatures are generic, but fallback runtime remains effectively `List<Int>`-biased in key paths.
-   - required fix:
-     - make fallback evaluation for imported `goby/list.each` and `goby/list.map` respect generic list item runtime values (at minimum `Int` and `String`, without regressing existing behavior).
-     - support effectful callbacks in `each` and pure mapping callbacks in `map` across supported item types.
-   - acceptance criteria:
-     - `list.each` works with `List String` callbacks (e.g., `println`).
-     - `map` works on `List String` and `List Int` with expected outputs.
-     - add/extend runtime parity tests in `crates/goby-wasm/src/lib.rs`.
+   - status: implemented (2026-03-10).
+   - shipped behavior:
+     - fallback evaluation for imported `goby/list.each` and `goby/list.map` now operates on generic runtime list items for the currently supported scalar item kinds (`Int`, `String`).
+     - `each` supports effectful callbacks across `List Int` and `List String`.
+     - `map` supports pure callbacks returning `Int` or `String`, preserving existing `List Int` behavior.
+   - remaining design note:
+     - runtime still contains imported-stdlib bridge handling for `goby/list` higher-order calls.
+     - future cleanup should move toward generic imported stdlib declaration execution so stdlib/user code share one runtime path.
 
 ### 4.6 Parking Lot (Needs Revalidation Before Implementation)
 
