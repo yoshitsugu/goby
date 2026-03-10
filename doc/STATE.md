@@ -28,8 +28,8 @@ This file is a restart-safe snapshot for resuming work after context reset.
 - Value-position `with` runs on the active `eval_expr` / `eval_stmts` /
   `apply_cont` path and consumes matching scoped exits at the `with` boundary.
 - Statement-position `with` still uses the legacy unit stmt-sequence wrapper for
-  replay, but scoped exit is absorbed at that `with` boundary instead of
-  aborting the whole program.
+  replay via `execute_unit_ast_stmt_sequence`, and scoped exit is absorbed at
+  that `with` boundary instead of aborting the whole program.
 
 ## Verified
 
@@ -45,15 +45,19 @@ This file is a restart-safe snapshot for resuming work after context reset.
 
 ## Next Work
 
-- Phase 5 is substantially complete. Remaining legacy items:
-  - `eval_ast_side_effect` / `eval_expr_ast` legacy path still active for
-    `Expr::With`, `Expr::Case`, `Expr::If`, `Expr::Pipeline`, `Expr::InterpolatedString`
-    statement-position and unsupported branches.
-  - `runtime_aborted` / `set_runtime_abort_once` / `has_abort_without_error`
-    still used by legacy `eval_ast_side_effect` / ingest path.
-  - These are lower priority — migrate only when needed for new functionality.
-- Next restart point: continue Phase 5 Step 4 (full workspace gate) or begin
-  next feature work.
+- Phase 5 is effectively complete for legacy statement-eval replacement:
+  - `ingest_ast_statement` no longer routes through `eval_ast_side_effect` /
+    `eval_ast_value`; expression statements run through `execute_unit_expr_ast`
+    and value statements use `eval_expr_to_option`.
+  - `Expr::With` unit execution now uses `execute_unit_ast_stmt_sequence`
+    so pending caller continuations replay correctly for statement position.
+  - `Expr::Pipeline` unit execution now dispatches active handler methods
+    (`value |> effectOp`) before declaration/bridge fallback.
+- Remaining cleanup item:
+  - `eval_expr_ast` still exists as a compatibility fallback helper for
+    unsupported value forms; removal is optional and can be done incrementally.
+- Next restart point: update `doc/PLAN.md`/checklist wording for Phase 5 close,
+  then continue next feature work.
 
 ## Completed in Current Session (2026-03-10)
 
@@ -83,6 +87,11 @@ This file is a restart-safe snapshot for resuming work after context reset.
     - `cargo check`
     - `cargo test -p goby-wasm`
     - `cargo test --workspace`
+    - latest focused re-check (session 246):
+      - `cargo fmt`
+      - `cargo check`
+      - `cargo test -p goby-wasm`
+      - `cargo test --workspace`
     - `cargo clippy -p goby-wasm -- -D warnings`
 
 ## Completed in Last Session (2026-03-09, session 243)
