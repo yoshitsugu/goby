@@ -18,7 +18,7 @@ concatenate a b = "${a}${b}"
 print_string : Unit -> Unit can Print
 print_string =
   a = "Hello"
-  print a
+  println a
 
 # Tuple
 a : (String, Int)
@@ -27,8 +27,8 @@ a = ("Hello", 3)
 main =
   t = add(1, 2)
   hello = concatenate("Hello ", "Goby")
-  print "${t}${hello}"
+  println "${t}${hello}"
 
   # Tuple members are accessed by index: .0, .1, ...
-  print a.0
-  print a.1
+  println a.0
+  println a.1

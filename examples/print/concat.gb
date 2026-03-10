@@ -2,4 +2,4 @@ main : Unit -> Unit can Print
 main =
   prefix = "Hello, "
   name = "Goby!"
-  print "${prefix}${name}"
+  println "${prefix}${name}"

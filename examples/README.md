@@ -4,7 +4,7 @@ This directory contains small Goby programs grouped by purpose.
 
 ## Start Here
 
-- `hello.gb`: minimal runnable example (`main` + `print`)
+- `hello.gb`: minimal runnable example (`main` + `println`)
 - `basic_types.gb`: type and syntax showcase (parse/typecheck target)
 - `function.gb`: canonical function/lambda/list example used as run-parity target
 - `read.gb`: minimal stdin sample using prelude `Read.read_line` and `Read.read`
@@ -16,8 +16,8 @@ This directory contains small Goby programs grouped by purpose.
 ## Grouped Samples
 
 - `print/`: focused print-related examples
-  - `local_binding.gb`: print a local string binding
-  - `concat.gb`: print interpolated string result
+  - `local_binding.gb`: println a local string binding
+  - `concat.gb`: println interpolated string result
   - `println.gb`: `print` (no newline) と `println` (末尾改行あり) の差分
 - `parser/`: parser behavior examples
   - `mixed_indent.gb`: mixed tabs/spaces indentation sample

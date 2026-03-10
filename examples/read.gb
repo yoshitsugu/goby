@@ -2,5 +2,5 @@ main : Unit -> Unit can Print, Read
 main =
   line = Read.read_line ()
   rest = Read.read ()
-  print "line=${line}"
-  print "rest=${rest}"
+  println "line=${line}"
+  println "rest=${rest}"

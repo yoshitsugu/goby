@@ -3,7 +3,7 @@ main =
   mut a = 1
   # Mutable variables can be updated with `:=`.
   a := 2
-  print a # -> 2
+  println a # -> 2
   # The following should be an error:
   # a = 10
 
@@ -11,4 +11,4 @@ main =
   # The following should be an error:
   # Variables are immutable by default.
   # b := 3
-  print b
+  println b

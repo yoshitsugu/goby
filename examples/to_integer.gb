@@ -7,9 +7,9 @@ main : Unit -> Unit can Print, StringParseError
 main =
   with
     invalid_integer value ->
-      print "invalid: ${value}"
+      println "invalid: ${value}"
       resume -1
   in
-    print int.parse("42")
-    print int.parse("-7")
-    print int.parse("12x")
+    println int.parse("42")
+    println int.parse("-7")
+    println int.parse("12x")
