@@ -1,7 +1,7 @@
+import goby/iterator
+
 join : List String -> String -> String
 join values sep = list.join(values, sep)
-
-import goby/iterator
 
 iter : List a -> b -> b can Iterator
 iter xs state =
