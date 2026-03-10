@@ -773,32 +773,22 @@ Step-by-step checklist:
     - keep existing multi-`resume` progression and exhaustion tests.
     - checks: `cargo test -p goby-wasm`
 
-  - [ ] Phase 5 — Cleanup around the new semantics, not the old ones
+  - [x] Phase 5 — Cleanup around the new semantics, not the old ones
     - after scoped-exit flow is stable, remove old AST continuation compatibility types/functions.
     - unify resume-token state on the final semantics, not on the old abortive contract.
     - checks: `cargo fmt`, `cargo clippy -p goby-wasm -- -D warnings`, `cargo test --workspace`
-    - Progress checkpoint (2026-03-09, sessions 239-241):
+    - Final checkpoint (2026-03-10):
       - done:
-        - `eval_expr_ast_outcome` reduced to a pure thin wrapper over `eval_expr`.
-        - dead AST wrapper paths removed:
-          - `apply_pipeline_ast_outcome`
-          - `apply_receiver_method_value_call_ast_outcome`
-          - `apply_named_value_call_ast_outcome`
-          - `dispatch_handler_method_as_value_outcome`
-        - helper conversions removed:
-          - `ast_outcome_from_option`
-          - `ast_outcome_to_out`
-        - `apply_named_value_call_args_ast_outcome` removed; conversion logic is now
-          inlined at the `execute_saved_value_continuation` multi-arg replay site.
-      - remaining:
-        - migrate `eval_named_call_args_outcome` to Out-native flow (remove
-          `AstEvalOutcome` dependency for multi-arg replay).
-        - migrate `resume_through_active_continuation_*_outcome` to Out return values.
-        - remove legacy `pending_value_continuations` / `AstContinuationFrame` path
-          and related compatibility structs/functions.
-      - execution guard:
-        - keep micro-step scope narrow; if blast radius grows, roll back the step and retry smaller.
-        - after each micro-step, run focused tests first, then full gate.
+        - `AstEvalOutcome` / `AstContinuation` compatibility layer removed.
+        - `pending_value_continuations` / `AstContinuationFrame` path removed.
+        - legacy statement-eval path (`eval_ast_side_effect` / `eval_ast_value`) removed from ingest flow.
+        - runtime abort flag state (`runtime_aborted`, `set_runtime_abort_once`,
+          `has_abort_without_error`) removed.
+        - handler/pipeline/with unit-position evaluation runs on `Out` semantics
+          with statement-sequence replay preserved.
+      - optional follow-up:
+        - `eval_expr_ast` compatibility fallback helper still exists; remove incrementally
+          only if future features need further simplification.
 
   ### Restart checklist
 
