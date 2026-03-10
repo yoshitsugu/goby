@@ -68,7 +68,7 @@ This file is a restart-safe snapshot for resuming work after context reset.
     - `dispatch_handler_method` return type migrated from `Option<()>` to
       `Out<()>`.
       - direct `Abort`/`Unsupported` mapping now flows through `Out::Err(...)`
-        at call sites instead of `None` + `has_abort_without_error` checks.
+        at call sites instead of legacy abort-flag checks.
       - `eval_ast_side_effect` top-level handler-dispatch call sites now bridge
         `Out<()>` back to `Option<()>` locally.
     - Added thin conversion helpers to reduce repeated legacy abort checks:
@@ -81,7 +81,11 @@ This file is a restart-safe snapshot for resuming work after context reset.
       `*_flow` variants (single source for handler-core mapping).
     - Removed `dispatch_handler_method_as_value*` `Option` wrapper functions;
       call sites now use `*_flow` directly and locally map `Abort` into the
-      legacy `runtime_aborted` flag only where Option-API boundaries remain.
+      remaining Option-API boundaries.
+    - Removed legacy abort flag state from runtime resolver:
+      - deleted dedicated abort field and its helper checks.
+      - abort is now represented via an internal marker in `runtime_error`
+        and treated as non-user-facing at the `resolve` output boundary.
   - Validation:
     - `cargo fmt`
     - `cargo check`
@@ -120,7 +124,7 @@ This file is a restart-safe snapshot for resuming work after context reset.
 
   - Removed `apply_named_value_call_args_ast_outcome` and inlined its conversion
     logic into `execute_saved_value_continuation` (`MultiArgNamedCall` branch).
-  - Preserved existing abort propagation (`set_runtime_abort_once`) and unsupported
+  - Preserved existing abort propagation (legacy abort marker path) and unsupported
     mapping behavior on that path.
   - Quality gate passing: `cargo fmt`, `cargo check -p goby-wasm`,
     `cargo test -p goby-wasm`.

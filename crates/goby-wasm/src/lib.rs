@@ -23,6 +23,7 @@ const MAX_EVAL_DEPTH: usize = 32;
 const ERR_RESUME_MISSING: &str = "resume used without an active continuation [E-RESUME-MISSING]: `resume` can only be called while executing a handler operation body";
 const ERR_RESUME_CONSUMED: &str = "resume continuation already consumed [E-RESUME-CONSUMED]: continuations are one-shot; call `resume` at most once per handled operation";
 const ERR_RESUME_STACK_MISMATCH: &str = "internal resume token stack mismatch [E-RESUME-STACK-MISMATCH]: continuation token stack became unbalanced";
+const INTERNAL_ABORT_MARKER: &str = "__goby_runtime_abort__";
 const ERR_CALLABLE_DISPATCH_LIST_EACH_CALLBACK: &str = "unsupported callable dispatch [E-CALLABLE-DISPATCH]: goby/list.each callback must be a lambda or function name";
 const ERR_CALLABLE_DISPATCH_DECL_PARAM: &str = "unsupported callable dispatch [E-CALLABLE-DISPATCH]: callable parameter requires a lambda or function name argument";
 
@@ -516,7 +517,6 @@ struct RuntimeOutputResolver<'m> {
     /// begin_handler_continuation_bridge during handler dispatch.
     pending_caller_cont_stack: Vec<Option<Cont>>,
     runtime_error: Option<String>,
-    runtime_aborted: bool,
     next_with_id: u64,
     execution_mode: lower::EffectExecutionMode,
     stdin_buffer: Option<String>,
@@ -927,7 +927,6 @@ impl<'m> RuntimeOutputResolver<'m> {
             optimized_resume_tokens: Vec::new(),
             pending_caller_cont_stack: Vec::new(),
             runtime_error: None,
-            runtime_aborted: false,
             next_with_id: 1,
             execution_mode,
             stdin_buffer: stdin_seed,
@@ -942,7 +941,6 @@ impl<'m> RuntimeOutputResolver<'m> {
                 .execute_ingest_ast_stmt_sequence(stmts, evaluators)
                 .is_none()
                 && resolver.runtime_error.is_none()
-                && !resolver.runtime_aborted
             {
                 return None;
             }
@@ -950,12 +948,20 @@ impl<'m> RuntimeOutputResolver<'m> {
             // String-based fallback path
             for statement in statements(body) {
                 if resolver.ingest_statement(statement, evaluators).is_none() {
-                    if resolver.runtime_error.is_some() || resolver.runtime_aborted {
+                    if resolver.runtime_error.is_some() {
                         break;
                     }
                     return None;
                 }
             }
+        }
+
+        if resolver.runtime_error_is_abort_marker() {
+            return if resolver.outputs.is_empty() {
+                None
+            } else {
+                Some(resolver.outputs.concat())
+            };
         }
 
         if let Some(err) = &resolver.runtime_error {
@@ -969,14 +975,6 @@ impl<'m> RuntimeOutputResolver<'m> {
             }
             out.push_str(&err_line);
             return Some(out);
-        }
-
-        if resolver.runtime_aborted {
-            return if resolver.outputs.is_empty() {
-                None
-            } else {
-                Some(resolver.outputs.concat())
-            };
         }
 
         if resolver.outputs.is_empty() {
@@ -1047,14 +1045,14 @@ impl<'m> RuntimeOutputResolver<'m> {
                         self.locals = locals;
                         Some(())
                     }
-                    Out::Err(RuntimeError::Abort { .. }) if self.has_abort_without_error() => {
-                        self.runtime_aborted = false;
+                    Out::Err(RuntimeError::Abort { .. })
+                        if self.runtime_error_is_abort_marker() =>
+                    {
+                        self.clear_runtime_abort_marker();
                         Some(())
                     }
                     Out::Err(RuntimeError::Unsupported)
-                        if self.runtime_error.is_none()
-                            && !self.runtime_aborted
-                            && self.outputs.len() == outputs_before =>
+                        if self.runtime_error.is_none() && self.outputs.len() == outputs_before =>
                     {
                         let repr = expr.to_str_repr()?;
                         self.eval_side_effect(&repr, evaluators)
@@ -1259,7 +1257,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                                 ) {
                                 Out::Done(value) => value,
                                 Out::Err(RuntimeError::Abort { .. }) => {
-                                    self.set_runtime_abort_once();
+                                    self.mark_runtime_abort();
                                     return None;
                                 }
                                 Out::Suspend(_)
@@ -1302,7 +1300,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                                 ) {
                                 Out::Done(value) => value,
                                 Out::Err(RuntimeError::Abort { .. }) => {
-                                    self.set_runtime_abort_once();
+                                    self.mark_runtime_abort();
                                     return None;
                                 }
                                 Out::Suspend(_)
@@ -1674,7 +1672,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                 }
                 Out::Escape(_) => return None,
                 Out::Err(RuntimeError::Abort { .. }) => {
-                    self.set_runtime_abort_once();
+                    self.mark_runtime_abort();
                     return None;
                 }
                 Out::Err(RuntimeError::Unsupported) => return None,
@@ -1703,7 +1701,7 @@ impl<'m> RuntimeOutputResolver<'m> {
             Expr::StringLit(s) => Out::Done(RuntimeValue::String(s.clone())),
             Expr::Var(name) => match locals.get(name) {
                 Some(v) => Out::Done(v),
-                None if self.has_abort_without_error() => Out::Err(RuntimeError::Abort {
+                None if self.runtime_error_is_abort_marker() => Out::Err(RuntimeError::Abort {
                     kind: "aborted".into(),
                 }),
                 None => Out::Err(RuntimeError::Unsupported),
@@ -3926,7 +3924,7 @@ impl<'m> RuntimeOutputResolver<'m> {
     ) -> Out<()> {
         match self.execute_unit_call(expr, caller_locals, caller_callables, evaluators) {
             Some(()) => Out::Done(()),
-            None if self.has_abort_without_error() => Out::Err(RuntimeError::Abort {
+            None if self.runtime_error_is_abort_marker() => Out::Err(RuntimeError::Abort {
                 kind: "aborted".into(),
             }),
             None => Out::Err(RuntimeError::Unsupported),
@@ -4518,7 +4516,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                     ) {
                         Out::Done(value) => Some(value),
                         Out::Err(RuntimeError::Abort { .. }) => {
-                            self.set_runtime_abort_once();
+                            self.mark_runtime_abort();
                             None
                         }
                         Out::Suspend(_) | Out::Escape(_) | Out::Err(RuntimeError::Unsupported) => {
@@ -4537,7 +4535,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                     ) {
                         Out::Done(value) => Some(value),
                         Out::Err(RuntimeError::Abort { .. }) => {
-                            self.set_runtime_abort_once();
+                            self.mark_runtime_abort();
                             None
                         }
                         Out::Suspend(_) | Out::Escape(_) | Out::Err(RuntimeError::Unsupported) => {
@@ -4748,20 +4746,28 @@ impl<'m> RuntimeOutputResolver<'m> {
         }
     }
 
-    fn set_runtime_abort_once(&mut self) {
-        if self.runtime_error.is_none() {
-            self.runtime_aborted = true;
-        }
-    }
-
     fn fresh_with_id(&mut self) -> WithId {
         let with_id = self.next_with_id;
         self.next_with_id += 1;
         with_id
     }
 
-    fn has_abort_without_error(&self) -> bool {
-        self.runtime_aborted && self.runtime_error.is_none()
+    fn mark_runtime_abort(&mut self) {
+        if self.runtime_error.is_none() {
+            self.runtime_error = Some(INTERNAL_ABORT_MARKER.to_string());
+        }
+    }
+
+    fn runtime_error_is_abort_marker(&self) -> bool {
+        self.runtime_error
+            .as_deref()
+            .is_some_and(|msg| msg == INTERNAL_ABORT_MARKER)
+    }
+
+    fn clear_runtime_abort_marker(&mut self) {
+        if self.runtime_error_is_abort_marker() {
+            self.runtime_error = None;
+        }
     }
 
     fn push_resume_token_for_handler(&mut self, take_caller_cont: bool) -> usize {
