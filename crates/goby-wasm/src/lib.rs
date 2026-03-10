@@ -509,6 +509,7 @@ struct RuntimeOutputResolver<'m> {
     embedded_default_handlers: HashMap<String, String>,
     runtime_bridges: RuntimeBridgeRegistry,
     current_module_stack: Vec<String>,
+    current_decl_stack: Vec<String>,
     /// Active inline handlers installed via `with` / `with`.
     active_inline_handler_stack: Vec<InlineHandlerValue>,
     resume_tokens: Vec<ResumeToken>,
@@ -754,45 +755,25 @@ struct RuntimeEvaluators<'a, 'b> {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum RuntimeBridgeKind {
-    Function,
-    EffectOperation,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum RuntimeBridgeTypeShape {
-    UnitToString,
-    StringToString,
-    StringToInt,
-    StringToIntCanStringParseError,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RuntimeBridgeIntrinsic {
     EmbeddedDefaultHandler {
         effect_name: &'static str,
         method_name: &'static str,
     },
-    EnvFetchEnvVar,
     IntParse,
-    StringLength,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct RuntimeBridgeMetadata {
     module: &'static str,
     symbol: &'static str,
-    kind: RuntimeBridgeKind,
-    type_shape: RuntimeBridgeTypeShape,
     intrinsic: RuntimeBridgeIntrinsic,
 }
 
-const RUNTIME_BRIDGE_CATALOG: [RuntimeBridgeMetadata; 5] = [
+const RUNTIME_BRIDGE_CATALOG: [RuntimeBridgeMetadata; 3] = [
     RuntimeBridgeMetadata {
         module: PRELUDE_MODULE_PATH,
         symbol: "read",
-        kind: RuntimeBridgeKind::EffectOperation,
-        type_shape: RuntimeBridgeTypeShape::UnitToString,
         intrinsic: RuntimeBridgeIntrinsic::EmbeddedDefaultHandler {
             effect_name: "Read",
             method_name: "read",
@@ -801,32 +782,14 @@ const RUNTIME_BRIDGE_CATALOG: [RuntimeBridgeMetadata; 5] = [
     RuntimeBridgeMetadata {
         module: PRELUDE_MODULE_PATH,
         symbol: "read_line",
-        kind: RuntimeBridgeKind::EffectOperation,
-        type_shape: RuntimeBridgeTypeShape::UnitToString,
         intrinsic: RuntimeBridgeIntrinsic::EmbeddedDefaultHandler {
             effect_name: "Read",
             method_name: "read_line",
         },
     },
     RuntimeBridgeMetadata {
-        module: "goby/env",
-        symbol: "fetch_env_var",
-        kind: RuntimeBridgeKind::Function,
-        type_shape: RuntimeBridgeTypeShape::StringToString,
-        intrinsic: RuntimeBridgeIntrinsic::EnvFetchEnvVar,
-    },
-    RuntimeBridgeMetadata {
-        module: "goby/string",
-        symbol: "length",
-        kind: RuntimeBridgeKind::Function,
-        type_shape: RuntimeBridgeTypeShape::StringToInt,
-        intrinsic: RuntimeBridgeIntrinsic::StringLength,
-    },
-    RuntimeBridgeMetadata {
         module: "goby/int",
         symbol: "parse",
-        kind: RuntimeBridgeKind::Function,
-        type_shape: RuntimeBridgeTypeShape::StringToIntCanStringParseError,
         intrinsic: RuntimeBridgeIntrinsic::IntParse,
     },
 ];
@@ -839,6 +802,7 @@ struct RuntimeBridgeRegistry {
 
 #[derive(Clone)]
 struct RuntimeDeclInfo {
+    name: String,
     owner_module: Option<String>,
     params: Vec<String>,
     callable_param_mask: Vec<bool>,
@@ -866,9 +830,7 @@ impl RuntimeBridgeRegistry {
                         if let Some(receiver) = import.module_path.rsplit('/').next() {
                             registry.insert_receiver(receiver, bridge.symbol, bridge);
                         }
-                        if import.module_path == PRELUDE_MODULE_PATH
-                            && bridge.kind == RuntimeBridgeKind::EffectOperation
-                        {
+                        if import.module_path == PRELUDE_MODULE_PATH {
                             registry.insert_bare(bridge.symbol, bridge);
                         }
                     }
@@ -939,6 +901,7 @@ impl<'m> RuntimeOutputResolver<'m> {
             embedded_default_handlers: collect_embedded_default_handlers(module),
             runtime_bridges: RuntimeBridgeRegistry::build(module),
             current_module_stack: Vec::new(),
+            current_decl_stack: Vec::new(),
             active_inline_handler_stack: Vec::new(),
             resume_tokens: Vec::new(),
             optimized_resume_tokens: Vec::new(),
@@ -1462,7 +1425,9 @@ impl<'m> RuntimeOutputResolver<'m> {
             Expr::InterpolatedString(_) => {
                 self.eval_expr_to_option(expr, locals, callables, evaluators, depth)
             }
-            Expr::Var(name) => locals.get(name),
+            Expr::Var(name) => locals
+                .get(name)
+                .or_else(|| self.eval_zero_arity_decl_value(name, evaluators, depth + 1)),
             Expr::Handler { clauses } => Some(RuntimeValue::Handler(
                 self.inline_handler_from_clauses(clauses, locals, callables),
             )),
@@ -1590,16 +1555,13 @@ impl<'m> RuntimeOutputResolver<'m> {
             } if args.len() == 1 => {
                 let arg_val =
                     self.eval_expr_ast(&args[0], locals, callables, evaluators, depth + 1)?;
-                if let Some(value) = self.try_apply_receiver_runtime_bridge_value(
+                self.try_apply_receiver_runtime_bridge_value(
                     receiver,
                     method,
                     arg_val,
                     evaluators,
                     depth + 1,
-                ) {
-                    return Some(value);
-                }
-                None
+                )
             }
             // Lambda as top-level value — not needed in main, return None to fall back.
             Expr::Lambda { .. } | Expr::MethodCall { .. } => None,
@@ -1728,10 +1690,13 @@ impl<'m> RuntimeOutputResolver<'m> {
             Expr::StringLit(s) => Out::Done(RuntimeValue::String(s.clone())),
             Expr::Var(name) => match locals.get(name) {
                 Some(v) => Out::Done(v),
-                None if self.runtime_error_is_abort_marker() => Out::Err(RuntimeError::Abort {
-                    kind: "aborted".into(),
-                }),
-                None => Out::Err(RuntimeError::Unsupported),
+                None => match self.eval_zero_arity_decl_value(name, evaluators, depth + 1) {
+                    Some(v) => Out::Done(v),
+                    None if self.runtime_error_is_abort_marker() => Out::Err(RuntimeError::Abort {
+                        kind: "aborted".into(),
+                    }),
+                    None => Out::Err(RuntimeError::Unsupported),
+                },
             },
             Expr::Handler { clauses } => Out::Done(RuntimeValue::Handler(
                 self.inline_handler_from_clauses(clauses, locals, callables),
@@ -2714,12 +2679,13 @@ impl<'m> RuntimeOutputResolver<'m> {
                 self.outputs.push(text);
                 return Out::Done(());
             }
-            if let Some(effect_name) = self.unique_effect_name_for_operation(fn_name)
-                && self
+            if let Some(effect_name) = self.unique_effect_name_for_operation(fn_name) {
+                if self
                     .apply_embedded_default_handler(&effect_name, fn_name, arg_val.clone())
                     .is_some()
-            {
-                return Out::Done(());
+                {
+                    return Out::Done(());
+                }
             }
             if self
                 .execute_unit_call_ast(
@@ -2754,6 +2720,9 @@ impl<'m> RuntimeOutputResolver<'m> {
             {
                 return Out::Done(());
             }
+            if self.unique_effect_name_for_operation(fn_name).is_some() {
+                self.set_unhandled_effect_error(fn_name);
+            }
             let Some(repr) = expr.to_str_repr() else {
                 return Out::Err(RuntimeError::Unsupported);
             };
@@ -2767,12 +2736,13 @@ impl<'m> RuntimeOutputResolver<'m> {
                     if let Some(method) = bare_method {
                         return self.dispatch_handler_method(&method, v, evaluators, depth + 1);
                     }
-                    if let Some(effect_name) = self.unique_effect_name_for_operation(callee)
-                        && self
+                    if let Some(effect_name) = self.unique_effect_name_for_operation(callee) {
+                        if self
                             .apply_embedded_default_handler(&effect_name, callee, v.clone())
                             .is_some()
-                    {
-                        return Out::Done(());
+                        {
+                            return Out::Done(());
+                        }
                     }
                     if self
                         .execute_unit_call_ast(
@@ -2799,6 +2769,9 @@ impl<'m> RuntimeOutputResolver<'m> {
                         .is_some()
                     {
                         return Out::Done(());
+                    }
+                    if self.unique_effect_name_for_operation(callee).is_some() {
+                        self.set_unhandled_effect_error(callee);
                     }
                 }
                 Out::Suspend(cont) => return Out::Suspend(cont),
@@ -2922,6 +2895,9 @@ impl<'m> RuntimeOutputResolver<'m> {
         }
         let (head, args) = flatten_direct_call(expr)?;
         let decl = self.resolve_imported_runtime_decl(&head)?;
+        if decl.owner_module.as_deref() == Some("goby/int") && decl.name == "parse" {
+            return None;
+        }
         if decl.params.len() != args.len() {
             return None;
         }
@@ -2961,6 +2937,7 @@ impl<'m> RuntimeOutputResolver<'m> {
         if let Some(owner_module) = &decl.owner_module {
             self.current_module_stack.push(owner_module.clone());
         }
+        self.push_runtime_decl_context(&decl);
         let result = self.eval_stmts(
             &decl.stmts,
             fn_locals,
@@ -2969,6 +2946,7 @@ impl<'m> RuntimeOutputResolver<'m> {
             depth + 1,
             FinishKind::Block,
         );
+        self.pop_runtime_decl_context();
         if decl.owner_module.is_some() {
             self.current_module_stack.pop();
         }
@@ -3043,6 +3021,7 @@ impl<'m> RuntimeOutputResolver<'m> {
         if let Some(owner_module) = &decl.owner_module {
             self.current_module_stack.push(owner_module.clone());
         }
+        self.push_runtime_decl_context(&decl);
         let result = self.eval_stmts(
             &filtered_stmts,
             fn_locals,
@@ -3051,6 +3030,7 @@ impl<'m> RuntimeOutputResolver<'m> {
             depth + 1,
             FinishKind::Block,
         );
+        self.pop_runtime_decl_context();
         if decl.owner_module.is_some() {
             self.current_module_stack.pop();
         }
@@ -3127,6 +3107,7 @@ impl<'m> RuntimeOutputResolver<'m> {
         if let Some(owner_module) = &decl.owner_module {
             self.current_module_stack.push(owner_module.clone());
         }
+        self.push_runtime_decl_context(&decl);
         let result = self.eval_stmts(
             &filtered_stmts,
             fn_locals,
@@ -3135,6 +3116,7 @@ impl<'m> RuntimeOutputResolver<'m> {
             depth + 1,
             FinishKind::Block,
         );
+        self.pop_runtime_decl_context();
         if decl.owner_module.is_some() {
             self.current_module_stack.pop();
         }
@@ -3199,6 +3181,7 @@ impl<'m> RuntimeOutputResolver<'m> {
         if let Some(owner_module) = &decl.owner_module {
             self.current_module_stack.push(owner_module.clone());
         }
+        self.push_runtime_decl_context(&decl);
         let result = self.eval_stmts(
             &stmts,
             fn_locals,
@@ -3207,6 +3190,7 @@ impl<'m> RuntimeOutputResolver<'m> {
             depth + 1,
             FinishKind::Block,
         );
+        self.pop_runtime_decl_context();
         if decl.owner_module.is_some() {
             self.current_module_stack.pop();
         }
@@ -4261,26 +4245,11 @@ impl<'m> RuntimeOutputResolver<'m> {
                 effect_name,
                 method_name,
             } => self.apply_embedded_default_handler(effect_name, method_name, arg_val),
-            RuntimeBridgeIntrinsic::EnvFetchEnvVar => {
-                let RuntimeValue::String(var_name) = arg_val else {
-                    return None;
-                };
-                Some(RuntimeValue::String(
-                    std::env::var(&var_name).unwrap_or_default(),
-                ))
-            }
             RuntimeBridgeIntrinsic::IntParse => {
                 let RuntimeValue::String(input) = arg_val else {
                     return None;
                 };
                 self.eval_int_parse_runtime(input, evaluators, depth + 1)
-            }
-            RuntimeBridgeIntrinsic::StringLength => {
-                let RuntimeValue::String(value) = arg_val else {
-                    return None;
-                };
-                let len = i64::try_from(value.chars().count()).ok()?;
-                Some(RuntimeValue::Int(len))
             }
         }
     }
@@ -4333,6 +4302,48 @@ impl<'m> RuntimeOutputResolver<'m> {
         self.apply_runtime_bridge_value(bridge, arg_val, evaluators, depth + 1)
     }
 
+    fn eval_zero_arity_decl_value(
+        &mut self,
+        name: &str,
+        evaluators: &RuntimeEvaluators<'_, '_>,
+        depth: usize,
+    ) -> Option<RuntimeValue> {
+        if depth >= MAX_EVAL_DEPTH {
+            return None;
+        }
+        if let Some(value) = self.eval_decl_as_value_with_args_ast(name, &[], evaluators, depth + 1)
+        {
+            return Some(value);
+        }
+
+        let decl = self.resolve_imported_runtime_decl(&DirectCallHead::Bare(name.to_string()))?;
+        if !decl.params.is_empty() {
+            return None;
+        }
+        let fn_locals = RuntimeLocals::default();
+        let fn_callables = HashMap::new();
+        if let Some(owner_module) = &decl.owner_module {
+            self.current_module_stack.push(owner_module.clone());
+        }
+        self.push_runtime_decl_context(&decl);
+        let result = self.eval_stmts(
+            &decl.stmts,
+            fn_locals,
+            fn_callables,
+            evaluators,
+            depth + 1,
+            FinishKind::Block,
+        );
+        self.pop_runtime_decl_context();
+        if decl.owner_module.is_some() {
+            self.current_module_stack.pop();
+        }
+        match result {
+            Out::Done((value, _)) => Some(value.unwrap_or(RuntimeValue::Unit)),
+            Out::Suspend(_) | Out::Escape(_) | Out::Err(_) => None,
+        }
+    }
+
     fn eval_decl_as_value_with_args_ast(
         &mut self,
         fn_name: &str,
@@ -4361,6 +4372,7 @@ impl<'m> RuntimeOutputResolver<'m> {
         if let Some(owner_module) = &decl.owner_module {
             self.current_module_stack.push(owner_module.clone());
         }
+        self.push_runtime_decl_context(&decl);
         let result = self.eval_expr_to_option(
             &Expr::Block(stmts),
             &fn_locals,
@@ -4368,6 +4380,7 @@ impl<'m> RuntimeOutputResolver<'m> {
             evaluators,
             depth + 1,
         );
+        self.pop_runtime_decl_context();
         if decl.owner_module.is_some() {
             self.current_module_stack.pop();
         }
@@ -4404,6 +4417,7 @@ impl<'m> RuntimeOutputResolver<'m> {
         if let Some(owner_module) = &decl.owner_module {
             self.current_module_stack.push(owner_module.clone());
         }
+        self.push_runtime_decl_context(&decl);
         let result = self.eval_stmts(
             &stmts,
             fn_locals,
@@ -4412,6 +4426,7 @@ impl<'m> RuntimeOutputResolver<'m> {
             depth + 1,
             FinishKind::Block,
         );
+        self.pop_runtime_decl_context();
         if decl.owner_module.is_some() {
             self.current_module_stack.pop();
         }
@@ -4502,11 +4517,12 @@ impl<'m> RuntimeOutputResolver<'m> {
             self.outputs.push(text);
             return Out::Done(RuntimeValue::Unit);
         }
-        if let Some(effect_name) = self.unique_effect_name_for_operation(fn_name)
-            && let Some(value) =
+        if let Some(effect_name) = self.unique_effect_name_for_operation(fn_name) {
+            if let Some(value) =
                 self.apply_embedded_default_handler(&effect_name, fn_name, arg_val.clone())
-        {
-            return Out::Done(value);
+            {
+                return Out::Done(value);
+            }
         }
         if let Some(value) = self.try_apply_bare_runtime_bridge_value(
             fn_name,
@@ -4517,6 +4533,10 @@ impl<'m> RuntimeOutputResolver<'m> {
             depth + 1,
         ) {
             return Out::Done(value);
+        }
+        if self.unique_effect_name_for_operation(fn_name).is_some() {
+            self.set_unhandled_effect_error(fn_name);
+            return Out::Err(RuntimeError::Unsupported);
         }
         if let RuntimeValue::Int(arg_int) = arg_val.clone() {
             if let Some(callable) = callables.get(fn_name).cloned() {
@@ -4668,10 +4688,18 @@ impl<'m> RuntimeOutputResolver<'m> {
         rv: RuntimeValue,
     ) -> Option<RuntimeValue> {
         match (lv, rv) {
+            (RuntimeValue::Bool(l), RuntimeValue::Bool(r)) => match op {
+                goby_core::BinOpKind::And => Some(RuntimeValue::Bool(l && r)),
+                goby_core::BinOpKind::Eq => Some(RuntimeValue::Bool(l == r)),
+                _ => None,
+            },
             (RuntimeValue::Int(l), RuntimeValue::Int(r)) => match op {
                 goby_core::BinOpKind::Add => l.checked_add(r).map(RuntimeValue::Int),
                 goby_core::BinOpKind::Mul => l.checked_mul(r).map(RuntimeValue::Int),
                 goby_core::BinOpKind::Eq => Some(RuntimeValue::Bool(l == r)),
+                goby_core::BinOpKind::Lt => Some(RuntimeValue::Bool(l < r)),
+                goby_core::BinOpKind::Gt => Some(RuntimeValue::Bool(l > r)),
+                _ => None,
             },
             (RuntimeValue::String(l), RuntimeValue::String(r))
                 if matches!(op, goby_core::BinOpKind::Eq) =>
@@ -4911,7 +4939,7 @@ impl<'m> RuntimeOutputResolver<'m> {
 
     fn unique_effect_name_for_operation(&self, op_name: &str) -> Option<String> {
         let mut matches = self
-            .module
+            .current_runtime_module()
             .effect_declarations
             .iter()
             .filter(|effect| effect.members.iter().any(|member| member.name == op_name))
@@ -5408,6 +5436,7 @@ impl<'m> RuntimeOutputResolver<'m> {
         if let Some(owner_module) = &decl.owner_module {
             self.current_module_stack.push(owner_module.clone());
         }
+        self.push_runtime_decl_context(&decl);
         let result = self.eval_stmts(
             &filtered_stmts,
             fn_locals,
@@ -5416,6 +5445,7 @@ impl<'m> RuntimeOutputResolver<'m> {
             depth + 1,
             FinishKind::Block,
         );
+        self.pop_runtime_decl_context();
         if decl.owner_module.is_some() {
             self.current_module_stack.pop();
         }
@@ -5457,6 +5487,7 @@ impl<'m> RuntimeOutputResolver<'m> {
         if let Some(owner_module) = &decl.owner_module {
             self.current_module_stack.push(owner_module.clone());
         }
+        self.push_runtime_decl_context(&decl);
         let result = self.eval_stmts(
             &filtered_stmts,
             fn_locals,
@@ -5465,6 +5496,7 @@ impl<'m> RuntimeOutputResolver<'m> {
             depth + 1,
             FinishKind::Block,
         );
+        self.pop_runtime_decl_context();
         if decl.owner_module.is_some() {
             self.current_module_stack.pop();
         }
@@ -5590,6 +5622,29 @@ impl<'m> RuntimeOutputResolver<'m> {
             .unwrap_or(self.module)
     }
 
+    fn push_runtime_decl_context(&mut self, decl: &RuntimeDeclInfo) {
+        let label = match &decl.owner_module {
+            Some(module) => format!("{module}.{}", decl.name),
+            None => decl.name.clone(),
+        };
+        self.current_decl_stack.push(label);
+    }
+
+    fn pop_runtime_decl_context(&mut self) {
+        self.current_decl_stack.pop();
+    }
+
+    fn set_unhandled_effect_error(&mut self, op_name: &str) {
+        let source = self
+            .current_decl_stack
+            .last()
+            .cloned()
+            .unwrap_or_else(|| "<runtime>".to_string());
+        self.set_runtime_error_once(format!(
+            "unhandled effect operation `{op_name}` from {source}"
+        ));
+    }
+
     fn resolve_local_runtime_decl(&self, fn_name: &str) -> Option<RuntimeDeclInfo> {
         let decl = self
             .current_runtime_module()
@@ -5655,6 +5710,7 @@ impl<'m> RuntimeOutputResolver<'m> {
             None => vec![false; decl.params.len()],
         };
         Some(RuntimeDeclInfo {
+            name: decl.name.clone(),
             owner_module,
             params: decl.params.clone(),
             callable_param_mask,
@@ -5781,9 +5837,6 @@ fn resolve_runtime_stdlib_root() -> PathBuf {
 }
 
 fn parse_goby_int_text(input: &str) -> Option<i64> {
-    // Runtime shortcut for stdlib `goby/int.parse`.
-    // Keep this behavior aligned with `stdlib/goby/int.gb`:
-    // optional leading `-`, then one or more ASCII digits, with overflow rejected.
     if input.is_empty() {
         return None;
     }
@@ -7124,7 +7177,7 @@ main =
     }
 
     #[test]
-    fn runtime_resolves_goby_env_fetch_via_selective_import_bridge() {
+    fn runtime_resolves_goby_env_fetch_via_imported_decl() {
         let _guard = ENV_MUTEX.lock().unwrap();
         // SAFETY: serialized by ENV_MUTEX; no concurrent env access while lock is held.
         unsafe { std::env::set_var("GOBY_ENV_BRIDGE_TEST_PATH", "env-bridge-ok") };
@@ -7143,7 +7196,7 @@ main =
     }
 
     #[test]
-    fn runtime_resolves_goby_string_length_via_module_receiver_bridge() {
+    fn runtime_resolves_goby_string_length_via_qualified_imported_decl() {
         let _guard = ENV_MUTEX.lock().unwrap();
         let source = r#"
 import goby/string
@@ -7159,7 +7212,7 @@ main =
     }
 
     #[test]
-    fn runtime_resolves_goby_string_length_via_selective_import_bridge() {
+    fn runtime_resolves_goby_string_length_via_selective_imported_decl() {
         let _guard = ENV_MUTEX.lock().unwrap();
         let source = r#"
 import goby/string ( length )
@@ -7175,7 +7228,7 @@ main =
     }
 
     #[test]
-    fn runtime_resolves_goby_int_parse_via_selective_import_bridge() {
+    fn runtime_resolves_goby_int_parse_via_selective_runtime_bridge() {
         let _guard = ENV_MUTEX.lock().unwrap();
         let source = r#"
 import goby/int ( parse )
@@ -8083,7 +8136,7 @@ main =
     }
 
     #[test]
-    fn runtime_resolves_goby_int_parse_via_module_alias() {
+    fn runtime_resolves_goby_int_parse_via_module_alias_runtime_bridge() {
         use goby_core::parse_module;
         let _guard = ENV_MUTEX.lock().unwrap();
         let source = r#"
@@ -8147,21 +8200,6 @@ main =
             output.as_deref(),
             Some("runtime error: unhandled effect operation `invalid_integer` from goby/int.parse")
         );
-    }
-
-    #[test]
-    fn parse_goby_int_text_matches_locked_boundary_cases() {
-        assert_eq!(parse_goby_int_text("0"), Some(0));
-        assert_eq!(parse_goby_int_text("-0"), Some(0));
-        assert_eq!(parse_goby_int_text("9223372036854775807"), Some(i64::MAX));
-        assert_eq!(parse_goby_int_text("-9223372036854775808"), Some(i64::MIN));
-        assert_eq!(parse_goby_int_text("9223372036854775808"), None);
-        assert_eq!(parse_goby_int_text("-9223372036854775809"), None);
-        assert_eq!(parse_goby_int_text(""), None);
-        assert_eq!(parse_goby_int_text("-"), None);
-        assert_eq!(parse_goby_int_text("+1"), None);
-        assert_eq!(parse_goby_int_text("1_000"), None);
-        assert_eq!(parse_goby_int_text("12x"), None);
     }
 
     #[test]

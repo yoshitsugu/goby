@@ -2043,10 +2043,13 @@ fn check_expr(expr: &Expr, env: &TypeEnv) -> Ty {
             let lt = check_expr(left, env);
             let rt = check_expr(right, env);
             match (op, &lt, &rt) {
+                (BinOpKind::And, Ty::Bool, Ty::Bool) => Ty::Bool,
                 (BinOpKind::Add, Ty::Int, Ty::Int) => Ty::Int,
                 (BinOpKind::Mul, Ty::Int, Ty::Int) => Ty::Int,
                 (BinOpKind::Eq, Ty::Int, Ty::Int) => Ty::Bool,
                 (BinOpKind::Eq, Ty::Str, Ty::Str) => Ty::Bool,
+                (BinOpKind::Lt, Ty::Int, Ty::Int) => Ty::Bool,
+                (BinOpKind::Gt, Ty::Int, Ty::Int) => Ty::Bool,
                 // Unknown operands are tolerated (forward-compatibility)
                 (_, Ty::Unknown, _) | (_, _, Ty::Unknown) => Ty::Unknown,
                 _ => Ty::Unknown,

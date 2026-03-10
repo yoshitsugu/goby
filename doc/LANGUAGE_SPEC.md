@@ -65,11 +65,12 @@ syntax/semantics.
   - `|x| -> expr`
   - placeholder shorthand: `_ * 10` (current supported subset)
 - Operators:
-  - precedence: `|>` < `+` < `*` < call/application
-  - `|>`, `+`, `*` are left-associative
-  - `+` and `*` require spaces around operators
+  - precedence: `|>` < `&&` < `==` / `<` / `>` < `+` < `*` < call/application
+  - `|>`, `&&`, `==`, `<`, `>`, `+`, `*` are left-associative
+  - binary operators require spaces around operators
 - Conditionals/case:
   - `if ... else ...` expression form
+  - multiline `if` branches may be either a single expression or an indented statement block; block branches return the last expression value
   - `case ...` arms support both:
     - inline body: `pattern -> expr`
     - block body: `pattern ->` then deeper-indented statements (last expression is arm result)

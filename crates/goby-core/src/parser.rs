@@ -1133,9 +1133,7 @@ fn parse_multiline_expr(lines: &[&str], start: usize) -> Option<(Expr, usize)> {
         let condition = parse_expr(cond_src.trim())?;
         let mut i = start + 1;
 
-        // Consume then-expression (first non-empty line deeper than `if`)
-        let mut then_expr: Option<Expr> = None;
-        while i < lines.len() && then_expr.is_none() {
+        while i < lines.len() {
             let then_raw = lines[i];
             let then_stripped = strip_line_comment(then_raw).trim_end();
             let then_trimmed = then_stripped.trim();
@@ -1147,10 +1145,15 @@ fn parse_multiline_expr(lines: &[&str], start: usize) -> Option<(Expr, usize)> {
             if then_indent <= case_indent {
                 return None;
             }
-            then_expr = Some(parse_expr(then_trimmed)?);
-            i += 1;
+            break;
         }
-        let then_expr = then_expr?;
+        if i >= lines.len() {
+            return None;
+        }
+        let then_start = i;
+        let (then_stmts, consumed) = parse_stmts_from_lines(lines, then_start)?;
+        let then_expr = expr_from_branch_stmts(then_stmts);
+        i = then_start + consumed;
 
         // Consume `else` keyword at same indent as `if`
         let mut found_else = false;
@@ -1173,9 +1176,7 @@ fn parse_multiline_expr(lines: &[&str], start: usize) -> Option<(Expr, usize)> {
             return None;
         }
 
-        // Consume else-expression (first non-empty line deeper than `if`)
-        let mut else_expr: Option<Expr> = None;
-        while i < lines.len() && else_expr.is_none() {
+        while i < lines.len() {
             let else_raw = lines[i];
             let else_stripped = strip_line_comment(else_raw).trim_end();
             let else_trimmed = else_stripped.trim();
@@ -1187,10 +1188,15 @@ fn parse_multiline_expr(lines: &[&str], start: usize) -> Option<(Expr, usize)> {
             if else_indent <= case_indent {
                 return None;
             }
-            else_expr = Some(parse_expr(else_trimmed)?);
-            i += 1;
+            break;
         }
-        let else_expr = else_expr?;
+        if i >= lines.len() {
+            return None;
+        }
+        let else_start = i;
+        let (else_stmts, consumed) = parse_stmts_from_lines(lines, else_start)?;
+        let else_expr = expr_from_branch_stmts(else_stmts);
+        i = else_start + consumed;
 
         Some((
             Expr::If {
@@ -1202,6 +1208,13 @@ fn parse_multiline_expr(lines: &[&str], start: usize) -> Option<(Expr, usize)> {
         ))
     } else {
         None
+    }
+}
+
+fn expr_from_branch_stmts(stmts: Vec<Stmt>) -> Expr {
+    match stmts.as_slice() {
+        [Stmt::Expr(expr)] => expr.clone(),
+        _ => Expr::Block(stmts),
     }
 }
 
@@ -1336,7 +1349,16 @@ pub fn parse_expr(src: &str) -> Option<Expr> {
         return Some(expr);
     }
 
-    // 4. Binary equality: expr == expr
+    // 4. Binary conjunction: expr && expr
+    if let Some((left, right)) = split_top_level_double_token(src, "&&") {
+        return Some(Expr::BinOp {
+            op: BinOpKind::And,
+            left: Box::new(parse_expr(left)?),
+            right: Box::new(parse_expr(right)?),
+        });
+    }
+
+    // 5. Binary equality: expr == expr
     if let Some((left, right)) = split_top_level_eq(src) {
         return Some(Expr::BinOp {
             op: BinOpKind::Eq,
@@ -1345,7 +1367,25 @@ pub fn parse_expr(src: &str) -> Option<Expr> {
         });
     }
 
-    // 5. Binary addition: expr + expr
+    // 6. Binary less-than: expr < expr
+    if let Some((left, right)) = split_top_level_binop(src, '<') {
+        return Some(Expr::BinOp {
+            op: BinOpKind::Lt,
+            left: Box::new(parse_expr(left)?),
+            right: Box::new(parse_expr(right)?),
+        });
+    }
+
+    // 7. Binary greater-than: expr > expr
+    if let Some((left, right)) = split_top_level_binop(src, '>') {
+        return Some(Expr::BinOp {
+            op: BinOpKind::Gt,
+            left: Box::new(parse_expr(left)?),
+            right: Box::new(parse_expr(right)?),
+        });
+    }
+
+    // 8. Binary addition: expr + expr
     if let Some((left, right)) = split_top_level_binop(src, '+') {
         return Some(Expr::BinOp {
             op: BinOpKind::Add,
@@ -1354,7 +1394,7 @@ pub fn parse_expr(src: &str) -> Option<Expr> {
         });
     }
 
-    // 6. Binary multiplication: expr * expr
+    // 9. Binary multiplication: expr * expr
     if let Some((left, right)) = split_top_level_binop(src, '*') {
         return Some(Expr::BinOp {
             op: BinOpKind::Mul,
@@ -1532,7 +1572,13 @@ fn split_top_level_binop(src: &str, op: char) -> Option<(&str, &str)> {
 }
 
 fn split_top_level_eq(src: &str) -> Option<(&str, &str)> {
+    split_top_level_double_token(src, "==")
+}
+
+fn split_top_level_double_token<'a>(src: &'a str, token: &str) -> Option<(&'a str, &'a str)> {
     let bytes = src.as_bytes();
+    let token_bytes = token.as_bytes();
+    debug_assert_eq!(token_bytes.len(), 2);
     let mut depth = 0usize;
     let mut in_string = false;
     let mut escaped = false;
@@ -1560,7 +1606,7 @@ fn split_top_level_eq(src: &str) -> Option<(&str, &str)> {
             b'"' => in_string = true,
             b'(' | b'[' => depth += 1,
             b')' | b']' => depth = depth.saturating_sub(1),
-            b'=' if depth == 0 && bytes[i + 1] == b'=' => {
+            b if depth == 0 && b == token_bytes[0] && bytes[i + 1] == token_bytes[1] => {
                 let left_space = i > 0 && bytes[i - 1] == b' ';
                 let right_space = i + 2 < bytes.len() && bytes[i + 2] == b' ';
                 if left_space && right_space {
@@ -3979,6 +4025,58 @@ main =
                 .contains("legacy `using` syntax is no longer supported"),
             "unexpected error message: {}",
             err.message
+        );
+    }
+
+    #[test]
+    fn parse_body_stmts_supports_with_handler_and_block_if_branches() {
+        let handler_body = r#"if valid
+  if index == 0 && grapheme == "-"
+    negative := True
+    index := index + 1
+    resume (True, ())
+  else
+    index := index + 1
+    resume (True, ())
+else
+  index := index + 1
+  resume (True, ())"#;
+        assert!(
+            parse_body_stmts(handler_body).is_some(),
+            "handler multiline if body should parse"
+        );
+
+        let final_if = r#"if valid
+  acc
+else
+  invalid_integer value"#;
+        assert!(
+            parse_body_stmts(final_if).is_some(),
+            "final if block should parse"
+        );
+
+        let body = r#"with
+  yield grapheme _ ->
+    if valid
+      if index == 0 && grapheme == "-"
+        negative := True
+        index := index + 1
+        resume (True, ())
+      else
+        index := index + 1
+        resume (True, ())
+    else
+      index := index + 1
+      resume (True, ())
+in
+  __goby_string_each_grapheme value
+if valid
+  acc
+else
+  invalid_integer value"#;
+        assert!(
+            parse_body_stmts(body).is_some(),
+            "with-handler body with block if branches should parse"
         );
     }
 }

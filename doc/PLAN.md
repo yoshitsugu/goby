@@ -547,7 +547,9 @@ Scope:
      - `map` supports pure callbacks returning `Int` or `String`, preserving existing `List Int` behavior.
    - remaining design note:
      - `goby/list` higher-order runtime handling now runs through generic imported stdlib declaration execution rather than dedicated `list`-specific callback bridges.
-     - future cleanup should continue the same direction for other imported stdlib/runtime bridge paths so stdlib/user code share one runtime path.
+     - `goby/env.fetch_env_var` and `goby/string.length` now run through generic imported declaration execution.
+     - `goby/int.parse` still uses a dedicated runtime bridge for now; its stdlib body now parses under fallback, but fully generic execution still needs handler-mutation semantics to match user code.
+     - future cleanup should continue the same direction for the remaining imported stdlib/runtime bridge paths so stdlib/user code share one runtime path.
 
 ### 4.6 Parking Lot (Needs Revalidation Before Implementation)
 
