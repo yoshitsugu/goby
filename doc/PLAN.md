@@ -530,15 +530,14 @@ but `goby run` fails in fallback execution.
 Scope:
 
 1. Unit-argument call syntax parity (`read ()` vs `read()`):
-   - bug: `read()` currently can pass parse/typecheck but fail runtime execution in fallback mode.
-   - required fix:
-     - accept zero-arg call surface in fallback call parsing for builtin/prelude function calls.
-     - preserve existing behavior for spaced unit-call form (`f ()`).
-   - acceptance criteria:
-      - both `read ()` and `read()` run successfully in `goby-cli run`.
-      - verify this is not `read`-specific by adding/executing equivalent zero-arg-call runtime checks for at least one additional function (for example `read_line`).
-      - verify the same `f ()` / `f()` parity for at least one user-defined function with type `Unit -> a`.
-      - add regression tests in `crates/goby-wasm` to lock both forms.
+   - status: implemented (2026-03-10).
+   - shipped behavior:
+     - parser accepts `f()` and lowers it to the same Unit-argument call AST as `f ()`.
+     - fallback runtime executes both forms for bare prelude calls, qualified effect calls, and user-defined `Unit -> a` declarations.
+   - regression coverage:
+      - `read ()` and `read()` both run successfully in fallback runtime paths.
+      - equivalent zero-arg-call coverage exists for `read_line`.
+      - user-defined `Unit -> a` call parity (`f ()` / `f()`) is covered in `crates/goby-wasm`.
 
 2. `goby/list` generic callback runtime support (`each`, `map`):
    - bug: stdlib signatures are generic, but fallback runtime remains effectively `List<Int>`-biased in key paths.

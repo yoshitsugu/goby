@@ -1829,10 +1829,14 @@ fn parse_call_expr(src: &str) -> Option<Expr> {
     if let Some(open) = src.find('(').filter(|_| src.ends_with(')')) {
         let callee = src[..open].trim();
         let inner = src[open + 1..src.len() - 1].trim();
-        if (is_identifier(callee) || is_qualified_name(callee)) && !inner.is_empty() {
+        if is_identifier(callee) || is_qualified_name(callee) {
             return Some(Expr::Call {
                 callee: Box::new(parse_expr(callee)?),
-                arg: Box::new(parse_expr(inner)?),
+                arg: Box::new(if inner.is_empty() {
+                    Expr::TupleLit(vec![])
+                } else {
+                    parse_expr(inner)?
+                }),
             });
         }
     }
@@ -3210,6 +3214,17 @@ main =
     fn parses_spaced_unit_argument_function_call() {
         assert_eq!(
             parse_expr("read_line ()"),
+            Some(Expr::Call {
+                callee: Box::new(Expr::Var("read_line".to_string())),
+                arg: Box::new(Expr::TupleLit(vec![])),
+            })
+        );
+    }
+
+    #[test]
+    fn parses_parenthesized_unit_argument_function_call() {
+        assert_eq!(
+            parse_expr("read_line()"),
             Some(Expr::Call {
                 callee: Box::new(Expr::Var("read_line".to_string())),
                 arg: Box::new(Expr::TupleLit(vec![])),

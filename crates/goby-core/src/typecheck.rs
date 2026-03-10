@@ -5414,6 +5414,18 @@ main =
     }
 
     #[test]
+    fn accepts_parenthesized_unit_argument_call_for_read_line() {
+        let source = "\
+main : Unit -> Unit can Read
+main =
+  line = read_line()
+  print line
+";
+        let module = parse_module(source).expect("should parse");
+        typecheck_module(&module).expect("`read_line()` should typecheck as Unit-arg call");
+    }
+
+    #[test]
     fn accepts_can_clause_with_explicit_context_prelude() {
         let sandbox = TempDirGuard::new("implicit_prelude_context");
         let stdlib_root = sandbox.path.join("stdlib");

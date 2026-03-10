@@ -60,6 +60,7 @@ syntax/semantics.
 - Function call:
   - spaced application: `f x`, `f a b`
   - parenthesized: `f(x)`
+  - parenthesized empty-arg form `f()` is accepted and is equivalent to `f ()`
 - Anonymous functions:
   - `|x| -> expr`
   - placeholder shorthand: `_ * 10` (current supported subset)

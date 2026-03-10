@@ -7583,6 +7583,81 @@ main =
     }
 
     #[test]
+    fn parenthesized_unit_argument_read_calls_run_via_fallback_runtime() {
+        use goby_core::{parse_module, typecheck::typecheck_module};
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let source = r#"
+main : Unit -> Unit can Print, Read
+main =
+  line = read_line()
+  tail = read()
+  print "line=${line}"
+  print "tail=${tail}"
+"#;
+        let module = parse_module(source).expect("parse should work");
+        typecheck_module(&module).expect("read_line()/read() should typecheck as Unit-arg calls");
+        let output = resolve_main_runtime_output_with_stdin(
+            &module,
+            main_body(&module),
+            main_parsed_body(&module),
+            "alpha\nbeta",
+        );
+        assert_eq!(
+            output.as_deref(),
+            Some("line=alphatail=beta"),
+            "read_line()/read() should execute through fallback runtime as Unit-arg calls"
+        );
+    }
+
+    #[test]
+    fn parenthesized_unit_argument_qualified_read_calls_run_via_fallback_runtime() {
+        use goby_core::{parse_module, typecheck::typecheck_module};
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let source = r#"
+main : Unit -> Unit can Print, Read
+main =
+  line = Read.read_line()
+  tail = Read.read()
+  print "line=${line}"
+  print "tail=${tail}"
+"#;
+        let module = parse_module(source).expect("parse should work");
+        typecheck_module(&module)
+            .expect("qualified read_line()/read() should typecheck as Unit-arg calls");
+        let output = resolve_main_runtime_output_with_stdin(
+            &module,
+            main_body(&module),
+            main_parsed_body(&module),
+            "alpha\nbeta",
+        );
+        assert_eq!(
+            output.as_deref(),
+            Some("line=alphatail=beta"),
+            "Read.read_line()/Read.read() should execute as Unit-arg calls"
+        );
+    }
+
+    #[test]
+    fn parenthesized_unit_argument_user_defined_function_runs() {
+        use goby_core::{parse_module, typecheck::typecheck_module};
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let source = r#"
+value : Unit -> String
+value = "ok"
+
+main : Unit -> Unit can Print
+main =
+  print value()
+"#;
+        let module = parse_module(source).expect("parse should work");
+        typecheck_module(&module).expect("user-defined value() should typecheck as Unit-arg call");
+        let output =
+            resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
+                .expect("runtime output should resolve");
+        assert_eq!(output, "ok");
+    }
+
+    #[test]
     fn embedded_read_line_trims_lf_crlf_and_cr() {
         use goby_core::parse_module;
         let _guard = ENV_MUTEX.lock().unwrap();
