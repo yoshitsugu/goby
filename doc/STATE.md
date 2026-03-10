@@ -10,6 +10,7 @@ This file is a restart-safe snapshot for resuming work after context reset.
 - List spread + stdlib `List.map` consolidation (former 4.5 task) is implemented.
 - Unit-argument call parity (`f ()` / `f()`) is implemented for parser + fallback runtime paths.
 - Imported `goby/list.each` / `goby/list.map` fallback runtime paths now handle `Int` and `String` list items generically.
+- Fallback runtime can now parse imported stdlib modules and execute imported declarations through the normal AST declaration path, including stdlib-local recursion/callable-parameter flows used by `goby/list.each` / `map`.
 - `doc/PLAN.md` has been pruned to remove completed active-task sections.
 - Active docs are aligned for current shipped behavior:
   - `doc/LANGUAGE_SPEC.md`
@@ -42,7 +43,7 @@ This file is a restart-safe snapshot for resuming work after context reset.
 
 - Immediate runtime parity fixes:
 - Runtime architecture cleanup:
-  - reduce imported-stdlib bridge special cases by moving toward generic stdlib declaration execution in fallback/runtime paths.
+  - continue replacing remaining imported-stdlib bridge special cases (`goby/int`, `goby/string`, `goby/env`, prelude runtime bridges) with generic imported declaration execution where practical.
 - Follow-up cleanup remains optional:
   - remove or shrink `eval_expr_ast` compatibility fallback incrementally if future refactors need it.
 

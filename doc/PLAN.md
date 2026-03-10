@@ -546,8 +546,8 @@ Scope:
      - `each` supports effectful callbacks across `List Int` and `List String`.
      - `map` supports pure callbacks returning `Int` or `String`, preserving existing `List Int` behavior.
    - remaining design note:
-     - runtime still contains imported-stdlib bridge handling for `goby/list` higher-order calls.
-     - future cleanup should move toward generic imported stdlib declaration execution so stdlib/user code share one runtime path.
+     - `goby/list` higher-order runtime handling now runs through generic imported stdlib declaration execution rather than dedicated `list`-specific callback bridges.
+     - future cleanup should continue the same direction for other imported stdlib/runtime bridge paths so stdlib/user code share one runtime path.
 
 ### 4.6 Parking Lot (Needs Revalidation Before Implementation)
 

@@ -1,35 +1,16 @@
-import goby/iterator
-
 join : List String -> String -> String
 join values sep = list.join(values, sep)
 
-iter : List a -> b -> b can Iterator
-iter xs state =
-  case xs
-    [] -> state
-    [x, ..xxs] ->
-      decision = yield x state
-      if decision.0
-        iter xxs decision.1
-      else
-        decision.1
-
 each : List a -> (a -> Unit) -> Unit
 each xs f =
-  emit_handler = handler
-    yield x _ ->
+  case xs
+    [] -> ()
+    [x, ..xxs] ->
       f x
-      resume (True, ())
-  with emit_handler
-  in
-    iter xs ()
+      each xxs f
 
 map : List a -> (a -> b) -> List b
 map xs f =
-  emit_handler = handler
-    yield x ys ->
-      ys 
-      resume (True, [f(x), ..ys])
-  with emit_handler
-  in
-    iter xs []
+  case xs
+    [] -> []
+    [x, ..xxs] -> [f x, ..map xxs f]
