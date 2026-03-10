@@ -1725,7 +1725,7 @@ fn parse_tuple_or_grouped_expr(src: &str) -> Option<Expr> {
     let inner = src[1..src.len() - 1].trim();
     if inner.is_empty() {
         // `()` is the canonical Unit value literal.
-        return Some(Expr::TupleLit(Vec::new()));
+        return Some(Expr::unit_value());
     }
     let parts = split_top_level_commas(inner);
     if parts.len() == 1 {
@@ -1833,7 +1833,7 @@ fn parse_call_expr(src: &str) -> Option<Expr> {
             return Some(Expr::Call {
                 callee: Box::new(parse_expr(callee)?),
                 arg: Box::new(if inner.is_empty() {
-                    Expr::TupleLit(vec![])
+                    Expr::unit_value()
                 } else {
                     parse_expr(inner)?
                 }),
@@ -2512,7 +2512,7 @@ main =
                     assert_eq!(clause_stmts.len(), 1);
                     match &clause_stmts[0] {
                         Stmt::Expr(Expr::Resume { value }) => {
-                            assert_eq!(**value, Expr::TupleLit(vec![]));
+                            assert!(value.is_unit_value());
                         }
                         other => panic!("unexpected statement shape: {:?}", other),
                     }
@@ -3179,7 +3179,7 @@ main =
 
     #[test]
     fn parses_unit_literal_as_empty_tuple_syntax() {
-        assert_eq!(parse_expr("()"), Some(Expr::TupleLit(vec![])));
+        assert_eq!(parse_expr("()"), Some(Expr::unit_value()));
     }
 
     #[test]
@@ -3216,7 +3216,7 @@ main =
             parse_expr("read_line ()"),
             Some(Expr::Call {
                 callee: Box::new(Expr::Var("read_line".to_string())),
-                arg: Box::new(Expr::TupleLit(vec![])),
+                arg: Box::new(Expr::unit_value()),
             })
         );
     }
@@ -3227,7 +3227,7 @@ main =
             parse_expr("read_line()"),
             Some(Expr::Call {
                 callee: Box::new(Expr::Var("read_line".to_string())),
-                arg: Box::new(Expr::TupleLit(vec![])),
+                arg: Box::new(Expr::unit_value()),
             })
         );
     }
@@ -3375,7 +3375,7 @@ main =
         assert_eq!(
             parse_expr("resume ()"),
             Some(Expr::Resume {
-                value: Box::new(Expr::TupleLit(vec![]))
+                value: Box::new(Expr::unit_value())
             })
         );
     }
@@ -3385,7 +3385,7 @@ main =
         assert_eq!(
             parse_expr("resume ()"),
             Some(Expr::Resume {
-                value: Box::new(Expr::TupleLit(vec![]))
+                value: Box::new(Expr::unit_value())
             })
         );
     }

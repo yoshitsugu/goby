@@ -214,6 +214,14 @@ pub enum Stmt {
 }
 
 impl Expr {
+    pub fn unit_value() -> Self {
+        Expr::TupleLit(Vec::new())
+    }
+
+    pub fn is_unit_value(&self) -> bool {
+        matches!(self, Expr::TupleLit(items) if items.is_empty())
+    }
+
     /// Returns true if this expression needs parentheses when used as a
     /// sub-expression (e.g. as an argument or operand) to preserve meaning.
     fn needs_parens_as_subexpr(&self) -> bool {
