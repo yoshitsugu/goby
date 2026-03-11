@@ -6,11 +6,15 @@ This file is a restart-safe snapshot for resuming work after context reset.
 
 ## Current Focus
 
-- `doc/PLAN.md` Track F: maintainability hardening is complete.
+- Active work is again `doc/PLAN.md` Track F: maintainability hardening.
 - `Milestone F1` (`goby-wasm` split) is complete.
 - `Milestone F2` (`goby-core` typecheck split) is complete.
 - `Milestone F3` (`goby-core` parser split) is complete.
 - `Milestone F4` (post-extraction cleanup) is complete.
+- New focus is the second maintainability pass:
+  - `Milestone F5`: shrink `goby-wasm/src/lib.rs`
+  - `Milestone F6`: split residual responsibilities from `typecheck.rs`
+  - `Milestone F7`: decompose `typecheck_check.rs`
 
 ## Current State
 
@@ -25,9 +29,10 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - `crates/goby-wasm/src/runtime_exec.rs`
   - `crates/goby-wasm/src/runtime_replay.rs`
 - `crates/goby-wasm/src/lib.rs` now mainly holds the public codegen entrypoint,
-  fallback orchestration glue, and remaining helper methods that were not part of F1 extraction scope.
+  fallback orchestration glue, and the largest remaining fallback-runtime concentration point after F1.
 - `crates/goby-core/src/typecheck.rs` is now reduced to phase orchestration plus
-  residual validation/helpers after the `F2` split.
+  residual validation/helpers after the `F2` split, but still owns environment construction,
+  annotation validation, and type-conversion helpers that are now planned for extraction in `F6`.
 - `F3.1` is landed:
   - `crates/goby-core/src/parser_util.rs` owns shared parser predicates and split helpers.
 - `F3.2` is landed:
@@ -63,6 +68,10 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - `crates/goby-core/src/typecheck_check.rs` owns expression inference, statement checking,
     resume validation, branch-consistency checks, and type rendering helpers.
   - `crates/goby-core/src/typecheck.rs` now calls that module instead of carrying the checking core inline.
+- Design-review follow-up for Track F second pass:
+  - `crates/goby-wasm/src/lib.rs` still contains the main `RuntimeOutputResolver` impl and several helper clusters (`flatten_direct_call`, pipeline/string helpers, print-only codegen helper).
+  - `crates/goby-core/src/typecheck.rs` still contains env-building, annotation/effect-clause validation, and type-conversion helpers.
+  - `crates/goby-core/src/typecheck_check.rs` is now the largest remaining semantic concentration point and is planned to split by checking concern rather than by arbitrary size.
 - `F2.5` is now landed:
   - `typecheck_module_with_context` now sequences explicit validation, checking-state preparation,
     and declaration-body checking phases through dedicated helpers.
@@ -83,8 +92,12 @@ This file is a restart-safe snapshot for resuming work after context reset.
 
 ## Next Work
 
-- Track F is complete.
-- Choose the next roadmap item outside maintainability hardening before further refactors.
+- Start `Milestone F5`:
+  - extract helper clusters from `crates/goby-wasm/src/lib.rs` before touching resolver internals more broadly
+  - prefer `runtime_call_shape.rs`, `runtime_string.rs`, and/or `print_codegen.rs` style boundaries over another generic helper module
+- After F5:
+  - continue with `F6` (`typecheck.rs` residual split)
+  - then `F7` (`typecheck_check.rs` concern split)
 
 ## Notes
 

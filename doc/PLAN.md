@@ -703,6 +703,97 @@ Detailed implementation plan:
      - shared parser example fixtures are centralized in `parser_test_support.rs`.
      - `parser.rs` is now limited to public entrypoints plus parse-module integration/error-span coverage.
 
+6. [ ] Milestone F5: shrink `crates/goby-wasm/src/lib.rs` below the resolver-god-module threshold.
+   - Goal:
+     - make `goby-wasm/src/lib.rs` a public codegen/orchestration layer, not the long-term home of fallback runtime mechanics.
+   - Why this milestone exists:
+     - after the first extraction wave, `goby-wasm/src/lib.rs` is still 7k+ lines and still owns the main `RuntimeOutputResolver` impl plus several helper clusters.
+     - this is the highest remaining black-box risk in the codebase.
+   - Planned extraction order:
+     - [ ] Step F5.1: extract direct-call/pipeline/string helper cluster.
+       - likely targets: `flatten_direct_call`, `module_has_selective_import_symbol`, `parse_pipeline`, `eval_string_expr`.
+       - preferred destinations: `runtime_call_shape.rs`, `runtime_string.rs`, or similarly narrow helper modules.
+     - [ ] Step F5.2: extract print-only codegen helper cluster.
+       - likely targets: `compile_print_module` and any print-module-only layout/encoding helpers.
+       - preferred destination: `print_codegen.rs` or `compile_print.rs`.
+     - [ ] Step F5.3: split `RuntimeOutputResolver` by behavior phase instead of leaving one giant `impl`.
+       - likely seams:
+         - expression/value evaluation glue
+         - imported declaration resolution
+         - handler/effect dispatch orchestration
+         - string/static-output-specific fallback helpers
+       - acceptable structure:
+         - separate extension impls in dedicated modules
+         - or a smaller coordinator plus helper structs/modules
+     - [ ] Step F5.4: leave `compile_module` and `resolve_main_runtime_output*` as orchestration entrypoints only.
+   - Constraints:
+     - do not change fallback/native parity behavior in the same patch as a structural move unless tests force a behavior fix.
+     - keep runtime-phase ownership explicit; avoid merely moving one giant impl into a differently named giant file.
+   - Acceptance criteria:
+     - `goby-wasm/src/lib.rs` is primarily entrypoints/constants/thin wiring.
+     - resolver/runtime helper clusters have names that describe their role without reading all call sites.
+
+7. [ ] Milestone F6: split residual phase-building responsibilities out of `crates/goby-core/src/typecheck.rs`.
+   - Goal:
+     - keep `typecheck_module_with_context` as the orchestrator while moving environment construction, annotation validation, and type conversion out of the remaining mixed file.
+   - Why this milestone exists:
+     - `typecheck.rs` is now phase-oriented, but still mixes orchestration with type-env building, type declaration validation, and annotation/type parsing helpers.
+   - Planned extraction order:
+     - [ ] Step F6.1: extract type-environment construction and global-symbol injection.
+       - likely targets: `build_type_env`, `ensure_no_ambiguous_globals`, `inject_effect_symbols`, `inject_type_constructors`.
+       - preferred destination: `typecheck_build.rs`.
+     - [ ] Step F6.2: extract annotation/effect-clause validation helpers.
+       - likely targets: `validate_type_annotation`, `validate_handler_type_expr`, `validate_effect_clause`, `strip_effect_clause`, `find_can_keyword_index`.
+       - preferred destination: `typecheck_annotation.rs`.
+     - [ ] Step F6.3: extract type-expression to internal-type conversion helpers.
+       - likely targets: `ty_from_annotation`, `ty_from_type_expr`, `ty_from_type_expr_with_holes`, `ty_from_name`, `is_type_variable_name`.
+       - preferred destination: `typecheck_types.rs` or `typecheck_convert.rs`.
+     - [ ] Step F6.4: reduce `typecheck.rs` to orchestration + minimal phase contract definitions.
+   - Constraints:
+     - keep stdlib/path validation isolated from pure type conversion.
+     - avoid circular dependencies between `typecheck.rs`, `typecheck_build.rs`, and `typecheck_annotation.rs`.
+   - Acceptance criteria:
+     - `typecheck.rs` reads as orchestration plus phase wiring.
+     - environment building and annotation parsing can be reviewed independently.
+
+8. [ ] Milestone F7: decompose `crates/goby-core/src/typecheck_check.rs` by checking concern.
+   - Goal:
+     - stop `typecheck_check.rs` from becoming the new single-file black box for every semantic rule after phase extraction.
+   - Why this milestone exists:
+     - `typecheck_check.rs` now concentrates expression inference, resume validation, effect-usage checking, ambiguous-ref checks, branch consistency, substitution/unification, and type rendering.
+   - Planned extraction order:
+     - [ ] Step F7.1: extract resume-context validation.
+       - likely targets: `check_resume_in_stmts`, `check_resume_in_expr`, `infer_binding_ty_with_resume_context`, related local-env helpers.
+       - preferred destination: `typecheck_resume.rs`.
+     - [ ] Step F7.2: extract effect-usage and handler-coverage checking.
+       - likely targets: `check_unhandled_effects_in_expr`, callee-required-effect checks, handler coverage helpers.
+       - preferred destination: `typecheck_effect_usage.rs`.
+     - [ ] Step F7.3: extract ambiguity and branch-consistency checking.
+       - likely targets: `ensure_no_ambiguous_refs_in_expr`, `ensure_no_ambiguous_refs_in_stmts`, `check_branch_type_consistency_in_expr`, `check_branch_type_consistency_in_stmts`.
+       - preferred destination: `typecheck_ambiguity.rs` and/or `typecheck_branch.rs`.
+     - [ ] Step F7.4: evaluate whether type substitution/unification deserves its own internal module.
+       - likely targets: `TypeSubst` application/binding/unification/instantiation helpers.
+       - preferred destination if worthwhile: `typecheck_unify.rs`.
+     - [ ] Step F7.5: keep `check_expr` / `check_body_stmts` as explicit top-level checking entrypoints over smaller helpers.
+   - Constraints:
+     - do not create opaque “semantic helpers” modules; each new file must have a specific rule family.
+     - preserve diagnostic wording and current effect semantics unless a separate task intentionally changes them.
+   - Acceptance criteria:
+     - no single checking file becomes the default dump site for unrelated semantic rules.
+     - rule families can be tested and reviewed independently.
+
+9. [ ] Milestone F8: close the second maintainability pass with boundary hardening.
+   - Goal:
+     - ensure the second extraction wave leaves stable internal contracts instead of another temporary arrangement.
+   - Planned work:
+     - re-review file sizes and dependency directions after F5-F7.
+     - move any new subsystem-specific tests beside owned modules.
+     - remove temporary helpers introduced only to make moves compile.
+     - update `doc/STATE.md` with the boundary decisions future refactors should preserve.
+   - Acceptance criteria:
+     - `goby-wasm/src/lib.rs`, `typecheck.rs`, and `typecheck_check.rs` are no longer the obvious default place for unrelated new logic.
+     - Track F can be considered complete again without known “next god module” hotspots.
+
 Change-unit policy:
 
 1. One extraction step per commit where practical.
@@ -738,6 +829,9 @@ Definition of done for this track:
   the full compiler/runtime stack.
 - `doc/STATE.md` captures any internal boundary decisions that future refactors
   should preserve.
+- Remaining high-risk concentration points identified by design review
+  (`goby-wasm/src/lib.rs`, `typecheck.rs`, `typecheck_check.rs`) have been either
+  split or intentionally justified as stable boundaries.
 
 Non-goals:
 
