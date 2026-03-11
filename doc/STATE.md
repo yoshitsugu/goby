@@ -27,13 +27,17 @@ This file is a restart-safe snapshot for resuming work after context reset.
   fallback orchestration glue, and remaining helper methods that were not part of F1 extraction scope.
 - Next maintainability target is `crates/goby-core/src/typecheck.rs`, which still mixes:
   - type environment construction
-  - import / stdlib / intrinsic validation
   - effect dependency validation
   - expression / statement checking
 - `F2.1` is now landed:
   - `crates/goby-core/src/typecheck_env.rs` owns `Ty`, `TypeEnv`, `ResumeContext`,
     effect-map structs, and related internal binding data.
   - `crates/goby-core/src/typecheck.rs` now consumes that module instead of defining those internals inline.
+- `F2.2` is now landed:
+  - `crates/goby-core/src/typecheck_validate.rs` owns import resolution helpers,
+    stdlib-root policy, embed/intrinsic validation, imported effect/type collection,
+    and import-backed symbol injection.
+  - `crates/goby-core/src/typecheck.rs` now calls that module instead of carrying those helpers inline.
 - Runtime model to preserve while refactoring:
   - `Out<T> = Done | Suspend | Escape | Err`
   - `Escape::WithScope { with_id, value }`
@@ -50,7 +54,7 @@ This file is a restart-safe snapshot for resuming work after context reset.
 ## Next Work
 
 - Start `Milestone F2` in `goby-core`:
-  - move import / stdlib / intrinsic policy validation into a dedicated internal module
+  - move effect declaration / effect dependency validation into a dedicated internal module
   - keep `typecheck_module_with_context` as the top-level orchestrator
   - preserve current diagnostics and test corpus while moving code
 - After the first `typecheck.rs` split lands, continue with later F2 steps and then `parser.rs`.
