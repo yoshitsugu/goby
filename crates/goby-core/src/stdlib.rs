@@ -17,10 +17,27 @@ pub struct ResolvedStdlibModule {
     pub embedded_defaults: Vec<EmbeddedDefaultHandlerDecl>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EmbeddedRuntimeHandlerKind {
+    Stdout,
+    Stdin,
+}
+
+impl EmbeddedRuntimeHandlerKind {
+    pub fn from_handler_name(handler_name: &str) -> Option<Self> {
+        match handler_name {
+            "__goby_embeded_effect_stdout_handler" => Some(Self::Stdout),
+            "__goby_embeded_effect_stdin_handler" => Some(Self::Stdin),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EmbeddedDefaultHandlerDecl {
     pub effect_name: String,
     pub handler_name: String,
+    pub runtime_kind: Option<EmbeddedRuntimeHandlerKind>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -166,6 +183,7 @@ fn collect_embedded_defaults(
         defaults.push(EmbeddedDefaultHandlerDecl {
             effect_name: embed.effect_name.clone(),
             handler_name: embed.handler_name.clone(),
+            runtime_kind: EmbeddedRuntimeHandlerKind::from_handler_name(&embed.handler_name),
         });
     }
     Ok(defaults)
@@ -296,6 +314,7 @@ mod tests {
             vec![EmbeddedDefaultHandlerDecl {
                 effect_name: "Print".to_string(),
                 handler_name: "__goby_embeded_effect_stdout_handler".to_string(),
+                runtime_kind: Some(super::EmbeddedRuntimeHandlerKind::Stdout),
             }]
         );
     }

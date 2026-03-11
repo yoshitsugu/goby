@@ -14,7 +14,9 @@ use unicode_segmentation::UnicodeSegmentation;
 use crate::call::flatten_named_call;
 use goby_core::{
     CasePattern, Expr, HandlerClause, ListPatternItem, ListPatternTail, Module, Stmt,
-    ast::InterpolatedPart, stdlib::StdlibResolver, types::parse_function_type,
+    ast::InterpolatedPart,
+    stdlib::{EmbeddedRuntimeHandlerKind, StdlibResolver},
+    types::parse_function_type,
 };
 const ERR_MISSING_MAIN: &str = "Wasm codegen requires a `main` declaration";
 const BUILTIN_PRINT: &str = "print";
@@ -534,6 +536,15 @@ enum EmbeddedEffectHandlerKind {
     Stdin,
 }
 
+impl From<EmbeddedRuntimeHandlerKind> for EmbeddedEffectHandlerKind {
+    fn from(value: EmbeddedRuntimeHandlerKind) -> Self {
+        match value {
+            EmbeddedRuntimeHandlerKind::Stdout => Self::Stdout,
+            EmbeddedRuntimeHandlerKind::Stdin => Self::Stdin,
+        }
+    }
+}
+
 type WithId = u64;
 
 impl EmbeddedEffectRuntime {
@@ -566,14 +577,6 @@ impl EmbeddedEffectRuntime {
             text.push('\n');
         }
         self.outputs.push(text);
-    }
-
-    fn resolve_handler_name(handler_name: &str) -> Option<EmbeddedEffectHandlerKind> {
-        match handler_name {
-            "__goby_embeded_effect_stdout_handler" => Some(EmbeddedEffectHandlerKind::Stdout),
-            "__goby_embeded_effect_stdin_handler" => Some(EmbeddedEffectHandlerKind::Stdin),
-            _ => None,
-        }
     }
 
     fn invoke(
@@ -5838,7 +5841,8 @@ fn collect_embedded_default_handlers(
         .embed_declarations
         .iter()
         .filter_map(|embed| {
-            EmbeddedEffectRuntime::resolve_handler_name(&embed.handler_name)
+            EmbeddedRuntimeHandlerKind::from_handler_name(&embed.handler_name)
+                .map(EmbeddedEffectHandlerKind::from)
                 .map(|kind| (embed.effect_name.clone(), kind))
         })
         .collect();
@@ -5848,8 +5852,7 @@ fn collect_embedded_default_handlers(
             continue;
         };
         for embed in resolved.embedded_defaults {
-            let Some(kind) = EmbeddedEffectRuntime::resolve_handler_name(&embed.handler_name)
-            else {
+            let Some(kind) = embed.runtime_kind.map(EmbeddedEffectHandlerKind::from) else {
                 continue;
             };
             defaults.entry(embed.effect_name).or_insert(kind);
