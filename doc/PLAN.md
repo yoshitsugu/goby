@@ -666,21 +666,22 @@ Detailed implementation plan:
      - the typechecker has named phase modules with explicit inputs/outputs.
      - tests can target validation/inference phases without traversing the full file.
 
-4. [ ] Milestone F3: decompose parser responsibilities.
+4. [x] Milestone F3: decompose parser responsibilities.
    - Goal:
      - keep `parse_module` as the entrypoint while splitting top-level parsing, statements, expressions, and helper utilities.
    - Planned extraction order:
      - [x] Step F3.1: isolate shared lexical/splitting helpers.
      - [x] Step F3.2: isolate top-level declaration parsing (`import`, `type`, `effect`, top-level definitions).
     - [x] Step F3.3: isolate statement parsing and multiline block handling.
-    - [ ] Step F3.4: isolate expression parsing and pattern parsing.
+    - [x] Step F3.4: isolate expression parsing and pattern parsing.
      - Progress note:
-       - completed extractions: `crates/goby-core/src/parser_util.rs`, `crates/goby-core/src/parser_top.rs`, `crates/goby-core/src/parser_stmt.rs`.
+       - completed extractions: `crates/goby-core/src/parser_util.rs`, `crates/goby-core/src/parser_top.rs`, `crates/goby-core/src/parser_stmt.rs`, `crates/goby-core/src/parser_expr.rs`, `crates/goby-core/src/parser_pattern.rs`.
        - `parser_util.rs` now owns shared identifier/keyword predicates, comment stripping, indentation helpers, and top-level split helpers used across parser phases.
        - `parser_top.rs` now owns top-level import/embed/type/effect/declaration header parsing, while `parse_module` remains the public entrypoint/orchestrator.
        - `parser_stmt.rs` now owns declaration-body statement parsing, multiline `with` / `case` / `if` block handling, handler-body parsing, and statement-oriented binding/assignment splitting.
-       - `parser.rs` now mainly holds module orchestration plus expression parsing and related expression helpers.
-       - next F3 step is isolating expression parsing and pattern parsing out of `parser.rs`.
+       - `parser_expr.rs` now owns expression parsing, interpolation parsing, application/method parsing, and top-level expression splitting helpers.
+       - `parser_pattern.rs` now owns case/list pattern parsing shared by multiline statement parsing.
+       - `parser.rs` is now reduced to module orchestration plus public parser entrypoints that delegate into focused parser modules.
    - Constraints:
      - preserve current parse error wording unless a separate diagnostics task intentionally changes it.
      - preserve current parser test corpus during moves; add narrower tests only where it reduces ambiguity.

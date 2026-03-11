@@ -1,0 +1,741 @@
+use crate::ast::{BinOpKind, Expr, InterpolatedPart};
+use crate::parser_util::{is_camel_case_identifier, is_identifier, is_non_reserved_identifier};
+use crate::str_util::split_top_level_commas;
+
+/// Parse a single expression from a source string.
+pub(crate) fn parse_expr(src: &str) -> Option<Expr> {
+    let src = src.trim();
+
+    if let Some((left, right)) = split_top_level_pipeline(src) {
+        let right = right.trim();
+        if is_identifier(right) {
+            let value = parse_expr(left)?;
+            return Some(Expr::Pipeline {
+                value: Box::new(value),
+                callee: right.to_string(),
+            });
+        }
+    }
+
+    if let Some(expr) = parse_lambda(src) {
+        return Some(expr);
+    }
+
+    if let Some(expr) = parse_resume_expr(src) {
+        return Some(expr);
+    }
+
+    if let Some((left, right)) = split_top_level_double_token(src, "&&") {
+        return Some(Expr::BinOp {
+            op: BinOpKind::And,
+            left: Box::new(parse_expr(left)?),
+            right: Box::new(parse_expr(right)?),
+        });
+    }
+
+    if let Some((left, right)) = split_top_level_eq(src) {
+        return Some(Expr::BinOp {
+            op: BinOpKind::Eq,
+            left: Box::new(parse_expr(left)?),
+            right: Box::new(parse_expr(right)?),
+        });
+    }
+
+    if let Some((left, right)) = split_top_level_binop(src, '<') {
+        return Some(Expr::BinOp {
+            op: BinOpKind::Lt,
+            left: Box::new(parse_expr(left)?),
+            right: Box::new(parse_expr(right)?),
+        });
+    }
+
+    if let Some((left, right)) = split_top_level_binop(src, '>') {
+        return Some(Expr::BinOp {
+            op: BinOpKind::Gt,
+            left: Box::new(parse_expr(left)?),
+            right: Box::new(parse_expr(right)?),
+        });
+    }
+
+    if let Some((left, right)) = split_top_level_binop(src, '+') {
+        return Some(Expr::BinOp {
+            op: BinOpKind::Add,
+            left: Box::new(parse_expr(left)?),
+            right: Box::new(parse_expr(right)?),
+        });
+    }
+
+    if let Some((left, right)) = split_top_level_binop(src, '*') {
+        return Some(Expr::BinOp {
+            op: BinOpKind::Mul,
+            left: Box::new(parse_expr(left)?),
+            right: Box::new(parse_expr(right)?),
+        });
+    }
+
+    if src.starts_with('[') && src.ends_with(']') {
+        return parse_list_expr(src);
+    }
+
+    if src.starts_with('(') && src.ends_with(')') {
+        return parse_tuple_or_grouped_expr(src);
+    }
+
+    if let Some(expr) = parse_record_constructor_call(src) {
+        return Some(expr);
+    }
+
+    if let Some(expr) = parse_method_call(src) {
+        return Some(expr);
+    }
+
+    if let Some(expr) = parse_qualified_access(src) {
+        return Some(expr);
+    }
+
+    if let Some(expr) = parse_call_expr(src) {
+        return Some(expr);
+    }
+
+    if src.starts_with('"') && src.ends_with('"') && src.len() >= 2 {
+        let inner = &src[1..src.len() - 1];
+        return parse_interpolated_string_body(inner);
+    }
+
+    if src == "True" {
+        return Some(Expr::BoolLit(true));
+    }
+    if src == "False" {
+        return Some(Expr::BoolLit(false));
+    }
+
+    if let Ok(n) = src.parse::<i64>() {
+        return Some(Expr::IntLit(n));
+    }
+
+    if is_non_reserved_identifier(src) {
+        return Some(Expr::Var(src.to_string()));
+    }
+
+    None
+}
+
+fn unescape_string(s: &str) -> String {
+    let mut result = String::with_capacity(s.len());
+    let mut chars = s.chars();
+    while let Some(c) = chars.next() {
+        if c == '\\' {
+            match chars.next() {
+                Some('n') => result.push('\n'),
+                Some('t') => result.push('\t'),
+                Some('\\') => result.push('\\'),
+                Some('"') => result.push('"'),
+                Some(other) => {
+                    result.push('\\');
+                    result.push(other);
+                }
+                None => result.push('\\'),
+            }
+        } else {
+            result.push(c);
+        }
+    }
+    result
+}
+
+fn parse_interpolated_string_body(body: &str) -> Option<Expr> {
+    let bytes = body.as_bytes();
+    let mut i = 0usize;
+    let mut literal_start = 0usize;
+    let mut parts: Vec<InterpolatedPart> = Vec::new();
+    let mut saw_interpolation = false;
+
+    while i < bytes.len() {
+        if bytes[i] == b'\\' {
+            i += 1;
+            if i < bytes.len() {
+                i += 1;
+            }
+            continue;
+        }
+
+        if bytes[i] == b'$' && i + 1 < bytes.len() && bytes[i + 1] == b'{' {
+            saw_interpolation = true;
+            let literal_raw = &body[literal_start..i];
+            if !literal_raw.is_empty() {
+                parts.push(InterpolatedPart::Text(unescape_string(literal_raw)));
+            }
+
+            let mut j = i + 2;
+            let mut depth = 1usize;
+            let mut in_string = false;
+            let mut escaped = false;
+            while j < bytes.len() {
+                if in_string {
+                    if escaped {
+                        escaped = false;
+                        j += 1;
+                        continue;
+                    }
+                    if bytes[j] == b'\\' {
+                        escaped = true;
+                        j += 1;
+                        continue;
+                    }
+                    if bytes[j] == b'"' {
+                        in_string = false;
+                    }
+                    j += 1;
+                    continue;
+                }
+
+                match bytes[j] {
+                    b'"' => in_string = true,
+                    b'{' => depth += 1,
+                    b'}' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+                j += 1;
+            }
+
+            if j >= bytes.len() || bytes[j] != b'}' {
+                return None;
+            }
+
+            let expr_src = body[i + 2..j].trim();
+            if expr_src.is_empty() {
+                return None;
+            }
+            parts.push(InterpolatedPart::Expr(Box::new(parse_expr(expr_src)?)));
+
+            i = j + 1;
+            literal_start = i;
+            continue;
+        }
+
+        if bytes[i] == b'"' {
+            return None;
+        }
+
+        i += 1;
+    }
+
+    if !saw_interpolation {
+        return Some(Expr::StringLit(unescape_string(body)));
+    }
+
+    let trailing = &body[literal_start..];
+    if !trailing.is_empty() {
+        parts.push(InterpolatedPart::Text(unescape_string(trailing)));
+    }
+
+    if parts.is_empty() {
+        return Some(Expr::StringLit(String::new()));
+    }
+    Some(Expr::InterpolatedString(parts))
+}
+
+fn parse_resume_expr(src: &str) -> Option<Expr> {
+    let rest = src.strip_prefix("resume")?;
+    if rest.is_empty() {
+        return None;
+    }
+    if !rest.chars().next().is_some_and(char::is_whitespace) {
+        return None;
+    }
+    let value_src = rest.trim();
+    if value_src.is_empty() {
+        return None;
+    }
+    let value = parse_expr(value_src)?;
+    Some(Expr::Resume {
+        value: Box::new(value),
+    })
+}
+
+fn split_top_level_pipeline(src: &str) -> Option<(&str, &str)> {
+    let bytes = src.as_bytes();
+    let mut depth = 0usize;
+    let mut in_string = false;
+    let mut escaped = false;
+    let mut last_split: Option<usize> = None;
+    let mut i = 0;
+    while i < bytes.len() {
+        if in_string {
+            if escaped {
+                escaped = false;
+                i += 1;
+                continue;
+            }
+            if bytes[i] == b'\\' {
+                escaped = true;
+                i += 1;
+                continue;
+            }
+            if bytes[i] == b'"' {
+                in_string = false;
+            }
+            i += 1;
+            continue;
+        }
+        match bytes[i] {
+            b'"' => in_string = true,
+            b'(' | b'[' => depth += 1,
+            b')' | b']' => depth = depth.saturating_sub(1),
+            b'|' if depth == 0 && i + 1 < bytes.len() && bytes[i + 1] == b'>' => {
+                last_split = Some(i);
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+
+    if let Some(pos) = last_split {
+        let left = src[..pos].trim();
+        let right = src[pos + 2..].trim();
+        if !left.is_empty() && !right.is_empty() {
+            return Some((left, right));
+        }
+    }
+
+    None
+}
+
+fn split_top_level_binop(src: &str, op: char) -> Option<(&str, &str)> {
+    let op_byte = op as u8;
+    let bytes = src.as_bytes();
+    let mut depth = 0usize;
+    let mut in_string = false;
+    let mut escaped = false;
+    let mut last_split: Option<usize> = None;
+    let mut i = 0;
+    while i < bytes.len() {
+        if in_string {
+            if escaped {
+                escaped = false;
+                i += 1;
+                continue;
+            }
+            if bytes[i] == b'\\' {
+                escaped = true;
+                i += 1;
+                continue;
+            }
+            if bytes[i] == b'"' {
+                in_string = false;
+            }
+            i += 1;
+            continue;
+        }
+        match bytes[i] {
+            b'"' => in_string = true,
+            b'(' | b'[' => depth += 1,
+            b')' | b']' => depth = depth.saturating_sub(1),
+            b if b == op_byte && depth == 0 => {
+                let left_space = i > 0 && bytes[i - 1] == b' ';
+                let right_space = i + 1 < bytes.len() && bytes[i + 1] == b' ';
+                if left_space && right_space {
+                    last_split = Some(i);
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+
+    if let Some(pos) = last_split {
+        let left = src[..pos - 1].trim();
+        let right = src[pos + 2..].trim();
+        if !left.is_empty() && !right.is_empty() {
+            return Some((left, right));
+        }
+    }
+    None
+}
+
+fn split_top_level_eq(src: &str) -> Option<(&str, &str)> {
+    split_top_level_double_token(src, "==")
+}
+
+fn split_top_level_double_token<'a>(src: &'a str, token: &str) -> Option<(&'a str, &'a str)> {
+    let bytes = src.as_bytes();
+    let token_bytes = token.as_bytes();
+    debug_assert_eq!(token_bytes.len(), 2);
+    let mut depth = 0usize;
+    let mut in_string = false;
+    let mut escaped = false;
+    let mut last_split: Option<usize> = None;
+    let mut i = 0usize;
+    while i + 1 < bytes.len() {
+        if in_string {
+            if escaped {
+                escaped = false;
+                i += 1;
+                continue;
+            }
+            if bytes[i] == b'\\' {
+                escaped = true;
+                i += 1;
+                continue;
+            }
+            if bytes[i] == b'"' {
+                in_string = false;
+            }
+            i += 1;
+            continue;
+        }
+        match bytes[i] {
+            b'"' => in_string = true,
+            b'(' | b'[' => depth += 1,
+            b')' | b']' => depth = depth.saturating_sub(1),
+            b if depth == 0 && b == token_bytes[0] && bytes[i + 1] == token_bytes[1] => {
+                let left_space = i > 0 && bytes[i - 1] == b' ';
+                let right_space = i + 2 < bytes.len() && bytes[i + 2] == b' ';
+                if left_space && right_space {
+                    last_split = Some(i);
+                }
+                i += 1;
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+
+    if let Some(pos) = last_split {
+        let left = src[..pos - 1].trim();
+        let right = src[pos + 3..].trim();
+        if !left.is_empty() && !right.is_empty() {
+            return Some((left, right));
+        }
+    }
+    None
+}
+
+fn parse_lambda(src: &str) -> Option<Expr> {
+    let src = src.trim();
+
+    if src.starts_with('|') {
+        let second_bar = src.get(1..)?.find('|')? + 1;
+        let param = src[1..second_bar].trim();
+        if !is_identifier(param) {
+            return None;
+        }
+        let rest = src[second_bar + 1..].trim();
+        let body_src = rest.strip_prefix("->")?;
+        let body_src = body_src.trim();
+        if body_src.is_empty() {
+            return None;
+        }
+        let body = parse_expr(body_src)?;
+        return Some(Expr::Lambda {
+            param: param.to_string(),
+            body: Box::new(body),
+        });
+    }
+
+    if src.starts_with("_ ")
+        && let Some(body) = parse_placeholder_body(src)
+    {
+        return Some(Expr::Lambda {
+            param: "_".to_string(),
+            body: Box::new(body),
+        });
+    }
+
+    None
+}
+
+fn parse_placeholder_body(src: &str) -> Option<Expr> {
+    if let Some(rhs) = src.strip_prefix("_ + ") {
+        let right = parse_non_lambda_expr(rhs.trim())?;
+        return Some(Expr::BinOp {
+            op: BinOpKind::Add,
+            left: Box::new(Expr::Var("_".to_string())),
+            right: Box::new(right),
+        });
+    }
+    if let Some(rhs) = src.strip_prefix("_ * ") {
+        let right = parse_non_lambda_expr(rhs.trim())?;
+        return Some(Expr::BinOp {
+            op: BinOpKind::Mul,
+            left: Box::new(Expr::Var("_".to_string())),
+            right: Box::new(right),
+        });
+    }
+    None
+}
+
+fn parse_non_lambda_expr(src: &str) -> Option<Expr> {
+    let src = src.trim();
+    if let Ok(n) = src.parse::<i64>() {
+        return Some(Expr::IntLit(n));
+    }
+    if is_non_reserved_identifier(src) {
+        return Some(Expr::Var(src.to_string()));
+    }
+    if let Some((left, right)) = split_top_level_binop(src, '+') {
+        return Some(Expr::BinOp {
+            op: BinOpKind::Add,
+            left: Box::new(parse_non_lambda_expr(left)?),
+            right: Box::new(parse_non_lambda_expr(right)?),
+        });
+    }
+    if let Some((left, right)) = split_top_level_binop(src, '*') {
+        return Some(Expr::BinOp {
+            op: BinOpKind::Mul,
+            left: Box::new(parse_non_lambda_expr(left)?),
+            right: Box::new(parse_non_lambda_expr(right)?),
+        });
+    }
+    None
+}
+
+fn parse_list_expr(src: &str) -> Option<Expr> {
+    let inner = src[1..src.len() - 1].trim();
+    if inner.is_empty() {
+        return Some(Expr::ListLit {
+            elements: Vec::new(),
+            spread: None,
+        });
+    }
+    let parts = split_top_level_commas(inner);
+
+    for part in &parts[..parts.len() - 1] {
+        if part.trim().starts_with("..") {
+            return None;
+        }
+    }
+
+    let last = parts.last().unwrap().trim();
+    if let Some(tail_src) = last.strip_prefix("..") {
+        let tail_src = tail_src.trim();
+        if parts.len() == 1 || tail_src.is_empty() {
+            return None;
+        }
+        let spread_expr = parse_expr(tail_src)?;
+        let elements: Option<Vec<Expr>> = parts[..parts.len() - 1]
+            .iter()
+            .map(|p| parse_expr(p.trim()))
+            .collect();
+        return Some(Expr::ListLit {
+            elements: elements?,
+            spread: Some(Box::new(spread_expr)),
+        });
+    }
+
+    let items: Option<Vec<Expr>> = parts.iter().map(|p| parse_expr(p.trim())).collect();
+    Some(Expr::ListLit {
+        elements: items?,
+        spread: None,
+    })
+}
+
+fn parse_tuple_or_grouped_expr(src: &str) -> Option<Expr> {
+    let inner = src[1..src.len() - 1].trim();
+    if inner.is_empty() {
+        return Some(Expr::unit_value());
+    }
+    let parts = split_top_level_commas(inner);
+    if parts.len() == 1 {
+        return parse_expr(parts[0].trim());
+    }
+    let items: Option<Vec<Expr>> = parts.iter().map(|p| parse_expr(p.trim())).collect();
+    Some(Expr::TupleLit(items?))
+}
+
+fn parse_method_call(src: &str) -> Option<Expr> {
+    if !src.ends_with(')') {
+        return None;
+    }
+    let open_idx = src.find('(')?;
+    let callee = src[..open_idx].trim();
+    let (receiver, method) = callee.split_once('.')?;
+    if !is_identifier(receiver) || !is_identifier(method) {
+        return None;
+    }
+    let inner = &src[open_idx + 1..src.len() - 1];
+    let parts = split_top_level_commas(inner);
+    if parts.is_empty() || parts.iter().any(|p| p.trim().is_empty()) {
+        return None;
+    }
+    let args: Option<Vec<Expr>> = parts.iter().map(|p| parse_expr(p.trim())).collect();
+    Some(Expr::MethodCall {
+        receiver: receiver.to_string(),
+        method: method.to_string(),
+        args: args?,
+    })
+}
+
+fn parse_record_constructor_call(src: &str) -> Option<Expr> {
+    if !src.ends_with(')') {
+        return None;
+    }
+    let open_idx = src.find('(')?;
+    let constructor = src[..open_idx].trim();
+    if !is_camel_case_identifier(constructor) {
+        return None;
+    }
+    let inner = src[open_idx + 1..src.len() - 1].trim();
+    if inner.is_empty() {
+        return Some(Expr::RecordConstruct {
+            constructor: constructor.to_string(),
+            fields: Vec::new(),
+        });
+    }
+
+    let parts = split_top_level_commas(inner);
+    let parsed_fields: Option<Vec<(String, Expr)>> = parts
+        .iter()
+        .map(|part| parse_record_constructor_field(part.trim()))
+        .collect();
+    Some(Expr::RecordConstruct {
+        constructor: constructor.to_string(),
+        fields: parsed_fields?,
+    })
+}
+
+fn parse_record_constructor_field(part: &str) -> Option<(String, Expr)> {
+    let (name, value) = part.split_once(':')?;
+    let name = name.trim();
+    let value = value.trim();
+    if !is_identifier(name) || value.is_empty() {
+        return None;
+    }
+    Some((name.to_string(), parse_expr(value)?))
+}
+
+fn parse_qualified_access(src: &str) -> Option<Expr> {
+    if src.contains('(') || src.contains(')') {
+        return None;
+    }
+    let (receiver, member) = src.split_once('.')?;
+    let receiver = receiver.trim();
+    let member = member.trim();
+    if !is_identifier(receiver) || !(is_identifier(member) || is_tuple_member_index(member)) {
+        return None;
+    }
+    Some(Expr::Qualified {
+        receiver: receiver.to_string(),
+        member: member.to_string(),
+    })
+}
+
+fn is_tuple_member_index(s: &str) -> bool {
+    !s.is_empty() && s.chars().all(|c| c.is_ascii_digit())
+}
+
+fn parse_call_expr(src: &str) -> Option<Expr> {
+    if let Some(open) = src.find('(').filter(|_| src.ends_with(')')) {
+        let callee = src[..open].trim();
+        let inner = src[open + 1..src.len() - 1].trim();
+        if is_identifier(callee) || is_qualified_name(callee) {
+            return Some(Expr::Call {
+                callee: Box::new(parse_expr(callee)?),
+                arg: Box::new(if inner.is_empty() {
+                    Expr::unit_value()
+                } else {
+                    parse_expr(inner)?
+                }),
+            });
+        }
+    }
+
+    if src.starts_with('|') || src.starts_with('"') || src.starts_with('[') {
+        return None;
+    }
+
+    let parts = split_top_level_whitespace_terms(src);
+    if parts.len() < 2 {
+        return None;
+    }
+    let callee = parts[0];
+    if !(is_identifier(callee) || is_qualified_name(callee)) {
+        return None;
+    }
+    let mut expr = parse_expr(callee)?;
+    for part in parts.iter().skip(1) {
+        let arg = parse_expr(part)?;
+        expr = Expr::Call {
+            callee: Box::new(expr),
+            arg: Box::new(arg),
+        };
+    }
+    Some(expr)
+}
+
+fn split_top_level_whitespace_terms(src: &str) -> Vec<&str> {
+    let mut terms = Vec::new();
+    let mut start: Option<usize> = None;
+    let mut depth = 0usize;
+    let mut in_string = false;
+    let mut escaped = false;
+
+    for (idx, ch) in src.char_indices() {
+        if in_string {
+            if escaped {
+                escaped = false;
+                continue;
+            }
+            if ch == '\\' {
+                escaped = true;
+                continue;
+            }
+            if ch == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+
+        match ch {
+            '"' => {
+                in_string = true;
+                if start.is_none() {
+                    start = Some(idx);
+                }
+            }
+            '(' | '[' => {
+                depth += 1;
+                if start.is_none() {
+                    start = Some(idx);
+                }
+            }
+            ')' | ']' => {
+                depth = depth.saturating_sub(1);
+            }
+            c if c.is_whitespace() && depth == 0 => {
+                if let Some(s) = start.take() {
+                    let piece = src[s..idx].trim();
+                    if !piece.is_empty() {
+                        terms.push(piece);
+                    }
+                }
+            }
+            _ => {
+                if start.is_none() {
+                    start = Some(idx);
+                }
+            }
+        }
+    }
+
+    if let Some(s) = start {
+        let piece = src[s..].trim();
+        if !piece.is_empty() {
+            terms.push(piece);
+        }
+    }
+    terms
+}
+
+fn is_qualified_name(s: &str) -> bool {
+    if let Some((receiver, member)) = s.split_once('.') {
+        is_identifier(receiver) && is_identifier(member)
+    } else {
+        false
+    }
+}

@@ -5,6 +5,8 @@
 pub mod analysis;
 pub mod ast;
 pub mod parser;
+mod parser_expr;
+mod parser_pattern;
 mod parser_stmt;
 mod parser_top;
 mod parser_util;

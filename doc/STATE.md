@@ -9,8 +9,8 @@ This file is a restart-safe snapshot for resuming work after context reset.
 - Active work is `doc/PLAN.md` Track F: maintainability hardening.
 - `Milestone F1` (`goby-wasm` split) is complete.
 - `Milestone F2` (`goby-core` typecheck split) is complete.
-- Current target is `Milestone F3`: finish splitting `crates/goby-core/src/parser.rs`
-  by responsibility without changing behavior.
+- `Milestone F3` (`goby-core` parser split) is complete.
+- Current target is `Milestone F4`: cleanup after the first extraction wave.
 
 ## Current State
 
@@ -34,7 +34,11 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - `crates/goby-core/src/parser_top.rs` owns top-level import/embed/type/effect/declaration-header parsing.
 - `F3.3` is landed:
   - `crates/goby-core/src/parser_stmt.rs` owns declaration-body statement parsing, multiline `with` / `case` / `if` block handling, handler-body parsing, and statement-oriented binding/assignment splitting.
-  - `crates/goby-core/src/parser.rs` now keeps `parse_module` orchestration and expression parsing, instead of mixing top-level and statement parsing in one file.
+  - `crates/goby-core/src/parser.rs` now keeps `parse_module` orchestration instead of mixing top-level and statement parsing in one file.
+- `F3.4` is landed:
+  - `crates/goby-core/src/parser_expr.rs` owns expression parsing, interpolation parsing, application/method parsing, and expression split helpers.
+  - `crates/goby-core/src/parser_pattern.rs` owns case/list pattern parsing shared by statement parsing.
+  - `crates/goby-core/src/parser.rs` is now a thin public entry layer for `parse_module`, `parse_body_stmts`, and `parse_expr`.
 - `F2.1` is now landed:
   - `crates/goby-core/src/typecheck_env.rs` owns `Ty`, `TypeEnv`, `ResumeContext`,
     effect-map structs, and related internal binding data.
@@ -72,10 +76,10 @@ This file is a restart-safe snapshot for resuming work after context reset.
 
 ## Next Work
 
-- Continue `Milestone F3` in `goby-core`:
-  - isolate expression parsing and pattern parsing next (`F3.4`)
-  - keep `parse_module` as the public entrypoint while shrinking `parser.rs`
-  - preserve current parse diagnostics and parser test corpus during moves
+- Start `Milestone F4` cleanup:
+  - remove transitional test-only helpers left in `parser.rs` if they no longer add value
+  - review whether parser submodule tests should move closer to owned modules
+  - keep parse diagnostics and current parser/runtime behavior unchanged during cleanup
 
 ## Notes
 
