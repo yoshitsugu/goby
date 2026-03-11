@@ -7,8 +7,9 @@ This file is a restart-safe snapshot for resuming work after context reset.
 ## Current Focus
 
 - Active work is `doc/PLAN.md` Track F: maintainability hardening.
-- Current target is shrinking `crates/goby-wasm/src/lib.rs` by moving
-  `RuntimeOutputResolver` responsibilities into focused modules without changing behavior.
+- `Milestone F1` (`goby-wasm` split) is complete.
+- Current target is `Milestone F2`: start splitting `crates/goby-core/src/typecheck.rs`
+  by responsibility without changing behavior.
 
 ## Current State
 
@@ -21,9 +22,14 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - `crates/goby-wasm/src/runtime_dispatch.rs`
   - `crates/goby-wasm/src/runtime_decl.rs`
   - `crates/goby-wasm/src/runtime_exec.rs`
-- `crates/goby-wasm/src/lib.rs` still contains the deeper orchestration layer:
-  - `apply_cont`
-  - remaining evaluator/orchestration glue around statement replay and continuation replay
+  - `crates/goby-wasm/src/runtime_replay.rs`
+- `crates/goby-wasm/src/lib.rs` now mainly holds the public codegen entrypoint,
+  fallback orchestration glue, and remaining helper methods that were not part of F1 extraction scope.
+- Next maintainability target is `crates/goby-core/src/typecheck.rs`, which still mixes:
+  - type environment construction
+  - import / stdlib / intrinsic validation
+  - effect dependency validation
+  - expression / statement checking
 - Runtime model to preserve while refactoring:
   - `Out<T> = Done | Suspend | Escape | Err`
   - `Escape::WithScope { with_id, value }`
@@ -39,13 +45,11 @@ This file is a restart-safe snapshot for resuming work after context reset.
 
 ## Next Work
 
-- Continue Track F in `goby-wasm`:
-  - extract `apply_cont` and remaining statement/continuation replay helpers from `crates/goby-wasm/src/lib.rs`
-  - keep changes behavior-preserving and modularity-only
-  - rerun the same quality gate after each extraction
-- After `goby-wasm` F1 work, move on to `goby-core` responsibility splits:
-  - `typecheck.rs`
-  - `parser.rs`
+- Start `Milestone F2` in `goby-core`:
+  - carve out shared type-environment and internal typecheck data first
+  - keep `typecheck_module_with_context` as the top-level orchestrator
+  - preserve current diagnostics and test corpus while moving code
+- After the first `typecheck.rs` split lands, continue with later F2 steps and then `parser.rs`.
 
 ## Notes
 

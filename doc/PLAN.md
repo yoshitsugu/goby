@@ -620,7 +620,7 @@ Detailed implementation plan:
    - Acceptance criteria:
      - every later milestone can point to a focused test command plus one broader regression command.
 
-2. [ ] Milestone F1: reduce `crates/goby-wasm/src/lib.rs` boundary width first.
+2. [x] Milestone F1: reduce `crates/goby-wasm/src/lib.rs` boundary width first.
    - Goal:
      - keep `compile_module` as the orchestration entrypoint while moving fallback-runtime mechanics behind explicit internal modules.
    - Planned extraction order:
@@ -628,13 +628,13 @@ Detailed implementation plan:
        - likely targets: `RuntimeValue`, `RuntimeLocals`, equality/format helpers, local-binding utilities.
      - [x] Step F1.2: extract embedded runtime and runtime import loading.
        - likely targets: `EmbeddedEffectRuntime`, `RuntimeImportContext`, stdlib import-loading helpers.
-     - [ ] Step F1.3: extract fallback evaluator/runtime executor.
+    - [x] Step F1.3: extract fallback evaluator/runtime executor.
        - likely targets: `RuntimeOutputResolver`, continuation state, handler dispatch, `Out` / `Escape` / `Cont` family.
      - [x] Step F1.4: extract compile-time output resolvers that are logically separate from public codegen entrypoints.
        - likely targets: `IntEvaluator`, `ListIntEvaluator`, static-output helpers used by `resolve_main_runtime_output*`.
      - Progress note:
-       - completed extractions so far: `runtime_value`, `runtime_env`, `runtime_flow`, `runtime_eval`, `runtime_resolver`, `runtime_dispatch`, `runtime_decl`.
-       - remaining F1 work is centered on `apply_cont` and unit-call / statement-replay orchestration still living in `goby-wasm/src/lib.rs`.
+       - completed extractions: `runtime_value`, `runtime_env`, `runtime_flow`, `runtime_eval`, `runtime_resolver`, `runtime_dispatch`, `runtime_decl`, `runtime_exec`, `runtime_replay`.
+       - `goby-wasm/src/lib.rs` is now reduced to the codegen entrypoint, orchestration glue, and runtime helpers not yet targeted by later milestones.
    - Constraints:
      - do not change lowering-plan selection or public `compile_module` behavior in the same patch as a large extraction.
      - keep module dependencies one-directional:
