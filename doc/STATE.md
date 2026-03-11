@@ -19,6 +19,8 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - `crates/goby-wasm/src/lib.rs` now depends on that evaluator module instead of owning those helper families directly.
   - `crates/goby-wasm/src/runtime_resolver.rs` now owns the resolver entry path plus statement-ingest/basic-value-eval methods (`resolve`, `ingest_*`, `eval_value*`, `eval_expr_ast`, list-pattern matching, case-arm selection).
   - `crates/goby-wasm/src/lib.rs` keeps deeper continuation/dispatch logic, but no longer owns the resolver's front-door evaluation helpers directly.
+  - `crates/goby-wasm/src/runtime_dispatch.rs` now owns handler lookup, effect-handler resolution, inline-handler construction, resume-token bridging, and handler dispatch/resume helpers.
+  - `crates/goby-wasm/src/lib.rs` now keeps `apply_cont`, declaration execution, and other deeper evaluator/orchestration paths, but no longer owns the handler-dispatch layer directly.
 - Scoped handler exit + multi-resume progression (former 4.7 task) is implemented.
 - List spread + stdlib `List.map` consolidation (former 4.5 task) is implemented.
 - Embedded default handler execution now goes through a dedicated `EmbeddedEffectRuntime` layer; stdout/stderr accumulation and stdin cursor state are no longer stored directly on `RuntimeOutputResolver`.
@@ -59,7 +61,7 @@ This file is a restart-safe snapshot for resuming work after context reset.
 - Maintainability hardening:
   - start with Track F milestone F0/F1:
     - lock focused refactor harness (`cargo test -p goby-wasm`, `cargo test -p goby-core`, `cargo test --workspace`, `cargo check`).
-    - continue reducing `crates/goby-wasm/src/lib.rs` boundary width after the `runtime_value`, `runtime_env`, `runtime_flow`, `runtime_eval`, and `runtime_resolver` extractions by pulling out deeper `RuntimeOutputResolver` continuation/dispatch helpers next.
+    - continue reducing `crates/goby-wasm/src/lib.rs` boundary width after the `runtime_value`, `runtime_env`, `runtime_flow`, `runtime_eval`, `runtime_resolver`, and `runtime_dispatch` extractions by pulling out `apply_cont`/declaration-execution helpers next.
   - after F1, separate typecheck phases and parser responsibilities into smaller modules with contract tests.
 - Runtime architecture cleanup:
   - continue shrinking remaining embedded default-handler special cases around the runtime-owned `Print` / `Read` intrinsic I/O hook without broadening `@embed` beyond that role.
