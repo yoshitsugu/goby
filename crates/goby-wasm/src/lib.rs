@@ -4,6 +4,7 @@ mod fallback;
 mod layout;
 mod lower;
 mod planning;
+mod print_codegen;
 mod runtime_decl;
 mod runtime_dispatch;
 mod runtime_env;
@@ -12,6 +13,7 @@ mod runtime_exec;
 mod runtime_flow;
 mod runtime_replay;
 mod runtime_resolver;
+mod runtime_support;
 mod runtime_value;
 mod support;
 
@@ -25,14 +27,17 @@ use crate::runtime_env::{
 };
 use crate::runtime_eval::{
     AstLambdaCallable, IntCallable, IntEvaluator, ListIntEvaluator, Statement,
-    collect_functions_with_result, collect_unit_functions, is_identifier, is_string_literal,
-    parse_call, parse_int_callable, statements,
+    collect_functions_with_result, collect_unit_functions, is_identifier, parse_call,
+    parse_int_callable, statements,
 };
 use crate::runtime_flow::{
     ApplyStep, Cont, Continuation, DirectCallHead, Escape, FinishKind, HandlerCompletion,
     HandlerContinuationState, InlineHandlerMethod, InlineHandlerValue, OptimizedResumeToken, Out,
     ResolvedEffectHandler, ResolvedHandlerMethod, ResumeToken, RuntimeDeclInfo, RuntimeError,
     RuntimeEvaluators, RuntimeHandlerMethod, StoreOp, WithId,
+};
+use crate::runtime_support::{
+    eval_string_expr, flatten_direct_call, module_has_selective_import_symbol, parse_pipeline,
 };
 use crate::runtime_value::{RuntimeLocals, RuntimeValue, runtime_value_option_eq};
 use goby_core::{
@@ -106,7 +111,7 @@ pub fn compile_module(module: &Module) -> Result<Vec<u8>, CodegenError> {
         main.parsed_body.as_deref(),
         runtime_mode,
     ) {
-        return compile_print_module(&text);
+        return print_codegen::compile_print_module(&text);
     }
 
     if let Some(handoff) = effect_boundary_handoff {
@@ -2018,76 +2023,6 @@ impl<'m> RuntimeOutputResolver<'m> {
             _ => None,
         }
     }
-}
-
-fn flatten_direct_call(expr: &Expr) -> Option<(DirectCallHead, Vec<&Expr>)> {
-    let mut args = Vec::new();
-    let mut cur = expr;
-    loop {
-        match cur {
-            Expr::Call { callee, arg } => {
-                args.push(arg.as_ref());
-                cur = callee.as_ref();
-            }
-            Expr::Var(name) => {
-                args.reverse();
-                return Some((DirectCallHead::Bare(name.clone()), args));
-            }
-            Expr::Qualified { receiver, member } => {
-                args.reverse();
-                return Some((
-                    DirectCallHead::Qualified {
-                        receiver: receiver.clone(),
-                        member: member.clone(),
-                    },
-                    args,
-                ));
-            }
-            _ => return None,
-        }
-    }
-}
-
-fn module_has_selective_import_symbol(module: &Module, module_path: &str, symbol: &str) -> bool {
-    module.imports.iter().any(|import| {
-        if import.module_path != module_path {
-            return false;
-        }
-        match &import.kind {
-            goby_core::ImportKind::Selective(selected) => {
-                selected.iter().any(|name| name == symbol)
-            }
-            _ => false,
-        }
-    })
-}
-
-fn parse_pipeline(expr: &str) -> Option<(&str, &str)> {
-    let (left, right) = expr.split_once("|>")?;
-    let left = left.trim();
-    let right = right.trim();
-    if left.is_empty() || !is_identifier(right) {
-        return None;
-    }
-    Some((left, right))
-}
-
-fn eval_string_expr(expr: &str, locals: &HashMap<String, String>) -> Option<String> {
-    let expr = expr.trim();
-
-    if is_string_literal(expr) {
-        return Some(expr[1..expr.len() - 1].to_string());
-    }
-
-    if is_identifier(expr) {
-        return locals.get(expr).cloned();
-    }
-
-    None
-}
-
-fn compile_print_module(text: &str) -> Result<Vec<u8>, CodegenError> {
-    backend::WasmProgramBuilder::new(layout::MemoryLayout::default()).emit_static_print_module(text)
 }
 
 #[cfg(test)]

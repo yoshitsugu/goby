@@ -72,6 +72,10 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - `crates/goby-wasm/src/lib.rs` still contains the main `RuntimeOutputResolver` impl and several helper clusters (`flatten_direct_call`, pipeline/string helpers, print-only codegen helper).
   - `crates/goby-core/src/typecheck.rs` still contains env-building, annotation/effect-clause validation, and type-conversion helpers.
   - `crates/goby-core/src/typecheck_check.rs` is now the largest remaining semantic concentration point and is planned to split by checking concern rather than by arbitrary size.
+- `F5` progress:
+  - `crates/goby-wasm/src/runtime_support.rs` now owns direct-call flattening, selective-import symbol lookup, simple pipeline parsing, and string-expression helpers.
+  - `crates/goby-wasm/src/print_codegen.rs` now owns the print-only Wasm emission helper.
+  - the remaining `F5` hotspot is the large `RuntimeOutputResolver` impl still living in `crates/goby-wasm/src/lib.rs`.
 - `F2.5` is now landed:
   - `typecheck_module_with_context` now sequences explicit validation, checking-state preparation,
     and declaration-body checking phases through dedicated helpers.
@@ -93,8 +97,8 @@ This file is a restart-safe snapshot for resuming work after context reset.
 ## Next Work
 
 - Start `Milestone F5`:
-  - extract helper clusters from `crates/goby-wasm/src/lib.rs` before touching resolver internals more broadly
-  - prefer `runtime_call_shape.rs`, `runtime_string.rs`, and/or `print_codegen.rs` style boundaries over another generic helper module
+  - continue after the first helper extraction wave by splitting the `RuntimeOutputResolver` impl into named behavior modules
+  - keep `crates/goby-wasm/src/lib.rs` focused on codegen entrypoints and orchestration glue
 - After F5:
   - continue with `F6` (`typecheck.rs` residual split)
   - then `F7` (`typecheck_check.rs` concern split)

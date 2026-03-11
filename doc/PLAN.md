@@ -710,10 +710,10 @@ Detailed implementation plan:
      - after the first extraction wave, `goby-wasm/src/lib.rs` is still 7k+ lines and still owns the main `RuntimeOutputResolver` impl plus several helper clusters.
      - this is the highest remaining black-box risk in the codebase.
    - Planned extraction order:
-     - [ ] Step F5.1: extract direct-call/pipeline/string helper cluster.
+    - [x] Step F5.1: extract direct-call/pipeline/string helper cluster.
        - likely targets: `flatten_direct_call`, `module_has_selective_import_symbol`, `parse_pipeline`, `eval_string_expr`.
        - preferred destinations: `runtime_call_shape.rs`, `runtime_string.rs`, or similarly narrow helper modules.
-     - [ ] Step F5.2: extract print-only codegen helper cluster.
+    - [x] Step F5.2: extract print-only codegen helper cluster.
        - likely targets: `compile_print_module` and any print-module-only layout/encoding helpers.
        - preferred destination: `print_codegen.rs` or `compile_print.rs`.
      - [ ] Step F5.3: split `RuntimeOutputResolver` by behavior phase instead of leaving one giant `impl`.
@@ -732,6 +732,10 @@ Detailed implementation plan:
    - Acceptance criteria:
      - `goby-wasm/src/lib.rs` is primarily entrypoints/constants/thin wiring.
      - resolver/runtime helper clusters have names that describe their role without reading all call sites.
+   - Progress note:
+     - `runtime_support.rs` now owns direct-call flattening, selective-import symbol lookup, simple pipeline parsing, and string-expression helpers.
+     - `print_codegen.rs` now owns the print-only Wasm emission helper used by fallback static-output compilation.
+     - remaining `F5` work is the large `RuntimeOutputResolver` impl split.
 
 7. [ ] Milestone F6: split residual phase-building responsibilities out of `crates/goby-core/src/typecheck.rs`.
    - Goal:
