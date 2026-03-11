@@ -38,6 +38,10 @@ This file is a restart-safe snapshot for resuming work after context reset.
     stdlib-root policy, embed/intrinsic validation, imported effect/type collection,
     and import-backed symbol injection.
   - `crates/goby-core/src/typecheck.rs` now calls that module instead of carrying those helpers inline.
+- `F2.3` is now landed:
+  - `crates/goby-core/src/typecheck_effect.rs` owns effect declaration validation,
+    member `can`-clause validation, effect dependency cycle checks, and effect-map builders.
+  - `crates/goby-core/src/typecheck.rs` now consumes those effect-phase helpers instead of defining them inline.
 - Runtime model to preserve while refactoring:
   - `Out<T> = Done | Suspend | Escape | Err`
   - `Escape::WithScope { with_id, value }`
@@ -54,7 +58,7 @@ This file is a restart-safe snapshot for resuming work after context reset.
 ## Next Work
 
 - Start `Milestone F2` in `goby-core`:
-  - move effect declaration / effect dependency validation into a dedicated internal module
+  - move expression / statement inference and checking into dedicated internal modules
   - keep `typecheck_module_with_context` as the top-level orchestrator
   - preserve current diagnostics and test corpus while moving code
 - After the first `typecheck.rs` split lands, continue with later F2 steps and then `parser.rs`.

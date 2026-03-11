@@ -650,13 +650,14 @@ Detailed implementation plan:
    - Planned extraction order:
      - [x] Step F2.1: move shared type environment and internal type representations into a dedicated internal module.
      - [x] Step F2.2: move import/stdlib/intrinsic policy validation into a dedicated validation module.
-     - [ ] Step F2.3: move effect declaration/effect dependency checks into a dedicated effect-validation module.
+     - [x] Step F2.3: move effect declaration/effect dependency checks into a dedicated effect-validation module.
      - [ ] Step F2.4: move expression/statement checking into dedicated inference/checking modules.
      - [ ] Step F2.5: keep `typecheck_module_with_context` as a top-level orchestrator that sequences the extracted phases.
      - Progress note:
-       - completed extractions: `crates/goby-core/src/typecheck_env.rs`, `crates/goby-core/src/typecheck_validate.rs`.
+       - completed extractions: `crates/goby-core/src/typecheck_env.rs`, `crates/goby-core/src/typecheck_validate.rs`, `crates/goby-core/src/typecheck_effect.rs`.
        - `typecheck_validate.rs` now owns import resolution, stdlib-root policy, embedded default handling, intrinsic namespace validation, and related import helpers.
-       - next F2 step is isolating effect declaration and dependency validation out of `typecheck.rs` without changing diagnostics.
+       - `typecheck_effect.rs` now owns effect declaration checks, effect dependency checks, effect-map construction, and `can`-clause parsing helpers.
+       - next F2 step is isolating expression/statement inference and checking out of `typecheck.rs` without changing diagnostics.
    - Constraints:
      - avoid creating a new hidden god-module under a different file name.
      - path/stdlib resolution code must remain clearly isolated from pure expression checking.

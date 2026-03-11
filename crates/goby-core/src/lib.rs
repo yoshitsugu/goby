@@ -8,6 +8,7 @@ pub mod parser;
 pub mod stdlib;
 pub mod str_util;
 pub mod typecheck;
+mod typecheck_effect;
 mod typecheck_env;
 mod typecheck_validate;
 pub mod types;
