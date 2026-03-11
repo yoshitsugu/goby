@@ -503,10 +503,10 @@ fn statements(body: &str) -> impl Iterator<Item = Statement<'_>> {
 
 struct RuntimeOutputResolver<'m> {
     locals: RuntimeLocals,
-    outputs: Vec<String>,
     module: &'m Module,
     imported_modules: HashMap<String, Module>,
-    embedded_default_handlers: HashMap<String, String>,
+    embedded_default_handlers: HashMap<String, EmbeddedEffectHandlerKind>,
+    embedded_effect_runtime: EmbeddedEffectRuntime,
     current_module_stack: Vec<String>,
     current_decl_stack: Vec<String>,
     /// Active inline handlers installed via `with` / `with`.
@@ -520,11 +520,149 @@ struct RuntimeOutputResolver<'m> {
     runtime_error: Option<String>,
     next_with_id: u64,
     execution_mode: lower::EffectExecutionMode,
+}
+
+struct EmbeddedEffectRuntime {
+    outputs: Vec<String>,
     stdin_buffer: Option<String>,
     stdin_cursor: usize,
 }
 
+#[derive(Clone, Copy)]
+enum EmbeddedEffectHandlerKind {
+    Stdout,
+    Stdin,
+}
+
 type WithId = u64;
+
+impl EmbeddedEffectRuntime {
+    fn new(stdin_seed: Option<String>) -> Self {
+        Self {
+            outputs: Vec::new(),
+            stdin_buffer: stdin_seed,
+            stdin_cursor: 0,
+        }
+    }
+
+    fn output_len(&self) -> usize {
+        self.outputs.len()
+    }
+
+    fn outputs_are_empty(&self) -> bool {
+        self.outputs.is_empty()
+    }
+
+    fn concat_outputs(&self) -> String {
+        self.outputs.concat()
+    }
+
+    fn emit_output_text(&mut self, text: String) {
+        self.outputs.push(text);
+    }
+
+    fn emit_output_line(&mut self, mut text: String) {
+        if !text.ends_with('\n') {
+            text.push('\n');
+        }
+        self.outputs.push(text);
+    }
+
+    fn resolve_handler_name(handler_name: &str) -> Option<EmbeddedEffectHandlerKind> {
+        match handler_name {
+            "__goby_embeded_effect_stdout_handler" => Some(EmbeddedEffectHandlerKind::Stdout),
+            "__goby_embeded_effect_stdin_handler" => Some(EmbeddedEffectHandlerKind::Stdin),
+            _ => None,
+        }
+    }
+
+    fn invoke(
+        &mut self,
+        handler_kind: EmbeddedEffectHandlerKind,
+        method_name: &str,
+        arg_val: RuntimeValue,
+    ) -> Result<Option<RuntimeValue>, String> {
+        match (handler_kind, method_name) {
+            (EmbeddedEffectHandlerKind::Stdout, "print") => {
+                self.emit_output_text(arg_val.to_output_text());
+                Ok(Some(RuntimeValue::Unit))
+            }
+            (EmbeddedEffectHandlerKind::Stdout, "println") => {
+                self.emit_output_line(arg_val.to_output_text());
+                Ok(Some(RuntimeValue::Unit))
+            }
+            (EmbeddedEffectHandlerKind::Stdin, "read") if matches!(arg_val, RuntimeValue::Unit) => {
+                self.read_stdin_remaining("read")
+                    .map(|text| Some(RuntimeValue::String(text)))
+            }
+            (EmbeddedEffectHandlerKind::Stdin, "read_line")
+                if matches!(arg_val, RuntimeValue::Unit) =>
+            {
+                self.read_stdin_line("read_line")
+                    .map(|text| Some(RuntimeValue::String(text)))
+            }
+            _ => Ok(None),
+        }
+    }
+
+    fn ensure_stdin_loaded(&mut self, op_name: &str) -> Result<(), String> {
+        if self.stdin_buffer.is_some() {
+            return Ok(());
+        }
+        let mut bytes = Vec::new();
+        match std::io::stdin().read_to_end(&mut bytes) {
+            Ok(_) => {
+                self.stdin_buffer = Some(String::from_utf8_lossy(&bytes).into_owned());
+                Ok(())
+            }
+            Err(err) => Err(format!("Read.{op_name} failed to read stdin: {err}")),
+        }
+    }
+
+    fn read_stdin_remaining(&mut self, op_name: &str) -> Result<String, String> {
+        self.ensure_stdin_loaded(op_name)?;
+        let content = self.stdin_buffer.as_ref().expect("stdin should be loaded");
+        if self.stdin_cursor >= content.len() {
+            return Ok(String::new());
+        }
+        let tail = content[self.stdin_cursor..].to_string();
+        self.stdin_cursor = content.len();
+        Ok(tail)
+    }
+
+    fn read_stdin_line(&mut self, op_name: &str) -> Result<String, String> {
+        self.ensure_stdin_loaded(op_name)?;
+        let content = self.stdin_buffer.as_ref().expect("stdin should be loaded");
+        if self.stdin_cursor >= content.len() {
+            return Ok(String::new());
+        }
+        let bytes = content.as_bytes();
+        let start = self.stdin_cursor;
+        let mut idx = start;
+        while idx < bytes.len() {
+            match bytes[idx] {
+                b'\n' => {
+                    let line = content[start..idx].to_string();
+                    self.stdin_cursor = idx + 1;
+                    return Ok(line);
+                }
+                b'\r' => {
+                    let line = content[start..idx].to_string();
+                    if idx + 1 < bytes.len() && bytes[idx + 1] == b'\n' {
+                        self.stdin_cursor = idx + 2;
+                    } else {
+                        self.stdin_cursor = idx + 1;
+                    }
+                    return Ok(line);
+                }
+                _ => idx += 1,
+            }
+        }
+        let line = content[start..].to_string();
+        self.stdin_cursor = content.len();
+        Ok(line)
+    }
+}
 
 #[derive(Clone)]
 struct Continuation {
@@ -729,7 +867,7 @@ struct ResolvedHandlerMethod {
 enum ResolvedEffectHandler {
     Explicit(ResolvedHandlerMethod),
     EmbeddedDefault {
-        effect_name: String,
+        handler_kind: EmbeddedEffectHandlerKind,
         method_name: String,
     },
 }
@@ -789,10 +927,10 @@ impl<'m> RuntimeOutputResolver<'m> {
     ) -> Option<String> {
         let mut resolver = Self {
             locals: RuntimeLocals::default(),
-            outputs: Vec::new(),
             module,
             imported_modules: load_runtime_imported_modules(module),
             embedded_default_handlers: collect_embedded_default_handlers(module),
+            embedded_effect_runtime: EmbeddedEffectRuntime::new(stdin_seed),
             current_module_stack: Vec::new(),
             current_decl_stack: Vec::new(),
             active_inline_handler_stack: Vec::new(),
@@ -802,8 +940,6 @@ impl<'m> RuntimeOutputResolver<'m> {
             runtime_error: None,
             next_with_id: 1,
             execution_mode,
-            stdin_buffer: stdin_seed,
-            stdin_cursor: 0,
         };
 
         if let Some(stmts) = parsed_stmts {
@@ -830,19 +966,19 @@ impl<'m> RuntimeOutputResolver<'m> {
         }
 
         if resolver.runtime_error_is_abort_marker() {
-            return if resolver.outputs.is_empty() {
+            return if resolver.embedded_effect_runtime.outputs_are_empty() {
                 None
             } else {
-                Some(resolver.outputs.concat())
+                Some(resolver.embedded_effect_runtime.concat_outputs())
             };
         }
 
         if let Some(err) = &resolver.runtime_error {
             let err_line = format!("runtime error: {}", err);
-            if resolver.outputs.is_empty() {
+            if resolver.embedded_effect_runtime.outputs_are_empty() {
                 return Some(err_line);
             }
-            let mut out = resolver.outputs.concat();
+            let mut out = resolver.embedded_effect_runtime.concat_outputs();
             if !out.ends_with('\n') {
                 out.push('\n');
             }
@@ -850,10 +986,10 @@ impl<'m> RuntimeOutputResolver<'m> {
             return Some(out);
         }
 
-        if resolver.outputs.is_empty() {
+        if resolver.embedded_effect_runtime.outputs_are_empty() {
             None
         } else {
-            Some(resolver.outputs.concat())
+            Some(resolver.embedded_effect_runtime.concat_outputs())
         }
     }
 
@@ -912,7 +1048,7 @@ impl<'m> RuntimeOutputResolver<'m> {
             Stmt::Expr(expr) => {
                 let mut locals = self.locals.clone();
                 let mut callables = HashMap::new();
-                let outputs_before = self.outputs.len();
+                let outputs_before = self.embedded_effect_runtime.output_len();
                 match self.execute_unit_expr_ast(expr, &mut locals, &mut callables, evaluators, 0) {
                     Out::Done(()) => {
                         self.locals = locals;
@@ -925,7 +1061,8 @@ impl<'m> RuntimeOutputResolver<'m> {
                         Some(())
                     }
                     Out::Err(RuntimeError::Unsupported)
-                        if self.runtime_error.is_none() && self.outputs.len() == outputs_before =>
+                        if self.runtime_error.is_none()
+                            && self.embedded_effect_runtime.output_len() == outputs_before =>
                     {
                         let repr = expr.to_str_repr()?;
                         self.eval_side_effect(&repr, evaluators)
@@ -990,7 +1127,8 @@ impl<'m> RuntimeOutputResolver<'m> {
         evaluators: &RuntimeEvaluators<'_, '_>,
     ) -> Option<()> {
         let value = self.eval_value(expr, evaluators)?;
-        self.outputs.push(value.to_output_text());
+        self.embedded_effect_runtime
+            .emit_output_text(value.to_output_text());
         Some(())
     }
 
@@ -2523,7 +2661,8 @@ impl<'m> RuntimeOutputResolver<'m> {
                 Out::Escape(escape) => return Out::Escape(escape),
                 Out::Err(e) => return Out::Err(e),
             };
-            self.outputs.push(value.to_output_text());
+            self.embedded_effect_runtime
+                .emit_output_text(value.to_output_text());
             return Out::Done(());
         }
         if let Expr::Call { callee, arg } = expr
@@ -2535,11 +2674,8 @@ impl<'m> RuntimeOutputResolver<'m> {
                 Out::Escape(escape) => return Out::Escape(escape),
                 Out::Err(e) => return Out::Err(e),
             };
-            let mut text = value.to_output_text();
-            if !text.ends_with('\n') {
-                text.push('\n');
-            }
-            self.outputs.push(text);
+            self.embedded_effect_runtime
+                .emit_output_line(value.to_output_text());
             return Out::Done(());
         }
 
@@ -2553,7 +2689,8 @@ impl<'m> RuntimeOutputResolver<'m> {
                 Out::Escape(escape) => return Out::Escape(escape),
                 Out::Err(e) => return Out::Err(e),
             };
-            self.outputs.push(v.to_output_text());
+            self.embedded_effect_runtime
+                .emit_output_text(v.to_output_text());
             return Out::Done(());
         }
 
@@ -2653,7 +2790,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                 if !text.ends_with('\n') {
                     text.push('\n');
                 }
-                self.outputs.push(text);
+                self.embedded_effect_runtime.emit_output_line(text);
                 return Out::Done(());
             }
             if fn_name.starts_with("__goby_")
@@ -4197,7 +4334,8 @@ impl<'m> RuntimeOutputResolver<'m> {
                             &function_callables,
                             evaluators,
                         )?;
-                        self.outputs.push(value.to_output_text());
+                        self.embedded_effect_runtime
+                            .emit_output_text(value.to_output_text());
                     }
                     Statement::Expr(inner_expr) => {
                         self.execute_unit_call(
@@ -4535,7 +4673,7 @@ impl<'m> RuntimeOutputResolver<'m> {
             if !text.ends_with('\n') {
                 text.push('\n');
             }
-            self.outputs.push(text);
+            self.embedded_effect_runtime.emit_output_line(text);
             return Out::Done(RuntimeValue::Unit);
         }
         if self.unique_effect_name_for_operation(fn_name).is_some() {
@@ -4748,9 +4886,9 @@ impl<'m> RuntimeOutputResolver<'m> {
             return Some(ResolvedEffectHandler::Explicit(method));
         }
         self.embedded_default_handlers
-            .contains_key(effect_name)
-            .then(|| ResolvedEffectHandler::EmbeddedDefault {
-                effect_name: effect_name.to_string(),
+            .get(effect_name)
+            .map(|handler_kind| ResolvedEffectHandler::EmbeddedDefault {
+                handler_kind: *handler_kind,
                 method_name: method_name.to_string(),
             })
     }
@@ -4766,9 +4904,9 @@ impl<'m> RuntimeOutputResolver<'m> {
             return Some(ResolvedEffectHandler::Explicit(method));
         }
         self.embedded_default_handlers
-            .contains_key(&effect_name)
-            .then(|| ResolvedEffectHandler::EmbeddedDefault {
-                effect_name,
+            .get(&effect_name)
+            .map(|handler_kind| ResolvedEffectHandler::EmbeddedDefault {
+                handler_kind: *handler_kind,
                 method_name: op_name.to_string(),
             })
     }
@@ -4788,11 +4926,19 @@ impl<'m> RuntimeOutputResolver<'m> {
                 depth + 1,
             ),
             ResolvedEffectHandler::EmbeddedDefault {
-                effect_name,
+                handler_kind,
                 method_name,
-            } => self
-                .apply_embedded_default_handler(&effect_name, &method_name, arg_value)
-                .map_or(Out::Err(RuntimeError::Unsupported), Out::Done),
+            } => match self
+                .embedded_effect_runtime
+                .invoke(handler_kind, &method_name, arg_value)
+            {
+                Ok(Some(value)) => Out::Done(value),
+                Ok(None) => Out::Err(RuntimeError::Unsupported),
+                Err(err) => {
+                    self.set_runtime_error_once(err);
+                    Out::Err(RuntimeError::Unsupported)
+                }
+            },
         }
     }
 
@@ -4808,109 +4954,20 @@ impl<'m> RuntimeOutputResolver<'m> {
                 self.dispatch_handler_method(&method, arg_value, evaluators, depth + 1)
             }
             ResolvedEffectHandler::EmbeddedDefault {
-                effect_name,
+                handler_kind,
                 method_name,
-            } => self
-                .apply_embedded_default_handler(&effect_name, &method_name, arg_value)
-                .map_or(Out::Err(RuntimeError::Unsupported), |_| Out::Done(())),
-        }
-    }
-
-    fn apply_embedded_default_handler(
-        &mut self,
-        effect_name: &str,
-        method_name: &str,
-        arg_val: RuntimeValue,
-    ) -> Option<RuntimeValue> {
-        let handler_name = self.embedded_default_handlers.get(effect_name)?;
-        match (handler_name.as_str(), method_name) {
-            ("__goby_embeded_effect_stdout_handler", "print") => {
-                self.outputs.push(arg_val.to_output_text());
-                Some(RuntimeValue::Unit)
-            }
-            ("__goby_embeded_effect_stdout_handler", "println") => {
-                let mut text = arg_val.to_output_text();
-                if !text.ends_with('\n') {
-                    text.push('\n');
-                }
-                self.outputs.push(text);
-                Some(RuntimeValue::Unit)
-            }
-            ("__goby_embeded_effect_stdin_handler", "read")
-                if matches!(arg_val, RuntimeValue::Unit) =>
+            } => match self
+                .embedded_effect_runtime
+                .invoke(handler_kind, &method_name, arg_value)
             {
-                Some(RuntimeValue::String(self.read_stdin_remaining("read")?))
-            }
-            ("__goby_embeded_effect_stdin_handler", "read_line")
-                if matches!(arg_val, RuntimeValue::Unit) =>
-            {
-                Some(RuntimeValue::String(self.read_stdin_line("read_line")?))
-            }
-            _ => None,
-        }
-    }
-
-    fn ensure_stdin_loaded(&mut self, op_name: &str) -> Option<()> {
-        if self.stdin_buffer.is_some() {
-            return Some(());
-        }
-        let mut bytes = Vec::new();
-        match std::io::stdin().read_to_end(&mut bytes) {
-            Ok(_) => {
-                self.stdin_buffer = Some(String::from_utf8_lossy(&bytes).into_owned());
-                Some(())
-            }
-            Err(err) => {
-                self.set_runtime_error_once(format!("Read.{op_name} failed to read stdin: {err}"));
-                None
-            }
-        }
-    }
-
-    fn read_stdin_remaining(&mut self, op_name: &str) -> Option<String> {
-        self.ensure_stdin_loaded(op_name)?;
-        let content = self.stdin_buffer.as_ref()?;
-        if self.stdin_cursor >= content.len() {
-            return Some(String::new());
-        }
-        let tail = content[self.stdin_cursor..].to_string();
-        self.stdin_cursor = content.len();
-        Some(tail)
-    }
-
-    fn read_stdin_line(&mut self, op_name: &str) -> Option<String> {
-        self.ensure_stdin_loaded(op_name)?;
-        let content = self.stdin_buffer.as_ref()?;
-        if self.stdin_cursor >= content.len() {
-            return Some(String::new());
-        }
-        let bytes = content.as_bytes();
-        let start = self.stdin_cursor;
-        let mut idx = start;
-        while idx < bytes.len() {
-            match bytes[idx] {
-                b'\n' => {
-                    let line = content[start..idx].to_string();
-                    self.stdin_cursor = idx + 1;
-                    return Some(line);
+                Ok(Some(_)) => Out::Done(()),
+                Ok(None) => Out::Err(RuntimeError::Unsupported),
+                Err(err) => {
+                    self.set_runtime_error_once(err);
+                    Out::Err(RuntimeError::Unsupported)
                 }
-                b'\r' => {
-                    let line = content[start..idx].to_string();
-                    if idx + 1 < bytes.len() && bytes[idx + 1] == b'\n' {
-                        self.stdin_cursor = idx + 2;
-                    } else {
-                        self.stdin_cursor = idx + 1;
-                    }
-                    return Some(line);
-                }
-                _ => {
-                    idx += 1;
-                }
-            }
+            },
         }
-        let line = content[start..].to_string();
-        self.stdin_cursor = content.len();
-        Some(line)
     }
 
     fn inline_handler_from_clauses(
@@ -5774,11 +5831,16 @@ impl<'m> RuntimeOutputResolver<'m> {
     }
 }
 
-fn collect_embedded_default_handlers(module: &Module) -> HashMap<String, String> {
-    let mut defaults: HashMap<String, String> = module
+fn collect_embedded_default_handlers(
+    module: &Module,
+) -> HashMap<String, EmbeddedEffectHandlerKind> {
+    let mut defaults: HashMap<String, EmbeddedEffectHandlerKind> = module
         .embed_declarations
         .iter()
-        .map(|embed| (embed.effect_name.clone(), embed.handler_name.clone()))
+        .filter_map(|embed| {
+            EmbeddedEffectRuntime::resolve_handler_name(&embed.handler_name)
+                .map(|kind| (embed.effect_name.clone(), kind))
+        })
         .collect();
     let resolver = StdlibResolver::new(resolve_runtime_stdlib_root());
     for import in effective_runtime_imports(module) {
@@ -5786,9 +5848,11 @@ fn collect_embedded_default_handlers(module: &Module) -> HashMap<String, String>
             continue;
         };
         for embed in resolved.embedded_defaults {
-            defaults
-                .entry(embed.effect_name)
-                .or_insert(embed.handler_name);
+            let Some(kind) = EmbeddedEffectRuntime::resolve_handler_name(&embed.handler_name)
+            else {
+                continue;
+            };
+            defaults.entry(embed.effect_name).or_insert(kind);
         }
     }
     defaults

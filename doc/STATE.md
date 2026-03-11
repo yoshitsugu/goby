@@ -13,6 +13,8 @@ This file is a restart-safe snapshot for resuming work after context reset.
 - Fallback runtime can now parse imported stdlib modules and execute imported declarations through the normal AST declaration path, including stdlib-local recursion/callable-parameter flows used by `goby/list.each` / `map`.
 - `goby/env.fetch_env_var`, `goby/string.length`, and `goby/int.parse` now run through generic imported declaration execution in fallback runtime.
 - Bare prelude effect ops (`read`, `read_line`) now resolve through normal imported effect visibility; the dedicated runtime bridge catalog is removed.
+- Embedded default handler execution now goes through a dedicated `EmbeddedEffectRuntime` layer; stdout/stderr accumulation and stdin cursor state are no longer stored directly on `RuntimeOutputResolver`.
+- Embedded handler-name strings are now resolved into runtime handler kinds before dispatch, so resolver-side effect dispatch no longer branches on raw `__goby_embeded_effect_*` names.
 - `doc/PLAN.md` has been pruned to remove completed active-task sections.
 - Active docs are aligned for current shipped behavior:
   - `doc/LANGUAGE_SPEC.md`
@@ -46,7 +48,7 @@ This file is a restart-safe snapshot for resuming work after context reset.
 
 - Immediate runtime parity fixes:
 - Runtime architecture cleanup:
-  - continue shrinking remaining embedded default-handler special cases where stdlib/runtime behavior still needs runtime-owned hooks.
+  - continue shrinking remaining embedded default-handler special cases by moving `effect -> embedded handler kind` resolution closer to stdlib loading and keeping dispatch/data flow on typed runtime metadata.
   - continue tightening state-threading semantics for structural expression evaluation so stdlib/user code keep sharing one runtime path.
 - Follow-up cleanup remains optional:
   - remove or shrink `eval_expr_ast` compatibility fallback incrementally if future refactors need it.
