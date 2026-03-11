@@ -121,16 +121,7 @@ pub fn parse_expr(src: &str) -> Option<Expr> {
 mod tests {
     use super::*;
     use crate::ast::{Expr, Stmt};
-    use std::path::PathBuf;
-
-    fn read_example(name: &str) -> String {
-        let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        path.push("..");
-        path.push("..");
-        path.push("examples");
-        path.push(name);
-        std::fs::read_to_string(path).expect("example file should exist")
-    }
+    use crate::parser_test_support::read_example;
 
     #[test]
     fn parses_hello_example() {

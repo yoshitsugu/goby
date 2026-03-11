@@ -275,16 +275,7 @@ mod tests {
     use super::*;
     use crate::ast::{ImportKind, Stmt, TypeDeclaration};
     use crate::parser::parse_module;
-    use std::path::PathBuf;
-
-    fn read_example(name: &str) -> String {
-        let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        path.push("..");
-        path.push("..");
-        path.push("examples");
-        path.push(name);
-        std::fs::read_to_string(path).expect("example file should exist")
-    }
+    use crate::parser_test_support::read_example;
 
     fn parse_single_declaration(source: &str) -> DeclarationParts {
         let module = parse_module(source).expect("source should parse");

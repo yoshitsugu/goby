@@ -44,6 +44,7 @@ This file is a restart-safe snapshot for resuming work after context reset.
     - list/case-pattern unit tests now live in `crates/goby-core/src/parser_pattern.rs`
     - statement/body parsing tests now live in `crates/goby-core/src/parser_stmt.rs`
     - top-level parser syntax tests now live in `crates/goby-core/src/parser_top.rs`
+    - shared parser example-test fixture now lives in `crates/goby-core/src/parser_test_support.rs`
     - `crates/goby-core/src/parser.rs` is shedding module-internal test shims and detailed submodule spec tests
 - `F2.1` is now landed:
   - `crates/goby-core/src/typecheck_env.rs` owns `Ty`, `TypeEnv`, `ResumeContext`,

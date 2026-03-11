@@ -8,6 +8,8 @@ pub mod parser;
 mod parser_expr;
 mod parser_pattern;
 mod parser_stmt;
+#[cfg(test)]
+mod parser_test_support;
 mod parser_top;
 mod parser_util;
 pub mod stdlib;
