@@ -572,9 +572,85 @@ Scope:
      - `goby/list` higher-order runtime handling now runs through generic imported stdlib declaration execution rather than dedicated `list`-specific callback bridges.
      - `goby/env.fetch_env_var`, `goby/string.length`, and `goby/int.parse` now run through generic imported declaration execution.
      - bare prelude effect ops (`read`, `read_line`) now resolve through normal imported effect declarations rather than a dedicated runtime bridge catalog.
-     - future cleanup should continue shrinking the remaining embedded-default-handler special cases so stdlib/user code share one runtime path where practical.
+   - future cleanup should continue shrinking the remaining embedded-default-handler special cases so stdlib/user code share one runtime path where practical.
 
-### 4.6 Parking Lot (Needs Revalidation Before Implementation)
+### 4.6 Active Track F: Maintainability Hardening
+
+Goal: reduce "black box" implementation risk by making parser/typechecker/Wasm
+runtime internals easier to understand, modify, and test in isolation.
+
+Why this is active:
+
+- Current behavior is heavily regression-tested, but core logic is still
+  concentrated in a few very large files (`parser.rs`, `typecheck.rs`,
+  `goby-wasm/src/lib.rs`).
+- This creates a maintenance risk where future language/runtime work requires
+  understanding too many unrelated branches at once.
+- Priority is not cosmetic decomposition; priority is to create explicit module
+  boundaries, stable internal contracts, and focused tests per subsystem.
+
+Execution policy:
+
+1. Prefer behavior-preserving refactors with contract tests before broad logic changes.
+2. Split by responsibility, not by arbitrary line count.
+3. Each extraction must leave a narrower public/internal API than before.
+4. If a refactor cannot name its boundary in one sentence, the split is too vague.
+
+Near-term slices:
+
+1. Parser decomposition:
+   - extract top-level declaration parsing, statement parsing, expression parsing,
+     and parser helpers into separate modules under `goby-core`.
+   - keep `parse_module` as a thin orchestration entrypoint.
+   - add targeted tests at the extracted-module boundary where behavior is currently
+     only covered through end-to-end parser tests.
+2. Typechecker phase separation:
+   - split declaration validation, import/stdlib resolution, effect validation,
+     type-environment construction, and body-expression checking into distinct modules.
+   - keep one orchestrator function, but move each major validation phase behind
+     a named function group/module with explicit inputs/outputs.
+   - document which phases are allowed to perform stdlib I/O or path resolution.
+3. Wasm runtime/codegen boundary cleanup:
+   - shrink `goby-wasm/src/lib.rs` so that public compile entrypoints do not also
+     own most fallback runtime execution details.
+   - extract fallback runtime evaluator, embedded runtime bridge, and compile-time
+     output resolvers into dedicated modules with narrow interfaces.
+   - keep lowering-plan selection and runtime fallback diagnostics observable via
+     dedicated structs instead of ad hoc cross-file knowledge.
+4. Shared contract cleanup:
+   - remove duplicated parsing/runtime helper logic where one canonical utility
+     can serve multiple modules.
+   - define stable internal data contracts for effect-operation lookup, runtime
+     imports, and diagnostic span propagation.
+5. Test-shape hardening:
+   - add subsystem-focused tests for extracted modules, not only large-file
+     regression tests.
+   - preserve end-to-end parity tests so refactors can be proven behavior-preserving.
+
+Priority order:
+
+1. `crates/goby-wasm/src/lib.rs` boundary reduction.
+2. `crates/goby-core/src/typecheck.rs` phase separation.
+3. `crates/goby-core/src/parser.rs` decomposition.
+
+Definition of done for this track:
+
+- No single core implementation file should continue growing as the default place
+  for unrelated new features.
+- `compile_module`, `parse_module`, and `typecheck_module_with_context` remain as
+  orchestration entrypoints, but most policy/mechanics live behind smaller modules.
+- Newly extracted subsystems have direct unit tests that do not require traversing
+  the full compiler/runtime stack.
+- `doc/STATE.md` captures any internal boundary decisions that future refactors
+  should preserve.
+
+Non-goals:
+
+- large semantic rewrites under the banner of cleanup,
+- replacing working regression suites with only smaller unit tests,
+- splitting files without reducing conceptual coupling.
+
+### 4.7 Parking Lot (Needs Revalidation Before Implementation)
 
 - CLI `build` expansion details (`--target`, `--engine-compat`, verify modes).
 - CLI binary naming migration (`goby-cli` -> `goby`) final policy.

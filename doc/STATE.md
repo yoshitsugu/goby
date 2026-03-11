@@ -6,6 +6,8 @@ This file is a restart-safe snapshot for resuming work after context reset.
 
 ## Current Status
 
+- `doc/PLAN.md` now includes an active maintainability-hardening track focused on
+  reducing parser/typechecker/Wasm-runtime black-box risk through responsibility-based decomposition.
 - Scoped handler exit + multi-resume progression (former 4.7 task) is implemented.
 - List spread + stdlib `List.map` consolidation (former 4.5 task) is implemented.
 - Unit-argument call parity (`f ()` / `f()`) is implemented for parser + fallback runtime paths.
@@ -49,6 +51,9 @@ This file is a restart-safe snapshot for resuming work after context reset.
 ## Next Work
 
 - Immediate runtime parity fixes:
+- Maintainability hardening:
+  - reduce `crates/goby-wasm/src/lib.rs` boundary width first.
+  - then separate typecheck phases and parser responsibilities into smaller modules with contract tests.
 - Runtime architecture cleanup:
   - continue shrinking remaining embedded default-handler special cases around the runtime-owned `Print` / `Read` intrinsic I/O hook without broadening `@embed` beyond that role.
   - continue tightening state-threading semantics for structural expression evaluation so stdlib/user code keep sharing one runtime path.
