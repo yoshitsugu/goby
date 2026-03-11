@@ -739,3 +739,487 @@ fn is_qualified_name(s: &str) -> bool {
         false
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::parse_expr;
+    use crate::ast::{BinOpKind, Expr, InterpolatedPart};
+
+    #[test]
+    fn parses_int_literal() {
+        assert_eq!(parse_expr("42"), Some(Expr::IntLit(42)));
+        assert_eq!(parse_expr("-5"), Some(Expr::IntLit(-5)));
+    }
+
+    #[test]
+    fn parses_string_literal() {
+        assert_eq!(
+            parse_expr("\"hello\""),
+            Some(Expr::StringLit("hello".to_string()))
+        );
+    }
+
+    #[test]
+    fn parses_interpolated_string_with_variables() {
+        assert_eq!(
+            parse_expr("\"${a}${b}\""),
+            Some(Expr::InterpolatedString(vec![
+                InterpolatedPart::Expr(Box::new(Expr::Var("a".to_string()))),
+                InterpolatedPart::Expr(Box::new(Expr::Var("b".to_string()))),
+            ]))
+        );
+    }
+
+    #[test]
+    fn parses_interpolated_string_with_literal_prefix_and_suffix() {
+        assert_eq!(
+            parse_expr("\"hello ${name}!\""),
+            Some(Expr::InterpolatedString(vec![
+                InterpolatedPart::Text("hello ".to_string()),
+                InterpolatedPart::Expr(Box::new(Expr::Var("name".to_string()))),
+                InterpolatedPart::Text("!".to_string()),
+            ]))
+        );
+    }
+
+    #[test]
+    fn parses_interpolated_string_with_string_literal_expression() {
+        assert_eq!(
+            parse_expr("\"${\"a\"}\""),
+            Some(Expr::InterpolatedString(vec![InterpolatedPart::Expr(
+                Box::new(Expr::StringLit("a".to_string())),
+            )]))
+        );
+    }
+
+    #[test]
+    fn rejects_interpolated_string_with_unclosed_expression() {
+        assert_eq!(parse_expr("\"x${name\""), None);
+    }
+
+    #[test]
+    fn parses_identifier() {
+        assert_eq!(parse_expr("foo"), Some(Expr::Var("foo".to_string())));
+    }
+
+    #[test]
+    fn parses_addition() {
+        assert_eq!(
+            parse_expr("a + b"),
+            Some(Expr::BinOp {
+                op: BinOpKind::Add,
+                left: Box::new(Expr::Var("a".to_string())),
+                right: Box::new(Expr::Var("b".to_string())),
+            })
+        );
+    }
+
+    #[test]
+    fn parses_equality() {
+        assert_eq!(
+            parse_expr("a == b"),
+            Some(Expr::BinOp {
+                op: BinOpKind::Eq,
+                left: Box::new(Expr::Var("a".to_string())),
+                right: Box::new(Expr::Var("b".to_string())),
+            })
+        );
+    }
+
+    #[test]
+    fn parses_bool_literals() {
+        assert_eq!(parse_expr("True"), Some(Expr::BoolLit(true)));
+        assert_eq!(parse_expr("False"), Some(Expr::BoolLit(false)));
+    }
+
+    #[test]
+    fn parses_multiplication() {
+        assert_eq!(
+            parse_expr("b * 3"),
+            Some(Expr::BinOp {
+                op: BinOpKind::Mul,
+                left: Box::new(Expr::Var("b".to_string())),
+                right: Box::new(Expr::IntLit(3)),
+            })
+        );
+    }
+
+    #[test]
+    fn parses_operator_precedence_mul_higher_than_add() {
+        assert_eq!(
+            parse_expr("1 + 2 * 3"),
+            Some(Expr::BinOp {
+                op: BinOpKind::Add,
+                left: Box::new(Expr::IntLit(1)),
+                right: Box::new(Expr::BinOp {
+                    op: BinOpKind::Mul,
+                    left: Box::new(Expr::IntLit(2)),
+                    right: Box::new(Expr::IntLit(3)),
+                }),
+            })
+        );
+    }
+
+    #[test]
+    fn parses_equality_as_lower_precedence_than_addition() {
+        assert_eq!(
+            parse_expr("a + b == c"),
+            Some(Expr::BinOp {
+                op: BinOpKind::Eq,
+                left: Box::new(Expr::BinOp {
+                    op: BinOpKind::Add,
+                    left: Box::new(Expr::Var("a".to_string())),
+                    right: Box::new(Expr::Var("b".to_string())),
+                }),
+                right: Box::new(Expr::Var("c".to_string())),
+            })
+        );
+    }
+
+    #[test]
+    fn parses_left_associative_addition() {
+        assert_eq!(
+            parse_expr("1 + 2 + 3"),
+            Some(Expr::BinOp {
+                op: BinOpKind::Add,
+                left: Box::new(Expr::BinOp {
+                    op: BinOpKind::Add,
+                    left: Box::new(Expr::IntLit(1)),
+                    right: Box::new(Expr::IntLit(2)),
+                }),
+                right: Box::new(Expr::IntLit(3)),
+            })
+        );
+    }
+
+    #[test]
+    fn parses_left_associative_multiplication() {
+        assert_eq!(
+            parse_expr("2 * 3 * 4"),
+            Some(Expr::BinOp {
+                op: BinOpKind::Mul,
+                left: Box::new(Expr::BinOp {
+                    op: BinOpKind::Mul,
+                    left: Box::new(Expr::IntLit(2)),
+                    right: Box::new(Expr::IntLit(3)),
+                }),
+                right: Box::new(Expr::IntLit(4)),
+            })
+        );
+    }
+
+    #[test]
+    fn parses_pipeline_as_lowest_precedence() {
+        assert_eq!(
+            parse_expr("1 + 2 |> print"),
+            Some(Expr::Pipeline {
+                value: Box::new(Expr::BinOp {
+                    op: BinOpKind::Add,
+                    left: Box::new(Expr::IntLit(1)),
+                    right: Box::new(Expr::IntLit(2)),
+                }),
+                callee: "print".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn parses_left_associative_pipeline_chain() {
+        assert_eq!(
+            parse_expr("x |> f |> g"),
+            Some(Expr::Pipeline {
+                value: Box::new(Expr::Pipeline {
+                    value: Box::new(Expr::Var("x".to_string())),
+                    callee: "f".to_string(),
+                }),
+                callee: "g".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn rejects_pipeline_with_non_identifier_callee_expression() {
+        assert_eq!(parse_expr("x |> f 1"), None);
+        assert_eq!(parse_expr("x |> string.split(a, b)"), None);
+    }
+
+    #[test]
+    fn requires_spaces_around_infix_operators_in_mvp_parser() {
+        assert_eq!(parse_expr("a+b"), None);
+        assert_eq!(parse_expr("a*2"), None);
+        assert_eq!(parse_expr("a==b"), None);
+    }
+
+    #[test]
+    fn parses_list_literal() {
+        assert_eq!(
+            parse_expr("[3, 4, 5]"),
+            Some(Expr::ListLit {
+                elements: vec![Expr::IntLit(3), Expr::IntLit(4), Expr::IntLit(5)],
+                spread: None,
+            })
+        );
+    }
+
+    #[test]
+    fn parses_list_spread_with_variable() {
+        assert_eq!(
+            parse_expr("[1, 2, ..xs]"),
+            Some(Expr::ListLit {
+                elements: vec![Expr::IntLit(1), Expr::IntLit(2)],
+                spread: Some(Box::new(Expr::Var("xs".to_string()))),
+            })
+        );
+    }
+
+    #[test]
+    fn parses_list_spread_with_call_expr() {
+        assert_eq!(
+            parse_expr("[f(x), ..ys]"),
+            Some(Expr::ListLit {
+                elements: vec![Expr::Call {
+                    callee: Box::new(Expr::Var("f".to_string())),
+                    arg: Box::new(Expr::Var("x".to_string())),
+                }],
+                spread: Some(Box::new(Expr::Var("ys".to_string()))),
+            })
+        );
+    }
+
+    #[test]
+    fn parses_list_spread_single_prefix() {
+        assert_eq!(
+            parse_expr("[a, ..rest]"),
+            Some(Expr::ListLit {
+                elements: vec![Expr::Var("a".to_string())],
+                spread: Some(Box::new(Expr::Var("rest".to_string()))),
+            })
+        );
+    }
+
+    #[test]
+    fn rejects_list_spread_only() {
+        assert_eq!(parse_expr("[..xs]"), None);
+    }
+
+    #[test]
+    fn rejects_list_spread_non_trailing() {
+        assert_eq!(parse_expr("[..a, b]"), None);
+    }
+
+    #[test]
+    fn rejects_list_spread_middle() {
+        assert_eq!(parse_expr("[a, ..b, c]"), None);
+    }
+
+    #[test]
+    fn rejects_list_spread_missing_expr() {
+        assert_eq!(parse_expr("[a, ..]"), None);
+    }
+
+    #[test]
+    fn parses_tuple_literal() {
+        assert_eq!(
+            parse_expr("(\"Hello\", 3)"),
+            Some(Expr::TupleLit(vec![
+                Expr::StringLit("Hello".to_string()),
+                Expr::IntLit(3)
+            ]))
+        );
+    }
+
+    #[test]
+    fn parses_unit_literal_as_empty_tuple_syntax() {
+        assert_eq!(parse_expr("()"), Some(Expr::unit_value()));
+    }
+
+    #[test]
+    fn parses_spaced_function_call() {
+        assert_eq!(
+            parse_expr("add_ten 10"),
+            Some(Expr::Call {
+                callee: Box::new(Expr::Var("add_ten".to_string())),
+                arg: Box::new(Expr::IntLit(10)),
+            })
+        );
+    }
+
+    #[test]
+    fn parses_spaced_multi_arg_function_call_left_associative() {
+        assert_eq!(
+            parse_expr("f a b c"),
+            Some(Expr::Call {
+                callee: Box::new(Expr::Call {
+                    callee: Box::new(Expr::Call {
+                        callee: Box::new(Expr::Var("f".to_string())),
+                        arg: Box::new(Expr::Var("a".to_string())),
+                    }),
+                    arg: Box::new(Expr::Var("b".to_string())),
+                }),
+                arg: Box::new(Expr::Var("c".to_string())),
+            })
+        );
+    }
+
+    #[test]
+    fn parses_spaced_unit_argument_function_call() {
+        assert_eq!(
+            parse_expr("read_line ()"),
+            Some(Expr::Call {
+                callee: Box::new(Expr::Var("read_line".to_string())),
+                arg: Box::new(Expr::unit_value()),
+            })
+        );
+    }
+
+    #[test]
+    fn parses_parenthesized_unit_argument_function_call() {
+        assert_eq!(
+            parse_expr("read_line()"),
+            Some(Expr::Call {
+                callee: Box::new(Expr::Var("read_line".to_string())),
+                arg: Box::new(Expr::unit_value()),
+            })
+        );
+    }
+
+    #[test]
+    fn parses_spaced_constructor_call_when_name_is_camel_case() {
+        assert_eq!(
+            parse_expr("User ()"),
+            Some(Expr::RecordConstruct {
+                constructor: "User".to_string(),
+                fields: vec![],
+            })
+        );
+    }
+
+    #[test]
+    fn parses_named_lambda() {
+        assert_eq!(
+            parse_expr("|n| -> n * 10"),
+            Some(Expr::Lambda {
+                param: "n".to_string(),
+                body: Box::new(Expr::BinOp {
+                    op: BinOpKind::Mul,
+                    left: Box::new(Expr::Var("n".to_string())),
+                    right: Box::new(Expr::IntLit(10)),
+                }),
+            })
+        );
+    }
+
+    #[test]
+    fn parses_placeholder_lambda() {
+        assert_eq!(
+            parse_expr("_ * 10"),
+            Some(Expr::Lambda {
+                param: "_".to_string(),
+                body: Box::new(Expr::BinOp {
+                    op: BinOpKind::Mul,
+                    left: Box::new(Expr::Var("_".to_string())),
+                    right: Box::new(Expr::IntLit(10)),
+                }),
+            })
+        );
+    }
+
+    #[test]
+    fn parses_pipeline() {
+        let expr = parse_expr("mul_tens [3, 4, 5] |> print").expect("should parse");
+        assert!(matches!(expr, Expr::Pipeline { .. }));
+    }
+
+    #[test]
+    fn parses_qualified_method_call() {
+        assert_eq!(
+            parse_expr("string.split(a, b)"),
+            Some(Expr::MethodCall {
+                receiver: "string".to_string(),
+                method: "split".to_string(),
+                args: vec![Expr::Var("a".to_string()), Expr::Var("b".to_string())],
+            })
+        );
+    }
+
+    #[test]
+    fn parses_generic_qualified_method_call() {
+        assert_eq!(
+            parse_expr("l.join(paths, \"\\n\")"),
+            Some(Expr::MethodCall {
+                receiver: "l".to_string(),
+                method: "join".to_string(),
+                args: vec![
+                    Expr::Var("paths".to_string()),
+                    Expr::StringLit("\n".to_string()),
+                ],
+            })
+        );
+    }
+
+    #[test]
+    fn parses_record_constructor_call_with_named_fields() {
+        assert_eq!(
+            parse_expr("User(id: \"1234\", name: \"John\")"),
+            Some(Expr::RecordConstruct {
+                constructor: "User".to_string(),
+                fields: vec![
+                    ("id".to_string(), Expr::StringLit("1234".to_string())),
+                    ("name".to_string(), Expr::StringLit("John".to_string())),
+                ],
+            })
+        );
+    }
+
+    #[test]
+    fn parses_qualified_access_expression() {
+        assert_eq!(
+            parse_expr("user.name"),
+            Some(Expr::Qualified {
+                receiver: "user".to_string(),
+                member: "name".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn parses_qualified_method_call_with_three_arguments() {
+        assert_eq!(
+            parse_expr("string.join(a, b, c)"),
+            Some(Expr::MethodCall {
+                receiver: "string".to_string(),
+                method: "join".to_string(),
+                args: vec![
+                    Expr::Var("a".to_string()),
+                    Expr::Var("b".to_string()),
+                    Expr::Var("c".to_string()),
+                ],
+            })
+        );
+    }
+
+    #[test]
+    fn parses_resume_expression() {
+        assert_eq!(
+            parse_expr("resume ()"),
+            Some(Expr::Resume {
+                value: Box::new(Expr::unit_value()),
+            })
+        );
+    }
+
+    #[test]
+    fn parses_resume_expression_with_unit_literal() {
+        assert_eq!(
+            parse_expr("resume ()"),
+            Some(Expr::Resume {
+                value: Box::new(Expr::unit_value()),
+            })
+        );
+    }
+
+    #[test]
+    fn rejects_malformed_resume_expression() {
+        assert_eq!(parse_expr("resume"), None);
+    }
+}

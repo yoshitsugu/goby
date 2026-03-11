@@ -39,6 +39,10 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - `crates/goby-core/src/parser_expr.rs` owns expression parsing, interpolation parsing, application/method parsing, and expression split helpers.
   - `crates/goby-core/src/parser_pattern.rs` owns case/list pattern parsing shared by statement parsing.
   - `crates/goby-core/src/parser.rs` is now a thin public entry layer for `parse_module`, `parse_body_stmts`, and `parse_expr`.
+  - `Milestone F4` cleanup has started:
+    - expression-focused parser tests now live in `crates/goby-core/src/parser_expr.rs`
+    - list/case-pattern unit tests now live in `crates/goby-core/src/parser_pattern.rs`
+    - `crates/goby-core/src/parser.rs` is shedding module-internal test shims and detailed submodule spec tests
 - `F2.1` is now landed:
   - `crates/goby-core/src/typecheck_env.rs` owns `Ty`, `TypeEnv`, `ResumeContext`,
     effect-map structs, and related internal binding data.
@@ -77,8 +81,8 @@ This file is a restart-safe snapshot for resuming work after context reset.
 ## Next Work
 
 - Start `Milestone F4` cleanup:
-  - remove transitional test-only helpers left in `parser.rs` if they no longer add value
-  - review whether parser submodule tests should move closer to owned modules
+  - continue moving statement/top-level parser spec tests closer to owned modules where they no longer need `parser.rs`
+  - remove any remaining parser-only transitional helpers that exist only for old test layout
   - keep parse diagnostics and current parser/runtime behavior unchanged during cleanup
 
 ## Notes
