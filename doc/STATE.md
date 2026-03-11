@@ -30,6 +30,10 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - import / stdlib / intrinsic validation
   - effect dependency validation
   - expression / statement checking
+- `F2.1` is now landed:
+  - `crates/goby-core/src/typecheck_env.rs` owns `Ty`, `TypeEnv`, `ResumeContext`,
+    effect-map structs, and related internal binding data.
+  - `crates/goby-core/src/typecheck.rs` now consumes that module instead of defining those internals inline.
 - Runtime model to preserve while refactoring:
   - `Out<T> = Done | Suspend | Escape | Err`
   - `Escape::WithScope { with_id, value }`
@@ -46,7 +50,7 @@ This file is a restart-safe snapshot for resuming work after context reset.
 ## Next Work
 
 - Start `Milestone F2` in `goby-core`:
-  - carve out shared type-environment and internal typecheck data first
+  - move import / stdlib / intrinsic policy validation into a dedicated internal module
   - keep `typecheck_module_with_context` as the top-level orchestrator
   - preserve current diagnostics and test corpus while moving code
 - After the first `typecheck.rs` split lands, continue with later F2 steps and then `parser.rs`.

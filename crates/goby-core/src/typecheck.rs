@@ -8,6 +8,10 @@ use crate::{
         ListPatternTail, Span, Stmt, TypeDeclaration,
     },
     stdlib::{StdlibResolveError, StdlibResolver},
+    typecheck_env::{
+        EffectDependencyInfo, EffectMap, GlobalBinding, ImportedEffectDecl, RecordTypeInfo,
+        ResumeContext, Ty, TypeEnv, TypeSubst,
+    },
     types::{TypeExpr, parse_function_type, parse_type_expr},
 };
 
@@ -214,182 +218,6 @@ pub fn typecheck_module_with_context(
 // Internal type representation
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum Ty {
-    Int,
-    Bool,
-    Str,
-    Unit,
-    List(Box<Ty>),
-    Tuple(Vec<Ty>),
-    Fun { params: Vec<Ty>, result: Box<Ty> },
-    Var(String),
-    Con { name: String, args: Vec<Ty> },
-    Handler { covered_ops: HashSet<String> },
-    Unknown,
-}
-
-#[derive(Clone)]
-struct TypeEnv {
-    globals: HashMap<String, GlobalBinding>,
-    locals: HashMap<String, Ty>,
-    type_aliases: HashMap<String, Ty>,
-    record_types: HashMap<String, RecordTypeInfo>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum GlobalBinding {
-    Resolved { ty: Ty, source: String },
-    Ambiguous { sources: Vec<String> },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct RecordTypeInfo {
-    type_name: String,
-    fields: HashMap<String, Ty>,
-}
-
-#[derive(Debug, Clone)]
-struct ResumeContext {
-    expected_arg_ty: Option<Ty>,
-}
-
-impl TypeEnv {
-    fn lookup(&self, name: &str) -> Ty {
-        if let Some(ty) = self.locals.get(name) {
-            return ty.clone();
-        }
-        if let Some(binding) = self.globals.get(name) {
-            return match binding {
-                GlobalBinding::Resolved { ty, .. } => ty.clone(),
-                GlobalBinding::Ambiguous { .. } => Ty::Unknown,
-            };
-        }
-        Ty::Unknown
-    }
-
-    fn ambiguous_sources(&self, name: &str) -> Option<&[String]> {
-        let binding = self.globals.get(name)?;
-        if let GlobalBinding::Ambiguous { sources } = binding {
-            Some(sources)
-        } else {
-            None
-        }
-    }
-
-    fn with_local(&self, name: &str, ty: Ty) -> TypeEnv {
-        let mut locals = self.locals.clone();
-        locals.insert(name.to_string(), ty);
-        TypeEnv {
-            globals: self.globals.clone(),
-            locals,
-            type_aliases: self.type_aliases.clone(),
-            record_types: self.record_types.clone(),
-        }
-    }
-
-    fn lookup_record_by_constructor(&self, constructor: &str) -> Option<&RecordTypeInfo> {
-        self.record_types.get(constructor)
-    }
-
-    fn record_field_ty(&self, type_name: &str, field: &str) -> Option<Ty> {
-        self.record_types
-            .values()
-            .find(|info| info.type_name == type_name)
-            .and_then(|info| info.fields.get(field).cloned())
-    }
-
-    /// Returns true if `name` is a known effect operation (registered via `inject_effect_symbols`).
-    /// A bare name that is `Ambiguous` due to two effects both declaring it is also considered an
-    /// effect op; the ambiguity will have been caught by `ensure_no_ambiguous_refs_in_expr` first.
-    fn is_effect_op(&self, name: &str) -> bool {
-        if self.locals.contains_key(name) {
-            return false;
-        }
-        match self.globals.get(name) {
-            Some(GlobalBinding::Resolved { source, .. }) => source.starts_with("effect `"),
-            Some(GlobalBinding::Ambiguous { sources }) => {
-                sources.iter().all(|s| s.starts_with("effect `"))
-            }
-            None => false,
-        }
-    }
-
-    fn are_compatible(&self, expected: &Ty, actual: &Ty) -> bool {
-        let expected = self.resolve_alias(expected, 0);
-        let actual = self.resolve_alias(actual, 0);
-        if let Ty::Con { name, args } = &expected
-            && name == "Handler"
-            && let Ty::Handler { covered_ops } = &actual
-            && let Some(expected_ops) = self.handler_ops_from_type_args(args)
-        {
-            return expected_ops == *covered_ops;
-        }
-        expected == actual
-    }
-
-    fn handler_ops_from_type_args(&self, args: &[Ty]) -> Option<HashSet<String>> {
-        let mut covered = HashSet::new();
-        for arg in args {
-            let Ty::Con { name, args } = self.resolve_alias(arg, 0) else {
-                return None;
-            };
-            if !args.is_empty() {
-                return None;
-            }
-            for (symbol, binding) in &self.globals {
-                if let GlobalBinding::Resolved { source, .. } = binding {
-                    let expected_source = format!("effect `{}` member", name);
-                    if source == &expected_source {
-                        covered.insert(symbol.clone());
-                    }
-                }
-            }
-        }
-        Some(covered)
-    }
-
-    fn resolve_alias(&self, ty: &Ty, depth: usize) -> Ty {
-        if depth > 32 {
-            return ty.clone();
-        }
-        match ty {
-            Ty::List(inner) => Ty::List(Box::new(self.resolve_alias(inner, depth + 1))),
-            Ty::Tuple(items) => Ty::Tuple(
-                items
-                    .iter()
-                    .map(|item| self.resolve_alias(item, depth + 1))
-                    .collect(),
-            ),
-            Ty::Fun { params, result } => Ty::Fun {
-                params: params
-                    .iter()
-                    .map(|param| self.resolve_alias(param, depth + 1))
-                    .collect(),
-                result: Box::new(self.resolve_alias(result, depth + 1)),
-            },
-            Ty::Con { name, args } => {
-                if args.is_empty()
-                    && let Some(target) = self.type_aliases.get(name)
-                {
-                    return self.resolve_alias(target, depth + 1);
-                }
-                Ty::Con {
-                    name: name.clone(),
-                    args: args
-                        .iter()
-                        .map(|arg| self.resolve_alias(arg, depth + 1))
-                        .collect(),
-                }
-            }
-            Ty::Handler { covered_ops } => Ty::Handler {
-                covered_ops: covered_ops.clone(),
-            },
-            _ => ty.clone(),
-        }
-    }
-}
-
 /// Returns the expected return type of a declaration from its type annotation.
 /// For function types (`A -> B`), returns the result type `B`.
 /// For non-function types (`Int`, `String`, …), returns the annotation type itself.
@@ -400,26 +228,6 @@ fn annotation_return_ty(annotation: &str) -> Ty {
     } else {
         ty_from_annotation(base)
     }
-}
-
-/// Maps effects to their operations and operation-name reverse lookups.
-struct EffectMap {
-    /// effect_name -> set of op identifiers: both qualified ("E.op") and bare ("op")
-    effect_to_ops: HashMap<String, HashSet<String>>,
-    /// bare operation name -> effect names declaring that operation
-    op_to_effects: HashMap<String, HashSet<String>>,
-}
-
-/// Per-operation dependencies declared in effect member `can` clauses.
-/// Key format: `EffectName.operation`.
-struct EffectDependencyInfo {
-    op_required_effects: HashMap<String, Vec<String>>,
-}
-
-#[derive(Debug, Clone)]
-struct ImportedEffectDecl {
-    source_module: String,
-    decl: crate::ast::EffectDecl,
 }
 
 /// Maps top-level declaration names to the list of effect names they require (from `can` clause).
@@ -2555,8 +2363,6 @@ fn infer_binding_ty_with_resume_context(
     }
     check_expr(value, env)
 }
-
-type TypeSubst = HashMap<String, Ty>;
 
 fn apply_type_substitution(ty: &Ty, subst: &TypeSubst, env: &TypeEnv) -> Ty {
     let resolved = env.resolve_alias(ty, 0);

@@ -648,11 +648,14 @@ Detailed implementation plan:
    - Goal:
      - replace one giant mixed-responsibility file with explicit checking phases and shared internal data contracts.
    - Planned extraction order:
-     - [ ] Step F2.1: move shared type environment and internal type representations into a dedicated internal module.
+     - [x] Step F2.1: move shared type environment and internal type representations into a dedicated internal module.
      - [ ] Step F2.2: move import/stdlib/intrinsic policy validation into a dedicated validation module.
      - [ ] Step F2.3: move effect declaration/effect dependency checks into a dedicated effect-validation module.
      - [ ] Step F2.4: move expression/statement checking into dedicated inference/checking modules.
      - [ ] Step F2.5: keep `typecheck_module_with_context` as a top-level orchestrator that sequences the extracted phases.
+     - Progress note:
+       - completed extraction: `crates/goby-core/src/typecheck_env.rs` now owns `Ty`, `TypeEnv`, effect-map data structs, and related internal bindings.
+       - next F2 step is splitting import / stdlib / intrinsic validation out of `typecheck.rs` without changing diagnostics.
    - Constraints:
      - avoid creating a new hidden god-module under a different file name.
      - path/stdlib resolution code must remain clearly isolated from pure expression checking.

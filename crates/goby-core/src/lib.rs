@@ -8,6 +8,7 @@ pub mod parser;
 pub mod stdlib;
 pub mod str_util;
 pub mod typecheck;
+mod typecheck_env;
 pub mod types;
 
 pub use analysis::resolve_print_text;
