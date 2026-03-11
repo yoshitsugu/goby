@@ -2,8 +2,6 @@
 use crate::ast::{CasePattern, InterpolatedPart, ListPatternItem, ListPatternTail};
 use crate::ast::{Declaration, Expr, Module, Stmt};
 use crate::parser_expr::parse_expr as parse_expr_impl;
-#[cfg(test)]
-use crate::parser_stmt::parse_stmt_with;
 use crate::parser_stmt::{
     first_legacy_using_line_offset, first_malformed_resume_expr_line_offset, parse_body_stmts_with,
 };
@@ -112,11 +110,6 @@ pub fn parse_body_stmts(body: &str) -> Option<Vec<Stmt>> {
     parse_body_stmts_with(body, parse_expr)
 }
 
-#[cfg(test)]
-fn parse_stmt(line: &str) -> Option<Stmt> {
-    parse_stmt_with(line, parse_expr)
-}
-
 /// Parse a single expression from a source string.
 pub fn parse_expr(src: &str) -> Option<Expr> {
     parse_expr_impl(src)
@@ -130,6 +123,7 @@ pub fn parse_expr(src: &str) -> Option<Expr> {
 mod tests {
     use super::*;
     use crate::ast::{BinOpKind, Expr, ImportKind, Stmt, TypeDeclaration};
+    use crate::parser_stmt::parse_stmt_with;
     use std::path::PathBuf;
 
     fn read_example(name: &str) -> String {
@@ -1227,7 +1221,7 @@ main =
     #[test]
     fn equality_is_parsed_as_expression_not_binding_statement() {
         assert!(matches!(
-            parse_stmt("a == 1"),
+            parse_stmt_with("a == 1", parse_expr),
             Some(Stmt::Expr(Expr::BinOp {
                 op: BinOpKind::Eq,
                 ..
