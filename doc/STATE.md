@@ -25,10 +25,8 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - `crates/goby-wasm/src/runtime_replay.rs`
 - `crates/goby-wasm/src/lib.rs` now mainly holds the public codegen entrypoint,
   fallback orchestration glue, and remaining helper methods that were not part of F1 extraction scope.
-- Next maintainability target is `crates/goby-core/src/typecheck.rs`, which still mixes:
-  - type environment construction
-  - effect dependency validation
-  - expression / statement checking
+- Current maintainability target is still `crates/goby-core/src/typecheck.rs`, but the
+  remaining work is now mostly phase orchestration and residual validation helpers.
 - `F2.1` is now landed:
   - `crates/goby-core/src/typecheck_env.rs` owns `Ty`, `TypeEnv`, `ResumeContext`,
     effect-map structs, and related internal binding data.
@@ -42,6 +40,10 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - `crates/goby-core/src/typecheck_effect.rs` owns effect declaration validation,
     member `can`-clause validation, effect dependency cycle checks, and effect-map builders.
   - `crates/goby-core/src/typecheck.rs` now consumes those effect-phase helpers instead of defining them inline.
+- `F2.4` is now landed:
+  - `crates/goby-core/src/typecheck_check.rs` owns expression inference, statement checking,
+    resume validation, branch-consistency checks, and type rendering helpers.
+  - `crates/goby-core/src/typecheck.rs` now calls that module instead of carrying the checking core inline.
 - Runtime model to preserve while refactoring:
   - `Out<T> = Done | Suspend | Escape | Err`
   - `Escape::WithScope { with_id, value }`
@@ -52,16 +54,17 @@ This file is a restart-safe snapshot for resuming work after context reset.
 
 - `cargo fmt`
 - `cargo check`
+- `cargo test -p goby-core`
 - `cargo test -p goby-wasm`
 - `cargo test --workspace`
 
 ## Next Work
 
-- Start `Milestone F2` in `goby-core`:
-  - move expression / statement inference and checking into dedicated internal modules
-  - keep `typecheck_module_with_context` as the top-level orchestrator
-  - preserve current diagnostics and test corpus while moving code
-- After the first `typecheck.rs` split lands, continue with later F2 steps and then `parser.rs`.
+- Finish `Milestone F2` in `goby-core`:
+  - reduce `typecheck_module_with_context` and nearby helpers into an explicit phase orchestrator
+  - keep imports/validation/effect/checking phases readable at the top level
+  - preserve current diagnostics and test corpus while shrinking `typecheck.rs`
+- After `F2.5`, continue with `parser.rs` decomposition.
 
 ## Notes
 
