@@ -604,6 +604,109 @@ Priority order:
 2. `crates/goby-core/src/typecheck.rs` phase separation.
 3. `crates/goby-core/src/parser.rs` decomposition.
 
+Detailed implementation plan:
+
+1. Milestone F0: establish refactor harness before moving code.
+   - Goal:
+     - lock in behavior-preserving checks so later file moves are judged by contracts, not intuition.
+   - Planned work:
+     - identify and keep a stable smoke subset for each subsystem:
+       - Wasm: `cargo test -p goby-wasm`
+       - core parser/typecheck: `cargo test -p goby-core`
+       - workspace regression: `cargo test --workspace`
+       - compile sanity: `cargo check`
+     - add or preserve focused tests around extracted seams before moving logic when current coverage is only end-to-end.
+     - record intended module boundaries in `doc/STATE.md` before the first code-moving patch.
+   - Acceptance criteria:
+     - every later milestone can point to a focused test command plus one broader regression command.
+
+2. Milestone F1: reduce `crates/goby-wasm/src/lib.rs` boundary width first.
+   - Goal:
+     - keep `compile_module` as the orchestration entrypoint while moving fallback-runtime mechanics behind explicit internal modules.
+   - Planned extraction order:
+     - Step F1.1: extract runtime value/state types and simple helpers.
+       - likely targets: `RuntimeValue`, `RuntimeLocals`, equality/format helpers, local-binding utilities.
+     - Step F1.2: extract embedded runtime and runtime import loading.
+       - likely targets: `EmbeddedEffectRuntime`, `RuntimeImportContext`, stdlib import-loading helpers.
+     - Step F1.3: extract fallback evaluator/runtime executor.
+       - likely targets: `RuntimeOutputResolver`, continuation state, handler dispatch, `Out` / `Escape` / `Cont` family.
+     - Step F1.4: extract compile-time output resolvers that are logically separate from public codegen entrypoints.
+       - likely targets: `IntEvaluator`, `ListIntEvaluator`, static-output helpers used by `resolve_main_runtime_output*`.
+   - Constraints:
+     - do not change lowering-plan selection or public `compile_module` behavior in the same patch as a large extraction.
+     - keep module dependencies one-directional:
+       - public entrypoint -> lowering/fallback/runtime helper modules
+       - evaluator/runtime helpers must not call back into `compile_module`.
+   - Acceptance criteria:
+     - `goby-wasm/src/lib.rs` becomes a thin orchestration layer plus public API.
+     - extracted modules own their tests where practical, while integration parity tests remain in place.
+
+3. Milestone F2: separate `goby-core` typecheck phases.
+   - Goal:
+     - replace one giant mixed-responsibility file with explicit checking phases and shared internal data contracts.
+   - Planned extraction order:
+     - Step F2.1: move shared type environment and internal type representations into a dedicated internal module.
+     - Step F2.2: move import/stdlib/intrinsic policy validation into a dedicated validation module.
+     - Step F2.3: move effect declaration/effect dependency checks into a dedicated effect-validation module.
+     - Step F2.4: move expression/statement checking into dedicated inference/checking modules.
+     - Step F2.5: keep `typecheck_module_with_context` as a top-level orchestrator that sequences the extracted phases.
+   - Constraints:
+     - avoid creating a new hidden god-module under a different file name.
+     - path/stdlib resolution code must remain clearly isolated from pure expression checking.
+   - Acceptance criteria:
+     - the typechecker has named phase modules with explicit inputs/outputs.
+     - tests can target validation/inference phases without traversing the full file.
+
+4. Milestone F3: decompose parser responsibilities.
+   - Goal:
+     - keep `parse_module` as the entrypoint while splitting top-level parsing, statements, expressions, and helper utilities.
+   - Planned extraction order:
+     - Step F3.1: isolate shared lexical/splitting helpers.
+     - Step F3.2: isolate top-level declaration parsing (`import`, `type`, `effect`, top-level definitions).
+     - Step F3.3: isolate statement parsing and multiline block handling.
+     - Step F3.4: isolate expression parsing and pattern parsing.
+   - Constraints:
+     - preserve current parse error wording unless a separate diagnostics task intentionally changes it.
+     - preserve current parser test corpus during moves; add narrower tests only where it reduces ambiguity.
+   - Acceptance criteria:
+     - parser modules correspond to syntax responsibilities rather than historical file growth.
+     - expression and statement parsing can be read independently of top-level declaration handling.
+
+5. Milestone F4: cross-cutting cleanup after the first extractions land.
+   - Goal:
+     - remove duplication exposed by the refactor rather than during speculative up-front cleanup.
+   - Planned work:
+     - unify duplicated helper logic only after canonical ownership is clear.
+     - tighten span/diagnostic propagation where extracted interfaces currently drop source context.
+     - prune transitional re-exports or compatibility shims created during file moves.
+   - Acceptance criteria:
+     - no transitional module layout remains as permanent architecture by accident.
+
+Change-unit policy:
+
+1. One extraction step per commit where practical.
+2. If a move also changes behavior, split it into:
+   - contract-test patch,
+   - move/refactor patch,
+   - behavior-change patch.
+3. If a file move causes broad test breakage across unrelated subsystems, stop and narrow the seam before continuing.
+
+Quality gates for each milestone:
+
+1. `cargo fmt`
+2. `cargo check`
+3. Focused tests for the touched subsystem:
+   - `cargo test -p goby-wasm` for F1
+   - `cargo test -p goby-core` for F2/F3
+4. Broad regression before closing a milestone:
+   - `cargo test --workspace`
+
+Plan update rule during execution:
+
+1. If an extraction reveals a tighter seam than planned, update this Track F section before continuing.
+2. If a proposed module split introduces bidirectional dependencies, revise the boundary and note the reason in `doc/STATE.md`.
+3. If a milestone stalls after two narrowing attempts, pause implementation and rewrite the milestone into smaller steps here.
+
 Definition of done for this track:
 
 - No single core implementation file should continue growing as the default place
@@ -620,6 +723,21 @@ Non-goals:
 - large semantic rewrites under the banner of cleanup,
 - replacing working regression suites with only smaller unit tests,
 - splitting files without reducing conceptual coupling.
+
+Plan review:
+
+- Review result: proceed, with sequencing constraints.
+- Findings:
+  - starting with `goby-wasm/src/lib.rs` is the right first move because it has the widest current boundary and can be reduced without changing language semantics.
+  - typechecker extraction must keep stdlib/path resolution separate from pure checking; otherwise the refactor only renames the same coupling.
+  - parser extraction should come after typechecker, not before, because parser tests are numerous and currently provide a stronger safety net than the typechecker's internal module boundaries.
+  - duplication cleanup should stay late; doing it early would mix architectural movement with semantic edits.
+- Risks to watch:
+  - cyclic dependencies between newly extracted internal modules,
+  - test relocation that accidentally drops regression coverage,
+  - "utility" modules becoming new dumping grounds.
+- Review verdict:
+  - plan is acceptable if milestones F1-F4 are executed incrementally with the listed quality gates and the change-unit policy above.
 
 ### 4.6 Parking Lot (Needs Revalidation Before Implementation)
 

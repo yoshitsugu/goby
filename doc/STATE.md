@@ -46,8 +46,10 @@ This file is a restart-safe snapshot for resuming work after context reset.
 ## Next Work
 
 - Maintainability hardening:
-  - reduce `crates/goby-wasm/src/lib.rs` boundary width first.
-  - then separate typecheck phases and parser responsibilities into smaller modules with contract tests.
+  - start with Track F milestone F0/F1:
+    - lock focused refactor harness (`cargo test -p goby-wasm`, `cargo test -p goby-core`, `cargo test --workspace`, `cargo check`).
+    - reduce `crates/goby-wasm/src/lib.rs` boundary width first by extracting runtime value/state helpers, embedded runtime/import loading, then fallback evaluator internals.
+  - after F1, separate typecheck phases and parser responsibilities into smaller modules with contract tests.
 - Runtime architecture cleanup:
   - continue shrinking remaining embedded default-handler special cases around the runtime-owned `Print` / `Read` intrinsic I/O hook without broadening `@embed` beyond that role.
   - continue tightening state-threading semantics for structural expression evaluation so stdlib/user code keep sharing one runtime path.
