@@ -670,10 +670,14 @@ Detailed implementation plan:
    - Goal:
      - keep `parse_module` as the entrypoint while splitting top-level parsing, statements, expressions, and helper utilities.
    - Planned extraction order:
-     - [ ] Step F3.1: isolate shared lexical/splitting helpers.
+     - [x] Step F3.1: isolate shared lexical/splitting helpers.
      - [ ] Step F3.2: isolate top-level declaration parsing (`import`, `type`, `effect`, top-level definitions).
      - [ ] Step F3.3: isolate statement parsing and multiline block handling.
      - [ ] Step F3.4: isolate expression parsing and pattern parsing.
+     - Progress note:
+       - completed extractions: `crates/goby-core/src/parser_util.rs`.
+       - `parser_util.rs` now owns shared identifier/keyword predicates, comment stripping, indentation helpers, and top-level split helpers used across parser phases.
+       - next F3 step is isolating top-level declaration parsing out of `parser.rs` while keeping `parse_module` as the public entrypoint.
    - Constraints:
      - preserve current parse error wording unless a separate diagnostics task intentionally changes it.
      - preserve current parser test corpus during moves; add narrower tests only where it reduces ambiguity.
