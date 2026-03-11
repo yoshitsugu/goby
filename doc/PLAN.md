@@ -401,11 +401,29 @@ removed in a deliberate order after active language/runtime work.
   - [ ] C4. embedded default handler / runtime bridge revalidation after C1-C3
     - current status:
       - embedded default handlers are current semantics, not legacy syntax.
-      - however, runtime behavior still relies on bridge-style stdlib/default-handler plumbing.
-    - removal target:
-      - re-evaluate after stdlib fallback cleanup whether any remaining bridge code is
-        accidental compatibility debt or intentional permanent runtime architecture.
-      - keep this item scoped as a review step, not an automatic deletion.
+      - bare prelude effect ops now resolve through normal imported-effect visibility rather than a dedicated runtime bridge catalog.
+      - remaining special handling is the embedded default-handler execution hook itself.
+    - design direction:
+      - do not treat `@embed` itself as debt to remove.
+      - instead, isolate runtime-owned embedded handler execution as an intentional extension point of effect dispatch.
+      - keep effect dispatch split into:
+        1. effect/op visibility resolution,
+        2. handler selection (`explicit`, `embedded default`, `unhandled`),
+        3. handler execution.
+    - implementation plan:
+      - introduce a dedicated embedded-effect runtime layer (for example `EmbeddedEffectRuntime`) so stdin/stdout behavior is not implemented directly in `RuntimeOutputResolver`.
+      - move current `Print` / `Read` execution details (`stdin` buffer/cursor handling and stdout writes) behind that layer.
+      - keep `collect_embedded_default_handlers(...)` limited to resolving `effect -> handler name`; it should not also define execution semantics.
+      - replace direct `apply_embedded_default_handler(...)` branching with resolved-handler dispatch so bare/qualified/value/unit call paths share one effect-dispatch route.
+      - centralize handler-name-to-runtime-implementation mapping in one catalog/registry so adding a new embedded handler does not require editing multiple call paths.
+    - guardrails:
+      - only one place in runtime should branch on embedded handler names such as `__goby_embeded_effect_stdout_handler`.
+      - `RuntimeOutputResolver` should not directly perform embedded stdin/stdout behavior once the refactor is complete.
+      - avoid separate embedded-handler fallback logic for bare calls, qualified calls, and pipeline/value paths.
+    - completion criteria:
+      - embedded handler execution is routed through the dedicated runtime layer.
+      - effect dispatch call paths no longer contain ad hoc embedded-handler special cases.
+      - existing `Print` / `Read` end-to-end tests still pass under both fallback and typed-continuation modes.
 - Recommended removal order:
   - 1. C1 stdlib import builtin fallback
   - 2. C3 fallback-oriented tests/docs
