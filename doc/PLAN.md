@@ -628,7 +628,7 @@ Detailed implementation plan:
        - likely targets: `RuntimeValue`, `RuntimeLocals`, equality/format helpers, local-binding utilities.
      - [x] Step F1.2: extract embedded runtime and runtime import loading.
        - likely targets: `EmbeddedEffectRuntime`, `RuntimeImportContext`, stdlib import-loading helpers.
-    - [x] Step F1.3: extract fallback evaluator/runtime executor.
+     - [x] Step F1.3: extract fallback evaluator/runtime executor.
        - likely targets: `RuntimeOutputResolver`, continuation state, handler dispatch, `Out` / `Escape` / `Cont` family.
      - [x] Step F1.4: extract compile-time output resolvers that are logically separate from public codegen entrypoints.
        - likely targets: `IntEvaluator`, `ListIntEvaluator`, static-output helpers used by `resolve_main_runtime_output*`.
