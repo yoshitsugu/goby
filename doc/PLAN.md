@@ -606,7 +606,7 @@ Priority order:
 
 Detailed implementation plan:
 
-1. Milestone F0: establish refactor harness before moving code.
+1. [x] Milestone F0: establish refactor harness before moving code.
    - Goal:
      - lock in behavior-preserving checks so later file moves are judged by contracts, not intuition.
    - Planned work:
@@ -620,18 +620,21 @@ Detailed implementation plan:
    - Acceptance criteria:
      - every later milestone can point to a focused test command plus one broader regression command.
 
-2. Milestone F1: reduce `crates/goby-wasm/src/lib.rs` boundary width first.
+2. [ ] Milestone F1: reduce `crates/goby-wasm/src/lib.rs` boundary width first.
    - Goal:
      - keep `compile_module` as the orchestration entrypoint while moving fallback-runtime mechanics behind explicit internal modules.
    - Planned extraction order:
-     - Step F1.1: extract runtime value/state types and simple helpers.
+     - [x] Step F1.1: extract runtime value/state types and simple helpers.
        - likely targets: `RuntimeValue`, `RuntimeLocals`, equality/format helpers, local-binding utilities.
-     - Step F1.2: extract embedded runtime and runtime import loading.
+     - [x] Step F1.2: extract embedded runtime and runtime import loading.
        - likely targets: `EmbeddedEffectRuntime`, `RuntimeImportContext`, stdlib import-loading helpers.
-     - Step F1.3: extract fallback evaluator/runtime executor.
+     - [ ] Step F1.3: extract fallback evaluator/runtime executor.
        - likely targets: `RuntimeOutputResolver`, continuation state, handler dispatch, `Out` / `Escape` / `Cont` family.
-     - Step F1.4: extract compile-time output resolvers that are logically separate from public codegen entrypoints.
+     - [x] Step F1.4: extract compile-time output resolvers that are logically separate from public codegen entrypoints.
        - likely targets: `IntEvaluator`, `ListIntEvaluator`, static-output helpers used by `resolve_main_runtime_output*`.
+     - Progress note:
+       - completed extractions so far: `runtime_value`, `runtime_env`, `runtime_flow`, `runtime_eval`, `runtime_resolver`, `runtime_dispatch`, `runtime_decl`.
+       - remaining F1 work is centered on `apply_cont` and unit-call / statement-replay orchestration still living in `goby-wasm/src/lib.rs`.
    - Constraints:
      - do not change lowering-plan selection or public `compile_module` behavior in the same patch as a large extraction.
      - keep module dependencies one-directional:
@@ -641,15 +644,15 @@ Detailed implementation plan:
      - `goby-wasm/src/lib.rs` becomes a thin orchestration layer plus public API.
      - extracted modules own their tests where practical, while integration parity tests remain in place.
 
-3. Milestone F2: separate `goby-core` typecheck phases.
+3. [ ] Milestone F2: separate `goby-core` typecheck phases.
    - Goal:
      - replace one giant mixed-responsibility file with explicit checking phases and shared internal data contracts.
    - Planned extraction order:
-     - Step F2.1: move shared type environment and internal type representations into a dedicated internal module.
-     - Step F2.2: move import/stdlib/intrinsic policy validation into a dedicated validation module.
-     - Step F2.3: move effect declaration/effect dependency checks into a dedicated effect-validation module.
-     - Step F2.4: move expression/statement checking into dedicated inference/checking modules.
-     - Step F2.5: keep `typecheck_module_with_context` as a top-level orchestrator that sequences the extracted phases.
+     - [ ] Step F2.1: move shared type environment and internal type representations into a dedicated internal module.
+     - [ ] Step F2.2: move import/stdlib/intrinsic policy validation into a dedicated validation module.
+     - [ ] Step F2.3: move effect declaration/effect dependency checks into a dedicated effect-validation module.
+     - [ ] Step F2.4: move expression/statement checking into dedicated inference/checking modules.
+     - [ ] Step F2.5: keep `typecheck_module_with_context` as a top-level orchestrator that sequences the extracted phases.
    - Constraints:
      - avoid creating a new hidden god-module under a different file name.
      - path/stdlib resolution code must remain clearly isolated from pure expression checking.
@@ -657,14 +660,14 @@ Detailed implementation plan:
      - the typechecker has named phase modules with explicit inputs/outputs.
      - tests can target validation/inference phases without traversing the full file.
 
-4. Milestone F3: decompose parser responsibilities.
+4. [ ] Milestone F3: decompose parser responsibilities.
    - Goal:
      - keep `parse_module` as the entrypoint while splitting top-level parsing, statements, expressions, and helper utilities.
    - Planned extraction order:
-     - Step F3.1: isolate shared lexical/splitting helpers.
-     - Step F3.2: isolate top-level declaration parsing (`import`, `type`, `effect`, top-level definitions).
-     - Step F3.3: isolate statement parsing and multiline block handling.
-     - Step F3.4: isolate expression parsing and pattern parsing.
+     - [ ] Step F3.1: isolate shared lexical/splitting helpers.
+     - [ ] Step F3.2: isolate top-level declaration parsing (`import`, `type`, `effect`, top-level definitions).
+     - [ ] Step F3.3: isolate statement parsing and multiline block handling.
+     - [ ] Step F3.4: isolate expression parsing and pattern parsing.
    - Constraints:
      - preserve current parse error wording unless a separate diagnostics task intentionally changes it.
      - preserve current parser test corpus during moves; add narrower tests only where it reduces ambiguity.
@@ -672,7 +675,7 @@ Detailed implementation plan:
      - parser modules correspond to syntax responsibilities rather than historical file growth.
      - expression and statement parsing can be read independently of top-level declaration handling.
 
-5. Milestone F4: cross-cutting cleanup after the first extractions land.
+5. [ ] Milestone F4: cross-cutting cleanup after the first extractions land.
    - Goal:
      - remove duplication exposed by the refactor rather than during speculative up-front cleanup.
    - Planned work:
