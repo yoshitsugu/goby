@@ -15,7 +15,7 @@ This file is a restart-safe snapshot for resuming work after context reset.
 - Bare prelude effect ops (`read`, `read_line`) now resolve through normal imported effect visibility; the dedicated runtime bridge catalog is removed.
 - Embedded default handler execution now goes through a dedicated `EmbeddedEffectRuntime` layer; stdout/stderr accumulation and stdin cursor state are no longer stored directly on `RuntimeOutputResolver`.
 - Embedded handler-name strings are now resolved into runtime handler kinds before dispatch, so resolver-side effect dispatch no longer branches on raw `__goby_embeded_effect_*` names.
-- `goby-core` stdlib resolution now exposes parsed embedded handler kinds alongside raw handler names, so wasm runtime no longer has to re-parse imported stdlib handler names on its own.
+- `goby-core` stdlib resolution now exposes parsed embedded handler kinds together with parsed stdlib modules, and wasm runtime builds one `RuntimeImportContext` from that shared typed metadata instead of running a second embedded-default collection pass.
 - `doc/PLAN.md` has been pruned to remove completed active-task sections.
 - Active docs are aligned for current shipped behavior:
   - `doc/LANGUAGE_SPEC.md`
@@ -49,7 +49,7 @@ This file is a restart-safe snapshot for resuming work after context reset.
 
 - Immediate runtime parity fixes:
 - Runtime architecture cleanup:
-  - continue shrinking remaining embedded default-handler special cases by reducing the remaining runtime-local `effect -> embedded handler kind` collection step and sharing more typed stdlib metadata end-to-end.
+  - continue shrinking remaining embedded default-handler special cases around the runtime-owned `Print` / `Read` intrinsic I/O hook.
   - continue tightening state-threading semantics for structural expression evaluation so stdlib/user code keep sharing one runtime path.
 - Follow-up cleanup remains optional:
   - remove or shrink `eval_expr_ast` compatibility fallback incrementally if future refactors need it.

@@ -404,8 +404,8 @@ removed in a deliberate order after active language/runtime work.
       - bare prelude effect ops now resolve through normal imported-effect visibility rather than a dedicated runtime bridge catalog.
       - embedded default execution now flows through a dedicated `EmbeddedEffectRuntime` layer rather than storing stdin/stdout state directly on `RuntimeOutputResolver`.
       - resolver-side effect dispatch now operates on typed embedded handler kinds instead of branching on raw `__goby_embeded_effect_*` names.
-      - stdlib resolver now exposes parsed embedded handler kinds alongside raw handler names.
-      - remaining special handling is mainly that embedded default metadata is still gathered into a runtime-local map after stdlib loading rather than flowing as one shared typed structure end-to-end.
+      - stdlib resolver now exposes parsed embedded handler kinds together with the parsed module AST, and wasm runtime consumes that shared typed metadata directly when building its runtime import context.
+      - remaining special handling is mainly the runtime-owned `Print` / `Read` intrinsic I/O hook itself, not stdlib metadata collection.
     - design direction:
       - do not treat `@embed` itself as debt to remove.
       - instead, isolate runtime-owned embedded handler execution as an intentional extension point of effect dispatch.
@@ -416,7 +416,7 @@ removed in a deliberate order after active language/runtime work.
     - implementation plan:
       - introduce a dedicated embedded-effect runtime layer (for example `EmbeddedEffectRuntime`) so stdin/stdout behavior is not implemented directly in `RuntimeOutputResolver`.
       - move current `Print` / `Read` execution details (`stdin` buffer/cursor handling and stdout writes) behind that layer.
-      - keep `collect_embedded_default_handlers(...)` limited to resolving `effect -> handler name`; it should not also define execution semantics.
+      - keep stdlib metadata resolution in `goby-core`; wasm runtime should only assemble its runtime import context from already-resolved typed metadata.
       - replace direct `apply_embedded_default_handler(...)` branching with resolved-handler dispatch so bare/qualified/value/unit call paths share one effect-dispatch route.
       - centralize handler-name-to-runtime-implementation mapping in one catalog/registry so adding a new embedded handler does not require editing multiple call paths.
     - guardrails:

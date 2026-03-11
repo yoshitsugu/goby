@@ -506,8 +506,7 @@ fn statements(body: &str) -> impl Iterator<Item = Statement<'_>> {
 struct RuntimeOutputResolver<'m> {
     locals: RuntimeLocals,
     module: &'m Module,
-    imported_modules: HashMap<String, Module>,
-    embedded_default_handlers: HashMap<String, EmbeddedEffectHandlerKind>,
+    runtime_imports: RuntimeImportContext,
     embedded_effect_runtime: EmbeddedEffectRuntime,
     current_module_stack: Vec<String>,
     current_decl_stack: Vec<String>,
@@ -530,19 +529,10 @@ struct EmbeddedEffectRuntime {
     stdin_cursor: usize,
 }
 
-#[derive(Clone, Copy)]
-enum EmbeddedEffectHandlerKind {
-    Stdout,
-    Stdin,
-}
-
-impl From<EmbeddedRuntimeHandlerKind> for EmbeddedEffectHandlerKind {
-    fn from(value: EmbeddedRuntimeHandlerKind) -> Self {
-        match value {
-            EmbeddedRuntimeHandlerKind::Stdout => Self::Stdout,
-            EmbeddedRuntimeHandlerKind::Stdin => Self::Stdin,
-        }
-    }
+#[derive(Default)]
+struct RuntimeImportContext {
+    modules: HashMap<String, Module>,
+    embedded_default_handlers: HashMap<String, EmbeddedRuntimeHandlerKind>,
 }
 
 type WithId = u64;
@@ -581,24 +571,26 @@ impl EmbeddedEffectRuntime {
 
     fn invoke(
         &mut self,
-        handler_kind: EmbeddedEffectHandlerKind,
+        handler_kind: EmbeddedRuntimeHandlerKind,
         method_name: &str,
         arg_val: RuntimeValue,
     ) -> Result<Option<RuntimeValue>, String> {
         match (handler_kind, method_name) {
-            (EmbeddedEffectHandlerKind::Stdout, "print") => {
+            (EmbeddedRuntimeHandlerKind::Stdout, "print") => {
                 self.emit_output_text(arg_val.to_output_text());
                 Ok(Some(RuntimeValue::Unit))
             }
-            (EmbeddedEffectHandlerKind::Stdout, "println") => {
+            (EmbeddedRuntimeHandlerKind::Stdout, "println") => {
                 self.emit_output_line(arg_val.to_output_text());
                 Ok(Some(RuntimeValue::Unit))
             }
-            (EmbeddedEffectHandlerKind::Stdin, "read") if matches!(arg_val, RuntimeValue::Unit) => {
+            (EmbeddedRuntimeHandlerKind::Stdin, "read")
+                if matches!(arg_val, RuntimeValue::Unit) =>
+            {
                 self.read_stdin_remaining("read")
                     .map(|text| Some(RuntimeValue::String(text)))
             }
-            (EmbeddedEffectHandlerKind::Stdin, "read_line")
+            (EmbeddedRuntimeHandlerKind::Stdin, "read_line")
                 if matches!(arg_val, RuntimeValue::Unit) =>
             {
                 self.read_stdin_line("read_line")
@@ -870,7 +862,7 @@ struct ResolvedHandlerMethod {
 enum ResolvedEffectHandler {
     Explicit(ResolvedHandlerMethod),
     EmbeddedDefault {
-        handler_kind: EmbeddedEffectHandlerKind,
+        handler_kind: EmbeddedRuntimeHandlerKind,
         method_name: String,
     },
 }
@@ -928,11 +920,11 @@ impl<'m> RuntimeOutputResolver<'m> {
         execution_mode: lower::EffectExecutionMode,
         stdin_seed: Option<String>,
     ) -> Option<String> {
+        let runtime_imports = load_runtime_import_context(module);
         let mut resolver = Self {
             locals: RuntimeLocals::default(),
             module,
-            imported_modules: load_runtime_imported_modules(module),
-            embedded_default_handlers: collect_embedded_default_handlers(module),
+            runtime_imports,
             embedded_effect_runtime: EmbeddedEffectRuntime::new(stdin_seed),
             current_module_stack: Vec::new(),
             current_decl_stack: Vec::new(),
@@ -4888,7 +4880,8 @@ impl<'m> RuntimeOutputResolver<'m> {
         if let Some(method) = self.find_handler_method_by_name(method_name) {
             return Some(ResolvedEffectHandler::Explicit(method));
         }
-        self.embedded_default_handlers
+        self.runtime_imports
+            .embedded_default_handlers
             .get(effect_name)
             .map(|handler_kind| ResolvedEffectHandler::EmbeddedDefault {
                 handler_kind: *handler_kind,
@@ -4906,7 +4899,8 @@ impl<'m> RuntimeOutputResolver<'m> {
         {
             return Some(ResolvedEffectHandler::Explicit(method));
         }
-        self.embedded_default_handlers
+        self.runtime_imports
+            .embedded_default_handlers
             .get(&effect_name)
             .map(|handler_kind| ResolvedEffectHandler::EmbeddedDefault {
                 handler_kind: *handler_kind,
@@ -5013,7 +5007,7 @@ impl<'m> RuntimeOutputResolver<'m> {
             .collect();
 
         for import in effective_runtime_imports(module) {
-            let Some(imported) = self.imported_modules.get(&import.module_path) else {
+            let Some(imported) = self.runtime_imports.modules.get(&import.module_path) else {
                 continue;
             };
             for effect in &imported.effect_declarations {
@@ -5733,7 +5727,7 @@ impl<'m> RuntimeOutputResolver<'m> {
     fn current_runtime_module(&self) -> &Module {
         self.current_module_stack
             .last()
-            .and_then(|path| self.imported_modules.get(path))
+            .and_then(|path| self.runtime_imports.modules.get(path))
             .unwrap_or(self.module)
     }
 
@@ -5779,7 +5773,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                     if !selected.iter().any(|symbol| symbol == name) {
                         continue;
                     }
-                    let module = self.imported_modules.get(&import.module_path)?;
+                    let module = self.runtime_imports.modules.get(&import.module_path)?;
                     let decl = module.declarations.iter().find(|d| d.name == *name)?;
                     return Self::runtime_decl_info_from_decl(decl, Some(import.module_path));
                 }
@@ -5799,7 +5793,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                     if !matches_receiver {
                         continue;
                     }
-                    let module = self.imported_modules.get(&import.module_path)?;
+                    let module = self.runtime_imports.modules.get(&import.module_path)?;
                     let decl = module.declarations.iter().find(|d| d.name == *member)?;
                     return Self::runtime_decl_info_from_decl(decl, Some(import.module_path));
                 }
@@ -5834,31 +5828,40 @@ impl<'m> RuntimeOutputResolver<'m> {
     }
 }
 
-fn collect_embedded_default_handlers(
-    module: &Module,
-) -> HashMap<String, EmbeddedEffectHandlerKind> {
-    let mut defaults: HashMap<String, EmbeddedEffectHandlerKind> = module
-        .embed_declarations
-        .iter()
-        .filter_map(|embed| {
-            EmbeddedRuntimeHandlerKind::from_handler_name(&embed.handler_name)
-                .map(EmbeddedEffectHandlerKind::from)
-                .map(|kind| (embed.effect_name.clone(), kind))
-        })
-        .collect();
+fn load_runtime_import_context(module: &Module) -> RuntimeImportContext {
+    let mut context = RuntimeImportContext {
+        modules: HashMap::new(),
+        embedded_default_handlers: module
+            .embed_declarations
+            .iter()
+            .filter_map(|embed| {
+                EmbeddedRuntimeHandlerKind::from_handler_name(&embed.handler_name)
+                    .map(|kind| (embed.effect_name.clone(), kind))
+            })
+            .collect(),
+    };
     let resolver = StdlibResolver::new(resolve_runtime_stdlib_root());
-    for import in effective_runtime_imports(module) {
+    let mut pending = effective_runtime_imports(module);
+    while let Some(import) = pending.pop() {
+        if context.modules.contains_key(&import.module_path) {
+            continue;
+        }
         let Ok(resolved) = resolver.resolve_module(&import.module_path) else {
             continue;
         };
+        pending.extend(effective_runtime_imports(&resolved.module));
         for embed in resolved.embedded_defaults {
-            let Some(kind) = embed.runtime_kind.map(EmbeddedEffectHandlerKind::from) else {
+            let Some(kind) = embed.runtime_kind else {
                 continue;
             };
-            defaults.entry(embed.effect_name).or_insert(kind);
+            context
+                .embedded_default_handlers
+                .entry(embed.effect_name)
+                .or_insert(kind);
         }
+        context.modules.insert(import.module_path, resolved.module);
     }
-    defaults
+    context
 }
 
 fn runtime_import_selects_name(kind: &goby_core::ImportKind, name: &str) -> bool {
@@ -5888,29 +5891,6 @@ fn effective_runtime_imports(module: &Module) -> Vec<goby_core::ImportDecl> {
         });
     }
     imports
-}
-
-fn load_runtime_imported_modules(module: &Module) -> HashMap<String, Module> {
-    let resolver = StdlibResolver::new(resolve_runtime_stdlib_root());
-    let mut modules = HashMap::new();
-    let mut pending = effective_runtime_imports(module);
-    while let Some(import) = pending.pop() {
-        if modules.contains_key(&import.module_path) {
-            continue;
-        }
-        let Ok(path) = resolver.module_file_path(&import.module_path) else {
-            continue;
-        };
-        let Ok(source) = std::fs::read_to_string(path) else {
-            continue;
-        };
-        let Ok(parsed) = goby_core::parse_module(&source) else {
-            continue;
-        };
-        pending.extend(effective_runtime_imports(&parsed));
-        modules.insert(import.module_path, parsed);
-    }
-    modules
 }
 
 fn flatten_direct_call(expr: &Expr) -> Option<(DirectCallHead, Vec<&Expr>)> {

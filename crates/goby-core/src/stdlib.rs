@@ -11,6 +11,7 @@ pub struct StdlibResolver {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedStdlibModule {
     pub module_path: String,
+    pub module: crate::ast::Module,
     pub exports: HashMap<String, String>,
     pub types: Vec<String>,
     pub effects: Vec<String>,
@@ -101,6 +102,7 @@ impl StdlibResolver {
         let embedded_defaults = collect_embedded_defaults(module_path, &module.embed_declarations)?;
         Ok(ResolvedStdlibModule {
             module_path: module_path.to_string(),
+            module,
             exports,
             types,
             effects,
