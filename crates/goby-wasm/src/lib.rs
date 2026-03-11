@@ -524,6 +524,8 @@ struct RuntimeOutputResolver<'m> {
 }
 
 struct EmbeddedEffectRuntime {
+    // Intentionally narrow runtime layer for prelude-backed Print/Read defaults.
+    // This is not meant to grow into the general host-capability surface.
     outputs: Vec<String>,
     stdin_buffer: Option<String>,
     stdin_cursor: usize,

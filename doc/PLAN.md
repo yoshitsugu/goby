@@ -406,9 +406,11 @@ removed in a deliberate order after active language/runtime work.
       - resolver-side effect dispatch now operates on typed embedded handler kinds instead of branching on raw `__goby_embeded_effect_*` names.
       - stdlib resolver now exposes parsed embedded handler kinds together with the parsed module AST, and wasm runtime consumes that shared typed metadata directly when building its runtime import context.
       - remaining special handling is mainly the runtime-owned `Print` / `Read` intrinsic I/O hook itself, not stdlib metadata collection.
+      - project direction is now to keep `@embed` narrow: it exists for the minimal `Print` / `Read` onboarding path, not as a general host-capability extension point.
     - design direction:
       - do not treat `@embed` itself as debt to remove.
-      - instead, isolate runtime-owned embedded handler execution as an intentional extension point of effect dispatch.
+      - keep `@embed` scoped to prelude `Print` / `Read`; future host capabilities should use other mechanisms rather than growing the embedded-handler surface.
+      - isolate runtime-owned embedded handler execution as a narrow effect-dispatch extension for that convenience path.
       - keep effect dispatch split into:
         1. effect/op visibility resolution,
         2. handler selection (`explicit`, `embedded default`, `unhandled`),
@@ -427,6 +429,7 @@ removed in a deliberate order after active language/runtime work.
       - embedded handler execution is routed through the dedicated runtime layer.
       - effect dispatch call paths no longer contain ad hoc embedded-handler special cases.
       - existing `Print` / `Read` end-to-end tests still pass under both fallback and typed-continuation modes.
+      - docs clearly state that `@embed` is not intended to grow into the general host-effect mechanism.
 - Recommended removal order:
   - 1. C1 stdlib import builtin fallback
   - 2. C3 fallback-oriented tests/docs

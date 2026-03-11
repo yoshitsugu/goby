@@ -1,7 +1,7 @@
 # Goby Language Specification (Current)
 
 Status: active
-Last updated: 2026-03-06
+Last updated: 2026-03-11
 
 This file is the current language-spec source of truth for user-visible Goby
 syntax/semantics.
@@ -141,7 +141,8 @@ syntax/semantics.
 
 ## 6. `@embed` (Stdlib-only)
 
-- Purpose: stdlib default-effect-handler declaration.
+- Purpose: stdlib default-effect-handler declaration for the minimal built-in
+  `Print` / `Read` onboarding path.
 - Canonical form:
   - `@embed <EffectName> <HandlerName>`
   - example: `@embed Print __goby_embeded_effect_stdout_handler`
@@ -151,6 +152,12 @@ syntax/semantics.
   - one embed per effect per module
   - handler name must be in `__goby_embeded_effect_*`
   - handler must be in known intrinsic set
+- Design intent:
+  - `@embed` is intentionally narrow.
+  - current intended use is the prelude-backed `Print` / `Read` defaults so users
+    can write simple I/O before learning full effect-handler patterns.
+  - `@embed` is not the general extension mechanism for future host capabilities
+    such as file, clock, or network access.
 - Legacy form `@embed effect <EffectName>` is rejected.
 
 ## 7. Current Runtime/Builtin Notes
@@ -167,6 +174,8 @@ syntax/semantics.
   - accepted form: optional leading `-` followed by one or more ASCII digits.
   - invalid input delegates to `StringParseError.invalid_integer : String -> Int`.
 - `Print` / `Read` effect resolution is provided via stdlib prelude (`goby/prelude`) embed defaults.
+- These prelude defaults are intentionally a minimal convenience layer, not a
+  general host-effect abstraction.
 - Prelude `Print` effect exposes:
   - `print : String -> Unit` (no trailing newline)
   - `println : String -> Unit` (ensures trailing `\n`: adds one only when missing)
