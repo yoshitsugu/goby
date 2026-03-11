@@ -545,36 +545,7 @@ Note:
 - Critical correctness items from the same review batch were already fixed:
   parser explicit early-return clarity and planning `u16` overflow fail-fast behavior.
 
-### 4.5 Active Track E: Runtime Parity Bugfixes (Immediate)
-
-Goal: fix user-visible runtime mismatches where parse/typecheck accepts programs
-but `goby run` fails in fallback execution.
-
-Scope:
-
-1. Unit-argument call syntax parity (`read ()` vs `read()`):
-   - status: implemented (2026-03-10).
-   - shipped behavior:
-     - parser accepts `f()` and lowers it to the same Unit-argument call AST as `f ()`.
-     - fallback runtime executes both forms for bare prelude calls, qualified effect calls, and user-defined `Unit -> a` declarations.
-   - regression coverage:
-      - `read ()` and `read()` both run successfully in fallback runtime paths.
-      - equivalent zero-arg-call coverage exists for `read_line`.
-      - user-defined `Unit -> a` call parity (`f ()` / `f()`) is covered in `crates/goby-wasm`.
-
-2. `goby/list` generic callback runtime support (`each`, `map`):
-   - status: implemented (2026-03-10).
-   - shipped behavior:
-     - fallback evaluation for imported `goby/list.each` and `goby/list.map` now operates on generic runtime list items for the currently supported scalar item kinds (`Int`, `String`).
-     - `each` supports effectful callbacks across `List Int` and `List String`.
-     - `map` supports pure callbacks returning `Int` or `String`, preserving existing `List Int` behavior.
-   - remaining design note:
-     - `goby/list` higher-order runtime handling now runs through generic imported stdlib declaration execution rather than dedicated `list`-specific callback bridges.
-     - `goby/env.fetch_env_var`, `goby/string.length`, and `goby/int.parse` now run through generic imported declaration execution.
-     - bare prelude effect ops (`read`, `read_line`) now resolve through normal imported effect declarations rather than a dedicated runtime bridge catalog.
-   - future cleanup should continue shrinking the remaining embedded-default-handler special cases so stdlib/user code share one runtime path where practical.
-
-### 4.6 Active Track F: Maintainability Hardening
+### 4.5 Active Track F: Maintainability Hardening
 
 Goal: reduce "black box" implementation risk by making parser/typechecker/Wasm
 runtime internals easier to understand, modify, and test in isolation.
@@ -650,7 +621,7 @@ Non-goals:
 - replacing working regression suites with only smaller unit tests,
 - splitting files without reducing conceptual coupling.
 
-### 4.7 Parking Lot (Needs Revalidation Before Implementation)
+### 4.6 Parking Lot (Needs Revalidation Before Implementation)
 
 - CLI `build` expansion details (`--target`, `--engine-compat`, verify modes).
 - CLI binary naming migration (`goby-cli` -> `goby`) final policy.
