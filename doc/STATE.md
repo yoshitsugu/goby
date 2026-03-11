@@ -42,6 +42,7 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - `Milestone F4` cleanup has started:
     - expression-focused parser tests now live in `crates/goby-core/src/parser_expr.rs`
     - list/case-pattern unit tests now live in `crates/goby-core/src/parser_pattern.rs`
+    - statement/body parsing tests now live in `crates/goby-core/src/parser_stmt.rs`
     - `crates/goby-core/src/parser.rs` is shedding module-internal test shims and detailed submodule spec tests
 - `F2.1` is now landed:
   - `crates/goby-core/src/typecheck_env.rs` owns `Ty`, `TypeEnv`, `ResumeContext`,
@@ -81,7 +82,7 @@ This file is a restart-safe snapshot for resuming work after context reset.
 ## Next Work
 
 - Start `Milestone F4` cleanup:
-  - continue moving statement/top-level parser spec tests closer to owned modules where they no longer need `parser.rs`
+  - continue moving top-level parser spec tests closer to owned modules where they no longer need `parser.rs`
   - remove any remaining parser-only transitional helpers that exist only for old test layout
   - keep parse diagnostics and current parser/runtime behavior unchanged during cleanup
 
