@@ -5,6 +5,7 @@
 pub mod analysis;
 pub mod ast;
 pub mod parser;
+mod parser_top;
 mod parser_util;
 pub mod stdlib;
 pub mod str_util;

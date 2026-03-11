@@ -31,6 +31,9 @@ This file is a restart-safe snapshot for resuming work after context reset.
 - `F3.1` is now landed:
   - `crates/goby-core/src/parser_util.rs` owns shared parser predicates and split helpers.
   - `crates/goby-core/src/parser.rs` now consumes that helper module instead of carrying those utilities inline.
+- `F3.2` is now landed:
+  - `crates/goby-core/src/parser_top.rs` owns top-level import/embed/type/effect/declaration-header parsing.
+  - `crates/goby-core/src/parser.rs` now loops over top-level items and keeps body parsing / module orchestration.
 - `F2.1` is now landed:
   - `crates/goby-core/src/typecheck_env.rs` owns `Ty`, `TypeEnv`, `ResumeContext`,
     effect-map structs, and related internal binding data.
@@ -69,7 +72,7 @@ This file is a restart-safe snapshot for resuming work after context reset.
 ## Next Work
 
 - Start `Milestone F3` in `goby-core`:
-  - isolate top-level declaration parsing seams next
+  - isolate statement parsing and multiline block handling next
   - keep `parse_module` as the public entrypoint while shrinking `parser.rs`
   - preserve current parse diagnostics and parser test corpus during moves
 
