@@ -10,7 +10,10 @@ use crate::{
         builtin_effect_names, ops_from_can_clause, validate_effect_declarations,
         validate_effect_dependency_cycles, validate_effect_member_effect_clauses,
     },
-    typecheck_env::{GlobalBinding, RecordTypeInfo, Ty, TypeEnv},
+    typecheck_env::{
+        EffectDependencyInfo, EffectMap, GlobalBinding, ImportedEffectDecl, RecordTypeInfo, Ty,
+        TypeEnv,
+    },
     typecheck_validate::{
         collect_imported_effect_declarations, collect_imported_effect_names,
         collect_imported_embedded_defaults, collect_imported_type_names,
@@ -55,6 +58,17 @@ impl std::fmt::Display for TypecheckError {
 
 impl std::error::Error for TypecheckError {}
 
+struct ValidationPhase {
+    imported_effect_declarations: Vec<ImportedEffectDecl>,
+}
+
+struct CheckingPhase {
+    env: TypeEnv,
+    effect_map: EffectMap,
+    effect_dependency_info: EffectDependencyInfo,
+    required_effects_map: HashMap<String, Vec<String>>,
+}
+
 pub fn typecheck_module(module: &Module) -> Result<(), TypecheckError> {
     typecheck_module_with_context(module, None, None)
 }
@@ -67,36 +81,119 @@ pub fn typecheck_module_with_context(
     let stdlib_root_path = stdlib_root
         .map(Path::to_path_buf)
         .unwrap_or_else(default_stdlib_root);
-    validate_intrinsic_namespace_policy(module, source_path, &stdlib_root_path)?;
-    validate_imports(module, &stdlib_root_path)?;
+    let validation = validate_module_phase(module, source_path, stdlib_root, &stdlib_root_path)?;
+    let checking = build_checking_phase(module, &stdlib_root_path, &validation)?;
+    check_declaration_bodies(module, &checking)
+}
+
+fn validate_module_phase(
+    module: &Module,
+    source_path: Option<&Path>,
+    stdlib_root: Option<&Path>,
+    stdlib_root_path: &Path,
+) -> Result<ValidationPhase, TypecheckError> {
+    validate_intrinsic_namespace_policy(module, source_path, stdlib_root_path)?;
+    validate_imports(module, stdlib_root_path)?;
     validate_embed_declarations(module, source_path, stdlib_root)?;
-    let imported_types = collect_imported_type_names(module, &stdlib_root_path);
+    let imported_types = collect_imported_type_names(module, stdlib_root_path);
     validate_type_declarations(module, &imported_types)?;
     validate_effect_declarations(module)?;
 
-    let imported_embedded_defaults = collect_imported_embedded_defaults(module, &stdlib_root_path)?;
+    let imported_embedded_defaults = collect_imported_embedded_defaults(module, stdlib_root_path)?;
     let imported_effect_declarations =
-        collect_imported_effect_declarations(module, &stdlib_root_path);
+        collect_imported_effect_declarations(module, stdlib_root_path);
     validate_no_ambiguous_effect_names(&imported_effect_declarations, &module.effect_declarations)?;
-    let imported_effects = collect_imported_effect_names(module, &stdlib_root_path);
-    let local_embedded_defaults = collect_local_embedded_defaults(module);
-    let embedded_default_effects: HashSet<String> = imported_embedded_defaults
-        .keys()
-        .cloned()
-        .chain(local_embedded_defaults.keys().cloned())
-        .collect();
-    let known_effects: HashSet<String> = builtin_effect_names()
+    let known_effects = known_effects(module, stdlib_root_path);
+    let embedded_default_effects = embedded_default_effects(module, &imported_embedded_defaults);
+    validate_effect_member_effect_clauses(module, &known_effects)?;
+    validate_effect_dependency_cycles(module)?;
+    validate_declaration_annotations(module, &known_effects, &embedded_default_effects)?;
+    validate_main_annotation(module)?;
+    Ok(ValidationPhase {
+        imported_effect_declarations,
+    })
+}
+
+fn build_checking_phase(
+    module: &Module,
+    stdlib_root_path: &Path,
+    validation: &ValidationPhase,
+) -> Result<CheckingPhase, TypecheckError> {
+    let env = build_type_env(module, stdlib_root_path);
+    ensure_no_ambiguous_globals(&env)?;
+    let effect_map = build_effect_map(module, &validation.imported_effect_declarations);
+    let effect_dependency_info =
+        build_effect_dependency_info(module, &validation.imported_effect_declarations);
+    let required_effects_map = build_required_effects_map(module);
+    Ok(CheckingPhase {
+        env,
+        effect_map,
+        effect_dependency_info,
+        required_effects_map,
+    })
+}
+
+fn check_declaration_bodies(
+    module: &Module,
+    checking: &CheckingPhase,
+) -> Result<(), TypecheckError> {
+    for decl in &module.declarations {
+        let Some(stmts) = &decl.parsed_body else {
+            continue;
+        };
+        let declared_return_ty = decl.type_annotation.as_deref().map(annotation_return_ty);
+        let param_tys = declaration_param_types(decl)?;
+        let param_ty_refs: Vec<(&str, Ty)> = param_tys
+            .iter()
+            .map(|(name, ty)| (name.as_str(), ty.clone()))
+            .collect();
+        let decl_covered_ops =
+            ops_from_can_clause(decl.type_annotation.as_deref(), &checking.effect_map);
+        check_resume_in_stmts(stmts, &checking.env, &decl.name, &param_ty_refs, None)?;
+        check_body_stmts(
+            stmts,
+            &checking.env,
+            &checking.effect_map,
+            &checking.effect_dependency_info,
+            &checking.required_effects_map,
+            &decl.name,
+            declared_return_ty,
+            &param_ty_refs,
+            &decl_covered_ops,
+        )?;
+    }
+    Ok(())
+}
+
+fn known_effects(module: &Module, stdlib_root_path: &Path) -> HashSet<String> {
+    let imported_effects = collect_imported_effect_names(module, stdlib_root_path);
+    builtin_effect_names()
         .iter()
         .copied()
         .map(str::to_string)
         .chain(imported_effects)
         .chain(module.effect_declarations.iter().map(|e| e.name.clone()))
-        .collect();
-    validate_effect_member_effect_clauses(module, &known_effects)?;
-    validate_effect_dependency_cycles(module)?;
+        .collect()
+}
 
+fn embedded_default_effects(
+    module: &Module,
+    imported_embedded_defaults: &HashMap<String, String>,
+) -> HashSet<String> {
+    let local_embedded_defaults = collect_local_embedded_defaults(module);
+    imported_embedded_defaults
+        .keys()
+        .cloned()
+        .chain(local_embedded_defaults.keys().cloned())
+        .collect()
+}
+
+fn validate_declaration_annotations(
+    module: &Module,
+    known_effects: &HashSet<String>,
+    embedded_default_effects: &HashSet<String>,
+) -> Result<(), TypecheckError> {
     let mut names = HashSet::new();
-
     for decl in &module.declarations {
         if !names.insert(decl.name.clone()) {
             return Err(TypecheckError {
@@ -113,119 +210,79 @@ pub fn typecheck_module_with_context(
             validate_type_annotation(
                 &decl.name,
                 annotation,
-                &known_effects,
-                &embedded_default_effects,
+                known_effects,
+                embedded_default_effects,
             )?;
         }
     }
-
-    if let Some(main) = module.declarations.iter().find(|d| d.name == "main") {
-        // A `main` declaration without a type annotation is allowed during `check`
-        // (e.g. `effect.gb`).  The Wasm backend will enforce the annotation at
-        // compile time when `run` is invoked.
-        if let Some(annotation) = main.type_annotation.as_deref() {
-            let base_annotation = strip_effect_clause(annotation);
-            let ty = parse_function_type(base_annotation).ok_or_else(|| TypecheckError {
-                declaration: Some("main".to_string()),
-                span: Some(Span {
-                    line: main.line,
-                    col: 1,
-                }),
-                message: "main type annotation must be a function type".to_string(),
-            })?;
-
-            if ty.arguments != vec!["Unit".to_string()] || ty.result != "Unit" {
-                return Err(TypecheckError {
-                    declaration: Some("main".to_string()),
-                    span: Some(Span {
-                        line: main.line,
-                        col: 1,
-                    }),
-                    message: "main type must be `Unit -> Unit` in MVP".to_string(),
-                });
-            }
-        }
-    }
-
-    // Expression-level type checking (when parsed_body is available).
-    let env = build_type_env(module, &stdlib_root_path);
-    ensure_no_ambiguous_globals(&env)?;
-    let effect_map = build_effect_map(module, &imported_effect_declarations);
-    let effect_dependency_info =
-        build_effect_dependency_info(module, &imported_effect_declarations);
-    let required_effects_map = build_required_effects_map(module);
-
-    for decl in &module.declarations {
-        if let Some(stmts) = &decl.parsed_body {
-            let declared_return_ty = decl.type_annotation.as_deref().map(annotation_return_ty);
-
-            // Derive per-parameter types from the function type annotation.
-            // Also validate that the number of declared params matches the annotation.
-            let param_tys: Vec<(String, Ty)> = {
-                let ft_opt = decl.type_annotation.as_deref().and_then(|ann| {
-                    let base = strip_effect_clause(ann);
-                    parse_function_type(base)
-                });
-
-                if let Some(ft) = ft_opt {
-                    // A single `Unit` parameter may be omitted from the definition
-                    // (e.g. `main : Unit -> Unit; main = ...` is idiomatic in MVP).
-                    let unit_param_omitted = decl.params.is_empty()
-                        && ft.arguments.len() == 1
-                        && ft.arguments[0] == "Unit";
-
-                    if !unit_param_omitted && decl.params.len() != ft.arguments.len() {
-                        return Err(TypecheckError {
-                            declaration: Some(decl.name.clone()),
-                            span: Some(Span {
-                                line: decl.line,
-                                col: 1,
-                            }),
-                            message: format!(
-                                "definition has {} parameter(s) but type annotation has {}",
-                                decl.params.len(),
-                                ft.arguments.len()
-                            ),
-                        });
-                    }
-                    decl.params
-                        .iter()
-                        .zip(ft.arguments.iter())
-                        .map(|(name, ann_ty)| (name.clone(), ty_from_annotation(ann_ty)))
-                        .collect()
-                } else {
-                    Vec::new()
-                }
-            };
-
-            let param_ty_refs: Vec<(&str, Ty)> = param_tys
-                .iter()
-                .map(|(name, ty)| (name.as_str(), ty.clone()))
-                .collect();
-
-            // Ops declared in the function's own `can` clause are implicitly
-            // available inside that function's body.
-            let decl_covered_ops =
-                ops_from_can_clause(decl.type_annotation.as_deref(), &effect_map);
-
-            // Step 2 (`resume`) checks in regular declaration bodies.
-            check_resume_in_stmts(stmts, &env, &decl.name, &param_ty_refs, None)?;
-
-            check_body_stmts(
-                stmts,
-                &env,
-                &effect_map,
-                &effect_dependency_info,
-                &required_effects_map,
-                &decl.name,
-                declared_return_ty,
-                &param_ty_refs,
-                &decl_covered_ops,
-            )?;
-        }
-    }
-
     Ok(())
+}
+
+fn validate_main_annotation(module: &Module) -> Result<(), TypecheckError> {
+    let Some(main) = module.declarations.iter().find(|d| d.name == "main") else {
+        return Ok(());
+    };
+    let Some(annotation) = main.type_annotation.as_deref() else {
+        return Ok(());
+    };
+    let base_annotation = strip_effect_clause(annotation);
+    let ty = parse_function_type(base_annotation).ok_or_else(|| TypecheckError {
+        declaration: Some("main".to_string()),
+        span: Some(Span {
+            line: main.line,
+            col: 1,
+        }),
+        message: "main type annotation must be a function type".to_string(),
+    })?;
+
+    if ty.arguments != vec!["Unit".to_string()] || ty.result != "Unit" {
+        return Err(TypecheckError {
+            declaration: Some("main".to_string()),
+            span: Some(Span {
+                line: main.line,
+                col: 1,
+            }),
+            message: "main type must be `Unit -> Unit` in MVP".to_string(),
+        });
+    }
+    Ok(())
+}
+
+fn declaration_param_types(
+    decl: &crate::ast::Declaration,
+) -> Result<Vec<(String, Ty)>, TypecheckError> {
+    let Some(function_type) = decl
+        .type_annotation
+        .as_deref()
+        .and_then(|annotation| parse_function_type(strip_effect_clause(annotation)))
+    else {
+        return Ok(Vec::new());
+    };
+
+    let unit_param_omitted = decl.params.is_empty()
+        && function_type.arguments.len() == 1
+        && function_type.arguments[0] == "Unit";
+    if !unit_param_omitted && decl.params.len() != function_type.arguments.len() {
+        return Err(TypecheckError {
+            declaration: Some(decl.name.clone()),
+            span: Some(Span {
+                line: decl.line,
+                col: 1,
+            }),
+            message: format!(
+                "definition has {} parameter(s) but type annotation has {}",
+                decl.params.len(),
+                function_type.arguments.len()
+            ),
+        });
+    }
+
+    Ok(decl
+        .params
+        .iter()
+        .zip(function_type.arguments.iter())
+        .map(|(name, ann_ty)| (name.clone(), ty_from_annotation(ann_ty)))
+        .collect())
 }
 
 // ---------------------------------------------------------------------------

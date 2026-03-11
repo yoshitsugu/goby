@@ -8,7 +8,8 @@ This file is a restart-safe snapshot for resuming work after context reset.
 
 - Active work is `doc/PLAN.md` Track F: maintainability hardening.
 - `Milestone F1` (`goby-wasm` split) is complete.
-- Current target is `Milestone F2`: start splitting `crates/goby-core/src/typecheck.rs`
+- `Milestone F2` (`goby-core` typecheck split) is complete.
+- Current target is `Milestone F3`: start splitting `crates/goby-core/src/parser.rs`
   by responsibility without changing behavior.
 
 ## Current State
@@ -25,8 +26,8 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - `crates/goby-wasm/src/runtime_replay.rs`
 - `crates/goby-wasm/src/lib.rs` now mainly holds the public codegen entrypoint,
   fallback orchestration glue, and remaining helper methods that were not part of F1 extraction scope.
-- Current maintainability target is still `crates/goby-core/src/typecheck.rs`, but the
-  remaining work is now mostly phase orchestration and residual validation helpers.
+- `crates/goby-core/src/typecheck.rs` is now reduced to phase orchestration plus
+  residual validation/helpers after the `F2` split.
 - `F2.1` is now landed:
   - `crates/goby-core/src/typecheck_env.rs` owns `Ty`, `TypeEnv`, `ResumeContext`,
     effect-map structs, and related internal binding data.
@@ -44,6 +45,10 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - `crates/goby-core/src/typecheck_check.rs` owns expression inference, statement checking,
     resume validation, branch-consistency checks, and type rendering helpers.
   - `crates/goby-core/src/typecheck.rs` now calls that module instead of carrying the checking core inline.
+- `F2.5` is now landed:
+  - `typecheck_module_with_context` now sequences explicit validation, checking-state preparation,
+    and declaration-body checking phases through dedicated helpers.
+  - `Milestone F2` can be treated as complete; next work moves to `parser.rs`.
 - Runtime model to preserve while refactoring:
   - `Out<T> = Done | Suspend | Escape | Err`
   - `Escape::WithScope { with_id, value }`
@@ -60,11 +65,10 @@ This file is a restart-safe snapshot for resuming work after context reset.
 
 ## Next Work
 
-- Finish `Milestone F2` in `goby-core`:
-  - reduce `typecheck_module_with_context` and nearby helpers into an explicit phase orchestrator
-  - keep imports/validation/effect/checking phases readable at the top level
-  - preserve current diagnostics and test corpus while shrinking `typecheck.rs`
-- After `F2.5`, continue with `parser.rs` decomposition.
+- Start `Milestone F3` in `goby-core`:
+  - isolate shared parser helpers and top-level declaration parsing seams first
+  - keep `parse_module` as the public entrypoint while shrinking `parser.rs`
+  - preserve current parse diagnostics and parser test corpus during moves
 
 ## Notes
 

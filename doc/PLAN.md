@@ -644,7 +644,7 @@ Detailed implementation plan:
      - `goby-wasm/src/lib.rs` becomes a thin orchestration layer plus public API.
      - extracted modules own their tests where practical, while integration parity tests remain in place.
 
-3. [ ] Milestone F2: separate `goby-core` typecheck phases.
+3. [x] Milestone F2: separate `goby-core` typecheck phases.
    - Goal:
      - replace one giant mixed-responsibility file with explicit checking phases and shared internal data contracts.
    - Planned extraction order:
@@ -652,13 +652,13 @@ Detailed implementation plan:
      - [x] Step F2.2: move import/stdlib/intrinsic policy validation into a dedicated validation module.
      - [x] Step F2.3: move effect declaration/effect dependency checks into a dedicated effect-validation module.
      - [x] Step F2.4: move expression/statement checking into dedicated inference/checking modules.
-     - [ ] Step F2.5: keep `typecheck_module_with_context` as a top-level orchestrator that sequences the extracted phases.
+     - [x] Step F2.5: keep `typecheck_module_with_context` as a top-level orchestrator that sequences the extracted phases.
      - Progress note:
        - completed extractions: `crates/goby-core/src/typecheck_env.rs`, `crates/goby-core/src/typecheck_validate.rs`, `crates/goby-core/src/typecheck_effect.rs`, `crates/goby-core/src/typecheck_check.rs`.
        - `typecheck_validate.rs` now owns import resolution, stdlib-root policy, embedded default handling, intrinsic namespace validation, and related import helpers.
        - `typecheck_effect.rs` now owns effect declaration checks, effect dependency checks, effect-map construction, and `can`-clause parsing helpers.
        - `typecheck_check.rs` now owns expression inference, statement checking, resume validation, branch consistency checks, and type rendering helpers.
-       - next F2 step is reducing `typecheck.rs` to a clear phase orchestrator around the extracted modules.
+       - `typecheck.rs` now reads as a phase orchestrator: validate module inputs, prepare checking state, then check declaration bodies.
    - Constraints:
      - avoid creating a new hidden god-module under a different file name.
      - path/stdlib resolution code must remain clearly isolated from pure expression checking.
