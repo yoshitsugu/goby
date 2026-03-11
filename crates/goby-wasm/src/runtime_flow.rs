@@ -2,7 +2,10 @@ use std::collections::{HashMap, HashSet};
 
 use goby_core::{Expr, Module, Stmt, ast::InterpolatedPart, stdlib::EmbeddedRuntimeHandlerKind};
 
-use crate::{IntCallable, IntEvaluator, ListIntEvaluator, RuntimeLocals, RuntimeValue};
+use crate::{
+    RuntimeLocals, RuntimeValue,
+    runtime_eval::{EvaluatedFunctions, IntCallable, IntEvaluator, ListIntEvaluator},
+};
 
 pub(crate) type WithId = u64;
 
@@ -218,7 +221,7 @@ pub(crate) struct RuntimeHandlerMethod {
 pub(crate) struct RuntimeEvaluators<'a, 'b> {
     pub(crate) int: &'b IntEvaluator<'a>,
     pub(crate) list: &'b ListIntEvaluator<'a>,
-    pub(crate) unit: &'b crate::EvaluatedFunctions<'a>,
+    pub(crate) unit: &'b EvaluatedFunctions<'a>,
 }
 
 #[derive(Clone)]

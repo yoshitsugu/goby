@@ -15,6 +15,8 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - `crates/goby-wasm/src/lib.rs` keeps orchestration logic, but no longer owns prelude/stdin runtime setup code directly.
   - `crates/goby-wasm/src/runtime_flow.rs` now owns continuation/result/handler-flow type definitions used by fallback runtime execution.
   - `crates/goby-wasm/src/lib.rs` still owns `RuntimeOutputResolver` methods, but no longer owns those supporting flow types directly.
+  - `crates/goby-wasm/src/runtime_eval.rs` now owns compile-time evaluator helpers (`IntEvaluator`, `ListIntEvaluator`, callable parsing, line-based evaluation helpers).
+  - `crates/goby-wasm/src/lib.rs` now depends on that evaluator module instead of owning those helper families directly.
 - Scoped handler exit + multi-resume progression (former 4.7 task) is implemented.
 - List spread + stdlib `List.map` consolidation (former 4.5 task) is implemented.
 - Embedded default handler execution now goes through a dedicated `EmbeddedEffectRuntime` layer; stdout/stderr accumulation and stdin cursor state are no longer stored directly on `RuntimeOutputResolver`.
@@ -55,7 +57,7 @@ This file is a restart-safe snapshot for resuming work after context reset.
 - Maintainability hardening:
   - start with Track F milestone F0/F1:
     - lock focused refactor harness (`cargo test -p goby-wasm`, `cargo test -p goby-core`, `cargo test --workspace`, `cargo check`).
-    - continue reducing `crates/goby-wasm/src/lib.rs` boundary width after the `runtime_value`, `runtime_env`, and `runtime_flow` extractions by pulling out `RuntimeOutputResolver` internals next.
+    - continue reducing `crates/goby-wasm/src/lib.rs` boundary width after the `runtime_value`, `runtime_env`, `runtime_flow`, and `runtime_eval` extractions by pulling out `RuntimeOutputResolver` internals next.
   - after F1, separate typecheck phases and parser responsibilities into smaller modules with contract tests.
 - Runtime architecture cleanup:
   - continue shrinking remaining embedded default-handler special cases around the runtime-owned `Print` / `Read` intrinsic I/O hook without broadening `@embed` beyond that role.
