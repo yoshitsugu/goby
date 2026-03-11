@@ -1,0 +1,13 @@
+import goby/list ( map )
+
+prefix_zero : List Int -> List Int
+prefix_zero xs = [0, ..xs]
+
+double_tail : List Int -> List Int
+double_tail xs = [1, ..map xs (_ * 2)]
+
+main : Unit -> Unit
+main =
+  print [1, ..[2, 3]]
+  print (prefix_zero [4, 5])
+  print (double_tail [6, 7])

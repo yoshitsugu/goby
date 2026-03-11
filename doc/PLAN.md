@@ -244,16 +244,15 @@ Based on `examples/*.gb`:
   - `a.0`, `a.1` parse as qualified numeric member access and are typechecked/runtime-evaluated as tuple index access.
   - Numeric member access is valid only for tuple receivers.
   - Non-tuple receivers (for example `Status.0`) are rejected.
-- **List spread/concat expression (`[a, b, ..xs]`)** (planned).
-  - Goal:
-    - allow list construction with fixed prefix elements plus tail concatenation in expression position.
+- **List spread/concat expression (`[a, b, ..xs]`)** (implemented).
+  - Shipped behavior:
+    - expression-side list literals support zero or more prefix elements plus one trailing spread segment.
     - examples: `[f(x), ..ys]`, `[a, b, c, ..xs]`.
-  - Parsing scope:
-    - support zero or more normal elements followed by at most one trailing `..expr`.
-    - reject malformed forms (`[..xs]` at current MVP scope, multiple spread segments, non-trailing spread).
-    - keep `case` list-pattern syntax behavior unchanged; this item is expression syntax only.
-  - AST scope:
-    - represent list literal elements and optional spread tail distinctly so lowering/typecheck can validate shape without reparsing.
+  - Parsing/AST rules:
+    - parser accepts at most one trailing `..expr`.
+    - parser rejects malformed forms (`[..xs]`, multiple spread segments, non-trailing spread).
+    - `case` list-pattern syntax remains separate from expression syntax.
+    - AST stores prefix elements and optional spread tail distinctly.
 
 ### 2.2 Types and Checking
 
@@ -267,14 +266,14 @@ Based on `examples/*.gb`:
   - MVP `Ty::Unknown` tolerance is preserved when information is insufficient.
   - Native Wasm capability checker still treats list patterns as unsupported;
     these cases execute via fallback runtime path.
-- **List spread expression typing (`[a, b, ..xs]`)** (planned).
-  - Type rules to implement:
-    - for `[e1, e2, ..., ..tail]`, all prefix elements must unify to the same type `a`.
+- **List spread expression typing (`[a, b, ..xs]`)** (implemented).
+  - Shipped rules:
+    - for `[e1, e2, ..., ..tail]`, all prefix elements must unify to one element type `a`.
     - `tail` must typecheck as `List a`.
     - whole expression type is `List a`.
   - Diagnostics:
-    - when prefix element types conflict, report expected element type vs actual element type.
-    - when tail is not a list (or has mismatched element type), report expected `List a` shape explicitly.
+    - conflicting prefix element types report expected vs actual element type.
+    - non-list or mismatched list tails report the expected `List a` shape explicitly.
 - Type annotation placement rules (required vs optional locations).
 - Type error diagnostics quality bar is fixed for MVP:
   - diagnostics must be non-empty and human-readable plain text.
