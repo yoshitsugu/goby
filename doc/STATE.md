@@ -20,9 +20,10 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - `crates/goby-wasm/src/runtime_resolver.rs`
   - `crates/goby-wasm/src/runtime_dispatch.rs`
   - `crates/goby-wasm/src/runtime_decl.rs`
+  - `crates/goby-wasm/src/runtime_exec.rs`
 - `crates/goby-wasm/src/lib.rs` still contains the deeper orchestration layer:
   - `apply_cont`
-  - remaining evaluator/orchestration glue around statement replay and unit-call execution
+  - remaining evaluator/orchestration glue around statement replay and continuation replay
 - Runtime model to preserve while refactoring:
   - `Out<T> = Done | Suspend | Escape | Err`
   - `Escape::WithScope { with_id, value }`
@@ -39,7 +40,7 @@ This file is a restart-safe snapshot for resuming work after context reset.
 ## Next Work
 
 - Continue Track F in `goby-wasm`:
-  - extract `apply_cont` and remaining unit-call/replay helpers from `crates/goby-wasm/src/lib.rs`
+  - extract `apply_cont` and remaining statement/continuation replay helpers from `crates/goby-wasm/src/lib.rs`
   - keep changes behavior-preserving and modularity-only
   - rerun the same quality gate after each extraction
 - After `goby-wasm` F1 work, move on to `goby-core` responsibility splits:
