@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-11
+Last updated: 2026-03-12
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -9,7 +9,7 @@ This file is a restart-safe snapshot for resuming work after context reset.
 - Active work is `doc/PLAN.md` Track F: maintainability hardening.
 - `Milestone F1` (`goby-wasm` split) is complete.
 - `Milestone F2` (`goby-core` typecheck split) is complete.
-- Current target is `Milestone F3`: start splitting `crates/goby-core/src/parser.rs`
+- Current target is `Milestone F3`: finish splitting `crates/goby-core/src/parser.rs`
   by responsibility without changing behavior.
 
 ## Current State
@@ -28,12 +28,13 @@ This file is a restart-safe snapshot for resuming work after context reset.
   fallback orchestration glue, and remaining helper methods that were not part of F1 extraction scope.
 - `crates/goby-core/src/typecheck.rs` is now reduced to phase orchestration plus
   residual validation/helpers after the `F2` split.
-- `F3.1` is now landed:
+- `F3.1` is landed:
   - `crates/goby-core/src/parser_util.rs` owns shared parser predicates and split helpers.
-  - `crates/goby-core/src/parser.rs` now consumes that helper module instead of carrying those utilities inline.
-- `F3.2` is now landed:
+- `F3.2` is landed:
   - `crates/goby-core/src/parser_top.rs` owns top-level import/embed/type/effect/declaration-header parsing.
-  - `crates/goby-core/src/parser.rs` now loops over top-level items and keeps body parsing / module orchestration.
+- `F3.3` is landed:
+  - `crates/goby-core/src/parser_stmt.rs` owns declaration-body statement parsing, multiline `with` / `case` / `if` block handling, handler-body parsing, and statement-oriented binding/assignment splitting.
+  - `crates/goby-core/src/parser.rs` now keeps `parse_module` orchestration and expression parsing, instead of mixing top-level and statement parsing in one file.
 - `F2.1` is now landed:
   - `crates/goby-core/src/typecheck_env.rs` owns `Ty`, `TypeEnv`, `ResumeContext`,
     effect-map structs, and related internal binding data.
@@ -71,8 +72,8 @@ This file is a restart-safe snapshot for resuming work after context reset.
 
 ## Next Work
 
-- Start `Milestone F3` in `goby-core`:
-  - isolate statement parsing and multiline block handling next
+- Continue `Milestone F3` in `goby-core`:
+  - isolate expression parsing and pattern parsing next (`F3.4`)
   - keep `parse_module` as the public entrypoint while shrinking `parser.rs`
   - preserve current parse diagnostics and parser test corpus during moves
 
