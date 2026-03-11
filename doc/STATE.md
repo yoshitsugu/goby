@@ -8,6 +8,11 @@ This file is a restart-safe snapshot for resuming work after context reset.
 
 - `doc/PLAN.md` now includes an active maintainability-hardening track focused on
   reducing parser/typechecker/Wasm-runtime black-box risk through responsibility-based decomposition.
+- Track F milestone F1.1 has started:
+  - `crates/goby-wasm/src/runtime_value.rs` now owns `RuntimeValue`, `RuntimeLocals`, and runtime-value equality helpers.
+  - `crates/goby-wasm/src/lib.rs` now consumes that module instead of owning those base runtime state types directly.
+  - `crates/goby-wasm/src/runtime_env.rs` now owns `EmbeddedEffectRuntime`, `RuntimeImportContext`, and runtime import-loading helpers.
+  - `crates/goby-wasm/src/lib.rs` keeps orchestration logic, but no longer owns prelude/stdin runtime setup code directly.
 - Scoped handler exit + multi-resume progression (former 4.7 task) is implemented.
 - List spread + stdlib `List.map` consolidation (former 4.5 task) is implemented.
 - Embedded default handler execution now goes through a dedicated `EmbeddedEffectRuntime` layer; stdout/stderr accumulation and stdin cursor state are no longer stored directly on `RuntimeOutputResolver`.
@@ -48,7 +53,7 @@ This file is a restart-safe snapshot for resuming work after context reset.
 - Maintainability hardening:
   - start with Track F milestone F0/F1:
     - lock focused refactor harness (`cargo test -p goby-wasm`, `cargo test -p goby-core`, `cargo test --workspace`, `cargo check`).
-    - reduce `crates/goby-wasm/src/lib.rs` boundary width first by extracting runtime value/state helpers, embedded runtime/import loading, then fallback evaluator internals.
+    - continue reducing `crates/goby-wasm/src/lib.rs` boundary width after the `runtime_value` and `runtime_env` extractions by pulling out fallback evaluator internals next.
   - after F1, separate typecheck phases and parser responsibilities into smaller modules with contract tests.
 - Runtime architecture cleanup:
   - continue shrinking remaining embedded default-handler special cases around the runtime-owned `Print` / `Read` intrinsic I/O hook without broadening `@embed` beyond that role.

@@ -4,19 +4,22 @@ mod fallback;
 mod layout;
 mod lower;
 mod planning;
+mod runtime_env;
+mod runtime_value;
 mod support;
 
 use std::collections::{HashMap, HashSet};
-use std::io::Read as _;
-use std::path::PathBuf;
 use unicode_segmentation::UnicodeSegmentation;
 
 use crate::call::flatten_named_call;
+use crate::runtime_env::{
+    EmbeddedEffectRuntime, RuntimeImportContext, effective_runtime_imports,
+    load_runtime_import_context, runtime_import_selects_name,
+};
+use crate::runtime_value::{RuntimeLocals, RuntimeValue, runtime_value_option_eq};
 use goby_core::{
     CasePattern, Expr, HandlerClause, ListPatternItem, ListPatternTail, Module, Stmt,
-    ast::InterpolatedPart,
-    stdlib::{EmbeddedRuntimeHandlerKind, StdlibResolver},
-    types::parse_function_type,
+    ast::InterpolatedPart, stdlib::EmbeddedRuntimeHandlerKind, types::parse_function_type,
 };
 const ERR_MISSING_MAIN: &str = "Wasm codegen requires a `main` declaration";
 const BUILTIN_PRINT: &str = "print";
@@ -523,143 +526,7 @@ struct RuntimeOutputResolver<'m> {
     execution_mode: lower::EffectExecutionMode,
 }
 
-struct EmbeddedEffectRuntime {
-    // Intentionally narrow runtime layer for prelude-backed Print/Read defaults.
-    // This is not meant to grow into the general host-capability surface.
-    outputs: Vec<String>,
-    stdin_buffer: Option<String>,
-    stdin_cursor: usize,
-}
-
-#[derive(Default)]
-struct RuntimeImportContext {
-    modules: HashMap<String, Module>,
-    embedded_default_handlers: HashMap<String, EmbeddedRuntimeHandlerKind>,
-}
-
 type WithId = u64;
-
-impl EmbeddedEffectRuntime {
-    fn new(stdin_seed: Option<String>) -> Self {
-        Self {
-            outputs: Vec::new(),
-            stdin_buffer: stdin_seed,
-            stdin_cursor: 0,
-        }
-    }
-
-    fn output_len(&self) -> usize {
-        self.outputs.len()
-    }
-
-    fn outputs_are_empty(&self) -> bool {
-        self.outputs.is_empty()
-    }
-
-    fn concat_outputs(&self) -> String {
-        self.outputs.concat()
-    }
-
-    fn emit_output_text(&mut self, text: String) {
-        self.outputs.push(text);
-    }
-
-    fn emit_output_line(&mut self, mut text: String) {
-        if !text.ends_with('\n') {
-            text.push('\n');
-        }
-        self.outputs.push(text);
-    }
-
-    fn invoke(
-        &mut self,
-        handler_kind: EmbeddedRuntimeHandlerKind,
-        method_name: &str,
-        arg_val: RuntimeValue,
-    ) -> Result<Option<RuntimeValue>, String> {
-        match (handler_kind, method_name) {
-            (EmbeddedRuntimeHandlerKind::Stdout, "print") => {
-                self.emit_output_text(arg_val.to_output_text());
-                Ok(Some(RuntimeValue::Unit))
-            }
-            (EmbeddedRuntimeHandlerKind::Stdout, "println") => {
-                self.emit_output_line(arg_val.to_output_text());
-                Ok(Some(RuntimeValue::Unit))
-            }
-            (EmbeddedRuntimeHandlerKind::Stdin, "read")
-                if matches!(arg_val, RuntimeValue::Unit) =>
-            {
-                self.read_stdin_remaining("read")
-                    .map(|text| Some(RuntimeValue::String(text)))
-            }
-            (EmbeddedRuntimeHandlerKind::Stdin, "read_line")
-                if matches!(arg_val, RuntimeValue::Unit) =>
-            {
-                self.read_stdin_line("read_line")
-                    .map(|text| Some(RuntimeValue::String(text)))
-            }
-            _ => Ok(None),
-        }
-    }
-
-    fn ensure_stdin_loaded(&mut self, op_name: &str) -> Result<(), String> {
-        if self.stdin_buffer.is_some() {
-            return Ok(());
-        }
-        let mut bytes = Vec::new();
-        match std::io::stdin().read_to_end(&mut bytes) {
-            Ok(_) => {
-                self.stdin_buffer = Some(String::from_utf8_lossy(&bytes).into_owned());
-                Ok(())
-            }
-            Err(err) => Err(format!("Read.{op_name} failed to read stdin: {err}")),
-        }
-    }
-
-    fn read_stdin_remaining(&mut self, op_name: &str) -> Result<String, String> {
-        self.ensure_stdin_loaded(op_name)?;
-        let content = self.stdin_buffer.as_ref().expect("stdin should be loaded");
-        if self.stdin_cursor >= content.len() {
-            return Ok(String::new());
-        }
-        let tail = content[self.stdin_cursor..].to_string();
-        self.stdin_cursor = content.len();
-        Ok(tail)
-    }
-
-    fn read_stdin_line(&mut self, op_name: &str) -> Result<String, String> {
-        self.ensure_stdin_loaded(op_name)?;
-        let content = self.stdin_buffer.as_ref().expect("stdin should be loaded");
-        if self.stdin_cursor >= content.len() {
-            return Ok(String::new());
-        }
-        let bytes = content.as_bytes();
-        let start = self.stdin_cursor;
-        let mut idx = start;
-        while idx < bytes.len() {
-            match bytes[idx] {
-                b'\n' => {
-                    let line = content[start..idx].to_string();
-                    self.stdin_cursor = idx + 1;
-                    return Ok(line);
-                }
-                b'\r' => {
-                    let line = content[start..idx].to_string();
-                    if idx + 1 < bytes.len() && bytes[idx + 1] == b'\n' {
-                        self.stdin_cursor = idx + 2;
-                    } else {
-                        self.stdin_cursor = idx + 1;
-                    }
-                    return Ok(line);
-                }
-                _ => idx += 1,
-            }
-        }
-        let line = content[start..].to_string();
-        self.stdin_cursor = content.len();
-        Ok(line)
-    }
-}
 
 #[derive(Clone)]
 struct Continuation {
@@ -1165,18 +1032,18 @@ impl<'m> RuntimeOutputResolver<'m> {
             return self.complete_value_out(out, evaluators);
         }
 
-        if let Some(text) = eval_string_expr(expr, &locals.string_values) {
+        if let Some(text) = eval_string_expr(expr, locals.string_values()) {
             return Some(RuntimeValue::String(text));
         }
 
         if let Some(value) = evaluators
             .int
-            .eval_expr(expr, &locals.int_values, callables)
+            .eval_expr(expr, locals.int_values(), callables)
         {
             return Some(RuntimeValue::Int(value));
         }
 
-        if let Some(values) = evaluators.list.eval_expr(expr, &locals.list_int_values) {
+        if let Some(values) = evaluators.list.eval_expr(expr, locals.list_int_values()) {
             return Some(RuntimeValue::ListInt(values));
         }
 
@@ -4279,9 +4146,7 @@ impl<'m> RuntimeOutputResolver<'m> {
             } else if let Some(RuntimeValue::Int(value)) =
                 self.eval_value_with_context(arg_expr, caller_locals, caller_callables, evaluators)
             {
-                function_locals
-                    .int_values
-                    .insert(parameter.to_string(), value);
+                function_locals.store(parameter, RuntimeValue::Int(value));
             } else {
                 return None;
             }
@@ -5830,71 +5695,6 @@ impl<'m> RuntimeOutputResolver<'m> {
     }
 }
 
-fn load_runtime_import_context(module: &Module) -> RuntimeImportContext {
-    let mut context = RuntimeImportContext {
-        modules: HashMap::new(),
-        embedded_default_handlers: module
-            .embed_declarations
-            .iter()
-            .filter_map(|embed| {
-                EmbeddedRuntimeHandlerKind::from_handler_name(&embed.handler_name)
-                    .map(|kind| (embed.effect_name.clone(), kind))
-            })
-            .collect(),
-    };
-    let resolver = StdlibResolver::new(resolve_runtime_stdlib_root());
-    let mut pending = effective_runtime_imports(module);
-    while let Some(import) = pending.pop() {
-        if context.modules.contains_key(&import.module_path) {
-            continue;
-        }
-        let Ok(resolved) = resolver.resolve_module(&import.module_path) else {
-            continue;
-        };
-        pending.extend(effective_runtime_imports(&resolved.module));
-        for embed in resolved.embedded_defaults {
-            let Some(kind) = embed.runtime_kind else {
-                continue;
-            };
-            context
-                .embedded_default_handlers
-                .entry(embed.effect_name)
-                .or_insert(kind);
-        }
-        context.modules.insert(import.module_path, resolved.module);
-    }
-    context
-}
-
-fn runtime_import_selects_name(kind: &goby_core::ImportKind, name: &str) -> bool {
-    match kind {
-        goby_core::ImportKind::Selective(names) => names.iter().any(|selected| selected == name),
-        goby_core::ImportKind::Plain | goby_core::ImportKind::Alias(_) => true,
-    }
-}
-
-fn effective_runtime_imports(module: &Module) -> Vec<goby_core::ImportDecl> {
-    let mut imports = module.imports.clone();
-    let has_prelude = imports
-        .iter()
-        .any(|import| import.module_path == PRELUDE_MODULE_PATH);
-    if has_prelude {
-        return imports;
-    }
-    let resolver = StdlibResolver::new(resolve_runtime_stdlib_root());
-    let prelude_available = resolver
-        .module_file_path(PRELUDE_MODULE_PATH)
-        .ok()
-        .is_some_and(|path| path.exists());
-    if prelude_available {
-        imports.push(goby_core::ImportDecl {
-            module_path: PRELUDE_MODULE_PATH.to_string(),
-            kind: goby_core::ImportKind::Plain,
-        });
-    }
-    imports
-}
-
 fn flatten_direct_call(expr: &Expr) -> Option<(DirectCallHead, Vec<&Expr>)> {
     let mut args = Vec::new();
     let mut cur = expr;
@@ -5935,212 +5735,6 @@ fn module_has_selective_import_symbol(module: &Module, module_path: &str, symbol
             _ => false,
         }
     })
-}
-
-fn resolve_runtime_stdlib_root() -> PathBuf {
-    std::env::var_os("GOBY_STDLIB_ROOT")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("../..")
-                .join("stdlib")
-        })
-}
-
-#[derive(Default, Clone)]
-struct RuntimeLocals {
-    string_values: HashMap<String, String>,
-    int_values: HashMap<String, i64>,
-    list_int_values: HashMap<String, Vec<i64>>,
-    record_values: HashMap<String, RuntimeValue>,
-}
-
-impl RuntimeLocals {
-    fn store(&mut self, name: &str, value: RuntimeValue) {
-        self.clear(name);
-        match value {
-            RuntimeValue::String(text) => {
-                self.string_values.insert(name.to_string(), text);
-            }
-            RuntimeValue::Int(number) => {
-                self.int_values.insert(name.to_string(), number);
-            }
-            RuntimeValue::ListInt(values) => {
-                self.list_int_values.insert(name.to_string(), values);
-            }
-            u @ RuntimeValue::Unit => {
-                self.record_values.insert(name.to_string(), u);
-            }
-            record @ RuntimeValue::Record { .. } => {
-                self.record_values.insert(name.to_string(), record);
-            }
-            b @ RuntimeValue::Bool(_) => {
-                self.record_values.insert(name.to_string(), b);
-            }
-            ls @ RuntimeValue::ListString(_) => {
-                self.record_values.insert(name.to_string(), ls);
-            }
-            t @ RuntimeValue::Tuple(_) => {
-                self.record_values.insert(name.to_string(), t);
-            }
-            h @ RuntimeValue::Handler(_) => {
-                self.record_values.insert(name.to_string(), h);
-            }
-        }
-    }
-
-    fn clear(&mut self, name: &str) {
-        self.string_values.remove(name);
-        self.int_values.remove(name);
-        self.list_int_values.remove(name);
-        self.record_values.remove(name);
-    }
-
-    fn get(&self, name: &str) -> Option<RuntimeValue> {
-        if let Some(v) = self.int_values.get(name) {
-            return Some(RuntimeValue::Int(*v));
-        }
-        if let Some(v) = self.string_values.get(name) {
-            return Some(RuntimeValue::String(v.clone()));
-        }
-        if let Some(v) = self.list_int_values.get(name) {
-            return Some(RuntimeValue::ListInt(v.clone()));
-        }
-        if let Some(v) = self.record_values.get(name) {
-            return Some(v.clone());
-        }
-        None
-    }
-
-    fn binding_names(&self) -> Vec<String> {
-        let mut names: HashSet<String> = self.int_values.keys().cloned().collect();
-        names.extend(self.string_values.keys().cloned());
-        names.extend(self.list_int_values.keys().cloned());
-        names.extend(self.record_values.keys().cloned());
-        names.into_iter().collect()
-    }
-
-    fn apply_selected_from(&mut self, other: &Self, names: &HashSet<String>) {
-        for name in names {
-            match other.get(name) {
-                Some(value) => self.store(name, value),
-                None => self.clear(name),
-            }
-        }
-    }
-}
-
-fn runtime_value_option_eq(left: Option<&RuntimeValue>, right: Option<&RuntimeValue>) -> bool {
-    match (left, right) {
-        (Some(left), Some(right)) => runtime_value_eq(left, right),
-        (None, None) => true,
-        _ => false,
-    }
-}
-
-fn runtime_value_eq(left: &RuntimeValue, right: &RuntimeValue) -> bool {
-    match (left, right) {
-        (RuntimeValue::String(a), RuntimeValue::String(b)) => a == b,
-        (RuntimeValue::Int(a), RuntimeValue::Int(b)) => a == b,
-        (RuntimeValue::Unit, RuntimeValue::Unit) => true,
-        (RuntimeValue::Bool(a), RuntimeValue::Bool(b)) => a == b,
-        (RuntimeValue::Tuple(a), RuntimeValue::Tuple(b)) => {
-            a.len() == b.len() && a.iter().zip(b).all(|(a, b)| runtime_value_eq(a, b))
-        }
-        (RuntimeValue::ListInt(a), RuntimeValue::ListInt(b)) => a == b,
-        (RuntimeValue::ListString(a), RuntimeValue::ListString(b)) => a == b,
-        (
-            RuntimeValue::Record {
-                constructor: a_ctor,
-                fields: a_fields,
-            },
-            RuntimeValue::Record {
-                constructor: b_ctor,
-                fields: b_fields,
-            },
-        ) => {
-            a_ctor == b_ctor
-                && a_fields.len() == b_fields.len()
-                && a_fields.iter().all(|(name, a_value)| {
-                    b_fields
-                        .get(name)
-                        .is_some_and(|b_value| runtime_value_eq(a_value, b_value))
-                })
-        }
-        (RuntimeValue::Handler(_), RuntimeValue::Handler(_)) => false,
-        _ => false,
-    }
-}
-
-#[derive(Clone)]
-#[allow(clippy::large_enum_variant)]
-enum RuntimeValue {
-    String(String),
-    Int(i64),
-    Unit,
-    Bool(bool),
-    Tuple(Vec<RuntimeValue>),
-    ListInt(Vec<i64>),
-    ListString(Vec<String>),
-    Handler(InlineHandlerValue),
-    Record {
-        constructor: String,
-        fields: HashMap<String, RuntimeValue>,
-    },
-}
-
-impl RuntimeValue {
-    fn to_output_text(&self) -> String {
-        match self {
-            Self::String(text) => text.clone(),
-            Self::Int(value) => value.to_string(),
-            Self::Unit => "Unit".to_string(),
-            Self::Bool(b) => if *b { "True" } else { "False" }.to_string(),
-            Self::Tuple(items) => {
-                let parts: Vec<String> = items.iter().map(RuntimeValue::to_output_text).collect();
-                format!("({})", parts.join(", "))
-            }
-            Self::ListInt(values) => format_list_int(values),
-            Self::ListString(values) => {
-                let parts: Vec<String> = values.iter().map(|s| format!("\"{}\"", s)).collect();
-                format!("[{}]", parts.join(", "))
-            }
-            Self::Handler(_) => "<handler>".to_string(),
-            // Print the constructor name as a placeholder; field access
-            // resolves the actual field value before printing in practice.
-            Self::Record { constructor, .. } => constructor.clone(),
-        }
-    }
-
-    fn to_expression_text(&self) -> String {
-        match self {
-            Self::String(text) => format!("\"{}\"", text),
-            Self::Int(value) => value.to_string(),
-            Self::Unit => "Unit".to_string(),
-            Self::Bool(b) => if *b { "True" } else { "False" }.to_string(),
-            Self::Tuple(items) => {
-                let parts: Vec<String> =
-                    items.iter().map(RuntimeValue::to_expression_text).collect();
-                format!("({})", parts.join(", "))
-            }
-            Self::ListInt(values) => format_list_int(values),
-            Self::ListString(values) => {
-                let parts: Vec<String> = values.iter().map(|s| format!("\"{}\"", s)).collect();
-                format!("[{}]", parts.join(", "))
-            }
-            Self::Handler(_) => "<handler>".to_string(),
-            Self::Record { constructor, .. } => constructor.clone(),
-        }
-    }
-}
-
-fn format_list_int(values: &[i64]) -> String {
-    let joined = values
-        .iter()
-        .map(i64::to_string)
-        .collect::<Vec<_>>()
-        .join(", ");
-    format!("[{}]", joined)
 }
 
 fn parse_pipeline(expr: &str) -> Option<(&str, &str)> {
