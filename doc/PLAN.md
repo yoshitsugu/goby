@@ -689,7 +689,7 @@ Detailed implementation plan:
      - parser modules correspond to syntax responsibilities rather than historical file growth.
      - expression and statement parsing can be read independently of top-level declaration handling.
 
-5. [ ] Milestone F4: cross-cutting cleanup after the first extractions land.
+5. [x] Milestone F4: cross-cutting cleanup after the first extractions land.
    - Goal:
      - remove duplication exposed by the refactor rather than during speculative up-front cleanup.
    - Planned work:
@@ -698,6 +698,10 @@ Detailed implementation plan:
      - prune transitional re-exports or compatibility shims created during file moves.
    - Acceptance criteria:
      - no transitional module layout remains as permanent architecture by accident.
+   - Completed:
+     - parser submodule tests now live beside owned parser modules (`parser_expr`, `parser_pattern`, `parser_stmt`, `parser_top`).
+     - shared parser example fixtures are centralized in `parser_test_support.rs`.
+     - `parser.rs` is now limited to public entrypoints plus parse-module integration/error-span coverage.
 
 Change-unit policy:
 

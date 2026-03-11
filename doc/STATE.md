@@ -6,11 +6,11 @@ This file is a restart-safe snapshot for resuming work after context reset.
 
 ## Current Focus
 
-- Active work is `doc/PLAN.md` Track F: maintainability hardening.
+- `doc/PLAN.md` Track F: maintainability hardening is complete.
 - `Milestone F1` (`goby-wasm` split) is complete.
 - `Milestone F2` (`goby-core` typecheck split) is complete.
 - `Milestone F3` (`goby-core` parser split) is complete.
-- Current target is `Milestone F4`: cleanup after the first extraction wave.
+- `Milestone F4` (post-extraction cleanup) is complete.
 
 ## Current State
 
@@ -39,13 +39,13 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - `crates/goby-core/src/parser_expr.rs` owns expression parsing, interpolation parsing, application/method parsing, and expression split helpers.
   - `crates/goby-core/src/parser_pattern.rs` owns case/list pattern parsing shared by statement parsing.
   - `crates/goby-core/src/parser.rs` is now a thin public entry layer for `parse_module`, `parse_body_stmts`, and `parse_expr`.
-  - `Milestone F4` cleanup has started:
+  - `Milestone F4` cleanup is complete:
     - expression-focused parser tests now live in `crates/goby-core/src/parser_expr.rs`
     - list/case-pattern unit tests now live in `crates/goby-core/src/parser_pattern.rs`
     - statement/body parsing tests now live in `crates/goby-core/src/parser_stmt.rs`
     - top-level parser syntax tests now live in `crates/goby-core/src/parser_top.rs`
     - shared parser example-test fixture now lives in `crates/goby-core/src/parser_test_support.rs`
-    - `crates/goby-core/src/parser.rs` is shedding module-internal test shims and detailed submodule spec tests
+    - `crates/goby-core/src/parser.rs` is now limited to public entrypoints plus parse-module integration/error-span coverage
 - `F2.1` is now landed:
   - `crates/goby-core/src/typecheck_env.rs` owns `Ty`, `TypeEnv`, `ResumeContext`,
     effect-map structs, and related internal binding data.
@@ -83,10 +83,8 @@ This file is a restart-safe snapshot for resuming work after context reset.
 
 ## Next Work
 
-- Start `Milestone F4` cleanup:
-  - review whether `parser.rs` still carries submodule-specific integration tests that can now live beside owned modules
-  - remove any remaining parser-only transitional helpers or duplicated test fixtures created by the old test layout
-  - keep parse diagnostics and current parser/runtime behavior unchanged during cleanup
+- Track F is complete.
+- Choose the next roadmap item outside maintainability hardening before further refactors.
 
 ## Notes
 
