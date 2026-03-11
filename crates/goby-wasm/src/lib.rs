@@ -5,6 +5,7 @@ mod layout;
 mod lower;
 mod planning;
 mod runtime_env;
+mod runtime_flow;
 mod runtime_value;
 mod support;
 
@@ -16,10 +17,16 @@ use crate::runtime_env::{
     EmbeddedEffectRuntime, RuntimeImportContext, effective_runtime_imports,
     load_runtime_import_context, runtime_import_selects_name,
 };
+use crate::runtime_flow::{
+    ApplyStep, Cont, Continuation, DirectCallHead, Escape, FinishKind, HandlerCompletion,
+    HandlerContinuationState, InlineHandlerMethod, InlineHandlerValue, OptimizedResumeToken, Out,
+    ResolvedEffectHandler, ResolvedHandlerMethod, ResumeToken, RuntimeDeclInfo, RuntimeError,
+    RuntimeEvaluators, RuntimeHandlerMethod, StoreOp, WithId,
+};
 use crate::runtime_value::{RuntimeLocals, RuntimeValue, runtime_value_option_eq};
 use goby_core::{
     CasePattern, Expr, HandlerClause, ListPatternItem, ListPatternTail, Module, Stmt,
-    ast::InterpolatedPart, stdlib::EmbeddedRuntimeHandlerKind, types::parse_function_type,
+    ast::InterpolatedPart, types::parse_function_type,
 };
 const ERR_MISSING_MAIN: &str = "Wasm codegen requires a `main` declaration";
 const BUILTIN_PRINT: &str = "print";
@@ -524,260 +531,6 @@ struct RuntimeOutputResolver<'m> {
     runtime_error: Option<String>,
     next_with_id: u64,
     execution_mode: lower::EffectExecutionMode,
-}
-
-type WithId = u64;
-
-#[derive(Clone)]
-struct Continuation {
-    consumed: bool,
-}
-
-#[derive(Clone)]
-struct ResumeToken {
-    continuation: Continuation,
-    state: HandlerContinuationState,
-    cont: Option<Cont>,
-}
-
-#[derive(Clone)]
-struct OptimizedResumeToken {
-    consumed: bool,
-    state: HandlerContinuationState,
-    cont: Option<Cont>,
-}
-
-#[derive(Clone)]
-enum HandlerContinuationState {
-    Pending,
-    Resumed(Box<RuntimeValue>),
-    Suspended,
-}
-
-#[allow(clippy::large_enum_variant)]
-enum HandlerCompletion {
-    Aborted,
-    Escaped(Escape),
-    Resumed(Box<RuntimeValue>),
-    Suspended,
-}
-
-// ── Phase 1: New unified continuation types ───────────────────────────────────
-
-/// Runtime error — replaces the ambiguous Out::Abort split.
-#[allow(dead_code)]
-#[derive(Clone, Debug)]
-enum RuntimeError {
-    /// User-visible runtime failure (abort at handled boundary, token consumed, etc.).
-    Abort { kind: String },
-    /// Evaluator reached a code path not yet supported by the new eval_expr.
-    Unsupported,
-}
-
-/// Evaluation result — replaces AstEvalOutcome<T>.
-#[allow(dead_code)]
-#[allow(clippy::large_enum_variant)]
-enum Out<T> {
-    Done(T),
-    Suspend(Cont),
-    Escape(Escape),
-    Err(RuntimeError),
-}
-
-#[allow(dead_code)]
-#[derive(Clone)]
-enum Escape {
-    WithScope {
-        with_id: WithId,
-        value: RuntimeValue,
-    },
-}
-
-/// What happens after the final statement in a StmtSeq.
-#[allow(dead_code)]
-#[derive(Clone)]
-enum FinishKind {
-    /// Return the last expression value to the enclosing expression (block body).
-    Block,
-    /// Consume matching scoped exits for the current `with ... in ...` body.
-    WithBody { with_id: WithId },
-    /// Store the result into the active resume token (handler body).
-    HandlerBody {
-        token_idx: usize,
-        produce_value: bool,
-        with_id: WithId,
-    },
-    /// Execute remaining stmts via ingest_ast_statement (with body via eval_ast_side_effect).
-    /// The `locals` field in StmtSeq is ignored; self.locals is used instead.
-    Ingest,
-}
-
-/// Unified continuation — pure data, no global mutable stacks.
-#[allow(dead_code)]
-#[derive(Clone)]
-#[allow(clippy::large_enum_variant)]
-enum Cont {
-    /// Remaining statements in a block or handler body after a suspension.
-    StmtSeq {
-        store: Option<StoreOp>,
-        remaining: Vec<Stmt>,
-        locals: RuntimeLocals,
-        callables: HashMap<String, IntCallable>,
-        depth: usize,
-        handler_stack: Vec<InlineHandlerValue>,
-        finish: FinishKind,
-    },
-    /// Apply the suspended value to the next expression-level computation step.
-    Apply {
-        step: ApplyStep,
-        locals: RuntimeLocals,
-        callables: HashMap<String, IntCallable>,
-        depth: usize,
-        handler_stack: Vec<InlineHandlerValue>,
-    },
-    /// Cross-handler-boundary resume: invoke the active resume token's continuation.
-    Resume,
-}
-
-/// Binding operation to apply when a StmtSeq continuation is resumed.
-#[allow(dead_code)]
-#[derive(Clone)]
-enum StoreOp {
-    /// `name = expr` — covers both Stmt::Binding and Stmt::MutBinding.
-    Bind { name: String },
-    /// `name := expr` — mutable reassignment.
-    Assign { name: String },
-}
-
-/// Expression-level continuation step (what to do with the resumed value).
-#[allow(dead_code)]
-#[derive(Clone)]
-enum ApplyStep {
-    WithBody {
-        body: Vec<Stmt>,
-    },
-    Pipeline {
-        callee: String,
-    },
-    SingleArgCall {
-        fn_name: String,
-    },
-    ReceiverMethod {
-        receiver: String,
-        member: String,
-    },
-    MultiArgCall {
-        fn_name: String,
-        evaluated: Vec<RuntimeValue>,
-        remaining: Vec<Expr>,
-    },
-    CaseSelect {
-        arms: Vec<goby_core::CaseArm>,
-    },
-    IfBranch {
-        then_expr: Expr,
-        else_expr: Expr,
-    },
-    BinOpLeft {
-        op: goby_core::BinOpKind,
-        right: Expr,
-    },
-    BinOpRight {
-        op: goby_core::BinOpKind,
-        left: RuntimeValue,
-    },
-    // Literal/composite element loops
-    ListLitElement {
-        evaluated: Vec<RuntimeValue>,
-        remaining: Vec<Expr>,
-        spread: Option<Expr>,
-        resuming_spread: bool,
-    },
-    TupleLitElement {
-        evaluated: Vec<RuntimeValue>,
-        remaining: Vec<Expr>,
-    },
-    RecordField {
-        constructor: String,
-        evaluated: Vec<(String, RuntimeValue)>,
-        pending_field: String,
-        remaining: Vec<(String, Expr)>,
-    },
-    InterpolatedPart {
-        accumulated: String,
-        remaining: Vec<InterpolatedPart>,
-    },
-}
-
-/// New unified resume token state — replaces HandlerContinuationState.
-#[allow(dead_code)]
-#[derive(Clone)]
-#[allow(clippy::large_enum_variant)]
-enum TokenState {
-    Pending,
-    Done(RuntimeValue),
-    Suspended(Cont),
-}
-
-// ── End Phase 1 ───────────────────────────────────────────────────────────────
-
-#[derive(Clone)]
-struct ResolvedHandlerMethod {
-    method: RuntimeHandlerMethod,
-    with_id: Option<WithId>,
-}
-
-#[derive(Clone)]
-enum ResolvedEffectHandler {
-    Explicit(ResolvedHandlerMethod),
-    EmbeddedDefault {
-        handler_kind: EmbeddedRuntimeHandlerKind,
-        method_name: String,
-    },
-}
-
-#[derive(Clone)]
-struct InlineHandlerMethod {
-    effect_name: Option<String>,
-    method: RuntimeHandlerMethod,
-}
-
-#[derive(Clone)]
-struct InlineHandlerValue {
-    methods: Vec<InlineHandlerMethod>,
-    captured_locals: RuntimeLocals,
-    changed_outer_names: HashSet<String>,
-    captured_callables: HashMap<String, IntCallable>,
-    with_id: Option<WithId>,
-}
-
-#[derive(Clone)]
-struct RuntimeHandlerMethod {
-    name: String,
-    params: Vec<String>,
-    body: String,
-    parsed_body: Option<Vec<Stmt>>,
-}
-
-struct RuntimeEvaluators<'a, 'b> {
-    int: &'b IntEvaluator<'a>,
-    list: &'b ListIntEvaluator<'a>,
-    unit: &'b EvaluatedFunctions<'a>,
-}
-
-#[derive(Clone)]
-struct RuntimeDeclInfo {
-    name: String,
-    owner_module: Option<String>,
-    params: Vec<String>,
-    callable_param_mask: Vec<bool>,
-    stmts: Vec<Stmt>,
-}
-
-#[derive(Clone)]
-enum DirectCallHead {
-    Bare(String),
-    Qualified { receiver: String, member: String },
 }
 
 impl<'m> RuntimeOutputResolver<'m> {
