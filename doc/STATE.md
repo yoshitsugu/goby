@@ -124,6 +124,9 @@ This file is a restart-safe snapshot for resuming work after context reset.
 - `F8.4` is now landed:
   - runtime parity/perf helpers now live in `crates/goby-wasm/src/runtime_parity.rs`.
   - `crates/goby-wasm/src/lib.rs` no longer hosts parity outcome decoding, perf sampling, or mode-comparison assertions inline.
+- `F8.5` is now landed:
+  - runtime-output, stdin-backed output resolution, and output-lock regression tests now live in `crates/goby-wasm/src/runtime_output_tests.rs`.
+  - `crates/goby-wasm/src/lib.rs` is narrowed further toward compile smoke tests plus remaining runtime-behavior integration coverage.
 - Runtime model to preserve while refactoring:
   - `Out<T> = Done | Suspend | Escape | Err`
   - `Escape::WithScope { with_id, value }`
@@ -136,6 +139,7 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - module-specific regression tests should live beside their owned implementation when they do not require top-level typecheck integration coverage.
   - `goby-wasm/src/lib.rs` should not regain compile/native-lowering smoke tests that fit dedicated test modules.
   - `goby-wasm/src/lib.rs` should not regain parity/perf helper infrastructure when a focused test-support module can own it.
+  - `goby-wasm/src/lib.rs` should not regain broad runtime-output/output-lock regression coverage when a dedicated runtime-output test module can own it.
 
 ## Verified
 
@@ -147,7 +151,7 @@ This file is a restart-safe snapshot for resuming work after context reset.
 
 ## Next Work
 
-- `F8.1`, `F8.2`, `F8.3`, and `F8.4` are complete.
+- `F8.1`, `F8.2`, `F8.3`, `F8.4`, and `F8.5` are complete.
 - Continue `Milestone F8` with:
   - boundary review for remaining large files (`goby-wasm/src/lib.rs`, `typecheck_check.rs`)
   - relocation of any remaining subsystem-specific regression tests to owned modules

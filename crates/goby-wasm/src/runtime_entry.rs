@@ -66,19 +66,3 @@ pub(crate) fn resolve_main_runtime_output_with_mode_and_stdin(
         stdin_seed,
     )
 }
-
-#[cfg(test)]
-pub(crate) fn resolve_main_runtime_output_with_stdin(
-    module: &Module,
-    body: &str,
-    parsed_stmts: Option<&[Stmt]>,
-    stdin_text: &str,
-) -> Option<String> {
-    resolve_main_runtime_output_with_mode_and_stdin(
-        module,
-        body,
-        parsed_stmts,
-        lower::EffectExecutionMode::PortableFallback,
-        Some(stdin_text.to_string()),
-    )
-}
