@@ -137,7 +137,8 @@ Notes:
 
 Initial `goby/stdio` API contract (minimum):
 
-- `print : String -> Unit can Print` (or equivalent effect-aware signature accepted by Goby).
+- `print : String -> Unit can Print`
+- `println : String -> Unit can Print`
 
 Initial embedded declaration model for stdio:
 
@@ -473,7 +474,7 @@ fetch_env_var : String -> String
 fetch_env_var name = __goby_env_fetch_env_var name
 ```
 
-Decision (2026-03-03):
+Decision (2026-03-12):
 
 - First intrinsic set is locked to:
   - `__goby_string_length : String -> Int`
@@ -503,14 +504,14 @@ Execution checklist (incremental):
   - update `stdlib/goby/env.gb` `fetch_env_var` to call `__goby_env_fetch_env_var`.
 - [x] B7. Resolver/import parity checks:
   - ensure resolver-first import behavior still matches expected symbol/type contracts,
-  - ensure builtin fallback behavior remains intact for missing stdlib files.
+  - ensure missing stdlib files now fail clearly instead of falling back to builtin exports.
 - [x] B8. Diagnostics hardening:
   - clear runtime/typecheck errors for unknown intrinsic usage,
   - explicit messages for disallowed user-space `__goby_*` usage (if hard reject is chosen).
 - [x] B9. Regression tests (`goby-core` + `goby-wasm` + CLI integration where relevant):
   - positive tests for `string.length` and `env.fetch_env_var` through stdlib entry points,
   - negative tests for malformed/unknown intrinsic calls,
-  - compatibility tests for existing bare `print` and stdlib imports.
+  - compatibility tests for implicit-prelude `print` / `println` and stdlib imports.
 - [x] B10. Performance/behavior sanity:
   - verify no unintended path regression in native/fallback mode selection,
   - ensure runtime output parity for affected examples/tests.
@@ -578,7 +579,7 @@ Execution checklist (incremental):
 - [ ] C8. Final quality gates:
   - `cargo fmt`, `cargo check`, `cargo test`, `cargo clippy -- -D warnings`.
 
-Current progress note (2026-03-03):
+Current progress note (2026-03-12):
 
 - `C2/C3` completed:
   - typechecker accepts `__goby_string_each_grapheme` and `__goby_list_push_string`
@@ -592,7 +593,7 @@ Current progress note (2026-03-03):
   - `stdlib/goby/string.gb` now contains iterator-driven `split` handlers for:
     - empty delimiter (grapheme-wise),
     - single-grapheme delimiter.
-  - multi-grapheme delimiter path still falls back to runtime `string.split(...)` and keeps
+  - multi-grapheme delimiter path still uses the runtime `string.split(...)` bridge and keeps
     C4/C5 open.
   - current typechecker limitation: `List ...` in record type declaration fields is not accepted,
     so `GraphemeState(parts: List String, ...)` remains parse-time/spec intent in stdlib source

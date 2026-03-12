@@ -6,8 +6,8 @@ This file is a restart-safe snapshot for resuming work after context reset.
 
 ## Current Focus
 
-- C1 and C2 are complete: checked-in stdlib files are the only import/export source of truth, and bare `print` now comes from implicit prelude rather than a separately injected builtin symbol.
-- The next adjacent cleanup is C3/C4: prune leftover fallback wording from docs, then re-review embedded default handler/runtime special-case boundaries.
+- C1, C2, and C3 are complete: stdlib import fallback is gone, bare `print` resolves through implicit prelude, and planning docs are aligned with that behavior.
+- The next adjacent cleanup is C4: re-review embedded default handler/runtime special-case boundaries now that name-resolution compatibility work is closed.
 
 ## Current State
 
@@ -15,9 +15,9 @@ This file is a restart-safe snapshot for resuming work after context reset.
 - `stdlib/goby/*.gb` is now expected to be present for all supported `goby/...` imports; missing files should surface a clear attempted-path diagnostic.
 - `crates/goby-core/src/typecheck_build.rs` no longer injects `print` as a builtin global.
 - Bare `print` / `println` still work in normal code because implicit `goby/prelude` import remains active when the prelude file exists.
+- `doc/PLAN_STANDARD_LIBRARY.md` no longer describes builtin import fallback as active behavior.
 - Remaining related cleanup after this slice:
-  - remove outdated builtin-fallback wording from the remaining standard-library plan sections,
-  - then move to C4/runtime-side cleanup for remaining print/embed special cases if they still count as architectural debt.
+  - move to C4/runtime-side cleanup for remaining print/embed special cases if they still count as architectural debt.
 
 ## Verified
 
@@ -27,8 +27,8 @@ This file is a restart-safe snapshot for resuming work after context reset.
 
 ## Next Work
 
-- Finish pruning obsolete builtin-fallback wording from the remaining standard-library planning docs under C3.
-- Then re-review whether remaining runtime-side `print` / embedded-handler special-casing should be simplified under C4 or a later stdlib-runtime milestone.
+- Re-review whether remaining runtime-side `print` / embedded-handler special-casing should be simplified under C4 or a later stdlib-runtime milestone.
+- If that re-review finds no additional compatibility debt, shift to the next feature/runtime milestone instead of more cleanup.
 
 ## Notes
 
