@@ -825,6 +825,9 @@ Detailed implementation plan:
      - [x] Step F8.6: move resume / continuation replay regression tests out of `goby-wasm/src/lib.rs`.
        - landed in `crates/goby-wasm/src/runtime_resume_tests.rs`.
        - `lib.rs` now keeps compile smoke plus residual runtime data-shape/integration coverage instead of also hosting continuation-path parity and replay tests.
+     - [x] Step F8.7: move residual runtime behavior/data-shape regression tests out of `goby-wasm/src/lib.rs`.
+       - landed in `crates/goby-wasm/src/runtime_behavior_tests.rs`.
+       - `lib.rs` test ownership is now reduced to compile smoke coverage instead of also hosting general runtime behavior integration checks.
      - re-review file sizes and dependency directions after F5-F7.
      - move any new subsystem-specific tests beside owned modules.
      - remove temporary helpers introduced only to make moves compile.

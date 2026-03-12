@@ -130,6 +130,9 @@ This file is a restart-safe snapshot for resuming work after context reset.
 - `F8.6` is now landed:
   - resume, continuation replay, nearest-handler parity, and resume perf-acceptance tests now live in `crates/goby-wasm/src/runtime_resume_tests.rs`.
   - `crates/goby-wasm/src/lib.rs` no longer acts as the default host for continuation-path parity coverage.
+- `F8.7` is now landed:
+  - residual runtime behavior, data-shape replay, and block-evaluation regression tests now live in `crates/goby-wasm/src/runtime_behavior_tests.rs`.
+  - `crates/goby-wasm/src/lib.rs` test ownership is now narrowed to compile smoke coverage.
 - Runtime model to preserve while refactoring:
   - `Out<T> = Done | Suspend | Escape | Err`
   - `Escape::WithScope { with_id, value }`
@@ -144,6 +147,7 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - `goby-wasm/src/lib.rs` should not regain parity/perf helper infrastructure when a focused test-support module can own it.
   - `goby-wasm/src/lib.rs` should not regain broad runtime-output/output-lock regression coverage when a dedicated runtime-output test module can own it.
   - `goby-wasm/src/lib.rs` should not regain broad resume/continuation replay regression coverage when a dedicated runtime-resume test module can own it.
+  - `goby-wasm/src/lib.rs` should not regain general runtime behavior/data-shape regression coverage when dedicated runtime test modules can own it.
 
 ## Verified
 
@@ -155,7 +159,7 @@ This file is a restart-safe snapshot for resuming work after context reset.
 
 ## Next Work
 
-- `F8.1`, `F8.2`, `F8.3`, `F8.4`, `F8.5`, and `F8.6` are complete.
+- `F8.1`, `F8.2`, `F8.3`, `F8.4`, `F8.5`, `F8.6`, and `F8.7` are complete.
 - Continue `Milestone F8` with:
   - boundary review for remaining large files (`goby-wasm/src/lib.rs`, `typecheck_check.rs`)
   - relocation of any remaining subsystem-specific regression tests to owned modules
