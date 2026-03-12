@@ -703,7 +703,7 @@ Detailed implementation plan:
      - shared parser example fixtures are centralized in `parser_test_support.rs`.
      - `parser.rs` is now limited to public entrypoints plus parse-module integration/error-span coverage.
 
-6. [ ] Milestone F5: shrink `crates/goby-wasm/src/lib.rs` below the resolver-god-module threshold.
+6. [x] Milestone F5: shrink `crates/goby-wasm/src/lib.rs` below the resolver-god-module threshold.
    - Goal:
      - make `goby-wasm/src/lib.rs` a public codegen/orchestration layer, not the long-term home of fallback runtime mechanics.
    - Why this milestone exists:
@@ -716,7 +716,7 @@ Detailed implementation plan:
     - [x] Step F5.2: extract print-only codegen helper cluster.
        - likely targets: `compile_print_module` and any print-module-only layout/encoding helpers.
        - preferred destination: `print_codegen.rs` or `compile_print.rs`.
-    - [ ] Step F5.3: split `RuntimeOutputResolver` by behavior phase instead of leaving one giant `impl`.
+    - [x] Step F5.3: split `RuntimeOutputResolver` by behavior phase instead of leaving one giant `impl`.
        - likely seams:
          - expression/value evaluation glue
          - imported declaration resolution
@@ -725,7 +725,7 @@ Detailed implementation plan:
        - acceptable structure:
          - separate extension impls in dedicated modules
          - or a smaller coordinator plus helper structs/modules
-     - [ ] Step F5.4: leave `compile_module` and `resolve_main_runtime_output*` as orchestration entrypoints only.
+     - [x] Step F5.4: leave `compile_module` and `resolve_main_runtime_output*` as orchestration entrypoints only.
    - Constraints:
      - do not change fallback/native parity behavior in the same patch as a structural move unless tests force a behavior fix.
      - keep runtime-phase ownership explicit; avoid merely moving one giant impl into a differently named giant file.
@@ -738,7 +738,8 @@ Detailed implementation plan:
      - `runtime_apply.rs` now owns declaration/value-call/binop helper methods that previously lived in the tail of the `RuntimeOutputResolver` impl.
      - `runtime_expr.rs` now owns expression/value evaluation, imported declaration value resolution, and continuation-to-value completion helpers from `RuntimeOutputResolver`.
      - `runtime_unit.rs` now owns unit-position expression execution and side-effect dispatch from `RuntimeOutputResolver`.
-     - remaining `F5` work is to finish reducing `lib.rs` to orchestration-only runtime wiring and decide whether `F5.4` needs a small entrypoint cleanup patch.
+     - `runtime_entry.rs` now owns `resolve_main_runtime_output*` helper entrypoints and runtime evaluator construction.
+     - `goby-wasm/src/lib.rs` now keeps `compile_module`, shared runtime constants/state, and test coverage; the runtime mechanics live in named modules.
 
 7. [ ] Milestone F6: split residual phase-building responsibilities out of `crates/goby-core/src/typecheck.rs`.
    - Goal:

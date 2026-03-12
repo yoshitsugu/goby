@@ -12,7 +12,6 @@ This file is a restart-safe snapshot for resuming work after context reset.
 - `Milestone F3` (`goby-core` parser split) is complete.
 - `Milestone F4` (post-extraction cleanup) is complete.
 - New focus is the second maintainability pass:
-  - `Milestone F5`: shrink `goby-wasm/src/lib.rs`
   - `Milestone F6`: split residual responsibilities from `typecheck.rs`
   - `Milestone F7`: decompose `typecheck_check.rs`
 
@@ -78,7 +77,8 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - `crates/goby-wasm/src/runtime_apply.rs` now owns declaration/value-call/binop helper methods extracted from the tail of `RuntimeOutputResolver`.
   - `crates/goby-wasm/src/runtime_expr.rs` now owns expression/value evaluation, imported declaration value resolution, effect-conflict lookup, and continuation-to-value completion helpers.
   - `crates/goby-wasm/src/runtime_unit.rs` now owns unit-position expression execution and side-effect dispatch centered on `execute_unit_expr_ast`.
-  - `crates/goby-wasm/src/lib.rs` is now much closer to a pure orchestration shell; the remaining `F5` question is whether `resolve_main_runtime_output*` and test-support glue need one final cleanup pass for `F5.4`.
+  - `crates/goby-wasm/src/runtime_entry.rs` now owns `resolve_main_runtime_output*` helper entrypoints and runtime evaluator construction.
+  - `Milestone F5` can be treated as complete; `crates/goby-wasm/src/lib.rs` now serves as compile entrypoint/state definition/test host rather than the fallback-runtime dump site.
 - `F2.5` is now landed:
   - `typecheck_module_with_context` now sequences explicit validation, checking-state preparation,
     and declaration-body checking phases through dedicated helpers.
@@ -99,12 +99,11 @@ This file is a restart-safe snapshot for resuming work after context reset.
 
 ## Next Work
 
-- Start `Milestone F5`:
-  - review whether `Milestone F5` only needs a small entrypoint cleanup patch to satisfy `F5.4`, or can be closed as-is
-  - keep `crates/goby-wasm/src/lib.rs` focused on codegen entrypoints and orchestration glue
-- After F5:
-  - continue with `F6` (`typecheck.rs` residual split)
-  - then `F7` (`typecheck_check.rs` concern split)
+- Start `Milestone F6`:
+  - extract type-environment construction and global symbol injection from `crates/goby-core/src/typecheck.rs`
+  - keep `typecheck.rs` focused on orchestration plus phase contracts
+- After F6:
+  - continue with `F7` (`typecheck_check.rs` concern split)
 
 ## Notes
 

@@ -8,6 +8,7 @@ mod print_codegen;
 mod runtime_apply;
 mod runtime_decl;
 mod runtime_dispatch;
+mod runtime_entry;
 mod runtime_env;
 mod runtime_eval;
 mod runtime_exec;
@@ -29,9 +30,8 @@ use crate::runtime_env::{
     load_runtime_import_context, runtime_import_selects_name,
 };
 use crate::runtime_eval::{
-    AstLambdaCallable, IntCallable, IntEvaluator, ListIntEvaluator, Statement,
-    collect_functions_with_result, collect_unit_functions, is_identifier, parse_call,
-    parse_int_callable, statements,
+    AstLambdaCallable, IntCallable, Statement, is_identifier, parse_call, parse_int_callable,
+    statements,
 };
 use crate::runtime_flow::{
     ApplyStep, Cont, Continuation, DirectCallHead, Escape, FinishKind, HandlerCompletion,
@@ -39,9 +39,7 @@ use crate::runtime_flow::{
     ResolvedEffectHandler, ResolvedHandlerMethod, ResumeToken, RuntimeDeclInfo, RuntimeError,
     RuntimeEvaluators, RuntimeHandlerMethod, StoreOp, WithId,
 };
-use crate::runtime_support::{
-    eval_string_expr, flatten_direct_call, module_has_selective_import_symbol, parse_pipeline,
-};
+use crate::runtime_support::{eval_string_expr, flatten_direct_call, parse_pipeline};
 use crate::runtime_value::{RuntimeLocals, RuntimeValue, runtime_value_option_eq};
 use goby_core::{
     CasePattern, Expr, HandlerClause, ListPatternItem, ListPatternTail, Module, Stmt,
@@ -56,6 +54,12 @@ const ERR_RESUME_CONSUMED: &str = "resume continuation already consumed [E-RESUM
 const ERR_RESUME_STACK_MISMATCH: &str = "internal resume token stack mismatch [E-RESUME-STACK-MISMATCH]: continuation token stack became unbalanced";
 const INTERNAL_ABORT_MARKER: &str = "__goby_runtime_abort__";
 const ERR_CALLABLE_DISPATCH_DECL_PARAM: &str = "unsupported callable dispatch [E-CALLABLE-DISPATCH]: callable parameter requires a lambda or function name argument";
+
+pub(crate) use crate::runtime_entry::resolve_main_runtime_output_with_mode;
+#[cfg(test)]
+pub(crate) use crate::runtime_entry::{
+    resolve_main_runtime_output, resolve_main_runtime_output_with_stdin,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 /// Error returned by [`compile_module`] when Wasm emission fails.
@@ -146,81 +150,6 @@ pub fn compile_module(module: &Module) -> Result<Vec<u8>, CodegenError> {
     Err(CodegenError {
         message: "main body contains unsupported constructs that cannot be lowered natively or resolved as static output".to_string(),
     })
-}
-
-#[cfg(test)]
-fn resolve_main_runtime_output(
-    module: &Module,
-    body: &str,
-    parsed_stmts: Option<&[Stmt]>,
-) -> Option<String> {
-    resolve_main_runtime_output_with_mode(
-        module,
-        body,
-        parsed_stmts,
-        lower::EffectExecutionMode::PortableFallback,
-    )
-}
-
-fn resolve_main_runtime_output_with_mode(
-    module: &Module,
-    body: &str,
-    parsed_stmts: Option<&[Stmt]>,
-    execution_mode: lower::EffectExecutionMode,
-) -> Option<String> {
-    resolve_main_runtime_output_with_mode_and_stdin(
-        module,
-        body,
-        parsed_stmts,
-        execution_mode,
-        None,
-    )
-}
-
-fn resolve_main_runtime_output_with_mode_and_stdin(
-    module: &Module,
-    body: &str,
-    parsed_stmts: Option<&[Stmt]>,
-    execution_mode: lower::EffectExecutionMode,
-    stdin_seed: Option<String>,
-) -> Option<String> {
-    let int_functions = collect_functions_with_result(module, "Int");
-    let list_functions = collect_functions_with_result(module, "List Int");
-    let unit_functions = collect_unit_functions(module);
-    let int_evaluator = IntEvaluator::root(&int_functions);
-    let list_evaluator = ListIntEvaluator::root(
-        &list_functions,
-        module_has_selective_import_symbol(module, "goby/list", "map"),
-    );
-    let evaluators = RuntimeEvaluators {
-        int: &int_evaluator,
-        list: &list_evaluator,
-        unit: &unit_functions,
-    };
-    RuntimeOutputResolver::resolve(
-        module,
-        body,
-        parsed_stmts,
-        &evaluators,
-        execution_mode,
-        stdin_seed,
-    )
-}
-
-#[cfg(test)]
-fn resolve_main_runtime_output_with_stdin(
-    module: &Module,
-    body: &str,
-    parsed_stmts: Option<&[Stmt]>,
-    stdin_text: &str,
-) -> Option<String> {
-    resolve_main_runtime_output_with_mode_and_stdin(
-        module,
-        body,
-        parsed_stmts,
-        lower::EffectExecutionMode::PortableFallback,
-        Some(stdin_text.to_string()),
-    )
 }
 
 pub(crate) struct RuntimeOutputResolver<'m> {
