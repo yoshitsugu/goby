@@ -15,6 +15,7 @@ mod parser_util;
 pub mod stdlib;
 pub mod str_util;
 pub mod typecheck;
+mod typecheck_annotation;
 mod typecheck_build;
 mod typecheck_check;
 mod typecheck_effect;

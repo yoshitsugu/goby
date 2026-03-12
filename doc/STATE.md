@@ -86,6 +86,9 @@ This file is a restart-safe snapshot for resuming work after context reset.
 - `F6.1` is now landed:
   - `crates/goby-core/src/typecheck_build.rs` owns type-environment construction, constructor/effect symbol injection, and global symbol insertion.
   - `crates/goby-core/src/typecheck.rs` now calls that build-phase module instead of carrying environment construction inline.
+- `F6.2` is now landed:
+  - `crates/goby-core/src/typecheck_annotation.rs` owns declaration/main annotation validation, handler-type validation, `can`-clause parsing helpers, and declaration annotation shape helpers.
+  - `crates/goby-core/src/typecheck.rs` now consumes that annotation-phase module instead of carrying annotation parsing inline.
 - Runtime model to preserve while refactoring:
   - `Out<T> = Done | Suspend | Escape | Err`
   - `Escape::WithScope { with_id, value }`
@@ -103,7 +106,7 @@ This file is a restart-safe snapshot for resuming work after context reset.
 ## Next Work
 
 - Start `Milestone F6`:
-  - continue with `F6.2` by extracting annotation/effect-clause validation helpers from `crates/goby-core/src/typecheck.rs`
+  - continue with `F6.3` by extracting type-expression to internal-type conversion helpers from `crates/goby-core/src/typecheck.rs`
   - keep `typecheck.rs` focused on orchestration plus phase contracts
 - After F6:
   - continue with `F7` (`typecheck_check.rs` concern split)

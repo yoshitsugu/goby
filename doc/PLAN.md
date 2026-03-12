@@ -750,7 +750,7 @@ Detailed implementation plan:
      - [x] Step F6.1: extract type-environment construction and global-symbol injection.
        - likely targets: `build_type_env`, `ensure_no_ambiguous_globals`, `inject_effect_symbols`, `inject_type_constructors`.
        - preferred destination: `typecheck_build.rs`.
-     - [ ] Step F6.2: extract annotation/effect-clause validation helpers.
+     - [x] Step F6.2: extract annotation/effect-clause validation helpers.
        - likely targets: `validate_type_annotation`, `validate_handler_type_expr`, `validate_effect_clause`, `strip_effect_clause`, `find_can_keyword_index`.
        - preferred destination: `typecheck_annotation.rs`.
      - [ ] Step F6.3: extract type-expression to internal-type conversion helpers.
@@ -766,6 +766,7 @@ Detailed implementation plan:
    - Progress note:
      - `typecheck_build.rs` now owns `build_type_env`, global-symbol insertion, import-backed symbol staging hookup, and constructor/effect symbol injection.
      - `typecheck.rs` now calls the build-phase module instead of carrying environment construction inline.
+     - `typecheck_annotation.rs` now owns declaration/main annotation validation, `can`-clause parsing helpers, and declaration annotation shape helpers.
 
 8. [ ] Milestone F7: decompose `crates/goby-core/src/typecheck_check.rs` by checking concern.
    - Goal:

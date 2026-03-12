@@ -5,6 +5,7 @@ use crate::{
     Module,
     ast::TypeDeclaration,
     typecheck::{TypecheckError, ty_from_annotation, ty_from_type_expr},
+    typecheck_annotation::strip_effect_clause,
     typecheck_env::{GlobalBinding, RecordTypeInfo, Ty, TypeEnv},
     typecheck_validate::inject_imported_symbols,
     types::parse_type_expr,
@@ -16,7 +17,7 @@ pub(crate) fn build_type_env(module: &Module, stdlib_root: &Path) -> TypeEnv {
     let mut record_types = HashMap::new();
     for decl in &module.declarations {
         if let Some(annotation) = decl.type_annotation.as_deref() {
-            let base = crate::typecheck::strip_effect_clause(annotation);
+            let base = strip_effect_clause(annotation);
             if let Some(ft) = crate::types::parse_function_type(base) {
                 let params: Vec<Ty> = ft.arguments.iter().map(|a| ty_from_annotation(a)).collect();
                 let result = ty_from_annotation(&ft.result);
