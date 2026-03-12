@@ -736,7 +736,8 @@ Detailed implementation plan:
      - `runtime_support.rs` now owns direct-call flattening, selective-import symbol lookup, simple pipeline parsing, and string-expression helpers.
      - `print_codegen.rs` now owns the print-only Wasm emission helper used by fallback static-output compilation.
      - `runtime_apply.rs` now owns declaration/value-call/binop helper methods that previously lived in the tail of the `RuntimeOutputResolver` impl.
-     - remaining `F5` work is to split the main evaluation/dispatch portions of `RuntimeOutputResolver` itself.
+     - `runtime_expr.rs` now owns expression/value evaluation, imported declaration value resolution, and continuation-to-value completion helpers from `RuntimeOutputResolver`.
+     - remaining `F5` work is to split the unit-position evaluation/dispatch path and leave `lib.rs` with orchestration-only runtime wiring.
 
 7. [ ] Milestone F6: split residual phase-building responsibilities out of `crates/goby-core/src/typecheck.rs`.
    - Goal:
