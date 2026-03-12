@@ -6,22 +6,25 @@ This file is a restart-safe snapshot for resuming work after context reset.
 
 ## Current Focus
 
-- No in-flight slice is currently recorded.
-- Resume from the next active runtime/stdlib milestone in `doc/PLAN.md`.
+- Planning slice recorded for Track D developer tooling.
+- `doc/PLAN.md` now contains a phased `goby-lsp` implementation plan under Active Track D.
 
 ## Current State
 
 - Compatibility cleanup backlog has been closed and removed from `doc/PLAN.md`.
-- This file is reset for the next development slice.
+- Next actionable tooling sequence is:
+  - machine-readable diagnostic/span hardening in `goby-core`,
+  - `crates/goby-lsp` workspace scaffold,
+  - LSP diagnostics/hover/definition MVP.
 
 ## Verified
 
-- No verification recorded for the next slice yet.
+- No code verification recorded for this planning-only update.
 
 ## Next Work
 
-- Choose the next active milestone from `doc/PLAN.md`.
-- Record new decisions and verification here once that slice starts.
+- Start Phase D1 from `doc/PLAN.md`: normalize diagnostics and close remaining source-span metadata gaps needed by LSP.
+- Record concrete crate/binary naming decisions once implementation starts.
 
 ## Notes
 

@@ -424,6 +424,74 @@ Acceptance criteria:
 
 - Formatter/linter commands and baseline LSP diagnostics are usable on `examples/` and stdlib sources.
 
+#### `goby-lsp` implementation plan
+
+Purpose:
+
+- make compiler diagnostics continuously available from editors without introducing a second analysis stack.
+- establish a minimal but extensible protocol boundary for later editor features (rename, references, completion).
+
+Non-goals for MVP:
+
+- project-wide symbol index across packages/workspaces.
+- semantic tokens, completion ranking, code actions, rename, references.
+- background build orchestration beyond single-file + directly loaded stdlib context.
+
+Architecture direction:
+
+- add a new workspace crate `crates/goby-lsp`.
+- reuse parser/typechecker/diagnostic machinery from `goby-core` as the single source of truth.
+- keep LSP-specific concerns isolated to:
+  - document lifecycle and text synchronization,
+  - span/offset conversion,
+  - protocol capability wiring,
+  - lightweight symbol lookup for hover/definition.
+- do not fork diagnostic formatting rules between CLI and LSP; instead introduce a shared structured-diagnostic layer if current CLI output is too string-oriented.
+
+Execution phases:
+
+1. Phase D1: Diagnostic substrate hardening
+   - audit current parse/typecheck/runtime-facing errors and normalize them into machine-readable diagnostics with stable severity, message, and source span.
+   - close the known metadata gap for type/effect declaration spans so editor diagnostics can point at declaration sites.
+   - define UTF-8 byte offset to LSP position conversion rules and cover multi-line / multi-byte text cases with tests.
+2. Phase D2: `goby-lsp` crate skeleton
+   - add `crates/goby-lsp` to the workspace with a stdio LSP server entrypoint.
+   - implement initialize / initialized / shutdown / exit.
+   - implement `textDocument/didOpen`, `didChange`, `didClose` with in-memory document storage.
+   - on open/change, re-run parse + typecheck for the active document and publish diagnostics.
+3. Phase D3: Single-file language intelligence MVP
+   - implement `textDocument/hover` for local bindings, top-level declarations, built-ins, and stdlib symbols that resolve through the current compilation context.
+   - implement `textDocument/definition` for identifiers resolvable within the current file or loaded stdlib source set.
+   - define clear fallback behavior: unresolved symbols return `null`, never best-effort guesses.
+4. Phase D4: Editor-facing hardening
+   - debounce or coalesce rapid document changes enough to avoid obviously redundant full recompilations.
+   - ensure diagnostics are cleared on close and replaced atomically on re-check.
+   - add fixture-based regression tests for malformed syntax, type errors, stdlib references, and hover/definition span accuracy.
+5. Phase D5: CLI/editor packaging alignment
+   - decide whether the long-term entrypoint is a standalone `goby-lsp` binary, a `goby lsp` subcommand, or both.
+   - document editor launch examples after protocol stability is proven.
+
+Ownership boundaries:
+
+- `goby-core` owns parsing, typing, source spans, symbol-resolution facts, and diagnostic data structures.
+- `goby-lsp` owns protocol transport, document versioning, publish-diagnostics flow, and protocol object translation.
+- avoid placing editor-only state or protocol types in `goby-core`.
+
+Suggested internal milestones:
+
+- M1: opening a `.gb` file in an editor yields parse/type diagnostics identical in substance to `goby-cli check`.
+- M2: hover returns type/signature information for local/top-level names.
+- M3: definition jumps work for same-file declarations and stdlib imports used by examples.
+- M4: the server is stable enough to wire into the existing VSCode extension or a minimal editor launch config.
+
+Definition of done for Track D LSP slice:
+
+- `cargo run -p goby-lsp` starts a functional stdio server.
+- opening/changing `examples/*.gb` publishes stable diagnostics with correct line/column mapping.
+- hover/definition work for the supported single-file + stdlib-backed subset.
+- regression tests cover offset conversion, diagnostic publication, and at least one hover/definition case.
+- remaining post-MVP gaps are documented explicitly before moving on to richer editor features.
+
 ### 4.4 Review Follow-ups (Backlog)
 
 The following items were identified in a focused code review and are tracked as
