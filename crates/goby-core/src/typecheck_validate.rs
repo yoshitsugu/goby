@@ -5,7 +5,8 @@ use crate::{
     Expr, ImportKind, Module, Span, Stmt,
     ast::InterpolatedPart,
     stdlib::{StdlibResolveError, StdlibResolver},
-    typecheck::{PRELUDE_MODULE_PATH, TypecheckError, insert_global_symbol, ty_from_annotation},
+    typecheck::{PRELUDE_MODULE_PATH, TypecheckError, ty_from_annotation},
+    typecheck_build::insert_global_symbol,
     typecheck_env::{GlobalBinding, ImportedEffectDecl, Ty},
     types::parse_function_type,
 };

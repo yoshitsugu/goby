@@ -83,6 +83,9 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - `typecheck_module_with_context` now sequences explicit validation, checking-state preparation,
     and declaration-body checking phases through dedicated helpers.
   - `Milestone F2` can be treated as complete; next work moves to `parser.rs`.
+- `F6.1` is now landed:
+  - `crates/goby-core/src/typecheck_build.rs` owns type-environment construction, constructor/effect symbol injection, and global symbol insertion.
+  - `crates/goby-core/src/typecheck.rs` now calls that build-phase module instead of carrying environment construction inline.
 - Runtime model to preserve while refactoring:
   - `Out<T> = Done | Suspend | Escape | Err`
   - `Escape::WithScope { with_id, value }`
@@ -100,7 +103,7 @@ This file is a restart-safe snapshot for resuming work after context reset.
 ## Next Work
 
 - Start `Milestone F6`:
-  - extract type-environment construction and global symbol injection from `crates/goby-core/src/typecheck.rs`
+  - continue with `F6.2` by extracting annotation/effect-clause validation helpers from `crates/goby-core/src/typecheck.rs`
   - keep `typecheck.rs` focused on orchestration plus phase contracts
 - After F6:
   - continue with `F7` (`typecheck_check.rs` concern split)

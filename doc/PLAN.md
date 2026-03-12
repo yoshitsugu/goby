@@ -747,7 +747,7 @@ Detailed implementation plan:
    - Why this milestone exists:
      - `typecheck.rs` is now phase-oriented, but still mixes orchestration with type-env building, type declaration validation, and annotation/type parsing helpers.
    - Planned extraction order:
-     - [ ] Step F6.1: extract type-environment construction and global-symbol injection.
+     - [x] Step F6.1: extract type-environment construction and global-symbol injection.
        - likely targets: `build_type_env`, `ensure_no_ambiguous_globals`, `inject_effect_symbols`, `inject_type_constructors`.
        - preferred destination: `typecheck_build.rs`.
      - [ ] Step F6.2: extract annotation/effect-clause validation helpers.
@@ -763,6 +763,9 @@ Detailed implementation plan:
    - Acceptance criteria:
      - `typecheck.rs` reads as orchestration plus phase wiring.
      - environment building and annotation parsing can be reviewed independently.
+   - Progress note:
+     - `typecheck_build.rs` now owns `build_type_env`, global-symbol insertion, import-backed symbol staging hookup, and constructor/effect symbol injection.
+     - `typecheck.rs` now calls the build-phase module instead of carrying environment construction inline.
 
 8. [ ] Milestone F7: decompose `crates/goby-core/src/typecheck_check.rs` by checking concern.
    - Goal:
