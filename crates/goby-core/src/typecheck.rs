@@ -13,8 +13,9 @@ use crate::{
 use crate::{
     BinOpKind,
     ast::Expr,
-    typecheck_check::{check_expr, infer_binding_ty_with_resume_context},
+    typecheck_check::check_expr,
     typecheck_env::{RecordTypeInfo, ResumeContext, Ty, TypeEnv},
+    typecheck_resume::infer_binding_ty_with_resume_context,
 };
 #[cfg(test)]
 use std::collections::HashMap;

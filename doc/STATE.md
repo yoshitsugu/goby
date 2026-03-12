@@ -95,6 +95,9 @@ This file is a restart-safe snapshot for resuming work after context reset.
 - `F6.4` is now landed:
   - `crates/goby-core/src/typecheck_phase.rs` owns validation/checking phase structs and the sequencing helpers used by `typecheck_module_with_context`.
   - `crates/goby-core/src/typecheck.rs` is now reduced to the public typecheck API, shared error type, and the identifier predicate reused by other phase modules.
+- `F7.1` is now landed:
+  - `crates/goby-core/src/typecheck_resume.rs` owns resume-context validation, local-env replay for handler bodies, and generic resume-substitution helpers.
+  - `crates/goby-core/src/typecheck_check.rs` now consumes that module instead of carrying resume validation inline.
 - Runtime model to preserve while refactoring:
   - `Out<T> = Done | Suspend | Escape | Err`
   - `Escape::WithScope { with_id, value }`
@@ -115,6 +118,7 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - `Milestone F6` can now be treated as complete
 - After F6:
   - continue with `F7` (`typecheck_check.rs` concern split)
+  - next up is `F7.2`: effect-usage and handler-coverage checking extraction
 
 ## Notes
 

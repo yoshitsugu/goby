@@ -777,9 +777,10 @@ Detailed implementation plan:
    - Why this milestone exists:
      - `typecheck_check.rs` now concentrates expression inference, resume validation, effect-usage checking, ambiguous-ref checks, branch consistency, substitution/unification, and type rendering.
    - Planned extraction order:
-     - [ ] Step F7.1: extract resume-context validation.
+     - [x] Step F7.1: extract resume-context validation.
        - likely targets: `check_resume_in_stmts`, `check_resume_in_expr`, `infer_binding_ty_with_resume_context`, related local-env helpers.
        - preferred destination: `typecheck_resume.rs`.
+       - landed in `typecheck_resume.rs`; resume validation and generic resume-substitution helpers now live outside `typecheck_check.rs`.
      - [ ] Step F7.2: extract effect-usage and handler-coverage checking.
        - likely targets: `check_unhandled_effects_in_expr`, callee-required-effect checks, handler coverage helpers.
        - preferred destination: `typecheck_effect_usage.rs`.

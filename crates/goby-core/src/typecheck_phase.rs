@@ -9,13 +9,14 @@ use crate::{
         validate_main_annotation,
     },
     typecheck_build::{build_type_env, ensure_no_ambiguous_globals},
-    typecheck_check::{check_body_stmts, check_resume_in_stmts},
+    typecheck_check::check_body_stmts,
     typecheck_effect::{
         build_effect_dependency_info, build_effect_map, build_required_effects_map,
         builtin_effect_names, ops_from_can_clause, validate_effect_declarations,
         validate_effect_dependency_cycles, validate_effect_member_effect_clauses,
     },
     typecheck_env::{EffectDependencyInfo, EffectMap, ImportedEffectDecl, Ty, TypeEnv},
+    typecheck_resume::check_resume_in_stmts,
     typecheck_types::validate_type_declarations,
     typecheck_validate::{
         collect_imported_effect_declarations, collect_imported_effect_names,
