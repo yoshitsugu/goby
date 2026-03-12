@@ -3,8 +3,9 @@ use std::collections::HashSet;
 use crate::{
     Module,
     ast::{Declaration, Span},
-    typecheck::{TypecheckError, is_identifier, ty_from_annotation},
+    typecheck::{TypecheckError, is_identifier},
     typecheck_env::Ty,
+    typecheck_types::ty_from_annotation,
     types::{TypeExpr, parse_function_type, parse_type_expr},
 };
 

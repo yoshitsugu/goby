@@ -20,6 +20,7 @@ mod typecheck_build;
 mod typecheck_check;
 mod typecheck_effect;
 mod typecheck_env;
+mod typecheck_types;
 mod typecheck_validate;
 pub mod types;
 

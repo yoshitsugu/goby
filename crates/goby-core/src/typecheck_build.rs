@@ -4,9 +4,10 @@ use std::path::Path;
 use crate::{
     Module,
     ast::TypeDeclaration,
-    typecheck::{TypecheckError, ty_from_annotation, ty_from_type_expr},
+    typecheck::TypecheckError,
     typecheck_annotation::strip_effect_clause,
     typecheck_env::{GlobalBinding, RecordTypeInfo, Ty, TypeEnv},
+    typecheck_types::{ty_from_annotation, ty_from_type_expr},
     typecheck_validate::inject_imported_symbols,
     types::parse_type_expr,
 };

@@ -5,9 +5,10 @@ use crate::{
     Expr, ImportKind, Module, Span, Stmt,
     ast::InterpolatedPart,
     stdlib::{StdlibResolveError, StdlibResolver},
-    typecheck::{PRELUDE_MODULE_PATH, TypecheckError, ty_from_annotation},
+    typecheck::{PRELUDE_MODULE_PATH, TypecheckError},
     typecheck_build::insert_global_symbol,
     typecheck_env::{GlobalBinding, ImportedEffectDecl, Ty},
+    typecheck_types::ty_from_annotation,
     types::parse_function_type,
 };
 

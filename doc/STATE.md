@@ -89,6 +89,9 @@ This file is a restart-safe snapshot for resuming work after context reset.
 - `F6.2` is now landed:
   - `crates/goby-core/src/typecheck_annotation.rs` owns declaration/main annotation validation, handler-type validation, `can`-clause parsing helpers, and declaration annotation shape helpers.
   - `crates/goby-core/src/typecheck.rs` now consumes that annotation-phase module instead of carrying annotation parsing inline.
+- `F6.3` is now landed:
+  - `crates/goby-core/src/typecheck_types.rs` owns type-declaration validation and type-expression to internal-`Ty` conversion helpers.
+  - `typecheck_build`, `typecheck_validate`, `typecheck_effect`, and `typecheck_annotation` now reuse that shared conversion layer instead of importing through `typecheck.rs`.
 - Runtime model to preserve while refactoring:
   - `Out<T> = Done | Suspend | Escape | Err`
   - `Escape::WithScope { with_id, value }`
@@ -106,7 +109,7 @@ This file is a restart-safe snapshot for resuming work after context reset.
 ## Next Work
 
 - Start `Milestone F6`:
-  - continue with `F6.3` by extracting type-expression to internal-type conversion helpers from `crates/goby-core/src/typecheck.rs`
+  - continue with `F6.4` by reducing `crates/goby-core/src/typecheck.rs` to orchestration plus minimal shared contracts
   - keep `typecheck.rs` focused on orchestration plus phase contracts
 - After F6:
   - continue with `F7` (`typecheck_check.rs` concern split)

@@ -753,9 +753,10 @@ Detailed implementation plan:
      - [x] Step F6.2: extract annotation/effect-clause validation helpers.
        - likely targets: `validate_type_annotation`, `validate_handler_type_expr`, `validate_effect_clause`, `strip_effect_clause`, `find_can_keyword_index`.
        - preferred destination: `typecheck_annotation.rs`.
-     - [ ] Step F6.3: extract type-expression to internal-type conversion helpers.
+    - [x] Step F6.3: extract type-expression to internal-type conversion helpers.
        - likely targets: `ty_from_annotation`, `ty_from_type_expr`, `ty_from_type_expr_with_holes`, `ty_from_name`, `is_type_variable_name`.
        - preferred destination: `typecheck_types.rs` or `typecheck_convert.rs`.
+       - landed in `typecheck_types.rs`; downstream validation/build/effect phases now depend on that shared conversion module.
      - [ ] Step F6.4: reduce `typecheck.rs` to orchestration + minimal phase contract definitions.
    - Constraints:
      - keep stdlib/path validation isolated from pure type conversion.

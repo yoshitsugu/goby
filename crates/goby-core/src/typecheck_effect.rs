@@ -2,9 +2,10 @@ use std::collections::{HashMap, HashSet};
 
 use crate::{
     Module,
-    typecheck::{TypecheckError, is_identifier, is_type_variable_name},
+    typecheck::{TypecheckError, is_identifier},
     typecheck_annotation::find_can_keyword_index,
     typecheck_env::{EffectDependencyInfo, EffectMap, ImportedEffectDecl},
+    typecheck_types::is_type_variable_name,
     types::{TypeExpr, parse_type_expr},
 };
 
