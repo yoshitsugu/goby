@@ -92,6 +92,9 @@ This file is a restart-safe snapshot for resuming work after context reset.
 - `F6.3` is now landed:
   - `crates/goby-core/src/typecheck_types.rs` owns type-declaration validation and type-expression to internal-`Ty` conversion helpers.
   - `typecheck_build`, `typecheck_validate`, `typecheck_effect`, and `typecheck_annotation` now reuse that shared conversion layer instead of importing through `typecheck.rs`.
+- `F6.4` is now landed:
+  - `crates/goby-core/src/typecheck_phase.rs` owns validation/checking phase structs and the sequencing helpers used by `typecheck_module_with_context`.
+  - `crates/goby-core/src/typecheck.rs` is now reduced to the public typecheck API, shared error type, and the identifier predicate reused by other phase modules.
 - Runtime model to preserve while refactoring:
   - `Out<T> = Done | Suspend | Escape | Err`
   - `Escape::WithScope { with_id, value }`
@@ -109,8 +112,7 @@ This file is a restart-safe snapshot for resuming work after context reset.
 ## Next Work
 
 - Start `Milestone F6`:
-  - continue with `F6.4` by reducing `crates/goby-core/src/typecheck.rs` to orchestration plus minimal shared contracts
-  - keep `typecheck.rs` focused on orchestration plus phase contracts
+  - `Milestone F6` can now be treated as complete
 - After F6:
   - continue with `F7` (`typecheck_check.rs` concern split)
 

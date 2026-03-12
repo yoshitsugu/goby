@@ -757,7 +757,8 @@ Detailed implementation plan:
        - likely targets: `ty_from_annotation`, `ty_from_type_expr`, `ty_from_type_expr_with_holes`, `ty_from_name`, `is_type_variable_name`.
        - preferred destination: `typecheck_types.rs` or `typecheck_convert.rs`.
        - landed in `typecheck_types.rs`; downstream validation/build/effect phases now depend on that shared conversion module.
-     - [ ] Step F6.4: reduce `typecheck.rs` to orchestration + minimal phase contract definitions.
+    - [x] Step F6.4: reduce `typecheck.rs` to orchestration + minimal phase contract definitions.
+      - landed by moving phase-state structs and validation/checking sequencing helpers into `typecheck_phase.rs`.
    - Constraints:
      - keep stdlib/path validation isolated from pure type conversion.
      - avoid circular dependencies between `typecheck.rs`, `typecheck_build.rs`, and `typecheck_annotation.rs`.
@@ -768,6 +769,7 @@ Detailed implementation plan:
      - `typecheck_build.rs` now owns `build_type_env`, global-symbol insertion, import-backed symbol staging hookup, and constructor/effect symbol injection.
      - `typecheck.rs` now calls the build-phase module instead of carrying environment construction inline.
      - `typecheck_annotation.rs` now owns declaration/main annotation validation, `can`-clause parsing helpers, and declaration annotation shape helpers.
+     - `typecheck_phase.rs` now owns validation/checking phase state and orchestration helpers; `typecheck.rs` is narrowed to public API, error type, and shared identifier predicate.
 
 8. [ ] Milestone F7: decompose `crates/goby-core/src/typecheck_check.rs` by checking concern.
    - Goal:

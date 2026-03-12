@@ -1,27 +1,11 @@
-use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use crate::{
     Module,
     ast::Span,
-    typecheck_annotation::{
-        annotation_return_ty, declaration_param_types, validate_declaration_annotations,
-        validate_main_annotation,
-    },
-    typecheck_build::{build_type_env, ensure_no_ambiguous_globals},
-    typecheck_check::{check_body_stmts, check_resume_in_stmts},
-    typecheck_effect::{
-        build_effect_dependency_info, build_effect_map, build_required_effects_map,
-        builtin_effect_names, ops_from_can_clause, validate_effect_declarations,
-        validate_effect_dependency_cycles, validate_effect_member_effect_clauses,
-    },
-    typecheck_env::{EffectDependencyInfo, EffectMap, ImportedEffectDecl, Ty, TypeEnv},
-    typecheck_types::validate_type_declarations,
-    typecheck_validate::{
-        collect_imported_effect_declarations, collect_imported_effect_names,
-        collect_imported_embedded_defaults, collect_imported_type_names,
-        collect_local_embedded_defaults, default_stdlib_root, validate_embed_declarations,
-        validate_imports, validate_intrinsic_namespace_policy, validate_no_ambiguous_effect_names,
+    typecheck_phase::{
+        build_checking_phase, check_declaration_bodies, default_typecheck_stdlib_root,
+        validate_module_phase,
     },
 };
 
@@ -30,8 +14,10 @@ use crate::{
     BinOpKind,
     ast::Expr,
     typecheck_check::{check_expr, infer_binding_ty_with_resume_context},
-    typecheck_env::{RecordTypeInfo, ResumeContext},
+    typecheck_env::{RecordTypeInfo, ResumeContext, Ty, TypeEnv},
 };
+#[cfg(test)]
+use std::collections::HashMap;
 
 pub(crate) const PRELUDE_MODULE_PATH: &str = "goby/prelude";
 
@@ -59,17 +45,6 @@ impl std::fmt::Display for TypecheckError {
 
 impl std::error::Error for TypecheckError {}
 
-struct ValidationPhase {
-    imported_effect_declarations: Vec<ImportedEffectDecl>,
-}
-
-struct CheckingPhase {
-    env: TypeEnv,
-    effect_map: EffectMap,
-    effect_dependency_info: EffectDependencyInfo,
-    required_effects_map: HashMap<String, Vec<String>>,
-}
-
 pub fn typecheck_module(module: &Module) -> Result<(), TypecheckError> {
     typecheck_module_with_context(module, None, None)
 }
@@ -79,114 +54,10 @@ pub fn typecheck_module_with_context(
     source_path: Option<&Path>,
     stdlib_root: Option<&Path>,
 ) -> Result<(), TypecheckError> {
-    let stdlib_root_path = stdlib_root
-        .map(Path::to_path_buf)
-        .unwrap_or_else(default_stdlib_root);
+    let stdlib_root_path = default_typecheck_stdlib_root(stdlib_root);
     let validation = validate_module_phase(module, source_path, stdlib_root, &stdlib_root_path)?;
     let checking = build_checking_phase(module, &stdlib_root_path, &validation)?;
     check_declaration_bodies(module, &checking)
-}
-
-fn validate_module_phase(
-    module: &Module,
-    source_path: Option<&Path>,
-    stdlib_root: Option<&Path>,
-    stdlib_root_path: &Path,
-) -> Result<ValidationPhase, TypecheckError> {
-    validate_intrinsic_namespace_policy(module, source_path, stdlib_root_path)?;
-    validate_imports(module, stdlib_root_path)?;
-    validate_embed_declarations(module, source_path, stdlib_root)?;
-    let imported_types = collect_imported_type_names(module, stdlib_root_path);
-    validate_type_declarations(module, &imported_types)?;
-    validate_effect_declarations(module)?;
-
-    let imported_embedded_defaults = collect_imported_embedded_defaults(module, stdlib_root_path)?;
-    let imported_effect_declarations =
-        collect_imported_effect_declarations(module, stdlib_root_path);
-    validate_no_ambiguous_effect_names(&imported_effect_declarations, &module.effect_declarations)?;
-    let known_effects = known_effects(module, stdlib_root_path);
-    let embedded_default_effects = embedded_default_effects(module, &imported_embedded_defaults);
-    validate_effect_member_effect_clauses(module, &known_effects)?;
-    validate_effect_dependency_cycles(module)?;
-    validate_declaration_annotations(module, &known_effects, &embedded_default_effects)?;
-    validate_main_annotation(module)?;
-    Ok(ValidationPhase {
-        imported_effect_declarations,
-    })
-}
-
-fn build_checking_phase(
-    module: &Module,
-    stdlib_root_path: &Path,
-    validation: &ValidationPhase,
-) -> Result<CheckingPhase, TypecheckError> {
-    let env = build_type_env(module, stdlib_root_path);
-    ensure_no_ambiguous_globals(&env)?;
-    let effect_map = build_effect_map(module, &validation.imported_effect_declarations);
-    let effect_dependency_info =
-        build_effect_dependency_info(module, &validation.imported_effect_declarations);
-    let required_effects_map = build_required_effects_map(module);
-    Ok(CheckingPhase {
-        env,
-        effect_map,
-        effect_dependency_info,
-        required_effects_map,
-    })
-}
-
-fn check_declaration_bodies(
-    module: &Module,
-    checking: &CheckingPhase,
-) -> Result<(), TypecheckError> {
-    for decl in &module.declarations {
-        let Some(stmts) = &decl.parsed_body else {
-            continue;
-        };
-        let declared_return_ty = decl.type_annotation.as_deref().map(annotation_return_ty);
-        let param_tys = declaration_param_types(decl)?;
-        let param_ty_refs: Vec<(&str, Ty)> = param_tys
-            .iter()
-            .map(|(name, ty)| (name.as_str(), ty.clone()))
-            .collect();
-        let decl_covered_ops =
-            ops_from_can_clause(decl.type_annotation.as_deref(), &checking.effect_map);
-        check_resume_in_stmts(stmts, &checking.env, &decl.name, &param_ty_refs, None)?;
-        check_body_stmts(
-            stmts,
-            &checking.env,
-            &checking.effect_map,
-            &checking.effect_dependency_info,
-            &checking.required_effects_map,
-            &decl.name,
-            declared_return_ty,
-            &param_ty_refs,
-            &decl_covered_ops,
-        )?;
-    }
-    Ok(())
-}
-
-fn known_effects(module: &Module, stdlib_root_path: &Path) -> HashSet<String> {
-    let imported_effects = collect_imported_effect_names(module, stdlib_root_path);
-    builtin_effect_names()
-        .iter()
-        .copied()
-        .map(str::to_string)
-        .chain(imported_effects)
-        .chain(module.effect_declarations.iter().map(|e| e.name.clone()))
-        .collect()
-}
-
-fn embedded_default_effects(
-    module: &Module,
-    imported_embedded_defaults: &HashMap<String, String>,
-) -> HashSet<String> {
-    let local_embedded_defaults = collect_local_embedded_defaults(module);
-    imported_embedded_defaults
-        .keys()
-        .cloned()
-        .chain(local_embedded_defaults.keys().cloned())
-        .collect()
 }
 
 pub(crate) fn is_identifier(s: &str) -> bool {
