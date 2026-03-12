@@ -737,7 +737,8 @@ Detailed implementation plan:
      - `print_codegen.rs` now owns the print-only Wasm emission helper used by fallback static-output compilation.
      - `runtime_apply.rs` now owns declaration/value-call/binop helper methods that previously lived in the tail of the `RuntimeOutputResolver` impl.
      - `runtime_expr.rs` now owns expression/value evaluation, imported declaration value resolution, and continuation-to-value completion helpers from `RuntimeOutputResolver`.
-     - remaining `F5` work is to split the unit-position evaluation/dispatch path and leave `lib.rs` with orchestration-only runtime wiring.
+     - `runtime_unit.rs` now owns unit-position expression execution and side-effect dispatch from `RuntimeOutputResolver`.
+     - remaining `F5` work is to finish reducing `lib.rs` to orchestration-only runtime wiring and decide whether `F5.4` needs a small entrypoint cleanup patch.
 
 7. [ ] Milestone F6: split residual phase-building responsibilities out of `crates/goby-core/src/typecheck.rs`.
    - Goal:
