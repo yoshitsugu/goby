@@ -781,9 +781,10 @@ Detailed implementation plan:
        - likely targets: `check_resume_in_stmts`, `check_resume_in_expr`, `infer_binding_ty_with_resume_context`, related local-env helpers.
        - preferred destination: `typecheck_resume.rs`.
        - landed in `typecheck_resume.rs`; resume validation and generic resume-substitution helpers now live outside `typecheck_check.rs`.
-     - [ ] Step F7.2: extract effect-usage and handler-coverage checking.
+     - [x] Step F7.2: extract effect-usage and handler-coverage checking.
        - likely targets: `check_unhandled_effects_in_expr`, callee-required-effect checks, handler coverage helpers.
        - preferred destination: `typecheck_effect_usage.rs`.
+       - landed in `typecheck_effect_usage.rs`; effect dispatch coverage and required-effect checks now sit outside `typecheck_check.rs`.
      - [ ] Step F7.3: extract ambiguity and branch-consistency checking.
        - likely targets: `ensure_no_ambiguous_refs_in_expr`, `ensure_no_ambiguous_refs_in_stmts`, `check_branch_type_consistency_in_expr`, `check_branch_type_consistency_in_stmts`.
        - preferred destination: `typecheck_ambiguity.rs` and/or `typecheck_branch.rs`.

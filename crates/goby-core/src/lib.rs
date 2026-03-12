@@ -19,6 +19,7 @@ mod typecheck_annotation;
 mod typecheck_build;
 mod typecheck_check;
 mod typecheck_effect;
+mod typecheck_effect_usage;
 mod typecheck_env;
 mod typecheck_phase;
 mod typecheck_resume;

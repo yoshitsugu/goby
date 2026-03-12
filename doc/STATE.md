@@ -98,6 +98,9 @@ This file is a restart-safe snapshot for resuming work after context reset.
 - `F7.1` is now landed:
   - `crates/goby-core/src/typecheck_resume.rs` owns resume-context validation, local-env replay for handler bodies, and generic resume-substitution helpers.
   - `crates/goby-core/src/typecheck_check.rs` now consumes that module instead of carrying resume validation inline.
+- `F7.2` is now landed:
+  - `crates/goby-core/src/typecheck_effect_usage.rs` owns effect-usage checking, handler coverage validation, and required-effect enforcement.
+  - `crates/goby-core/src/typecheck_check.rs` now calls that module instead of mixing effect semantics into the general checking file.
 - Runtime model to preserve while refactoring:
   - `Out<T> = Done | Suspend | Escape | Err`
   - `Escape::WithScope { with_id, value }`
@@ -118,7 +121,7 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - `Milestone F6` can now be treated as complete
 - After F6:
   - continue with `F7` (`typecheck_check.rs` concern split)
-  - next up is `F7.2`: effect-usage and handler-coverage checking extraction
+  - next up is `F7.3`: ambiguity and branch-consistency extraction
 
 ## Notes
 
