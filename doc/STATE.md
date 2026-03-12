@@ -107,6 +107,9 @@ This file is a restart-safe snapshot for resuming work after context reset.
 - `F7.4` is now landed:
   - `crates/goby-core/src/typecheck_unify.rs` owns type substitution, unification, fresh type-variable instantiation, and shared type-hole diagnostics.
   - `typecheck_resume` and `typecheck_effect_usage` now depend on that common unification layer instead of coupling through one checking phase file.
+- `F7.5` is now landed:
+  - `crates/goby-core/src/typecheck_check.rs` now keeps `check_expr` and `check_body_stmts` as thin top-level entrypoints over smaller helper layers.
+  - statement-sequence checking, per-statement validation, and return-type validation are now explicit internal steps instead of being inlined in one long entry function.
 - Runtime model to preserve while refactoring:
   - `Out<T> = Done | Suspend | Escape | Err`
   - `Escape::WithScope { with_id, value }`
@@ -127,7 +130,8 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - `Milestone F6` can now be treated as complete
 - After F6:
   - continue with `F7` (`typecheck_check.rs` concern split)
-  - next up is `F7.5`: keep `check_expr` / `check_body_stmts` as the thin top-level entrypoints over split helpers
+  - `Milestone F7` can now be treated as complete
+  - next up is `F8`: boundary hardening and post-split cleanup
 
 ## Notes
 

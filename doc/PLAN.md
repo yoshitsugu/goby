@@ -793,7 +793,8 @@ Detailed implementation plan:
        - likely targets: `TypeSubst` application/binding/unification/instantiation helpers.
        - preferred destination if worthwhile: `typecheck_unify.rs`.
        - landed in `typecheck_unify.rs`; resume/effect-usage phases now share explicit unification helpers instead of reusing `typecheck_resume.rs` as an accidental common layer.
-     - [ ] Step F7.5: keep `check_expr` / `check_body_stmts` as explicit top-level checking entrypoints over smaller helpers.
+     - [x] Step F7.5: keep `check_expr` / `check_body_stmts` as explicit top-level checking entrypoints over smaller helpers.
+       - landed by reducing both entrypoints to orchestration over internal helper layers (`infer_expr_ty`, statement-sequence checking, return-type validation).
    - Constraints:
      - do not create opaque “semantic helpers” modules; each new file must have a specific rule family.
      - preserve diagnostic wording and current effect semantics unless a separate task intentionally changes them.
