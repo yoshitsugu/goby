@@ -716,7 +716,7 @@ Detailed implementation plan:
     - [x] Step F5.2: extract print-only codegen helper cluster.
        - likely targets: `compile_print_module` and any print-module-only layout/encoding helpers.
        - preferred destination: `print_codegen.rs` or `compile_print.rs`.
-     - [ ] Step F5.3: split `RuntimeOutputResolver` by behavior phase instead of leaving one giant `impl`.
+    - [ ] Step F5.3: split `RuntimeOutputResolver` by behavior phase instead of leaving one giant `impl`.
        - likely seams:
          - expression/value evaluation glue
          - imported declaration resolution
@@ -735,7 +735,8 @@ Detailed implementation plan:
    - Progress note:
      - `runtime_support.rs` now owns direct-call flattening, selective-import symbol lookup, simple pipeline parsing, and string-expression helpers.
      - `print_codegen.rs` now owns the print-only Wasm emission helper used by fallback static-output compilation.
-     - remaining `F5` work is the large `RuntimeOutputResolver` impl split.
+     - `runtime_apply.rs` now owns declaration/value-call/binop helper methods that previously lived in the tail of the `RuntimeOutputResolver` impl.
+     - remaining `F5` work is to split the main evaluation/dispatch portions of `RuntimeOutputResolver` itself.
 
 7. [ ] Milestone F6: split residual phase-building responsibilities out of `crates/goby-core/src/typecheck.rs`.
    - Goal:
