@@ -789,9 +789,10 @@ Detailed implementation plan:
        - likely targets: `ensure_no_ambiguous_refs_in_expr`, `ensure_no_ambiguous_refs_in_stmts`, `check_branch_type_consistency_in_expr`, `check_branch_type_consistency_in_stmts`.
        - preferred destination: `typecheck_ambiguity.rs` and/or `typecheck_branch.rs`.
        - landed in `typecheck_ambiguity.rs` and `typecheck_branch.rs`; `typecheck_check.rs` now delegates these rule families instead of hosting them inline.
-     - [ ] Step F7.4: evaluate whether type substitution/unification deserves its own internal module.
+     - [x] Step F7.4: evaluate whether type substitution/unification deserves its own internal module.
        - likely targets: `TypeSubst` application/binding/unification/instantiation helpers.
        - preferred destination if worthwhile: `typecheck_unify.rs`.
+       - landed in `typecheck_unify.rs`; resume/effect-usage phases now share explicit unification helpers instead of reusing `typecheck_resume.rs` as an accidental common layer.
      - [ ] Step F7.5: keep `check_expr` / `check_body_stmts` as explicit top-level checking entrypoints over smaller helpers.
    - Constraints:
      - do not create opaque “semantic helpers” modules; each new file must have a specific rule family.

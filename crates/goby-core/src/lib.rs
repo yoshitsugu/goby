@@ -26,6 +26,7 @@ mod typecheck_env;
 mod typecheck_phase;
 mod typecheck_resume;
 mod typecheck_types;
+mod typecheck_unify;
 mod typecheck_validate;
 pub mod types;
 

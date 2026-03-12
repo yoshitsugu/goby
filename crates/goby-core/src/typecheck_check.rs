@@ -6,7 +6,7 @@ use crate::typecheck_ambiguity::ensure_no_ambiguous_refs_in_expr;
 use crate::typecheck_branch::check_branch_type_consistency_in_expr;
 use crate::typecheck_effect_usage::check_unhandled_effects_in_expr;
 use crate::typecheck_env::{EffectDependencyInfo, EffectMap, GlobalBinding, Ty, TypeEnv};
-use crate::typecheck_resume::ty_contains_type_var;
+use crate::typecheck_unify::ty_contains_type_var;
 
 pub(crate) fn check_expr(expr: &Expr, env: &TypeEnv) -> Ty {
     match expr {

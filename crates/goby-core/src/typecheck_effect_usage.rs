@@ -7,7 +7,7 @@ use crate::typecheck_check::{
     check_body_stmts, check_expr, env_with_case_pattern_bindings, ty_name,
 };
 use crate::typecheck_env::{EffectDependencyInfo, EffectMap, Ty, TypeEnv, TypeSubst};
-use crate::typecheck_resume::{
+use crate::typecheck_unify::{
     apply_type_substitution, instantiate_handler_clause_signature, ty_contains_type_var,
     type_hole_conflict_note, unify_types_with_subst,
 };
