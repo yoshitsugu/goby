@@ -802,7 +802,7 @@ Detailed implementation plan:
      - no single checking file becomes the default dump site for unrelated semantic rules.
      - rule families can be tested and reviewed independently.
 
-9. [ ] Milestone F8: close the second maintainability pass with boundary hardening.
+9. [x] Milestone F8: close the second maintainability pass with boundary hardening.
    - Goal:
      - ensure the second extraction wave leaves stable internal contracts instead of another temporary arrangement.
    - Planned work:
@@ -828,6 +828,10 @@ Detailed implementation plan:
      - [x] Step F8.7: move residual runtime behavior/data-shape regression tests out of `goby-wasm/src/lib.rs`.
        - landed in `crates/goby-wasm/src/runtime_behavior_tests.rs`.
        - `lib.rs` test ownership is now reduced to compile smoke coverage instead of also hosting general runtime behavior integration checks.
+     - [x] Step F8.8: re-review remaining large files and stop where further splits would weaken cohesion.
+       - review result:
+         `crates/goby-wasm/src/lib.rs` is down to compile orchestration/state definition plus compile smoke tests, so it no longer needs another Track F split.
+         `crates/goby-core/src/typecheck_check.rs` still has expression-centric helper logic, but the remaining functions share one inference layer and would introduce tighter coupling if split further.
      - re-review file sizes and dependency directions after F5-F7.
      - move any new subsystem-specific tests beside owned modules.
      - remove temporary helpers introduced only to make moves compile.

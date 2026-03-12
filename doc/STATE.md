@@ -6,12 +6,12 @@ This file is a restart-safe snapshot for resuming work after context reset.
 
 ## Current Focus
 
-- Active work is again `doc/PLAN.md` Track F: maintainability hardening.
+- `doc/PLAN.md` Track F second maintainability pass is complete.
 - `Milestone F1` (`goby-wasm` split) is complete.
 - `Milestone F2` (`goby-core` typecheck split) is complete.
 - `Milestone F3` (`goby-core` parser split) is complete.
 - `Milestone F4` (post-extraction cleanup) is complete.
-- New focus is the second maintainability pass:
+- The latest closure point was:
   - `Milestone F6`: split residual responsibilities from `typecheck.rs`
   - `Milestone F7`: decompose `typecheck_check.rs`
   - `Milestone F8`: boundary hardening and post-split cleanup
@@ -133,6 +133,9 @@ This file is a restart-safe snapshot for resuming work after context reset.
 - `F8.7` is now landed:
   - residual runtime behavior, data-shape replay, and block-evaluation regression tests now live in `crates/goby-wasm/src/runtime_behavior_tests.rs`.
   - `crates/goby-wasm/src/lib.rs` test ownership is now narrowed to compile smoke coverage.
+- `F8.8` review is now landed:
+  - `crates/goby-wasm/src/lib.rs` is down to compile orchestration/state definition plus compile smoke tests and is no longer a Track F hotspot.
+  - `crates/goby-core/src/typecheck_check.rs` remains expression-centric; its remaining helpers are cohesive enough that another split would mostly create cross-module coupling.
 - Runtime model to preserve while refactoring:
   - `Out<T> = Done | Suspend | Escape | Err`
   - `Escape::WithScope { with_id, value }`
@@ -159,11 +162,9 @@ This file is a restart-safe snapshot for resuming work after context reset.
 
 ## Next Work
 
-- `F8.1`, `F8.2`, `F8.3`, `F8.4`, `F8.5`, `F8.6`, and `F8.7` are complete.
-- Continue `Milestone F8` with:
-  - boundary review for remaining large files (`goby-wasm/src/lib.rs`, `typecheck_check.rs`)
-  - relocation of any remaining subsystem-specific regression tests to owned modules
-  - cleanup of temporary cross-module helpers that are no longer carrying distinct logic
+- `F8.1`, `F8.2`, `F8.3`, `F8.4`, `F8.5`, `F8.6`, `F8.7`, and `F8.8` are complete.
+- Track F can now be treated as closed again.
+- Next work should come from a new feature/behavior milestone rather than more forced decomposition of the current expression/runtime layers.
 
 ## Notes
 
