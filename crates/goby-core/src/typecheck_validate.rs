@@ -15,63 +15,42 @@ use crate::{
 pub(crate) fn validate_imports(module: &Module, stdlib_root: &Path) -> Result<(), TypecheckError> {
     let resolver = StdlibResolver::new(stdlib_root.to_path_buf());
     for import in effective_imports(module, &resolver) {
-        match resolver.resolve_module(&import.module_path) {
-            Ok(resolved) => {
-                if let ImportKind::Selective(names) = &import.kind {
-                    for name in names {
-                        let exists = resolved.exports.contains_key(name)
-                            || resolved.types.iter().any(|ty| ty == name)
-                            || resolved.effects.iter().any(|effect| effect == name);
-                        if !exists {
-                            return Err(TypecheckError {
-                                declaration: None,
-                                span: None,
-                                message: format!(
-                                    "unknown symbol `{}` in import from `{}`",
-                                    name, import.module_path
-                                ),
-                            });
-                        }
-                    }
-                }
-            }
-            Err(StdlibResolveError::ModuleNotFound { attempted_path, .. }) => {
-                let Some(exports) = builtin_module_exports(&import.module_path) else {
-                    return Err(TypecheckError {
-                        declaration: None,
-                        span: None,
-                        message: format!(
-                            "unknown module `{}` (attempted stdlib path: {})",
-                            import.module_path,
-                            attempted_path.display()
-                        ),
-                    });
-                };
-                if let ImportKind::Selective(names) = &import.kind {
-                    for name in names {
-                        if !exports.contains_key(name.as_str()) {
-                            return Err(TypecheckError {
-                                declaration: None,
-                                span: None,
-                                message: format!(
-                                    "unknown symbol `{}` in import from `{}`",
-                                    name, import.module_path
-                                ),
-                            });
-                        }
-                    }
-                }
-            }
-            Err(err) => {
-                return Err(TypecheckError {
-                    declaration: None,
-                    span: None,
-                    message: format!(
+        let resolved = resolver
+            .resolve_module(&import.module_path)
+            .map_err(|err| {
+                let message = match err {
+                    StdlibResolveError::ModuleNotFound { attempted_path, .. } => format!(
+                        "unknown module `{}` (attempted stdlib path: {})",
+                        import.module_path,
+                        attempted_path.display()
+                    ),
+                    _ => format!(
                         "failed to resolve stdlib module `{}`: {}",
                         import.module_path,
                         stdlib_error_message(&err)
                     ),
-                });
+                };
+                TypecheckError {
+                    declaration: None,
+                    span: None,
+                    message,
+                }
+            })?;
+        if let ImportKind::Selective(names) = &import.kind {
+            for name in names {
+                let exists = resolved.exports.contains_key(name)
+                    || resolved.types.iter().any(|ty| ty == name)
+                    || resolved.effects.iter().any(|effect| effect == name);
+                if !exists {
+                    return Err(TypecheckError {
+                        declaration: None,
+                        span: None,
+                        message: format!(
+                            "unknown symbol `{}` in import from `{}`",
+                            name, import.module_path
+                        ),
+                    });
+                }
             }
         }
     }
@@ -460,24 +439,15 @@ pub(crate) fn module_exports_for_import_with_resolver(
             .into_iter()
             .map(|(name, annotation)| (name, ty_from_import_annotation(&annotation)))
             .collect()),
-        Err(StdlibResolveError::ModuleNotFound { attempted_path, .. }) => {
-            builtin_module_exports(module_path)
-                .map(|builtin| {
-                    builtin
-                        .into_iter()
-                        .map(|(name, ty)| (name.to_string(), ty))
-                        .collect()
-                })
-                .ok_or_else(|| TypecheckError {
-                    declaration: None,
-                    span: None,
-                    message: format!(
-                        "unknown module `{}` (attempted stdlib path: {})",
-                        module_path,
-                        attempted_path.display()
-                    ),
-                })
-        }
+        Err(StdlibResolveError::ModuleNotFound { attempted_path, .. }) => Err(TypecheckError {
+            declaration: None,
+            span: None,
+            message: format!(
+                "unknown module `{}` (attempted stdlib path: {})",
+                module_path,
+                attempted_path.display()
+            ),
+        }),
         Err(err) => Err(TypecheckError {
             declaration: None,
             span: None,
@@ -728,39 +698,4 @@ fn strip_effect_clause(annotation: &str) -> &str {
     } else {
         annotation
     }
-}
-
-fn builtin_module_exports(module_path: &str) -> Option<HashMap<&'static str, Ty>> {
-    let mut exports = HashMap::new();
-    match module_path {
-        "goby/string" => {
-            exports.insert(
-                "split",
-                Ty::Fun {
-                    params: vec![Ty::Str, Ty::Str],
-                    result: Box::new(Ty::List(Box::new(Ty::Str))),
-                },
-            );
-        }
-        "goby/list" => {
-            exports.insert(
-                "join",
-                Ty::Fun {
-                    params: vec![Ty::List(Box::new(Ty::Str)), Ty::Str],
-                    result: Box::new(Ty::Str),
-                },
-            );
-        }
-        "goby/env" => {
-            exports.insert(
-                "fetch_env_var",
-                Ty::Fun {
-                    params: vec![Ty::Str],
-                    result: Box::new(Ty::Str),
-                },
-            );
-        }
-        _ => return None,
-    }
-    Some(exports)
 }

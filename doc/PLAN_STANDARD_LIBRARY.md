@@ -227,13 +227,13 @@ Step 3: Export map extraction
 
 Step 4: Integrate import validation (read path only)
 
-- Switch `validate_imports` to use resolver first, then builtin fallback.
+- Switch `validate_imports` to use resolver-backed stdlib files as the only source of truth.
 - Keep symbol injection path unchanged in this step.
 - Exit criteria: unknown-module/symbol diagnostics remain stable.
 
 Step 5: Integrate symbol injection
 
-- Switch `inject_imported_symbols` to resolver-first, builtin fallback.
+- Switch `inject_imported_symbols` to resolver-backed stdlib files only.
 - Keep ambiguity/collision behavior unchanged.
 - Exit criteria: existing import collision tests remain green.
 
@@ -318,8 +318,8 @@ Step 12: print migration handoff checkpoint
 
 ## 10. Risks and Mitigations
 
-Risk: import behavior drift between file-based and built-in fallback.
-Mitigation: table-driven parity tests for shared modules/symbols.
+Risk: import behavior drift between checked-in stdlib files and importer expectations.
+Mitigation: table-driven resolver/typecheck tests over real `stdlib/goby/*.gb` modules.
 
 Risk: ambiguous symbol diagnostics regress during resolver integration.
 Mitigation: retain current global symbol insertion and ambiguity logic.
@@ -335,7 +335,7 @@ Checkpoint 1:
 
 Checkpoint 2:
 
-- Typechecker imports use resolver (with fallback), existing tests green.
+- Typechecker imports use resolver-backed stdlib files only; missing stdlib modules fail clearly.
 
 Checkpoint 3:
 
@@ -361,7 +361,7 @@ Checkpoint 6:
 ## 12. Definition of Done
 
 - File-based stdlib import resolution for `goby/...` is implemented and tested.
-- Legacy fallback remains available and verified during transition.
+- Missing stdlib modules now fail explicitly instead of falling back to builtin export tables.
 - Existing import examples and tests pass unchanged.
 - `goby/stdio` is available as stdlib module, and `print` migration status is explicitly tracked.
 - `@embed` is supported for stdlib modules only and rejected elsewhere.

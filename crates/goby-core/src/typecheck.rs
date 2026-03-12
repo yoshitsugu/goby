@@ -1519,23 +1519,16 @@ main = ()
     }
 
     #[test]
-    fn resolver_falls_back_to_builtin_exports_when_file_missing() {
+    fn resolver_reports_missing_stdlib_module_when_file_is_missing() {
         let sandbox = TempDirGuard::new("resolver_fallback");
         let resolver = StdlibResolver::new(sandbox.path.join("stdlib"));
-        let exports = crate::typecheck_validate::module_exports_for_import_with_resolver(
+        let err = crate::typecheck_validate::module_exports_for_import_with_resolver(
             "goby/env", &resolver,
         )
-        .expect("builtin fallback should resolve");
-        let ty = exports
-            .get("fetch_env_var")
-            .expect("fetch_env_var should be available from builtin fallback");
-        assert_eq!(
-            ty,
-            &Ty::Fun {
-                params: vec![Ty::Str],
-                result: Box::new(Ty::Str),
-            }
-        );
+        .expect_err("missing stdlib file should fail");
+        assert!(err.message.contains("unknown module `goby/env`"));
+        assert!(err.message.contains("attempted stdlib path"));
+        assert!(err.message.contains("goby/env.gb"));
     }
 
     #[test]

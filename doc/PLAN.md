@@ -363,23 +363,23 @@ removed in a deliberate order after active language/runtime work.
   - legacy `with_handler`
   - expression-form `Unit` value
   - legacy `@embed effect <EffectName>`
+  - stdlib import builtin fallback for missing `goby/...` modules
 - Remaining compatibility bridges to remove later:
-  - [ ] C1. stdlib import builtin fallback
+  - [x] C1. stdlib import builtin fallback
     - current status:
       - file-based stdlib is now present for `goby/env`, `goby/int`, `goby/iterator`,
         `goby/list`, `goby/prelude`, `goby/stdio`, and `goby/string`.
-      - `validate_imports` and imported-symbol injection still fall back to
-        `builtin_module_exports(...)` when the resolver reports `ModuleNotFound`.
-      - current builtin-fallback-covered modules are still only `goby/string`,
-        `goby/list`, and `goby/env`, so missing-file regressions for those modules can
-        still be masked.
+      - `validate_imports`, imported-symbol injection, and
+        `module_exports_for_import_with_resolver` now use resolver-backed stdlib files only.
+      - missing stdlib modules now fail with an explicit attempted-path diagnostic instead of
+        silently falling back to builtin export tables.
     - code anchors:
       - `crates/goby-core/src/typecheck_validate.rs`:
-        `validate_imports`, `inject_imported_symbols`,
-        `module_exports_for_import_with_resolver`, `builtin_module_exports`
-    - removal target:
-      - make stdlib file resolution the single source of truth for import/export visibility.
-      - fail clearly when a stdlib module file is missing instead of silently using builtin exports.
+        `validate_imports`, `inject_imported_symbols`, `module_exports_for_import_with_resolver`
+      - `crates/goby-core/src/typecheck.rs`:
+        `resolver_reports_missing_stdlib_module_when_file_is_missing`
+    - completion note:
+      - C1 is complete; follow-up cleanup now belongs under C3 doc/test pruning rather than import-resolution behavior.
   - [ ] C2. bare builtin `print` availability without import
     - current status:
       - typecheck still injects bare `print` into the global environment even without
@@ -398,18 +398,17 @@ removed in a deliberate order after active language/runtime work.
       - if removed, replace compatibility tests with explicit-prelude/import coverage.
   - [ ] C3. builtin fallback tests and migration assumptions
     - current status:
-      - tests now cover both resolver-first behavior and builtin fallback when stdlib files
-        are absent.
-      - planning docs still describe builtin fallback as an active migration bridge even
-        though the stdlib file set is largely in place.
+      - focused tests now cover resolver-first behavior and explicit failure when stdlib files
+        are absent; the old builtin-fallback assertion has been removed.
+      - some planning docs still describe builtin fallback as an active migration bridge.
     - code anchors:
       - `crates/goby-core/src/typecheck.rs`
         (`resolver_first_prefers_file_based_stdlib_exports`,
-        `resolver_falls_back_to_builtin_exports_when_file_missing`)
+        `resolver_reports_missing_stdlib_module_when_file_is_missing`)
       - `doc/PLAN_STANDARD_LIBRARY.md`
     - removal target:
-      - flip tests from "fallback works" to "missing stdlib fails clearly" once C1 is removed.
-      - trim obsolete migration wording from standard-library planning docs.
+      - finish trimming obsolete builtin-fallback wording from standard-library planning docs.
+      - keep resolver-first and missing-module diagnostics coverage as the steady-state tests.
   - [ ] C4. embedded default handler / runtime bridge revalidation after C1-C3
     - current status:
       - embedded default handlers are current semantics, not legacy syntax.
@@ -448,10 +447,9 @@ removed in a deliberate order after active language/runtime work.
       - existing `Print` / `Read` end-to-end tests still pass under both fallback and typed-continuation modes.
       - docs clearly state that `@embed` is not intended to grow into the general host-effect mechanism.
 - Recommended removal order:
-  - 1. C1 stdlib import builtin fallback
-  - 2. C3 fallback-oriented tests/docs
-  - 3. C2 bare builtin `print` policy decision and cleanup
-  - 4. C4 embedded default handler bridge revalidation
+  - 1. C3 fallback-oriented tests/docs
+  - 2. C2 bare builtin `print` policy decision and cleanup
+  - 3. C4 embedded default handler bridge revalidation
 - Out of scope for this backlog:
   - `Unit` as a type name and internal runtime representation (`RuntimeValue::Unit`) is not
     compatibility debt.
