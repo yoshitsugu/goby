@@ -813,6 +813,9 @@ Detailed implementation plan:
      - [x] Step F8.2: move `typecheck_check`-owned regression tests beside the owned module.
        - expression inference, tuple-member access, and list-spread regression tests now live in `typecheck_check.rs`.
        - `typecheck.rs` no longer hosts those module-specific checks as spillover tests.
+     - [x] Step F8.3: move `goby-wasm` compile/native-lowering regression tests out of `lib.rs`.
+       - landed in `crates/goby-wasm/src/compile_tests.rs`.
+       - `lib.rs` now keeps runtime-parity/runtime-execution coverage instead of also acting as the codegen smoke-test host.
      - re-review file sizes and dependency directions after F5-F7.
      - move any new subsystem-specific tests beside owned modules.
      - remove temporary helpers introduced only to make moves compile.

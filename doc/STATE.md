@@ -118,6 +118,9 @@ This file is a restart-safe snapshot for resuming work after context reset.
 - `F8.2` is now landed:
   - expression-inference, tuple-member access, and list-spread regression tests now live beside `crates/goby-core/src/typecheck_check.rs`.
   - `crates/goby-core/src/typecheck.rs` is less of a generic test host and more focused on top-level typecheck integration coverage.
+- `F8.3` is now landed:
+  - compile/native-lowering regression tests now live in `crates/goby-wasm/src/compile_tests.rs`.
+  - `crates/goby-wasm/src/lib.rs` is narrowed toward runtime behavior/parity coverage instead of mixing compile smoke tests with runtime test ownership.
 - Runtime model to preserve while refactoring:
   - `Out<T> = Done | Suspend | Escape | Err`
   - `Escape::WithScope { with_id, value }`
@@ -128,6 +131,7 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - `typecheck_stmt.rs` should own statement sequencing and return-type enforcement.
   - `typecheck_render.rs` should own user-visible internal `Ty` formatting.
   - module-specific regression tests should live beside their owned implementation when they do not require top-level typecheck integration coverage.
+  - `goby-wasm/src/lib.rs` should not regain compile/native-lowering smoke tests that fit dedicated test modules.
 
 ## Verified
 
@@ -139,7 +143,7 @@ This file is a restart-safe snapshot for resuming work after context reset.
 
 ## Next Work
 
-- `F8.1` and `F8.2` are complete.
+- `F8.1`, `F8.2`, and `F8.3` are complete.
 - Continue `Milestone F8` with:
   - boundary review for remaining large files (`goby-wasm/src/lib.rs`, `typecheck_check.rs`)
   - relocation of any remaining subsystem-specific regression tests to owned modules

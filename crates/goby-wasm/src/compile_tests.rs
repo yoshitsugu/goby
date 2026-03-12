@@ -1,0 +1,571 @@
+use std::path::PathBuf;
+
+use goby_core::{Module, Stmt, parse_module};
+
+use super::*;
+
+fn assert_valid_wasm_module(wasm: &[u8]) {
+    assert!(wasm.len() >= 8, "module too short: {} bytes", wasm.len());
+    assert_eq!(&wasm[..4], &[0x00, 0x61, 0x73, 0x6d], "bad wasm magic");
+    assert_eq!(&wasm[4..8], &[0x01, 0x00, 0x00, 0x00], "bad wasm version");
+}
+
+fn read_example(name: &str) -> String {
+    let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    path.push("..");
+    path.push("..");
+    path.push("examples");
+    path.push(name);
+    std::fs::read_to_string(path).expect("example file should exist")
+}
+
+fn main_body(module: &Module) -> &str {
+    module
+        .declarations
+        .iter()
+        .find(|decl| decl.name == "main")
+        .map(|decl| decl.body.as_str())
+        .expect("main should exist")
+}
+
+fn main_parsed_body(module: &Module) -> Option<&[Stmt]> {
+    module
+        .declarations
+        .iter()
+        .find(|decl| decl.name == "main")
+        .and_then(|decl| decl.parsed_body.as_deref())
+}
+
+#[test]
+fn native_codegen_capability_checker_rejects_hello_effect_boundary_subset() {
+    let source = read_example("hello.gb");
+    let module = parse_module(&source).expect("hello.gb should parse");
+    assert!(
+        !fallback::supports_native_codegen(&module),
+        "hello.gb should be rejected by native capability checker when main is EffectBoundary"
+    );
+    assert_eq!(
+        fallback::native_unsupported_reason_kind(&module),
+        Some(fallback::UnsupportedReason::CallTargetBodyNotNativeSupported)
+    );
+    assert_eq!(
+        fallback::native_unsupported_reason(&module),
+        Some("call_target_body_not_native_supported")
+    );
+}
+
+#[test]
+fn native_codegen_capability_checker_rejects_effect_example() {
+    let source = read_example("effect.gb");
+    let module = parse_module(&source).expect("effect.gb should parse");
+    assert!(
+        !fallback::supports_native_codegen(&module),
+        "effect.gb should remain on fallback path in Phase 0"
+    );
+    assert_eq!(
+        fallback::native_unsupported_reason_kind(&module),
+        Some(fallback::UnsupportedReason::MainAnnotationNotUnitToUnit),
+        "effect example should expose typed fallback reason"
+    );
+    assert_eq!(
+        fallback::native_unsupported_reason(&module),
+        Some("main_annotation_not_unit_to_unit"),
+        "effect example should expose explicit fallback reason"
+    );
+}
+
+#[test]
+fn compile_module_emits_valid_wasm_for_phase1_subset_via_fallback() {
+    let source = read_example("hello.gb");
+    let module = parse_module(&source).expect("hello.gb should parse");
+    assert!(
+        !fallback::supports_native_codegen(&module),
+        "phase-1 hello subset should take fallback path because main is EffectBoundary"
+    );
+    let wasm = compile_module(&module).expect("codegen should succeed");
+    assert_valid_wasm_module(&wasm);
+}
+
+#[test]
+fn native_codegen_capability_checker_accepts_phase2_int_bool_subset() {
+    let source = r#"
+main : Unit -> Unit
+main =
+  x = 6 * 7
+  ok = x == 42
+  print x
+  print ok
+"#;
+    let module = parse_module(source).expect("source should parse");
+    assert!(
+        fallback::supports_native_codegen(&module),
+        "phase-2 int/bool subset should be accepted by native capability checker"
+    );
+}
+
+#[test]
+fn compile_module_uses_native_emitter_for_phase2_int_bool_subset() {
+    let source = r#"
+main : Unit -> Unit
+main =
+  x = 6 * 7
+  ok = x == 42
+  print x
+  print ok
+"#;
+    let module = parse_module(source).expect("source should parse");
+    let wasm = compile_module(&module).expect("codegen should succeed");
+    let expected_text =
+        resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
+            .expect("runtime output should resolve");
+    assert_eq!(expected_text, "42True");
+    assert_valid_wasm_module(&wasm);
+}
+
+#[test]
+fn native_codegen_capability_checker_accepts_direct_function_call_subset() {
+    let source = r#"
+double : Int -> Int
+double n = n * 2
+
+main : Unit -> Unit
+main =
+  print (double 21)
+"#;
+    let module = parse_module(source).expect("source should parse");
+    assert!(
+        fallback::supports_native_codegen(&module),
+        "direct single-arg function call subset should be accepted"
+    );
+}
+
+#[test]
+fn compile_module_uses_native_emitter_for_direct_function_call_subset() {
+    let source = r#"
+double : Int -> Int
+double n = n * 2
+
+main : Unit -> Unit
+main =
+  print (double 21)
+"#;
+    let module = parse_module(source).expect("source should parse");
+    let wasm = compile_module(&module).expect("codegen should succeed");
+    let expected_text =
+        resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
+            .expect("runtime output should resolve");
+    assert_eq!(expected_text, "42");
+    assert_valid_wasm_module(&wasm);
+}
+
+#[test]
+fn compile_module_uses_native_emitter_for_multi_arg_direct_function_call_subset() {
+    let source = r#"
+add4 : Int -> Int -> Int -> Int -> Int
+add4 a b c d = a + b + c + d
+
+main : Unit -> Unit
+main =
+  print (add4 1 2 3 4)
+"#;
+    let module = parse_module(source).expect("source should parse");
+    assert!(
+        fallback::supports_native_codegen(&module),
+        "multi-arg direct function call subset should be accepted"
+    );
+    let wasm = compile_module(&module).expect("codegen should succeed");
+    assert_valid_wasm_module(&wasm);
+}
+
+#[test]
+fn compile_module_uses_native_emitter_for_function_example_first_order_subset() {
+    let source = r#"
+add_ten : Int -> Int
+add_ten x = x + 10
+
+add_ten_mul_three : Int -> Int
+add_ten_mul_three a =
+  b = a + 10
+  b * 3
+
+main : Unit -> Unit
+main =
+  b = add_ten 10
+  c = add_ten_mul_three b
+  print c
+"#;
+    let module = parse_module(source).expect("source should parse");
+    assert!(
+        fallback::supports_native_codegen(&module),
+        "first-order subset derived from function.gb should be accepted"
+    );
+    assert_eq!(fallback::native_unsupported_reason_kind(&module), None);
+    let wasm = compile_module(&module).expect("codegen should succeed");
+    let expected_text =
+        resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
+            .expect("runtime output should resolve");
+    assert_eq!(expected_text, "90");
+    assert_valid_wasm_module(&wasm);
+}
+
+#[test]
+fn native_codegen_ignores_unused_hof_declaration() {
+    let source = r#"
+import goby/list ( map )
+
+mul_tens : List Int -> List Int
+mul_tens ns = map ns (|n| -> n * 10)
+
+main : Unit -> Unit
+main =
+  print 42
+"#;
+    let module = parse_module(source).expect("source should parse");
+    assert!(
+        fallback::supports_native_codegen(&module),
+        "unused HOF declaration should not block native path"
+    );
+    assert_eq!(fallback::native_unsupported_reason_kind(&module), None);
+    let wasm = compile_module(&module).expect("codegen should succeed");
+    let expected_text =
+        resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
+            .expect("runtime output should resolve");
+    assert_eq!(expected_text, "42");
+    assert_valid_wasm_module(&wasm);
+}
+
+#[test]
+fn native_codegen_accepts_transitively_required_hof_declaration() {
+    let source = r#"
+import goby/list ( map )
+
+mul_tens : List Int -> List Int
+mul_tens ns = map ns (|n| -> n * 10)
+
+wrapped_mul_tens : List Int -> List Int
+wrapped_mul_tens ns = mul_tens ns
+
+main : Unit -> Unit
+main =
+  print (wrapped_mul_tens [1, 2])
+"#;
+    let module = parse_module(source).expect("source should parse");
+    assert!(
+        fallback::supports_native_codegen(&module),
+        "transitively required HOF declaration should be accepted by native lowering"
+    );
+    assert_eq!(fallback::native_unsupported_reason_kind(&module), None);
+    assert_eq!(fallback::native_unsupported_reason(&module), None);
+    let wasm = compile_module(&module).expect("codegen should succeed");
+    let expected_text =
+        resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
+            .expect("runtime output should resolve");
+    assert_eq!(expected_text, "[10, 20]");
+    assert_valid_wasm_module(&wasm);
+}
+
+#[test]
+fn compile_module_uses_native_emitter_for_list_int_print_subset() {
+    let source = r#"
+main : Unit -> Unit
+main =
+  xs = [1, 2, 3]
+  print xs
+"#;
+    let module = parse_module(source).expect("source should parse");
+    assert!(
+        fallback::supports_native_codegen(&module),
+        "list-int print subset should be accepted by native capability checker"
+    );
+    let wasm = compile_module(&module).expect("codegen should succeed");
+    let expected_text =
+        resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
+            .expect("runtime output should resolve");
+    assert_eq!(expected_text, "[1, 2, 3]");
+    assert_valid_wasm_module(&wasm);
+}
+
+#[test]
+fn compile_module_uses_native_emitter_for_list_int_pipeline_print_subset() {
+    let source = r#"
+main : Unit -> Unit
+main =
+  [4, 5, 6] |> print
+"#;
+    let module = parse_module(source).expect("source should parse");
+    assert!(
+        fallback::supports_native_codegen(&module),
+        "list-int pipeline print subset should be accepted by native capability checker"
+    );
+    let wasm = compile_module(&module).expect("codegen should succeed");
+    let expected_text =
+        resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
+            .expect("runtime output should resolve");
+    assert_eq!(expected_text, "[4, 5, 6]");
+    assert_valid_wasm_module(&wasm);
+}
+
+#[test]
+fn compile_module_uses_native_emitter_for_if_print_subset() {
+    let source = r#"
+main : Unit -> Unit
+main =
+  a = 10
+  b = 20
+  print
+    if a + b == 30
+      "30"
+    else
+      "other"
+"#;
+    let module = parse_module(source).expect("source should parse");
+    assert!(
+        fallback::supports_native_codegen(&module),
+        "if-print subset should be accepted by native capability checker"
+    );
+    let wasm = compile_module(&module).expect("codegen should succeed");
+    let expected_text =
+        resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
+            .expect("runtime output should resolve");
+    assert_eq!(expected_text, "30");
+    assert_valid_wasm_module(&wasm);
+}
+
+#[test]
+fn compile_module_uses_native_emitter_for_case_print_subset() {
+    let source = r#"
+main : Unit -> Unit
+main =
+  x = 5
+  print
+    case x
+      5 -> "Five!"
+      3 -> "Three!"
+      _ -> "Other"
+"#;
+    let module = parse_module(source).expect("source should parse");
+    assert!(
+        fallback::supports_native_codegen(&module),
+        "case-print subset should be accepted by native capability checker"
+    );
+    let wasm = compile_module(&module).expect("codegen should succeed");
+    let expected_text =
+        resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
+            .expect("runtime output should resolve");
+    assert_eq!(expected_text, "Five!");
+    assert_valid_wasm_module(&wasm);
+}
+
+#[test]
+fn compile_module_emits_valid_wasm_for_control_flow_example_via_fallback() {
+    let source = read_example("control_flow.gb");
+    let module = parse_module(&source).expect("control_flow.gb should parse");
+    assert!(
+        !fallback::supports_native_codegen(&module),
+        "control_flow.gb should take fallback path because main is EffectBoundary"
+    );
+    let wasm = compile_module(&module).expect("codegen should succeed");
+    let expected_text =
+        resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
+            .expect("runtime output should resolve");
+    assert_eq!(expected_text, "Five!5030");
+    assert_valid_wasm_module(&wasm);
+}
+
+#[test]
+fn native_codegen_capability_checker_accepts_function_example_with_hof_lambda() {
+    let source = read_example("function.gb");
+    let module = parse_module(&source).expect("function.gb should parse");
+    assert!(
+        fallback::supports_native_codegen(&module),
+        "function.gb should be accepted by native lowering after lambda/HOF support"
+    );
+    assert_eq!(
+        fallback::native_unsupported_reason_kind(&module),
+        None,
+        "function.gb should no longer report a native fallback reason"
+    );
+    assert_eq!(
+        fallback::native_unsupported_reason(&module),
+        None,
+        "function.gb should no longer report a native fallback reason"
+    );
+}
+
+#[test]
+fn native_codegen_capability_checker_reports_expected_call_reasons() {
+    let cases = [
+        (
+            "non_direct_callee",
+            r#"
+main : Unit -> Unit
+main =
+  print (Foo.bar 1)
+"#,
+            Some(fallback::UnsupportedReason::CallCalleeNotDirectName),
+        ),
+        (
+            "arity_mismatch",
+            r#"
+id : Int -> Int
+id x = x
+
+main : Unit -> Unit
+main =
+  print (id 1 2)
+"#,
+            Some(fallback::UnsupportedReason::CallArityMismatch),
+        ),
+        (
+            "target_missing",
+            r#"
+main : Unit -> Unit
+main =
+  print (unknown 1)
+"#,
+            Some(fallback::UnsupportedReason::CallTargetNotDeclaration),
+        ),
+        (
+            "target_body_not_supported",
+            r#"
+uses_with : Int -> Int
+uses_with x =
+  with
+    log v ->
+      resume ()
+  in
+    x
+
+main : Unit -> Unit
+main =
+  print (uses_with 1)
+"#,
+            Some(fallback::UnsupportedReason::CallTargetBodyNotNativeSupported),
+        ),
+        (
+            "target_body_not_supported_with_lambda",
+            r#"
+uses_with_callback : (Int -> Int) -> Int
+uses_with_callback f =
+  with
+    log v ->
+      resume ()
+  in
+    f 1
+
+main : Unit -> Unit
+main =
+  print (uses_with_callback (|x| -> x + 1))
+"#,
+            Some(fallback::UnsupportedReason::CallTargetBodyNotNativeSupported),
+        ),
+        (
+            "target_body_not_supported_due_to_effect_boundary",
+            r#"
+tick : Int -> Int can Tick
+tick n = n
+
+main : Unit -> Unit
+main =
+  print (tick 1)
+"#,
+            Some(fallback::UnsupportedReason::CallTargetBodyNotNativeSupported),
+        ),
+    ];
+
+    for (name, source, expected_kind) in cases {
+        let module = parse_module(source).expect("source should parse");
+        let expected_str = expected_kind.map(fallback::UnsupportedReason::as_str);
+        assert_eq!(
+            fallback::native_unsupported_reason_kind(&module),
+            expected_kind,
+            "unexpected typed fallback reason for case: {}",
+            name
+        );
+        assert_eq!(
+            fallback::native_unsupported_reason(&module),
+            expected_str,
+            "unexpected fallback reason for case: {}",
+            name
+        );
+    }
+}
+
+#[test]
+fn native_codegen_capability_checker_prioritizes_body_reason_over_arity_mismatch() {
+    let source = r#"
+uses_with : Int -> Int
+uses_with x =
+  with
+    log v ->
+      resume ()
+  in
+    x
+
+main : Unit -> Unit
+main =
+  print (uses_with 1 2)
+"#;
+    let module = parse_module(source).expect("source should parse");
+    assert_eq!(
+        fallback::native_unsupported_reason_kind(&module),
+        Some(fallback::UnsupportedReason::CallTargetBodyNotNativeSupported),
+        "typed reason should prefer unsupported declaration body over arity mismatch"
+    );
+    assert_eq!(
+        fallback::native_unsupported_reason(&module),
+        Some("call_target_body_not_native_supported"),
+        "unsupported declaration body reason should win when call-shape mismatch coexists"
+    );
+}
+
+#[test]
+fn native_fallback_path_matrix_for_examples() {
+    let cases = [
+        (
+            "hello.gb",
+            false,
+            Some(fallback::UnsupportedReason::CallTargetBodyNotNativeSupported),
+            Some("call_target_body_not_native_supported"),
+        ),
+        (
+            "control_flow.gb",
+            false,
+            Some(fallback::UnsupportedReason::CallTargetBodyNotNativeSupported),
+            Some("call_target_body_not_native_supported"),
+        ),
+        (
+            "effect.gb",
+            false,
+            Some(fallback::UnsupportedReason::MainAnnotationNotUnitToUnit),
+            Some("main_annotation_not_unit_to_unit"),
+        ),
+        ("function.gb", true, None, None),
+    ];
+
+    for (name, expect_native, expected_reason_kind, expected_reason) in cases {
+        let source = read_example(name);
+        let module = parse_module(&source).expect("example should parse");
+        let reason_kind = fallback::native_unsupported_reason_kind(&module);
+        let reason = fallback::native_unsupported_reason(&module);
+        let supports_native = fallback::supports_native_codegen(&module);
+        assert_eq!(
+            reason_kind, expected_reason_kind,
+            "unexpected typed fallback reason for {}",
+            name
+        );
+        assert_eq!(
+            reason, expected_reason,
+            "unexpected fallback reason for {}",
+            name
+        );
+        assert_eq!(
+            supports_native, expect_native,
+            "unexpected native capability result for {}",
+            name
+        );
+
+        let wasm = compile_module(&module).expect("codegen should succeed");
+        assert_valid_wasm_module(&wasm);
+    }
+}
