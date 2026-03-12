@@ -1,9 +1,10 @@
 use crate::ast::{Expr, InterpolatedPart, Stmt};
 use crate::typecheck::TypecheckError;
 use crate::typecheck_check::{
-    branch_types_compatible, check_expr, env_with_case_pattern_bindings, merge_branch_type, ty_name,
+    branch_types_compatible, check_expr, env_with_case_pattern_bindings, merge_branch_type,
 };
 use crate::typecheck_env::{Ty, TypeEnv};
+use crate::typecheck_render::ty_name;
 
 pub(crate) fn check_branch_type_consistency_in_stmts(
     stmts: &[Stmt],

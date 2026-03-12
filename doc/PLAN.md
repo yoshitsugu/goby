@@ -806,6 +806,10 @@ Detailed implementation plan:
    - Goal:
      - ensure the second extraction wave leaves stable internal contracts instead of another temporary arrangement.
    - Planned work:
+     - [x] Step F8.1: move statement/body checking and type rendering out of `typecheck_check.rs`.
+       - landed in `typecheck_stmt.rs` and `typecheck_render.rs`.
+       - `typecheck_check.rs` is now narrowed back toward expression inference and expression-adjacent helpers.
+       - focused type-rendering regression tests now live beside `typecheck_render.rs`.
      - re-review file sizes and dependency directions after F5-F7.
      - move any new subsystem-specific tests beside owned modules.
      - remove temporary helpers introduced only to make moves compile.

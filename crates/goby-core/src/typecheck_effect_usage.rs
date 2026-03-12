@@ -3,10 +3,10 @@ use std::collections::{HashMap, HashSet};
 use crate::ast::{Expr, InterpolatedPart, Stmt};
 use crate::typecheck::TypecheckError;
 use crate::typecheck_ambiguity::ensure_no_ambiguous_refs_in_expr;
-use crate::typecheck_check::{
-    check_body_stmts, check_expr, env_with_case_pattern_bindings, ty_name,
-};
+use crate::typecheck_check::{check_expr, env_with_case_pattern_bindings};
 use crate::typecheck_env::{EffectDependencyInfo, EffectMap, Ty, TypeEnv, TypeSubst};
+use crate::typecheck_render::ty_name;
+use crate::typecheck_stmt::check_body_stmts;
 use crate::typecheck_unify::{
     apply_type_substitution, instantiate_handler_clause_signature, ty_contains_type_var,
     type_hole_conflict_note, unify_types_with_subst,

@@ -2302,44 +2302,6 @@ main =
     }
 
     #[test]
-    fn rejects_list_int_annotation_body_mismatch_shows_element_type() {
-        // ty_name(Ty::List(Ty::Int)) must appear as "List Int" in the error message,
-        // not just "List".
-        let module = parse_module("xs : List Int\nxs = \"oops\"\n").expect("should parse");
-        let err = typecheck_module(&module).expect_err("type mismatch should be rejected");
-        assert_eq!(err.declaration.as_deref(), Some("xs"));
-        assert!(
-            err.message.contains("List Int"),
-            "expected 'List Int' in error message, got: {}",
-            err.message
-        );
-    }
-
-    #[test]
-    fn rejects_generic_application_mismatch_shows_haskell_style_name() {
-        let module = parse_module("x : TypeX a b\nx = 1\n").expect("should parse");
-        let err = typecheck_module(&module).expect_err("type mismatch should be rejected");
-        assert_eq!(err.declaration.as_deref(), Some("x"));
-        assert!(
-            err.message.contains("TypeX a b"),
-            "expected `TypeX a b` in error message, got: {}",
-            err.message
-        );
-    }
-
-    #[test]
-    fn rejects_nested_generic_application_mismatch_with_parenthesized_arg() {
-        let module = parse_module("x : TypeX (TypeY a b) c\nx = 1\n").expect("should parse");
-        let err = typecheck_module(&module).expect_err("type mismatch should be rejected");
-        assert_eq!(err.declaration.as_deref(), Some("x"));
-        assert!(
-            err.message.contains("TypeX (TypeY a b) c"),
-            "expected nested haskell-style type in error message, got: {}",
-            err.message
-        );
-    }
-
-    #[test]
     fn rejects_constant_annotation_type_mismatch() {
         // `x : Int; x = "hello"` — non-function annotation; body is String not Int.
         let module = parse_module("x : Int\nx = \"hello\"\n").expect("should parse");

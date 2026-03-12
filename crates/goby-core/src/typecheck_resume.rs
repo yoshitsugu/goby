@@ -1,10 +1,10 @@
 use crate::ast::{Expr, InterpolatedPart, Stmt};
 use crate::typecheck::TypecheckError;
 use crate::typecheck_check::{
-    check_expr, check_list_spread_constraints, env_with_case_pattern_bindings,
-    is_list_case_pattern, ty_name,
+    check_expr, check_list_spread_constraints, env_with_case_pattern_bindings, is_list_case_pattern,
 };
 use crate::typecheck_env::{ResumeContext, Ty, TypeEnv, TypeSubst};
+use crate::typecheck_render::ty_name;
 use crate::typecheck_unify::{
     apply_type_substitution, instantiate_handler_clause_signature, ty_contains_type_var,
     type_hole_conflict_note, unify_types_with_subst,

@@ -3,9 +3,10 @@ use std::collections::HashSet;
 use crate::ast::{Expr, InterpolatedPart, Stmt};
 use crate::typecheck::TypecheckError;
 use crate::typecheck_check::{
-    check_expr, env_with_case_pattern_bindings, parse_tuple_member_index, ty_name,
+    check_expr, env_with_case_pattern_bindings, parse_tuple_member_index,
 };
 use crate::typecheck_env::{Ty, TypeEnv};
+use crate::typecheck_render::ty_name;
 
 pub(crate) fn ensure_no_ambiguous_refs_in_expr(
     expr: &Expr,

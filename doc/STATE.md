@@ -14,6 +14,7 @@ This file is a restart-safe snapshot for resuming work after context reset.
 - New focus is the second maintainability pass:
   - `Milestone F6`: split residual responsibilities from `typecheck.rs`
   - `Milestone F7`: decompose `typecheck_check.rs`
+  - `Milestone F8`: boundary hardening and post-split cleanup
 
 ## Current State
 
@@ -110,11 +111,19 @@ This file is a restart-safe snapshot for resuming work after context reset.
 - `F7.5` is now landed:
   - `crates/goby-core/src/typecheck_check.rs` now keeps `check_expr` and `check_body_stmts` as thin top-level entrypoints over smaller helper layers.
   - statement-sequence checking, per-statement validation, and return-type validation are now explicit internal steps instead of being inlined in one long entry function.
+- `F8.1` is now landed:
+  - `crates/goby-core/src/typecheck_stmt.rs` owns statement/body checking, local mutability validation, and declared return-type enforcement.
+  - `crates/goby-core/src/typecheck_render.rs` owns `Ty` rendering and focused formatting regression tests.
+  - `crates/goby-core/src/typecheck_check.rs` is narrowed to expression inference, branch merge helpers, list-spread checks, and expression-shape helpers reused by other checking modules.
 - Runtime model to preserve while refactoring:
   - `Out<T> = Done | Suspend | Escape | Err`
   - `Escape::WithScope { with_id, value }`
   - lexical nearest-handler dispatch
   - parity between fallback runtime behavior and current tests
+- Boundary decisions to preserve in F8:
+  - `typecheck_check.rs` should stay expression-centric.
+  - `typecheck_stmt.rs` should own statement sequencing and return-type enforcement.
+  - `typecheck_render.rs` should own user-visible internal `Ty` formatting.
 
 ## Verified
 
@@ -126,12 +135,11 @@ This file is a restart-safe snapshot for resuming work after context reset.
 
 ## Next Work
 
-- Start `Milestone F6`:
-  - `Milestone F6` can now be treated as complete
-- After F6:
-  - continue with `F7` (`typecheck_check.rs` concern split)
-  - `Milestone F7` can now be treated as complete
-  - next up is `F8`: boundary hardening and post-split cleanup
+- `F8.1` is complete.
+- Continue `Milestone F8` with:
+  - boundary review for remaining large files (`goby-wasm/src/lib.rs`, `typecheck_check.rs`)
+  - relocation of any remaining subsystem-specific regression tests to owned modules
+  - cleanup of temporary cross-module helpers that are no longer carrying distinct logic
 
 ## Notes
 
