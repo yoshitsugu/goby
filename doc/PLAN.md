@@ -352,7 +352,7 @@ Note: detailed step-by-step renewal history is intentionally omitted here; use
   - replace internal/builtin-path map callsites with stdlib module usage where possible.
   - after migration, trim builtin-only `map` special handling so runtime/compiler has a single semantics source.
 
-#### Compatibility Cleanup Backlog (Survey: 2026-03-06)
+#### Compatibility Cleanup Backlog (Survey: 2026-03-12)
 
 Goal: record remaining implementation-side compatibility bridges so they can be
 removed in a deliberate order after active language/runtime work.
@@ -366,34 +366,46 @@ removed in a deliberate order after active language/runtime work.
 - Remaining compatibility bridges to remove later:
   - [ ] C1. stdlib import builtin fallback
     - current status:
-      - `validate_imports` and import-type resolution still fall back to
-        `builtin_module_exports(...)` when stdlib files are missing.
-      - current fallback-covered modules are `goby/string`, `goby/list`, and `goby/env`.
+      - file-based stdlib is now present for `goby/env`, `goby/int`, `goby/iterator`,
+        `goby/list`, `goby/prelude`, `goby/stdio`, and `goby/string`.
+      - `validate_imports` and imported-symbol injection still fall back to
+        `builtin_module_exports(...)` when the resolver reports `ModuleNotFound`.
+      - current builtin-fallback-covered modules are still only `goby/string`,
+        `goby/list`, and `goby/env`, so missing-file regressions for those modules can
+        still be masked.
     - code anchors:
-      - `crates/goby-core/src/typecheck.rs`:
-        `validate_imports`, `module_exports_for_import_with_resolver`,
-        `builtin_module_exports`
+      - `crates/goby-core/src/typecheck_validate.rs`:
+        `validate_imports`, `inject_imported_symbols`,
+        `module_exports_for_import_with_resolver`, `builtin_module_exports`
     - removal target:
       - make stdlib file resolution the single source of truth for import/export visibility.
       - fail clearly when a stdlib module file is missing instead of silently using builtin exports.
   - [ ] C2. bare builtin `print` availability without import
     - current status:
-      - typecheck still treats bare `print` as available without explicit stdlib import.
+      - typecheck still injects bare `print` into the global environment even without
+        importing `goby/prelude` or `goby/stdio`.
+      - wasm lowering and fallback/runtime execution still special-case bare `print`
+        as a builtin call shape rather than treating it purely as imported stdlib surface.
       - tests currently lock this behavior as intentional compatibility.
     - code anchors:
+      - `crates/goby-core/src/typecheck_build.rs`: builtin `print` insertion
       - `crates/goby-core/src/typecheck.rs`
         (`baseline_bare_print_builtin_is_available_without_import`)
-      - runtime fallback bridge paths in `crates/goby-wasm/src/lib.rs`
+      - `crates/goby-wasm/src/lower.rs`, `crates/goby-wasm/src/runtime_unit.rs`,
+        `crates/goby-wasm/src/runtime_resolver.rs`, `crates/goby-wasm/src/fallback.rs`
     - removal target:
       - decide whether `print` remains permanent prelude sugar or becomes import/prelude-only.
       - if removed, replace compatibility tests with explicit-prelude/import coverage.
   - [ ] C3. builtin fallback tests and migration assumptions
     - current status:
-      - tests explicitly assert resolver fallback when stdlib files are absent.
-      - planning docs still describe builtin fallback as part of migration strategy.
+      - tests now cover both resolver-first behavior and builtin fallback when stdlib files
+        are absent.
+      - planning docs still describe builtin fallback as an active migration bridge even
+        though the stdlib file set is largely in place.
     - code anchors:
       - `crates/goby-core/src/typecheck.rs`
-        (`resolver_falls_back_to_builtin_exports_when_file_missing`)
+        (`resolver_first_prefers_file_based_stdlib_exports`,
+        `resolver_falls_back_to_builtin_exports_when_file_missing`)
       - `doc/PLAN_STANDARD_LIBRARY.md`
     - removal target:
       - flip tests from "fallback works" to "missing stdlib fails clearly" once C1 is removed.
@@ -401,11 +413,15 @@ removed in a deliberate order after active language/runtime work.
   - [ ] C4. embedded default handler / runtime bridge revalidation after C1-C3
     - current status:
       - embedded default handlers are current semantics, not legacy syntax.
-      - bare prelude effect ops now resolve through normal imported-effect visibility rather than a dedicated runtime bridge catalog.
-      - embedded default execution now flows through a dedicated `EmbeddedEffectRuntime` layer rather than storing stdin/stdout state directly on `RuntimeOutputResolver`.
-      - resolver-side effect dispatch now operates on typed embedded handler kinds instead of branching on raw `__goby_embeded_effect_*` names.
-      - stdlib resolver now exposes parsed embedded handler kinds together with the parsed module AST, and wasm runtime consumes that shared typed metadata directly when building its runtime import context.
-      - remaining special handling is mainly the runtime-owned `Print` / `Read` intrinsic I/O hook itself, not stdlib metadata collection.
+      - bare prelude effect ops now resolve through normal imported-effect visibility rather
+        than a dedicated runtime bridge catalog.
+      - embedded default execution already flows through dedicated layers:
+        `goby-core` resolves typed embedded metadata and `goby-wasm` executes it through
+        `EmbeddedEffectRuntime` plus `RuntimeImportContext`.
+      - resolver-side effect dispatch now uses `EmbeddedRuntimeHandlerKind` and the shared
+        runtime import context instead of ad hoc branching spread across the old monolith.
+      - remaining special handling is mainly the intentional narrow runtime-owned
+        `Print` / `Read` I/O hook and the handler-name-to-runtime-kind mapping.
       - project direction is now to keep `@embed` narrow: it exists for the minimal `Print` / `Read` onboarding path, not as a general host-capability extension point.
     - design direction:
       - do not treat `@embed` itself as debt to remove.
@@ -416,18 +432,19 @@ removed in a deliberate order after active language/runtime work.
         2. handler selection (`explicit`, `embedded default`, `unhandled`),
         3. handler execution.
     - implementation plan:
-      - introduce a dedicated embedded-effect runtime layer (for example `EmbeddedEffectRuntime`) so stdin/stdout behavior is not implemented directly in `RuntimeOutputResolver`.
-      - move current `Print` / `Read` execution details (`stdin` buffer/cursor handling and stdout writes) behind that layer.
-      - keep stdlib metadata resolution in `goby-core`; wasm runtime should only assemble its runtime import context from already-resolved typed metadata.
-      - replace direct `apply_embedded_default_handler(...)` branching with resolved-handler dispatch so bare/qualified/value/unit call paths share one effect-dispatch route.
-      - centralize handler-name-to-runtime-implementation mapping in one catalog/registry so adding a new embedded handler does not require editing multiple call paths.
+      - [x] introduce a dedicated embedded-effect runtime layer (`EmbeddedEffectRuntime`) so stdin/stdout behavior is not implemented directly in `RuntimeOutputResolver`.
+      - [x] move current `Print` / `Read` execution details (`stdin` buffer/cursor handling and stdout writes) behind that layer.
+      - [x] keep stdlib metadata resolution in `goby-core`; wasm runtime consumes typed embedded metadata through `StdlibResolver` and `RuntimeImportContext`.
+      - [x] replace old direct embedded-default branching with resolved-handler dispatch shared by bare/qualified/value/unit call paths.
+      - [x] centralize handler-name-to-runtime-implementation mapping through `EmbeddedRuntimeHandlerKind`.
+      - [ ] after C1-C3, re-check whether any duplicate "builtin convenience" path still bypasses the intended imported-prelude/embed route.
     - guardrails:
       - only one place in runtime should branch on embedded handler names such as `__goby_embeded_effect_stdout_handler`.
       - `RuntimeOutputResolver` should not directly perform embedded stdin/stdout behavior once the refactor is complete.
       - avoid separate embedded-handler fallback logic for bare calls, qualified calls, and pipeline/value paths.
     - completion criteria:
-      - embedded handler execution is routed through the dedicated runtime layer.
-      - effect dispatch call paths no longer contain ad hoc embedded-handler special cases.
+      - embedded handler execution stays routed through the dedicated runtime layer.
+      - effect dispatch call paths do not reintroduce ad hoc embedded-handler special cases.
       - existing `Print` / `Read` end-to-end tests still pass under both fallback and typed-continuation modes.
       - docs clearly state that `@embed` is not intended to grow into the general host-effect mechanism.
 - Recommended removal order:
