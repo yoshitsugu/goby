@@ -810,6 +810,9 @@ Detailed implementation plan:
        - landed in `typecheck_stmt.rs` and `typecheck_render.rs`.
        - `typecheck_check.rs` is now narrowed back toward expression inference and expression-adjacent helpers.
        - focused type-rendering regression tests now live beside `typecheck_render.rs`.
+     - [x] Step F8.2: move `typecheck_check`-owned regression tests beside the owned module.
+       - expression inference, tuple-member access, and list-spread regression tests now live in `typecheck_check.rs`.
+       - `typecheck.rs` no longer hosts those module-specific checks as spillover tests.
      - re-review file sizes and dependency directions after F5-F7.
      - move any new subsystem-specific tests beside owned modules.
      - remove temporary helpers introduced only to make moves compile.

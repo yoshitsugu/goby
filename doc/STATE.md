@@ -115,6 +115,9 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - `crates/goby-core/src/typecheck_stmt.rs` owns statement/body checking, local mutability validation, and declared return-type enforcement.
   - `crates/goby-core/src/typecheck_render.rs` owns `Ty` rendering and focused formatting regression tests.
   - `crates/goby-core/src/typecheck_check.rs` is narrowed to expression inference, branch merge helpers, list-spread checks, and expression-shape helpers reused by other checking modules.
+- `F8.2` is now landed:
+  - expression-inference, tuple-member access, and list-spread regression tests now live beside `crates/goby-core/src/typecheck_check.rs`.
+  - `crates/goby-core/src/typecheck.rs` is less of a generic test host and more focused on top-level typecheck integration coverage.
 - Runtime model to preserve while refactoring:
   - `Out<T> = Done | Suspend | Escape | Err`
   - `Escape::WithScope { with_id, value }`
@@ -124,6 +127,7 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - `typecheck_check.rs` should stay expression-centric.
   - `typecheck_stmt.rs` should own statement sequencing and return-type enforcement.
   - `typecheck_render.rs` should own user-visible internal `Ty` formatting.
+  - module-specific regression tests should live beside their owned implementation when they do not require top-level typecheck integration coverage.
 
 ## Verified
 
@@ -135,7 +139,7 @@ This file is a restart-safe snapshot for resuming work after context reset.
 
 ## Next Work
 
-- `F8.1` is complete.
+- `F8.1` and `F8.2` are complete.
 - Continue `Milestone F8` with:
   - boundary review for remaining large files (`goby-wasm/src/lib.rs`, `typecheck_check.rs`)
   - relocation of any remaining subsystem-specific regression tests to owned modules

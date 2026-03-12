@@ -11,10 +11,8 @@ use crate::{
 
 #[cfg(test)]
 use crate::{
-    BinOpKind,
     ast::Expr,
-    typecheck_check::check_expr,
-    typecheck_env::{RecordTypeInfo, ResumeContext, Ty, TypeEnv},
+    typecheck_env::{ResumeContext, Ty, TypeEnv},
     typecheck_resume::infer_binding_ty_with_resume_context,
 };
 #[cfg(test)]
@@ -260,116 +258,6 @@ mk =
         let err = typecheck_module(&module).expect_err("duplicate constructor field should fail");
         assert_eq!(err.declaration.as_deref(), Some("mk"));
         assert!(err.message.contains("duplicate field"));
-    }
-
-    #[test]
-    fn resolves_record_field_access_for_alias_receiver_type() {
-        let mut type_aliases = HashMap::new();
-        type_aliases.insert(
-            "UserAlias".to_string(),
-            Ty::Con {
-                name: "User".to_string(),
-                args: Vec::new(),
-            },
-        );
-        let mut fields = HashMap::new();
-        fields.insert("name".to_string(), Ty::Str);
-        let mut record_types = HashMap::new();
-        record_types.insert(
-            "User".to_string(),
-            RecordTypeInfo {
-                type_name: "User".to_string(),
-                fields,
-            },
-        );
-        let mut locals = HashMap::new();
-        locals.insert(
-            "user".to_string(),
-            Ty::Con {
-                name: "UserAlias".to_string(),
-                args: Vec::new(),
-            },
-        );
-        let env = TypeEnv {
-            globals: HashMap::new(),
-            locals,
-            type_aliases,
-            record_types,
-        };
-        let expr = crate::ast::Expr::Qualified {
-            receiver: "user".to_string(),
-            member: "name".to_string(),
-        };
-        assert_eq!(check_expr(&expr, &env), Ty::Str);
-    }
-
-    #[test]
-    fn resolves_tuple_member_access_by_index() {
-        let mut locals = HashMap::new();
-        locals.insert("pair".to_string(), Ty::Tuple(vec![Ty::Bool, Ty::Int]));
-        let env = TypeEnv {
-            globals: HashMap::new(),
-            locals,
-            type_aliases: HashMap::new(),
-            record_types: HashMap::new(),
-        };
-        let expr = crate::ast::Expr::Qualified {
-            receiver: "pair".to_string(),
-            member: "1".to_string(),
-        };
-        assert_eq!(check_expr(&expr, &env), Ty::Int);
-    }
-
-    #[test]
-    fn tuple_member_access_out_of_range_is_unknown() {
-        let mut locals = HashMap::new();
-        locals.insert("pair".to_string(), Ty::Tuple(vec![Ty::Bool]));
-        let env = TypeEnv {
-            globals: HashMap::new(),
-            locals,
-            type_aliases: HashMap::new(),
-            record_types: HashMap::new(),
-        };
-        let expr = crate::ast::Expr::Qualified {
-            receiver: "pair".to_string(),
-            member: "1".to_string(),
-        };
-        assert_eq!(check_expr(&expr, &env), Ty::Unknown);
-    }
-
-    #[test]
-    fn rejects_numeric_qualified_access_on_non_tuple_receiver() {
-        let source = "\
-type Status = Ready | Busy
-main : Unit -> Unit
-main =
-  print Status.0
-";
-        let module = parse_module(source).expect("should parse");
-        let err =
-            typecheck_module(&module).expect_err("numeric member access on non-tuple should fail");
-        assert!(
-            err.message.contains("tuple member access"),
-            "unexpected error: {}",
-            err.message
-        );
-    }
-
-    #[test]
-    fn accepts_numeric_qualified_access_on_global_tuple_receiver() {
-        let source = "\
-pair : (Bool, Int)
-pair = (True, 42)
-main : Unit -> Unit
-main =
-  if pair.0
-    print pair.1
-  else
-    print 0
-";
-        let module = parse_module(source).expect("should parse");
-        typecheck_module(&module)
-            .expect("numeric member access on tuple-typed global should typecheck");
     }
 
     #[test]
@@ -1287,50 +1175,6 @@ f n = n
     }
 
     #[test]
-    fn accepts_list_spread_annotation_matching_list_literal_body() {
-        let module = parse_module("xs : List Int\nxs = [1, ..[2, 3]]\n").expect("should parse");
-        typecheck_module(&module).expect("list spread body should typecheck");
-    }
-
-    #[test]
-    fn rejects_list_spread_tail_when_tail_is_not_list() {
-        let module = parse_module("xs : List Int\nxs = [1, ..2]\n").expect("should parse");
-        let err = typecheck_module(&module).expect_err("non-list spread tail should fail");
-        assert_eq!(err.declaration.as_deref(), Some("xs"));
-        assert!(
-            err.message.contains("list spread tail must be"),
-            "unexpected message: {}",
-            err.message
-        );
-    }
-
-    #[test]
-    fn rejects_list_spread_prefix_element_type_mismatch() {
-        let module = parse_module("xs : List Int\nxs = [1, \"x\", ..[2]]\n").expect("should parse");
-        let err = typecheck_module(&module).expect_err("spread prefix mismatch should fail");
-        assert_eq!(err.declaration.as_deref(), Some("xs"));
-        assert!(
-            err.message
-                .contains("list spread prefix element type mismatch"),
-            "unexpected message: {}",
-            err.message
-        );
-    }
-
-    #[test]
-    fn rejects_list_spread_tail_element_type_mismatch() {
-        let module = parse_module("xs : List Int\nxs = [1, ..[\"x\"]]\n").expect("should parse");
-        let err = typecheck_module(&module).expect_err("spread tail element mismatch should fail");
-        assert_eq!(err.declaration.as_deref(), Some("xs"));
-        assert!(
-            err.message
-                .contains("list spread tail element type mismatch"),
-            "unexpected message: {}",
-            err.message
-        );
-    }
-
-    #[test]
     fn accepts_case_list_pattern_bindings_in_arm_body() {
         let source = r#"
 id : Int -> Int
@@ -1491,30 +1335,6 @@ f x =
             "unexpected message: {}",
             err.message
         );
-    }
-
-    #[test]
-    fn infers_string_literal_type() {
-        let module = parse_module("s : String\ns = \"hello\"\n").expect("should parse");
-        typecheck_module(&module).expect("string literal body should typecheck");
-    }
-
-    #[test]
-    fn infers_interpolated_string_type() {
-        let module = parse_module("s : String\ns = \"n=${1}\"\n").expect("should parse");
-        typecheck_module(&module).expect("interpolated string body should typecheck as String");
-    }
-
-    #[test]
-    fn infers_equality_as_bool() {
-        let module = parse_module("flag : Bool\nflag = 1 == 1\n").expect("should parse");
-        typecheck_module(&module).expect("equality result should typecheck as Bool");
-    }
-
-    #[test]
-    fn infers_string_equality_as_bool() {
-        let module = parse_module("flag : Bool\nflag = \"a\" == \"a\"\n").expect("should parse");
-        typecheck_module(&module).expect("string equality result should typecheck as Bool");
     }
 
     #[test]
@@ -3192,21 +3012,5 @@ main =
         };
         let inferred = infer_binding_ty_with_resume_context(&value, &env, Some(&ctx));
         assert_eq!(inferred, Ty::Unknown);
-    }
-
-    #[test]
-    fn check_expr_infers_addition() {
-        let env = TypeEnv {
-            globals: HashMap::new(),
-            locals: HashMap::new(),
-            type_aliases: HashMap::new(),
-            record_types: HashMap::new(),
-        };
-        let expr = crate::ast::Expr::BinOp {
-            op: BinOpKind::Add,
-            left: Box::new(crate::ast::Expr::IntLit(1)),
-            right: Box::new(crate::ast::Expr::IntLit(2)),
-        };
-        assert_eq!(check_expr(&expr, &env), Ty::Int);
     }
 }
