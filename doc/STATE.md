@@ -101,6 +101,9 @@ This file is a restart-safe snapshot for resuming work after context reset.
 - `F7.2` is now landed:
   - `crates/goby-core/src/typecheck_effect_usage.rs` owns effect-usage checking, handler coverage validation, and required-effect enforcement.
   - `crates/goby-core/src/typecheck_check.rs` now calls that module instead of mixing effect semantics into the general checking file.
+- `F7.3` is now landed:
+  - `crates/goby-core/src/typecheck_ambiguity.rs` owns ambiguity/name-collision validation and related constructor/tuple-member checks.
+  - `crates/goby-core/src/typecheck_branch.rs` owns branch-consistency checking for `if`/`case`/block forms.
 - Runtime model to preserve while refactoring:
   - `Out<T> = Done | Suspend | Escape | Err`
   - `Escape::WithScope { with_id, value }`
@@ -121,7 +124,7 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - `Milestone F6` can now be treated as complete
 - After F6:
   - continue with `F7` (`typecheck_check.rs` concern split)
-  - next up is `F7.3`: ambiguity and branch-consistency extraction
+  - next up is `F7.4`: decide whether substitution/unification should become its own internal module
 
 ## Notes
 

@@ -2,9 +2,9 @@ use std::collections::{HashMap, HashSet};
 
 use crate::ast::{Expr, InterpolatedPart, Stmt};
 use crate::typecheck::TypecheckError;
+use crate::typecheck_ambiguity::ensure_no_ambiguous_refs_in_expr;
 use crate::typecheck_check::{
-    check_body_stmts, check_expr, ensure_no_ambiguous_refs_in_expr,
-    env_with_case_pattern_bindings, ty_name,
+    check_body_stmts, check_expr, env_with_case_pattern_bindings, ty_name,
 };
 use crate::typecheck_env::{EffectDependencyInfo, EffectMap, Ty, TypeEnv, TypeSubst};
 use crate::typecheck_resume::{
