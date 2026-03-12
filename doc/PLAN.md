@@ -816,6 +816,9 @@ Detailed implementation plan:
      - [x] Step F8.3: move `goby-wasm` compile/native-lowering regression tests out of `lib.rs`.
        - landed in `crates/goby-wasm/src/compile_tests.rs`.
        - `lib.rs` now keeps runtime-parity/runtime-execution coverage instead of also acting as the codegen smoke-test host.
+     - [x] Step F8.4: move runtime parity/perf helpers out of `goby-wasm/src/lib.rs`.
+       - landed in `crates/goby-wasm/src/runtime_parity.rs`.
+       - `lib.rs` runtime tests now depend on a dedicated parity helper layer instead of hosting mode-comparison infrastructure inline.
      - re-review file sizes and dependency directions after F5-F7.
      - move any new subsystem-specific tests beside owned modules.
      - remove temporary helpers introduced only to make moves compile.

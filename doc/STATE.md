@@ -121,6 +121,9 @@ This file is a restart-safe snapshot for resuming work after context reset.
 - `F8.3` is now landed:
   - compile/native-lowering regression tests now live in `crates/goby-wasm/src/compile_tests.rs`.
   - `crates/goby-wasm/src/lib.rs` is narrowed toward runtime behavior/parity coverage instead of mixing compile smoke tests with runtime test ownership.
+- `F8.4` is now landed:
+  - runtime parity/perf helpers now live in `crates/goby-wasm/src/runtime_parity.rs`.
+  - `crates/goby-wasm/src/lib.rs` no longer hosts parity outcome decoding, perf sampling, or mode-comparison assertions inline.
 - Runtime model to preserve while refactoring:
   - `Out<T> = Done | Suspend | Escape | Err`
   - `Escape::WithScope { with_id, value }`
@@ -132,6 +135,7 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - `typecheck_render.rs` should own user-visible internal `Ty` formatting.
   - module-specific regression tests should live beside their owned implementation when they do not require top-level typecheck integration coverage.
   - `goby-wasm/src/lib.rs` should not regain compile/native-lowering smoke tests that fit dedicated test modules.
+  - `goby-wasm/src/lib.rs` should not regain parity/perf helper infrastructure when a focused test-support module can own it.
 
 ## Verified
 
@@ -143,7 +147,7 @@ This file is a restart-safe snapshot for resuming work after context reset.
 
 ## Next Work
 
-- `F8.1`, `F8.2`, and `F8.3` are complete.
+- `F8.1`, `F8.2`, `F8.3`, and `F8.4` are complete.
 - Continue `Milestone F8` with:
   - boundary review for remaining large files (`goby-wasm/src/lib.rs`, `typecheck_check.rs`)
   - relocation of any remaining subsystem-specific regression tests to owned modules
