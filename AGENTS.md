@@ -97,6 +97,14 @@ When making non-trivial changes, run at least `cargo check` and `cargo test`.
 - Add regression tests for previously failing language cases.
 - Prefer small, focused tests tied to a single behavior.
 
+### Module Ownership
+
+- Keep orchestration entrypoints thin; move mechanics and policy into narrower internal modules.
+- Do not use large existing files as the default landing place for unrelated new logic.
+- Prefer splits by rule family, runtime phase, or ownership boundary, not by arbitrary line count.
+- Place subsystem-specific regression tests beside the module that owns the behavior when full-stack integration coverage is not required.
+- Stop splitting when the remaining helpers form one cohesive layer and further extraction would mostly add cross-module coupling.
+
 ## Change Workflow Expectations
 
 For language-facing changes:
@@ -117,5 +125,12 @@ For restart safety:
    - immediate next steps.
 3. Keep `doc/STATE.md` concise and execution-oriented so work can resume after
    context reset without ambiguity.
+
+For maintainability refactors:
+
+1. Preserve behavior and diagnostics unless the task explicitly includes a behavior change.
+2. Prefer one ownership move per commit where practical.
+3. Move module-specific regression tests with the owned implementation in the same refactor when possible.
+4. Run at least `cargo check`, the focused subsystem tests, and `cargo test --workspace` before closing the refactor slice.
 
 If there is tension between approaches, choose the option that keeps the language easy to read and reason about while still enabling practical, high-value expressiveness.
