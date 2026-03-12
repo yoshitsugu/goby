@@ -211,6 +211,7 @@ fn validate_stmt_value(
     covered_ops: &HashSet<String>,
     decl_name: &str,
 ) -> Result<(), TypecheckError> {
+    ensure_known_call_targets_in_expr(expr, local_env, decl_name)?;
     ensure_no_ambiguous_refs_in_expr(expr, local_env, decl_name)?;
     check_unhandled_effects_in_expr(
         expr,
@@ -222,6 +223,149 @@ fn validate_stmt_value(
         decl_name,
     )?;
     check_branch_type_consistency_in_expr(expr, local_env, decl_name)
+}
+
+fn ensure_known_call_targets_in_expr(
+    expr: &Expr,
+    env: &TypeEnv,
+    decl_name: &str,
+) -> Result<(), TypecheckError> {
+    match expr {
+        Expr::Call { callee, arg } => {
+            match callee.as_ref() {
+                Expr::Var(name) => {
+                    if matches!(name.as_str(), "print" | "println")
+                        && env.lookup(name) == Ty::Unknown
+                    {
+                        return Err(TypecheckError {
+                            declaration: Some(decl_name.to_string()),
+                            span: None,
+                            message: format!("unknown function or constructor `{}`", name),
+                        });
+                    }
+                }
+                _ => {}
+            }
+            ensure_known_call_targets_in_expr(callee, env, decl_name)?;
+            ensure_known_call_targets_in_expr(arg, env, decl_name)
+        }
+        Expr::MethodCall { args, .. } => {
+            for arg in args {
+                ensure_known_call_targets_in_expr(arg, env, decl_name)?;
+            }
+            Ok(())
+        }
+        Expr::Pipeline { value, callee } => {
+            if matches!(callee.as_str(), "print" | "println") && env.lookup(callee) == Ty::Unknown {
+                return Err(TypecheckError {
+                    declaration: Some(decl_name.to_string()),
+                    span: None,
+                    message: format!("unknown function or constructor `{}`", callee),
+                });
+            }
+            ensure_known_call_targets_in_expr(value, env, decl_name)
+        }
+        Expr::ListLit { elements, spread } => {
+            for element in elements {
+                ensure_known_call_targets_in_expr(element, env, decl_name)?;
+            }
+            if let Some(spread) = spread {
+                ensure_known_call_targets_in_expr(spread, env, decl_name)?;
+            }
+            Ok(())
+        }
+        Expr::TupleLit(items) => {
+            for item in items {
+                ensure_known_call_targets_in_expr(item, env, decl_name)?;
+            }
+            Ok(())
+        }
+        Expr::RecordConstruct { fields, .. } => {
+            for (_, value) in fields {
+                ensure_known_call_targets_in_expr(value, env, decl_name)?;
+            }
+            Ok(())
+        }
+        Expr::BinOp { left, right, .. } => {
+            ensure_known_call_targets_in_expr(left, env, decl_name)?;
+            ensure_known_call_targets_in_expr(right, env, decl_name)
+        }
+        Expr::InterpolatedString(parts) => {
+            for part in parts {
+                if let crate::ast::InterpolatedPart::Expr(expr) = part {
+                    ensure_known_call_targets_in_expr(expr, env, decl_name)?;
+                }
+            }
+            Ok(())
+        }
+        Expr::Lambda { body, .. } => ensure_known_call_targets_in_expr(body, env, decl_name),
+        Expr::Handler { clauses } => {
+            for clause in clauses {
+                if let Some(stmts) = &clause.parsed_body {
+                    for stmt in stmts {
+                        match stmt {
+                            Stmt::Binding { value, .. }
+                            | Stmt::MutBinding { value, .. }
+                            | Stmt::Assign { value, .. }
+                            | Stmt::Expr(value) => {
+                                ensure_known_call_targets_in_expr(value, env, decl_name)?;
+                            }
+                        }
+                    }
+                }
+            }
+            Ok(())
+        }
+        Expr::With { handler, body } => {
+            ensure_known_call_targets_in_expr(handler, env, decl_name)?;
+            for stmt in body {
+                match stmt {
+                    Stmt::Binding { value, .. }
+                    | Stmt::MutBinding { value, .. }
+                    | Stmt::Assign { value, .. }
+                    | Stmt::Expr(value) => {
+                        ensure_known_call_targets_in_expr(value, env, decl_name)?;
+                    }
+                }
+            }
+            Ok(())
+        }
+        Expr::Resume { value } => ensure_known_call_targets_in_expr(value, env, decl_name),
+        Expr::Block(stmts) => {
+            for stmt in stmts {
+                match stmt {
+                    Stmt::Binding { value, .. }
+                    | Stmt::MutBinding { value, .. }
+                    | Stmt::Assign { value, .. }
+                    | Stmt::Expr(value) => {
+                        ensure_known_call_targets_in_expr(value, env, decl_name)?;
+                    }
+                }
+            }
+            Ok(())
+        }
+        Expr::Case { scrutinee, arms } => {
+            ensure_known_call_targets_in_expr(scrutinee, env, decl_name)?;
+            for arm in arms {
+                ensure_known_call_targets_in_expr(&arm.body, env, decl_name)?;
+            }
+            Ok(())
+        }
+        Expr::If {
+            condition,
+            then_expr,
+            else_expr,
+        } => {
+            ensure_known_call_targets_in_expr(condition, env, decl_name)?;
+            ensure_known_call_targets_in_expr(then_expr, env, decl_name)?;
+            ensure_known_call_targets_in_expr(else_expr, env, decl_name)
+        }
+        Expr::IntLit(_)
+        | Expr::BoolLit(_)
+        | Expr::StringLit(_)
+        | Expr::Var(_)
+        | Expr::Qualified { .. } => Ok(()),
+    }
 }
 
 fn check_declared_return_type(

@@ -380,22 +380,27 @@ removed in a deliberate order after active language/runtime work.
         `resolver_reports_missing_stdlib_module_when_file_is_missing`
     - completion note:
       - C1 is complete; follow-up cleanup now belongs under C3 doc/test pruning rather than import-resolution behavior.
-  - [ ] C2. bare builtin `print` availability without import
+  - [x] C2. bare builtin `print` availability without import
     - current status:
-      - typecheck still injects bare `print` into the global environment even without
-        importing `goby/prelude` or `goby/stdio`.
+      - typecheck no longer injects bare `print` as a standalone builtin symbol.
+      - bare `print` and `println` remain available in normal user code through the
+        implicit `goby/prelude` import path.
+      - when `goby/prelude` is absent from the active stdlib root, bare `print` now fails
+        like any other missing prelude symbol.
       - wasm lowering and fallback/runtime execution still special-case bare `print`
         as a builtin call shape rather than treating it purely as imported stdlib surface.
-      - tests currently lock this behavior as intentional compatibility.
+      - tests now lock the implicit-prelude policy rather than builtin symbol injection.
     - code anchors:
-      - `crates/goby-core/src/typecheck_build.rs`: builtin `print` insertion
       - `crates/goby-core/src/typecheck.rs`
-        (`baseline_bare_print_builtin_is_available_without_import`)
+        (`baseline_bare_print_is_available_via_implicit_prelude`,
+        `rejects_bare_print_call_when_prelude_is_missing_in_context_root`)
       - `crates/goby-wasm/src/lower.rs`, `crates/goby-wasm/src/runtime_unit.rs`,
         `crates/goby-wasm/src/runtime_resolver.rs`, `crates/goby-wasm/src/fallback.rs`
-    - removal target:
-      - decide whether `print` remains permanent prelude sugar or becomes import/prelude-only.
-      - if removed, replace compatibility tests with explicit-prelude/import coverage.
+    - policy note:
+      - C2 is complete as a typechecker/name-resolution decision:
+        bare `print` is implicit-prelude sugar, not a separately injected builtin.
+      - remaining runtime/output-path special-casing is not name-resolution compatibility debt;
+        it belongs to later runtime cleanup.
   - [ ] C3. builtin fallback tests and migration assumptions
     - current status:
       - focused tests now cover resolver-first behavior and explicit failure when stdlib files
@@ -448,8 +453,7 @@ removed in a deliberate order after active language/runtime work.
       - docs clearly state that `@embed` is not intended to grow into the general host-effect mechanism.
 - Recommended removal order:
   - 1. C3 fallback-oriented tests/docs
-  - 2. C2 bare builtin `print` policy decision and cleanup
-  - 3. C4 embedded default handler bridge revalidation
+  - 2. C4 embedded default handler bridge revalidation
 - Out of scope for this backlog:
   - `Unit` as a type name and internal runtime representation (`RuntimeValue::Unit`) is not
     compatibility debt.

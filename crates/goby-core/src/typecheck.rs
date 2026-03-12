@@ -1034,6 +1034,27 @@ main =
     }
 
     #[test]
+    fn rejects_bare_print_call_when_prelude_is_missing_in_context_root() {
+        let sandbox = TempDirGuard::new("implicit_prelude_print_missing");
+        let stdlib_root = sandbox.path.join("stdlib");
+        let source_path = sandbox.path.join("user/main.gb");
+        fs::create_dir_all(&stdlib_root).expect("stdlib root should be creatable");
+        fs::create_dir_all(source_path.parent().expect("parent should exist"))
+            .expect("user path should be creatable");
+        let source = "main : Unit -> Unit\nmain = print \"hi\"\n";
+        fs::write(&source_path, source).expect("fixture file should be writable");
+        let module = parse_module(source).expect("should parse");
+        let err = typecheck_module_with_context(&module, Some(&source_path), Some(&stdlib_root))
+            .expect_err("missing prelude should reject bare print call");
+        assert!(
+            err.message
+                .contains("unknown function or constructor `print`"),
+            "unexpected message: {}",
+            err.message
+        );
+    }
+
+    #[test]
     fn rejects_non_main_can_clause_with_implicit_prelude_effect() {
         let source = "\
 f : Unit -> Unit can Print
@@ -1399,10 +1420,10 @@ f = fetch_env_var(\"HOME\")
     }
 
     #[test]
-    fn baseline_bare_print_builtin_is_available_without_import() {
+    fn baseline_bare_print_is_available_via_implicit_prelude() {
         let source = "main : Unit -> Unit\nmain = print \"hi\"\n";
         let module = parse_module(source).expect("should parse");
-        typecheck_module(&module).expect("bare print should remain available as builtin");
+        typecheck_module(&module).expect("bare print should resolve via implicit prelude");
     }
 
     #[test]

@@ -361,6 +361,16 @@ pub(crate) fn inject_imported_symbols(
         };
         match &import.kind {
             ImportKind::Plain => {
+                if import.module_path == PRELUDE_MODULE_PATH {
+                    for (name, ty) in &exports {
+                        insert_global_symbol(
+                            globals,
+                            name.clone(),
+                            ty.clone(),
+                            format!("implicit prelude `{}`", import.module_path),
+                        );
+                    }
+                }
                 let qualifier = import
                     .module_path
                     .rsplit('/')

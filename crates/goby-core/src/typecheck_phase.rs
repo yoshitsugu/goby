@@ -28,6 +28,7 @@ use crate::{
 
 pub(crate) struct ValidationPhase {
     pub(crate) imported_effect_declarations: Vec<ImportedEffectDecl>,
+    pub(crate) embedded_default_effects: HashSet<String>,
 }
 
 pub(crate) struct CheckingPhase {
@@ -35,6 +36,7 @@ pub(crate) struct CheckingPhase {
     pub(crate) effect_map: EffectMap,
     pub(crate) effect_dependency_info: EffectDependencyInfo,
     pub(crate) required_effects_map: HashMap<String, Vec<String>>,
+    pub(crate) embedded_default_effects: HashSet<String>,
 }
 
 pub(crate) fn default_typecheck_stdlib_root(stdlib_root: Option<&Path>) -> std::path::PathBuf {
@@ -68,6 +70,7 @@ pub(crate) fn validate_module_phase(
     validate_main_annotation(module)?;
     Ok(ValidationPhase {
         imported_effect_declarations,
+        embedded_default_effects,
     })
 }
 
@@ -87,6 +90,7 @@ pub(crate) fn build_checking_phase(
         effect_map,
         effect_dependency_info,
         required_effects_map,
+        embedded_default_effects: validation.embedded_default_effects.clone(),
     })
 }
 
@@ -104,8 +108,15 @@ pub(crate) fn check_declaration_bodies(
             .iter()
             .map(|(name, ty)| (name.as_str(), ty.clone()))
             .collect();
-        let decl_covered_ops =
+        let mut decl_covered_ops =
             ops_from_can_clause(decl.type_annotation.as_deref(), &checking.effect_map);
+        if decl.name == "main" {
+            for effect_name in &checking.embedded_default_effects {
+                if let Some(ops) = checking.effect_map.effect_to_ops.get(effect_name) {
+                    decl_covered_ops.extend(ops.iter().cloned());
+                }
+            }
+        }
         check_resume_in_stmts(stmts, &checking.env, &decl.name, &param_ty_refs, None)?;
         check_body_stmts(
             stmts,

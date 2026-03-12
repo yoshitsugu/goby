@@ -2,7 +2,7 @@
 
 Status: Step 0-12 + ExtraStep A/B complete
 Owner: Goby core/tooling track
-Last updated: 2026-03-03
+Last updated: 2026-03-12
 
 ## 1. Purpose
 
@@ -19,7 +19,6 @@ In scope:
 
 - Introduce a canonical in-repo stdlib source layout.
 - Resolve `import goby/...` from `.gb` source files.
-- Keep current built-in import behavior as compatibility fallback during migration.
 - Add a stdlib-only `@embed` annotation for effect embedding declarations.
 - Preserve existing import diagnostics quality.
 - Add regression coverage for file-based stdlib import behavior.
@@ -33,11 +32,11 @@ Out of scope (later phases):
 
 ## 3. Current Baseline
 
-Today, import resolution is built-in and hardcoded in typechecker logic:
+Today, import resolution is file-backed in typechecker logic:
 
-- `validate_imports` and `inject_imported_symbols` use `builtin_module_exports`.
-- Supported modules are fixed (`goby/string`, `goby/list`, `goby/env`).
-- `print` is currently treated as a language/runtime builtin rather than a stdlib module API.
+- `validate_imports` and `inject_imported_symbols` resolve checked-in stdlib files directly.
+- Supported modules come from files under `stdlib/goby/*.gb`.
+- bare `print` / `println` come from the implicit `goby/prelude` import path rather than a separately injected builtin symbol.
 - Runtime behavior for some stdlib operations is still hardcoded in `goby-wasm`.
 
 Implication:
@@ -56,9 +55,9 @@ Introduce a dedicated stdlib resolver layer in `goby-core`:
 
 Compatibility rule during migration:
 
-- Try file-based stdlib resolution first.
-- If unavailable, fall back to legacy built-in export table.
-- Keep a temporary builtin bridge for `print` until `goby/stdio` runtime parity is complete.
+- Use checked-in stdlib files as the single source of truth for `goby/...` imports.
+- Keep bare `print` available as implicit-prelude sugar while runtime lowering/output paths
+  still special-case the print call shape.
 
 `@embed` rule:
 
@@ -114,7 +113,7 @@ Deliverables:
 
 - Route `validate_imports` through resolver-backed module export lookup.
 - Route `inject_imported_symbols` through the same resolver-backed source.
-- Keep `builtin_module_exports` as fallback path for compatibility.
+- Do not keep a builtin export-table fallback in the typechecker import path.
 
 Rules:
 
@@ -189,12 +188,12 @@ Not executed in this plan unless explicitly started.
 
 Planned `print` migration sequence:
 
-1. Keep builtin `print` as runtime primitive while introducing `goby/stdio.print`.
+1. Keep runtime print execution support while introducing `goby/stdio.print`.
 2. Make `goby/stdio` import path first-class in docs/examples.
-3. Keep compatibility so legacy bare `print` still works during migration.
+3. Keep compatibility so bare `print` still works through implicit prelude during migration.
 4. Introduce stdlib-only `@embed Print` declaration path and wire runtime bridge through it.
 5. After parity and adoption, reduce direct compiler/runtime special-casing.
-6. Decide policy: retire bare builtin `print` or keep as permanent compatibility alias.
+6. Revisit whether implicit-prelude `print` should remain permanent sugar or become explicit-import-only.
 
 ## 7. Incremental Step-by-Step Execution Plan
 
@@ -258,7 +257,7 @@ Step 8: Introduce stdlib-only `@embed` parsing gate
 Step 9: `@embed Print` stdio bridge metadata
 
 - Wire embedded `Print` declaration metadata into stdio planning path.
-- Keep bare builtin `print` behavior intact.
+- Keep bare `print` behavior intact through implicit prelude.
 - Exit criteria: no runtime regression; bridge metadata visible to compiler stages.
 
 Step 10: CLI stdlib root wiring
@@ -276,7 +275,7 @@ Step 12: print migration handoff checkpoint
 
 - Document active behavior:
   - `goby/stdio.print` available,
-  - bare `print` compatibility preserved,
+  - bare `print` available via implicit prelude,
   - `@embed` restricted to stdlib.
 - Exit criteria: checkpoint recorded in `doc/STATE.md`, next runtime step unblocked.
 ## 8. Test Strategy

@@ -4,11 +4,11 @@ use std::path::Path;
 use crate::{
     Module,
     ast::TypeDeclaration,
-    typecheck::TypecheckError,
+    typecheck::{PRELUDE_MODULE_PATH, TypecheckError},
     typecheck_annotation::strip_effect_clause,
-    typecheck_env::{GlobalBinding, RecordTypeInfo, Ty, TypeEnv},
+    typecheck_env::{GlobalBinding, ImportedEffectDecl, RecordTypeInfo, Ty, TypeEnv},
     typecheck_types::{ty_from_annotation, ty_from_type_expr},
-    typecheck_validate::inject_imported_symbols,
+    typecheck_validate::{collect_imported_effect_declarations, inject_imported_symbols},
     types::parse_type_expr,
 };
 
@@ -41,15 +41,6 @@ pub(crate) fn build_type_env(module: &Module, stdlib_root: &Path) -> TypeEnv {
             }
         }
     }
-    insert_global_symbol(
-        &mut globals,
-        "print".to_string(),
-        Ty::Fun {
-            params: vec![Ty::Unknown],
-            result: Box::new(Ty::Unit),
-        },
-        "builtin `print`".to_string(),
-    );
     insert_global_symbol(
         &mut globals,
         "__goby_string_length".to_string(),
@@ -102,6 +93,10 @@ pub(crate) fn build_type_env(module: &Module, stdlib_root: &Path) -> TypeEnv {
         "runtime intrinsic `__goby_embeded_effect_stdin_handler`".to_string(),
     );
     inject_imported_symbols(module, &mut globals, stdlib_root);
+    inject_imported_effect_symbols(
+        &collect_imported_effect_declarations(module, stdlib_root),
+        &mut globals,
+    );
     inject_type_constructors(module, &mut globals, &mut type_aliases, &mut record_types);
     inject_effect_symbols(module, &mut globals);
 
@@ -168,6 +163,46 @@ pub(crate) fn inject_effect_symbols(module: &Module, globals: &mut HashMap<Strin
                 ty,
                 format!("effect `{}` member", effect_decl.name),
             );
+        }
+    }
+}
+
+fn inject_imported_effect_symbols(
+    imported_effects: &[ImportedEffectDecl],
+    globals: &mut HashMap<String, GlobalBinding>,
+) {
+    for imported in imported_effects {
+        if imported.source_module != PRELUDE_MODULE_PATH {
+            continue;
+        }
+        for member in &imported.decl.members {
+            let qualified_key = format!("{}.{}", imported.decl.name, member.name);
+            let (ty, source) = if imported.decl.name == "Print"
+                && matches!(member.name.as_str(), "print" | "println")
+            {
+                (
+                    Ty::Fun {
+                        params: vec![Ty::Unknown],
+                        result: Box::new(Ty::Unit),
+                    },
+                    format!("implicit prelude `{}` convenience", member.name),
+                )
+            } else {
+                (
+                    match parse_type_expr(&member.type_annotation)
+                        .map(|expr| ty_from_type_expr(&expr))
+                    {
+                        Some(fun_ty @ Ty::Fun { .. }) => fun_ty,
+                        _ => Ty::Unknown,
+                    },
+                    format!(
+                        "effect `{}` member from import `{}`",
+                        imported.decl.name, imported.source_module
+                    ),
+                )
+            };
+            insert_global_symbol(globals, qualified_key, ty.clone(), source.clone());
+            insert_global_symbol(globals, member.name.clone(), ty, source);
         }
     }
 }
