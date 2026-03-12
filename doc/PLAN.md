@@ -258,6 +258,13 @@ Based on `examples/*.gb`:
 
 - TODO (Deferred): declaration-side generic parameter binders
   (for example, `id : a -> a` with explicit binders).
+- Planned numeric expansion: `Float` type backed by Wasm `f64`.
+  - intended surface type name is `Float`.
+  - initial implementation target is IEEE 754 double precision semantics via Wasm `f64`.
+  - MVP scope should stay explicit about unsupported edge cases until diagnostics/runtime text are defined:
+    - NaN display/equality wording,
+    - infinity parsing/printing policy,
+    - mixed `Int`/`Float` operator coercion rules.
 - **List `case` pattern typing** (implemented).
   - For `case xs` with list patterns, typecheck verifies scrutinee is `List _` when known.
   - Per-arm local environment extension is implemented:
@@ -524,6 +531,62 @@ Note:
 
 - Critical correctness items from the same review batch were already fixed:
   parser explicit early-return clarity and planning `u16` overflow fail-fast behavior.
+
+### 4.5 Active Track E: `Float` / Wasm `f64` Support
+
+Goal: add a first-class `Float` type with predictable parser/typechecker/runtime/Wasm behavior.
+
+Why this is a separate track:
+
+- `Float` crosses language surface, type rules, runtime behavior, stdlib shape, and Wasm lowering.
+- the design needs a few semantics to be locked before implementation to avoid ad-hoc numeric behavior.
+
+Scope to lock before coding:
+
+1. Literal syntax
+   - canonical decimal forms for `Float` literals (for example `1.0`, `0.5`, `-3.25`).
+   - whether exponent notation (`1e3`, `1.2e-3`) is included in the first slice.
+   - parser boundary with tuple/member syntax so `1.0` is never confused with `expr.0`.
+2. Type/system rules
+   - `Float` is a distinct primitive type, not an alias of `Int`.
+   - decide whether mixed arithmetic is rejected initially or whether `Int -> Float` promotion exists for operators/calls.
+   - comparison/equality semantics must be explicit, especially around NaN.
+3. Runtime/CLI behavior
+   - printing/rendering policy for `Float`.
+   - parse/runtime behavior for NaN, `inf`, `-inf`, and division edge cases.
+4. Stdlib surface
+   - introduce a minimal `goby/float` module only if it has a clearly defined first API surface.
+
+Execution phases:
+
+1. Phase E1: Syntax and semantic lock
+   - define accepted literal grammar and operator coverage.
+   - decide initial coercion policy:
+     - preferred conservative default: no implicit `Int`/`Float` mixing in MVP; require exact operand types until explicit conversion APIs exist.
+   - update `doc/LANGUAGE_SPEC.md`, examples, and diagnostics wording once semantics are locked.
+2. Phase E2: Core representation and parsing
+   - add `Float` to AST/type representations.
+   - teach the lexer/parser to recognize `Float` literals without regressing tuple-index/member access parsing.
+   - add parser regression tests for decimal literals, negatives, malformed literals, and `expr.0` ambiguity cases.
+3. Phase E3: Typechecker and operators
+   - add `Float` typing rules for literals, annotations, and supported operators.
+   - implement diagnostics for invalid mixed arithmetic if coercion stays disabled.
+   - ensure branch/type-unification paths report `Int` vs `Float` mismatches clearly.
+4. Phase E4: Runtime and Wasm lowering
+   - extend interpreter/fallback runtime with `Float` values and operator execution.
+   - lower `Float` values/operators to Wasm `f64`.
+   - verify parity between fallback execution and native Wasm execution for the supported subset.
+5. Phase E5: Stdlib, examples, and tooling follow-through
+   - add or update canonical examples using `Float`.
+   - extend formatter/linter/LSP assumptions if numeric literal/token handling needs updates.
+   - add diagnostics/hover rendering coverage for `Float`.
+
+Acceptance criteria:
+
+- `Float` annotations and literals are accepted by `check` for the supported syntax.
+- supported `Float` arithmetic behaves consistently in fallback runtime and Wasm-native execution.
+- diagnostics clearly distinguish `Int` from `Float`.
+- docs/examples/spec are updated in the same slice that lands behavior.
 
 ### 4.6 Parking Lot (Needs Revalidation Before Implementation)
 
