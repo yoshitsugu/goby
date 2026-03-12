@@ -6,8 +6,8 @@ This file is a restart-safe snapshot for resuming work after context reset.
 
 ## Current Focus
 
-- C1, C2, and C3 are complete: stdlib import fallback is gone, bare `print` resolves through implicit prelude, and planning docs are aligned with that behavior.
-- The next adjacent cleanup is C4: re-review embedded default handler/runtime special-case boundaries now that name-resolution compatibility work is closed.
+- Compatibility cleanup backlog C1-C4 is complete.
+- The next milestone should come from active runtime/stdlib feature work, not additional compatibility-bridge pruning.
 
 ## Current State
 
@@ -16,19 +16,19 @@ This file is a restart-safe snapshot for resuming work after context reset.
 - `crates/goby-core/src/typecheck_build.rs` no longer injects `print` as a builtin global.
 - Bare `print` / `println` still work in normal code because implicit `goby/prelude` import remains active when the prelude file exists.
 - `doc/PLAN_STANDARD_LIBRARY.md` no longer describes builtin import fallback as active behavior.
-- Remaining related cleanup after this slice:
-  - move to C4/runtime-side cleanup for remaining print/embed special cases if they still count as architectural debt.
+- `crates/goby-wasm/src/runtime_unit.rs` and `crates/goby-wasm/src/runtime_apply.rs` now route bare/pipeline/value `print` / `println` through embedded-effect dispatch instead of separate AST-level output shortcuts.
+- Remaining runtime `print` recognition is limited to native-lowering / string-fallback mechanics and is no longer tracked as embedded-handler compatibility debt.
 
 ## Verified
 
 - `cargo fmt`
 - `cargo check`
-- `cargo test -p goby-core`
+- `cargo test -p goby-wasm`
 
 ## Next Work
 
-- Re-review whether remaining runtime-side `print` / embedded-handler special-casing should be simplified under C4 or a later stdlib-runtime milestone.
-- If that re-review finds no additional compatibility debt, shift to the next feature/runtime milestone instead of more cleanup.
+- Pick the next active runtime/stdlib milestone from `doc/PLAN.md`.
+- Treat compatibility cleanup as closed unless new compatibility-only behavior is intentionally introduced.
 
 ## Notes
 

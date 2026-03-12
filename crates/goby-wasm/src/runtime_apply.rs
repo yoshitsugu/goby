@@ -259,14 +259,6 @@ impl<'m> RuntimeOutputResolver<'m> {
                 depth + 1,
             );
         }
-        if fn_name == "println" {
-            let mut text = arg_val.to_output_text();
-            if !text.ends_with('\n') {
-                text.push('\n');
-            }
-            self.embedded_effect_runtime.emit_output_line(text);
-            return Out::Done(RuntimeValue::Unit);
-        }
         if self.unique_effect_name_for_operation(fn_name).is_some() {
             self.set_unhandled_effect_error(fn_name);
             return Out::Err(RuntimeError::Unsupported);

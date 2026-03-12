@@ -414,7 +414,7 @@ removed in a deliberate order after active language/runtime work.
       - `doc/PLAN_STANDARD_LIBRARY.md`
     - completion note:
       - C3 is complete; remaining work is runtime-side cleanup under C4/C5, not import fallback policy.
-  - [ ] C4. embedded default handler / runtime bridge revalidation after C1-C3
+  - [x] C4. embedded default handler / runtime bridge revalidation after C1-C3
     - current status:
       - embedded default handlers are current semantics, not legacy syntax.
       - bare prelude effect ops now resolve through normal imported-effect visibility rather
@@ -424,8 +424,9 @@ removed in a deliberate order after active language/runtime work.
         `EmbeddedEffectRuntime` plus `RuntimeImportContext`.
       - resolver-side effect dispatch now uses `EmbeddedRuntimeHandlerKind` and the shared
         runtime import context instead of ad hoc branching spread across the old monolith.
-      - remaining special handling is mainly the intentional narrow runtime-owned
-        `Print` / `Read` I/O hook and the handler-name-to-runtime-kind mapping.
+      - remaining special handling is the intentional narrow runtime-owned
+        `Print` / `Read` I/O hook and the handler-name-to-runtime-kind mapping,
+        both owned by `EmbeddedEffectRuntime` / `EmbeddedRuntimeHandlerKind`.
       - project direction is now to keep `@embed` narrow: it exists for the minimal `Print` / `Read` onboarding path, not as a general host-capability extension point.
     - design direction:
       - do not treat `@embed` itself as debt to remove.
@@ -443,7 +444,8 @@ removed in a deliberate order after active language/runtime work.
       - [x] centralize handler-name-to-runtime-implementation mapping through `EmbeddedRuntimeHandlerKind`.
       - [x] after C1-C3, re-check whether any duplicate "builtin convenience" path still bypasses the intended imported-prelude/embed route.
         - result: typechecker-side bare `print` now routes through implicit prelude instead of a standalone builtin symbol.
-        - remaining special-casing is runtime execution convenience, not import/name-resolution fallback debt.
+        - result: runtime AST dispatch no longer keeps separate bare/pipeline/value `print` /
+          `println` output shortcuts outside embedded-effect dispatch.
     - guardrails:
       - only one place in runtime should branch on embedded handler names such as `__goby_embeded_effect_stdout_handler`.
       - `RuntimeOutputResolver` should not directly perform embedded stdin/stdout behavior once the refactor is complete.
@@ -453,8 +455,11 @@ removed in a deliberate order after active language/runtime work.
       - effect dispatch call paths do not reintroduce ad hoc embedded-handler special cases.
       - existing `Print` / `Read` end-to-end tests still pass under both fallback and typed-continuation modes.
       - docs clearly state that `@embed` is not intended to grow into the general host-effect mechanism.
+    - completion note:
+      - C4 is complete; remaining runtime `print` recognition belongs to native-lowering /
+        string-fallback execution mechanics, not embedded-handler compatibility debt.
 - Recommended removal order:
-  - 1. C4 embedded default handler bridge revalidation
+  - compatibility cleanup backlog is complete; next work should come from active runtime/stdlib features instead of this survey.
 - Out of scope for this backlog:
   - `Unit` as a type name and internal runtime representation (`RuntimeValue::Unit`) is not
     compatibility debt.

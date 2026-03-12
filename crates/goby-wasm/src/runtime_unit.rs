@@ -6,7 +6,7 @@ use crate::call::flatten_named_call;
 use crate::runtime_eval::{AstLambdaCallable, IntCallable};
 use crate::runtime_flow::{Escape, FinishKind, Out, RuntimeError, RuntimeEvaluators};
 use crate::runtime_value::{RuntimeLocals, RuntimeValue};
-use crate::{BUILTIN_PRINT, ERR_CALLABLE_DISPATCH_DECL_PARAM, RuntimeOutputResolver};
+use crate::{ERR_CALLABLE_DISPATCH_DECL_PARAM, RuntimeOutputResolver};
 
 impl<'m> RuntimeOutputResolver<'m> {
     pub(crate) fn execute_unit_expr_ast(
@@ -82,47 +82,6 @@ impl<'m> RuntimeOutputResolver<'m> {
                 )
                 .is_some()
         {
-            return Out::Done(());
-        }
-
-        if let Expr::Call { callee, arg } = expr
-            && matches!(callee.as_ref(), Expr::Var(n) if n == BUILTIN_PRINT)
-        {
-            let value = match self.eval_expr(arg, locals, callables, evaluators, depth) {
-                Out::Done(v) => v,
-                Out::Suspend(cont) => return Out::Suspend(cont),
-                Out::Escape(escape) => return Out::Escape(escape),
-                Out::Err(e) => return Out::Err(e),
-            };
-            self.embedded_effect_runtime
-                .emit_output_text(value.to_output_text());
-            return Out::Done(());
-        }
-        if let Expr::Call { callee, arg } = expr
-            && matches!(callee.as_ref(), Expr::Var(n) if n == "println")
-        {
-            let value = match self.eval_expr(arg, locals, callables, evaluators, depth) {
-                Out::Done(v) => v,
-                Out::Suspend(cont) => return Out::Suspend(cont),
-                Out::Escape(escape) => return Out::Escape(escape),
-                Out::Err(e) => return Out::Err(e),
-            };
-            self.embedded_effect_runtime
-                .emit_output_line(value.to_output_text());
-            return Out::Done(());
-        }
-
-        if let Expr::Pipeline { value, callee } = expr
-            && callee == BUILTIN_PRINT
-        {
-            let v = match self.eval_expr(value, locals, callables, evaluators, depth) {
-                Out::Done(v) => v,
-                Out::Suspend(cont) => return Out::Suspend(cont),
-                Out::Escape(escape) => return Out::Escape(escape),
-                Out::Err(e) => return Out::Err(e),
-            };
-            self.embedded_effect_runtime
-                .emit_output_text(v.to_output_text());
             return Out::Done(());
         }
 
@@ -209,14 +168,6 @@ impl<'m> RuntimeOutputResolver<'m> {
             let bare_method = self.find_handler_method_by_name(fn_name);
             if let Some(method) = bare_method {
                 return self.dispatch_handler_method(&method, arg_val, evaluators, depth + 1);
-            }
-            if fn_name == "println" {
-                let mut text = arg_val.to_output_text();
-                if !text.ends_with('\n') {
-                    text.push('\n');
-                }
-                self.embedded_effect_runtime.emit_output_line(text);
-                return Out::Done(());
             }
             if fn_name.starts_with("__goby_")
                 && self
