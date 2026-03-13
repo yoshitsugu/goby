@@ -1,5 +1,8 @@
 use goby_core::{Expr, Module, Stmt};
 
+use crate::CodegenError;
+use crate::backend::WasmProgramBuilder;
+use crate::layout::MemoryLayout;
 use crate::runtime_flow::DirectCallHead;
 use crate::runtime_support::{flatten_direct_call, module_has_selective_import_symbol};
 
@@ -29,6 +32,31 @@ pub(crate) enum RuntimeIoClassification {
     DynamicWasiIo(RuntimeIoPlan),
     InterpreterBridge,
     NotRuntimeIo,
+}
+
+impl RuntimeIoPlan {
+    pub(crate) fn emit_wasm(self) -> Result<Vec<u8>, CodegenError> {
+        let builder = WasmProgramBuilder::new(MemoryLayout::default());
+        match self {
+            RuntimeIoPlan::Echo {
+                input_mode,
+                output_mode,
+            } => {
+                let append_newline = matches!(output_mode, OutputReadMode::Println);
+                match input_mode {
+                    InputReadMode::ReadAll => {
+                        builder.emit_read_all_to_stdout_module(append_newline)
+                    }
+                    InputReadMode::ReadLine => {
+                        builder.emit_read_line_to_stdout_module(append_newline)
+                    }
+                }
+            }
+            RuntimeIoPlan::SplitLinesEachPrintln => {
+                builder.emit_read_split_lines_each_println_module()
+            }
+        }
+    }
 }
 
 pub(crate) fn classify_runtime_io(

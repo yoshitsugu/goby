@@ -64,8 +64,9 @@ This file is a restart-safe snapshot for resuming work after context reset.
 - That dynamic path is now generalized across a few equivalent output spellings, but it
   still only handles direct echo-style `read` / `read_line` output shapes plus the
   newline-splitting `each println` family in a narrow set of local-binding forms.
-- Runtime-I/O planning ownership has started moving out of `crates/goby-wasm/src/lib.rs`
-  into a dedicated module, but the old direct matcher path has not been fully retired yet.
+- Runtime-I/O planning ownership has moved into a dedicated `goby-wasm` module, and
+  dynamic runtime-I/O Wasm emission now follows that same ownership boundary instead
+  of being re-mapped from planner cases inside `crates/goby-wasm/src/lib.rs`.
 - `compile_module` now consults the runtime-I/O classifier before compile-time fallback,
   so bridge cases are rejected by planning rather than only by fallback execution.
 - `goby-wasm` now exposes a small public runtime-I/O execution-kind query so callers can
@@ -78,6 +79,8 @@ This file is a restart-safe snapshot for resuming work after context reset.
 - Wasm smoke/regression coverage now separates the two runtime-I/O paths explicitly:
   bridge-only stdin execution is tested with a planner-classified bridge shape, while
   dynamic-Wasm shapes are checked to reject the temporary interpreter bridge entrypoint.
+- `RuntimeIoPlan` now owns both classification and dynamic-Wasm emission for the
+  currently supported stdin/stdout runtime-I/O cases.
 
 ## Verified
 
@@ -96,6 +99,8 @@ This file is a restart-safe snapshot for resuming work after context reset.
   interpreter runtime.
 - Decide whether the new runtime execution path should become an explicit internal API
   boundary before dynamic Wasm support lands, or remain a temporary CLI-only bridge.
+- Continue Track F by expanding `RuntimeIoPlan` expressiveness, not by adding new
+  planner-bypassing runtime-I/O branches in `crates/goby-wasm/src/lib.rs`.
 - Keep Track D queued after the runtime I/O containment/runtime split work is in a stable state.
 - Once Track F runtime support lands, sync `doc/LANGUAGE_SPEC.md` and runnable stdin examples.
 

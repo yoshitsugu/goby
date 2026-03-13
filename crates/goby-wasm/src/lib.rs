@@ -49,9 +49,7 @@ use crate::runtime_flow::{
     ResolvedEffectHandler, ResolvedHandlerMethod, ResumeToken, RuntimeDeclInfo, RuntimeError,
     RuntimeEvaluators, RuntimeHandlerMethod, StoreOp, WithId,
 };
-use crate::runtime_io_plan::{
-    InputReadMode, RuntimeIoClassification, RuntimeIoPlan, classify_runtime_io,
-};
+use crate::runtime_io_plan::{RuntimeIoClassification, classify_runtime_io};
 use crate::runtime_support::{eval_string_expr, parse_pipeline};
 use crate::runtime_value::{RuntimeLocals, RuntimeValue, runtime_value_option_eq};
 use goby_core::{
@@ -127,34 +125,6 @@ fn unresolved_runtime_output_error(
             "main body contains unsupported constructs that cannot be lowered natively or resolved as static output"
                 .to_string(),
     }
-}
-
-fn try_emit_runtime_stdin_wasm(
-    module: &Module,
-    parsed_body: Option<&[Stmt]>,
-) -> Result<Option<Vec<u8>>, CodegenError> {
-    let plan = match classify_runtime_io(module, parsed_body) {
-        RuntimeIoClassification::DynamicWasiIo(plan) => plan,
-        RuntimeIoClassification::InterpreterBridge | RuntimeIoClassification::NotRuntimeIo => {
-            return Ok(None);
-        }
-    };
-    let builder = backend::WasmProgramBuilder::new(layout::MemoryLayout::default());
-    match plan {
-        RuntimeIoPlan::Echo {
-            input_mode,
-            output_mode,
-        } => {
-            let append_newline =
-                matches!(output_mode, crate::runtime_io_plan::OutputReadMode::Println);
-            match input_mode {
-                InputReadMode::ReadAll => builder.emit_read_all_to_stdout_module(append_newline),
-                InputReadMode::ReadLine => builder.emit_read_line_to_stdout_module(append_newline),
-            }
-        }
-        RuntimeIoPlan::SplitLinesEachPrintln => builder.emit_read_split_lines_each_println_module(),
-    }
-    .map(Some)
 }
 
 fn runtime_mode_and_handoff(
@@ -233,18 +203,16 @@ pub fn compile_module(module: &Module) -> Result<Vec<u8>, CodegenError> {
             message: ERR_MISSING_MAIN.to_string(),
         });
     };
-    if matches!(
-        classify_runtime_io(module, parsed_body),
-        RuntimeIoClassification::InterpreterBridge
-    ) {
-        return Err(CodegenError {
-            message:
-                "compile-time fallback cannot consume stdin; use the runtime stdin execution path"
-                    .to_string(),
-        });
-    }
-    if let Some(wasm) = try_emit_runtime_stdin_wasm(module, parsed_body)? {
-        return Ok(wasm);
+    match classify_runtime_io(module, parsed_body) {
+        RuntimeIoClassification::DynamicWasiIo(plan) => return plan.emit_wasm(),
+        RuntimeIoClassification::InterpreterBridge => {
+            return Err(CodegenError {
+                message:
+                    "compile-time fallback cannot consume stdin; use the runtime stdin execution path"
+                        .to_string(),
+            });
+        }
+        RuntimeIoClassification::NotRuntimeIo => {}
     }
     if let Some(text) =
         resolve_main_runtime_output_for_compile(module, &main_body, parsed_body, runtime_mode)
@@ -269,7 +237,8 @@ pub fn execute_module_with_stdin(
             message: ERR_MISSING_MAIN.to_string(),
         });
     };
-    match classify_runtime_io(module, parsed_body) {
+    let classification = classify_runtime_io(module, parsed_body);
+    match classification {
         RuntimeIoClassification::InterpreterBridge => {}
         RuntimeIoClassification::DynamicWasiIo(_) => {
             return Err(CodegenError {
