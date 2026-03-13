@@ -749,6 +749,55 @@ main =
     }
 
     #[test]
+    fn plans_split_each_lambda_calling_local_println_alias() {
+        let (module, body) = main_stmts(
+            r#"
+import goby/list ( each )
+import goby/string ( split )
+
+main : Unit -> Unit can Print, Read
+main =
+  text = read()
+  delim = "\n"
+  lines = split(text, delim)
+  printer = println
+  each lines (|line| -> printer line)
+"#,
+        );
+        assert_eq!(
+            classify_runtime_io(&module, body.as_deref()),
+            RuntimeIoClassification::DynamicWasiIo(RuntimeIoPlan::SplitLinesEach {
+                output_mode: OutputReadMode::Println,
+            })
+        );
+    }
+
+    #[test]
+    fn plans_split_each_lambda_calling_forwarded_local_print_alias() {
+        let (module, body) = main_stmts(
+            r#"
+import goby/list ( each )
+import goby/string ( split )
+
+main : Unit -> Unit can Print, Read
+main =
+  text = read()
+  delim = "\n"
+  lines = split(text, delim)
+  printer = print
+  writer = printer
+  each lines (|line| -> writer line)
+"#,
+        );
+        assert_eq!(
+            classify_runtime_io(&module, body.as_deref()),
+            RuntimeIoClassification::DynamicWasiIo(RuntimeIoPlan::SplitLinesEach {
+                output_mode: OutputReadMode::Print,
+            })
+        );
+    }
+
+    #[test]
     fn plans_read_echo_with_forwarded_local_binding() {
         let (module, body) = main_stmts(
             r#"

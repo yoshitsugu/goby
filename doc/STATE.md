@@ -109,6 +109,9 @@ This file is a restart-safe snapshot for resuming work after context reset.
 - Split-callback planning now also resolves local output-function aliases such as
   `printer = println; each lines printer` and simple forwarded forms like
   `writer = printer; each lines writer`, so those cases no longer depend on the bridge.
+- The same callback alias resolution now also covers equivalent lambda-call spellings like
+  `each lines (|line| -> printer line)`, including simple forwarded aliases, so planner
+  coverage follows the named-function-reference direction rather than only bare callback vars.
 
 ## Verified
 
