@@ -23,6 +23,9 @@ This file is a restart-safe snapshot for resuming work after context reset.
   `println(read())` and `text = read(); print/println text`.
 - The first `read_line()`-based dynamic Wasm shapes now work too:
   `print(read_line())` and `line = read_line(); println line`.
+- The original `read` + `split(text, "\n")` + `each ... println`
+  sample shape now also compiles to dynamic WASI Wasm instead of requiring the
+  interpreter-backed runtime bridge.
 
 ## Current State
 
@@ -51,7 +54,8 @@ This file is a restart-safe snapshot for resuming work after context reset.
   read-all echo case (`print(read())`), while more complex `Read` programs still use
   the interpreter-backed runtime execution bridge.
 - That dynamic path is now generalized across a few equivalent output spellings, but it
-  still only handles direct echo-style `read` / `read_line` output shapes.
+  still only handles direct echo-style `read` / `read_line` output shapes plus the
+  exact newline-splitting `each println` form.
 
 ## Verified
 
@@ -65,8 +69,9 @@ This file is a restart-safe snapshot for resuming work after context reset.
   extend the new `fd_read`/`fd_write` backend work beyond the simple echo shape so
   more `Read` programs stop depending on the interpreter-backed runtime execution path.
 - Likely next backend slice:
-  support at least one structured post-read transform so the dynamic Wasm path starts
-  covering non-trivial stdin programs like the current `read` + `split` + `each` sample.
+  widen the new structured stdin shape support beyond the exact `split(..., "\n")`
+  + `each println` pattern so nearby variants do not immediately fall back to the
+  interpreter runtime.
 - Decide whether the new runtime execution path should become an explicit internal API
   boundary before dynamic Wasm support lands, or remain a temporary CLI-only bridge.
 - Keep Track D queued after the runtime I/O containment/runtime split work is in a stable state.

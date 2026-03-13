@@ -373,7 +373,8 @@ import goby/string ( split )
 main : Unit -> Unit can Print, Read
 main =
   text = read()
-  lines = split(text, "\n")
+  delim = "\n"
+  lines = split(text, delim)
   each lines (|line| -> println(line))
 "#,
     )

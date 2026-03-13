@@ -55,6 +55,22 @@ fn find_wasm_section(wasm: &[u8], target_id: u8) -> Option<&[u8]> {
     None
 }
 
+fn assert_has_fd_read_and_fd_write_imports(wasm: &[u8]) {
+    let import_section = find_wasm_section(wasm, 0x02).expect("import section must exist");
+    assert!(
+        import_section
+            .windows(b"\x07fd_read".len())
+            .any(|w| w == b"\x07fd_read"),
+        "expected fd_read import in import section"
+    );
+    assert!(
+        import_section
+            .windows(b"\x08fd_write".len())
+            .any(|w| w == b"\x08fd_write"),
+        "expected fd_write import in import section"
+    );
+}
+
 #[test]
 fn exports_start_entrypoint() {
     let src = "main : Unit -> Unit\nmain = print \"Hello\"\n";
@@ -100,7 +116,7 @@ fn effect_boundary_with_unresolvable_fallback_reports_boundary_context() {
 }
 
 #[test]
-fn read_effect_requires_runtime_stdin_backed_wasm() {
+fn read_split_each_println_program_emits_wasm_with_fd_read_and_fd_write_imports() {
     let module = parse_module(
         r#"
 import goby/list ( each )
@@ -114,13 +130,9 @@ main =
 "#,
     )
     .expect("parse should work");
-    let err = compile_module(&module).expect_err("compile should reject compile-time stdin use");
-    assert!(
-        err.message
-            .contains("compile-time fallback cannot consume stdin"),
-        "error should explain stdin containment, got: {}",
-        err.message
-    );
+    let wasm = compile_module(&module).expect("split each println shape should compile to Wasm");
+    assert_valid_wasm_module(&wasm);
+    assert_has_fd_read_and_fd_write_imports(&wasm);
 }
 
 #[test]
@@ -135,19 +147,7 @@ main =
     .expect("parse should work");
     let wasm = compile_module(&module).expect("simple read echo should compile to Wasm");
     assert_valid_wasm_module(&wasm);
-    let import_section = find_wasm_section(&wasm, 0x02).expect("import section must exist");
-    assert!(
-        import_section
-            .windows(b"\x07fd_read".len())
-            .any(|w| w == b"\x07fd_read"),
-        "expected fd_read import in import section"
-    );
-    assert!(
-        import_section
-            .windows(b"\x08fd_write".len())
-            .any(|w| w == b"\x08fd_write"),
-        "expected fd_write import in import section"
-    );
+    assert_has_fd_read_and_fd_write_imports(&wasm);
 }
 
 #[test]
@@ -162,19 +162,7 @@ main =
     .expect("parse should work");
     let wasm = compile_module(&module).expect("println read should compile to Wasm");
     assert_valid_wasm_module(&wasm);
-    let import_section = find_wasm_section(&wasm, 0x02).expect("import section must exist");
-    assert!(
-        import_section
-            .windows(b"\x07fd_read".len())
-            .any(|w| w == b"\x07fd_read"),
-        "expected fd_read import in import section"
-    );
-    assert!(
-        import_section
-            .windows(b"\x08fd_write".len())
-            .any(|w| w == b"\x08fd_write"),
-        "expected fd_write import in import section"
-    );
+    assert_has_fd_read_and_fd_write_imports(&wasm);
 }
 
 #[test]
@@ -190,19 +178,7 @@ main =
     .expect("parse should work");
     let wasm = compile_module(&module).expect("binding read print should compile to Wasm");
     assert_valid_wasm_module(&wasm);
-    let import_section = find_wasm_section(&wasm, 0x02).expect("import section must exist");
-    assert!(
-        import_section
-            .windows(b"\x07fd_read".len())
-            .any(|w| w == b"\x07fd_read"),
-        "expected fd_read import in import section"
-    );
-    assert!(
-        import_section
-            .windows(b"\x08fd_write".len())
-            .any(|w| w == b"\x08fd_write"),
-        "expected fd_write import in import section"
-    );
+    assert_has_fd_read_and_fd_write_imports(&wasm);
 }
 
 #[test]
@@ -217,19 +193,7 @@ main =
     .expect("parse should work");
     let wasm = compile_module(&module).expect("simple read_line should compile to Wasm");
     assert_valid_wasm_module(&wasm);
-    let import_section = find_wasm_section(&wasm, 0x02).expect("import section must exist");
-    assert!(
-        import_section
-            .windows(b"\x07fd_read".len())
-            .any(|w| w == b"\x07fd_read"),
-        "expected fd_read import in import section"
-    );
-    assert!(
-        import_section
-            .windows(b"\x08fd_write".len())
-            .any(|w| w == b"\x08fd_write"),
-        "expected fd_write import in import section"
-    );
+    assert_has_fd_read_and_fd_write_imports(&wasm);
 }
 
 #[test]
@@ -245,19 +209,7 @@ main =
     .expect("parse should work");
     let wasm = compile_module(&module).expect("binding read_line println should compile to Wasm");
     assert_valid_wasm_module(&wasm);
-    let import_section = find_wasm_section(&wasm, 0x02).expect("import section must exist");
-    assert!(
-        import_section
-            .windows(b"\x07fd_read".len())
-            .any(|w| w == b"\x07fd_read"),
-        "expected fd_read import in import section"
-    );
-    assert!(
-        import_section
-            .windows(b"\x08fd_write".len())
-            .any(|w| w == b"\x08fd_write"),
-        "expected fd_write import in import section"
-    );
+    assert_has_fd_read_and_fd_write_imports(&wasm);
 }
 
 #[test]
