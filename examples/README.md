@@ -7,6 +7,7 @@ This directory contains small Goby programs grouped by purpose.
 - `hello.gb`: minimal runnable example (`main` + `println`)
 - `basic_types.gb`: type and syntax showcase (parse/typecheck target)
 - `function.gb`: canonical function/lambda/list example used as run-parity target
+- `function_reference.gb`: named-function callback sample (`map xs add_ten`)
 - `read.gb`: minimal stdin sample using prelude `Read.read_line` and `Read.read`
 - `to_integer.gb`: `int.parse` sample with `StringParseError` handler
 - `list_case.gb`: list `case` pattern sample (`[]`, `[1]`, `[4, ..]`, `[a, ..b]`, `[_, _]`, `_`)

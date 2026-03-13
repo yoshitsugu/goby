@@ -1376,6 +1376,22 @@ f x =
     }
 
     #[test]
+    fn typechecks_named_function_reference_in_higher_order_position() {
+        let source = r#"
+import goby/list ( map )
+
+plus_ten : Int -> Int
+plus_ten x = x + 10
+
+apply_all : List Int -> List Int
+apply_all xs = map xs plus_ten
+"#;
+        let module = parse_module(source).expect("should parse");
+        typecheck_module(&module)
+            .expect("named function reference should typecheck in higher-order position");
+    }
+
+    #[test]
     fn typechecks_import_example() {
         let source = std::fs::read_to_string(format!(
             "{}/../../examples/import.gb",

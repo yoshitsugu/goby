@@ -64,6 +64,8 @@ syntax/semantics.
 - Anonymous functions:
   - `|x| -> expr`
   - placeholder shorthand: `_ * 10` (current supported subset)
+  - when a function-typed argument is expected, a named function may be passed directly
+    (for example: `map xs add_ten`)
 - Operators:
   - precedence: `|>` < `&&` < `==` / `<` / `>` < `+` < `*` < call/application
   - `|>`, `&&`, `==`, `<`, `>`, `+`, `*` are left-associative

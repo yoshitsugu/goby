@@ -9,6 +9,8 @@ This file is a restart-safe snapshot for resuming work after context reset.
 - Planning slice recorded for Track D developer tooling.
 - `doc/PLAN.md` now contains a phased `goby-lsp` implementation plan under Active Track D.
 - `doc/PLAN.md` also records Active Track E for `Float` support backed by Wasm `f64`.
+- Higher-order named function references are now documented explicitly
+  (for example: `map xs add_ten`).
 
 ## Current State
 
@@ -21,10 +23,14 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - lock `Float` literal/coercion/equality semantics,
   - implement parser/typechecker/runtime/Wasm support,
   - sync docs/examples/tooling once behavior lands.
+- Current language docs/examples/tests now make explicit that named functions can be
+  passed directly where a function-typed argument is expected.
 
 ## Verified
 
-- No code verification recorded for this planning-only update.
+- `cargo fmt`
+- `cargo check`
+- `cargo test`
 
 ## Next Work
 

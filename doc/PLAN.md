@@ -33,6 +33,8 @@ Based on `examples/*.gb`:
 - Last expression is the return value
 - Effect annotation syntax: `can Print`
 - Anonymous functions: `|x| -> ...` and placeholder shorthand (`_ * 10`)
+- Named function references are valid in higher-order call positions
+  (for example: `map xs add_ten` when the parameter expects a function value).
 - Basic shown types: `Int`, `String`, tuple `(A, B)`, `List T`
 
 ## 2. MVP Decisions and Remaining Open Items

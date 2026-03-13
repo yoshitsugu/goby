@@ -1,0 +1,11 @@
+import goby/list ( map )
+
+add_ten : Int -> Int
+add_ten x = x + 10
+
+mul_tens : List Int -> List Int
+mul_tens xs = map xs add_ten
+
+main : Unit -> Unit
+main =
+  mul_tens [1, 2, 3] |> print

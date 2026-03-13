@@ -278,6 +278,46 @@ main =
 }
 
 #[test]
+fn run_command_accepts_named_function_reference_higher_order_program() {
+    let root = repo_root();
+    let sandbox = TempDirGuard::new("run_named_function_reference");
+    let input = sandbox.join("function_reference.gb");
+    fs::write(
+        &input,
+        r#"
+import goby/list ( map )
+
+plus_ten : Int -> Int
+plus_ten x = x + 10
+
+main : Unit -> Unit
+main =
+  map [1, 2] plus_ten |> print
+"#,
+    )
+    .expect("temporary input should be writable");
+
+    let output = command_for_goby_cli()
+        .arg("run")
+        .arg(&input)
+        .current_dir(&root)
+        .output()
+        .expect("cli should execute");
+
+    assert!(
+        output.status.success(),
+        "expected success, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("[11, 12]"),
+        "expected named function reference output, stdout: {}",
+        stdout
+    );
+}
+
+#[test]
 fn run_command_accepts_case_arm_block_program_without_wasmtime() {
     let root = repo_root();
     let sandbox = TempDirGuard::new("run_case_arm_block_no_wasmtime");
