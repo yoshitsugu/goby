@@ -116,6 +116,10 @@ This file is a restart-safe snapshot for resuming work after context reset.
   fixed `read -> delim -> split` layout, so nearby input-side forms like delimiter alias chains
   (`newline = "\n"; delim = newline`) and callback aliases placed before the `split` binding
   also compile to dynamic Wasm.
+- `SplitLinesEach` runtime-I/O planning can now carry trailing static literal
+  `print` / `println` suffixes after the `each` step, so sample-shaped programs like
+  `...; each lines println; println "test"; print "done"` no longer have to stay on
+  the interpreter bridge just because they append fixed output afterward.
 
 ## Verified
 

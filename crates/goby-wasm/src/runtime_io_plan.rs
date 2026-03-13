@@ -19,7 +19,13 @@ pub(crate) enum OutputReadMode {
     Println,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct StaticPrintSuffix {
+    pub(crate) text: String,
+    pub(crate) output_mode: OutputReadMode,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum RuntimeIoPlan {
     Echo {
         input_mode: InputReadMode,
@@ -27,10 +33,11 @@ pub(crate) enum RuntimeIoPlan {
     },
     SplitLinesEach {
         output_mode: OutputReadMode,
+        suffix_prints: Vec<StaticPrintSuffix>,
     },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum RuntimeIoClassification {
     DynamicWasiIo(RuntimeIoPlan),
     InterpreterBridge,
@@ -62,11 +69,13 @@ impl RuntimeIoPlan {
                     }
                 }
             }
-            RuntimeIoPlan::SplitLinesEach { output_mode } => builder
-                .emit_read_split_lines_each_print_module(matches!(
-                    output_mode,
-                    OutputReadMode::Println
-                )),
+            RuntimeIoPlan::SplitLinesEach {
+                output_mode,
+                suffix_prints,
+            } => builder.emit_read_split_lines_each_print_module(
+                matches!(output_mode, OutputReadMode::Println),
+                &suffix_prints,
+            ),
         }
     }
 }
@@ -141,8 +150,11 @@ fn plan_runtime_io(module: &Module, stmts: &[Stmt]) -> Option<RuntimeIoPlan> {
     if let Some(plan) = plan_echo_runtime_io(stmts) {
         return Some(plan);
     }
-    if let Some(output_mode) = split_lines_each_output_mode(module, stmts) {
-        return Some(RuntimeIoPlan::SplitLinesEach { output_mode });
+    if let Some((output_mode, suffix_prints)) = split_lines_each_plan(module, stmts) {
+        return Some(RuntimeIoPlan::SplitLinesEach {
+            output_mode,
+            suffix_prints,
+        });
     }
     None
 }
@@ -515,30 +527,68 @@ fn callback_output_mode_name(name: &str) -> Option<OutputReadMode> {
     }
 }
 
-fn split_lines_each_output_mode(module: &Module, stmts: &[Stmt]) -> Option<OutputReadMode> {
-    let [read_stmt, middle @ .., Stmt::Expr(each_expr)] = stmts else {
+fn static_print_suffix(stmt: &Stmt) -> Option<StaticPrintSuffix> {
+    let Stmt::Expr(Expr::Call { callee, arg }) = stmt else {
+        return None;
+    };
+    let Expr::Var(name) = callee.as_ref() else {
+        return None;
+    };
+    let output_mode = callback_output_mode_name(name)?;
+    let Expr::StringLit(text) = arg.as_ref() else {
+        return None;
+    };
+    Some(StaticPrintSuffix {
+        text: text.clone(),
+        output_mode,
+    })
+}
+
+fn collect_static_print_suffixes(stmts: &[Stmt]) -> Option<Vec<StaticPrintSuffix>> {
+    stmts.iter().map(static_print_suffix).collect()
+}
+
+fn split_lines_each_plan(
+    module: &Module,
+    stmts: &[Stmt],
+) -> Option<(OutputReadMode, Vec<StaticPrintSuffix>)> {
+    let [read_stmt, rest @ ..] = stmts else {
         return None;
     };
     let Some((text_name, InputReadMode::ReadAll)) = read_binding_mode(read_stmt) else {
         return None;
     };
 
-    for (split_index, split_stmt) in middle.iter().enumerate() {
-        let pre_split_stmts = &middle[..split_index];
-        let post_split_stmts = &middle[split_index + 1..];
-        let Some(lines_name) =
-            split_lines_binding_name(module, pre_split_stmts, split_stmt, text_name)
-        else {
+    for (each_index, each_stmt) in rest.iter().enumerate() {
+        let Stmt::Expr(each_expr) = each_stmt else {
             continue;
         };
-        let Some(iterated_name) = resolve_alias_chain_terminal_name(post_split_stmts, lines_name)
-        else {
+        let Some(suffix_prints) = collect_static_print_suffixes(&rest[each_index + 1..]) else {
             continue;
         };
-        if let Some(output_mode) =
-            split_lines_each_output_mode_from_callback(module, middle, iterated_name, each_expr)
-        {
-            return Some(output_mode);
+        let pre_each_stmts = &rest[..each_index];
+
+        for (split_index, split_stmt) in pre_each_stmts.iter().enumerate() {
+            let pre_split_stmts = &pre_each_stmts[..split_index];
+            let post_split_stmts = &pre_each_stmts[split_index + 1..];
+            let Some(lines_name) =
+                split_lines_binding_name(module, pre_split_stmts, split_stmt, text_name)
+            else {
+                continue;
+            };
+            let Some(iterated_name) =
+                resolve_alias_chain_terminal_name(post_split_stmts, lines_name)
+            else {
+                continue;
+            };
+            if let Some(output_mode) = split_lines_each_output_mode_from_callback(
+                module,
+                pre_each_stmts,
+                iterated_name,
+                each_expr,
+            ) {
+                return Some((output_mode, suffix_prints));
+            }
         }
     }
     None
@@ -549,7 +599,8 @@ mod tests {
     use goby_core::parse_module;
 
     use super::{
-        InputReadMode, OutputReadMode, RuntimeIoClassification, RuntimeIoPlan, classify_runtime_io,
+        InputReadMode, OutputReadMode, RuntimeIoClassification, RuntimeIoPlan, StaticPrintSuffix,
+        classify_runtime_io,
     };
 
     fn main_stmts(source: &str) -> (goby_core::Module, Option<Vec<Stmt>>) {
@@ -601,6 +652,41 @@ main =
             classify_runtime_io(&module, body.as_deref()),
             RuntimeIoClassification::DynamicWasiIo(RuntimeIoPlan::SplitLinesEach {
                 output_mode: OutputReadMode::Println,
+                suffix_prints: vec![],
+            })
+        );
+    }
+
+    #[test]
+    fn plans_split_each_with_static_print_suffixes() {
+        let (module, body) = main_stmts(
+            r#"
+import goby/list ( each )
+import goby/string ( split )
+
+main : Unit -> Unit can Print, Read
+main =
+  text = read()
+  lines = split(text, "\n")
+  each lines (|line| -> println(line))
+  println "test"
+  print "done"
+"#,
+        );
+        assert_eq!(
+            classify_runtime_io(&module, body.as_deref()),
+            RuntimeIoClassification::DynamicWasiIo(RuntimeIoPlan::SplitLinesEach {
+                output_mode: OutputReadMode::Println,
+                suffix_prints: vec![
+                    StaticPrintSuffix {
+                        text: "test".to_string(),
+                        output_mode: OutputReadMode::Println,
+                    },
+                    StaticPrintSuffix {
+                        text: "done".to_string(),
+                        output_mode: OutputReadMode::Print,
+                    },
+                ],
             })
         );
     }
@@ -625,6 +711,7 @@ main =
             classify_runtime_io(&module, body.as_deref()),
             RuntimeIoClassification::DynamicWasiIo(RuntimeIoPlan::SplitLinesEach {
                 output_mode: OutputReadMode::Println,
+                suffix_prints: vec![],
             })
         );
     }
@@ -649,6 +736,7 @@ main =
             classify_runtime_io(&module, body.as_deref()),
             RuntimeIoClassification::DynamicWasiIo(RuntimeIoPlan::SplitLinesEach {
                 output_mode: OutputReadMode::Println,
+                suffix_prints: vec![],
             })
         );
     }
@@ -672,6 +760,7 @@ main =
             classify_runtime_io(&module, body.as_deref()),
             RuntimeIoClassification::DynamicWasiIo(RuntimeIoPlan::SplitLinesEach {
                 output_mode: OutputReadMode::Println,
+                suffix_prints: vec![],
             })
         );
     }
@@ -695,6 +784,7 @@ main =
             classify_runtime_io(&module, body.as_deref()),
             RuntimeIoClassification::DynamicWasiIo(RuntimeIoPlan::SplitLinesEach {
                 output_mode: OutputReadMode::Print,
+                suffix_prints: vec![],
             })
         );
     }
@@ -718,6 +808,7 @@ main =
             classify_runtime_io(&module, body.as_deref()),
             RuntimeIoClassification::DynamicWasiIo(RuntimeIoPlan::SplitLinesEach {
                 output_mode: OutputReadMode::Println,
+                suffix_prints: vec![],
             })
         );
     }
@@ -742,6 +833,7 @@ main =
             classify_runtime_io(&module, body.as_deref()),
             RuntimeIoClassification::DynamicWasiIo(RuntimeIoPlan::SplitLinesEach {
                 output_mode: OutputReadMode::Println,
+                suffix_prints: vec![],
             })
         );
     }
@@ -767,6 +859,7 @@ main =
             classify_runtime_io(&module, body.as_deref()),
             RuntimeIoClassification::DynamicWasiIo(RuntimeIoPlan::SplitLinesEach {
                 output_mode: OutputReadMode::Print,
+                suffix_prints: vec![],
             })
         );
     }
@@ -791,6 +884,7 @@ main =
             classify_runtime_io(&module, body.as_deref()),
             RuntimeIoClassification::DynamicWasiIo(RuntimeIoPlan::SplitLinesEach {
                 output_mode: OutputReadMode::Println,
+                suffix_prints: vec![],
             })
         );
     }
@@ -816,6 +910,7 @@ main =
             classify_runtime_io(&module, body.as_deref()),
             RuntimeIoClassification::DynamicWasiIo(RuntimeIoPlan::SplitLinesEach {
                 output_mode: OutputReadMode::Print,
+                suffix_prints: vec![],
             })
         );
     }
@@ -840,6 +935,7 @@ main =
             classify_runtime_io(&module, body.as_deref()),
             RuntimeIoClassification::DynamicWasiIo(RuntimeIoPlan::SplitLinesEach {
                 output_mode: OutputReadMode::Println,
+                suffix_prints: vec![],
             })
         );
     }

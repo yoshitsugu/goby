@@ -456,6 +456,29 @@ main =
 }
 
 #[test]
+fn split_lines_each_with_static_print_suffixes_emits_wasm_with_fd_read_and_fd_write_imports() {
+    let module = parse_module(
+        r#"
+import goby/list ( each )
+import goby/string ( split )
+
+main : Unit -> Unit can Print, Read
+main =
+  text = read()
+  lines = split(text, "\n")
+  each lines (|line| -> println(line))
+  println "test"
+  print "done"
+"#,
+    )
+    .expect("parse should work");
+    let wasm = compile_module(&module)
+        .expect("split each with static print suffixes should compile to Wasm");
+    assert_valid_wasm_module(&wasm);
+    assert_has_fd_read_and_fd_write_imports(&wasm);
+}
+
+#[test]
 fn simple_read_line_program_emits_wasm_with_fd_read_and_fd_write_imports() {
     let module = parse_module(
         r#"
