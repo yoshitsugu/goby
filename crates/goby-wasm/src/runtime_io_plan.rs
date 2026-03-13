@@ -398,20 +398,28 @@ fn resolve_alias_chain_source_name<'a>(stmts: &'a [Stmt], target_name: &'a str) 
     Some(current_name)
 }
 
-fn newline_delimiter_binding_name(stmt: &Stmt) -> Option<&str> {
-    let (name, value) = stmt_binding_parts(stmt)?;
-    if matches!(value, Expr::StringLit(delim) if delim == "\n") {
-        Some(name)
-    } else {
-        None
-    }
+fn binding_value_by_name<'a>(stmts: &'a [Stmt], target_name: &str) -> Option<&'a Expr> {
+    stmts.iter().rev().find_map(|stmt| {
+        let (name, value) = stmt_binding_parts(stmt)?;
+        (name == target_name).then_some(value)
+    })
+}
+
+fn name_resolves_to_newline_literal(stmts: &[Stmt], target_name: &str) -> bool {
+    let Some(root_name) = resolve_alias_chain_source_name(stmts, target_name) else {
+        return false;
+    };
+    matches!(
+        binding_value_by_name(stmts, root_name),
+        Some(Expr::StringLit(delim)) if delim == "\n"
+    )
 }
 
 fn split_lines_binding_name<'a>(
     module: &Module,
+    pre_split_stmts: &[Stmt],
     stmt: &'a Stmt,
     text_name: &str,
-    delimiter_name: Option<&str>,
 ) -> Option<&'a str> {
     let (lines_name, split_value) = stmt_binding_parts(stmt)?;
     let Some((split_head, split_args)) = flatten_direct_call(split_value) else {
@@ -419,23 +427,29 @@ fn split_lines_binding_name<'a>(
     };
     if !imported_head_matches_symbol(module, &split_head, "goby/string", "split")
         || split_args.len() != 2
-        || !matches!(split_args[0], Expr::Var(name) if name == text_name)
-        || !expr_is_newline_delimiter(split_args[1], delimiter_name)
+        || !expr_resolves_to_name(split_args[0], pre_split_stmts, text_name)
+        || !expr_is_newline_delimiter(split_args[1], pre_split_stmts)
     {
         return None;
     }
     Some(lines_name)
 }
 
-fn expr_is_newline_delimiter(expr: &Expr, delimiter_name: Option<&str>) -> bool {
+fn expr_resolves_to_name(expr: &Expr, stmts: &[Stmt], expected_name: &str) -> bool {
+    match expr {
+        Expr::Var(name) => resolve_alias_chain_source_name(stmts, name) == Some(expected_name),
+        _ => false,
+    }
+}
+
+fn expr_is_newline_delimiter(expr: &Expr, stmts: &[Stmt]) -> bool {
     matches!(expr, Expr::StringLit(delim) if delim == "\n")
-        || delimiter_name
-            .is_some_and(|name| matches!(expr, Expr::Var(var_name) if var_name == name))
+        || matches!(expr, Expr::Var(name) if name_resolves_to_newline_literal(stmts, name))
 }
 
 fn split_lines_each_output_mode_from_callback(
     module: &Module,
-    middle_stmts: &[Stmt],
+    callback_scope_stmts: &[Stmt],
     lines_name: &str,
     each_expr: &Expr,
 ) -> Option<OutputReadMode> {
@@ -451,13 +465,13 @@ fn split_lines_each_output_mode_from_callback(
 
     match each_args[1] {
         Expr::Var(name) => {
-            callback_output_mode_name(resolve_alias_chain_source_name(middle_stmts, name)?)
+            callback_output_mode_name(resolve_alias_chain_source_name(callback_scope_stmts, name)?)
         }
         Expr::Lambda { param, body } => match body.as_ref() {
             Expr::Call { callee, arg } if callback_arg_matches_line_passthrough(arg, param) => {
                 match callee.as_ref() {
                     Expr::Var(name) => callback_output_mode_name(resolve_alias_chain_source_name(
-                        middle_stmts,
+                        callback_scope_stmts,
                         name,
                     )?),
                     _ => None,
@@ -502,47 +516,32 @@ fn callback_output_mode_name(name: &str) -> Option<OutputReadMode> {
 }
 
 fn split_lines_each_output_mode(module: &Module, stmts: &[Stmt]) -> Option<OutputReadMode> {
-    match stmts {
-        [read_stmt, split_stmt, middle @ .., Stmt::Expr(each_expr)]
-            if newline_delimiter_binding_name(split_stmt).is_none() =>
+    let [read_stmt, middle @ .., Stmt::Expr(each_expr)] = stmts else {
+        return None;
+    };
+    let Some((text_name, InputReadMode::ReadAll)) = read_binding_mode(read_stmt) else {
+        return None;
+    };
+
+    for (split_index, split_stmt) in middle.iter().enumerate() {
+        let pre_split_stmts = &middle[..split_index];
+        let post_split_stmts = &middle[split_index + 1..];
+        let Some(lines_name) =
+            split_lines_binding_name(module, pre_split_stmts, split_stmt, text_name)
+        else {
+            continue;
+        };
+        let Some(iterated_name) = resolve_alias_chain_terminal_name(post_split_stmts, lines_name)
+        else {
+            continue;
+        };
+        if let Some(output_mode) =
+            split_lines_each_output_mode_from_callback(module, middle, iterated_name, each_expr)
         {
-            let Some((text_name, InputReadMode::ReadAll)) = read_binding_mode(read_stmt) else {
-                return None;
-            };
-            let Some(lines_name) = split_lines_binding_name(module, split_stmt, text_name, None)
-            else {
-                return None;
-            };
-            let Some(iterated_name) = resolve_alias_chain_terminal_name(middle, lines_name) else {
-                return None;
-            };
-            split_lines_each_output_mode_from_callback(module, middle, iterated_name, each_expr)
+            return Some(output_mode);
         }
-        [
-            read_stmt,
-            delim_stmt,
-            split_stmt,
-            middle @ ..,
-            Stmt::Expr(each_expr),
-        ] if newline_delimiter_binding_name(delim_stmt).is_some() => {
-            let Some((text_name, InputReadMode::ReadAll)) = read_binding_mode(read_stmt) else {
-                return None;
-            };
-            let Some(delimiter_name) = newline_delimiter_binding_name(delim_stmt) else {
-                return None;
-            };
-            let Some(lines_name) =
-                split_lines_binding_name(module, split_stmt, text_name, Some(delimiter_name))
-            else {
-                return None;
-            };
-            let Some(iterated_name) = resolve_alias_chain_terminal_name(middle, lines_name) else {
-                return None;
-            };
-            split_lines_each_output_mode_from_callback(module, middle, iterated_name, each_expr)
-        }
-        _ => None,
     }
+    None
 }
 
 #[cfg(test)]
@@ -596,6 +595,30 @@ main =
   delim = "\n"
   lines = split(text, delim)
   each lines (|line| -> println(line))
+"#,
+        );
+        assert_eq!(
+            classify_runtime_io(&module, body.as_deref()),
+            RuntimeIoClassification::DynamicWasiIo(RuntimeIoPlan::SplitLinesEach {
+                output_mode: OutputReadMode::Println,
+            })
+        );
+    }
+
+    #[test]
+    fn plans_split_each_with_delimiter_alias_chain() {
+        let (module, body) = main_stmts(
+            r#"
+import goby/list ( each )
+import goby/string ( split )
+
+main : Unit -> Unit can Print, Read
+main =
+  text = read()
+  newline = "\n"
+  delim = newline
+  lines = split(text, delim)
+  each lines println
 "#,
         );
         assert_eq!(
@@ -793,6 +816,30 @@ main =
             classify_runtime_io(&module, body.as_deref()),
             RuntimeIoClassification::DynamicWasiIo(RuntimeIoPlan::SplitLinesEach {
                 output_mode: OutputReadMode::Print,
+            })
+        );
+    }
+
+    #[test]
+    fn plans_split_each_with_callback_alias_before_split() {
+        let (module, body) = main_stmts(
+            r#"
+import goby/list ( each )
+import goby/string ( split )
+
+main : Unit -> Unit can Print, Read
+main =
+  text = read()
+  printer = println
+  delim = "\n"
+  lines = split(text, delim)
+  each lines printer
+"#,
+        );
+        assert_eq!(
+            classify_runtime_io(&module, body.as_deref()),
+            RuntimeIoClassification::DynamicWasiIo(RuntimeIoPlan::SplitLinesEach {
+                output_mode: OutputReadMode::Println,
             })
         );
     }

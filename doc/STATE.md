@@ -112,6 +112,10 @@ This file is a restart-safe snapshot for resuming work after context reset.
 - The same callback alias resolution now also covers equivalent lambda-call spellings like
   `each lines (|line| -> printer line)`, including simple forwarded aliases, so planner
   coverage follows the named-function-reference direction rather than only bare callback vars.
+- Split planning now scans the binding sequence around `split(...)` instead of requiring a
+  fixed `read -> delim -> split` layout, so nearby input-side forms like delimiter alias chains
+  (`newline = "\n"; delim = newline`) and callback aliases placed before the `split` binding
+  also compile to dynamic Wasm.
 
 ## Verified
 

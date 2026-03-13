@@ -222,6 +222,29 @@ main =
 }
 
 #[test]
+fn split_lines_each_with_delimiter_alias_chain_emits_wasm_with_fd_read_and_fd_write_imports() {
+    let module = parse_module(
+        r#"
+import goby/list ( each )
+import goby/string ( split )
+
+main : Unit -> Unit can Print, Read
+main =
+  text = read()
+  newline = "\n"
+  delim = newline
+  lines = split(text, delim)
+  each lines println
+"#,
+    )
+    .expect("parse should work");
+    let wasm =
+        compile_module(&module).expect("delimiter alias-chain split shape should compile to Wasm");
+    assert_valid_wasm_module(&wasm);
+    assert_has_fd_read_and_fd_write_imports(&wasm);
+}
+
+#[test]
 fn forwarded_split_lines_each_println_program_emits_wasm_with_fd_read_and_fd_write_imports() {
     let module = parse_module(
         r#"
@@ -404,6 +427,30 @@ main =
     .expect("parse should work");
     let wasm = compile_module(&module)
         .expect("lambda-calling forwarded local print alias split shape should compile to Wasm");
+    assert_valid_wasm_module(&wasm);
+    assert_has_fd_read_and_fd_write_imports(&wasm);
+}
+
+#[test]
+fn split_lines_each_with_callback_alias_before_split_emits_wasm_with_fd_read_and_fd_write_imports()
+{
+    let module = parse_module(
+        r#"
+import goby/list ( each )
+import goby/string ( split )
+
+main : Unit -> Unit can Print, Read
+main =
+  text = read()
+  printer = println
+  delim = "\n"
+  lines = split(text, delim)
+  each lines printer
+"#,
+    )
+    .expect("parse should work");
+    let wasm =
+        compile_module(&module).expect("callback-alias-before-split shape should compile to Wasm");
     assert_valid_wasm_module(&wasm);
     assert_has_fd_read_and_fd_write_imports(&wasm);
 }
