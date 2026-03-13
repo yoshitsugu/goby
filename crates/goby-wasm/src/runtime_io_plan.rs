@@ -24,7 +24,9 @@ pub(crate) enum RuntimeIoPlan {
         input_mode: InputReadMode,
         output_mode: OutputReadMode,
     },
-    SplitLinesEachPrintln,
+    SplitLinesEach {
+        output_mode: OutputReadMode,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -59,9 +61,11 @@ impl RuntimeIoPlan {
                     }
                 }
             }
-            RuntimeIoPlan::SplitLinesEachPrintln => {
-                builder.emit_read_split_lines_each_println_module()
-            }
+            RuntimeIoPlan::SplitLinesEach { output_mode } => builder
+                .emit_read_split_lines_each_print_module(matches!(
+                    output_mode,
+                    OutputReadMode::Println
+                )),
         }
     }
 }
@@ -136,8 +140,8 @@ fn plan_runtime_io(module: &Module, stmts: &[Stmt]) -> Option<RuntimeIoPlan> {
     if let Some(plan) = plan_echo_runtime_io(stmts) {
         return Some(plan);
     }
-    if is_split_lines_each_println_shape(module, stmts) {
-        return Some(RuntimeIoPlan::SplitLinesEachPrintln);
+    if let Some(output_mode) = split_lines_each_output_mode(module, stmts) {
+        return Some(RuntimeIoPlan::SplitLinesEach { output_mode });
     }
     None
 }
@@ -401,45 +405,60 @@ fn expr_is_newline_delimiter(expr: &Expr, delimiter_name: Option<&str>) -> bool 
             .is_some_and(|name| matches!(expr, Expr::Var(var_name) if var_name == name))
 }
 
-fn split_lines_each_println_matches(module: &Module, lines_name: &str, each_expr: &Expr) -> bool {
+fn split_lines_each_output_mode_from_callback(
+    module: &Module,
+    lines_name: &str,
+    each_expr: &Expr,
+) -> Option<OutputReadMode> {
     let Some((each_head, each_args)) = flatten_direct_call(each_expr) else {
-        return false;
+        return None;
     };
     if !imported_head_matches_symbol(module, &each_head, "goby/list", "each")
         || each_args.len() != 2
         || !matches!(each_args[0], Expr::Var(name) if name == lines_name)
     {
-        return false;
+        return None;
     }
 
-    let Expr::Lambda { param, body } = each_args[1] else {
-        return false;
-    };
-
-    matches!(
-        body.as_ref(),
-        Expr::Call { callee, arg }
-            if matches!(callee.as_ref(), Expr::Var(name) if name == "println")
-                && matches!(arg.as_ref(), Expr::Var(name) if name == param)
-    )
+    match each_args[1] {
+        Expr::Var(name) => callback_output_mode_name(name),
+        Expr::Lambda { param, body } => match body.as_ref() {
+            Expr::Call { callee, arg } if matches!(arg.as_ref(), Expr::Var(name) if name == param) => {
+                match callee.as_ref() {
+                    Expr::Var(name) => callback_output_mode_name(name),
+                    _ => None,
+                }
+            }
+            _ => None,
+        },
+        _ => None,
+    }
 }
 
-fn is_split_lines_each_println_shape(module: &Module, stmts: &[Stmt]) -> bool {
+fn callback_output_mode_name(name: &str) -> Option<OutputReadMode> {
+    match name {
+        "print" => Some(OutputReadMode::Print),
+        "println" => Some(OutputReadMode::Println),
+        _ => None,
+    }
+}
+
+fn split_lines_each_output_mode(module: &Module, stmts: &[Stmt]) -> Option<OutputReadMode> {
     match stmts {
         [read_stmt, split_stmt, middle @ .., Stmt::Expr(each_expr)]
             if newline_delimiter_binding_name(split_stmt).is_none() =>
         {
             let Some((text_name, InputReadMode::ReadAll)) = read_binding_mode(read_stmt) else {
-                return false;
+                return None;
             };
             let Some(lines_name) = split_lines_binding_name(module, split_stmt, text_name, None)
             else {
-                return false;
+                return None;
             };
             let Some(iterated_name) = resolve_alias_chain_terminal_name(middle, lines_name) else {
-                return false;
+                return None;
             };
-            split_lines_each_println_matches(module, iterated_name, each_expr)
+            split_lines_each_output_mode_from_callback(module, iterated_name, each_expr)
         }
         [
             read_stmt,
@@ -449,22 +468,22 @@ fn is_split_lines_each_println_shape(module: &Module, stmts: &[Stmt]) -> bool {
             Stmt::Expr(each_expr),
         ] if newline_delimiter_binding_name(delim_stmt).is_some() => {
             let Some((text_name, InputReadMode::ReadAll)) = read_binding_mode(read_stmt) else {
-                return false;
+                return None;
             };
             let Some(delimiter_name) = newline_delimiter_binding_name(delim_stmt) else {
-                return false;
+                return None;
             };
             let Some(lines_name) =
                 split_lines_binding_name(module, split_stmt, text_name, Some(delimiter_name))
             else {
-                return false;
+                return None;
             };
             let Some(iterated_name) = resolve_alias_chain_terminal_name(middle, lines_name) else {
-                return false;
+                return None;
             };
-            split_lines_each_println_matches(module, iterated_name, each_expr)
+            split_lines_each_output_mode_from_callback(module, iterated_name, each_expr)
         }
-        _ => false,
+        _ => None,
     }
 }
 
@@ -523,7 +542,9 @@ main =
         );
         assert_eq!(
             classify_runtime_io(&module, body.as_deref()),
-            RuntimeIoClassification::DynamicWasiIo(RuntimeIoPlan::SplitLinesEachPrintln)
+            RuntimeIoClassification::DynamicWasiIo(RuntimeIoPlan::SplitLinesEach {
+                output_mode: OutputReadMode::Println,
+            })
         );
     }
 
@@ -545,7 +566,55 @@ main =
         );
         assert_eq!(
             classify_runtime_io(&module, body.as_deref()),
-            RuntimeIoClassification::DynamicWasiIo(RuntimeIoPlan::SplitLinesEachPrintln)
+            RuntimeIoClassification::DynamicWasiIo(RuntimeIoPlan::SplitLinesEach {
+                output_mode: OutputReadMode::Println,
+            })
+        );
+    }
+
+    #[test]
+    fn plans_split_each_named_println_callback() {
+        let (module, body) = main_stmts(
+            r#"
+import goby/list ( each )
+import goby/string ( split )
+
+main : Unit -> Unit can Print, Read
+main =
+  text = read()
+  delim = "\n"
+  lines = split(text, delim)
+  each lines println
+"#,
+        );
+        assert_eq!(
+            classify_runtime_io(&module, body.as_deref()),
+            RuntimeIoClassification::DynamicWasiIo(RuntimeIoPlan::SplitLinesEach {
+                output_mode: OutputReadMode::Println,
+            })
+        );
+    }
+
+    #[test]
+    fn plans_split_each_named_print_callback() {
+        let (module, body) = main_stmts(
+            r#"
+import goby/list ( each )
+import goby/string ( split )
+
+main : Unit -> Unit can Print, Read
+main =
+  text = read()
+  delim = "\n"
+  lines = split(text, delim)
+  each lines print
+"#,
+        );
+        assert_eq!(
+            classify_runtime_io(&module, body.as_deref()),
+            RuntimeIoClassification::DynamicWasiIo(RuntimeIoPlan::SplitLinesEach {
+                output_mode: OutputReadMode::Print,
+            })
         );
     }
 
@@ -603,7 +672,7 @@ main =
   lines = split(text, delim)
   copied = lines
   forwarded = copied
-  each forwarded (|line| -> print(line))
+  each forwarded (|line| -> println "${line}")
 "#,
         );
         assert_eq!(

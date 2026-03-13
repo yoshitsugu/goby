@@ -245,6 +245,50 @@ main =
 }
 
 #[test]
+fn split_lines_each_named_println_callback_emits_wasm_with_fd_read_and_fd_write_imports() {
+    let module = parse_module(
+        r#"
+import goby/list ( each )
+import goby/string ( split )
+
+main : Unit -> Unit can Print, Read
+main =
+  text = read()
+  delim = "\n"
+  lines = split(text, delim)
+  each lines println
+"#,
+    )
+    .expect("parse should work");
+    let wasm =
+        compile_module(&module).expect("named println callback split shape should compile to Wasm");
+    assert_valid_wasm_module(&wasm);
+    assert_has_fd_read_and_fd_write_imports(&wasm);
+}
+
+#[test]
+fn split_lines_each_named_print_callback_emits_wasm_with_fd_read_and_fd_write_imports() {
+    let module = parse_module(
+        r#"
+import goby/list ( each )
+import goby/string ( split )
+
+main : Unit -> Unit can Print, Read
+main =
+  text = read()
+  delim = "\n"
+  lines = split(text, delim)
+  each lines print
+"#,
+    )
+    .expect("parse should work");
+    let wasm =
+        compile_module(&module).expect("named print callback split shape should compile to Wasm");
+    assert_valid_wasm_module(&wasm);
+    assert_has_fd_read_and_fd_write_imports(&wasm);
+}
+
+#[test]
 fn simple_read_line_program_emits_wasm_with_fd_read_and_fd_write_imports() {
     let module = parse_module(
         r#"
@@ -306,13 +350,13 @@ main =
   lines = split(text, delim)
   copied = lines
   forwarded = copied
-  each forwarded (|line| -> print(line))
+  each forwarded (|line| -> println "${line}")
 "#,
     )
     .expect("parse should work");
     let output = execute_module_with_stdin(&module, Some("hogehoge\nfugafuga".to_string()))
         .expect("runtime execution should succeed");
-    assert_eq!(output.as_deref(), Some("hogehogefugafuga"));
+    assert_eq!(output.as_deref(), Some("hogehoge\nfugafuga\n"));
 }
 
 #[test]
@@ -329,7 +373,7 @@ main =
   lines = split(text, delim)
   copied = lines
   forwarded = copied
-  each forwarded (|line| -> print(line))
+  each forwarded (|line| -> println "${line}")
 "#,
     )
     .expect("parse should work");

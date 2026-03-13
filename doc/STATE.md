@@ -100,6 +100,9 @@ This file is a restart-safe snapshot for resuming work after context reset.
 - Echo and newline-splitting runtime-I/O planning now follow simple local alias chains
   instead of stopping after a single forwarded binding, while bridge-only regression
   coverage has moved to nearby unsupported callback-body shapes such as `each ... print`.
+- The newline-splitting runtime-I/O planner/back-end path now models the callback output
+  mode directly, so `each lines print` and `each lines println` both compile to dynamic
+  Wasm, including the named-function callback spelling in addition to the direct lambda form.
 
 ## Verified
 

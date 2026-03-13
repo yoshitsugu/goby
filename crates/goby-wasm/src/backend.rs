@@ -454,8 +454,9 @@ impl WasmProgramBuilder {
         Ok(module.finish())
     }
 
-    pub(crate) fn emit_read_split_lines_each_println_module(
+    pub(crate) fn emit_read_split_lines_each_print_module(
         &self,
+        append_newline: bool,
     ) -> Result<Vec<u8>, CodegenError> {
         let buffer_ptr = i32::try_from(self.layout.heap_base).map_err(|_| CodegenError {
             message: "heap base does not fit in i32".to_string(),
@@ -573,26 +574,28 @@ impl WasmProgramBuilder {
         function.instruction(&Instruction::Call(1));
         function.instruction(&Instruction::Drop);
 
-        function.instruction(&Instruction::I32Const(iovec_offset));
-        function.instruction(&Instruction::I32Const(newline_ptr));
-        function.instruction(&Instruction::I32Store(MemArg {
-            offset: 0,
-            align: 2,
-            memory_index: 0,
-        }));
-        function.instruction(&Instruction::I32Const(iovec_offset + 4));
-        function.instruction(&Instruction::I32Const(1));
-        function.instruction(&Instruction::I32Store(MemArg {
-            offset: 0,
-            align: 2,
-            memory_index: 0,
-        }));
-        function.instruction(&Instruction::I32Const(1));
-        function.instruction(&Instruction::I32Const(iovec_offset));
-        function.instruction(&Instruction::I32Const(1));
-        function.instruction(&Instruction::I32Const(nread_offset));
-        function.instruction(&Instruction::Call(1));
-        function.instruction(&Instruction::Drop);
+        if append_newline {
+            function.instruction(&Instruction::I32Const(iovec_offset));
+            function.instruction(&Instruction::I32Const(newline_ptr));
+            function.instruction(&Instruction::I32Store(MemArg {
+                offset: 0,
+                align: 2,
+                memory_index: 0,
+            }));
+            function.instruction(&Instruction::I32Const(iovec_offset + 4));
+            function.instruction(&Instruction::I32Const(1));
+            function.instruction(&Instruction::I32Store(MemArg {
+                offset: 0,
+                align: 2,
+                memory_index: 0,
+            }));
+            function.instruction(&Instruction::I32Const(1));
+            function.instruction(&Instruction::I32Const(iovec_offset));
+            function.instruction(&Instruction::I32Const(1));
+            function.instruction(&Instruction::I32Const(nread_offset));
+            function.instruction(&Instruction::Call(1));
+            function.instruction(&Instruction::Drop);
+        }
 
         function.instruction(&Instruction::End);
         function.instruction(&Instruction::End);
@@ -600,9 +603,11 @@ impl WasmProgramBuilder {
         code.function(&function);
         module.section(&code);
 
-        let mut data = DataSection::new();
-        data.active(0, &ConstExpr::i32_const(newline_ptr), b"\n".to_vec());
-        module.section(&data);
+        if append_newline {
+            let mut data = DataSection::new();
+            data.active(0, &ConstExpr::i32_const(newline_ptr), b"\n".to_vec());
+            module.section(&data);
+        }
 
         Ok(module.finish())
     }
