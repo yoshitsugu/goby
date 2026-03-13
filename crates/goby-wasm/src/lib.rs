@@ -34,7 +34,7 @@ mod support;
 use std::collections::{HashMap, HashSet};
 use unicode_segmentation::UnicodeSegmentation;
 
-use crate::call::flatten_named_call;
+use crate::call::extract_direct_print_call_arg;
 use crate::runtime_env::{
     EmbeddedEffectRuntime, RuntimeImportContext, effective_runtime_imports,
     load_runtime_import_context, runtime_import_selects_name,
@@ -119,6 +119,40 @@ fn unresolved_runtime_output_error(
     }
 }
 
+fn is_read_all_expr(expr: &Expr) -> bool {
+    match expr {
+        Expr::Call { callee, arg } if arg.is_unit_value() => match callee.as_ref() {
+            Expr::Var(name) => name == "read",
+            Expr::Qualified { receiver, member } => receiver == "Read" && member == "read",
+            _ => false,
+        },
+        _ => false,
+    }
+}
+
+fn try_emit_runtime_stdin_wasm(
+    parsed_body: Option<&[Stmt]>,
+) -> Result<Option<Vec<u8>>, CodegenError> {
+    let Some(stmts) = parsed_body else {
+        return Ok(None);
+    };
+    if stmts.len() != 1 {
+        return Ok(None);
+    }
+    let Stmt::Expr(expr) = &stmts[0] else {
+        return Ok(None);
+    };
+    let Ok(arg) = extract_direct_print_call_arg(expr) else {
+        return Ok(None);
+    };
+    if !is_read_all_expr(arg) {
+        return Ok(None);
+    }
+    backend::WasmProgramBuilder::new(layout::MemoryLayout::default())
+        .emit_read_all_to_stdout_module()
+        .map(Some)
+}
+
 fn runtime_mode_and_handoff(
     module: &Module,
 ) -> Result<
@@ -195,6 +229,9 @@ pub fn compile_module(module: &Module) -> Result<Vec<u8>, CodegenError> {
             message: ERR_MISSING_MAIN.to_string(),
         });
     };
+    if let Some(wasm) = try_emit_runtime_stdin_wasm(parsed_body)? {
+        return Ok(wasm);
+    }
     if let Some(text) =
         resolve_main_runtime_output_for_compile(module, &main_body, parsed_body, runtime_mode)
     {

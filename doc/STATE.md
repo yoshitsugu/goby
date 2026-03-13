@@ -16,6 +16,9 @@ This file is a restart-safe snapshot for resuming work after context reset.
 - Track F capability split has advanced:
   `goby run` now executes stdin-backed `Read` programs through the runtime resolver
   instead of failing once compile-time fallback is blocked.
+- Track F dynamic Wasm work has started:
+  the exact `print(read())` shape now compiles to a WASI Wasm module that imports
+  `fd_read` and `fd_write`.
 
 ## Current State
 
@@ -40,6 +43,9 @@ This file is a restart-safe snapshot for resuming work after context reset.
   of selective-import stdlib helpers in this path.
 - CLI and Wasm regression tests now cover both containment and runtime stdin execution
   for the `read` + `split` + `each` shape.
+- `goby-wasm` backend now has a first dynamic stdin/stdout Wasm path for the simple
+  read-all echo case (`print(read())`), while more complex `Read` programs still use
+  the interpreter-backed runtime execution bridge.
 
 ## Verified
 
@@ -50,8 +56,8 @@ This file is a restart-safe snapshot for resuming work after context reset.
 ## Next Work
 
 - Continue Track F toward dynamic Wasm/WASI stdin support:
-  current `goby run` stdin execution is interpreter-backed runtime execution, not yet
-  generated executable Wasm with runtime imports.
+  extend the new `fd_read`/`fd_write` backend work beyond the simple echo shape so
+  more `Read` programs stop depending on the interpreter-backed runtime execution path.
 - Decide whether the new runtime execution path should become an explicit internal API
   boundary before dynamic Wasm support lands, or remain a temporary CLI-only bridge.
 - Keep Track D queued after the runtime I/O containment/runtime split work is in a stable state.

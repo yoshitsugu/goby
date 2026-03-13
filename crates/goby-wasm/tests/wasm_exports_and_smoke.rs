@@ -103,9 +103,14 @@ fn effect_boundary_with_unresolvable_fallback_reports_boundary_context() {
 fn read_effect_requires_runtime_stdin_backed_wasm() {
     let module = parse_module(
         r#"
+import goby/list ( each )
+import goby/string ( split )
+
 main : Unit -> Unit can Print, Read
 main =
-  print (read())
+  text = read()
+  lines = split(text, "\n")
+  each lines (|line| -> println(line))
 "#,
     )
     .expect("parse should work");
@@ -115,6 +120,33 @@ main =
             .contains("compile-time fallback cannot consume stdin"),
         "error should explain stdin containment, got: {}",
         err.message
+    );
+}
+
+#[test]
+fn simple_read_echo_program_emits_wasm_with_fd_read_and_fd_write_imports() {
+    let module = parse_module(
+        r#"
+main : Unit -> Unit can Print, Read
+main =
+  print (read())
+"#,
+    )
+    .expect("parse should work");
+    let wasm = compile_module(&module).expect("simple read echo should compile to Wasm");
+    assert_valid_wasm_module(&wasm);
+    let import_section = find_wasm_section(&wasm, 0x02).expect("import section must exist");
+    assert!(
+        import_section
+            .windows(b"\x07fd_read".len())
+            .any(|w| w == b"\x07fd_read"),
+        "expected fd_read import in import section"
+    );
+    assert!(
+        import_section
+            .windows(b"\x08fd_write".len())
+            .any(|w| w == b"\x08fd_write"),
+        "expected fd_write import in import section"
     );
 }
 

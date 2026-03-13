@@ -1,4 +1,5 @@
 use super::*;
+use crate::call::flatten_named_call;
 
 impl<'m> RuntimeOutputResolver<'m> {
     pub(super) fn resolve(
