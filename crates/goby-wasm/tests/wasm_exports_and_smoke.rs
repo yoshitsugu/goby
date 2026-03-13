@@ -151,6 +151,61 @@ main =
 }
 
 #[test]
+fn println_read_program_emits_wasm_with_fd_read_and_fd_write_imports() {
+    let module = parse_module(
+        r#"
+main : Unit -> Unit can Print, Read
+main =
+  println (read())
+"#,
+    )
+    .expect("parse should work");
+    let wasm = compile_module(&module).expect("println read should compile to Wasm");
+    assert_valid_wasm_module(&wasm);
+    let import_section = find_wasm_section(&wasm, 0x02).expect("import section must exist");
+    assert!(
+        import_section
+            .windows(b"\x07fd_read".len())
+            .any(|w| w == b"\x07fd_read"),
+        "expected fd_read import in import section"
+    );
+    assert!(
+        import_section
+            .windows(b"\x08fd_write".len())
+            .any(|w| w == b"\x08fd_write"),
+        "expected fd_write import in import section"
+    );
+}
+
+#[test]
+fn binding_read_then_print_program_emits_wasm_with_fd_read_and_fd_write_imports() {
+    let module = parse_module(
+        r#"
+main : Unit -> Unit can Print, Read
+main =
+  text = read()
+  print text
+"#,
+    )
+    .expect("parse should work");
+    let wasm = compile_module(&module).expect("binding read print should compile to Wasm");
+    assert_valid_wasm_module(&wasm);
+    let import_section = find_wasm_section(&wasm, 0x02).expect("import section must exist");
+    assert!(
+        import_section
+            .windows(b"\x07fd_read".len())
+            .any(|w| w == b"\x07fd_read"),
+        "expected fd_read import in import section"
+    );
+    assert!(
+        import_section
+            .windows(b"\x08fd_write".len())
+            .any(|w| w == b"\x08fd_write"),
+        "expected fd_write import in import section"
+    );
+}
+
+#[test]
 fn execute_module_with_stdin_runs_read_program_at_runtime() {
     let module = parse_module(
         r#"

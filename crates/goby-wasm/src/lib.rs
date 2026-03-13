@@ -34,7 +34,6 @@ mod support;
 use std::collections::{HashMap, HashSet};
 use unicode_segmentation::UnicodeSegmentation;
 
-use crate::call::extract_direct_print_call_arg;
 use crate::runtime_env::{
     EmbeddedEffectRuntime, RuntimeImportContext, effective_runtime_imports,
     load_runtime_import_context, runtime_import_selects_name,
@@ -130,26 +129,62 @@ fn is_read_all_expr(expr: &Expr) -> bool {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OutputReadMode {
+    Print,
+    Println,
+}
+
+fn output_read_mode(expr: &Expr) -> Option<OutputReadMode> {
+    let Expr::Call { callee, arg } = expr else {
+        return None;
+    };
+    let Expr::Var(name) = callee.as_ref() else {
+        return None;
+    };
+    if !is_read_all_expr(arg) {
+        return None;
+    }
+    match name.as_str() {
+        "print" => Some(OutputReadMode::Print),
+        "println" => Some(OutputReadMode::Println),
+        _ => None,
+    }
+}
+
 fn try_emit_runtime_stdin_wasm(
     parsed_body: Option<&[Stmt]>,
 ) -> Result<Option<Vec<u8>>, CodegenError> {
     let Some(stmts) = parsed_body else {
         return Ok(None);
     };
-    if stmts.len() != 1 {
-        return Ok(None);
-    }
-    let Stmt::Expr(expr) = &stmts[0] else {
+    let mode = match stmts {
+        [Stmt::Expr(expr)] => output_read_mode(expr),
+        [
+            Stmt::Binding { name, value } | Stmt::MutBinding { name, value },
+            Stmt::Expr(Expr::Call { callee, arg }),
+        ] => {
+            if !is_read_all_expr(value) {
+                None
+            } else if !matches!(arg.as_ref(), Expr::Var(var_name) if var_name == name) {
+                None
+            } else if let Expr::Var(output_name) = callee.as_ref() {
+                match output_name.as_str() {
+                    "print" => Some(OutputReadMode::Print),
+                    "println" => Some(OutputReadMode::Println),
+                    _ => None,
+                }
+            } else {
+                None
+            }
+        }
+        _ => None,
+    };
+    let Some(mode) = mode else {
         return Ok(None);
     };
-    let Ok(arg) = extract_direct_print_call_arg(expr) else {
-        return Ok(None);
-    };
-    if !is_read_all_expr(arg) {
-        return Ok(None);
-    }
     backend::WasmProgramBuilder::new(layout::MemoryLayout::default())
-        .emit_read_all_to_stdout_module()
+        .emit_read_all_to_stdout_module(matches!(mode, OutputReadMode::Println))
         .map(Some)
 }
 

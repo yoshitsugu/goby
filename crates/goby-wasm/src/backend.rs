@@ -108,7 +108,10 @@ impl WasmProgramBuilder {
         Ok(module.finish())
     }
 
-    pub(crate) fn emit_read_all_to_stdout_module(&self) -> Result<Vec<u8>, CodegenError> {
+    pub(crate) fn emit_read_all_to_stdout_module(
+        &self,
+        append_newline: bool,
+    ) -> Result<Vec<u8>, CodegenError> {
         let buffer_ptr = i32::try_from(self.layout.heap_base).map_err(|_| CodegenError {
             message: "heap base does not fit in i32".to_string(),
         })?;
@@ -123,6 +126,9 @@ impl WasmProgramBuilder {
             i32::try_from(WASM_PAGE_BYTES - self.layout.heap_base).map_err(|_| CodegenError {
                 message: "stdin buffer length does not fit in i32".to_string(),
             })?;
+        let newline_ptr = i32::try_from(self.layout.heap_base - 1).map_err(|_| CodegenError {
+            message: "newline pointer does not fit in i32".to_string(),
+        })?;
 
         let mut module = Module::new();
 
@@ -216,10 +222,38 @@ impl WasmProgramBuilder {
         function.instruction(&Instruction::I32Const(nread_offset));
         function.instruction(&Instruction::Call(1));
         function.instruction(&Instruction::Drop);
+        if append_newline {
+            function.instruction(&Instruction::I32Const(iovec_offset));
+            function.instruction(&Instruction::I32Const(newline_ptr));
+            function.instruction(&Instruction::I32Store(MemArg {
+                offset: 0,
+                align: 2,
+                memory_index: 0,
+            }));
+            function.instruction(&Instruction::I32Const(iovec_offset + 4));
+            function.instruction(&Instruction::I32Const(1));
+            function.instruction(&Instruction::I32Store(MemArg {
+                offset: 0,
+                align: 2,
+                memory_index: 0,
+            }));
+            function.instruction(&Instruction::I32Const(1));
+            function.instruction(&Instruction::I32Const(iovec_offset));
+            function.instruction(&Instruction::I32Const(1));
+            function.instruction(&Instruction::I32Const(nread_offset));
+            function.instruction(&Instruction::Call(1));
+            function.instruction(&Instruction::Drop);
+        }
         function.instruction(&Instruction::End);
 
         code.function(&function);
         module.section(&code);
+
+        if append_newline {
+            let mut data = DataSection::new();
+            data.active(0, &ConstExpr::i32_const(newline_ptr), b"\n".to_vec());
+            module.section(&data);
+        }
 
         Ok(module.finish())
     }
