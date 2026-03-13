@@ -687,8 +687,6 @@ Remaining:
     routing) so the same rule is applied consistently without string-matching on
     diagnostics.
 - [ ] Phase F2c: Runtime bridge boundary decision
-  - lock `InterpreterBridge` as a temporary transition mode for the current Wasm-only
-    direction; do not treat it as a second long-term runtime.
   - decide whether the temporary bridge remains CLI-only or is exposed as a narrow
     internal `goby-wasm` API while still being marked for shrinkage.
   - reflect that decision in ownership and tests before extending more shape coverage.
@@ -696,6 +694,8 @@ Remaining:
   - re-express the current exact-shape dynamic Wasm support through the new
     `RuntimeIoPlan` layer instead of direct AST-shape conditionals in
     `crates/goby-wasm/src/lib.rs`.
+  - move runtime-I/O planning ownership into a dedicated internal module rather than
+    leaving the decision logic in the top-level orchestration entrypoint.
   - only extend supported forms that map cleanly into that plan representation.
   - explicit stopping rule:
     - once `RuntimeIoPlan` exists, do not add new planner-bypassing AST-pattern cases;
@@ -704,14 +704,11 @@ Remaining:
     - remove the old direct matcher path after the existing supported dynamic-Wasm cases
       are routed through `RuntimeIoPlan`.
 - [ ] Phase F3b: General lowering expansion
-  - generalize the current structured `Read.read ()` support beyond the exact
-    `split(..., "\n")` + `each println` family:
-    - equivalent local-binding forwarding,
-    - close import spellings that are semantically identical,
-    - other one-step post-read transforms that preserve current runtime semantics.
-  - extend dynamic Wasm support for `Read.read_line ()` beyond direct echo-style output
-    so non-trivial line-oriented stdin programs stop depending on the interpreter-backed
-    runtime bridge.
+  - extend `RuntimeIoPlan` so it can represent more runtime-I/O programs without
+    planner-bypassing matcher growth.
+  - use that expanded plan to cover additional `Read.read ()` and `Read.read_line ()`
+    programs that preserve current runtime semantics, including nearby structured
+    transforms that are currently forced onto the bridge.
   - if this phase reveals that broad support is better served by a more general lowering
     path than by additional pattern coverage, prefer expanding the planning IR/backend
     rather than adding more matcher cases.
@@ -775,6 +772,8 @@ Acceptance criteria:
   being routed through compile-time text collapse.
 - `InterpreterBridge` remains a bounded temporary migration mode whose supported surface
   shrinks over time rather than a second permanent runtime path.
+- planner-bypassing direct matcher routing is removed once `RuntimeIoPlan` covers the
+  currently supported dynamic-Wasm cases.
 - existing static-output fallback remains available for pure/output-only programs where it
   is semantically valid.
 - the set of host-dependent embedded effects is explicitly audited, with either tests or
