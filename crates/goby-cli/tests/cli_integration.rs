@@ -1,8 +1,9 @@
 use goby_core::parse_module;
 use std::env;
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 struct TempDirGuard {
@@ -359,36 +360,59 @@ main =
 }
 
 #[test]
-fn run_command_rejects_compile_time_stdin_capture_for_read_program() {
+fn run_command_executes_read_program_with_runtime_stdin() {
     let root = repo_root();
-    let sandbox = TempDirGuard::new("run_read_compile_time_stdin_capture");
+    let sandbox = TempDirGuard::new("run_read_runtime_stdin");
     let input = sandbox.join("read.gb");
     fs::write(
         &input,
         r#"
+import goby/list ( each )
+import goby/string ( split )
+
 main : Unit -> Unit can Print, Read
 main =
-  print (read())
+  text = read()
+  lines = split(text, "\n")
+  each lines (|line| -> println(line))
 "#,
     )
     .expect("temporary input should be writable");
 
-    let output = command_for_goby_cli()
+    let mut child = command_for_goby_cli()
         .arg("run")
         .arg(&input)
         .current_dir(&root)
-        .output()
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
         .expect("cli should execute");
+    child
+        .stdin
+        .as_mut()
+        .expect("stdin pipe should exist")
+        .write_all(b"hogehoge\nfugafuga")
+        .expect("stdin should be writable");
+    let output = child
+        .wait_with_output()
+        .expect("cli output should be readable");
 
     assert!(
-        !output.status.success(),
-        "expected failure until runtime stdin-backed Wasm is implemented"
+        output.status.success(),
+        "expected runtime stdin-backed execution to succeed, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
     );
-    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        stderr.contains("compile-time fallback cannot consume stdin"),
-        "expected explicit stdin containment diagnostic, stderr: {}",
-        stderr
+        stdout.contains("parsed and typechecked"),
+        "unexpected stdout: {}",
+        stdout
+    );
+    assert!(
+        stdout.contains("hogehoge\nfugafuga\n"),
+        "expected runtime stdin output, stdout: {}",
+        stdout
     );
 }
 

@@ -1,5 +1,6 @@
 use std::env;
 use std::io::ErrorKind;
+use std::io::Read as _;
 use std::path::{Path, PathBuf};
 use std::process::Command as ProcessCommand;
 
@@ -99,22 +100,39 @@ fn run() -> Result<(), CliError> {
     })?;
 
     match cli.command {
-        Command::Run => {
-            let bytes = goby_wasm::compile_module(&module)
-                .map_err(|err| CliError::Runtime(format!("codegen error: {}", err.message)))?;
-            let output = output_wasm_path(&cli.file);
-            std::fs::write(&output, bytes)
-                .map_err(|err| CliError::Runtime(format!("failed to write {}: {}", output, err)))?;
+        Command::Run => match goby_wasm::compile_module(&module) {
+            Ok(bytes) => {
+                let output = output_wasm_path(&cli.file);
+                std::fs::write(&output, bytes).map_err(|err| {
+                    CliError::Runtime(format!("failed to write {}: {}", output, err))
+                })?;
 
-            print_parse_summary(module.declarations.len(), &cli.file);
-            println!("generated wasm: {}", output);
-            match execute_wasm(&output)? {
-                ExecutionOutcome::Executed => {}
-                ExecutionOutcome::SkippedNoWasmtime => {
-                    println!("wasmtime not found; skipped wasm execution")
+                print_parse_summary(module.declarations.len(), &cli.file);
+                println!("generated wasm: {}", output);
+                match execute_wasm(&output)? {
+                    ExecutionOutcome::Executed => {}
+                    ExecutionOutcome::SkippedNoWasmtime => {
+                        println!("wasmtime not found; skipped wasm execution")
+                    }
                 }
             }
-        }
+            Err(err)
+                if err
+                    .message
+                    .contains("compile-time fallback cannot consume stdin") =>
+            {
+                let stdin_text = read_stdin_to_string()?;
+                let output = goby_wasm::execute_module_with_stdin(&module, Some(stdin_text))
+                    .map_err(|err| CliError::Runtime(format!("runtime error: {}", err.message)))?;
+                print_parse_summary(module.declarations.len(), &cli.file);
+                if let Some(text) = output {
+                    print!("{}", text);
+                }
+            }
+            Err(err) => {
+                return Err(CliError::Runtime(format!("codegen error: {}", err.message)));
+            }
+        },
         Command::Check => {
             print_parse_summary(module.declarations.len(), &cli.file);
         }
@@ -222,6 +240,14 @@ fn execute_wasm(wasm_path: &str) -> Result<ExecutionOutcome, CliError> {
     }
 
     Ok(ExecutionOutcome::Executed)
+}
+
+fn read_stdin_to_string() -> Result<String, CliError> {
+    let mut bytes = Vec::new();
+    std::io::stdin()
+        .read_to_end(&mut bytes)
+        .map_err(|err| CliError::Runtime(format!("failed to read stdin: {}", err)))?;
+    Ok(String::from_utf8_lossy(&bytes).into_owned())
 }
 
 #[cfg(test)]

@@ -13,6 +13,9 @@ This file is a restart-safe snapshot for resuming work after context reset.
   (for example: `map xs add_ten`).
 - Track F Phase F1 containment is now implemented:
   compile-time fallback no longer consumes stdin for `Read` programs during `goby run`.
+- Track F capability split has advanced:
+  `goby run` now executes stdin-backed `Read` programs through the runtime resolver
+  instead of failing once compile-time fallback is blocked.
 
 ## Current State
 
@@ -30,7 +33,13 @@ This file is a restart-safe snapshot for resuming work after context reset.
 - `goby-wasm::compile_module` now runs compile-time fallback output resolution in a
   "no live stdin" mode and surfaces an explicit codegen error if `Read.read` or
   `Read.read_line` would consume compiler-process stdin.
-- CLI and Wasm regression tests now cover the containment behavior.
+- `goby-wasm` now exposes a runtime execution path with seeded stdin so the CLI can
+  execute `Read` programs without compile-time stdin capture.
+- `goby-core` parser now lowers parenthesized multi-arg calls like `split(a, b)` into
+  the same left-associative call shape as spaced calls, which unblocks runtime handling
+  of selective-import stdlib helpers in this path.
+- CLI and Wasm regression tests now cover both containment and runtime stdin execution
+  for the `read` + `split` + `each` shape.
 
 ## Verified
 
@@ -40,9 +49,11 @@ This file is a restart-safe snapshot for resuming work after context reset.
 
 ## Next Work
 
-- Start Track F Phase F2/F3:
-  split compile-time static-output fallback from runtime execution capability planning,
-  then add dynamic Wasm/WASI stdin support for `Read`.
+- Continue Track F toward dynamic Wasm/WASI stdin support:
+  current `goby run` stdin execution is interpreter-backed runtime execution, not yet
+  generated executable Wasm with runtime imports.
+- Decide whether the new runtime execution path should become an explicit internal API
+  boundary before dynamic Wasm support lands, or remain a temporary CLI-only bridge.
 - Keep Track D queued after the runtime I/O containment/runtime split work is in a stable state.
 - Once Track F runtime support lands, sync `doc/LANGUAGE_SPEC.md` and runnable stdin examples.
 

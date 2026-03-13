@@ -634,14 +634,24 @@ fn parse_call_expr(src: &str) -> Option<Expr> {
         let callee = src[..open].trim();
         let inner = src[open + 1..src.len() - 1].trim();
         if is_identifier(callee) || is_qualified_name(callee) {
-            return Some(Expr::Call {
-                callee: Box::new(parse_expr(callee)?),
-                arg: Box::new(if inner.is_empty() {
-                    Expr::unit_value()
-                } else {
-                    parse_expr(inner)?
-                }),
-            });
+            let mut expr = parse_expr(callee)?;
+            if inner.is_empty() {
+                return Some(Expr::Call {
+                    callee: Box::new(expr),
+                    arg: Box::new(Expr::unit_value()),
+                });
+            }
+            let parts = split_top_level_commas(inner);
+            if parts.is_empty() || parts.iter().any(|part| part.trim().is_empty()) {
+                return None;
+            }
+            for part in parts {
+                expr = Expr::Call {
+                    callee: Box::new(expr),
+                    arg: Box::new(parse_expr(part.trim())?),
+                };
+            }
+            return Some(expr);
         }
     }
 
@@ -1079,6 +1089,20 @@ mod tests {
             Some(Expr::Call {
                 callee: Box::new(Expr::Var("read_line".to_string())),
                 arg: Box::new(Expr::unit_value()),
+            })
+        );
+    }
+
+    #[test]
+    fn parses_parenthesized_multi_arg_function_call_left_associative() {
+        assert_eq!(
+            parse_expr("split(text, \"\\n\")"),
+            Some(Expr::Call {
+                callee: Box::new(Expr::Call {
+                    callee: Box::new(Expr::Var("split".to_string())),
+                    arg: Box::new(Expr::Var("text".to_string())),
+                }),
+                arg: Box::new(Expr::StringLit("\n".to_string())),
             })
         );
     }

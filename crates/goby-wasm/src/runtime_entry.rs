@@ -41,6 +41,23 @@ pub(crate) fn resolve_main_runtime_output_with_mode(
     )
 }
 
+pub(crate) fn resolve_main_runtime_output_with_mode_and_stdin(
+    module: &Module,
+    body: &str,
+    parsed_stmts: Option<&[Stmt]>,
+    execution_mode: lower::EffectExecutionMode,
+    stdin_seed: Option<String>,
+) -> Option<String> {
+    resolve_main_runtime_output_with_mode_internal(
+        module,
+        body,
+        parsed_stmts,
+        execution_mode,
+        stdin_seed,
+        true,
+    )
+}
+
 pub(crate) fn resolve_main_runtime_output_for_compile(
     module: &Module,
     body: &str,

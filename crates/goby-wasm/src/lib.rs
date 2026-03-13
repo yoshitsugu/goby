@@ -70,6 +70,7 @@ pub(crate) use crate::runtime_entry::resolve_main_runtime_output;
 use crate::runtime_entry::resolve_main_runtime_output_for_compile;
 #[cfg(test)]
 pub(crate) use crate::runtime_entry::resolve_main_runtime_output_with_mode;
+use crate::runtime_entry::resolve_main_runtime_output_with_mode_and_stdin;
 #[cfg(test)]
 pub(crate) use crate::runtime_parity::{
     assert_mode_parity, assert_perf_within_threshold, measure_runtime_mode_micros,
@@ -81,26 +82,65 @@ pub struct CodegenError {
     pub message: String,
 }
 
-/// Compile a parsed Goby [`Module`] into a WASI Preview 1 Wasm binary.
-///
-/// # Errors
-///
-/// Returns [`CodegenError`] when:
-/// - `main` declaration is missing.
-/// - `main` body contains constructs that are neither natively lowerable nor
-///   resolvable as static print output.
-/// - Internal Wasm encoding fails (e.g. string literal too large).
-pub fn compile_module(module: &Module) -> Result<Vec<u8>, CodegenError> {
-    let Some(main) = module.declarations.iter().find(|d| d.name == "main") else {
-        return Err(CodegenError {
+fn unresolved_runtime_output_error(
+    module: &Module,
+    handoff: Option<lower::EffectBoundaryHandoff>,
+) -> CodegenError {
+    if let Some(handoff) = handoff {
+        return CodegenError {
+            message: format!(
+                "main lowered as effect boundary (style={:?}, selected_mode={:?}, selected_mode_fallback_reason={:?}, runtime_profile={:?}, typed_continuation_ir_present={}, handlers_resume={}, evidence_ops={}, evidence_requirements={}, evidence_fingerprint_hint={}); fallback runtime output could not be resolved",
+                handoff.main_style,
+                handoff.selected_mode,
+                handoff.selected_mode_fallback_reason,
+                handoff.runtime_profile,
+                handoff.typed_continuation_ir.is_some(),
+                handoff.handler_resume_present,
+                handoff.evidence_operation_table_len,
+                handoff.evidence_requirements_len,
+                handoff.evidence_fingerprint_hint,
+            ),
+        };
+    }
+
+    if let Some(reason) = fallback::native_unsupported_reason(module) {
+        return CodegenError {
+            message: format!(
+                "main body contains unsupported constructs that cannot be lowered natively or resolved as static output (native_unsupported_reason={})",
+                reason
+            ),
+        };
+    }
+
+    CodegenError {
+        message:
+            "main body contains unsupported constructs that cannot be lowered natively or resolved as static output"
+                .to_string(),
+    }
+}
+
+fn runtime_mode_and_handoff(
+    module: &Module,
+) -> Result<
+    (
+        lower::EffectExecutionMode,
+        Option<lower::EffectBoundaryHandoff>,
+        Option<(String, Option<&[Stmt]>)>,
+    ),
+    CodegenError,
+> {
+    let main = module
+        .declarations
+        .iter()
+        .find(|d| d.name == "main")
+        .ok_or_else(|| CodegenError {
             message: ERR_MISSING_MAIN.to_string(),
-        });
-    };
+        })?;
 
     let native_attempt = lower::try_emit_native_module_with_handoff(module)?;
     let mut effect_boundary_handoff: Option<lower::EffectBoundaryHandoff> = None;
     match native_attempt {
-        lower::NativeLoweringResult::Emitted(wasm) => return Ok(wasm),
+        lower::NativeLoweringResult::Emitted(_) => {}
         lower::NativeLoweringResult::EffectBoundaryHandoff(handoff) => {
             if handoff.main_style == planning::LoweringStyle::DirectStyle {
                 return Err(CodegenError {
@@ -119,19 +159,45 @@ pub fn compile_module(module: &Module) -> Result<Vec<u8>, CodegenError> {
             }
             effect_boundary_handoff = Some(handoff);
         }
-        _ => {}
+        lower::NativeLoweringResult::NotLowered => {}
     }
 
     let runtime_mode = effect_boundary_handoff
         .as_ref()
         .map(|handoff| handoff.selected_mode)
         .unwrap_or(lower::EffectExecutionMode::PortableFallback);
-    if let Some(text) = resolve_main_runtime_output_for_compile(
-        module,
-        &main.body,
-        main.parsed_body.as_deref(),
+
+    Ok((
         runtime_mode,
-    ) {
+        effect_boundary_handoff,
+        Some((main.body.clone(), main.parsed_body.as_deref())),
+    ))
+}
+
+/// Compile a parsed Goby [`Module`] into a WASI Preview 1 Wasm binary.
+///
+/// # Errors
+///
+/// Returns [`CodegenError`] when:
+/// - `main` declaration is missing.
+/// - `main` body contains constructs that are neither natively lowerable nor
+///   resolvable as static print output.
+/// - Internal Wasm encoding fails (e.g. string literal too large).
+pub fn compile_module(module: &Module) -> Result<Vec<u8>, CodegenError> {
+    if let lower::NativeLoweringResult::Emitted(wasm) =
+        lower::try_emit_native_module_with_handoff(module)?
+    {
+        return Ok(wasm);
+    }
+    let (runtime_mode, effect_boundary_handoff, main) = runtime_mode_and_handoff(module)?;
+    let Some((main_body, parsed_body)) = main else {
+        return Err(CodegenError {
+            message: ERR_MISSING_MAIN.to_string(),
+        });
+    };
+    if let Some(text) =
+        resolve_main_runtime_output_for_compile(module, &main_body, parsed_body, runtime_mode)
+    {
         if text.contains("compile-time fallback cannot consume stdin") {
             return Err(CodegenError {
                 message: text.trim_start_matches("runtime error: ").to_string(),
@@ -140,35 +206,37 @@ pub fn compile_module(module: &Module) -> Result<Vec<u8>, CodegenError> {
         return print_codegen::compile_print_module(&text);
     }
 
-    if let Some(handoff) = effect_boundary_handoff {
+    Err(unresolved_runtime_output_error(
+        module,
+        effect_boundary_handoff,
+    ))
+}
+
+pub fn execute_module_with_stdin(
+    module: &Module,
+    stdin_seed: Option<String>,
+) -> Result<Option<String>, CodegenError> {
+    let (runtime_mode, effect_boundary_handoff, main) = runtime_mode_and_handoff(module)?;
+    let Some((main_body, parsed_body)) = main else {
         return Err(CodegenError {
-            message: format!(
-                "main lowered as effect boundary (style={:?}, selected_mode={:?}, selected_mode_fallback_reason={:?}, runtime_profile={:?}, typed_continuation_ir_present={}, handlers_resume={}, evidence_ops={}, evidence_requirements={}, evidence_fingerprint_hint={}); fallback runtime output could not be resolved",
-                handoff.main_style,
-                handoff.selected_mode,
-                handoff.selected_mode_fallback_reason,
-                handoff.runtime_profile,
-                handoff.typed_continuation_ir.is_some(),
-                handoff.handler_resume_present,
-                handoff.evidence_operation_table_len,
-                handoff.evidence_requirements_len,
-                handoff.evidence_fingerprint_hint,
-            ),
+            message: ERR_MISSING_MAIN.to_string(),
         });
+    };
+
+    if let Some(text) = resolve_main_runtime_output_with_mode_and_stdin(
+        module,
+        &main_body,
+        parsed_body,
+        runtime_mode,
+        stdin_seed,
+    ) {
+        return Ok(Some(text));
     }
 
-    if let Some(reason) = fallback::native_unsupported_reason(module) {
-        return Err(CodegenError {
-            message: format!(
-                "main body contains unsupported constructs that cannot be lowered natively or resolved as static output (native_unsupported_reason={})",
-                reason
-            ),
-        });
-    }
-
-    Err(CodegenError {
-        message: "main body contains unsupported constructs that cannot be lowered natively or resolved as static output".to_string(),
-    })
+    Err(unresolved_runtime_output_error(
+        module,
+        effect_boundary_handoff,
+    ))
 }
 
 pub(crate) struct RuntimeOutputResolver<'m> {

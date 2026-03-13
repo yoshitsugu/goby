@@ -358,6 +358,42 @@ main =
 }
 
 #[test]
+fn resolves_runtime_output_for_list_each_with_string_callback_and_selective_import() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    let source = r#"
+import goby/list ( each )
+
+main : Unit -> Unit can Print
+main =
+  each ["go", "by"] (|s| -> println(s))
+"#;
+    let module = parse_module(source).expect("parse should work");
+    let output =
+        resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
+            .expect("runtime output should resolve");
+    assert_eq!(output, "go\nby\n");
+}
+
+#[test]
+fn resolves_runtime_output_for_imported_string_split_with_selective_import() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    let source = r#"
+import goby/list ( each )
+import goby/string ( split )
+
+main : Unit -> Unit can Print
+main =
+  lines = split("hogehoge\nfugafuga", "\n")
+  each lines (|line| -> println(line))
+"#;
+    let module = parse_module(source).expect("parse should work");
+    let output =
+        resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
+            .expect("runtime output should resolve");
+    assert_eq!(output, "hogehoge\nfugafuga\n");
+}
+
+#[test]
 fn resolves_runtime_output_for_imported_list_map_with_ints() {
     let _guard = ENV_MUTEX.lock().unwrap();
     let source = r#"

@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 
 use goby_core::parse_module;
-use goby_wasm::compile_module;
+use goby_wasm::{compile_module, execute_module_with_stdin};
 
 /// Serializes tests that read or write process-wide environment variables.
 static ENV_MUTEX: Mutex<()> = Mutex::new(());
@@ -116,6 +116,26 @@ main =
         "error should explain stdin containment, got: {}",
         err.message
     );
+}
+
+#[test]
+fn execute_module_with_stdin_runs_read_program_at_runtime() {
+    let module = parse_module(
+        r#"
+import goby/list ( each )
+import goby/string ( split )
+
+main : Unit -> Unit can Print, Read
+main =
+  text = read()
+  lines = split(text, "\n")
+  each lines (|line| -> println(line))
+"#,
+    )
+    .expect("parse should work");
+    let output = execute_module_with_stdin(&module, Some("hogehoge\nfugafuga".to_string()))
+        .expect("runtime execution should succeed");
+    assert_eq!(output.as_deref(), Some("hogehoge\nfugafuga\n"));
 }
 
 #[test]
