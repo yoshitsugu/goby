@@ -590,7 +590,130 @@ Acceptance criteria:
 - diagnostics clearly distinguish `Int` from `Float`.
 - docs/examples/spec are updated in the same slice that lands behavior.
 
-### 4.6 Parking Lot (Needs Revalidation Before Implementation)
+### 4.6 Active Track F: Runtime I/O Correctness and Fallback Containment
+
+Goal: stop compile-time host I/O from leaking into `goby run`, then add real runtime
+stdin support for effect-boundary programs.
+
+Problem statement locked from investigation:
+
+- current `goby run` may execute `main` through `resolve_main_runtime_output` during
+  compilation when native lowering cannot handle the program shape.
+- if that fallback path succeeds, the compiler collapses the observed output into a
+  static print-only Wasm module.
+- this is acceptable only for pure/output-only fallback cases.
+- it is incorrect for host-input-dependent effects such as `Read`, because the compiler
+  process consumes stdin before the generated Wasm runs.
+
+Observed affected surface from pre-plan audit:
+
+- `Print` and `Read` are the only currently registered embedded runtime handler kinds.
+- `Print` in fallback is currently a materialization mechanism for static output and is
+  not itself evidence of incorrect behavior.
+- `Read.read` / `Read.read_line` are unsafe in compile-time fallback because they call
+  host stdin directly from the compiler-side runtime environment.
+- the broader architectural risk is "any future embedded or host-backed effect that
+  depends on runtime environment must not be resolved into static output during compile".
+
+Execution policy for this track:
+
+- prefer a two-stage rollout:
+  1. immediate containment of the incorrect compile-time stdin behavior.
+  2. real Wasm/WASI runtime support for stdin-backed execution.
+- keep fallback evaluation available for pure/static-output programs that do not depend
+  on runtime host input.
+- make host-dependence an explicit planning/runtime property rather than an accidental
+  side effect of whatever the fallback interpreter can execute.
+
+Execution phases:
+
+1. Phase F1: Host-effect audit and containment rules
+   - classify current fallback-executable operations into:
+     - pure/static-safe,
+     - output-only static-safe,
+     - runtime-host-dependent.
+   - lock the rule that any path requiring runtime host input must not be consumed by
+     compile-time fallback output resolution.
+   - implement a first containment gate so programs that require `Read` do not read stdin
+     from the compiler process during `goby run`.
+   - locked short-term behavior:
+     - fail fast with a clear diagnostic when `goby run` encounters a program that requires
+       runtime stdin but no runtime stdin-backed Wasm path is available yet.
+     - do not silently fall back to compile-time output synthesis for these programs.
+   - add focused regression tests proving that piping input into `goby run` no longer
+     causes compile-time stdin capture.
+2. Phase F2: Runtime capability planning split
+   - separate "fallback interpreter for compile-time static output synthesis" from
+     "runtime execution support needed by generated Wasm".
+   - introduce an explicit capability/planning decision for embedded effects so lowering
+     can distinguish:
+     - static-print collapsible programs,
+     - programs requiring runtime stdin/stdout bridge support,
+     - unsupported effect/runtime combinations.
+   - audit existing decision points (`try_emit_native_module_with_handoff`,
+     `resolve_main_runtime_output`, embedded handler metadata) so the same host-dependence
+     rule is applied consistently.
+3. Phase F3: Wasm/WASI stdin support
+   - extend the backend beyond static print-module emission so effect-boundary programs can
+     execute as dynamic Wasm rather than only being collapsed to compile-time text.
+   - add a real Wasm-side stdin path using WASI I/O imports rather than compiler-side
+     `std::io::stdin()`.
+   - support both `Read.read ()` (remaining stdin) and `Read.read_line ()`
+     (line-oriented read with current CRLF/LF normalization semantics).
+   - preserve existing stdout behavior for `print` / `println` and ensure stdin/stdout
+     plumbing can coexist in one generated module.
+   - make the execution contract explicit:
+     - effect-boundary programs using embedded `Print` / `Read` must lower to an executable
+       Wasm module with runtime imports, not to `compile_print_module` output.
+   - document the minimum supported runtime assumption explicitly:
+     - initial target should remain `wasmtime run` / WASI Preview 1 unless and until the
+       backend runtime contract changes.
+4. Phase F4: Behavior parity and regression sweep
+   - add deterministic lower-level tests for:
+     - capability/planning decisions that reject compile-time fallback for `Read`,
+     - stdin buffering/line semantics for runtime `Read.read` / `Read.read_line`,
+     - dynamic effect-boundary codegen selection versus static print-module collapse.
+   - add CLI integration tests for:
+     - `echo "a\nb" | goby run ...` with `Read.read ()`,
+     - mixed `read_line` then `read`,
+     - empty stdin,
+     - repeated reads after exhaustion,
+     - programs combining `Read` and `Print`.
+   - treat the CLI pipe tests as end-to-end coverage that may remain environment-gated on
+     `wasmtime`; do not make them the only proof of correctness.
+   - add lower-level runtime tests that verify the same line-splitting semantics currently
+     covered by `EmbeddedEffectRuntime`.
+   - sweep for other compile-time fallback call sites or future effect hooks that could
+     accidentally observe host environment during compilation; encode those findings as
+     tests or explicit TODOs before closing the track.
+5. Phase F5: Cleanup and docs
+   - update `doc/LANGUAGE_SPEC.md` once behavior is implemented so runtime stdin semantics
+     and execution guarantees are described accurately.
+   - update examples (notably `examples/read.gb`) to serve as runnable regression fixtures.
+   - remove or sharply narrow any compiler-side stdin-reading helper that is no longer
+     valid after Wasm runtime support lands.
+
+Acceptance criteria:
+
+- `goby run` never consumes stdin during compilation for programs that require runtime input.
+- before Phase F3 lands, such programs fail with an explicit diagnostic instead of silently
+  producing a static-output Wasm artifact.
+- `Read.read ()` and `Read.read_line ()` observe the stdin of the executed Wasm program,
+  not the stdin of the compiler process.
+- effect-boundary programs using embedded `Read` / `Print` execute as dynamic Wasm modules
+  rather than being routed through compile-time text collapse.
+- existing static-output fallback remains available for pure/output-only programs where it
+  is semantically valid.
+- the set of host-dependent embedded effects is explicitly audited, with either tests or
+  recorded follow-up items preventing this class of bug from reappearing silently.
+
+Non-goals for the first slice of this track:
+
+- general host capability/FFI design beyond current embedded `Print` / `Read` defaults.
+- broad replacement of all fallback execution with native Wasm lowering.
+- redesign of effect syntax or handler semantics.
+
+### 4.7 Parking Lot (Needs Revalidation Before Implementation)
 
 - CLI `build` expansion details (`--target`, `--engine-compat`, verify modes).
 - CLI binary naming migration (`goby-cli` -> `goby`) final policy.
