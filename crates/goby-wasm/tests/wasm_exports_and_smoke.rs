@@ -222,6 +222,29 @@ main =
 }
 
 #[test]
+fn forwarded_split_lines_each_println_program_emits_wasm_with_fd_read_and_fd_write_imports() {
+    let module = parse_module(
+        r#"
+import goby/list ( each )
+import goby/string ( split )
+
+main : Unit -> Unit can Print, Read
+main =
+  text = read()
+  delim = "\n"
+  lines = split(text, delim)
+  copied = lines
+  each copied (|line| -> println(line))
+"#,
+    )
+    .expect("parse should work");
+    let wasm =
+        compile_module(&module).expect("forwarded split each println shape should compile to Wasm");
+    assert_valid_wasm_module(&wasm);
+    assert_has_fd_read_and_fd_write_imports(&wasm);
+}
+
+#[test]
 fn simple_read_line_program_emits_wasm_with_fd_read_and_fd_write_imports() {
     let module = parse_module(
         r#"
@@ -282,7 +305,8 @@ main =
   delim = "\n"
   lines = split(text, delim)
   copied = lines
-  each copied (|line| -> println(line))
+  forwarded = copied
+  each forwarded (|line| -> println(line))
 "#,
     )
     .expect("parse should work");
@@ -304,7 +328,8 @@ main =
   delim = "\n"
   lines = split(text, delim)
   copied = lines
-  each copied (|line| -> println(line))
+  forwarded = copied
+  each forwarded (|line| -> println(line))
 "#,
     )
     .expect("parse should work");

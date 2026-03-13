@@ -376,7 +376,8 @@ main =
   delim = "\n"
   lines = split(text, delim)
   copied = lines
-  each copied (|line| -> println(line))
+  forwarded = copied
+  each forwarded (|line| -> println(line))
 "#,
     )
     .expect("temporary input should be writable");

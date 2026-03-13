@@ -366,7 +366,11 @@ fn is_split_lines_each_println_shape(module: &Module, stmts: &[Stmt]) -> bool {
                     each_expr,
                 )
         }
-        [read_stmt, delim_stmt, split_stmt, Stmt::Expr(each_expr)] => {
+        [read_stmt, delim_stmt, split_stmt, Stmt::Expr(each_expr)]
+            if stmt_binding_parts(delim_stmt).is_some_and(
+                |(_, value)| matches!(value, Expr::StringLit(delim) if delim == "\n"),
+            ) =>
+        {
             let Some((text_name, read_value)) = stmt_binding_parts(read_stmt) else {
                 return false;
             };
@@ -383,6 +387,62 @@ fn is_split_lines_each_println_shape(module: &Module, stmts: &[Stmt]) -> bool {
                     text_name,
                     Some(delimiter_name),
                     lines_name,
+                    split_value,
+                    each_expr,
+                )
+        }
+        [read_stmt, split_stmt, alias_stmt, Stmt::Expr(each_expr)]
+            if !stmt_binding_parts(split_stmt).is_some_and(
+                |(_, value)| matches!(value, Expr::StringLit(delim) if delim == "\n"),
+            ) =>
+        {
+            let Some((text_name, read_value)) = stmt_binding_parts(read_stmt) else {
+                return false;
+            };
+            let Some((lines_name, split_value)) = stmt_binding_parts(split_stmt) else {
+                return false;
+            };
+            let Some((alias_name, alias_value)) = stmt_binding_parts(alias_stmt) else {
+                return false;
+            };
+            is_read_all_expr(read_value)
+                && matches!(alias_value, Expr::Var(var_name) if var_name == lines_name)
+                && split_lines_each_println_matches(
+                    module,
+                    text_name,
+                    None,
+                    alias_name,
+                    split_value,
+                    each_expr,
+                )
+        }
+        [
+            read_stmt,
+            delim_stmt,
+            split_stmt,
+            alias_stmt,
+            Stmt::Expr(each_expr),
+        ] => {
+            let Some((text_name, read_value)) = stmt_binding_parts(read_stmt) else {
+                return false;
+            };
+            let Some((delimiter_name, delimiter_value)) = stmt_binding_parts(delim_stmt) else {
+                return false;
+            };
+            let Some((lines_name, split_value)) = stmt_binding_parts(split_stmt) else {
+                return false;
+            };
+            let Some((alias_name, alias_value)) = stmt_binding_parts(alias_stmt) else {
+                return false;
+            };
+            is_read_all_expr(read_value)
+                && matches!(delimiter_value, Expr::StringLit(delim) if delim == "\n")
+                && matches!(alias_value, Expr::Var(var_name) if var_name == lines_name)
+                && split_lines_each_println_matches(
+                    module,
+                    text_name,
+                    Some(delimiter_name),
+                    alias_name,
                     split_value,
                     each_expr,
                 )
@@ -451,6 +511,28 @@ main =
     }
 
     #[test]
+    fn plans_bound_newline_split_each_println_with_forwarded_lines_binding() {
+        let (module, body) = main_stmts(
+            r#"
+import goby/list ( each )
+import goby/string ( split )
+
+main : Unit -> Unit can Print, Read
+main =
+  text = read()
+  delim = "\n"
+  lines = split(text, delim)
+  copied = lines
+  each copied (|line| -> println(line))
+"#,
+        );
+        assert_eq!(
+            classify_runtime_io(&module, body.as_deref()),
+            RuntimeIoClassification::DynamicWasiIo(RuntimeIoPlan::SplitLinesEachPrintln)
+        );
+    }
+
+    #[test]
     fn plans_read_echo_with_forwarded_local_binding() {
         let (module, body) = main_stmts(
             r#"
@@ -503,7 +585,8 @@ main =
   delim = "\n"
   lines = split(text, delim)
   copied = lines
-  each copied (|line| -> println(line))
+  forwarded = copied
+  each forwarded (|line| -> println(line))
 "#,
         );
         assert_eq!(

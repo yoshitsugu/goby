@@ -84,6 +84,10 @@ This file is a restart-safe snapshot for resuming work after context reset.
 - `RuntimeIoPlan` echo planning now also accepts a one-hop local forwarding shape,
   so `text = read(); copied = text; print copied` and the analogous `read_line`
   variant no longer fall back to the temporary interpreter bridge.
+- `RuntimeIoPlan` newline-splitting `each println` planning now also accepts a
+  one-hop forwarding of the `split` result, so `copied = lines; each copied ...`
+  compiles to dynamic Wasm and the bridge-only regression path now requires a
+  more complex two-hop variant.
 
 ## Verified
 
