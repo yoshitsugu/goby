@@ -377,7 +377,7 @@ main =
   lines = split(text, delim)
   copied = lines
   forwarded = copied
-  each forwarded (|line| -> println(line))
+  each forwarded (|line| -> print(line))
 "#,
     )
     .expect("temporary input should be writable");
@@ -413,7 +413,7 @@ main =
         stdout
     );
     assert!(
-        stdout.contains("hogehoge\nfugafuga\n"),
+        stdout.contains("hogehogefugafuga"),
         "expected runtime stdin output, stdout: {}",
         stdout
     );

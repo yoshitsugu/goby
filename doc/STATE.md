@@ -97,6 +97,9 @@ This file is a restart-safe snapshot for resuming work after context reset.
 - `RuntimeIoPlan` matching now factors read-binding, alias-binding, delimiter-binding,
   and split-binding detection through small helpers, reducing duplicated AST-shape
   logic across the echo and split planning paths.
+- Echo and newline-splitting runtime-I/O planning now follow simple local alias chains
+  instead of stopping after a single forwarded binding, while bridge-only regression
+  coverage has moved to nearby unsupported callback-body shapes such as `each ... print`.
 
 ## Verified
 

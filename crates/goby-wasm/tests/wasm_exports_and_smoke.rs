@@ -306,13 +306,13 @@ main =
   lines = split(text, delim)
   copied = lines
   forwarded = copied
-  each forwarded (|line| -> println(line))
+  each forwarded (|line| -> print(line))
 "#,
     )
     .expect("parse should work");
     let output = execute_module_with_stdin(&module, Some("hogehoge\nfugafuga".to_string()))
         .expect("runtime execution should succeed");
-    assert_eq!(output.as_deref(), Some("hogehoge\nfugafuga\n"));
+    assert_eq!(output.as_deref(), Some("hogehogefugafuga"));
 }
 
 #[test]
@@ -329,7 +329,7 @@ main =
   lines = split(text, delim)
   copied = lines
   forwarded = copied
-  each forwarded (|line| -> println(line))
+  each forwarded (|line| -> print(line))
 "#,
     )
     .expect("parse should work");
