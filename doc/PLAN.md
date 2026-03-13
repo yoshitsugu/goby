@@ -592,8 +592,9 @@ Acceptance criteria:
 
 ### 4.6 Active Track F: Runtime I/O Correctness and Fallback Containment
 
-Goal: stop compile-time host I/O from leaking into `goby run`, then add real runtime
-stdin support for effect-boundary programs.
+Goal: stop compile-time host I/O from leaking into `goby run`, then converge on a
+unified runtime-I/O design for effect-boundary programs instead of growing ad-hoc
+fallback behavior indefinitely.
 
 Problem statement locked from investigation:
 
@@ -624,84 +625,156 @@ Execution policy for this track:
   on runtime host input.
 - make host-dependence an explicit planning/runtime property rather than an accidental
   side effect of whatever the fallback interpreter can execute.
+- treat the current shape-based dynamic Wasm support as a temporary coverage bridge, not
+  as the final architectural boundary.
 
-Execution phases:
+Target architecture for the remainder of this track:
 
-1. Phase F1: Host-effect audit and containment rules
-   - classify current fallback-executable operations into:
-     - pure/static-safe,
-     - output-only static-safe,
-     - runtime-host-dependent.
-   - lock the rule that any path requiring runtime host input must not be consumed by
-     compile-time fallback output resolution.
-   - implement a first containment gate so programs that require `Read` do not read stdin
-     from the compiler process during `goby run`.
-   - locked short-term behavior:
-     - fail fast with a clear diagnostic when `goby run` encounters a program that requires
-       runtime stdin but no runtime stdin-backed Wasm path is available yet.
-     - do not silently fall back to compile-time output synthesis for these programs.
-   - add focused regression tests proving that piping input into `goby run` no longer
-     causes compile-time stdin capture.
-2. Phase F2: Runtime capability planning split
-   - separate "fallback interpreter for compile-time static output synthesis" from
-     "runtime execution support needed by generated Wasm".
-   - introduce an explicit capability/planning decision for embedded effects so lowering
-     can distinguish:
-     - static-print collapsible programs,
-     - programs requiring runtime stdin/stdout bridge support,
-     - unsupported effect/runtime combinations.
-   - audit existing decision points (`try_emit_native_module_with_handoff`,
-     `resolve_main_runtime_output`, embedded handler metadata) so the same host-dependence
-     rule is applied consistently.
-3. Phase F3: Wasm/WASI stdin support
-   - extend the backend beyond static print-module emission so effect-boundary programs can
-     execute as dynamic Wasm rather than only being collapsed to compile-time text.
-   - add a real Wasm-side stdin path using WASI I/O imports rather than compiler-side
-     `std::io::stdin()`.
-   - support both `Read.read ()` (remaining stdin) and `Read.read_line ()`
-     (line-oriented read with current CRLF/LF normalization semantics).
-   - preserve existing stdout behavior for `print` / `println` and ensure stdin/stdout
-     plumbing can coexist in one generated module.
-   - make the execution contract explicit:
-     - effect-boundary programs using embedded `Print` / `Read` must lower to an executable
-       Wasm module with runtime imports, not to `compile_print_module` output.
-   - document the minimum supported runtime assumption explicitly:
-     - initial target should remain `wasmtime run` / WASI Preview 1 unless and until the
-       backend runtime contract changes.
-4. Phase F4: Behavior parity and regression sweep
-   - add deterministic lower-level tests for:
-     - capability/planning decisions that reject compile-time fallback for `Read`,
-     - stdin buffering/line semantics for runtime `Read.read` / `Read.read_line`,
-     - dynamic effect-boundary codegen selection versus static print-module collapse.
-   - add CLI integration tests for:
-     - `echo "a\nb" | goby run ...` with `Read.read ()`,
-     - mixed `read_line` then `read`,
-     - empty stdin,
-     - repeated reads after exhaustion,
-     - programs combining `Read` and `Print`.
-   - treat the CLI pipe tests as end-to-end coverage that may remain environment-gated on
-     `wasmtime`; do not make them the only proof of correctness.
-   - add lower-level runtime tests that verify the same line-splitting semantics currently
-     covered by `EmbeddedEffectRuntime`.
-   - sweep for other compile-time fallback call sites or future effect hooks that could
-     accidentally observe host environment during compilation; encode those findings as
-     tests or explicit TODOs before closing the track.
-5. Phase F5: Cleanup and docs
-   - update `doc/LANGUAGE_SPEC.md` once behavior is implemented so runtime stdin semantics
-     and execution guarantees are described accurately.
-   - update examples (notably `examples/read.gb`) to serve as runnable regression fixtures.
-   - remove or sharply narrow any compiler-side stdin-reading helper that is no longer
-     valid after Wasm runtime support lands.
+- introduce a small internal runtime-I/O planning layer that classifies effect-boundary
+  `main` into one of:
+  - `StaticOutput`,
+  - `DynamicWasiIo`,
+  - `InterpreterBridge`,
+  - `Unsupported`.
+- for this project direction, `InterpreterBridge` is an explicitly temporary migration
+  mode, not a desired steady-state execution target:
+  - it exists only to keep `goby run` usable while Wasm-only runtime coverage is being
+    expanded,
+  - new work should prefer shrinking the `InterpreterBridge` surface rather than
+    normalizing it as a permanent parallel runtime.
+- keep ownership boundaries explicit:
+  - planning layer decides which runtime-I/O program shape is present and which execution
+    path is allowed,
+  - Wasm backend lowers `DynamicWasiIo` plans,
+  - CLI/runtime entrypoints only execute the chosen path and do not rediscover policy.
+- keep the current exact-shape dynamic Wasm support as a temporary bridge with an exit
+  condition:
+  - only add new supported forms if they map cleanly into the planning layer,
+  - stop extending ad-hoc AST matching once the planning layer can express the same cases
+    more directly.
+
+Execution status and remaining work:
+
+Completed:
+
+- [x] Phase F1 containment: classify `Read` as runtime-host-dependent and block
+  compile-time fallback from consuming compiler-process stdin.
+- [x] Add containment regressions proving that piping input into `goby run` no longer
+  causes compile-time stdin capture.
+- [x] Phase F2 initial split: separate compile-time static-output synthesis from
+  runtime stdin-backed execution by introducing an interpreter-backed runtime bridge
+  for `goby run`.
+- [x] Audit current embedded handler surface enough to lock that `Print` is
+  static-output-safe while `Read.read` / `Read.read_line` are not.
+- [x] Phase F3 initial dynamic Wasm slice: support executable WASI modules for
+  simple `Read.read ()` / `Read.read_line ()` echo-style shapes.
+- [x] Extend the first dynamic stdin/stdout Wasm path to the current structured
+  `split(..., "\n")` + `each println` family in a narrow set of local-binding forms.
+
+Remaining:
+
+- [ ] Phase F2b: Runtime-I/O planning unification
+  - introduce a small internal `RuntimeIoPlan` layer so lowering can
+    distinguish:
+    - static-print collapsible programs,
+    - programs requiring dynamic stdin/stdout Wasm,
+    - programs that still require interpreter-backed runtime bridging,
+    - unsupported effect/runtime combinations.
+  - move host-dependence and execution policy into that planning layer rather than
+    rediscovering it in CLI or backend glue.
+  - audit existing decision points (`try_emit_native_module_with_handoff`,
+    `resolve_main_runtime_output`, embedded handler metadata, CLI `run` fallback
+    routing) so the same rule is applied consistently without string-matching on
+    diagnostics.
+- [ ] Phase F2c: Runtime bridge boundary decision
+  - lock `InterpreterBridge` as a temporary transition mode for the current Wasm-only
+    direction; do not treat it as a second long-term runtime.
+  - decide whether the temporary bridge remains CLI-only or is exposed as a narrow
+    internal `goby-wasm` API while still being marked for shrinkage.
+  - reflect that decision in ownership and tests before extending more shape coverage.
+- [ ] Phase F3a: Temporary coverage bridge on top of the planning layer
+  - re-express the current exact-shape dynamic Wasm support through the new
+    `RuntimeIoPlan` layer instead of direct AST-shape conditionals in
+    `crates/goby-wasm/src/lib.rs`.
+  - only extend supported forms that map cleanly into that plan representation.
+  - explicit stopping rule:
+    - once `RuntimeIoPlan` exists, do not add new planner-bypassing AST-pattern cases;
+      any new supported form must be expressed by extending the plan and lowering from it.
+  - exit condition:
+    - remove the old direct matcher path after the existing supported dynamic-Wasm cases
+      are routed through `RuntimeIoPlan`.
+- [ ] Phase F3b: General lowering expansion
+  - generalize the current structured `Read.read ()` support beyond the exact
+    `split(..., "\n")` + `each println` family:
+    - equivalent local-binding forwarding,
+    - close import spellings that are semantically identical,
+    - other one-step post-read transforms that preserve current runtime semantics.
+  - extend dynamic Wasm support for `Read.read_line ()` beyond direct echo-style output
+    so non-trivial line-oriented stdin programs stop depending on the interpreter-backed
+    runtime bridge.
+  - if this phase reveals that broad support is better served by a more general lowering
+    path than by additional pattern coverage, prefer expanding the planning IR/backend
+    rather than adding more matcher cases.
+- [ ] Phase F3c: Backend ownership cleanup
+  - reduce duplication in the WASI backend by extracting common stdin/stdout module
+    building blocks.
+  - separate concerns so:
+    - planning decides what runtime-I/O program exists,
+    - backend lowers that plan to Wasm,
+    - CLI only selects and executes the resulting path.
+- [ ] Track explicit shrinkage of temporary modes
+  - add milestone checks showing that `InterpreterBridge` coverage is shrinking as
+    `DynamicWasiIo` support grows.
+  - keep at least one test fixture intentionally on the bridge until a matching Wasm
+    lowering exists, then move it across rather than leaving both paths in place.
+- [ ] Preserve and document the execution contract that effect-boundary programs using
+  embedded `Print` / `Read` should prefer executable Wasm modules with runtime imports,
+  not `compile_print_module` output, whenever a dynamic Wasm lowering exists.
+- [ ] Keep the minimum supported runtime assumption explicit:
+  initial target remains `wasmtime run` / WASI Preview 1 unless and until the backend
+  runtime contract changes.
+- [ ] Phase F4 deterministic tests:
+  - capability/planning decisions that reject compile-time fallback for `Read`,
+  - stdin buffering and line semantics for runtime `Read.read` / `Read.read_line`,
+  - dynamic effect-boundary codegen selection versus static print-module collapse,
+  - boundary tests proving which nearby shapes do and do not compile to dynamic Wasm,
+  - planning-layer tests proving how a program is classified into `StaticOutput`,
+    `DynamicWasiIo`, `InterpreterBridge`, or `Unsupported`.
+- [ ] Phase F4 CLI integration tests:
+  - `echo "a\nb" | goby run ...` with `Read.read ()`,
+  - mixed `read_line` then `read`,
+  - empty stdin,
+  - repeated reads after exhaustion,
+  - programs combining `Read` and `Print`,
+  - at least one shape that intentionally remains on the interpreter-backed runtime path.
+- [ ] Treat CLI pipe tests as end-to-end coverage only; keep lower-level deterministic
+  tests as the primary proof of correctness so Track F does not depend solely on
+  `wasmtime` availability.
+- [ ] Sweep for other compile-time fallback call sites or future effect hooks that could
+  accidentally observe host environment during compilation; encode findings as tests or
+  explicit TODOs before closing the track.
+- [ ] Phase F5 docs and cleanup:
+  - narrow or remove compiler-side stdin-reading helpers once the final runtime-I/O
+    ownership boundary is in place,
+  - update `doc/LANGUAGE_SPEC.md` once stdin runtime semantics and guarantees are stable,
+  - update runnable stdin examples such as `examples/read.gb`,
+  - document whether interpreter bridging remains part of the supported internal design
+    or only a temporary transition mechanism.
 
 Acceptance criteria:
 
 - `goby run` never consumes stdin during compilation for programs that require runtime input.
-- before Phase F3 lands, such programs fail with an explicit diagnostic instead of silently
-  producing a static-output Wasm artifact.
+- before a matching dynamic Wasm lowering exists, such programs must not silently
+  produce a static-output Wasm artifact from compile-time stdin capture.
 - `Read.read ()` and `Read.read_line ()` observe the stdin of the executed Wasm program,
   not the stdin of the compiler process.
-- effect-boundary programs using embedded `Read` / `Print` execute as dynamic Wasm modules
-  rather than being routed through compile-time text collapse.
+- effect-boundary programs using embedded `Read` / `Print` are classified explicitly into
+  `StaticOutput`, `DynamicWasiIo`, `InterpreterBridge`, or `Unsupported` rather than
+  being routed by accidental fallback behavior.
+- programs classified as `DynamicWasiIo` execute as dynamic Wasm modules rather than
+  being routed through compile-time text collapse.
+- `InterpreterBridge` remains a bounded temporary migration mode whose supported surface
+  shrinks over time rather than a second permanent runtime path.
 - existing static-output fallback remains available for pure/output-only programs where it
   is semantically valid.
 - the set of host-dependent embedded effects is explicitly audited, with either tests or

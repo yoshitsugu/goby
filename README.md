@@ -51,6 +51,9 @@ If `wasmtime` is not installed, install it first so `goby run` can execute gener
 - All data is immutable by default.
 - Built-in effect system.
 - Statically typed.
+- Wasm-first implementation direction: the current backend target is Wasm, and
+  `goby run` is intended to execute generated Wasm rather than a separate
+  language-level interpreter runtime.
 - Prioritize readability over advanced or highly complex language features.
 - Strong tooling is a core part of the project vision.
 - Built with deep respect for the ideas and communities behind Gleam and Ante.
