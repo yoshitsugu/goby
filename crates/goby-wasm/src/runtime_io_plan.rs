@@ -24,11 +24,30 @@ pub(crate) enum RuntimeIoPlan {
     SplitLinesEachPrintln,
 }
 
-pub(crate) fn plan_runtime_io(
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RuntimeIoClassification {
+    DynamicWasiIo(RuntimeIoPlan),
+    InterpreterBridge,
+    NotRuntimeIo,
+}
+
+pub(crate) fn classify_runtime_io(
     module: &Module,
     parsed_body: Option<&[Stmt]>,
-) -> Option<RuntimeIoPlan> {
-    let stmts = parsed_body?;
+) -> RuntimeIoClassification {
+    let Some(stmts) = parsed_body else {
+        return RuntimeIoClassification::NotRuntimeIo;
+    };
+    if let Some(plan) = plan_runtime_io(module, stmts) {
+        return RuntimeIoClassification::DynamicWasiIo(plan);
+    }
+    if stmts.iter().any(stmt_contains_runtime_read) {
+        return RuntimeIoClassification::InterpreterBridge;
+    }
+    RuntimeIoClassification::NotRuntimeIo
+}
+
+fn plan_runtime_io(module: &Module, stmts: &[Stmt]) -> Option<RuntimeIoPlan> {
     match stmts {
         [Stmt::Expr(expr)] => {
             output_read_mode(expr).map(|(input_mode, output_mode)| RuntimeIoPlan::Echo {
@@ -71,6 +90,73 @@ pub(crate) fn plan_runtime_io(
             Some(RuntimeIoPlan::SplitLinesEachPrintln)
         }
         _ => None,
+    }
+}
+
+fn stmt_contains_runtime_read(stmt: &Stmt) -> bool {
+    match stmt {
+        Stmt::Binding { value, .. }
+        | Stmt::MutBinding { value, .. }
+        | Stmt::Assign { value, .. } => expr_contains_runtime_read(value),
+        Stmt::Expr(expr) => expr_contains_runtime_read(expr),
+    }
+}
+
+fn expr_contains_runtime_read(expr: &Expr) -> bool {
+    match expr {
+        Expr::Call { callee, arg } => {
+            is_read_all_expr(expr)
+                || is_read_line_expr(expr)
+                || expr_contains_runtime_read(callee)
+                || expr_contains_runtime_read(arg)
+        }
+        Expr::InterpolatedString(parts) => parts.iter().any(|part| match part {
+            goby_core::ast::InterpolatedPart::Text(_) => false,
+            goby_core::ast::InterpolatedPart::Expr(expr) => expr_contains_runtime_read(expr),
+        }),
+        Expr::ListLit { elements, spread } => {
+            elements.iter().any(expr_contains_runtime_read)
+                || spread.as_deref().is_some_and(expr_contains_runtime_read)
+        }
+        Expr::TupleLit(items) => items.iter().any(expr_contains_runtime_read),
+        Expr::RecordConstruct { fields, .. } => fields
+            .iter()
+            .any(|(_, value)| expr_contains_runtime_read(value)),
+        Expr::BinOp { left, right, .. } => {
+            expr_contains_runtime_read(left) || expr_contains_runtime_read(right)
+        }
+        Expr::MethodCall { args, .. } => args.iter().any(expr_contains_runtime_read),
+        Expr::Pipeline { value, .. } => expr_contains_runtime_read(value),
+        Expr::Lambda { body, .. } => expr_contains_runtime_read(body),
+        Expr::Handler { clauses } => clauses.iter().any(|clause| {
+            clause
+                .parsed_body
+                .as_deref()
+                .is_some_and(|body| body.iter().any(stmt_contains_runtime_read))
+        }),
+        Expr::With { handler, body } => {
+            expr_contains_runtime_read(handler) || body.iter().any(stmt_contains_runtime_read)
+        }
+        Expr::Resume { value } => expr_contains_runtime_read(value),
+        Expr::Block(stmts) => stmts.iter().any(stmt_contains_runtime_read),
+        Expr::Case { scrutinee, arms } => {
+            expr_contains_runtime_read(scrutinee)
+                || arms.iter().any(|arm| expr_contains_runtime_read(&arm.body))
+        }
+        Expr::If {
+            condition,
+            then_expr,
+            else_expr,
+        } => {
+            expr_contains_runtime_read(condition)
+                || expr_contains_runtime_read(then_expr)
+                || expr_contains_runtime_read(else_expr)
+        }
+        Expr::IntLit(_)
+        | Expr::BoolLit(_)
+        | Expr::StringLit(_)
+        | Expr::Var(_)
+        | Expr::Qualified { .. } => false,
     }
 }
 
@@ -249,7 +335,9 @@ fn is_split_lines_each_println_shape(module: &Module, stmts: &[Stmt]) -> bool {
 mod tests {
     use goby_core::parse_module;
 
-    use super::{InputReadMode, OutputReadMode, RuntimeIoPlan, plan_runtime_io};
+    use super::{
+        InputReadMode, OutputReadMode, RuntimeIoClassification, RuntimeIoPlan, classify_runtime_io,
+    };
 
     fn main_stmts(source: &str) -> (goby_core::Module, Option<Vec<Stmt>>) {
         let module = parse_module(source).expect("parse should work");
@@ -273,8 +361,8 @@ main =
 "#,
         );
         assert_eq!(
-            plan_runtime_io(&module, body.as_deref()),
-            Some(RuntimeIoPlan::Echo {
+            classify_runtime_io(&module, body.as_deref()),
+            RuntimeIoClassification::DynamicWasiIo(RuntimeIoPlan::Echo {
                 input_mode: InputReadMode::ReadAll,
                 output_mode: OutputReadMode::Print,
             })
@@ -297,8 +385,8 @@ main =
 "#,
         );
         assert_eq!(
-            plan_runtime_io(&module, body.as_deref()),
-            Some(RuntimeIoPlan::SplitLinesEachPrintln)
+            classify_runtime_io(&module, body.as_deref()),
+            RuntimeIoClassification::DynamicWasiIo(RuntimeIoPlan::SplitLinesEachPrintln)
         );
     }
 
@@ -318,6 +406,24 @@ main =
   each copied (|line| -> println(line))
 "#,
         );
-        assert_eq!(plan_runtime_io(&module, body.as_deref()), None);
+        assert_eq!(
+            classify_runtime_io(&module, body.as_deref()),
+            RuntimeIoClassification::InterpreterBridge
+        );
+    }
+
+    #[test]
+    fn non_read_program_is_not_runtime_io() {
+        let (module, body) = main_stmts(
+            r#"
+main : Unit -> Unit can Print
+main =
+  println "hello"
+"#,
+        );
+        assert_eq!(
+            classify_runtime_io(&module, body.as_deref()),
+            RuntimeIoClassification::NotRuntimeIo
+        );
     }
 }

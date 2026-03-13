@@ -49,7 +49,9 @@ use crate::runtime_flow::{
     ResolvedEffectHandler, ResolvedHandlerMethod, ResumeToken, RuntimeDeclInfo, RuntimeError,
     RuntimeEvaluators, RuntimeHandlerMethod, StoreOp, WithId,
 };
-use crate::runtime_io_plan::{InputReadMode, RuntimeIoPlan, plan_runtime_io};
+use crate::runtime_io_plan::{
+    InputReadMode, RuntimeIoClassification, RuntimeIoPlan, classify_runtime_io,
+};
 use crate::runtime_support::{eval_string_expr, parse_pipeline};
 use crate::runtime_value::{RuntimeLocals, RuntimeValue, runtime_value_option_eq};
 use goby_core::{
@@ -124,8 +126,11 @@ fn try_emit_runtime_stdin_wasm(
     module: &Module,
     parsed_body: Option<&[Stmt]>,
 ) -> Result<Option<Vec<u8>>, CodegenError> {
-    let Some(plan) = plan_runtime_io(module, parsed_body) else {
-        return Ok(None);
+    let plan = match classify_runtime_io(module, parsed_body) {
+        RuntimeIoClassification::DynamicWasiIo(plan) => plan,
+        RuntimeIoClassification::InterpreterBridge | RuntimeIoClassification::NotRuntimeIo => {
+            return Ok(None);
+        }
     };
     let builder = backend::WasmProgramBuilder::new(layout::MemoryLayout::default());
     match plan {
@@ -221,6 +226,16 @@ pub fn compile_module(module: &Module) -> Result<Vec<u8>, CodegenError> {
             message: ERR_MISSING_MAIN.to_string(),
         });
     };
+    if matches!(
+        classify_runtime_io(module, parsed_body),
+        RuntimeIoClassification::InterpreterBridge
+    ) {
+        return Err(CodegenError {
+            message:
+                "compile-time fallback cannot consume stdin; use the runtime stdin execution path"
+                    .to_string(),
+        });
+    }
     if let Some(wasm) = try_emit_runtime_stdin_wasm(module, parsed_body)? {
         return Ok(wasm);
     }
