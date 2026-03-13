@@ -66,6 +66,35 @@ impl RuntimeIoPlan {
     }
 }
 
+impl RuntimeIoClassification {
+    pub(crate) fn compile_module_wasm_or_error(self) -> Result<Option<Vec<u8>>, CodegenError> {
+        match self {
+            RuntimeIoClassification::DynamicWasiIo(plan) => plan.emit_wasm().map(Some),
+            RuntimeIoClassification::InterpreterBridge => Err(CodegenError {
+                message:
+                    "compile-time fallback cannot consume stdin; use the runtime stdin execution path"
+                        .to_string(),
+            }),
+            RuntimeIoClassification::NotRuntimeIo => Ok(None),
+        }
+    }
+
+    pub(crate) fn require_interpreter_bridge_stdin(self) -> Result<(), CodegenError> {
+        match self {
+            RuntimeIoClassification::InterpreterBridge => Ok(()),
+            RuntimeIoClassification::DynamicWasiIo(_) => Err(CodegenError {
+                message:
+                    "runtime stdin execution path is only for interpreter-bridge programs; compile this program to Wasm instead"
+                        .to_string(),
+            }),
+            RuntimeIoClassification::NotRuntimeIo => Err(CodegenError {
+                message: "runtime stdin execution path is only for interpreter-bridge programs"
+                    .to_string(),
+            }),
+        }
+    }
+}
+
 pub(crate) fn classify_runtime_io(
     module: &Module,
     parsed_body: Option<&[Stmt]>,

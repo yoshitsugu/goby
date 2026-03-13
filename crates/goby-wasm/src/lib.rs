@@ -49,7 +49,7 @@ use crate::runtime_flow::{
     ResolvedEffectHandler, ResolvedHandlerMethod, ResumeToken, RuntimeDeclInfo, RuntimeError,
     RuntimeEvaluators, RuntimeHandlerMethod, StoreOp, WithId,
 };
-use crate::runtime_io_plan::{RuntimeIoClassification, classify_runtime_io};
+use crate::runtime_io_plan::classify_runtime_io;
 pub use crate::runtime_io_plan::{RuntimeIoExecutionKind, runtime_io_execution_kind};
 use crate::runtime_support::{eval_string_expr, parse_pipeline};
 use crate::runtime_value::{RuntimeLocals, RuntimeValue, runtime_value_option_eq};
@@ -197,16 +197,8 @@ pub fn compile_module(module: &Module) -> Result<Vec<u8>, CodegenError> {
             message: ERR_MISSING_MAIN.to_string(),
         });
     };
-    match classify_runtime_io(module, parsed_body) {
-        RuntimeIoClassification::DynamicWasiIo(plan) => return plan.emit_wasm(),
-        RuntimeIoClassification::InterpreterBridge => {
-            return Err(CodegenError {
-                message:
-                    "compile-time fallback cannot consume stdin; use the runtime stdin execution path"
-                        .to_string(),
-            });
-        }
-        RuntimeIoClassification::NotRuntimeIo => {}
+    if let Some(wasm) = classify_runtime_io(module, parsed_body).compile_module_wasm_or_error()? {
+        return Ok(wasm);
     }
     if let Some(text) =
         resolve_main_runtime_output_for_compile(module, &main_body, parsed_body, runtime_mode)
@@ -231,23 +223,7 @@ pub fn execute_module_with_stdin(
             message: ERR_MISSING_MAIN.to_string(),
         });
     };
-    let classification = classify_runtime_io(module, parsed_body);
-    match classification {
-        RuntimeIoClassification::InterpreterBridge => {}
-        RuntimeIoClassification::DynamicWasiIo(_) => {
-            return Err(CodegenError {
-                message:
-                    "runtime stdin execution path is only for interpreter-bridge programs; compile this program to Wasm instead"
-                        .to_string(),
-            });
-        }
-        RuntimeIoClassification::NotRuntimeIo => {
-            return Err(CodegenError {
-                message: "runtime stdin execution path is only for interpreter-bridge programs"
-                    .to_string(),
-            });
-        }
-    }
+    classify_runtime_io(module, parsed_body).require_interpreter_bridge_stdin()?;
 
     if let Some(text) = resolve_main_runtime_output_with_mode_and_stdin(
         module,

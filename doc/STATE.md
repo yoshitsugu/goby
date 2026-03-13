@@ -91,6 +91,9 @@ This file is a restart-safe snapshot for resuming work after context reset.
 - The public runtime-I/O execution-kind query is now owned by the planner module
   and re-exported from `goby-wasm`, so classification policy lives with the
   runtime-I/O planner rather than in `lib.rs`.
+- The remaining runtime-I/O bridge policy in `execute_module_with_stdin` and the
+  compile-time stdin-blocking decision are now also expressed through planner-owned
+  classification helpers instead of ad-hoc matches in `lib.rs`.
 
 ## Verified
 
