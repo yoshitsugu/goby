@@ -34,6 +34,13 @@ pub(crate) enum RuntimeIoClassification {
     NotRuntimeIo,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuntimeIoExecutionKind {
+    DynamicWasiIo,
+    InterpreterBridge,
+    NotRuntimeIo,
+}
+
 impl RuntimeIoPlan {
     pub(crate) fn emit_wasm(self) -> Result<Vec<u8>, CodegenError> {
         let builder = WasmProgramBuilder::new(MemoryLayout::default());
@@ -73,6 +80,27 @@ pub(crate) fn classify_runtime_io(
         return RuntimeIoClassification::InterpreterBridge;
     }
     RuntimeIoClassification::NotRuntimeIo
+}
+
+pub(crate) fn classify_runtime_io_main(
+    module: &Module,
+) -> Result<RuntimeIoClassification, CodegenError> {
+    let main = module
+        .declarations
+        .iter()
+        .find(|d| d.name == "main")
+        .ok_or_else(|| CodegenError {
+            message: "Wasm codegen requires a `main` declaration".to_string(),
+        })?;
+    Ok(classify_runtime_io(module, main.parsed_body.as_deref()))
+}
+
+pub fn runtime_io_execution_kind(module: &Module) -> Result<RuntimeIoExecutionKind, CodegenError> {
+    Ok(match classify_runtime_io_main(module)? {
+        RuntimeIoClassification::DynamicWasiIo(_) => RuntimeIoExecutionKind::DynamicWasiIo,
+        RuntimeIoClassification::InterpreterBridge => RuntimeIoExecutionKind::InterpreterBridge,
+        RuntimeIoClassification::NotRuntimeIo => RuntimeIoExecutionKind::NotRuntimeIo,
+    })
 }
 
 fn plan_runtime_io(module: &Module, stmts: &[Stmt]) -> Option<RuntimeIoPlan> {

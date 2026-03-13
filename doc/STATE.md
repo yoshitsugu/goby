@@ -88,6 +88,9 @@ This file is a restart-safe snapshot for resuming work after context reset.
   one-hop forwarding of the `split` result, so `copied = lines; each copied ...`
   compiles to dynamic Wasm and the bridge-only regression path now requires a
   more complex two-hop variant.
+- The public runtime-I/O execution-kind query is now owned by the planner module
+  and re-exported from `goby-wasm`, so classification policy lives with the
+  runtime-I/O planner rather than in `lib.rs`.
 
 ## Verified
 
