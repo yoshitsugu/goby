@@ -133,6 +133,16 @@ pub fn runtime_io_execution_kind(module: &Module) -> Result<RuntimeIoExecutionKi
 }
 
 fn plan_runtime_io(module: &Module, stmts: &[Stmt]) -> Option<RuntimeIoPlan> {
+    if let Some(plan) = plan_echo_runtime_io(stmts) {
+        return Some(plan);
+    }
+    if is_split_lines_each_println_shape(module, stmts) {
+        return Some(RuntimeIoPlan::SplitLinesEachPrintln);
+    }
+    None
+}
+
+fn plan_echo_runtime_io(stmts: &[Stmt]) -> Option<RuntimeIoPlan> {
     match stmts {
         [Stmt::Expr(expr)] => {
             output_read_mode(expr).map(|(input_mode, output_mode)| RuntimeIoPlan::Echo {
@@ -140,73 +150,45 @@ fn plan_runtime_io(module: &Module, stmts: &[Stmt]) -> Option<RuntimeIoPlan> {
                 output_mode,
             })
         }
-        [
-            Stmt::Binding { name, value } | Stmt::MutBinding { name, value },
-            Stmt::Expr(Expr::Call { callee, arg }),
-        ] => plan_bound_echo_shape(name, value, name, callee, arg),
-        _ if is_split_lines_each_println_shape(module, stmts) => {
-            Some(RuntimeIoPlan::SplitLinesEachPrintln)
+        [read_stmt, Stmt::Expr(Expr::Call { callee, arg })] => {
+            let (source_name, input_mode) = read_binding_mode(read_stmt)?;
+            plan_bound_echo_shape(input_mode, source_name, callee, arg)
         }
         [
-            Stmt::Binding {
-                name: source_name,
-                value: source_value,
-            }
-            | Stmt::MutBinding {
-                name: source_name,
-                value: source_value,
-            },
-            Stmt::Binding {
-                name: alias_name,
-                value: alias_value,
-            }
-            | Stmt::MutBinding {
-                name: alias_name,
-                value: alias_value,
-            },
+            read_stmt,
+            alias_stmt,
             Stmt::Expr(Expr::Call { callee, arg }),
         ] => {
-            if !matches!(alias_value, Expr::Var(var_name) if var_name == source_name) {
-                return None;
-            }
-            plan_bound_echo_shape(source_name, source_value, alias_name, callee, arg)
+            let (source_name, input_mode) = read_binding_mode(read_stmt)?;
+            let printed_name = alias_binding_name(alias_stmt, source_name)?;
+            plan_bound_echo_shape(input_mode, printed_name, callee, arg)
         }
         _ => None,
     }
 }
 
 fn plan_bound_echo_shape(
-    _source_name: &str,
-    source_value: &Expr,
+    input_mode: InputReadMode,
     printed_name: &str,
     callee: &Expr,
     arg: &Expr,
 ) -> Option<RuntimeIoPlan> {
-    let input_mode = if is_read_all_expr(source_value) {
-        Some(InputReadMode::ReadAll)
-    } else if is_read_line_expr(source_value) {
-        Some(InputReadMode::ReadLine)
-    } else {
-        None
+    if !matches!(arg, Expr::Var(var_name) if var_name == printed_name) {
+        return None;
+    }
+    let Expr::Var(output_name) = callee else {
+        return None;
     };
-    if input_mode.is_none() {
-        None
-    } else if !matches!(arg, Expr::Var(var_name) if var_name == printed_name) {
-        None
-    } else if let Expr::Var(output_name) = callee {
-        match output_name.as_str() {
-            "print" => Some(RuntimeIoPlan::Echo {
-                input_mode: input_mode.expect("checked above"),
-                output_mode: OutputReadMode::Print,
-            }),
-            "println" => Some(RuntimeIoPlan::Echo {
-                input_mode: input_mode.expect("checked above"),
-                output_mode: OutputReadMode::Println,
-            }),
-            _ => None,
-        }
-    } else {
-        None
+    match output_name.as_str() {
+        "print" => Some(RuntimeIoPlan::Echo {
+            input_mode,
+            output_mode: OutputReadMode::Print,
+        }),
+        "println" => Some(RuntimeIoPlan::Echo {
+            input_mode,
+            output_mode: OutputReadMode::Println,
+        }),
+        _ => None,
     }
 }
 
@@ -357,31 +339,62 @@ fn stmt_binding_parts(stmt: &Stmt) -> Option<(&str, &Expr)> {
     }
 }
 
-fn expr_is_newline_delimiter(expr: &Expr, delimiter_name: Option<&str>) -> bool {
-    matches!(expr, Expr::StringLit(delim) if delim == "\n")
-        || delimiter_name
-            .is_some_and(|name| matches!(expr, Expr::Var(var_name) if var_name == name))
+fn read_binding_mode(stmt: &Stmt) -> Option<(&str, InputReadMode)> {
+    let (name, value) = stmt_binding_parts(stmt)?;
+    if is_read_all_expr(value) {
+        Some((name, InputReadMode::ReadAll))
+    } else if is_read_line_expr(value) {
+        Some((name, InputReadMode::ReadLine))
+    } else {
+        None
+    }
 }
 
-fn split_lines_each_println_matches(
+fn alias_binding_name<'a>(stmt: &'a Stmt, source_name: &str) -> Option<&'a str> {
+    let (alias_name, alias_value) = stmt_binding_parts(stmt)?;
+    if matches!(alias_value, Expr::Var(var_name) if var_name == source_name) {
+        Some(alias_name)
+    } else {
+        None
+    }
+}
+
+fn newline_delimiter_binding_name(stmt: &Stmt) -> Option<&str> {
+    let (name, value) = stmt_binding_parts(stmt)?;
+    if matches!(value, Expr::StringLit(delim) if delim == "\n") {
+        Some(name)
+    } else {
+        None
+    }
+}
+
+fn split_lines_binding_name<'a>(
     module: &Module,
+    stmt: &'a Stmt,
     text_name: &str,
     delimiter_name: Option<&str>,
-    lines_name: &str,
-    split_value: &Expr,
-    each_expr: &Expr,
-) -> bool {
+) -> Option<&'a str> {
+    let (lines_name, split_value) = stmt_binding_parts(stmt)?;
     let Some((split_head, split_args)) = flatten_direct_call(split_value) else {
-        return false;
+        return None;
     };
     if !imported_head_matches_symbol(module, &split_head, "goby/string", "split")
         || split_args.len() != 2
         || !matches!(split_args[0], Expr::Var(name) if name == text_name)
         || !expr_is_newline_delimiter(split_args[1], delimiter_name)
     {
-        return false;
+        return None;
     }
+    Some(lines_name)
+}
 
+fn expr_is_newline_delimiter(expr: &Expr, delimiter_name: Option<&str>) -> bool {
+    matches!(expr, Expr::StringLit(delim) if delim == "\n")
+        || delimiter_name
+            .is_some_and(|name| matches!(expr, Expr::Var(var_name) if var_name == name))
+}
+
+fn split_lines_each_println_matches(module: &Module, lines_name: &str, each_expr: &Expr) -> bool {
     let Some((each_head, each_args)) = flatten_direct_call(each_expr) else {
         return false;
     };
@@ -407,71 +420,45 @@ fn split_lines_each_println_matches(
 fn is_split_lines_each_println_shape(module: &Module, stmts: &[Stmt]) -> bool {
     match stmts {
         [read_stmt, split_stmt, Stmt::Expr(each_expr)] => {
-            let Some((text_name, read_value)) = stmt_binding_parts(read_stmt) else {
+            let Some((text_name, InputReadMode::ReadAll)) = read_binding_mode(read_stmt) else {
                 return false;
             };
-            let Some((lines_name, split_value)) = stmt_binding_parts(split_stmt) else {
+            let Some(lines_name) = split_lines_binding_name(module, split_stmt, text_name, None)
+            else {
                 return false;
             };
-            is_read_all_expr(read_value)
-                && split_lines_each_println_matches(
-                    module,
-                    text_name,
-                    None,
-                    lines_name,
-                    split_value,
-                    each_expr,
-                )
+            split_lines_each_println_matches(module, lines_name, each_expr)
         }
         [read_stmt, delim_stmt, split_stmt, Stmt::Expr(each_expr)]
-            if stmt_binding_parts(delim_stmt).is_some_and(
-                |(_, value)| matches!(value, Expr::StringLit(delim) if delim == "\n"),
-            ) =>
+            if newline_delimiter_binding_name(delim_stmt).is_some() =>
         {
-            let Some((text_name, read_value)) = stmt_binding_parts(read_stmt) else {
+            let Some((text_name, InputReadMode::ReadAll)) = read_binding_mode(read_stmt) else {
                 return false;
             };
-            let Some((delimiter_name, delimiter_value)) = stmt_binding_parts(delim_stmt) else {
+            let Some(delimiter_name) = newline_delimiter_binding_name(delim_stmt) else {
                 return false;
             };
-            let Some((lines_name, split_value)) = stmt_binding_parts(split_stmt) else {
+            let Some(lines_name) =
+                split_lines_binding_name(module, split_stmt, text_name, Some(delimiter_name))
+            else {
                 return false;
             };
-            is_read_all_expr(read_value)
-                && matches!(delimiter_value, Expr::StringLit(delim) if delim == "\n")
-                && split_lines_each_println_matches(
-                    module,
-                    text_name,
-                    Some(delimiter_name),
-                    lines_name,
-                    split_value,
-                    each_expr,
-                )
+            split_lines_each_println_matches(module, lines_name, each_expr)
         }
         [read_stmt, split_stmt, alias_stmt, Stmt::Expr(each_expr)]
-            if !stmt_binding_parts(split_stmt).is_some_and(
-                |(_, value)| matches!(value, Expr::StringLit(delim) if delim == "\n"),
-            ) =>
+            if newline_delimiter_binding_name(split_stmt).is_none() =>
         {
-            let Some((text_name, read_value)) = stmt_binding_parts(read_stmt) else {
+            let Some((text_name, InputReadMode::ReadAll)) = read_binding_mode(read_stmt) else {
                 return false;
             };
-            let Some((lines_name, split_value)) = stmt_binding_parts(split_stmt) else {
+            let Some(lines_name) = split_lines_binding_name(module, split_stmt, text_name, None)
+            else {
                 return false;
             };
-            let Some((alias_name, alias_value)) = stmt_binding_parts(alias_stmt) else {
+            let Some(alias_name) = alias_binding_name(alias_stmt, lines_name) else {
                 return false;
             };
-            is_read_all_expr(read_value)
-                && matches!(alias_value, Expr::Var(var_name) if var_name == lines_name)
-                && split_lines_each_println_matches(
-                    module,
-                    text_name,
-                    None,
-                    alias_name,
-                    split_value,
-                    each_expr,
-                )
+            split_lines_each_println_matches(module, alias_name, each_expr)
         }
         [
             read_stmt,
@@ -480,29 +467,21 @@ fn is_split_lines_each_println_shape(module: &Module, stmts: &[Stmt]) -> bool {
             alias_stmt,
             Stmt::Expr(each_expr),
         ] => {
-            let Some((text_name, read_value)) = stmt_binding_parts(read_stmt) else {
+            let Some((text_name, InputReadMode::ReadAll)) = read_binding_mode(read_stmt) else {
                 return false;
             };
-            let Some((delimiter_name, delimiter_value)) = stmt_binding_parts(delim_stmt) else {
+            let Some(delimiter_name) = newline_delimiter_binding_name(delim_stmt) else {
                 return false;
             };
-            let Some((lines_name, split_value)) = stmt_binding_parts(split_stmt) else {
+            let Some(lines_name) =
+                split_lines_binding_name(module, split_stmt, text_name, Some(delimiter_name))
+            else {
                 return false;
             };
-            let Some((alias_name, alias_value)) = stmt_binding_parts(alias_stmt) else {
+            let Some(alias_name) = alias_binding_name(alias_stmt, lines_name) else {
                 return false;
             };
-            is_read_all_expr(read_value)
-                && matches!(delimiter_value, Expr::StringLit(delim) if delim == "\n")
-                && matches!(alias_value, Expr::Var(var_name) if var_name == lines_name)
-                && split_lines_each_println_matches(
-                    module,
-                    text_name,
-                    Some(delimiter_name),
-                    alias_name,
-                    split_value,
-                    each_expr,
-                )
+            split_lines_each_println_matches(module, alias_name, each_expr)
         }
         _ => false,
     }
