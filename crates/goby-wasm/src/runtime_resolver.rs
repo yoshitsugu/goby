@@ -1,8 +1,13 @@
 use super::*;
 use crate::call::flatten_named_call;
 
+pub(super) struct ResolvedRuntimeOutput {
+    pub(super) output: Option<String>,
+    pub(super) runtime_error: Option<String>,
+}
+
 impl<'m> RuntimeOutputResolver<'m> {
-    pub(super) fn resolve(
+    pub(super) fn resolve_detailed(
         module: &'m Module,
         body: &str,
         parsed_stmts: Option<&[Stmt]>,
@@ -10,7 +15,7 @@ impl<'m> RuntimeOutputResolver<'m> {
         execution_mode: lower::EffectExecutionMode,
         stdin_seed: Option<String>,
         allow_live_stdin: bool,
-    ) -> Option<String> {
+    ) -> ResolvedRuntimeOutput {
         let runtime_imports = load_runtime_import_context(module);
         let mut resolver = Self {
             locals: RuntimeLocals::default(),
@@ -29,53 +34,48 @@ impl<'m> RuntimeOutputResolver<'m> {
         };
 
         if let Some(stmts) = parsed_stmts {
-            // AST-based path (preferred when parsed_body is available).
-            // Keep statement-sequence continuation wiring so resume() can replay
-            // remaining top-level unit statements before control returns.
             if resolver
                 .execute_ingest_ast_stmt_sequence(stmts, evaluators)
                 .is_none()
                 && resolver.runtime_error.is_none()
             {
-                return None;
+                return ResolvedRuntimeOutput {
+                    output: None,
+                    runtime_error: None,
+                };
             }
         } else {
-            // String-based fallback path
             for statement in statements(body) {
                 if resolver.ingest_statement(statement, evaluators).is_none() {
                     if resolver.runtime_error.is_some() {
                         break;
                     }
-                    return None;
+                    return ResolvedRuntimeOutput {
+                        output: None,
+                        runtime_error: None,
+                    };
                 }
             }
         }
 
         if resolver.runtime_error_is_abort_marker() {
-            return if resolver.embedded_effect_runtime.outputs_are_empty() {
-                None
-            } else {
-                Some(resolver.embedded_effect_runtime.concat_outputs())
+            return ResolvedRuntimeOutput {
+                output: if resolver.embedded_effect_runtime.outputs_are_empty() {
+                    None
+                } else {
+                    Some(resolver.embedded_effect_runtime.concat_outputs())
+                },
+                runtime_error: None,
             };
         }
 
-        if let Some(err) = &resolver.runtime_error {
-            let err_line = format!("runtime error: {}", err);
-            if resolver.embedded_effect_runtime.outputs_are_empty() {
-                return Some(err_line);
-            }
-            let mut out = resolver.embedded_effect_runtime.concat_outputs();
-            if !out.ends_with('\n') {
-                out.push('\n');
-            }
-            out.push_str(&err_line);
-            return Some(out);
-        }
-
-        if resolver.embedded_effect_runtime.outputs_are_empty() {
-            None
-        } else {
-            Some(resolver.embedded_effect_runtime.concat_outputs())
+        ResolvedRuntimeOutput {
+            output: if resolver.embedded_effect_runtime.outputs_are_empty() {
+                None
+            } else {
+                Some(resolver.embedded_effect_runtime.concat_outputs())
+            },
+            runtime_error: resolver.runtime_error,
         }
     }
 

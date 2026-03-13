@@ -6,6 +6,7 @@ use crate::runtime_eval::{
     IntEvaluator, ListIntEvaluator, collect_functions_with_result, collect_unit_functions,
 };
 use crate::runtime_flow::RuntimeEvaluators;
+use crate::runtime_resolver::ResolvedRuntimeOutput;
 use crate::runtime_support::module_has_selective_import_symbol;
 
 #[cfg(test)]
@@ -63,15 +64,19 @@ pub(crate) fn resolve_main_runtime_output_for_compile(
     body: &str,
     parsed_stmts: Option<&[Stmt]>,
     execution_mode: lower::EffectExecutionMode,
-) -> Option<String> {
-    resolve_main_runtime_output_with_mode_internal(
+) -> Result<Option<String>, String> {
+    let resolved = resolve_main_runtime_output_with_mode_internal_detailed(
         module,
         body,
         parsed_stmts,
         execution_mode,
         None,
         false,
-    )
+    );
+    if let Some(err) = resolved.runtime_error {
+        return Err(err);
+    }
+    Ok(resolved.output)
 }
 
 fn resolve_main_runtime_output_with_mode_internal(
@@ -82,6 +87,36 @@ fn resolve_main_runtime_output_with_mode_internal(
     stdin_seed: Option<String>,
     allow_live_stdin: bool,
 ) -> Option<String> {
+    let resolved = resolve_main_runtime_output_with_mode_internal_detailed(
+        module,
+        body,
+        parsed_stmts,
+        execution_mode,
+        stdin_seed,
+        allow_live_stdin,
+    );
+    if let Some(err) = resolved.runtime_error {
+        let err_line = format!("runtime error: {}", err);
+        if let Some(mut out) = resolved.output {
+            if !out.ends_with('\n') {
+                out.push('\n');
+            }
+            out.push_str(&err_line);
+            return Some(out);
+        }
+        return Some(err_line);
+    }
+    resolved.output
+}
+
+fn resolve_main_runtime_output_with_mode_internal_detailed(
+    module: &Module,
+    body: &str,
+    parsed_stmts: Option<&[Stmt]>,
+    execution_mode: lower::EffectExecutionMode,
+    stdin_seed: Option<String>,
+    allow_live_stdin: bool,
+) -> ResolvedRuntimeOutput {
     let int_functions = collect_functions_with_result(module, "Int");
     let list_functions = collect_functions_with_result(module, "List Int");
     let unit_functions = collect_unit_functions(module);
@@ -95,7 +130,7 @@ fn resolve_main_runtime_output_with_mode_internal(
         list: &list_evaluator,
         unit: &unit_functions,
     };
-    RuntimeOutputResolver::resolve(
+    RuntimeOutputResolver::resolve_detailed(
         module,
         body,
         parsed_stmts,

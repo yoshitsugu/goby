@@ -245,8 +245,10 @@ import goby/string ( split )
 main : Unit -> Unit can Print, Read
 main =
   text = read()
-  lines = split(text, "\n")
-  each lines (|line| -> println(line))
+  delim = "\n"
+  lines = split(text, delim)
+  copied = lines
+  each copied (|line| -> println(line))
 "#,
     )
     .expect("parse should work");
@@ -275,6 +277,25 @@ main =
     assert_eq!(
         runtime_io_execution_kind(&module).expect("classification should work"),
         RuntimeIoExecutionKind::InterpreterBridge
+    );
+}
+
+#[test]
+fn execute_module_with_stdin_rejects_dynamic_wasi_io_program() {
+    let module = parse_module(
+        r#"
+main : Unit -> Unit can Print, Read
+main =
+  print (read())
+"#,
+    )
+    .expect("parse should work");
+    let err = execute_module_with_stdin(&module, Some("hello".to_string()))
+        .expect_err("dynamic wasi io program should not use interpreter bridge path");
+    assert!(
+        err.message.contains("compile this program to Wasm instead"),
+        "unexpected error message: {}",
+        err.message
     );
 }
 

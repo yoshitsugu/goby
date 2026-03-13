@@ -70,6 +70,14 @@ This file is a restart-safe snapshot for resuming work after context reset.
   so bridge cases are rejected by planning rather than only by fallback execution.
 - `goby-wasm` now exposes a small public runtime-I/O execution-kind query so callers can
   align execution-path decisions with planner output instead of error-message text.
+- compile-time fallback now receives structured runtime-resolution results internally,
+  so `compile_module` no longer inspects formatted `"runtime error: ..."` text to detect
+  stdin-related bridge cases.
+- `execute_module_with_stdin` is now explicitly limited to interpreter-bridge programs,
+  so dynamic-Wasm shapes are no longer silently executable through the temporary bridge.
+- Wasm smoke/regression coverage now separates the two runtime-I/O paths explicitly:
+  bridge-only stdin execution is tested with a planner-classified bridge shape, while
+  dynamic-Wasm shapes are checked to reject the temporary interpreter bridge entrypoint.
 
 ## Verified
 

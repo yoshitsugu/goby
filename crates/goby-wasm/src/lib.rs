@@ -248,12 +248,8 @@ pub fn compile_module(module: &Module) -> Result<Vec<u8>, CodegenError> {
     }
     if let Some(text) =
         resolve_main_runtime_output_for_compile(module, &main_body, parsed_body, runtime_mode)
+            .map_err(|message| CodegenError { message })?
     {
-        if text.contains("compile-time fallback cannot consume stdin") {
-            return Err(CodegenError {
-                message: text.trim_start_matches("runtime error: ").to_string(),
-            });
-        }
         return print_codegen::compile_print_module(&text);
     }
 
@@ -273,6 +269,22 @@ pub fn execute_module_with_stdin(
             message: ERR_MISSING_MAIN.to_string(),
         });
     };
+    match classify_runtime_io(module, parsed_body) {
+        RuntimeIoClassification::InterpreterBridge => {}
+        RuntimeIoClassification::DynamicWasiIo(_) => {
+            return Err(CodegenError {
+                message:
+                    "runtime stdin execution path is only for interpreter-bridge programs; compile this program to Wasm instead"
+                        .to_string(),
+            });
+        }
+        RuntimeIoClassification::NotRuntimeIo => {
+            return Err(CodegenError {
+                message: "runtime stdin execution path is only for interpreter-bridge programs"
+                    .to_string(),
+            });
+        }
+    }
 
     if let Some(text) = resolve_main_runtime_output_with_mode_and_stdin(
         module,
