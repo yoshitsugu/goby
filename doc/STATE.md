@@ -120,6 +120,11 @@ This file is a restart-safe snapshot for resuming work after context reset.
   `print` / `println` suffixes after the `each` step, so sample-shaped programs like
   `...; each lines println; println "test"; print "done"` no longer have to stay on
   the interpreter bridge just because they append fixed output afterward.
+- Track F Phase F2b is now mostly implemented in practice:
+  runtime-I/O classification, CLI routing, and dynamic-Wasm selection are planner-driven,
+  but the checklist is not fully closable yet because `StaticOutput` and `Unsupported`
+  are still not first-class planner outcomes. Compile-time static-output collapse remains
+  partly outside `RuntimeIoPlan` rather than being unified under the same planning boundary.
 
 ## Verified
 
