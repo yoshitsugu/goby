@@ -67,6 +67,8 @@ const ERR_CALLABLE_DISPATCH_DECL_PARAM: &str = "unsupported callable dispatch [E
 
 #[cfg(test)]
 pub(crate) use crate::runtime_entry::resolve_main_runtime_output;
+use crate::runtime_entry::resolve_main_runtime_output_for_compile;
+#[cfg(test)]
 pub(crate) use crate::runtime_entry::resolve_main_runtime_output_with_mode;
 #[cfg(test)]
 pub(crate) use crate::runtime_parity::{
@@ -124,12 +126,17 @@ pub fn compile_module(module: &Module) -> Result<Vec<u8>, CodegenError> {
         .as_ref()
         .map(|handoff| handoff.selected_mode)
         .unwrap_or(lower::EffectExecutionMode::PortableFallback);
-    if let Some(text) = resolve_main_runtime_output_with_mode(
+    if let Some(text) = resolve_main_runtime_output_for_compile(
         module,
         &main.body,
         main.parsed_body.as_deref(),
         runtime_mode,
     ) {
+        if text.contains("compile-time fallback cannot consume stdin") {
+            return Err(CodegenError {
+                message: text.trim_start_matches("runtime error: ").to_string(),
+            });
+        }
         return print_codegen::compile_print_module(&text);
     }
 

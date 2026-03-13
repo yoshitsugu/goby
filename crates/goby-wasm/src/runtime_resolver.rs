@@ -8,13 +8,14 @@ impl<'m> RuntimeOutputResolver<'m> {
         evaluators: &RuntimeEvaluators<'_, '_>,
         execution_mode: lower::EffectExecutionMode,
         stdin_seed: Option<String>,
+        allow_live_stdin: bool,
     ) -> Option<String> {
         let runtime_imports = load_runtime_import_context(module);
         let mut resolver = Self {
             locals: RuntimeLocals::default(),
             module,
             runtime_imports,
-            embedded_effect_runtime: EmbeddedEffectRuntime::new(stdin_seed),
+            embedded_effect_runtime: EmbeddedEffectRuntime::new(stdin_seed, allow_live_stdin),
             current_module_stack: Vec::new(),
             current_decl_stack: Vec::new(),
             active_inline_handler_stack: Vec::new(),

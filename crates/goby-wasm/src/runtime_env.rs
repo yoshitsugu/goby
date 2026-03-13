@@ -15,6 +15,7 @@ pub(crate) struct EmbeddedEffectRuntime {
     outputs: Vec<String>,
     stdin_buffer: Option<String>,
     stdin_cursor: usize,
+    allow_live_stdin: bool,
 }
 
 #[derive(Default)]
@@ -24,11 +25,12 @@ pub(crate) struct RuntimeImportContext {
 }
 
 impl EmbeddedEffectRuntime {
-    pub(crate) fn new(stdin_seed: Option<String>) -> Self {
+    pub(crate) fn new(stdin_seed: Option<String>, allow_live_stdin: bool) -> Self {
         Self {
             outputs: Vec::new(),
             stdin_buffer: stdin_seed,
             stdin_cursor: 0,
+            allow_live_stdin,
         }
     }
 
@@ -89,6 +91,11 @@ impl EmbeddedEffectRuntime {
     fn ensure_stdin_loaded(&mut self, op_name: &str) -> Result<(), String> {
         if self.stdin_buffer.is_some() {
             return Ok(());
+        }
+        if !self.allow_live_stdin {
+            return Err(format!(
+                "Read.{op_name} requires runtime stdin-backed Wasm execution; compile-time fallback cannot consume stdin"
+            ));
         }
         let mut bytes = Vec::new();
         match std::io::stdin().read_to_end(&mut bytes) {
@@ -247,7 +254,7 @@ mod tests {
 
     #[test]
     fn embedded_effect_runtime_reads_crlf_line_by_line() {
-        let mut runtime = EmbeddedEffectRuntime::new(Some("a\r\nb\n".to_string()));
+        let mut runtime = EmbeddedEffectRuntime::new(Some("a\r\nb\n".to_string()), true);
 
         let first = runtime
             .invoke(
@@ -272,5 +279,24 @@ mod tests {
             second,
             Some(crate::RuntimeValue::String(text)) if text == "b"
         ));
+    }
+
+    #[test]
+    fn embedded_effect_runtime_rejects_live_stdin_when_disallowed() {
+        let mut runtime = EmbeddedEffectRuntime::new(None, false);
+
+        let err = match runtime.invoke(
+            EmbeddedRuntimeHandlerKind::Stdin,
+            "read",
+            crate::RuntimeValue::Unit,
+        ) {
+            Ok(_) => panic!("live stdin should be rejected in compile-time fallback mode"),
+            Err(err) => err,
+        };
+
+        assert!(
+            err.contains("compile-time fallback cannot consume stdin"),
+            "unexpected error: {err}"
+        );
     }
 }

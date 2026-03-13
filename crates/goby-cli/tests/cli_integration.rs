@@ -359,6 +359,40 @@ main =
 }
 
 #[test]
+fn run_command_rejects_compile_time_stdin_capture_for_read_program() {
+    let root = repo_root();
+    let sandbox = TempDirGuard::new("run_read_compile_time_stdin_capture");
+    let input = sandbox.join("read.gb");
+    fs::write(
+        &input,
+        r#"
+main : Unit -> Unit can Print, Read
+main =
+  print (read())
+"#,
+    )
+    .expect("temporary input should be writable");
+
+    let output = command_for_goby_cli()
+        .arg("run")
+        .arg(&input)
+        .current_dir(&root)
+        .output()
+        .expect("cli should execute");
+
+    assert!(
+        !output.status.success(),
+        "expected failure until runtime stdin-backed Wasm is implemented"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("compile-time fallback cannot consume stdin"),
+        "expected explicit stdin containment diagnostic, stderr: {}",
+        stderr
+    );
+}
+
+#[test]
 fn check_command_rejects_legacy_syntax_by_default() {
     let root = repo_root();
     let sandbox = TempDirGuard::new("check_legacy_warnings");

@@ -100,6 +100,25 @@ fn effect_boundary_with_unresolvable_fallback_reports_boundary_context() {
 }
 
 #[test]
+fn read_effect_requires_runtime_stdin_backed_wasm() {
+    let module = parse_module(
+        r#"
+main : Unit -> Unit can Print, Read
+main =
+  print (read())
+"#,
+    )
+    .expect("parse should work");
+    let err = compile_module(&module).expect_err("compile should reject compile-time stdin use");
+    assert!(
+        err.message
+            .contains("compile-time fallback cannot consume stdin"),
+        "error should explain stdin containment, got: {}",
+        err.message
+    );
+}
+
+#[test]
 fn runtime_override_force_portable_is_reflected_in_boundary_diagnostics() {
     let _guard = ENV_MUTEX.lock().expect("env mutex lock");
     // SAFETY: guarded by ENV_MUTEX in this test module.

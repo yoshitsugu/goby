@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-12
+Last updated: 2026-03-13
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -11,6 +11,8 @@ This file is a restart-safe snapshot for resuming work after context reset.
 - `doc/PLAN.md` also records Active Track E for `Float` support backed by Wasm `f64`.
 - Higher-order named function references are now documented explicitly
   (for example: `map xs add_ten`).
+- Track F Phase F1 containment is now implemented:
+  compile-time fallback no longer consumes stdin for `Read` programs during `goby run`.
 
 ## Current State
 
@@ -25,6 +27,10 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - sync docs/examples/tooling once behavior lands.
 - Current language docs/examples/tests now make explicit that named functions can be
   passed directly where a function-typed argument is expected.
+- `goby-wasm::compile_module` now runs compile-time fallback output resolution in a
+  "no live stdin" mode and surfaces an explicit codegen error if `Read.read` or
+  `Read.read_line` would consume compiler-process stdin.
+- CLI and Wasm regression tests now cover the containment behavior.
 
 ## Verified
 
@@ -34,9 +40,11 @@ This file is a restart-safe snapshot for resuming work after context reset.
 
 ## Next Work
 
-- Start Phase D1 from `doc/PLAN.md`: normalize diagnostics and close remaining source-span metadata gaps needed by LSP.
-- Record concrete crate/binary naming decisions once implementation starts.
-- When Track D is stable enough, start Track E Phase E1 and lock `Float` semantics before code changes.
+- Start Track F Phase F2/F3:
+  split compile-time static-output fallback from runtime execution capability planning,
+  then add dynamic Wasm/WASI stdin support for `Read`.
+- Keep Track D queued after the runtime I/O containment/runtime split work is in a stable state.
+- Once Track F runtime support lands, sync `doc/LANGUAGE_SPEC.md` and runnable stdin examples.
 
 ## Notes
 

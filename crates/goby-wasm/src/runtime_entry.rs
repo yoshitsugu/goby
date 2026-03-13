@@ -14,35 +14,56 @@ pub(crate) fn resolve_main_runtime_output(
     body: &str,
     parsed_stmts: Option<&[Stmt]>,
 ) -> Option<String> {
-    resolve_main_runtime_output_with_mode(
+    resolve_main_runtime_output_with_mode_internal(
         module,
         body,
         parsed_stmts,
         lower::EffectExecutionMode::PortableFallback,
+        None,
+        true,
     )
 }
 
+#[cfg(test)]
 pub(crate) fn resolve_main_runtime_output_with_mode(
     module: &Module,
     body: &str,
     parsed_stmts: Option<&[Stmt]>,
     execution_mode: lower::EffectExecutionMode,
 ) -> Option<String> {
-    resolve_main_runtime_output_with_mode_and_stdin(
+    resolve_main_runtime_output_with_mode_internal(
         module,
         body,
         parsed_stmts,
         execution_mode,
         None,
+        true,
     )
 }
 
-pub(crate) fn resolve_main_runtime_output_with_mode_and_stdin(
+pub(crate) fn resolve_main_runtime_output_for_compile(
+    module: &Module,
+    body: &str,
+    parsed_stmts: Option<&[Stmt]>,
+    execution_mode: lower::EffectExecutionMode,
+) -> Option<String> {
+    resolve_main_runtime_output_with_mode_internal(
+        module,
+        body,
+        parsed_stmts,
+        execution_mode,
+        None,
+        false,
+    )
+}
+
+fn resolve_main_runtime_output_with_mode_internal(
     module: &Module,
     body: &str,
     parsed_stmts: Option<&[Stmt]>,
     execution_mode: lower::EffectExecutionMode,
     stdin_seed: Option<String>,
+    allow_live_stdin: bool,
 ) -> Option<String> {
     let int_functions = collect_functions_with_result(module, "Int");
     let list_functions = collect_functions_with_result(module, "List Int");
@@ -64,5 +85,6 @@ pub(crate) fn resolve_main_runtime_output_with_mode_and_stdin(
         &evaluators,
         execution_mode,
         stdin_seed,
+        allow_live_stdin,
     )
 }
