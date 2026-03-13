@@ -103,6 +103,9 @@ This file is a restart-safe snapshot for resuming work after context reset.
 - The newline-splitting runtime-I/O planner/back-end path now models the callback output
   mode directly, so `each lines print` and `each lines println` both compile to dynamic
   Wasm, including the named-function callback spelling in addition to the direct lambda form.
+- That same split-callback planner path now also accepts the equivalent passthrough
+  interpolation spelling `|line| -> println "${line}"`, while still leaving genuinely
+  transformed output shapes such as `|line| -> println "${line}!"` on the temporary bridge.
 
 ## Verified
 

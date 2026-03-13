@@ -1,3 +1,4 @@
+use goby_core::ast::InterpolatedPart;
 use goby_core::{Expr, Module, Stmt};
 
 use crate::CodegenError;
@@ -423,7 +424,7 @@ fn split_lines_each_output_mode_from_callback(
     match each_args[1] {
         Expr::Var(name) => callback_output_mode_name(name),
         Expr::Lambda { param, body } => match body.as_ref() {
-            Expr::Call { callee, arg } if matches!(arg.as_ref(), Expr::Var(name) if name == param) => {
+            Expr::Call { callee, arg } if callback_arg_matches_line_passthrough(arg, param) => {
                 match callee.as_ref() {
                     Expr::Var(name) => callback_output_mode_name(name),
                     _ => None,
@@ -433,6 +434,30 @@ fn split_lines_each_output_mode_from_callback(
         },
         _ => None,
     }
+}
+
+fn callback_arg_matches_line_passthrough(arg: &Expr, param: &str) -> bool {
+    matches!(arg, Expr::Var(name) if name == param)
+        || matches_passthrough_interpolated_string(arg, param)
+}
+
+fn matches_passthrough_interpolated_string(arg: &Expr, param: &str) -> bool {
+    let Expr::InterpolatedString(parts) = arg else {
+        return false;
+    };
+    let mut saw_param_expr = false;
+    for part in parts {
+        match part {
+            InterpolatedPart::Text(text) if text.is_empty() => {}
+            InterpolatedPart::Expr(expr)
+                if !saw_param_expr && matches!(expr.as_ref(), Expr::Var(name) if name == param) =>
+            {
+                saw_param_expr = true;
+            }
+            _ => return false,
+        }
+    }
+    saw_param_expr
 }
 
 fn callback_output_mode_name(name: &str) -> Option<OutputReadMode> {
@@ -619,6 +644,29 @@ main =
     }
 
     #[test]
+    fn plans_split_each_interpolated_passthrough_println_callback() {
+        let (module, body) = main_stmts(
+            r#"
+import goby/list ( each )
+import goby/string ( split )
+
+main : Unit -> Unit can Print, Read
+main =
+  text = read()
+  delim = "\n"
+  lines = split(text, delim)
+  each lines (|line| -> println "${line}")
+"#,
+        );
+        assert_eq!(
+            classify_runtime_io(&module, body.as_deref()),
+            RuntimeIoClassification::DynamicWasiIo(RuntimeIoPlan::SplitLinesEach {
+                output_mode: OutputReadMode::Println,
+            })
+        );
+    }
+
+    #[test]
     fn plans_read_echo_with_forwarded_local_binding() {
         let (module, body) = main_stmts(
             r#"
@@ -672,7 +720,7 @@ main =
   lines = split(text, delim)
   copied = lines
   forwarded = copied
-  each forwarded (|line| -> println "${line}")
+  each forwarded (|line| -> println "${line}!")
 "#,
         );
         assert_eq!(
