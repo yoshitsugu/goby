@@ -18,6 +18,7 @@ mod runtime_eval;
 mod runtime_exec;
 mod runtime_expr;
 mod runtime_flow;
+mod runtime_io_plan;
 #[cfg(test)]
 mod runtime_output_tests;
 #[cfg(test)]
@@ -48,9 +49,8 @@ use crate::runtime_flow::{
     ResolvedEffectHandler, ResolvedHandlerMethod, ResumeToken, RuntimeDeclInfo, RuntimeError,
     RuntimeEvaluators, RuntimeHandlerMethod, StoreOp, WithId,
 };
-use crate::runtime_support::{
-    eval_string_expr, flatten_direct_call, module_has_selective_import_symbol, parse_pipeline,
-};
+use crate::runtime_io_plan::{InputReadMode, RuntimeIoPlan, plan_runtime_io};
+use crate::runtime_support::{eval_string_expr, parse_pipeline};
 use crate::runtime_value::{RuntimeLocals, RuntimeValue, runtime_value_option_eq};
 use goby_core::{
     CasePattern, Expr, HandlerClause, ListPatternItem, ListPatternTail, Module, Stmt,
@@ -120,266 +120,27 @@ fn unresolved_runtime_output_error(
     }
 }
 
-fn is_read_all_expr(expr: &Expr) -> bool {
-    match expr {
-        Expr::Call { callee, arg } if arg.is_unit_value() => match callee.as_ref() {
-            Expr::Var(name) => name == "read",
-            Expr::Qualified { receiver, member } => receiver == "Read" && member == "read",
-            _ => false,
-        },
-        _ => false,
-    }
-}
-
-fn is_read_line_expr(expr: &Expr) -> bool {
-    match expr {
-        Expr::Call { callee, arg } if arg.is_unit_value() => match callee.as_ref() {
-            Expr::Var(name) => name == "read_line",
-            Expr::Qualified { receiver, member } => receiver == "Read" && member == "read_line",
-            _ => false,
-        },
-        _ => false,
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum InputReadMode {
-    ReadAll,
-    ReadLine,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum OutputReadMode {
-    Print,
-    Println,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum RuntimeStdinWasmShape {
-    Echo {
-        input_mode: InputReadMode,
-        output_mode: OutputReadMode,
-    },
-    SplitLinesEachPrintln,
-}
-
-fn output_read_mode(expr: &Expr) -> Option<(InputReadMode, OutputReadMode)> {
-    let Expr::Call { callee, arg } = expr else {
-        return None;
-    };
-    let Expr::Var(name) = callee.as_ref() else {
-        return None;
-    };
-    let input_mode = if is_read_all_expr(arg) {
-        InputReadMode::ReadAll
-    } else if is_read_line_expr(arg) {
-        InputReadMode::ReadLine
-    } else {
-        return None;
-    };
-    match name.as_str() {
-        "print" => Some((input_mode, OutputReadMode::Print)),
-        "println" => Some((input_mode, OutputReadMode::Println)),
-        _ => None,
-    }
-}
-
-fn imported_head_matches_symbol(
-    module: &Module,
-    head: &DirectCallHead,
-    module_path: &str,
-    symbol: &str,
-) -> bool {
-    match head {
-        DirectCallHead::Bare(name) if name == symbol => {
-            module_has_selective_import_symbol(module, module_path, symbol)
-        }
-        DirectCallHead::Qualified { receiver, member } if member == symbol => {
-            module.imports.iter().any(|import| {
-                if import.module_path != module_path {
-                    return false;
-                }
-                match &import.kind {
-                    goby_core::ImportKind::Plain => import
-                        .module_path
-                        .rsplit('/')
-                        .next()
-                        .is_some_and(|qualifier| qualifier == receiver),
-                    goby_core::ImportKind::Alias(alias) => alias == receiver,
-                    goby_core::ImportKind::Selective(_) => false,
-                }
-            })
-        }
-        _ => false,
-    }
-}
-
-fn stmt_binding_parts(stmt: &Stmt) -> Option<(&str, &Expr)> {
-    match stmt {
-        Stmt::Binding { name, value } | Stmt::MutBinding { name, value } => Some((name, value)),
-        _ => None,
-    }
-}
-
-fn expr_is_newline_delimiter(expr: &Expr, delimiter_name: Option<&str>) -> bool {
-    matches!(expr, Expr::StringLit(delim) if delim == "\n")
-        || delimiter_name
-            .is_some_and(|name| matches!(expr, Expr::Var(var_name) if var_name == name))
-}
-
-fn split_lines_each_println_matches(
-    module: &Module,
-    text_name: &str,
-    delimiter_name: Option<&str>,
-    lines_name: &str,
-    split_value: &Expr,
-    each_expr: &Expr,
-) -> bool {
-    let Some((split_head, split_args)) = flatten_direct_call(split_value) else {
-        return false;
-    };
-    if !imported_head_matches_symbol(module, &split_head, "goby/string", "split")
-        || split_args.len() != 2
-        || !matches!(split_args[0], Expr::Var(name) if name == text_name)
-        || !expr_is_newline_delimiter(split_args[1], delimiter_name)
-    {
-        return false;
-    }
-
-    let Some((each_head, each_args)) = flatten_direct_call(each_expr) else {
-        return false;
-    };
-    if !imported_head_matches_symbol(module, &each_head, "goby/list", "each")
-        || each_args.len() != 2
-        || !matches!(each_args[0], Expr::Var(name) if name == lines_name)
-    {
-        return false;
-    }
-
-    let Expr::Lambda { param, body } = each_args[1] else {
-        return false;
-    };
-
-    matches!(
-        body.as_ref(),
-        Expr::Call { callee, arg }
-            if matches!(callee.as_ref(), Expr::Var(name) if name == "println")
-                && matches!(arg.as_ref(), Expr::Var(name) if name == param)
-    )
-}
-
-fn is_split_lines_each_println_shape(module: &Module, stmts: &[Stmt]) -> bool {
-    match stmts {
-        [read_stmt, split_stmt, Stmt::Expr(each_expr)] => {
-            let Some((text_name, read_value)) = stmt_binding_parts(read_stmt) else {
-                return false;
-            };
-            let Some((lines_name, split_value)) = stmt_binding_parts(split_stmt) else {
-                return false;
-            };
-            is_read_all_expr(read_value)
-                && split_lines_each_println_matches(
-                    module,
-                    text_name,
-                    None,
-                    lines_name,
-                    split_value,
-                    each_expr,
-                )
-        }
-        [read_stmt, delim_stmt, split_stmt, Stmt::Expr(each_expr)] => {
-            let Some((text_name, read_value)) = stmt_binding_parts(read_stmt) else {
-                return false;
-            };
-            let Some((delimiter_name, delimiter_value)) = stmt_binding_parts(delim_stmt) else {
-                return false;
-            };
-            let Some((lines_name, split_value)) = stmt_binding_parts(split_stmt) else {
-                return false;
-            };
-            is_read_all_expr(read_value)
-                && matches!(delimiter_value, Expr::StringLit(delim) if delim == "\n")
-                && split_lines_each_println_matches(
-                    module,
-                    text_name,
-                    Some(delimiter_name),
-                    lines_name,
-                    split_value,
-                    each_expr,
-                )
-        }
-        _ => false,
-    }
-}
-
 fn try_emit_runtime_stdin_wasm(
     module: &Module,
     parsed_body: Option<&[Stmt]>,
 ) -> Result<Option<Vec<u8>>, CodegenError> {
-    let Some(stmts) = parsed_body else {
-        return Ok(None);
-    };
-    let shape = match stmts {
-        [Stmt::Expr(expr)] => {
-            output_read_mode(expr).map(|(input_mode, output_mode)| RuntimeStdinWasmShape::Echo {
-                input_mode,
-                output_mode,
-            })
-        }
-        [
-            Stmt::Binding { name, value } | Stmt::MutBinding { name, value },
-            Stmt::Expr(Expr::Call { callee, arg }),
-        ] => {
-            let input_mode = if is_read_all_expr(value) {
-                Some(InputReadMode::ReadAll)
-            } else if is_read_line_expr(value) {
-                Some(InputReadMode::ReadLine)
-            } else {
-                None
-            };
-            if input_mode.is_none() {
-                None
-            } else if !matches!(arg.as_ref(), Expr::Var(var_name) if var_name == name) {
-                None
-            } else if let Expr::Var(output_name) = callee.as_ref() {
-                match output_name.as_str() {
-                    "print" => Some(RuntimeStdinWasmShape::Echo {
-                        input_mode: input_mode.expect("checked above"),
-                        output_mode: OutputReadMode::Print,
-                    }),
-                    "println" => Some(RuntimeStdinWasmShape::Echo {
-                        input_mode: input_mode.expect("checked above"),
-                        output_mode: OutputReadMode::Println,
-                    }),
-                    _ => None,
-                }
-            } else {
-                None
-            }
-        }
-        _ if is_split_lines_each_println_shape(module, stmts) => {
-            Some(RuntimeStdinWasmShape::SplitLinesEachPrintln)
-        }
-        _ => None,
-    };
-    let Some(shape) = shape else {
+    let Some(plan) = plan_runtime_io(module, parsed_body) else {
         return Ok(None);
     };
     let builder = backend::WasmProgramBuilder::new(layout::MemoryLayout::default());
-    match shape {
-        RuntimeStdinWasmShape::Echo {
+    match plan {
+        RuntimeIoPlan::Echo {
             input_mode,
             output_mode,
         } => {
-            let append_newline = matches!(output_mode, OutputReadMode::Println);
+            let append_newline =
+                matches!(output_mode, crate::runtime_io_plan::OutputReadMode::Println);
             match input_mode {
                 InputReadMode::ReadAll => builder.emit_read_all_to_stdout_module(append_newline),
                 InputReadMode::ReadLine => builder.emit_read_line_to_stdout_module(append_newline),
             }
         }
-        RuntimeStdinWasmShape::SplitLinesEachPrintln => {
-            builder.emit_read_split_lines_each_println_module()
-        }
+        RuntimeIoPlan::SplitLinesEachPrintln => builder.emit_read_split_lines_each_println_module(),
     }
     .map(Some)
 }

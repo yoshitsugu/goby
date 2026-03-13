@@ -28,6 +28,8 @@ This file is a restart-safe snapshot for resuming work after context reset.
   interpreter-backed runtime bridge.
 - That structured stdin Wasm shape now also accepts a nearby spelling where the
   newline delimiter is first bound to a local variable before calling `split`.
+- Runtime-I/O shape detection now lives in a dedicated `goby-wasm` planning module
+  instead of staying inline in the top-level `lib.rs` orchestration path.
 
 ## Current State
 
@@ -58,6 +60,8 @@ This file is a restart-safe snapshot for resuming work after context reset.
 - That dynamic path is now generalized across a few equivalent output spellings, but it
   still only handles direct echo-style `read` / `read_line` output shapes plus the
   newline-splitting `each println` family in a narrow set of local-binding forms.
+- Runtime-I/O planning ownership has started moving out of `crates/goby-wasm/src/lib.rs`
+  into a dedicated module, but the old direct matcher path has not been fully retired yet.
 
 ## Verified
 

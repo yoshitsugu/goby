@@ -1,4 +1,5 @@
 use super::*;
+use crate::runtime_support::flatten_direct_call;
 
 impl<'m> RuntimeOutputResolver<'m> {
     pub(super) fn try_eval_imported_decl_call_as_value(
