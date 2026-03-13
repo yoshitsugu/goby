@@ -257,4 +257,200 @@ impl WasmProgramBuilder {
 
         Ok(module.finish())
     }
+
+    pub(crate) fn emit_read_line_to_stdout_module(
+        &self,
+        append_newline: bool,
+    ) -> Result<Vec<u8>, CodegenError> {
+        let buffer_ptr = i32::try_from(self.layout.heap_base).map_err(|_| CodegenError {
+            message: "heap base does not fit in i32".to_string(),
+        })?;
+        let iovec_offset = i32::try_from(self.layout.iovec_offset).map_err(|_| CodegenError {
+            message: "iovec offset does not fit in i32".to_string(),
+        })?;
+        let nread_offset =
+            i32::try_from(self.layout.nwritten_offset).map_err(|_| CodegenError {
+                message: "nread offset does not fit in i32".to_string(),
+            })?;
+        let buffer_len =
+            i32::try_from(WASM_PAGE_BYTES - self.layout.heap_base).map_err(|_| CodegenError {
+                message: "stdin buffer length does not fit in i32".to_string(),
+            })?;
+        let newline_ptr = i32::try_from(self.layout.heap_base - 1).map_err(|_| CodegenError {
+            message: "newline pointer does not fit in i32".to_string(),
+        })?;
+
+        let mut module = Module::new();
+
+        let mut types = TypeSection::new();
+        let fd_io_type = types.len();
+        types.ty().function(
+            [ValType::I32, ValType::I32, ValType::I32, ValType::I32],
+            [ValType::I32],
+        );
+        let main_type = types.len();
+        types.ty().function([], []);
+        module.section(&types);
+
+        let mut imports = ImportSection::new();
+        imports.import(
+            "wasi_snapshot_preview1",
+            "fd_read",
+            EntityType::Function(fd_io_type),
+        );
+        imports.import(
+            "wasi_snapshot_preview1",
+            "fd_write",
+            EntityType::Function(fd_io_type),
+        );
+        module.section(&imports);
+
+        let mut functions = FunctionSection::new();
+        functions.function(main_type);
+        module.section(&functions);
+
+        let mut memories = MemorySection::new();
+        memories.memory(MemoryType {
+            minimum: 1,
+            maximum: None,
+            memory64: false,
+            shared: false,
+            page_size_log2: None,
+        });
+        module.section(&memories);
+
+        let mut exports = ExportSection::new();
+        exports.export("memory", ExportKind::Memory, 0);
+        exports.export("_start", ExportKind::Func, 2);
+        module.section(&exports);
+
+        let mut code = CodeSection::new();
+        let mut function = Function::new([(2, ValType::I32)]);
+
+        // Prepare one iovec for stdin read into the heap buffer.
+        function.instruction(&Instruction::I32Const(iovec_offset));
+        function.instruction(&Instruction::I32Const(buffer_ptr));
+        function.instruction(&Instruction::I32Store(MemArg {
+            offset: 0,
+            align: 2,
+            memory_index: 0,
+        }));
+        function.instruction(&Instruction::I32Const(iovec_offset + 4));
+        function.instruction(&Instruction::I32Const(buffer_len));
+        function.instruction(&Instruction::I32Store(MemArg {
+            offset: 0,
+            align: 2,
+            memory_index: 0,
+        }));
+
+        // fd_read(stdin=0, &iovec, 1, &nread)
+        function.instruction(&Instruction::I32Const(0));
+        function.instruction(&Instruction::I32Const(iovec_offset));
+        function.instruction(&Instruction::I32Const(1));
+        function.instruction(&Instruction::I32Const(nread_offset));
+        function.instruction(&Instruction::Call(0));
+        function.instruction(&Instruction::Drop);
+
+        // local1 = nread, local0 = current line length scan index
+        function.instruction(&Instruction::I32Const(nread_offset));
+        function.instruction(&Instruction::I32Load(MemArg {
+            offset: 0,
+            align: 2,
+            memory_index: 0,
+        }));
+        function.instruction(&Instruction::LocalSet(1));
+        function.instruction(&Instruction::I32Const(0));
+        function.instruction(&Instruction::LocalSet(0));
+
+        // Scan until '\n', '\r', or EOF.
+        function.instruction(&Instruction::Block(wasm_encoder::BlockType::Empty));
+        function.instruction(&Instruction::Loop(wasm_encoder::BlockType::Empty));
+        function.instruction(&Instruction::LocalGet(0));
+        function.instruction(&Instruction::LocalGet(1));
+        function.instruction(&Instruction::I32GeU);
+        function.instruction(&Instruction::BrIf(1));
+
+        function.instruction(&Instruction::I32Const(buffer_ptr));
+        function.instruction(&Instruction::LocalGet(0));
+        function.instruction(&Instruction::I32Add);
+        function.instruction(&Instruction::I32Load8U(MemArg {
+            offset: 0,
+            align: 0,
+            memory_index: 0,
+        }));
+        function.instruction(&Instruction::I32Const(10));
+        function.instruction(&Instruction::I32Eq);
+        function.instruction(&Instruction::BrIf(1));
+
+        function.instruction(&Instruction::I32Const(buffer_ptr));
+        function.instruction(&Instruction::LocalGet(0));
+        function.instruction(&Instruction::I32Add);
+        function.instruction(&Instruction::I32Load8U(MemArg {
+            offset: 0,
+            align: 0,
+            memory_index: 0,
+        }));
+        function.instruction(&Instruction::I32Const(13));
+        function.instruction(&Instruction::I32Eq);
+        function.instruction(&Instruction::BrIf(1));
+
+        function.instruction(&Instruction::LocalGet(0));
+        function.instruction(&Instruction::I32Const(1));
+        function.instruction(&Instruction::I32Add);
+        function.instruction(&Instruction::LocalSet(0));
+        function.instruction(&Instruction::Br(0));
+        function.instruction(&Instruction::End);
+        function.instruction(&Instruction::End);
+
+        // Write only the scanned line prefix.
+        function.instruction(&Instruction::I32Const(iovec_offset + 4));
+        function.instruction(&Instruction::LocalGet(0));
+        function.instruction(&Instruction::I32Store(MemArg {
+            offset: 0,
+            align: 2,
+            memory_index: 0,
+        }));
+        function.instruction(&Instruction::I32Const(1));
+        function.instruction(&Instruction::I32Const(iovec_offset));
+        function.instruction(&Instruction::I32Const(1));
+        function.instruction(&Instruction::I32Const(nread_offset));
+        function.instruction(&Instruction::Call(1));
+        function.instruction(&Instruction::Drop);
+
+        if append_newline {
+            function.instruction(&Instruction::I32Const(iovec_offset));
+            function.instruction(&Instruction::I32Const(newline_ptr));
+            function.instruction(&Instruction::I32Store(MemArg {
+                offset: 0,
+                align: 2,
+                memory_index: 0,
+            }));
+            function.instruction(&Instruction::I32Const(iovec_offset + 4));
+            function.instruction(&Instruction::I32Const(1));
+            function.instruction(&Instruction::I32Store(MemArg {
+                offset: 0,
+                align: 2,
+                memory_index: 0,
+            }));
+            function.instruction(&Instruction::I32Const(1));
+            function.instruction(&Instruction::I32Const(iovec_offset));
+            function.instruction(&Instruction::I32Const(1));
+            function.instruction(&Instruction::I32Const(nread_offset));
+            function.instruction(&Instruction::Call(1));
+            function.instruction(&Instruction::Drop);
+        }
+
+        function.instruction(&Instruction::End);
+
+        code.function(&function);
+        module.section(&code);
+
+        if append_newline {
+            let mut data = DataSection::new();
+            data.active(0, &ConstExpr::i32_const(newline_ptr), b"\n".to_vec());
+            module.section(&data);
+        }
+
+        Ok(module.finish())
+    }
 }

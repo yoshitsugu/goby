@@ -129,25 +129,46 @@ fn is_read_all_expr(expr: &Expr) -> bool {
     }
 }
 
+fn is_read_line_expr(expr: &Expr) -> bool {
+    match expr {
+        Expr::Call { callee, arg } if arg.is_unit_value() => match callee.as_ref() {
+            Expr::Var(name) => name == "read_line",
+            Expr::Qualified { receiver, member } => receiver == "Read" && member == "read_line",
+            _ => false,
+        },
+        _ => false,
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InputReadMode {
+    ReadAll,
+    ReadLine,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum OutputReadMode {
     Print,
     Println,
 }
 
-fn output_read_mode(expr: &Expr) -> Option<OutputReadMode> {
+fn output_read_mode(expr: &Expr) -> Option<(InputReadMode, OutputReadMode)> {
     let Expr::Call { callee, arg } = expr else {
         return None;
     };
     let Expr::Var(name) = callee.as_ref() else {
         return None;
     };
-    if !is_read_all_expr(arg) {
+    let input_mode = if is_read_all_expr(arg) {
+        InputReadMode::ReadAll
+    } else if is_read_line_expr(arg) {
+        InputReadMode::ReadLine
+    } else {
         return None;
-    }
+    };
     match name.as_str() {
-        "print" => Some(OutputReadMode::Print),
-        "println" => Some(OutputReadMode::Println),
+        "print" => Some((input_mode, OutputReadMode::Print)),
+        "println" => Some((input_mode, OutputReadMode::Println)),
         _ => None,
     }
 }
@@ -164,14 +185,23 @@ fn try_emit_runtime_stdin_wasm(
             Stmt::Binding { name, value } | Stmt::MutBinding { name, value },
             Stmt::Expr(Expr::Call { callee, arg }),
         ] => {
-            if !is_read_all_expr(value) {
+            let input_mode = if is_read_all_expr(value) {
+                Some(InputReadMode::ReadAll)
+            } else if is_read_line_expr(value) {
+                Some(InputReadMode::ReadLine)
+            } else {
+                None
+            };
+            if input_mode.is_none() {
                 None
             } else if !matches!(arg.as_ref(), Expr::Var(var_name) if var_name == name) {
                 None
             } else if let Expr::Var(output_name) = callee.as_ref() {
                 match output_name.as_str() {
-                    "print" => Some(OutputReadMode::Print),
-                    "println" => Some(OutputReadMode::Println),
+                    "print" => Some((input_mode.expect("checked above"), OutputReadMode::Print)),
+                    "println" => {
+                        Some((input_mode.expect("checked above"), OutputReadMode::Println))
+                    }
                     _ => None,
                 }
             } else {
@@ -180,12 +210,16 @@ fn try_emit_runtime_stdin_wasm(
         }
         _ => None,
     };
-    let Some(mode) = mode else {
+    let Some((input_mode, output_mode)) = mode else {
         return Ok(None);
     };
-    backend::WasmProgramBuilder::new(layout::MemoryLayout::default())
-        .emit_read_all_to_stdout_module(matches!(mode, OutputReadMode::Println))
-        .map(Some)
+    let builder = backend::WasmProgramBuilder::new(layout::MemoryLayout::default());
+    let append_newline = matches!(output_mode, OutputReadMode::Println);
+    match input_mode {
+        InputReadMode::ReadAll => builder.emit_read_all_to_stdout_module(append_newline),
+        InputReadMode::ReadLine => builder.emit_read_line_to_stdout_module(append_newline),
+    }
+    .map(Some)
 }
 
 fn runtime_mode_and_handoff(
