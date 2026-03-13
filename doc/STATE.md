@@ -106,6 +106,9 @@ This file is a restart-safe snapshot for resuming work after context reset.
 - That same split-callback planner path now also accepts the equivalent passthrough
   interpolation spelling `|line| -> println "${line}"`, while still leaving genuinely
   transformed output shapes such as `|line| -> println "${line}!"` on the temporary bridge.
+- Split-callback planning now also resolves local output-function aliases such as
+  `printer = println; each lines printer` and simple forwarded forms like
+  `writer = printer; each lines writer`, so those cases no longer depend on the bridge.
 
 ## Verified
 

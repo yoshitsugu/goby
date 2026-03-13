@@ -366,7 +366,34 @@ fn resolve_alias_chain_terminal_name<'a>(
 ) -> Option<&'a str> {
     let mut current_name = source_name;
     for stmt in stmts {
-        current_name = alias_binding_name(stmt, current_name)?;
+        match stmt {
+            Stmt::Binding { .. } | Stmt::MutBinding { .. } => {
+                if let Some(next_name) = alias_binding_name(stmt, current_name) {
+                    current_name = next_name;
+                }
+            }
+            _ => return None,
+        }
+    }
+    Some(current_name)
+}
+
+fn resolve_alias_chain_source_name<'a>(stmts: &'a [Stmt], target_name: &'a str) -> Option<&'a str> {
+    let mut current_name = target_name;
+    for stmt in stmts.iter().rev() {
+        match stmt {
+            Stmt::Binding { .. } | Stmt::MutBinding { .. } => {
+                let Some((alias_name, alias_value)) = stmt_binding_parts(stmt) else {
+                    continue;
+                };
+                if alias_name == current_name
+                    && let Expr::Var(source_name) = alias_value
+                {
+                    current_name = source_name;
+                }
+            }
+            _ => return None,
+        }
     }
     Some(current_name)
 }
@@ -408,6 +435,7 @@ fn expr_is_newline_delimiter(expr: &Expr, delimiter_name: Option<&str>) -> bool 
 
 fn split_lines_each_output_mode_from_callback(
     module: &Module,
+    middle_stmts: &[Stmt],
     lines_name: &str,
     each_expr: &Expr,
 ) -> Option<OutputReadMode> {
@@ -422,11 +450,16 @@ fn split_lines_each_output_mode_from_callback(
     }
 
     match each_args[1] {
-        Expr::Var(name) => callback_output_mode_name(name),
+        Expr::Var(name) => {
+            callback_output_mode_name(resolve_alias_chain_source_name(middle_stmts, name)?)
+        }
         Expr::Lambda { param, body } => match body.as_ref() {
             Expr::Call { callee, arg } if callback_arg_matches_line_passthrough(arg, param) => {
                 match callee.as_ref() {
-                    Expr::Var(name) => callback_output_mode_name(name),
+                    Expr::Var(name) => callback_output_mode_name(resolve_alias_chain_source_name(
+                        middle_stmts,
+                        name,
+                    )?),
                     _ => None,
                 }
             }
@@ -483,7 +516,7 @@ fn split_lines_each_output_mode(module: &Module, stmts: &[Stmt]) -> Option<Outpu
             let Some(iterated_name) = resolve_alias_chain_terminal_name(middle, lines_name) else {
                 return None;
             };
-            split_lines_each_output_mode_from_callback(module, iterated_name, each_expr)
+            split_lines_each_output_mode_from_callback(module, middle, iterated_name, each_expr)
         }
         [
             read_stmt,
@@ -506,7 +539,7 @@ fn split_lines_each_output_mode(module: &Module, stmts: &[Stmt]) -> Option<Outpu
             let Some(iterated_name) = resolve_alias_chain_terminal_name(middle, lines_name) else {
                 return None;
             };
-            split_lines_each_output_mode_from_callback(module, iterated_name, each_expr)
+            split_lines_each_output_mode_from_callback(module, middle, iterated_name, each_expr)
         }
         _ => None,
     }
@@ -662,6 +695,55 @@ main =
             classify_runtime_io(&module, body.as_deref()),
             RuntimeIoClassification::DynamicWasiIo(RuntimeIoPlan::SplitLinesEach {
                 output_mode: OutputReadMode::Println,
+            })
+        );
+    }
+
+    #[test]
+    fn plans_split_each_local_println_callback_alias() {
+        let (module, body) = main_stmts(
+            r#"
+import goby/list ( each )
+import goby/string ( split )
+
+main : Unit -> Unit can Print, Read
+main =
+  text = read()
+  delim = "\n"
+  lines = split(text, delim)
+  printer = println
+  each lines printer
+"#,
+        );
+        assert_eq!(
+            classify_runtime_io(&module, body.as_deref()),
+            RuntimeIoClassification::DynamicWasiIo(RuntimeIoPlan::SplitLinesEach {
+                output_mode: OutputReadMode::Println,
+            })
+        );
+    }
+
+    #[test]
+    fn plans_split_each_forwarded_local_print_callback_alias() {
+        let (module, body) = main_stmts(
+            r#"
+import goby/list ( each )
+import goby/string ( split )
+
+main : Unit -> Unit can Print, Read
+main =
+  text = read()
+  delim = "\n"
+  lines = split(text, delim)
+  printer = print
+  writer = printer
+  each lines writer
+"#,
+        );
+        assert_eq!(
+            classify_runtime_io(&module, body.as_deref()),
+            RuntimeIoClassification::DynamicWasiIo(RuntimeIoPlan::SplitLinesEach {
+                output_mode: OutputReadMode::Print,
             })
         );
     }
