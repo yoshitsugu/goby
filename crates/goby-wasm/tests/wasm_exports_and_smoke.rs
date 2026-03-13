@@ -2,7 +2,9 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 
 use goby_core::parse_module;
-use goby_wasm::{compile_module, execute_module_with_stdin};
+use goby_wasm::{
+    RuntimeIoExecutionKind, compile_module, execute_module_with_stdin, runtime_io_execution_kind,
+};
 
 /// Serializes tests that read or write process-wide environment variables.
 static ENV_MUTEX: Mutex<()> = Mutex::new(());
@@ -251,6 +253,29 @@ main =
     let output = execute_module_with_stdin(&module, Some("hogehoge\nfugafuga".to_string()))
         .expect("runtime execution should succeed");
     assert_eq!(output.as_deref(), Some("hogehoge\nfugafuga\n"));
+}
+
+#[test]
+fn runtime_io_execution_kind_reports_interpreter_bridge_for_complex_read_program() {
+    let module = parse_module(
+        r#"
+import goby/list ( each )
+import goby/string ( split )
+
+main : Unit -> Unit can Print, Read
+main =
+  text = read()
+  delim = "\n"
+  lines = split(text, delim)
+  copied = lines
+  each copied (|line| -> println(line))
+"#,
+    )
+    .expect("parse should work");
+    assert_eq!(
+        runtime_io_execution_kind(&module).expect("classification should work"),
+        RuntimeIoExecutionKind::InterpreterBridge
+    );
 }
 
 #[test]

@@ -32,6 +32,8 @@ This file is a restart-safe snapshot for resuming work after context reset.
   instead of staying inline in the top-level `lib.rs` orchestration path.
 - That planning module now explicitly classifies current `main` shapes into
   dynamic-Wasm candidates, temporary interpreter-bridge cases, or non-runtime-I/O code.
+- CLI `run` now uses that runtime-I/O classification instead of matching a codegen
+  diagnostic string to decide when to execute the temporary stdin-backed bridge.
 
 ## Current State
 
@@ -66,6 +68,8 @@ This file is a restart-safe snapshot for resuming work after context reset.
   into a dedicated module, but the old direct matcher path has not been fully retired yet.
 - `compile_module` now consults the runtime-I/O classifier before compile-time fallback,
   so bridge cases are rejected by planning rather than only by fallback execution.
+- `goby-wasm` now exposes a small public runtime-I/O execution-kind query so callers can
+  align execution-path decisions with planner output instead of error-message text.
 
 ## Verified
 

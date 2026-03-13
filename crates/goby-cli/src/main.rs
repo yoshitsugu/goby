@@ -117,9 +117,10 @@ fn run() -> Result<(), CliError> {
                 }
             }
             Err(err)
-                if err
-                    .message
-                    .contains("compile-time fallback cannot consume stdin") =>
+                if matches!(
+                    goby_wasm::runtime_io_execution_kind(&module),
+                    Ok(goby_wasm::RuntimeIoExecutionKind::InterpreterBridge)
+                ) =>
             {
                 let stdin_text = read_stdin_to_string()?;
                 let output = goby_wasm::execute_module_with_stdin(&module, Some(stdin_text))

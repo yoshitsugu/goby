@@ -85,6 +85,13 @@ pub struct CodegenError {
     pub message: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuntimeIoExecutionKind {
+    DynamicWasiIo,
+    InterpreterBridge,
+    NotRuntimeIo,
+}
+
 fn unresolved_runtime_output_error(
     module: &Module,
     handoff: Option<lower::EffectBoundaryHandoff>,
@@ -281,6 +288,24 @@ pub fn execute_module_with_stdin(
         module,
         effect_boundary_handoff,
     ))
+}
+
+pub fn runtime_io_execution_kind(module: &Module) -> Result<RuntimeIoExecutionKind, CodegenError> {
+    let main = module
+        .declarations
+        .iter()
+        .find(|d| d.name == "main")
+        .ok_or_else(|| CodegenError {
+            message: ERR_MISSING_MAIN.to_string(),
+        })?;
+
+    Ok(
+        match classify_runtime_io(module, main.parsed_body.as_deref()) {
+            RuntimeIoClassification::DynamicWasiIo(_) => RuntimeIoExecutionKind::DynamicWasiIo,
+            RuntimeIoClassification::InterpreterBridge => RuntimeIoExecutionKind::InterpreterBridge,
+            RuntimeIoClassification::NotRuntimeIo => RuntimeIoExecutionKind::NotRuntimeIo,
+        },
+    )
 }
 
 pub(crate) struct RuntimeOutputResolver<'m> {
