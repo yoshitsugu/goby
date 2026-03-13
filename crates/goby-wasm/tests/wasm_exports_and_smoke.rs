@@ -182,6 +182,27 @@ main =
 }
 
 #[test]
+fn bound_newline_split_each_println_program_emits_wasm_with_fd_read_and_fd_write_imports() {
+    let module = parse_module(
+        r#"
+import goby/list ( each )
+import goby/string ( split )
+
+main : Unit -> Unit can Print, Read
+main =
+  text = read()
+  delim = "\n"
+  lines = split(text, delim)
+  each lines (|line| -> println(line))
+"#,
+    )
+    .expect("parse should work");
+    let wasm = compile_module(&module).expect("bound newline split shape should compile to Wasm");
+    assert_valid_wasm_module(&wasm);
+    assert_has_fd_read_and_fd_write_imports(&wasm);
+}
+
+#[test]
 fn simple_read_line_program_emits_wasm_with_fd_read_and_fd_write_imports() {
     let module = parse_module(
         r#"

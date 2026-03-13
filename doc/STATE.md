@@ -26,6 +26,8 @@ This file is a restart-safe snapshot for resuming work after context reset.
 - The original `read` + `split(text, "\n")` + `each ... println`
   sample shape now also compiles to dynamic WASI Wasm instead of requiring the
   interpreter-backed runtime bridge.
+- That structured stdin Wasm shape now also accepts a nearby spelling where the
+  newline delimiter is first bound to a local variable before calling `split`.
 
 ## Current State
 
@@ -55,7 +57,7 @@ This file is a restart-safe snapshot for resuming work after context reset.
   the interpreter-backed runtime execution bridge.
 - That dynamic path is now generalized across a few equivalent output spellings, but it
   still only handles direct echo-style `read` / `read_line` output shapes plus the
-  exact newline-splitting `each println` form.
+  newline-splitting `each println` family in a narrow set of local-binding forms.
 
 ## Verified
 
