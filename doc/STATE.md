@@ -81,6 +81,9 @@ This file is a restart-safe snapshot for resuming work after context reset.
   dynamic-Wasm shapes are checked to reject the temporary interpreter bridge entrypoint.
 - `RuntimeIoPlan` now owns both classification and dynamic-Wasm emission for the
   currently supported stdin/stdout runtime-I/O cases.
+- `RuntimeIoPlan` echo planning now also accepts a one-hop local forwarding shape,
+  so `text = read(); copied = text; print copied` and the analogous `read_line`
+  variant no longer fall back to the temporary interpreter bridge.
 
 ## Verified
 

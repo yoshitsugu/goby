@@ -184,6 +184,23 @@ main =
 }
 
 #[test]
+fn forwarded_read_binding_then_print_program_emits_wasm_with_fd_read_and_fd_write_imports() {
+    let module = parse_module(
+        r#"
+main : Unit -> Unit can Print, Read
+main =
+  text = read()
+  copied = text
+  print copied
+"#,
+    )
+    .expect("parse should work");
+    let wasm = compile_module(&module).expect("forwarded read print should compile to Wasm");
+    assert_valid_wasm_module(&wasm);
+    assert_has_fd_read_and_fd_write_imports(&wasm);
+}
+
+#[test]
 fn bound_newline_split_each_println_program_emits_wasm_with_fd_read_and_fd_write_imports() {
     let module = parse_module(
         r#"
@@ -231,6 +248,23 @@ main =
     )
     .expect("parse should work");
     let wasm = compile_module(&module).expect("binding read_line println should compile to Wasm");
+    assert_valid_wasm_module(&wasm);
+    assert_has_fd_read_and_fd_write_imports(&wasm);
+}
+
+#[test]
+fn forwarded_read_line_binding_then_println_program_emits_wasm_with_fd_read_and_fd_write_imports() {
+    let module = parse_module(
+        r#"
+main : Unit -> Unit can Print, Read
+main =
+  line = read_line()
+  copied = line
+  println copied
+"#,
+    )
+    .expect("parse should work");
+    let wasm = compile_module(&module).expect("forwarded read_line println should compile to Wasm");
     assert_valid_wasm_module(&wasm);
     assert_has_fd_read_and_fd_write_imports(&wasm);
 }

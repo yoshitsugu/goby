@@ -86,38 +86,70 @@ fn plan_runtime_io(module: &Module, stmts: &[Stmt]) -> Option<RuntimeIoPlan> {
         [
             Stmt::Binding { name, value } | Stmt::MutBinding { name, value },
             Stmt::Expr(Expr::Call { callee, arg }),
-        ] => {
-            let input_mode = if is_read_all_expr(value) {
-                Some(InputReadMode::ReadAll)
-            } else if is_read_line_expr(value) {
-                Some(InputReadMode::ReadLine)
-            } else {
-                None
-            };
-            if input_mode.is_none() {
-                None
-            } else if !matches!(arg.as_ref(), Expr::Var(var_name) if var_name == name) {
-                None
-            } else if let Expr::Var(output_name) = callee.as_ref() {
-                match output_name.as_str() {
-                    "print" => Some(RuntimeIoPlan::Echo {
-                        input_mode: input_mode.expect("checked above"),
-                        output_mode: OutputReadMode::Print,
-                    }),
-                    "println" => Some(RuntimeIoPlan::Echo {
-                        input_mode: input_mode.expect("checked above"),
-                        output_mode: OutputReadMode::Println,
-                    }),
-                    _ => None,
-                }
-            } else {
-                None
-            }
-        }
+        ] => plan_bound_echo_shape(name, value, name, callee, arg),
         _ if is_split_lines_each_println_shape(module, stmts) => {
             Some(RuntimeIoPlan::SplitLinesEachPrintln)
         }
+        [
+            Stmt::Binding {
+                name: source_name,
+                value: source_value,
+            }
+            | Stmt::MutBinding {
+                name: source_name,
+                value: source_value,
+            },
+            Stmt::Binding {
+                name: alias_name,
+                value: alias_value,
+            }
+            | Stmt::MutBinding {
+                name: alias_name,
+                value: alias_value,
+            },
+            Stmt::Expr(Expr::Call { callee, arg }),
+        ] => {
+            if !matches!(alias_value, Expr::Var(var_name) if var_name == source_name) {
+                return None;
+            }
+            plan_bound_echo_shape(source_name, source_value, alias_name, callee, arg)
+        }
         _ => None,
+    }
+}
+
+fn plan_bound_echo_shape(
+    _source_name: &str,
+    source_value: &Expr,
+    printed_name: &str,
+    callee: &Expr,
+    arg: &Expr,
+) -> Option<RuntimeIoPlan> {
+    let input_mode = if is_read_all_expr(source_value) {
+        Some(InputReadMode::ReadAll)
+    } else if is_read_line_expr(source_value) {
+        Some(InputReadMode::ReadLine)
+    } else {
+        None
+    };
+    if input_mode.is_none() {
+        None
+    } else if !matches!(arg, Expr::Var(var_name) if var_name == printed_name) {
+        None
+    } else if let Expr::Var(output_name) = callee {
+        match output_name.as_str() {
+            "print" => Some(RuntimeIoPlan::Echo {
+                input_mode: input_mode.expect("checked above"),
+                output_mode: OutputReadMode::Print,
+            }),
+            "println" => Some(RuntimeIoPlan::Echo {
+                input_mode: input_mode.expect("checked above"),
+                output_mode: OutputReadMode::Println,
+            }),
+            _ => None,
+        }
+    } else {
+        None
     }
 }
 
@@ -415,6 +447,46 @@ main =
         assert_eq!(
             classify_runtime_io(&module, body.as_deref()),
             RuntimeIoClassification::DynamicWasiIo(RuntimeIoPlan::SplitLinesEachPrintln)
+        );
+    }
+
+    #[test]
+    fn plans_read_echo_with_forwarded_local_binding() {
+        let (module, body) = main_stmts(
+            r#"
+main : Unit -> Unit can Print, Read
+main =
+  text = read()
+  copied = text
+  print copied
+"#,
+        );
+        assert_eq!(
+            classify_runtime_io(&module, body.as_deref()),
+            RuntimeIoClassification::DynamicWasiIo(RuntimeIoPlan::Echo {
+                input_mode: InputReadMode::ReadAll,
+                output_mode: OutputReadMode::Print,
+            })
+        );
+    }
+
+    #[test]
+    fn plans_read_line_echo_with_forwarded_local_binding() {
+        let (module, body) = main_stmts(
+            r#"
+main : Unit -> Unit can Print, Read
+main =
+  line = read_line()
+  copied = line
+  println copied
+"#,
+        );
+        assert_eq!(
+            classify_runtime_io(&module, body.as_deref()),
+            RuntimeIoClassification::DynamicWasiIo(RuntimeIoPlan::Echo {
+                input_mode: InputReadMode::ReadLine,
+                output_mode: OutputReadMode::Println,
+            })
         );
     }
 
