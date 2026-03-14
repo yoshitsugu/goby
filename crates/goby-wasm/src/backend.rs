@@ -297,6 +297,21 @@ impl WasmProgramBuilder {
         // prefix string slot: just below suffix
         let prefix_str_ptr = suffix_str_ptr - prefix_len;
 
+        // Guard: prefix and suffix must not overlap the iovec/nread region [0..nwritten_offset+4].
+        let iovec_end =
+            i32::try_from(self.layout.nwritten_offset + 4).map_err(|_| CodegenError {
+                message: "iovec end offset does not fit in i32".to_string(),
+            })?;
+        if prefix_str_ptr < iovec_end {
+            return Err(CodegenError {
+                message: format!(
+                    "transform prefix+suffix combined ({} bytes) is too long: \
+                     static string region would overlap iovec/nread area",
+                    prefix_bytes.len() + suffix_bytes.len()
+                ),
+            });
+        }
+
         let buffer_ptr = i32::try_from(self.layout.heap_base).map_err(|_| CodegenError {
             message: "heap base does not fit in i32".to_string(),
         })?;

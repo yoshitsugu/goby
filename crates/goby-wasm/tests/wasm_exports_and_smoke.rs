@@ -563,52 +563,9 @@ main =
 }
 
 #[test]
-fn execute_module_with_stdin_runs_read_program_at_runtime() {
-    let module = parse_module(
-        r#"
-import goby/list ( each )
-import goby/string ( split )
-
-main : Unit -> Unit can Print, Read
-main =
-  text = read()
-  delim = "\n"
-  lines = split(text, delim)
-  copied = lines
-  forwarded = copied
-  each forwarded (|line| -> println "${line}!")
-"#,
-    )
-    .expect("parse should work");
-    let output = execute_module_with_stdin(&module, Some("hogehoge\nfugafuga".to_string()))
-        .expect("runtime execution should succeed");
-    assert_eq!(output.as_deref(), Some("hogehoge!\nfugafuga!\n"));
-}
-
-#[test]
-fn execute_module_with_stdin_bridge_shape_handles_empty_stdin() {
-    let module = parse_module(
-        r#"
-import goby/list ( each )
-import goby/string ( split )
-
-main : Unit -> Unit can Print, Read
-main =
-  text = read()
-  delim = "\n"
-  lines = split(text, delim)
-  each lines (|line| -> println "${line}!")
-  print "done"
-"#,
-    )
-    .expect("parse should work");
-    let output = execute_module_with_stdin(&module, Some(String::new()))
-        .expect("runtime execution should succeed");
-    assert_eq!(output.as_deref(), Some("done"));
-}
-
-#[test]
-fn runtime_io_execution_kind_reports_interpreter_bridge_for_complex_read_program() {
+fn compile_module_produces_wasm_for_transformed_split_callback() {
+    // Previously InterpreterBridge (execute_module_with_stdin path).
+    // Now DynamicWasiIo: compile_module produces a valid Wasm module.
     let module = parse_module(
         r#"
 import goby/list ( each )
@@ -627,7 +584,35 @@ main =
     .expect("parse should work");
     assert_eq!(
         runtime_io_execution_kind(&module).expect("classification should work"),
-        RuntimeIoExecutionKind::InterpreterBridge
+        RuntimeIoExecutionKind::DynamicWasiIo,
+        "transformed split callback should now classify as DynamicWasiIo"
+    );
+    let wasm = compile_module(&module).expect("should compile to Wasm");
+    assert_valid_wasm_module(&wasm);
+    assert_has_fd_read_and_fd_write_imports(&wasm);
+}
+
+#[test]
+fn runtime_io_execution_kind_reports_dynamic_wasi_io_for_transformed_split_callback() {
+    let module = parse_module(
+        r#"
+import goby/list ( each )
+import goby/string ( split )
+
+main : Unit -> Unit can Print, Read
+main =
+  text = read()
+  delim = "\n"
+  lines = split(text, delim)
+  copied = lines
+  forwarded = copied
+  each forwarded (|line| -> println "${line}!")
+"#,
+    )
+    .expect("parse should work");
+    assert_eq!(
+        runtime_io_execution_kind(&module).expect("classification should work"),
+        RuntimeIoExecutionKind::DynamicWasiIo
     );
 }
 

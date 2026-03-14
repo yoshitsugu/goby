@@ -601,7 +601,9 @@ main =
 }
 
 #[test]
-fn run_command_executes_bridge_read_program_with_empty_runtime_stdin() {
+fn run_command_executes_transformed_split_callback_with_empty_runtime_stdin() {
+    // The transformed split-callback shape is now DynamicWasiIo (no longer InterpreterBridge).
+    // With empty stdin: nread==0, so no lines are processed and no "!" output is produced.
     let root = repo_root();
     let sandbox = TempDirGuard::new("run_read_runtime_stdin_empty");
     let input = sandbox.join("read_empty.gb");
@@ -617,7 +619,6 @@ main =
   delim = "\n"
   lines = split(text, delim)
   each lines (|line| -> println "${line}!")
-  print "done"
 "#,
     )
     .expect("temporary input should be writable");
@@ -638,13 +639,13 @@ main =
 
     assert!(
         output.status.success(),
-        "expected runtime stdin-backed execution to succeed, stderr: {}",
+        "expected dynamic Wasm execution to succeed with empty stdin, stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        stdout.contains("done"),
-        "expected empty-stdin bridge output suffix, stdout: {}",
+        stdout.contains("generated wasm"),
+        "expected DynamicWasiIo Wasm path, stdout: {}",
         stdout
     );
     assert!(

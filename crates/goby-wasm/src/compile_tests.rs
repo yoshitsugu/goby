@@ -707,7 +707,9 @@ main =
 }
 
 #[test]
-fn compile_module_rejects_interpreter_bridge_runtime_io_shape() {
+fn compile_module_compiles_transformed_split_callback_as_dynamic_wasi_io() {
+    // Previously classified as InterpreterBridge and rejected by compile_module.
+    // Now classified as DynamicWasiIo and compiled to a valid Wasm module.
     let source = r#"
 import goby/list ( each )
 import goby/string ( split )
@@ -722,18 +724,18 @@ main =
     let module = parse_module(source).expect("source should parse");
     assert_eq!(
         runtime_io_execution_kind(&module).expect("classification should succeed"),
-        crate::RuntimeIoExecutionKind::InterpreterBridge,
-        "transformed split callback should classify as InterpreterBridge"
+        crate::RuntimeIoExecutionKind::DynamicWasiIo,
+        "transformed split callback should now classify as DynamicWasiIo"
     );
-    let err = compile_module(&module)
-        .expect_err("interpreter bridge runtime I/O shape should not compile to Wasm directly");
-    assert!(
-        err.message.contains("runtime stdin execution path"),
-        "unexpected error message: {}",
-        err.message
-    );
+    let wasm =
+        compile_module(&module).expect("transformed split callback should compile to Wasm");
+    assert_valid_wasm_module(&wasm);
 }
 
+/// Milestone test: tracks which shapes are DynamicWasiIo, Unsupported, etc.
+/// InterpreterBridge is intentionally absent from the cases below: the
+/// transformed split-callback family (formerly the only bridge-only shape) has
+/// been promoted to DynamicWasiIo.  The bridge surface is now effectively empty.
 #[test]
 fn runtime_io_milestone_bridge_surface_is_narrow_and_explicit() {
     let cases = [
@@ -772,7 +774,7 @@ main =
             crate::RuntimeIoExecutionKind::DynamicWasiIo,
         ),
         (
-            "bridge_transformed_split_callback",
+            "dynamic_transformed_split_callback",
             r#"
 import goby/list ( each )
 import goby/string ( split )
@@ -783,7 +785,7 @@ main =
   lines = split(text, "\n")
   each lines (|line| -> println "${line}!")
 "#,
-            crate::RuntimeIoExecutionKind::InterpreterBridge,
+            crate::RuntimeIoExecutionKind::DynamicWasiIo,
         ),
         (
             "unsupported_read_transform",

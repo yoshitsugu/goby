@@ -268,11 +268,11 @@ fn plan_runtime_io(module: &Module, stmts: &[Stmt]) -> Option<RuntimeIoPlan> {
     if let Some(plan) = plan_echo_runtime_io(stmts) {
         return Some(plan);
     }
-    if let Some((output_mode, suffix_prints)) = split_lines_each_plan(module, stmts) {
+    if let Some((output_mode, suffix_prints, transform)) = split_lines_each_plan(module, stmts) {
         return Some(RuntimeIoPlan::SplitLinesEach {
             output_mode,
             suffix_prints,
-            transform: None,
+            transform,
         });
     }
     None
@@ -590,12 +590,15 @@ fn expr_is_newline_delimiter(expr: &Expr, stmts: &[Stmt]) -> bool {
         || matches!(expr, Expr::Var(name) if name_resolves_to_newline_literal(stmts, name))
 }
 
-fn split_lines_each_output_mode_from_callback(
+/// Returns `(output_mode, transform)` for the `each` callback:
+/// - `transform = None`:  passthrough (emit each line as-is)
+/// - `transform = Some((prefix, suffix))`:  wrap each line with static prefix/suffix
+fn split_lines_each_callback_plan(
     module: &Module,
     callback_scope_stmts: &[Stmt],
     lines_name: &str,
     each_expr: &Expr,
-) -> Option<OutputReadMode> {
+) -> Option<(OutputReadMode, Option<(String, String)>)> {
     let Some((each_head, each_args)) = flatten_direct_call(each_expr) else {
         return None;
     };
@@ -608,22 +611,72 @@ fn split_lines_each_output_mode_from_callback(
 
     match each_args[1] {
         Expr::Var(name) => {
-            callback_output_mode_name(resolve_alias_chain_source_name(callback_scope_stmts, name)?)
+            let mode = callback_output_mode_name(
+                resolve_alias_chain_source_name(callback_scope_stmts, name)?,
+            )?;
+            Some((mode, None))
         }
         Expr::Lambda { param, body } => match body.as_ref() {
-            Expr::Call { callee, arg } if callback_arg_matches_line_passthrough(arg, param) => {
-                match callee.as_ref() {
-                    Expr::Var(name) => callback_output_mode_name(resolve_alias_chain_source_name(
-                        callback_scope_stmts,
-                        name,
-                    )?),
-                    _ => None,
+            Expr::Call { callee, arg } => {
+                let mode = match callee.as_ref() {
+                    Expr::Var(name) => callback_output_mode_name(
+                        resolve_alias_chain_source_name(callback_scope_stmts, name)?,
+                    )?,
+                    _ => return None,
+                };
+                if callback_arg_matches_line_passthrough(arg, param) {
+                    Some((mode, None))
+                } else if let Some((prefix, suffix)) = extract_transform(arg, param) {
+                    Some((mode, Some((prefix, suffix))))
+                } else {
+                    None
                 }
             }
             _ => None,
         },
         _ => None,
     }
+}
+
+/// Extract `(prefix, suffix)` from a transformed interpolated string like `"${param}!"`.
+///
+/// - Concatenates all `Text` parts before the `Var(param)` expr into `prefix`.
+/// - Concatenates all `Text` parts after into `suffix`.
+/// - Returns `None` if the interpolated string is not exactly `prefix + param + suffix`
+///   (e.g., has extra expressions, or is a plain passthrough with no non-empty text).
+fn extract_transform(arg: &Expr, param: &str) -> Option<(String, String)> {
+    let Expr::InterpolatedString(parts) = arg else {
+        return None;
+    };
+    let mut prefix = String::new();
+    let mut suffix = String::new();
+    let mut saw_param = false;
+    for part in parts {
+        match part {
+            InterpolatedPart::Text(t) => {
+                if saw_param {
+                    suffix.push_str(t);
+                } else {
+                    prefix.push_str(t);
+                }
+            }
+            InterpolatedPart::Expr(e)
+                if !saw_param && matches!(e.as_ref(), Expr::Var(n) if n == param) =>
+            {
+                saw_param = true;
+            }
+            _ => return None,
+        }
+    }
+    if !saw_param {
+        return None;
+    }
+    // Passthrough (pure `"${param}"`) has no non-empty text parts; skip it so the
+    // passthrough path in `split_lines_each_callback_plan` handles it instead.
+    if prefix.is_empty() && suffix.is_empty() {
+        return None;
+    }
+    Some((prefix, suffix))
 }
 
 fn callback_arg_matches_line_passthrough(arg: &Expr, param: &str) -> bool {
@@ -701,7 +754,7 @@ fn split_trailing_static_print_suffixes(
 fn split_lines_each_plan(
     module: &Module,
     stmts: &[Stmt],
-) -> Option<(OutputReadMode, Vec<StaticPrintSuffix>)> {
+) -> Option<(OutputReadMode, Vec<StaticPrintSuffix>, Option<(String, String)>)> {
     let [read_stmt, rest @ ..] = stmts else {
         return None;
     };
@@ -731,13 +784,13 @@ fn split_lines_each_plan(
             else {
                 continue;
             };
-            if let Some(output_mode) = split_lines_each_output_mode_from_callback(
+            if let Some((output_mode, transform)) = split_lines_each_callback_plan(
                 module,
                 pre_each_stmts,
                 iterated_name,
                 each_expr,
             ) {
-                return Some((output_mode, suffix_prints));
+                return Some((output_mode, suffix_prints, transform));
             }
         }
     }
@@ -1347,7 +1400,8 @@ main =
     }
 
     #[test]
-    fn does_not_plan_bridge_only_shape() {
+    fn plans_transformed_split_callback_as_dynamic_wasi_io() {
+        // Previously classified as InterpreterBridge; now promotes to DynamicWasiIo.
         let (module, body) = main_stmts(
             r#"
 import goby/list ( each )
@@ -1363,9 +1417,18 @@ main =
   each forwarded (|line| -> println "${line}!")
 "#,
         );
-        assert_eq!(
-            classify_runtime_io(&module, body.as_deref()),
-            RuntimeIoClassification::InterpreterBridge
+        let classification = classify_runtime_io(&module, body.as_deref());
+        assert!(
+            matches!(
+                &classification,
+                RuntimeIoClassification::DynamicWasiIo(RuntimeIoPlan::SplitLinesEach {
+                    output_mode: OutputReadMode::Println,
+                    transform: Some((prefix, suffix)),
+                    ..
+                }) if suffix == "!" && prefix.is_empty()
+            ),
+            "expected DynamicWasiIo with transform suffix '!', got: {:?}",
+            classification
         );
     }
 
