@@ -105,6 +105,9 @@ This file is a restart-safe snapshot for resuming work after context reset.
 - Echo runtime-I/O planning can now also carry trailing static literal
   `print` / `println` suffixes after the dynamic read echo step, so nearby
   shapes like `print(read()); println "done"` no longer need the interpreter bridge.
+- Echo runtime-I/O planning now also resolves local `print` / `println` aliases,
+  including simple forwarded aliases, so shapes like
+  `printer = print; text = read(); printer text` also compile to dynamic Wasm.
 - The newline-splitting runtime-I/O planner/back-end path now models the callback output
   mode directly, so `each lines print` and `each lines println` both compile to dynamic
   Wasm, including the named-function callback spelling in addition to the direct lambda form.

@@ -545,6 +545,24 @@ main =
 }
 
 #[test]
+fn read_echo_with_output_alias_emits_wasm_with_fd_read_and_fd_write_imports() {
+    let module = parse_module(
+        r#"
+main : Unit -> Unit can Print, Read
+main =
+  text = read()
+  printer = print
+  copied = text
+  printer copied
+"#,
+    )
+    .expect("parse should work");
+    let wasm = compile_module(&module).expect("read echo with output alias should compile to Wasm");
+    assert_valid_wasm_module(&wasm);
+    assert_has_fd_read_and_fd_write_imports(&wasm);
+}
+
+#[test]
 fn execute_module_with_stdin_runs_read_program_at_runtime() {
     let module = parse_module(
         r#"

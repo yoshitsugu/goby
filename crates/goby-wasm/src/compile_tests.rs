@@ -663,6 +663,26 @@ main =
 }
 
 #[test]
+fn compile_module_routes_echo_with_output_alias_through_dynamic_wasi_io_classification() {
+    let source = r#"
+main : Unit -> Unit can Print, Read
+main =
+  text = read()
+  printer = print
+  copied = text
+  printer copied
+"#;
+    let module = parse_module(source).expect("source should parse");
+    assert_eq!(
+        runtime_io_execution_kind(&module).expect("classification should succeed"),
+        crate::RuntimeIoExecutionKind::DynamicWasiIo,
+        "read echo with local output alias should classify as DynamicWasiIo"
+    );
+    let wasm = compile_module(&module).expect("codegen should succeed");
+    assert_valid_wasm_module(&wasm);
+}
+
+#[test]
 fn compile_module_routes_split_lines_each_through_dynamic_wasi_io_classification() {
     let source = r#"
 import goby/list ( each )

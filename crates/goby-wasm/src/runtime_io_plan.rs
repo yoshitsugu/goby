@@ -275,7 +275,7 @@ fn plan_echo_runtime_io(stmts: &[Stmt]) -> Option<RuntimeIoPlan> {
         ] => {
             let (source_name, input_mode) = read_binding_mode(read_stmt)?;
             let printed_name = resolve_alias_chain_terminal_name(middle, source_name)?;
-            plan_bound_echo_shape(input_mode, printed_name, callee, arg, suffix_prints)
+            plan_bound_echo_shape(input_mode, printed_name, callee, arg, middle, suffix_prints)
         }
         _ => None,
     }
@@ -286,15 +286,13 @@ fn plan_bound_echo_shape(
     printed_name: &str,
     callee: &Expr,
     arg: &Expr,
+    scope_stmts: &[Stmt],
     suffix_prints: Vec<StaticPrintSuffix>,
 ) -> Option<RuntimeIoPlan> {
     if !matches!(arg, Expr::Var(var_name) if var_name == printed_name) {
         return None;
     }
-    let Expr::Var(output_name) = callee else {
-        return None;
-    };
-    match output_name.as_str() {
+    match callee_output_mode(callee, scope_stmts)? {
         "print" => Some(RuntimeIoPlan::Echo {
             input_mode,
             output_mode: OutputReadMode::Print,
@@ -307,6 +305,15 @@ fn plan_bound_echo_shape(
         }),
         _ => None,
     }
+}
+
+fn callee_output_mode<'a>(callee: &'a Expr, scope_stmts: &'a [Stmt]) -> Option<&'a str> {
+    let Expr::Var(output_name) = callee else {
+        return None;
+    };
+    let resolved_name =
+        resolve_alias_chain_source_name(scope_stmts, output_name).unwrap_or(output_name);
+    matches!(resolved_name, "print" | "println").then_some(resolved_name)
 }
 
 fn stmt_contains_runtime_read(stmt: &Stmt) -> bool {
@@ -1157,6 +1164,51 @@ main =
                     text: "done".to_string(),
                     output_mode: OutputReadMode::Print,
                 }],
+            })
+        );
+    }
+
+    #[test]
+    fn plans_bound_read_echo_with_local_print_alias() {
+        let (module, body) = main_stmts(
+            r#"
+main : Unit -> Unit can Print, Read
+main =
+  text = read()
+  printer = print
+  copied = text
+  printer copied
+"#,
+        );
+        assert_eq!(
+            classify_runtime_io(&module, body.as_deref()),
+            RuntimeIoClassification::DynamicWasiIo(RuntimeIoPlan::Echo {
+                input_mode: InputReadMode::ReadAll,
+                output_mode: OutputReadMode::Print,
+                suffix_prints: vec![],
+            })
+        );
+    }
+
+    #[test]
+    fn plans_bound_read_line_echo_with_forwarded_output_alias() {
+        let (module, body) = main_stmts(
+            r#"
+main : Unit -> Unit can Print, Read
+main =
+  line = read_line()
+  printer = println
+  writer = printer
+  copied = line
+  writer copied
+"#,
+        );
+        assert_eq!(
+            classify_runtime_io(&module, body.as_deref()),
+            RuntimeIoClassification::DynamicWasiIo(RuntimeIoPlan::Echo {
+                input_mode: InputReadMode::ReadLine,
+                output_mode: OutputReadMode::Println,
+                suffix_prints: vec![],
             })
         );
     }
