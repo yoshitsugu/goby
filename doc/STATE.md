@@ -54,5 +54,5 @@ NotRuntimeIo:
 Immediate planning goals:
 
 1. Remove the old effect-member-`can` model in implementation.
-2. Add regression coverage for handled-vs-unhandled function effects and inline handler clause resolution before broader refactors.
-3. Keep the next slice focused on parser/typechecker/docs/examples alignment before broader tooling work.
+2. Rebuild effect checking around one residual-effect model for expressions and function bodies.
+3. Add regression coverage for handled-vs-unhandled function effects and inline handler clause resolution before broader refactors.

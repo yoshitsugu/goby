@@ -311,7 +311,7 @@ Based on `examples/*.gb`:
   - calls to `can`-annotated functions require an appropriate enclosing handler scope.
 - Known mismatch against the locked semantics:
   - the current implementation/spec history still has a separate "effect member `can` dependency" model.
-  - this is no longer aligned with the desired meaning of `can` and should be removed or redesigned.
+  - this is no longer aligned with the desired meaning of `can` and should be removed.
   - runtime/planning notes still mention bare-name dispatch fallback by effect-name order; this should be replaced by unique-or-qualified clause resolution.
 - Current runtime behavior:
   - effect operations dispatch through installed handlers.
@@ -322,8 +322,6 @@ Based on `examples/*.gb`:
   (for example local `a` shadows operation `a`) — deferred.
   - resolution rule remains: lexical value namespace wins.
   - warning is planned as tooling/diagnostics improvement, not a type error.
-- Multi-effect implicit `main` wrapper ordering and topological expansion based on
-  effect-member dependency declarations (`op ... can Dep`) — in progress.
 
 #### Planned Semantics Alignment: `can` Means Unhandled Effects
 
@@ -332,31 +330,46 @@ Status: planned (2026-03-15)
 Goal: align parser/typechecker/docs/examples with the rule that `can` lists only
 effects that escape a function body.
 
-- Phase 1: annotation and checker model cleanup
-  - remove the old assumption that `can` on a function means any effect used by the body, even when locally handled.
-  - define one effect-accounting pass for expressions:
-    - direct effect operation calls contribute their effect only when not discharged by an enclosing `with`,
-    - calls to functions annotated with `can ...` contribute those effects at the call site unless discharged there.
-  - ensure a function with no `can` annotation is rejected when its body leaves any effect unhandled.
-- Phase 2: remove or redesign effect-member `can`
-  - audit parser/AST/typechecker/runtime assumptions that effect members may declare dependency effects.
-  - either delete that syntax/logic entirely or replace it with a distinct future syntax if dependency metadata is still needed.
-  - remove cycle checks and handler-clause rules that exist only for the old effect-member-`can` design.
-- Phase 3: diagnostics and examples
-  - report unhandled-effect errors in terms of the enclosing function/call site, with concrete effect names.
-  - update examples and stdlib annotations to reflect handled-vs-unhandled distinction.
-  - add a regression example covering:
+- Design intent:
+  - keep one effect-accounting model only: each expression contributes a residual set of unhandled effects.
+  - `with` removes handled effects from that residual set.
+  - direct effect operation calls add their effect to that residual set.
+  - calls to functions annotated with `can ...` add those effects at the call site unless discharged there.
+  - handler clause heads should resolve in the operation namespace first:
+    - unique bare operation names are accepted,
+    - ambiguous bare names are rejected,
+    - qualified `Effect.operation` is the explicit escape hatch.
+
+Execution checklist:
+
+- [ ] Step 1: delete the old effect-member dependency model
+  - remove parser/AST/typechecker/runtime assumptions that effect members declare dependency effects.
+  - remove dependency-cycle validation and any `op_required_effects`-style bookkeeping.
+  - update docs/tests that still describe member-level effect dependencies.
+- [ ] Step 2: define one residual-effect checker for expressions
+  - implement effect accounting around a single question: which effects escape this expression?
+  - effect op call: add the owning effect unless an enclosing `with` discharges it.
+  - function call: add the callee's `can` effects unless an enclosing `with` discharges them.
+  - function body validation: residual set must equal the declared `can` set, or be empty when `can` is omitted.
+- [ ] Step 3: simplify `with` clause name resolution
+  - resolve clause heads in the effect-operation namespace, not through ordinary lexical value lookup.
+  - accept bare clause names only when they identify exactly one visible operation.
+  - require qualified `Effect.operation` when bare clause resolution is ambiguous.
+- [ ] Step 4: align diagnostics with the new model
+  - report errors in terms of unhandled effects escaping a function body or call site.
+  - make ambiguity diagnostics point users from bare clause names to `Effect.operation`.
+  - remove old wording that implies handler-member dependency propagation.
+- [ ] Step 5: update examples and stdlib surface
+  - remove unnecessary `can` from locally handled stdlib/example functions.
+  - add examples for:
     - locally handled iterator usage without `can Iterator`,
-    - unhandled operation call that requires `can Message`,
-    - call-site propagation through intermediate functions.
-    - ambiguous inline handler clause name rejected until rewritten as `EffectName.operation`.
-- Phase 4: verification
-  - add parser/typechecker tests for missing `can`, unnecessary `can`, and `with` discharging behavior.
-  - add tests for inline handler clause name resolution:
-    - unique bare-name clause accepted,
-    - ambiguous bare-name clause rejected,
-    - qualified clause accepted.
-  - run at least `cargo check`, focused effect-system tests, and `cargo test`.
+    - directly unhandled operation requiring `can Message`,
+    - propagation through an intermediate function,
+    - ambiguous clause resolution requiring `Effect.operation`.
+- [ ] Step 6: verify in small gates
+  - add focused parser/typechecker tests for missing `can`, extra `can`, and `with` discharge behavior.
+  - add focused tests for unique bare clause names, ambiguous bare clause rejection, and qualified clause acceptance.
+  - run `cargo check`, focused effect-system tests, and `cargo test`.
 
 Locked design follow-up:
 
