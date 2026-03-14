@@ -116,6 +116,9 @@ This file is a restart-safe snapshot for resuming work after context reset.
   - the intentionally narrow remaining bridge subset
     (`read` + newline `split` + transformed `each` callback family),
   - `Unsupported` for other runtime-read shapes with no current dynamic lowering.
+- `goby-core` now resolves workspace-root-relative `examples/` and `stdlib/`
+  paths through a shared helper instead of assuming a fixed checkout path,
+  which restores full `cargo test` stability after repo relocation.
 - The newline-splitting runtime-I/O planner/back-end path now models the callback output
   mode directly, so `each lines print` and `each lines println` both compile to dynamic
   Wasm, including the named-function callback spelling in addition to the direct lambda form.
@@ -165,7 +168,6 @@ This file is a restart-safe snapshot for resuming work after context reset.
 - `cargo check`
 - `cargo test -p goby-wasm`
 - `cargo test`
-  - currently fails in existing `goby-core` example/stdlib path-dependent tests unrelated to this slice.
 
 ## Next Work
 

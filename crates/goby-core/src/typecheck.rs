@@ -77,6 +77,7 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use crate::parse_module;
+    use crate::parser_test_support::read_example;
     use crate::stdlib::StdlibResolver;
 
     use super::*;
@@ -110,56 +111,16 @@ mod tests {
 
     #[test]
     fn typechecks_examples() {
-        let hello = std::fs::read_to_string(format!(
-            "{}/../../examples/hello.gb",
-            env!("CARGO_MANIFEST_DIR")
-        ))
-        .expect("hello example should exist");
-        let basic = std::fs::read_to_string(format!(
-            "{}/../../examples/basic_types.gb",
-            env!("CARGO_MANIFEST_DIR")
-        ))
-        .expect("basic_types example should exist");
-        let generic_types = std::fs::read_to_string(format!(
-            "{}/../../examples/generic_types.gb",
-            env!("CARGO_MANIFEST_DIR")
-        ))
-        .expect("generic_types example should exist");
-        let import_example = std::fs::read_to_string(format!(
-            "{}/../../examples/import.gb",
-            env!("CARGO_MANIFEST_DIR")
-        ))
-        .expect("import example should exist");
-        let control_flow = std::fs::read_to_string(format!(
-            "{}/../../examples/control_flow.gb",
-            env!("CARGO_MANIFEST_DIR")
-        ))
-        .expect("control_flow example should exist");
-        let type_example = std::fs::read_to_string(format!(
-            "{}/../../examples/type.gb",
-            env!("CARGO_MANIFEST_DIR")
-        ))
-        .expect("type example should exist");
-        let effect_example = std::fs::read_to_string(format!(
-            "{}/../../examples/effect.gb",
-            env!("CARGO_MANIFEST_DIR")
-        ))
-        .expect("effect example should exist");
-        let iterator_example = std::fs::read_to_string(format!(
-            "{}/../../examples/iterator.gb",
-            env!("CARGO_MANIFEST_DIR")
-        ))
-        .expect("iterator example should exist");
-        let iterator_unified_example = std::fs::read_to_string(format!(
-            "{}/../../examples/iterator_unified.gb",
-            env!("CARGO_MANIFEST_DIR")
-        ))
-        .expect("iterator_unified example should exist");
-        let list_case_example = std::fs::read_to_string(format!(
-            "{}/../../examples/list_case.gb",
-            env!("CARGO_MANIFEST_DIR")
-        ))
-        .expect("list_case example should exist");
+        let hello = read_example("hello.gb");
+        let basic = read_example("basic_types.gb");
+        let generic_types = read_example("generic_types.gb");
+        let import_example = read_example("import.gb");
+        let control_flow = read_example("control_flow.gb");
+        let type_example = read_example("type.gb");
+        let effect_example = read_example("effect.gb");
+        let iterator_example = read_example("iterator.gb");
+        let iterator_unified_example = read_example("iterator_unified.gb");
+        let list_case_example = read_example("list_case.gb");
 
         let hello_module = parse_module(&hello).expect("hello should parse");
         let basic_module = parse_module(&basic).expect("basic_types should parse");
@@ -1366,11 +1327,7 @@ f x =
 
     #[test]
     fn typechecks_function_example() {
-        let source = std::fs::read_to_string(format!(
-            "{}/../../examples/function.gb",
-            env!("CARGO_MANIFEST_DIR")
-        ))
-        .expect("function example should exist");
+        let source = read_example("function.gb");
         let module = parse_module(&source).expect("function.gb should parse");
         typecheck_module(&module).expect("function.gb should typecheck");
     }
@@ -1393,11 +1350,7 @@ apply_all xs = map xs plus_ten
 
     #[test]
     fn typechecks_import_example() {
-        let source = std::fs::read_to_string(format!(
-            "{}/../../examples/import.gb",
-            env!("CARGO_MANIFEST_DIR")
-        ))
-        .expect("import example should exist");
+        let source = read_example("import.gb");
         let module = parse_module(&source).expect("import.gb should parse");
         typecheck_module(&module).expect("import.gb should typecheck");
     }

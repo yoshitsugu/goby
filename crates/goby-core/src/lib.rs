@@ -12,6 +12,7 @@ mod parser_stmt;
 mod parser_test_support;
 mod parser_top;
 mod parser_util;
+mod path_util;
 pub mod stdlib;
 pub mod str_util;
 pub mod typecheck;

@@ -185,9 +185,7 @@ pub(crate) fn validate_intrinsic_namespace_policy(
 }
 
 pub(crate) fn default_stdlib_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../..")
-        .join("stdlib")
+    crate::path_util::workspace_root().join("stdlib")
 }
 
 pub(crate) fn collect_imported_embedded_defaults(
