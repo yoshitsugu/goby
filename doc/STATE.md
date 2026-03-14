@@ -4,13 +4,25 @@ Last updated: 2026-03-14
 
 ## Current Focus
 
-- Active track: Track F — **Phase F5 complete**
-- Track F is now closed; all acceptance criteria met
-- `cargo test` is green
+- Next planning target: Track D — Developer Tooling Foundation
+- Track F is closed; runtime-I/O containment and DynamicWasiIo follow-through are complete
+- `cargo test` was green at Track F close
+
+## Locked Decisions Carried Forward
+
+- Runtime-I/O ownership stays split as:
+  - `runtime_io_plan.rs` for classification/planning
+  - `backend.rs` for dynamic WASI stdin/stdout lowering helpers
+  - CLI as path selector only
+- `goby run` must follow planner classification, not codegen error text
+- No planner-bypassing runtime-I/O branching in `crates/goby-wasm/src/lib.rs`
+- `InterpreterBridge` remains only as a temporary extension point; current reachable surface is empty
+- `fetch_env_var` still reads the compiler-process environment at compile time for direct-style and effect-boundary programs.
+  Open policy question remains tracked by `TODO(F-sweep)` in `lower.rs`.
 
 ## Current Runtime-I/O Boundary
 
-Dynamic (DynamicWasiIo):
+Dynamic (`DynamicWasiIo`):
 
 - echo shapes for `read()` / `read_line()`
 - local alias / forwarded alias echo variants
@@ -18,15 +30,8 @@ Dynamic (DynamicWasiIo):
 - `read` + `split(text, "\n")` + `each` when the callback is output-passthrough
 - callback alias / delimiter alias chain variants of that split family
 - trailing static print suffixes after `each`
-- **transformed split-callback family**: `|line| -> println "${line}!"` with static
-  prefix/suffix decorations (promoted from InterpreterBridge)
-
-InterpreterBridge:
-
-- **effectively empty**: the transformed split-callback family was the only
-  bridge-only shape and has been promoted to DynamicWasiIo.
-- The bridge path remains in the code but currently has no program shapes that
-  route through it.
+- transformed split-callback family: `|line| -> println "${line}!"` with static
+  prefix/suffix decorations
 
 Unsupported:
 
@@ -41,42 +46,12 @@ NotRuntimeIo:
 - complex static-output programs with bindings still fall through to fallback resolution
   instead of `StaticOutput` collapse
 
-## Important Current Facts
-
-- `runtime_io_plan.rs` owns runtime-I/O classification.
-- `backend.rs` owns dynamic WASI stdin/stdout lowering helpers.
-- `compile_module` does not consume compiler-process stdin for `Read` programs.
-- `execute_module_with_stdin` is temporary and only valid for `InterpreterBridge`
-  (currently no programs route through it).
-- `InterpreterBridge` detection has been removed from `classify_runtime_io`;
-  the variant and CLI fallback arm are retained as extension points only.
-- `goby run` follows planner classification, not codegen error text.
-- stdlib `goby/string.graphemes` is implemented.
-- `fetch_env_var` reads the **compiler-process** environment at compile time for
-  direct-style and effect-boundary programs (both paths bake the value into emitted
-  output before Wasm is finalized).  See `TODO(F-sweep)` in `lower.rs` for the
-  open question on whether this should be a documented user guarantee or restricted.
-
-## Phase F5 Completed Work
-
-1. Removed dead bridge detection code (`belongs_on_interpreter_bridge` and related
-   functions) from `runtime_io_plan.rs`; `InterpreterBridge` variant retained as
-   extension point with NOTE comments in CLI and `execute_module_with_stdin`.
-2. Added execution runtime requirements to `LANGUAGE_SPEC.md` section 7: WASI Preview 1
-   requirement, stdin not available at compile time, Print-only vs Read program behavior.
-3. Strengthened doc comments in `classify_runtime_io`: safety contract, Print is
-   compile-time-safe, Read is runtime-host-dependent, WASI Preview 1 minimum runtime.
-4. Compile-time host-observation sweep: `Read` guarded by `allow_live_stdin=false`;
-   `fetch_env_var` reads compiler-process env at compile time (see `TODO(F-sweep)` in
-   `lower.rs` for open policy question).
-5. Updated `examples/read.gb` with a comment explaining current runability status.
-
 ## Next Slice
 
-Track F is complete. Next active track: Track D (Developer Tooling Foundation) or
-Track E (`Float` / Wasm `f64` support).
+Track D plan entry is the next default starting point.
 
-Constraints carried forward:
+Immediate planning goals:
 
-- do not add planner-bypassing runtime-I/O branching in `crates/goby-wasm/src/lib.rs`
-- prefer extending `RuntimeIoPlan` / backend ownership rather than adding one-off matcher hacks
+1. Pick the first Track D slice with a narrow acceptance target.
+2. Define the minimum test/tooling gate for that slice before code changes.
+3. Keep Track E (`Float` / Wasm `f64`) as the next alternative only if tooling work is deferred.
