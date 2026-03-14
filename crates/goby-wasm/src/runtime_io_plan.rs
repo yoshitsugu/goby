@@ -90,13 +90,13 @@ impl RuntimeIoPlan {
                         append_newline,
                         &suffix_prints,
                     ),
-                    Some(_) => {
-                        // TODO(F3b): transformed split-lines lowering not yet implemented
-                        Err(CodegenError {
-                            message: "transformed split-lines lowering is not yet implemented"
-                                .to_string(),
-                        })
-                    }
+                    Some((prefix, suffix)) => builder
+                        .emit_read_split_lines_each_transform_module(
+                            &prefix,
+                            &suffix,
+                            append_newline,
+                            &suffix_prints,
+                        ),
                 }
             }
         }
