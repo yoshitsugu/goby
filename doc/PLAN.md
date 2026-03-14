@@ -694,19 +694,13 @@ Remaining:
   - integration tests added: `execute_module_with_stdin` rejects `StaticOutput` and `NotRuntimeIo` programs.
   - `Unsupported` assignment in `classify_runtime_io` deferred to F3b (interpreter bridge currently
     handles all Read programs; boundary assignment requires F3b expansion work).
-- [ ] Phase F3a: Temporary coverage bridge on top of the planning layer
-  - re-express the current exact-shape dynamic Wasm support through the new
-    `RuntimeIoPlan` layer instead of direct AST-shape conditionals in
-    `crates/goby-wasm/src/lib.rs`.
-  - move runtime-I/O planning ownership into a dedicated internal module rather than
-    leaving the decision logic in the top-level orchestration entrypoint.
-  - only extend supported forms that map cleanly into that plan representation.
-  - explicit stopping rule:
-    - once `RuntimeIoPlan` exists, do not add new planner-bypassing AST-pattern cases;
-      any new supported form must be expressed by extending the plan and lowering from it.
-  - exit condition:
-    - remove the old direct matcher path after the existing supported dynamic-Wasm cases
-      are routed through `RuntimeIoPlan`.
+- [x] Phase F3a: Temporary coverage bridge on top of the planning layer
+  - all runtime-I/O AST-pattern matching was moved to `runtime_io_plan.rs` in prior commits;
+    `compile_module` in `lib.rs` contains no direct AST-shape conditionals.
+  - stopping rule documented in `classify_runtime_io` doc comment: new shapes must extend
+    `RuntimeIoPlan` / `plan_runtime_io`, not add inline conditionals in call sites.
+  - exit condition met: `DynamicWasiIo` shapes are routed through `RuntimeIoPlan::emit_wasm`;
+    round-trip classification + Wasm tests added covering all four Echo combinations and SplitLinesEach.
 - [ ] Phase F3b: General lowering expansion
   - extend `RuntimeIoPlan` so it can represent more runtime-I/O programs without
     planner-bypassing matcher growth.

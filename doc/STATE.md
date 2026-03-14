@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-14 (F2c complete)
+Last updated: 2026-03-14 (F3a complete)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -132,6 +132,10 @@ This file is a restart-safe snapshot for resuming work after context reset.
   integration tests. `execute_module_with_stdin` is doc-commented as "temporary bridge,
   CLI-only, marked for shrinkage". `classify_runtime_io` now has explicit variant boundary
   documentation. `Unsupported` assignment in `classify_runtime_io` deferred to F3b.
+- Track F Phase F3a is complete: the exit condition was already met by prior commits
+  (no direct AST-shape conditionals in `lib.rs`). Stopping rule documented in
+  `classify_runtime_io` doc comment. Five `DynamicWasiIo` round-trip tests added
+  (classification + valid Wasm) covering all four Echo combinations and `SplitLinesEach`.
 
 ## Verified
 
@@ -141,11 +145,10 @@ This file is a restart-safe snapshot for resuming work after context reset.
 
 ## Next Work
 
-- Phase F3a: Temporary coverage bridge on top of the planning layer
-  re-express the current exact-shape dynamic Wasm support through `RuntimeIoPlan`
-  instead of direct AST-shape conditionals in `crates/goby-wasm/src/lib.rs`;
-  remove the old direct matcher path after existing dynamic-Wasm cases are routed
-  through `RuntimeIoPlan`.
+- Phase F3b: General lowering expansion
+  extend `RuntimeIoPlan` so it can represent more runtime-I/O programs without
+  planner-bypassing matcher growth; assign `Unsupported` in `classify_runtime_io`
+  for programs that neither match a `DynamicWasiIo` plan nor belong on the interpreter bridge.
 - Continue Track F by expanding `RuntimeIoPlan` expressiveness, not by adding new
   planner-bypassing runtime-I/O branches in `crates/goby-wasm/src/lib.rs`.
 - Keep Track D queued after the runtime I/O containment/runtime split work is in a stable state.
