@@ -736,6 +736,11 @@ Remaining:
 - [ ] Track explicit shrinkage of temporary modes
   - add milestone checks showing that `InterpreterBridge` coverage is shrinking as
     `DynamicWasiIo` support grows.
+  - current milestone lock:
+    - direct echo, passthrough split-callback, output-alias, delimiter-alias, and
+      static-suffix shapes are already `DynamicWasiIo`.
+    - the canonical remaining bridge-only family is the transformed split callback
+      shape such as `|line| -> println "${line}!"`.
   - keep at least one test fixture intentionally on the bridge until a matching Wasm
     lowering exists, then move it across rather than leaving both paths in place.
 - [ ] Preserve and document the execution contract that effect-boundary programs using
