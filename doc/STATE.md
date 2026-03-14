@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-13
+Last updated: 2026-03-14
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -120,11 +120,13 @@ This file is a restart-safe snapshot for resuming work after context reset.
   `print` / `println` suffixes after the `each` step, so sample-shaped programs like
   `...; each lines println; println "test"; print "done"` no longer have to stay on
   the interpreter bridge just because they append fixed output afterward.
-- Track F Phase F2b is now mostly implemented in practice:
-  runtime-I/O classification, CLI routing, and dynamic-Wasm selection are planner-driven,
-  but the checklist is not fully closable yet because `StaticOutput` and `Unsupported`
-  are still not first-class planner outcomes. Compile-time static-output collapse remains
-  partly outside `RuntimeIoPlan` rather than being unified under the same planning boundary.
+- Track F Phase F2b is now complete:
+  `StaticOutput(String)` and `Unsupported` are now first-class `RuntimeIoClassification`
+  and `RuntimeIoExecutionKind` variants. `plan_static_output` detects programs whose every
+  statement is a `print`/`println` call with a string-literal argument and routes them
+  through `compile_module_wasm_or_error` directly. The fallback `resolve_main_runtime_output_for_compile`
+  is retained for more complex static-output programs (variable args, arithmetic, etc.)
+  that require interpreter evaluation. `Unsupported` is a placeholder variant for F2c.
 
 ## Verified
 
@@ -134,15 +136,12 @@ This file is a restart-safe snapshot for resuming work after context reset.
 
 ## Next Work
 
-- Continue Track F toward dynamic Wasm/WASI stdin support:
-  extend the new `fd_read`/`fd_write` backend work beyond the simple echo shape so
-  more `Read` programs stop depending on the interpreter-backed runtime execution path.
-- Likely next backend slice:
-  widen the new structured stdin shape support beyond the exact `split(..., "\n")`
-  + `each println` pattern so nearby variants do not immediately fall back to the
-  interpreter runtime.
-- Decide whether the new runtime execution path should become an explicit internal API
-  boundary before dynamic Wasm support lands, or remain a temporary CLI-only bridge.
+- Phase F2c: Runtime bridge boundary decision
+  decide whether the temporary interpreter bridge remains CLI-only or is exposed as
+  a narrow internal `goby-wasm` API while still being marked for shrinkage; define
+  the precise boundary between `InterpreterBridge` and the newly added `Unsupported`
+  variant so `classify_runtime_io` can assign `Unsupported` to genuinely unsupported
+  Read programs.
 - Continue Track F by expanding `RuntimeIoPlan` expressiveness, not by adding new
   planner-bypassing runtime-I/O branches in `crates/goby-wasm/src/lib.rs`.
 - Keep Track D queued after the runtime I/O containment/runtime split work is in a stable state.
