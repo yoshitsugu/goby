@@ -735,6 +735,92 @@ main =
 }
 
 #[test]
+fn runtime_io_milestone_bridge_surface_is_narrow_and_explicit() {
+    let cases = [
+        (
+            "dynamic_echo",
+            r#"
+main : Unit -> Unit can Print, Read
+main =
+  print (read())
+"#,
+            crate::RuntimeIoExecutionKind::DynamicWasiIo,
+        ),
+        (
+            "dynamic_echo_alias",
+            r#"
+main : Unit -> Unit can Print, Read
+main =
+  text = read()
+  printer = print
+  printer text
+"#,
+            crate::RuntimeIoExecutionKind::DynamicWasiIo,
+        ),
+        (
+            "dynamic_split_passthrough",
+            r#"
+import goby/list ( each )
+import goby/string ( split )
+
+main : Unit -> Unit can Print, Read
+main =
+  text = read()
+  lines = split(text, "\n")
+  each lines (|line| -> println "${line}")
+"#,
+            crate::RuntimeIoExecutionKind::DynamicWasiIo,
+        ),
+        (
+            "bridge_transformed_split_callback",
+            r#"
+import goby/list ( each )
+import goby/string ( split )
+
+main : Unit -> Unit can Print, Read
+main =
+  text = read()
+  lines = split(text, "\n")
+  each lines (|line| -> println "${line}!")
+"#,
+            crate::RuntimeIoExecutionKind::InterpreterBridge,
+        ),
+        (
+            "unsupported_read_transform",
+            r#"
+main : Unit -> Unit can Print, Read
+main =
+  text = read()
+  decorated = "${text}!"
+  print decorated
+"#,
+            crate::RuntimeIoExecutionKind::Unsupported,
+        ),
+        (
+            "unsupported_mixed_read_line_then_read",
+            r#"
+main : Unit -> Unit can Print, Read
+main =
+  first = read_line()
+  rest = read()
+  print "${first}|${rest}"
+"#,
+            crate::RuntimeIoExecutionKind::Unsupported,
+        ),
+    ];
+
+    for (name, source, expected) in cases {
+        let module = parse_module(source).expect("source should parse");
+        assert_eq!(
+            runtime_io_execution_kind(&module).expect("classification should succeed"),
+            expected,
+            "unexpected runtime I/O execution kind for {}",
+            name
+        );
+    }
+}
+
+#[test]
 fn compile_module_routes_split_lines_each_through_dynamic_wasi_io_classification() {
     let source = r#"
 import goby/list ( each )
