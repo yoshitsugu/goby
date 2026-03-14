@@ -40,14 +40,18 @@ pub(crate) enum RuntimeIoPlan {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum RuntimeIoClassification {
     DynamicWasiIo(RuntimeIoPlan),
+    StaticOutput(String),
     InterpreterBridge,
+    Unsupported,
     NotRuntimeIo,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RuntimeIoExecutionKind {
     DynamicWasiIo,
+    StaticOutput,
     InterpreterBridge,
+    Unsupported,
     NotRuntimeIo,
 }
 
@@ -84,11 +88,18 @@ impl RuntimeIoClassification {
     pub(crate) fn compile_module_wasm_or_error(self) -> Result<Option<Vec<u8>>, CodegenError> {
         match self {
             RuntimeIoClassification::DynamicWasiIo(plan) => plan.emit_wasm().map(Some),
+            RuntimeIoClassification::StaticOutput(text) => {
+                crate::print_codegen::compile_print_module(&text).map(Some)
+            }
             RuntimeIoClassification::InterpreterBridge => Err(CodegenError {
                 message:
                     "compile-time fallback cannot consume stdin; use the runtime stdin execution path"
                         .to_string(),
             }),
+            // TODO(F2c): return a user-facing error here once classify_runtime_io
+            // assigns Unsupported to genuinely unsupported programs, so callers get a
+            // clear diagnostic instead of falling through to resolve_main_runtime_output_for_compile.
+            RuntimeIoClassification::Unsupported => Ok(None),
             RuntimeIoClassification::NotRuntimeIo => Ok(None),
         }
     }
@@ -100,6 +111,17 @@ impl RuntimeIoClassification {
                 message:
                     "runtime stdin execution path is only for interpreter-bridge programs; compile this program to Wasm instead"
                         .to_string(),
+            }),
+            RuntimeIoClassification::StaticOutput(_) => Err(CodegenError {
+                message:
+                    "runtime stdin execution path is only for interpreter-bridge programs; this program has static output and should be compiled to Wasm instead"
+                        .to_string(),
+            }),
+            // TODO(F2c): once Unsupported is assigned by classify_runtime_io, give a
+            // distinct message so callers can distinguish it from NotRuntimeIo.
+            RuntimeIoClassification::Unsupported => Err(CodegenError {
+                message: "runtime stdin execution path is only for interpreter-bridge programs"
+                    .to_string(),
             }),
             RuntimeIoClassification::NotRuntimeIo => Err(CodegenError {
                 message: "runtime stdin execution path is only for interpreter-bridge programs"
@@ -122,7 +144,46 @@ pub(crate) fn classify_runtime_io(
     if stmts.iter().any(stmt_contains_runtime_read) {
         return RuntimeIoClassification::InterpreterBridge;
     }
+    if let Some(text) = plan_static_output(stmts) {
+        return RuntimeIoClassification::StaticOutput(text);
+    }
     RuntimeIoClassification::NotRuntimeIo
+}
+
+/// Detect programs where every statement is a direct `print`/`println` call with a
+/// string-literal argument.  Returns the concatenated output string (with newlines
+/// appended for `println` calls).  Returns `None` if the body contains anything that
+/// cannot be determined purely by AST shape.
+///
+/// Scope: intentionally limited to `StringLit` arguments only.  Programs that call
+/// `print` with non-literal arguments (variables, integer literals, arithmetic, etc.)
+/// return `None` and fall through to `resolve_main_runtime_output_for_compile` for
+/// interpreter-based static evaluation.
+fn plan_static_output(stmts: &[Stmt]) -> Option<String> {
+    if stmts.is_empty() {
+        return None;
+    }
+    let mut output = String::new();
+    for stmt in stmts {
+        let Stmt::Expr(Expr::Call { callee, arg }) = stmt else {
+            return None;
+        };
+        let Expr::Var(name) = callee.as_ref() else {
+            return None;
+        };
+        let Expr::StringLit(text) = arg.as_ref() else {
+            return None;
+        };
+        match name.as_str() {
+            "print" => output.push_str(text),
+            "println" => {
+                output.push_str(text);
+                output.push('\n');
+            }
+            _ => return None,
+        }
+    }
+    Some(output)
 }
 
 pub(crate) fn classify_runtime_io_main(
@@ -141,7 +202,9 @@ pub(crate) fn classify_runtime_io_main(
 pub fn runtime_io_execution_kind(module: &Module) -> Result<RuntimeIoExecutionKind, CodegenError> {
     Ok(match classify_runtime_io_main(module)? {
         RuntimeIoClassification::DynamicWasiIo(_) => RuntimeIoExecutionKind::DynamicWasiIo,
+        RuntimeIoClassification::StaticOutput(_) => RuntimeIoExecutionKind::StaticOutput,
         RuntimeIoClassification::InterpreterBridge => RuntimeIoExecutionKind::InterpreterBridge,
+        RuntimeIoClassification::Unsupported => RuntimeIoExecutionKind::Unsupported,
         RuntimeIoClassification::NotRuntimeIo => RuntimeIoExecutionKind::NotRuntimeIo,
     })
 }
@@ -1004,7 +1067,23 @@ main =
     }
 
     #[test]
-    fn non_read_program_is_not_runtime_io() {
+    fn non_read_program_with_var_arg_is_not_runtime_io() {
+        let (module, body) = main_stmts(
+            r#"
+main : Unit -> Unit can Print
+main =
+  msg = "hello"
+  println msg
+"#,
+        );
+        assert_eq!(
+            classify_runtime_io(&module, body.as_deref()),
+            RuntimeIoClassification::NotRuntimeIo
+        );
+    }
+
+    #[test]
+    fn pure_print_literal_is_static_output() {
         let (module, body) = main_stmts(
             r#"
 main : Unit -> Unit can Print
@@ -1014,7 +1093,83 @@ main =
         );
         assert_eq!(
             classify_runtime_io(&module, body.as_deref()),
+            RuntimeIoClassification::StaticOutput("hello\n".to_string())
+        );
+    }
+
+    #[test]
+    fn multiple_print_literals_are_static_output() {
+        let (module, body) = main_stmts(
+            r#"
+main : Unit -> Unit can Print
+main =
+  print "a"
+  println "b"
+  print "c"
+"#,
+        );
+        assert_eq!(
+            classify_runtime_io(&module, body.as_deref()),
+            RuntimeIoClassification::StaticOutput("ab\nc".to_string())
+        );
+    }
+
+    #[test]
+    fn print_with_var_arg_is_not_static_output() {
+        let (module, body) = main_stmts(
+            r#"
+main : Unit -> Unit can Print
+main =
+  n = 42
+  print n
+"#,
+        );
+        // var arg is not a string literal, so not StaticOutput
+        assert_eq!(
+            classify_runtime_io(&module, body.as_deref()),
             RuntimeIoClassification::NotRuntimeIo
         );
+    }
+
+    #[test]
+    fn empty_string_print_is_static_output() {
+        let (module, body) = main_stmts(
+            r#"
+main : Unit -> Unit can Print
+main =
+  print ""
+"#,
+        );
+        assert_eq!(
+            classify_runtime_io(&module, body.as_deref()),
+            RuntimeIoClassification::StaticOutput("".to_string())
+        );
+    }
+
+    #[test]
+    fn empty_string_println_is_static_output_with_newline() {
+        let (module, body) = main_stmts(
+            r#"
+main : Unit -> Unit can Print
+main =
+  println ""
+"#,
+        );
+        assert_eq!(
+            classify_runtime_io(&module, body.as_deref()),
+            RuntimeIoClassification::StaticOutput("\n".to_string())
+        );
+    }
+
+    #[test]
+    fn unsupported_classification_does_not_produce_wasm() {
+        let result = RuntimeIoClassification::Unsupported.compile_module_wasm_or_error();
+        assert_eq!(result, Ok(None));
+    }
+
+    #[test]
+    fn unsupported_classification_rejects_interpreter_bridge_stdin() {
+        let result = RuntimeIoClassification::Unsupported.require_interpreter_bridge_stdin();
+        assert!(result.is_err());
     }
 }

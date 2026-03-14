@@ -569,3 +569,38 @@ fn native_fallback_path_matrix_for_examples() {
         assert_valid_wasm_module(&wasm);
     }
 }
+
+#[test]
+fn compile_module_routes_print_literal_through_static_output_classification() {
+    let source = r#"
+main : Unit -> Unit can Print
+main =
+  println "hello"
+"#;
+    let module = parse_module(source).expect("source should parse");
+    // verify it is classified as StaticOutput
+    assert_eq!(
+        runtime_io_execution_kind(&module).expect("classification should succeed"),
+        crate::RuntimeIoExecutionKind::StaticOutput,
+    );
+    // verify it still produces valid Wasm
+    let wasm = compile_module(&module).expect("codegen should succeed");
+    assert_valid_wasm_module(&wasm);
+}
+
+#[test]
+fn compile_module_routes_multiple_print_literals_through_static_output() {
+    let source = r#"
+main : Unit -> Unit can Print
+main =
+  print "a"
+  println "b"
+"#;
+    let module = parse_module(source).expect("source should parse");
+    assert_eq!(
+        runtime_io_execution_kind(&module).expect("classification should succeed"),
+        crate::RuntimeIoExecutionKind::StaticOutput,
+    );
+    let wasm = compile_module(&module).expect("codegen should succeed");
+    assert_valid_wasm_module(&wasm);
+}
