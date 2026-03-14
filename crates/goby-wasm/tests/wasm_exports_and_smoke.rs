@@ -586,6 +586,28 @@ main =
 }
 
 #[test]
+fn execute_module_with_stdin_bridge_shape_handles_empty_stdin() {
+    let module = parse_module(
+        r#"
+import goby/list ( each )
+import goby/string ( split )
+
+main : Unit -> Unit can Print, Read
+main =
+  text = read()
+  delim = "\n"
+  lines = split(text, delim)
+  each lines (|line| -> println "${line}!")
+  print "done"
+"#,
+    )
+    .expect("parse should work");
+    let output = execute_module_with_stdin(&module, Some(String::new()))
+        .expect("runtime execution should succeed");
+    assert_eq!(output.as_deref(), Some("done"));
+}
+
+#[test]
 fn runtime_io_execution_kind_reports_interpreter_bridge_for_complex_read_program() {
     let module = parse_module(
         r#"

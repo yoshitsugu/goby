@@ -282,6 +282,75 @@ mod tests {
     }
 
     #[test]
+    fn embedded_effect_runtime_read_returns_empty_after_exhaustion() {
+        let mut runtime = EmbeddedEffectRuntime::new(Some("abc".to_string()), true);
+
+        let first = runtime
+            .invoke(
+                EmbeddedRuntimeHandlerKind::Stdin,
+                "read",
+                crate::RuntimeValue::Unit,
+            )
+            .expect("stdin read should succeed");
+        let second = runtime
+            .invoke(
+                EmbeddedRuntimeHandlerKind::Stdin,
+                "read",
+                crate::RuntimeValue::Unit,
+            )
+            .expect("stdin read should succeed");
+
+        assert!(matches!(
+            first,
+            Some(crate::RuntimeValue::String(text)) if text == "abc"
+        ));
+        assert!(matches!(
+            second,
+            Some(crate::RuntimeValue::String(text)) if text.is_empty()
+        ));
+    }
+
+    #[test]
+    fn embedded_effect_runtime_mixes_read_line_then_read_remaining() {
+        let mut runtime = EmbeddedEffectRuntime::new(Some("a\nb\nc".to_string()), true);
+
+        let first = runtime
+            .invoke(
+                EmbeddedRuntimeHandlerKind::Stdin,
+                "read_line",
+                crate::RuntimeValue::Unit,
+            )
+            .expect("stdin read_line should succeed");
+        let second = runtime
+            .invoke(
+                EmbeddedRuntimeHandlerKind::Stdin,
+                "read",
+                crate::RuntimeValue::Unit,
+            )
+            .expect("stdin read should succeed");
+        let third = runtime
+            .invoke(
+                EmbeddedRuntimeHandlerKind::Stdin,
+                "read_line",
+                crate::RuntimeValue::Unit,
+            )
+            .expect("stdin read_line after exhaustion should succeed");
+
+        assert!(matches!(
+            first,
+            Some(crate::RuntimeValue::String(text)) if text == "a"
+        ));
+        assert!(matches!(
+            second,
+            Some(crate::RuntimeValue::String(text)) if text == "b\nc"
+        ));
+        assert!(matches!(
+            third,
+            Some(crate::RuntimeValue::String(text)) if text.is_empty()
+        ));
+    }
+
+    #[test]
     fn embedded_effect_runtime_rejects_live_stdin_when_disallowed() {
         let mut runtime = EmbeddedEffectRuntime::new(None, false);
 

@@ -420,6 +420,60 @@ main =
 }
 
 #[test]
+fn run_command_executes_bridge_read_program_with_empty_runtime_stdin() {
+    let root = repo_root();
+    let sandbox = TempDirGuard::new("run_read_runtime_stdin_empty");
+    let input = sandbox.join("read_empty.gb");
+    fs::write(
+        &input,
+        r#"
+import goby/list ( each )
+import goby/string ( split )
+
+main : Unit -> Unit can Print, Read
+main =
+  text = read()
+  delim = "\n"
+  lines = split(text, delim)
+  each lines (|line| -> println "${line}!")
+  print "done"
+"#,
+    )
+    .expect("temporary input should be writable");
+
+    let mut child = command_for_goby_cli()
+        .arg("run")
+        .arg(&input)
+        .current_dir(&root)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("cli should execute");
+    drop(child.stdin.take());
+    let output = child
+        .wait_with_output()
+        .expect("cli output should be readable");
+
+    assert!(
+        output.status.success(),
+        "expected runtime stdin-backed execution to succeed, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("done"),
+        "expected empty-stdin bridge output suffix, stdout: {}",
+        stdout
+    );
+    assert!(
+        !stdout.contains("!\n"),
+        "empty stdin should not emit transformed line output, stdout: {}",
+        stdout
+    );
+}
+
+#[test]
 fn check_command_rejects_legacy_syntax_by_default() {
     let root = repo_root();
     let sandbox = TempDirGuard::new("check_legacy_warnings");

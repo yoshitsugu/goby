@@ -12,6 +12,10 @@ This file is a restart-safe snapshot for resuming work after context reset.
 - Stdlib `goby/string` now exports `graphemes : String -> List String`,
   implemented by reusing the existing grapheme intrinsic path instead of adding a
   separate runtime builtin.
+- Track F Phase F4 deterministic coverage has started:
+  runtime/env tests now pin `read` exhaustion and mixed `read_line` + `read`
+  semantics, and runtime-output/bridge tests pin seeded-stdin behavior including
+  EOF handling on repeated reads.
 - Higher-order named function references are now documented explicitly
   (for example: `map xs add_ten`).
 - Track F Phase F1 containment is now implemented:

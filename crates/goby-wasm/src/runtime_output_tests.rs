@@ -3,7 +3,10 @@ use std::sync::Mutex;
 
 use goby_core::{Module, Stmt, parse_module};
 
-use crate::{assert_mode_parity, resolve_main_runtime_output};
+use crate::{
+    assert_mode_parity, lower, resolve_main_runtime_output,
+    resolve_main_runtime_output_with_mode_and_stdin,
+};
 
 static ENV_MUTEX: Mutex<()> = Mutex::new(());
 
@@ -31,6 +34,16 @@ fn main_parsed_body(module: &Module) -> Option<&[Stmt]> {
         .iter()
         .find(|decl| decl.name == "main")
         .and_then(|decl| decl.parsed_body.as_deref())
+}
+
+fn resolve_with_seeded_stdin(module: &Module, stdin: &str) -> Option<String> {
+    resolve_main_runtime_output_with_mode_and_stdin(
+        module,
+        main_body(module),
+        main_parsed_body(module),
+        lower::EffectExecutionMode::PortableFallback,
+        Some(stdin.to_string()),
+    )
 }
 
 #[test]
@@ -411,6 +424,54 @@ main =
         output,
         "[\"a\", \"👨\u{200d}👩\u{200d}👧\u{200d}👦\", \"b\"]"
     );
+}
+
+#[test]
+fn resolves_runtime_output_for_read_line_then_read_remaining() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    let source = r#"
+main : Unit -> Unit can Print, Read
+main =
+  first = read_line()
+  rest = read()
+  print "${first}|${rest}"
+"#;
+    let module = parse_module(source).expect("parse should work");
+    let output = resolve_with_seeded_stdin(&module, "alpha\nbeta\ngamma")
+        .expect("runtime output should resolve");
+    assert_eq!(output, "alpha|beta\ngamma");
+}
+
+#[test]
+fn resolves_runtime_output_for_repeated_read_after_exhaustion() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    let source = r#"
+main : Unit -> Unit can Print, Read
+main =
+  first = read()
+  second = read()
+  print "${first}|${second}"
+"#;
+    let module = parse_module(source).expect("parse should work");
+    let output =
+        resolve_with_seeded_stdin(&module, "payload").expect("runtime output should resolve");
+    assert_eq!(output, "payload|");
+}
+
+#[test]
+fn resolves_runtime_output_for_repeated_read_line_at_eof() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    let source = r#"
+main : Unit -> Unit can Print, Read
+main =
+  first = read_line()
+  second = read_line()
+  third = read_line()
+  print "${first}|${second}|${third}"
+"#;
+    let module = parse_module(source).expect("parse should work");
+    let output = resolve_with_seeded_stdin(&module, "a\nb").expect("runtime output should resolve");
+    assert_eq!(output, "a|b|");
 }
 
 #[test]
