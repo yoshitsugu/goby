@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-14 (F3c complete + string.graphemes)
+Last updated: 2026-03-14 (F4 complete + string.graphemes)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -16,6 +16,15 @@ This file is a restart-safe snapshot for resuming work after context reset.
   runtime/env tests now pin `read` exhaustion and mixed `read_line` + `read`
   semantics, and runtime-output/bridge tests pin seeded-stdin behavior including
   EOF handling on repeated reads.
+- Track F Phase F4 is now complete:
+  deterministic tests cover stdin buffering, EOF/exhaustion, bridge rejection,
+  `NotRuntimeIo` fallback versus `StaticOutput`, and the full
+  `DynamicWasiIo` / `InterpreterBridge` / `Unsupported` / `StaticOutput` /
+  `NotRuntimeIo` classification boundary.
+- CLI integration now covers both temporary bridge and dynamic-Wasm stdin flows,
+  including successful `read()` / empty-stdin bridge execution plus explicit
+  unsupported-boundary diagnostics for mixed `read_line()` then `read()` and
+  repeated `read()` exhaustion shapes.
 - Higher-order named function references are now documented explicitly
   (for example: `map xs add_ten`).
 - Track F Phase F1 containment is now implemented:
@@ -188,9 +197,8 @@ This file is a restart-safe snapshot for resuming work after context reset.
 - Continue Track F by expanding `RuntimeIoPlan` expressiveness, not by adding new
   planner-bypassing runtime-I/O branches in `crates/goby-wasm/src/lib.rs`.
 - Track explicit shrinkage of temporary bridge coverage as matching dynamic lowerings land.
-- Phase F4 deterministic tests
-  expand boundary and runtime-I/O classification coverage around the now-explicit
-  `DynamicWasiIo` / `InterpreterBridge` / `Unsupported` split.
+- Track explicit shrinkage of temporary bridge coverage as new dynamic lowerings land,
+  using the now-complete F4 tests as the regression boundary.
 - Keep Track D queued after the runtime I/O containment/runtime split work is in a stable state.
 - Once Track F runtime support lands, sync `doc/LANGUAGE_SPEC.md` and runnable stdin examples.
 

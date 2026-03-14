@@ -744,14 +744,14 @@ Remaining:
 - [ ] Keep the minimum supported runtime assumption explicit:
   initial target remains `wasmtime run` / WASI Preview 1 unless and until the backend
   runtime contract changes.
-- [ ] Phase F4 deterministic tests:
+- [x] Phase F4 deterministic tests:
   - capability/planning decisions that reject compile-time fallback for `Read`,
   - stdin buffering and line semantics for runtime `Read.read` / `Read.read_line`,
   - dynamic effect-boundary codegen selection versus static print-module collapse,
   - boundary tests proving which nearby shapes do and do not compile to dynamic Wasm,
   - planning-layer tests proving how a program is classified into `StaticOutput`,
     `DynamicWasiIo`, `InterpreterBridge`, or `Unsupported`.
-- [ ] Phase F4 CLI integration tests:
+- [x] Phase F4 CLI integration tests:
   - `echo "a\nb" | goby run ...` with `Read.read ()`,
   - mixed `read_line` then `read`,
   - empty stdin,

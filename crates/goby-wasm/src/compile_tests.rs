@@ -707,6 +707,34 @@ main =
 }
 
 #[test]
+fn compile_module_rejects_interpreter_bridge_runtime_io_shape() {
+    let source = r#"
+import goby/list ( each )
+import goby/string ( split )
+
+main : Unit -> Unit can Print, Read
+main =
+  text = read()
+  delim = "\n"
+  lines = split(text, delim)
+  each lines (|line| -> println "${line}!")
+"#;
+    let module = parse_module(source).expect("source should parse");
+    assert_eq!(
+        runtime_io_execution_kind(&module).expect("classification should succeed"),
+        crate::RuntimeIoExecutionKind::InterpreterBridge,
+        "transformed split callback should classify as InterpreterBridge"
+    );
+    let err = compile_module(&module)
+        .expect_err("interpreter bridge runtime I/O shape should not compile to Wasm directly");
+    assert!(
+        err.message.contains("runtime stdin execution path"),
+        "unexpected error message: {}",
+        err.message
+    );
+}
+
+#[test]
 fn compile_module_routes_split_lines_each_through_dynamic_wasi_io_classification() {
     let source = r#"
 import goby/list ( each )
@@ -725,6 +753,28 @@ main =
         "read + split + each println should classify as DynamicWasiIo"
     );
     let wasm = compile_module(&module).expect("codegen should succeed");
+    assert_valid_wasm_module(&wasm);
+}
+
+#[test]
+fn compile_module_routes_non_runtime_io_program_through_fallback_resolution() {
+    let source = r#"
+main : Unit -> Unit can Print
+main =
+  msg = "hello"
+  println msg
+"#;
+    let module = parse_module(source).expect("source should parse");
+    assert_eq!(
+        runtime_io_execution_kind(&module).expect("classification should succeed"),
+        crate::RuntimeIoExecutionKind::NotRuntimeIo,
+        "bound println should classify as NotRuntimeIo rather than StaticOutput"
+    );
+    let wasm = compile_module(&module).expect("codegen should succeed");
+    let expected_text =
+        resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
+            .expect("runtime output should resolve");
+    assert_eq!(expected_text, "hello\n");
     assert_valid_wasm_module(&wasm);
 }
 

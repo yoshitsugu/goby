@@ -147,6 +147,18 @@ exit 1
     fs::set_permissions(script_path, perms).expect("fake wasmtime should be executable");
 }
 
+#[cfg(unix)]
+fn install_fake_wasmtime_script(script_path: &Path, script: &str) {
+    use std::os::unix::fs::PermissionsExt;
+
+    fs::write(script_path, script).expect("fake wasmtime should be writable");
+    let mut perms = fs::metadata(script_path)
+        .expect("fake wasmtime metadata should be readable")
+        .permissions();
+    perms.set_mode(0o755);
+    fs::set_permissions(script_path, perms).expect("fake wasmtime should be executable");
+}
+
 #[test]
 #[cfg(unix)]
 fn run_command_emits_locked_function_output_via_wasmtime() {
@@ -206,6 +218,175 @@ fn run_command_emits_locked_function_output_via_wasmtime() {
         wasm_out.exists(),
         "expected generated wasm at {:?}",
         wasm_out
+    );
+}
+
+#[test]
+#[cfg(unix)]
+fn run_command_executes_dynamic_read_program_via_wasmtime_stdin() {
+    let root = repo_root();
+    let sandbox = TempDirGuard::new("run_dynamic_read_via_fake_wasmtime");
+    let fake_bin = sandbox.join("bin");
+    fs::create_dir_all(&fake_bin).expect("bin directory should be creatable");
+    install_fake_wasmtime_script(
+        &fake_bin.join("wasmtime"),
+        r#"#!/bin/sh
+if [ "$1" = "run" ] && [ -n "$2" ]; then
+  cat
+  exit 0
+fi
+echo "unexpected args: $*" >&2
+exit 1
+"#,
+    );
+
+    let input = sandbox.join("read_all.gb");
+    fs::write(
+        &input,
+        r#"
+main : Unit -> Unit can Print, Read
+main =
+  print (read())
+"#,
+    )
+    .expect("temporary input should be writable");
+
+    let mut path_entries = vec![fake_bin.clone()];
+    if let Some(existing) = env::var_os("PATH") {
+        path_entries.extend(env::split_paths(&existing));
+    }
+    let merged_path = env::join_paths(path_entries).expect("PATH should be joinable");
+
+    let mut child = command_for_goby_cli()
+        .arg("run")
+        .arg(&input)
+        .env("PATH", merged_path)
+        .current_dir(&root)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("cli should execute");
+    child
+        .stdin
+        .as_mut()
+        .expect("stdin pipe should exist")
+        .write_all(b"a\nb")
+        .expect("stdin should be writable");
+    let output = child
+        .wait_with_output()
+        .expect("cli output should be readable");
+
+    assert!(
+        output.status.success(),
+        "expected success, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("generated wasm"),
+        "dynamic read program should compile to Wasm, stdout: {}",
+        stdout
+    );
+    assert!(
+        stdout.contains("a\nb"),
+        "expected stdin to reach fake wasmtime, stdout: {}",
+        stdout
+    );
+}
+
+#[test]
+#[cfg(unix)]
+fn run_command_rejects_mixed_read_line_then_read_shape_with_explicit_boundary_error() {
+    let root = repo_root();
+    let sandbox = TempDirGuard::new("run_mixed_read_line_then_read_boundary");
+    let input = sandbox.join("mixed_read.gb");
+    fs::write(
+        &input,
+        r#"
+main : Unit -> Unit can Print, Read
+main =
+  first = read_line()
+  rest = read()
+  print "${first}|${rest}"
+"#,
+    )
+    .expect("temporary input should be writable");
+
+    let mut child = command_for_goby_cli()
+        .arg("run")
+        .arg(&input)
+        .current_dir(&root)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("cli should execute");
+    child
+        .stdin
+        .as_mut()
+        .expect("stdin pipe should exist")
+        .write_all(b"alpha\nbeta\ngamma")
+        .expect("stdin should be writable");
+    let output = child
+        .wait_with_output()
+        .expect("cli output should be readable");
+
+    assert!(
+        !output.status.success(),
+        "expected unsupported-shape failure, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("unsupported"),
+        "expected explicit unsupported-boundary error, stderr: {}",
+        stderr
+    );
+}
+
+#[test]
+#[cfg(unix)]
+fn run_command_rejects_repeated_read_after_exhaustion_shape_with_explicit_boundary_error() {
+    let root = repo_root();
+    let sandbox = TempDirGuard::new("run_repeated_reads_boundary");
+    let input = sandbox.join("repeated_reads.gb");
+    fs::write(
+        &input,
+        r#"
+main : Unit -> Unit can Print, Read
+main =
+  first = read()
+  second = read()
+  print "${first}|${second}"
+"#,
+    )
+    .expect("temporary input should be writable");
+
+    let mut child = command_for_goby_cli()
+        .arg("run")
+        .arg(&input)
+        .current_dir(&root)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("cli should execute");
+    drop(child.stdin.take());
+    let output = child
+        .wait_with_output()
+        .expect("cli output should be readable");
+
+    assert!(
+        !output.status.success(),
+        "expected unsupported-shape failure, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("unsupported"),
+        "expected explicit unsupported-boundary error, stderr: {}",
+        stderr
     );
 }
 
