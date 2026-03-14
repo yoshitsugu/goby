@@ -660,6 +660,25 @@ fn is_runtime_intrinsic_name(name: &str) -> bool {
     matches!(name, "__goby_string_length" | "__goby_env_fetch_env_var")
 }
 
+/// Apply a compile-time-safe runtime intrinsic during direct-style native lowering.
+///
+/// # Host-environment access policy
+///
+/// This function is called from `collect_phase2_output_text` which runs **during
+/// compilation** (inside `try_emit_native_module_with_handoff`).  Only intrinsics
+/// that are safe to evaluate at compile time should be listed here.
+///
+/// - `__goby_string_length`: COMPILE-TIME-SAFE — pure function over a string literal.
+/// - `__goby_env_fetch_env_var`: reads the **compiler-process** environment at compile
+///   time.  This is intentional for direct-style programs (the output string is baked
+///   into the emitted Wasm), but means that `fetch_env_var` in a direct-style `main`
+///   is evaluated against the build-time host env, not the runtime env.
+///   TODO(F-sweep): decide whether compile-time env reads should be documented as a
+///   user-visible guarantee or restricted to prevent surprising behavior when env vars
+///   differ between build time and execution time.
+///
+/// **Do not add** intrinsics that observe stdin, network, files, clocks, or other
+/// non-deterministic host state here.  Those must be lowered to WASI imports instead.
 fn apply_runtime_intrinsic(name: &str, args: &[NativeValue]) -> Option<NativeValue> {
     match name {
         "__goby_string_length" => {

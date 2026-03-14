@@ -48,8 +48,14 @@ NotRuntimeIo:
 - `compile_module` does not consume compiler-process stdin for `Read` programs.
 - `execute_module_with_stdin` is temporary and only valid for `InterpreterBridge`
   (currently no programs route through it).
+- `InterpreterBridge` detection has been removed from `classify_runtime_io`;
+  the variant and CLI fallback arm are retained as extension points only.
 - `goby run` follows planner classification, not codegen error text.
 - stdlib `goby/string.graphemes` is implemented.
+- `fetch_env_var` reads the **compiler-process** environment at compile time for
+  direct-style and effect-boundary programs (both paths bake the value into emitted
+  output before Wasm is finalized).  See `TODO(F-sweep)` in `lower.rs` for the
+  open question on whether this should be a documented user guarantee or restricted.
 
 ## Next Slice
 

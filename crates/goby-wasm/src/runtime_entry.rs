@@ -59,6 +59,26 @@ pub(crate) fn resolve_main_runtime_output_with_mode_and_stdin(
     )
 }
 
+/// Attempt to resolve `main`'s output purely at compile time.
+///
+/// # Host-environment access policy (Sweep F5)
+///
+/// This function passes `stdin_seed = None` and `allow_live_stdin = false` to the
+/// interpreter.  As a result, `EmbeddedEffectRuntime::ensure_stdin_loaded` will
+/// return `Err` for any `Read.read` / `Read.read_line` call, preventing the
+/// compiler from consuming host stdin.
+///
+/// COMPILE-TIME-SAFE for `Print` and `Read`-guarded paths: the interpreter will
+/// fail (return `None` or `Err`) rather than silently consuming stdin or network state.
+///
+/// Note: `fetch_env_var` reads the **compiler-process** environment at compile
+/// time regardless of the program path taken:
+/// - In direct-style programs, it is evaluated in `lower.rs`'s
+///   `collect_phase2_output_text` before this function is called.
+/// - In effect-boundary programs, it is evaluated inside this function via
+///   `runtime_resolver`'s `apply_runtime_intrinsic_ast`.
+/// Either way, the env value is read at compile time and baked into the output.
+/// See `apply_runtime_intrinsic` in `lower.rs` for the policy discussion.
 pub(crate) fn resolve_main_runtime_output_for_compile(
     module: &Module,
     body: &str,
