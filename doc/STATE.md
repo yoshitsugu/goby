@@ -4,8 +4,8 @@ Last updated: 2026-03-14
 
 ## Current Focus
 
-- Active track: Track F
-- Current goal: Track F remaining non-feature work (docs, sweep, Phase F5)
+- Active track: Track F — **Phase F5 complete**
+- Track F is now closed; all acceptance criteria met
 - `cargo test` is green
 
 ## Current Runtime-I/O Boundary
@@ -57,19 +57,26 @@ NotRuntimeIo:
   output before Wasm is finalized).  See `TODO(F-sweep)` in `lower.rs` for the
   open question on whether this should be a documented user guarantee or restricted.
 
+## Phase F5 Completed Work
+
+1. Removed dead bridge detection code (`belongs_on_interpreter_bridge` and related
+   functions) from `runtime_io_plan.rs`; `InterpreterBridge` variant retained as
+   extension point with NOTE comments in CLI and `execute_module_with_stdin`.
+2. Added execution runtime requirements to `LANGUAGE_SPEC.md` section 7: WASI Preview 1
+   requirement, stdin not available at compile time, Print-only vs Read program behavior.
+3. Strengthened doc comments in `classify_runtime_io`: safety contract, Print is
+   compile-time-safe, Read is runtime-host-dependent, WASI Preview 1 minimum runtime.
+4. Compile-time host-observation sweep: `Read` guarded by `allow_live_stdin=false`;
+   `fetch_env_var` reads compiler-process env at compile time (see `TODO(F-sweep)` in
+   `lower.rs` for open policy question).
+5. Updated `examples/read.gb` with a comment explaining current runability status.
+
 ## Next Slice
 
-Track F remaining work (Phase F5):
+Track F is complete. Next active track: Track D (Developer Tooling Foundation) or
+Track E (`Float` / Wasm `f64` support).
 
-1. Document the execution contract around `DynamicWasiIo` vs `StaticOutput` vs
-   `InterpreterBridge` in `doc/LANGUAGE_SPEC.md` or inline in code.
-2. Sweep for compile-time fallback call sites that could observe host environment
-   during compilation; encode findings as tests or explicit TODOs.
-3. Consider whether `belongs_on_interpreter_bridge` / `split_lines_each_bridge_plan`
-   should be removed or retained as dead-code scaffolding for future shapes.
-4. Update runnable stdin examples such as `examples/read.gb` if needed.
-
-Constraints:
+Constraints carried forward:
 
 - do not add planner-bypassing runtime-I/O branching in `crates/goby-wasm/src/lib.rs`
 - prefer extending `RuntimeIoPlan` / backend ownership rather than adding one-off matcher hacks

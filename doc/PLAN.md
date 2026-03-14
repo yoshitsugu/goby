@@ -741,12 +741,15 @@ Remaining:
     - The bridge fixture was moved to `DynamicWasiIo` once the matching lowering existed.
   - `runtime_io_milestone_bridge_surface_is_narrow_and_explicit` updated to reflect
     the empty bridge state.
-- [ ] Preserve and document the execution contract that effect-boundary programs using
+- [x] Preserve and document the execution contract that effect-boundary programs using
   embedded `Print` / `Read` should prefer executable Wasm modules with runtime imports,
   not `compile_print_module` output, whenever a dynamic Wasm lowering exists.
-- [ ] Keep the minimum supported runtime assumption explicit:
+  - Documented in `classify_runtime_io` doc comment safety contract and `LANGUAGE_SPEC.md`
+    section 7 execution runtime requirements.
+- [x] Keep the minimum supported runtime assumption explicit:
   initial target remains `wasmtime run` / WASI Preview 1 unless and until the backend
   runtime contract changes.
+  - Documented in `classify_runtime_io` doc comment and `LANGUAGE_SPEC.md` section 7.
 - [x] Phase F4 deterministic tests:
   - capability/planning decisions that reject compile-time fallback for `Read`,
   - stdin buffering and line semantics for runtime `Read.read` / `Read.read_line`,
@@ -761,19 +764,22 @@ Remaining:
   - repeated reads after exhaustion,
   - programs combining `Read` and `Print`,
   - at least one shape that intentionally remains on the interpreter-backed runtime path.
-- [ ] Treat CLI pipe tests as end-to-end coverage only; keep lower-level deterministic
+- [x] Treat CLI pipe tests as end-to-end coverage only; keep lower-level deterministic
   tests as the primary proof of correctness so Track F does not depend solely on
   `wasmtime` availability.
-- [ ] Sweep for other compile-time fallback call sites or future effect hooks that could
+- [x] Sweep for other compile-time fallback call sites or future effect hooks that could
   accidentally observe host environment during compilation; encode findings as tests or
   explicit TODOs before closing the track.
-- [ ] Phase F5 docs and cleanup:
-  - narrow or remove compiler-side stdin-reading helpers once the final runtime-I/O
-    ownership boundary is in place,
-  - update `doc/LANGUAGE_SPEC.md` once stdin runtime semantics and guarantees are stable,
-  - update runnable stdin examples such as `examples/read.gb`,
-  - document whether interpreter bridging remains part of the supported internal design
-    or only a temporary transition mechanism.
+  - Findings: `Read` is guarded by `allow_live_stdin=false`; `fetch_env_var` reads
+    compiler-process env at compile time (intentional for direct-style programs;
+    `TODO(F-sweep)` recorded in `lower.rs` for the open policy question).
+- [x] Phase F5 docs and cleanup:
+  - bridge dead-code (`belongs_on_interpreter_bridge` and related functions) removed from
+    `runtime_io_plan.rs`; `InterpreterBridge` variant retained as extension point.
+  - `doc/LANGUAGE_SPEC.md` updated with execution runtime requirements (WASI Preview 1,
+    stdin not available at compile time, Print-only vs Read program distinction).
+  - `examples/read.gb` updated with a comment explaining current runability status.
+  - compile-time host-observation sweep documented in code and `STATE.md`.
 
 Acceptance criteria:
 
