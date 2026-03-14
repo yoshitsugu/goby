@@ -35,6 +35,10 @@ pub(crate) enum RuntimeIoPlan {
     SplitLinesEach {
         output_mode: OutputReadMode,
         suffix_prints: Vec<StaticPrintSuffix>,
+        /// Interpolation transform applied to each line before output.
+        /// `None` = passthrough (emit the line as-is).
+        /// `Some((prefix, suffix))` = emit `prefix + line + suffix` per line.
+        transform: Option<(String, String)>,
     },
 }
 
@@ -78,10 +82,23 @@ impl RuntimeIoPlan {
             RuntimeIoPlan::SplitLinesEach {
                 output_mode,
                 suffix_prints,
-            } => builder.emit_read_split_lines_each_print_module(
-                matches!(output_mode, OutputReadMode::Println),
-                &suffix_prints,
-            ),
+                transform,
+            } => {
+                let append_newline = matches!(output_mode, OutputReadMode::Println);
+                match transform {
+                    None => builder.emit_read_split_lines_each_print_module(
+                        append_newline,
+                        &suffix_prints,
+                    ),
+                    Some(_) => {
+                        // TODO(F3b): transformed split-lines lowering not yet implemented
+                        Err(CodegenError {
+                            message: "transformed split-lines lowering is not yet implemented"
+                                .to_string(),
+                        })
+                    }
+                }
+            }
         }
     }
 }
@@ -255,6 +272,7 @@ fn plan_runtime_io(module: &Module, stmts: &[Stmt]) -> Option<RuntimeIoPlan> {
         return Some(RuntimeIoPlan::SplitLinesEach {
             output_mode,
             suffix_prints,
+            transform: None,
         });
     }
     None
@@ -887,6 +905,7 @@ main =
             RuntimeIoClassification::DynamicWasiIo(RuntimeIoPlan::SplitLinesEach {
                 output_mode: OutputReadMode::Println,
                 suffix_prints: vec![],
+                transform: None,
             })
         );
     }
@@ -921,6 +940,7 @@ main =
                         output_mode: OutputReadMode::Print,
                     },
                 ],
+                transform: None,
             })
         );
     }
@@ -946,6 +966,7 @@ main =
             RuntimeIoClassification::DynamicWasiIo(RuntimeIoPlan::SplitLinesEach {
                 output_mode: OutputReadMode::Println,
                 suffix_prints: vec![],
+                transform: None,
             })
         );
     }
@@ -971,6 +992,7 @@ main =
             RuntimeIoClassification::DynamicWasiIo(RuntimeIoPlan::SplitLinesEach {
                 output_mode: OutputReadMode::Println,
                 suffix_prints: vec![],
+                transform: None,
             })
         );
     }
@@ -995,6 +1017,7 @@ main =
             RuntimeIoClassification::DynamicWasiIo(RuntimeIoPlan::SplitLinesEach {
                 output_mode: OutputReadMode::Println,
                 suffix_prints: vec![],
+                transform: None,
             })
         );
     }
@@ -1019,6 +1042,7 @@ main =
             RuntimeIoClassification::DynamicWasiIo(RuntimeIoPlan::SplitLinesEach {
                 output_mode: OutputReadMode::Print,
                 suffix_prints: vec![],
+                transform: None,
             })
         );
     }
@@ -1043,6 +1067,7 @@ main =
             RuntimeIoClassification::DynamicWasiIo(RuntimeIoPlan::SplitLinesEach {
                 output_mode: OutputReadMode::Println,
                 suffix_prints: vec![],
+                transform: None,
             })
         );
     }
@@ -1068,6 +1093,7 @@ main =
             RuntimeIoClassification::DynamicWasiIo(RuntimeIoPlan::SplitLinesEach {
                 output_mode: OutputReadMode::Println,
                 suffix_prints: vec![],
+                transform: None,
             })
         );
     }
@@ -1094,6 +1120,7 @@ main =
             RuntimeIoClassification::DynamicWasiIo(RuntimeIoPlan::SplitLinesEach {
                 output_mode: OutputReadMode::Print,
                 suffix_prints: vec![],
+                transform: None,
             })
         );
     }
@@ -1119,6 +1146,7 @@ main =
             RuntimeIoClassification::DynamicWasiIo(RuntimeIoPlan::SplitLinesEach {
                 output_mode: OutputReadMode::Println,
                 suffix_prints: vec![],
+                transform: None,
             })
         );
     }
@@ -1145,6 +1173,7 @@ main =
             RuntimeIoClassification::DynamicWasiIo(RuntimeIoPlan::SplitLinesEach {
                 output_mode: OutputReadMode::Print,
                 suffix_prints: vec![],
+                transform: None,
             })
         );
     }
@@ -1170,6 +1199,7 @@ main =
             RuntimeIoClassification::DynamicWasiIo(RuntimeIoPlan::SplitLinesEach {
                 output_mode: OutputReadMode::Println,
                 suffix_prints: vec![],
+                transform: None,
             })
         );
     }
