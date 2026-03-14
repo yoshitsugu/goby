@@ -123,6 +123,11 @@ fn run() -> Result<(), CliError> {
             // bridge path is gated on the planner's decision, not on the error message.
             // This is a temporary fallback: as DynamicWasiIo support grows, fewer
             // programs should reach this branch.
+            //
+            // NOTE: `InterpreterBridge` is currently unreachable from `classify_runtime_io`
+            // because all previously bridged shapes have been promoted to `DynamicWasiIo`.
+            // This arm is retained as an extension point for future shapes that need
+            // interpreter-backed execution while Wasm lowering is developed.
             Err(_err)
                 if matches!(
                     goby_wasm::runtime_io_execution_kind(&module),

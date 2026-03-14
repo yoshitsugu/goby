@@ -159,14 +159,27 @@ impl RuntimeIoClassification {
 /// |---------|-----------|
 /// | `DynamicWasiIo(plan)` | Body contains `Read.read`/`Read.read_line` usage **and** matches a known [`RuntimeIoPlan`] shape that can be lowered to a WASI Wasm module. |
 /// | `StaticOutput(text)` | Body contains **no** runtime-read calls **and** every statement is a direct `print`/`println` with a string-literal argument.  The output is statically known at compile time. |
-/// | `InterpreterBridge` | Body contains runtime-read calls, does not match a known [`RuntimeIoPlan`], but does match the narrow temporary bridge subset retained while dynamic lowering grows. |
+/// | `InterpreterBridge` | Body contains runtime-read calls that fall into the narrow temporary interpreter-bridge subset.  The current detection surface is empty — no program shapes route here now that the transformed split-callback family was promoted to `DynamicWasiIo`.  The variant and CLI fallback path are retained as an extension point for future shapes that need interpreter-backed execution during Wasm lowering development. |
 /// | `Unsupported` | Body contains runtime-read calls but matches neither a known [`RuntimeIoPlan`] nor the narrow temporary interpreter-bridge subset. |
 /// | `NotRuntimeIo` | Body contains **no** runtime-read calls and is not a `StaticOutput` program (e.g. complex static evaluation via local bindings, arithmetic, etc.).  Falls through to `resolve_main_runtime_output_for_compile`. |
 ///
+/// # Safety contract
+///
+/// - `Print` effects are **compile-time-safe**: static output collapse (`StaticOutput`) is
+///   valid because `Print` does not observe host-environment state.
+/// - `Read` effects are **runtime-host-dependent**: they must not be resolved during
+///   compilation.  Programs that use `Read` must produce a `DynamicWasiIo` Wasm module or
+///   (in the future, if an interpreter-bridge shape is re-introduced) an `InterpreterBridge`
+///   execution — never a collapsed `StaticOutput` artifact.  Currently, programs with `Read`
+///   that do not match a `DynamicWasiIo` plan are classified `Unsupported`.
+///   The minimum supported runtime is WASI Preview 1 (`wasmtime run`).
+///
 /// # Ordering
 ///
-/// The function checks in priority order: `DynamicWasiIo` → `InterpreterBridge` →
-/// `Unsupported` → `StaticOutput` → `NotRuntimeIo`.
+/// The function checks in priority order: `DynamicWasiIo` → `Unsupported` (via
+/// runtime-read detection) → `StaticOutput` → `NotRuntimeIo`.
+/// `InterpreterBridge` is currently unreachable because no shapes are detected for it;
+/// the detection step has been removed until a concrete future shape requires it.
 ///
 /// # Stopping rule (F3a)
 ///
@@ -192,9 +205,6 @@ pub(crate) fn classify_runtime_io(
     };
     if let Some(plan) = plan_runtime_io(module, stmts) {
         return RuntimeIoClassification::DynamicWasiIo(plan);
-    }
-    if belongs_on_interpreter_bridge(module, stmts) {
-        return RuntimeIoClassification::InterpreterBridge;
     }
     if stmts.iter().any(stmt_contains_runtime_read) {
         return RuntimeIoClassification::Unsupported;
@@ -795,107 +805,6 @@ fn split_lines_each_plan(
         }
     }
     None
-}
-
-fn belongs_on_interpreter_bridge(module: &Module, stmts: &[Stmt]) -> bool {
-    split_lines_each_bridge_plan(module, stmts)
-}
-
-fn split_lines_each_bridge_plan(module: &Module, stmts: &[Stmt]) -> bool {
-    let [read_stmt, rest @ ..] = stmts else {
-        return false;
-    };
-    let Some((text_name, InputReadMode::ReadAll)) = read_binding_mode(read_stmt) else {
-        return false;
-    };
-
-    for (each_index, each_stmt) in rest.iter().enumerate() {
-        let Stmt::Expr(each_expr) = each_stmt else {
-            continue;
-        };
-        let pre_each_stmts = &rest[..each_index];
-        let post_each_stmts = &rest[each_index + 1..];
-
-        if !post_each_stmts.iter().all(static_print_suffix_passthrough) {
-            continue;
-        }
-
-        for (split_index, split_stmt) in pre_each_stmts.iter().enumerate() {
-            let pre_split_stmts = &pre_each_stmts[..split_index];
-            let post_split_stmts = &pre_each_stmts[split_index + 1..];
-            let Some(lines_name) =
-                split_lines_binding_name(module, pre_split_stmts, split_stmt, text_name)
-            else {
-                continue;
-            };
-            let Some(iterated_name) =
-                resolve_alias_chain_terminal_name(post_split_stmts, lines_name)
-            else {
-                continue;
-            };
-            if split_lines_each_bridge_callback(module, pre_each_stmts, iterated_name, each_expr) {
-                return true;
-            }
-        }
-    }
-    false
-}
-
-fn static_print_suffix_passthrough(stmt: &Stmt) -> bool {
-    static_print_suffix(stmt).is_some()
-}
-
-fn split_lines_each_bridge_callback(
-    module: &Module,
-    callback_scope_stmts: &[Stmt],
-    lines_name: &str,
-    each_expr: &Expr,
-) -> bool {
-    let Some((each_head, each_args)) = flatten_direct_call(each_expr) else {
-        return false;
-    };
-    if !imported_head_matches_symbol(module, &each_head, "goby/list", "each")
-        || each_args.len() != 2
-        || !matches!(each_args[0], Expr::Var(name) if name == lines_name)
-    {
-        return false;
-    }
-
-    match each_args[1] {
-        Expr::Lambda { param, body } => {
-            bridge_callback_body_matches(body, param, callback_scope_stmts)
-        }
-        _ => false,
-    }
-}
-
-fn bridge_callback_body_matches(body: &Expr, param: &str, scope_stmts: &[Stmt]) -> bool {
-    let Expr::Call { callee, arg } = body else {
-        return false;
-    };
-    callee_output_mode(callee, scope_stmts).is_some()
-        && matches_transformed_interpolated_string(arg, param)
-}
-
-fn matches_transformed_interpolated_string(arg: &Expr, param: &str) -> bool {
-    let Expr::InterpolatedString(parts) = arg else {
-        return false;
-    };
-    let mut saw_param_expr = false;
-    let mut saw_non_empty_text = false;
-    for part in parts {
-        match part {
-            InterpolatedPart::Text(text) if !text.is_empty() => saw_non_empty_text = true,
-            InterpolatedPart::Text(_) => {}
-            InterpolatedPart::Expr(expr)
-                if !saw_param_expr && matches!(expr.as_ref(), Expr::Var(name) if name == param) =>
-            {
-                saw_param_expr = true;
-            }
-            _ => return false,
-        }
-    }
-    saw_param_expr && saw_non_empty_text
 }
 
 #[cfg(test)]
