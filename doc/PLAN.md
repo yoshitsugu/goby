@@ -733,16 +733,14 @@ Remaining:
       fd_read/fd_write helpers, newline emission, and static suffix emission helpers.
     - ownership boundary is clearer: `runtime_io_plan.rs` selects shapes, `backend.rs`
       owns reusable Wasm building blocks, and callers remain policy-free.
-- [ ] Track explicit shrinkage of temporary modes
-  - add milestone checks showing that `InterpreterBridge` coverage is shrinking as
-    `DynamicWasiIo` support grows.
-  - current milestone lock:
-    - direct echo, passthrough split-callback, output-alias, delimiter-alias, and
-      static-suffix shapes are already `DynamicWasiIo`.
-    - the canonical remaining bridge-only family is the transformed split callback
-      shape such as `|line| -> println "${line}!"`.
-  - keep at least one test fixture intentionally on the bridge until a matching Wasm
-    lowering exists, then move it across rather than leaving both paths in place.
+- [x] Track explicit shrinkage of temporary modes
+  - milestone lock met (2026-03-14):
+    - transformed split-callback shape (`|line| -> println "${line}!"`) promoted from
+      `InterpreterBridge` to `DynamicWasiIo` with a new line-scan Wasm lowering.
+    - `InterpreterBridge` surface is now effectively empty.
+    - The bridge fixture was moved to `DynamicWasiIo` once the matching lowering existed.
+  - `runtime_io_milestone_bridge_surface_is_narrow_and_explicit` updated to reflect
+    the empty bridge state.
 - [ ] Preserve and document the execution contract that effect-boundary programs using
   embedded `Print` / `Read` should prefer executable Wasm modules with runtime imports,
   not `compile_print_module` output, whenever a dynamic Wasm lowering exists.
