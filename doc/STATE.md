@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-14
+Last updated: 2026-03-14 (F2c complete)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -120,13 +120,18 @@ This file is a restart-safe snapshot for resuming work after context reset.
   `print` / `println` suffixes after the `each` step, so sample-shaped programs like
   `...; each lines println; println "test"; print "done"` no longer have to stay on
   the interpreter bridge just because they append fixed output afterward.
-- Track F Phase F2b is now complete:
+- Track F Phase F2b and F2c are now complete:
   `StaticOutput(String)` and `Unsupported` are now first-class `RuntimeIoClassification`
   and `RuntimeIoExecutionKind` variants. `plan_static_output` detects programs whose every
   statement is a `print`/`println` call with a string-literal argument and routes them
   through `compile_module_wasm_or_error` directly. The fallback `resolve_main_runtime_output_for_compile`
   is retained for more complex static-output programs (variable args, arithmetic, etc.)
-  that require interpreter evaluation. `Unsupported` is a placeholder variant for F2c.
+  that require interpreter evaluation. `Unsupported` is a placeholder variant whose
+  assignment is deferred to F3b.
+- Track F Phase F2c is complete: the bridge boundary is clarified via doc comments and
+  integration tests. `execute_module_with_stdin` is doc-commented as "temporary bridge,
+  CLI-only, marked for shrinkage". `classify_runtime_io` now has explicit variant boundary
+  documentation. `Unsupported` assignment in `classify_runtime_io` deferred to F3b.
 
 ## Verified
 
@@ -136,12 +141,11 @@ This file is a restart-safe snapshot for resuming work after context reset.
 
 ## Next Work
 
-- Phase F2c: Runtime bridge boundary decision
-  decide whether the temporary interpreter bridge remains CLI-only or is exposed as
-  a narrow internal `goby-wasm` API while still being marked for shrinkage; define
-  the precise boundary between `InterpreterBridge` and the newly added `Unsupported`
-  variant so `classify_runtime_io` can assign `Unsupported` to genuinely unsupported
-  Read programs.
+- Phase F3a: Temporary coverage bridge on top of the planning layer
+  re-express the current exact-shape dynamic Wasm support through `RuntimeIoPlan`
+  instead of direct AST-shape conditionals in `crates/goby-wasm/src/lib.rs`;
+  remove the old direct matcher path after existing dynamic-Wasm cases are routed
+  through `RuntimeIoPlan`.
 - Continue Track F by expanding `RuntimeIoPlan` expressiveness, not by adding new
   planner-bypassing runtime-I/O branches in `crates/goby-wasm/src/lib.rs`.
 - Keep Track D queued after the runtime I/O containment/runtime split work is in a stable state.

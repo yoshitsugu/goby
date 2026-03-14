@@ -673,7 +673,7 @@ Completed:
 
 Remaining:
 
-- [ ] Phase F2b: Runtime-I/O planning unification
+- [x] Phase F2b: Runtime-I/O planning unification
   - introduce a small internal `RuntimeIoPlan` layer so lowering can
     distinguish:
     - static-print collapsible programs,
@@ -686,10 +686,14 @@ Remaining:
     `resolve_main_runtime_output`, embedded handler metadata, CLI `run` fallback
     routing) so the same rule is applied consistently without string-matching on
     diagnostics.
-- [ ] Phase F2c: Runtime bridge boundary decision
-  - decide whether the temporary bridge remains CLI-only or is exposed as a narrow
-    internal `goby-wasm` API while still being marked for shrinkage.
-  - reflect that decision in ownership and tests before extending more shape coverage.
+- [x] Phase F2c: Runtime bridge boundary decision
+  - decided: `execute_module_with_stdin` stays `pub` (CLI needs it across crate boundary)
+    but is doc-commented as "temporary bridge, CLI-only, marked for shrinkage".
+  - `classify_runtime_io` now has explicit doc comment documenting the boundary of all 5
+    variants (`DynamicWasiIo`, `StaticOutput`, `InterpreterBridge`, `Unsupported`, `NotRuntimeIo`).
+  - integration tests added: `execute_module_with_stdin` rejects `StaticOutput` and `NotRuntimeIo` programs.
+  - `Unsupported` assignment in `classify_runtime_io` deferred to F3b (interpreter bridge currently
+    handles all Read programs; boundary assignment requires F3b expansion work).
 - [ ] Phase F3a: Temporary coverage bridge on top of the planning layer
   - re-express the current exact-shape dynamic Wasm support through the new
     `RuntimeIoPlan` layer instead of direct AST-shape conditionals in
