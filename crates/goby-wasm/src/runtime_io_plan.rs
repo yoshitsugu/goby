@@ -149,6 +149,22 @@ impl RuntimeIoClassification {
 /// The function checks in priority order: `DynamicWasiIo` → `InterpreterBridge` →
 /// `StaticOutput` → `NotRuntimeIo`.  `Unsupported` is not yet assigned here; it will
 /// be wired in during F3b once the bridge surface is explicitly bounded.
+///
+/// # Stopping rule (F3a)
+///
+/// All runtime-I/O AST-pattern matching lives in this module — **not** in `lib.rs` or
+/// any other call site.  When adding support for a new runtime-I/O program shape:
+///
+/// 1. Extend [`RuntimeIoPlan`] with a new variant (or extend an existing plan variant).
+/// 2. Add or extend a lowering arm in [`RuntimeIoPlan::emit_wasm`].
+/// 3. Add a detection branch in [`plan_runtime_io`] (called from this function).
+///    Note: `StaticOutput` detection is handled by [`plan_static_output`] (also called
+///    directly from `classify_runtime_io`), not through `plan_runtime_io`.  New
+///    static-output shapes should extend `plan_static_output` instead.
+///
+/// Do **not** add new AST-pattern conditionals anywhere outside this module —
+/// not in `compile_module`, `execute_module_with_stdin`, the CLI, or any other caller.
+/// Those entry points must stay policy-free; all shape decisions belong here.
 pub(crate) fn classify_runtime_io(
     module: &Module,
     parsed_body: Option<&[Stmt]>,
@@ -1180,6 +1196,10 @@ main =
     }
 
     #[test]
+    // TODO(F3b): when F3b wires Unsupported assignment into classify_runtime_io,
+    // compile_module_wasm_or_error for Unsupported should return a user-facing Err
+    // rather than Ok(None). At that point this test assertion must be inverted to
+    // assert!(result.is_err()).
     fn unsupported_classification_does_not_produce_wasm() {
         let result = RuntimeIoClassification::Unsupported.compile_module_wasm_or_error();
         assert_eq!(result, Ok(None));

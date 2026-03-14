@@ -570,6 +570,101 @@ fn native_fallback_path_matrix_for_examples() {
     }
 }
 
+// F3a round-trip tests: assert that classify_runtime_io returns DynamicWasiIo for known
+// dynamic-Wasm shapes AND that compile_module produces valid Wasm for each.
+// These tests mirror the StaticOutput round-trip tests below and confirm that the
+// planning boundary (all shape decisions in runtime_io_plan.rs) is working end-to-end.
+
+#[test]
+fn compile_module_routes_echo_read_through_dynamic_wasi_io_classification() {
+    let source = r#"
+main : Unit -> Unit can Print, Read
+main =
+  print (read())
+"#;
+    let module = parse_module(source).expect("source should parse");
+    assert_eq!(
+        runtime_io_execution_kind(&module).expect("classification should succeed"),
+        crate::RuntimeIoExecutionKind::DynamicWasiIo,
+        "print(read()) should classify as DynamicWasiIo"
+    );
+    let wasm = compile_module(&module).expect("codegen should succeed");
+    assert_valid_wasm_module(&wasm);
+}
+
+#[test]
+fn compile_module_routes_echo_read_line_println_through_dynamic_wasi_io_classification() {
+    let source = r#"
+main : Unit -> Unit can Print, Read
+main =
+  println (read_line())
+"#;
+    let module = parse_module(source).expect("source should parse");
+    assert_eq!(
+        runtime_io_execution_kind(&module).expect("classification should succeed"),
+        crate::RuntimeIoExecutionKind::DynamicWasiIo,
+        "println(read_line()) should classify as DynamicWasiIo"
+    );
+    let wasm = compile_module(&module).expect("codegen should succeed");
+    assert_valid_wasm_module(&wasm);
+}
+
+#[test]
+fn compile_module_routes_echo_read_all_println_through_dynamic_wasi_io_classification() {
+    let source = r#"
+main : Unit -> Unit can Print, Read
+main =
+  println (read())
+"#;
+    let module = parse_module(source).expect("source should parse");
+    assert_eq!(
+        runtime_io_execution_kind(&module).expect("classification should succeed"),
+        crate::RuntimeIoExecutionKind::DynamicWasiIo,
+        "println(read()) should classify as DynamicWasiIo"
+    );
+    let wasm = compile_module(&module).expect("codegen should succeed");
+    assert_valid_wasm_module(&wasm);
+}
+
+#[test]
+fn compile_module_routes_echo_read_line_print_through_dynamic_wasi_io_classification() {
+    let source = r#"
+main : Unit -> Unit can Print, Read
+main =
+  print (read_line())
+"#;
+    let module = parse_module(source).expect("source should parse");
+    assert_eq!(
+        runtime_io_execution_kind(&module).expect("classification should succeed"),
+        crate::RuntimeIoExecutionKind::DynamicWasiIo,
+        "print(read_line()) should classify as DynamicWasiIo"
+    );
+    let wasm = compile_module(&module).expect("codegen should succeed");
+    assert_valid_wasm_module(&wasm);
+}
+
+#[test]
+fn compile_module_routes_split_lines_each_through_dynamic_wasi_io_classification() {
+    let source = r#"
+import goby/list ( each )
+import goby/string ( split )
+
+main : Unit -> Unit can Print, Read
+main =
+  text = read()
+  lines = split(text, "\n")
+  each lines println
+"#;
+    let module = parse_module(source).expect("source should parse");
+    assert_eq!(
+        runtime_io_execution_kind(&module).expect("classification should succeed"),
+        crate::RuntimeIoExecutionKind::DynamicWasiIo,
+        "read + split + each println should classify as DynamicWasiIo"
+    );
+    let wasm = compile_module(&module).expect("codegen should succeed");
+    assert_valid_wasm_module(&wasm);
+}
+
 #[test]
 fn compile_module_routes_print_literal_through_static_output_classification() {
     let source = r#"
