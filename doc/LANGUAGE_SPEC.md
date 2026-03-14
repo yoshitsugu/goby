@@ -1,7 +1,7 @@
 # Goby Language Specification (Current)
 
 Status: active
-Last updated: 2026-03-11
+Last updated: 2026-03-15
 
 This file is the current language-spec source of truth for user-visible Goby
 syntax/semantics.
@@ -95,6 +95,13 @@ syntax/semantics.
 - `main` must be `Unit -> Unit` for `run`.
 - `check` allows missing `main` annotation, but `run` requires entry constraints.
 - Type annotations are optional where inference is sufficient.
+- Function type annotations may end with an effect clause: `can EffectA, EffectB`.
+  - meaning: evaluating that function body may leave those effects unhandled at the call site.
+  - if omitted, the function body must not leave any effect operation unhandled.
+  - effects handled internally by `with ... in ...` are not listed in the function's `can` clause.
+  - example:
+    - `unhandled_effect_function : String -> Unit can Message`
+    - if `say_hello s` is wrapped by a matching `with`, the enclosing function type does not use `can Message`.
 - Type-variable identifiers in type annotations are lowercase-start names (or `_`).
 - For effect-member generic design, `_` in type position is reserved as an anonymous
   type-hole marker (full inference behavior rollout is tracked in `doc/PLAN.md`).
@@ -103,12 +110,10 @@ syntax/semantics.
 
 ## 5. Effects and Handlers
 
-- Effect annotation: `can EffectA, EffectB`.
-- Effect member signatures may also declare dependencies with `can`:
-  - example: `trace : String -> Unit can Print`
-  - meaning: implementations/handlers of that operation may use `Print`.
-  - if omitted, the operation implementation is not allowed to use additional effects.
-  - effect dependencies must be acyclic across local `effect` declarations; cycles are a typecheck error.
+- Function effect annotation: `can EffectA, EffectB`.
+- `can` describes the unhandled effects of the annotated function body, not the effects used internally while evaluating it.
+- Effect declarations define operations only.
+  - current spec does not assign `can` semantics to effect member signatures.
 - Effect-member generic type variables are unified at typecheck time for:
   - effect operation call arguments in handler-covered scopes,
   - `resume` argument validation against the operation return type.
@@ -121,9 +126,24 @@ syntax/semantics.
   - inline handler: `with` + indented clauses + `in ...`
   - handler value: `with <handler_expr> in ...`
 - Handler clause validation:
-  - clause operation name must resolve to exactly one visible effect operation.
-  - clause body may use only effects currently handled in scope plus effects declared by
-    that operation member's `can` clause.
+  - clause head may use either:
+    - unqualified operation name: `yield x -> ...`
+    - qualified operation name: `Iterator.yield x -> ...`
+  - unqualified clause names are accepted only when they resolve to exactly one visible effect operation.
+  - if an unqualified clause name matches multiple visible effects, typechecking fails and the clause must use the qualified `EffectName.operation` form.
+  - clause body is checked like an ordinary expression body:
+    - effects handled by nested `with ... in ...` do not escape the clause,
+    - any effect operation left unhandled by the clause body must be permitted by the surrounding function context.
+- Effect checking rule:
+  - an effect operation call is valid only if that operation's effect is either:
+    - handled by an enclosing `with ... in ...` within the current body, or
+    - listed in the surrounding function's `can` clause.
+  - otherwise typechecking fails with an unhandled-effect error.
+- Call-site rule for effectful functions:
+  - calling a function annotated with `can E1, E2` requires the caller context to account for those same effects.
+  - a caller may account for them either by:
+    - handling them around the call with `with ... in ...`, or
+    - itself being inside a function whose `can` clause includes those effects.
 - `resume`:
   - expression form: `resume <expr>`
   - valid only inside handler operation bodies

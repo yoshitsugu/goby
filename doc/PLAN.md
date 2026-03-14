@@ -293,17 +293,28 @@ Based on `examples/*.gb`:
 
 ### 2.3 Effect System
 
+- Target semantics lock (2026-03-15):
+  - `can` on a function type means "effects that remain unhandled after evaluating this function body".
+  - effects discharged by `with ... in ...` inside the function body must not appear in that function's `can` clause.
+  - omitting `can` means the function body must not leave any effect unhandled.
+  - calling a `can`-annotated function is allowed only when the caller also accounts for those effects
+    (either by an enclosing `with` at the call site or by the caller's own `can` clause).
+  - inline `with` clause heads default to unqualified operation names (`yield`) when resolution is unique.
+  - if multiple visible effects expose the same operation name, the clause must use a qualified name (`Iterator.yield`).
+  - example consequence:
+    - `stdlib/goby/string.gb` helpers that invoke `yield` only inside a matching `with` should not carry `can Iterator`.
+    - a function that directly calls `say_hello` from `effect Message` without handling it must carry `can Message`.
 - Current implemented checks:
   - `can` effect names must be declared (or built-in).
-  - effect member signatures can declare dependency effects (`op : ... can Dep`), and
-    handler clause bodies are validated against those declared dependencies.
-  - dependency cycles in effect-member `can` declarations are rejected at typecheck time.
   - uncovered effect operation calls are rejected unless covered by enclosing handler scope
     (`with`).
   - calls to `can`-annotated functions require an appropriate enclosing handler scope.
+- Known mismatch against the locked semantics:
+  - the current implementation/spec history still has a separate "effect member `can` dependency" model.
+  - this is no longer aligned with the desired meaning of `can` and should be removed or redesigned.
+  - runtime/planning notes still mention bare-name dispatch fallback by effect-name order; this should be replaced by unique-or-qualified clause resolution.
 - Current runtime behavior:
   - effect operations dispatch through installed handlers.
-  - bare-name dispatch falls back to deterministic effect-name order (temporary MVP behavior).
 - How to represent multiple effects (`can Print + Read` or other syntax) — deferred.
 - Effect propagation rules for higher-order functions — deferred.
 - Effect diagnostics UX polish (wording/format consistency) — deferred.
@@ -313,6 +324,44 @@ Based on `examples/*.gb`:
   - warning is planned as tooling/diagnostics improvement, not a type error.
 - Multi-effect implicit `main` wrapper ordering and topological expansion based on
   effect-member dependency declarations (`op ... can Dep`) — in progress.
+
+#### Planned Semantics Alignment: `can` Means Unhandled Effects
+
+Status: planned (2026-03-15)
+
+Goal: align parser/typechecker/docs/examples with the rule that `can` lists only
+effects that escape a function body.
+
+- Phase 1: annotation and checker model cleanup
+  - remove the old assumption that `can` on a function means any effect used by the body, even when locally handled.
+  - define one effect-accounting pass for expressions:
+    - direct effect operation calls contribute their effect only when not discharged by an enclosing `with`,
+    - calls to functions annotated with `can ...` contribute those effects at the call site unless discharged there.
+  - ensure a function with no `can` annotation is rejected when its body leaves any effect unhandled.
+- Phase 2: remove or redesign effect-member `can`
+  - audit parser/AST/typechecker/runtime assumptions that effect members may declare dependency effects.
+  - either delete that syntax/logic entirely or replace it with a distinct future syntax if dependency metadata is still needed.
+  - remove cycle checks and handler-clause rules that exist only for the old effect-member-`can` design.
+- Phase 3: diagnostics and examples
+  - report unhandled-effect errors in terms of the enclosing function/call site, with concrete effect names.
+  - update examples and stdlib annotations to reflect handled-vs-unhandled distinction.
+  - add a regression example covering:
+    - locally handled iterator usage without `can Iterator`,
+    - unhandled operation call that requires `can Message`,
+    - call-site propagation through intermediate functions.
+    - ambiguous inline handler clause name rejected until rewritten as `EffectName.operation`.
+- Phase 4: verification
+  - add parser/typechecker tests for missing `can`, unnecessary `can`, and `with` discharging behavior.
+  - add tests for inline handler clause name resolution:
+    - unique bare-name clause accepted,
+    - ambiguous bare-name clause rejected,
+    - qualified clause accepted.
+  - run at least `cargo check`, focused effect-system tests, and `cargo test`.
+
+Locked design follow-up:
+
+- `can` is reserved for unhandled function effects only.
+- effect member signatures do not declare dependency effects.
 
 
 #### Effect Renewal/Resume Status (Summary)

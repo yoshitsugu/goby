@@ -1,12 +1,13 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-14
+Last updated: 2026-03-15
 
 ## Current Focus
 
-- Next planning target: Track D — Developer Tooling Foundation
-- Track F is closed; runtime-I/O containment and DynamicWasiIo follow-through are complete
-- `cargo test` was green at Track F close
+- Semantics planning update: `can` is now specified as "unhandled effects that escape a function body"
+- Inline `with` handler clauses now target: unique bare operation names by default, qualified `Effect.operation` only when disambiguation is needed
+- Next implementation-planning target: align parser/typechecker/examples/stdlib with the new `can` semantics
+- Track D — Developer Tooling Foundation remains the next broader roadmap track after the `can` semantics slice
 
 ## Locked Decisions Carried Forward
 
@@ -48,10 +49,10 @@ NotRuntimeIo:
 
 ## Next Slice
 
-Track D plan entry is the next default starting point.
+`can` semantics alignment is the next default starting point.
 
 Immediate planning goals:
 
-1. Pick the first Track D slice with a narrow acceptance target.
-2. Define the minimum test/tooling gate for that slice before code changes.
-3. Keep Track E (`Float` / Wasm `f64`) as the next alternative only if tooling work is deferred.
+1. Remove the old effect-member-`can` model in implementation.
+2. Add regression coverage for handled-vs-unhandled function effects and inline handler clause resolution before broader refactors.
+3. Keep the next slice focused on parser/typechecker/docs/examples alignment before broader tooling work.
