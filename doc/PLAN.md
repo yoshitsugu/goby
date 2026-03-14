@@ -718,13 +718,20 @@ Remaining:
     - the temporary interpreter bridge is now explicitly reserved for the remaining
       transformed `read + split(..., "\n") + each ...` callback family while broader
       dynamic lowering remains future work.
-- [ ] Phase F3c: Backend ownership cleanup
+- [x] Phase F3c: Backend ownership cleanup
   - reduce duplication in the WASI backend by extracting common stdin/stdout module
     building blocks.
   - separate concerns so:
     - planning decides what runtime-I/O program exists,
     - backend lowers that plan to Wasm,
     - CLI only selects and executes the resulting path.
+  - completed slice summary:
+    - shared runtime-I/O memory planning and WASI module skeleton setup now live in
+      backend-owned helpers instead of being open-coded in each lowering entrypoint.
+    - echo/read-line/split-lines lowering paths now reuse shared stdin iovec setup,
+      fd_read/fd_write helpers, newline emission, and static suffix emission helpers.
+    - ownership boundary is clearer: `runtime_io_plan.rs` selects shapes, `backend.rs`
+      owns reusable Wasm building blocks, and callers remain policy-free.
 - [ ] Track explicit shrinkage of temporary modes
   - add milestone checks showing that `InterpreterBridge` coverage is shrinking as
     `DynamicWasiIo` support grows.

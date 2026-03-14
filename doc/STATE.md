@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-14 (F3b complete)
+Last updated: 2026-03-14 (F3c complete)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -28,6 +28,9 @@ This file is a restart-safe snapshot for resuming work after context reset.
 - F3b boundary work is now complete:
   runtime-read programs outside known dynamic-Wasm plans and the remaining narrow
   bridge subset are classified as `Unsupported` with explicit user-facing errors.
+- F3c backend cleanup is now complete:
+  runtime-I/O Wasm emission now shares backend-owned memory planning, module
+  skeleton setup, and stdout helper building blocks across echo/read-line/split paths.
 - The original `read` + `split(text, "\n")` + `each ... println`
   sample shape now also compiles to dynamic WASI Wasm instead of requiring the
   interpreter-backed runtime bridge.
@@ -161,6 +164,10 @@ This file is a restart-safe snapshot for resuming work after context reset.
     outside both dynamic lowering and the narrow temporary bridge subset.
   - compile/bridge entrypoints now surface explicit `Unsupported` diagnostics instead
     of silently falling through to compile-time fallback or generic bridge errors.
+- Track F Phase F3c is complete:
+  - `backend.rs` now owns shared runtime-I/O memory planning and WASI module setup helpers.
+  - echo/read-line/split-lines lowering paths reuse common stdin/stdout instruction helpers.
+  - planning/lowering/caller ownership is cleaner without changing planner policy.
 
 ## Verified
 
@@ -171,12 +178,12 @@ This file is a restart-safe snapshot for resuming work after context reset.
 
 ## Next Work
 
-- Phase F3c: Backend ownership cleanup
-  reduce duplication in the WASI backend by extracting common stdin/stdout module
-  building blocks while keeping planning, lowering, and CLI execution boundaries clean.
 - Continue Track F by expanding `RuntimeIoPlan` expressiveness, not by adding new
   planner-bypassing runtime-I/O branches in `crates/goby-wasm/src/lib.rs`.
 - Track explicit shrinkage of temporary bridge coverage as matching dynamic lowerings land.
+- Phase F4 deterministic tests
+  expand boundary and runtime-I/O classification coverage around the now-explicit
+  `DynamicWasiIo` / `InterpreterBridge` / `Unsupported` split.
 - Keep Track D queued after the runtime I/O containment/runtime split work is in a stable state.
 - Once Track F runtime support lands, sync `doc/LANGUAGE_SPEC.md` and runnable stdin examples.
 
