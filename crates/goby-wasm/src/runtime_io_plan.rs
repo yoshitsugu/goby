@@ -98,10 +98,11 @@ impl RuntimeIoClassification {
                     "compile-time fallback cannot consume stdin; use the runtime stdin execution path"
                         .to_string(),
             }),
-            // TODO(F3b): return a user-facing error here once classify_runtime_io
-            // assigns Unsupported to genuinely unsupported programs, so callers get a
-            // clear diagnostic instead of falling through to resolve_main_runtime_output_for_compile.
-            RuntimeIoClassification::Unsupported => Ok(None),
+            RuntimeIoClassification::Unsupported => Err(CodegenError {
+                message:
+                    "runtime I/O program shape is currently unsupported: no dynamic Wasm lowering exists and it is outside the temporary interpreter-bridge subset"
+                        .to_string(),
+            }),
             RuntimeIoClassification::NotRuntimeIo => Ok(None),
         }
     }
@@ -119,11 +120,10 @@ impl RuntimeIoClassification {
                     "runtime stdin execution path is only for interpreter-bridge programs; this program has static output and should be compiled to Wasm instead"
                         .to_string(),
             }),
-            // TODO(F3b): once Unsupported is assigned by classify_runtime_io, give a
-            // distinct message so callers can distinguish it from NotRuntimeIo.
             RuntimeIoClassification::Unsupported => Err(CodegenError {
-                message: "runtime stdin execution path is only for interpreter-bridge programs"
-                    .to_string(),
+                message:
+                    "runtime stdin execution path is only for interpreter-bridge programs; this runtime I/O shape is currently unsupported"
+                        .to_string(),
             }),
             RuntimeIoClassification::NotRuntimeIo => Err(CodegenError {
                 message: "runtime stdin execution path is only for interpreter-bridge programs"
@@ -142,15 +142,14 @@ impl RuntimeIoClassification {
 /// |---------|-----------|
 /// | `DynamicWasiIo(plan)` | Body contains `Read.read`/`Read.read_line` usage **and** matches a known [`RuntimeIoPlan`] shape that can be lowered to a WASI Wasm module. |
 /// | `StaticOutput(text)` | Body contains **no** runtime-read calls **and** every statement is a direct `print`/`println` with a string-literal argument.  The output is statically known at compile time. |
-/// | `InterpreterBridge` | Body contains runtime-read calls **but** no known `RuntimeIoPlan` shape matches.  The program is executed at runtime via the interpreter bridge (temporary migration mode). |
-/// | `Unsupported` | Reserved for F3b: runtime-read programs that neither match a `DynamicWasiIo` plan nor are expected to be executed via the interpreter bridge. Currently not assigned by this function. |
+/// | `InterpreterBridge` | Body contains runtime-read calls, does not match a known [`RuntimeIoPlan`], but does match the narrow temporary bridge subset retained while dynamic lowering grows. |
+/// | `Unsupported` | Body contains runtime-read calls but matches neither a known [`RuntimeIoPlan`] nor the narrow temporary interpreter-bridge subset. |
 /// | `NotRuntimeIo` | Body contains **no** runtime-read calls and is not a `StaticOutput` program (e.g. complex static evaluation via local bindings, arithmetic, etc.).  Falls through to `resolve_main_runtime_output_for_compile`. |
 ///
 /// # Ordering
 ///
 /// The function checks in priority order: `DynamicWasiIo` → `InterpreterBridge` →
-/// `StaticOutput` → `NotRuntimeIo`.  `Unsupported` is not yet assigned here; it will
-/// be wired in during F3b once the bridge surface is explicitly bounded.
+/// `Unsupported` → `StaticOutput` → `NotRuntimeIo`.
 ///
 /// # Stopping rule (F3a)
 ///
@@ -177,8 +176,11 @@ pub(crate) fn classify_runtime_io(
     if let Some(plan) = plan_runtime_io(module, stmts) {
         return RuntimeIoClassification::DynamicWasiIo(plan);
     }
-    if stmts.iter().any(stmt_contains_runtime_read) {
+    if belongs_on_interpreter_bridge(module, stmts) {
         return RuntimeIoClassification::InterpreterBridge;
+    }
+    if stmts.iter().any(stmt_contains_runtime_read) {
+        return RuntimeIoClassification::Unsupported;
     }
     if let Some(text) = plan_static_output(stmts) {
         return RuntimeIoClassification::StaticOutput(text);
@@ -724,6 +726,107 @@ fn split_lines_each_plan(
     None
 }
 
+fn belongs_on_interpreter_bridge(module: &Module, stmts: &[Stmt]) -> bool {
+    split_lines_each_bridge_plan(module, stmts)
+}
+
+fn split_lines_each_bridge_plan(module: &Module, stmts: &[Stmt]) -> bool {
+    let [read_stmt, rest @ ..] = stmts else {
+        return false;
+    };
+    let Some((text_name, InputReadMode::ReadAll)) = read_binding_mode(read_stmt) else {
+        return false;
+    };
+
+    for (each_index, each_stmt) in rest.iter().enumerate() {
+        let Stmt::Expr(each_expr) = each_stmt else {
+            continue;
+        };
+        let pre_each_stmts = &rest[..each_index];
+        let post_each_stmts = &rest[each_index + 1..];
+
+        if !post_each_stmts.iter().all(static_print_suffix_passthrough) {
+            continue;
+        }
+
+        for (split_index, split_stmt) in pre_each_stmts.iter().enumerate() {
+            let pre_split_stmts = &pre_each_stmts[..split_index];
+            let post_split_stmts = &pre_each_stmts[split_index + 1..];
+            let Some(lines_name) =
+                split_lines_binding_name(module, pre_split_stmts, split_stmt, text_name)
+            else {
+                continue;
+            };
+            let Some(iterated_name) =
+                resolve_alias_chain_terminal_name(post_split_stmts, lines_name)
+            else {
+                continue;
+            };
+            if split_lines_each_bridge_callback(module, pre_each_stmts, iterated_name, each_expr) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn static_print_suffix_passthrough(stmt: &Stmt) -> bool {
+    static_print_suffix(stmt).is_some()
+}
+
+fn split_lines_each_bridge_callback(
+    module: &Module,
+    callback_scope_stmts: &[Stmt],
+    lines_name: &str,
+    each_expr: &Expr,
+) -> bool {
+    let Some((each_head, each_args)) = flatten_direct_call(each_expr) else {
+        return false;
+    };
+    if !imported_head_matches_symbol(module, &each_head, "goby/list", "each")
+        || each_args.len() != 2
+        || !matches!(each_args[0], Expr::Var(name) if name == lines_name)
+    {
+        return false;
+    }
+
+    match each_args[1] {
+        Expr::Lambda { param, body } => {
+            bridge_callback_body_matches(body, param, callback_scope_stmts)
+        }
+        _ => false,
+    }
+}
+
+fn bridge_callback_body_matches(body: &Expr, param: &str, scope_stmts: &[Stmt]) -> bool {
+    let Expr::Call { callee, arg } = body else {
+        return false;
+    };
+    callee_output_mode(callee, scope_stmts).is_some()
+        && matches_transformed_interpolated_string(arg, param)
+}
+
+fn matches_transformed_interpolated_string(arg: &Expr, param: &str) -> bool {
+    let Expr::InterpolatedString(parts) = arg else {
+        return false;
+    };
+    let mut saw_param_expr = false;
+    let mut saw_non_empty_text = false;
+    for part in parts {
+        match part {
+            InterpolatedPart::Text(text) if !text.is_empty() => saw_non_empty_text = true,
+            InterpolatedPart::Text(_) => {}
+            InterpolatedPart::Expr(expr)
+                if !saw_param_expr && matches!(expr.as_ref(), Expr::Var(name) if name == param) =>
+            {
+                saw_param_expr = true;
+            }
+            _ => return false,
+        }
+    }
+    saw_param_expr && saw_non_empty_text
+}
+
 #[cfg(test)]
 mod tests {
     use goby_core::parse_module;
@@ -1237,6 +1340,23 @@ main =
     }
 
     #[test]
+    fn classifies_non_bridge_read_transform_as_unsupported() {
+        let (module, body) = main_stmts(
+            r#"
+main : Unit -> Unit can Print, Read
+main =
+  text = read()
+  decorated = "${text}!"
+  print decorated
+"#,
+        );
+        assert_eq!(
+            classify_runtime_io(&module, body.as_deref()),
+            RuntimeIoClassification::Unsupported
+        );
+    }
+
+    #[test]
     fn non_read_program_with_var_arg_is_not_runtime_io() {
         let (module, body) = main_stmts(
             r#"
@@ -1332,19 +1452,12 @@ main =
     }
 
     #[test]
-    // TODO(F3b): when F3b wires Unsupported assignment into classify_runtime_io,
-    // compile_module_wasm_or_error for Unsupported should return a user-facing Err
-    // rather than Ok(None). At that point this test assertion must be inverted to
-    // assert!(result.is_err()).
     fn unsupported_classification_does_not_produce_wasm() {
         let result = RuntimeIoClassification::Unsupported.compile_module_wasm_or_error();
-        assert_eq!(result, Ok(None));
+        assert!(result.is_err());
     }
 
     #[test]
-    // TODO(F3b): add an integration-level test in wasm_exports_and_smoke.rs that calls
-    // execute_module_with_stdin on a program classified as Unsupported, once
-    // classify_runtime_io actually assigns Unsupported to programs.
     fn unsupported_classification_rejects_interpreter_bridge_stdin() {
         let result = RuntimeIoClassification::Unsupported.require_interpreter_bridge_stdin();
         assert!(result.is_err());

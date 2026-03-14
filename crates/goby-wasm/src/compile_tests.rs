@@ -683,6 +683,30 @@ main =
 }
 
 #[test]
+fn compile_module_rejects_unsupported_runtime_io_shape() {
+    let source = r#"
+main : Unit -> Unit can Print, Read
+main =
+  text = read()
+  decorated = "${text}!"
+  print decorated
+"#;
+    let module = parse_module(source).expect("source should parse");
+    assert_eq!(
+        runtime_io_execution_kind(&module).expect("classification should succeed"),
+        crate::RuntimeIoExecutionKind::Unsupported,
+        "interpolated read transform should classify as Unsupported"
+    );
+    let err =
+        compile_module(&module).expect_err("unsupported runtime I/O shape should fail codegen");
+    assert!(
+        err.message.contains("unsupported"),
+        "unexpected error message: {}",
+        err.message
+    );
+}
+
+#[test]
 fn compile_module_routes_split_lines_each_through_dynamic_wasi_io_classification() {
     let source = r#"
 import goby/list ( each )

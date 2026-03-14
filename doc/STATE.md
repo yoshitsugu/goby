@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-14 (F3b echo suffix slice)
+Last updated: 2026-03-14 (F3b complete)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -25,6 +25,9 @@ This file is a restart-safe snapshot for resuming work after context reset.
   `print(read_line())` and `line = read_line(); println line`.
 - Echo-style dynamic Wasm lowering now also covers trailing static literal output,
   so shapes like `println(read_line()); print "done"` stay on the dynamic Wasm path.
+- F3b boundary work is now complete:
+  runtime-read programs outside known dynamic-Wasm plans and the remaining narrow
+  bridge subset are classified as `Unsupported` with explicit user-facing errors.
 - The original `read` + `split(text, "\n")` + `each ... println`
   sample shape now also compiles to dynamic WASI Wasm instead of requiring the
   interpreter-backed runtime bridge.
@@ -108,6 +111,11 @@ This file is a restart-safe snapshot for resuming work after context reset.
 - Echo runtime-I/O planning now also resolves local `print` / `println` aliases,
   including simple forwarded aliases, so shapes like
   `printer = print; text = read(); printer text` also compile to dynamic Wasm.
+- `classify_runtime_io` no longer treats every unmatched read-program as
+  `InterpreterBridge`; unmatched runtime-read shapes now split into:
+  - the intentionally narrow remaining bridge subset
+    (`read` + newline `split` + transformed `each` callback family),
+  - `Unsupported` for other runtime-read shapes with no current dynamic lowering.
 - The newline-splitting runtime-I/O planner/back-end path now models the callback output
   mode directly, so `each lines print` and `each lines println` both compile to dynamic
   Wasm, including the named-function callback spelling in addition to the direct lambda form.
@@ -144,6 +152,12 @@ This file is a restart-safe snapshot for resuming work after context reset.
   (no direct AST-shape conditionals in `lib.rs`). Stopping rule documented in
   `classify_runtime_io` doc comment. Five `DynamicWasiIo` round-trip tests added
   (classification + valid Wasm) covering all four Echo combinations and `SplitLinesEach`.
+- Track F Phase F3b is complete:
+  - echo-path planner coverage expanded to suffix-output and local output-alias forms.
+  - `Unsupported` is now assigned by `classify_runtime_io` for runtime-read programs
+    outside both dynamic lowering and the narrow temporary bridge subset.
+  - compile/bridge entrypoints now surface explicit `Unsupported` diagnostics instead
+    of silently falling through to compile-time fallback or generic bridge errors.
 
 ## Verified
 
@@ -155,12 +169,12 @@ This file is a restart-safe snapshot for resuming work after context reset.
 
 ## Next Work
 
-- Phase F3b: General lowering expansion
-  extend `RuntimeIoPlan` so it can represent more runtime-I/O programs without
-  planner-bypassing matcher growth; assign `Unsupported` in `classify_runtime_io`
-  for programs that neither match a `DynamicWasiIo` plan nor belong on the interpreter bridge.
+- Phase F3c: Backend ownership cleanup
+  reduce duplication in the WASI backend by extracting common stdin/stdout module
+  building blocks while keeping planning, lowering, and CLI execution boundaries clean.
 - Continue Track F by expanding `RuntimeIoPlan` expressiveness, not by adding new
   planner-bypassing runtime-I/O branches in `crates/goby-wasm/src/lib.rs`.
+- Track explicit shrinkage of temporary bridge coverage as matching dynamic lowerings land.
 - Keep Track D queued after the runtime I/O containment/runtime split work is in a stable state.
 - Once Track F runtime support lands, sync `doc/LANGUAGE_SPEC.md` and runnable stdin examples.
 

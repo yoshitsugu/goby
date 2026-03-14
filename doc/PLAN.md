@@ -701,7 +701,7 @@ Remaining:
     `RuntimeIoPlan` / `plan_runtime_io`, not add inline conditionals in call sites.
   - exit condition met: `DynamicWasiIo` shapes are routed through `RuntimeIoPlan::emit_wasm`;
     round-trip classification + Wasm tests added covering all four Echo combinations and SplitLinesEach.
-- [ ] Phase F3b: General lowering expansion
+- [x] Phase F3b: General lowering expansion
   - extend `RuntimeIoPlan` so it can represent more runtime-I/O programs without
     planner-bypassing matcher growth.
   - use that expanded plan to cover additional `Read.read ()` and `Read.read_line ()`
@@ -710,6 +710,14 @@ Remaining:
   - if this phase reveals that broad support is better served by a more general lowering
     path than by additional pattern coverage, prefer expanding the planning IR/backend
     rather than adding more matcher cases.
+  - completed slice summary:
+    - echo-path dynamic lowering now covers trailing static literal suffixes and local
+      output-function aliases (`print` / `println`, including simple forwarded aliases).
+    - `classify_runtime_io` now assigns `Unsupported` to runtime-read programs that match
+      neither a `DynamicWasiIo` plan nor the intentionally narrow temporary bridge subset.
+    - the temporary interpreter bridge is now explicitly reserved for the remaining
+      transformed `read + split(..., "\n") + each ...` callback family while broader
+      dynamic lowering remains future work.
 - [ ] Phase F3c: Backend ownership cleanup
   - reduce duplication in the WASI backend by extracting common stdin/stdout module
     building blocks.
