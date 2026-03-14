@@ -194,3 +194,12 @@ syntax/semantics.
   - stdin is decoded as UTF-8 with replacement for invalid sequences.
 - `@embed` default handlers are active for `main` effect validation and runtime
   fallback behavior where configured.
+- Execution runtime requirements:
+  - `Read` effects require a live WASI Preview 1 host at runtime.
+    stdin reads are not available at compile time.
+  - The minimum supported runtime is any WASI Preview 1-compliant host (e.g. `wasmtime run`).
+  - `Print`-only programs (e.g. `print "hello"`) do not require stdin at runtime;
+    the output string is determined during compilation and baked into a minimal Wasm
+    module that still executes through the WASI runtime host.
+    For programs that use `Read`, a dynamic Wasm module is generated and executed
+    against the runtime host's stdin/stdout.
