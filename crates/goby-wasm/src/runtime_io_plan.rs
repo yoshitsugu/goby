@@ -96,7 +96,7 @@ impl RuntimeIoClassification {
                     "compile-time fallback cannot consume stdin; use the runtime stdin execution path"
                         .to_string(),
             }),
-            // TODO(F2c): return a user-facing error here once classify_runtime_io
+            // TODO(F3b): return a user-facing error here once classify_runtime_io
             // assigns Unsupported to genuinely unsupported programs, so callers get a
             // clear diagnostic instead of falling through to resolve_main_runtime_output_for_compile.
             RuntimeIoClassification::Unsupported => Ok(None),
@@ -117,7 +117,7 @@ impl RuntimeIoClassification {
                     "runtime stdin execution path is only for interpreter-bridge programs; this program has static output and should be compiled to Wasm instead"
                         .to_string(),
             }),
-            // TODO(F2c): once Unsupported is assigned by classify_runtime_io, give a
+            // TODO(F3b): once Unsupported is assigned by classify_runtime_io, give a
             // distinct message so callers can distinguish it from NotRuntimeIo.
             RuntimeIoClassification::Unsupported => Err(CodegenError {
                 message: "runtime stdin execution path is only for interpreter-bridge programs"
@@ -131,6 +131,24 @@ impl RuntimeIoClassification {
     }
 }
 
+/// Classify a `main` body's runtime I/O posture into one of five explicit categories.
+///
+/// The classification determines which execution path `compile_module` and the CLI
+/// will choose.  The boundaries are:
+///
+/// | Variant | Condition |
+/// |---------|-----------|
+/// | `DynamicWasiIo(plan)` | Body contains `Read.read`/`Read.read_line` usage **and** matches a known [`RuntimeIoPlan`] shape that can be lowered to a WASI Wasm module. |
+/// | `StaticOutput(text)` | Body contains **no** runtime-read calls **and** every statement is a direct `print`/`println` with a string-literal argument.  The output is statically known at compile time. |
+/// | `InterpreterBridge` | Body contains runtime-read calls **but** no known `RuntimeIoPlan` shape matches.  The program is executed at runtime via the interpreter bridge (temporary migration mode). |
+/// | `Unsupported` | Reserved for F3b: runtime-read programs that neither match a `DynamicWasiIo` plan nor are expected to be executed via the interpreter bridge. Currently not assigned by this function. |
+/// | `NotRuntimeIo` | Body contains **no** runtime-read calls and is not a `StaticOutput` program (e.g. complex static evaluation via local bindings, arithmetic, etc.).  Falls through to `resolve_main_runtime_output_for_compile`. |
+///
+/// # Ordering
+///
+/// The function checks in priority order: `DynamicWasiIo` → `InterpreterBridge` →
+/// `StaticOutput` → `NotRuntimeIo`.  `Unsupported` is not yet assigned here; it will
+/// be wired in during F3b once the bridge surface is explicitly bounded.
 pub(crate) fn classify_runtime_io(
     module: &Module,
     parsed_body: Option<&[Stmt]>,
@@ -1168,6 +1186,9 @@ main =
     }
 
     #[test]
+    // TODO(F3b): add an integration-level test in wasm_exports_and_smoke.rs that calls
+    // execute_module_with_stdin on a program classified as Unsupported, once
+    // classify_runtime_io actually assigns Unsupported to programs.
     fn unsupported_classification_rejects_interpreter_bridge_stdin() {
         let result = RuntimeIoClassification::Unsupported.require_interpreter_bridge_stdin();
         assert!(result.is_err());

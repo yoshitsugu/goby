@@ -213,6 +213,29 @@ pub fn compile_module(module: &Module) -> Result<Vec<u8>, CodegenError> {
     ))
 }
 
+/// Execute an [`InterpreterBridge`][`crate::RuntimeIoExecutionKind::InterpreterBridge`]
+/// program using the interpreter runtime, seeding stdin with `stdin_seed`.
+///
+/// # Temporary bridge — marked for shrinkage
+///
+/// This function is a **temporary migration aid** intended only for programs that
+/// the planner classifies as [`RuntimeIoExecutionKind::InterpreterBridge`].  It must
+/// not be used as a general-purpose execution path:
+///
+/// - It rejects programs classified as `DynamicWasiIo`, `StaticOutput`, `Unsupported`,
+///   or `NotRuntimeIo` via an internal guard.
+/// - New work should prefer shrinking the set of programs that reach this path by
+///   extending `DynamicWasiIo` plan support,
+///   not by widening this function's accepted surface.
+/// - This function is intended to be called only from the CLI `run` command.
+///   It is `pub` only because the CLI lives in a separate crate.
+///
+/// # Errors
+///
+/// Returns [`CodegenError`] when:
+/// - `main` declaration is missing.
+/// - The program is not classified as `InterpreterBridge`.
+/// - The interpreter cannot resolve the program's runtime output.
 pub fn execute_module_with_stdin(
     module: &Module,
     stdin_seed: Option<String>,

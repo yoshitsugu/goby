@@ -116,7 +116,14 @@ fn run() -> Result<(), CliError> {
                     }
                 }
             }
-            Err(err)
+            // compile_module returns Err for InterpreterBridge programs because
+            // compile_module_wasm_or_error explicitly rejects them (they cannot be
+            // compiled to a static Wasm module at this time).  We re-check the
+            // classification here rather than inspecting `_err` directly so that the
+            // bridge path is gated on the planner's decision, not on the error message.
+            // This is a temporary fallback: as DynamicWasiIo support grows, fewer
+            // programs should reach this branch.
+            Err(_err)
                 if matches!(
                     goby_wasm::runtime_io_execution_kind(&module),
                     Ok(goby_wasm::RuntimeIoExecutionKind::InterpreterBridge)

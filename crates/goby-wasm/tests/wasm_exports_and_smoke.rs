@@ -625,3 +625,56 @@ fn emits_valid_wasm_for_function_example() {
     let wasm = compile_module(&module).expect("codegen");
     assert_valid_wasm_module(&wasm);
 }
+
+#[test]
+fn execute_module_with_stdin_rejects_static_output_program() {
+    // StaticOutput programs compile directly to Wasm and do not go through the
+    // interpreter bridge; execute_module_with_stdin must reject them.
+    let module = parse_module(
+        r#"
+main : Unit -> Unit can Print
+main =
+  println "hello"
+"#,
+    )
+    .expect("parse should work");
+    assert_eq!(
+        runtime_io_execution_kind(&module).expect("classification should succeed"),
+        goby_wasm::RuntimeIoExecutionKind::StaticOutput,
+        "program should be classified as StaticOutput"
+    );
+    let err = execute_module_with_stdin(&module, None)
+        .expect_err("static output program should not use interpreter bridge path");
+    assert!(
+        err.message.contains("static output"),
+        "unexpected error message: {}",
+        err.message
+    );
+}
+
+#[test]
+fn execute_module_with_stdin_rejects_not_runtime_io_program() {
+    // NotRuntimeIo programs (complex static evaluation via variable bindings etc.)
+    // are also not valid interpreter-bridge inputs.
+    let module = parse_module(
+        r#"
+main : Unit -> Unit can Print
+main =
+  msg = "hello"
+  println msg
+"#,
+    )
+    .expect("parse should work");
+    assert_eq!(
+        runtime_io_execution_kind(&module).expect("classification should succeed"),
+        goby_wasm::RuntimeIoExecutionKind::NotRuntimeIo,
+        "program should be classified as NotRuntimeIo"
+    );
+    let err = execute_module_with_stdin(&module, None)
+        .expect_err("not-runtime-io program should not use interpreter bridge path");
+    assert!(
+        err.message.contains("interpreter-bridge"),
+        "unexpected error message: {}",
+        err.message
+    );
+}
