@@ -115,7 +115,10 @@ impl WasmProgramBuilder {
     pub(crate) fn emit_read_all_to_stdout_module(
         &self,
         append_newline: bool,
+        suffix_prints: &[StaticPrintSuffix],
     ) -> Result<Vec<u8>, CodegenError> {
+        let suffix_payloads = encode_static_print_suffix_payloads(suffix_prints);
+        let suffix_bytes_total: usize = suffix_payloads.iter().map(Vec::len).sum();
         let buffer_ptr = i32::try_from(self.layout.heap_base).map_err(|_| CodegenError {
             message: "heap base does not fit in i32".to_string(),
         })?;
@@ -126,9 +129,26 @@ impl WasmProgramBuilder {
             i32::try_from(self.layout.nwritten_offset).map_err(|_| CodegenError {
                 message: "nread offset does not fit in i32".to_string(),
             })?;
-        let buffer_len =
-            i32::try_from(WASM_PAGE_BYTES - self.layout.heap_base).map_err(|_| CodegenError {
-                message: "stdin buffer length does not fit in i32".to_string(),
+        let buffer_len = i32::try_from(
+            usize::try_from(WASM_PAGE_BYTES - self.layout.heap_base)
+                .map_err(|_| CodegenError {
+                    message: "stdin buffer length does not fit in usize".to_string(),
+                })?
+                .checked_sub(suffix_bytes_total)
+                .ok_or_else(|| CodegenError {
+                    message: "static print suffixes leave no room for stdin buffer".to_string(),
+                })?,
+        )
+        .map_err(|_| CodegenError {
+            message: "stdin buffer length does not fit in i32".to_string(),
+        })?;
+        let suffix_base = usize::try_from(WASM_PAGE_BYTES)
+            .map_err(|_| CodegenError {
+                message: "wasm page size does not fit in usize".to_string(),
+            })?
+            .checked_sub(suffix_bytes_total)
+            .ok_or_else(|| CodegenError {
+                message: "static print suffix payloads overflow wasm memory page".to_string(),
             })?;
         let newline_ptr = i32::try_from(self.layout.heap_base - 1).map_err(|_| CodegenError {
             message: "newline pointer does not fit in i32".to_string(),
@@ -248,16 +268,24 @@ impl WasmProgramBuilder {
             function.instruction(&Instruction::Call(1));
             function.instruction(&Instruction::Drop);
         }
+        emit_static_suffix_writes(
+            &mut function,
+            iovec_offset,
+            nread_offset,
+            suffix_base,
+            &suffix_payloads,
+        )?;
         function.instruction(&Instruction::End);
 
         code.function(&function);
         module.section(&code);
 
-        if append_newline {
-            let mut data = DataSection::new();
-            data.active(0, &ConstExpr::i32_const(newline_ptr), b"\n".to_vec());
-            module.section(&data);
-        }
+        emit_runtime_io_data_section(
+            &mut module,
+            append_newline.then_some(newline_ptr),
+            suffix_base,
+            &suffix_payloads,
+        )?;
 
         Ok(module.finish())
     }
@@ -265,7 +293,10 @@ impl WasmProgramBuilder {
     pub(crate) fn emit_read_line_to_stdout_module(
         &self,
         append_newline: bool,
+        suffix_prints: &[StaticPrintSuffix],
     ) -> Result<Vec<u8>, CodegenError> {
+        let suffix_payloads = encode_static_print_suffix_payloads(suffix_prints);
+        let suffix_bytes_total: usize = suffix_payloads.iter().map(Vec::len).sum();
         let buffer_ptr = i32::try_from(self.layout.heap_base).map_err(|_| CodegenError {
             message: "heap base does not fit in i32".to_string(),
         })?;
@@ -276,9 +307,26 @@ impl WasmProgramBuilder {
             i32::try_from(self.layout.nwritten_offset).map_err(|_| CodegenError {
                 message: "nread offset does not fit in i32".to_string(),
             })?;
-        let buffer_len =
-            i32::try_from(WASM_PAGE_BYTES - self.layout.heap_base).map_err(|_| CodegenError {
-                message: "stdin buffer length does not fit in i32".to_string(),
+        let buffer_len = i32::try_from(
+            usize::try_from(WASM_PAGE_BYTES - self.layout.heap_base)
+                .map_err(|_| CodegenError {
+                    message: "stdin buffer length does not fit in usize".to_string(),
+                })?
+                .checked_sub(suffix_bytes_total)
+                .ok_or_else(|| CodegenError {
+                    message: "static print suffixes leave no room for stdin buffer".to_string(),
+                })?,
+        )
+        .map_err(|_| CodegenError {
+            message: "stdin buffer length does not fit in i32".to_string(),
+        })?;
+        let suffix_base = usize::try_from(WASM_PAGE_BYTES)
+            .map_err(|_| CodegenError {
+                message: "wasm page size does not fit in usize".to_string(),
+            })?
+            .checked_sub(suffix_bytes_total)
+            .ok_or_else(|| CodegenError {
+                message: "static print suffix payloads overflow wasm memory page".to_string(),
             })?;
         let newline_ptr = i32::try_from(self.layout.heap_base - 1).map_err(|_| CodegenError {
             message: "newline pointer does not fit in i32".to_string(),
@@ -443,17 +491,25 @@ impl WasmProgramBuilder {
             function.instruction(&Instruction::Call(1));
             function.instruction(&Instruction::Drop);
         }
+        emit_static_suffix_writes(
+            &mut function,
+            iovec_offset,
+            nread_offset,
+            suffix_base,
+            &suffix_payloads,
+        )?;
 
         function.instruction(&Instruction::End);
 
         code.function(&function);
         module.section(&code);
 
-        if append_newline {
-            let mut data = DataSection::new();
-            data.active(0, &ConstExpr::i32_const(newline_ptr), b"\n".to_vec());
-            module.section(&data);
-        }
+        emit_runtime_io_data_section(
+            &mut module,
+            append_newline.then_some(newline_ptr),
+            suffix_base,
+            &suffix_payloads,
+        )?;
 
         Ok(module.finish())
     }
@@ -657,35 +713,80 @@ impl WasmProgramBuilder {
         code.function(&function);
         module.section(&code);
 
-        if append_newline {
-            let mut data = DataSection::new();
-            data.active(0, &ConstExpr::i32_const(newline_ptr), b"\n".to_vec());
-            let mut suffix_ptr = i32::try_from(suffix_base).map_err(|_| CodegenError {
-                message: "static print suffix base does not fit in i32".to_string(),
-            })?;
-            for payload in &suffix_payloads {
-                data.active(0, &ConstExpr::i32_const(suffix_ptr), payload.clone());
-                suffix_ptr += i32::try_from(payload.len()).map_err(|_| CodegenError {
-                    message: "static print suffix length does not fit in i32".to_string(),
-                })?;
-            }
-            module.section(&data);
-        } else if !suffix_payloads.is_empty() {
-            let mut data = DataSection::new();
-            let mut suffix_ptr = i32::try_from(suffix_base).map_err(|_| CodegenError {
-                message: "static print suffix base does not fit in i32".to_string(),
-            })?;
-            for payload in &suffix_payloads {
-                data.active(0, &ConstExpr::i32_const(suffix_ptr), payload.clone());
-                suffix_ptr += i32::try_from(payload.len()).map_err(|_| CodegenError {
-                    message: "static print suffix length does not fit in i32".to_string(),
-                })?;
-            }
-            module.section(&data);
-        }
+        emit_runtime_io_data_section(
+            &mut module,
+            append_newline.then_some(newline_ptr),
+            suffix_base,
+            &suffix_payloads,
+        )?;
 
         Ok(module.finish())
     }
+}
+
+fn emit_static_suffix_writes(
+    function: &mut Function,
+    iovec_offset: i32,
+    nread_offset: i32,
+    suffix_base: usize,
+    suffix_payloads: &[Vec<u8>],
+) -> Result<(), CodegenError> {
+    let mut suffix_ptr = i32::try_from(suffix_base).map_err(|_| CodegenError {
+        message: "static print suffix base does not fit in i32".to_string(),
+    })?;
+    for payload in suffix_payloads {
+        let payload_len = i32::try_from(payload.len()).map_err(|_| CodegenError {
+            message: "static print suffix length does not fit in i32".to_string(),
+        })?;
+        function.instruction(&Instruction::I32Const(iovec_offset));
+        function.instruction(&Instruction::I32Const(suffix_ptr));
+        function.instruction(&Instruction::I32Store(MemArg {
+            offset: 0,
+            align: 2,
+            memory_index: 0,
+        }));
+        function.instruction(&Instruction::I32Const(iovec_offset + 4));
+        function.instruction(&Instruction::I32Const(payload_len));
+        function.instruction(&Instruction::I32Store(MemArg {
+            offset: 0,
+            align: 2,
+            memory_index: 0,
+        }));
+        function.instruction(&Instruction::I32Const(1));
+        function.instruction(&Instruction::I32Const(iovec_offset));
+        function.instruction(&Instruction::I32Const(1));
+        function.instruction(&Instruction::I32Const(nread_offset));
+        function.instruction(&Instruction::Call(1));
+        function.instruction(&Instruction::Drop);
+        suffix_ptr += payload_len;
+    }
+    Ok(())
+}
+
+fn emit_runtime_io_data_section(
+    module: &mut Module,
+    newline_ptr: Option<i32>,
+    suffix_base: usize,
+    suffix_payloads: &[Vec<u8>],
+) -> Result<(), CodegenError> {
+    if newline_ptr.is_none() && suffix_payloads.is_empty() {
+        return Ok(());
+    }
+    let mut data = DataSection::new();
+    if let Some(newline_ptr) = newline_ptr {
+        data.active(0, &ConstExpr::i32_const(newline_ptr), b"\n".to_vec());
+    }
+    let mut suffix_ptr = i32::try_from(suffix_base).map_err(|_| CodegenError {
+        message: "static print suffix base does not fit in i32".to_string(),
+    })?;
+    for payload in suffix_payloads {
+        data.active(0, &ConstExpr::i32_const(suffix_ptr), payload.clone());
+        suffix_ptr += i32::try_from(payload.len()).map_err(|_| CodegenError {
+            message: "static print suffix length does not fit in i32".to_string(),
+        })?;
+    }
+    module.section(&data);
+    Ok(())
 }
 
 fn encode_static_print_suffix_payloads(suffix_prints: &[StaticPrintSuffix]) -> Vec<Vec<u8>> {

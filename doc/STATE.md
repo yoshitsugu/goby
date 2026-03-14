@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-14 (F3a complete)
+Last updated: 2026-03-14 (F3b echo suffix slice)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -23,6 +23,8 @@ This file is a restart-safe snapshot for resuming work after context reset.
   `println(read())` and `text = read(); print/println text`.
 - The first `read_line()`-based dynamic Wasm shapes now work too:
   `print(read_line())` and `line = read_line(); println line`.
+- Echo-style dynamic Wasm lowering now also covers trailing static literal output,
+  so shapes like `println(read_line()); print "done"` stay on the dynamic Wasm path.
 - The original `read` + `split(text, "\n")` + `each ... println`
   sample shape now also compiles to dynamic WASI Wasm instead of requiring the
   interpreter-backed runtime bridge.
@@ -100,6 +102,9 @@ This file is a restart-safe snapshot for resuming work after context reset.
 - Echo and newline-splitting runtime-I/O planning now follow simple local alias chains
   instead of stopping after a single forwarded binding, while bridge-only regression
   coverage has moved to nearby unsupported callback-body shapes such as `each ... print`.
+- Echo runtime-I/O planning can now also carry trailing static literal
+  `print` / `println` suffixes after the dynamic read echo step, so nearby
+  shapes like `print(read()); println "done"` no longer need the interpreter bridge.
 - The newline-splitting runtime-I/O planner/back-end path now models the callback output
   mode directly, so `each lines print` and `each lines println` both compile to dynamic
   Wasm, including the named-function callback spelling in addition to the direct lambda form.
@@ -141,7 +146,9 @@ This file is a restart-safe snapshot for resuming work after context reset.
 
 - `cargo fmt`
 - `cargo check`
+- `cargo test -p goby-wasm`
 - `cargo test`
+  - currently fails in existing `goby-core` example/stdlib path-dependent tests unrelated to this slice.
 
 ## Next Work
 

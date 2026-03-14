@@ -30,6 +30,7 @@ pub(crate) enum RuntimeIoPlan {
     Echo {
         input_mode: InputReadMode,
         output_mode: OutputReadMode,
+        suffix_prints: Vec<StaticPrintSuffix>,
     },
     SplitLinesEach {
         output_mode: OutputReadMode,
@@ -62,14 +63,15 @@ impl RuntimeIoPlan {
             RuntimeIoPlan::Echo {
                 input_mode,
                 output_mode,
+                suffix_prints,
             } => {
                 let append_newline = matches!(output_mode, OutputReadMode::Println);
                 match input_mode {
                     InputReadMode::ReadAll => {
-                        builder.emit_read_all_to_stdout_module(append_newline)
+                        builder.emit_read_all_to_stdout_module(append_newline, &suffix_prints)
                     }
                     InputReadMode::ReadLine => {
-                        builder.emit_read_line_to_stdout_module(append_newline)
+                        builder.emit_read_line_to_stdout_module(append_newline, &suffix_prints)
                     }
                 }
             }
@@ -257,11 +259,13 @@ fn plan_runtime_io(module: &Module, stmts: &[Stmt]) -> Option<RuntimeIoPlan> {
 }
 
 fn plan_echo_runtime_io(stmts: &[Stmt]) -> Option<RuntimeIoPlan> {
-    match stmts {
+    let (echo_stmts, suffix_prints) = split_trailing_static_print_suffixes(stmts)?;
+    match echo_stmts {
         [Stmt::Expr(expr)] => {
             output_read_mode(expr).map(|(input_mode, output_mode)| RuntimeIoPlan::Echo {
                 input_mode,
                 output_mode,
+                suffix_prints,
             })
         }
         [
@@ -271,7 +275,7 @@ fn plan_echo_runtime_io(stmts: &[Stmt]) -> Option<RuntimeIoPlan> {
         ] => {
             let (source_name, input_mode) = read_binding_mode(read_stmt)?;
             let printed_name = resolve_alias_chain_terminal_name(middle, source_name)?;
-            plan_bound_echo_shape(input_mode, printed_name, callee, arg)
+            plan_bound_echo_shape(input_mode, printed_name, callee, arg, suffix_prints)
         }
         _ => None,
     }
@@ -282,6 +286,7 @@ fn plan_bound_echo_shape(
     printed_name: &str,
     callee: &Expr,
     arg: &Expr,
+    suffix_prints: Vec<StaticPrintSuffix>,
 ) -> Option<RuntimeIoPlan> {
     if !matches!(arg, Expr::Var(var_name) if var_name == printed_name) {
         return None;
@@ -293,10 +298,12 @@ fn plan_bound_echo_shape(
         "print" => Some(RuntimeIoPlan::Echo {
             input_mode,
             output_mode: OutputReadMode::Print,
+            suffix_prints,
         }),
         "println" => Some(RuntimeIoPlan::Echo {
             input_mode,
             output_mode: OutputReadMode::Println,
+            suffix_prints,
         }),
         _ => None,
     }
@@ -645,6 +652,25 @@ fn collect_static_print_suffixes(stmts: &[Stmt]) -> Option<Vec<StaticPrintSuffix
     stmts.iter().map(static_print_suffix).collect()
 }
 
+fn split_trailing_static_print_suffixes(
+    stmts: &[Stmt],
+) -> Option<(&[Stmt], Vec<StaticPrintSuffix>)> {
+    if stmts.is_empty() {
+        return None;
+    }
+    let suffix_len = stmts
+        .iter()
+        .rev()
+        .take_while(|stmt| static_print_suffix(stmt).is_some())
+        .count();
+    let split_index = stmts.len().checked_sub(suffix_len)?;
+    let (prefix, suffix_stmts) = stmts.split_at(split_index);
+    if prefix.is_empty() {
+        return None;
+    }
+    Some((prefix, collect_static_print_suffixes(suffix_stmts)?))
+}
+
 fn split_lines_each_plan(
     module: &Module,
     stmts: &[Stmt],
@@ -726,6 +752,7 @@ main =
             RuntimeIoClassification::DynamicWasiIo(RuntimeIoPlan::Echo {
                 input_mode: InputReadMode::ReadAll,
                 output_mode: OutputReadMode::Print,
+                suffix_prints: vec![],
             })
         );
     }
@@ -1053,6 +1080,7 @@ main =
             RuntimeIoClassification::DynamicWasiIo(RuntimeIoPlan::Echo {
                 input_mode: InputReadMode::ReadAll,
                 output_mode: OutputReadMode::Print,
+                suffix_prints: vec![],
             })
         );
     }
@@ -1073,6 +1101,62 @@ main =
             RuntimeIoClassification::DynamicWasiIo(RuntimeIoPlan::Echo {
                 input_mode: InputReadMode::ReadLine,
                 output_mode: OutputReadMode::Println,
+                suffix_prints: vec![],
+            })
+        );
+    }
+
+    #[test]
+    fn plans_read_echo_with_static_print_suffixes() {
+        let (module, body) = main_stmts(
+            r#"
+main : Unit -> Unit can Print, Read
+main =
+  print (read())
+  println "done"
+  print "!"
+"#,
+        );
+        assert_eq!(
+            classify_runtime_io(&module, body.as_deref()),
+            RuntimeIoClassification::DynamicWasiIo(RuntimeIoPlan::Echo {
+                input_mode: InputReadMode::ReadAll,
+                output_mode: OutputReadMode::Print,
+                suffix_prints: vec![
+                    StaticPrintSuffix {
+                        text: "done".to_string(),
+                        output_mode: OutputReadMode::Println,
+                    },
+                    StaticPrintSuffix {
+                        text: "!".to_string(),
+                        output_mode: OutputReadMode::Print,
+                    },
+                ],
+            })
+        );
+    }
+
+    #[test]
+    fn plans_bound_read_line_echo_with_static_print_suffixes() {
+        let (module, body) = main_stmts(
+            r#"
+main : Unit -> Unit can Print, Read
+main =
+  line = read_line()
+  copied = line
+  println copied
+  print "done"
+"#,
+        );
+        assert_eq!(
+            classify_runtime_io(&module, body.as_deref()),
+            RuntimeIoClassification::DynamicWasiIo(RuntimeIoPlan::Echo {
+                input_mode: InputReadMode::ReadLine,
+                output_mode: OutputReadMode::Println,
+                suffix_prints: vec![StaticPrintSuffix {
+                    text: "done".to_string(),
+                    output_mode: OutputReadMode::Print,
+                }],
             })
         );
     }

@@ -527,6 +527,24 @@ main =
 }
 
 #[test]
+fn read_line_echo_with_static_suffixes_emits_wasm_with_fd_read_and_fd_write_imports() {
+    let module = parse_module(
+        r#"
+main : Unit -> Unit can Print, Read
+main =
+  line = read_line()
+  println line
+  print "done"
+"#,
+    )
+    .expect("parse should work");
+    let wasm = compile_module(&module)
+        .expect("read_line echo with static suffixes should compile to Wasm");
+    assert_valid_wasm_module(&wasm);
+    assert_has_fd_read_and_fd_write_imports(&wasm);
+}
+
+#[test]
 fn execute_module_with_stdin_runs_read_program_at_runtime() {
     let module = parse_module(
         r#"
