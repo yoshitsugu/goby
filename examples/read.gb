@@ -1,3 +1,13 @@
+# Example: Read effect (read_line + read)
+#
+# This example demonstrates the Read effect interface.
+# goby check passes; goby run is not yet supported for this shape
+# (mixed read_line + read with interpolated output is currently Unsupported).
+#
+# For a runnable stdin example see the split-lines pattern:
+#   text = read()
+#   lines = split(text, "\n")
+#   each lines println
 main : Unit -> Unit can Print, Read
 main =
   line = Read.read_line ()
