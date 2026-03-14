@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-14 (F3c complete)
+Last updated: 2026-03-14 (F3c complete + string.graphemes)
 
 This file is a restart-safe snapshot for resuming work after context reset.
 
@@ -9,6 +9,9 @@ This file is a restart-safe snapshot for resuming work after context reset.
 - Planning slice recorded for Track D developer tooling.
 - `doc/PLAN.md` now contains a phased `goby-lsp` implementation plan under Active Track D.
 - `doc/PLAN.md` also records Active Track E for `Float` support backed by Wasm `f64`.
+- Stdlib `goby/string` now exports `graphemes : String -> List String`,
+  implemented by reusing the existing grapheme intrinsic path instead of adding a
+  separate runtime builtin.
 - Higher-order named function references are now documented explicitly
   (for example: `map xs add_ten`).
 - Track F Phase F1 containment is now implemented:

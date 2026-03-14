@@ -166,6 +166,12 @@ syntax/semantics.
 
 - Builtins currently include `print`, `fetch_env_var`, `string.split`, `list.join`.
 - List mapping is provided via stdlib `goby/list.map`.
+- Stdlib `goby/string` currently provides:
+  - `length : String -> Int`
+  - `split : String -> String -> List String`
+  - `graphemes : String -> List String`
+    - returns Unicode Extended Grapheme Cluster segments in source order.
+    - `""` returns `[]`.
 - Iterator runtime intrinsic contract (current):
   - `__goby_string_each_grapheme` expects handler operation
     `yield : String -> state -> (Bool, state)`.

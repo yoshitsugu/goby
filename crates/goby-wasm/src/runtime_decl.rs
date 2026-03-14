@@ -1,5 +1,6 @@
 use super::*;
 use crate::runtime_support::flatten_direct_call;
+use unicode_segmentation::UnicodeSegmentation;
 
 impl<'m> RuntimeOutputResolver<'m> {
     pub(super) fn try_eval_imported_decl_call_as_value(
@@ -40,6 +41,21 @@ impl<'m> RuntimeOutputResolver<'m> {
                     };
                     Some(RuntimeValue::ListString(parts))
                 }
+                _ => None,
+            };
+        }
+        if self.imported_head_matches_string_graphemes(&head) && args.len() == 1 {
+            let value = self.eval_expr_to_option(
+                &args[0],
+                caller_locals,
+                caller_callables,
+                evaluators,
+                depth + 1,
+            )?;
+            return match value {
+                RuntimeValue::String(s) => Some(RuntimeValue::ListString(
+                    s.graphemes(true).map(|part| part.to_string()).collect(),
+                )),
                 _ => None,
             };
         }
@@ -113,6 +129,38 @@ impl<'m> RuntimeOutputResolver<'m> {
                     })
             }
             DirectCallHead::Qualified { receiver, member } if member == "split" => {
+                effective_runtime_imports(self.current_runtime_module())
+                    .into_iter()
+                    .any(|import| {
+                        if import.module_path != "goby/string" {
+                            return false;
+                        }
+                        match import.kind {
+                            goby_core::ImportKind::Plain => import
+                                .module_path
+                                .rsplit('/')
+                                .next()
+                                .is_some_and(|qualifier| qualifier == receiver),
+                            goby_core::ImportKind::Alias(alias) => alias == *receiver,
+                            goby_core::ImportKind::Selective(_) => false,
+                        }
+                    })
+            }
+            _ => false,
+        }
+    }
+
+    fn imported_head_matches_string_graphemes(&self, head: &DirectCallHead) -> bool {
+        match head {
+            DirectCallHead::Bare(name) if name == "graphemes" => {
+                effective_runtime_imports(self.current_runtime_module())
+                    .into_iter()
+                    .any(|import| {
+                        import.module_path == "goby/string"
+                            && runtime_import_selects_name(&import.kind, "graphemes")
+                    })
+            }
+            DirectCallHead::Qualified { receiver, member } if member == "graphemes" => {
                 effective_runtime_imports(self.current_runtime_module())
                     .into_iter()
                     .any(|import| {

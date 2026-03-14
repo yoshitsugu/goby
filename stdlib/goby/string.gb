@@ -78,5 +78,27 @@ split value sep =
       else
         string.split(value, sep)
 
+graphemes : String -> List String
+graphemes value =
+  initial =
+    GraphemeState(grapheme: "", parts: [], current: "", delimiter: "", seen: False)
+  mut final = initial
+  with
+    yield grapheme step ->
+      next_parts = __goby_list_push_string step.parts grapheme
+      resume (True, GraphemeState(
+        grapheme: "",
+        parts: next_parts,
+        current: "",
+        delimiter: "",
+        seen: True
+      ))
+  in
+    final := __goby_string_each_grapheme value initial
+  if final.seen
+    final.parts
+  else
+    []
+
 length : String -> Int
 length value = __goby_string_length value

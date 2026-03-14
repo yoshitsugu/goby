@@ -1,0 +1,5 @@
+import goby/string ( graphemes )
+
+main : Unit -> Unit
+main =
+  print (graphemes "Go👨‍👩‍👧‍👦!")

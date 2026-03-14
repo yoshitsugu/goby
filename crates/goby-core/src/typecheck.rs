@@ -1367,6 +1367,17 @@ f = string.split(\"a,b\", \",\")
     }
 
     #[test]
+    fn baseline_selective_import_exposes_string_graphemes() {
+        let source = "\
+import goby/string ( graphemes )
+f : Unit -> List String
+f = graphemes(\"a👨‍👩‍👧‍👦b\")
+";
+        let module = parse_module(source).expect("should parse");
+        typecheck_module(&module).expect("selective import should expose stdlib string.graphemes");
+    }
+
+    #[test]
     fn baseline_alias_import_works_with_qualified_access() {
         let source = "\
 import goby/list as l

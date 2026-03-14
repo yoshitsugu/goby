@@ -394,6 +394,26 @@ main =
 }
 
 #[test]
+fn resolves_runtime_output_for_imported_string_graphemes_with_selective_import() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    let source = r#"
+import goby/string ( graphemes )
+
+main : Unit -> Unit
+main =
+  print (graphemes "a👨‍👩‍👧‍👦b")
+"#;
+    let module = parse_module(source).expect("parse should work");
+    let output =
+        resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
+            .expect("runtime output should resolve");
+    assert_eq!(
+        output,
+        "[\"a\", \"👨\u{200d}👩\u{200d}👧\u{200d}👦\", \"b\"]"
+    );
+}
+
+#[test]
 fn resolves_runtime_output_for_imported_list_map_with_ints() {
     let _guard = ENV_MUTEX.lock().unwrap();
     let source = r#"

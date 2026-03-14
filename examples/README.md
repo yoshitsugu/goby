@@ -10,6 +10,7 @@ This directory contains small Goby programs grouped by purpose.
 - `function_reference.gb`: named-function callback sample (`map xs add_ten`)
 - `read.gb`: minimal stdin sample using prelude `Read.read_line` and `Read.read`
 - `to_integer.gb`: `int.parse` sample with `StringParseError` handler
+- `string_graphemes.gb`: `string.graphemes` sample returning Unicode grapheme clusters
 - `list_case.gb`: list `case` pattern sample (`[]`, `[1]`, `[4, ..]`, `[a, ..b]`, `[_, _]`, `_`)
 - `list_spread.gb`: expression-side list spread sample (`[1, ..xs]`, `[1, ..map xs f]`)
 - `case_arm_block.gb`: `case` arm block sample (`pattern ->` + indented block body)

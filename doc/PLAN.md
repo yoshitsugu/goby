@@ -407,7 +407,8 @@ predictable.
   - implicit `goby/prelude`,
   - Unit value `()` path,
   - `Print` split (`print` / `println`),
-  - `Read` default handler (`read`, `read_line`).
+  - `Read` default handler (`read`, `read_line`),
+  - `goby/string.graphemes` iterator-backed Unicode grapheme segmentation helper.
 - Editor syntax packs (VSCode/Emacs/Vim/TextMate) are implemented.
 
 Note: detailed execution history for these items is retained in git history and
