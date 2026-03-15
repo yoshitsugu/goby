@@ -835,7 +835,7 @@ main = ()
     }
 
     #[test]
-    fn rejects_effect_use_in_handler_clause_when_member_dependency_is_not_declared() {
+    fn rejects_uncovered_effect_op_in_handler_clause_body() {
         let source = "\
 effect Log
   log : String -> Unit
@@ -856,6 +856,75 @@ main =
             err.message
                 .contains("effect operation `log` is not handled")
         );
+    }
+
+    #[test]
+    fn accepts_effect_in_handler_clause_when_covered_by_outer_with() {
+        // handler clause body can use an effect op that is covered by an outer `with`
+        let source = "\
+effect Log
+  log : String -> Unit
+effect Trace
+  trace : String -> Unit
+main : Unit -> Unit
+main =
+  with
+    log str -> resume ()
+  in
+    with
+      trace msg ->
+        log msg
+    in
+      trace \"x\"
+";
+        let module = parse_module(source).expect("should parse");
+        typecheck_module(&module)
+            .expect("handler clause body can use effect op covered by outer with");
+    }
+
+    #[test]
+    fn accepts_effect_in_handler_clause_when_covered_by_can_clause() {
+        // handler clause body can use an effect op that is covered by the function's can clause
+        let source = "\
+effect Log
+  log : String -> Unit
+effect Trace
+  trace : String -> Unit
+f : Unit -> Unit can Trace, Log
+f =
+  with
+    trace msg ->
+      log msg
+  in
+    trace \"x\"
+main : Unit -> Unit
+main = ()
+";
+        let module = parse_module(source).expect("should parse");
+        typecheck_module(&module)
+            .expect("handler clause body can use effect op covered by caller can clause");
+    }
+
+    #[test]
+    fn rejects_sibling_op_in_handler_clause_body_without_outer_with() {
+        // within a handler clause body, sibling ops from the same effect are not in covered_ops.
+        // to use them, an outer `with` or the function's `can` clause must cover them.
+        let source = "\
+effect Foo
+  a : String -> Unit
+  b : String -> Unit
+main : Unit -> Unit
+main =
+  with
+    a msg -> b msg
+    b msg -> resume ()
+  in
+    a \"x\"
+";
+        let module = parse_module(source).expect("should parse");
+        let err = typecheck_module(&module)
+            .expect_err("sibling op in handler clause body without outer coverage should fail");
+        assert!(err.message.contains("effect operation `b` is not handled"));
     }
 
     #[test]
