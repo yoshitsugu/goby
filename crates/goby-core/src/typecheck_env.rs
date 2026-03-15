@@ -45,9 +45,6 @@ pub(crate) struct EffectMap {
     pub(crate) op_to_effects: HashMap<String, HashSet<String>>,
 }
 
-pub(crate) struct EffectDependencyInfo {
-    pub(crate) op_required_effects: HashMap<String, Vec<String>>,
-}
 
 #[derive(Debug, Clone)]
 pub(crate) struct ImportedEffectDecl {

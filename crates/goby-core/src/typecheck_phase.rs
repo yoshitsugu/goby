@@ -10,11 +10,11 @@ use crate::{
     },
     typecheck_build::{build_type_env, ensure_no_ambiguous_globals},
     typecheck_effect::{
-        build_effect_dependency_info, build_effect_map, build_required_effects_map,
+        build_effect_map, build_required_effects_map,
         builtin_effect_names, ops_from_can_clause, validate_effect_declarations,
         validate_effect_member_effect_clauses,
     },
-    typecheck_env::{EffectDependencyInfo, EffectMap, ImportedEffectDecl, Ty, TypeEnv},
+    typecheck_env::{EffectMap, ImportedEffectDecl, Ty, TypeEnv},
     typecheck_resume::check_resume_in_stmts,
     typecheck_stmt::check_body_stmts,
     typecheck_types::validate_type_declarations,
@@ -34,7 +34,6 @@ pub(crate) struct ValidationPhase {
 pub(crate) struct CheckingPhase {
     pub(crate) env: TypeEnv,
     pub(crate) effect_map: EffectMap,
-    pub(crate) effect_dependency_info: EffectDependencyInfo,
     pub(crate) required_effects_map: HashMap<String, Vec<String>>,
     pub(crate) embedded_default_effects: HashSet<String>,
 }
@@ -81,13 +80,10 @@ pub(crate) fn build_checking_phase(
     let env = build_type_env(module, stdlib_root_path);
     ensure_no_ambiguous_globals(&env)?;
     let effect_map = build_effect_map(module, &validation.imported_effect_declarations);
-    let effect_dependency_info =
-        build_effect_dependency_info(module, &validation.imported_effect_declarations);
     let required_effects_map = build_required_effects_map(module);
     Ok(CheckingPhase {
         env,
         effect_map,
-        effect_dependency_info,
         required_effects_map,
         embedded_default_effects: validation.embedded_default_effects.clone(),
     })
@@ -121,7 +117,6 @@ pub(crate) fn check_declaration_bodies(
             stmts,
             &checking.env,
             &checking.effect_map,
-            &checking.effect_dependency_info,
             &checking.required_effects_map,
             &decl.name,
             declared_return_ty,

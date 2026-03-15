@@ -4,7 +4,7 @@ use crate::ast::{Expr, InterpolatedPart, Stmt};
 use crate::typecheck::TypecheckError;
 use crate::typecheck_ambiguity::ensure_no_ambiguous_refs_in_expr;
 use crate::typecheck_check::{check_expr, env_with_case_pattern_bindings};
-use crate::typecheck_env::{EffectDependencyInfo, EffectMap, Ty, TypeEnv, TypeSubst};
+use crate::typecheck_env::{EffectMap, Ty, TypeEnv, TypeSubst};
 use crate::typecheck_render::ty_name;
 use crate::typecheck_stmt::check_body_stmts;
 use crate::typecheck_unify::{
@@ -113,7 +113,6 @@ fn check_callee_required_effects(
 pub(crate) fn check_unhandled_effects_in_expr(
     expr: &Expr,
     env: &TypeEnv,
-    effect_dependency_info: &EffectDependencyInfo,
     required_effects_map: &HashMap<String, Vec<String>>,
     effect_map: &EffectMap,
     covered_ops: &HashSet<String>,
@@ -203,7 +202,6 @@ pub(crate) fn check_unhandled_effects_in_expr(
             check_unhandled_effects_in_expr(
                 $e,
                 env,
-                effect_dependency_info,
                 required_effects_map,
                 effect_map,
                 covered_ops,
@@ -214,7 +212,6 @@ pub(crate) fn check_unhandled_effects_in_expr(
             check_unhandled_effects_in_expr(
                 $e,
                 $child_env,
-                effect_dependency_info,
                 required_effects_map,
                 effect_map,
                 covered_ops,
@@ -399,22 +396,6 @@ pub(crate) fn check_unhandled_effects_in_expr(
                         ),
                     });
                 }
-                let effect_name = effects
-                    .iter()
-                    .next()
-                    .expect("single-effect handler clause resolution");
-                let qualified_op = format!("{}.{}", effect_name, clause.name);
-                let mut clause_covered_ops = covered_ops.clone();
-                if let Some(required_effects) = effect_dependency_info
-                    .op_required_effects
-                    .get(&qualified_op)
-                {
-                    for required_effect in required_effects {
-                        if let Some(required_ops) = effect_map.effect_to_ops.get(required_effect) {
-                            clause_covered_ops.extend(required_ops.iter().cloned());
-                        }
-                    }
-                }
                 if let Some(stmts) = &clause.parsed_body {
                     let instantiated = instantiate_handler_clause_signature(
                         env,
@@ -448,12 +429,11 @@ pub(crate) fn check_unhandled_effects_in_expr(
                         stmts,
                         env,
                         effect_map,
-                        effect_dependency_info,
                         required_effects_map,
                         decl_name,
                         None,
                         &param_refs,
-                        &clause_covered_ops,
+                        covered_ops,
                     )?;
                 }
             }
@@ -469,7 +449,6 @@ pub(crate) fn check_unhandled_effects_in_expr(
                 body,
                 env,
                 effect_map,
-                effect_dependency_info,
                 required_effects_map,
                 decl_name,
                 None,
@@ -494,7 +473,6 @@ pub(crate) fn check_unhandled_effects_in_expr(
                         check_unhandled_effects_in_expr(
                             value,
                             &local_env,
-                            effect_dependency_info,
                             required_effects_map,
                             effect_map,
                             covered_ops,
@@ -508,7 +486,6 @@ pub(crate) fn check_unhandled_effects_in_expr(
                         check_unhandled_effects_in_expr(
                             value,
                             &local_env,
-                            effect_dependency_info,
                             required_effects_map,
                             effect_map,
                             covered_ops,
@@ -520,7 +497,6 @@ pub(crate) fn check_unhandled_effects_in_expr(
                         check_unhandled_effects_in_expr(
                             expr,
                             &local_env,
-                            effect_dependency_info,
                             required_effects_map,
                             effect_map,
                             covered_ops,

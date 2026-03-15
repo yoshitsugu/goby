@@ -4,7 +4,7 @@ use crate::{
     Module,
     typecheck::TypecheckError,
     typecheck_annotation::find_can_keyword_index,
-    typecheck_env::{EffectDependencyInfo, EffectMap, ImportedEffectDecl},
+    typecheck_env::{EffectMap, ImportedEffectDecl},
     typecheck_types::is_type_variable_name,
     types::{TypeExpr, parse_type_expr},
 };
@@ -59,28 +59,6 @@ pub(crate) fn build_effect_map(
     }
 }
 
-pub(crate) fn build_effect_dependency_info(
-    module: &Module,
-    imported_effects: &[ImportedEffectDecl],
-) -> EffectDependencyInfo {
-    let mut op_required_effects: HashMap<String, Vec<String>> = HashMap::new();
-    for effect_decl in imported_effects
-        .iter()
-        .map(|imported| &imported.decl)
-        .chain(module.effect_declarations.iter())
-    {
-        for member in &effect_decl.members {
-            op_required_effects.insert(
-                format!("{}.{}", effect_decl.name, member.name),
-                parse_can_clause_effects(&member.type_annotation),
-            );
-        }
-    }
-    EffectDependencyInfo {
-        op_required_effects,
-    }
-}
-
 pub(crate) fn ops_from_can_clause(
     annotation: Option<&str>,
     effect_map: &EffectMap,
@@ -106,19 +84,6 @@ pub(crate) fn ops_from_can_clause(
         .collect()
 }
 
-pub(crate) fn parse_can_clause_effects(annotation: &str) -> Vec<String> {
-    let Some(idx) = find_can_keyword_index(annotation) else {
-        return Vec::new();
-    };
-    let effects_raw = annotation[idx + 3..].trim();
-    effects_raw
-        .split(',')
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(str::to_string)
-        .collect()
-}
-
 pub(crate) fn validate_effect_declarations(module: &Module) -> Result<(), TypecheckError> {
     let mut seen = HashSet::new();
     for effect_decl in &module.effect_declarations {
@@ -140,6 +105,16 @@ pub(crate) fn validate_effect_member_effect_clauses(
         let declared_type_params: HashSet<String> =
             effect_decl.type_params.iter().cloned().collect();
         for member in &effect_decl.members {
+            if find_can_keyword_index(&member.type_annotation).is_some() {
+                return Err(TypecheckError {
+                    declaration: Some(effect_decl.name.clone()),
+                    span: None,
+                    message: format!(
+                        "can clauses on effect members are not supported in `{}.{}`",
+                        effect_decl.name, member.name
+                    ),
+                });
+            }
             let parsed =
                 parse_type_expr(&member.type_annotation).ok_or_else(|| TypecheckError {
                     declaration: Some(effect_decl.name.clone()),
@@ -166,21 +141,10 @@ pub(crate) fn validate_effect_member_effect_clauses(
                     });
                 }
             }
-            if find_can_keyword_index(&member.type_annotation).is_some() {
-                return Err(TypecheckError {
-                    declaration: Some(effect_decl.name.clone()),
-                    span: None,
-                    message: format!(
-                        "can clauses on effect members are not supported in `{}.{}`",
-                        effect_decl.name, member.name
-                    ),
-                });
-            }
         }
     }
     Ok(())
 }
-
 
 fn build_op_to_effects(
     module: &Module,

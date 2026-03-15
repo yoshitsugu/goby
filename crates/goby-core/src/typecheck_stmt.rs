@@ -6,15 +6,13 @@ use crate::typecheck_ambiguity::ensure_no_ambiguous_refs_in_expr;
 use crate::typecheck_branch::check_branch_type_consistency_in_expr;
 use crate::typecheck_check::check_expr;
 use crate::typecheck_effect_usage::check_unhandled_effects_in_expr;
-use crate::typecheck_env::{EffectDependencyInfo, EffectMap, Ty, TypeEnv};
+use crate::typecheck_env::{EffectMap, Ty, TypeEnv};
 use crate::typecheck_render::ty_name;
 
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn check_body_stmts(
     stmts: &[Stmt],
     env: &TypeEnv,
     effect_map: &EffectMap,
-    effect_dependency_info: &EffectDependencyInfo,
     required_effects_map: &HashMap<String, Vec<String>>,
     decl_name: &str,
     declared_return_ty: Option<Ty>,
@@ -41,7 +39,6 @@ pub(crate) fn check_body_stmts(
         &mut local_env,
         &mut local_mutability,
         effect_map,
-        effect_dependency_info,
         required_effects_map,
         decl_name,
         covered_ops,
@@ -49,14 +46,12 @@ pub(crate) fn check_body_stmts(
     check_declared_return_type(stmts, env, &local_env, decl_name, declared_return_ty)
 }
 
-#[allow(clippy::too_many_arguments)]
 fn check_statement_sequence(
     stmts: &[Stmt],
     env: &TypeEnv,
     local_env: &mut TypeEnv,
     local_mutability: &mut HashMap<String, bool>,
     effect_map: &EffectMap,
-    effect_dependency_info: &EffectDependencyInfo,
     required_effects_map: &HashMap<String, Vec<String>>,
     decl_name: &str,
     covered_ops: &HashSet<String>,
@@ -68,7 +63,6 @@ fn check_statement_sequence(
             local_env,
             local_mutability,
             effect_map,
-            effect_dependency_info,
             required_effects_map,
             decl_name,
             covered_ops,
@@ -77,14 +71,12 @@ fn check_statement_sequence(
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
 fn check_stmt(
     stmt: &Stmt,
     env: &TypeEnv,
     local_env: &mut TypeEnv,
     local_mutability: &mut HashMap<String, bool>,
     effect_map: &EffectMap,
-    effect_dependency_info: &EffectDependencyInfo,
     required_effects_map: &HashMap<String, Vec<String>>,
     decl_name: &str,
     covered_ops: &HashSet<String>,
@@ -104,7 +96,6 @@ fn check_stmt(
             validate_stmt_value(
                 value,
                 local_env,
-                effect_dependency_info,
                 required_effects_map,
                 effect_map,
                 covered_ops,
@@ -129,7 +120,6 @@ fn check_stmt(
             validate_stmt_value(
                 value,
                 local_env,
-                effect_dependency_info,
                 required_effects_map,
                 effect_map,
                 covered_ops,
@@ -161,7 +151,6 @@ fn check_stmt(
             validate_stmt_value(
                 value,
                 local_env,
-                effect_dependency_info,
                 required_effects_map,
                 effect_map,
                 covered_ops,
@@ -192,7 +181,6 @@ fn check_stmt(
         Stmt::Expr(expr) => validate_stmt_value(
             expr,
             local_env,
-            effect_dependency_info,
             required_effects_map,
             effect_map,
             covered_ops,
@@ -201,11 +189,9 @@ fn check_stmt(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn validate_stmt_value(
     expr: &Expr,
     local_env: &TypeEnv,
-    effect_dependency_info: &EffectDependencyInfo,
     required_effects_map: &HashMap<String, Vec<String>>,
     effect_map: &EffectMap,
     covered_ops: &HashSet<String>,
@@ -216,7 +202,6 @@ fn validate_stmt_value(
     check_unhandled_effects_in_expr(
         expr,
         local_env,
-        effect_dependency_info,
         required_effects_map,
         effect_map,
         covered_ops,
