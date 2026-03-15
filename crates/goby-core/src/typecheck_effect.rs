@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::{
     Module,
-    typecheck::{TypecheckError, is_identifier},
+    typecheck::TypecheckError,
     typecheck_annotation::find_can_keyword_index,
     typecheck_env::{EffectDependencyInfo, EffectMap, ImportedEffectDecl},
     typecheck_types::is_type_variable_name,
@@ -135,7 +135,6 @@ pub(crate) fn validate_effect_declarations(module: &Module) -> Result<(), Typech
 
 pub(crate) fn validate_effect_member_effect_clauses(
     module: &Module,
-    known_effects: &HashSet<String>,
 ) -> Result<(), TypecheckError> {
     for effect_decl in &module.effect_declarations {
         let declared_type_params: HashSet<String> =
@@ -167,126 +166,21 @@ pub(crate) fn validate_effect_member_effect_clauses(
                     });
                 }
             }
-            if let Some(idx) = find_can_keyword_index(&member.type_annotation)
-                && member.type_annotation[idx + 3..].trim().is_empty()
-            {
+            if find_can_keyword_index(&member.type_annotation).is_some() {
                 return Err(TypecheckError {
                     declaration: Some(effect_decl.name.clone()),
                     span: None,
                     message: format!(
-                        "effect list after `can` must not be empty in `{}.{}`",
+                        "can clauses on effect members are not supported in `{}.{}`",
                         effect_decl.name, member.name
                     ),
                 });
             }
-            let deps = parse_can_clause_effects(&member.type_annotation);
-            if deps.is_empty() {
-                continue;
-            }
-            for dep in deps {
-                if !is_identifier(&dep) {
-                    return Err(TypecheckError {
-                        declaration: Some(effect_decl.name.clone()),
-                        span: None,
-                        message: format!(
-                            "invalid effect name `{}` in `can` clause of `{}.{}`",
-                            dep, effect_decl.name, member.name
-                        ),
-                    });
-                }
-                if !known_effects.contains(&dep) {
-                    return Err(TypecheckError {
-                        declaration: Some(effect_decl.name.clone()),
-                        span: None,
-                        message: format!(
-                            "unknown effect `{}` in `can` clause of `{}.{}`",
-                            dep, effect_decl.name, member.name
-                        ),
-                    });
-                }
-            }
         }
     }
     Ok(())
 }
 
-pub(crate) fn validate_effect_dependency_cycles(module: &Module) -> Result<(), TypecheckError> {
-    let mut graph: HashMap<String, Vec<String>> = HashMap::new();
-    let local_effects: HashSet<String> = module
-        .effect_declarations
-        .iter()
-        .map(|decl| decl.name.clone())
-        .collect();
-
-    for effect_decl in &module.effect_declarations {
-        let deps = graph.entry(effect_decl.name.clone()).or_default();
-        for member in &effect_decl.members {
-            for dep in parse_can_clause_effects(&member.type_annotation) {
-                if local_effects.contains(&dep) && !deps.contains(&dep) {
-                    deps.push(dep);
-                }
-            }
-        }
-    }
-
-    #[derive(Clone, Copy, PartialEq, Eq)]
-    enum VisitState {
-        Visiting,
-        Visited,
-    }
-
-    fn dfs_cycle(
-        effect: &str,
-        graph: &HashMap<String, Vec<String>>,
-        state: &mut HashMap<String, VisitState>,
-        stack: &mut Vec<String>,
-    ) -> Option<Vec<String>> {
-        match state.get(effect) {
-            Some(VisitState::Visiting) => {
-                let cycle_start = stack
-                    .iter()
-                    .position(|name| name == effect)
-                    .unwrap_or_default();
-                let mut cycle = stack[cycle_start..].to_vec();
-                cycle.push(effect.to_string());
-                return Some(cycle);
-            }
-            Some(VisitState::Visited) => return None,
-            None => {}
-        }
-
-        state.insert(effect.to_string(), VisitState::Visiting);
-        stack.push(effect.to_string());
-        if let Some(deps) = graph.get(effect) {
-            for dep in deps {
-                if let Some(cycle) = dfs_cycle(dep, graph, state, stack) {
-                    return Some(cycle);
-                }
-            }
-        }
-        stack.pop();
-        state.insert(effect.to_string(), VisitState::Visited);
-        None
-    }
-
-    let mut state: HashMap<String, VisitState> = HashMap::new();
-    let mut stack = Vec::new();
-    for effect_decl in &module.effect_declarations {
-        if let Some(cycle) = dfs_cycle(&effect_decl.name, &graph, &mut state, &mut stack) {
-            let cycle_display = cycle.join(" -> ");
-            return Err(TypecheckError {
-                declaration: Some(effect_decl.name.clone()),
-                span: None,
-                message: format!(
-                    "effect dependency cycle detected in member `can` clauses: {}",
-                    cycle_display
-                ),
-            });
-        }
-    }
-
-    Ok(())
-}
 
 fn build_op_to_effects(
     module: &Module,

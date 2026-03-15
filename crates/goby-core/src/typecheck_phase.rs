@@ -12,7 +12,7 @@ use crate::{
     typecheck_effect::{
         build_effect_dependency_info, build_effect_map, build_required_effects_map,
         builtin_effect_names, ops_from_can_clause, validate_effect_declarations,
-        validate_effect_dependency_cycles, validate_effect_member_effect_clauses,
+        validate_effect_member_effect_clauses,
     },
     typecheck_env::{EffectDependencyInfo, EffectMap, ImportedEffectDecl, Ty, TypeEnv},
     typecheck_resume::check_resume_in_stmts,
@@ -64,8 +64,7 @@ pub(crate) fn validate_module_phase(
     validate_no_ambiguous_effect_names(&imported_effect_declarations, &module.effect_declarations)?;
     let known_effects = known_effects(module, stdlib_root_path);
     let embedded_default_effects = embedded_default_effects(module, &imported_embedded_defaults);
-    validate_effect_member_effect_clauses(module, &known_effects)?;
-    validate_effect_dependency_cycles(module)?;
+    validate_effect_member_effect_clauses(module)?;
     validate_declaration_annotations(module, &known_effects, &embedded_default_effects)?;
     validate_main_annotation(module)?;
     Ok(ValidationPhase {

@@ -806,7 +806,7 @@ main =
     }
 
     #[test]
-    fn rejects_unknown_effect_in_effect_member_can_clause() {
+    fn rejects_can_clause_on_effect_member() {
         let source = "\
 effect Trace
   trace : String -> Unit can Ghost
@@ -815,9 +815,9 @@ main = ()
 ";
         let module = parse_module(source).expect("should parse");
         let err = typecheck_module(&module)
-            .expect_err("unknown effect in effect member can-clause should fail");
+            .expect_err("can clause on effect member should fail");
         assert_eq!(err.declaration.as_deref(), Some("Trace"));
-        assert!(err.message.contains("unknown effect `Ghost`"));
+        assert!(err.message.contains("can clauses on effect members are not supported"));
     }
 
     #[test]
@@ -832,36 +832,6 @@ main = ()
         let err = typecheck_module(&module)
             .expect_err("unknown effect type parameter in member annotation should fail");
         assert!(err.message.contains("unknown effect type parameter `b`"));
-    }
-
-    #[test]
-    fn rejects_effect_dependency_cycle_in_effect_member_can_clause() {
-        let source = "\
-effect A
-  a : Unit -> Unit can B
-effect B
-  b : Unit -> Unit can A
-main : Unit -> Unit
-main = ()
-";
-        let module = parse_module(source).expect("should parse");
-        let err = typecheck_module(&module).expect_err("effect dependency cycle should fail");
-        assert!(err.message.contains("effect dependency cycle detected"));
-        assert!(err.message.contains("A -> B -> A"));
-    }
-
-    #[test]
-    fn rejects_self_effect_dependency_cycle_in_effect_member_can_clause() {
-        let source = "\
-effect A
-  a : Unit -> Unit can A
-main : Unit -> Unit
-main = ()
-";
-        let module = parse_module(source).expect("should parse");
-        let err = typecheck_module(&module).expect_err("self effect dependency cycle should fail");
-        assert!(err.message.contains("effect dependency cycle detected"));
-        assert!(err.message.contains("A -> A"));
     }
 
     #[test]
@@ -886,26 +856,6 @@ main =
             err.message
                 .contains("effect operation `log` is not handled")
         );
-    }
-
-    #[test]
-    fn accepts_effect_use_in_handler_clause_when_member_dependency_is_declared() {
-        let source = "\
-effect Log
-  log : String -> Unit
-effect Trace
-  trace : String -> Unit can Log
-main : Unit -> Unit can Trace
-main =
-  with
-    trace msg ->
-      log msg
-  in
-    trace \"x\"
-";
-        let module = parse_module(source).expect("should parse");
-        typecheck_module(&module)
-            .expect("handler clause should allow effect usage declared via member can-clause");
     }
 
     #[test]
