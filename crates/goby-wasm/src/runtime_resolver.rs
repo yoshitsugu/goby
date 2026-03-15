@@ -662,9 +662,32 @@ impl<'m> RuntimeOutputResolver<'m> {
                 self.complete_value_out(out, evaluators)
             }
             Expr::Lambda { .. } | Expr::MethodCall { .. } => None,
-            // F1a stub: return None so the string-based fallback (to_str_repr) handles it;
-            // full runtime evaluation is implemented in F3.
-            Expr::ListIndex { .. } => None,
+            Expr::ListIndex { list, index } => {
+                let list_val =
+                    self.eval_expr_ast(list, locals, callables, evaluators, depth + 1)?;
+                let index_val =
+                    self.eval_expr_ast(index, locals, callables, evaluators, depth + 1)?;
+                let RuntimeValue::Int(i) = index_val else {
+                    return None;
+                };
+                match list_val {
+                    RuntimeValue::ListInt(items) => {
+                        if i < 0 || i as usize >= items.len() {
+                            self.mark_runtime_abort();
+                            return None;
+                        }
+                        Some(RuntimeValue::Int(items[i as usize]))
+                    }
+                    RuntimeValue::ListString(items) => {
+                        if i < 0 || i as usize >= items.len() {
+                            self.mark_runtime_abort();
+                            return None;
+                        }
+                        Some(RuntimeValue::String(items[i as usize].clone()))
+                    }
+                    _ => None,
+                }
+            }
         }
     }
 

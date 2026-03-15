@@ -860,3 +860,60 @@ main =
     assert_eq!(typed.stdout.as_deref(), Some("6"));
     assert_eq!(typed.runtime_error_kind, None);
 }
+
+#[test]
+fn resolves_list_index_int_access() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    // Note: `print xs[1]` would parse as `(print xs)[1]` (call-receiver precedence).
+    // Use `print (xs[1])` to explicitly index then print.
+    let source = r#"
+xs : List Int
+xs = [10, 20, 30]
+
+main : Unit -> Unit
+main =
+  print (xs[1])
+"#;
+    let module = parse_module(source).expect("parse should work");
+    let typed = assert_mode_parity(&module, "list index access on int list");
+    assert_eq!(typed.stdout.as_deref(), Some("20"));
+    assert_eq!(typed.runtime_error_kind, None);
+}
+
+#[test]
+fn resolves_list_index_string_access() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    let source = r#"
+words : List String
+words = ["hello", "world"]
+
+main : Unit -> Unit
+main =
+  print (words[0])
+"#;
+    let module = parse_module(source).expect("parse should work");
+    let typed = assert_mode_parity(&module, "list index access on string list");
+    assert_eq!(typed.stdout.as_deref(), Some("hello"));
+    assert_eq!(typed.runtime_error_kind, None);
+}
+
+#[test]
+fn list_index_out_of_bounds_aborts() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    let source = r#"
+xs : List Int
+xs = [1, 2]
+
+v : Int
+v = xs[5]
+
+main : Unit -> Unit
+main =
+  print v
+"#;
+    let module = parse_module(source).expect("parse should work");
+    let output =
+        resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module));
+    // OOB triggers abort: no output produced
+    assert_eq!(output, None);
+}
