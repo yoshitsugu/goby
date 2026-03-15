@@ -1,7 +1,8 @@
 use crate::ast::{CaseArm, Expr, HandlerClause, Stmt};
 use crate::parser_pattern::parse_case_pattern;
 use crate::parser_util::{
-    is_identifier, is_non_reserved_identifier, starts_with_keyword_token, strip_line_comment,
+    is_camel_case_identifier, is_identifier, is_non_reserved_identifier,
+    starts_with_keyword_token, strip_line_comment,
 };
 
 pub(crate) fn parse_body_stmts_with<F>(body: &str, parse_expr: F) -> Option<Vec<Stmt>>
@@ -657,13 +658,23 @@ where
     Some((stmts, first_idx + consumed))
 }
 
+fn is_handler_clause_name(s: &str) -> bool {
+    if is_non_reserved_identifier(s) {
+        return true;
+    }
+    if let Some((effect, op)) = s.split_once('.') {
+        return is_camel_case_identifier(effect) && is_non_reserved_identifier(op);
+    }
+    false
+}
+
 fn parse_handler_clause_header(src: &str) -> Option<(String, Vec<String>, &str)> {
     let (lhs, rhs) = src.split_once("->")?;
     let lhs = lhs.trim();
     let rhs = rhs.trim();
     let mut parts = lhs.split_whitespace();
     let name = parts.next()?;
-    if !is_non_reserved_identifier(name) {
+    if !is_handler_clause_name(name) {
         return None;
     }
 
@@ -1184,5 +1195,41 @@ else
             parse_body_stmts(body).is_some(),
             "with-handler body with block if branches should parse"
         );
+    }
+
+    #[test]
+    fn parses_qualified_handler_clause_name() {
+        let body = "with\n  Log.log msg ->\n    resume ()\nin\n  Log.log \"hello\"";
+        let stmts = parse_body_stmts(body);
+        assert!(stmts.is_some(), "qualified handler clause name should parse");
+        if let Some(stmts) = stmts {
+            if let crate::ast::Stmt::Expr(crate::ast::Expr::With { handler, .. }) = &stmts[0] {
+                if let crate::ast::Expr::Handler { clauses } = handler.as_ref() {
+                    assert_eq!(clauses[0].name, "Log.log");
+                    return;
+                }
+            }
+            panic!("unexpected AST shape");
+        }
+    }
+
+    #[test]
+    fn rejects_malformed_qualified_handler_clause_name() {
+        // "log.Log" (lowercase.CamelCase) is not a valid handler clause name
+        // because the effect part must start with uppercase
+        let body = "with\n  log.Log msg ->\n    resume ()\nin\n  ()";
+        // This should either fail to parse or be treated as method call, not a handler clause
+        // The key is it should NOT parse as a valid handler with clause name "log.Log"
+        let stmts = parse_body_stmts(body);
+        if let Some(stmts) = stmts {
+            if let crate::ast::Stmt::Expr(crate::ast::Expr::With { handler, .. }) = &stmts[0] {
+                if let crate::ast::Expr::Handler { clauses } = handler.as_ref() {
+                    assert!(
+                        clauses.is_empty() || clauses[0].name != "log.Log",
+                        "log.Log should not be accepted as a handler clause name"
+                    );
+                }
+            }
+        }
     }
 }
