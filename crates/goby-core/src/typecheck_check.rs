@@ -171,9 +171,8 @@ fn infer_expr_ty(expr: &Expr, env: &TypeEnv) -> Ty {
             let else_ty = check_expr(else_expr, env);
             merge_branch_type(env, then_ty, else_ty)
         }
-        // F1a stub: full inference implemented in F2
         Expr::ListIndex { list, index } => {
-            let list_ty = check_expr(list, env);
+            let list_ty = env.resolve_alias(&check_expr(list, env), 0);
             let _index_ty = check_expr(index, env);
             match list_ty {
                 Ty::List(elem_ty) => *elem_ty,
@@ -260,6 +259,45 @@ pub(crate) fn check_list_spread_constraints(
             })
         }
     }
+}
+
+pub(crate) fn check_list_index_constraints(
+    list: &Expr,
+    index: &Expr,
+    env: &TypeEnv,
+    decl_name: &str,
+) -> Result<(), TypecheckError> {
+    let list_ty = env.resolve_alias(&check_expr(list, env), 0);
+    match &list_ty {
+        Ty::List(_) | Ty::Unknown => {}
+        other => {
+            return Err(TypecheckError {
+                declaration: Some(decl_name.to_string()),
+                span: None,
+                message: format!(
+                    "list index requires a `List` receiver, but got `{}`",
+                    ty_name(other)
+                ),
+            });
+        }
+    }
+
+    let index_ty = env.resolve_alias(&check_expr(index, env), 0);
+    match &index_ty {
+        Ty::Int | Ty::Unknown => {}
+        other => {
+            return Err(TypecheckError {
+                declaration: Some(decl_name.to_string()),
+                span: None,
+                message: format!(
+                    "list index must be `Int`, but got `{}`",
+                    ty_name(other)
+                ),
+            });
+        }
+    }
+
+    Ok(())
 }
 
 pub(crate) fn merge_branch_type(env: &TypeEnv, left: Ty, right: Ty) -> Ty {
@@ -665,6 +703,37 @@ main =
     fn infers_interpolated_string_type() {
         let module = parse_module("s : String\ns = \"n=${1}\"\n").expect("should parse");
         typecheck_module(&module).expect("interpolated string body should typecheck as String");
+    }
+
+    #[test]
+    fn list_index_infers_element_type() {
+        let module = parse_module("xs : List Int\nxs = [1, 2, 3]\nv : Int\nv = xs[0]\n")
+            .expect("should parse");
+        typecheck_module(&module).expect("list index result should typecheck as Int");
+    }
+
+    #[test]
+    fn list_index_rejects_non_int_index() {
+        let module =
+            parse_module("xs : List Int\nxs = [1, 2]\nv : Int\nv = xs[True]\n").expect("should parse");
+        let err = typecheck_module(&module).expect_err("bool index should fail");
+        assert!(
+            err.message.contains("list index must be `Int`"),
+            "unexpected message: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn list_index_rejects_non_list_receiver() {
+        let module =
+            parse_module("n : Int\nn = 42\nv : Int\nv = n[0]\n").expect("should parse");
+        let err = typecheck_module(&module).expect_err("int receiver index should fail");
+        assert!(
+            err.message.contains("list index requires a `List` receiver"),
+            "unexpected message: {}",
+            err.message
+        );
     }
 
     #[test]

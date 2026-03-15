@@ -1,7 +1,8 @@
 use crate::ast::{Expr, InterpolatedPart, Stmt};
 use crate::typecheck::TypecheckError;
 use crate::typecheck_check::{
-    check_expr, check_list_spread_constraints, env_with_case_pattern_bindings, is_list_case_pattern,
+    check_expr, check_list_index_constraints, check_list_spread_constraints,
+    env_with_case_pattern_bindings, is_list_case_pattern,
 };
 use crate::typecheck_env::{ResumeContext, Ty, TypeEnv, TypeSubst};
 use crate::typecheck_render::ty_name;
@@ -281,7 +282,8 @@ fn check_resume_in_expr(
         }
         Expr::ListIndex { list, index } => {
             recurse!(list)?;
-            recurse!(index)
+            recurse!(index)?;
+            check_list_index_constraints(list, index, env, decl_name)
         }
     }
 }
