@@ -4,10 +4,8 @@ Last updated: 2026-03-15
 
 ## Current Focus
 
-- Semantics planning update: `can` is now specified as "unhandled effects that escape a function body"
-- Inline `with` handler clauses now target: unique bare operation names by default, qualified `Effect.operation` only when disambiguation is needed
-- Next implementation-planning target: align parser/typechecker/examples/stdlib with the new `can` semantics
-- Track D — Developer Tooling Foundation remains the next broader roadmap track after the `can` semantics slice
+- `can` semantics alignment: **completed** (2026-03-15)
+- Next track: **Track D — Developer Tooling Foundation** (formatter, linter, LSP)
 
 ## Locked Decisions Carried Forward
 
@@ -49,10 +47,11 @@ NotRuntimeIo:
 
 ## Next Slice
 
-`can` semantics alignment is the next default starting point.
+Track D — Developer Tooling Foundation is the next starting point.
 
-Immediate planning goals:
+Near-term scope:
 
-1. Remove the old effect-member-`can` model in implementation.
-2. Rebuild effect checking around one residual-effect model for expressions and function bodies.
-3. Add regression coverage for handled-vs-unhandled function effects and inline handler clause resolution before broader refactors.
+1. `goby fmt` / `goby fmt --check` (deterministic formatting).
+2. `goby lint` (high-signal checks + machine-readable output).
+3. `goby-lsp` MVP (diagnostics, hover, definition).
+4. Cross-editor syntax regression tests for existing highlight packs.

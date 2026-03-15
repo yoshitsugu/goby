@@ -166,82 +166,11 @@ Based on `examples/*.gb`:
   - List item literals in MVP are `Int` / `String` only (no `Bool` list-pattern items).
   - Parser rejects malformed forms and duplicate binders.
 - **`case` arm block body** (implemented, 2026-03-05).
-  - Goal:
-    - support both inline arm bodies and indented block arm bodies.
-    - inline (current): `pat -> expr`
-    - block (new): `pat ->` then deeper-indented statements, with last expression as arm result.
-  - Definition of Done (MVP for this item):
-    - `goby-cli check` accepts `case` with mixed inline/block arms.
-    - `goby-cli run` executes selected arm block correctly (binding order + last expression value).
-    - behavior is consistent between native-lowered and fallback-executed paths.
-  - Proposed syntax shape:
-    - `case x`
-    - `  0 ->`
-    - `    y = 1`
-    - `    y + 10`
-    - `  _ -> 0`
-  - Implemented scope:
-    - parser accepts both inline and block arm bodies.
-    - block arm body is represented by expression-level block AST.
-    - typecheck enforces that a block arm ends with an expression.
-    - runtime supports evaluating selected arm block and returning tail-expression value.
-  - Follow-up scope:
-    - generalize expression-level block parsing beyond `case` arms (currently case-arm focused).
-  - Known remaining gaps (to be implemented):
-    - (done 2026-03-05) `run` now supports effectful expressions inside `case` arm blocks (`print`, effect ops, calls requiring `can ...`) and preserves parity with `check` for covered patterns.
-    - in arm-block effect resolution, use the same lexical outer-scope search flow as normal expression evaluation:
-      - unresolved effects must be searched in outer scopes.
-      - if still unresolved at `main`, keep existing behavior: allow only embedded/builtin runtime-backed effects, and report missing handler error for others.
-    - (done 2026-03-05) make `case` consistently value-returning in all positions (including bindings like `x = case ...`), not only direct tail-expression positions.
-    - (done 2026-03-05) enforce branch result type unification for both `if` and `case`:
-      - all branches must resolve to one compatible result type.
-      - type inference + type checking now carry this constraint and report mismatch diagnostics.
-  - Phase notes (kept for maintenance):
-  - Phase 1 (AST/parser):
-    - introduce an explicit expression-level block representation (for example `Expr::Block(Vec<Stmt>)`)
-      so arm blocks are first-class and reusable in other expression positions later.
-    - scope guard:
-      - in this milestone, parser constructs `Expr::Block` only for `case` arm bodies.
-      - reuse in other expression positions is handled by follow-up tasks.
-    - extend `parse_multiline_expr` (`case` arm path):
-      - keep accepting `pattern -> <expr>` inline form.
-      - add `pattern ->` form that consumes a deeper-indented statement block.
-    - error rules:
-      - reject empty arm blocks.
-      - reject non-indented lines immediately after `pattern ->`.
-      - arm block may include blank/comment-only lines; they do not satisfy non-empty block requirement by themselves.
-      - dedent closes current arm block; next sibling arm is parsed at case-arm indent level.
-      - preserve existing malformed-pattern diagnostics.
-  - Phase 2 (typing/analysis):
-    - typecheck block expressions with existing local-binding rules:
-      - each statement extends local env in order.
-      - block type is the type of the last expression statement.
-      - if block tail is not an expression statement (for example trailing binding), report type error.
-    - ensure existing case-arm checks still apply:
-      - list-pattern binding environment extension.
-      - arm result compatibility checks.
-      - effect/resume/intrinsic checks traverse block expressions.
-  - Phase 3 (runtime/codegen):
-    - fallback evaluator: execute arm block statements sequentially and return last expression value.
-    - Wasm lowering:
-      - either lower block expressions directly, or conservatively route such `case` expressions
-        to fallback until native lowering is implemented.
-      - keep behavior parity between native and fallback paths.
-  - Phase 4 (tests/examples/docs):
-    - parser tests:
-      - parse mixed inline/block arms in one `case`.
-      - reject malformed/empty arm block shapes.
-      - accept blank/comment lines inside arm block while still rejecting effectively empty block.
-    - typechecker tests:
-      - arm-local bindings are visible only inside that arm block.
-      - arm block result type participates in arm type checks.
-      - trailing non-expression statement in arm block is rejected.
-    - runtime tests:
-      - selected arm block executes in order and returns last expression.
-      - add CLI integration checks for both `check` and `run` paths with arm-block source.
-    - examples/spec sync:
-      - add one canonical example under `examples/`.
-      - update `doc/LANGUAGE_SPEC.md` once implementation is merged.
+  - Both inline (`pat -> expr`) and block (`pat ->` + indented statements) arm bodies are supported.
+  - Block arm type is the type of the last expression; trailing non-expression statement is rejected.
+  - `case` is value-returning in all positions; branch type unification enforced for both `if` and `case`.
+  - Effectful expressions inside `case` arm blocks work with parity between `check` and `run`.
+  - Follow-up: generalize expression-level block parsing beyond `case` arms.
 - **Tuple index access `expr.N`** (implemented).
   - `a.0`, `a.1` parse as qualified numeric member access and are typechecked/runtime-evaluated as tuple index access.
   - Numeric member access is valid only for tuple receivers.
@@ -309,10 +238,6 @@ Based on `examples/*.gb`:
   - uncovered effect operation calls are rejected unless covered by enclosing handler scope
     (`with`).
   - calls to `can`-annotated functions require an appropriate enclosing handler scope.
-- Known mismatch against the locked semantics:
-  - the current implementation/spec history still has a separate "effect member `can` dependency" model.
-  - this is no longer aligned with the desired meaning of `can` and should be removed.
-  - runtime/planning notes still mention bare-name dispatch fallback by effect-name order; this should be replaced by unique-or-qualified clause resolution.
 - Current runtime behavior:
   - effect operations dispatch through installed handlers.
 - How to represent multiple effects (`can Print + Read` or other syntax) — deferred.
@@ -323,56 +248,13 @@ Based on `examples/*.gb`:
   - resolution rule remains: lexical value namespace wins.
   - warning is planned as tooling/diagnostics improvement, not a type error.
 
-#### Planned Semantics Alignment: `can` Means Unhandled Effects
+#### `can` Semantics Alignment (completed 2026-03-15)
 
-Status: planned (2026-03-15)
-
-Goal: align parser/typechecker/docs/examples with the rule that `can` lists only
-effects that escape a function body.
-
-- Design intent:
-  - keep one effect-accounting model only: each expression contributes a residual set of unhandled effects.
-  - `with` removes handled effects from that residual set.
-  - direct effect operation calls add their effect to that residual set.
-  - calls to functions annotated with `can ...` add those effects at the call site unless discharged there.
-  - handler clause heads should resolve in the operation namespace first:
-    - unique bare operation names are accepted,
-    - ambiguous bare names are rejected,
-    - qualified `Effect.operation` is the explicit escape hatch.
-
-Execution checklist:
-
-- [x] Step 1: delete the old effect-member dependency model
-  - remove parser/AST/typechecker/runtime assumptions that effect members declare dependency effects.
-  - remove dependency-cycle validation and any `op_required_effects`-style bookkeeping.
-  - update docs/tests that still describe member-level effect dependencies.
-- [x] Step 2: define one residual-effect checker for expressions
-  - implement effect accounting around a single question: which effects escape this expression?
-  - effect op call: add the owning effect unless an enclosing `with` discharges it.
-  - function call: add the callee's `can` effects unless an enclosing `with` discharges them.
-  - function body validation: residual set must equal the declared `can` set, or be empty when `can` is omitted.
-- [x] Step 3: simplify `with` clause name resolution
-  - resolve clause heads in the effect-operation namespace, not through ordinary lexical value lookup.
-  - accept bare clause names only when they identify exactly one visible operation.
-  - require qualified `Effect.operation` when bare clause resolution is ambiguous.
-- [x] Step 4: align diagnostics with the new model
-  - report errors in terms of unhandled effects escaping a function body or call site.
-  - make ambiguity diagnostics point users from bare clause names to `Effect.operation`.
-  - remove old wording that implies handler-member dependency propagation.
-- [x] Step 5: update examples and stdlib surface
-  - remove unnecessary `can` from locally handled stdlib/example functions.
-  - stdlib/goby/string.gb: removed `can Iterator` from grapheme_count,
-    split_with_empty_delimiter, and split_with_single_delimiter (all locally handled).
-- [x] Step 6: verify in small gates
-  - focused tests added throughout Steps 1-5 covering missing `can`, extra `can`,
-    `with` discharge, unique bare clause names, ambiguous bare clause rejection,
-    and qualified clause acceptance.
-  - cargo check, focused effect-system tests, and cargo test all pass.
-
-Locked design follow-up:
-
-- `can` is reserved for unhandled function effects only.
-- effect member signatures do not declare dependency effects.
+- Old effect-member dependency model removed (dependency cycles, `op_required_effects` bookkeeping).
+- Single residual-effect checker: each expression contributes unhandled effects; `with` discharges them.
+- `with` clause name resolution: bare names accepted only when unique; qualified `Effect.operation` required when ambiguous.
+- Diagnostics updated; `can Iterator` removed from locally-handled stdlib functions.
+- `can` is reserved for unhandled function effects only; effect member signatures do not declare dependency effects.
 
 
 #### Effect Renewal/Resume Status (Summary)
@@ -395,20 +277,10 @@ Locked design follow-up:
   - continue migration from name-based runtime dispatch to compiled operation identity (`EffectId`/`OpId`),
   - evaluate explicit `discontinue` only as a later separate proposal.
 
-#### Planned Syntax Simplification: `with` Unification
+#### `with` Syntax Unification (completed 2026-03-05)
 
-Status: completed (2026-03-05)
-
-Goal: unify handler application syntax on `with` only.
-
-- Implemented summary:
-  - canonical syntax is `with` only, for both inline handlers and handler-value form.
-  - multiline RHS parsing supports `with` in bindings/assignments.
-  - legacy inline-handler syntax is removed and diagnostics now point only to `with`.
-  - docs, examples, tests, and quality gates were completed together as one migration slice.
-
-Note: detailed step-by-step renewal history is intentionally omitted here; use
-`doc/STATE.md` and git history for chronological implementation records.
+- `with` is the only handler-application syntax (inline and handler-value forms).
+- Legacy `handler ... for ...` / `using` syntax removed from parser/runtime/typecheck.
 
 
 ### 2.4 Standard Library Surface (MVP)
