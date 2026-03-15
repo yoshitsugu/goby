@@ -4,8 +4,9 @@ Last updated: 2026-03-15
 
 ## Current Focus
 
-- `can` semantics alignment: **completed** (2026-03-15)
-- Next track: **Track D — Developer Tooling Foundation** (formatter, linter, LSP)
+- Track D — Developer Tooling Foundation
+- D1a-i (Span extension + position helpers): **completed** (2026-03-15)
+- Next step: **D1a-ii** (declaration-level AST node spans)
 
 ## Locked Decisions Carried Forward
 
@@ -51,7 +52,9 @@ Track D — Developer Tooling Foundation is the next starting point.
 
 Execution order (matches PLAN.md dependency chain):
 
-1. D1a: Source coordinates (Span extension, position helpers, AST node span addition).
+1. ~~D1a-i: Span extension and position helpers~~ **(completed)**
+1a. D1a-ii: Declaration-level AST node spans.
+1b. D1a-iii: Stmt/Expr identifier node spans.
 2. D1b: Unified `Diagnostic` type (shared between CLI and LSP).
 3. D1c: TypecheckError span population (remaining ~77 sites).
 4. D2a: `goby-lsp` crate — diagnostics only (editor diagnostics).

@@ -390,26 +390,13 @@ Goal: establish a correct, well-specified text-position layer that all later pha
 
 Split into three sub-phases to keep each step reviewable and independently testable.
 
-##### D1a-i: Span extension and position helpers
+##### D1a-i: Span extension and position helpers (completed 2026-03-15)
 
-Scope:
-
-- Clarify and document the column semantics once: `col` is a 1-indexed **byte offset within
-  the line**; `col = 1` is the "unknown column" sentinel (current CLI behavior).
-- Extend `Span` to carry an end position:
-  `Span { line, col, end_line, end_col }` with same-point default for existing sites.
-- Add `fn line_col_to_offset(source: &str, line: usize, col: usize) -> usize` and
-  the reverse `fn offset_to_line_col(source: &str, offset: usize) -> (usize, usize)`.
-  - Both helpers treat `col` as a byte offset within the line, not a character count.
-  - Tests: ASCII single/multi-line, 2-byte codepoint (`é`), 3-byte codepoint (`あ`),
-    out-of-range line/col, end-range cases.
-- Update all existing `Span` construction sites to supply same-point defaults for end fields.
-
-Done when:
-
-- `cargo test` passes including new position-mapping tests.
-- `goby-cli check examples/function.gb` output is unchanged.
-- No AST node changes yet; only `Span` struct and helpers.
+- `Span` extended with `end_line`/`end_col`; `Copy` derived.
+- `Span::point()` and `Span::new()` constructors added.
+- All 10 construction sites migrated to `Span::point()`.
+- `span.rs` module added with `line_col_to_offset` / `offset_to_line_col` (LF-only, 1-indexed byte-offset cols).
+- 21 unit tests (ASCII, multi-byte UTF-8, edge cases, round-trip).
 
 ##### D1a-ii: Declaration-level AST node spans
 
