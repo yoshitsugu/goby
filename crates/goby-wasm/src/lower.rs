@@ -312,6 +312,9 @@ fn expr_contains_resume(expr: &Expr) -> bool {
         | Expr::StringLit(_)
         | Expr::IntLit(_)
         | Expr::BoolLit(_) => false,
+        Expr::ListIndex { list, index } => {
+            expr_contains_resume(list) || expr_contains_resume(index)
+        }
     }
 }
 

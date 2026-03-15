@@ -180,5 +180,9 @@ pub(crate) fn check_branch_type_consistency_in_expr(
             }
             Ok(())
         }
+        Expr::ListIndex { list, index } => {
+            recurse!(list)?;
+            recurse!(index)
+        }
     }
 }

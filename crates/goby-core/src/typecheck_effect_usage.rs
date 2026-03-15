@@ -548,5 +548,9 @@ pub(crate) fn check_unhandled_effects_in_expr(
             recurse!(then_expr)?;
             recurse!(else_expr)
         }
+        Expr::ListIndex { list, index } => {
+            recurse!(list)?;
+            recurse!(index)
+        }
     }
 }

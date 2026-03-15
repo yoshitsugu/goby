@@ -237,6 +237,10 @@ pub enum Expr {
         then_expr: Box<Expr>,
         else_expr: Box<Expr>,
     },
+    ListIndex {
+        list: Box<Expr>,
+        index: Box<Expr>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -370,6 +374,22 @@ impl Expr {
                 None
             }
             Expr::Case { .. } | Expr::If { .. } => None,
+            // Note: returns a non-None string even though the current string-based
+            // evaluators do not yet understand `expr[i]` syntax.  Once the F1b parser
+            // lands, this string will be parseable and the runtime path will fully work.
+            // Until then, callers that fall back to to_str_repr() will receive a string
+            // that no current evaluator can evaluate and will silently return None — which
+            // is the correct safe-fallback behaviour.
+            Expr::ListIndex { list, index } => {
+                let l_raw = list.to_str_repr()?;
+                let i = index.to_str_repr()?;
+                let l = if list.needs_parens_as_subexpr() {
+                    format!("({})", l_raw)
+                } else {
+                    l_raw
+                };
+                Some(format!("{}[{}]", l, i))
+            }
         }
     }
 }
@@ -475,5 +495,50 @@ mod tests {
             spread: Some(Box::new(Expr::Var("xs".to_string()))),
         };
         assert_eq!(expr.to_str_repr(), Some("[1, 2, ..xs]".to_string()));
+    }
+
+    #[test]
+    fn to_str_repr_list_index_simple() {
+        let expr = Expr::ListIndex {
+            list: Box::new(Expr::Var("xs".to_string())),
+            index: Box::new(Expr::IntLit(0)),
+        };
+        assert_eq!(expr.to_str_repr(), Some("xs[0]".to_string()));
+    }
+
+    #[test]
+    fn to_str_repr_list_index_var_index() {
+        let expr = Expr::ListIndex {
+            list: Box::new(Expr::Var("xs".to_string())),
+            index: Box::new(Expr::Var("i".to_string())),
+        };
+        assert_eq!(expr.to_str_repr(), Some("xs[i]".to_string()));
+    }
+
+    #[test]
+    fn to_str_repr_list_index_call_receiver_gets_parens() {
+        // `(f 1)[0]` — Call receiver must be parenthesised to avoid `f 1[0]`
+        let expr = Expr::ListIndex {
+            list: Box::new(Expr::Call {
+                callee: Box::new(Expr::Var("f".to_string())),
+                arg: Box::new(Expr::IntLit(1)),
+            }),
+            index: Box::new(Expr::IntLit(0)),
+        };
+        assert_eq!(expr.to_str_repr(), Some("(f 1)[0]".to_string()));
+    }
+
+    #[test]
+    fn to_str_repr_list_index_chained() {
+        // `xs[0][1]`
+        let inner = Expr::ListIndex {
+            list: Box::new(Expr::Var("xs".to_string())),
+            index: Box::new(Expr::IntLit(0)),
+        };
+        let outer = Expr::ListIndex {
+            list: Box::new(inner),
+            index: Box::new(Expr::IntLit(1)),
+        };
+        assert_eq!(outer.to_str_repr(), Some("xs[0][1]".to_string()));
     }
 }

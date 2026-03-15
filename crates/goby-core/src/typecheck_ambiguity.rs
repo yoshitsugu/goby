@@ -248,6 +248,10 @@ pub(crate) fn ensure_no_ambiguous_refs_in_expr(
             ensure_no_ambiguous_refs_in_expr(then_expr, env, decl_name)?;
             ensure_no_ambiguous_refs_in_expr(else_expr, env, decl_name)
         }
+        Expr::ListIndex { list, index } => {
+            ensure_no_ambiguous_refs_in_expr(list, env, decl_name)?;
+            ensure_no_ambiguous_refs_in_expr(index, env, decl_name)
+        }
     }
 }
 

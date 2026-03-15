@@ -411,6 +411,9 @@ fn expr_contains_runtime_read(expr: &Expr) -> bool {
         | Expr::StringLit(_)
         | Expr::Var(_)
         | Expr::Qualified { .. } => false,
+        Expr::ListIndex { list, index } => {
+            expr_contains_runtime_read(list) || expr_contains_runtime_read(index)
+        }
     }
 }
 

@@ -662,6 +662,9 @@ impl<'m> RuntimeOutputResolver<'m> {
                 self.complete_value_out(out, evaluators)
             }
             Expr::Lambda { .. } | Expr::MethodCall { .. } => None,
+            // F1a stub: return None so the string-based fallback (to_str_repr) handles it;
+            // full runtime evaluation is implemented in F3.
+            Expr::ListIndex { .. } => None,
         }
     }
 

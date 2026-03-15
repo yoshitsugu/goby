@@ -171,6 +171,16 @@ fn infer_expr_ty(expr: &Expr, env: &TypeEnv) -> Ty {
             let else_ty = check_expr(else_expr, env);
             merge_branch_type(env, then_ty, else_ty)
         }
+        // F1a stub: full inference implemented in F2
+        Expr::ListIndex { list, index } => {
+            let list_ty = check_expr(list, env);
+            let _index_ty = check_expr(index, env);
+            match list_ty {
+                Ty::List(elem_ty) => *elem_ty,
+                Ty::Unknown => Ty::Unknown,
+                _ => Ty::Unknown,
+            }
+        }
     }
 }
 

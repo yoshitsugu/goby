@@ -595,6 +595,10 @@ fn inspect_expr(
                 );
             }
         }
+        Expr::ListIndex { list, index } => {
+            inspect_expr(list, out, declaration_names, qualified_operation_index, op_name_index);
+            inspect_expr(index, out, declaration_names, qualified_operation_index, op_name_index);
+        }
     }
 }
 
@@ -682,6 +686,9 @@ fn expr_contains_handler_resume(expr: &Expr) -> bool {
                 || arms
                     .iter()
                     .any(|arm| expr_contains_handler_resume(&arm.body))
+        }
+        Expr::ListIndex { list, index } => {
+            expr_contains_handler_resume(list) || expr_contains_handler_resume(index)
         }
     }
 }

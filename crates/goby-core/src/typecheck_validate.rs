@@ -636,6 +636,10 @@ fn first_disallowed_intrinsic_in_expr(
         } => first_disallowed_intrinsic_in_expr(condition, is_stdlib_source)
             .or_else(|| first_disallowed_intrinsic_in_expr(then_expr, is_stdlib_source))
             .or_else(|| first_disallowed_intrinsic_in_expr(else_expr, is_stdlib_source)),
+        Expr::ListIndex { list, index } => {
+            first_disallowed_intrinsic_in_expr(list, is_stdlib_source)
+                .or_else(|| first_disallowed_intrinsic_in_expr(index, is_stdlib_source))
+        }
     }
 }
 
