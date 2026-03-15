@@ -685,7 +685,13 @@ impl<'m> RuntimeOutputResolver<'m> {
                         }
                         Some(RuntimeValue::String(items[i as usize].clone()))
                     }
-                    _ => None,
+                    _ => {
+                        // The type system should have rejected a non-list receiver,
+                        // but if we reach here at runtime the program is in an invalid
+                        // state — abort consistently with OOB handling.
+                        self.mark_runtime_abort();
+                        None
+                    }
                 }
             }
         }

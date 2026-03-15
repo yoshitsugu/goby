@@ -761,12 +761,164 @@ Acceptance criteria:
 - diagnostics clearly distinguish `Int` from `Float`.
 - docs/examples/spec are updated in the same slice that lands behavior.
 
-### 4.6 Parking Lot (Needs Revalidation Before Implementation)
+### 4.6 Active Track F: List Index Access `l[i]`
+
+Goal: add `expr[expr]` syntax for `List` index access.
+
+#### Design decisions (lock before coding)
+
+- Syntax: `list_expr[index_expr]` — postfix bracket form, binds tighter than function application.
+- Index type: `Int` only (0-based). Negative indices are a runtime error (not Python-style wrap-around).
+- Out-of-bounds: `RuntimeError::Abort` — not `Unsupported` (which silently degrades).
+- `list_expr` may be any expression (variable, call result, literal, etc.).
+- Chaining: `l[i][j]` is valid (left-associative postfix).
+- `l[i]` in assignment position is NOT supported in this track (read-only).
+- `case` pattern side: index access is not a pattern; no change to pattern syntax.
+- `ListIndex` is NOT added to `needs_parens_as_subexpr` (postfix form never needs wrapping parens).
+
+#### Phase F1a: AST stub — add `Expr::ListIndex` and patch all exhaustive match sites
+
+Scope:
+
+- Add `Expr::ListIndex { list: Box<Expr>, index: Box<Expr> }` to `ast.rs`.
+- `to_str_repr`: return `None` (same as other unprinted forms).
+- `needs_parens_as_subexpr`: do NOT add `ListIndex` here.
+- Add stub arms to every exhaustive `match expr` site (at minimum safe defaults):
+  - `goby-core`: `typecheck_check.rs`, `typecheck_resume.rs`, `typecheck_effect_usage.rs`,
+    `typecheck_stmt.rs`, `typecheck_ambiguity.rs`, `typecheck_annotation.rs`,
+    `typecheck_validate.rs` (if exists), `typecheck_branch.rs`, `typecheck_effect.rs`
+  - `goby-wasm`: `lower.rs`, `runtime_expr.rs`, `runtime_replay.rs`, `runtime_io_plan.rs`,
+    `planning.rs`, `runtime_resolver.rs`
+  - walker/inspector sites (e.g. `inspect_expr` in `planning.rs`) must recurse into
+    both `list` and `index` sub-expressions, not just compile with `_ => ()`.
+
+Done when:
+
+- `cargo check` passes with zero warnings on exhaustive-match.
+- All new arms are safe stubs (no logic changes).
+
+#### Phase F1b: Parser — simple `identifier[expr]` and call-result `f()[expr]`
+
+Scope:
+
+- In `parse_expr`, before the `starts_with('[') && ends_with(']')` gate, scan from the
+  right for a trailing `]`, find the matching `[` via bracket depth, and if the prefix is
+  non-empty, parse prefix as list expression and bracketed part as index expression.
+- Algorithm: scan right-to-left, track `[`/`]` depth; when depth returns to 0, split there.
+  If prefix starts with `[`, that case is deferred to F1c.
+- Empty bracket `xs[]` → `None`.
+- `xs[0]`, `xs[n]`, `xs[i + 1]`, `f()[0]` must parse correctly.
+- `xs[0]` as a call argument (inside `split_top_level_whitespace_terms`) must also work:
+  verify that `split_top_level_whitespace_terms` already tracks `[`/`]` depth; if not,
+  fix it in this phase.
+
+Done when:
+
+- Parser tests pass for `xs[0]`, `xs[n]`, `xs[i + 1]`, `f()[0]`.
+- `print xs[0]` parses as `ListIndex { list: Call(print, xs), index: 0 }` because
+  `parse_list_index_suffix` fires before `parse_call_expr` on any string ending with `]`.
+  To print the element, write `print (xs[0])` explicitly.
+- `xs[]` returns parse error.
+- `cargo test -p goby-core` passes; all existing list-literal tests still pass.
+
+#### Phase F1c: Parser — chaining and list-literal receiver `[1,2,3][0]`
+
+Scope:
+
+- Extend F1b to handle prefix starting with `[` (i.e. list literal used as receiver).
+  Move the new `ListIndex` detection to run before the `starts_with('[') && ends_with(']')`
+  list-literal gate. Adjust parse order so the suffix scan runs first and only falls
+  through to `parse_list_expr` when no `]`-terminated index suffix is found.
+- Chaining `xs[0][1]`: the suffix-scan loop naturally produces left-associative chaining.
+- Test cases: `[1, 2, 3][0]`, `[10, 20][1]`, `xs[0][0]`.
+
+Done when:
+
+- `[1,2,3][0]` parses as `ListIndex { list: ListLit([1,2,3]), index: 0 }`.
+- `xs[0][1]` parses as `ListIndex { list: ListIndex { xs, 0 }, index: 1 }`.
+- All existing list-literal parse tests still pass.
+- `cargo test -p goby-core` passes.
+
+#### Phase F2: Typechecker
+
+Scope:
+
+- In `typecheck_check.rs` (or equivalent `check_expr`), replace the stub arm for
+  `Expr::ListIndex` with real inference:
+  - Infer `list` type; require `Ty::List(a)` → result is `a`.
+  - `Ty::Unknown` receiver → result `Ty::Unknown` (no error).
+  - `Ty::List(Ty::Unknown)` receiver → result `Ty::Unknown`.
+  - Infer `index` type; require `Ty::Int` → error if mismatch.
+  - Non-list receiver → type error "expected List type, got X".
+- Add typecheck tests:
+  - `xs : List Int`, `xs[0]` → `Int`.
+  - `xs : List String`, `xs[1]` → `String`.
+  - `xs[True]` → type error (index must be `Int`).
+  - `42[0]` → type error (receiver must be `List`).
+
+Done when:
+
+- Type inference and error diagnostics work for all cases above.
+- `cargo test -p goby-core` passes.
+
+#### Phase F3: Fallback runtime evaluation
+
+Scope:
+
+- Replace stub arm in `runtime_resolver.rs` / `runtime_expr.rs` for `Expr::ListIndex`:
+  - Evaluate `list` → `Value::List(items)`.
+  - Evaluate `index` → `Value::Int(i)`.
+  - Bounds check: `0 <= i < items.len()` → return `items[i]`.
+  - Out-of-bounds or negative → `RuntimeError::Abort { message: "list index out of bounds" }`.
+- `planning.rs::inspect_expr` stub is already recursive (from F1a) — verify it.
+- Wasm capability check: `ListIndex` is already classified as `UnsupportedValueExpr` via
+  the wildcard in `fallback.rs` — no additional work needed; verify with a test.
+- Add runtime output tests:
+  - `xs : List Int = [10, 20, 30]; println "${xs[1]}"` → `20`.
+  - `List String`, `List Bool` variants.
+  - out-of-bounds produces `RuntimeError::Abort`.
+
+Done when:
+
+- `goby-cli run` executes list index access correctly for in-bounds cases.
+- Out-of-bounds produces a deterministic `Abort` error.
+- `cargo test` passes including runtime output tests.
+
+#### Phase F4: Spec and tooling follow-through
+
+Scope:
+
+- Update `doc/LANGUAGE_SPEC.md` section 3 to document `expr[expr]` syntax, precedence,
+  out-of-bounds behavior (`Abort`), and negative-index policy.
+- Add a canonical example to `examples/` demonstrating list index access.
+- Update syntax highlighting if `[` in postfix position needs a new token rule
+  (`tooling/syntax/textmate`, `tooling/vscode-goby/syntaxes`, `tooling/emacs`, `tooling/vim`).
+- Update formatter (`goby fmt`) to handle `Expr::ListIndex` once D4 is active
+  (or add a placeholder rendering `list[index]`).
+
+Done when:
+
+- `doc/LANGUAGE_SPEC.md` is updated.
+- Syntax highlight definitions handle the new form.
+- Example file parses, typechecks, and runs correctly.
+
+#### Milestones summary
+
+- MF1a (F1a done): AST node exists; all exhaustive match sites patched; `cargo check` clean.
+- MF1b (F1b done): parser handles `xs[i]`, `f()[i]` and argument-position uses.
+- MF1c (F1c done): parser handles `[1,2,3][i]` and chaining.
+- MF2 (F2 done): typechecker infers element type and rejects bad index/receiver types.
+- MF3 (F3 done): runtime executes index access; out-of-bounds `Abort`.
+- MF4 (F4 done): spec and tooling updated; example committed.
+
+### 4.7 Parking Lot (Needs Revalidation Before Implementation)
 
 - CLI `build` expansion details (`--target`, `--engine-compat`, verify modes).
 - CLI binary naming migration (`goby-cli` -> `goby`) final policy.
 
 These items are intentionally kept as short placeholders until they become active.
+
+
 
 ## 5. Spec Detail Notes
 

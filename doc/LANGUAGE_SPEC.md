@@ -59,7 +59,9 @@ syntax/semantics.
   - index must be `Int`; receiver must be `List a`; result type is `a`
   - negative or out-of-bounds index aborts the program (`RuntimeError::Abort`)
   - no negative-index shorthand (e.g. `xs[-1]` aborts rather than wrapping)
-  - chaining is supported: `xs[0][1]` indexes into the result of `xs[0]`
+  - chaining syntax is supported: `xs[0][1]` indexes into the result of `xs[0]`
+    (current runtime limitation: chained indexing only works if intermediate results
+    are `Int` or `String` values; `List (List T)` is not yet a representable runtime value)
   - precedence: `expr[expr]` binds tighter than function call application —
     `f xs[0]` parses as `(f xs)[0]`, not `f (xs[0])`; use `f (xs[0])` when indexing before calling
 - Tuple member access uses numeric qualified form: `pair.0`, `pair.1`, ...

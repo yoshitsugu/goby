@@ -829,9 +829,10 @@ fn parse_list_index_suffix(src: &str) -> Option<Expr> {
             b']' | b')' => depth += 1,
             b'[' | b'(' => {
                 if depth == 0 {
-                    // An unmatched open bracket before our target `[` — this means
-                    // there is no top-level `[…]` suffix (e.g. `(expr)[idx]` would
-                    // hit `(` here). Return None.
+                    // A `[` or `(` that has no matching closer to our right —
+                    // the source is malformed (e.g. an unbalanced `xs[0` or `(xs`).
+                    // Note: `(expr)[idx]` does NOT reach here; the scanner finds the
+                    // index `[` at depth==1 and breaks before ever reaching the `(`.
                     return None;
                 }
                 depth -= 1;

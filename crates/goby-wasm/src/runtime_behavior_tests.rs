@@ -917,3 +917,45 @@ main =
     // OOB triggers abort: no output produced
     assert_eq!(output, None);
 }
+
+#[test]
+fn list_index_negative_index_aborts() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    let source = r#"
+xs : List Int
+xs = [1, 2]
+
+v : Int
+v = xs[-1]
+
+main : Unit -> Unit
+main =
+  print v
+"#;
+    let module = parse_module(source).expect("parse should work");
+    let output =
+        resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module));
+    // Negative index aborts: no output produced
+    assert_eq!(output, None);
+}
+
+#[test]
+fn list_index_string_list_out_of_bounds_aborts() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    let source = r#"
+words : List String
+words = ["a", "b"]
+
+v : String
+v = words[9]
+
+main : Unit -> Unit
+main =
+  print v
+"#;
+    let module = parse_module(source).expect("parse should work");
+    let output =
+        resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module));
+    // OOB on string list triggers abort: no output produced
+    assert_eq!(output, None);
+}

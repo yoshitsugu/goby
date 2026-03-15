@@ -269,7 +269,7 @@ pub(crate) fn check_list_index_constraints(
 ) -> Result<(), TypecheckError> {
     let list_ty = env.resolve_alias(&check_expr(list, env), 0);
     match &list_ty {
-        Ty::List(_) | Ty::Unknown => {}
+        Ty::List(_) | Ty::Unknown | Ty::Var(_) => {}
         other => {
             return Err(TypecheckError {
                 declaration: Some(decl_name.to_string()),
@@ -284,7 +284,7 @@ pub(crate) fn check_list_index_constraints(
 
     let index_ty = env.resolve_alias(&check_expr(index, env), 0);
     match &index_ty {
-        Ty::Int | Ty::Unknown => {}
+        Ty::Int | Ty::Unknown | Ty::Var(_) => {}
         other => {
             return Err(TypecheckError {
                 declaration: Some(decl_name.to_string()),

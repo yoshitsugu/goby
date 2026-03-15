@@ -277,6 +277,7 @@ impl Expr {
                 | Expr::Block(..)
                 | Expr::Case { .. }
                 | Expr::If { .. }
+                | Expr::ListIndex { .. }
         )
     }
 
@@ -383,7 +384,12 @@ impl Expr {
             Expr::ListIndex { list, index } => {
                 let l_raw = list.to_str_repr()?;
                 let i = index.to_str_repr()?;
-                let l = if list.needs_parens_as_subexpr() {
+                // In the receiver position, `ListIndex` itself does NOT need parens:
+                // `xs[0][1]` round-trips correctly without `(xs[0])[1]`.
+                // Other complex sub-expressions (Call, BinOp, …) do need parens.
+                let l = if list.needs_parens_as_subexpr()
+                    && !matches!(list.as_ref(), Expr::ListIndex { .. })
+                {
                     format!("({})", l_raw)
                 } else {
                     l_raw
