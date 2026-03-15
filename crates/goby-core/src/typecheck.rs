@@ -110,6 +110,7 @@ mod tests {
         let iterator_example = read_example("iterator.gb");
         let iterator_unified_example = read_example("iterator_unified.gb");
         let list_case_example = read_example("list_case.gb");
+        let list_index_example = read_example("list_index.gb");
 
         let hello_module = parse_module(&hello).expect("hello should parse");
         let basic_module = parse_module(&basic).expect("basic_types should parse");
@@ -123,6 +124,8 @@ mod tests {
         let iterator_unified_module =
             parse_module(&iterator_unified_example).expect("iterator_unified.gb should parse");
         let list_case_module = parse_module(&list_case_example).expect("list_case should parse");
+        let list_index_module =
+            parse_module(&list_index_example).expect("list_index.gb should parse");
 
         typecheck_module(&hello_module).expect("hello should typecheck");
         typecheck_module(&basic_module).expect("basic_types should typecheck");
@@ -134,6 +137,7 @@ mod tests {
         typecheck_module(&iterator_module).expect("iterator.gb should typecheck");
         typecheck_module(&iterator_unified_module).expect("iterator_unified.gb should typecheck");
         typecheck_module(&list_case_module).expect("list_case should typecheck");
+        typecheck_module(&list_index_module).expect("list_index.gb should typecheck");
     }
 
     #[test]

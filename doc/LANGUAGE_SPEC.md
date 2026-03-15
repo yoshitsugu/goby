@@ -54,6 +54,14 @@ syntax/semantics.
   - spread segment is expression-only syntax and must be trailing
   - `[..xs]`, `[a, ..]`, `[a, ..b, c]` are rejected
   - type rule: prefix elements unify to one element type `a`; spread tail must be `List a`
+- List index access: `expr[expr]`
+  - `xs[i]` evaluates `xs` then `i` and returns the element at zero-based index `i`
+  - index must be `Int`; receiver must be `List a`; result type is `a`
+  - negative or out-of-bounds index aborts the program (`RuntimeError::Abort`)
+  - no negative-index shorthand (e.g. `xs[-1]` aborts rather than wrapping)
+  - chaining is supported: `xs[0][1]` indexes into the result of `xs[0]`
+  - precedence: `expr[expr]` binds tighter than function call application —
+    `f xs[0]` parses as `(f xs)[0]`, not `f (xs[0])`; use `f (xs[0])` when indexing before calling
 - Tuple member access uses numeric qualified form: `pair.0`, `pair.1`, ...
 - Unit value spelling: `()` (canonical).
   - Legacy expression-form `Unit` is rejected.
