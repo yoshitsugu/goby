@@ -353,86 +353,170 @@ are retained in `doc/STATE.md` and git history.
 
 ### 4.3 Active Track D: Developer Tooling Foundation
 
-Goal: establish practical developer tooling aligned with current language behavior.
+Goal: establish practical developer tooling — diagnostics in editors, a formatter, and a
+linter — built on `goby-core` as the single analysis source.
 
-Near-term scope:
+#### Current infrastructure baseline (2026-03-15 audit)
 
-1. `goby fmt` / `goby fmt --check` (deterministic formatting).
-2. `goby lint` (high-signal checks + machine-readable output).
-3. `goby-lsp` MVP (diagnostics, hover, definition).
-4. Cross-editor syntax regression tests for existing highlight packs.
+What exists:
 
-Acceptance criteria:
+- `ParseError` always carries `line`/`col` (1-indexed, ASCII-only MVP assumption).
+- `TypecheckError` has an `Option<Span>` field; ~10 of 30+ error sites populate it.
+- `Span` is a `{line, col}` struct — no end position, no byte offset from file start.
+- `Declaration` carries a start `line` but no column.
+- `goby-cli` renders a caret-style snippet for errors that have line/col.
+- `Expr::to_str_repr()` exists as a legacy bridge, not a formatter; `Handler`/`With`/`If`/`Case`/`Block` are not covered.
 
-- Formatter/linter commands and baseline LSP diagnostics are usable on `examples/` and stdlib sources.
+What is missing:
 
-#### `goby-lsp` implementation plan
+- AST nodes (`Expr`, `Stmt`) carry no span — once parsed, source location is lost.
+- Effect/handler-clause declaration sites have no position metadata.
+- No end-of-span (single character point only), so range-based LSP highlights are impossible.
+- No unified `Diagnostic` type shared between CLI and a future LSP server.
+- No UTF-8 byte-offset ↔ LSP line/character conversion layer.
+- No AST pretty-printer (needed for `goby fmt`).
+- `typecheck_module` returns a single `TypecheckError`, not a collection.
 
-Purpose:
+#### Ownership boundaries
 
-- make compiler diagnostics continuously available from editors without introducing a second analysis stack.
-- establish a minimal but extensible protocol boundary for later editor features (rename, references, completion).
+- `goby-core` owns: parsing, typechecking, source spans, symbol-resolution facts, and `Diagnostic` structs.
+- `goby-lsp` (new crate) owns: LSP protocol transport, document versioning, and protocol object translation.
+- `goby-cli` owns: human-readable rendering of `Diagnostic` for terminal output.
+- Do not place LSP-specific types or editor state in `goby-core`.
 
-Non-goals for MVP:
+#### Phase D1: Span infrastructure and unified diagnostics
 
-- project-wide symbol index across packages/workspaces.
-- semantic tokens, completion ranking, code actions, rename, references.
-- background build orchestration beyond single-file + directly loaded stdlib context.
+Goal: make `goby-core` emit structured, span-bearing diagnostics consumable by both CLI and LSP.
 
-Architecture direction:
+Scope:
 
-- add a new workspace crate `crates/goby-lsp`.
-- reuse parser/typechecker/diagnostic machinery from `goby-core` as the single source of truth.
-- keep LSP-specific concerns isolated to:
-  - document lifecycle and text synchronization,
-  - span/offset conversion,
-  - protocol capability wiring,
-  - lightweight symbol lookup for hover/definition.
-- do not fork diagnostic formatting rules between CLI and LSP; instead introduce a shared structured-diagnostic layer if current CLI output is too string-oriented.
+- Extend `Span` to carry an end position: `{ line: usize, col: usize, end_line: usize, end_col: usize }`.
+  - Keep the existing `line`/`col` semantics; add `end_line`/`end_col` defaulting to the same point.
+- Add span fields to parser AST nodes where source location is needed for diagnostics:
+  - `Declaration`: add `col` and `annotation_span: Option<Span>`.
+  - `Expr`/`Stmt`: do not add spans to every node in this phase; instead record spans at
+    declaration-body boundaries and key error sites only.
+- Introduce a `Diagnostic` struct in `goby-core`:
+  ```
+  Diagnostic { severity: Severity, span: Option<Span>, declaration: Option<String>, message: String }
+  ```
+  where `Severity` is `Error | Warning`.
+- Migrate `TypecheckError` and `ParseError` to produce `Diagnostic` values (or map to them).
+- Change `typecheck_module` to return `Vec<Diagnostic>` instead of a single error, so multiple
+  errors in one pass can be reported.
+- Add a UTF-8 byte-offset conversion helper: `fn line_col_to_offset(source: &str, line: usize, col: usize) -> usize`.
+  - Cover multi-byte characters; add tests for ASCII, 2-byte, and 3-byte codepoint cases.
+- Update `goby-cli` to render `Vec<Diagnostic>` (the existing caret-snippet logic is reused).
 
-Execution phases:
+Done when:
 
-1. Phase D1: Diagnostic substrate hardening
-   - audit current parse/typecheck/runtime-facing errors and normalize them into machine-readable diagnostics with stable severity, message, and source span.
-   - close the known metadata gap for type/effect declaration spans so editor diagnostics can point at declaration sites.
-   - define UTF-8 byte offset to LSP position conversion rules and cover multi-line / multi-byte text cases with tests.
-2. Phase D2: `goby-lsp` crate skeleton
-   - add `crates/goby-lsp` to the workspace with a stdio LSP server entrypoint.
-   - implement initialize / initialized / shutdown / exit.
-   - implement `textDocument/didOpen`, `didChange`, `didClose` with in-memory document storage.
-   - on open/change, re-run parse + typecheck for the active document and publish diagnostics.
-3. Phase D3: Single-file language intelligence MVP
-   - implement `textDocument/hover` for local bindings, top-level declarations, built-ins, and stdlib symbols that resolve through the current compilation context.
-   - implement `textDocument/definition` for identifiers resolvable within the current file or loaded stdlib source set.
-   - define clear fallback behavior: unresolved symbols return `null`, never best-effort guesses.
-4. Phase D4: Editor-facing hardening
-   - debounce or coalesce rapid document changes enough to avoid obviously redundant full recompilations.
-   - ensure diagnostics are cleared on close and replaced atomically on re-check.
-   - add fixture-based regression tests for malformed syntax, type errors, stdlib references, and hover/definition span accuracy.
-5. Phase D5: CLI/editor packaging alignment
-   - decide whether the long-term entrypoint is a standalone `goby-lsp` binary, a `goby lsp` subcommand, or both.
-   - document editor launch examples after protocol stability is proven.
+- `cargo test` passes.
+- `goby-cli check examples/function.gb` still renders correct line/col diagnostics.
+- The `Diagnostic` type is exported from `goby-core` and documented.
+- Multi-byte offset conversion has unit tests.
 
-Ownership boundaries:
+#### Phase D2: `goby-lsp` crate — diagnostics only
 
-- `goby-core` owns parsing, typing, source spans, symbol-resolution facts, and diagnostic data structures.
-- `goby-lsp` owns protocol transport, document versioning, publish-diagnostics flow, and protocol object translation.
-- avoid placing editor-only state or protocol types in `goby-core`.
+Goal: `goby-cli check`-equivalent diagnostics available inside editors via LSP.
 
-Suggested internal milestones:
+Scope:
 
-- M1: opening a `.gb` file in an editor yields parse/type diagnostics identical in substance to `goby-cli check`.
-- M2: hover returns type/signature information for local/top-level names.
-- M3: definition jumps work for same-file declarations and stdlib imports used by examples.
-- M4: the server is stable enough to wire into the existing VSCode extension or a minimal editor launch config.
+- Add `crates/goby-lsp` to the Cargo workspace.
+- Depend on `goby-core`; use `lsp-types` and `lsp-server` crates for protocol plumbing.
+- Implement lifecycle: `initialize` / `initialized` / `shutdown` / `exit`.
+- Implement `textDocument/didOpen`, `didChange`, `didClose` with in-memory document store.
+- On open/change: run `parse_module` + `typecheck_module`; publish `textDocument/publishDiagnostics`
+  using spans from Phase D1.
+- LSP position mapping: convert `Span` line/col to LSP 0-indexed line/character using the
+  byte-offset helper from D1.
+- On `didClose`: clear diagnostics for that URI.
 
-Definition of done for Track D LSP slice:
+Done when:
 
-- `cargo run -p goby-lsp` starts a functional stdio server.
-- opening/changing `examples/*.gb` publishes stable diagnostics with correct line/column mapping.
-- hover/definition work for the supported single-file + stdlib-backed subset.
-- regression tests cover offset conversion, diagnostic publication, and at least one hover/definition case.
-- remaining post-MVP gaps are documented explicitly before moving on to richer editor features.
+- `cargo run -p goby-lsp` starts without error and speaks stdio LSP.
+- Opening `examples/function.gb` in an editor (or via `lsp-mode` / `nvim-lspconfig`) shows the
+  same errors as `goby-cli check`.
+- A fixture-based integration test drives open/change/close and asserts published diagnostics.
+
+#### Phase D3: Hover and go-to-definition (single file)
+
+Goal: hover shows type/signature; definition jumps work within a single file and loaded stdlib.
+
+Scope:
+
+- `textDocument/hover`:
+  - for top-level declaration names and their call sites: return `name : TypeAnnotation`.
+  - for local bindings: return `name : InferredType` using `check_expr` result.
+  - for effect operations: return the effect member signature.
+  - unresolved symbols: return `null` (no best-effort guessing).
+- `textDocument/definition`:
+  - for identifiers resolvable within the current file: return the declaration `Span`.
+  - for stdlib imports (`import goby/string`): return the span in the loaded stdlib source.
+  - unresolved: return `null`.
+- Requires: declaration spans in AST (from D1) and a symbol-lookup helper in `goby-core`.
+
+Done when:
+
+- Hovering a top-level function name shows its type annotation.
+- Go-to-definition from a call site jumps to the declaration line.
+- Hovering an unknown identifier returns no result (not a crash).
+- Tests cover: local binding hover, top-level hover, stdlib symbol hover, unresolved hover.
+
+#### Phase D4: `goby fmt` — AST pretty-printer
+
+Goal: deterministic, idempotent source formatter as a `goby fmt` CLI subcommand.
+
+Scope:
+
+- Implement an AST pretty-printer in `goby-core` covering the full current `Expr`/`Stmt` surface:
+  - literals, variables, binary ops, calls, lambdas, records, tuples, lists.
+  - `if`/`case` expressions with correct indentation.
+  - `with`/`handler` expressions.
+  - `Block` expressions.
+- Style rules (to be locked before coding):
+  - 2-space indentation.
+  - one blank line between top-level declarations.
+  - trailing newline.
+  - no trailing whitespace.
+- Add `goby fmt <file>` (in-place) and `goby fmt --check <file>` (exit 1 if not formatted).
+- Formatter is idempotent: `fmt(fmt(source)) == fmt(source)`.
+
+Done when:
+
+- `goby fmt examples/function.gb` produces a stable output.
+- `goby fmt --check` passes on all files under `examples/` and `stdlib/`.
+- Round-trip test: `parse(fmt(source))` produces an AST equal to `parse(source)`.
+
+#### Phase D5: `goby lint` — high-signal static checks
+
+Goal: machine-readable linter output for common mistakes not caught by the typechecker.
+
+Scope (initial lint rules):
+
+- Unused local binding (binding `x = expr` where `x` is never referenced afterward).
+- Shadowed effect operation name (local binding name collides with a visible effect op).
+- `can` annotation lists an effect that is fully discharged inside the function body
+  (redundant `can`).
+- Unreachable `case` arm (wildcard `_` arm followed by more arms).
+
+Output format:
+
+- JSON lines: `{"severity":"warning","file":"...","line":1,"col":1,"rule":"unused-binding","message":"..."}`.
+- Human-readable mode (default): same caret-snippet format as `goby-cli check`.
+
+Done when:
+
+- `goby lint examples/function.gb` exits 0 with no output on clean files.
+- Each lint rule has at least one positive and one negative test fixture.
+- JSON output mode is parseable and stable.
+
+#### Milestones summary
+
+- M1 (D1 done): diagnostics carry spans; multi-error reporting works; CLI output unchanged.
+- M2 (D2 done): editor shows parse/type errors via LSP on `.gb` files.
+- M3 (D3 done): hover and go-to-definition work for single-file + stdlib.
+- M4 (D4 done): `goby fmt` is idempotent on all existing sources.
+- M5 (D5 done): `goby lint` catches the initial rule set with machine-readable output.
 
 ### 4.4 Review Follow-ups (Backlog)
 
