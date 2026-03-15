@@ -75,6 +75,18 @@ pub(crate) fn parse_expr(src: &str) -> Option<Expr> {
         });
     }
 
+    // List index access: `expr[index]` — placed after binary-op splits so that
+    // `xs[0] + 1` parses as `BinOp(+, ListIndex(xs,0), 1)` (the `+` split fires
+    // first and recurses, hitting `parse_list_index_suffix` on `xs[0]`).
+    // Note: `f xs[0]` ends with `]` so `parse_list_index_suffix` fires on the
+    // whole string here, producing `ListIndex(Call(f, xs), 0)`.  Users who need
+    // `Call(f, ListIndex(xs, 0))` should write `f (xs[0])` explicitly.
+    // Placed before the `starts_with('[')` list-literal gate so that `[1,2,3][0]`
+    // is not consumed as a plain list literal.
+    if let Some(expr) = parse_list_index_suffix(src) {
+        return Some(expr);
+    }
+
     if src.starts_with('[') && src.ends_with(']') {
         return parse_list_expr(src);
     }
@@ -744,6 +756,118 @@ fn split_top_level_whitespace_terms(src: &str) -> Vec<&str> {
     terms
 }
 
+/// Try to parse `src` as a list-index expression `expr[index]`.
+///
+/// Scans from the right end of `src` looking for a top-level `[…]` suffix.
+/// If found and the prefix (the `list` expression) is non-empty, recurses to
+/// parse both sub-expressions.
+///
+/// Placed after binary-op splits so that binary operators bind more tightly than
+/// index access (e.g. `xs[0] + 1` → `(xs[0]) + 1` since `+` split fires first).
+/// Placed before the `starts_with('[')` list-literal gate so that `[1,2,3][0]`
+/// is not consumed as a plain list literal.
+///
+/// Chaining (`xs[0][1]`) works naturally because the recursive call to
+/// `parse_expr` on the prefix will re-enter this function.
+///
+/// Notes:
+/// - `(paren_expr)[idx]` is supported: the backward scan finds the `[` before the
+///   `)`, so `(xs)[0]` and `(f x)[0]` both work via `parse_tuple_or_grouped_expr`.
+/// - String literals in the index containing `]` are handled correctly because
+///   the scan tracks string literal boundaries right-to-left.
+/// - `f xs[0]` parses as `ListIndex(Call(f, xs), 0)` because the whole string ends
+///   with `]` and this function fires before `parse_call_expr`.
+fn parse_list_index_suffix(src: &str) -> Option<Expr> {
+    // Quick rejection: must end with `]` to possibly be an index access.
+    if !src.ends_with(']') {
+        return None;
+    }
+
+    // Walk backwards to find the `[` matching the trailing `]`.
+    // Track `[`/`]`, `(`/`)` nesting depth and string literal boundaries.
+    // All of `[`, `]`, `(`, `)`, `"`, `\` are ASCII single-byte — scanning
+    // byte-by-byte is correct even for multi-byte UTF-8 content.
+    let bytes = src.as_bytes();
+    let len = bytes.len();
+
+    let mut depth = 0usize;
+    let mut bracket_start: Option<usize> = None;
+    let mut i = len; // start just past the last character
+    while i > 0 {
+        i -= 1;
+        match bytes[i] {
+            b'"' => {
+                // Right-to-left string literal skip: scan left until we find the
+                // opening `"`, accounting for `\`-escape sequences.
+                // We walk left past the closing `"` we just found, looking for the
+                // matching opening `"`.
+                if i == 0 {
+                    return None; // malformed — opening quote would be before start
+                }
+                i -= 1;
+                loop {
+                    if bytes[i] == b'"' {
+                        // Check if this `"` is escaped by counting preceding backslashes.
+                        let mut backslashes = 0usize;
+                        let mut j = i;
+                        while j > 0 && bytes[j - 1] == b'\\' {
+                            backslashes += 1;
+                            j -= 1;
+                        }
+                        if backslashes % 2 == 0 {
+                            // Unescaped `"` — this is the opening quote; done.
+                            break;
+                        }
+                    }
+                    if i == 0 {
+                        return None; // unterminated string
+                    }
+                    i -= 1;
+                }
+                // `i` now points at the opening `"`. Continue the outer loop.
+            }
+            b']' | b')' => depth += 1,
+            b'[' | b'(' => {
+                if depth == 0 {
+                    // An unmatched open bracket before our target `[` — this means
+                    // there is no top-level `[…]` suffix (e.g. `(expr)[idx]` would
+                    // hit `(` here). Return None.
+                    return None;
+                }
+                depth -= 1;
+                if depth == 0 && bytes[i] == b'[' {
+                    bracket_start = Some(i);
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let bracket_start = bracket_start?;
+
+    // The prefix (list expression) is src[..bracket_start].
+    let list_src = src[..bracket_start].trim();
+    if list_src.is_empty() {
+        // `[…]` with no prefix — plain list literal, not an index access.
+        return None;
+    }
+
+    // The index expression is src[bracket_start+1..len-1].
+    let index_src = src[bracket_start + 1..len - 1].trim();
+    if index_src.is_empty() {
+        // Empty bracket `xs[]` — reject.
+        return None;
+    }
+
+    let list = parse_expr(list_src)?;
+    let index = parse_expr(index_src)?;
+    Some(Expr::ListIndex {
+        list: Box::new(list),
+        index: Box::new(index),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::parse_expr;
@@ -1239,5 +1363,150 @@ mod tests {
     #[test]
     fn rejects_malformed_resume_expression() {
         assert_eq!(parse_expr("resume"), None);
+    }
+
+    // --- Phase F1b: list index access parser tests ---
+
+    fn list_index(list: Expr, index: Expr) -> Expr {
+        Expr::ListIndex {
+            list: Box::new(list),
+            index: Box::new(index),
+        }
+    }
+
+    #[test]
+    fn parses_list_index_simple() {
+        assert_eq!(
+            parse_expr("xs[0]"),
+            Some(list_index(Expr::Var("xs".to_string()), Expr::IntLit(0)))
+        );
+    }
+
+    #[test]
+    fn parses_list_index_var_index() {
+        assert_eq!(
+            parse_expr("xs[i]"),
+            Some(list_index(
+                Expr::Var("xs".to_string()),
+                Expr::Var("i".to_string())
+            ))
+        );
+    }
+
+    #[test]
+    fn parses_list_index_with_spaces_around_bracket() {
+        // xs [ 0 ] — spaces inside brackets are trimmed from the index expression
+        assert_eq!(
+            parse_expr("xs [ 0 ]"),
+            Some(list_index(Expr::Var("xs".to_string()), Expr::IntLit(0)))
+        );
+    }
+
+    #[test]
+    fn list_index_in_call_arg_position() {
+        // `f xs[0]` — ListIndex suffix fires only after binary-op splits but
+        // BEFORE parse_call_expr; however parse_call_expr splits on whitespace
+        // terms and each term is recursively parsed, so the result depends on
+        // whether `parse_list_index_suffix` fires on the whole string first.
+        // Current behaviour: "f xs[0]" ends with `]`, so `parse_list_index_suffix`
+        // fires first and produces ListIndex(Call(f, xs), 0).
+        // This matches the right-to-left scan finding `[` at position 4 with
+        // list_src = "f xs" parsed as Call(f, xs).
+        // Document the actual parse so regressions are caught.
+        assert_eq!(
+            parse_expr("f xs[0]"),
+            Some(list_index(
+                Expr::Call {
+                    callee: Box::new(Expr::Var("f".to_string())),
+                    arg: Box::new(Expr::Var("xs".to_string())),
+                },
+                Expr::IntLit(0)
+            ))
+        );
+    }
+
+    #[test]
+    fn parses_list_index_expr_index() {
+        // xs[i + 1]
+        assert_eq!(
+            parse_expr("xs[i + 1]"),
+            Some(list_index(
+                Expr::Var("xs".to_string()),
+                Expr::BinOp {
+                    op: BinOpKind::Add,
+                    left: Box::new(Expr::Var("i".to_string())),
+                    right: Box::new(Expr::IntLit(1)),
+                }
+            ))
+        );
+    }
+
+    #[test]
+    fn parses_list_index_call_receiver() {
+        // f()[0]
+        assert_eq!(
+            parse_expr("f()[0]"),
+            Some(list_index(
+                Expr::Call {
+                    callee: Box::new(Expr::Var("f".to_string())),
+                    arg: Box::new(Expr::unit_value()),
+                },
+                Expr::IntLit(0)
+            ))
+        );
+    }
+
+    #[test]
+    fn parses_list_index_chained() {
+        // xs[0][1]
+        assert_eq!(
+            parse_expr("xs[0][1]"),
+            Some(list_index(
+                list_index(Expr::Var("xs".to_string()), Expr::IntLit(0)),
+                Expr::IntLit(1)
+            ))
+        );
+    }
+
+    #[test]
+    fn parses_list_literal_index_access() {
+        // [1, 2, 3][0]
+        assert_eq!(
+            parse_expr("[1, 2, 3][0]"),
+            Some(list_index(
+                Expr::ListLit {
+                    elements: vec![Expr::IntLit(1), Expr::IntLit(2), Expr::IntLit(3)],
+                    spread: None,
+                },
+                Expr::IntLit(0)
+            ))
+        );
+    }
+
+    #[test]
+    fn parses_list_index_paren_grouped_receiver() {
+        // (xs)[0] — the backward scan finds `[` at position 4 (before `(xs)`),
+        // list_src = "(xs)" which parse_tuple_or_grouped_expr turns into Var("xs").
+        assert_eq!(
+            parse_expr("(xs)[0]"),
+            Some(list_index(Expr::Var("xs".to_string()), Expr::IntLit(0)))
+        );
+    }
+
+    #[test]
+    fn rejects_empty_index_bracket() {
+        assert_eq!(parse_expr("xs[]"), None);
+    }
+
+    #[test]
+    fn list_literal_without_index_still_parses() {
+        // Plain list literal must not be consumed as a ListIndex.
+        assert_eq!(
+            parse_expr("[1, 2, 3]"),
+            Some(Expr::ListLit {
+                elements: vec![Expr::IntLit(1), Expr::IntLit(2), Expr::IntLit(3)],
+                spread: None,
+            })
+        );
     }
 }
