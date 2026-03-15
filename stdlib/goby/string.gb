@@ -2,7 +2,7 @@ import goby/iterator
 
 type GraphemeState = GraphemeState(grapheme: String, parts: List String, current: String, delimiter: String, seen: Bool)
 
-grapheme_count : String -> Int can Iterator
+grapheme_count : String -> Int
 grapheme_count value =
   mut n = 0
   with
@@ -12,7 +12,7 @@ grapheme_count value =
     n := __goby_string_each_grapheme value
   n
 
-split_with_empty_delimiter : String -> List String can Iterator
+split_with_empty_delimiter : String -> List String
 split_with_empty_delimiter value =
   initial =
     GraphemeState(grapheme: "", parts: [], current: "", delimiter: "", seen: False)
@@ -34,7 +34,7 @@ split_with_empty_delimiter value =
   else
     []
 
-split_with_single_delimiter : String -> String -> List String can Iterator
+split_with_single_delimiter : String -> String -> List String
 split_with_single_delimiter value sep =
   initial = GraphemeState(grapheme: "", parts: [], current: "", delimiter: sep, seen: False)
   mut final = initial

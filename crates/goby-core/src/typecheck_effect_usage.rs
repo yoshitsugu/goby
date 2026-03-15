@@ -198,7 +198,7 @@ pub(crate) fn check_unhandled_effects_in_expr(
                         declaration: Some(decl_name.to_string()),
                         span: None,
                         message: format!(
-                            "effect_op_unresolved_generic_constraints: effect operation `{}` argument #{} cannot resolve generic constraints (expected `{}` but argument type is unresolved)",
+                            "effect operation `{}` argument #{} has unresolved type (expected `{}`; provide a concrete argument or annotate the type)",
                             op_name,
                             idx + 1,
                             ty_name(&expected_after_subst)

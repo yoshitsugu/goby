@@ -2740,8 +2740,7 @@ main =
         let err = typecheck_module(&module)
             .expect_err("unresolved generic constraint in effect-op call should fail");
         assert!(
-            err.message
-                .contains("effect_op_unresolved_generic_constraints"),
+            err.message.contains("unresolved type"),
             "unexpected error: {}",
             err.message
         );

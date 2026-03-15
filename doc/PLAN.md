@@ -342,34 +342,32 @@ effects that escape a function body.
 
 Execution checklist:
 
-- [ ] Step 1: delete the old effect-member dependency model
+- [x] Step 1: delete the old effect-member dependency model
   - remove parser/AST/typechecker/runtime assumptions that effect members declare dependency effects.
   - remove dependency-cycle validation and any `op_required_effects`-style bookkeeping.
   - update docs/tests that still describe member-level effect dependencies.
-- [ ] Step 2: define one residual-effect checker for expressions
+- [x] Step 2: define one residual-effect checker for expressions
   - implement effect accounting around a single question: which effects escape this expression?
   - effect op call: add the owning effect unless an enclosing `with` discharges it.
   - function call: add the callee's `can` effects unless an enclosing `with` discharges them.
   - function body validation: residual set must equal the declared `can` set, or be empty when `can` is omitted.
-- [ ] Step 3: simplify `with` clause name resolution
+- [x] Step 3: simplify `with` clause name resolution
   - resolve clause heads in the effect-operation namespace, not through ordinary lexical value lookup.
   - accept bare clause names only when they identify exactly one visible operation.
   - require qualified `Effect.operation` when bare clause resolution is ambiguous.
-- [ ] Step 4: align diagnostics with the new model
+- [x] Step 4: align diagnostics with the new model
   - report errors in terms of unhandled effects escaping a function body or call site.
   - make ambiguity diagnostics point users from bare clause names to `Effect.operation`.
   - remove old wording that implies handler-member dependency propagation.
-- [ ] Step 5: update examples and stdlib surface
+- [x] Step 5: update examples and stdlib surface
   - remove unnecessary `can` from locally handled stdlib/example functions.
-  - add examples for:
-    - locally handled iterator usage without `can Iterator`,
-    - directly unhandled operation requiring `can Message`,
-    - propagation through an intermediate function,
-    - ambiguous clause resolution requiring `Effect.operation`.
-- [ ] Step 6: verify in small gates
-  - add focused parser/typechecker tests for missing `can`, extra `can`, and `with` discharge behavior.
-  - add focused tests for unique bare clause names, ambiguous bare clause rejection, and qualified clause acceptance.
-  - run `cargo check`, focused effect-system tests, and `cargo test`.
+  - stdlib/goby/string.gb: removed `can Iterator` from grapheme_count,
+    split_with_empty_delimiter, and split_with_single_delimiter (all locally handled).
+- [x] Step 6: verify in small gates
+  - focused tests added throughout Steps 1-5 covering missing `can`, extra `can`,
+    `with` discharge, unique bare clause names, ambiguous bare clause rejection,
+    and qualified clause acceptance.
+  - cargo check, focused effect-system tests, and cargo test all pass.
 
 Locked design follow-up:
 
