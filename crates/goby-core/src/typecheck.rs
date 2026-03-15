@@ -388,6 +388,70 @@ main =
     }
 
     #[test]
+    fn resolves_ambiguous_operation_via_qualified_handler_clause_name() {
+        // When two effects share the same op name, using qualified form in the handler
+        // clause head should work (qualified call in body avoids name-resolution ambiguity).
+        let source = "\
+effect Log
+  log: String -> Unit
+effect Logger
+  log: String -> Unit
+main : Unit -> Unit
+main =
+  with
+    Log.log msg ->
+      resume ()
+  in
+    Log.log \"hello\"
+";
+        let module = parse_module(source).expect("should parse");
+        typecheck_module(&module)
+            .expect("qualified handler clause name should resolve ambiguous operation");
+    }
+
+    #[test]
+    fn rejects_unknown_qualified_operation_in_handler_expression() {
+        let source = "\
+effect Log
+  log: String -> Unit
+main : Unit -> Unit
+main =
+  with
+    Log.nonexistent msg ->
+      resume ()
+  in
+    log \"hello\"
+";
+        let module = parse_module(source).expect("should parse");
+        let err = typecheck_module(&module)
+            .expect_err("unknown qualified operation should fail");
+        assert!(err.message.contains("unknown effect operation"));
+        assert!(err.message.contains("Log.nonexistent"));
+    }
+
+    #[test]
+    fn rejects_duplicate_bare_and_qualified_handler_clauses() {
+        let source = "\
+effect Log
+  log: String -> Unit
+main : Unit -> Unit
+main =
+  with
+    log msg ->
+      resume ()
+    Log.log msg ->
+      resume ()
+  in
+    log \"hello\"
+";
+        let module = parse_module(source).expect("should parse");
+        let err = typecheck_module(&module)
+            .expect_err("duplicate bare and qualified handler clauses should fail");
+        assert!(err.message.contains("duplicate handler clause"));
+        assert!(err.message.contains("log"));
+    }
+
+    #[test]
     fn rejects_with_non_handler_expression() {
         let source = "\
 effect Log

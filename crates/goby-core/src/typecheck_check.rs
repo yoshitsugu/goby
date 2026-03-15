@@ -421,13 +421,24 @@ fn infer_handler_covered_ops_lenient(
             continue;
         }
         let effect = &effects[0];
-        covered.insert(clause.name.clone());
-        covered.insert(format!("{}.{}", effect, clause.name));
+        // For qualified names like "Log.log", extract the bare op name.
+        let bare_name = if let Some((_e, op)) = clause.name.split_once('.') {
+            op
+        } else {
+            &clause.name
+        };
+        covered.insert(bare_name.to_string());
+        covered.insert(format!("{}.{}", effect, bare_name));
     }
     covered
 }
 
 pub(crate) fn effect_candidates_for_operation(env: &TypeEnv, op_name: &str) -> Vec<String> {
+    // If this is a qualified name like "Effect.op", resolve directly without env lookup.
+    if let Some((effect, _op)) = op_name.split_once('.') {
+        return vec![effect.to_string()];
+    }
+
     let mut out = Vec::new();
     let Some(binding) = env.globals.get(op_name) else {
         return out;

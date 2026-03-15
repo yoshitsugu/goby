@@ -12,6 +12,71 @@ use crate::typecheck_unify::{
     type_hole_conflict_note, unify_types_with_subst,
 };
 
+fn resolve_handler_clause_name(
+    clause_name: &str,
+    effect_map: &EffectMap,
+    decl_name: &str,
+) -> Result<(String, String), TypecheckError> {
+    // Returns (bare_op_name, effect_name).
+    if let Some((effect, op)) = clause_name.split_once('.') {
+        // Qualified form: "Effect.op" — verify the op exists in that effect.
+        let Some(ops) = effect_map.effect_to_ops.get(effect) else {
+            return Err(TypecheckError {
+                declaration: Some(decl_name.to_string()),
+                span: None,
+                message: format!(
+                    "unknown effect operation `{}` in handler expression",
+                    clause_name
+                ),
+            });
+        };
+        // The effect_to_ops set contains both bare and qualified forms (e.g. "log" and "Log.log").
+        let bare = op.to_string();
+        let qualified = clause_name.to_string();
+        if !ops.contains(&bare) && !ops.contains(&qualified) {
+            return Err(TypecheckError {
+                declaration: Some(decl_name.to_string()),
+                span: None,
+                message: format!(
+                    "unknown effect operation `{}` in handler expression",
+                    clause_name
+                ),
+            });
+        }
+        return Ok((bare, effect.to_string()));
+    }
+
+    // Bare form: look up via op_to_effects.
+    let Some(effects) = effect_map.op_to_effects.get(clause_name) else {
+        return Err(TypecheckError {
+            declaration: Some(decl_name.to_string()),
+            span: None,
+            message: format!(
+                "unknown effect operation `{}` in handler expression",
+                clause_name
+            ),
+        });
+    };
+    if effects.len() > 1 {
+        let mut names: Vec<String> = effects.iter().cloned().collect();
+        names.sort();
+        let first_effect = names[0].clone();
+        return Err(TypecheckError {
+            declaration: Some(decl_name.to_string()),
+            span: None,
+            message: format!(
+                "handler clause '{}' is ambiguous (defined in effects: {}); use qualified form e.g. '{}.{}'",
+                clause_name,
+                names.join(", "),
+                first_effect,
+                clause_name
+            ),
+        });
+    }
+    let effect = effects.iter().next().expect("non-empty set");
+    Ok((clause_name.to_string(), effect.clone()))
+}
+
 fn infer_handler_covered_ops_strict(
     handler_expr: &Expr,
     env: &TypeEnv,
@@ -23,42 +88,21 @@ fn infer_handler_covered_ops_strict(
             let mut covered = HashSet::new();
             let mut seen_ops = HashSet::new();
             for clause in clauses {
-                if !seen_ops.insert(clause.name.clone()) {
+                let (bare_name, effect) =
+                    resolve_handler_clause_name(&clause.name, effect_map, decl_name)?;
+                // Duplicate check uses bare name so "log" and "Log.log" conflict.
+                if !seen_ops.insert(bare_name.clone()) {
                     return Err(TypecheckError {
                         declaration: Some(decl_name.to_string()),
                         span: None,
                         message: format!(
                             "duplicate handler clause for operation `{}`",
-                            clause.name
+                            bare_name
                         ),
                     });
                 }
-                let Some(effects) = effect_map.op_to_effects.get(&clause.name) else {
-                    return Err(TypecheckError {
-                        declaration: Some(decl_name.to_string()),
-                        span: None,
-                        message: format!(
-                            "unknown effect operation `{}` in handler expression",
-                            clause.name
-                        ),
-                    });
-                };
-                if effects.len() > 1 {
-                    let mut names: Vec<String> = effects.iter().cloned().collect();
-                    names.sort();
-                    return Err(TypecheckError {
-                        declaration: Some(decl_name.to_string()),
-                        span: None,
-                        message: format!(
-                            "operation '{}' is ambiguous across effects in Handler(...): {}",
-                            clause.name,
-                            names.join(", ")
-                        ),
-                    });
-                }
-                let effect = effects.iter().next().expect("non-empty set");
-                covered.insert(clause.name.clone());
-                covered.insert(format!("{}.{}", effect, clause.name));
+                covered.insert(bare_name.clone());
+                covered.insert(format!("{}.{}", effect, bare_name));
             }
             Ok(covered)
         }
@@ -373,33 +417,12 @@ pub(crate) fn check_unhandled_effects_in_expr(
         Expr::Handler { clauses } => {
             let mut fresh_type_counter = 0usize;
             for clause in clauses {
-                let Some(effects) = effect_map.op_to_effects.get(&clause.name) else {
-                    return Err(TypecheckError {
-                        declaration: Some(decl_name.to_string()),
-                        span: None,
-                        message: format!(
-                            "unknown effect operation `{}` in handler expression",
-                            clause.name
-                        ),
-                    });
-                };
-                if effects.len() > 1 {
-                    let mut names: Vec<String> = effects.iter().cloned().collect();
-                    names.sort();
-                    return Err(TypecheckError {
-                        declaration: Some(decl_name.to_string()),
-                        span: None,
-                        message: format!(
-                            "operation '{}' is ambiguous across effects in Handler(...): {}",
-                            clause.name,
-                            names.join(", ")
-                        ),
-                    });
-                }
+                let (bare_name, _effect) =
+                    resolve_handler_clause_name(&clause.name, effect_map, decl_name)?;
                 if let Some(stmts) = &clause.parsed_body {
                     let instantiated = instantiate_handler_clause_signature(
                         env,
-                        &clause.name,
+                        &bare_name,
                         &mut fresh_type_counter,
                     );
                     let params: Vec<(String, Ty)> = if let Some((param_tys, _)) = instantiated {
