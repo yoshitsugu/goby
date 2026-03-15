@@ -46,6 +46,7 @@ pub(crate) enum RuntimeIoPlan {
 pub(crate) enum RuntimeIoClassification {
     DynamicWasiIo(RuntimeIoPlan),
     StaticOutput(String),
+    #[allow(dead_code)] // Intentional extension point; see STATE.md
     InterpreterBridge,
     Unsupported,
     NotRuntimeIo,
@@ -575,9 +576,7 @@ fn split_lines_binding_name<'a>(
     text_name: &str,
 ) -> Option<&'a str> {
     let (lines_name, split_value) = stmt_binding_parts(stmt)?;
-    let Some((split_head, split_args)) = flatten_direct_call(split_value) else {
-        return None;
-    };
+    let (split_head, split_args) = flatten_direct_call(split_value)?;
     if !imported_head_matches_symbol(module, &split_head, "goby/string", "split")
         || split_args.len() != 2
         || !expr_resolves_to_name(split_args[0], pre_split_stmts, text_name)
@@ -609,9 +608,7 @@ fn split_lines_each_callback_plan(
     lines_name: &str,
     each_expr: &Expr,
 ) -> Option<(OutputReadMode, Option<(String, String)>)> {
-    let Some((each_head, each_args)) = flatten_direct_call(each_expr) else {
-        return None;
-    };
+    let (each_head, each_args) = flatten_direct_call(each_expr)?;
     if !imported_head_matches_symbol(module, &each_head, "goby/list", "each")
         || each_args.len() != 2
         || !matches!(each_args[0], Expr::Var(name) if name == lines_name)
@@ -761,6 +758,7 @@ fn split_trailing_static_print_suffixes(
     Some((prefix, collect_static_print_suffixes(suffix_stmts)?))
 }
 
+#[allow(clippy::type_complexity)]
 fn split_lines_each_plan(
     module: &Module,
     stmts: &[Stmt],

@@ -77,8 +77,8 @@ pub(crate) fn resolve_main_runtime_output_with_mode_and_stdin(
 ///   `collect_phase2_output_text` before this function is called.
 /// - In effect-boundary programs, it is evaluated inside this function via
 ///   `runtime_resolver`'s `apply_runtime_intrinsic_ast`.
-/// Either way, the env value is read at compile time and baked into the output.
-/// See `apply_runtime_intrinsic` in `lower.rs` for the policy discussion.
+///   Either way, the env value is read at compile time and baked into the output.
+///   See `apply_runtime_intrinsic` in `lower.rs` for the policy discussion.
 pub(crate) fn resolve_main_runtime_output_for_compile(
     module: &Module,
     body: &str,

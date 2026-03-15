@@ -17,14 +17,14 @@ impl<'m> RuntimeOutputResolver<'m> {
         let (head, args) = flatten_direct_call(expr)?;
         if self.imported_head_matches_string_split(&head) && args.len() == 2 {
             let value = self.eval_expr_to_option(
-                &args[0],
+                args[0],
                 caller_locals,
                 caller_callables,
                 evaluators,
                 depth + 1,
             )?;
             let delim = self.eval_expr_to_option(
-                &args[1],
+                args[1],
                 caller_locals,
                 caller_callables,
                 evaluators,
@@ -46,7 +46,7 @@ impl<'m> RuntimeOutputResolver<'m> {
         }
         if self.imported_head_matches_string_graphemes(&head) && args.len() == 1 {
             let value = self.eval_expr_to_option(
-                &args[0],
+                args[0],
                 caller_locals,
                 caller_callables,
                 evaluators,

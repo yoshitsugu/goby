@@ -189,13 +189,13 @@ impl<'m> RuntimeOutputResolver<'m> {
                         && runtime_import_selects_name(&import.kind, "split")
                 })
         {
-            let value = match self.eval_expr(&args[0], locals, callables, evaluators, depth + 1) {
+            let value = match self.eval_expr(args[0], locals, callables, evaluators, depth + 1) {
                 Out::Done(value) => value,
                 Out::Suspend(cont) => return Out::Suspend(cont),
                 Out::Escape(escape) => return Out::Escape(escape),
                 Out::Err(e) => return Out::Err(e),
             };
-            let delim = match self.eval_expr(&args[1], locals, callables, evaluators, depth + 1) {
+            let delim = match self.eval_expr(args[1], locals, callables, evaluators, depth + 1) {
                 Out::Done(value) => value,
                 Out::Suspend(cont) => return Out::Suspend(cont),
                 Out::Escape(escape) => return Out::Escape(escape),

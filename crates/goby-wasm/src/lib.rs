@@ -121,6 +121,7 @@ fn unresolved_runtime_output_error(
     }
 }
 
+#[allow(clippy::type_complexity)]
 fn runtime_mode_and_handoff(
     module: &Module,
 ) -> Result<

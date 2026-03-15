@@ -9,6 +9,7 @@ use crate::typecheck_effect_usage::check_unhandled_effects_in_expr;
 use crate::typecheck_env::{EffectMap, Ty, TypeEnv};
 use crate::typecheck_render::ty_name;
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn check_body_stmts(
     stmts: &[Stmt],
     env: &TypeEnv,
@@ -46,6 +47,7 @@ pub(crate) fn check_body_stmts(
     check_declared_return_type(stmts, env, &local_env, decl_name, declared_return_ty)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn check_statement_sequence(
     stmts: &[Stmt],
     env: &TypeEnv,
@@ -71,6 +73,7 @@ fn check_statement_sequence(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn check_stmt(
     stmt: &Stmt,
     env: &TypeEnv,
@@ -217,19 +220,15 @@ fn ensure_known_call_targets_in_expr(
 ) -> Result<(), TypecheckError> {
     match expr {
         Expr::Call { callee, arg } => {
-            match callee.as_ref() {
-                Expr::Var(name) => {
-                    if matches!(name.as_str(), "print" | "println")
-                        && env.lookup(name) == Ty::Unknown
-                    {
-                        return Err(TypecheckError {
-                            declaration: Some(decl_name.to_string()),
-                            span: None,
-                            message: format!("unknown function or constructor `{}`", name),
-                        });
-                    }
-                }
-                _ => {}
+            if let Expr::Var(name) = callee.as_ref()
+                && matches!(name.as_str(), "print" | "println")
+                && env.lookup(name) == Ty::Unknown
+            {
+                return Err(TypecheckError {
+                    declaration: Some(decl_name.to_string()),
+                    span: None,
+                    message: format!("unknown function or constructor `{}`", name),
+                });
             }
             ensure_known_call_targets_in_expr(callee, env, decl_name)?;
             ensure_known_call_targets_in_expr(arg, env, decl_name)
