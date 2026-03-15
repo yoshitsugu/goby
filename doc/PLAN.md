@@ -384,36 +384,72 @@ What is missing:
 - `goby-cli` owns: human-readable rendering of `Diagnostic` for terminal output.
 - Do not place LSP-specific types or editor state in `goby-core`.
 
-#### Phase D1: Span infrastructure and unified diagnostics
+#### Phase D1a: Source coordinates
 
-Goal: make `goby-core` emit structured, span-bearing diagnostics consumable by both CLI and LSP.
+Goal: establish a correct, well-specified text-position layer that all later phases depend on.
 
 Scope:
 
-- Extend `Span` to carry an end position: `{ line: usize, col: usize, end_line: usize, end_col: usize }`.
-  - Keep the existing `line`/`col` semantics; add `end_line`/`end_col` defaulting to the same point.
-- Add span fields to parser AST nodes where source location is needed for diagnostics:
-  - `Declaration`: add `col` and `annotation_span: Option<Span>`.
-  - `Expr`/`Stmt`: do not add spans to every node in this phase; instead record spans at
-    declaration-body boundaries and key error sites only.
-- Introduce a `Diagnostic` struct in `goby-core`:
-  ```
-  Diagnostic { severity: Severity, span: Option<Span>, declaration: Option<String>, message: String }
-  ```
-  where `Severity` is `Error | Warning`.
-- Migrate `TypecheckError` and `ParseError` to produce `Diagnostic` values (or map to them).
-- Change `typecheck_module` to return `Vec<Diagnostic>` instead of a single error, so multiple
-  errors in one pass can be reported.
-- Add a UTF-8 byte-offset conversion helper: `fn line_col_to_offset(source: &str, line: usize, col: usize) -> usize`.
-  - Cover multi-byte characters; add tests for ASCII, 2-byte, and 3-byte codepoint cases.
-- Update `goby-cli` to render `Vec<Diagnostic>` (the existing caret-snippet logic is reused).
+- Clarify and document the column semantics once: `col` is a 1-indexed **byte offset within
+  the line**; `col = 1` is the "unknown column" sentinel (current CLI behavior).
+- Extend `Span` to carry an end position:
+  `Span { line, col, end_line, end_col }` with same-point default for existing sites.
+- Add `fn line_col_to_offset(source: &str, line: usize, col: usize) -> usize` and
+  the reverse `fn offset_to_line_col(source: &str, offset: usize) -> (usize, usize)`.
+  - Both helpers treat `col` as a byte offset within the line, not a character count.
+  - Tests: ASCII single/multi-line, 2-byte codepoint (`é`), 3-byte codepoint (`あ`),
+    out-of-range line/col, end-range cases.
+- Add spans to the identifier-bearing AST nodes needed soonest for diagnostics and D3:
+  - `Declaration`: add `col: usize` and `annotation_span: Option<Span>`.
+  - `EffectDecl` and `EffectMember`: add `span: Span`.
+  - `HandlerClause`: add `span: Span`.
+  - `CaseArm`: add `span: Span`.
+  - `Stmt` variants (`Binding`, `MutBinding`, `Assign`, `Expr`): add `span: Option<Span>`.
+  - `Expr` identifier/call-site forms (`Var`, `Qualified`, `Call`): add `span: Option<Span>`.
+  - Other `Expr` variants: leave spanless for now.
+- Populate the new span fields in the parser at the sites above.
+- Add corpus tests asserting that specific span fields are correctly populated for each
+  node type (not just that compilation succeeds).
 
 Done when:
 
-- `cargo test` passes.
-- `goby-cli check examples/function.gb` still renders correct line/col diagnostics.
-- The `Diagnostic` type is exported from `goby-core` and documented.
-- Multi-byte offset conversion has unit tests.
+- `cargo test` passes including new position-mapping and span-population tests.
+- `goby-cli check examples/function.gb` output is unchanged.
+
+#### Phase D1b: Unified diagnostics
+
+Goal: introduce a shared `Diagnostic` type and route both CLI and future LSP through it.
+Keep fail-fast behavior; do not attempt multi-error collection yet.
+
+Scope:
+
+- Add `goby-core/src/diagnostic.rs` with:
+  ```rust
+  pub enum Severity { Error, Warning }
+  pub struct Diagnostic {
+      pub severity: Severity,
+      pub span: Option<Span>,
+      pub declaration: Option<String>,
+      pub message: String,
+  }
+  ```
+- Add `impl From<TypecheckError> for Diagnostic` and `impl From<ParseError> for Diagnostic`.
+- Export `Diagnostic` and `Severity` from `goby-core/src/lib.rs`.
+- Update `goby-cli` to render `Diagnostic` through a single formatting path, eliminating the
+  current parse-vs-typecheck format divergence (noted as a TODO in `main.rs`).
+  - No visual change to output; existing caret-snippet logic is reused.
+- Golden tests: assert that `goby-cli check` produces byte-for-byte identical messages for
+  parse errors and typecheck errors before and after this change.
+- Regression tests for the "unknown column" sentinel (`col = 1`) path to guard existing CLI
+  behavior for errors where span is absent.
+- **Explicitly deferred**: changing `typecheck_module` return type to `Vec<Diagnostic>` and
+  multi-error collection — these require a control-flow refactor and belong in a later step.
+
+Done when:
+
+- `cargo test` passes; no CLI output regression.
+- `Diagnostic` is exported and documented.
+- Golden tests lock the current CLI error format.
 
 #### Phase D2: `goby-lsp` crate — diagnostics only
 
@@ -426,97 +462,137 @@ Scope:
 - Implement lifecycle: `initialize` / `initialized` / `shutdown` / `exit`.
 - Implement `textDocument/didOpen`, `didChange`, `didClose` with in-memory document store.
 - On open/change: run `parse_module` + `typecheck_module`; publish `textDocument/publishDiagnostics`
-  using spans from Phase D1.
-- LSP position mapping: convert `Span` line/col to LSP 0-indexed line/character using the
-  byte-offset helper from D1.
+  using spans from D1a and the `Diagnostic` type from D1b.
+- LSP position mapping: convert `Span` line/col (byte offset) to LSP 0-indexed line/character
+  using `line_col_to_offset` from D1a; document that LSP `character` is UTF-16 code unit index
+  and handle the conversion explicitly.
 - On `didClose`: clear diagnostics for that URI.
+- Integration test: fixture-based driver sends open/change/close sequences and asserts that
+  published diagnostic messages and ranges match `goby-cli check` output for the same source.
+  - Golden test: CLI diagnostic text == LSP diagnostic message for the same error.
 
 Done when:
 
-- `cargo run -p goby-lsp` starts without error and speaks stdio LSP.
-- Opening `examples/function.gb` in an editor (or via `lsp-mode` / `nvim-lspconfig`) shows the
-  same errors as `goby-cli check`.
-- A fixture-based integration test drives open/change/close and asserts published diagnostics.
+- `cargo run -p goby-lsp` starts a functional stdio LSP server.
+- Opening `examples/function.gb` in an editor shows the same errors as `goby-cli check`.
+- Fixture integration test passes.
 
-#### Phase D3: Hover and go-to-definition (single file)
+#### Phase D3a: Symbol index and top-level hover/definition
 
-Goal: hover shows type/signature; definition jumps work within a single file and loaded stdlib.
+Goal: hover and go-to-definition for top-level declarations and effect members.
+Defers local bindings and stdlib jumps until expression spans are proven.
 
 Scope:
 
-- `textDocument/hover`:
-  - for top-level declaration names and their call sites: return `name : TypeAnnotation`.
-  - for local bindings: return `name : InferredType` using `check_expr` result.
-  - for effect operations: return the effect member signature.
-  - unresolved symbols: return `null` (no best-effort guessing).
-- `textDocument/definition`:
-  - for identifiers resolvable within the current file: return the declaration `Span`.
-  - for stdlib imports (`import goby/string`): return the span in the loaded stdlib source.
-  - unresolved: return `null`.
-- Requires: declaration spans in AST (from D1) and a symbol-lookup helper in `goby-core`.
+- Add a `SymbolIndex` type in `goby-core` built from the typechecked module:
+  - maps top-level declaration names → `(Span, type_annotation: Option<String>)`.
+  - maps effect declaration names and their members → `(Span, signature: String)`.
+- Add `fn build_symbol_index(module: &Module) -> SymbolIndex` using spans from D1a.
+- Expose `SymbolIndex` from `goby-core`.
+- In `goby-lsp`, implement `textDocument/hover` for top-level names:
+  - cursor on a top-level function name or its call site → return `name : TypeAnnotation`.
+  - cursor on an effect operation name → return the member signature.
+  - unresolved or out-of-index → return `null`.
+- Implement `textDocument/definition` for top-level names:
+  - identifier within the current file → return the declaration `Span`.
+  - unresolved → return `null`.
+  - stdlib imports and local bindings: explicitly return `null` (documented as deferred).
+- Tests: hover top-level function, hover effect member, definition within file,
+  hover unknown name returns null.
 
 Done when:
 
 - Hovering a top-level function name shows its type annotation.
-- Go-to-definition from a call site jumps to the declaration line.
-- Hovering an unknown identifier returns no result (not a crash).
-- Tests cover: local binding hover, top-level hover, stdlib symbol hover, unresolved hover.
+- Definition jump lands on the correct declaration line.
+- Unresolved hover/definition returns null without a crash.
+
+#### Phase D3b: Local binding hover and stdlib definition
+
+Goal: extend hover/definition to local bindings and imported stdlib symbols.
+Depends on `Expr`/`Stmt` spans being populated (D1a) and stdlib source locations being
+available from `goby-core`.
+
+Scope:
+
+- `textDocument/hover` for local bindings:
+  - cursor on a `let`/`mut` binding name or its use site → return inferred type via `check_expr`.
+  - requires `Var` span from D1a to map cursor position to an identifier.
+- `textDocument/definition` for stdlib imports:
+  - cursor on an imported symbol → return the span in the loaded stdlib source file.
+  - requires `goby-core` to expose the loaded stdlib source path and declaration spans.
+- Tests: local binding hover, stdlib symbol hover, stdlib definition jump, use-site hover.
+
+Done when:
+
+- Hovering a local variable shows its inferred type.
+- Go-to-definition on a stdlib symbol lands on the stdlib declaration.
 
 #### Phase D4: `goby fmt` — AST pretty-printer
 
 Goal: deterministic, idempotent source formatter as a `goby fmt` CLI subcommand.
 
-Scope:
+Comment policy decision (must be locked before coding):
 
-- Implement an AST pretty-printer in `goby-core` covering the full current `Expr`/`Stmt` surface:
-  - literals, variables, binary ops, calls, lambdas, records, tuples, lists.
-  - `if`/`case` expressions with correct indentation.
-  - `with`/`handler` expressions.
-  - `Block` expressions.
-- Style rules (to be locked before coding):
-  - 2-space indentation.
-  - one blank line between top-level declarations.
-  - trailing newline.
-  - no trailing whitespace.
-- Add `goby fmt <file>` (in-place) and `goby fmt --check <file>` (exit 1 if not formatted).
-- Formatter is idempotent: `fmt(fmt(source)) == fmt(source)`.
+- **Option A (drop comments)**: the formatter is comment-unaware; comments are stripped
+  during parsing and do not appear in output. Document this explicitly.
+- **Option B (preserve comments)**: requires a token/CST layer that retains comment positions.
+  This is significantly more work and is not recommended for the first slice.
+- **Default**: Option A. If comment preservation is needed, it becomes a follow-up track.
+
+Scope (assuming Option A):
+
+- Implement `fn format_module(module: &Module) -> String` in `goby-core`:
+  - covers all `Expr`/`Stmt` variants: literals, variables, binary ops, calls, lambdas,
+    records, tuples, lists, `if`, `case`, `with`, `handler`, `Block`.
+  - style rules: 2-space indentation, one blank line between top-level declarations,
+    trailing newline, no trailing whitespace.
+- Add `goby fmt <file>` (in-place rewrite) and `goby fmt --check <file>` (exit 1 if not formatted).
+- Formatter is idempotent: `format_module(parse(format_module(parse(src)))) == format_module(parse(src))`.
+- Snapshot tests over all `examples/` and `stdlib/` files (locked expected output).
+- Round-trip test: `parse(fmt(src))` produces an AST structurally equal to `parse(src)`.
+- Comment-drop behavior documented in `goby fmt --help` output.
 
 Done when:
 
-- `goby fmt examples/function.gb` produces a stable output.
 - `goby fmt --check` passes on all files under `examples/` and `stdlib/`.
-- Round-trip test: `parse(fmt(source))` produces an AST equal to `parse(source)`.
+- Snapshot tests are committed and stable.
+- Idempotency property holds for all test inputs.
 
 #### Phase D5: `goby lint` — high-signal static checks
 
 Goal: machine-readable linter output for common mistakes not caught by the typechecker.
 
-Scope (initial lint rules):
+Lint rules in ascending analysis cost (implement in this order):
 
-- Unused local binding (binding `x = expr` where `x` is never referenced afterward).
-- Shadowed effect operation name (local binding name collides with a visible effect op).
-- `can` annotation lists an effect that is fully discharged inside the function body
-  (redundant `can`).
-- Unreachable `case` arm (wildcard `_` arm followed by more arms).
+1. **Unreachable `case` arm**: wildcard `_` arm followed by more arms (purely syntactic, cheapest).
+2. **Shadowed effect operation name**: local binding name collides with a visible effect op
+   (needs symbol table from D3a, no use-tracking required).
+3. **Unused local binding**: `x = expr` where `x` is never referenced afterward
+   (needs local-use tracking across `Expr`/`Stmt` spans from D1a).
+4. **Redundant `can` annotation**: effect is fully discharged inside the function body
+   (needs effect discharge analysis; implement last to avoid noisy warnings).
 
 Output format:
 
-- JSON lines: `{"severity":"warning","file":"...","line":1,"col":1,"rule":"unused-binding","message":"..."}`.
-- Human-readable mode (default): same caret-snippet format as `goby-cli check`.
+- Human-readable (default): same caret-snippet format as `goby-cli check`.
+- JSON lines (`--json`): `{"severity":"warning","file":"...","line":1,"col":1,"rule":"unreachable-arm","message":"..."}`.
 
 Done when:
 
-- `goby lint examples/function.gb` exits 0 with no output on clean files.
-- Each lint rule has at least one positive and one negative test fixture.
-- JSON output mode is parseable and stable.
+- Each rule is implemented and enabled one at a time (separate commits).
+- Each rule has at least one positive fixture (warning fired) and one negative fixture (no warning).
+- `goby lint examples/function.gb` exits 0 on all existing clean sources.
+- JSON output is parseable; schema documented.
 
 #### Milestones summary
 
-- M1 (D1 done): diagnostics carry spans; multi-error reporting works; CLI output unchanged.
-- M2 (D2 done): editor shows parse/type errors via LSP on `.gb` files.
-- M3 (D3 done): hover and go-to-definition work for single-file + stdlib.
-- M4 (D4 done): `goby fmt` is idempotent on all existing sources.
-- M5 (D5 done): `goby lint` catches the initial rule set with machine-readable output.
+- M1a (D1a done): all identifier-bearing AST nodes carry spans; position helpers tested.
+- M1b (D1b done): unified `Diagnostic` type; CLI format locked by golden tests.
+- M2 (D2 done): editor shows parse/type diagnostics via LSP identical to `goby-cli check`.
+- M3a (D3a done): hover/definition for top-level declarations and effect members.
+- M3b (D3b done): hover/definition for local bindings and stdlib imports.
+- M4 (D4 done): `goby fmt` is idempotent on all existing sources; comment policy explicit.
+- M5 (D5 done): four lint rules shipped in cost order; JSON output stable.
 
 ### 4.4 Review Follow-ups (Backlog)
 
