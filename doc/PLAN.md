@@ -388,6 +388,10 @@ What is missing:
 
 Goal: establish a correct, well-specified text-position layer that all later phases depend on.
 
+Split into three sub-phases to keep each step reviewable and independently testable.
+
+##### D1a-i: Span extension and position helpers
+
 Scope:
 
 - Clarify and document the column semantics once: `col` is a 1-indexed **byte offset within
@@ -399,21 +403,43 @@ Scope:
   - Both helpers treat `col` as a byte offset within the line, not a character count.
   - Tests: ASCII single/multi-line, 2-byte codepoint (`é`), 3-byte codepoint (`あ`),
     out-of-range line/col, end-range cases.
-- Add spans to the identifier-bearing AST nodes needed soonest for diagnostics and D3:
-  - `Declaration`: add `col: usize` and `annotation_span: Option<Span>`.
-  - `EffectDecl` and `EffectMember`: add `span: Span`.
-  - `HandlerClause`: add `span: Span`.
-  - `CaseArm`: add `span: Span`.
-  - `Stmt` variants (`Binding`, `MutBinding`, `Assign`, `Expr`): add `span: Option<Span>`.
-  - `Expr` identifier/call-site forms (`Var`, `Qualified`, `Call`): add `span: Option<Span>`.
-  - Other `Expr` variants: leave spanless for now.
-- Populate the new span fields in the parser at the sites above.
-- Add corpus tests asserting that specific span fields are correctly populated for each
-  node type (not just that compilation succeeds).
+- Update all existing `Span` construction sites to supply same-point defaults for end fields.
 
 Done when:
 
-- `cargo test` passes including new position-mapping and span-population tests.
+- `cargo test` passes including new position-mapping tests.
+- `goby-cli check examples/function.gb` output is unchanged.
+- No AST node changes yet; only `Span` struct and helpers.
+
+##### D1a-ii: Declaration-level AST node spans
+
+Scope:
+
+- `Declaration`: add `col: usize` and `annotation_span: Option<Span>`.
+- `EffectDecl` and `EffectMember`: add `span: Span`.
+- `HandlerClause`: add `span: Span`.
+- `CaseArm`: add `span: Span`.
+- Populate the new span fields in the parser at these sites.
+- Add corpus tests asserting span fields are correctly populated for each node type.
+
+Done when:
+
+- `cargo test` passes including new span-population tests for declaration-level nodes.
+- `goby-cli check examples/function.gb` output is unchanged.
+
+##### D1a-iii: Stmt/Expr identifier node spans
+
+Scope:
+
+- `Stmt` variants (`Binding`, `MutBinding`, `Assign`, `Expr`): add `span: Option<Span>`.
+- `Expr` identifier/call-site forms (`Var`, `Qualified`, `Call`): add `span: Option<Span>`.
+- Other `Expr` variants: leave spanless for now.
+- Populate the new span fields in the parser at the sites above.
+- Add corpus tests for Stmt/Expr span population.
+
+Done when:
+
+- `cargo test` passes including new span-population tests for Stmt/Expr nodes.
 - `goby-cli check examples/function.gb` output is unchanged.
 
 #### Phase D1b: Unified diagnostics
@@ -451,7 +477,28 @@ Done when:
 - `Diagnostic` is exported and documented.
 - Golden tests lock the current CLI error format.
 
-#### Phase D2: `goby-lsp` crate — diagnostics only
+#### Phase D1c: TypecheckError span population
+
+Goal: improve diagnostic source-location coverage by populating `span: Some(...)` at the
+remaining ~77 TypecheckError construction sites that currently emit `span: None`.
+
+Scope:
+
+- Audit all `TypecheckError { ... span: None ... }` sites in `typecheck*.rs` modules.
+- For each site, determine the nearest AST node with a span (from D1a-ii/iii) and wire it through.
+- Priority order: sites reachable from common user errors first (type mismatch, unresolved name,
+  effect errors), then rarer internal errors.
+- Sites where no span is available (e.g. module-level structural errors) may remain `span: None`
+  with a `// no span available: <reason>` comment.
+- Add tests verifying that representative error cases now carry non-None spans.
+
+Done when:
+
+- At least 80% of TypecheckError construction sites populate `span: Some(...)`.
+- Remaining `span: None` sites are documented with reason comments.
+- `cargo test` passes; no CLI output regression.
+
+#### Phase D2a: `goby-lsp` crate — diagnostics only
 
 Goal: `goby-cli check`-equivalent diagnostics available inside editors via LSP.
 
@@ -463,10 +510,15 @@ Scope:
 - Implement `textDocument/didOpen`, `didChange`, `didClose` with in-memory document store.
 - On open/change: run `parse_module` + `typecheck_module`; publish `textDocument/publishDiagnostics`
   using spans from D1a and the `Diagnostic` type from D1b.
+- On `didSave`: re-run diagnostics (same as didChange path; ensures saved-file state is checked).
 - LSP position mapping: convert `Span` line/col (byte offset) to LSP 0-indexed line/character
   using `line_col_to_offset` from D1a; document that LSP `character` is UTF-16 code unit index
   and handle the conversion explicitly.
 - On `didClose`: clear diagnostics for that URI.
+- Re-analysis debounce: defer re-analysis until the editor has been idle for at least 200ms
+  after the last `didChange` to avoid redundant work on rapid keystrokes.
+- Stdlib change handling: for MVP, stdlib sources are loaded once at server startup;
+  stdlib edits require LSP server restart (document this limitation explicitly).
 - Integration test: fixture-based driver sends open/change/close sequences and asserts that
   published diagnostic messages and ranges match `goby-cli check` output for the same source.
   - Golden test: CLI diagnostic text == LSP diagnostic message for the same error.
@@ -476,6 +528,29 @@ Done when:
 - `cargo run -p goby-lsp` starts a functional stdio LSP server.
 - Opening `examples/function.gb` in an editor shows the same errors as `goby-cli check`.
 - Fixture integration test passes.
+
+#### Phase D2b: Multi-error collection
+
+Goal: report multiple diagnostics per file instead of stopping at the first error.
+This is critical for LSP usability — users expect to see all errors at once.
+
+Scope:
+
+- Change `typecheck_module` return type from `Result<(), TypecheckError>` to
+  `Result<(), Vec<TypecheckError>>` (or introduce a parallel `typecheck_module_collect`
+  entrypoint to avoid breaking existing callers in a single step).
+- Modify the typechecker to continue checking subsequent declarations after an error in one
+  declaration, collecting errors into a `Vec`.
+  - Intra-declaration recovery is NOT required in this phase; a declaration that fails still
+    stops checking within that declaration's body.
+- Update `goby-cli` to render all collected diagnostics, not just the first.
+- Update `goby-lsp` to publish all collected diagnostics per file.
+- Add tests: file with errors in two independent declarations produces two diagnostics.
+
+Done when:
+
+- A file with errors in multiple declarations shows all errors in both CLI and LSP.
+- `cargo test` passes; no regression on single-error cases.
 
 #### Phase D3a: Symbol index and top-level hover/definition
 
@@ -531,6 +606,11 @@ Done when:
 
 Goal: deterministic, idempotent source formatter as a `goby fmt` CLI subcommand.
 
+Dependencies: D4 does not strictly require spans (D1a) for Option A (comment-drop) formatting,
+but round-trip testing benefits from span information for error localization. If Option B
+(comment preservation) is pursued later, it requires a token/CST layer that depends on
+position infrastructure from D1a.
+
 Comment policy decision (must be locked before coding):
 
 - **Option A (drop comments)**: the formatter is comment-unaware; comments are stripped
@@ -562,15 +642,22 @@ Done when:
 
 Goal: machine-readable linter output for common mistakes not caught by the typechecker.
 
-Lint rules in ascending analysis cost (implement in this order):
+Lint rules ordered by ascending analysis cost (cheapest infrastructure first to unblock
+the lint framework early; user-value ranking noted in parentheses for future prioritization):
 
 1. **Unreachable `case` arm**: wildcard `_` arm followed by more arms (purely syntactic, cheapest).
-2. **Shadowed effect operation name**: local binding name collides with a visible effect op
-   (needs symbol table from D3a, no use-tracking required).
-3. **Unused local binding**: `x = expr` where `x` is never referenced afterward
+   User value: medium — catches subtle logic errors in pattern matching.
+2. **Unused local binding**: `x = expr` where `x` is never referenced afterward
    (needs local-use tracking across `Expr`/`Stmt` spans from D1a).
+   User value: **high** — most frequently encountered lint in practice; catches typos and dead code.
+   Note: despite higher analysis cost than rule 1, consider implementing early if the
+   lint framework from rule 1 is already in place, as this delivers the most user value.
+3. **Shadowed effect operation name**: local binding name collides with a visible effect op
+   (needs symbol table from D3a, no use-tracking required).
+   User value: medium — prevents confusing name collisions specific to Goby's effect system.
 4. **Redundant `can` annotation**: effect is fully discharged inside the function body
    (needs effect discharge analysis; implement last to avoid noisy warnings).
+   User value: medium — helps keep effect annotations accurate.
 
 Output format:
 
@@ -586,13 +673,17 @@ Done when:
 
 #### Milestones summary
 
-- M1a (D1a done): all identifier-bearing AST nodes carry spans; position helpers tested.
+- M1a-i (D1a-i done): `Span` carries end position; position helpers tested.
+- M1a-ii (D1a-ii done): declaration-level AST nodes carry spans.
+- M1a-iii (D1a-iii done): Stmt/Expr identifier nodes carry spans.
 - M1b (D1b done): unified `Diagnostic` type; CLI format locked by golden tests.
-- M2 (D2 done): editor shows parse/type diagnostics via LSP identical to `goby-cli check`.
+- M1c (D1c done): ≥80% of TypecheckError sites populate span.
+- M2a (D2a done): editor shows parse/type diagnostics via LSP identical to `goby-cli check`.
+- M2b (D2b done): multiple errors per file reported in both CLI and LSP.
 - M3a (D3a done): hover/definition for top-level declarations and effect members.
 - M3b (D3b done): hover/definition for local bindings and stdlib imports.
 - M4 (D4 done): `goby fmt` is idempotent on all existing sources; comment policy explicit.
-- M5 (D5 done): four lint rules shipped in cost order; JSON output stable.
+- M5 (D5 done): four lint rules shipped; JSON output stable.
 
 ### 4.4 Review Follow-ups (Backlog)
 
