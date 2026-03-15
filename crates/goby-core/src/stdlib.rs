@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use crate::parse_module;
+use crate::parser_util::is_identifier;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StdlibResolver {
@@ -131,17 +132,6 @@ fn is_valid_module_path(module_path: &str) -> bool {
     }
 
     segments.iter().all(|segment| is_identifier(segment))
-}
-
-fn is_identifier(s: &str) -> bool {
-    let mut chars = s.chars();
-    let Some(first) = chars.next() else {
-        return false;
-    };
-    if !first.is_ascii_alphabetic() && first != '_' {
-        return false;
-    }
-    chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
 fn collect_exports(

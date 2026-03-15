@@ -1,6 +1,8 @@
 use std::collections::{HashMap, HashSet};
 
-use goby_core::{Expr, Module, Stmt, ast::InterpolatedPart, types::strip_effect};
+use goby_core::{
+    Expr, Module, Stmt, ast::InterpolatedPart, find_can_keyword_index, types::strip_effect,
+};
 
 use crate::call::flatten_named_call;
 
@@ -758,31 +760,6 @@ fn expand_effects_with_dependencies(
         );
     }
     out
-}
-
-fn find_can_keyword_index(annotation: &str) -> Option<usize> {
-    for (idx, _) in annotation.char_indices() {
-        let rest = &annotation[idx..];
-        if !rest.starts_with("can") {
-            continue;
-        }
-        let has_left_whitespace = annotation[..idx]
-            .chars()
-            .last()
-            .is_some_and(char::is_whitespace);
-        if !has_left_whitespace {
-            continue;
-        }
-        let has_right_whitespace = annotation[idx + 3..]
-            .chars()
-            .next()
-            .is_none_or(char::is_whitespace);
-        if !has_right_whitespace {
-            continue;
-        }
-        return Some(idx);
-    }
-    None
 }
 
 fn collect_operation_refs(

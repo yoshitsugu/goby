@@ -41,6 +41,14 @@ pub fn is_identifier(s: &str) -> bool {
     chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
+pub(crate) fn is_qualified_name(s: &str) -> bool {
+    if let Some((receiver, member)) = s.split_once('.') {
+        is_identifier(receiver) && is_identifier(member)
+    } else {
+        false
+    }
+}
+
 pub(crate) fn is_non_reserved_identifier(s: &str) -> bool {
     is_identifier(s) && !is_reserved_keyword(s)
 }

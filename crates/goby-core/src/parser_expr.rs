@@ -1,5 +1,7 @@
 use crate::ast::{BinOpKind, Expr, InterpolatedPart};
-use crate::parser_util::{is_camel_case_identifier, is_identifier, is_non_reserved_identifier};
+use crate::parser_util::{
+    is_camel_case_identifier, is_identifier, is_non_reserved_identifier, is_qualified_name,
+};
 use crate::str_util::split_top_level_commas;
 
 /// Parse a single expression from a source string.
@@ -740,14 +742,6 @@ fn split_top_level_whitespace_terms(src: &str) -> Vec<&str> {
         }
     }
     terms
-}
-
-fn is_qualified_name(s: &str) -> bool {
-    if let Some((receiver, member)) = s.split_once('.') {
-        is_identifier(receiver) && is_identifier(member)
-    } else {
-        false
-    }
 }
 
 #[cfg(test)]

@@ -1,7 +1,7 @@
 use crate::ast::{CaseArm, Expr, HandlerClause, Stmt};
 use crate::parser_pattern::parse_case_pattern;
 use crate::parser_util::{
-    is_camel_case_identifier, is_identifier, is_non_reserved_identifier,
+    is_camel_case_identifier, is_identifier, is_non_reserved_identifier, is_qualified_name,
     starts_with_keyword_token, strip_line_comment,
 };
 
@@ -758,14 +758,6 @@ fn find_top_level_case_arm_separator(src: &str) -> Option<usize> {
 
 fn indent_len(line: &str) -> usize {
     line.len() - line.trim_start().len()
-}
-
-fn is_qualified_name(s: &str) -> bool {
-    if let Some((receiver, member)) = s.split_once('.') {
-        is_identifier(receiver) && is_identifier(member)
-    } else {
-        false
-    }
 }
 
 fn try_split_binding(line: &str) -> Option<(&str, &str)> {

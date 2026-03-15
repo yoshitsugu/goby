@@ -40,5 +40,7 @@ pub use ast::{
     ImportKind, ListPatternItem, ListPatternTail, Module, RecordField, Span, Stmt, TypeDeclaration,
 };
 pub use parser::{ParseError, parse_body_stmts, parse_module};
+pub use parser_util::is_identifier;
+pub use typecheck_annotation::find_can_keyword_index;
 pub use span::{line_col_to_offset, offset_to_line_col};
 pub use typecheck::{TypecheckError, typecheck_module, typecheck_module_with_context};

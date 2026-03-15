@@ -3,7 +3,8 @@ use std::collections::HashSet;
 use crate::{
     Module,
     ast::{Declaration, Span},
-    typecheck::{TypecheckError, is_identifier},
+    parser_util::is_identifier,
+    typecheck::TypecheckError,
     typecheck_env::Ty,
     typecheck_types::ty_from_annotation,
     types::{TypeExpr, parse_function_type, parse_type_expr},
@@ -281,7 +282,7 @@ pub(crate) fn strip_effect_clause(annotation: &str) -> &str {
     }
 }
 
-pub(crate) fn find_can_keyword_index(annotation: &str) -> Option<usize> {
+pub fn find_can_keyword_index(annotation: &str) -> Option<usize> {
     for (idx, _) in annotation.char_indices() {
         let rest = &annotation[idx..];
         if !rest.starts_with("can") {

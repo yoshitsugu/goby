@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 
+use crate::parser_util::is_identifier;
+
 const ERR_PRINT_ARG_TYPE: &str = "print argument must resolve to String (literal or identifier)";
 const ERR_PRINT_ARG_UNBOUND: &str = "print argument must resolve to a String binding";
 const ERR_MULTIPLE_PRINTS: &str = "multiple print calls are not yet supported in MVP";
@@ -93,17 +95,6 @@ fn parse_string_literal(expr: &str) -> Option<&str> {
         return None;
     }
     Some(inner)
-}
-
-fn is_identifier(s: &str) -> bool {
-    let mut chars = s.chars();
-    let Some(first) = chars.next() else {
-        return false;
-    };
-    if !first.is_ascii_alphabetic() && first != '_' {
-        return false;
-    }
-    chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
 fn is_assignment_operator(line: &str, eq_index: usize) -> bool {

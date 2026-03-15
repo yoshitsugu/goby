@@ -1,4 +1,6 @@
+use crate::parser_util::is_identifier;
 use crate::str_util::split_top_level_commas;
+use crate::typecheck_annotation::find_can_keyword_index;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FunctionType {
@@ -105,35 +107,6 @@ pub fn strip_effect(annotation: &str) -> &str {
         Some(idx) => annotation[..idx].trim_end(),
         None => annotation.trim(),
     }
-}
-
-fn find_can_keyword_index(annotation: &str) -> Option<usize> {
-    for (idx, _) in annotation.char_indices() {
-        let rest = &annotation[idx..];
-        if !rest.starts_with("can") {
-            continue;
-        }
-
-        let has_left_whitespace = annotation[..idx]
-            .chars()
-            .last()
-            .is_some_and(char::is_whitespace);
-        if !has_left_whitespace {
-            continue;
-        }
-
-        let has_right_whitespace = annotation[idx + 3..]
-            .chars()
-            .next()
-            .is_none_or(char::is_whitespace);
-        if !has_right_whitespace {
-            continue;
-        }
-
-        return Some(idx);
-    }
-
-    None
 }
 
 pub fn parse_type_expr(annotation: &str) -> Option<TypeExpr> {
@@ -339,17 +312,6 @@ fn trim_outer_parens(s: &str) -> Option<&str> {
         return None;
     }
     Some(&s[1..s.len() - 1])
-}
-
-fn is_identifier(s: &str) -> bool {
-    let mut chars = s.chars();
-    let Some(first) = chars.next() else {
-        return false;
-    };
-    if !first.is_ascii_alphabetic() && first != '_' {
-        return false;
-    }
-    chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
 #[cfg(test)]

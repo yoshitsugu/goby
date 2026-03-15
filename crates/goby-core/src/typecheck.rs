@@ -59,17 +59,6 @@ pub fn typecheck_module_with_context(
     check_declaration_bodies(module, &checking)
 }
 
-pub(crate) fn is_identifier(s: &str) -> bool {
-    let mut chars = s.chars();
-    let Some(first) = chars.next() else {
-        return false;
-    };
-    if !first.is_ascii_alphabetic() && first != '_' {
-        return false;
-    }
-    chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
-}
-
 #[cfg(test)]
 mod tests {
     use std::fs;

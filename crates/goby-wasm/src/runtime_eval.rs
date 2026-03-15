@@ -504,16 +504,7 @@ pub(crate) fn parse_call(expr: &str) -> Option<(&str, &str)> {
     }
 }
 
-pub(crate) fn is_identifier(s: &str) -> bool {
-    let mut chars = s.chars();
-    let Some(first) = chars.next() else {
-        return false;
-    };
-    if !first.is_ascii_alphabetic() && first != '_' {
-        return false;
-    }
-    chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
-}
+pub(crate) use goby_core::is_identifier;
 
 pub(crate) fn is_string_literal(expr: &str) -> bool {
     expr.starts_with('"') && expr.ends_with('"') && expr.len() >= 2
