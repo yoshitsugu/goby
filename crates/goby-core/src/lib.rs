@@ -13,6 +13,7 @@ mod parser_test_support;
 mod parser_top;
 mod parser_util;
 mod path_util;
+pub mod span;
 pub mod stdlib;
 pub mod str_util;
 pub mod typecheck;
@@ -39,4 +40,5 @@ pub use ast::{
     ImportKind, ListPatternItem, ListPatternTail, Module, RecordField, Span, Stmt, TypeDeclaration,
 };
 pub use parser::{ParseError, parse_body_stmts, parse_module};
+pub use span::{line_col_to_offset, offset_to_line_col};
 pub use typecheck::{TypecheckError, typecheck_module, typecheck_module_with_context};

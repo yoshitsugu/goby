@@ -1,11 +1,42 @@
 /// Source location within a source file.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// Represents a range from `(line, col)` to `(end_line, end_col)`.
+/// For point spans (single position), `end_line == line` and `end_col == col`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Span {
-    /// 1-indexed line number in the source file.
+    /// 1-indexed line number of the start position.
     pub line: usize,
-    /// 1-indexed byte offset within the line (ASCII sources only; MVP assumption).
+    /// 1-indexed byte offset within the start line.
     /// Value `1` means "unknown column".
     pub col: usize,
+    /// 1-indexed line number of the end position.
+    pub end_line: usize,
+    /// 1-indexed byte offset within the end line.
+    /// For point spans created via `Span::point()`, inherits the same sentinel
+    /// semantics as `col` (i.e. `end_col = 1` means "unknown column").
+    pub end_col: usize,
+}
+
+impl Span {
+    /// Create a point span (start == end) at the given line and column.
+    pub fn point(line: usize, col: usize) -> Self {
+        Self {
+            line,
+            col,
+            end_line: line,
+            end_col: col,
+        }
+    }
+
+    /// Create a range span from start to end positions.
+    pub fn new(line: usize, col: usize, end_line: usize, end_col: usize) -> Self {
+        Self {
+            line,
+            col,
+            end_line,
+            end_col,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -346,6 +377,24 @@ impl Expr {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn span_point_sets_end_equal_to_start() {
+        let s = Span::point(5, 3);
+        assert_eq!(s.line, 5);
+        assert_eq!(s.col, 3);
+        assert_eq!(s.end_line, 5);
+        assert_eq!(s.end_col, 3);
+    }
+
+    #[test]
+    fn span_new_sets_all_fields() {
+        let s = Span::new(1, 2, 3, 4);
+        assert_eq!(s.line, 1);
+        assert_eq!(s.col, 2);
+        assert_eq!(s.end_line, 3);
+        assert_eq!(s.end_col, 4);
+    }
 
     #[test]
     fn to_str_repr_wraps_binop_arg_in_parens() {

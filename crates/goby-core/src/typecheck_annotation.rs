@@ -19,10 +19,7 @@ pub(crate) fn validate_declaration_annotations(
         if !names.insert(decl.name.clone()) {
             return Err(TypecheckError {
                 declaration: Some(decl.name.clone()),
-                span: Some(Span {
-                    line: decl.line,
-                    col: 1,
-                }),
+                span: Some(Span::point(decl.line, 1)),
                 message: "duplicate top-level declaration".to_string(),
             });
         }
@@ -49,20 +46,14 @@ pub(crate) fn validate_main_annotation(module: &Module) -> Result<(), TypecheckE
     let base_annotation = strip_effect_clause(annotation);
     let ty = parse_function_type(base_annotation).ok_or_else(|| TypecheckError {
         declaration: Some("main".to_string()),
-        span: Some(Span {
-            line: main.line,
-            col: 1,
-        }),
+        span: Some(Span::point(main.line, 1)),
         message: "main type annotation must be a function type".to_string(),
     })?;
 
     if ty.arguments != vec!["Unit".to_string()] || ty.result != "Unit" {
         return Err(TypecheckError {
             declaration: Some("main".to_string()),
-            span: Some(Span {
-                line: main.line,
-                col: 1,
-            }),
+            span: Some(Span::point(main.line, 1)),
             message: "main type must be `Unit -> Unit` in MVP".to_string(),
         });
     }
@@ -86,10 +77,7 @@ pub(crate) fn declaration_param_types(
     if !unit_param_omitted && decl.params.len() != function_type.arguments.len() {
         return Err(TypecheckError {
             declaration: Some(decl.name.clone()),
-            span: Some(Span {
-                line: decl.line,
-                col: 1,
-            }),
+            span: Some(Span::point(decl.line, 1)),
             message: format!(
                 "definition has {} parameter(s) but type annotation has {}",
                 decl.params.len(),

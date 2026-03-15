@@ -92,20 +92,14 @@ pub(crate) fn validate_embed_declarations(
         if !seen.insert(embed.effect_name.clone()) {
             return Err(TypecheckError {
                 declaration: None,
-                span: Some(Span {
-                    line: embed.line,
-                    col: 1,
-                }),
+                span: Some(Span::point(embed.line, 1)),
                 message: format!("duplicate embedded effect `{}`", embed.effect_name),
             });
         }
         if !embed.handler_name.starts_with("__goby_embeded_effect_") {
             return Err(TypecheckError {
                 declaration: None,
-                span: Some(Span {
-                    line: embed.line,
-                    col: 1,
-                }),
+                span: Some(Span::point(embed.line, 1)),
                 message: format!(
                     "embedded handler `{}` must start with `__goby_embeded_effect_`",
                     embed.handler_name
@@ -115,10 +109,7 @@ pub(crate) fn validate_embed_declarations(
         if !is_known_runtime_intrinsic_name(&embed.handler_name) {
             return Err(TypecheckError {
                 declaration: None,
-                span: Some(Span {
-                    line: embed.line,
-                    col: 1,
-                }),
+                span: Some(Span::point(embed.line, 1)),
                 message: format!(
                     "unknown embedded handler intrinsic `{}`",
                     embed.handler_name
@@ -128,10 +119,7 @@ pub(crate) fn validate_embed_declarations(
         if !declared_effects.contains(embed.effect_name.as_str()) {
             return Err(TypecheckError {
                 declaration: None,
-                span: Some(Span {
-                    line: embed.line,
-                    col: 1,
-                }),
+                span: Some(Span::point(embed.line, 1)),
                 message: format!(
                     "embedded effect `{}` must be declared in the same module",
                     embed.effect_name
@@ -157,10 +145,7 @@ pub(crate) fn validate_intrinsic_namespace_policy(
         if is_reserved_intrinsic_name(&decl.name) {
             return Err(TypecheckError {
                 declaration: Some(decl.name.clone()),
-                span: Some(Span {
-                    line: decl.line,
-                    col: 1,
-                }),
+                span: Some(Span::point(decl.line, 1)),
                 message: format!(
                     "reserved intrinsic name `{}` is stdlib-only (`__goby_*`)",
                     decl.name
@@ -172,10 +157,7 @@ pub(crate) fn validate_intrinsic_namespace_policy(
         {
             return Err(TypecheckError {
                 declaration: Some(decl.name.clone()),
-                span: Some(Span {
-                    line: decl.line,
-                    col: 1,
-                }),
+                span: Some(Span::point(decl.line, 1)),
                 message: intrinsic_error_message(&name, kind),
             });
         }
