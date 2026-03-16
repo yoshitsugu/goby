@@ -205,7 +205,7 @@ pub(crate) fn check_list_spread_constraints(
         {
             return Err(TypecheckError {
                 declaration: Some(decl_name.to_string()),
-                span: None,
+                span: None, // no span available: requires Expr/Stmt span (D1a-iii)
                 message: format!(
                     "list spread prefix element type mismatch: element #{} is `{}` but earlier prefix elements require `{}`",
                     idx + 1,
@@ -235,7 +235,7 @@ pub(crate) fn check_list_spread_constraints(
             {
                 return Err(TypecheckError {
                     declaration: Some(decl_name.to_string()),
-                    span: None,
+                    span: None, // no span available: requires Expr/Stmt span (D1a-iii)
                     message: format!(
                         "list spread tail element type mismatch: expected `List {}` but got `List {}`",
                         ty_name(&expected_prefix_ty),
@@ -250,7 +250,7 @@ pub(crate) fn check_list_spread_constraints(
             let expected = merged_prefix_ty.unwrap_or(Ty::Unknown);
             Err(TypecheckError {
                 declaration: Some(decl_name.to_string()),
-                span: None,
+                span: None, // no span available: requires Expr/Stmt span (D1a-iii)
                 message: format!(
                     "list spread tail must be `List {}` but got `{}`",
                     ty_name(&expected),
@@ -273,7 +273,7 @@ pub(crate) fn check_list_index_constraints(
         other => {
             return Err(TypecheckError {
                 declaration: Some(decl_name.to_string()),
-                span: None,
+                span: None, // no span available: requires Expr/Stmt span (D1a-iii)
                 message: format!(
                     "list index requires a `List` receiver, but got `{}`",
                     ty_name(other)
@@ -288,7 +288,7 @@ pub(crate) fn check_list_index_constraints(
         other => {
             return Err(TypecheckError {
                 declaration: Some(decl_name.to_string()),
-                span: None,
+                span: None, // no span available: requires Expr/Stmt span (D1a-iii)
                 message: format!(
                     "list index must be `Int`, but got `{}`",
                     ty_name(other)

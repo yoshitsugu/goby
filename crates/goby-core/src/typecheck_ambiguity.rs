@@ -50,7 +50,7 @@ pub(crate) fn ensure_no_ambiguous_refs_in_expr(
                         } else {
                             Err(TypecheckError {
                                 declaration: Some(decl_name.to_string()),
-                                span: None,
+                                span: None, // no span available: requires Expr/Stmt span (D1a-iii)
                                 message: format!(
                                     "tuple member access index `{}` is out of range for receiver `{}` of type `{}`",
                                     index,
@@ -66,7 +66,7 @@ pub(crate) fn ensure_no_ambiguous_refs_in_expr(
                         } else {
                             Err(TypecheckError {
                                 declaration: Some(decl_name.to_string()),
-                                span: None,
+                                span: None, // no span available: requires Expr/Stmt span (D1a-iii)
                                 message: format!(
                                     "tuple member access `{}` requires tuple receiver, but `{}` type is unresolved",
                                     member, receiver
@@ -76,7 +76,7 @@ pub(crate) fn ensure_no_ambiguous_refs_in_expr(
                     }
                     other => Err(TypecheckError {
                         declaration: Some(decl_name.to_string()),
-                        span: None,
+                        span: None, // no span available: requires Expr/Stmt span (D1a-iii)
                         message: format!(
                             "tuple member access `{}` requires tuple receiver, but `{}` has type `{}`",
                             member,
@@ -99,7 +99,7 @@ pub(crate) fn ensure_no_ambiguous_refs_in_expr(
             let Some(record) = env.lookup_record_by_constructor(constructor) else {
                 return Err(TypecheckError {
                     declaration: Some(decl_name.to_string()),
-                    span: None,
+                    span: None, // no span available: requires Expr/Stmt span (D1a-iii)
                     message: format!("unknown record constructor `{}`", constructor),
                 });
             };
@@ -111,7 +111,7 @@ pub(crate) fn ensure_no_ambiguous_refs_in_expr(
                 if !seen.insert(name.clone()) {
                     return Err(TypecheckError {
                         declaration: Some(decl_name.to_string()),
-                        span: None,
+                        span: None, // no span available: requires Expr/Stmt span (D1a-iii)
                         message: format!(
                             "duplicate field `{}` in constructor call `{}`",
                             name, constructor
@@ -121,7 +121,7 @@ pub(crate) fn ensure_no_ambiguous_refs_in_expr(
                 let Some(expected_ty) = record.fields.get(name) else {
                     return Err(TypecheckError {
                         declaration: Some(decl_name.to_string()),
-                        span: None,
+                        span: None, // no span available: requires Expr/Stmt span (D1a-iii)
                         message: format!(
                             "unknown field `{}` in constructor call `{}`",
                             name, constructor
@@ -132,7 +132,7 @@ pub(crate) fn ensure_no_ambiguous_refs_in_expr(
                 if actual_ty != Ty::Unknown && !env.are_compatible(expected_ty, &actual_ty) {
                     return Err(TypecheckError {
                         declaration: Some(decl_name.to_string()),
-                        span: None,
+                        span: None, // no span available: requires Expr/Stmt span (D1a-iii)
                         message: format!(
                             "field `{}` in constructor `{}` has type `{}` but expected `{}`",
                             name,
@@ -153,7 +153,7 @@ pub(crate) fn ensure_no_ambiguous_refs_in_expr(
                 missing.sort();
                 return Err(TypecheckError {
                     declaration: Some(decl_name.to_string()),
-                    span: None,
+                    span: None, // no span available: requires Expr/Stmt span (D1a-iii)
                     message: format!(
                         "missing field(s) in constructor call `{}`: {}",
                         constructor,
@@ -208,7 +208,7 @@ pub(crate) fn ensure_no_ambiguous_refs_in_expr(
             if !matches!(stmts.last(), Some(Stmt::Expr(_))) {
                 return Err(TypecheckError {
                     declaration: Some(decl_name.to_string()),
-                    span: None,
+                    span: None, // no span available: requires Expr/Stmt span (D1a-iii)
                     message: "block expression must end with an expression".to_string(),
                 });
             }
@@ -284,7 +284,7 @@ fn ensure_name_not_ambiguous(
     if let Some(sources) = env.ambiguous_sources(name) {
         return Err(TypecheckError {
             declaration: Some(decl_name.to_string()),
-            span: None,
+            span: None, // no span available: requires Expr/Stmt span (D1a-iii)
             message: format!(
                 "name `{}` is ambiguous due to name resolution collision: {}",
                 name,

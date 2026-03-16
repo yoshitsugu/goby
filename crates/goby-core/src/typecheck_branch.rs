@@ -139,7 +139,7 @@ pub(crate) fn check_branch_type_consistency_in_expr(
                 {
                     return Err(TypecheckError {
                         declaration: Some(decl_name.to_string()),
-                        span: None,
+                        span: None, // no span available: requires Expr/Stmt span (D1a-iii)
                         message: format!(
                             "case branch type mismatch: `{}` vs `{}`",
                             ty_name(prev),
@@ -170,7 +170,7 @@ pub(crate) fn check_branch_type_consistency_in_expr(
             {
                 return Err(TypecheckError {
                     declaration: Some(decl_name.to_string()),
-                    span: None,
+                    span: None, // no span available: requires Expr/Stmt span (D1a-iii)
                     message: format!(
                         "if branch type mismatch: then is `{}`, else is `{}`",
                         ty_name(&then_ty),

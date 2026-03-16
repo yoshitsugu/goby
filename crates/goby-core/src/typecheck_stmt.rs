@@ -89,7 +89,7 @@ fn check_stmt(
             if local_mutability.contains_key(name) {
                 return Err(TypecheckError {
                     declaration: Some(decl_name.to_string()),
-                    span: None,
+                    span: None, // no span available: requires Expr/Stmt span (D1a-iii)
                     message: format!(
                         "duplicate declaration `{}` in the same scope; use `:=` for mutation",
                         name
@@ -113,7 +113,7 @@ fn check_stmt(
             if local_mutability.contains_key(name) {
                 return Err(TypecheckError {
                     declaration: Some(decl_name.to_string()),
-                    span: None,
+                    span: None, // no span available: requires Expr/Stmt span (D1a-iii)
                     message: format!(
                         "duplicate declaration `{}` in the same scope; use `:=` for mutation",
                         name
@@ -137,14 +137,14 @@ fn check_stmt(
             if !local_mutability.contains_key(name) {
                 return Err(TypecheckError {
                     declaration: Some(decl_name.to_string()),
-                    span: None,
+                    span: None, // no span available: requires Expr/Stmt span (D1a-iii)
                     message: format!("cannot assign to undeclared variable `{}`", name),
                 });
             }
             if !local_mutability.get(name).copied().unwrap_or(false) {
                 return Err(TypecheckError {
                     declaration: Some(decl_name.to_string()),
-                    span: None,
+                    span: None, // no span available: requires Expr/Stmt span (D1a-iii)
                     message: format!(
                         "cannot assign to immutable variable `{}`; declare it with `mut` first",
                         name
@@ -167,7 +167,7 @@ fn check_stmt(
             {
                 return Err(TypecheckError {
                     declaration: Some(decl_name.to_string()),
-                    span: None,
+                    span: None, // no span available: requires Expr/Stmt span (D1a-iii)
                     message: format!(
                         "assignment type `{}` does not match variable `{}` type `{}`",
                         ty_name(&assigned_ty),
@@ -226,7 +226,7 @@ fn ensure_known_call_targets_in_expr(
             {
                 return Err(TypecheckError {
                     declaration: Some(decl_name.to_string()),
-                    span: None,
+                    span: None, // no span available: requires Expr/Stmt span (D1a-iii)
                     message: format!("unknown function or constructor `{}`", name),
                 });
             }
@@ -243,7 +243,7 @@ fn ensure_known_call_targets_in_expr(
             if matches!(callee.as_str(), "print" | "println") && env.lookup(callee) == Ty::Unknown {
                 return Err(TypecheckError {
                     declaration: Some(decl_name.to_string()),
-                    span: None,
+                    span: None, // no span available: requires Expr/Stmt span (D1a-iii)
                     message: format!("unknown function or constructor `{}`", callee),
                 });
             }
@@ -382,7 +382,7 @@ fn check_declared_return_type(
     if inferred != Ty::Unknown && !env.are_compatible(&declared, &inferred) {
         return Err(TypecheckError {
             declaration: Some(decl_name.to_string()),
-            span: None,
+            span: None, // no span available: requires Expr/Stmt span (D1a-iii)
             message: format!(
                 "body type `{}` does not match declared return type `{}`",
                 ty_name(&inferred),

@@ -20,7 +20,7 @@ pub(crate) fn validate_declaration_annotations(
         if !names.insert(decl.name.clone()) {
             return Err(TypecheckError {
                 declaration: Some(decl.name.clone()),
-                span: Some(Span::point(decl.line, 1)),
+                span: Some(Span::point(decl.line, decl.col)),
                 message: "duplicate top-level declaration".to_string(),
             });
         }
@@ -31,6 +31,7 @@ pub(crate) fn validate_declaration_annotations(
                 annotation,
                 known_effects,
                 embedded_default_effects,
+                Some(Span::point(decl.line, decl.col)),
             )?;
         }
     }
@@ -109,11 +110,12 @@ pub(crate) fn validate_type_annotation(
     annotation: &str,
     known_effects: &HashSet<String>,
     embedded_default_effects: &HashSet<String>,
+    decl_span: Option<Span>,
 ) -> Result<(), TypecheckError> {
     if uses_legacy_void(annotation) {
         return Err(TypecheckError {
             declaration: Some(decl_name.to_string()),
-            span: None,
+            span: decl_span,
             message: "legacy `void` is not supported; use `Unit`".to_string(),
         });
     }
@@ -123,13 +125,14 @@ pub(crate) fn validate_type_annotation(
         annotation,
         known_effects,
         embedded_default_effects,
+        decl_span,
     )?;
 
     let base = strip_effect_clause(annotation).trim();
     if base.is_empty() {
         return Err(TypecheckError {
             declaration: Some(decl_name.to_string()),
-            span: None,
+            span: decl_span,
             message: "type annotation must not be empty".to_string(),
         });
     }
@@ -138,7 +141,7 @@ pub(crate) fn validate_type_annotation(
         let Some(ft) = parse_function_type(base) else {
             return Err(TypecheckError {
                 declaration: Some(decl_name.to_string()),
-                span: None,
+                span: decl_span,
                 message: "invalid function type annotation".to_string(),
             });
         };
@@ -148,21 +151,21 @@ pub(crate) fn validate_type_annotation(
             let Some(type_expr) = parse_type_expr(segment) else {
                 return Err(TypecheckError {
                     declaration: Some(decl_name.to_string()),
-                    span: None,
+                    span: decl_span,
                     message: "invalid function type annotation".to_string(),
                 });
             };
-            validate_handler_type_expr(decl_name, &type_expr, known_effects)?;
+            validate_handler_type_expr(decl_name, &type_expr, known_effects, decl_span)?;
         }
     } else {
         let Some(type_expr) = parse_type_expr(base) else {
             return Err(TypecheckError {
                 declaration: Some(decl_name.to_string()),
-                span: None,
+                span: decl_span,
                 message: "invalid type annotation".to_string(),
             });
         };
-        validate_handler_type_expr(decl_name, &type_expr, known_effects)?;
+        validate_handler_type_expr(decl_name, &type_expr, known_effects, decl_span)?;
     }
 
     Ok(())
@@ -172,25 +175,26 @@ pub(crate) fn validate_handler_type_expr(
     decl_name: &str,
     expr: &TypeExpr,
     known_effects: &HashSet<String>,
+    decl_span: Option<Span>,
 ) -> Result<(), TypecheckError> {
     match expr {
         TypeExpr::Name(_) => Ok(()),
         TypeExpr::Tuple(items) => {
             for item in items {
-                validate_handler_type_expr(decl_name, item, known_effects)?;
+                validate_handler_type_expr(decl_name, item, known_effects, decl_span)?;
             }
             Ok(())
         }
         TypeExpr::Function { arguments, result } => {
             for arg in arguments {
-                validate_handler_type_expr(decl_name, arg, known_effects)?;
+                validate_handler_type_expr(decl_name, arg, known_effects, decl_span)?;
             }
-            validate_handler_type_expr(decl_name, result, known_effects)
+            validate_handler_type_expr(decl_name, result, known_effects, decl_span)
         }
         TypeExpr::Apply { head, args } => {
-            validate_handler_type_expr(decl_name, head, known_effects)?;
+            validate_handler_type_expr(decl_name, head, known_effects, decl_span)?;
             for arg in args {
-                validate_handler_type_expr(decl_name, arg, known_effects)?;
+                validate_handler_type_expr(decl_name, arg, known_effects, decl_span)?;
             }
             if let TypeExpr::Name(name) = head.as_ref()
                 && name == "Handler"
@@ -198,7 +202,7 @@ pub(crate) fn validate_handler_type_expr(
                 if args.is_empty() {
                     return Err(TypecheckError {
                         declaration: Some(decl_name.to_string()),
-                        span: None,
+                        span: decl_span,
                         message: "Handler type must include at least one effect".to_string(),
                     });
                 }
@@ -206,7 +210,7 @@ pub(crate) fn validate_handler_type_expr(
                     let TypeExpr::Name(effect_name) = arg else {
                         return Err(TypecheckError {
                             declaration: Some(decl_name.to_string()),
-                            span: None,
+                            span: decl_span,
                             message: "Handler type arguments must be effect names (identifiers)"
                                 .to_string(),
                         });
@@ -214,7 +218,7 @@ pub(crate) fn validate_handler_type_expr(
                     if !known_effects.contains(effect_name) {
                         return Err(TypecheckError {
                             declaration: Some(decl_name.to_string()),
-                            span: None,
+                            span: decl_span,
                             message: format!(
                                 "unknown effect `{}` in `Handler(...)` type annotation",
                                 effect_name
@@ -239,6 +243,7 @@ pub(crate) fn validate_effect_clause(
     annotation: &str,
     known_effects: &HashSet<String>,
     embedded_default_effects: &HashSet<String>,
+    decl_span: Option<Span>,
 ) -> Result<(), TypecheckError> {
     let Some(effect_idx) = find_can_keyword_index(annotation) else {
         return Ok(());
@@ -248,7 +253,7 @@ pub(crate) fn validate_effect_clause(
     if effects_raw.is_empty() {
         return Err(TypecheckError {
             declaration: Some(decl_name.to_string()),
-            span: None,
+            span: decl_span,
             message: "effect list after `can` must not be empty".to_string(),
         });
     }
@@ -257,7 +262,7 @@ pub(crate) fn validate_effect_clause(
         if !is_identifier(effect_name) {
             return Err(TypecheckError {
                 declaration: Some(decl_name.to_string()),
-                span: None,
+                span: decl_span,
                 message: format!("invalid effect name `{}` in type annotation", effect_name),
             });
         }
@@ -266,7 +271,7 @@ pub(crate) fn validate_effect_clause(
         if !known_effects.contains(effect_name) && !is_main_relaxed_embedded {
             return Err(TypecheckError {
                 declaration: Some(decl_name.to_string()),
-                span: None,
+                span: decl_span,
                 message: format!("unknown effect `{}` in `can` clause", effect_name),
             });
         }

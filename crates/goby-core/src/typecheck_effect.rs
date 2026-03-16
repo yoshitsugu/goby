@@ -90,7 +90,7 @@ pub(crate) fn validate_effect_declarations(module: &Module) -> Result<(), Typech
         if !seen.insert(effect_decl.name.clone()) {
             return Err(TypecheckError {
                 declaration: Some(effect_decl.name.clone()),
-                span: None,
+                span: Some(effect_decl.span),
                 message: format!("duplicate effect declaration `{}`", effect_decl.name),
             });
         }
@@ -108,7 +108,7 @@ pub(crate) fn validate_effect_member_effect_clauses(
             if find_can_keyword_index(&member.type_annotation).is_some() {
                 return Err(TypecheckError {
                     declaration: Some(effect_decl.name.clone()),
-                    span: None,
+                    span: Some(member.span),
                     message: format!(
                         "can clauses on effect members are not supported in `{}.{}`",
                         effect_decl.name, member.name
@@ -118,7 +118,7 @@ pub(crate) fn validate_effect_member_effect_clauses(
             let parsed =
                 parse_type_expr(&member.type_annotation).ok_or_else(|| TypecheckError {
                     declaration: Some(effect_decl.name.clone()),
-                    span: None,
+                    span: Some(member.span),
                     message: format!(
                         "invalid effect member type annotation in `{}.{}`",
                         effect_decl.name, member.name
@@ -133,7 +133,7 @@ pub(crate) fn validate_effect_member_effect_clauses(
                 if !declared_type_params.contains(&type_var) {
                     return Err(TypecheckError {
                         declaration: Some(effect_decl.name.clone()),
-                        span: None,
+                        span: Some(member.span),
                         message: format!(
                             "unknown effect type parameter `{}` in `{}.{}`",
                             type_var, effect_decl.name, member.name

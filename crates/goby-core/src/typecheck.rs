@@ -2397,6 +2397,55 @@ main =
         assert!(err.message.contains("Unit -> Unit"));
     }
 
+    #[test]
+    fn legacy_void_annotation_span_points_to_declaration_line() {
+        // `uses_legacy_void` path in validate_type_annotation.
+        let source = "f : void\nf = ()\n";
+        let module = parse_module(source).expect("should parse");
+        let err = typecheck_module(&module).expect_err("void annotation should fail");
+        let span = err.span.expect("legacy void error must have a span");
+        assert_eq!(span.line, 1, "span.line should point to f's declaration line");
+        assert_eq!(span.col, 1);
+        assert!(err.message.contains("void"));
+    }
+
+    #[test]
+    fn unknown_effect_in_can_clause_span_points_to_declaration_line() {
+        // `validate_effect_clause` — unknown effect name in `can` clause.
+        let source = "f : Int can Ghost\nf = 1\n";
+        let module = parse_module(source).expect("should parse");
+        let err = typecheck_module(&module).expect_err("unknown effect should fail");
+        let span = err.span.expect("unknown effect error must have a span");
+        assert_eq!(span.line, 1, "span.line should point to f's declaration line");
+        assert_eq!(span.col, 1);
+        assert!(err.message.contains("Ghost"));
+    }
+
+    #[test]
+    fn duplicate_effect_declaration_span_points_to_effect_line() {
+        // `validate_effect_declarations` — duplicate effect name.
+        // Source layout: line 1 = first effect Dup, line 4 = second (duplicate) effect Dup.
+        let source = "effect Dup\n  op: Int -> Unit\n\neffect Dup\n  op: Int -> Unit\n\nmain : Unit -> Unit can Dup\nmain = ()\n";
+        let module = parse_module(source).expect("should parse");
+        let err = typecheck_module(&module).expect_err("duplicate effect should fail");
+        let span = err.span.expect("duplicate effect error must have a span");
+        assert_eq!(span.line, 4, "span.line should point to the second (duplicate) effect header");
+        assert_eq!(span.col, 1);
+        assert!(err.message.contains("duplicate"));
+    }
+
+    #[test]
+    fn duplicate_top_level_declaration_span_points_to_declaration_line() {
+        // `validate_declaration_annotations` — duplicate top-level declaration name.
+        let source = "f : Int\nf = 1\n\nf : String\nf = \"x\"\n";
+        let module = parse_module(source).expect("should parse");
+        let err = typecheck_module(&module).expect_err("duplicate declaration should fail");
+        let span = err.span.expect("duplicate declaration error must have a span");
+        assert_eq!(span.line, 4, "span.line should point to the second (duplicate) declaration");
+        assert_eq!(span.col, 1);
+        assert!(err.message.contains("duplicate"));
+    }
+
     // --- effect op argument type checking (§4.1.1) ---
 
     #[test]

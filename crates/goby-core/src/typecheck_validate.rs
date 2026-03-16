@@ -32,7 +32,7 @@ pub(crate) fn validate_imports(module: &Module, stdlib_root: &Path) -> Result<()
                 };
                 TypecheckError {
                     declaration: None,
-                    span: None,
+                    span: None, // no span available: ImportDecl has no span field
                     message,
                 }
             })?;
@@ -44,7 +44,7 @@ pub(crate) fn validate_imports(module: &Module, stdlib_root: &Path) -> Result<()
                 if !exists {
                     return Err(TypecheckError {
                         declaration: None,
-                        span: None,
+                        span: None, // no span available: ImportDecl has no span field
                         message: format!(
                             "unknown symbol `{}` in import from `{}`",
                             name, import.module_path
@@ -73,7 +73,7 @@ pub(crate) fn validate_embed_declarations(
         if !is_path_within_root(source_path, &stdlib_root) {
             return Err(TypecheckError {
                 declaration: None,
-                span: None,
+                span: None, // no span available: source path check, no AST node span
                 message: format!(
                     "@embed declarations are only allowed under stdlib root `{}`",
                     stdlib_root.display()
@@ -186,7 +186,7 @@ pub(crate) fn collect_imported_embedded_defaults(
             {
                 return Err(TypecheckError {
                     declaration: None,
-                    span: None,
+                    span: None, // no span available: ImportDecl has no span field
                     message: format!(
                         "conflicting embedded default handler for effect `{}` across stdlib imports (`{}` vs `{}`)",
                         embed.effect_name, existing, embed.handler_name
@@ -274,7 +274,7 @@ pub(crate) fn validate_no_ambiguous_effect_names(
     };
     Err(TypecheckError {
         declaration: None,
-        span: None,
+        span: None, // no span available: ImportDecl has no span field
         message: format!(
             "effect `{}` has conflicting declarations across imports/declarations: {}",
             effect_name,
@@ -431,7 +431,7 @@ pub(crate) fn module_exports_for_import_with_resolver(
             .collect()),
         Err(StdlibResolveError::ModuleNotFound { attempted_path, .. }) => Err(TypecheckError {
             declaration: None,
-            span: None,
+            span: None, // no span available: ImportDecl has no span field
             message: format!(
                 "unknown module `{}` (attempted stdlib path: {})",
                 module_path,
@@ -440,7 +440,7 @@ pub(crate) fn module_exports_for_import_with_resolver(
         }),
         Err(err) => Err(TypecheckError {
             declaration: None,
-            span: None,
+            span: None, // no span available: ImportDecl has no span field
             message: format!(
                 "failed to resolve stdlib module `{}`: {}",
                 module_path,

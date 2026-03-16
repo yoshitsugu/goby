@@ -132,7 +132,7 @@ pub(crate) fn ensure_no_ambiguous_globals(env: &TypeEnv) -> Result<(), Typecheck
     sorted_sources.sort();
     Err(TypecheckError {
         declaration: None,
-        span: None,
+        span: None, // no span available: global symbol has no declaration span
         message: format!(
             "name `{}` is ambiguous due to name resolution collision: {}",
             name,
