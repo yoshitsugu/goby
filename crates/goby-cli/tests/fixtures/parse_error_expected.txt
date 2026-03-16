@@ -1,3 +1,3 @@
-crates/goby-cli/tests/fixtures/parse_error_input.gb:1:3: parse error: unexpected indentation at top level
-    bad_indented : Int
-    ^
+crates/goby-cli/tests/fixtures/parse_error_input.gb:1:3: error: unexpected indentation at top level
+1 |   bad_indented : Int
+  |   ^

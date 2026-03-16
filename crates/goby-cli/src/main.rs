@@ -4,23 +4,98 @@ use std::io::Read as _;
 use std::path::{Path, PathBuf};
 use std::process::Command as ProcessCommand;
 
+use goby_core::Span;
+
 const USAGE: &str = "usage: goby <run|check> <file.gb>";
 
-/// Returns a two-line snippet:
-///   "  {source_line}"
-///   "  {spaces}^"
+/// Render the error header line.
 ///
-/// `line` and `col` are 1-indexed. `col = 1` means "start of line" and is also
-/// used as an "unknown column" sentinel by `TypecheckError`; the caret will land
-/// on the first byte, which is the best available position when column is unknown.
-/// Returns an empty string when `line` is out of range.
-fn render_snippet(source: &str, line: usize, col: usize) -> String {
-    let src_line = match source.lines().nth(line.saturating_sub(1)) {
+/// With a span: `file:line:col: error: message` (plus optional ` in 'declaration'`).
+/// Without a span: `file: error: message` (plus optional ` in 'declaration'`).
+fn render_header(
+    file: &str,
+    span: Option<&Span>,
+    declaration: Option<&str>,
+    message: &str,
+) -> String {
+    let decl_suffix = match declaration {
+        Some(name) => format!(" in '{}'", name),
+        None => String::new(),
+    };
+    match span {
+        Some(s) => format!(
+            "{}:{}:{}: error: {}{}",
+            file, s.line, s.col, message, decl_suffix
+        ),
+        None => format!("{}: error: {}{}", file, message, decl_suffix),
+    }
+}
+
+/// Render a source snippet with line-number gutter and caret/underline.
+///
+/// `span.line` and `span.col` are 1-indexed. Returns empty string when `span.line`
+/// is 0 or out of range.
+///
+/// Underline width:
+/// - `end_line == line` and `end_col > col` → width `end_col - col` (range span)
+/// - otherwise → width 1 (point span, multiline span, or same-position sentinel)
+///
+/// Gutter format: right-aligned line number padded to the width of the total line count,
+/// followed by ` | `. Example for a 50-line file: `" 2 | source"`.
+fn render_snippet(source: &str, span: &Span) -> String {
+    let line = span.line;
+    let col = span.col;
+    if line == 0 {
+        return String::new();
+    }
+    let all_lines: Vec<&str> = source.lines().collect();
+    let src_line = match all_lines.get(line - 1) {
         Some(l) => l,
         None => return String::new(),
     };
-    let spaces = " ".repeat(col.saturating_sub(1));
-    format!("  {}\n  {}^", src_line, spaces)
+    let total_lines = all_lines.len();
+    let gutter_width = total_lines.to_string().len();
+    let underline_width = if span.end_line == line && span.end_col > col {
+        span.end_col - col
+    } else {
+        1
+    };
+    let caret_spaces = " ".repeat(col.saturating_sub(1));
+    let carets = "^".repeat(underline_width);
+    let gutter_pad = " ".repeat(gutter_width);
+    format!(
+        "{:>width$} | {}\n{} | {}{}",
+        line,
+        src_line,
+        gutter_pad,
+        caret_spaces,
+        carets,
+        width = gutter_width
+    )
+}
+
+/// Render a complete diagnostic: header plus optional snippet.
+///
+/// When `span` is `None`, only the header is rendered (no snippet block).
+fn render_diagnostic(
+    file: &str,
+    source: &str,
+    span: Option<&Span>,
+    declaration: Option<&str>,
+    message: &str,
+) -> String {
+    let header = render_header(file, span, declaration, message);
+    match span {
+        None => header,
+        Some(s) => {
+            let snippet = render_snippet(source, s);
+            if snippet.is_empty() {
+                header
+            } else {
+                format!("{}\n{}", header, snippet)
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -69,34 +144,31 @@ fn run() -> Result<(), CliError> {
         .map_err(|err| CliError::Runtime(format!("failed to read {}: {}", cli.file, err)))?;
 
     let module = goby_core::parse_module(&source).map_err(|err| {
-        let snippet = render_snippet(&source, err.line, err.col);
-        let suffix = if snippet.is_empty() {
-            String::new()
-        } else {
-            format!("\n{}", snippet)
-        };
-        CliError::Runtime(format!(
-            "{}:{}:{}: parse error: {}{}",
-            cli.file, err.line, err.col, err.message, suffix
+        // Normalise col==1 sentinel (unknown column) to span: None via Diagnostic.
+        let diag = goby_core::Diagnostic::from(err);
+        CliError::Runtime(render_diagnostic(
+            &cli.file,
+            &source,
+            diag.span.as_ref(),
+            None,
+            &diag.message,
         ))
     })?;
 
-    // TODO: unify parse/typecheck error format ("file:line:col: msg" GCC-style vs
-    // "file: typecheck error in X at line Y:Z: msg" prose-style); deferred post-MVP.
     goby_core::typecheck_module_with_context(
         &module,
         Some(Path::new(&cli.file)),
         Some(stdlib_root.as_path()),
     )
     .map_err(|err| {
-        let snippet = err
-            .span
-            .as_ref()
-            .map(|s| render_snippet(&source, s.line, s.col))
-            .filter(|s| !s.is_empty())
-            .map(|s| format!("\n{}", s))
-            .unwrap_or_default();
-        CliError::Runtime(format!("{}: {}{}", cli.file, err, snippet))
+        let diag = goby_core::Diagnostic::from(err);
+        CliError::Runtime(render_diagnostic(
+            &cli.file,
+            &source,
+            diag.span.as_ref(),
+            diag.declaration.as_deref(),
+            &diag.message,
+        ))
     })?;
 
     match cli.command {
@@ -272,37 +344,80 @@ mod tests {
     }
 
     #[test]
-    fn render_snippet_normal() {
+    fn render_snippet_point_span() {
+        // 3-line source: gutter_width=1, line 2 col 6 (point span → single ^)
         let source = "line one\nline two\nline three";
-        // line 2, col 6 → caret under 't' of "two"
-        let snippet = render_snippet(source, 2, 6);
-        assert_eq!(snippet, "  line two\n       ^");
+        let span = Span::point(2, 6);
+        let snippet = render_snippet(source, &span);
+        assert_eq!(snippet, "2 | line two\n  |      ^");
+    }
+
+    #[test]
+    fn render_snippet_range_span_same_line() {
+        // Range span on same line: end_col > col → ^^^ of width end_col - col
+        let source = "let x = 42";
+        let span = Span::new(1, 5, 1, 10); // "x = 4" (5..10)
+        let snippet = render_snippet(source, &span);
+        assert_eq!(snippet, "1 | let x = 42\n  |     ^^^^^");
+    }
+
+    #[test]
+    fn render_snippet_multiline_span_falls_back_to_single_caret() {
+        // Multiline span: end_line != line → single ^ at start col
+        let source = "abc\ndef";
+        let span = Span::new(1, 2, 2, 3);
+        let snippet = render_snippet(source, &span);
+        assert_eq!(snippet, "1 | abc\n  |  ^");
     }
 
     #[test]
     fn render_snippet_col_past_end() {
         let source = "abc";
         // col 20 is past the 3-byte line — caret falls beyond text, no panic.
-        // indent "  " + 19 spaces (col-1) + "^"
-        let snippet = render_snippet(source, 1, 20);
-        assert_eq!(snippet, "  abc\n                     ^");
+        let span = Span::point(1, 20);
+        let snippet = render_snippet(source, &span);
+        assert_eq!(snippet, "1 | abc\n  |                    ^");
     }
 
     #[test]
     fn render_snippet_line_out_of_range() {
         let source = "abc";
         // line 5 does not exist → empty string
-        let snippet = render_snippet(source, 5, 1);
+        let span = Span::point(5, 1);
+        let snippet = render_snippet(source, &span);
         assert_eq!(snippet, "");
     }
 
     #[test]
-    fn render_snippet_line_zero() {
+    fn render_snippet_sentinel_col1_end_col1_renders_single_caret() {
+        // col==1 && end_col==1 is the "unknown position" sentinel for TypecheckErrors.
+        // It falls into the default branch (width 1) — single ^ at col 1.
+        // NOTE: This is a known false-negative: a genuine point span at column 1 also
+        // renders a single ^ here, which is correct behaviour (col 1 is still a valid
+        // position; the sentinel heuristic only suppresses the *width*, not the snippet).
+        let source = "foo = bar";
+        let span = Span::new(1, 1, 1, 1);
+        let snippet = render_snippet(source, &span);
+        assert_eq!(snippet, "1 | foo = bar\n  | ^");
+    }
+
+    #[test]
+    fn render_snippet_line_zero_returns_empty() {
+        // line=0 is undefined/invalid; render_snippet returns "" rather than silently
+        // rendering the first source line.
         let source = "abc";
-        // line 0 → saturating_sub(1) = 0 → nth(0) = "abc" (first line)
-        // This is a fallback for misbehaving callers; we just verify no panic.
-        let snippet = render_snippet(source, 0, 1);
-        assert_eq!(snippet, "  abc\n  ^");
+        let span = Span::point(0, 1);
+        let snippet = render_snippet(source, &span);
+        assert_eq!(snippet, "");
+    }
+
+    #[test]
+    fn render_snippet_gutter_width_matches_line_count_digits() {
+        // 10-line source: max line number is 10 → gutter_width=2, padded to 2 digits.
+        let source = "a\nb\nc\nd\ne\nf\ng\nh\ni\nj";
+        let span = Span::point(2, 1);
+        let snippet = render_snippet(source, &span);
+        assert_eq!(snippet, " 2 | b\n   | ^");
     }
 
     #[test]
@@ -355,5 +470,52 @@ mod tests {
     #[test]
     fn computes_wasm_output_path() {
         assert_eq!(output_wasm_path("examples/hello.gb"), "examples/hello.wasm");
+    }
+
+    // --- render_header tests ---
+
+    #[test]
+    fn render_header_span_present_no_declaration() {
+        let span = Span::point(3, 5);
+        let h = render_header("foo.gb", Some(&span), None, "type mismatch");
+        assert_eq!(h, "foo.gb:3:5: error: type mismatch");
+    }
+
+    #[test]
+    fn render_header_span_present_with_declaration() {
+        let span = Span::point(3, 5);
+        let h = render_header("foo.gb", Some(&span), Some("add"), "type mismatch");
+        assert_eq!(h, "foo.gb:3:5: error: type mismatch in 'add'");
+    }
+
+    #[test]
+    fn render_header_span_absent_no_declaration() {
+        let h = render_header("foo.gb", None, None, "unknown symbol");
+        assert_eq!(h, "foo.gb: error: unknown symbol");
+    }
+
+    #[test]
+    fn render_header_span_absent_with_declaration() {
+        let h = render_header("foo.gb", None, Some("main"), "body type mismatch");
+        assert_eq!(h, "foo.gb: error: body type mismatch in 'main'");
+    }
+
+    // --- render_diagnostic smoke tests ---
+
+    #[test]
+    fn render_diagnostic_span_absent_returns_header_only() {
+        let source = "f = 1\n";
+        let result = render_diagnostic("f.gb", source, None, Some("f"), "type error");
+        assert_eq!(result, "f.gb: error: type error in 'f'");
+    }
+
+    #[test]
+    fn render_diagnostic_span_present_includes_snippet() {
+        let source = "f = 1\n";
+        let span = Span::point(1, 5);
+        let result = render_diagnostic("f.gb", source, Some(&span), Some("f"), "type error");
+        assert!(result.starts_with("f.gb:1:5: error: type error in 'f'\n"));
+        assert!(result.contains("| f = 1"));
+        assert!(result.contains('^'));
     }
 }
