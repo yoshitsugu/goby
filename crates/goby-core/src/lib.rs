@@ -4,6 +4,7 @@
 
 pub mod analysis;
 pub mod ast;
+pub mod diagnostic;
 pub mod parser;
 mod parser_expr;
 mod parser_pattern;
@@ -39,6 +40,7 @@ pub use ast::{
     BinOpKind, CaseArm, CasePattern, Declaration, EmbedDecl, Expr, HandlerClause, ImportDecl,
     ImportKind, ListPatternItem, ListPatternTail, Module, RecordField, Span, Stmt, TypeDeclaration,
 };
+pub use diagnostic::{Diagnostic, Severity};
 pub use parser::{ParseError, parse_body_stmts, parse_module};
 pub use parser_util::is_identifier;
 pub use typecheck_annotation::find_can_keyword_index;
