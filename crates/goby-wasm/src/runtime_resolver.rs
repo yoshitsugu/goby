@@ -672,14 +672,16 @@ impl<'m> RuntimeOutputResolver<'m> {
                 };
                 match list_val {
                     RuntimeValue::ListInt(items) => {
-                        if i < 0 || i as usize >= items.len() {
+                        // Use `i >= items.len() as i64` rather than `i as usize >= items.len()`
+                        // to avoid silent truncation on 32-bit WASM targets where usize is 32-bit.
+                        if i < 0 || i >= items.len() as i64 {
                             self.mark_runtime_abort();
                             return None;
                         }
                         Some(RuntimeValue::Int(items[i as usize]))
                     }
                     RuntimeValue::ListString(items) => {
-                        if i < 0 || i as usize >= items.len() {
+                        if i < 0 || i >= items.len() as i64 {
                             self.mark_runtime_abort();
                             return None;
                         }

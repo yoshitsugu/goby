@@ -375,12 +375,11 @@ impl Expr {
                 None
             }
             Expr::Case { .. } | Expr::If { .. } => None,
-            // Note: returns a non-None string even though the current string-based
-            // evaluators do not yet understand `expr[i]` syntax.  Once the F1b parser
-            // lands, this string will be parseable and the runtime path will fully work.
-            // Until then, callers that fall back to to_str_repr() will receive a string
-            // that no current evaluator can evaluate and will silently return None — which
-            // is the correct safe-fallback behaviour.
+            // The F1b parser handles `expr[i]` syntax, so this string is parseable.
+            // However, the legacy string-based evaluators (IntEvaluator,
+            // eval_value_with_context, etc.) do not handle `xs[i]` notation —
+            // callers that fall back to the string evaluator will receive None,
+            // which is the correct safe-fallback behaviour.
             Expr::ListIndex { list, index } => {
                 let l_raw = list.to_str_repr()?;
                 let i = index.to_str_repr()?;
@@ -532,6 +531,21 @@ mod tests {
             index: Box::new(Expr::IntLit(0)),
         };
         assert_eq!(expr.to_str_repr(), Some("(f 1)[0]".to_string()));
+    }
+
+    #[test]
+    fn to_str_repr_list_index_binop_index_no_parens() {
+        // Index expressions are delimited by `[…]` so they never need parens.
+        // `xs[a + b]` must NOT become `xs[(a + b)]`.
+        let expr = Expr::ListIndex {
+            list: Box::new(Expr::Var("xs".to_string())),
+            index: Box::new(Expr::BinOp {
+                op: crate::ast::BinOpKind::Add,
+                left: Box::new(Expr::Var("a".to_string())),
+                right: Box::new(Expr::Var("b".to_string())),
+            }),
+        };
+        assert_eq!(expr.to_str_repr(), Some("xs[a + b]".to_string()));
     }
 
     #[test]
