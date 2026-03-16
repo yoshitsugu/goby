@@ -63,8 +63,9 @@ Execution order (matches PLAN.md dependency chain):
 1b. D1a-iii: Stmt/Expr identifier node spans.
 2. D1b: Unified `Diagnostic` type (shared between CLI and LSP).
 3. D1c: TypecheckError span population (remaining ~77 sites).
-4. D2a: `goby-lsp` crate — diagnostics only (editor diagnostics).
-5. D2b: Multi-error collection (`typecheck_module` → `Vec<Diagnostic>`).
-6. D3a/D3b: Symbol index, hover, go-to-definition.
-7. D4: `goby fmt` (AST pretty-printer).
-8. D5: `goby lint` (static checks).
+4. D1d: Ruby/Elm-style range-underline error display (`^^^`, `file:line:col:` header).
+5. D2a: `goby-lsp` crate — diagnostics only (editor diagnostics).
+6. D2b: Multi-error collection (`typecheck_module` → `Vec<Diagnostic>`).
+7. D3a/D3b: Symbol index, hover, go-to-definition.
+8. D4: `goby fmt` (AST pretty-printer).
+9. D5: `goby lint` (static checks).

@@ -485,6 +485,109 @@ Done when:
 - Remaining `span: None` sites are documented with reason comments.
 - `cargo test` passes; no CLI output regression.
 
+#### Phase D1d: Ruby/Elm-style range-underline error display
+
+Goal: improve CLI error messages to show the error source line with a `^^^` underline
+that marks the exact token/expression span, matching the style popularised by Ruby and Elm.
+
+##### Output contract (locked before coding)
+
+Header format: `file:line:col: error: <message>` with optional `in '<name>'` suffix when
+`declaration` is present.
+
+- **Error codes** (`error[type-mismatch]` etc.) are **deferred** to a later phase.
+  `Diagnostic` (from D1b) does not carry a code field; adding one is a separate decision.
+- **Line number gutter** (`2 | xs["key"]`) is included in the snippet block.
+- **`span: None` errors**: render as `file: error: <message> in '<name>'` with no line/col
+  and no snippet block. A pseudo-position (`file:0:0:`) is explicitly forbidden.
+  Two output forms will coexist after D1d: span-present (with gutter + underline) and
+  span-absent (header only). This is expected; D1c and D1d together progressively close
+  the span-absent cases.
+- **ParseError**: carries a single start position only; range underline is not available.
+  ParseError snippets always render a single `^`. This is a known limitation.
+- **TypecheckError with `col = 1` sentinel**: `col = 1` is overloaded as both "column 1"
+  and "column unknown". The sentinel detection rule is: `col == 1 && end_col == 1` → single
+  `^` (treated as position-unknown). Known false negative: a genuine point span at real column
+  1 also falls into this bucket and renders a single `^`. This is accepted for now; removing
+  the sentinel requires a separate `Option<usize>` refactor and is deferred.
+
+Example target output:
+
+```
+hoge.gb:2:5: error: list index must be `Int`, but got `String` in 'add'
+    2 | xs["key"]
+              ^^^
+```
+
+##### Non-goals (explicitly deferred)
+
+- Error codes (`error[type-mismatch]` bracket syntax).
+- Tab character expansion in source lines (tab columns are byte-offset only; a misaligned
+  caret under a tab-indented line is a known limitation, documented but not fixed here).
+- Removing the `col = 1` sentinel from `Span` / `ParseError` (belongs in a separate cleanup).
+- Multi-file error context or secondary labels (Rust-style).
+
+##### Dependencies
+
+D1a-i (`Span.end_col` available) → D1b (`Diagnostic` type) → D1c (span coverage for
+representative user-facing error families: type mismatch, unresolved name, list constraint
+errors must be covered before D1d ships, not just 80% by count).
+
+##### Sub-phases
+
+**D1d-0: Lock output contract**
+- Write two golden fixture files under `crates/goby-cli/tests/fixtures/`:
+  - `parse_error_expected.txt` — exact expected stderr for a parse error in a fixed repo-relative
+    source file (so the `file:` prefix is stable across machines).
+  - `typecheck_error_expected.txt` — exact expected stderr for a typecheck error in a fixed
+    repo-relative source file.
+  - Both fixtures cover the span-present (with snippet) and span-absent (header only) forms.
+- No code changes in this sub-phase; fixtures drive all subsequent sub-phases.
+- Done when: both fixtures committed; all format decisions in the output contract above are
+  reflected in them.
+
+**D1d-1: Split CLI renderer**
+- Extract in `goby-cli/src/main.rs`:
+  - `render_header(file: &str, span: Option<&Span>, declaration: Option<&str>, message: &str) -> String`
+    — owns `file:line:col: error: <message> in '<name>'`; when span is None emits
+    `file: error: <message> in '<name>'`.
+  - `render_snippet(source: &str, span: &Span) -> String`
+    — owns gutter (`  2 | ...`) and underline line; always receives a concrete Span.
+    The decision of whether to call `render_snippet` at all (i.e. `Option<Span>` dispatch)
+    lives in the caller, not inside `render_snippet`. This keeps `render_snippet` a pure
+    function testable without Option logic.
+  - A thin `render_diagnostic(file: &str, source: &str, span: Option<&Span>, declaration: Option<&str>, message: &str) -> String`
+    wrapper that composes header + optional snippet and centralises the Option dispatch.
+- `format_snippet` is replaced by these three; file path is **not** passed into `render_snippet`.
+- Done when: refactor complete; all existing tests pass unchanged.
+
+**D1d-2: Underline width logic**
+- In `render_snippet`, compute underline length:
+  - `end_col > col` and same line → `^^^` of length `end_col - col`.
+  - `end_col == col`, `end_col < col` (defensive), or multi-line span → single `^`.
+  - sentinel heuristic: if `col == 1` and `end_col == 1` → single `^` (treated as unknown).
+- ParseError path always renders single `^` (no `end_col` available).
+- Done when: underline logic unit-tested; golden fixture from D1d-0 matches output.
+
+**D1d-3: Test hardening**
+- Unit tests for `render_snippet`: point span, range span, multiline fallback,
+  line out of range, col past end of line, `end_col < col` (defensive), sentinel `col=1`
+  (known false-negative documented in test comment).
+- Unit tests for `render_header`: span-present with/without declaration, span-absent
+  with/without declaration (four cases).
+- Unit tests for `render_diagnostic`: smoke test that header + snippet compose correctly for
+  span-present and span-absent paths.
+- CLI integration tests using the fixtures from D1d-0: parse error and typecheck error stderr
+  **byte-for-byte match**. Input files must be repo-relative fixed paths so the `file:`
+  prefix is stable.
+- Done when: all tests pass; no partial-match pattern in integration tests for these two paths.
+
+##### Done when
+
+- All four sub-phases complete and committed independently.
+- `goby-cli check` output matches the D1d-0 golden fixture.
+- `cargo test` passes; existing CLI tests updated to new format.
+
 #### Phase D2a: `goby-lsp` crate — diagnostics only
 
 Goal: `goby-cli check`-equivalent diagnostics available inside editors via LSP.
@@ -665,6 +768,7 @@ Done when:
 - M1a-iii (D1a-iii done): Stmt/Expr identifier nodes carry spans.
 - M1b (D1b done): unified `Diagnostic` type; CLI format locked by golden tests.
 - M1c (D1c done): ≥80% of TypecheckError sites populate span.
+- M1d (D1d done): CLI shows `^^^` range underline and `file:line:col:` header for errors with span.
 - M2a (D2a done): editor shows parse/type diagnostics via LSP identical to `goby-cli check`.
 - M2b (D2b done): multiple errors per file reported in both CLI and LSP.
 - M3a (D3a done): hover/definition for top-level declarations and effect members.
