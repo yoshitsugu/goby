@@ -4,15 +4,19 @@ Last updated: 2026-03-16
 
 ## Recently Completed
 
+- Track D — Developer Tooling Foundation (D1a-ii through D1d): **completed** (2026-03-16)
+  - D1a-ii: declaration-level AST node spans (Declaration.col, EffectDecl/EffectMember/HandlerClause/CaseArm spans)
+  - D1b: unified `Diagnostic` type with `From<ParseError>` and `From<TypecheckError>`
+  - D1c: populate spans at TypecheckError construction sites (annotation + effect decl errors)
+  - D1d-0 through D1d-3: Ruby/Elm-style range-underline CLI display with `file:line:col: error:` header, gutter, and `^^^`
+  - 409 goby-core tests, 21 goby-cli unit tests, 18 goby-cli integration tests passing
 - Track F — List Index Access `l[i]`: **completed** (2026-03-16)
   - All phases F1a–F4 shipped and Codex-reviewed (two full review rounds).
   - See PLAN.md §4.6 for summary.
 
 ## Current Focus
 
-- Track D — Developer Tooling Foundation
-- D1a-i (Span extension + position helpers): **completed** (2026-03-15)
-- Next step: **D1a-ii** (declaration-level AST node spans)
+- Next: Track D2a — `goby-lsp` crate (editor diagnostics via LSP)
 
 ## Locked Decisions Carried Forward
 
@@ -54,18 +58,18 @@ NotRuntimeIo:
 
 ## Next Slice
 
-Track D — Developer Tooling Foundation is the next starting point.
+Track D2 — LSP and further tooling.
 
 Execution order (matches PLAN.md dependency chain):
 
 1. ~~D1a-i: Span extension and position helpers~~ **(completed)**
-1a. D1a-ii: Declaration-level AST node spans.
-1b. D1a-iii: Stmt/Expr identifier node spans.
-2. D1b: Unified `Diagnostic` type (shared between CLI and LSP).
-3. D1c: TypecheckError span population (remaining ~77 sites).
-4. D1d: Ruby/Elm-style range-underline error display (`^^^`, `file:line:col:` header).
-5. D2a: `goby-lsp` crate — diagnostics only (editor diagnostics).
-6. D2b: Multi-error collection (`typecheck_module` → `Vec<Diagnostic>`).
-7. D3a/D3b: Symbol index, hover, go-to-definition.
-8. D4: `goby fmt` (AST pretty-printer).
-9. D5: `goby lint` (static checks).
+2. ~~D1a-ii: Declaration-level AST node spans~~ **(completed)**
+3. D1a-iii: Stmt/Expr identifier node spans. **(deferred — requires exhaustive match audit)**
+4. ~~D1b: Unified `Diagnostic` type~~ **(completed)**
+5. ~~D1c: TypecheckError span population~~ **(completed — annotation + effect decl sites)**
+6. ~~D1d: Ruby/Elm-style range-underline error display~~ **(completed)**
+7. D2a: `goby-lsp` crate — diagnostics only (editor diagnostics).
+8. D2b: Multi-error collection (`typecheck_module` → `Vec<Diagnostic>`).
+9. D3a/D3b: Symbol index, hover, go-to-definition.
+10. D4: `goby fmt` (AST pretty-printer).
+11. D5: `goby lint` (static checks).
