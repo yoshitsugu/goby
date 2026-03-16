@@ -808,7 +808,7 @@ fn record_operation_ref(out: &mut StmtInspection, op_ref: &EffectOperationRef) {
 
 #[cfg(test)]
 mod tests {
-    use goby_core::ast::{EffectDecl, EffectMember};
+    use goby_core::ast::{EffectDecl, EffectMember, Span};
     use goby_core::parse_module;
 
     use super::*;
@@ -1133,7 +1133,9 @@ main =
             members: vec![EffectMember {
                 name: "op".to_string(),
                 type_annotation: "Unit -> Unit".to_string(),
+                span: Span::point(1, 1),
             }],
+            span: Span::point(1, 1),
         };
         let module = Module {
             imports: Vec::new(),

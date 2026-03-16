@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use crate::ast::{EffectDecl, EffectMember, EmbedDecl, ImportDecl, ImportKind, TypeDeclaration};
+use crate::ast::{EffectDecl, EffectMember, EmbedDecl, ImportDecl, ImportKind, Span, TypeDeclaration};
 use crate::parser::ParseError;
 use crate::parser_util::{
     collect_indented_body, is_camel_case_identifier, is_identifier, is_indented,
@@ -25,6 +25,8 @@ pub(crate) struct DeclarationParts {
     pub(crate) params: Vec<String>,
     pub(crate) body: String,
     pub(crate) line: usize,
+    /// 1-indexed byte offset of the declaration name on the definition line.
+    pub(crate) col: usize,
 }
 
 pub(crate) fn parse_top_level_item(
@@ -174,9 +176,12 @@ fn parse_effect_declaration(
                 message: "effect member type must not be empty".to_string(),
             });
         }
+        let member_indent = member_line.len() - member_line.trim_start().len();
+        let member_col = member_indent + 1;
         members.push(EffectMember {
             name: name.to_string(),
             type_annotation: ty.to_string(),
+            span: Span::point(index + 1, member_col),
         });
         index += 1;
     }
@@ -186,6 +191,7 @@ fn parse_effect_declaration(
             name: effect_name,
             type_params,
             members,
+            span: Span::point(line_no, 1),
         },
         index,
     ))
@@ -257,6 +263,11 @@ fn parse_declaration_header(
         });
     }
 
+    // col: byte offset of the declaration name on the definition line (1-indexed).
+    let def_raw_line = lines[index];
+    let def_indent = def_raw_line.len() - def_raw_line.trim_start().len();
+    let def_col = def_indent + 1;
+
     let next_index = collect_indented_body(lines, index + 1, &mut body);
     Ok((
         DeclarationParts {
@@ -265,6 +276,7 @@ fn parse_declaration_header(
             params,
             body,
             line: decl_line,
+            col: def_col,
         },
         next_index,
     ))
@@ -287,6 +299,7 @@ mod tests {
             params: decl.params.clone(),
             body: decl.body.clone(),
             line: decl.line,
+            col: decl.col,
         }
     }
 
@@ -648,6 +661,55 @@ main = 1
             .expect("main body should parse");
         assert_eq!(stmts.len(), 2);
         assert!(matches!(stmts[0], Stmt::Binding { .. }));
+    }
+
+    // --- D1a-ii span population tests ---
+
+    #[test]
+    fn declaration_col_is_1_for_top_level_definition() {
+        // Simple top-level definition starts at column 1.
+        let source = "main = 1\n";
+        let module = parse_module(source).expect("source should parse");
+        assert_eq!(module.declarations[0].col, 1);
+    }
+
+    #[test]
+    fn declaration_col_is_1_for_annotated_definition() {
+        // With type annotation, col should point to definition line which starts at col 1.
+        let source = "main : Unit -> Unit\nmain = 1\n";
+        let module = parse_module(source).expect("source should parse");
+        let decl = &module.declarations[0];
+        assert_eq!(decl.line, 1); // annotation line
+        assert_eq!(decl.col, 1); // definition is also at col 1
+    }
+
+    #[test]
+    fn effect_decl_span_points_to_header_line() {
+        // `effect Print` on line 1 → span.line == 1, span.col == 1.
+        let source = "effect Print\n  log: String -> Unit\nmain = 1\n";
+        let module = parse_module(source).expect("source should parse");
+        let effect = &module.effect_declarations[0];
+        assert_eq!(effect.span.line, 1);
+        assert_eq!(effect.span.col, 1);
+    }
+
+    #[test]
+    fn effect_member_span_points_to_member_line() {
+        // Member `log` is on line 2, indented 2 spaces → col == 3.
+        let source = "effect Print\n  log: String -> Unit\nmain = 1\n";
+        let module = parse_module(source).expect("source should parse");
+        let member = &module.effect_declarations[0].members[0];
+        assert_eq!(member.span.line, 2);
+        assert_eq!(member.span.col, 3); // 2 spaces indent + 1
+    }
+
+    #[test]
+    fn effect_decl_span_for_second_effect_on_line_three() {
+        // Effect starting on line 3 → span.line == 3.
+        let source = "main = 1\n\neffect Log\n  log: String -> Unit\n";
+        let module = parse_module(source).expect("source should parse");
+        let effect = &module.effect_declarations[0];
+        assert_eq!(effect.span.line, 3);
     }
 }
 

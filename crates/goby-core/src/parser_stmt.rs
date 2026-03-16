@@ -1,4 +1,4 @@
-use crate::ast::{CaseArm, Expr, HandlerClause, Stmt};
+use crate::ast::{CaseArm, Expr, HandlerClause, Span, Stmt};
 use crate::parser_pattern::parse_case_pattern;
 use crate::parser_util::{
     is_camel_case_identifier, is_identifier, is_non_reserved_identifier, is_qualified_name,
@@ -426,6 +426,8 @@ where
             break;
         }
 
+        let clause_line_no = i + 1;
+        let clause_col = clause_indent + 1;
         let (name, params, inline_body) = parse_handler_clause_header(clause_trimmed)?;
         let mut body = inline_body.to_string();
         i += 1;
@@ -460,6 +462,7 @@ where
             params,
             body,
             parsed_body,
+            span: Span::point(clause_line_no, clause_col),
         });
     }
 
@@ -494,6 +497,8 @@ where
             if arm_indent <= case_indent {
                 break;
             }
+            let arm_line_no = i + 1;
+            let arm_col = arm_indent + 1;
             let (pat_src, body_src) = split_case_arm(arm_trimmed)?;
             let pattern = parse_case_pattern(pat_src)?;
             let (body, next_i) = if body_src.is_empty() {
@@ -506,6 +511,7 @@ where
             arms.push(CaseArm {
                 pattern,
                 body: Box::new(body),
+                span: Span::point(arm_line_no, arm_col),
             });
             i = next_i;
         }
@@ -1222,6 +1228,89 @@ else
                     );
                 }
             }
+        }
+    }
+
+    // --- D1a-ii span population tests ---
+
+    #[test]
+    fn handler_clause_span_points_to_clause_line() {
+        use crate::parser::parse_module;
+        // Body starts with a blank line then "  with\n    log msg ->...\n  in\n    log \"hi\"".
+        // After collect_indented_body, body lines are:
+        //   index 0: "" (blank)
+        //   index 1: "  with"
+        //   index 2: "    log msg ->"
+        //   ...
+        // parse_handler_expr_from_lines is called with parent_indent from the `with` level.
+        // The clause line is at body index 2 → clause_line_no = 3.
+        // 4-space indent → clause_col = 5.
+        let source = "effect Log\n  log: String -> Unit\nmain =\n  with\n    log msg ->\n      print msg\n      resume ()\n  in\n    log \"hi\"\n";
+        let module = parse_module(source).expect("source should parse");
+        let stmts = module.declarations[0].parsed_body.as_ref().expect("body should parse");
+        match &stmts[0] {
+            crate::ast::Stmt::Expr(crate::ast::Expr::With { handler, .. }) => {
+                match handler.as_ref() {
+                    crate::ast::Expr::Handler { clauses } => {
+                        assert_eq!(clauses.len(), 1);
+                        // body-relative: clause at body index 2 → line_no = 3, indent 4 → col 5
+                        assert_eq!(clauses[0].span.line, 3);
+                        assert_eq!(clauses[0].span.col, 5);
+                    }
+                    other => panic!("expected Handler, got {:?}", other),
+                }
+            }
+            other => panic!("expected With stmt, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn case_arm_span_points_to_arm_line() {
+        use crate::parser::parse_module;
+        // Body starts with a blank line then "  case x\n    1 -> ...\n    _ -> ...".
+        // After collect_indented_body, body lines:
+        //   index 0: "" (blank)
+        //   index 1: "  case x"
+        //   index 2: "    1 -> \"one\""   → arms[0].span.line = 3, col = 5
+        //   index 3: "    _ -> \"other\"" → arms[1].span.line = 4, col = 5
+        let source = "f x =\n  case x\n    1 -> \"one\"\n    _ -> \"other\"\n";
+        let module = parse_module(source).expect("source should parse");
+        let stmts = module.declarations[0].parsed_body.as_ref().expect("body should parse");
+        match &stmts[0] {
+            crate::ast::Stmt::Expr(crate::ast::Expr::Case { arms, .. }) => {
+                assert_eq!(arms.len(), 2);
+                // body-relative: arm at index 2 → line_no = 3, indent 4 → col 5
+                assert_eq!(arms[0].span.line, 3);
+                assert_eq!(arms[0].span.col, 5);
+                // body-relative: arm at index 3 → line_no = 4, col 5
+                assert_eq!(arms[1].span.line, 4);
+                assert_eq!(arms[1].span.col, 5);
+            }
+            other => panic!("expected Case expr, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn case_arm_span_is_body_relative_regardless_of_type_annotation() {
+        use crate::parser::parse_module;
+        // With a type annotation, Declaration.line == 1 (annotation) but body is still
+        // relative to the definition line. The arm span values should be identical to
+        // the un-annotated case (body-relative coordinates do not change).
+        let source = "f : Int -> Int\nf x =\n  case x\n    1 -> 1\n    _ -> 0\n";
+        let module = parse_module(source).expect("source should parse");
+        let decl = &module.declarations[0];
+        assert_eq!(decl.line, 1); // annotation line
+        let stmts = decl.parsed_body.as_ref().expect("body should parse");
+        match &stmts[0] {
+            crate::ast::Stmt::Expr(crate::ast::Expr::Case { arms, .. }) => {
+                assert_eq!(arms.len(), 2);
+                // Body-relative coordinates are unchanged by the annotation.
+                assert_eq!(arms[0].span.line, 3);
+                assert_eq!(arms[0].span.col, 5);
+                assert_eq!(arms[1].span.line, 4);
+                assert_eq!(arms[1].span.col, 5);
+            }
+            other => panic!("expected Case expr, got {:?}", other),
         }
     }
 }

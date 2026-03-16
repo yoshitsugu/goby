@@ -1,19 +1,21 @@
-/// Source location within a source file.
+/// Source location within a source file (or body sub-string — see individual fields).
 ///
 /// Represents a range from `(line, col)` to `(end_line, end_col)`.
 /// For point spans (single position), `end_line == line` and `end_col == col`.
+///
+/// # Column-1 sentinel convention
+/// `TypecheckError` uses `col = 1` as a sentinel meaning "unknown column" when no
+/// precise location is available. This convention does **not** apply to parser-produced
+/// spans: `col = 1` in a parser-produced `Span` always means the first byte of the line.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Span {
     /// 1-indexed line number of the start position.
     pub line: usize,
     /// 1-indexed byte offset within the start line.
-    /// Value `1` means "unknown column".
     pub col: usize,
     /// 1-indexed line number of the end position.
     pub end_line: usize,
     /// 1-indexed byte offset within the end line.
-    /// For point spans created via `Span::point()`, inherits the same sentinel
-    /// semantics as `col` (i.e. `end_col = 1` means "unknown column").
     pub end_col: usize,
 }
 
@@ -60,12 +62,16 @@ pub struct EffectDecl {
     pub name: String,
     pub type_params: Vec<String>,
     pub members: Vec<EffectMember>,
+    /// Span of the `effect <Name>` header line.
+    pub span: Span,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EffectMember {
     pub name: String,
     pub type_annotation: String,
+    /// Span of this effect member line.
+    pub span: Span,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -75,6 +81,14 @@ pub struct HandlerClause {
     pub body: String,
     /// Pre-parsed body statements; `None` if the body failed to parse.
     pub parsed_body: Option<Vec<Stmt>>,
+    /// Span of the handler clause header line (e.g. `name params ->`).
+    ///
+    /// **Note:** line/col are relative to the declaration *body sub-string*, not the
+    /// original source file. The body sub-string starts at the line following the
+    /// definition line (the line with `name params = ...`). To obtain a source-file
+    /// line number, add the 1-indexed line number of the *definition line* (not
+    /// `Declaration.line`, which may point to the type annotation instead).
+    pub span: Span,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -124,6 +138,10 @@ pub struct Declaration {
     /// 1-indexed source line where this declaration begins (type annotation line if present,
     /// otherwise the definition line).
     pub line: usize,
+    /// 1-indexed byte offset of the first non-whitespace byte on the definition line.
+    /// For all currently-valid top-level declarations this is always 1 (the grammar rejects
+    /// indented top-level items), but the field is provided for future use.
+    pub col: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -167,6 +185,11 @@ pub enum CasePattern {
 pub struct CaseArm {
     pub pattern: CasePattern,
     pub body: Box<Expr>,
+    /// Span of the `pattern ->` arm header.
+    ///
+    /// **Note:** line/col are relative to the declaration *body sub-string*, not the
+    /// original source file. See `HandlerClause.span` for details on the coordinate system.
+    pub span: Span,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

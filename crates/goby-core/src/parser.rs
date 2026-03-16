@@ -87,6 +87,7 @@ pub fn parse_module(source: &str) -> Result<Module, ParseError> {
                     body: parts.body,
                     parsed_body,
                     line: parts.line,
+                    col: parts.col,
                 });
             }
         }
