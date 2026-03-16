@@ -1,6 +1,12 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-15
+Last updated: 2026-03-16
+
+## Recently Completed
+
+- Track F — List Index Access `l[i]`: **completed** (2026-03-16)
+  - All phases F1a–F4 shipped and Codex-reviewed (two full review rounds).
+  - See PLAN.md §4.6 for summary.
 
 ## Current Focus
 
