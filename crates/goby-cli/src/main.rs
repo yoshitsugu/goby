@@ -389,6 +389,18 @@ mod tests {
     }
 
     #[test]
+    fn render_snippet_end_col_less_than_col_defensive_single_caret() {
+        // Malformed span where end_col < col: defensively renders a single ^ at col.
+        // This cannot happen from well-formed parser output but is exercised as a
+        // regression guard for any future span construction code.
+        let source = "hello world";
+        let span = Span::new(1, 7, 1, 3); // inverted: end_col(3) < col(7)
+        let snippet = render_snippet(source, &span);
+        // end_col(3) is not > col(7), so falls back to width 1
+        assert_eq!(snippet, "1 | hello world\n  |       ^");
+    }
+
+    #[test]
     fn render_snippet_sentinel_col1_end_col1_renders_single_caret() {
         // col==1 && end_col==1 is the "unknown position" sentinel for TypecheckErrors.
         // It falls into the default branch (width 1) — single ^ at col 1.

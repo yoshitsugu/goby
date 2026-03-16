@@ -757,3 +757,77 @@ fn check_command_rejects_legacy_syntax_even_with_legacy_env_var() {
         stderr
     );
 }
+
+// --- Golden fixture tests (D1d-3) ---
+//
+// These tests run `goby check` on a fixed repo-relative source file and compare
+// stderr byte-for-byte against the expected fixture. The file paths in the fixture
+// text are repo-relative (run from repo root), so the `file:` prefix is stable.
+
+#[test]
+fn parse_error_output_matches_fixture() {
+    let root = repo_root();
+    let input = "crates/goby-cli/tests/fixtures/parse_error_input.gb";
+    let expected_path = root.join("crates/goby-cli/tests/fixtures/parse_error_expected.txt");
+    assert!(
+        root.join(input).exists(),
+        "fixture input must exist at {}",
+        input
+    );
+    assert!(
+        expected_path.exists(),
+        "expected fixture must exist at {:?}",
+        expected_path
+    );
+    let expected_raw = fs::read_to_string(&expected_path).expect("fixture should be readable");
+
+    let output = command_for_goby_cli()
+        .arg("check")
+        .arg(input)
+        .current_dir(&root)
+        .output()
+        .expect("cli should execute");
+
+    assert!(!output.status.success(), "parse error input should fail");
+    let actual = String::from_utf8_lossy(&output.stderr);
+    // Strip all trailing newlines from both sides for stable comparison.
+    assert_eq!(
+        actual.trim_end_matches('\n'),
+        expected_raw.trim_end_matches('\n'),
+        "stderr does not match parse_error_expected.txt"
+    );
+}
+
+#[test]
+fn typecheck_error_output_matches_fixture() {
+    let root = repo_root();
+    let input = "crates/goby-cli/tests/fixtures/typecheck_error_input.gb";
+    let expected_path =
+        root.join("crates/goby-cli/tests/fixtures/typecheck_error_expected.txt");
+    assert!(
+        root.join(input).exists(),
+        "fixture input must exist at {}",
+        input
+    );
+    assert!(
+        expected_path.exists(),
+        "expected fixture must exist at {:?}",
+        expected_path
+    );
+    let expected_raw = fs::read_to_string(&expected_path).expect("fixture should be readable");
+
+    let output = command_for_goby_cli()
+        .arg("check")
+        .arg(input)
+        .current_dir(&root)
+        .output()
+        .expect("cli should execute");
+
+    assert!(!output.status.success(), "typecheck error input should fail");
+    let actual = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(
+        actual.trim_end_matches('\n'),
+        expected_raw.trim_end_matches('\n'),
+        "stderr does not match typecheck_error_expected.txt"
+    );
+}
