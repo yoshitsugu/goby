@@ -92,6 +92,25 @@ fn run_server(connection: Connection) {
     }
 }
 
+/// Deserialize request params, returning an `InvalidParams` error response on failure.
+fn parse_request_params<T, F>(
+    id: &lsp_server::RequestId,
+    params: serde_json::Value,
+    label: &str,
+    parse: F,
+) -> Result<T, Response>
+where
+    F: FnOnce(serde_json::Value) -> Result<T, serde_json::Error>,
+{
+    parse(params).map_err(|e| {
+        Response::new_err(
+            id.clone(),
+            lsp_server::ErrorCode::InvalidParams as i32,
+            format!("invalid {label} params: {e}"),
+        )
+    })
+}
+
 /// Dispatch an incoming LSP request to the appropriate handler.
 fn handle_request(
     store: &DocumentStore,
@@ -99,16 +118,11 @@ fn handle_request(
     req: lsp_server::Request,
 ) -> Response {
     if req.method == <HoverRequest as lsp_types::request::Request>::METHOD {
-        let params: lsp_types::HoverParams = match serde_json::from_value(req.params) {
-            Ok(p) => p,
-            Err(e) => {
-                return Response::new_err(
-                    req.id,
-                    lsp_server::ErrorCode::InvalidParams as i32,
-                    format!("invalid hover params: {e}"),
-                );
-            }
-        };
+        let params: lsp_types::HoverParams =
+            match parse_request_params(&req.id, req.params, "hover", serde_json::from_value) {
+                Ok(p) => p,
+                Err(e) => return e,
+            };
         let uri = &params.text_document_position_params.text_document.uri;
         let pos = params.text_document_position_params.position;
         let source = store.docs.get(uri).map(|s| s.as_str()).unwrap_or("");
@@ -118,16 +132,11 @@ fn handle_request(
     }
 
     if req.method == <GotoDefinition as lsp_types::request::Request>::METHOD {
-        let params: lsp_types::GotoDefinitionParams = match serde_json::from_value(req.params) {
-            Ok(p) => p,
-            Err(e) => {
-                return Response::new_err(
-                    req.id,
-                    lsp_server::ErrorCode::InvalidParams as i32,
-                    format!("invalid definition params: {e}"),
-                );
-            }
-        };
+        let params: lsp_types::GotoDefinitionParams =
+            match parse_request_params(&req.id, req.params, "definition", serde_json::from_value) {
+                Ok(p) => p,
+                Err(e) => return e,
+            };
         let uri = params.text_document_position_params.text_document.uri.clone();
         let pos = params.text_document_position_params.position;
         let source = store.docs.get(&uri).map(|s| s.as_str()).unwrap_or("");
@@ -258,7 +267,7 @@ fn handle_notification(
                 };
             let uri = params.text_document.uri;
             let text = params.text_document.text;
-            store.open(uri.clone(), text.clone());
+            store.upsert(uri.clone(), text.clone());
             publish_diagnostics(connection, uri, &text, stdlib_root);
         }
         <DidChangeTextDocument as lsp_types::notification::Notification>::METHOD => {
@@ -273,7 +282,7 @@ fn handle_notification(
             let uri = params.text_document.uri;
             // FULL sync: each didChange contains the complete document text.
             if let Some(change) = params.content_changes.into_iter().last() {
-                store.change(uri.clone(), change.text.clone());
+                store.upsert(uri.clone(), change.text.clone());
                 publish_diagnostics(connection, uri, &change.text, stdlib_root);
             } else {
                 eprintln!("goby-lsp: didChange with empty content_changes; diagnostics not updated");
@@ -291,16 +300,7 @@ fn handle_notification(
             let uri = params.text_document.uri;
             store.close(&uri);
             // Publish empty diagnostics to clear editor markers.
-            let publish_params = PublishDiagnosticsParams {
-                uri,
-                diagnostics: vec![],
-                version: None,
-            };
-            let notif = Notification::new(
-                <PublishDiagnostics as lsp_types::notification::Notification>::METHOD.to_string(),
-                publish_params,
-            );
-            connection.sender.send(notif.into()).ok();
+            send_diagnostics(connection, uri, vec![]);
         }
         method => {
             eprintln!("goby-lsp: unhandled notification: {method}");
@@ -314,12 +314,11 @@ fn publish_diagnostics(
     source: &str,
     stdlib_root: Option<&Path>,
 ) {
-    let diagnostics = analyze(source, stdlib_root);
-    let params = PublishDiagnosticsParams {
-        uri,
-        diagnostics,
-        version: None,
-    };
+    send_diagnostics(connection, uri, analyze(source, stdlib_root));
+}
+
+fn send_diagnostics(connection: &Connection, uri: Url, diagnostics: Vec<lsp_types::Diagnostic>) {
+    let params = PublishDiagnosticsParams { uri, diagnostics, version: None };
     let notif = Notification::new(
         <PublishDiagnostics as lsp_types::notification::Notification>::METHOD.to_string(),
         params,
@@ -442,11 +441,8 @@ struct DocumentStore {
 }
 
 impl DocumentStore {
-    fn open(&mut self, uri: Url, text: String) {
-        self.docs.insert(uri, text);
-    }
-
-    fn change(&mut self, uri: Url, text: String) {
+    /// Insert or fully replace the text for `uri` (used for both open and change in FULL sync).
+    fn upsert(&mut self, uri: Url, text: String) {
         self.docs.insert(uri, text);
     }
 
@@ -575,15 +571,15 @@ mod tests {
     // --- DocumentStore ---
 
     #[test]
-    fn doc_store_open_change_close() {
+    fn doc_store_upsert_close() {
         let mut store = DocumentStore::default();
         let uri = Url::parse("file:///test.gb").unwrap();
 
-        store.open(uri.clone(), "hello".to_string());
+        store.upsert(uri.clone(), "hello".to_string());
         assert_eq!(store.get(&uri), Some("hello"));
 
-        // change fully replaces (does not append)
-        store.change(uri.clone(), "world".to_string());
+        // upsert fully replaces (does not append)
+        store.upsert(uri.clone(), "world".to_string());
         assert_eq!(store.get(&uri), Some("world"));
 
         store.close(&uri);
