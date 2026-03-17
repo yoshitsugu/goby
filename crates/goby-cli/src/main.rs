@@ -98,6 +98,11 @@ fn render_diagnostic(
     }
 }
 
+/// Convenience wrapper: convert a `Diagnostic` and render it.
+fn render_diag(file: &str, source: &str, diag: goby_core::Diagnostic) -> String {
+    render_diagnostic(file, source, diag.span.as_ref(), diag.declaration.as_deref(), &diag.message)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Command {
     Run,
@@ -145,14 +150,7 @@ fn run() -> Result<(), CliError> {
 
     let module = goby_core::parse_module(&source).map_err(|err| {
         // Normalise col==1 sentinel (unknown column) to span: None via Diagnostic.
-        let diag = goby_core::Diagnostic::from(err);
-        CliError::Runtime(render_diagnostic(
-            &cli.file,
-            &source,
-            diag.span.as_ref(),
-            None,
-            &diag.message,
-        ))
+        CliError::Runtime(render_diag(&cli.file, &source, goby_core::Diagnostic::from(err)))
     })?;
 
     let typecheck_errors = goby_core::typecheck_module_collect_with_context(
@@ -163,72 +161,67 @@ fn run() -> Result<(), CliError> {
     if !typecheck_errors.is_empty() {
         let rendered: Vec<String> = typecheck_errors
             .into_iter()
-            .map(|err| {
-                let diag = goby_core::Diagnostic::from(err);
-                render_diagnostic(
-                    &cli.file,
-                    &source,
-                    diag.span.as_ref(),
-                    diag.declaration.as_deref(),
-                    &diag.message,
-                )
-            })
+            .map(|err| render_diag(&cli.file, &source, goby_core::Diagnostic::from(err)))
             .collect();
         return Err(CliError::Runtime(rendered.join("\n\n")));
     }
 
     match cli.command {
-        Command::Run => match goby_wasm::compile_module(&module) {
-            Ok(bytes) => {
-                let output = output_wasm_path(&cli.file);
-                std::fs::write(&output, bytes).map_err(|err| {
-                    CliError::Runtime(format!("failed to write {}: {}", output, err))
-                })?;
-
-                print_parse_summary(module.declarations.len(), &cli.file);
-                println!("generated wasm: {}", output);
-                match execute_wasm(&output)? {
-                    ExecutionOutcome::Executed => {}
-                    ExecutionOutcome::SkippedNoWasmtime => {
-                        println!("wasmtime not found; skipped wasm execution")
-                    }
-                }
-            }
-            // compile_module returns Err for InterpreterBridge programs because
-            // compile_module_wasm_or_error explicitly rejects them (they cannot be
-            // compiled to a static Wasm module at this time).  We re-check the
-            // classification here rather than inspecting `_err` directly so that the
-            // bridge path is gated on the planner's decision, not on the error message.
-            // This is a temporary fallback: as DynamicWasiIo support grows, fewer
-            // programs should reach this branch.
-            //
-            // NOTE: `InterpreterBridge` is currently unreachable from `classify_runtime_io`
-            // because all previously bridged shapes have been promoted to `DynamicWasiIo`.
-            // This arm is retained as an extension point for future shapes that need
-            // interpreter-backed execution while Wasm lowering is developed.
-            Err(_err)
-                if matches!(
-                    goby_wasm::runtime_io_execution_kind(&module),
-                    Ok(goby_wasm::RuntimeIoExecutionKind::InterpreterBridge)
-                ) =>
-            {
-                let stdin_text = read_stdin_to_string()?;
-                let output = goby_wasm::execute_module_with_stdin(&module, Some(stdin_text))
-                    .map_err(|err| CliError::Runtime(format!("runtime error: {}", err.message)))?;
-                print_parse_summary(module.declarations.len(), &cli.file);
-                if let Some(text) = output {
-                    print!("{}", text);
-                }
-            }
-            Err(err) => {
-                return Err(CliError::Runtime(format!("codegen error: {}", err.message)));
-            }
-        },
+        Command::Run => run_command(&module, &cli.file)?,
         Command::Check => {
             print_parse_summary(module.declarations.len(), &cli.file);
         }
     }
 
+    Ok(())
+}
+
+fn run_command(module: &goby_core::Module, file: &str) -> Result<(), CliError> {
+    match goby_wasm::compile_module(module) {
+        Ok(bytes) => {
+            let output = output_wasm_path(file);
+            std::fs::write(&output, &bytes).map_err(|err| {
+                CliError::Runtime(format!("failed to write {}: {}", output, err))
+            })?;
+            print_parse_summary(module.declarations.len(), file);
+            println!("generated wasm: {}", output);
+            match execute_wasm(&output)? {
+                ExecutionOutcome::Executed => {}
+                ExecutionOutcome::SkippedNoWasmtime => {
+                    println!("wasmtime not found; skipped wasm execution")
+                }
+            }
+        }
+        // compile_module returns Err for InterpreterBridge programs because
+        // compile_module_wasm_or_error explicitly rejects them (they cannot be
+        // compiled to a static Wasm module at this time).  We re-check the
+        // classification here rather than inspecting `_err` directly so that the
+        // bridge path is gated on the planner's decision, not on the error message.
+        // This is a temporary fallback: as DynamicWasiIo support grows, fewer
+        // programs should reach this branch.
+        //
+        // NOTE: `InterpreterBridge` is currently unreachable from `classify_runtime_io`
+        // because all previously bridged shapes have been promoted to `DynamicWasiIo`.
+        // This arm is retained as an extension point for future shapes that need
+        // interpreter-backed execution while Wasm lowering is developed.
+        Err(_err)
+            if matches!(
+                goby_wasm::runtime_io_execution_kind(module),
+                Ok(goby_wasm::RuntimeIoExecutionKind::InterpreterBridge)
+            ) =>
+        {
+            let stdin_text = read_stdin_to_string()?;
+            let output = goby_wasm::execute_module_with_stdin(module, Some(stdin_text))
+                .map_err(|err| CliError::Runtime(format!("runtime error: {}", err.message)))?;
+            print_parse_summary(module.declarations.len(), file);
+            if let Some(text) = output {
+                print!("{}", text);
+            }
+        }
+        Err(err) => {
+            return Err(CliError::Runtime(format!("codegen error: {}", err.message)));
+        }
+    }
     Ok(())
 }
 
