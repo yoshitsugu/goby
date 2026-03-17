@@ -42,14 +42,13 @@ Last updated: 2026-03-17
 
 ## Current Focus
 
-- Track D3b — Local binding hover: **completed** (2026-03-17)
+- Track D3b — Local binding hover: **completed** (2026-03-17); D3b-fix **completed** (2026-03-17)
   - `infer_local_bindings(decl: &Declaration) -> Vec<LocalBindingSymbol>` in goby-core
-  - Walks `parsed_body` stmts with a minimal `TypeEnv` seeded from param types
-  - `LocalBindingSymbol { name, body_relative_line, ty_str }` — omits `Ty::Unknown` bindings
-  - `hover_at` in goby-lsp: local binding lookup (definition-line only) precedes top-level lookup
-  - 4 new goby-core unit tests; 7 new goby-lsp tests (38 total)
-  - 479 goby-core tests, 38 goby-lsp tests pass
-  - Use-site hover and stdlib definition jump remain deferred (Expr::Var spans unpopulated)
+  - Walks `parsed_body` stmts (top-level + `Expr::With` body) with a minimal `TypeEnv`
+  - `LocalBindingSymbol { name, body_relative_line, body_relative_col, ty_str }` — omits `Ty::Unknown`
+  - `hover_at`: column-range guard prevents false positives on same-line RHS occurrences
+  - 480 goby-core tests, 42 goby-lsp tests pass
+  - Known limitations: use-site hover (Expr::Var spans unpopulated), Handler clause / Expr::Block bindings deferred
 - Track D4 — `goby fmt` (AST pretty-printer): **completed** (2026-03-17)
   - `format_module(module: &Module) -> String` in goby-core (Option A, comment-drop)
   - Covers all Expr/Stmt variants; round-trip-safe output (parser-compatible form)
