@@ -25,33 +25,19 @@ impl RuntimeLocals {
 
     pub(crate) fn store(&mut self, name: &str, value: RuntimeValue) {
         self.clear(name);
+        let key = name.to_string();
         match value {
             RuntimeValue::String(text) => {
-                self.string_values.insert(name.to_string(), text);
+                self.string_values.insert(key, text);
             }
             RuntimeValue::Int(number) => {
-                self.int_values.insert(name.to_string(), number);
+                self.int_values.insert(key, number);
             }
             RuntimeValue::ListInt(values) => {
-                self.list_int_values.insert(name.to_string(), values);
+                self.list_int_values.insert(key, values);
             }
-            u @ RuntimeValue::Unit => {
-                self.record_values.insert(name.to_string(), u);
-            }
-            record @ RuntimeValue::Record { .. } => {
-                self.record_values.insert(name.to_string(), record);
-            }
-            b @ RuntimeValue::Bool(_) => {
-                self.record_values.insert(name.to_string(), b);
-            }
-            ls @ RuntimeValue::ListString(_) => {
-                self.record_values.insert(name.to_string(), ls);
-            }
-            t @ RuntimeValue::Tuple(_) => {
-                self.record_values.insert(name.to_string(), t);
-            }
-            h @ RuntimeValue::Handler(_) => {
-                self.record_values.insert(name.to_string(), h);
+            other => {
+                self.record_values.insert(key, other);
             }
         }
     }
@@ -160,35 +146,32 @@ pub(crate) enum RuntimeValue {
 }
 
 impl RuntimeValue {
+    /// Format value for runtime output (e.g. `print`/`println`).
+    /// Strings are emitted as-is; use `to_expression_text` for quoted form.
     pub(crate) fn to_output_text(&self) -> String {
-        match self {
-            Self::String(text) => text.clone(),
-            Self::Int(value) => value.to_string(),
-            Self::Unit => "Unit".to_string(),
-            Self::Bool(b) => if *b { "True" } else { "False" }.to_string(),
-            Self::Tuple(items) => {
-                let parts: Vec<String> = items.iter().map(RuntimeValue::to_output_text).collect();
-                format!("({})", parts.join(", "))
-            }
-            Self::ListInt(values) => format_list_int(values),
-            Self::ListString(values) => {
-                let parts: Vec<String> = values.iter().map(|s| format!("\"{}\"", s)).collect();
-                format!("[{}]", parts.join(", "))
-            }
-            Self::Handler(_) => "<handler>".to_string(),
-            Self::Record { constructor, .. } => constructor.clone(),
-        }
+        self.format_text(false)
     }
 
+    /// Format value as a Goby expression literal (strings are double-quoted).
     pub(crate) fn to_expression_text(&self) -> String {
+        self.format_text(true)
+    }
+
+    fn format_text(&self, quoted_strings: bool) -> String {
         match self {
-            Self::String(text) => format!("\"{}\"", text),
+            Self::String(text) => {
+                if quoted_strings {
+                    format!("\"{}\"", text)
+                } else {
+                    text.clone()
+                }
+            }
             Self::Int(value) => value.to_string(),
             Self::Unit => "Unit".to_string(),
             Self::Bool(b) => if *b { "True" } else { "False" }.to_string(),
             Self::Tuple(items) => {
                 let parts: Vec<String> =
-                    items.iter().map(RuntimeValue::to_expression_text).collect();
+                    items.iter().map(|v| v.format_text(quoted_strings)).collect();
                 format!("({})", parts.join(", "))
             }
             Self::ListInt(values) => format_list_int(values),

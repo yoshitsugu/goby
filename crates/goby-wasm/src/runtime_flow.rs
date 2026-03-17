@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use goby_core::{Expr, Module, Stmt, ast::InterpolatedPart, stdlib::EmbeddedRuntimeHandlerKind};
+use goby_core::{Expr, Stmt, ast::InterpolatedPart, stdlib::EmbeddedRuntimeHandlerKind};
 
 use crate::{
     RuntimeLocals, RuntimeValue,
@@ -43,6 +43,9 @@ pub(crate) enum HandlerCompletion {
     Suspended,
 }
 
+// These types are defined for the typed-continuation execution path (planned),
+// which is not yet wired up in the interpreter. They are kept here so the data
+// model can evolve alongside the runtime without a large future diff.
 #[allow(dead_code)]
 #[derive(Clone, Debug)]
 pub(crate) enum RuntimeError {
@@ -171,6 +174,7 @@ pub(crate) enum ApplyStep {
     },
 }
 
+// Part of the typed-continuation execution path (see comment above RuntimeError).
 #[allow(dead_code)]
 #[derive(Clone)]
 #[allow(clippy::large_enum_variant)]
@@ -239,5 +243,3 @@ pub(crate) enum DirectCallHead {
     Qualified { receiver: String, member: String },
 }
 
-#[allow(dead_code)]
-fn _module_marker(_: &Module) {}

@@ -10,43 +10,22 @@ pub(crate) fn collect_functions_with_result<'a>(
     module: &'a Module,
     expected_result_type: &str,
 ) -> EvaluatedFunctions<'a> {
-    let declaration_names: HashSet<&str> = module
-        .declarations
-        .iter()
-        .map(|decl| decl.name.as_str())
-        .collect();
-
-    let mut functions = HashMap::new();
-    for decl in &module.declarations {
-        if decl.name == "main" {
-            continue;
-        }
-
-        let Some(annotation) = decl.type_annotation.as_deref() else {
-            continue;
-        };
-        let Some(function_type) = parse_function_type(annotation) else {
-            continue;
-        };
-        if function_type.result != expected_result_type || function_type.arguments.len() > 1 {
-            continue;
-        }
-
-        let parameter = infer_single_parameter_name(&decl.body, &declaration_names);
-        functions.insert(
-            decl.name.as_str(),
-            EvaluatedFunction {
-                body: &decl.body,
-                parameter,
-                parsed_stmts: decl.parsed_body.as_deref(),
-            },
-        );
-    }
-
-    functions
+    // Restrict to at-most-one-argument functions: multi-arg helpers are not
+    // eligible for the single-pass Int/ListInt evaluators.
+    collect_functions(module, |ft| {
+        ft.result == expected_result_type && ft.arguments.len() <= 1
+    })
 }
 
 pub(crate) fn collect_unit_functions<'a>(module: &'a Module) -> EvaluatedFunctions<'a> {
+    // Unit functions may take any number of arguments (including 0).
+    collect_functions(module, |ft| ft.result == "Unit")
+}
+
+fn collect_functions<'a>(
+    module: &'a Module,
+    accept: impl Fn(&goby_core::types::FunctionType) -> bool,
+) -> EvaluatedFunctions<'a> {
     let declaration_names: HashSet<&str> = module
         .declarations
         .iter()
@@ -58,17 +37,15 @@ pub(crate) fn collect_unit_functions<'a>(module: &'a Module) -> EvaluatedFunctio
         if decl.name == "main" {
             continue;
         }
-
         let Some(annotation) = decl.type_annotation.as_deref() else {
             continue;
         };
         let Some(function_type) = parse_function_type(annotation) else {
             continue;
         };
-        if function_type.result != "Unit" {
+        if !accept(&function_type) {
             continue;
         }
-
         let parameter = infer_single_parameter_name(&decl.body, &declaration_names);
         functions.insert(
             decl.name.as_str(),
@@ -79,7 +56,6 @@ pub(crate) fn collect_unit_functions<'a>(module: &'a Module) -> EvaluatedFunctio
             },
         );
     }
-
     functions
 }
 
