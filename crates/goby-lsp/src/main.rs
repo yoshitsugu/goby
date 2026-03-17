@@ -1347,4 +1347,29 @@ mod tests {
             "RHS 'n' (same name, different col) should return None"
         );
     }
+
+    #[test]
+    fn local_binding_hover_with_body() {
+        // Binding inside a `with` body should be visible to hover.
+        // Source (0-indexed lines):
+        //   0: "main ="
+        //   1: "  with"
+        //   2: "    log str ->"
+        //   3: "      resume ()"
+        //   4: "  in"
+        //   5: "    y = 42"   ← def_line=1, body_relative_line=6, source_line=6, LSP line=5
+        //   6: "    y"
+        // "    y = 42": indent=4, body_relative_col=5, LSP character=4.
+        let source = "main =\n  with\n    log str ->\n      resume ()\n  in\n    y = 42\n    y\n";
+        let pos = Position { line: 5, character: 4 }; // 'y' in "    y = 42"
+        let result = hover_at(source, None, pos);
+        assert!(result.is_some(), "expected hover on 'y' in with body, got None");
+        if let Some(hover) = result {
+            if let HoverContents::Markup(mc) = hover.contents {
+                assert_eq!(mc.value, "y : Int");
+            } else {
+                panic!("expected Markup hover");
+            }
+        }
+    }
 }

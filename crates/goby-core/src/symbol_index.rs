@@ -6,7 +6,7 @@
 
 use std::collections::HashMap;
 
-use crate::ast::{Declaration, Module, Span, Stmt};
+use crate::ast::{Declaration, Expr, Module, Span, Stmt};
 use crate::typecheck_annotation::declaration_param_types;
 use crate::typecheck_check::check_expr;
 use crate::typecheck_env::{Ty, TypeEnv};
@@ -124,20 +124,24 @@ pub fn infer_local_bindings(decl: &Declaration) -> Vec<LocalBindingSymbol> {
     };
 
     let mut result = Vec::new();
+    collect_stmts(stmts, &mut local_env, &mut result);
+    result
+}
 
+/// Walk a slice of stmts, collecting local bindings into `result` and updating `env`.
+///
+/// Shared by the top-level body loop and recursive callers (e.g. `Expr::With` body).
+fn collect_stmts(stmts: &[Stmt], env: &mut TypeEnv, result: &mut Vec<LocalBindingSymbol>) {
     for stmt in stmts {
         match stmt {
             Stmt::Binding { name, value, span } => {
-                let ty = check_expr(value, &local_env);
-                // Update local env so later bindings can reference this one.
-                local_env.locals.insert(name.clone(), ty.clone());
-                // Only emit symbols with a known type and a span.
+                let ty = check_expr(value, env);
+                env.locals.insert(name.clone(), ty.clone());
                 if ty != Ty::Unknown {
                     if let Some(sp) = span {
                         result.push(LocalBindingSymbol {
                             name: name.clone(),
                             body_relative_line: sp.line,
-                            // Span::col is the indent+1 of the line start (name start for Binding).
                             body_relative_col: sp.col,
                             ty_str: ty_name(&ty),
                         });
@@ -145,15 +149,13 @@ pub fn infer_local_bindings(decl: &Declaration) -> Vec<LocalBindingSymbol> {
                 }
             }
             Stmt::MutBinding { name, value, span } => {
-                let ty = check_expr(value, &local_env);
-                local_env.locals.insert(name.clone(), ty.clone());
+                let ty = check_expr(value, env);
+                env.locals.insert(name.clone(), ty.clone());
                 if ty != Ty::Unknown {
                     if let Some(sp) = span {
                         result.push(LocalBindingSymbol {
                             name: name.clone(),
                             body_relative_line: sp.line,
-                            // span.col points to the 'm' of "mut"; the name starts 4 ASCII bytes later.
-                            // "mut " is always 4 ASCII bytes (keyword + required space).
                             body_relative_col: sp.col + 4,
                             ty_str: ty_name(&ty),
                         });
@@ -161,17 +163,21 @@ pub fn infer_local_bindings(decl: &Declaration) -> Vec<LocalBindingSymbol> {
                 }
             }
             Stmt::Assign { name, value, .. } => {
-                // Re-assignment: update the env but don't emit a new symbol.
-                let ty = check_expr(value, &local_env);
+                let ty = check_expr(value, env);
                 if ty != Ty::Unknown {
-                    local_env.locals.insert(name.clone(), ty);
+                    env.locals.insert(name.clone(), ty);
                 }
             }
-            Stmt::Expr(_, _) => {}
+            Stmt::Expr(expr, _) => {
+                if let Expr::With { body, .. } = expr {
+                    // Use a cloned env so bindings introduced inside the `with` body do not
+                    // pollute the outer scope (Goby's `with` body is a new scope).
+                    let mut inner_env = env.clone();
+                    collect_stmts(body, &mut inner_env, result);
+                }
+            }
         }
     }
-
-    result
 }
 
 // ---------------------------------------------------------------------------
@@ -355,6 +361,28 @@ mod tests {
         let src = "foo : Int -> Int\nfoo x =\n  y = some_global_fn x\n  y\n";
         let bindings = decl_bindings(src);
         // y depends on some_global_fn which is not in locals → Ty::Unknown → omitted
-        assert!(bindings.is_empty(), "expected empty, got: {:?}", bindings);
+        assert!(bindings.is_empty(), "expected empty, got: {:?}\n\nSource:\n{}", bindings, src);
+    }
+
+    #[test]
+    fn local_binding_in_with_body() {
+        // Bindings inside a `with` body should be collected.
+        // Source (0-indexed display):
+        //   0: "main ="
+        //   1: "  with"
+        //   2: "    log str ->"
+        //   3: "      resume ()"
+        //   4: "  in"
+        //   5: "    y = 42"  ← binding in with body
+        //   6: "    y"
+        let src = "main =\n  with\n    log str ->\n      resume ()\n  in\n    y = 42\n    y\n";
+        let bindings = decl_bindings(src);
+        assert!(!bindings.is_empty(), "expected at least one binding, got none\nsrc:\n{}", src);
+        let y = bindings.iter().find(|b| b.name == "y").expect("binding 'y' not found");
+        assert_eq!(y.ty_str, "Int");
+        // body_relative_line=6 → source line 6 (def_line=1, 1+6-1=6, LSP line 5)
+        assert_eq!(y.body_relative_line, 6);
+        // "    y = 42": indent=4, col=5 (1-indexed), LSP character=4
+        assert_eq!(y.body_relative_col, 5);
     }
 }
