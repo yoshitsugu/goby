@@ -17,7 +17,7 @@ pub(crate) fn parse_stmt_with<F>(line: &str, parse_expr: F) -> Option<Stmt>
 where
     F: Copy + Fn(&str) -> Option<Expr>,
 {
-    parse_stmt(line, parse_expr)
+    parse_stmt(line, Span::point(1, 1), parse_expr)
 }
 
 pub(crate) fn first_malformed_resume_expr_line_offset(body: &str) -> Option<usize> {
@@ -74,6 +74,11 @@ where
             return None;
         }
 
+        // 1-indexed body-relative line number and column for this statement.
+        let stmt_line = i + 1;
+        let stmt_col = this_indent + 1;
+        let stmt_span = Span::point(stmt_line, stmt_col);
+
         if let Some((name, rhs)) = try_split_binding(trimmed)
             && rhs.is_empty()
             && let Some(next_i) = find_next_nonblank(lines, i + 1)
@@ -89,7 +94,7 @@ where
                 stmts.push(Stmt::Binding {
                     name: name.to_string(),
                     value,
-                    span: None,
+                    span: Some(stmt_span),
                 });
                 i = after;
                 continue;
@@ -104,7 +109,7 @@ where
             stmts.push(Stmt::Binding {
                 name: name.to_string(),
                 value: handler,
-                span: None,
+                span: Some(stmt_span),
             });
             i = next_i;
             continue;
@@ -117,7 +122,7 @@ where
             stmts.push(Stmt::Expr(Expr::With {
                 handler: Box::new(handler),
                 body,
-            }, None));
+            }, Some(stmt_span)));
             i = after_with;
             continue;
         }
@@ -128,7 +133,7 @@ where
             stmts.push(Stmt::Expr(Expr::With {
                 handler: Box::new(handler),
                 body,
-            }, None));
+            }, Some(stmt_span)));
             i = after_with;
             continue;
         }
@@ -149,8 +154,8 @@ where
                 stmts.push(Stmt::Expr(Expr::Call {
                     callee: Box::new(callee),
                     arg: Box::new(multi_expr),
-                span: None,
-                }, None));
+                    span: None,
+                }, Some(stmt_span)));
                 i = next_i + consumed;
                 continue;
             }
@@ -175,7 +180,7 @@ where
         if (trimmed.starts_with("case ") || trimmed.starts_with("if "))
             && let Some((multi_expr, consumed)) = parse_multiline_expr(lines, i, parse_expr)
         {
-            stmts.push(Stmt::Expr(multi_expr, None));
+            stmts.push(Stmt::Expr(multi_expr, Some(stmt_span)));
             i += consumed;
             continue;
         }
@@ -196,7 +201,7 @@ where
                 stmts.push(Stmt::MutBinding {
                     name: name.to_string(),
                     value,
-                    span: None,
+                    span: Some(stmt_span),
                 });
                 i = after;
                 continue;
@@ -211,7 +216,7 @@ where
             stmts.push(Stmt::Binding {
                 name: name.to_string(),
                 value,
-                span: None,
+                span: Some(stmt_span),
             });
             i = next_i;
             continue;
@@ -226,7 +231,7 @@ where
             stmts.push(Stmt::MutBinding {
                 name: name.to_string(),
                 value,
-                span: None,
+                span: Some(stmt_span),
             });
             i = next_i;
             continue;
@@ -248,7 +253,7 @@ where
                 stmts.push(Stmt::Assign {
                     name: lhs.trim().to_string(),
                     value,
-                    span: None,
+                    span: Some(stmt_span),
                 });
                 i = after;
                 continue;
@@ -262,13 +267,13 @@ where
             stmts.push(Stmt::Assign {
                 name: name.to_string(),
                 value,
-                span: None,
+                span: Some(stmt_span),
             });
             i = next_i;
             continue;
         }
 
-        stmts.push(parse_stmt(trimmed, parse_expr)?);
+        stmts.push(parse_stmt(trimmed, stmt_span, parse_expr)?);
         i += 1;
     }
 
@@ -615,7 +620,7 @@ where
     }
 }
 
-fn parse_stmt<F>(line: &str, parse_expr: F) -> Option<Stmt>
+fn parse_stmt<F>(line: &str, span: Span, parse_expr: F) -> Option<Stmt>
 where
     F: Copy + Fn(&str) -> Option<Expr>,
 {
@@ -625,7 +630,7 @@ where
         return Some(Stmt::MutBinding {
             name: name.to_string(),
             value,
-            span: None,
+            span: Some(span),
         });
     }
     if let Some((name, rhs)) = try_split_assignment(line) {
@@ -633,7 +638,7 @@ where
         return Some(Stmt::Assign {
             name: name.to_string(),
             value,
-            span: None,
+            span: Some(span),
         });
     }
     if let Some((name, rhs)) = try_split_binding(line) {
@@ -641,11 +646,11 @@ where
         return Some(Stmt::Binding {
             name: name.to_string(),
             value,
-            span: None,
+            span: Some(span),
         });
     }
     let expr = parse_expr(line)?;
-    Some(Stmt::Expr(expr, None))
+    Some(Stmt::Expr(expr, Some(span)))
 }
 
 fn expr_from_branch_stmts(stmts: Vec<Stmt>) -> Expr {
