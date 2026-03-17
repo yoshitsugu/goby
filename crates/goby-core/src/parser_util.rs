@@ -257,7 +257,7 @@ pub(crate) fn parse_record_field(field_src: &str) -> Option<RecordField> {
     }
     Some(RecordField {
         name: name.to_string(),
-        ty: ty.to_string(),
+        type_annotation: ty.to_string(),
     })
 }
 

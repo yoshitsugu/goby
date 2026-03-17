@@ -28,7 +28,7 @@ pub(crate) fn validate_type_declarations(
         if !declared_type_names.insert(name.clone()) {
             return Err(TypecheckError {
                 declaration: Some(name.clone()),
-                span: None, // no span available: requires Expr/Stmt span (D1a-iii)
+                span: None, // expr span not yet available
                 message: format!("duplicate type declaration `{}`", name),
             });
         }
@@ -40,7 +40,7 @@ pub(crate) fn validate_type_declarations(
             TypeDeclaration::Alias { name, target } => {
                 let parsed = parse_type_expr(target).ok_or_else(|| TypecheckError {
                     declaration: Some(name.clone()),
-                    span: None, // no span available: requires Expr/Stmt span (D1a-iii)
+                    span: None, // expr span not yet available
                     message: "invalid alias target type".to_string(),
                 })?;
                 validate_type_expr_names(&parsed, &known_type_names, name)?;
@@ -51,7 +51,7 @@ pub(crate) fn validate_type_declarations(
                     if !seen.insert(constructor.clone()) {
                         return Err(TypecheckError {
                             declaration: Some(name.clone()),
-                            span: None, // no span available: requires Expr/Stmt span (D1a-iii)
+                            span: None, // expr span not yet available
                             message: format!(
                                 "duplicate constructor `{}` in type `{}`",
                                 constructor, name
@@ -66,14 +66,14 @@ pub(crate) fn validate_type_declarations(
                     if !seen.insert(field.name.clone()) {
                         return Err(TypecheckError {
                             declaration: Some(name.clone()),
-                            span: None, // no span available: requires Expr/Stmt span (D1a-iii)
+                            span: None, // expr span not yet available
                             message: format!("duplicate field `{}` in type `{}`", field.name, name),
                         });
                     }
-                    let parsed = parse_type_expr(&field.ty).ok_or_else(|| TypecheckError {
+                    let parsed = parse_type_expr(&field.type_annotation).ok_or_else(|| TypecheckError {
                         declaration: Some(name.clone()),
-                        span: None, // no span available: requires Expr/Stmt span (D1a-iii)
-                        message: format!("invalid field type `{}`", field.ty),
+                        span: None, // expr span not yet available
+                        message: format!("invalid field type `{}`", field.type_annotation),
                     })?;
                     validate_type_expr_names(&parsed, &known_type_names, name)?;
                 }
@@ -99,7 +99,7 @@ fn validate_type_expr_names(
             }
             Err(TypecheckError {
                 declaration: Some(declaration.to_string()),
-                span: None, // no span available: requires Expr/Stmt span (D1a-iii)
+                span: None, // expr span not yet available
                 message: format!("unknown type `{}` in type declaration", name),
             })
         }

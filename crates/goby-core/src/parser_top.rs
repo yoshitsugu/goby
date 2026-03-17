@@ -561,15 +561,15 @@ main = 1
                 fields: vec![
                     crate::ast::RecordField {
                         name: "id".to_string(),
-                        ty: "UserID".to_string(),
+                        type_annotation: "UserID".to_string(),
                     },
                     crate::ast::RecordField {
                         name: "name".to_string(),
-                        ty: "String".to_string(),
+                        type_annotation: "String".to_string(),
                     },
                     crate::ast::RecordField {
                         name: "status".to_string(),
-                        ty: "UserStatus".to_string(),
+                        type_annotation: "UserStatus".to_string(),
                     },
                 ],
             }

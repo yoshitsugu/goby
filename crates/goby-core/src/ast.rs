@@ -124,7 +124,8 @@ pub enum TypeDeclaration {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RecordField {
     pub name: String,
-    pub ty: String,
+    /// The field's type as a raw annotation string (e.g. `"Int"`, `"List String"`).
+    pub type_annotation: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

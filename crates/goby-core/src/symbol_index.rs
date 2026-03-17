@@ -69,16 +69,12 @@ pub enum SymbolInfo<'a> {
 // Builder
 // ---------------------------------------------------------------------------
 
-/// Compute the 1-indexed source line of the *definition* line for a declaration.
+/// Return the 1-indexed source line of the `name params = ...` definition line.
 ///
-/// `Declaration.line` points to the type-annotation line when an annotation is present;
-/// the actual `name params = ...` line is one line lower in that case.
-fn decl_def_line(decl: &Declaration) -> usize {
-    if decl.type_annotation.is_some() {
-        decl.line + 1
-    } else {
-        decl.line
-    }
+/// `Declaration.line` points to the type-annotation line when an annotation is
+/// present; the actual definition line is one line below it in that case.
+fn def_line_of(decl: &Declaration) -> usize {
+    if decl.type_annotation.is_some() { decl.line + 1 } else { decl.line }
 }
 
 /// Build a `SymbolIndex` from a parsed (or typechecked) `Module`.
@@ -86,7 +82,7 @@ pub fn build_symbol_index(module: &Module) -> SymbolIndex {
     let mut index = SymbolIndex::default();
 
     for decl in &module.declarations {
-        let def_line = decl_def_line(decl);
+        let def_line = def_line_of(decl);
         index.decls.insert(
             decl.name.clone(),
             DeclSymbol {

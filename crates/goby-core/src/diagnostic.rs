@@ -6,9 +6,6 @@ use crate::typecheck::TypecheckError;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Severity {
     Error,
-    /// Reserved for future lint/hint diagnostics; not currently emitted.
-    #[allow(dead_code)]
-    Warning,
 }
 
 /// A unified diagnostic that can represent both parse errors and typecheck errors.

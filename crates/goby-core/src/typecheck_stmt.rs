@@ -85,11 +85,11 @@ fn check_stmt(
     covered_ops: &HashSet<String>,
 ) -> Result<(), TypecheckError> {
     match stmt {
-        Stmt::Binding { name, value, .. } => {
+        Stmt::Binding { name, value, span } => {
             if local_mutability.contains_key(name) {
                 return Err(TypecheckError {
                     declaration: Some(decl_name.to_string()),
-                    span: None, // no span available: requires Expr/Stmt span (D1a-iii)
+                    span: *span,
                     message: format!(
                         "duplicate declaration `{}` in the same scope; use `:=` for mutation",
                         name
@@ -109,11 +109,11 @@ fn check_stmt(
             local_mutability.insert(name.clone(), false);
             Ok(())
         }
-        Stmt::MutBinding { name, value, .. } => {
+        Stmt::MutBinding { name, value, span } => {
             if local_mutability.contains_key(name) {
                 return Err(TypecheckError {
                     declaration: Some(decl_name.to_string()),
-                    span: None, // no span available: requires Expr/Stmt span (D1a-iii)
+                    span: *span,
                     message: format!(
                         "duplicate declaration `{}` in the same scope; use `:=` for mutation",
                         name
@@ -133,18 +133,18 @@ fn check_stmt(
             local_mutability.insert(name.clone(), true);
             Ok(())
         }
-        Stmt::Assign { name, value, .. } => {
+        Stmt::Assign { name, value, span } => {
             if !local_mutability.contains_key(name) {
                 return Err(TypecheckError {
                     declaration: Some(decl_name.to_string()),
-                    span: None, // no span available: requires Expr/Stmt span (D1a-iii)
+                    span: *span,
                     message: format!("cannot assign to undeclared variable `{}`", name),
                 });
             }
             if !local_mutability.get(name).copied().unwrap_or(false) {
                 return Err(TypecheckError {
                     declaration: Some(decl_name.to_string()),
-                    span: None, // no span available: requires Expr/Stmt span (D1a-iii)
+                    span: *span,
                     message: format!(
                         "cannot assign to immutable variable `{}`; declare it with `mut` first",
                         name
@@ -167,7 +167,7 @@ fn check_stmt(
             {
                 return Err(TypecheckError {
                     declaration: Some(decl_name.to_string()),
-                    span: None, // no span available: requires Expr/Stmt span (D1a-iii)
+                    span: *span,
                     message: format!(
                         "assignment type `{}` does not match variable `{}` type `{}`",
                         ty_name(&assigned_ty),
@@ -226,7 +226,7 @@ fn ensure_known_call_targets_in_expr(
             {
                 return Err(TypecheckError {
                     declaration: Some(decl_name.to_string()),
-                    span: None, // no span available: requires Expr/Stmt span (D1a-iii)
+                    span: None, // expr span not yet available
                     message: format!("unknown function or constructor `{}`", name),
                 });
             }
@@ -243,7 +243,7 @@ fn ensure_known_call_targets_in_expr(
             if matches!(callee.as_str(), "print" | "println") && env.lookup(callee) == Ty::Unknown {
                 return Err(TypecheckError {
                     declaration: Some(decl_name.to_string()),
-                    span: None, // no span available: requires Expr/Stmt span (D1a-iii)
+                    span: None, // expr span not yet available
                     message: format!("unknown function or constructor `{}`", callee),
                 });
             }
@@ -382,7 +382,7 @@ fn check_declared_return_type(
     if inferred != Ty::Unknown && !env.are_compatible(&declared, &inferred) {
         return Err(TypecheckError {
             declaration: Some(decl_name.to_string()),
-            span: None, // no span available: requires Expr/Stmt span (D1a-iii)
+            span: None, // body-relative span; file-relative offset not yet wired up
             message: format!(
                 "body type `{}` does not match declared return type `{}`",
                 ty_name(&inferred),

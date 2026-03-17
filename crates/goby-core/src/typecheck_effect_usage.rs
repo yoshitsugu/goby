@@ -23,7 +23,7 @@ fn resolve_handler_clause_name(
         let Some(ops) = effect_map.effect_to_ops.get(effect) else {
             return Err(TypecheckError {
                 declaration: Some(decl_name.to_string()),
-                span: None, // no span available: requires Expr/Stmt span (D1a-iii)
+                span: None, // expr span not yet available
                 message: format!(
                     "unknown effect operation `{}` in handler expression",
                     clause_name
@@ -36,7 +36,7 @@ fn resolve_handler_clause_name(
         if !ops.contains(&bare) && !ops.contains(&qualified) {
             return Err(TypecheckError {
                 declaration: Some(decl_name.to_string()),
-                span: None, // no span available: requires Expr/Stmt span (D1a-iii)
+                span: None, // expr span not yet available
                 message: format!(
                     "unknown effect operation `{}` in handler expression",
                     clause_name
@@ -50,7 +50,7 @@ fn resolve_handler_clause_name(
     let Some(effects) = effect_map.op_to_effects.get(clause_name) else {
         return Err(TypecheckError {
             declaration: Some(decl_name.to_string()),
-            span: None, // no span available: requires Expr/Stmt span (D1a-iii)
+            span: None, // expr span not yet available
             message: format!(
                 "unknown effect operation `{}` in handler expression",
                 clause_name
@@ -63,7 +63,7 @@ fn resolve_handler_clause_name(
         let first_effect = names[0].clone();
         return Err(TypecheckError {
             declaration: Some(decl_name.to_string()),
-            span: None, // no span available: requires Expr/Stmt span (D1a-iii)
+            span: None, // expr span not yet available
             message: format!(
                 "handler clause '{}' is ambiguous (defined in effects: {}); use qualified form e.g. '{}.{}'",
                 clause_name,
@@ -94,7 +94,7 @@ fn infer_handler_covered_ops_strict(
                 if !seen_ops.insert(bare_name.clone()) {
                     return Err(TypecheckError {
                         declaration: Some(decl_name.to_string()),
-                        span: None, // no span available: requires Expr/Stmt span (D1a-iii)
+                        span: None, // expr span not yet available
                         message: format!(
                             "duplicate handler clause for operation `{}`",
                             bare_name
@@ -110,7 +110,7 @@ fn infer_handler_covered_ops_strict(
             Ty::Handler { covered_ops } => Ok(covered_ops),
             _ => Err(TypecheckError {
                 declaration: Some(decl_name.to_string()),
-                span: None, // no span available: requires Expr/Stmt span (D1a-iii)
+                span: None, // expr span not yet available
                 message: format!(
                     "`with` expects a handler value, but `{}` is not a Handler",
                     name
@@ -119,7 +119,7 @@ fn infer_handler_covered_ops_strict(
         },
         _ => Err(TypecheckError {
             declaration: Some(decl_name.to_string()),
-            span: None, // no span available: requires Expr/Stmt span (D1a-iii)
+            span: None, // expr span not yet available
             message: "`with` expects a handler value".to_string(),
         }),
     }
@@ -143,7 +143,7 @@ fn check_callee_required_effects(
         if !all_covered {
             return Err(TypecheckError {
                 declaration: Some(decl_name.to_string()),
-                span: None, // no span available: requires Expr/Stmt span (D1a-iii)
+                span: None, // expr span not yet available
                 message: format!(
                     "function `{}` requires effect `{}` which is not handled by any enclosing `with` scope",
                     callee_name, effect_name
@@ -176,7 +176,7 @@ pub(crate) fn check_unhandled_effects_in_expr(
             if args.len() > params.len() {
                 return Err(TypecheckError {
                     declaration: Some(decl_name.to_string()),
-                    span: None, // no span available: requires Expr/Stmt span (D1a-iii)
+                    span: None, // expr span not yet available
                     message: format!(
                         "effect operation `{}` expects {} argument(s) but got at least {}",
                         op_name,
@@ -196,7 +196,7 @@ pub(crate) fn check_unhandled_effects_in_expr(
                 if actual == Ty::Unknown && ty_contains_type_var(&expected_after_subst) {
                     return Err(TypecheckError {
                         declaration: Some(decl_name.to_string()),
-                        span: None, // no span available: requires Expr/Stmt span (D1a-iii)
+                        span: None, // expr span not yet available
                         message: format!(
                             "effect operation `{}` argument #{} has unresolved type (expected `{}`; provide a concrete argument or annotate the type)",
                             op_name,
@@ -211,7 +211,7 @@ pub(crate) fn check_unhandled_effects_in_expr(
                     let expected_rendered = apply_type_substitution(expected, &subst, env);
                     return Err(TypecheckError {
                         declaration: Some(decl_name.to_string()),
-                        span: None, // no span available: requires Expr/Stmt span (D1a-iii)
+                        span: None, // expr span not yet available
                         message: format!(
                             "effect operation `{}` expects argument of type `{}` but got `{}`{}",
                             op_name,
@@ -293,7 +293,7 @@ pub(crate) fn check_unhandled_effects_in_expr(
             if env.is_effect_op(name) && !covered_ops.contains(name.as_str()) {
                 return Err(TypecheckError {
                     declaration: Some(decl_name.to_string()),
-                    span: None, // no span available: requires Expr/Stmt span (D1a-iii)
+                    span: None, // expr span not yet available
                     message: format!(
                         "effect operation `{}` is not handled by any enclosing `with` scope",
                         name
@@ -313,7 +313,7 @@ pub(crate) fn check_unhandled_effects_in_expr(
             if env.is_effect_op(&qualified) && !covered_ops.contains(qualified.as_str()) {
                 return Err(TypecheckError {
                     declaration: Some(decl_name.to_string()),
-                    span: None, // no span available: requires Expr/Stmt span (D1a-iii)
+                    span: None, // expr span not yet available
                     message: format!(
                         "effect operation `{}` is not handled by any enclosing `with` scope",
                         qualified
@@ -363,7 +363,7 @@ pub(crate) fn check_unhandled_effects_in_expr(
             if env.is_effect_op(&qualified) && !covered_ops.contains(qualified.as_str()) {
                 return Err(TypecheckError {
                     declaration: Some(decl_name.to_string()),
-                    span: None, // no span available: requires Expr/Stmt span (D1a-iii)
+                    span: None, // expr span not yet available
                     message: format!(
                         "effect operation `{}` is not handled by any enclosing `with` scope",
                         qualified
@@ -387,7 +387,7 @@ pub(crate) fn check_unhandled_effects_in_expr(
             if env.is_effect_op(callee) && !covered_ops.contains(callee.as_str()) {
                 return Err(TypecheckError {
                     declaration: Some(decl_name.to_string()),
-                    span: None, // no span available: requires Expr/Stmt span (D1a-iii)
+                    span: None, // expr span not yet available
                     message: format!(
                         "effect operation `{}` is not handled by any enclosing `with` scope",
                         callee
@@ -484,7 +484,7 @@ pub(crate) fn check_unhandled_effects_in_expr(
             if !matches!(stmts.last(), Some(Stmt::Expr(_, _))) {
                 return Err(TypecheckError {
                     declaration: Some(decl_name.to_string()),
-                    span: None, // no span available: requires Expr/Stmt span (D1a-iii)
+                    span: None, // expr span not yet available
                     message: "block expression must end with an expression".to_string(),
                 });
             }
