@@ -4,6 +4,13 @@ Last updated: 2026-03-17
 
 ## Recently Completed
 
+- Track D1a-iii — Stmt/Expr identifier node spans: **completed** (2026-03-17)
+  - `Expr::Var` → named-field variant `{ name, span: Option<Span> }`
+  - `Expr::Qualified` and `Expr::Call` also gained `span: Option<Span>`
+  - `Stmt::Binding/MutBinding/Assign` gained `span: Option<Span>`; `Stmt::Expr` extended to `Stmt::Expr(Expr, Option<Span>)`
+  - `parse_stmts_from_lines` populates Stmt spans with body-relative `Span::point(i+1, indent+1)`
+  - Expr::Var/Qualified/Call span population deferred (parse_expr works on trimmed strings with no position context)
+  - 6 new Stmt span unit tests; 429 goby-core tests, 778 workspace tests pass
 - Track D3a — Symbol index + hover/go-to-definition: **completed** (2026-03-17)
   - `SymbolIndex` / `build_symbol_index()` in `goby-core/src/symbol_index.rs`
   - top-level declarations → (def-line Span, type_annotation); effect members → (Span, signature)
@@ -35,9 +42,9 @@ Last updated: 2026-03-17
 
 ## Current Focus
 
-- Next: Track D3b — Local binding hover and stdlib definition
-  - Depends on D1a-iii (Expr/Stmt identifier spans) which is currently deferred
-  - Alternative next: Track D4 — `goby fmt` (AST pretty-printer)
+- Track D1 fully completed (D1a-i through D1a-iii, D1b, D1c, D1d)
+- Next: Track D3b — Local binding hover (depends on Expr::Var span population)
+  or Track D4 — `goby fmt` (AST pretty-printer)
 
 ## Locked Decisions Carried Forward
 
@@ -85,7 +92,7 @@ Execution order (matches PLAN.md dependency chain):
 
 1. ~~D1a-i: Span extension and position helpers~~ **(completed)**
 2. ~~D1a-ii: Declaration-level AST node spans~~ **(completed)**
-3. D1a-iii: Stmt/Expr identifier node spans. **(deferred — requires exhaustive match audit)**
+3. ~~D1a-iii: Stmt/Expr identifier node spans~~ **(completed — Stmt spans populated; Expr::Var/Call/Qualified span field added, population deferred)**
 4. ~~D1b: Unified `Diagnostic` type~~ **(completed)**
 5. ~~D1c: TypecheckError span population~~ **(completed — annotation + effect decl sites)**
 6. ~~D1d: Ruby/Elm-style range-underline error display~~ **(completed)**
