@@ -4,6 +4,13 @@ Last updated: 2026-03-17
 
 ## Recently Completed
 
+- Track D3a — Symbol index + hover/go-to-definition: **completed** (2026-03-17)
+  - `SymbolIndex` / `build_symbol_index()` in `goby-core/src/symbol_index.rs`
+  - top-level declarations → (def-line Span, type_annotation); effect members → (Span, signature)
+  - `textDocument/hover`: returns `name : annotation` (PlainText) for top-level names; null otherwise
+  - `textDocument/definition`: returns `Location` for declaration span; null for unknowns/stdlib
+  - `word_at_position()`: UTF-16-aware identifier extraction at cursor
+  - 423 goby-core tests, 31 goby-lsp tests (2 end-to-end)
 - Track D2b — multi-error collection: **completed** (2026-03-17)
   - `typecheck_module_collect` / `typecheck_module_collect_with_context`: new parallel entrypoints that return `Vec<TypecheckError>` instead of stopping at first error
   - `check_declaration_bodies_collect()`: per-declaration error recovery; module-level errors remain fail-fast
@@ -28,7 +35,9 @@ Last updated: 2026-03-17
 
 ## Current Focus
 
-- Next: Track D3a/D3b — Symbol index, hover, go-to-definition
+- Next: Track D3b — Local binding hover and stdlib definition
+  - Depends on D1a-iii (Expr/Stmt identifier spans) which is currently deferred
+  - Alternative next: Track D4 — `goby fmt` (AST pretty-printer)
 
 ## Locked Decisions Carried Forward
 
@@ -82,6 +91,7 @@ Execution order (matches PLAN.md dependency chain):
 6. ~~D1d: Ruby/Elm-style range-underline error display~~ **(completed)**
 7. ~~D2a: `goby-lsp` crate — diagnostics only~~ **(completed)**
 8. ~~D2b: Multi-error collection (`typecheck_module` → `Vec<Diagnostic>`)~~ **(completed)**
-9. D3a/D3b: Symbol index, hover, go-to-definition.
+9. ~~D3a: Symbol index, top-level hover/go-to-definition~~ **(completed)**
+9b. D3b: Local binding hover and stdlib definition. **(deferred — needs D1a-iii Expr/Stmt spans)**
 10. D4: `goby fmt` (AST pretty-printer).
 11. D5: `goby lint` (static checks).
