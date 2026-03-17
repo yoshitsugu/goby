@@ -56,7 +56,7 @@ Last updated: 2026-03-17
   - `goby fmt <file>` (in-place rewrite) and `goby fmt --check <file>` (exit 1 if not formatted)
   - 17 idempotency tests over examples/; 3 CLI integration tests
   - 475 goby-core tests, 22 goby-cli tests pass
-- Next: Track D5 — `goby lint`
+- Next: Track D5 — `goby lint`, then Track D6 — Editor extensions (VS Code + Neovim)
 
 ## Locked Decisions Carried Forward
 
@@ -114,3 +114,6 @@ Execution order (matches PLAN.md dependency chain):
 9b. ~~D3b: Local binding hover and stdlib definition~~ **(completed — definition-line hover only; use-site and stdlib jump deferred)**
 10. D4: `goby fmt` (AST pretty-printer).
 11. D5: `goby lint` (static checks).
+12. D6a: VS Code extension (syntax highlighting, LSP client, fmt-on-save).
+13. D6b: Neovim plugin (LSP client, fmt-on-save, optional Tree-sitter grammar).
+14. D6c: Shared grammar asset (single source of truth for language definition).

@@ -761,6 +761,100 @@ Done when:
 - `goby lint examples/function.gb` exits 0 on all existing clean sources.
 - JSON output is parseable; schema documented.
 
+#### Phase D6: Editor extensions — VS Code and Neovim
+
+Goal: make `goby-lsp` and `goby fmt` usable out-of-the-box in mainstream editors
+without manual LSP configuration.  Ship a VS Code extension and a Neovim plugin,
+both auto-discovering the `goby-lsp` binary from `PATH` or a workspace-local build.
+
+Dependencies: D2a (goby-lsp binary functional), D4 (goby fmt functional).
+D5 (goby lint) is optional; lint diagnostics flow through the LSP diagnostic channel
+automatically once D5 is done.
+
+##### D6a: VS Code extension (`editors/vscode/`)
+
+Scope:
+
+- New directory `editors/vscode/` with a standard VS Code extension project:
+  - `package.json`: publisher, display name (`Goby Language Support`), activationEvents
+    (`onLanguage:goby`), contributes `languages` (id `goby`, extensions `[".gb"]`),
+    contributes `commands` (`goby.formatDocument`), configurationDefaults.
+  - `src/extension.ts`: entry point using `vscode-languageclient/node`
+    (`LanguageClient` with `serverOptions` → `goby-lsp`).
+  - `language-configuration.json`: comment toggle (`# ...`), bracket pairs, indentation rules.
+  - `syntaxes/goby.tmLanguage.json`: minimal TextMate grammar for syntax highlighting
+    (keywords: `effect`, `handler`, `with`, `can`, `mut`, `case`, `if`, `else`, `import`;
+    literals; identifiers; string interpolation `"${...}"`; line comments `#`).
+- Server resolution order:
+  1. `goby.serverPath` VS Code setting (user-specified absolute path).
+  2. `PATH` lookup of `goby-lsp`.
+  3. Workspace-local `./target/debug/goby-lsp` / `./target/release/goby-lsp`.
+  - If not found: show an informational message with a link to build instructions.
+- Format-on-save: invoke `goby fmt --check`; if it fails, run `goby fmt` and apply
+  the result as a workspace edit (or use LSP `textDocument/formatting` once added).
+- `goby.formatOnSave` setting (boolean, default `true`).
+- VSIX packaging: `npm run package` produces `goby-language-support-<version>.vsix`
+  installable with `code --install-extension`.
+- README in `editors/vscode/` with install + usage instructions.
+
+Done when:
+
+- Opening a `.gb` file in VS Code activates the extension.
+- Diagnostics from `goby-lsp` appear as editor squiggles.
+- Hover shows type annotation for top-level and local binding names.
+- Go-to-definition jumps to the declaration.
+- Save triggers `goby fmt` (when `goby.formatOnSave` is true).
+- `npm run package` succeeds and produces a `.vsix`.
+
+##### D6b: Neovim plugin (`editors/nvim/`)
+
+Scope:
+
+- New directory `editors/nvim/` as a self-contained Lua plugin (compatible with
+  `lazy.nvim`, `packer.nvim`, and manual `runtimepath` installation):
+  - `lua/goby/init.lua`: public API — `require("goby").setup(opts)`.
+  - `lua/goby/lsp.lua`: registers `goby-lsp` as an `nvim-lspconfig`-compatible LSP
+    server entry and calls `lspconfig.goby_lsp.setup(opts)`.
+  - `lua/goby/format.lua`: `goby.format()` command — shell-calls `goby fmt` on the
+    current buffer's file; reloads the buffer if changed.
+  - `ftdetect/goby.vim`: sets `filetype=goby` for `*.gb` files.
+  - `ftplugin/goby.vim`: sets `commentstring=# %s`, `expandtab`, `shiftwidth=2`.
+  - `syntax/goby.vim`: Vim syntax file for environments without Tree-sitter.
+- Server resolution: same order as D6a (`opts.server_path` → PATH → workspace local).
+- Auto-format-on-save: `autocmd BufWritePost *.gb` when `opts.format_on_save = true`
+  (default true).
+- `opts` table: `{ server_path, format_on_save, on_attach, capabilities }`.
+- Tree-sitter grammar (optional, separate sub-directory `editors/nvim/tree-sitter-goby/`):
+  - `grammar.js` covering top-level declarations, effect/handler blocks, expressions,
+    statements, and string interpolation.
+  - Queries: `highlights.scm`, `indents.scm`.
+  - This sub-step is optional for D6b completion; it becomes D6b-ts if deferred.
+- README in `editors/nvim/` with `lazy.nvim` snippet, manual install instructions,
+  and key-mapping examples.
+
+Done when:
+
+- `:lua require("goby").setup()` in Neovim starts `goby-lsp` for `*.gb` files.
+- Diagnostics, hover, and go-to-definition work via the Neovim LSP client.
+- `:GobyFormat` (or save) invokes `goby fmt`.
+- Plugin is installable via `lazy.nvim` with a one-liner spec.
+
+##### D6c: Shared grammar asset (`editors/shared/`)
+
+Scope:
+
+- Extract the language definition (keywords, operators, string interpolation pattern)
+  into a canonical `editors/shared/goby-language.json` used by both the VS Code grammar
+  and the Neovim syntax file to avoid duplication.
+- This is a refactor step after D6a and D6b are both working; it ensures future
+  keyword additions only need to be made in one place.
+
+Done when:
+
+- VS Code `.tmLanguage.json` and Neovim `syntax/goby.vim` are generated from or
+  directly reference `editors/shared/goby-language.json`.
+- Adding a new keyword to the shared file propagates correctly to both editors.
+
 #### Milestones summary
 
 - M1a-i (D1a-i done): `Span` carries end position; position helpers tested.
@@ -775,6 +869,9 @@ Done when:
 - M3b (D3b done): hover/definition for local bindings and stdlib imports.
 - M4 (D4 done): `goby fmt` is idempotent on all existing sources; comment policy explicit.
 - M5 (D5 done): four lint rules shipped; JSON output stable.
+- M6a (D6a done): VS Code extension installable; diagnostics, hover, fmt-on-save working.
+- M6b (D6b done): Neovim plugin installable via lazy.nvim; LSP + fmt-on-save working.
+- M6c (D6c done): shared grammar asset; keyword additions propagate to both editors.
 
 ### 4.4 Review Follow-ups (Backlog)
 
