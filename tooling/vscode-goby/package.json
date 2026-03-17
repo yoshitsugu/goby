@@ -1,7 +1,7 @@
 {
   "name": "vscode-goby",
   "displayName": "Goby Language Support",
-  "description": "Syntax highlighting for the Goby programming language (.gb files).",
+  "description": "Syntax highlighting, LSP diagnostics/hover/go-to-definition, and fmt-on-save for the Goby programming language (.gb files).",
   "version": "0.1.0",
   "publisher": "goby-lang",
   "engines": {
@@ -11,6 +11,22 @@
   "repository": {
     "type": "git",
     "url": "https://gitlab.com/yoshitsugu/goby"
+  },
+  "main": "./out/extension.js",
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.75.0",
+    "@vscode/vsce": "^3.0.0",
+    "esbuild": "^0.25.0",
+    "typescript": "^5.0.0"
+  },
+  "scripts": {
+    "compile": "esbuild src/extension.ts --bundle --outfile=out/extension.js --external:vscode --format=cjs --platform=node",
+    "watch": "npm run compile -- --watch",
+    "package": "npm run compile && vsce package --no-dependencies"
   },
   "contributes": {
     "languages": [
@@ -27,6 +43,37 @@
         "scopeName": "source.goby",
         "path": "./syntaxes/goby.tmLanguage.json"
       }
-    ]
+    ],
+    "commands": [
+      {
+        "command": "goby.restartServer",
+        "title": "Goby: Restart Language Server"
+      }
+    ],
+    "configuration": {
+      "title": "Goby",
+      "properties": {
+        "goby.serverPath": {
+          "type": "string",
+          "default": "",
+          "description": "Absolute path to the goby-lsp binary. Leave empty to use PATH or workspace-local target/."
+        },
+        "goby.executablePath": {
+          "type": "string",
+          "default": "",
+          "description": "Absolute path to the goby binary (used for fmt-on-save). Leave empty to use PATH or workspace-local target/."
+        },
+        "goby.stdlibRoot": {
+          "type": "string",
+          "default": "",
+          "description": "Path to the Goby stdlib root directory (sets GOBY_STDLIB_ROOT). Leave empty to inherit from environment."
+        },
+        "goby.formatOnSave": {
+          "type": "boolean",
+          "default": true,
+          "description": "Run goby fmt on .gb files when saving."
+        }
+      }
+    }
   }
 }
