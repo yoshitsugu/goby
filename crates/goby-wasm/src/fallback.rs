@@ -186,7 +186,7 @@ fn unsupported_value_expr_reason(
     stack: &mut HashSet<String>,
 ) -> Option<UnsupportedReason> {
     match expr {
-        Expr::StringLit(_) | Expr::IntLit(_) | Expr::BoolLit(_) | Expr::Var(_) => None,
+        Expr::StringLit(_) | Expr::IntLit(_) | Expr::BoolLit(_) | Expr::Var { name: _, .. } => None,
         Expr::ListLit { elements, spread } => {
             if spread.is_some() {
                 return Some(UnsupportedReason::UnsupportedListItemExpr);
@@ -263,7 +263,7 @@ fn unsupported_value_expr_reason(
             let Some((name, args)) = flatten_named_call(expr) else {
                 // Allow callable-value application (`f 1`, where `f` is a local/lambda)
                 // when both callee and argument expressions are in the native value subset.
-                if let Expr::Call { callee, arg } = expr
+                if let Expr::Call { callee, arg, .. } = expr
                     && is_phase2_supported_value_expr(callee, module, stack)
                     && is_phase2_supported_value_expr(arg, module, stack)
                 {
@@ -336,7 +336,7 @@ fn is_decl_stmt_supported(stmt: &Stmt, module: &Module, stack: &mut HashSet<Stri
         Stmt::Binding { value, .. } => is_decl_value_expr_supported(value, module, stack),
         Stmt::MutBinding { .. } | Stmt::Assign { .. } => false,
         Stmt::Expr(expr) => match expr {
-            Expr::Call { callee, arg } if matches!(callee.as_ref(), Expr::Var(n) if n == BUILTIN_PRINT) => {
+            Expr::Call { callee, arg, .. } if matches!(callee.as_ref(), Expr::Var { name: n, .. } if n == BUILTIN_PRINT) => {
                 is_decl_value_expr_supported(arg, module, stack)
             }
             _ => is_decl_value_expr_supported(expr, module, stack),
@@ -346,7 +346,7 @@ fn is_decl_stmt_supported(stmt: &Stmt, module: &Module, stack: &mut HashSet<Stri
 
 fn is_decl_value_expr_supported(expr: &Expr, module: &Module, stack: &mut HashSet<String>) -> bool {
     match expr {
-        Expr::StringLit(_) | Expr::IntLit(_) | Expr::BoolLit(_) | Expr::Var(_) => true,
+        Expr::StringLit(_) | Expr::IntLit(_) | Expr::BoolLit(_) | Expr::Var { name: _, .. } => true,
         Expr::ListLit { elements, spread } => {
             spread.is_none() && elements.iter().all(is_supported_list_item_expr)
         }
@@ -383,8 +383,8 @@ fn is_decl_value_expr_supported(expr: &Expr, module: &Module, stack: &mut HashSe
                     Stmt::Expr(expr) => is_decl_value_expr_supported(expr, module, stack),
                 })
         }
-        Expr::Call { callee, arg } => {
-            if matches!(callee.as_ref(), Expr::Var(name) if name == BUILTIN_PRINT) {
+        Expr::Call { callee, arg, .. } => {
+            if matches!(callee.as_ref(), Expr::Var { name, .. } if name == BUILTIN_PRINT) {
                 return false;
             }
             if let Some((name, args)) = flatten_named_call(expr)

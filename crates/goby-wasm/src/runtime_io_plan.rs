@@ -231,10 +231,10 @@ fn plan_static_output(stmts: &[Stmt]) -> Option<String> {
     }
     let mut output = String::new();
     for stmt in stmts {
-        let Stmt::Expr(Expr::Call { callee, arg }) = stmt else {
+        let Stmt::Expr(Expr::Call { callee, arg, .. }) = stmt else {
             return None;
         };
-        let Expr::Var(name) = callee.as_ref() else {
+        let Expr::Var { name, .. } = callee.as_ref() else {
             return None;
         };
         let Expr::StringLit(text) = arg.as_ref() else {
@@ -302,7 +302,7 @@ fn plan_echo_runtime_io(stmts: &[Stmt]) -> Option<RuntimeIoPlan> {
         [
             read_stmt,
             middle @ ..,
-            Stmt::Expr(Expr::Call { callee, arg }),
+            Stmt::Expr(Expr::Call { callee, arg, .. }),
         ] => {
             let (source_name, input_mode) = read_binding_mode(read_stmt)?;
             let printed_name = resolve_alias_chain_terminal_name(middle, source_name)?;
@@ -320,7 +320,7 @@ fn plan_bound_echo_shape(
     scope_stmts: &[Stmt],
     suffix_prints: Vec<StaticPrintSuffix>,
 ) -> Option<RuntimeIoPlan> {
-    if !matches!(arg, Expr::Var(var_name) if var_name == printed_name) {
+    if !matches!(arg, Expr::Var { name: var_name, .. } if var_name == printed_name) {
         return None;
     }
     match callee_output_mode(callee, scope_stmts)? {
@@ -339,7 +339,7 @@ fn plan_bound_echo_shape(
 }
 
 fn callee_output_mode<'a>(callee: &'a Expr, scope_stmts: &'a [Stmt]) -> Option<&'a str> {
-    let Expr::Var(output_name) = callee else {
+    let Expr::Var { name: output_name, .. } = callee else {
         return None;
     };
     let resolved_name =
@@ -358,7 +358,7 @@ fn stmt_contains_runtime_read(stmt: &Stmt) -> bool {
 
 fn expr_contains_runtime_read(expr: &Expr) -> bool {
     match expr {
-        Expr::Call { callee, arg } => {
+        Expr::Call { callee, arg, .. } => {
             is_read_all_expr(expr)
                 || is_read_line_expr(expr)
                 || expr_contains_runtime_read(callee)
@@ -409,7 +409,7 @@ fn expr_contains_runtime_read(expr: &Expr) -> bool {
         Expr::IntLit(_)
         | Expr::BoolLit(_)
         | Expr::StringLit(_)
-        | Expr::Var(_)
+        | Expr::Var { name: _, .. }
         | Expr::Qualified { .. } => false,
         Expr::ListIndex { list, index } => {
             expr_contains_runtime_read(list) || expr_contains_runtime_read(index)
@@ -419,9 +419,9 @@ fn expr_contains_runtime_read(expr: &Expr) -> bool {
 
 fn is_read_all_expr(expr: &Expr) -> bool {
     match expr {
-        Expr::Call { callee, arg } if arg.is_unit_value() => match callee.as_ref() {
-            Expr::Var(name) => name == "read",
-            Expr::Qualified { receiver, member } => receiver == "Read" && member == "read",
+        Expr::Call { callee, arg, .. } if arg.is_unit_value() => match callee.as_ref() {
+            Expr::Var { name, .. } => name == "read",
+            Expr::Qualified { receiver, member, .. } => receiver == "Read" && member == "read",
             _ => false,
         },
         _ => false,
@@ -430,9 +430,9 @@ fn is_read_all_expr(expr: &Expr) -> bool {
 
 fn is_read_line_expr(expr: &Expr) -> bool {
     match expr {
-        Expr::Call { callee, arg } if arg.is_unit_value() => match callee.as_ref() {
-            Expr::Var(name) => name == "read_line",
-            Expr::Qualified { receiver, member } => receiver == "Read" && member == "read_line",
+        Expr::Call { callee, arg, .. } if arg.is_unit_value() => match callee.as_ref() {
+            Expr::Var { name, .. } => name == "read_line",
+            Expr::Qualified { receiver, member, .. } => receiver == "Read" && member == "read_line",
             _ => false,
         },
         _ => false,
@@ -440,10 +440,10 @@ fn is_read_line_expr(expr: &Expr) -> bool {
 }
 
 fn output_read_mode(expr: &Expr) -> Option<(InputReadMode, OutputReadMode)> {
-    let Expr::Call { callee, arg } = expr else {
+    let Expr::Call { callee, arg, .. } = expr else {
         return None;
     };
-    let Expr::Var(name) = callee.as_ref() else {
+    let Expr::Var { name, .. } = callee.as_ref() else {
         return None;
     };
     let input_mode = if is_read_all_expr(arg) {
@@ -510,7 +510,7 @@ fn read_binding_mode(stmt: &Stmt) -> Option<(&str, InputReadMode)> {
 
 fn alias_binding_name<'a>(stmt: &'a Stmt, source_name: &str) -> Option<&'a str> {
     let (alias_name, alias_value) = stmt_binding_parts(stmt)?;
-    if matches!(alias_value, Expr::Var(var_name) if var_name == source_name) {
+    if matches!(alias_value, Expr::Var { name: var_name, .. } if var_name == source_name) {
         Some(alias_name)
     } else {
         None
@@ -544,7 +544,7 @@ fn resolve_alias_chain_source_name<'a>(stmts: &'a [Stmt], target_name: &'a str) 
                     continue;
                 };
                 if alias_name == current_name
-                    && let Expr::Var(source_name) = alias_value
+                    && let Expr::Var { name: source_name, .. } = alias_value
                 {
                     current_name = source_name;
                 }
@@ -592,14 +592,14 @@ fn split_lines_binding_name<'a>(
 
 fn expr_resolves_to_name(expr: &Expr, stmts: &[Stmt], expected_name: &str) -> bool {
     match expr {
-        Expr::Var(name) => resolve_alias_chain_source_name(stmts, name) == Some(expected_name),
+        Expr::Var { name, .. } => resolve_alias_chain_source_name(stmts, name) == Some(expected_name),
         _ => false,
     }
 }
 
 fn expr_is_newline_delimiter(expr: &Expr, stmts: &[Stmt]) -> bool {
     matches!(expr, Expr::StringLit(delim) if delim == "\n")
-        || matches!(expr, Expr::Var(name) if name_resolves_to_newline_literal(stmts, name))
+        || matches!(expr, Expr::Var { name, .. } if name_resolves_to_newline_literal(stmts, name))
 }
 
 /// Returns `(output_mode, transform)` for the `each` callback:
@@ -614,22 +614,22 @@ fn split_lines_each_callback_plan(
     let (each_head, each_args) = flatten_direct_call(each_expr)?;
     if !imported_head_matches_symbol(module, &each_head, "goby/list", "each")
         || each_args.len() != 2
-        || !matches!(each_args[0], Expr::Var(name) if name == lines_name)
+        || !matches!(each_args[0], Expr::Var { name, .. } if name == lines_name)
     {
         return None;
     }
 
     match each_args[1] {
-        Expr::Var(name) => {
+        Expr::Var { name, .. } => {
             let mode = callback_output_mode_name(
                 resolve_alias_chain_source_name(callback_scope_stmts, name)?,
             )?;
             Some((mode, None))
         }
         Expr::Lambda { param, body } => match body.as_ref() {
-            Expr::Call { callee, arg } => {
+            Expr::Call { callee, arg, .. } => {
                 let mode = match callee.as_ref() {
-                    Expr::Var(name) => callback_output_mode_name(
+                    Expr::Var { name, .. } => callback_output_mode_name(
                         resolve_alias_chain_source_name(callback_scope_stmts, name)?,
                     )?,
                     _ => return None,
@@ -671,7 +671,7 @@ fn extract_transform(arg: &Expr, param: &str) -> Option<(String, String)> {
                 }
             }
             InterpolatedPart::Expr(e)
-                if !saw_param && matches!(e.as_ref(), Expr::Var(n) if n == param) =>
+                if !saw_param && matches!(e.as_ref(), Expr::Var { name: n, .. } if n == param) =>
             {
                 saw_param = true;
             }
@@ -690,7 +690,7 @@ fn extract_transform(arg: &Expr, param: &str) -> Option<(String, String)> {
 }
 
 fn callback_arg_matches_line_passthrough(arg: &Expr, param: &str) -> bool {
-    matches!(arg, Expr::Var(name) if name == param)
+    matches!(arg, Expr::Var { name, .. } if name == param)
         || matches_passthrough_interpolated_string(arg, param)
 }
 
@@ -703,7 +703,7 @@ fn matches_passthrough_interpolated_string(arg: &Expr, param: &str) -> bool {
         match part {
             InterpolatedPart::Text(text) if text.is_empty() => {}
             InterpolatedPart::Expr(expr)
-                if !saw_param_expr && matches!(expr.as_ref(), Expr::Var(name) if name == param) =>
+                if !saw_param_expr && matches!(expr.as_ref(), Expr::Var { name, .. } if name == param) =>
             {
                 saw_param_expr = true;
             }
@@ -722,10 +722,10 @@ fn callback_output_mode_name(name: &str) -> Option<OutputReadMode> {
 }
 
 fn static_print_suffix(stmt: &Stmt) -> Option<StaticPrintSuffix> {
-    let Stmt::Expr(Expr::Call { callee, arg }) = stmt else {
+    let Stmt::Expr(Expr::Call { callee, arg, .. }) = stmt else {
         return None;
     };
-    let Expr::Var(name) = callee.as_ref() else {
+    let Expr::Var { name, .. } = callee.as_ref() else {
         return None;
     };
     let output_mode = callback_output_mode_name(name)?;

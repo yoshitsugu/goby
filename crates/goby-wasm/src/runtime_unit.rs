@@ -85,8 +85,8 @@ impl<'m> RuntimeOutputResolver<'m> {
             return Out::Done(());
         }
 
-        if let Expr::Call { callee, arg } = expr
-            && let Expr::Qualified { receiver, member } = callee.as_ref()
+        if let Expr::Call { callee, arg, .. } = expr
+            && let Expr::Qualified { receiver, member, .. } = callee.as_ref()
         {
             let arg_val = match self.eval_expr(arg, locals, callables, evaluators, depth + 1) {
                 Out::Done(v) => v,
@@ -104,8 +104,8 @@ impl<'m> RuntimeOutputResolver<'m> {
             }
         }
 
-        if let Expr::Call { callee, arg } = expr
-            && let Expr::Var(fn_name) = callee.as_ref()
+        if let Expr::Call { callee, arg, .. } = expr
+            && let Expr::Var { name: fn_name, .. } = callee.as_ref()
         {
             if let Expr::Lambda { param, body } = arg.as_ref() {
                 let callable = IntCallable::AstLambda(Box::new(AstLambdaCallable {
@@ -126,7 +126,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                     return Out::Done(());
                 }
             }
-            if let Expr::Var(arg_name) = arg.as_ref()
+            if let Expr::Var { name: arg_name, .. } = arg.as_ref()
                 && self.declaration_expects_callable_param(fn_name)
                 && self
                     .execute_decl_with_callable_as_side_effect(
@@ -140,7 +140,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                 return Out::Done(());
             }
             if self.declaration_expects_callable_param(fn_name)
-                && !matches!(arg.as_ref(), Expr::Lambda { .. } | Expr::Var(_))
+                && !matches!(arg.as_ref(), Expr::Lambda { .. } | Expr::Var { name: _, .. })
             {
                 self.set_runtime_error_once(ERR_CALLABLE_DISPATCH_DECL_PARAM);
                 return Out::Err(RuntimeError::Unsupported);
@@ -259,7 +259,7 @@ impl<'m> RuntimeOutputResolver<'m> {
             return self.execute_unit_call_out(&repr, locals, callables, evaluators);
         }
 
-        if let Expr::Var(_) | Expr::IntLit(_) | Expr::StringLit(_) | Expr::BoolLit(_) = expr {
+        if let Expr::Var { name: _, .. } | Expr::IntLit(_) | Expr::StringLit(_) | Expr::BoolLit(_) = expr {
             return Out::Done(());
         }
 

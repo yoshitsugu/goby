@@ -535,7 +535,7 @@ impl<'m> RuntimeOutputResolver<'m> {
             Expr::InterpolatedString(_) => {
                 self.eval_expr_to_option(expr, locals, callables, evaluators, depth)
             }
-            Expr::Var(name) => locals
+            Expr::Var { name, .. } => locals
                 .get(name)
                 .or_else(|| self.eval_zero_arity_decl_value(name, evaluators, depth + 1)),
             Expr::Handler { clauses } => Some(RuntimeValue::Handler(
@@ -553,8 +553,8 @@ impl<'m> RuntimeOutputResolver<'m> {
             Expr::TupleLit(_) => {
                 self.eval_expr_to_option(expr, locals, callables, evaluators, depth)
             }
-            Expr::Call { callee, arg: _ } => {
-                if let Expr::Var(ctor_name) = callee.as_ref()
+            Expr::Call { callee, arg: _, .. } => {
+                if let Expr::Var { name: ctor_name, .. } = callee.as_ref()
                     && self.single_field_constructor_field(ctor_name).is_some()
                 {
                     return self.eval_expr_to_option(expr, locals, callables, evaluators, depth);
@@ -566,7 +566,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                     return self.eval_expr_to_option(expr, locals, callables, evaluators, depth);
                 }
 
-                if let Expr::Var(_) = callee.as_ref() {
+                if let Expr::Var { name: _, .. } = callee.as_ref() {
                     return self.eval_expr_to_option(expr, locals, callables, evaluators, depth);
                 }
                 if let Expr::Qualified { .. } = callee.as_ref() {
@@ -580,7 +580,7 @@ impl<'m> RuntimeOutputResolver<'m> {
             Expr::RecordConstruct { .. } => {
                 self.eval_expr_to_option(expr, locals, callables, evaluators, depth)
             }
-            Expr::Qualified { receiver, member } => match locals.get(receiver) {
+            Expr::Qualified { receiver, member, .. } => match locals.get(receiver) {
                 Some(RuntimeValue::Record { fields, .. }) => fields.get(member).cloned(),
                 Some(RuntimeValue::Tuple(items)) => {
                     let index = member.parse::<usize>().ok()?;

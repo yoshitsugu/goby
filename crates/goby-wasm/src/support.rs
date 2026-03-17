@@ -11,7 +11,7 @@ pub(crate) fn is_supported_case_pattern(pattern: &CasePattern) -> bool {
 }
 
 pub(crate) fn is_supported_list_item_expr(expr: &Expr) -> bool {
-    matches!(expr, Expr::IntLit(_) | Expr::Var(_))
+    matches!(expr, Expr::IntLit(_) | Expr::Var { name: _, .. })
 }
 
 pub(crate) fn is_supported_binop_kind(op: &BinOpKind) -> bool {
@@ -37,7 +37,7 @@ mod tests {
     #[test]
     fn supports_current_native_list_item_expressions() {
         assert!(is_supported_list_item_expr(&Expr::IntLit(1)));
-        assert!(is_supported_list_item_expr(&Expr::Var("x".to_string())));
+        assert!(is_supported_list_item_expr(&Expr::Var { name: "x".to_string(), span: None }));
         assert!(!is_supported_list_item_expr(&Expr::BoolLit(true)));
     }
 

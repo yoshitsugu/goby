@@ -10,15 +10,15 @@ pub(crate) fn flatten_direct_call(expr: &Expr) -> Option<(DirectCallHead, Vec<&E
     let mut cur = expr;
     loop {
         match cur {
-            Expr::Call { callee, arg } => {
+            Expr::Call { callee, arg, .. } => {
                 args.push(arg.as_ref());
                 cur = callee.as_ref();
             }
-            Expr::Var(name) => {
+            Expr::Var { name, .. } => {
                 args.reverse();
                 return Some((DirectCallHead::Bare(name.clone()), args));
             }
-            Expr::Qualified { receiver, member } => {
+            Expr::Qualified { receiver, member, .. } => {
                 args.reverse();
                 return Some((
                     DirectCallHead::Qualified {

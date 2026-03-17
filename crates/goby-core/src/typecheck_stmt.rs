@@ -219,8 +219,8 @@ fn ensure_known_call_targets_in_expr(
     decl_name: &str,
 ) -> Result<(), TypecheckError> {
     match expr {
-        Expr::Call { callee, arg } => {
-            if let Expr::Var(name) = callee.as_ref()
+        Expr::Call { callee, arg, .. } => {
+            if let Expr::Var { name, .. } = callee.as_ref()
                 && matches!(name.as_str(), "print" | "println")
                 && env.lookup(name) == Ty::Unknown
             {
@@ -347,7 +347,7 @@ fn ensure_known_call_targets_in_expr(
         Expr::IntLit(_)
         | Expr::BoolLit(_)
         | Expr::StringLit(_)
-        | Expr::Var(_)
+        | Expr::Var { name: _, .. }
         | Expr::Qualified { .. } => Ok(()),
         Expr::ListIndex { list, index } => {
             ensure_known_call_targets_in_expr(list, env, decl_name)?;

@@ -38,8 +38,8 @@ pub(crate) fn ensure_no_ambiguous_refs_in_expr(
             }
             Ok(())
         }
-        Expr::Var(name) => ensure_name_not_ambiguous(name, env, decl_name),
-        Expr::Qualified { receiver, member } => {
+        Expr::Var { name, .. } => ensure_name_not_ambiguous(name, env, decl_name),
+        Expr::Qualified { receiver, member, .. } => {
             if let Some(index) = parse_tuple_member_index(member) {
                 let receiver_ty = env.lookup(receiver);
                 let resolved_receiver_ty = env.resolve_alias(&receiver_ty, 0);
@@ -167,7 +167,7 @@ pub(crate) fn ensure_no_ambiguous_refs_in_expr(
             ensure_no_ambiguous_refs_in_expr(left, env, decl_name)?;
             ensure_no_ambiguous_refs_in_expr(right, env, decl_name)
         }
-        Expr::Call { callee, arg } => {
+        Expr::Call { callee, arg, .. } => {
             ensure_no_ambiguous_refs_in_expr(callee, env, decl_name)?;
             ensure_no_ambiguous_refs_in_expr(arg, env, decl_name)
         }

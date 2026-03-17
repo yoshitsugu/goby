@@ -576,7 +576,7 @@ fn first_disallowed_intrinsic_in_expr(
     };
 
     match expr {
-        Expr::Var(name) => classify(name),
+        Expr::Var { name, .. } => classify(name),
         Expr::IntLit(_) | Expr::BoolLit(_) | Expr::StringLit(_) | Expr::Qualified { .. } => None,
         Expr::InterpolatedString(parts) => parts.iter().find_map(|part| match part {
             InterpolatedPart::Text(_) => None,
@@ -602,7 +602,7 @@ fn first_disallowed_intrinsic_in_expr(
             first_disallowed_intrinsic_in_expr(left, is_stdlib_source)
                 .or_else(|| first_disallowed_intrinsic_in_expr(right, is_stdlib_source))
         }
-        Expr::Call { callee, arg } => first_disallowed_intrinsic_in_expr(callee, is_stdlib_source)
+        Expr::Call { callee, arg, .. } => first_disallowed_intrinsic_in_expr(callee, is_stdlib_source)
             .or_else(|| first_disallowed_intrinsic_in_expr(arg, is_stdlib_source)),
         Expr::MethodCall { args, .. } => args
             .iter()

@@ -106,7 +106,7 @@ fn infer_handler_covered_ops_strict(
             }
             Ok(covered)
         }
-        Expr::Var(name) => match env.lookup(name) {
+        Expr::Var { name, .. } => match env.lookup(name) {
             Ty::Handler { covered_ops } => Ok(covered_ops),
             _ => Err(TypecheckError {
                 declaration: Some(decl_name.to_string()),
@@ -228,11 +228,11 @@ pub(crate) fn check_unhandled_effects_in_expr(
 
     fn effect_op_call_target_and_args(expr: &Expr) -> Option<(String, Vec<&Expr>)> {
         match expr {
-            Expr::Var(name) => Some((name.clone(), Vec::new())),
-            Expr::Qualified { receiver, member } => {
+            Expr::Var { name, .. } => Some((name.clone(), Vec::new())),
+            Expr::Qualified { receiver, member, .. } => {
                 Some((format!("{}.{}", receiver, member), Vec::new()))
             }
-            Expr::Call { callee, arg } => {
+            Expr::Call { callee, arg, .. } => {
                 let (target, mut args) = effect_op_call_target_and_args(callee)?;
                 args.push(arg.as_ref());
                 Some((target, args))
@@ -289,7 +289,7 @@ pub(crate) fn check_unhandled_effects_in_expr(
             }
             Ok(())
         }
-        Expr::Var(name) => {
+        Expr::Var { name, .. } => {
             if env.is_effect_op(name) && !covered_ops.contains(name.as_str()) {
                 return Err(TypecheckError {
                     declaration: Some(decl_name.to_string()),
@@ -308,7 +308,7 @@ pub(crate) fn check_unhandled_effects_in_expr(
                 decl_name,
             )
         }
-        Expr::Qualified { receiver, member } => {
+        Expr::Qualified { receiver, member, .. } => {
             let qualified = format!("{}.{}", receiver, member);
             if env.is_effect_op(&qualified) && !covered_ops.contains(qualified.as_str()) {
                 return Err(TypecheckError {
@@ -332,8 +332,8 @@ pub(crate) fn check_unhandled_effects_in_expr(
             recurse!(left)?;
             recurse!(right)
         }
-        Expr::Call { callee, arg } => {
-            if let Expr::Var(name) = callee.as_ref() {
+        Expr::Call { callee, arg, .. } => {
+            if let Expr::Var { name, .. } = callee.as_ref() {
                 check_callee_required_effects(
                     name,
                     required_effects_map,

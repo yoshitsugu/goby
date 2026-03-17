@@ -220,7 +220,7 @@ impl<'m> RuntimeOutputResolver<'m> {
             Expr::IntLit(n) => Out::Done(RuntimeValue::Int(*n)),
             Expr::BoolLit(b) => Out::Done(RuntimeValue::Bool(*b)),
             Expr::StringLit(s) => Out::Done(RuntimeValue::String(s.clone())),
-            Expr::Var(name) => match locals.get(name) {
+            Expr::Var { name, .. } => match locals.get(name) {
                 Some(v) => Out::Done(v),
                 None => match self.eval_zero_arity_decl_value(name, evaluators, depth + 1) {
                     Some(v) => Out::Done(v),
@@ -668,7 +668,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                     Out::Err(e) => Out::Err(e),
                 }
             }
-            Expr::Call { callee, arg } => {
+            Expr::Call { callee, arg, .. } => {
                 if let Some((fn_name, args)) = crate::call::flatten_named_call(expr)
                     && args.len() > 1
                 {
@@ -729,7 +729,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                     );
                 }
 
-                if let Expr::Qualified { receiver, member } = callee.as_ref() {
+                if let Expr::Qualified { receiver, member, .. } = callee.as_ref() {
                     let arg_value =
                         match self.eval_expr(arg, locals, callables, evaluators, depth + 1) {
                             Out::Done(v) => v,
@@ -757,7 +757,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                     );
                 }
 
-                if let Expr::Var(ctor_name) = callee.as_ref()
+                if let Expr::Var { name: ctor_name, .. } = callee.as_ref()
                     && let Some(field_name) = self.single_field_constructor_field(ctor_name)
                 {
                     let field_value =
@@ -775,7 +775,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                     });
                 }
 
-                if let Expr::Var(fn_name) = callee.as_ref() {
+                if let Expr::Var { name: fn_name, .. } = callee.as_ref() {
                     let arg_value =
                         match self.eval_expr(arg, locals, callables, evaluators, depth + 1) {
                             Out::Done(v) => v,

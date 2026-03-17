@@ -392,7 +392,7 @@ fn inspect_expr(
         Expr::IntLit(_)
         | Expr::BoolLit(_)
         | Expr::StringLit(_)
-        | Expr::Var(_)
+        | Expr::Var { name: _, .. }
         | Expr::Qualified { .. } => {}
         Expr::InterpolatedString(parts) => {
             for part in parts {
@@ -465,7 +465,7 @@ fn inspect_expr(
                 op_name_index,
             );
         }
-        Expr::Call { callee, arg } => {
+        Expr::Call { callee, arg, .. } => {
             inspect_expr(
                 callee,
                 out,
@@ -638,7 +638,7 @@ fn expr_contains_handler_resume(expr: &Expr) -> bool {
         Expr::IntLit(_)
         | Expr::BoolLit(_)
         | Expr::StringLit(_)
-        | Expr::Var(_)
+        | Expr::Var { name: _, .. }
         | Expr::Qualified { .. } => false,
         Expr::InterpolatedString(parts) => parts.iter().any(|part| match part {
             InterpolatedPart::Text(_) => false,
@@ -657,7 +657,7 @@ fn expr_contains_handler_resume(expr: &Expr) -> bool {
         Expr::BinOp { left, right, .. } => {
             expr_contains_handler_resume(left) || expr_contains_handler_resume(right)
         }
-        Expr::Call { callee, arg } => {
+        Expr::Call { callee, arg, .. } => {
             expr_contains_handler_resume(callee) || expr_contains_handler_resume(arg)
         }
         Expr::MethodCall { args, .. } => args.iter().any(expr_contains_handler_resume),
@@ -775,7 +775,7 @@ fn collect_operation_refs(
     qualified_operation_index: &HashMap<(String, String), EffectOperationRef>,
     op_name_index: &HashMap<String, Vec<EffectOperationRef>>,
 ) {
-    if let Expr::Qualified { receiver, member } = expr
+    if let Expr::Qualified { receiver, member, .. } = expr
         && let Some(op_ref) = qualified_operation_index.get(&(receiver.clone(), member.clone()))
     {
         record_operation_ref(out, op_ref);

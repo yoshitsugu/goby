@@ -45,7 +45,7 @@ pub(crate) fn check_branch_type_consistency_in_expr(
     }
 
     match expr {
-        Expr::IntLit(_) | Expr::BoolLit(_) | Expr::StringLit(_) | Expr::Var(_) => Ok(()),
+        Expr::IntLit(_) | Expr::BoolLit(_) | Expr::StringLit(_) | Expr::Var { name: _, .. } => Ok(()),
         Expr::InterpolatedString(parts) => {
             for part in parts {
                 if let InterpolatedPart::Expr(expr) = part {
@@ -80,7 +80,7 @@ pub(crate) fn check_branch_type_consistency_in_expr(
             recurse!(left)?;
             recurse!(right)
         }
-        Expr::Call { callee, arg } => {
+        Expr::Call { callee, arg, .. } => {
             recurse!(callee)?;
             recurse!(arg)
         }

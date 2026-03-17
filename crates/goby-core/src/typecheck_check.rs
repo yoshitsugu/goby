@@ -39,8 +39,8 @@ fn infer_expr_ty(expr: &Expr, env: &TypeEnv) -> Ty {
             let tys: Vec<Ty> = items.iter().map(|i| check_expr(i, env)).collect();
             Ty::Tuple(tys)
         }
-        Expr::Var(name) => env.lookup(name),
-        Expr::Qualified { receiver, member } => {
+        Expr::Var { name, .. } => env.lookup(name),
+        Expr::Qualified { receiver, member, .. } => {
             let receiver_ty = env.lookup(receiver);
             let resolved_receiver_ty = env.resolve_alias(&receiver_ty, 0);
             if let Ty::Tuple(items) = &resolved_receiver_ty
@@ -97,8 +97,8 @@ fn infer_expr_ty(expr: &Expr, env: &TypeEnv) -> Ty {
                 _ => Ty::Unknown,
             }
         }
-        Expr::Call { callee, arg } => {
-            if let Expr::Var(name) = callee.as_ref()
+        Expr::Call { callee, arg, .. } => {
+            if let Expr::Var { name, .. } = callee.as_ref()
                 && let Some(record) = env.lookup_record_by_constructor(name)
                 && record.fields.len() == 1
             {
@@ -576,6 +576,7 @@ mod tests {
         let expr = Expr::Qualified {
             receiver: "user".to_string(),
             member: "name".to_string(),
+            span: None,
         };
         assert_eq!(check_expr(&expr, &env), Ty::Str);
     }
@@ -593,6 +594,7 @@ mod tests {
         let expr = Expr::Qualified {
             receiver: "pair".to_string(),
             member: "1".to_string(),
+            span: None,
         };
         assert_eq!(check_expr(&expr, &env), Ty::Int);
     }
@@ -610,6 +612,7 @@ mod tests {
         let expr = Expr::Qualified {
             receiver: "pair".to_string(),
             member: "1".to_string(),
+            span: None,
         };
         assert_eq!(check_expr(&expr, &env), Ty::Unknown);
     }

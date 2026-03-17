@@ -15,11 +15,11 @@ pub(crate) fn flatten_named_call(expr: &Expr) -> Option<(&str, Vec<&Expr>)> {
     let mut cur = expr;
     loop {
         match cur {
-            Expr::Call { callee, arg } => {
+            Expr::Call { callee, arg, .. } => {
                 args.push(arg.as_ref());
                 cur = callee.as_ref();
             }
-            Expr::Var(name) => {
+            Expr::Var { name, .. } => {
                 args.reverse();
                 return Some((name.as_str(), args));
             }

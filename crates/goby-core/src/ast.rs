@@ -209,10 +209,14 @@ pub enum Expr {
         spread: Option<Box<Expr>>,
     },
     TupleLit(Vec<Expr>),
-    Var(String),
+    Var {
+        name: String,
+        span: Option<Span>,
+    },
     Qualified {
         receiver: String,
         member: String,
+        span: Option<Span>,
     },
     RecordConstruct {
         constructor: String,
@@ -226,6 +230,7 @@ pub enum Expr {
     Call {
         callee: Box<Expr>,
         arg: Box<Expr>,
+        span: Option<Span>,
     },
     MethodCall {
         receiver: String,
@@ -313,8 +318,8 @@ impl Expr {
             Expr::BoolLit(v) => Some(if *v { "True" } else { "False" }.to_string()),
             Expr::StringLit(s) => Some(format!("\"{}\"", s)),
             Expr::InterpolatedString(_) => None,
-            Expr::Var(name) => Some(name.clone()),
-            Expr::Qualified { receiver, member } => Some(format!("{}.{}", receiver, member)),
+            Expr::Var { name, .. } => Some(name.clone()),
+            Expr::Qualified { receiver, member, .. } => Some(format!("{}.{}", receiver, member)),
             Expr::RecordConstruct {
                 constructor,
                 fields,
@@ -363,7 +368,7 @@ impl Expr {
                 };
                 Some(format!("{} {} {}", l, op_str, r))
             }
-            Expr::Call { callee, arg } => {
+            Expr::Call { callee, arg, .. } => {
                 let c = callee.to_str_repr()?;
                 let a_raw = arg.to_str_repr()?;
                 let a = if arg.needs_parens_as_subexpr() {
@@ -449,12 +454,13 @@ mod tests {
         // `double (1 + 2)` — the BinOp argument must be parenthesised so that
         // the legacy evaluator does not see `double 1 + 2` (wrong precedence).
         let expr = Expr::Call {
-            callee: Box::new(Expr::Var("double".to_string())),
+            callee: Box::new(Expr::Var { name: "double".to_string(), span: None }),
             arg: Box::new(Expr::BinOp {
                 op: BinOpKind::Add,
                 left: Box::new(Expr::IntLit(1)),
                 right: Box::new(Expr::IntLit(2)),
             }),
+            span: None,
         };
         assert_eq!(expr.to_str_repr(), Some("double (1 + 2)".to_string()));
     }
@@ -463,16 +469,18 @@ mod tests {
     fn to_str_repr_wraps_nested_call_arg_in_parens() {
         // `print (double (1 + 2))` — both the outer and inner arg need parens.
         let inner = Expr::Call {
-            callee: Box::new(Expr::Var("double".to_string())),
+            callee: Box::new(Expr::Var { name: "double".to_string(), span: None }),
             arg: Box::new(Expr::BinOp {
                 op: BinOpKind::Add,
                 left: Box::new(Expr::IntLit(1)),
                 right: Box::new(Expr::IntLit(2)),
             }),
+            span: None,
         };
         let outer = Expr::Call {
-            callee: Box::new(Expr::Var("print".to_string())),
+            callee: Box::new(Expr::Var { name: "print".to_string(), span: None }),
             arg: Box::new(inner),
+            span: None,
         };
         assert_eq!(
             outer.to_str_repr(),
@@ -485,7 +493,7 @@ mod tests {
         // `f string.split("a", ",")` — MethodCall as a Call argument must be
         // wrapped so the legacy evaluator does not misparse the expression.
         let expr = Expr::Call {
-            callee: Box::new(Expr::Var("f".to_string())),
+            callee: Box::new(Expr::Var { name: "f".to_string(), span: None }),
             arg: Box::new(Expr::MethodCall {
                 receiver: "string".to_string(),
                 method: "split".to_string(),
@@ -494,6 +502,7 @@ mod tests {
                     Expr::StringLit(",".to_string()),
                 ],
             }),
+            span: None,
         };
         assert_eq!(
             expr.to_str_repr(),
@@ -508,10 +517,10 @@ mod tests {
             op: BinOpKind::Mul,
             left: Box::new(Expr::BinOp {
                 op: BinOpKind::Add,
-                left: Box::new(Expr::Var("a".to_string())),
-                right: Box::new(Expr::Var("b".to_string())),
+                left: Box::new(Expr::Var { name: "a".to_string(), span: None }),
+                right: Box::new(Expr::Var { name: "b".to_string(), span: None }),
             }),
-            right: Box::new(Expr::Var("c".to_string())),
+            right: Box::new(Expr::Var { name: "c".to_string(), span: None }),
         };
         assert_eq!(expr.to_str_repr(), Some("(a + b) * c".to_string()));
     }
@@ -520,7 +529,7 @@ mod tests {
     fn to_str_repr_list_with_spread() {
         let expr = Expr::ListLit {
             elements: vec![Expr::IntLit(1), Expr::IntLit(2)],
-            spread: Some(Box::new(Expr::Var("xs".to_string()))),
+            spread: Some(Box::new(Expr::Var { name: "xs".to_string(), span: None })),
         };
         assert_eq!(expr.to_str_repr(), Some("[1, 2, ..xs]".to_string()));
     }
@@ -528,7 +537,7 @@ mod tests {
     #[test]
     fn to_str_repr_list_index_simple() {
         let expr = Expr::ListIndex {
-            list: Box::new(Expr::Var("xs".to_string())),
+            list: Box::new(Expr::Var { name: "xs".to_string(), span: None }),
             index: Box::new(Expr::IntLit(0)),
         };
         assert_eq!(expr.to_str_repr(), Some("xs[0]".to_string()));
@@ -537,8 +546,8 @@ mod tests {
     #[test]
     fn to_str_repr_list_index_var_index() {
         let expr = Expr::ListIndex {
-            list: Box::new(Expr::Var("xs".to_string())),
-            index: Box::new(Expr::Var("i".to_string())),
+            list: Box::new(Expr::Var { name: "xs".to_string(), span: None }),
+            index: Box::new(Expr::Var { name: "i".to_string(), span: None }),
         };
         assert_eq!(expr.to_str_repr(), Some("xs[i]".to_string()));
     }
@@ -548,8 +557,9 @@ mod tests {
         // `(f 1)[0]` — Call receiver must be parenthesised to avoid `f 1[0]`
         let expr = Expr::ListIndex {
             list: Box::new(Expr::Call {
-                callee: Box::new(Expr::Var("f".to_string())),
+                callee: Box::new(Expr::Var { name: "f".to_string(), span: None }),
                 arg: Box::new(Expr::IntLit(1)),
+                span: None,
             }),
             index: Box::new(Expr::IntLit(0)),
         };
@@ -561,11 +571,11 @@ mod tests {
         // Index expressions are delimited by `[…]` so they never need parens.
         // `xs[a + b]` must NOT become `xs[(a + b)]`.
         let expr = Expr::ListIndex {
-            list: Box::new(Expr::Var("xs".to_string())),
+            list: Box::new(Expr::Var { name: "xs".to_string(), span: None }),
             index: Box::new(Expr::BinOp {
                 op: crate::ast::BinOpKind::Add,
-                left: Box::new(Expr::Var("a".to_string())),
-                right: Box::new(Expr::Var("b".to_string())),
+                left: Box::new(Expr::Var { name: "a".to_string(), span: None }),
+                right: Box::new(Expr::Var { name: "b".to_string(), span: None }),
             }),
         };
         assert_eq!(expr.to_str_repr(), Some("xs[a + b]".to_string()));
@@ -575,7 +585,7 @@ mod tests {
     fn to_str_repr_list_index_chained() {
         // `xs[0][1]`
         let inner = Expr::ListIndex {
-            list: Box::new(Expr::Var("xs".to_string())),
+            list: Box::new(Expr::Var { name: "xs".to_string(), span: None }),
             index: Box::new(Expr::IntLit(0)),
         };
         let outer = Expr::ListIndex {

@@ -77,7 +77,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                             captured_callables: caller_callables.clone(),
                         }))
                     }
-                    Expr::Var(name) => self.resolve_callable_argument(name, caller_callables),
+                    Expr::Var { name, .. } => self.resolve_callable_argument(name, caller_callables),
                     _ => {
                         self.set_runtime_error_once(ERR_CALLABLE_DISPATCH_DECL_PARAM);
                         return None;
@@ -212,7 +212,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                             captured_callables: caller_callables.clone(),
                         }))
                     }
-                    Expr::Var(name) => self.resolve_callable_argument(name, caller_callables),
+                    Expr::Var { name, .. } => self.resolve_callable_argument(name, caller_callables),
                     _ => {
                         self.set_runtime_error_once(ERR_CALLABLE_DISPATCH_DECL_PARAM);
                         return None;
@@ -238,7 +238,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                 !matches!(
                     stmt,
                     Stmt::Expr(
-                        Expr::Var(_) | Expr::IntLit(_) | Expr::StringLit(_) | Expr::BoolLit(_)
+                        Expr::Var { name: _, .. } | Expr::IntLit(_) | Expr::StringLit(_) | Expr::BoolLit(_)
                     )
                 )
             })
@@ -299,7 +299,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                             captured_callables: caller_callables.clone(),
                         }))
                     }
-                    Expr::Var(name) => self.resolve_callable_argument(name, caller_callables),
+                    Expr::Var { name, .. } => self.resolve_callable_argument(name, caller_callables),
                     _ => {
                         self.set_runtime_error_once(ERR_CALLABLE_DISPATCH_DECL_PARAM);
                         return None;
@@ -324,7 +324,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                 !matches!(
                     stmt,
                     Stmt::Expr(
-                        Expr::Var(_) | Expr::IntLit(_) | Expr::StringLit(_) | Expr::BoolLit(_)
+                        Expr::Var { name: _, .. } | Expr::IntLit(_) | Expr::StringLit(_) | Expr::BoolLit(_)
                     )
                 )
             })
@@ -384,7 +384,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                             captured_callables: caller_callables.clone(),
                         }))
                     }
-                    Expr::Var(name) => self.resolve_callable_argument(name, caller_callables),
+                    Expr::Var { name, .. } => self.resolve_callable_argument(name, caller_callables),
                     _ => {
                         self.set_runtime_error_once(ERR_CALLABLE_DISPATCH_DECL_PARAM);
                         return None;
@@ -449,7 +449,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                 !matches!(
                     stmt,
                     Stmt::Expr(
-                        Expr::Var(_) | Expr::IntLit(_) | Expr::StringLit(_) | Expr::BoolLit(_)
+                        Expr::Var { name: _, .. } | Expr::IntLit(_) | Expr::StringLit(_) | Expr::BoolLit(_)
                     )
                 )
             })
@@ -500,7 +500,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                 !matches!(
                     stmt,
                     Stmt::Expr(
-                        Expr::Var(_) | Expr::IntLit(_) | Expr::StringLit(_) | Expr::BoolLit(_)
+                        Expr::Var { name: _, .. } | Expr::IntLit(_) | Expr::StringLit(_) | Expr::BoolLit(_)
                     )
                 )
             })

@@ -75,7 +75,7 @@ fn check_resume_in_expr(
     decl_name: &str,
     resume_ctx: Option<&ResumeContext>,
 ) -> Result<(), TypecheckError> {
-    if let Expr::Var(name) = expr
+    if let Expr::Var { name, .. } = expr
         && name == "Unit"
     {
         return Err(TypecheckError {
@@ -96,7 +96,7 @@ fn check_resume_in_expr(
     }
 
     match expr {
-        Expr::IntLit(_) | Expr::BoolLit(_) | Expr::StringLit(_) | Expr::Var(_) => Ok(()),
+        Expr::IntLit(_) | Expr::BoolLit(_) | Expr::StringLit(_) | Expr::Var { name: _, .. } => Ok(()),
         Expr::InterpolatedString(parts) => {
             for part in parts {
                 if let InterpolatedPart::Expr(expr) = part {
@@ -132,7 +132,7 @@ fn check_resume_in_expr(
             recurse!(left)?;
             recurse!(right)
         }
-        Expr::Call { callee, arg } => {
+        Expr::Call { callee, arg, .. } => {
             recurse!(callee)?;
             recurse!(arg)
         }

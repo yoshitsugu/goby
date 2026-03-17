@@ -267,7 +267,7 @@ fn stmt_contains_resume(stmt: &Stmt) -> bool {
 fn expr_contains_resume(expr: &Expr) -> bool {
     match expr {
         Expr::Resume { .. } => true,
-        Expr::Call { callee, arg } => expr_contains_resume(callee) || expr_contains_resume(arg),
+        Expr::Call { callee, arg, .. } => expr_contains_resume(callee) || expr_contains_resume(arg),
         Expr::Pipeline { value, .. } => expr_contains_resume(value),
         Expr::BinOp { left, right, .. } => {
             expr_contains_resume(left) || expr_contains_resume(right)
@@ -308,7 +308,7 @@ fn expr_contains_resume(expr: &Expr) -> bool {
             InterpolatedPart::Expr(expr) => expr_contains_resume(expr),
         }),
         Expr::Qualified { .. }
-        | Expr::Var(_)
+        | Expr::Var { name: _, .. }
         | Expr::StringLit(_)
         | Expr::IntLit(_)
         | Expr::BoolLit(_) => false,
@@ -420,7 +420,7 @@ fn eval_expr(
         Expr::StringLit(s) => Some(NativeValue::String(s.clone())),
         Expr::IntLit(n) => Some(NativeValue::Int(*n)),
         Expr::BoolLit(b) => Some(NativeValue::Bool(*b)),
-        Expr::Var(name) => bindings.get(name).cloned().or_else(|| {
+        Expr::Var { name, .. } => bindings.get(name).cloned().or_else(|| {
             if (env.declarations.contains_key(name.as_str())
                 && env.lowering_plan.is_direct_style(name.as_str()))
                 || is_runtime_intrinsic_name(name)
@@ -452,7 +452,7 @@ fn eval_expr(
                 _ => None,
             }
         }
-        Expr::Call { callee, arg } => {
+        Expr::Call { callee, arg, .. } => {
             let callee_value = eval_expr(callee, bindings, env, depth + 1)?;
             let arg_value = eval_expr(arg, bindings, env, depth + 1)?;
             apply_callable(callee_value, arg_value, env, depth + 1)

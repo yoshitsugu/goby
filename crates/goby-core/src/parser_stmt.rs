@@ -147,6 +147,7 @@ where
                 stmts.push(Stmt::Expr(Expr::Call {
                     callee: Box::new(callee),
                     arg: Box::new(multi_expr),
+                span: None,
                 }));
                 i = next_i + consumed;
                 continue;
@@ -315,6 +316,7 @@ where
         Stmt::Expr(Expr::Call {
             callee: Box::new(parse_expr(callee_src)?),
             arg: Box::new(arg),
+        span: None,
         }),
         close_idx + 1,
     ))
@@ -838,7 +840,7 @@ mod tests {
         assert_eq!(stmts.len(), 3);
         assert!(matches!(&stmts[0], Stmt::Binding { name, .. } if name == "a"));
         assert!(matches!(&stmts[1], Stmt::Binding { name, .. } if name == "a"));
-        assert!(matches!(&stmts[2], Stmt::Expr(Expr::Var(name)) if name == "a"));
+        assert!(matches!(&stmts[2], Stmt::Expr(Expr::Var { name, .. }) if name == "a"));
     }
 
     #[test]
@@ -848,7 +850,7 @@ mod tests {
         assert_eq!(stmts.len(), 3);
         assert!(matches!(&stmts[0], Stmt::MutBinding { name, .. } if name == "a"));
         assert!(matches!(&stmts[1], Stmt::Assign { name, .. } if name == "a"));
-        assert!(matches!(&stmts[2], Stmt::Expr(Expr::Var(name)) if name == "a"));
+        assert!(matches!(&stmts[2], Stmt::Expr(Expr::Var { name, .. }) if name == "a"));
     }
 
     #[test]
@@ -868,8 +870,8 @@ mod tests {
         let stmts = parse_body_stmts(body).expect("should parse");
         assert_eq!(stmts.len(), 1);
         match &stmts[0] {
-            Stmt::Expr(Expr::Call { callee, arg }) => {
-                assert_eq!(**callee, Expr::Var("print".to_string()));
+            Stmt::Expr(Expr::Call { callee, arg, .. }) => {
+                assert_eq!(**callee, Expr::Var { name: "print".to_string(), span: None });
                 assert_eq!(**arg, Expr::StringLit("hello".to_string()));
             }
             other => panic!("unexpected: {:?}", other),
@@ -904,7 +906,7 @@ mod tests {
         assert_eq!(stmts.len(), 1);
         match &stmts[0] {
             Stmt::Expr(Expr::With { handler, body }) => {
-                assert_eq!(**handler, Expr::Var("h".to_string()));
+                assert_eq!(**handler, Expr::Var { name: "h".to_string(), span: None });
                 assert_eq!(body.len(), 1);
             }
             other => panic!("unexpected statement: {other:?}"),
