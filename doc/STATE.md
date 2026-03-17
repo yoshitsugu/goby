@@ -1,17 +1,21 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-16
+Last updated: 2026-03-17
 
 ## Recently Completed
 
+- Track D2b — multi-error collection: **completed** (2026-03-17)
+  - `typecheck_module_collect` / `typecheck_module_collect_with_context`: new parallel entrypoints that return `Vec<TypecheckError>` instead of stopping at first error
+  - `check_declaration_bodies_collect()`: per-declaration error recovery; module-level errors remain fail-fast
+  - goby-cli `check`/`run`: renders all errors joined by blank line; two-error golden fixture test added
+  - goby-lsp `analyze()`: returns all per-declaration diagnostics via collect variant; two-diagnostic test added
+  - 9 new goby-core unit tests (416 total), 19 goby-cli integration tests, 20 goby-lsp tests passing
 - Track D2a — `goby-lsp` crate (diagnostics only): **completed** (2026-03-16)
   - New crate `crates/goby-lsp` added to workspace
   - LSP lifecycle: initialize / shutdown / exit via `lsp-server 0.7` + `lsp-types 0.95`
   - In-memory `DocumentStore` for didOpen/didChange/didClose
-  - `analyze()`: parse + typecheck → at most one `lsp_types::Diagnostic` per run
   - `span_to_lsp_range()`: Goby 1-indexed byte-offset spans → LSP 0-indexed UTF-16 positions
   - `floor_char_boundary` guard prevents mid-codepoint panic on approximate span cols
-  - 19 tests: span conversion (ASCII, 2/3/4-byte UTF-8), document store, analyze, lifecycle, end-to-end
 - Track D — Developer Tooling Foundation (D1a-ii through D1d): **completed** (2026-03-16)
   - D1a-ii: declaration-level AST node spans (Declaration.col, EffectDecl/EffectMember/HandlerClause/CaseArm spans)
   - D1b: unified `Diagnostic` type with `From<ParseError>` and `From<TypecheckError>`
@@ -24,7 +28,7 @@ Last updated: 2026-03-16
 
 ## Current Focus
 
-- Next: Track D2b — multi-error collection (`typecheck_module` → `Vec<Diagnostic>`)
+- Next: Track D3a/D3b — Symbol index, hover, go-to-definition
 
 ## Locked Decisions Carried Forward
 
@@ -77,7 +81,7 @@ Execution order (matches PLAN.md dependency chain):
 5. ~~D1c: TypecheckError span population~~ **(completed — annotation + effect decl sites)**
 6. ~~D1d: Ruby/Elm-style range-underline error display~~ **(completed)**
 7. ~~D2a: `goby-lsp` crate — diagnostics only~~ **(completed)**
-8. D2b: Multi-error collection (`typecheck_module` → `Vec<Diagnostic>`).
+8. ~~D2b: Multi-error collection (`typecheck_module` → `Vec<Diagnostic>`)~~ **(completed)**
 9. D3a/D3b: Symbol index, hover, go-to-definition.
 10. D4: `goby fmt` (AST pretty-printer).
 11. D5: `goby lint` (static checks).
