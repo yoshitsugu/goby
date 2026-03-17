@@ -84,6 +84,16 @@ pub struct LocalBindingSymbol {
     /// so the first content line is always at body-relative line **2** (not 1).
     /// To convert to a source-file line number: `source_line = def_line_of(decl) + body_relative_line - 1`.
     pub body_relative_line: usize,
+    /// 1-indexed byte column of the **binding name** on its line.
+    ///
+    /// For `Binding`, this equals `Span::col` (indent + 1 = name start).
+    /// For `MutBinding`, this equals `Span::col + 4` (skipping the `"mut "` prefix).
+    ///
+    /// Used together with `body_relative_line` to restrict hover to the LHS identifier
+    /// and avoid false positives on RHS occurrences of the same name on the same line.
+    ///
+    /// Assumes ASCII-only content before the name on the line (true for all current Goby syntax).
+    pub body_relative_col: usize,
     /// Human-readable inferred type string (e.g. `"Int"`, `"List String"`).
     pub ty_str: String,
 }
@@ -117,7 +127,7 @@ pub fn infer_local_bindings(decl: &Declaration) -> Vec<LocalBindingSymbol> {
 
     for stmt in stmts {
         match stmt {
-            Stmt::Binding { name, value, span } | Stmt::MutBinding { name, value, span } => {
+            Stmt::Binding { name, value, span } => {
                 let ty = check_expr(value, &local_env);
                 // Update local env so later bindings can reference this one.
                 local_env.locals.insert(name.clone(), ty.clone());
@@ -127,6 +137,24 @@ pub fn infer_local_bindings(decl: &Declaration) -> Vec<LocalBindingSymbol> {
                         result.push(LocalBindingSymbol {
                             name: name.clone(),
                             body_relative_line: sp.line,
+                            // Span::col is the indent+1 of the line start (name start for Binding).
+                            body_relative_col: sp.col,
+                            ty_str: ty_name(&ty),
+                        });
+                    }
+                }
+            }
+            Stmt::MutBinding { name, value, span } => {
+                let ty = check_expr(value, &local_env);
+                local_env.locals.insert(name.clone(), ty.clone());
+                if ty != Ty::Unknown {
+                    if let Some(sp) = span {
+                        result.push(LocalBindingSymbol {
+                            name: name.clone(),
+                            body_relative_line: sp.line,
+                            // span.col points to the 'm' of "mut"; the name starts 4 ASCII bytes later.
+                            // "mut " is always 4 ASCII bytes (keyword + required space).
+                            body_relative_col: sp.col + 4,
                             ty_str: ty_name(&ty),
                         });
                     }
@@ -295,6 +323,8 @@ mod tests {
         // body string starts with a leading '\n' (from collect_indented_body),
         // so "y = x + 1" is at body.lines() index 1 → stmt_line = 2.
         assert_eq!(bindings[0].body_relative_line, 2);
+        // "  y = x + 1": indent=2, col=3 (1-indexed).
+        assert_eq!(bindings[0].body_relative_col, 3);
     }
 
     #[test]
@@ -305,6 +335,8 @@ mod tests {
         assert_eq!(bindings.len(), 1, "expected one binding, got: {:?}", bindings);
         assert_eq!(bindings[0].name, "z");
         assert_eq!(bindings[0].ty_str, "Int");
+        // "  mut z = 0": indent=2 → sp.col=3 ("mut" start), name starts at sp.col+4=7.
+        assert_eq!(bindings[0].body_relative_col, 7);
     }
 
     #[test]

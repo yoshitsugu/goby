@@ -165,7 +165,10 @@ fn hover_at(source: &str, stdlib_root: Option<&Path>, pos: Position) -> Option<H
     // instead of the top-level annotation when the cursor is on the definition line.
     //
     // LSP pos.line is 0-indexed; source lines are 1-indexed.
+    // LSP pos.character is 0-indexed UTF-16; Span::col is 1-indexed byte offset.
+    // For ASCII identifiers UTF-16 == byte, so: cursor_col_1indexed = pos.character + 1.
     let cursor_source_line = pos.line as usize + 1;
+    let cursor_col_1indexed = pos.character as usize + 1;
     for decl in &module.declarations {
         let def_line = goby_core::def_line_of(decl);
         let bindings = goby_core::infer_local_bindings(decl);
@@ -177,7 +180,15 @@ fn hover_at(source: &str, stdlib_root: Option<&Path>, pos: Position) -> Option<H
             // body string starts with a leading '\n', so body line N maps to
             // source file line: def_line + body_relative_line - 1
             let source_line = def_line + sym.body_relative_line - 1;
-            if source_line == cursor_source_line {
+            if source_line != cursor_source_line {
+                continue;
+            }
+            // Column check: cursor must be within the LHS identifier range.
+            // This prevents false positives when the same name appears on the RHS
+            // of the same line (e.g. `x = x + 1` — RHS `x` should return None).
+            let sym_col = sym.body_relative_col;
+            // sym.name.len() is byte length; safe because Goby identifiers are ASCII-only.
+            if cursor_col_1indexed >= sym_col && cursor_col_1indexed < sym_col + sym.name.len() {
                 return Some(Hover {
                     contents: HoverContents::Markup(MarkupContent {
                         kind: MarkupKind::PlainText,
@@ -1267,5 +1278,73 @@ mod tests {
         let pos = Position { line: 3, character: 2 }; // "n" on the Assign line
         let result = hover_at(source, None, pos);
         assert!(result.is_none(), "reassignment LHS hover should return None, got: {:?}", result);
+    }
+
+    #[test]
+    fn local_binding_hover_lhs_col_match() {
+        // Cursor exactly on the LHS "x" in "  x = n + 1" should return hover.
+        // LHS "x": indent 2, col 3 (1-indexed), character 2 (0-indexed).
+        let source = "f : Int -> Int\nf n =\n  x = n + 1\n  x\n";
+        let pos = Position { line: 2, character: 2 }; // LHS "x"
+        let result = hover_at(source, None, pos);
+        assert!(result.is_some(), "expected hover on LHS 'x', got None");
+        if let Some(hover) = result {
+            if let HoverContents::Markup(mc) = hover.contents {
+                assert_eq!(mc.value, "x : Int");
+            } else {
+                panic!("expected Markup hover");
+            }
+        }
+    }
+
+    #[test]
+    fn local_binding_hover_rhs_col_out_of_range() {
+        // Column-range test: binding "ab" at col 3-4 (chars 2-3, 0-indexed).
+        // Cursor at char 7 (on the "x" in "x + 1") should return None.
+        // Source:
+        //   line 2: "  ab = x + 1"  ← LHS "ab" col 3, len 2 → col range [3,5)
+        let source = "f : Int -> Int\nf x =\n  ab = x + 1\n  ab\n";
+        let pos_lhs_start = Position { line: 2, character: 2 }; // 'a' of "ab"
+        let pos_lhs_end = Position { line: 2, character: 3 };   // 'b' of "ab"
+        // character: 4 is one past end of "ab" (exclusive upper bound test)
+        let pos_just_past = Position { line: 2, character: 4 };
+        // character: 7 is 'x' in "x + 1" — different name, filtered by name check (not col guard)
+        let pos_rhs = Position { line: 2, character: 7 };
+        assert!(hover_at(source, None, pos_lhs_start).is_some(), "LHS start should hover");
+        assert!(hover_at(source, None, pos_lhs_end).is_some(), "LHS end char should hover");
+        assert!(hover_at(source, None, pos_just_past).is_none(), "one past name end should not hover");
+        assert!(hover_at(source, None, pos_rhs).is_none(), "RHS 'x' (different name) should not hover");
+    }
+
+    #[test]
+    fn local_binding_hover_rhs_same_name_returns_none() {
+        // The critical column-guard test: same name appears on both LHS and RHS of a binding.
+        // Source:
+        //   line 0: "f : Int -> Int"
+        //   line 1: "f x ="
+        //   line 2: "  y = x + 1"   ← but use a case where binding name == param name
+        //
+        // Use "f n =\n  n = n + 1": LHS 'n' at col 3 (char 2), RHS 'n' at col 7 (char 6).
+        // Both have the same word "n", so the name filter does NOT eliminate the RHS case —
+        // only the column guard can distinguish them.
+        //   line 2: "  n = n + 1"
+        //   LHS 'n': col 3, char 2. Range [3, 4).
+        //   RHS 'n': col 7, char 6. Outside range → None.
+        let source = "f : Int -> Int\nf n =\n  n = n + 1\n  n\n";
+        let pos_lhs = Position { line: 2, character: 2 }; // LHS 'n' at col 3
+        let pos_rhs = Position { line: 2, character: 6 }; // RHS 'n' at col 7
+        let lhs_result = hover_at(source, None, pos_lhs);
+        assert!(lhs_result.is_some(), "LHS 'n' should hover, got None");
+        if let Some(hover) = lhs_result {
+            if let HoverContents::Markup(mc) = hover.contents {
+                assert_eq!(mc.value, "n : Int");
+            } else {
+                panic!("expected Markup hover");
+            }
+        }
+        assert!(
+            hover_at(source, None, pos_rhs).is_none(),
+            "RHS 'n' (same name, different col) should return None"
+        );
     }
 }
