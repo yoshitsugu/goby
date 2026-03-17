@@ -155,21 +155,27 @@ fn run() -> Result<(), CliError> {
         ))
     })?;
 
-    goby_core::typecheck_module_with_context(
+    let typecheck_errors = goby_core::typecheck_module_collect_with_context(
         &module,
         Some(Path::new(&cli.file)),
         Some(stdlib_root.as_path()),
-    )
-    .map_err(|err| {
-        let diag = goby_core::Diagnostic::from(err);
-        CliError::Runtime(render_diagnostic(
-            &cli.file,
-            &source,
-            diag.span.as_ref(),
-            diag.declaration.as_deref(),
-            &diag.message,
-        ))
-    })?;
+    );
+    if !typecheck_errors.is_empty() {
+        let rendered: Vec<String> = typecheck_errors
+            .into_iter()
+            .map(|err| {
+                let diag = goby_core::Diagnostic::from(err);
+                render_diagnostic(
+                    &cli.file,
+                    &source,
+                    diag.span.as_ref(),
+                    diag.declaration.as_deref(),
+                    &diag.message,
+                )
+            })
+            .collect();
+        return Err(CliError::Runtime(rendered.join("\n\n")));
+    }
 
     match cli.command {
         Command::Run => match goby_wasm::compile_module(&module) {

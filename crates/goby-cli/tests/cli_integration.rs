@@ -831,3 +831,37 @@ fn typecheck_error_output_matches_fixture() {
         "stderr does not match typecheck_error_expected.txt"
     );
 }
+
+#[test]
+fn two_typecheck_errors_output_matches_fixture() {
+    let root = repo_root();
+    let input = "crates/goby-cli/tests/fixtures/two_typecheck_errors_input.gb";
+    let expected_path =
+        root.join("crates/goby-cli/tests/fixtures/two_typecheck_errors_expected.txt");
+    assert!(
+        root.join(input).exists(),
+        "fixture input must exist at {}",
+        input
+    );
+    assert!(
+        expected_path.exists(),
+        "expected fixture must exist at {:?}",
+        expected_path
+    );
+    let expected_raw = fs::read_to_string(&expected_path).expect("fixture should be readable");
+
+    let output = command_for_goby_cli()
+        .arg("check")
+        .arg(input)
+        .current_dir(&root)
+        .output()
+        .expect("cli should execute");
+
+    assert!(!output.status.success(), "two-error input should fail");
+    let actual = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(
+        actual.trim_end_matches('\n'),
+        expected_raw.trim_end_matches('\n'),
+        "stderr does not match two_typecheck_errors_expected.txt"
+    );
+}

@@ -1,0 +1,3 @@
+crates/goby-cli/tests/fixtures/two_typecheck_errors_input.gb: error: body type `String` does not match declared return type `Int` in 'add'
+
+crates/goby-cli/tests/fixtures/two_typecheck_errors_input.gb: error: body type `Bool` does not match declared return type `Int` in 'mul'

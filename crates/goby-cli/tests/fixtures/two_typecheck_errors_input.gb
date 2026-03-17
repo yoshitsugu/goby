@@ -1,0 +1,5 @@
+add : Int -> Int
+add x = "hello"
+
+mul : Int -> Int
+mul x = True

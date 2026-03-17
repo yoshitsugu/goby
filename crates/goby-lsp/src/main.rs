@@ -15,9 +15,8 @@
 //!
 //! # Limitations (MVP)
 //!
-//!   - At most one diagnostic per analysis run (multi-error collection is D2b).
 //!   - source_path is not passed to the typechecker; stdlib-relative imports from
-//!     user source are unsupported until D2b.
+//!     user source are not resolved.
 //!   - No re-analysis debounce; analysis runs synchronously on every didChange.
 //!     TODO(D2a-debounce): add 200ms idle debounce.
 //!   - When GOBY_STDLIB_ROOT is not set and the bundled stdlib path is unavailable,
@@ -184,9 +183,8 @@ fn publish_diagnostics(
 
 /// Analyze `source` and return LSP diagnostics.
 ///
-/// At most one diagnostic is returned per run (multi-error collection is D2b).
-/// `source_path` is passed as `None` to the typechecker; stdlib-relative imports
-/// from user source are unsupported until D2b.
+/// All per-declaration typecheck errors are collected and returned (D2b).
+/// `source_path` is passed as `None` to the typechecker.
 ///
 /// If `stdlib_root` is `None` (stdlib not found), a synthetic diagnostic is
 /// returned rather than panicking.
@@ -211,13 +209,13 @@ fn analyze(source: &str, stdlib_root: Option<&Path>) -> Vec<lsp_types::Diagnosti
         }
     };
 
-    match goby_core::typecheck_module_with_context(&module, None, Some(stdlib)) {
-        Ok(()) => vec![],
-        Err(err) => {
+    goby_core::typecheck_module_collect_with_context(&module, None, Some(stdlib))
+        .into_iter()
+        .map(|err| {
             let diag = goby_core::Diagnostic::from(err);
-            vec![to_lsp_diagnostic(source, &diag)]
-        }
-    }
+            to_lsp_diagnostic(source, &diag)
+        })
+        .collect()
 }
 
 /// Convert a `goby_core::Diagnostic` to an `lsp_types::Diagnostic`.
@@ -500,6 +498,19 @@ mod tests {
         assert_eq!(diags.len(), 1);
         assert_eq!(diags[0].severity, Some(DiagnosticSeverity::ERROR));
         assert!(!diags[0].message.is_empty());
+    }
+
+    #[test]
+    fn analyze_two_typecheck_errors_returns_two_diagnostics() {
+        let Some(root) = stdlib_root() else {
+            return;
+        };
+        // Two independent declarations, each with a type mismatch.
+        let source = "add : Int -> Int\nadd x = \"hello\"\n\nmul : Int -> Int\nmul x = True\n";
+        let diags = analyze(source, Some(&root));
+        assert_eq!(diags.len(), 2, "expected two diagnostics, got: {:?}", diags);
+        assert_eq!(diags[0].severity, Some(DiagnosticSeverity::ERROR));
+        assert_eq!(diags[1].severity, Some(DiagnosticSeverity::ERROR));
     }
 
     #[test]
