@@ -5,6 +5,7 @@
 pub mod analysis;
 pub mod ast;
 pub mod diagnostic;
+pub mod formatter;
 pub mod symbol_index;
 pub mod parser;
 mod parser_expr;
@@ -42,6 +43,7 @@ pub use ast::{
     ImportKind, ListPatternItem, ListPatternTail, Module, RecordField, Span, Stmt, TypeDeclaration,
 };
 pub use diagnostic::{Diagnostic, Severity};
+pub use formatter::format_module;
 pub use symbol_index::{
     DeclSymbol, EffectMemberSymbol, SymbolIndex, SymbolInfo, build_symbol_index,
 };

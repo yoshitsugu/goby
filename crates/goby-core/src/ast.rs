@@ -307,7 +307,7 @@ impl Expr {
 
     /// Returns true if this expression needs parentheses when used as a
     /// sub-expression (e.g. as an argument or operand) to preserve meaning.
-    fn needs_parens_as_subexpr(&self) -> bool {
+    pub fn needs_parens_as_subexpr(&self) -> bool {
         matches!(
             self,
             Expr::BinOp { .. }
