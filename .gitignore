@@ -2,3 +2,6 @@
 /examples/*.wasm
 .codex
 *.elc
+**/node_modules/
+/tooling/vscode-goby/out/
+/tooling/vscode-goby/*.vsix
