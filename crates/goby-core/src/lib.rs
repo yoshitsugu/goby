@@ -45,7 +45,8 @@ pub use ast::{
 pub use diagnostic::{Diagnostic, Severity};
 pub use formatter::format_module;
 pub use symbol_index::{
-    DeclSymbol, EffectMemberSymbol, SymbolIndex, SymbolInfo, build_symbol_index,
+    DeclSymbol, EffectMemberSymbol, LocalBindingSymbol, SymbolIndex, SymbolInfo,
+    build_symbol_index, def_line_of, infer_local_bindings,
 };
 pub use parser::{ParseError, parse_body_stmts, parse_module};
 pub use parser_util::is_identifier;

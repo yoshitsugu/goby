@@ -155,30 +155,58 @@ fn handle_request(
 
 /// Return the hover result for the given cursor position, or `None` for no-hover.
 fn hover_at(source: &str, stdlib_root: Option<&Path>, pos: Position) -> Option<Hover> {
-    let index = build_index(source, stdlib_root)?;
+    let (index, module) = build_index(source, stdlib_root)?;
     let word = word_at_position(source, pos)?;
-    match index.lookup(&word)? {
-        goby_core::SymbolInfo::Decl(sym) => {
-            let text = match &sym.annotation {
-                Some(ann) => format!("{} : {}", word, ann),
-                None => word,
-            };
-            Some(Hover {
-                contents: HoverContents::Markup(MarkupContent {
-                    kind: MarkupKind::PlainText,
-                    value: text,
-                }),
-                range: None,
-            })
+
+    // 1. Try local bindings first.
+    //
+    // Check local bindings before top-level symbols so that a local binding
+    // whose name shadows a top-level declaration shows the inferred local type
+    // instead of the top-level annotation when the cursor is on the definition line.
+    //
+    // LSP pos.line is 0-indexed; source lines are 1-indexed.
+    let cursor_source_line = pos.line as usize + 1;
+    for decl in &module.declarations {
+        let def_line = goby_core::def_line_of(decl);
+        let bindings = goby_core::infer_local_bindings(decl);
+        for sym in &bindings {
+            if sym.name != word {
+                continue;
+            }
+            // body-relative line → source file line:
+            // body string starts with a leading '\n', so body line N maps to
+            // source file line: def_line + body_relative_line - 1
+            let source_line = def_line + sym.body_relative_line - 1;
+            if source_line == cursor_source_line {
+                return Some(Hover {
+                    contents: HoverContents::Markup(MarkupContent {
+                        kind: MarkupKind::PlainText,
+                        value: format!("{} : {}", sym.name, sym.ty_str),
+                    }),
+                    range: None,
+                });
+            }
         }
-        goby_core::SymbolInfo::EffectMember(sym) => Some(Hover {
-            contents: HoverContents::Markup(MarkupContent {
-                kind: MarkupKind::PlainText,
-                value: format!("{} : {}", word, sym.signature),
-            }),
-            range: None,
-        }),
     }
+
+    // 2. Fall back to top-level symbols and effect members.
+    let sym_info = index.lookup(&word)?;
+    let text = match sym_info {
+        goby_core::SymbolInfo::Decl(sym) => match &sym.annotation {
+            Some(ann) => format!("{} : {}", word, ann),
+            None => word,
+        },
+        goby_core::SymbolInfo::EffectMember(sym) => {
+            format!("{} : {}", word, sym.signature)
+        }
+    };
+    Some(Hover {
+        contents: HoverContents::Markup(MarkupContent {
+            kind: MarkupKind::PlainText,
+            value: text,
+        }),
+        range: None,
+    })
 }
 
 /// Return the definition location for the given cursor position, or `None` for no-definition.
@@ -188,7 +216,7 @@ fn definition_at(
     stdlib_root: Option<&Path>,
     pos: Position,
 ) -> Option<GotoDefinitionResponse> {
-    let index = build_index(source, stdlib_root)?;
+    let (index, _module) = build_index(source, stdlib_root)?;
     let word = word_at_position(source, pos)?;
     let span = match index.lookup(&word)? {
         goby_core::SymbolInfo::Decl(sym) => sym.span,
@@ -201,13 +229,17 @@ fn definition_at(
     }))
 }
 
-/// Build a `SymbolIndex` from `source`.
+/// Parse `source` and build a `SymbolIndex`.
 ///
 /// Returns `None` if the source fails to parse.
 /// When `stdlib_root` is `None` we still build the index from the parse result.
-fn build_index(source: &str, _stdlib_root: Option<&Path>) -> Option<goby_core::SymbolIndex> {
+fn build_index(
+    source: &str,
+    _stdlib_root: Option<&Path>,
+) -> Option<(goby_core::SymbolIndex, goby_core::Module)> {
     let module = goby_core::parse_module(source).ok()?;
-    Some(goby_core::build_symbol_index(&module))
+    let index = goby_core::build_symbol_index(&module);
+    Some((index, module))
 }
 
 /// Extract the identifier word that surrounds `pos` in `source`.
@@ -1109,5 +1141,131 @@ mod tests {
         }
 
         shutdown_server(client_conn, server_thread);
+    }
+
+    // --- local binding hover ---
+
+    #[test]
+    fn local_binding_hover_basic() {
+        // Source:
+        //   line 0 (LSP): "add : Int -> Int"
+        //   line 1 (LSP): "add x ="
+        //   line 2 (LSP): "  y = x + 1"   ← cursor here on "y"
+        //   line 3 (LSP): "  y"
+        //
+        // def_line_of(decl) = 2 (annotation at line 1, def at line 2, 1-indexed)
+        // body_relative_line for "y = x + 1" = 2 (body starts with '\n')
+        // source_line = 2 + 2 - 1 = 3; cursor_source_line = 2 + 1 = 3 ✓
+        let source = "add : Int -> Int\nadd x =\n  y = x + 1\n  y\n";
+        let pos = Position { line: 2, character: 2 }; // "y" on line 2 (0-indexed)
+        let result = hover_at(source, None, pos);
+        assert!(result.is_some(), "expected hover for local binding 'y'");
+        if let Some(hover) = result {
+            if let HoverContents::Markup(mc) = hover.contents {
+                assert_eq!(mc.value, "y : Int");
+            } else {
+                panic!("expected Markup hover");
+            }
+        }
+    }
+
+    #[test]
+    fn local_binding_hover_mut() {
+        // Source:
+        //   line 0 (LSP): "foo : Int -> Int"
+        //   line 1 (LSP): "foo x ="
+        //   line 2 (LSP): "  mut z = 0"   ← cursor here on "z"
+        //   line 3 (LSP): "  z"
+        let source = "foo : Int -> Int\nfoo x =\n  mut z = 0\n  z\n";
+        let pos = Position { line: 2, character: 6 }; // "z" in "  mut z = 0"
+        let result = hover_at(source, None, pos);
+        assert!(result.is_some(), "expected hover for local binding 'z'");
+        if let Some(hover) = result {
+            if let HoverContents::Markup(mc) = hover.contents {
+                assert_eq!(mc.value, "z : Int");
+            } else {
+                panic!("expected Markup hover");
+            }
+        }
+    }
+
+    #[test]
+    fn local_binding_hover_use_site_returns_none() {
+        // Cursor on the USE site of "y" (line 3), not the definition (line 2).
+        // Use-site hover is out of scope; should return None.
+        let source = "add : Int -> Int\nadd x =\n  y = x + 1\n  y\n";
+        let pos = Position { line: 3, character: 2 }; // "y" on line 3 (the tail expr)
+        let result = hover_at(source, None, pos);
+        assert!(result.is_none(), "use-site hover should return None, got: {:?}", result);
+    }
+
+    #[test]
+    fn local_binding_hover_unknown_type_returns_none() {
+        // Binding depends on an unknown global → Ty::Unknown → not emitted.
+        let source = "foo : Int -> Int\nfoo x =\n  y = some_global_fn x\n  y\n";
+        let pos = Position { line: 2, character: 2 };
+        let result = hover_at(source, None, pos);
+        assert!(result.is_none(), "unknown-type binding should return None, got: {:?}", result);
+    }
+
+    #[test]
+    fn local_binding_hover_no_annotation() {
+        // Function with no type annotation: literals still produce a known type.
+        // Source:
+        //   line 0 (LSP): "answer ="
+        //   line 1 (LSP): "  x = 42"   ← cursor on "x"
+        //   line 2 (LSP): "  x"
+        //
+        // def_line_of(decl) = 1 (no annotation, def line is line 1, 1-indexed)
+        // body_relative_line = 2 (body starts with '\n')
+        // source_line = 1 + 2 - 1 = 2; cursor_source_line = 1 + 1 = 2 ✓
+        let source = "answer =\n  x = 42\n  x\n";
+        let pos = Position { line: 1, character: 2 }; // "x" on line 1 (0-indexed)
+        let result = hover_at(source, None, pos);
+        assert!(result.is_some(), "expected hover for local binding 'x'");
+        if let Some(hover) = result {
+            if let HoverContents::Markup(mc) = hover.contents {
+                assert_eq!(mc.value, "x : Int");
+            } else {
+                panic!("expected Markup hover");
+            }
+        }
+    }
+
+    #[test]
+    fn local_binding_hover_multi_binding_chain() {
+        // Second binding depends on first: b = a * 2 where a : Int → b : Int.
+        // Source:
+        //   line 0 (LSP): "f : Int -> Int"
+        //   line 1 (LSP): "f x ="
+        //   line 2 (LSP): "  a = x + 1"
+        //   line 3 (LSP): "  b = a + 2"   ← cursor on "b"
+        //   line 4 (LSP): "  b"
+        let source = "f : Int -> Int\nf x =\n  a = x + 1\n  b = a + 2\n  b\n";
+        let pos = Position { line: 3, character: 2 }; // "b" on line 3
+        let result = hover_at(source, None, pos);
+        assert!(result.is_some(), "expected hover for local binding 'b'");
+        if let Some(hover) = result {
+            if let HoverContents::Markup(mc) = hover.contents {
+                assert_eq!(mc.value, "b : Int");
+            } else {
+                panic!("expected Markup hover");
+            }
+        }
+    }
+
+    #[test]
+    fn local_binding_hover_reassign_lhs_returns_none() {
+        // Hovering on `n` in `n := n + 1` (reassignment, not definition) → None.
+        // Source:
+        //   line 0 (LSP): "count : Int -> Int"
+        //   line 1 (LSP): "count x ="
+        //   line 2 (LSP): "  mut n = x"    ← definition (returns "n : Int")
+        //   line 3 (LSP): "  n := n + 1"   ← reassignment (cursor here → None)
+        //   line 4 (LSP): "  n"
+        let source = "count : Int -> Int\ncount x =\n  mut n = x\n  n := n + 1\n  n\n";
+        let pos = Position { line: 3, character: 2 }; // "n" on the Assign line
+        let result = hover_at(source, None, pos);
+        assert!(result.is_none(), "reassignment LHS hover should return None, got: {:?}", result);
     }
 }

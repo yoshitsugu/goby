@@ -42,13 +42,21 @@ Last updated: 2026-03-17
 
 ## Current Focus
 
+- Track D3b — Local binding hover: **completed** (2026-03-17)
+  - `infer_local_bindings(decl: &Declaration) -> Vec<LocalBindingSymbol>` in goby-core
+  - Walks `parsed_body` stmts with a minimal `TypeEnv` seeded from param types
+  - `LocalBindingSymbol { name, body_relative_line, ty_str }` — omits `Ty::Unknown` bindings
+  - `hover_at` in goby-lsp: local binding lookup (definition-line only) precedes top-level lookup
+  - 4 new goby-core unit tests; 7 new goby-lsp tests (38 total)
+  - 479 goby-core tests, 38 goby-lsp tests pass
+  - Use-site hover and stdlib definition jump remain deferred (Expr::Var spans unpopulated)
 - Track D4 — `goby fmt` (AST pretty-printer): **completed** (2026-03-17)
   - `format_module(module: &Module) -> String` in goby-core (Option A, comment-drop)
   - Covers all Expr/Stmt variants; round-trip-safe output (parser-compatible form)
   - `goby fmt <file>` (in-place rewrite) and `goby fmt --check <file>` (exit 1 if not formatted)
   - 17 idempotency tests over examples/; 3 CLI integration tests
   - 475 goby-core tests, 22 goby-cli tests pass
-- Next: Track D3b — Local binding hover, or Track D5 — `goby lint`
+- Next: Track D5 — `goby lint`
 
 ## Locked Decisions Carried Forward
 
@@ -103,6 +111,6 @@ Execution order (matches PLAN.md dependency chain):
 7. ~~D2a: `goby-lsp` crate — diagnostics only~~ **(completed)**
 8. ~~D2b: Multi-error collection (`typecheck_module` → `Vec<Diagnostic>`)~~ **(completed)**
 9. ~~D3a: Symbol index, top-level hover/go-to-definition~~ **(completed)**
-9b. D3b: Local binding hover and stdlib definition. **(deferred — needs D1a-iii Expr/Stmt spans)**
+9b. ~~D3b: Local binding hover and stdlib definition~~ **(completed — definition-line hover only; use-site and stdlib jump deferred)**
 10. D4: `goby fmt` (AST pretty-printer).
 11. D5: `goby lint` (static checks).

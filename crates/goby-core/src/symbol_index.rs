@@ -6,7 +6,11 @@
 
 use std::collections::HashMap;
 
-use crate::ast::{Declaration, Module, Span};
+use crate::ast::{Declaration, Module, Span, Stmt};
+use crate::typecheck_annotation::declaration_param_types;
+use crate::typecheck_check::check_expr;
+use crate::typecheck_env::{Ty, TypeEnv};
+use crate::typecheck_render::ty_name;
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -66,6 +70,83 @@ pub enum SymbolInfo<'a> {
 }
 
 // ---------------------------------------------------------------------------
+// Local binding index
+// ---------------------------------------------------------------------------
+
+/// Information about a single local binding (`name = expr` or `mut name = expr`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LocalBindingSymbol {
+    /// Binding name.
+    pub name: String,
+    /// Body-relative line number (1-indexed).
+    ///
+    /// The body string begins with a leading `'\n'` inserted by `collect_indented_body`,
+    /// so the first content line is always at body-relative line **2** (not 1).
+    /// To convert to a source-file line number: `source_line = def_line_of(decl) + body_relative_line - 1`.
+    pub body_relative_line: usize,
+    /// Human-readable inferred type string (e.g. `"Int"`, `"List String"`).
+    pub ty_str: String,
+}
+
+/// Walk the parsed body of a single declaration and collect all local bindings
+/// with their inferred types.
+///
+/// Returns a (possibly empty) list of [`LocalBindingSymbol`] values.  Bindings
+/// whose type cannot be inferred (`Ty::Unknown`) are omitted.
+///
+/// Uses a minimal `TypeEnv` seeded with the declaration's parameter types.
+/// Globals are not available in this context, so bindings that depend on
+/// global functions will have `Ty::Unknown` and will be omitted.
+pub fn infer_local_bindings(decl: &Declaration) -> Vec<LocalBindingSymbol> {
+    let stmts = match &decl.parsed_body {
+        Some(s) if !s.is_empty() => s,
+        _ => return vec![],
+    };
+
+    // Build a minimal TypeEnv seeded with declared parameter types.
+    let param_tys: Vec<(String, Ty)> = declaration_param_types(decl).unwrap_or_default();
+
+    let mut local_env = TypeEnv {
+        globals: HashMap::new(),
+        locals: param_tys.iter().map(|(n, t)| (n.clone(), t.clone())).collect(),
+        type_aliases: HashMap::new(),
+        record_types: HashMap::new(),
+    };
+
+    let mut result = Vec::new();
+
+    for stmt in stmts {
+        match stmt {
+            Stmt::Binding { name, value, span } | Stmt::MutBinding { name, value, span } => {
+                let ty = check_expr(value, &local_env);
+                // Update local env so later bindings can reference this one.
+                local_env.locals.insert(name.clone(), ty.clone());
+                // Only emit symbols with a known type and a span.
+                if ty != Ty::Unknown {
+                    if let Some(sp) = span {
+                        result.push(LocalBindingSymbol {
+                            name: name.clone(),
+                            body_relative_line: sp.line,
+                            ty_str: ty_name(&ty),
+                        });
+                    }
+                }
+            }
+            Stmt::Assign { name, value, .. } => {
+                // Re-assignment: update the env but don't emit a new symbol.
+                let ty = check_expr(value, &local_env);
+                if ty != Ty::Unknown {
+                    local_env.locals.insert(name.clone(), ty);
+                }
+            }
+            Stmt::Expr(_, _) => {}
+        }
+    }
+
+    result
+}
+
+// ---------------------------------------------------------------------------
 // Builder
 // ---------------------------------------------------------------------------
 
@@ -73,7 +154,7 @@ pub enum SymbolInfo<'a> {
 ///
 /// `Declaration.line` points to the type-annotation line when an annotation is
 /// present; the actual definition line is one line below it in that case.
-fn def_line_of(decl: &Declaration) -> usize {
+pub fn def_line_of(decl: &Declaration) -> usize {
     if decl.type_annotation.is_some() { decl.line + 1 } else { decl.line }
 }
 
@@ -193,5 +274,55 @@ mod tests {
             }
             _ => panic!("expected EffectMember"),
         }
+    }
+
+    // --- infer_local_bindings ---
+
+    fn decl_bindings(src: &str) -> Vec<LocalBindingSymbol> {
+        let module = parse_module(src).expect("parse failed");
+        let decl = module.declarations.first().expect("no declaration");
+        infer_local_bindings(decl)
+    }
+
+    #[test]
+    fn local_binding_int_param() {
+        // `y = x + 1` where x : Int  →  y : Int
+        let src = "add : Int -> Int\nadd x =\n  y = x + 1\n  y\n";
+        let bindings = decl_bindings(src);
+        assert_eq!(bindings.len(), 1, "expected one binding, got: {:?}", bindings);
+        assert_eq!(bindings[0].name, "y");
+        assert_eq!(bindings[0].ty_str, "Int");
+        // body string starts with a leading '\n' (from collect_indented_body),
+        // so "y = x + 1" is at body.lines() index 1 → stmt_line = 2.
+        assert_eq!(bindings[0].body_relative_line, 2);
+    }
+
+    #[test]
+    fn local_binding_mut_int() {
+        // `mut z = 0`  →  z : Int
+        let src = "foo : Int -> Int\nfoo x =\n  mut z = 0\n  z\n";
+        let bindings = decl_bindings(src);
+        assert_eq!(bindings.len(), 1, "expected one binding, got: {:?}", bindings);
+        assert_eq!(bindings[0].name, "z");
+        assert_eq!(bindings[0].ty_str, "Int");
+    }
+
+    #[test]
+    fn local_binding_no_annotation_no_params() {
+        // No annotation → no param types → literals still work
+        let src = "answer =\n  x = 42\n  x\n";
+        let bindings = decl_bindings(src);
+        assert_eq!(bindings.len(), 1);
+        assert_eq!(bindings[0].name, "x");
+        assert_eq!(bindings[0].ty_str, "Int");
+    }
+
+    #[test]
+    fn local_binding_unknown_type_omitted() {
+        // `y = some_global_fn x` — global not in env → Unknown → omitted
+        let src = "foo : Int -> Int\nfoo x =\n  y = some_global_fn x\n  y\n";
+        let bindings = decl_bindings(src);
+        // y depends on some_global_fn which is not in locals → Ty::Unknown → omitted
+        assert!(bindings.is_empty(), "expected empty, got: {:?}", bindings);
     }
 }
