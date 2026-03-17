@@ -38,7 +38,7 @@ pub(crate) fn check_resume_in_stmts_with_local_env(
 ) -> Result<(), TypecheckError> {
     for stmt in stmts {
         match stmt {
-            Stmt::Binding { name, value } | Stmt::MutBinding { name, value } => {
+            Stmt::Binding { name, value, .. } | Stmt::MutBinding { name, value, .. } => {
                 check_resume_in_expr(value, local_env, decl_name, resume_ctx)?;
                 let ty = infer_binding_ty_with_resume_context(value, local_env, resume_ctx);
                 local_env.locals.insert(name.clone(), ty);
@@ -46,7 +46,7 @@ pub(crate) fn check_resume_in_stmts_with_local_env(
             Stmt::Assign { value, .. } => {
                 check_resume_in_expr(value, local_env, decl_name, resume_ctx)?;
             }
-            Stmt::Expr(expr) => {
+            Stmt::Expr(expr, _) => {
                 check_resume_in_expr(expr, local_env, decl_name, resume_ctx)?;
             }
         }

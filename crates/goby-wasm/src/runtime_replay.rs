@@ -11,7 +11,7 @@ impl<'m> RuntimeOutputResolver<'m> {
         depth: usize,
     ) -> Out<()> {
         match stmt {
-            Stmt::Binding { name, value } | Stmt::MutBinding { name, value } => {
+            Stmt::Binding { name, value, .. } | Stmt::MutBinding { name, value, .. } => {
                 let v = match self.eval_expr(value, locals, callables, evaluators, depth) {
                     Out::Done(v) => v,
                     Out::Suspend(cont) => return Out::Suspend(cont),
@@ -21,7 +21,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                 locals.store(name, v);
                 Out::Done(())
             }
-            Stmt::Assign { name, value } => {
+            Stmt::Assign { name, value, .. } => {
                 if locals.get(name).is_none() {
                     return Out::Err(RuntimeError::Unsupported);
                 }
@@ -34,7 +34,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                 locals.store(name, v);
                 Out::Done(())
             }
-            Stmt::Expr(expr) => {
+            Stmt::Expr(expr, _) => {
                 self.execute_unit_expr_ast(expr, locals, callables, evaluators, depth)
             }
         }
@@ -50,7 +50,7 @@ impl<'m> RuntimeOutputResolver<'m> {
         let mut i = 0;
         while i < stmts.len() {
             let remaining = &stmts[i + 1..];
-            let did_set_slot = !remaining.is_empty() && matches!(&stmts[i], Stmt::Expr(_));
+            let did_set_slot = !remaining.is_empty() && matches!(&stmts[i], Stmt::Expr(_, _));
             if did_set_slot && let Some(slot) = self.pending_caller_cont_stack.last_mut() {
                 *slot = Some(Cont::StmtSeq {
                     store: None,
@@ -98,7 +98,7 @@ impl<'m> RuntimeOutputResolver<'m> {
         let mut i = 0;
         while i < stmts.len() {
             let remaining = stmts[i + 1..].to_vec();
-            let did_set_slot = !remaining.is_empty() && matches!(&stmts[i], Stmt::Expr(_));
+            let did_set_slot = !remaining.is_empty() && matches!(&stmts[i], Stmt::Expr(_, _));
             if did_set_slot && let Some(slot) = self.pending_caller_cont_stack.last_mut() {
                 *slot = Some(Cont::StmtSeq {
                     store: None,
@@ -158,7 +158,7 @@ impl<'m> RuntimeOutputResolver<'m> {
         for (i, stmt) in stmts.iter().enumerate() {
             let remaining = stmts[i + 1..].to_vec();
             match stmt {
-                Stmt::Binding { name, value } | Stmt::MutBinding { name, value } => {
+                Stmt::Binding { name, value, .. } | Stmt::MutBinding { name, value, .. } => {
                     match self.eval_expr(value, &locals, &callables, evaluators, depth + 1) {
                         Out::Done(v) => {
                             locals.store(name, v);
@@ -178,7 +178,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                         Out::Err(e) => return Out::Err(e),
                     }
                 }
-                Stmt::Assign { name, value } => {
+                Stmt::Assign { name, value, .. } => {
                     if locals.get(name).is_none() {
                         return Out::Err(RuntimeError::Abort {
                             kind: "assign_missing_var".into(),
@@ -203,7 +203,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                         Out::Err(e) => return Out::Err(e),
                     }
                 }
-                Stmt::Expr(expr) => {
+                Stmt::Expr(expr, _) => {
                     if matches!(expr, Expr::If { .. } | Expr::Block(_) | Expr::With { .. }) {
                         match self.eval_stmt_expr_with_local_effects(
                             expr,

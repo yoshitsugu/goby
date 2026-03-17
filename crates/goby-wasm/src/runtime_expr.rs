@@ -477,7 +477,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                 while i < stmts_slice.len() {
                     let stmt = &stmts_slice[i];
                     match stmt {
-                        Stmt::Binding { name, value } | Stmt::MutBinding { name, value } => {
+                        Stmt::Binding { name, value, .. } | Stmt::MutBinding { name, value, .. } => {
                             match self.eval_expr(
                                 value,
                                 &block_locals,
@@ -506,7 +506,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                                 Out::Err(e) => return Out::Err(e),
                             }
                         }
-                        Stmt::Assign { name, value } => {
+                        Stmt::Assign { name, value, .. } => {
                             if block_locals.get(name).is_none() {
                                 return Out::Err(RuntimeError::Unsupported);
                             }
@@ -538,7 +538,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                                 Out::Err(e) => return Out::Err(e),
                             }
                         }
-                        Stmt::Expr(inner_expr) => {
+                        Stmt::Expr(inner_expr, _) => {
                             match self.eval_expr(
                                 inner_expr,
                                 &block_locals,

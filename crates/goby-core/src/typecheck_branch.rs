@@ -14,7 +14,7 @@ pub(crate) fn check_branch_type_consistency_in_stmts(
     let mut local_env = env.clone();
     for stmt in stmts {
         match stmt {
-            Stmt::Binding { name, value } | Stmt::MutBinding { name, value } => {
+            Stmt::Binding { name, value, .. } | Stmt::MutBinding { name, value, .. } => {
                 check_branch_type_consistency_in_expr(value, &local_env, decl_name)?;
                 let ty = check_expr(value, &local_env);
                 local_env.locals.insert(name.clone(), ty);
@@ -22,7 +22,7 @@ pub(crate) fn check_branch_type_consistency_in_stmts(
             Stmt::Assign { value, .. } => {
                 check_branch_type_consistency_in_expr(value, &local_env, decl_name)?;
             }
-            Stmt::Expr(expr) => {
+            Stmt::Expr(expr, _) => {
                 check_branch_type_consistency_in_expr(expr, &local_env, decl_name)?;
             }
         }

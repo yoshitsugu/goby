@@ -144,7 +144,7 @@ fn unsupported_stmt_reason(
         Stmt::MutBinding { .. } | Stmt::Assign { .. } => {
             Some(UnsupportedReason::UnsupportedStatementExpr)
         }
-        Stmt::Expr(expr) => unsupported_stmt_expr_reason(expr, module, stack),
+        Stmt::Expr(expr, _) => unsupported_stmt_expr_reason(expr, module, stack),
     }
 }
 
@@ -237,7 +237,7 @@ fn unsupported_value_expr_reason(
             None
         }
         Expr::Block(stmts) => {
-            if !matches!(stmts.last(), Some(Stmt::Expr(_))) {
+            if !matches!(stmts.last(), Some(Stmt::Expr(_, _))) {
                 return Some(UnsupportedReason::UnsupportedValueExpr);
             }
             for stmt in stmts {
@@ -250,7 +250,7 @@ fn unsupported_value_expr_reason(
                     Stmt::Assign { .. } => {
                         return Some(UnsupportedReason::UnsupportedStatementExpr);
                     }
-                    Stmt::Expr(expr) => {
+                    Stmt::Expr(expr, _) => {
                         if let Some(reason) = unsupported_value_expr_reason(expr, module, stack) {
                             return Some(reason);
                         }
@@ -335,7 +335,7 @@ fn is_decl_stmt_supported(stmt: &Stmt, module: &Module, stack: &mut HashSet<Stri
     match stmt {
         Stmt::Binding { value, .. } => is_decl_value_expr_supported(value, module, stack),
         Stmt::MutBinding { .. } | Stmt::Assign { .. } => false,
-        Stmt::Expr(expr) => match expr {
+        Stmt::Expr(expr, _) => match expr {
             Expr::Call { callee, arg, .. } if matches!(callee.as_ref(), Expr::Var { name: n, .. } if n == BUILTIN_PRINT) => {
                 is_decl_value_expr_supported(arg, module, stack)
             }
@@ -374,13 +374,13 @@ fn is_decl_value_expr_supported(expr: &Expr, module: &Module, stack: &mut HashSe
         }
         Expr::Block(stmts) => {
             !stmts.is_empty()
-                && matches!(stmts.last(), Some(Stmt::Expr(_)))
+                && matches!(stmts.last(), Some(Stmt::Expr(_, _)))
                 && stmts.iter().all(|stmt| match stmt {
                     Stmt::Binding { value, .. } => {
                         is_decl_value_expr_supported(value, module, stack)
                     }
                     Stmt::MutBinding { .. } | Stmt::Assign { .. } => false,
-                    Stmt::Expr(expr) => is_decl_value_expr_supported(expr, module, stack),
+                    Stmt::Expr(expr, _) => is_decl_value_expr_supported(expr, module, stack),
                 })
         }
         Expr::Call { callee, arg, .. } => {

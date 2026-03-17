@@ -548,7 +548,7 @@ fn first_disallowed_intrinsic_in_stmts(
             Stmt::Binding { value, .. }
             | Stmt::MutBinding { value, .. }
             | Stmt::Assign { value, .. }
-            | Stmt::Expr(value) => {
+            | Stmt::Expr(value, _) => {
                 if let Some(hit) = first_disallowed_intrinsic_in_expr(value, is_stdlib_source) {
                     return Some(hit);
                 }

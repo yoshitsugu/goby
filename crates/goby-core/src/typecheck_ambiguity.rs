@@ -205,7 +205,7 @@ pub(crate) fn ensure_no_ambiguous_refs_in_expr(
         }
         Expr::Resume { value } => ensure_no_ambiguous_refs_in_expr(value, env, decl_name),
         Expr::Block(stmts) => {
-            if !matches!(stmts.last(), Some(Stmt::Expr(_))) {
+            if !matches!(stmts.last(), Some(Stmt::Expr(_, _))) {
                 return Err(TypecheckError {
                     declaration: Some(decl_name.to_string()),
                     span: None, // no span available: requires Expr/Stmt span (D1a-iii)
@@ -215,7 +215,7 @@ pub(crate) fn ensure_no_ambiguous_refs_in_expr(
             let mut local_env = env.clone();
             for stmt in stmts {
                 match stmt {
-                    Stmt::Binding { name, value } | Stmt::MutBinding { name, value } => {
+                    Stmt::Binding { name, value, .. } | Stmt::MutBinding { name, value, .. } => {
                         ensure_no_ambiguous_refs_in_expr(value, &local_env, decl_name)?;
                         let ty = check_expr(value, &local_env);
                         local_env.locals.insert(name.clone(), ty);
@@ -223,7 +223,7 @@ pub(crate) fn ensure_no_ambiguous_refs_in_expr(
                     Stmt::Assign { value, .. } => {
                         ensure_no_ambiguous_refs_in_expr(value, &local_env, decl_name)?;
                     }
-                    Stmt::Expr(expr) => {
+                    Stmt::Expr(expr, _) => {
                         ensure_no_ambiguous_refs_in_expr(expr, &local_env, decl_name)?;
                     }
                 }
@@ -267,7 +267,7 @@ pub(crate) fn ensure_no_ambiguous_refs_in_stmts(
             | Stmt::Assign { value, .. } => {
                 ensure_no_ambiguous_refs_in_expr(value, env, decl_name)?
             }
-            Stmt::Expr(expr) => ensure_no_ambiguous_refs_in_expr(expr, env, decl_name)?,
+            Stmt::Expr(expr, _) => ensure_no_ambiguous_refs_in_expr(expr, env, decl_name)?,
         }
     }
     Ok(())

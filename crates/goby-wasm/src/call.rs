@@ -86,7 +86,7 @@ mod tests {
             .as_deref()
             .expect("main parsed body should exist");
         match &stmts[0] {
-            Stmt::Expr(expr) => expr.clone(),
+            Stmt::Expr(expr, _) => expr.clone(),
             other => panic!("expected first stmt to be expression, got {:?}", other),
         }
     }

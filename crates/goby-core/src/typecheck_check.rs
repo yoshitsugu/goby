@@ -395,7 +395,7 @@ fn infer_block_expr_ty(stmts: &[Stmt], env: &TypeEnv) -> Ty {
     let mut has_tail_expr = false;
     for stmt in stmts {
         match stmt {
-            Stmt::Binding { name, value } | Stmt::MutBinding { name, value } => {
+            Stmt::Binding { name, value, .. } | Stmt::MutBinding { name, value, .. } => {
                 let ty = check_expr(value, &local_env);
                 local_env.locals.insert(name.clone(), ty);
                 has_tail_expr = false;
@@ -404,7 +404,7 @@ fn infer_block_expr_ty(stmts: &[Stmt], env: &TypeEnv) -> Ty {
                 let _ = check_expr(value, &local_env);
                 has_tail_expr = false;
             }
-            Stmt::Expr(expr) => {
+            Stmt::Expr(expr, _) => {
                 last_expr_ty = check_expr(expr, &local_env);
                 has_tail_expr = true;
             }

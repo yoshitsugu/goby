@@ -231,7 +231,7 @@ fn plan_static_output(stmts: &[Stmt]) -> Option<String> {
     }
     let mut output = String::new();
     for stmt in stmts {
-        let Stmt::Expr(Expr::Call { callee, arg, .. }) = stmt else {
+        let Stmt::Expr(Expr::Call { callee, arg, .. }, _) = stmt else {
             return None;
         };
         let Expr::Var { name, .. } = callee.as_ref() else {
@@ -292,7 +292,7 @@ fn plan_runtime_io(module: &Module, stmts: &[Stmt]) -> Option<RuntimeIoPlan> {
 fn plan_echo_runtime_io(stmts: &[Stmt]) -> Option<RuntimeIoPlan> {
     let (echo_stmts, suffix_prints) = split_trailing_static_print_suffixes(stmts)?;
     match echo_stmts {
-        [Stmt::Expr(expr)] => {
+        [Stmt::Expr(expr, _)] => {
             output_read_mode(expr).map(|(input_mode, output_mode)| RuntimeIoPlan::Echo {
                 input_mode,
                 output_mode,
@@ -302,7 +302,7 @@ fn plan_echo_runtime_io(stmts: &[Stmt]) -> Option<RuntimeIoPlan> {
         [
             read_stmt,
             middle @ ..,
-            Stmt::Expr(Expr::Call { callee, arg, .. }),
+            Stmt::Expr(Expr::Call { callee, arg, .. }, _),
         ] => {
             let (source_name, input_mode) = read_binding_mode(read_stmt)?;
             let printed_name = resolve_alias_chain_terminal_name(middle, source_name)?;
@@ -352,7 +352,7 @@ fn stmt_contains_runtime_read(stmt: &Stmt) -> bool {
         Stmt::Binding { value, .. }
         | Stmt::MutBinding { value, .. }
         | Stmt::Assign { value, .. } => expr_contains_runtime_read(value),
-        Stmt::Expr(expr) => expr_contains_runtime_read(expr),
+        Stmt::Expr(expr, _) => expr_contains_runtime_read(expr),
     }
 }
 
@@ -492,7 +492,7 @@ fn imported_head_matches_symbol(
 
 fn stmt_binding_parts(stmt: &Stmt) -> Option<(&str, &Expr)> {
     match stmt {
-        Stmt::Binding { name, value } | Stmt::MutBinding { name, value } => Some((name, value)),
+        Stmt::Binding { name, value, .. } | Stmt::MutBinding { name, value, .. } => Some((name, value)),
         _ => None,
     }
 }
@@ -722,7 +722,7 @@ fn callback_output_mode_name(name: &str) -> Option<OutputReadMode> {
 }
 
 fn static_print_suffix(stmt: &Stmt) -> Option<StaticPrintSuffix> {
-    let Stmt::Expr(Expr::Call { callee, arg, .. }) = stmt else {
+    let Stmt::Expr(Expr::Call { callee, arg, .. }, _) = stmt else {
         return None;
     };
     let Expr::Var { name, .. } = callee.as_ref() else {
@@ -774,7 +774,7 @@ fn split_lines_each_plan(
     };
 
     for (each_index, each_stmt) in rest.iter().enumerate() {
-        let Stmt::Expr(each_expr) = each_stmt else {
+        let Stmt::Expr(each_expr, _) = each_stmt else {
             continue;
         };
         let Some(suffix_prints) = collect_static_print_suffixes(&rest[each_index + 1..]) else {

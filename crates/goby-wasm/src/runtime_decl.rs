@@ -238,7 +238,8 @@ impl<'m> RuntimeOutputResolver<'m> {
                 !matches!(
                     stmt,
                     Stmt::Expr(
-                        Expr::Var { name: _, .. } | Expr::IntLit(_) | Expr::StringLit(_) | Expr::BoolLit(_)
+                        Expr::Var { name: _, .. } | Expr::IntLit(_) | Expr::StringLit(_) | Expr::BoolLit(_),
+                        _
                     )
                 )
             })
@@ -324,7 +325,8 @@ impl<'m> RuntimeOutputResolver<'m> {
                 !matches!(
                     stmt,
                     Stmt::Expr(
-                        Expr::Var { name: _, .. } | Expr::IntLit(_) | Expr::StringLit(_) | Expr::BoolLit(_)
+                        Expr::Var { name: _, .. } | Expr::IntLit(_) | Expr::StringLit(_) | Expr::BoolLit(_),
+                        _
                     )
                 )
             })
@@ -449,7 +451,8 @@ impl<'m> RuntimeOutputResolver<'m> {
                 !matches!(
                     stmt,
                     Stmt::Expr(
-                        Expr::Var { name: _, .. } | Expr::IntLit(_) | Expr::StringLit(_) | Expr::BoolLit(_)
+                        Expr::Var { name: _, .. } | Expr::IntLit(_) | Expr::StringLit(_) | Expr::BoolLit(_),
+                        _
                     )
                 )
             })
@@ -500,7 +503,8 @@ impl<'m> RuntimeOutputResolver<'m> {
                 !matches!(
                     stmt,
                     Stmt::Expr(
-                        Expr::Var { name: _, .. } | Expr::IntLit(_) | Expr::StringLit(_) | Expr::BoolLit(_)
+                        Expr::Var { name: _, .. } | Expr::IntLit(_) | Expr::StringLit(_) | Expr::BoolLit(_),
+                        _
                     )
                 )
             })

@@ -203,7 +203,7 @@ main =
             .expect("declaration body should parse");
         assert_eq!(stmts.len(), 1);
         match &stmts[0] {
-            Stmt::Expr(Expr::With { handler, .. }) => match handler.as_ref() {
+            Stmt::Expr(Expr::With { handler, .. }, _) => match handler.as_ref() {
                 Expr::Handler { clauses } => {
                     let clause_stmts = clauses[0]
                         .parsed_body
@@ -211,7 +211,7 @@ main =
                         .expect("handler clause body should parse");
                     assert_eq!(clause_stmts.len(), 1);
                     match &clause_stmts[0] {
-                        Stmt::Expr(Expr::Resume { value }) => {
+                        Stmt::Expr(Expr::Resume { value }, _) => {
                             assert!(value.is_unit_value());
                         }
                         other => panic!("unexpected statement shape: {:?}", other),
@@ -249,7 +249,7 @@ main =
             .parsed_body
             .as_ref()
             .expect("main body should parse");
-        let Stmt::Expr(Expr::With { handler, .. }) = &stmts[0] else {
+        let Stmt::Expr(Expr::With { handler, .. }, _) = &stmts[0] else {
             panic!("expected top-level with");
         };
         let Expr::Handler { clauses } = handler.as_ref() else {
@@ -262,7 +262,7 @@ main =
         assert!(
             clause_stmts
                 .iter()
-                .any(|stmt| matches!(stmt, Stmt::Expr(Expr::With { .. }))),
+                .any(|stmt| matches!(stmt, Stmt::Expr(Expr::With { .. }, _))),
             "handler clause body should contain nested with expression"
         );
     }
@@ -300,7 +300,7 @@ main =
             .expect("body with trailing comment should parse");
         assert_eq!(parsed.len(), 1);
         match &parsed[0] {
-            Stmt::Expr(Expr::Call { arg, .. }) => {
+            Stmt::Expr(Expr::Call { arg, .. }, _) => {
                 assert_eq!(**arg, Expr::StringLit("a#b".to_string()));
             }
             other => panic!("unexpected stmt: {:?}", other),
@@ -365,7 +365,7 @@ main =
             if let Some(stmts) = &decl.parsed_body {
                 // Verify no Stmt contains an Expr::If (the malformed if/else failed to parse).
                 for stmt in stmts {
-                    if let crate::ast::Stmt::Expr(expr) = stmt {
+                    if let crate::ast::Stmt::Expr(expr, _) = stmt {
                         assert!(
                             !matches!(expr, crate::ast::Expr::If { .. }),
                             "malformed else indent should not produce Expr::If"

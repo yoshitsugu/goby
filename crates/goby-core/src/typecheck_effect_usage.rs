@@ -481,7 +481,7 @@ pub(crate) fn check_unhandled_effects_in_expr(
         }
         Expr::Resume { value } => recurse!(value),
         Expr::Block(stmts) => {
-            if !matches!(stmts.last(), Some(Stmt::Expr(_))) {
+            if !matches!(stmts.last(), Some(Stmt::Expr(_, _))) {
                 return Err(TypecheckError {
                     declaration: Some(decl_name.to_string()),
                     span: None, // no span available: requires Expr/Stmt span (D1a-iii)
@@ -491,7 +491,7 @@ pub(crate) fn check_unhandled_effects_in_expr(
             let mut local_env = env.clone();
             for stmt in stmts {
                 match stmt {
-                    Stmt::Binding { name, value } | Stmt::MutBinding { name, value } => {
+                    Stmt::Binding { name, value, .. } | Stmt::MutBinding { name, value, .. } => {
                         ensure_no_ambiguous_refs_in_expr(value, &local_env, decl_name)?;
                         check_unhandled_effects_in_expr(
                             value,
@@ -515,7 +515,7 @@ pub(crate) fn check_unhandled_effects_in_expr(
                             decl_name,
                         )?;
                     }
-                    Stmt::Expr(expr) => {
+                    Stmt::Expr(expr, _) => {
                         ensure_no_ambiguous_refs_in_expr(expr, &local_env, decl_name)?;
                         check_unhandled_effects_in_expr(
                             expr,

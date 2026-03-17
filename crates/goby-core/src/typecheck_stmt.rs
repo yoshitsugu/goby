@@ -85,7 +85,7 @@ fn check_stmt(
     covered_ops: &HashSet<String>,
 ) -> Result<(), TypecheckError> {
     match stmt {
-        Stmt::Binding { name, value } => {
+        Stmt::Binding { name, value, .. } => {
             if local_mutability.contains_key(name) {
                 return Err(TypecheckError {
                     declaration: Some(decl_name.to_string()),
@@ -109,7 +109,7 @@ fn check_stmt(
             local_mutability.insert(name.clone(), false);
             Ok(())
         }
-        Stmt::MutBinding { name, value } => {
+        Stmt::MutBinding { name, value, .. } => {
             if local_mutability.contains_key(name) {
                 return Err(TypecheckError {
                     declaration: Some(decl_name.to_string()),
@@ -133,7 +133,7 @@ fn check_stmt(
             local_mutability.insert(name.clone(), true);
             Ok(())
         }
-        Stmt::Assign { name, value } => {
+        Stmt::Assign { name, value, .. } => {
             if !local_mutability.contains_key(name) {
                 return Err(TypecheckError {
                     declaration: Some(decl_name.to_string()),
@@ -181,7 +181,7 @@ fn check_stmt(
             }
             Ok(())
         }
-        Stmt::Expr(expr) => validate_stmt_value(
+        Stmt::Expr(expr, _) => validate_stmt_value(
             expr,
             local_env,
             required_effects_map,
@@ -291,7 +291,7 @@ fn ensure_known_call_targets_in_expr(
                             Stmt::Binding { value, .. }
                             | Stmt::MutBinding { value, .. }
                             | Stmt::Assign { value, .. }
-                            | Stmt::Expr(value) => {
+                            | Stmt::Expr(value, _) => {
                                 ensure_known_call_targets_in_expr(value, env, decl_name)?;
                             }
                         }
@@ -307,7 +307,7 @@ fn ensure_known_call_targets_in_expr(
                     Stmt::Binding { value, .. }
                     | Stmt::MutBinding { value, .. }
                     | Stmt::Assign { value, .. }
-                    | Stmt::Expr(value) => {
+                    | Stmt::Expr(value, _) => {
                         ensure_known_call_targets_in_expr(value, env, decl_name)?;
                     }
                 }
@@ -321,7 +321,7 @@ fn ensure_known_call_targets_in_expr(
                     Stmt::Binding { value, .. }
                     | Stmt::MutBinding { value, .. }
                     | Stmt::Assign { value, .. }
-                    | Stmt::Expr(value) => {
+                    | Stmt::Expr(value, _) => {
                         ensure_known_call_targets_in_expr(value, env, decl_name)?;
                     }
                 }
@@ -371,7 +371,7 @@ fn check_declared_return_type(
         .iter()
         .rev()
         .find_map(|s| {
-            if let Stmt::Expr(expr) = s {
+            if let Stmt::Expr(expr, _) = s {
                 Some(check_expr(expr, local_env))
             } else {
                 None

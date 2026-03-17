@@ -260,7 +260,7 @@ fn stmt_contains_resume(stmt: &Stmt) -> bool {
         Stmt::Binding { value, .. }
         | Stmt::MutBinding { value, .. }
         | Stmt::Assign { value, .. } => expr_contains_resume(value),
-        Stmt::Expr(expr) => expr_contains_resume(expr),
+        Stmt::Expr(expr, _) => expr_contains_resume(expr),
     }
 }
 
@@ -373,18 +373,18 @@ fn collect_phase2_output_text(
     let mut outputs: Vec<String> = Vec::new();
     for stmt in stmts {
         match stmt {
-            Stmt::Binding { name, value } | Stmt::MutBinding { name, value } => {
+            Stmt::Binding { name, value, .. } | Stmt::MutBinding { name, value, .. } => {
                 let val = eval_expr(value, &bindings, &env, 0)?;
                 bindings.insert(name.to_string(), val);
             }
-            Stmt::Assign { name, value } => {
+            Stmt::Assign { name, value, .. } => {
                 let val = eval_expr(value, &bindings, &env, 0)?;
                 if !bindings.contains_key(name) {
                     return None;
                 }
                 bindings.insert(name.to_string(), val);
             }
-            Stmt::Expr(expr) => {
+            Stmt::Expr(expr, _) => {
                 let val = as_print_expr(expr, &bindings, &env)?;
                 outputs.push(val.as_output_text());
             }
@@ -510,12 +510,12 @@ fn eval_expr(
             let mut last_expr: Option<NativeValue> = None;
             for stmt in stmts {
                 match stmt {
-                    Stmt::Binding { name, value } | Stmt::MutBinding { name, value } => {
+                    Stmt::Binding { name, value, .. } | Stmt::MutBinding { name, value, .. } => {
                         let val = eval_expr(value, &locals, env, depth + 1)?;
                         locals.insert(name.clone(), val);
                         last_expr = None;
                     }
-                    Stmt::Assign { name, value } => {
+                    Stmt::Assign { name, value, .. } => {
                         if !locals.contains_key(name) {
                             return None;
                         }
@@ -523,7 +523,7 @@ fn eval_expr(
                         locals.insert(name.clone(), val);
                         last_expr = None;
                     }
-                    Stmt::Expr(expr) => {
+                    Stmt::Expr(expr, _) => {
                         last_expr = Some(eval_expr(expr, &locals, env, depth + 1)?);
                     }
                 }
@@ -582,18 +582,18 @@ fn eval_named_function(
     let mut last_expr: Option<NativeValue> = None;
     for stmt in stmts {
         match stmt {
-            Stmt::Binding { name, value } | Stmt::MutBinding { name, value } => {
+            Stmt::Binding { name, value, .. } | Stmt::MutBinding { name, value, .. } => {
                 let val = eval_expr(value, &locals, env, depth + 1)?;
                 locals.insert(name.clone(), val);
             }
-            Stmt::Assign { name, value } => {
+            Stmt::Assign { name, value, .. } => {
                 if !locals.contains_key(name) {
                     return None;
                 }
                 let val = eval_expr(value, &locals, env, depth + 1)?;
                 locals.insert(name.clone(), val);
             }
-            Stmt::Expr(expr) => {
+            Stmt::Expr(expr, _) => {
                 let value = eval_expr(expr, &locals, env, depth + 1)?;
                 last_expr = Some(value);
             }

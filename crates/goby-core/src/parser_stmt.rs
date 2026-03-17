@@ -89,6 +89,7 @@ where
                 stmts.push(Stmt::Binding {
                     name: name.to_string(),
                     value,
+                    span: None,
                 });
                 i = after;
                 continue;
@@ -103,6 +104,7 @@ where
             stmts.push(Stmt::Binding {
                 name: name.to_string(),
                 value: handler,
+                span: None,
             });
             i = next_i;
             continue;
@@ -115,7 +117,7 @@ where
             stmts.push(Stmt::Expr(Expr::With {
                 handler: Box::new(handler),
                 body,
-            }));
+            }, None));
             i = after_with;
             continue;
         }
@@ -126,7 +128,7 @@ where
             stmts.push(Stmt::Expr(Expr::With {
                 handler: Box::new(handler),
                 body,
-            }));
+            }, None));
             i = after_with;
             continue;
         }
@@ -148,7 +150,7 @@ where
                     callee: Box::new(callee),
                     arg: Box::new(multi_expr),
                 span: None,
-                }));
+                }, None));
                 i = next_i + consumed;
                 continue;
             }
@@ -173,7 +175,7 @@ where
         if (trimmed.starts_with("case ") || trimmed.starts_with("if "))
             && let Some((multi_expr, consumed)) = parse_multiline_expr(lines, i, parse_expr)
         {
-            stmts.push(Stmt::Expr(multi_expr));
+            stmts.push(Stmt::Expr(multi_expr, None));
             i += consumed;
             continue;
         }
@@ -194,6 +196,7 @@ where
                 stmts.push(Stmt::MutBinding {
                     name: name.to_string(),
                     value,
+                    span: None,
                 });
                 i = after;
                 continue;
@@ -208,6 +211,7 @@ where
             stmts.push(Stmt::Binding {
                 name: name.to_string(),
                 value,
+                span: None,
             });
             i = next_i;
             continue;
@@ -222,6 +226,7 @@ where
             stmts.push(Stmt::MutBinding {
                 name: name.to_string(),
                 value,
+                span: None,
             });
             i = next_i;
             continue;
@@ -243,6 +248,7 @@ where
                 stmts.push(Stmt::Assign {
                     name: lhs.trim().to_string(),
                     value,
+                    span: None,
                 });
                 i = after;
                 continue;
@@ -256,6 +262,7 @@ where
             stmts.push(Stmt::Assign {
                 name: name.to_string(),
                 value,
+                span: None,
             });
             i = next_i;
             continue;
@@ -317,7 +324,7 @@ where
             callee: Box::new(parse_expr(callee_src)?),
             arg: Box::new(arg),
         span: None,
-        }),
+        }, None),
         close_idx + 1,
     ))
 }
@@ -618,6 +625,7 @@ where
         return Some(Stmt::MutBinding {
             name: name.to_string(),
             value,
+            span: None,
         });
     }
     if let Some((name, rhs)) = try_split_assignment(line) {
@@ -625,6 +633,7 @@ where
         return Some(Stmt::Assign {
             name: name.to_string(),
             value,
+            span: None,
         });
     }
     if let Some((name, rhs)) = try_split_binding(line) {
@@ -632,15 +641,16 @@ where
         return Some(Stmt::Binding {
             name: name.to_string(),
             value,
+            span: None,
         });
     }
     let expr = parse_expr(line)?;
-    Some(Stmt::Expr(expr))
+    Some(Stmt::Expr(expr, None))
 }
 
 fn expr_from_branch_stmts(stmts: Vec<Stmt>) -> Expr {
     match stmts.as_slice() {
-        [Stmt::Expr(expr)] => expr.clone(),
+        [Stmt::Expr(expr, _)] => expr.clone(),
         _ => Expr::Block(stmts),
     }
 }
@@ -826,10 +836,13 @@ mod tests {
         assert!(matches!(&stmts[0], Stmt::Binding { name, .. } if name == "b"));
         assert!(matches!(
             &stmts[1],
-            Stmt::Expr(Expr::BinOp {
-                op: BinOpKind::Mul,
-                ..
-            })
+            Stmt::Expr(
+                Expr::BinOp {
+                    op: BinOpKind::Mul,
+                    ..
+                },
+                _
+            )
         ));
     }
 
@@ -840,7 +853,7 @@ mod tests {
         assert_eq!(stmts.len(), 3);
         assert!(matches!(&stmts[0], Stmt::Binding { name, .. } if name == "a"));
         assert!(matches!(&stmts[1], Stmt::Binding { name, .. } if name == "a"));
-        assert!(matches!(&stmts[2], Stmt::Expr(Expr::Var { name, .. }) if name == "a"));
+        assert!(matches!(&stmts[2], Stmt::Expr(Expr::Var { name, .. }, _) if name == "a"));
     }
 
     #[test]
@@ -850,17 +863,20 @@ mod tests {
         assert_eq!(stmts.len(), 3);
         assert!(matches!(&stmts[0], Stmt::MutBinding { name, .. } if name == "a"));
         assert!(matches!(&stmts[1], Stmt::Assign { name, .. } if name == "a"));
-        assert!(matches!(&stmts[2], Stmt::Expr(Expr::Var { name, .. }) if name == "a"));
+        assert!(matches!(&stmts[2], Stmt::Expr(Expr::Var { name, .. }, _) if name == "a"));
     }
 
     #[test]
     fn equality_is_parsed_as_expression_not_binding_statement() {
         assert!(matches!(
             parse_stmt_with("a == 1", parse_expr),
-            Some(Stmt::Expr(Expr::BinOp {
-                op: BinOpKind::Eq,
-                ..
-            }))
+            Some(Stmt::Expr(
+                Expr::BinOp {
+                    op: BinOpKind::Eq,
+                    ..
+                },
+                _
+            ))
         ));
     }
 
@@ -870,7 +886,7 @@ mod tests {
         let stmts = parse_body_stmts(body).expect("should parse");
         assert_eq!(stmts.len(), 1);
         match &stmts[0] {
-            Stmt::Expr(Expr::Call { callee, arg, .. }) => {
+            Stmt::Expr(Expr::Call { callee, arg, .. }, _) => {
                 assert_eq!(**callee, Expr::Var { name: "print".to_string(), span: None });
                 assert_eq!(**arg, Expr::StringLit("hello".to_string()));
             }
@@ -884,7 +900,7 @@ mod tests {
         let stmts = parse_body_stmts(body).expect("should parse");
         assert_eq!(stmts.len(), 2);
         match &stmts[0] {
-            Stmt::Binding { name, value } => {
+            Stmt::Binding { name, value, .. } => {
                 assert_eq!(name, "h");
                 match value {
                     Expr::Handler { clauses } => {
@@ -905,7 +921,7 @@ mod tests {
         let stmts = parse_body_stmts(body).expect("should parse");
         assert_eq!(stmts.len(), 1);
         match &stmts[0] {
-            Stmt::Expr(Expr::With { handler, body }) => {
+            Stmt::Expr(Expr::With { handler, body }, _) => {
                 assert_eq!(**handler, Expr::Var { name: "h".to_string(), span: None });
                 assert_eq!(body.len(), 1);
             }
@@ -919,7 +935,7 @@ mod tests {
         let stmts = parse_body_stmts(body).expect("should parse");
         assert_eq!(stmts.len(), 1);
         match &stmts[0] {
-            Stmt::Expr(Expr::With { handler, body }) => {
+            Stmt::Expr(Expr::With { handler, body }, _) => {
                 assert_eq!(body.len(), 1);
                 match handler.as_ref() {
                     Expr::Handler { clauses } => {
@@ -948,7 +964,7 @@ mod tests {
         let stmts = parse_body_stmts(body).expect("should parse");
         assert_eq!(stmts.len(), 2);
         match &stmts[0] {
-            Stmt::Binding { name, value } => {
+            Stmt::Binding { name, value, .. } => {
                 assert_eq!(name, "x");
                 assert!(matches!(value, Expr::With { .. }));
             }
@@ -962,7 +978,7 @@ mod tests {
         let stmts = parse_body_stmts(body).expect("should parse");
         assert_eq!(stmts.len(), 3);
         match &stmts[1] {
-            Stmt::Assign { name, value } => {
+            Stmt::Assign { name, value, .. } => {
                 assert_eq!(name, "x");
                 assert!(matches!(value, Expr::With { .. }));
             }
@@ -976,7 +992,7 @@ mod tests {
         let stmts = parse_body_stmts(body).expect("should parse");
         assert_eq!(stmts.len(), 2);
         match &stmts[0] {
-            Stmt::Binding { name, value } => {
+            Stmt::Binding { name, value, .. } => {
                 assert_eq!(name, "x");
                 assert!(matches!(value, Expr::With { .. }));
             }
@@ -990,7 +1006,7 @@ mod tests {
         let stmts = parse_body_stmts(body).expect("should parse");
         assert_eq!(stmts.len(), 2);
         match &stmts[0] {
-            Stmt::MutBinding { name, value } => {
+            Stmt::MutBinding { name, value, .. } => {
                 assert_eq!(name, "x");
                 assert!(matches!(value, Expr::With { .. }));
             }
@@ -1004,7 +1020,7 @@ mod tests {
         let stmts = parse_body_stmts(body).expect("should parse");
         assert_eq!(stmts.len(), 2);
         match &stmts[0] {
-            Stmt::Binding { name, value } => {
+            Stmt::Binding { name, value, .. } => {
                 assert_eq!(name, "x");
                 assert!(matches!(value, Expr::With { .. }));
             }
@@ -1019,7 +1035,7 @@ mod tests {
         let stmts = parse_body_stmts(body).expect("should parse");
         assert_eq!(stmts.len(), 3);
         match &stmts[1] {
-            Stmt::Assign { name, value } => {
+            Stmt::Assign { name, value, .. } => {
                 assert_eq!(name, "x");
                 assert!(matches!(value, Expr::With { .. }));
             }
@@ -1033,14 +1049,14 @@ mod tests {
         let stmts = parse_body_stmts(body).expect("should parse");
         assert_eq!(stmts.len(), 1);
         match &stmts[0] {
-            Stmt::Expr(Expr::Call { arg, .. }) => match arg.as_ref() {
+            Stmt::Expr(Expr::Call { arg, .. }, _) => match arg.as_ref() {
                 Expr::Case { arms, .. } => {
                     assert_eq!(arms.len(), 2);
                     match arms[0].body.as_ref() {
                         Expr::Block(stmts) => {
                             assert_eq!(stmts.len(), 2);
                             assert!(matches!(stmts[0], Stmt::Binding { .. }));
-                            assert!(matches!(stmts[1], Stmt::Expr(_)));
+                            assert!(matches!(stmts[1], Stmt::Expr(_, _)));
                         }
                         other => panic!("expected block arm body, got {other:?}"),
                     }
@@ -1057,7 +1073,7 @@ mod tests {
         let stmts = parse_body_stmts(body).expect("should parse");
         assert_eq!(stmts.len(), 3);
         match &stmts[1] {
-            Stmt::Binding { name, value } => {
+            Stmt::Binding { name, value, .. } => {
                 assert_eq!(name, "b");
                 match value {
                     Expr::Case { arms, .. } => {
@@ -1078,7 +1094,7 @@ mod tests {
         let stmts = parse_body_stmts(body).expect("should parse");
         assert_eq!(stmts.len(), 2);
         match &stmts[0] {
-            Stmt::Binding { name, value } => {
+            Stmt::Binding { name, value, .. } => {
                 assert_eq!(name, "x");
                 assert!(matches!(value, Expr::If { .. }));
             }
@@ -1092,7 +1108,7 @@ mod tests {
         let stmts = parse_body_stmts(body).expect("should parse");
         assert_eq!(stmts.len(), 2);
         match &stmts[1] {
-            Stmt::Expr(Expr::Case { arms, .. }) => {
+            Stmt::Expr(Expr::Case { arms, .. }, _) => {
                 assert_eq!(arms.len(), 2);
                 assert!(matches!(arms[0].body.as_ref(), Expr::Call { .. }));
                 assert!(matches!(arms[1].body.as_ref(), Expr::Call { .. }));
@@ -1107,7 +1123,7 @@ mod tests {
         let stmts = parse_body_stmts(body).expect("should parse");
         assert_eq!(stmts.len(), 1);
         match &stmts[0] {
-            Stmt::Expr(Expr::Call { arg, .. }) => {
+            Stmt::Expr(Expr::Call { arg, .. }, _) => {
                 assert!(matches!(arg.as_ref(), Expr::Case { .. }));
             }
             other => panic!("unexpected statement: {other:?}"),
@@ -1120,7 +1136,7 @@ mod tests {
         let stmts = parse_body_stmts(body).expect("should parse");
         assert_eq!(stmts.len(), 1);
         match &stmts[0] {
-            Stmt::Expr(Expr::Call { arg, .. }) => {
+            Stmt::Expr(Expr::Call { arg, .. }, _) => {
                 assert!(matches!(arg.as_ref(), Expr::If { .. }));
             }
             other => panic!("unexpected statement: {other:?}"),
@@ -1203,7 +1219,7 @@ else
         let stmts = parse_body_stmts(body);
         assert!(stmts.is_some(), "qualified handler clause name should parse");
         if let Some(stmts) = stmts {
-            if let crate::ast::Stmt::Expr(crate::ast::Expr::With { handler, .. }) = &stmts[0] {
+            if let crate::ast::Stmt::Expr(crate::ast::Expr::With { handler, .. }, _) = &stmts[0] {
                 if let crate::ast::Expr::Handler { clauses } = handler.as_ref() {
                     assert_eq!(clauses[0].name, "Log.log");
                     return;
@@ -1222,7 +1238,7 @@ else
         // The key is it should NOT parse as a valid handler with clause name "log.Log"
         let stmts = parse_body_stmts(body);
         if let Some(stmts) = stmts {
-            if let crate::ast::Stmt::Expr(crate::ast::Expr::With { handler, .. }) = &stmts[0] {
+            if let crate::ast::Stmt::Expr(crate::ast::Expr::With { handler, .. }, _) = &stmts[0] {
                 if let crate::ast::Expr::Handler { clauses } = handler.as_ref() {
                     assert!(
                         clauses.is_empty() || clauses[0].name != "log.Log",
@@ -1251,7 +1267,7 @@ else
         let module = parse_module(source).expect("source should parse");
         let stmts = module.declarations[0].parsed_body.as_ref().expect("body should parse");
         match &stmts[0] {
-            crate::ast::Stmt::Expr(crate::ast::Expr::With { handler, .. }) => {
+            crate::ast::Stmt::Expr(crate::ast::Expr::With { handler, .. }, _) => {
                 match handler.as_ref() {
                     crate::ast::Expr::Handler { clauses } => {
                         assert_eq!(clauses.len(), 1);
@@ -1279,7 +1295,7 @@ else
         let module = parse_module(source).expect("source should parse");
         let stmts = module.declarations[0].parsed_body.as_ref().expect("body should parse");
         match &stmts[0] {
-            crate::ast::Stmt::Expr(crate::ast::Expr::Case { arms, .. }) => {
+            crate::ast::Stmt::Expr(crate::ast::Expr::Case { arms, .. }, _) => {
                 assert_eq!(arms.len(), 2);
                 // body-relative: arm at index 2 → line_no = 3, indent 4 → col 5
                 assert_eq!(arms[0].span.line, 3);
@@ -1304,7 +1320,7 @@ else
         assert_eq!(decl.line, 1); // annotation line
         let stmts = decl.parsed_body.as_ref().expect("body should parse");
         match &stmts[0] {
-            crate::ast::Stmt::Expr(crate::ast::Expr::Case { arms, .. }) => {
+            crate::ast::Stmt::Expr(crate::ast::Expr::Case { arms, .. }, _) => {
                 assert_eq!(arms.len(), 2);
                 // Body-relative coordinates are unchanged by the annotation.
                 assert_eq!(arms[0].span.line, 3);

@@ -86,7 +86,7 @@ impl<'m> RuntimeOutputResolver<'m> {
         evaluators: &RuntimeEvaluators<'_, '_>,
     ) -> Option<()> {
         match stmt {
-            Stmt::Binding { name, value } | Stmt::MutBinding { name, value } => {
+            Stmt::Binding { name, value, .. } | Stmt::MutBinding { name, value, .. } => {
                 // Propagate None so the caller can fall back to the string path
                 // rather than silently dropping the binding.
                 let runtime_val = self
@@ -109,7 +109,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                 self.locals.store(name, runtime_val);
                 Some(())
             }
-            Stmt::Assign { name, value } => {
+            Stmt::Assign { name, value, .. } => {
                 self.locals.get(name)?;
                 let runtime_val = self
                     .eval_expr_to_option(
@@ -131,7 +131,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                 self.locals.store(name, runtime_val);
                 Some(())
             }
-            Stmt::Expr(expr) => {
+            Stmt::Expr(expr, _) => {
                 let mut locals = self.locals.clone();
                 let mut callables = HashMap::new();
                 let outputs_before = self.embedded_effect_runtime.output_len();

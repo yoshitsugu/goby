@@ -273,10 +273,10 @@ pub enum Expr {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Stmt {
-    Binding { name: String, value: Expr },
-    MutBinding { name: String, value: Expr },
-    Assign { name: String, value: Expr },
-    Expr(Expr),
+    Binding { name: String, value: Expr, span: Option<Span> },
+    MutBinding { name: String, value: Expr, span: Option<Span> },
+    Assign { name: String, value: Expr, span: Option<Span> },
+    Expr(Expr, Option<Span>),
 }
 
 impl Expr {
