@@ -31,10 +31,11 @@ use lsp_server::{Connection, Message, Notification, Response};
 use lsp_types::notification::{
     DidChangeTextDocument, DidCloseTextDocument, DidOpenTextDocument, PublishDiagnostics,
 };
-use lsp_types::request::Shutdown;
+use lsp_types::request::{GotoDefinition, HoverRequest, Shutdown};
 use lsp_types::{
-    DiagnosticSeverity, Position, PublishDiagnosticsParams, Range, ServerCapabilities,
-    TextDocumentSyncCapability, TextDocumentSyncKind, Url,
+    DiagnosticSeverity, GotoDefinitionResponse, Hover, HoverContents, HoverProviderCapability,
+    Location, MarkupContent, MarkupKind, OneOf, Position, PublishDiagnosticsParams, Range,
+    ServerCapabilities, TextDocumentSyncCapability, TextDocumentSyncKind, Url,
 };
 
 fn main() {
@@ -46,6 +47,8 @@ fn main() {
         text_document_sync: Some(TextDocumentSyncCapability::Kind(
             TextDocumentSyncKind::FULL,
         )),
+        hover_provider: Some(HoverProviderCapability::Simple(true)),
+        definition_provider: Some(OneOf::Left(true)),
         ..ServerCapabilities::default()
     })
     .expect("server capabilities serialization failed");
@@ -76,12 +79,7 @@ fn run_server(connection: Connection) {
                     }
                     return;
                 }
-                eprintln!("goby-lsp: unhandled request: {}", req.method);
-                let resp = Response::new_err(
-                    req.id,
-                    lsp_server::ErrorCode::MethodNotFound as i32,
-                    format!("method not found: {}", req.method),
-                );
+                let resp = handle_request(&store, stdlib_root.as_deref(), req);
                 connection.sender.send(resp.into()).ok();
             }
             Message::Notification(notif) => {
@@ -92,6 +90,154 @@ fn run_server(connection: Connection) {
             }
         }
     }
+}
+
+/// Dispatch an incoming LSP request to the appropriate handler.
+fn handle_request(
+    store: &DocumentStore,
+    stdlib_root: Option<&Path>,
+    req: lsp_server::Request,
+) -> Response {
+    if req.method == <HoverRequest as lsp_types::request::Request>::METHOD {
+        let params: lsp_types::HoverParams = match serde_json::from_value(req.params) {
+            Ok(p) => p,
+            Err(e) => {
+                return Response::new_err(
+                    req.id,
+                    lsp_server::ErrorCode::InvalidParams as i32,
+                    format!("invalid hover params: {e}"),
+                );
+            }
+        };
+        let uri = &params.text_document_position_params.text_document.uri;
+        let pos = params.text_document_position_params.position;
+        let source = store.docs.get(uri).map(|s| s.as_str()).unwrap_or("");
+        let result = hover_at(source, stdlib_root, pos);
+        let value = serde_json::to_value(result).unwrap_or(serde_json::Value::Null);
+        return Response::new_ok(req.id, value);
+    }
+
+    if req.method == <GotoDefinition as lsp_types::request::Request>::METHOD {
+        let params: lsp_types::GotoDefinitionParams = match serde_json::from_value(req.params) {
+            Ok(p) => p,
+            Err(e) => {
+                return Response::new_err(
+                    req.id,
+                    lsp_server::ErrorCode::InvalidParams as i32,
+                    format!("invalid definition params: {e}"),
+                );
+            }
+        };
+        let uri = params.text_document_position_params.text_document.uri.clone();
+        let pos = params.text_document_position_params.position;
+        let source = store.docs.get(&uri).map(|s| s.as_str()).unwrap_or("");
+        let result = definition_at(source, &uri, stdlib_root, pos);
+        let value = serde_json::to_value(result).unwrap_or(serde_json::Value::Null);
+        return Response::new_ok(req.id, value);
+    }
+
+    eprintln!("goby-lsp: unhandled request: {}", req.method);
+    Response::new_err(
+        req.id,
+        lsp_server::ErrorCode::MethodNotFound as i32,
+        format!("method not found: {}", req.method),
+    )
+}
+
+/// Return the hover result for the given cursor position, or `None` for no-hover.
+fn hover_at(source: &str, stdlib_root: Option<&Path>, pos: Position) -> Option<Hover> {
+    let index = build_index(source, stdlib_root)?;
+    let word = word_at_position(source, pos)?;
+    match index.lookup(&word)? {
+        goby_core::SymbolInfo::Decl(sym) => {
+            let text = match &sym.annotation {
+                Some(ann) => format!("{} : {}", word, ann),
+                None => word,
+            };
+            Some(Hover {
+                contents: HoverContents::Markup(MarkupContent {
+                    kind: MarkupKind::PlainText,
+                    value: text,
+                }),
+                range: None,
+            })
+        }
+        goby_core::SymbolInfo::EffectMember(sym) => Some(Hover {
+            contents: HoverContents::Markup(MarkupContent {
+                kind: MarkupKind::PlainText,
+                value: format!("{} : {}", word, sym.signature),
+            }),
+            range: None,
+        }),
+    }
+}
+
+/// Return the definition location for the given cursor position, or `None` for no-definition.
+fn definition_at(
+    source: &str,
+    uri: &Url,
+    stdlib_root: Option<&Path>,
+    pos: Position,
+) -> Option<GotoDefinitionResponse> {
+    let index = build_index(source, stdlib_root)?;
+    let word = word_at_position(source, pos)?;
+    let span = match index.lookup(&word)? {
+        goby_core::SymbolInfo::Decl(sym) => sym.span,
+        goby_core::SymbolInfo::EffectMember(sym) => sym.span,
+    };
+    let range = span_to_lsp_range(source, Some(&span));
+    Some(GotoDefinitionResponse::Scalar(Location {
+        uri: uri.clone(),
+        range,
+    }))
+}
+
+/// Build a `SymbolIndex` from `source`.
+///
+/// Returns `None` if the source fails to parse.
+/// When `stdlib_root` is `None` we still build the index from the parse result.
+fn build_index(source: &str, _stdlib_root: Option<&Path>) -> Option<goby_core::SymbolIndex> {
+    let module = goby_core::parse_module(source).ok()?;
+    Some(goby_core::build_symbol_index(&module))
+}
+
+/// Extract the identifier word that surrounds `pos` in `source`.
+///
+/// Uses ASCII identifier rules: `[a-zA-Z0-9_]`.  Returns `None` when the
+/// character under the cursor is not part of an identifier.
+///
+/// `pos` is an LSP `Position` (0-indexed line, UTF-16 char offset).
+fn word_at_position(source: &str, pos: Position) -> Option<String> {
+    let line_text = source.split('\n').nth(pos.line as usize)?;
+    // Convert UTF-16 character offset to a byte offset.
+    let mut byte_offset = 0usize;
+    let mut utf16_count = 0u32;
+    for ch in line_text.chars() {
+        if utf16_count >= pos.character {
+            break;
+        }
+        utf16_count += ch.len_utf16() as u32;
+        byte_offset += ch.len_utf8();
+    }
+    // byte_offset now points to the start of the character at pos.character.
+    // Check whether the character at that byte offset is an identifier character.
+    let bytes = line_text.as_bytes();
+    let is_ident = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
+    if byte_offset >= bytes.len() || !is_ident(bytes[byte_offset]) {
+        return None;
+    }
+    // Scan left to the start of the word.
+    let mut start = byte_offset;
+    while start > 0 && is_ident(bytes[start - 1]) {
+        start -= 1;
+    }
+    // Scan right to the end of the word.
+    let mut end = byte_offset;
+    while end < bytes.len() && is_ident(bytes[end]) {
+        end += 1;
+    }
+    // Safety: start..end spans complete ASCII bytes so the slice is valid UTF-8.
+    Some(line_text[start..end].to_string())
 }
 
 fn handle_notification(
@@ -567,6 +713,8 @@ mod tests {
                 text_document_sync: Some(TextDocumentSyncCapability::Kind(
                     TextDocumentSyncKind::FULL,
                 )),
+                hover_provider: Some(HoverProviderCapability::Simple(true)),
+                definition_provider: Some(OneOf::Left(true)),
                 ..ServerCapabilities::default()
             })
             .unwrap();
@@ -763,6 +911,206 @@ mod tests {
 
         let params = recv_publish_diagnostics(&client_conn);
         assert!(params.diagnostics.is_empty(), "expected empty on close");
+
+        shutdown_server(client_conn, server_thread);
+    }
+
+    // --- word_at_position ---
+
+    #[test]
+    fn word_at_position_on_identifier() {
+        let source = "add x = x + 1\n";
+        // "add" starts at LSP col 0; cursor on col 1 (middle of "add")
+        let word = word_at_position(source, Position { line: 0, character: 1 });
+        assert_eq!(word.as_deref(), Some("add"));
+    }
+
+    #[test]
+    fn word_at_position_on_whitespace_returns_none() {
+        let source = "add x = x\n";
+        // space between "add" and "x"
+        let word = word_at_position(source, Position { line: 0, character: 3 });
+        assert!(word.is_none());
+    }
+
+    #[test]
+    fn word_at_position_past_end_of_line_returns_none() {
+        let source = "foo\n";
+        let word = word_at_position(source, Position { line: 0, character: 100 });
+        assert!(word.is_none());
+    }
+
+    // --- hover_at ---
+
+    #[test]
+    fn hover_at_top_level_function_with_annotation() {
+        let source = "add : Int -> Int -> Int\nadd x y = x + y\n";
+        // cursor on "add" definition line (LSP line 1, char 0)
+        let hover = hover_at(source, None, Position { line: 1, character: 0 });
+        let hover = hover.expect("expected hover");
+        if let HoverContents::Markup(mc) = hover.contents {
+            assert_eq!(mc.value, "add : Int -> Int -> Int");
+        } else {
+            panic!("expected Markup hover contents");
+        }
+    }
+
+    #[test]
+    fn hover_at_unknown_position_returns_none() {
+        let source = "add x = x + 1\n";
+        // cursor on whitespace
+        let hover = hover_at(source, None, Position { line: 0, character: 3 });
+        assert!(hover.is_none());
+    }
+
+    #[test]
+    fn hover_at_unknown_name_returns_none() {
+        let source = "add x = x + 1\n";
+        // "x" is a parameter, not in SymbolIndex
+        let hover = hover_at(source, None, Position { line: 0, character: 4 });
+        assert!(hover.is_none());
+    }
+
+    #[test]
+    fn hover_at_effect_member() {
+        let source = "effect Print\n  println : String -> ()\n";
+        // cursor on "println" (LSP line 1, char 2)
+        let hover = hover_at(source, None, Position { line: 1, character: 2 });
+        let hover = hover.expect("expected hover for effect member");
+        if let HoverContents::Markup(mc) = hover.contents {
+            assert!(mc.value.contains("println"), "hover text: {}", mc.value);
+            assert!(mc.value.contains("String -> ()"), "hover text: {}", mc.value);
+        } else {
+            panic!("expected Markup hover contents");
+        }
+    }
+
+    // --- definition_at ---
+
+    #[test]
+    fn definition_at_top_level_function() {
+        let source = "add : Int -> Int -> Int\nadd x y = x + y\n";
+        let uri = Url::parse("file:///test.gb").unwrap();
+        // cursor on "add" definition line (LSP line 1, char 0)
+        let result = definition_at(source, &uri, None, Position { line: 1, character: 0 });
+        let result = result.expect("expected definition response");
+        if let GotoDefinitionResponse::Scalar(loc) = result {
+            assert_eq!(loc.uri, uri);
+            // definition line is line 2 (1-indexed) → LSP line 1
+            assert_eq!(loc.range.start.line, 1);
+        } else {
+            panic!("expected Scalar definition response");
+        }
+    }
+
+    #[test]
+    fn definition_at_unknown_name_returns_none() {
+        let source = "add x = x + 1\n";
+        let uri = Url::parse("file:///test.gb").unwrap();
+        // "x" is not in SymbolIndex
+        let result = definition_at(source, &uri, None, Position { line: 0, character: 4 });
+        assert!(result.is_none());
+    }
+
+    // --- end-to-end hover via in-memory connection ---
+
+    fn recv_response(client_conn: &Connection) -> lsp_server::Response {
+        let msg = client_conn.receiver.recv().unwrap();
+        if let Message::Response(resp) = msg {
+            resp
+        } else {
+            panic!("expected response, got: {:?}", msg);
+        }
+    }
+
+    fn open_document(client_conn: &Connection, uri: &Url, source: &str) {
+        let notif = LspNotification {
+            method: <DidOpenTextDocument as lsp_types::notification::Notification>::METHOD
+                .to_string(),
+            params: serde_json::to_value(DidOpenTextDocumentParams {
+                text_document: TextDocumentItem {
+                    uri: uri.clone(),
+                    language_id: "goby".to_string(),
+                    version: 1,
+                    text: source.to_string(),
+                },
+            })
+            .unwrap(),
+        };
+        client_conn.sender.send(notif.into()).unwrap();
+        let _ = recv_publish_diagnostics(client_conn); // discard open diagnostics
+    }
+
+    #[test]
+    fn e2e_hover_returns_annotation() {
+        let (client_conn, server_thread) = start_server();
+        let uri = Url::parse("file:///hover_test.gb").unwrap();
+        let source = "double : Int -> Int\ndouble x = x + x\n";
+        open_document(&client_conn, &uri, source);
+
+        // Send hover request on "double" definition line (LSP line 1, char 0)
+        let hover_req = LspRequest {
+            id: lsp_server::RequestId::from(10),
+            method: <HoverRequest as lsp_types::request::Request>::METHOD.to_string(),
+            params: serde_json::to_value(lsp_types::HoverParams {
+                text_document_position_params: lsp_types::TextDocumentPositionParams {
+                    text_document: lsp_types::TextDocumentIdentifier { uri: uri.clone() },
+                    position: Position { line: 1, character: 0 },
+                },
+                work_done_progress_params: lsp_types::WorkDoneProgressParams::default(),
+            })
+            .unwrap(),
+        };
+        client_conn.sender.send(hover_req.into()).unwrap();
+
+        let resp = recv_response(&client_conn);
+        assert!(resp.error.is_none(), "unexpected error: {:?}", resp.error);
+        let hover: Option<Hover> = serde_json::from_value(resp.result.unwrap()).unwrap();
+        let hover = hover.expect("expected hover result");
+        if let HoverContents::Markup(mc) = hover.contents {
+            assert!(mc.value.contains("double"), "hover: {}", mc.value);
+            assert!(mc.value.contains("Int -> Int"), "hover: {}", mc.value);
+        } else {
+            panic!("expected Markup hover");
+        }
+
+        shutdown_server(client_conn, server_thread);
+    }
+
+    #[test]
+    fn e2e_definition_returns_location() {
+        let (client_conn, server_thread) = start_server();
+        let uri = Url::parse("file:///def_test.gb").unwrap();
+        let source = "double : Int -> Int\ndouble x = x + x\n";
+        open_document(&client_conn, &uri, source);
+
+        // Send definition request on "double" definition line
+        let def_req = LspRequest {
+            id: lsp_server::RequestId::from(11),
+            method: <GotoDefinition as lsp_types::request::Request>::METHOD.to_string(),
+            params: serde_json::to_value(lsp_types::GotoDefinitionParams {
+                text_document_position_params: lsp_types::TextDocumentPositionParams {
+                    text_document: lsp_types::TextDocumentIdentifier { uri: uri.clone() },
+                    position: Position { line: 1, character: 0 },
+                },
+                work_done_progress_params: lsp_types::WorkDoneProgressParams::default(),
+                partial_result_params: lsp_types::PartialResultParams::default(),
+            })
+            .unwrap(),
+        };
+        client_conn.sender.send(def_req.into()).unwrap();
+
+        let resp = recv_response(&client_conn);
+        assert!(resp.error.is_none(), "unexpected error: {:?}", resp.error);
+        let def: Option<GotoDefinitionResponse> =
+            serde_json::from_value(resp.result.unwrap()).unwrap();
+        let def = def.expect("expected definition result");
+        if let GotoDefinitionResponse::Scalar(loc) = def {
+            assert_eq!(loc.uri, uri);
+            assert_eq!(loc.range.start.line, 1); // LSP line 1 = source line 2
+        } else {
+            panic!("expected Scalar definition");
+        }
 
         shutdown_server(client_conn, server_thread);
     }
