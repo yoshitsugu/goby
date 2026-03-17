@@ -1,0 +1,10 @@
+---
+source: crates/goby-core/src/ir_lower.rs
+assertion_line: 556
+expression: fmt_ir(&m)
+---
+decl block_fn: ? =
+  let x: Int =
+    5
+  in
+    x

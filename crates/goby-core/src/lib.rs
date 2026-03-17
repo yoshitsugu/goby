@@ -3,6 +3,8 @@
 //! This crate currently provides a minimal AST, parser, and typechecker for MVP bootstrapping.
 
 pub mod analysis;
+pub mod ir;
+pub mod ir_lower;
 pub mod ast;
 pub mod diagnostic;
 pub mod formatter;

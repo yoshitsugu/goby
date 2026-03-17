@@ -1,0 +1,10 @@
+---
+source: crates/goby-core/src/ir.rs
+assertion_line: 548
+expression: fmt_ir(&m)
+---
+decl check(b: Bool): Int =
+  if b then
+    1
+  else
+    0

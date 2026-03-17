@@ -1,0 +1,7 @@
+---
+source: crates/goby-core/src/ir_lower.rs
+assertion_line: 435
+expression: fmt_ir(&m)
+---
+decl id(x: ?): ? =
+  x

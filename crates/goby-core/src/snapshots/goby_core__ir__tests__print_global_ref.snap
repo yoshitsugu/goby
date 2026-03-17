@@ -1,0 +1,7 @@
+---
+source: crates/goby-core/src/ir.rs
+assertion_line: 476
+expression: fmt_ir(&m)
+---
+decl use_io: ? =
+  call Print.print("hi")

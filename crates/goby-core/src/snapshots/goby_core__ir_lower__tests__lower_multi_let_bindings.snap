@@ -1,0 +1,13 @@
+---
+source: crates/goby-core/src/ir_lower.rs
+assertion_line: 541
+expression: fmt_ir(&m)
+---
+decl multi_let: ? =
+  let a: Int =
+    1
+  in
+    let b: Int =
+      2
+    in
+      (a + b)

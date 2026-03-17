@@ -481,19 +481,19 @@ Use this section as the step-by-step implementation tracker for Track G. Check a
 box only when the milestone is complete enough that follow-up work can rely on
 it as the new baseline.
 
-- [ ] G1. IR boundary lock
+- [x] G1. IR boundary lock
   - `doc/PLAN_IR.md` is accepted as the active architecture plan.
   - Module ownership is fixed: shared IR in `goby-core`, backend analysis in
     `goby-wasm`.
   - New backend work stops adding source-shape-specific runtime-I/O branches
     except for emergency unblock cases.
 
-- [ ] G2. Shared IR module skeleton exists
+- [x] G2. Shared IR module skeleton exists
   - `goby-core` contains initial IR definitions.
   - The IR has a readable debug/text rendering format.
   - IR validation helpers exist for basic well-formedness checks.
 
-- [ ] G3. Pure AST-to-IR lowering works
+- [x] G3. Pure AST-to-IR lowering works
   - Pure declarations can lower from typed AST into IR.
   - Covered forms include literals, vars, local bindings, arithmetic, blocks,
     conditionals, and direct calls.

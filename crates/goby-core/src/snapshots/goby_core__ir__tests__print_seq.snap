@@ -1,0 +1,10 @@
+---
+source: crates/goby-core/src/ir.rs
+assertion_line: 570
+expression: fmt_ir(&m)
+---
+decl seq_example: Unit =
+  seq
+    call Print.print("a")
+  =>
+    ()
