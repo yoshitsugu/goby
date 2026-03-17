@@ -588,7 +588,7 @@ errors must be covered before D1d ships, not just 80% by count).
 - `goby-cli check` output matches the D1d-0 golden fixture.
 - `cargo test` passes; existing CLI tests updated to new format.
 
-#### Phase D2a: `goby-lsp` crate — diagnostics only
+#### Phase D2a: `goby-lsp` crate — diagnostics only (completed 2026-03-16)
 
 Goal: `goby-cli check`-equivalent diagnostics available inside editors via LSP.
 
