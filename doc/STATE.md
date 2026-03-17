@@ -61,7 +61,13 @@ Last updated: 2026-03-17
   - `GOBY_STDLIB_ROOT` passed from `goby.stdlibRoot` setting; async fmt with 10 s timeout
   - Concurrent-save guard; double-save loop prevention; `applyEdit` awaited
   - `npm run package` produces `vscode-goby-0.1.0.vsix`
-- Next: Track D6b — Neovim plugin
+- Track D6b — Neovim plugin: **completed** (2026-03-17)
+  - `tooling/nvim/` に Lua プラグイン (goby.nvim) を新規作成
+  - `lua/goby/{init,lsp,format,util}.lua`: setup() + LSP + fmt-on-save
+  - nvim-lspconfig (優先) / vim.lsp.start (fallback, Neovim >= 0.8)
+  - Cargo.toml 上昇探索でバイナリを解決; augroup clear=true; filetype guard
+  - `b:undo_ftplugin` 設定; `&&`, `<`, `>` 演算子と負数リテラルのシンタックス追加
+- Next: Track D6c — Shared grammar asset
 
 ## Locked Decisions Carried Forward
 
@@ -120,5 +126,5 @@ Execution order (matches PLAN.md dependency chain):
 10. D4: `goby fmt` (AST pretty-printer).
 11. D5: `goby lint` (static checks).
 12. ~~D6a: VS Code extension (syntax highlighting, LSP client, fmt-on-save).~~ **(completed)**
-13. D6b: Neovim plugin (LSP client, fmt-on-save, optional Tree-sitter grammar).
+13. ~~D6b: Neovim plugin (LSP client, fmt-on-save, optional Tree-sitter grammar).~~ **(completed)**
 14. D6c: Shared grammar asset (single source of truth for language definition).
