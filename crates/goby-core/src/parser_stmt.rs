@@ -1336,4 +1336,87 @@ else
             other => panic!("expected Case expr, got {:?}", other),
         }
     }
+
+    // --- Stmt span population tests ---
+
+    #[test]
+    fn binding_stmt_carries_body_relative_span() {
+        // Body line 1: "x = 1"  → span.line=1, span.col=1 (no indent)
+        let stmts = parse_body_stmts("x = 1\nx + 2").expect("should parse");
+        match &stmts[0] {
+            Stmt::Binding { span: Some(span), .. } => {
+                assert_eq!(span.line, 1, "line");
+                assert_eq!(span.col, 1, "col");
+            }
+            other => panic!("expected Binding with span, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn second_binding_stmt_has_line_two() {
+        // Body line 1: "x = 1", line 2: "y = 2"
+        let stmts = parse_body_stmts("x = 1\ny = 2").expect("should parse");
+        match &stmts[1] {
+            Stmt::Binding { name, span: Some(span), .. } => {
+                assert_eq!(name, "y");
+                assert_eq!(span.line, 2, "second binding should be on body line 2");
+                assert_eq!(span.col, 1);
+            }
+            other => panic!("expected second Binding with span, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn mut_binding_stmt_carries_span() {
+        let stmts = parse_body_stmts("mut n = 0\nn").expect("should parse");
+        match &stmts[0] {
+            Stmt::MutBinding { span: Some(span), .. } => {
+                assert_eq!(span.line, 1);
+                assert_eq!(span.col, 1);
+            }
+            other => panic!("expected MutBinding with span, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn assign_stmt_carries_span() {
+        let stmts = parse_body_stmts("mut n = 0\nn := 1\nn").expect("should parse");
+        match &stmts[1] {
+            Stmt::Assign { name, span: Some(span), .. } => {
+                assert_eq!(name, "n");
+                assert_eq!(span.line, 2);
+                assert_eq!(span.col, 1);
+            }
+            other => panic!("expected Assign with span, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn expr_stmt_carries_span() {
+        let stmts = parse_body_stmts("x = 1\nx + 2").expect("should parse");
+        match &stmts[1] {
+            Stmt::Expr(_, Some(span)) => {
+                assert_eq!(span.line, 2, "expr stmt should be on body line 2");
+                assert_eq!(span.col, 1);
+            }
+            other => panic!("expected Expr stmt with span, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn indented_binding_has_correct_col() {
+        // parse_body_stmts_with starts at baseline indent; col = indent + 1.
+        // A body that starts with 2-space indent: baseline=2, col=3.
+        // But parse_body_stmts always strips leading indent (baseline), so
+        // a uniformly-indented body → col = baseline + 1.
+        // Here the whole body is at 2-space indent.
+        let stmts = parse_body_stmts("  x = 1\n  x").expect("should parse");
+        match &stmts[0] {
+            Stmt::Binding { span: Some(span), .. } => {
+                // baseline = 2, col = baseline + 1 = 3
+                assert_eq!(span.col, 3);
+            }
+            other => panic!("expected Binding with span, got {:?}", other),
+        }
+    }
 }
