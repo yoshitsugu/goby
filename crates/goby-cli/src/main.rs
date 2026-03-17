@@ -6,7 +6,15 @@ use std::process::Command as ProcessCommand;
 
 use goby_core::Span;
 
-const USAGE: &str = "usage: goby <run|check> <file.gb>";
+const USAGE: &str = "\
+usage: goby <command> [options] <file.gb>
+
+commands:
+  run    <file.gb>           compile and run a Goby program
+  check  <file.gb>           parse and typecheck a Goby program
+  fmt    [--check] <file.gb> format a Goby source file in-place
+                             (comments are stripped — Option A policy)
+                             with --check: exit 1 if the file is not formatted";
 
 /// Render the error header line.
 ///
@@ -107,6 +115,7 @@ fn render_diag(file: &str, source: &str, diag: goby_core::Diagnostic) -> String 
 enum Command {
     Run,
     Check,
+    Fmt { check: bool },
 }
 
 #[derive(Debug)]
@@ -144,9 +153,16 @@ fn main() {
 
 fn run() -> Result<(), CliError> {
     let cli = parse_args()?;
-    let stdlib_root = resolve_stdlib_root()?;
+
     let source = std::fs::read_to_string(&cli.file)
         .map_err(|err| CliError::Runtime(format!("failed to read {}: {}", cli.file, err)))?;
+
+    // `fmt` only requires parsing — skip typecheck and wasm paths.
+    if let Command::Fmt { check } = cli.command {
+        return run_fmt(&cli.file, &source, check);
+    }
+
+    let stdlib_root = resolve_stdlib_root()?;
 
     let module = goby_core::parse_module(&source).map_err(|err| {
         // Normalise col==1 sentinel (unknown column) to span: None via Diagnostic.
@@ -171,9 +187,33 @@ fn run() -> Result<(), CliError> {
         Command::Check => {
             print_parse_summary(module.declarations.len(), &cli.file);
         }
+        Command::Fmt { .. } => unreachable!("handled above"),
     }
 
     Ok(())
+}
+
+/// Implement `goby fmt [--check] <file>`.
+fn run_fmt(file: &str, source: &str, check: bool) -> Result<(), CliError> {
+    let module = goby_core::parse_module(source).map_err(|err| {
+        CliError::Runtime(render_diag(file, source, goby_core::Diagnostic::from(err)))
+    })?;
+    let formatted = goby_core::format_module(&module);
+
+    if check {
+        if source == formatted {
+            Ok(())
+        } else {
+            Err(CliError::Runtime(format!(
+                "{}: not formatted (run `goby fmt {}` to fix)",
+                file, file
+            )))
+        }
+    } else {
+        std::fs::write(file, &formatted)
+            .map_err(|err| CliError::Runtime(format!("failed to write {}: {}", file, err)))?;
+        Ok(())
+    }
 }
 
 fn run_command(module: &goby_core::Module, file: &str) -> Result<(), CliError> {
@@ -239,21 +279,37 @@ where
         .next()
         .ok_or_else(|| CliError::Usage("missing command".to_string()))?;
 
-    let command = match command_raw.as_str() {
-        "run" => Command::Run,
-        "check" => Command::Check,
-        _ => return Err(CliError::Usage(format!("unknown command: {}", command_raw))),
-    };
-
-    let file = args
-        .next()
-        .ok_or_else(|| CliError::Usage("missing input file".to_string()))?;
-
-    if let Some(extra) = args.next() {
-        return Err(CliError::Usage(format!("unexpected argument: {}", extra)));
+    match command_raw.as_str() {
+        "run" | "check" => {
+            let command = if command_raw == "run" { Command::Run } else { Command::Check };
+            let file = args
+                .next()
+                .ok_or_else(|| CliError::Usage("missing input file".to_string()))?;
+            if let Some(extra) = args.next() {
+                return Err(CliError::Usage(format!("unexpected argument: {}", extra)));
+            }
+            Ok(CliArgs { command, file })
+        }
+        "fmt" => {
+            // Optional --check flag before the file argument.
+            let next = args
+                .next()
+                .ok_or_else(|| CliError::Usage("missing input file".to_string()))?;
+            let (check, file) = if next == "--check" {
+                let f = args
+                    .next()
+                    .ok_or_else(|| CliError::Usage("missing input file".to_string()))?;
+                (true, f)
+            } else {
+                (false, next)
+            };
+            if let Some(extra) = args.next() {
+                return Err(CliError::Usage(format!("unexpected argument: {}", extra)));
+            }
+            Ok(CliArgs { command: Command::Fmt { check }, file })
+        }
+        _ => Err(CliError::Usage(format!("unknown command: {}", command_raw))),
     }
-
-    Ok(CliArgs { command, file })
 }
 
 fn output_wasm_path(input: &str) -> String {

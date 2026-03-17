@@ -865,3 +865,74 @@ fn two_typecheck_errors_output_matches_fixture() {
         "stderr does not match two_typecheck_errors_expected.txt"
     );
 }
+
+// --- fmt command tests ---
+
+#[test]
+fn fmt_check_passes_on_already_formatted_file() {
+    // Write the expected fixture (already formatted) to a temp file and verify --check passes.
+    let tmpdir = TempDirGuard::new("fmt_check_pass");
+    let expected_src = include_str!("fixtures/fmt_expected.gb");
+    let tmp_file = tmpdir.join("already_fmt.gb");
+    fs::write(&tmp_file, expected_src).expect("should write formatted file");
+
+    let output = command_for_goby_cli()
+        .arg("fmt")
+        .arg("--check")
+        .arg(&tmp_file)
+        .output()
+        .expect("cli should execute");
+    assert!(
+        output.status.success(),
+        "fmt --check should pass on already-formatted file; stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn fmt_check_fails_on_unformatted_file() {
+    let fixtures_dir = repo_root().join("crates/goby-cli/tests/fixtures");
+    let input_path = fixtures_dir.join("fmt_input.gb");
+    assert!(input_path.exists(), "fmt_input.gb fixture must exist");
+
+    let output = command_for_goby_cli()
+        .arg("fmt")
+        .arg("--check")
+        .arg(&input_path)
+        .output()
+        .expect("cli should execute");
+    assert!(
+        !output.status.success(),
+        "fmt --check should fail on unformatted file"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("not formatted"),
+        "stderr should mention 'not formatted': {}",
+        stderr
+    );
+}
+
+#[test]
+fn fmt_rewrites_file_in_place() {
+    let tmpdir = TempDirGuard::new("fmt_rewrite");
+    let input_src = include_str!("fixtures/fmt_input.gb");
+    let expected_src = include_str!("fixtures/fmt_expected.gb");
+
+    let tmp_file = tmpdir.join("test.gb");
+    fs::write(&tmp_file, input_src).expect("should write input");
+
+    let output = command_for_goby_cli()
+        .arg("fmt")
+        .arg(&tmp_file)
+        .output()
+        .expect("cli should execute");
+    assert!(
+        output.status.success(),
+        "fmt should succeed; stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let actual = fs::read_to_string(&tmp_file).expect("should read result");
+    assert_eq!(actual, expected_src, "file should be rewritten to formatted form");
+}

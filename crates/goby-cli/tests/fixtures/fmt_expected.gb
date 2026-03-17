@@ -1,0 +1,4 @@
+main : Unit -> Unit can Print
+main =
+  x = 1
+  print "hello"
