@@ -42,9 +42,13 @@ Last updated: 2026-03-17
 
 ## Current Focus
 
-- Track D1 fully completed (D1a-i through D1a-iii, D1b, D1c, D1d)
-- Next: Track D3b — Local binding hover (depends on Expr::Var span population)
-  or Track D4 — `goby fmt` (AST pretty-printer)
+- Track D4 — `goby fmt` (AST pretty-printer): **completed** (2026-03-17)
+  - `format_module(module: &Module) -> String` in goby-core (Option A, comment-drop)
+  - Covers all Expr/Stmt variants; round-trip-safe output (parser-compatible form)
+  - `goby fmt <file>` (in-place rewrite) and `goby fmt --check <file>` (exit 1 if not formatted)
+  - 17 idempotency tests over examples/; 3 CLI integration tests
+  - 475 goby-core tests, 22 goby-cli tests pass
+- Next: Track D3b — Local binding hover, or Track D5 — `goby lint`
 
 ## Locked Decisions Carried Forward
 
