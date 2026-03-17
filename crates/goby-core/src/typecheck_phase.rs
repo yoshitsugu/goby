@@ -127,6 +127,69 @@ pub(crate) fn check_declaration_bodies(
     Ok(())
 }
 
+/// Like `check_declaration_bodies` but collects all per-declaration errors instead of
+/// short-circuiting on the first one.
+///
+/// Intra-declaration recovery is not performed: if a declaration errors at any stage
+/// (`declaration_param_types`, `check_resume_in_stmts`, or `check_body_stmts`), that
+/// error is collected and the loop advances to the next declaration.
+///
+/// `CheckingPhase` fields are read-only across declarations, making per-declaration
+/// recovery safe with no shared mutable state.
+///
+/// Errors are returned in declaration order.
+pub(crate) fn check_declaration_bodies_collect(
+    module: &Module,
+    checking: &CheckingPhase,
+) -> Vec<TypecheckError> {
+    let mut errors = Vec::new();
+    for decl in &module.declarations {
+        let Some(stmts) = &decl.parsed_body else {
+            continue;
+        };
+        let declared_return_ty = decl.type_annotation.as_deref().map(annotation_return_ty);
+        let param_tys = match declaration_param_types(decl) {
+            Ok(p) => p,
+            Err(e) => {
+                errors.push(e);
+                continue;
+            }
+        };
+        let param_ty_refs: Vec<(&str, Ty)> = param_tys
+            .iter()
+            .map(|(name, ty)| (name.as_str(), ty.clone()))
+            .collect();
+        let mut decl_covered_ops =
+            ops_from_can_clause(decl.type_annotation.as_deref(), &checking.effect_map);
+        if decl.name == "main" {
+            for effect_name in &checking.embedded_default_effects {
+                if let Some(ops) = checking.effect_map.effect_to_ops.get(effect_name) {
+                    decl_covered_ops.extend(ops.iter().cloned());
+                }
+            }
+        }
+        if let Err(e) =
+            check_resume_in_stmts(stmts, &checking.env, &decl.name, &param_ty_refs, None)
+        {
+            errors.push(e);
+            continue; // skip body check to avoid spurious follow-on errors
+        }
+        if let Err(e) = check_body_stmts(
+            stmts,
+            &checking.env,
+            &checking.effect_map,
+            &checking.required_effects_map,
+            &decl.name,
+            declared_return_ty,
+            &param_ty_refs,
+            &decl_covered_ops,
+        ) {
+            errors.push(e);
+        }
+    }
+    errors
+}
+
 fn known_effects(module: &Module, stdlib_root_path: &Path) -> HashSet<String> {
     let imported_effects = collect_imported_effect_names(module, stdlib_root_path);
     builtin_effect_names()

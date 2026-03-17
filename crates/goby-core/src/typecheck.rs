@@ -4,8 +4,8 @@ use crate::{
     Module,
     ast::Span,
     typecheck_phase::{
-        build_checking_phase, check_declaration_bodies, default_typecheck_stdlib_root,
-        validate_module_phase,
+        build_checking_phase, check_declaration_bodies, check_declaration_bodies_collect,
+        default_typecheck_stdlib_root, validate_module_phase,
     },
 };
 
@@ -57,6 +57,38 @@ pub fn typecheck_module_with_context(
     let validation = validate_module_phase(module, source_path, stdlib_root, &stdlib_root_path)?;
     let checking = build_checking_phase(module, &stdlib_root_path, &validation)?;
     check_declaration_bodies(module, &checking)
+}
+
+/// Like `typecheck_module` but collects all declaration-level errors instead of stopping
+/// at the first one. Returns an empty vec on success.
+///
+/// Module-level structural errors (imports, duplicate names, type/effect declarations)
+/// still fail fast and return `vec![err]` — these errors make further checking unsafe.
+/// Only per-declaration body-checking errors are collected across declarations.
+pub fn typecheck_module_collect(module: &Module) -> Vec<TypecheckError> {
+    typecheck_module_collect_with_context(module, None, None)
+}
+
+/// Like `typecheck_module_with_context` but collects all declaration-level errors.
+/// Returns an empty vec on success.
+///
+/// Module-level structural errors still fail fast and return `vec![err]`.
+/// Errors are returned in declaration order.
+pub fn typecheck_module_collect_with_context(
+    module: &Module,
+    source_path: Option<&Path>,
+    stdlib_root: Option<&Path>,
+) -> Vec<TypecheckError> {
+    let stdlib_root_path = default_typecheck_stdlib_root(stdlib_root);
+    let validation = match validate_module_phase(module, source_path, stdlib_root, &stdlib_root_path) {
+        Ok(v) => v,
+        Err(e) => return vec![e],
+    };
+    let checking = match build_checking_phase(module, &stdlib_root_path, &validation) {
+        Ok(c) => c,
+        Err(e) => return vec![e],
+    };
+    check_declaration_bodies_collect(module, &checking)
 }
 
 #[cfg(test)]
@@ -3130,5 +3162,89 @@ main =
         };
         let inferred = infer_binding_ty_with_resume_context(&value, &env, Some(&ctx));
         assert_eq!(inferred, Ty::Unknown);
+    }
+
+    // --- typecheck_module_collect tests ---
+
+    #[test]
+    fn collect_valid_source_returns_empty() {
+        let source = "add x = x + 1\n";
+        let module = parse_module(source).expect("should parse");
+        let errors = typecheck_module_collect(&module);
+        assert!(errors.is_empty(), "expected no errors, got: {:?}", errors);
+    }
+
+    #[test]
+    fn collect_single_error_source_returns_one_error() {
+        // Return type mismatch: declared Int but returns String
+        let source = "add : Int -> Int\nadd x = \"hello\"\n";
+        let module = parse_module(source).expect("should parse");
+        let errors = typecheck_module_collect(&module);
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].message.contains("String") || errors[0].message.contains("Int"),
+            "unexpected error message: {}", errors[0].message);
+    }
+
+    #[test]
+    fn collect_two_independent_errors_returns_two_errors_in_declaration_order() {
+        // Two declarations with independent type mismatches
+        let source = "add : Int -> Int\nadd x = \"hello\"\n\nmul : Int -> Int\nmul x = True\n";
+        let module = parse_module(source).expect("should parse");
+        let errors = typecheck_module_collect(&module);
+        assert_eq!(errors.len(), 2, "expected 2 errors, got: {:?}", errors);
+        // Errors are in declaration order: add first, mul second
+        assert!(errors[0].declaration.as_deref() == Some("add"),
+            "first error should be from 'add', got: {:?}", errors[0].declaration);
+        assert!(errors[1].declaration.as_deref() == Some("mul"),
+            "second error should be from 'mul', got: {:?}", errors[1].declaration);
+    }
+
+    #[test]
+    fn collect_module_level_error_returns_one_error() {
+        // Duplicate declaration name — caught in validate_module_phase (fail-fast)
+        let source = "add x = x + 1\nadd y = y + 2\n";
+        let module = parse_module(source).expect("should parse");
+        let errors = typecheck_module_collect(&module);
+        assert_eq!(errors.len(), 1, "expected exactly 1 structural error, got: {:?}", errors);
+    }
+
+    #[test]
+    fn collect_with_context_valid_module_returns_empty() {
+        // Exercises the _with_context path using the default stdlib
+        let source = "main : Unit -> Unit can Print\nmain = print \"hello\"\n";
+        let module = parse_module(source).expect("should parse");
+        let errors = typecheck_module_collect_with_context(&module, None, None);
+        assert!(errors.is_empty(), "expected no errors, got: {:?}", errors);
+    }
+
+    #[test]
+    fn collect_param_arity_error_does_not_suppress_next_declaration() {
+        // 'add' has a param-arity mismatch (caught by declaration_param_types).
+        // 'mul' has a body type mismatch (caught by check_body_stmts).
+        // Both errors must appear even though 'add' fails at an earlier stage.
+        let source =
+            "add : Int -> Int -> Int\nadd x = x\n\nmul : Int -> Int\nmul x = \"wrong\"\n";
+        let module = parse_module(source).expect("should parse");
+        let errors = typecheck_module_collect(&module);
+        assert_eq!(errors.len(), 2, "expected 2 errors, got: {:?}", errors);
+        assert_eq!(errors[0].declaration.as_deref(), Some("add"),
+            "first error should be from 'add'");
+        assert_eq!(errors[1].declaration.as_deref(), Some("mul"),
+            "second error should be from 'mul'");
+    }
+
+    #[test]
+    fn collect_resume_error_does_not_suppress_next_declaration() {
+        // 'a' has a resume-outside-handler error (caught by check_resume_in_stmts).
+        // 'b' has a body type mismatch (caught by check_body_stmts).
+        // Both errors must appear even though 'a' fails at an earlier stage.
+        let source = "a : Unit -> Unit\na =\n  resume ()\n\nb : Int -> Int\nb x = \"wrong\"\n";
+        let module = parse_module(source).expect("should parse");
+        let errors = typecheck_module_collect(&module);
+        assert_eq!(errors.len(), 2, "expected 2 errors, got: {:?}", errors);
+        assert_eq!(errors[0].declaration.as_deref(), Some("a"),
+            "first error should be from 'a'");
+        assert_eq!(errors[1].declaration.as_deref(), Some("b"),
+            "second error should be from 'b'");
     }
 }
