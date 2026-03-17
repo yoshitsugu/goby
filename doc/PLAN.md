@@ -626,6 +626,27 @@ Acceptance criteria:
 
 These items are intentionally kept as short placeholders until they become active.
 
+### 4.8 Active Track G: Shared Typed IR Boundary
+
+Goal: replace AST-shape-driven backend decisions with a shared typed IR between
+`goby-core` and backend lowering.
+
+Why this is the next architecture track:
+
+- current runtime-I/O support in `crates/goby-wasm` relies on source-shape
+  classification, which does not scale to semantically equivalent programs,
+- effectful execution is currently split across AST matching, backend-local
+  planning, and fallback runtime behavior,
+- Goby should establish a long-term compiler boundary now, while breaking
+  internal architecture is still cheap.
+
+Execution note:
+
+- detailed design, scope, migration phases, and acceptance criteria are tracked
+  in `doc/PLAN_IR.md`.
+- until Track G is implemented, avoid adding new ad-hoc AST-shape cases to
+  backend runtime-I/O planning unless needed for emergency unblock work.
+
 
 
 ## 5. Spec Detail Notes
