@@ -154,7 +154,7 @@ where
                 stmts.push(Stmt::Expr(Expr::Call {
                     callee: Box::new(callee),
                     arg: Box::new(multi_expr),
-                    span: None,
+                    span: Some(stmt_span),
                 }, Some(stmt_span)));
                 i = next_i + consumed;
                 continue;
@@ -892,7 +892,7 @@ mod tests {
         assert_eq!(stmts.len(), 1);
         match &stmts[0] {
             Stmt::Expr(Expr::Call { callee, arg, .. }, _) => {
-                assert_eq!(**callee, Expr::Var { name: "print".to_string(), span: None });
+                assert_eq!(**callee, Expr::var("print"));
                 assert_eq!(**arg, Expr::StringLit("hello".to_string()));
             }
             other => panic!("unexpected: {:?}", other),
@@ -927,7 +927,7 @@ mod tests {
         assert_eq!(stmts.len(), 1);
         match &stmts[0] {
             Stmt::Expr(Expr::With { handler, body }, _) => {
-                assert_eq!(**handler, Expr::Var { name: "h".to_string(), span: None });
+                assert_eq!(**handler, Expr::var("h"));
                 assert_eq!(body.len(), 1);
             }
             other => panic!("unexpected statement: {other:?}"),

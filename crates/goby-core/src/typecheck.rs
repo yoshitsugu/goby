@@ -3155,7 +3155,7 @@ main =
             record_types: HashMap::new(),
         };
         let value = Expr::Resume {
-            value: Box::new(Expr::Var { name: "x".to_string(), span: None }),
+            value: Box::new(Expr::var("x")),
         };
         let ctx = ResumeContext {
             expected_arg_ty: Some(Ty::Var("T".to_string())),

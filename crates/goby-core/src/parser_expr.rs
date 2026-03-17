@@ -128,7 +128,7 @@ pub(crate) fn parse_expr(src: &str) -> Option<Expr> {
     }
 
     if is_non_reserved_identifier(src) {
-        return Some(Expr::Var { name: src.to_string(), span: None });
+        return Some(Expr::var(src));
     }
 
     None
@@ -469,7 +469,7 @@ fn parse_placeholder_body(src: &str) -> Option<Expr> {
         let right = parse_non_lambda_expr(rhs.trim())?;
         return Some(Expr::BinOp {
             op: BinOpKind::Add,
-            left: Box::new(Expr::Var { name: "_".to_string(), span: None }),
+            left: Box::new(Expr::var("_")),
             right: Box::new(right),
         });
     }
@@ -477,7 +477,7 @@ fn parse_placeholder_body(src: &str) -> Option<Expr> {
         let right = parse_non_lambda_expr(rhs.trim())?;
         return Some(Expr::BinOp {
             op: BinOpKind::Mul,
-            left: Box::new(Expr::Var { name: "_".to_string(), span: None }),
+            left: Box::new(Expr::var("_")),
             right: Box::new(right),
         });
     }
@@ -490,7 +490,7 @@ fn parse_non_lambda_expr(src: &str) -> Option<Expr> {
         return Some(Expr::IntLit(n));
     }
     if is_non_reserved_identifier(src) {
-        return Some(Expr::Var { name: src.to_string(), span: None });
+        return Some(Expr::var(src));
     }
     if let Some((left, right)) = split_top_level_binop(src, '+') {
         return Some(Expr::BinOp {
@@ -897,8 +897,8 @@ mod tests {
         assert_eq!(
             parse_expr("\"${a}${b}\""),
             Some(Expr::InterpolatedString(vec![
-                InterpolatedPart::Expr(Box::new(Expr::Var { name: "a".to_string(), span: None })),
-                InterpolatedPart::Expr(Box::new(Expr::Var { name: "b".to_string(), span: None })),
+                InterpolatedPart::Expr(Box::new(Expr::var("a"))),
+                InterpolatedPart::Expr(Box::new(Expr::var("b"))),
             ]))
         );
     }
@@ -909,7 +909,7 @@ mod tests {
             parse_expr("\"hello ${name}!\""),
             Some(Expr::InterpolatedString(vec![
                 InterpolatedPart::Text("hello ".to_string()),
-                InterpolatedPart::Expr(Box::new(Expr::Var { name: "name".to_string(), span: None })),
+                InterpolatedPart::Expr(Box::new(Expr::var("name"))),
                 InterpolatedPart::Text("!".to_string()),
             ]))
         );
@@ -932,7 +932,7 @@ mod tests {
 
     #[test]
     fn parses_identifier() {
-        assert_eq!(parse_expr("foo"), Some(Expr::Var { name: "foo".to_string(), span: None }));
+        assert_eq!(parse_expr("foo"), Some(Expr::var("foo")));
     }
 
     #[test]
@@ -941,8 +941,8 @@ mod tests {
             parse_expr("a + b"),
             Some(Expr::BinOp {
                 op: BinOpKind::Add,
-                left: Box::new(Expr::Var { name: "a".to_string(), span: None }),
-                right: Box::new(Expr::Var { name: "b".to_string(), span: None }),
+                left: Box::new(Expr::var("a")),
+                right: Box::new(Expr::var("b")),
             })
         );
     }
@@ -953,8 +953,8 @@ mod tests {
             parse_expr("a == b"),
             Some(Expr::BinOp {
                 op: BinOpKind::Eq,
-                left: Box::new(Expr::Var { name: "a".to_string(), span: None }),
-                right: Box::new(Expr::Var { name: "b".to_string(), span: None }),
+                left: Box::new(Expr::var("a")),
+                right: Box::new(Expr::var("b")),
             })
         );
     }
@@ -971,7 +971,7 @@ mod tests {
             parse_expr("b * 3"),
             Some(Expr::BinOp {
                 op: BinOpKind::Mul,
-                left: Box::new(Expr::Var { name: "b".to_string(), span: None }),
+                left: Box::new(Expr::var("b")),
                 right: Box::new(Expr::IntLit(3)),
             })
         );
@@ -1001,10 +1001,10 @@ mod tests {
                 op: BinOpKind::Eq,
                 left: Box::new(Expr::BinOp {
                     op: BinOpKind::Add,
-                    left: Box::new(Expr::Var { name: "a".to_string(), span: None }),
-                    right: Box::new(Expr::Var { name: "b".to_string(), span: None }),
+                    left: Box::new(Expr::var("a")),
+                    right: Box::new(Expr::var("b")),
                 }),
-                right: Box::new(Expr::Var { name: "c".to_string(), span: None }),
+                right: Box::new(Expr::var("c")),
             })
         );
     }
@@ -1062,7 +1062,7 @@ mod tests {
             parse_expr("x |> f |> g"),
             Some(Expr::Pipeline {
                 value: Box::new(Expr::Pipeline {
-                    value: Box::new(Expr::Var { name: "x".to_string(), span: None }),
+                    value: Box::new(Expr::var("x")),
                     callee: "f".to_string(),
                 }),
                 callee: "g".to_string(),
@@ -1100,7 +1100,7 @@ mod tests {
             parse_expr("[1, 2, ..xs]"),
             Some(Expr::ListLit {
                 elements: vec![Expr::IntLit(1), Expr::IntLit(2)],
-                spread: Some(Box::new(Expr::Var { name: "xs".to_string(), span: None })),
+                spread: Some(Box::new(Expr::var("xs"))),
             })
         );
     }
@@ -1110,12 +1110,8 @@ mod tests {
         assert_eq!(
             parse_expr("[f(x), ..ys]"),
             Some(Expr::ListLit {
-                elements: vec![Expr::Call {
-                    callee: Box::new(Expr::Var { name: "f".to_string(), span: None }),
-                    arg: Box::new(Expr::Var { name: "x".to_string(), span: None }),
-                    span: None,
-                }],
-                spread: Some(Box::new(Expr::Var { name: "ys".to_string(), span: None })),
+                elements: vec![Expr::call(Expr::var("f"), Expr::var("x"))],
+                spread: Some(Box::new(Expr::var("ys"))),
             })
         );
     }
@@ -1125,8 +1121,8 @@ mod tests {
         assert_eq!(
             parse_expr("[a, ..rest]"),
             Some(Expr::ListLit {
-                elements: vec![Expr::Var { name: "a".to_string(), span: None }],
-                spread: Some(Box::new(Expr::Var { name: "rest".to_string(), span: None })),
+                elements: vec![Expr::var("a")],
+                spread: Some(Box::new(Expr::var("rest"))),
             })
         );
     }
@@ -1171,11 +1167,7 @@ mod tests {
     fn parses_spaced_function_call() {
         assert_eq!(
             parse_expr("add_ten 10"),
-            Some(Expr::Call {
-                callee: Box::new(Expr::Var { name: "add_ten".to_string(), span: None }),
-                arg: Box::new(Expr::IntLit(10)),
-                span: None,
-            })
+            Some(Expr::call(Expr::var("add_ten"), Expr::IntLit(10)))
         );
     }
 
@@ -1183,19 +1175,10 @@ mod tests {
     fn parses_spaced_multi_arg_function_call_left_associative() {
         assert_eq!(
             parse_expr("f a b c"),
-            Some(Expr::Call {
-                callee: Box::new(Expr::Call {
-                    callee: Box::new(Expr::Call {
-                        callee: Box::new(Expr::Var { name: "f".to_string(), span: None }),
-                        arg: Box::new(Expr::Var { name: "a".to_string(), span: None }),
-                        span: None,
-                    }),
-                    arg: Box::new(Expr::Var { name: "b".to_string(), span: None }),
-                    span: None,
-                }),
-                arg: Box::new(Expr::Var { name: "c".to_string(), span: None }),
-                span: None,
-            })
+            Some(Expr::call(
+                Expr::call(Expr::call(Expr::var("f"), Expr::var("a")), Expr::var("b")),
+                Expr::var("c"),
+            ))
         );
     }
 
@@ -1203,11 +1186,7 @@ mod tests {
     fn parses_spaced_unit_argument_function_call() {
         assert_eq!(
             parse_expr("read_line ()"),
-            Some(Expr::Call {
-                callee: Box::new(Expr::Var { name: "read_line".to_string(), span: None }),
-                arg: Box::new(Expr::unit_value()),
-                span: None,
-            })
+            Some(Expr::call(Expr::var("read_line"), Expr::unit_value()))
         );
     }
 
@@ -1215,11 +1194,7 @@ mod tests {
     fn parses_parenthesized_unit_argument_function_call() {
         assert_eq!(
             parse_expr("read_line()"),
-            Some(Expr::Call {
-                callee: Box::new(Expr::Var { name: "read_line".to_string(), span: None }),
-                arg: Box::new(Expr::unit_value()),
-                span: None,
-            })
+            Some(Expr::call(Expr::var("read_line"), Expr::unit_value()))
         );
     }
 
@@ -1227,15 +1202,10 @@ mod tests {
     fn parses_parenthesized_multi_arg_function_call_left_associative() {
         assert_eq!(
             parse_expr("split(text, \"\\n\")"),
-            Some(Expr::Call {
-                callee: Box::new(Expr::Call {
-                    callee: Box::new(Expr::Var { name: "split".to_string(), span: None }),
-                    arg: Box::new(Expr::Var { name: "text".to_string(), span: None }),
-                    span: None,
-                }),
-                arg: Box::new(Expr::StringLit("\n".to_string())),
-                span: None,
-            })
+            Some(Expr::call(
+                Expr::call(Expr::var("split"), Expr::var("text")),
+                Expr::StringLit("\n".to_string()),
+            ))
         );
     }
 
@@ -1258,7 +1228,7 @@ mod tests {
                 param: "n".to_string(),
                 body: Box::new(Expr::BinOp {
                     op: BinOpKind::Mul,
-                    left: Box::new(Expr::Var { name: "n".to_string(), span: None }),
+                    left: Box::new(Expr::var("n")),
                     right: Box::new(Expr::IntLit(10)),
                 }),
             })
@@ -1273,7 +1243,7 @@ mod tests {
                 param: "_".to_string(),
                 body: Box::new(Expr::BinOp {
                     op: BinOpKind::Mul,
-                    left: Box::new(Expr::Var { name: "_".to_string(), span: None }),
+                    left: Box::new(Expr::var("_")),
                     right: Box::new(Expr::IntLit(10)),
                 }),
             })
@@ -1293,7 +1263,7 @@ mod tests {
             Some(Expr::MethodCall {
                 receiver: "string".to_string(),
                 method: "split".to_string(),
-                args: vec![Expr::Var { name: "a".to_string(), span: None }, Expr::Var { name: "b".to_string(), span: None }],
+                args: vec![Expr::var("a"), Expr::var("b")],
             })
         );
     }
@@ -1306,7 +1276,7 @@ mod tests {
                 receiver: "l".to_string(),
                 method: "join".to_string(),
                 args: vec![
-                    Expr::Var { name: "paths".to_string(), span: None },
+                    Expr::var("paths"),
                     Expr::StringLit("\n".to_string()),
                 ],
             })
@@ -1331,11 +1301,7 @@ mod tests {
     fn parses_qualified_access_expression() {
         assert_eq!(
             parse_expr("user.name"),
-            Some(Expr::Qualified {
-                receiver: "user".to_string(),
-                member: "name".to_string(),
-                span: None,
-            })
+            Some(Expr::qualified("user", "name"))
         );
     }
 
@@ -1346,11 +1312,7 @@ mod tests {
             Some(Expr::MethodCall {
                 receiver: "string".to_string(),
                 method: "join".to_string(),
-                args: vec![
-                    Expr::Var { name: "a".to_string(), span: None },
-                    Expr::Var { name: "b".to_string(), span: None },
-                    Expr::Var { name: "c".to_string(), span: None },
-                ],
+                args: vec![Expr::var("a"), Expr::var("b"), Expr::var("c")],
             })
         );
     }
@@ -1393,7 +1355,7 @@ mod tests {
     fn parses_list_index_simple() {
         assert_eq!(
             parse_expr("xs[0]"),
-            Some(list_index(Expr::Var { name: "xs".to_string(), span: None }, Expr::IntLit(0)))
+            Some(list_index(Expr::var("xs"), Expr::IntLit(0)))
         );
     }
 
@@ -1401,10 +1363,7 @@ mod tests {
     fn parses_list_index_var_index() {
         assert_eq!(
             parse_expr("xs[i]"),
-            Some(list_index(
-                Expr::Var { name: "xs".to_string(), span: None },
-                Expr::Var { name: "i".to_string(), span: None }
-            ))
+            Some(list_index(Expr::var("xs"), Expr::var("i")))
         );
     }
 
@@ -1413,7 +1372,7 @@ mod tests {
         // xs [ 0 ] — spaces inside brackets are trimmed from the index expression
         assert_eq!(
             parse_expr("xs [ 0 ]"),
-            Some(list_index(Expr::Var { name: "xs".to_string(), span: None }, Expr::IntLit(0)))
+            Some(list_index(Expr::var("xs"), Expr::IntLit(0)))
         );
     }
 
@@ -1430,14 +1389,7 @@ mod tests {
         // Document the actual parse so regressions are caught.
         assert_eq!(
             parse_expr("f xs[0]"),
-            Some(list_index(
-                Expr::Call {
-                    callee: Box::new(Expr::Var { name: "f".to_string(), span: None }),
-                    arg: Box::new(Expr::Var { name: "xs".to_string(), span: None }),
-                    span: None,
-                },
-                Expr::IntLit(0)
-            ))
+            Some(list_index(Expr::call(Expr::var("f"), Expr::var("xs")), Expr::IntLit(0)))
         );
     }
 
@@ -1447,10 +1399,10 @@ mod tests {
         assert_eq!(
             parse_expr("xs[i + 1]"),
             Some(list_index(
-                Expr::Var { name: "xs".to_string(), span: None },
+                Expr::var("xs"),
                 Expr::BinOp {
                     op: BinOpKind::Add,
-                    left: Box::new(Expr::Var { name: "i".to_string(), span: None }),
+                    left: Box::new(Expr::var("i")),
                     right: Box::new(Expr::IntLit(1)),
                 }
             ))
@@ -1462,14 +1414,7 @@ mod tests {
         // f()[0]
         assert_eq!(
             parse_expr("f()[0]"),
-            Some(list_index(
-                Expr::Call {
-                    callee: Box::new(Expr::Var { name: "f".to_string(), span: None }),
-                    arg: Box::new(Expr::unit_value()),
-                    span: None,
-                },
-                Expr::IntLit(0)
-            ))
+            Some(list_index(Expr::call(Expr::var("f"), Expr::unit_value()), Expr::IntLit(0)))
         );
     }
 
@@ -1479,7 +1424,7 @@ mod tests {
         assert_eq!(
             parse_expr("xs[0][1]"),
             Some(list_index(
-                list_index(Expr::Var { name: "xs".to_string(), span: None }, Expr::IntLit(0)),
+                list_index(Expr::var("xs"), Expr::IntLit(0)),
                 Expr::IntLit(1)
             ))
         );
@@ -1506,7 +1451,7 @@ mod tests {
         // list_src = "(xs)" which parse_tuple_or_grouped_expr turns into Var("xs").
         assert_eq!(
             parse_expr("(xs)[0]"),
-            Some(list_index(Expr::Var { name: "xs".to_string(), span: None }, Expr::IntLit(0)))
+            Some(list_index(Expr::var("xs"), Expr::IntLit(0)))
         );
     }
 

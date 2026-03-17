@@ -347,7 +347,7 @@ fn ensure_known_call_targets_in_expr(
         Expr::IntLit(_)
         | Expr::BoolLit(_)
         | Expr::StringLit(_)
-        | Expr::Var { name: _, .. }
+        | Expr::Var { .. }
         | Expr::Qualified { .. } => Ok(()),
         Expr::ListIndex { list, index } => {
             ensure_known_call_targets_in_expr(list, env, decl_name)?;
