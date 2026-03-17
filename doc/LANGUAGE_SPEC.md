@@ -6,7 +6,9 @@ Last updated: 2026-03-15
 This file is the current language-spec source of truth for user-visible Goby
 syntax/semantics.
 
-`doc/PLAN.md` tracks implementation plans, migrations, and future work.
+`doc/PLAN.md` tracks top-level implementation plans, migrations, and future work.
+Specialized active tracks may use companion plan documents such as
+`doc/PLAN_IR.md` and `doc/PLAN_STANDARD_LIBRARY.md`.
 
 ## 1. Source and Module Basics
 

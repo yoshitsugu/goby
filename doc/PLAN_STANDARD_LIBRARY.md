@@ -1,649 +1,131 @@
-# Goby Standard Library Foundation Plan
+# Goby Standard Library Remaining Work Plan
 
-Status: Step 0-12 + ExtraStep A/B complete
-Owner: Goby core/tooling track
-Last updated: 2026-03-12
+Status: active follow-up only
+Owner: Goby core/runtime track
+Last updated: 2026-03-18
 
-## 1. Purpose
+## 1. Scope
 
-This document defines the implementation plan for establishing a file-based
-standard library foundation in Goby, while preserving current behavior and
-developer workflows.
+Most of the original stdlib-foundation plan is already implemented. This
+document now keeps only the remaining work that is still relevant for active
+development.
 
-The immediate target is import/typecheck infrastructure, not full runtime
-replacement.
+This is a focused companion plan to `doc/PLAN.md`, not a separate roadmap.
 
-## 2. Scope
+Current remaining stdlib track:
 
-In scope:
+- finish moving `goby/string.split` to stdlib-driven behavior,
+- remove the remaining direct runtime builtin path for `string.split`,
+- lock tests/docs around the final ownership boundary.
 
-- Introduce a canonical in-repo stdlib source layout.
-- Resolve `import goby/...` from `.gb` source files.
-- Add a stdlib-only `@embed` annotation for effect embedding declarations.
-- Preserve existing import diagnostics quality.
-- Add regression coverage for file-based stdlib import behavior.
+Everything else from the earlier stdlib bootstrap plan should be treated as
+completed historical work and recovered from git history if needed.
 
-Out of scope (later phases):
+## 2. Current State
 
-- Full runtime replacement of built-in operations with stdlib Goby code.
-- Package manager / remote dependency resolution.
-- Cross-repo stdlib distribution.
-- General `@embed` support for user code or third-party libraries.
+Already true today:
 
-## 3. Current Baseline
+- file-based stdlib import resolution exists,
+- stdlib-only `@embed` is implemented,
+- intrinsic bridge names for current stdlib support exist,
+- `__goby_string_each_grapheme` and `__goby_list_push_string` are implemented,
+- `String == String` works through the normal `==` operator,
+- `stdlib/goby/string.gb` already contains iterator-driven `split` paths for:
+  - empty delimiter,
+  - single-grapheme delimiter.
 
-Today, import resolution is file-backed in typechecker logic:
+Still not finished:
 
-- `validate_imports` and `inject_imported_symbols` resolve checked-in stdlib files directly.
-- Supported modules come from files under `stdlib/goby/*.gb`.
-- bare `print` / `println` come from the implicit `goby/prelude` import path rather than a separately injected builtin symbol.
-- Runtime behavior for some stdlib operations is still hardcoded in `goby-wasm`.
+- multi-grapheme delimiters still depend on the runtime `string.split(...)`
+  builtin path,
+- stdlib state/type plumbing for the final `split` implementation is incomplete,
+- the runtime builtin branch cannot yet be deleted.
 
-Implication:
+## 3. Locked Behavior
 
-- Import behavior works, but no file-based stdlib source pipeline exists yet.
-- Language-level stdlib evolution is tightly coupled to compiler code edits.
+These semantics remain locked while finishing the work:
 
-## 4. Target Architecture
+- preserve empty segments,
+- preserve leading and trailing empty segments,
+- empty delimiter means grapheme-wise split,
+- grapheme definition is Unicode Extended Grapheme Cluster,
+- empty input returns `[]` for current compatibility.
 
-Introduce a dedicated stdlib resolver layer in `goby-core`:
+## 4. Remaining Milestones
 
-- Input: module path (`goby/string`, etc.) + stdlib root directory.
-- Resolution: module path -> source file path (`stdlib/goby/string.gb`).
-- Parse/type extraction: read exported symbols and their type signatures.
-- Output: resolved module export map for typechecker import validation/injection.
-
-Compatibility rule during migration:
-
-- Use checked-in stdlib files as the single source of truth for `goby/...` imports.
-- Keep bare `print` available as implicit-prelude sugar while runtime lowering/output paths
-  still special-case the print call shape.
-
-`@embed` rule:
-
-- `@embed` is accepted only in stdlib sources under `stdlib/`.
-- `@embed` is rejected in user modules and non-stdlib libraries.
-- Embedded effects are treated as runtime-provided capabilities that do not need
-  user-space effect declaration boilerplate in `main`.
-
-## 5. Canonical Layout
-
-Planned repository layout:
-
-- `stdlib/goby/string.gb`
-- `stdlib/goby/list.gb`
-- `stdlib/goby/env.gb`
-- `stdlib/goby/stdio.gb`
-
-Path mapping rule:
-
-- `import goby/<name>` resolves to `<stdlib_root>/goby/<name>.gb`.
-
-## 6. Phased Implementation Plan
-
-### Phase A: Resolver Skeleton (Type Information Only)
-
-Deliverables:
-
-- New module: `crates/goby-core/src/stdlib.rs`.
-- Resolver API (tentative):
-  - `StdlibResolver::new(root: PathBuf)`
-  - `resolve_module(module_path: &str) -> Result<ResolvedStdlibModule, StdlibResolveError>`
-- `ResolvedStdlibModule` includes:
-  - normalized module path,
-  - exported symbol -> type map (typechecker-facing representation).
-
-Behavior:
-
-- Parse resolved `.gb` module.
-- Collect top-level declarations with type annotations as exported symbols.
-- Ignore runtime body semantics in this phase.
-
-Diagnostics:
-
-- `ModuleNotFound`
-- `ReadFailed`
-- `ParseFailed`
-- `DuplicateExport`
-- `ExportTypeMissing` (if stricter export policy is chosen)
-
-### Phase B: Typechecker Integration
-
-Deliverables:
-
-- Route `validate_imports` through resolver-backed module export lookup.
-- Route `inject_imported_symbols` through the same resolver-backed source.
-- Do not keep a builtin export-table fallback in the typechecker import path.
-
-Rules:
-
-- `ImportKind::Plain`, `Alias`, `Selective` behavior remains unchanged.
-- Unknown module/symbol diagnostics remain stable and explicit.
-- Existing collision/ambiguity handling via `GlobalBinding::Ambiguous` remains unchanged.
-
-### Phase C: Seed File-Based Stdlib Modules
-
-Deliverables:
-
-- Add initial stdlib files under `stdlib/goby/`.
-- Include stable export signatures matching current built-in module contracts.
-- Add `goby/stdio` module that exposes standard I/O functions (including `print`).
-- Add stdlib examples of embedded effect declarations, e.g. `@embed Print`.
-
-Notes:
-
-- Initial bodies may be minimal; type signatures are the critical bridge for import/typecheck.
-- Keep runtime behavior unchanged unless a function is explicitly migrated.
-
-Initial `goby/stdio` API contract (minimum):
-
-- `print : String -> Unit can Print`
-- `println : String -> Unit can Print`
-
-Initial embedded declaration model for stdio:
-
-- Stdlib module may include embedded effect declarations such as:
-  - `effect Print`
-  - `@embed Print`
-  - embedded operation signatures consumed by `goby/stdio.print`.
-- Goal: keep `Print` capability wiring inside stdlib/runtime bridge instead of
-  requiring user modules to declare effect internals.
-
-Deferred additions:
-
-- `println`, `eprint`, `read_line`.
-
-### Phase D: CLI Wiring for Stdlib Root
-
-Deliverables:
-
-- Pass stdlib root into typecheck/import resolution flow.
-- Default root: repository-local `stdlib/`.
-
-Optional extension:
-
-- Environment override `GOBY_STDLIB_ROOT`.
-- Future CLI flag `--stdlib-root`.
-
-### Phase E: Diagnostics and UX Hardening
-
-Deliverables:
-
-- Improve import error messages with attempted path details.
-- Keep machine-readable stability for editor tooling.
-- Ensure ambiguous import diagnostics identify competing sources clearly.
-- Add explicit diagnostics for invalid `@embed` usage:
-  - used outside stdlib root,
-  - malformed embed target,
-  - duplicate embedded effect names.
-
-### Phase F: Runtime Migration Preparation (Separate Execution Track)
-
-Deliverables:
-
-- Inventory hardcoded runtime built-ins in `goby-wasm`.
-- Define per-function migration checklist from hardcoded runtime path to stdlib-backed path.
-- Define explicit migration path from builtin `print` to `goby/stdio.print`.
-
-Not executed in this plan unless explicitly started.
-
-Planned `print` migration sequence:
-
-1. Keep runtime print execution support while introducing `goby/stdio.print`.
-2. Make `goby/stdio` import path first-class in docs/examples.
-3. Keep compatibility so bare `print` still works through implicit prelude during migration.
-4. Introduce stdlib-only `@embed Print` declaration path and wire runtime bridge through it.
-5. After parity and adoption, reduce direct compiler/runtime special-casing.
-6. Revisit whether implicit-prelude `print` should remain permanent sugar or become explicit-import-only.
-
-## 7. Incremental Step-by-Step Execution Plan
-
-This section is the operational sequence. Each step is intentionally small and
-should be completed (code + tests + docs) before moving to the next.
-
-Step 0: Baseline lock
-
-- Add/confirm baseline tests for current import behavior and bare `print`.
-- No behavior change.
-- Exit criteria: `cargo check/test/clippy` green on unchanged behavior.
-
-Step 1: Add stdlib resolver module shell
-
-- Add `crates/goby-core/src/stdlib.rs` with data types and no integration.
-- Add unit tests for path mapping only.
-- Exit criteria: resolver compiles, no call sites changed.
-
-Step 2: Implement file resolution + parse path
-
-- Implement module-path -> file-path resolution and file loading.
-- Parse resolved `.gb` and return declaration/type metadata.
-- Exit criteria: resolver tests cover success + module-not-found + parse-failed.
-
-Step 3: Export map extraction
-
-- Build symbol->type export map from parsed stdlib module.
-- Add duplicate-export and missing-type tests.
-- Exit criteria: resolver returns stable export maps for fixture modules.
-
-Step 4: Integrate import validation (read path only)
-
-- Switch `validate_imports` to use resolver-backed stdlib files as the only source of truth.
-- Keep symbol injection path unchanged in this step.
-- Exit criteria: unknown-module/symbol diagnostics remain stable.
-
-Step 5: Integrate symbol injection
-
-- Switch `inject_imported_symbols` to resolver-backed stdlib files only.
-- Keep ambiguity/collision behavior unchanged.
-- Exit criteria: existing import collision tests remain green.
-
-Step 6: Seed stdlib files (`string/list/env`)
-
-- Add initial files under `stdlib/goby/` with current signatures.
-- No runtime migration yet.
-- Exit criteria: imports resolve from files in normal repo layout.
-
-Step 7: Add `stdlib/goby/stdio.gb`
-
-- Add `print` signature in `goby/stdio`.
-- Add typecheck test for `import goby/stdio ( print )`.
-- Exit criteria: stdio import path is usable in typechecker.
-
-Step 8: Introduce stdlib-only `@embed` parsing gate
-
-- Add parser/typechecker support for `@embed` declarations.
-- Enforce path restriction: allowed only when module source is under stdlib root.
-- Exit criteria: stdlib fixture accepted; user-module fixture rejected.
-
-Step 9: `@embed Print` stdio bridge metadata
-
-- Wire embedded `Print` declaration metadata into stdio planning path.
-- Keep bare `print` behavior intact through implicit prelude.
-- Exit criteria: no runtime regression; bridge metadata visible to compiler stages.
-
-Step 10: CLI stdlib root wiring
-
-- Pass stdlib root to resolver/typecheck flow.
-- Default to repo `stdlib/`; optional env override.
-- Exit criteria: CLI tests cover default and invalid-root error paths.
-
-Step 11: Diagnostic hardening
-
-- Improve resolver/import/embed diagnostics (attempted path, context).
-- Exit criteria: snapshot tests for key diagnostics.
-
-Step 12: print migration handoff checkpoint
-
-- Document active behavior:
-  - `goby/stdio.print` available,
-  - bare `print` available via implicit prelude,
-  - `@embed` restricted to stdlib.
-- Exit criteria: checkpoint recorded in `doc/STATE.md`, next runtime step unblocked.
-## 8. Test Strategy
-
-### Unit Tests (`goby-core`)
-
-- Resolver:
-  - resolves existing stdlib module by path,
-  - reports module-not-found cleanly,
-  - reports duplicate exports deterministically.
-- Typecheck import integration:
-  - `import goby/string` works from file-based resolver,
-  - `import goby/stdio` resolves `print` symbol with expected type,
-  - selective import unknown symbol fails with expected message,
-  - collision ambiguity behavior remains unchanged.
-  - `@embed` declaration is rejected outside stdlib modules.
-
-### Integration/Regression
-
-- Existing `examples/import.gb` still typechecks and runs.
-- Existing import-related tests remain green.
-- Add stdio regression:
-  - `import goby/stdio ( print )` typechecks,
-  - bare `print` compatibility path remains functional until migration completion.
-  - stdlib `@embed Print` fixture is accepted only from stdlib path.
-
-### Quality Gates
-
-- `cargo check`
-- `cargo test`
-- `cargo clippy -- -D warnings`
-
-## 9. Migration Guardrails
-
-- Do not break existing built-in module behavior during transition.
-- Keep fallback path until file-based stdlib parity is confirmed.
-- Avoid widening scope into package/dependency resolution.
-- Keep `README.md` user-facing and high-level; put implementation details in `doc/`.
-
-## 10. Risks and Mitigations
-
-Risk: import behavior drift between checked-in stdlib files and importer expectations.
-Mitigation: table-driven resolver/typecheck tests over real `stdlib/goby/*.gb` modules.
-
-Risk: ambiguous symbol diagnostics regress during resolver integration.
-Mitigation: retain current global symbol insertion and ambiguity logic.
-
-Risk: runtime/typecheck mismatch while stdlib is type-only.
-Mitigation: keep runtime built-ins as source of truth until explicit runtime migration.
-
-## 11. Execution Checkpoints
-
-Checkpoint 1:
-
-- Resolver module added, tests for successful/failed module resolution.
-
-Checkpoint 2:
-
-- Typechecker imports use resolver-backed stdlib files only; missing stdlib modules fail clearly.
-
-Checkpoint 3:
-
-- `stdlib/goby/*.gb` seed modules committed, `examples/import.gb` regression green.
-- `stdlib/goby/stdio.gb` added and covered by import/typecheck regression.
-- `@embed Print` declaration sample added under stdlib and validated.
-
-Checkpoint 4:
-
-- CLI stdlib-root wiring complete and documented.
-
-Checkpoint 5:
-
-- Diagnostics hardening complete; plan marked ready for runtime migration handoff.
-
-Checkpoint 6:
-
-- `print` migration track validated:
-  - `goby/stdio.print` path is available and tested,
-  - compatibility bridge behavior is documented in `doc/STATE.md`.
-  - stdlib-only `@embed` restriction is enforced by parser/typechecker diagnostics.
-
-## 12. Definition of Done
-
-- File-based stdlib import resolution for `goby/...` is implemented and tested.
-- Missing stdlib modules now fail explicitly instead of falling back to builtin export tables.
-- Existing import examples and tests pass unchanged.
-- `goby/stdio` is available as stdlib module, and `print` migration status is explicitly tracked.
-- `@embed` is supported for stdlib modules only and rejected elsewhere.
-- Progress and follow-up work are tracked in `doc/STATE.md`.
-
-## ExtraStep Candidates (Post Step12)
-
-This section tracks follow-up adjustments discovered after Step12 completion.
-These items are intentionally staged as additional work, not retroactive changes
-to Step0-12.
-
-### ExtraStep A: stdio embed model alignment (Print default handler embedding)
-
-Status note (2026-03-04):
-
-- This section is superseded by `doc/PLAN_EMBED.md`.
-- Current locked syntax is `@embed <EffectName> <HandlerName>`.
-- Legacy `@embed effect <EffectName>` is removed and must be rejected by parser.
-
-Problem statement:
-
-- Current `stdlib/goby/stdio.gb` uses:
-  - `@embed Print __goby_embeded_effect_stdout_handler`
-  - `print : String -> Unit can Print`
-  - body placeholder `value |> print`
-- Intended model is:
-  - explicit effect declaration in stdio module,
-  - embedding declaration for the effect's default runtime handler.
-
-Target shape (illustrative):
-
-```gb
-effect Print
-  print : String -> Unit can Print
-
-@embed Print __goby_embeded_effect_stdout_handler
-```
-
-Follow-up tasks are tracked in `doc/PLAN_EMBED.md`.
-
-Decision (updated 2026-03-04):
-
-- Canonical syntax is `@embed <EffectName> <HandlerName>`.
-- Legacy `@embed effect <EffectName>` is rejected.
-
-Execution checklist (incremental):
-
-- [x] A1. Baseline lock: current gates pass before edits (`cargo check`, `cargo test -p goby-core`).
-- [x] A2. Spec lock in this plan: decide compatibility policy for legacy `@embed effect <Name>`.
-- [x] A3. Parser accepts canonical `@embed <Name>`.
-- [x] A4. Parser compatibility behavior implemented per A2 (accept+deprecate or reject with clear error).
-- [x] A5. AST/internal representation normalized so downstream stages are syntax-agnostic.
-- [x] A6. Typechecker rule added: `@embed X` requires in-module `effect X`.
-- [x] A7. Path-gate integration verified:
-  - stdlib path + declared effect => accept,
-  - non-stdlib path => reject,
-  - stdlib path + missing effect => reject.
-- [x] A8. Resolver `embedded_effects` extraction remains stable across accepted embed syntax.
-- [x] A9. `stdlib/goby/stdio.gb` migrated to canonical model (`effect Print` + `@embed Print`).
-- [x] A10. Diagnostics hardened for malformed embed, unknown embedded effect, and duplicates.
-- [x] A11. Docs synced (`doc/PLAN.md`, `doc/STATE.md`) with landed behavior.
-- [x] A12. Final quality gates pass (`cargo fmt`, `cargo check`, `cargo test`, `cargo clippy -- -D warnings`).
-
-### ExtraStep B: stdlib intrinsic bridge naming (`__goby_<module>_<function>`)
-
-Problem statement:
-
-- Some stdlib APIs (for example string length) are difficult to implement
-  faithfully in pure Goby at current language/runtime capability level.
-- Current placeholder implementations (for example `length value = 0`) should
-  be replaced with explicit runtime bridge calls.
-
-Proposed convention:
-
-- Introduce reserved intrinsic names:
-  - `__goby_<module>_<function>`
-  - example: `__goby_string_length : String -> Int`
-- Stdlib modules can call these intrinsics as a temporary runtime bridge.
-- User modules should not define or call `__goby_*` names directly
-  (restriction policy to be enforced in parser/typechecker/lints as follow-up).
-
-Illustrative stdlib usage:
-
-```gb
-length : String -> Int
-length value = __goby_string_length value
-```
-
-Staging guidance:
-
-1. Add only minimal intrinsics needed for parity-critical stdlib APIs.
-2. Keep APIs that can be expressed with future language features
-   (for example iteration + algebraic effects with resume) on a path toward
-   pure Goby stdlib implementations.
-3. Track each intrinsic as technical debt with an explicit retirement target.
-
-Near-term candidate split:
-
-- Intrinsic-backed first:
-  - `string.length` (runtime primitive likely needed short-term).
-  - `env.fetch_env_var` (host environment access requires runtime boundary).
-- Deferred for language-feature implementation:
-  - `string.split` (possible pure stdlib implementation once iteration/resume
-    support is available).
-
-Additional intrinsic example:
-
-```gb
-fetch_env_var : String -> String
-fetch_env_var name = __goby_env_fetch_env_var name
-```
-
-Decision (2026-03-12):
-
-- First intrinsic set is locked to:
-  - `__goby_string_length : String -> Int`
-  - `__goby_env_fetch_env_var : String -> String`
-- Restriction policy (current phase):
-  - user modules are hard-rejected for `__goby_*` declaration/call usage,
-  - stdlib modules may call only the known intrinsic set above,
-  - unknown `__goby_*` names in stdlib are rejected with explicit diagnostics.
-
-Execution checklist (incremental):
-
-- [x] B1. Baseline lock: current gates pass before edits (`cargo check`, `cargo test`).
-- [x] B2. Spec lock in this plan:
-  - confirm first intrinsic set (`__goby_string_length`, `__goby_env_fetch_env_var`),
-  - lock temporary user restriction policy scope (diagnostic-only vs hard reject).
-- [x] B3. Reserve intrinsic namespace policy:
-  - parser/typechecker/runtime convention for names matching `__goby_*`,
-  - clarify whether user definitions/calls are rejected now or warned/deferred.
-- [x] B4. Typechecker symbol modeling:
-  - add intrinsic function types to type environment when referenced by stdlib modules,
-  - keep imported API surface unchanged (`goby/string.length`, `goby/env.fetch_env_var`).
-- [x] B5. Runtime bridge implementation:
-  - map `__goby_string_length` to runtime string-length primitive,
-  - map `__goby_env_fetch_env_var` to existing host env boundary behavior.
-- [x] B6. Stdlib module migration:
-  - update `stdlib/goby/string.gb` `length` to call `__goby_string_length`,
-  - update `stdlib/goby/env.gb` `fetch_env_var` to call `__goby_env_fetch_env_var`.
-- [x] B7. Resolver/import parity checks:
-  - ensure resolver-first import behavior still matches expected symbol/type contracts,
-  - ensure missing stdlib files now fail clearly instead of falling back to builtin exports.
-- [x] B8. Diagnostics hardening:
-  - clear runtime/typecheck errors for unknown intrinsic usage,
-  - explicit messages for disallowed user-space `__goby_*` usage (if hard reject is chosen).
-- [x] B9. Regression tests (`goby-core` + `goby-wasm` + CLI integration where relevant):
-  - positive tests for `string.length` and `env.fetch_env_var` through stdlib entry points,
-  - negative tests for malformed/unknown intrinsic calls,
-  - compatibility tests for implicit-prelude `print` / `println` and stdlib imports.
-- [x] B10. Performance/behavior sanity:
-  - verify no unintended path regression in native/fallback mode selection,
-  - ensure runtime output parity for affected examples/tests.
-- [x] B11. Docs synced (`doc/PLAN.md`, `doc/STATE.md`) with intrinsic bridge policy and limits.
-- [x] B12. Final quality gates pass (`cargo fmt`, `cargo check`, `cargo test`, `cargo clippy -- -D warnings`).
-
-### ExtraStep C: `string.split` stdlib implementation via Iterator + grapheme intrinsic
-
-Problem statement:
-
-- `string.concat` was retired and string interpolation is now the canonical string
-  composition mechanism.
-- `string.split` is still runtime-builtin backed and should move toward stdlib-driven
-  behavior.
-- `Iterator` effect declarations are now available in stdlib and can be used as the
-  stream-like execution model.
-
-Decisions (2026-03-03):
-
-- New intrinsic name:
-  - `__goby_string_each_grapheme : String -> Int can Iterator`
-- Processing model:
-  - stream-like internal execution using `Iterator.yield`,
-  - public API remains `List String` for now.
-- Implementation direction:
-  - choose **B** strategy: add minimal list/string primitives needed to build
-    `split` in stdlib (instead of keeping `string.split` as permanent builtin).
-- Split semantics lock:
-  - preserve empty segments (compatible with current runtime split behavior),
-  - preserve leading/trailing empty segments,
-  - empty delimiter means grapheme-wise split (`"abc"` -> `["a", "b", "c"]`).
-- Grapheme definition lock:
-  - Unicode Extended Grapheme Cluster.
-
-Remaining decisions:
-
-1. Minimal helper primitive set for stdlib implementation:
-   - `__goby_list_push_string : List String -> String -> List String`
-   - string equality should use `==` operator (`String == String -> Bool`) instead of a dedicated intrinsic.
-   - keep intrinsic scope minimal and stdlib-only.
-
-Execution checklist (incremental):
-
-- [x] C1. Spec lock in this plan:
-  - split edge-case semantics locked (empty delimiter, consecutive delimiters, leading/trailing delimiters),
-  - grapheme definition locked (Unicode Extended Grapheme Cluster).
-- [x] C2. Typechecker intrinsic model expansion:
-  - allow `__goby_string_each_grapheme`, `__goby_list_push_string` in stdlib only,
-  - ensure `String == String` is typechecked as `Bool`,
-  - keep user-space `__goby_*` hard rejection unchanged.
-- [x] C3. Runtime bridge implementation:
-  - implement `__goby_string_each_grapheme` with iterator-effect dispatch,
-  - implement `__goby_list_push_string`,
-  - evaluate `String == String` via `==` operator (no string-eq intrinsic).
-- [ ] C4. Stdlib iterator/string implementation:
-  - implement `split` in `stdlib/goby/string.gb` using Iterator-driven processing,
+- [ ] C4. Stdlib iterator/string implementation
+  - finish `split` in `stdlib/goby/string.gb` using Iterator-driven processing,
   - remove dependency on runtime builtin `string.split(...)`.
-- [ ] C5. Runtime builtin retirement:
+
+- [ ] C5. Runtime builtin retirement
   - remove direct runtime handling path for `string.split` method call.
-- [ ] C6. Regression coverage:
-  - add edge-case tests for split semantics and Unicode grapheme behavior,
-  - add import/example parity tests (including `examples/import.gb` behavior).
-- [ ] C7. Docs sync:
-  - update `doc/PLAN.md` and `doc/STATE.md` with final intrinsic set and split ownership.
-- [ ] C8. Final quality gates:
-  - `cargo fmt`, `cargo check`, `cargo test`, `cargo clippy -- -D warnings`.
 
-Current progress note (2026-03-12):
+- [ ] C6. Regression coverage
+  - add split edge-case tests and Unicode grapheme behavior tests,
+  - add parity coverage for import/example paths that depend on `split`.
 
-- `C2/C3` completed:
-  - typechecker accepts `__goby_string_each_grapheme` and `__goby_list_push_string`
-    under stdlib-root policy,
-  - runtime bridge implements those intrinsics,
-  - `String == String` is handled by the language `==` operator (typecheck + runtime),
-  - grapheme intrinsic dispatches through `Iterator.yield` and returns yielded-count.
-- `C4` phase 1 started:
-  - `__goby_string_each_grapheme` now supports state-thread mode (`String -> state -> state`)
-    through `Iterator.yield_state`,
-  - `stdlib/goby/string.gb` now contains iterator-driven `split` handlers for:
-    - empty delimiter (grapheme-wise),
-    - single-grapheme delimiter.
-  - multi-grapheme delimiter path still uses the runtime `string.split(...)` bridge and keeps
-    C4/C5 open.
-  - current typechecker limitation: `List ...` in record type declaration fields is not accepted,
-    so `GraphemeState(parts: List String, ...)` remains parse-time/spec intent in stdlib source
-    but is not yet fully `check`-clean as an isolated module.
+- [ ] C7. Docs sync
+  - update active docs with final split ownership and intrinsic set.
 
-Detailed step-by-step to finish `C4`:
+- [ ] C8. Final quality gates
+  - `cargo fmt`
+  - `cargo check`
+  - `cargo test`
+  - `cargo clippy -- -D warnings`
 
-- [ ] C4-S1: Unblock stdlib state type declaration
-   - Extend type declaration validation/type-expression handling so record fields can use
-     generic application types (minimum needed: `List String`).
-   - Add focused `goby-core` regression:
-     - positive: `type S = S(xs: List String)` accepted,
-     - negative: malformed generic field type still rejected.
-   - Exit criteria:
-     - `cargo run -p goby-cli -- check stdlib/goby/string.gb` no longer fails on
-       `GraphemeState` field type.
+## 5. Step-By-Step Execution
 
-- [ ] C4-S2: Stabilize iterator state contract in stdlib
-   - Keep `GraphemeState` in `stdlib/goby/iterator.gb` as canonical shared state shape.
-   - Ensure `stdlib/goby/string.gb` imports and uses that shape only (remove duplicated local
-     type/effect declaration once C4-S1 is done).
-   - Exit criteria:
-     - no duplicated `Iterator`/`GraphemeState` declarations across stdlib modules.
+- [ ] C4-S1. Unblock stdlib state type declaration
+  - extend type declaration validation/type-expression handling so record fields
+    can use generic application types such as `List String`.
+  - add focused regression coverage:
+    - positive: `type S = S(xs: List String)` accepted,
+    - negative: malformed generic field type still rejected.
+  - exit criteria:
+    - `cargo run -p goby-cli -- check stdlib/goby/string.gb` no longer fails on
+      the state record field type.
 
-- [ ] C4-S3: Implement multi-grapheme delimiter path in stdlib
-   - Add iterator-driven matcher state for delimiter window accumulation:
-     - current token buffer,
-     - delimiter-match progress,
-     - output parts list.
-   - Preserve locked semantics:
-     - leading/trailing empty segments preserved,
-     - consecutive delimiters produce empty segments,
-     - empty input returns `[]` (current compatibility rule).
-   - Exit criteria:
-     - `split` no longer calls runtime `string.split(...)` for any delimiter case.
+- [ ] C4-S2. Stabilize iterator state contract in stdlib
+  - keep `GraphemeState` in `stdlib/goby/iterator.gb` as the canonical shared
+    state shape,
+  - make `stdlib/goby/string.gb` import and use that shared shape only,
+  - remove duplicated local declarations once C4-S1 is done.
+  - exit criteria:
+    - no duplicated `Iterator` / `GraphemeState` declarations across stdlib modules.
 
-- [ ] C4-S4: Remove stdlib fallback dependency and harden behavior tests
-   - Add stdlib-level split cases in `goby-wasm` runtime-output tests:
-     - empty delimiter,
-     - single grapheme delimiter,
-     - multi-grapheme delimiter,
-     - consecutive/leading/trailing delimiter cases,
-     - Unicode grapheme cases (including emoji family cluster).
-   - Add parity coverage for `examples/import.gb` behavior with stdlib split path.
-   - Exit criteria:
-     - tests prove stdlib `split` behavior matches lock in C1.
+- [ ] C4-S3. Implement multi-grapheme delimiter path in stdlib
+  - add iterator-driven matcher state for:
+    - current token buffer,
+    - delimiter-match progress,
+    - output parts list.
+  - preserve the locked split semantics from section 3.
+  - exit criteria:
+    - `split` no longer calls runtime `string.split(...)` for any delimiter case.
 
-- [ ] C4-S5: Mark C4 done and prepare C5 handoff
-   - Update this plan and `doc/STATE.md`:
-     - C4 completed,
-     - runtime `string.split` branch now strictly legacy path pending C5 deletion.
-   - Exit criteria:
-     - explicit note of remaining C5-only work (runtime method-call branch removal).
+- [ ] C4-S4. Remove stdlib fallback dependency and harden behavior tests
+  - add stdlib-level split cases in `goby-wasm` runtime-output tests:
+    - empty delimiter,
+    - single-grapheme delimiter,
+    - multi-grapheme delimiter,
+    - consecutive / leading / trailing delimiter cases,
+    - Unicode grapheme cases including emoji-family clusters.
+  - add parity coverage for `examples/import.gb` behavior with the stdlib split path.
+  - exit criteria:
+    - tests prove stdlib `split` behavior matches the locked semantics.
+
+- [ ] C4-S5. Mark C4 done and prepare C5 handoff
+  - update active docs/state:
+    - C4 complete,
+    - runtime `string.split` branch is now legacy-only pending deletion.
+  - exit criteria:
+    - only C5 remains between current state and builtin retirement.
+
+## 6. Definition Of Done
+
+This remaining stdlib track is complete when all of the following are true:
+
+- `goby/string.split` is fully implemented in stdlib for all delimiter cases,
+- no direct runtime builtin branch remains for `string.split`,
+- regression tests cover the locked split semantics and Unicode grapheme cases,
+- active planning/state docs reflect the final ownership boundary,
+- quality gates pass.

@@ -2,18 +2,18 @@
 
 This document tracks:
 
-- what is already visible from examples,
-- what must be fixed for MVP,
-- what can be postponed.
+- what is already visible in the current draft,
+- what is fixed for MVP,
+- what remains open or deferred.
 
-Note:
+Notes:
 
 - `doc/LANGUAGE_SPEC.md` is the source of truth for current language
-  syntax/semantics.
-- This `PLAN.md` file is for roadmap/migration/execution planning.
-- Workflow rule: when language syntax/semantics change, update
+  syntax and semantics.
+- `PLAN.md` is the top-level roadmap and execution-planning document.
+- When language syntax or semantics change, update
   `doc/LANGUAGE_SPEC.md` in the same change.
-- Workflow rule: when language syntax changes, also verify whether syntax
+- When language syntax changes, also verify whether syntax
   highlighting definitions need updates (`tooling/syntax/textmate`,
   `tooling/vscode-goby/syntaxes`, `tooling/emacs`, `tooling/vim`), and update
   them in the same change when needed.
@@ -325,8 +325,8 @@ Based on `examples/*.gb`:
 
 ## 4. Next Phase Plan
 
-Post-MVP focus is to reduce fallback-runtime special-cases and make execution paths
-predictable.
+Post-MVP work focuses on reducing fallback-runtime special cases and making
+execution paths more predictable.
 
 ### 4.1 Completed Work (Summary)
 
@@ -344,44 +344,32 @@ predictable.
 - Editor syntax packs (VSCode/Emacs/Vim/TextMate) are implemented.
 
 Note: detailed execution history for these items is retained in git history and
-`doc/STATE.md`; this section keeps only decision-level summaries.
+specialized active plans; this section keeps only decision-level summaries.
 
 ### 4.2 Closed Tracks Archive
 
 Tracks A/B/C are closed. Detailed records were removed from this plan file and
-are retained in `doc/STATE.md` and git history.
+are retained in git history.
 
 ### 4.3 Active Track D: Developer Tooling Foundation
 
-Goal: establish practical developer tooling — diagnostics in editors, a formatter, and a
-linter — built on `goby-core` as the single analysis source.
-
-#### Completed phases
-
-- **D1a** (2026-03-15): `Span` with end position; `Stmt`/`Expr` span fields; position helpers in `span.rs`.
-- **D1b** (2026-03-16): Unified `Diagnostic` type; `From<ParseError>` + `From<TypecheckError>`; single CLI render path.
-- **D1c** (2026-03-16): `span: Some(...)` populated at annotation + effect-decl error sites; sentinel convention documented.
-- **D1d** (2026-03-16): Ruby/Elm-style `file:line:col: error:` header + gutter + `^^^` underline in `goby-cli check`.
-- **D2a** (2026-03-16): `goby-lsp` crate; LSP lifecycle; diagnostics via `textDocument/publishDiagnostics`; `span_to_lsp_range` UTF-16 conversion.
-- **D2b** (2026-03-17): `typecheck_module_collect` / `typecheck_module_collect_with_context`; all per-declaration errors reported in CLI and LSP.
-- **D3a** (2026-03-17): `SymbolIndex`; `textDocument/hover` + `textDocument/definition` for top-level declarations and effect members.
-- **D3b** (2026-03-17): `infer_local_bindings`; hover for local binding definition lines (definition-line only; use-site deferred).
-- **D4** (2026-03-17): `format_module` in goby-core (comment-drop, Option A); `goby fmt <file>` + `goby fmt --check`; 17 idempotency tests.
+Most of Track D is complete. Only still-relevant follow-up items are kept here.
 
 #### Phase D5: `goby lint` — high-signal static checks
 
 Goal: machine-readable linter output for common mistakes not caught by the typechecker.
 
-Lint rules ordered by ascending analysis cost (cheapest infrastructure first to unblock
-the lint framework early; user-value ranking noted in parentheses for future prioritization):
+Lint rules are ordered by ascending analysis cost. The cheapest infrastructure
+comes first to unblock the framework early; user-value ranking is noted in
+parentheses for prioritization.
 
 1. **Unreachable `case` arm**: wildcard `_` arm followed by more arms (purely syntactic, cheapest).
    User value: medium — catches subtle logic errors in pattern matching.
 2. **Unused local binding**: `x = expr` where `x` is never referenced afterward
    (needs local-use tracking across `Expr`/`Stmt` spans from D1a).
    User value: **high** — most frequently encountered lint in practice; catches typos and dead code.
-   Note: despite higher analysis cost than rule 1, consider implementing early if the
-   lint framework from rule 1 is already in place, as this delivers the most user value.
+   Note: despite higher analysis cost than rule 1, consider implementing this early if the
+   lint framework from rule 1 is already in place, because it delivers the most user value.
 3. **Shadowed effect operation name**: local binding name collides with a visible effect op
    (needs symbol table from D3a, no use-tracking required).
    User value: medium — prevents confusing name collisions specific to Goby's effect system.
@@ -401,117 +389,14 @@ Done when:
 - `goby lint examples/function.gb` exits 0 on all existing clean sources.
 - JSON output is parseable; schema documented.
 
-#### Phase D6: Editor extensions — VS Code and Neovim
+#### Phase D6 follow-ups still worth keeping
 
-Goal: make `goby-lsp` and `goby fmt` usable out-of-the-box in mainstream editors
-without manual LSP configuration.  Ship a VS Code extension and a Neovim plugin,
-both auto-discovering the `goby-lsp` binary from `PATH` or a workspace-local build.
-
-Dependencies: D2a (goby-lsp binary functional), D4 (goby fmt functional).
-D5 (goby lint) is optional; lint diagnostics flow through the LSP diagnostic channel
-automatically once D5 is done.
-
-##### D6a: VS Code extension (`editors/vscode/`)
-
-Scope:
-
-- New directory `editors/vscode/` with a standard VS Code extension project:
-  - `package.json`: publisher, display name (`Goby Language Support`), activationEvents
-    (`onLanguage:goby`), contributes `languages` (id `goby`, extensions `[".gb"]`),
-    contributes `commands` (`goby.formatDocument`), configurationDefaults.
-  - `src/extension.ts`: entry point using `vscode-languageclient/node`
-    (`LanguageClient` with `serverOptions` → `goby-lsp`).
-  - `language-configuration.json`: comment toggle (`# ...`), bracket pairs, indentation rules.
-  - `syntaxes/goby.tmLanguage.json`: minimal TextMate grammar for syntax highlighting
-    (keywords: `effect`, `handler`, `with`, `can`, `mut`, `case`, `if`, `else`, `import`;
-    literals; identifiers; string interpolation `"${...}"`; line comments `#`).
-- Server resolution order:
-  1. `goby.serverPath` VS Code setting (user-specified absolute path).
-  2. `PATH` lookup of `goby-lsp`.
-  3. Workspace-local `./target/debug/goby-lsp` / `./target/release/goby-lsp`.
-  - If not found: show an informational message with a link to build instructions.
-- Format-on-save: invoke `goby fmt --check`; if it fails, run `goby fmt` and apply
-  the result as a workspace edit (or use LSP `textDocument/formatting` once added).
-- `goby.formatOnSave` setting (boolean, default `true`).
-- VSIX packaging: `npm run package` produces `goby-language-support-<version>.vsix`
-  installable with `code --install-extension`.
-- README in `editors/vscode/` with install + usage instructions.
-
-Done when:
-
-- Opening a `.gb` file in VS Code activates the extension.
-- Diagnostics from `goby-lsp` appear as editor squiggles.
-- Hover shows type annotation for top-level and local binding names.
-- Go-to-definition jumps to the declaration.
-- Save triggers `goby fmt` (when `goby.formatOnSave` is true).
-- `npm run package` succeeds and produces a `.vsix`.
-
-##### D6b: Neovim plugin (`editors/nvim/`)
-
-Scope:
-
-- New directory `editors/nvim/` as a self-contained Lua plugin (compatible with
-  `lazy.nvim`, `packer.nvim`, and manual `runtimepath` installation):
-  - `lua/goby/init.lua`: public API — `require("goby").setup(opts)`.
-  - `lua/goby/lsp.lua`: registers `goby-lsp` as an `nvim-lspconfig`-compatible LSP
-    server entry and calls `lspconfig.goby_lsp.setup(opts)`.
-  - `lua/goby/format.lua`: `goby.format()` command — shell-calls `goby fmt` on the
-    current buffer's file; reloads the buffer if changed.
-  - `ftdetect/goby.vim`: sets `filetype=goby` for `*.gb` files.
-  - `ftplugin/goby.vim`: sets `commentstring=# %s`, `expandtab`, `shiftwidth=2`.
-  - `syntax/goby.vim`: Vim syntax file for environments without Tree-sitter.
-- Server resolution: same order as D6a (`opts.server_path` → PATH → workspace local).
-- Auto-format-on-save: `autocmd BufWritePost *.gb` when `opts.format_on_save = true`
-  (default true).
-- `opts` table: `{ server_path, format_on_save, on_attach, capabilities }`.
-- Tree-sitter grammar (optional, separate sub-directory `editors/nvim/tree-sitter-goby/`):
-  - `grammar.js` covering top-level declarations, effect/handler blocks, expressions,
-    statements, and string interpolation.
-  - Queries: `highlights.scm`, `indents.scm`.
-  - This sub-step is optional for D6b completion; it becomes D6b-ts if deferred.
-- README in `editors/nvim/` with `lazy.nvim` snippet, manual install instructions,
-  and key-mapping examples.
-
-Done when:
-
-- `:lua require("goby").setup()` in Neovim starts `goby-lsp` for `*.gb` files.
-- Diagnostics, hover, and go-to-definition work via the Neovim LSP client.
-- `:GobyFormat` (or save) invokes `goby fmt`.
-- Plugin is installable via `lazy.nvim` with a one-liner spec.
-
-##### D6c: Shared grammar asset (`editors/shared/`)
-
-Scope:
-
-- Extract the language definition (keywords, operators, string interpolation pattern)
-  into a canonical `editors/shared/goby-language.json` used by both the VS Code grammar
-  and the Neovim syntax file to avoid duplication.
-- This is a refactor step after D6a and D6b are both working; it ensures future
-  keyword additions only need to be made in one place.
-
-Done when:
-
-- VS Code `.tmLanguage.json` and Neovim `syntax/goby.vim` are generated from or
-  directly reference `editors/shared/goby-language.json`.
-- Adding a new keyword to the shared file propagates correctly to both editors.
-
-#### Milestones summary
-
-- M1a-i (D1a-i done): `Span` carries end position; position helpers tested.
-- M1a-ii (D1a-ii done): declaration-level AST nodes carry spans.
-- M1a-iii (D1a-iii done): Stmt/Expr identifier nodes carry spans.
-- M1b (D1b done): unified `Diagnostic` type; CLI format locked by golden tests.
-- M1c (D1c done): ≥80% of TypecheckError sites populate span.
-- M1d (D1d done): CLI shows `^^^` range underline and `file:line:col:` header for errors with span.
-- M2a (D2a done): editor shows parse/type diagnostics via LSP identical to `goby-cli check`.
-- M2b (D2b done): multiple errors per file reported in both CLI and LSP.
-- M3a (D3a done): hover/definition for top-level declarations and effect members.
-- M3b (D3b done): hover/definition for local bindings and stdlib imports.
-- M4 (D4 done): `goby fmt` is idempotent on all existing sources; comment policy explicit.
-- M5 (D5 done): four lint rules shipped; JSON output stable.
-- M6a (D6a done): VS Code extension installable; diagnostics, hover, fmt-on-save working.
-- M6b (D6b done): Neovim plugin installable via lazy.nvim; LSP + fmt-on-save working.
-- M6c (D6c done): shared grammar asset; keyword additions propagate to both editors.
+- **D6c: Shared grammar asset**
+  - Extract shared language-definition data for the VS Code grammar and Neovim/Vim syntax files.
+  - Keep this as the remaining editor-tooling refactor slice.
+- **D6b-ts: Tree-sitter grammar**
+  - Defer until after D6c.
+  - Keep as optional editor tooling follow-up rather than active architecture work.
 
 ### 4.4 Review Follow-ups (Backlog)
 
@@ -602,31 +487,14 @@ Acceptance criteria:
 - diagnostics clearly distinguish `Int` from `Float`.
 - docs/examples/spec are updated in the same slice that lands behavior.
 
-### 4.6 Track F: List Index Access `l[i]` — **completed 2026-03-16**
-
-`expr[expr]` syntax for `List` index access. All phases (F1a–F4) shipped:
-
-- AST: `Expr::ListIndex { list, index }`, all exhaustive match sites patched.
-- Parser: right-to-left suffix scan in `parse_list_index_suffix`; handles chaining,
-  list-literal receivers, paren-grouped receivers, string literals in index. Key precedence:
-  `f xs[0]` → `ListIndex(Call(f,xs), 0)`; use `f (xs[0])` to index before calling.
-- Typechecker: element type inference; rejects non-`List` receiver and non-`Int` index;
-  `Ty::Unknown` / `Ty::Var` pass through without error.
-- Runtime: `ListInt` / `ListString` dispatch in `eval_expr_ast`; negative or OOB index →
-  `mark_runtime_abort()`; non-list receiver also aborts. OOB bounds check uses
-  `i >= items.len() as i64` (safe on wasm32).
-- Spec: `LANGUAGE_SPEC.md` updated; `examples/list_index.gb` added.
-- Known limitation: `List (List T)` is not yet a representable `RuntimeValue`;
-  chained indexing only works if intermediate results are `Int` or `String`.
-
-### 4.7 Parking Lot (Needs Revalidation Before Implementation)
+### 4.6 Parking Lot (Needs Revalidation Before Implementation)
 
 - CLI `build` expansion details (`--target`, `--engine-compat`, verify modes).
 - CLI binary naming migration (`goby-cli` -> `goby`) final policy.
 
 These items are intentionally kept as short placeholders until they become active.
 
-### 4.8 Active Track G: Shared Typed IR Boundary
+### 4.7 Active Track G: Shared Typed IR Boundary
 
 Goal: replace AST-shape-driven backend decisions with a shared typed IR between
 `goby-core` and backend lowering.
@@ -646,8 +514,6 @@ Execution note:
   in `doc/PLAN_IR.md`.
 - until Track G is implemented, avoid adding new ad-hoc AST-shape cases to
   backend runtime-I/O planning unless needed for emergency unblock work.
-
-
 
 ## 5. Spec Detail Notes
 
