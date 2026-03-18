@@ -1,8 +1,10 @@
-use std::collections::{HashMap, HashSet};
+use std::borrow::Cow;
+use std::collections::HashMap;
 
 use goby_core::{Expr, Module, Stmt, types::parse_function_type};
 
-use crate::{BUILTIN_PRINT, MAX_EVAL_DEPTH, RuntimeLocals};
+use crate::runtime_ir_adapter::runtime_body_artifacts_from_decl;
+use crate::{MAX_EVAL_DEPTH, RuntimeLocals};
 
 pub(crate) type EvaluatedFunctions<'a> = HashMap<&'a str, EvaluatedFunction<'a>>;
 
@@ -26,12 +28,6 @@ fn collect_functions<'a>(
     module: &'a Module,
     accept: impl Fn(&goby_core::types::FunctionType) -> bool,
 ) -> EvaluatedFunctions<'a> {
-    let declaration_names: HashSet<&str> = module
-        .declarations
-        .iter()
-        .map(|decl| decl.name.as_str())
-        .collect();
-
     let mut functions = HashMap::new();
     for decl in &module.declarations {
         if decl.name == "main" {
@@ -46,13 +42,22 @@ fn collect_functions<'a>(
         if !accept(&function_type) {
             continue;
         }
-        let parameter = infer_single_parameter_name(&decl.body, &declaration_names);
+        let parameter = match decl.params.as_slice() {
+            [param] => Some(Cow::Owned(param.clone())),
+            _ => None,
+        };
+        let Some(runtime_body) = runtime_body_artifacts_from_decl(decl) else {
+            continue;
+        };
+        let Some(body) = runtime_body.body else {
+            continue;
+        };
         functions.insert(
             decl.name.as_str(),
             EvaluatedFunction {
-                body: &decl.body,
+                body,
                 parameter,
-                parsed_stmts: decl.parsed_body.as_deref(),
+                parsed_stmts: Some(runtime_body.stmts),
             },
         );
     }
@@ -181,10 +186,10 @@ impl<'a> IntEvaluator<'a> {
     ) -> Option<i64> {
         let mut locals = HashMap::new();
         let callables = HashMap::new();
-        seed_locals_from_parameter(&mut locals, function.parameter, arg);
+        seed_locals_from_parameter(&mut locals, function.parameter.as_deref(), arg);
 
         let mut result_expr = None;
-        for line in code_lines(function.body) {
+        for line in code_lines(function.body.as_ref()) {
             if let Some((name, expr)) = split_binding(line) {
                 let value = self.descend()?.eval_expr(expr, &locals, &callables);
                 assign_local(name, value, &mut locals);
@@ -302,10 +307,10 @@ impl<'a> ListIntEvaluator<'a> {
         arg: Option<Vec<i64>>,
     ) -> Option<Vec<i64>> {
         let mut locals = HashMap::new();
-        seed_locals_from_parameter(&mut locals, function.parameter, arg);
+        seed_locals_from_parameter(&mut locals, function.parameter.as_deref(), arg);
 
         let mut result_expr = None;
-        for line in code_lines(function.body) {
+        for line in code_lines(function.body.as_ref()) {
             if let Some((name, expr)) = split_binding(line) {
                 let value = self.descend()?.eval_expr(expr, &locals);
                 assign_local(name, value, &mut locals);
@@ -446,9 +451,9 @@ fn parse_list_int_literal(expr: &str) -> Option<Vec<i64>> {
 
 #[derive(Clone)]
 pub(crate) struct EvaluatedFunction<'a> {
-    pub(crate) body: &'a str,
-    pub(crate) parameter: Option<&'a str>,
-    pub(crate) parsed_stmts: Option<&'a [Stmt]>,
+    pub(crate) body: Cow<'a, str>,
+    pub(crate) parameter: Option<Cow<'a, str>>,
+    pub(crate) parsed_stmts: Option<Cow<'a, [Stmt]>>,
 }
 
 pub(crate) fn code_lines(body: &str) -> impl Iterator<Item = &str> {
@@ -512,109 +517,6 @@ fn seed_locals_from_parameter<T>(
         && let Some(value) = arg
     {
         locals.insert(parameter.to_string(), value);
-    }
-}
-
-fn infer_single_parameter_name<'a>(
-    body: &'a str,
-    declaration_names: &HashSet<&str>,
-) -> Option<&'a str> {
-    let mut assigned: HashSet<&str> = HashSet::new();
-    let mut referenced: HashSet<&str> = HashSet::new();
-
-    for line in code_lines(body) {
-        if let Some((name, expr)) = split_binding(line) {
-            assigned.insert(name);
-            collect_referenced_identifiers(expr, &mut referenced);
-            continue;
-        }
-
-        if let Some(expr) = parse_print_call(line) {
-            collect_referenced_identifiers(expr, &mut referenced);
-            continue;
-        }
-
-        collect_referenced_identifiers(line, &mut referenced);
-    }
-
-    let candidates: Vec<&str> = referenced
-        .into_iter()
-        .filter(|name| !assigned.contains(name))
-        .filter(|name| !declaration_names.contains(name))
-        .filter(|name| *name != BUILTIN_PRINT)
-        .filter(|name| *name != "map")
-        .filter(|name| *name != "_")
-        .collect();
-
-    if candidates.len() == 1 {
-        Some(candidates[0])
-    } else {
-        None
-    }
-}
-
-fn collect_referenced_identifiers<'a>(expr: &'a str, out: &mut HashSet<&'a str>) {
-    if let Some((list_expr, _lambda_expr)) = parse_map_call(expr) {
-        collect_identifiers(list_expr, out);
-        return;
-    }
-    collect_identifiers(expr, out);
-}
-
-fn collect_identifiers<'a>(expr: &'a str, out: &mut HashSet<&'a str>) {
-    let mut start = None;
-    let mut in_string = false;
-    let mut escaped = false;
-
-    for (idx, byte) in expr.as_bytes().iter().copied().enumerate() {
-        if in_string {
-            if escaped {
-                escaped = false;
-                continue;
-            }
-            if byte == b'\\' {
-                escaped = true;
-                continue;
-            }
-            if byte == b'"' {
-                in_string = false;
-            }
-            continue;
-        }
-
-        if byte == b'"' {
-            maybe_insert_identifier(expr, start.take(), idx, out);
-            in_string = true;
-            continue;
-        }
-
-        let is_ident_char = byte.is_ascii_alphanumeric() || byte == b'_';
-        if is_ident_char {
-            if start.is_none() {
-                start = Some(idx);
-            }
-            continue;
-        }
-
-        maybe_insert_identifier(expr, start.take(), idx, out);
-    }
-
-    maybe_insert_identifier(expr, start, expr.len(), out);
-}
-
-fn maybe_insert_identifier<'a>(
-    source: &'a str,
-    start: Option<usize>,
-    end: usize,
-    out: &mut HashSet<&'a str>,
-) {
-    let Some(start_idx) = start else {
-        return;
-    };
-
-    let candidate = &source[start_idx..end];
-    if is_identifier(candidate) && !is_int_literal(candidate) {
-        out.insert(candidate);
     }
 }
 

@@ -9,7 +9,7 @@ pub(super) struct ResolvedRuntimeOutput {
 impl<'m> RuntimeOutputResolver<'m> {
     pub(super) fn resolve_detailed(
         module: &'m Module,
-        body: &str,
+        body: Option<&str>,
         parsed_stmts: Option<&[Stmt]>,
         evaluators: &RuntimeEvaluators<'_, '_>,
         execution_mode: lower::EffectExecutionMode,
@@ -44,7 +44,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                     runtime_error: None,
                 };
             }
-        } else {
+        } else if let Some(body) = body {
             for statement in statements(body) {
                 if resolver.ingest_statement(statement, evaluators).is_none() {
                     if resolver.runtime_error.is_some() {
@@ -56,6 +56,11 @@ impl<'m> RuntimeOutputResolver<'m> {
                     };
                 }
             }
+        } else {
+            return ResolvedRuntimeOutput {
+                output: None,
+                runtime_error: None,
+            };
         }
 
         if resolver.runtime_error_is_abort_marker() {

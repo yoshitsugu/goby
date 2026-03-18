@@ -6,16 +6,9 @@ use crate::runtime_eval::{
     IntEvaluator, ListIntEvaluator, collect_functions_with_result, collect_unit_functions,
 };
 use crate::runtime_flow::RuntimeEvaluators;
+use crate::runtime_ir_adapter::runtime_main_body_artifacts;
 use crate::runtime_resolver::ResolvedRuntimeOutput;
 use crate::runtime_support::module_has_selective_import_symbol;
-
-fn main_runtime_parts(module: &Module) -> Option<(&str, Option<&[Stmt]>)> {
-    let main = module
-        .declarations
-        .iter()
-        .find(|decl| decl.name == "main")?;
-    Some((main.body.as_str(), main.parsed_body.as_deref()))
-}
 
 #[cfg(test)]
 pub(crate) fn resolve_module_runtime_output(module: &Module) -> Option<String> {
@@ -27,11 +20,11 @@ pub(crate) fn resolve_module_runtime_output_with_mode(
     module: &Module,
     execution_mode: lower::EffectExecutionMode,
 ) -> Option<String> {
-    let (body, parsed_stmts) = main_runtime_parts(module)?;
+    let runtime = runtime_main_body_artifacts(module)?;
     resolve_main_runtime_output_with_mode_internal(
         module,
-        body,
-        parsed_stmts,
+        runtime.body.as_deref(),
+        Some(runtime.stmts.as_ref()),
         execution_mode,
         None,
         true,
@@ -43,11 +36,11 @@ pub(crate) fn resolve_module_runtime_output_with_mode_and_stdin(
     execution_mode: lower::EffectExecutionMode,
     stdin_seed: Option<String>,
 ) -> Option<String> {
-    let (body, parsed_stmts) = main_runtime_parts(module)?;
+    let runtime = runtime_main_body_artifacts(module)?;
     resolve_main_runtime_output_with_mode_and_stdin_internal(
         module,
-        body,
-        parsed_stmts,
+        runtime.body.as_deref(),
+        Some(runtime.stmts.as_ref()),
         execution_mode,
         stdin_seed,
     )
@@ -57,15 +50,20 @@ pub(crate) fn resolve_module_runtime_output_for_compile(
     module: &Module,
     execution_mode: lower::EffectExecutionMode,
 ) -> Result<Option<String>, String> {
-    let Some((body, parsed_stmts)) = main_runtime_parts(module) else {
+    let Some(runtime) = runtime_main_body_artifacts(module) else {
         return Ok(None);
     };
-    resolve_main_runtime_output_for_compile(module, body, parsed_stmts, execution_mode)
+    resolve_main_runtime_output_for_compile(
+        module,
+        runtime.body.as_deref(),
+        Some(runtime.stmts.as_ref()),
+        execution_mode,
+    )
 }
 
 fn resolve_main_runtime_output_with_mode_and_stdin_internal(
     module: &Module,
-    body: &str,
+    body: Option<&str>,
     parsed_stmts: Option<&[Stmt]>,
     execution_mode: lower::EffectExecutionMode,
     stdin_seed: Option<String>,
@@ -102,7 +100,7 @@ fn resolve_main_runtime_output_with_mode_and_stdin_internal(
 ///   See `apply_runtime_intrinsic` in `lower.rs` for the policy discussion.
 pub(crate) fn resolve_main_runtime_output_for_compile(
     module: &Module,
-    body: &str,
+    body: Option<&str>,
     parsed_stmts: Option<&[Stmt]>,
     execution_mode: lower::EffectExecutionMode,
 ) -> Result<Option<String>, String> {
@@ -122,7 +120,7 @@ pub(crate) fn resolve_main_runtime_output_for_compile(
 
 fn resolve_main_runtime_output_with_mode_internal(
     module: &Module,
-    body: &str,
+    body: Option<&str>,
     parsed_stmts: Option<&[Stmt]>,
     execution_mode: lower::EffectExecutionMode,
     stdin_seed: Option<String>,
@@ -152,7 +150,7 @@ fn resolve_main_runtime_output_with_mode_internal(
 
 fn resolve_main_runtime_output_with_mode_internal_detailed(
     module: &Module,
-    body: &str,
+    body: Option<&str>,
     parsed_stmts: Option<&[Stmt]>,
     execution_mode: lower::EffectExecutionMode,
     stdin_seed: Option<String>,

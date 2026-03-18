@@ -47,7 +47,7 @@ impl<'m> RuntimeOutputResolver<'m> {
         let mut function_locals = RuntimeLocals::default();
         let mut function_callables = HashMap::new();
 
-        if let Some(parameter) = function.parameter {
+        if let Some(parameter) = function.parameter.as_deref() {
             let arg_expr = arg_expr?;
             if let Some(callable) = parse_int_callable(arg_expr) {
                 function_callables.insert(parameter.to_string(), callable);
@@ -60,7 +60,7 @@ impl<'m> RuntimeOutputResolver<'m> {
             }
         }
 
-        if let Some(stmts) = function.parsed_stmts {
+        if let Some(stmts) = function.parsed_stmts.as_deref() {
             for (i, stmt) in stmts.iter().enumerate() {
                 match self.execute_unit_ast_stmt(
                     stmt,
@@ -74,7 +74,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                 }
             }
         } else {
-            for statement in statements(function.body) {
+            for statement in statements(function.body.as_ref()) {
                 match statement {
                     Statement::Binding { name, expr } | Statement::MutBinding { name, expr } => {
                         let value = self.eval_value_with_context(
@@ -149,8 +149,8 @@ impl<'m> RuntimeOutputResolver<'m> {
         let mut function_locals = RuntimeLocals::default();
         let function_callables = HashMap::new();
 
-        if let Some(stmts) = function.parsed_stmts {
-            if let Some(parameter) = function.parameter {
+        if let Some(stmts) = function.parsed_stmts.as_deref() {
+            if let Some(parameter) = function.parameter.as_deref() {
                 function_locals.store(parameter, arg_val);
             }
             match self.eval_stmts(

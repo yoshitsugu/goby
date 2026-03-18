@@ -19,6 +19,7 @@ mod runtime_exec;
 mod runtime_expr;
 mod runtime_flow;
 mod runtime_io_plan;
+mod runtime_ir_adapter;
 #[cfg(test)]
 mod runtime_output_tests;
 #[cfg(test)]

@@ -539,13 +539,16 @@ it as the new baseline.
   - Optimized effect-path gating no longer scans raw AST for `resume`; it uses
     IR-derived lowering-plan metadata.
 
-- [ ] G9. Portable fallback aligns to the IR boundary
+- [x] G9. Portable fallback aligns to the IR boundary
   - `compile_module`, interpreter execution, runtime parity, and runtime-output
     tests now enter fallback execution through module-centric wrappers rather
     than passing `main.body` / `main.parsed_body` across call boundaries.
-  - Remaining raw AST dependence is still inside fallback runtime internals; the
-    next slices should replace or isolate those internals behind the same
-    module/shared-IR semantic boundary.
+  - Portable fallback runtime now builds `main`/declaration runtime artifacts
+    from shared IR first, using a thin IR-to-runtime adapter and only falling
+    back to raw parsed AST when IR lowering is unavailable.
+  - Native capability checks and simple runtime evaluators consume the same
+    shared-IR-derived runtime artifacts, so fallback/native parity is exercised
+    from one semantic boundary for supported programs.
   - Portable fallback execution runs from shared IR directly, or from a thin
     adapter over the same IR-owned semantic boundary.
   - Fallback/native parity can be tested from the same IR input for supported
