@@ -4,23 +4,21 @@ Last updated: 2026-03-18
 
 ## Current Focus
 
-- Track F F5 is complete: fused `SplitGetPrint` backend IR instruction handles
-  `string.split text "\n"` + `line = list.get lines 1` + `Print.println line`
-  in the general lowering path.
-- `track_f_f5_index_is_general_lowered` passes and runtime fallback regressions
-  cover seeded-stdin success and out-of-range abort behavior.
-- F6 has started: `runtime_io_execution_kind` now reports `GeneralLowered`
-  for shapes already owned by the general lowering path (currently F3/F4/F5).
-- Next milestone is F6: converge the remaining shape-specific runtime-I/O plans
-  onto the general lowering path and delete/reduce special cases.
+- Track F F6 is complete.
+- F3/F4/F5 representative runtime-I/O programs now classify as `GeneralLowered`
+  and compile through the general lowering path.
+- Remaining `RuntimeIoPlan` shapes are explicitly documented as optimization-only
+  paths rather than semantic source-of-truth code paths.
+- Size guardrail tests now cover both general-lowered Track F fixtures and a
+  remaining optimization-backed transformed split callback.
 
 ## Immediate Next Steps
 
-1. F6: route remaining runtime-I/O recognizers through the general lowering path.
-2. Move simple read/print echo shapes off `RuntimeIoPlan::Echo` where IR/general
-   lowering can already express them.
-3. Decide which DynamicWasiIo special cases remain as explicit optimizations versus
-   semantic lowering paths to delete.
+1. If desired, continue shrinking `RuntimeIoPlan::Echo` by normalizing more bare-name
+   read/print forms into general lowering.
+2. Revisit whether transformed split-callback optimization should move into
+   general lowering proper or remain as a documented fast path.
+3. Start the next roadmap item outside Track F convergence.
 
 ## Decisions To Carry Forward
 
@@ -33,6 +31,8 @@ Last updated: 2026-03-18
   matching the existing runtime abort policy.
 - Public runtime-I/O classification now distinguishes `GeneralLowered` from
   `DynamicWasiIo` so convergence progress is observable in tests and callers.
+- `RuntimeIoPlan` is no longer the semantic source of truth; any remaining plan-backed
+  lowering is treated and documented as an optimization layer with parity obligations.
 - String layout: len (i32) at heap_base, bytes at heap_base+4.
 - I32 scratch locals (5 total) are declared when fused split instructions are present.
 

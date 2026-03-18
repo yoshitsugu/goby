@@ -885,10 +885,9 @@ main =
 
 // ---------------------------------------------------------------------------
 // Track F fixture tests
-// These tests assert the *current* classification of the Track F representative
-// programs (Unsupported until the general lowering path is implemented).
-// Remove the `#[ignore]` attribute and update the expected status when the
-// corresponding F-milestone lands.
+// These tests lock the convergence state of the Track F representative programs.
+// F3/F4/F5 should now classify as GeneralLowered rather than old handwritten
+// RuntimeIoPlan categories.
 // ---------------------------------------------------------------------------
 
 /// F3 fixture current status: GeneralLowered.
@@ -1028,8 +1027,8 @@ main =
 }
 
 // ---------------------------------------------------------------------------
-// F3 parity: programs previously handled by DynamicWasiIo(Echo) must produce
-// valid Wasm through the general lowering path.
+// F3 parity: programs previously handled by handwritten runtime-I/O plans must
+// produce valid Wasm through the general lowering path.
 // ---------------------------------------------------------------------------
 
 /// Parity test: `print (read())` compiles via general path and produces valid Wasm
@@ -1065,4 +1064,42 @@ main =
     let module = parse_module(source).expect("inline f3 source should parse");
     let wasm = compile_module(&module).expect("inline F3 codegen should succeed");
     assert_valid_wasm_module(&wasm);
+}
+
+#[test]
+fn track_f_f6_runtime_io_wasm_size_guardrails_hold() {
+    let general_sources = [
+        read_track_f_fixture("f3_print_read.gb"),
+        read_track_f_fixture("f4_split_each.gb"),
+        read_track_f_fixture("f5_index.gb"),
+    ];
+    for source in general_sources {
+        let module = parse_module(&source).expect("track-f source should parse");
+        let wasm = compile_module(&module).expect("track-f source should compile");
+        assert!(
+            wasm.len() < 65_536,
+            "general-lowered runtime I/O wasm unexpectedly large: {} bytes",
+            wasm.len()
+        );
+    }
+
+    let optimized_source = r#"
+import goby/list ( each )
+import goby/string ( split )
+
+main : Unit -> Unit can Print, Read
+main =
+  text = read()
+  delim = "\n"
+  lines = split(text, delim)
+  each lines (|line| -> println "${line}!")
+"#;
+    let optimized_module = parse_module(optimized_source).expect("optimized source should parse");
+    let optimized_wasm =
+        compile_module(&optimized_module).expect("optimized source should compile");
+    assert!(
+        optimized_wasm.len() < 65_536,
+        "optimized runtime I/O wasm unexpectedly large: {} bytes",
+        optimized_wasm.len()
+    );
 }

@@ -29,11 +29,25 @@ pub(crate) struct StaticPrintSuffix {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum RuntimeIoPlan {
+    /// Temporary optimization path for echo-family programs that are not yet
+    /// normalized into the general lowering pipeline.
+    ///
+    /// Semantic source of truth:
+    /// - general lowering architecture in `doc/wasm_runtime_architecture.md`
+    /// - fallback runtime/interpreter parity tests
+    ///
+    /// Proof obligation while this optimization remains:
+    /// - compiled Wasm must preserve the same observable stdout and abort policy
+    ///   as the general lowering / fallback runtime semantics for the same program.
     Echo {
         input_mode: InputReadMode,
         output_mode: OutputReadMode,
         suffix_prints: Vec<StaticPrintSuffix>,
     },
+    /// Temporary optimization path for split-callback programs that still use
+    /// the specialized builder rather than direct general lowering.
+    ///
+    /// This is an optimization layer, not the semantic source of truth.
     SplitLinesEach {
         output_mode: OutputReadMode,
         suffix_prints: Vec<StaticPrintSuffix>,
@@ -158,7 +172,7 @@ impl RuntimeIoClassification {
 ///
 /// | Variant | Condition |
 /// |---------|-----------|
-/// | `DynamicWasiIo(plan)` | Body contains `Read.read`/`Read.read_line` usage **and** matches a recognized [`RuntimeIoPlan`] form that can be lowered to a WASI Wasm module. |
+/// | `DynamicWasiIo(plan)` | Body matches a remaining handwritten optimization plan. These plans are retained only as an optimization layer on top of the same runtime semantics; they are not the semantic source of truth. |
 /// | `StaticOutput(text)` | Body contains **no** runtime-read calls **and** every statement is a direct `print`/`println` with a string-literal argument.  The output is statically known at compile time. |
 /// | `InterpreterBridge` | Body contains runtime-read calls that fall into the narrow temporary interpreter-bridge subset.  The current detection surface is empty — no programs route here now that the transformed split-callback family was promoted to `DynamicWasiIo`.  The variant and CLI fallback path are retained as an extension point for future interpreter-backed forms during Wasm lowering development. |
 /// | `Unsupported` | Body contains runtime-read calls but matches neither a recognized [`RuntimeIoPlan`] nor the narrow temporary interpreter-bridge subset. |
@@ -182,7 +196,19 @@ impl RuntimeIoClassification {
 /// `InterpreterBridge` is currently unreachable because no shapes are detected for it;
 /// the detection step has been removed until a concrete future shape requires it.
 ///
-/// # Stopping rule (F3a)
+/// # Convergence status (F6)
+///
+/// The general lowering pipeline is now the primary semantic path for Track F
+/// representative programs. `RuntimeIoPlan` remains only for a shrinking set of
+/// optimization-oriented shapes that have not yet been normalized into general
+/// lowering. New semantic capability should go to general lowering first.
+///
+/// Deprecation plan for the remaining `RuntimeIoPlan` machinery:
+/// 1. move plain echo-family shapes into general lowering or an IR-normalization step,
+/// 2. keep only optimization-only paths with explicit parity coverage,
+/// 3. delete plan variants once no caller relies on their handwritten emitters.
+///
+/// # Historical stopping rule (F3a)
 ///
 /// All runtime-I/O fallback form recognition lives in this module — **not** in `lib.rs` or
 /// any other call site.  When adding support for a new runtime-I/O program form:

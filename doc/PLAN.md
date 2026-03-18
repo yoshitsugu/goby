@@ -654,7 +654,7 @@ Milestones:
       - out-of-range index behavior is tested and matches the chosen policy.
     - unit tests for collection/indexing layout invariants where possible, not only end-to-end tests.
 
-- [ ] F6. Convergence and deletion of special cases
+- [x] F6. Convergence and deletion of special cases
   - route currently special-cased runtime-I/O programs through the new general lowering path.
   - keep specialized fast paths only if they remain a strict optimization layer on top of the same semantics.
   - remove or sharply reduce `RuntimeIoPlan`-specific handwritten emitters once parity is proven.
