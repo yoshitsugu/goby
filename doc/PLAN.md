@@ -522,7 +522,7 @@ Concrete user-visible problem this track is meant to solve:
 
 Milestones:
 
-- [ ] F1. Runtime-lowering architecture lock
+- [x] F1. Runtime-lowering architecture lock
   - choose the single source IR/owned runtime representation that general Wasm lowering will consume.
   - choose the lowering pipeline layering explicitly.
     - preferred default: `Goby IR -> backend IR -> Wasm emitter`.

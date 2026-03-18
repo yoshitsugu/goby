@@ -4,23 +4,25 @@ Last updated: 2026-03-18
 
 ## Current Focus
 
-- `doc/PLAN.md` now has Active Track F for general Wasm lowering of runtime `Read` programs.
-- Priority direction is to replace shape-specific runtime-I/O Wasm emitters with a general
-  lowering/execution path, not to keep extending recognizer-driven support case by case.
+- Track F F1 is complete: `doc/wasm_runtime_architecture.md` locked, fixture files committed.
+- Next milestone is F2: value representation stub (`gen_lower/value.rs` with `RtValue` tagged-i64).
 
 ## Immediate Next Steps
 
-1. Lock Phase F1 architecture:
-   choose the execution representation and lowering boundary for general effectful runtime programs.
-2. Define the Wasm-side runtime value/memory model needed for `Read.read`, `string.split`,
-   `List String`, and `Print`.
-3. Re-evaluate whether any temporary bridge is needed only after the Phase F1/F2 design is written down.
+1. F2: create `crates/goby-wasm/src/gen_lower/` module with:
+   - `mod.rs`: skeleton + `GeneralLowerer` entry point stub
+   - `value.rs`: `RtValue` tagged-i64 encoding for Unit/Int/Bool/String/List
+   - Unit tests for encode/decode round-trips
+2. F2 must confirm or revise the tentative helper ABI in §6 of the architecture doc.
+3. F3 follows after F2: general lowering for `Read.read` + `Print.print/println`.
 
 ## Decisions To Carry Forward
 
-- Runtime `Read` support should move toward general Wasm lowering rather than more
-  ad-hoc `RuntimeIoPlan` pattern additions.
-- Temporary breakage is acceptable while moving toward the cleaner long-term backend design.
+- Architecture is locked in `doc/wasm_runtime_architecture.md`; all F2+ code must follow it.
+- `gen_lower/` must not import from `runtime_io_plan.rs`.
+- Helper ABI in §6 is tentative until F2 confirms.
+- F3 fixture (`tests/track-f/f3_print_read.gb`) currently routes through `DynamicWasiIo(Echo)`;
+  F3 goal is to route through the general lowering path instead.
 
 ## Deferred Work Still Relevant Later
 
@@ -32,4 +34,5 @@ Last updated: 2026-03-18
 ## Restart Notes
 
 - `doc/PLAN.md` is the roadmap reference.
+- `doc/wasm_runtime_architecture.md` is the architecture reference for Track F.
 - Add a new focused save-point here when the next development slice starts.
