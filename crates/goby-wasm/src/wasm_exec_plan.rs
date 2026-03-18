@@ -1,36 +1,48 @@
 use std::borrow::Cow;
 
 use goby_core::ast::{BinOpKind, HandlerClause, InterpolatedPart};
-use goby_core::ir::{CompExpr, IrBinOp, IrHandlerClause, ValueExpr};
+use goby_core::ir::{CompExpr, IrBinOp, IrDecl, IrHandlerClause, ValueExpr};
 use goby_core::{Declaration, Expr, Module, Stmt};
 
-pub(crate) struct RuntimeBodyArtifacts<'a> {
+pub(crate) struct WasmRuntimeArtifacts<'a> {
     pub(crate) body: Option<Cow<'a, str>>,
     pub(crate) stmts: Cow<'a, [Stmt]>,
 }
 
-pub(crate) fn runtime_main_body_artifacts(module: &Module) -> Option<RuntimeBodyArtifacts<'_>> {
+pub(crate) struct WasmDeclExecPlan<'a> {
+    pub(crate) ir_decl: Option<IrDecl>,
+    pub(crate) runtime: Option<WasmRuntimeArtifacts<'a>>,
+}
+
+pub(crate) fn main_exec_plan(module: &Module) -> Option<WasmDeclExecPlan<'_>> {
     let decl = module
         .declarations
         .iter()
         .find(|decl| decl.name == "main")?;
-    runtime_body_artifacts_from_decl(decl)
+    Some(decl_exec_plan(decl))
 }
 
-pub(crate) fn runtime_body_artifacts_from_decl(
-    decl: &Declaration,
-) -> Option<RuntimeBodyArtifacts<'_>> {
-    if let Ok(ir_decl) = goby_core::ir_lower::lower_declaration(decl) {
+pub(crate) fn decl_exec_plan(decl: &Declaration) -> WasmDeclExecPlan<'_> {
+    let ir_decl = goby_core::ir_lower::lower_declaration(decl).ok();
+    let runtime = runtime_artifacts_from_decl_and_ir(decl, ir_decl.as_ref());
+    WasmDeclExecPlan { ir_decl, runtime }
+}
+
+fn runtime_artifacts_from_decl_and_ir<'a>(
+    decl: &'a Declaration,
+    ir_decl: Option<&IrDecl>,
+) -> Option<WasmRuntimeArtifacts<'a>> {
+    if let Some(ir_decl) = ir_decl {
         let stmts = comp_to_stmts(&ir_decl.body)?;
         let body = stmts_to_body_source(&stmts).map(Cow::Owned);
-        return Some(RuntimeBodyArtifacts {
+        return Some(WasmRuntimeArtifacts {
             body,
             stmts: Cow::Owned(stmts),
         });
     }
 
     let stmts = decl.parsed_body.as_deref()?;
-    Some(RuntimeBodyArtifacts {
+    Some(WasmRuntimeArtifacts {
         body: Some(Cow::Borrowed(decl.body.as_str())),
         stmts: Cow::Borrowed(stmts),
     })
@@ -192,7 +204,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn adapts_ir_main_with_effect_handler_to_runtime_stmts() {
+    fn builds_main_exec_plan_for_handler_body() {
         let module = parse_module(
             r#"
 effect Iter
@@ -208,7 +220,8 @@ main =
 "#,
         )
         .expect("parse should work");
-        let adapted = runtime_main_body_artifacts(&module).expect("main should adapt");
-        assert!(matches!(adapted.stmts[0], Stmt::Expr(Expr::With { .. }, _)));
+        let plan = main_exec_plan(&module).expect("main should exist");
+        let runtime = plan.runtime.expect("runtime plan should exist");
+        assert!(matches!(runtime.stmts[0], Stmt::Expr(Expr::With { .. }, _)));
     }
 }

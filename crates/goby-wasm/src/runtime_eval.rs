@@ -3,7 +3,7 @@ use std::collections::HashMap;
 
 use goby_core::{Expr, Module, Stmt, types::parse_function_type};
 
-use crate::runtime_ir_adapter::runtime_body_artifacts_from_decl;
+use crate::wasm_exec_plan::decl_exec_plan;
 use crate::{MAX_EVAL_DEPTH, RuntimeLocals};
 
 pub(crate) type EvaluatedFunctions<'a> = HashMap<&'a str, EvaluatedFunction<'a>>;
@@ -46,7 +46,7 @@ fn collect_functions<'a>(
             [param] => Some(Cow::Owned(param.clone())),
             _ => None,
         };
-        let Some(runtime_body) = runtime_body_artifacts_from_decl(decl) else {
+        let Some(runtime_body) = decl_exec_plan(decl).runtime else {
             continue;
         };
         functions.insert(

@@ -32,8 +32,8 @@ use crate::{
         resolve_direct_call_target,
     },
     planning::build_lowering_plan,
-    runtime_ir_adapter::runtime_body_artifacts_from_decl,
     support::{is_supported_binop_kind, is_supported_case_pattern, is_supported_list_item_expr},
+    wasm_exec_plan::decl_exec_plan,
 };
 
 const BUILTIN_PRINT: &str = "print";
@@ -102,7 +102,7 @@ pub(crate) fn native_unsupported_reason_kind(module: &Module) -> Option<Unsuppor
         return Some(UnsupportedReason::MainAnnotationNotUnitToUnit);
     }
 
-    let Some(runtime_body) = runtime_body_artifacts_from_decl(main) else {
+    let Some(runtime_body) = decl_exec_plan(main).runtime else {
         return Some(UnsupportedReason::MainParsedBodyUnavailable);
     };
     let stmts = runtime_body.stmts.as_ref();
@@ -321,7 +321,7 @@ fn declaration_body_supported_for_native(
         stack.remove(decl_name);
         return false;
     };
-    let Some(runtime_body) = runtime_body_artifacts_from_decl(decl) else {
+    let Some(runtime_body) = decl_exec_plan(decl).runtime else {
         stack.remove(decl_name);
         return false;
     };

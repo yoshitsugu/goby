@@ -6,9 +6,9 @@ use crate::runtime_eval::{
     IntEvaluator, ListIntEvaluator, collect_functions_with_result, collect_unit_functions,
 };
 use crate::runtime_flow::RuntimeEvaluators;
-use crate::runtime_ir_adapter::runtime_main_body_artifacts;
 use crate::runtime_resolver::ResolvedRuntimeOutput;
 use crate::runtime_support::module_has_selective_import_symbol;
+use crate::wasm_exec_plan::main_exec_plan;
 
 #[cfg(test)]
 pub(crate) fn resolve_module_runtime_output(module: &Module) -> Option<String> {
@@ -20,7 +20,7 @@ pub(crate) fn resolve_module_runtime_output_with_mode(
     module: &Module,
     execution_mode: lower::EffectExecutionMode,
 ) -> Option<String> {
-    let runtime = runtime_main_body_artifacts(module)?;
+    let runtime = main_exec_plan(module)?.runtime?;
     resolve_main_runtime_output_with_mode_internal(
         module,
         runtime.body.as_deref(),
@@ -36,7 +36,7 @@ pub(crate) fn resolve_module_runtime_output_with_mode_and_stdin(
     execution_mode: lower::EffectExecutionMode,
     stdin_seed: Option<String>,
 ) -> Option<String> {
-    let runtime = runtime_main_body_artifacts(module)?;
+    let runtime = main_exec_plan(module)?.runtime?;
     resolve_main_runtime_output_with_mode_and_stdin_internal(
         module,
         runtime.body.as_deref(),
@@ -50,7 +50,7 @@ pub(crate) fn resolve_module_runtime_output_for_compile(
     module: &Module,
     execution_mode: lower::EffectExecutionMode,
 ) -> Result<Option<String>, String> {
-    let Some(runtime) = runtime_main_body_artifacts(module) else {
+    let Some(runtime) = main_exec_plan(module).and_then(|plan| plan.runtime) else {
         return Ok(None);
     };
     resolve_main_runtime_output_for_compile(

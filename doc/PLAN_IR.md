@@ -555,6 +555,10 @@ it as the new baseline.
     programs.
 
 - [ ] G10. Track G architecture is complete
+  - `goby-wasm` may keep one explicit backend-local semantic layer over shared
+    IR (currently `wasm_exec_plan.rs`) for Wasm-specific execution/planning
+    needs, but it must be the only such layer and must not become a second
+    source-language canonicalization boundary.
   - Shared typed IR is the canonical semantic handoff.
   - Backend compilation decisions are made from IR rather than source AST
     spelling.

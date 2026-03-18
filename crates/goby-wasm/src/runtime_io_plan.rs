@@ -7,6 +7,7 @@ use crate::backend::WasmProgramBuilder;
 use crate::layout::MemoryLayout;
 use crate::runtime_flow::DirectCallHead;
 use crate::runtime_support::{flatten_direct_call, module_has_selective_import_symbol};
+use crate::wasm_exec_plan::main_exec_plan;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum InputReadMode {
@@ -500,10 +501,15 @@ fn ir_collect_static_prints(comp: &CompExpr, out: &mut String, print_count: &mut
 /// - Echo plans with `suffix_prints` are not detected here. `ir_has_read_op` will still
 ///   detect the Read op and the IR returns `Unsupported`. The
 ///   [`classify_runtime_io_with_ir_fallback`] caller then promotes that to AST fallback.
+#[allow(dead_code)]
 pub(crate) fn classify_runtime_io_from_ir(ir_module: &IrModule) -> RuntimeIoClassification {
     let Some(main_decl) = ir_module.decls.iter().find(|d| d.name == "main") else {
         return RuntimeIoClassification::NotRuntimeIo;
     };
+    classify_runtime_io_from_ir_decl(main_decl)
+}
+
+fn classify_runtime_io_from_ir_decl(main_decl: &goby_core::ir::IrDecl) -> RuntimeIoClassification {
     let body = &main_decl.body;
     if ir_has_read_op(body) {
         if let Some(plan) = ir_plan_echo(body) {
@@ -520,7 +526,7 @@ pub(crate) fn classify_runtime_io_from_ir(ir_module: &IrModule) -> RuntimeIoClas
 /// Classify runtime I/O with IR-based analysis preferred, falling back to AST when needed.
 ///
 /// Strategy (G6):
-/// 1. Attempt IR lowering via `lower_module`.
+/// 1. Attempt IR lowering for `main`.
 /// 2. If lowering fails → AST classification (covers inline echo, SplitLinesEach, etc.).
 /// 3. If lowering succeeds → IR classification.
 ///    - If IR returns `DynamicWasiIo` or `StaticOutput` → definitive; use it.
@@ -536,21 +542,17 @@ pub(crate) fn classify_runtime_io_with_ir_fallback(module: &Module) -> RuntimeIo
         .iter()
         .find(|decl| decl.name == "main")
         .and_then(|decl| decl.parsed_body.as_deref());
-    match goby_core::ir_lower::lower_module(module) {
-        Err(_) => classify_runtime_io(module, parsed_body),
-        Ok(ir) => {
-            let ir_result = classify_runtime_io_from_ir(&ir);
-            if matches!(
-                ir_result,
-                RuntimeIoClassification::NotRuntimeIo | RuntimeIoClassification::Unsupported
-            ) {
-                // IR may have missed bare-name effect calls or unrecognised plan shapes;
-                // consult AST classifier for a potentially better result.
-                classify_runtime_io(module, parsed_body)
-            } else {
-                ir_result
-            }
+    let ir_result = main_exec_plan(module)
+        .and_then(|plan| plan.ir_decl)
+        .map(|ir_decl| classify_runtime_io_from_ir_decl(&ir_decl));
+    match ir_result {
+        None => classify_runtime_io(module, parsed_body),
+        Some(RuntimeIoClassification::NotRuntimeIo | RuntimeIoClassification::Unsupported) => {
+            // IR may have missed bare-name effect calls or unrecognised plan shapes;
+            // consult AST classifier for a potentially better result.
+            classify_runtime_io(module, parsed_body)
         }
+        Some(other) => other,
     }
 }
 

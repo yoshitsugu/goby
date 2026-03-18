@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-18 (G9 complete)
+Last updated: 2026-03-18 (G10 in progress)
 
 ## Current Focus
 
@@ -12,6 +12,9 @@ Last updated: 2026-03-18 (G9 complete)
 ## Immediate Next Steps
 
 1. G10: Remove the remaining Track G transitional seams.
+   - Keep `crates/goby-wasm/src/wasm_exec_plan.rs` as the single formal
+     backend-local semantic layer over shared IR; do not reintroduce separate
+     ad-hoc adapters for planning, runtime, and lowering.
    - Decide whether backend-local typed-continuation evidence in
      `crates/goby-wasm/src/lower.rs` should migrate into shared IR ownership or
      remain a backend analysis derived from shared IR.
@@ -29,6 +32,10 @@ Last updated: 2026-03-18 (G9 complete)
   `main`, runtime declaration lookup, simple evaluators, and native capability
   checks; raw parsed AST fallback remains only as an internal compatibility path
   when IR lowering is unavailable.
+- `crates/goby-wasm/src/wasm_exec_plan.rs` is now the named backend-local layer
+  over shared IR for Wasm execution/planning inputs. Further Track G cleanup
+  should consolidate backend consumers onto that layer instead of adding new
+  parallel adapters.
 
 ## Deferred Work Still Relevant Later
 

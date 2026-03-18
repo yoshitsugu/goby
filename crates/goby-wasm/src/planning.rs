@@ -6,6 +6,7 @@ use goby_core::{
 };
 
 use crate::call::flatten_named_call;
+use crate::wasm_exec_plan::decl_exec_plan;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum LoweringStyle {
@@ -244,27 +245,23 @@ pub(crate) fn build_lowering_plan(module: &Module) -> LoweringPlan {
             }
         }
 
-        let mut calls = HashSet::new();
-        let mut referenced_operations = Vec::new();
-        if let Some(stmts) = decl.parsed_body.as_deref() {
-            let mut inspection = StmtInspection::default();
-            inspect_stmts(
-                stmts,
+        let exec_plan = decl_exec_plan(decl);
+        let (calls, referenced_operations) = if let Some(ir_decl) = exec_plan.ir_decl.as_ref() {
+            let mut inspection = IrInspection::default();
+            inspect_ir_comp(
+                &ir_decl.body,
                 &mut inspection,
                 &declaration_names,
                 &qualified_operation_index,
-                &op_name_index,
             );
-            calls = inspection.called_declarations;
-            referenced_operations = inspection.referenced_operations;
-        }
-        if let Ok(ir_decl) = goby_core::ir_lower::lower_declaration(decl) {
-            let mut inspection = IrInspection::default();
-            inspect_ir_comp(&ir_decl.body, &mut inspection);
             if inspection.contains_with_handler || inspection.contains_resume {
                 is_effect_boundary = true;
             }
             handler_resume_present |= inspection.handler_resume_present;
+            (
+                inspection.called_declarations,
+                inspection.referenced_operations,
+            )
         } else if let Some(stmts) = decl.parsed_body.as_deref() {
             let mut inspection = StmtInspection::default();
             inspect_stmts(
@@ -278,10 +275,15 @@ pub(crate) fn build_lowering_plan(module: &Module) -> LoweringPlan {
                 is_effect_boundary = true;
             }
             handler_resume_present |= stmts_contain_handler_resume(stmts);
+            (
+                inspection.called_declarations,
+                inspection.referenced_operations,
+            )
         } else {
             // Missing parsed body forces boundary mode until lowering coverage expands.
             is_effect_boundary = true;
-        }
+            (HashSet::new(), Vec::new())
+        };
 
         declaration_styles.insert(
             decl.name.clone(),
@@ -365,33 +367,60 @@ struct IrInspection {
     contains_with_handler: bool,
     contains_resume: bool,
     handler_resume_present: bool,
+    called_declarations: HashSet<String>,
+    referenced_operations: Vec<EffectOperationRef>,
+    referenced_operation_ids: HashSet<(EffectId, OpId)>,
 }
 
-fn inspect_ir_comp(comp: &CompExpr, out: &mut IrInspection) {
+fn inspect_ir_comp(
+    comp: &CompExpr,
+    out: &mut IrInspection,
+    declaration_names: &HashSet<String>,
+    qualified_operation_index: &HashMap<(String, String), EffectOperationRef>,
+) {
     match comp {
         CompExpr::Value(value) => inspect_ir_value(value, out),
         CompExpr::Let { value, body, .. } => {
-            inspect_ir_comp(value, out);
-            inspect_ir_comp(body, out);
+            inspect_ir_comp(value, out, declaration_names, qualified_operation_index);
+            inspect_ir_comp(body, out, declaration_names, qualified_operation_index);
         }
         CompExpr::Seq { stmts, tail } => {
             for stmt in stmts {
-                inspect_ir_comp(stmt, out);
+                inspect_ir_comp(stmt, out, declaration_names, qualified_operation_index);
             }
-            inspect_ir_comp(tail, out);
+            inspect_ir_comp(tail, out, declaration_names, qualified_operation_index);
         }
         CompExpr::If { cond, then_, else_ } => {
             inspect_ir_value(cond, out);
-            inspect_ir_comp(then_, out);
-            inspect_ir_comp(else_, out);
+            inspect_ir_comp(then_, out, declaration_names, qualified_operation_index);
+            inspect_ir_comp(else_, out, declaration_names, qualified_operation_index);
         }
         CompExpr::Call { callee, args } => {
             inspect_ir_value(callee, out);
+            if let ValueExpr::Var(name) = callee.as_ref()
+                && declaration_names.contains(name)
+            {
+                out.called_declarations.insert(name.clone());
+            } else if let ValueExpr::GlobalRef { module, name } = callee.as_ref()
+                && let Some(op_ref) = qualified_operation_index.get(&(module.clone(), name.clone()))
+                && out
+                    .referenced_operation_ids
+                    .insert((op_ref.effect_id, op_ref.op_id))
+            {
+                out.referenced_operations.push(op_ref.clone());
+            }
             for arg in args {
                 inspect_ir_value(arg, out);
             }
         }
-        CompExpr::PerformEffect { args, .. } => {
+        CompExpr::PerformEffect { effect, op, args } => {
+            if let Some(op_ref) = qualified_operation_index.get(&(effect.clone(), op.clone()))
+                && out
+                    .referenced_operation_ids
+                    .insert((op_ref.effect_id, op_ref.op_id))
+            {
+                out.referenced_operations.push(op_ref.clone());
+            }
             for arg in args {
                 inspect_ir_value(arg, out);
             }
@@ -401,13 +430,18 @@ fn inspect_ir_comp(comp: &CompExpr, out: &mut IrInspection) {
                 if ir_comp_contains_resume(&clause.body) {
                     out.handler_resume_present = true;
                 }
-                inspect_ir_comp(&clause.body, out);
+                inspect_ir_comp(
+                    &clause.body,
+                    out,
+                    declaration_names,
+                    qualified_operation_index,
+                );
             }
         }
         CompExpr::WithHandler { handler, body } => {
             out.contains_with_handler = true;
-            inspect_ir_comp(handler, out);
-            inspect_ir_comp(body, out);
+            inspect_ir_comp(handler, out, declaration_names, qualified_operation_index);
+            inspect_ir_comp(body, out, declaration_names, qualified_operation_index);
         }
         CompExpr::Resume { value } => {
             out.contains_resume = true;

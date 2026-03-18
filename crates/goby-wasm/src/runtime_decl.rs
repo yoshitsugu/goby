@@ -1,6 +1,6 @@
 use super::*;
-use crate::runtime_ir_adapter::runtime_body_artifacts_from_decl;
 use crate::runtime_support::flatten_direct_call;
+use crate::wasm_exec_plan::decl_exec_plan;
 use unicode_segmentation::UnicodeSegmentation;
 
 impl<'m> RuntimeOutputResolver<'m> {
@@ -747,7 +747,7 @@ impl<'m> RuntimeOutputResolver<'m> {
         decl: &goby_core::Declaration,
         owner_module: Option<String>,
     ) -> Option<RuntimeDeclInfo> {
-        let stmts = runtime_body_artifacts_from_decl(decl)?.stmts.into_owned();
+        let stmts = decl_exec_plan(decl).runtime?.stmts.into_owned();
         let callable_param_mask = match decl.type_annotation.as_deref() {
             Some(annotation) => match parse_function_type(annotation) {
                 Some(function_type) => function_type

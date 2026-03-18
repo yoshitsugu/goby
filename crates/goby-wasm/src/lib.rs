@@ -19,7 +19,6 @@ mod runtime_exec;
 mod runtime_expr;
 mod runtime_flow;
 mod runtime_io_plan;
-mod runtime_ir_adapter;
 #[cfg(test)]
 mod runtime_output_tests;
 #[cfg(test)]
@@ -32,6 +31,7 @@ mod runtime_support;
 mod runtime_unit;
 mod runtime_value;
 mod support;
+mod wasm_exec_plan;
 
 use std::collections::{HashMap, HashSet};
 use unicode_segmentation::UnicodeSegmentation;
