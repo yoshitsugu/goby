@@ -4,27 +4,29 @@ Last updated: 2026-03-18
 
 ## Current Focus
 
-- Track F F2 is complete: `gen_lower/` module created with `value.rs` (tagged-i64 encoding),
-  `backend_ir.rs` (`WasmBackendInstr` skeleton), helper ABI confirmed.
-- Next milestone is F3: general runtime execution core (`Read.read` + `Print.print/println`).
+- Track F F3 is complete: `gen_lower/lower.rs` and `gen_lower/emit.rs` implemented.
+  - `lower_comp`/`lower_value` map Goby IR → `WasmBackendInstr`
+  - `emit_general_module` maps `WasmBackendInstr` → Wasm bytes via WASI fd_read/fd_write
+  - `try_general_lower_module` wired into `compile_module` before shape-specific classification
+  - `track_f_f3_print_read_is_general_lowered` passes (no longer `#[ignore]`)
+- Next milestone is F4: helper-call ABI for `string.split` and list iteration.
 
 ## Immediate Next Steps
 
-1. F3: implement `GeneralLowerer` in `gen_lower/lower.rs`:
-   - Lower `CompExpr::Let`, `CompExpr::Seq`, `CompExpr::PerformEffect` to `WasmBackendInstr`
-   - Handle `Read.read` → `EffectOp { "Read", "read" }` → `fd_read` WASI call
-   - Handle `Print.print/println` → `EffectOp { "Print", "print/println" }` → `fd_write` WASI call
-2. F3 done when `track_f_f3_print_read_is_general_lowered` test passes (remove `#[ignore]`).
-3. F4 follows: helper-call ABI for `string.split` and list iteration.
+1. F4: implement `CallHelper` emission in `gen_lower/emit.rs`:
+   - Helper functions for `string.split` → returns a list ptr
+   - `each` iteration over lists
+2. F4 done when `track_f_f4_split_each_is_general_lowered` test passes (remove `#[ignore]`).
+3. F5 follows: collection indexing (`list.get`).
 
 ## Decisions To Carry Forward
 
 - Architecture locked in `doc/wasm_runtime_architecture.md`.
 - `gen_lower/` must not import from `runtime_io_plan.rs`.
-- F3 fixture (`tests/track-f/f3_print_read.gb`) currently routes through `DynamicWasiIo(Echo)`;
-  F3 goal: route through general lowering path instead.
-- Unqualified effect calls (`read()`, `print(x)`) must be normalized to `PerformEffect` nodes
-  at the general lowerer entry (per §11 invariant).
+- General lowering path only activates when IR body contains `PerformEffect` nodes.
+- `Print.print/println` EffectOp pushes `encode_unit()` onto stack after writing stdout.
+- String layout: len (i32) at `heap_base`, bytes at `heap_base+4`.
+- For F3 programs, there is only one string in flight at a time (single heap_base).
 
 ## Deferred Work Still Relevant Later
 
