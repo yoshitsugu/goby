@@ -617,6 +617,23 @@ main =
 }
 
 #[test]
+fn runtime_io_execution_kind_reports_general_lowered_for_qualified_read_print() {
+    let module = parse_module(
+        r#"
+main : Unit -> Unit can Print, Read
+main =
+  text = Read.read ()
+  Print.print text
+"#,
+    )
+    .expect("parse should work");
+    assert_eq!(
+        runtime_io_execution_kind(&module).expect("classification should work"),
+        RuntimeIoExecutionKind::GeneralLowered
+    );
+}
+
+#[test]
 fn runtime_io_execution_kind_reports_unsupported_for_non_bridge_read_transform() {
     let module = parse_module(
         r#"

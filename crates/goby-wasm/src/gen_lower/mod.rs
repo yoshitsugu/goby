@@ -54,7 +54,9 @@ fn has_perform_effect(comp: &CompExpr) -> bool {
 /// Returns `Ok(Some(wasm))` when the general path succeeds,
 /// `Ok(None)` when the IR contains unsupported forms (fall through to next path),
 /// or `Err` on hard codegen failures.
-pub(crate) fn try_general_lower_module(module: &Module) -> Result<Option<Vec<u8>>, CodegenError> {
+fn lower_module_to_instrs(
+    module: &Module,
+) -> Result<Option<Vec<backend_ir::WasmBackendInstr>>, CodegenError> {
     let plan = match main_exec_plan(module) {
         Some(p) => p,
         None => return Ok(None),
@@ -78,7 +80,17 @@ pub(crate) fn try_general_lower_module(module: &Module) -> Result<Option<Vec<u8>
             });
         }
     };
+    Ok(Some(instrs))
+}
 
+pub(crate) fn supports_general_lower_module(module: &Module) -> Result<bool, CodegenError> {
+    Ok(lower_module_to_instrs(module)?.is_some())
+}
+
+pub(crate) fn try_general_lower_module(module: &Module) -> Result<Option<Vec<u8>>, CodegenError> {
+    let Some(instrs) = lower_module_to_instrs(module)? else {
+        return Ok(None);
+    };
     let layout = MemoryLayout::default();
     let wasm = emit::emit_general_module(&instrs, &layout)?;
     Ok(Some(wasm))

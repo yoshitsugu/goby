@@ -9,15 +9,18 @@ Last updated: 2026-03-18
   in the general lowering path.
 - `track_f_f5_index_is_general_lowered` passes and runtime fallback regressions
   cover seeded-stdin success and out-of-range abort behavior.
+- F6 has started: `runtime_io_execution_kind` now reports `GeneralLowered`
+  for shapes already owned by the general lowering path (currently F3/F4/F5).
 - Next milestone is F6: converge the remaining shape-specific runtime-I/O plans
   onto the general lowering path and delete/reduce special cases.
 
 ## Immediate Next Steps
 
 1. F6: route remaining runtime-I/O recognizers through the general lowering path.
-2. Decide which DynamicWasiIo special cases remain as explicit optimizations versus
+2. Move simple read/print echo shapes off `RuntimeIoPlan::Echo` where IR/general
+   lowering can already express them.
+3. Decide which DynamicWasiIo special cases remain as explicit optimizations versus
    semantic lowering paths to delete.
-3. Reduce `RuntimeIoPlan` surface after parity is proven.
 
 ## Decisions To Carry Forward
 
@@ -28,6 +31,8 @@ Last updated: 2026-03-18
 - F5 also uses a fused pattern (SplitGetPrint) rather than a heap-allocated list.
 - Out-of-range indexed split access aborts the Wasm program via generated trap checks,
   matching the existing runtime abort policy.
+- Public runtime-I/O classification now distinguishes `GeneralLowered` from
+  `DynamicWasiIo` so convergence progress is observable in tests and callers.
 - String layout: len (i32) at heap_base, bytes at heap_base+4.
 - I32 scratch locals (5 total) are declared when fused split instructions are present.
 

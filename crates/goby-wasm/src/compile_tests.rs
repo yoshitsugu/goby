@@ -891,20 +891,15 @@ main =
 // corresponding F-milestone lands.
 // ---------------------------------------------------------------------------
 
-/// F3 fixture current status: DynamicWasiIo (Echo recognizer handles this shape today).
-/// After F3 general lowering lands, update the expected kind to reflect the general path.
-/// When F3 convergence (F6) removes the Echo recognizer, update this test accordingly.
+/// F3 fixture current status: GeneralLowered.
 #[test]
 fn track_f_f3_print_read_current_classification() {
     let source = read_track_f_fixture("f3_print_read.gb");
     let module = parse_module(&source).expect("f3_print_read.gb should parse");
-    // Currently handled by the DynamicWasiIo(Echo) recognizer in runtime_io_plan.rs.
-    // Track F / F3 goal: route through general lowering path instead.
     assert_eq!(
         runtime_io_execution_kind(&module).expect("classification should succeed"),
-        crate::RuntimeIoExecutionKind::DynamicWasiIo,
-        "F3 fixture is currently classified as DynamicWasiIo (Echo shape); \
-         update this assertion when the general lowering path takes over"
+        crate::RuntimeIoExecutionKind::GeneralLowered,
+        "F3 fixture should report GeneralLowered once the general path is the semantic source of truth"
     );
 }
 
@@ -918,15 +913,15 @@ fn track_f_f3_print_read_is_general_lowered() {
     assert_valid_wasm_module(&wasm);
 }
 
-/// F4 fixture current status: Unsupported.
+/// F4 fixture current status: GeneralLowered.
 #[test]
 fn track_f_f4_split_each_is_currently_unsupported() {
     let source = read_track_f_fixture("f4_split_each.gb");
     let module = parse_module(&source).expect("f4_split_each.gb should parse");
     assert_eq!(
         runtime_io_execution_kind(&module).expect("classification should succeed"),
-        crate::RuntimeIoExecutionKind::Unsupported,
-        "F4 fixture should be Unsupported until general lowering is implemented"
+        crate::RuntimeIoExecutionKind::GeneralLowered,
+        "F4 fixture should report GeneralLowered once the fused general path owns this shape"
     );
 }
 
@@ -978,15 +973,15 @@ main =
     assert_valid_wasm_module(&wasm);
 }
 
-/// F5 fixture current status: Unsupported.
+/// F5 fixture current status: GeneralLowered.
 #[test]
 fn track_f_f5_index_is_currently_unsupported() {
     let source = read_track_f_fixture("f5_index.gb");
     let module = parse_module(&source).expect("f5_index.gb should parse");
     assert_eq!(
         runtime_io_execution_kind(&module).expect("classification should succeed"),
-        crate::RuntimeIoExecutionKind::Unsupported,
-        "F5 fixture should be Unsupported until general lowering is implemented"
+        crate::RuntimeIoExecutionKind::GeneralLowered,
+        "F5 fixture should report GeneralLowered once the fused general path owns this shape"
     );
 }
 

@@ -56,6 +56,7 @@ pub(crate) enum RuntimeIoClassification {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RuntimeIoExecutionKind {
+    GeneralLowered,
     DynamicWasiIo,
     StaticOutput,
     InterpreterBridge,
@@ -252,6 +253,9 @@ fn plan_static_output(stmts: &[Stmt]) -> Option<String> {
 }
 
 pub fn runtime_io_execution_kind(module: &Module) -> Result<RuntimeIoExecutionKind, CodegenError> {
+    if crate::gen_lower::supports_general_lower_module(module)? {
+        return Ok(RuntimeIoExecutionKind::GeneralLowered);
+    }
     // G6: IR-based classification with AST fallback.
     let classification = classify_runtime_io_with_ir_fallback(module);
     Ok(match classification {
