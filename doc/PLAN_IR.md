@@ -511,11 +511,13 @@ it as the new baseline.
   - Equivalent source programs such as `print(read())` and `text = read(); print text`
     lower to the same or intentionally equivalent normalized IR.
 
-- [ ] G6. Wasm runtime-I/O planning is IR-based
+- [x] G6. Wasm runtime-I/O planning is IR-based
   - Backend runtime-I/O capability checks consume IR rather than parsed AST
     statement lists.
-  - `runtime_io_plan.rs` is either removed or reduced to a backend-local pass
-    derived from IR.
+  - `runtime_io_plan.rs` is reduced to a backend-local pass derived from IR:
+    `classify_runtime_io_with_ir_fallback` is the primary entry point; IR
+    classification is preferred, with AST fallback for forms not yet fully
+    lowerable (bare effect names, SplitLinesEach via Pipeline/MethodCall).
   - Unsupported cases are reported as IR/backend capability limits rather than
     source-pattern mismatches.
 

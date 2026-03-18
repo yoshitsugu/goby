@@ -1,18 +1,20 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-18 (G5 complete)
+Last updated: 2026-03-18 (G6 complete)
 
 ## Current Focus
 
 - Next active work: **Track G — Shared Typed IR Boundary**
   - Detailed architecture and milestone tracker: `doc/PLAN_IR.md`
   - Roadmap entry: `doc/PLAN.md` §4.7
-  - G1–G5 complete; next is G6
+  - G1–G6 complete; next is G7
 
 ## Immediate Next Steps
 
-1. G6: Make Wasm runtime-I/O capability checks consume IR rather than parsed AST statement lists.
-   - `runtime_io_plan.rs` should become a backend-local pass derived from IR, or be removed.
+1. G7: Route native Wasm compilation through shared IR.
+   - `compile_module` should not depend on raw AST shape for native-vs-fallback decisions.
+   - Remaining typed-continuation/effect-boundary metadata should be derived from shared IR
+     or clearly isolated as a temporary backend pass over IR.
 2. Do not add new ad-hoc AST-shape branches to runtime-I/O planning while Track G is active.
 
 ## Decisions To Carry Forward
