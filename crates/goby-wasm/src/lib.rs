@@ -1,5 +1,6 @@
 mod backend;
 mod call;
+mod gen_lower;
 #[cfg(test)]
 mod compile_tests;
 mod fallback;
