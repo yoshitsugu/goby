@@ -216,9 +216,9 @@ pub(crate) struct InlineHandlerValue {
 
 #[derive(Clone)]
 pub(crate) struct RuntimeHandlerMethod {
+    pub(crate) clause_index: usize,
     pub(crate) name: String,
     pub(crate) params: Vec<String>,
-    pub(crate) body: String,
     pub(crate) parsed_body: Option<Vec<Stmt>>,
 }
 

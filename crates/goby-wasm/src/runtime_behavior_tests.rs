@@ -41,6 +41,58 @@ main =
 }
 
 #[test]
+fn unit_helper_with_handler_body_remains_callable_through_runtime_map() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    let source = r#"
+effect Iter
+  next: Int -> Int
+
+emit : Unit -> Unit
+emit =
+  with
+    next n ->
+      resume (n + 1)
+  in
+    print (next 0)
+
+main : Unit -> Unit
+main =
+  emit ()
+"#;
+    let module = parse_module(source).expect("parse should work");
+    let output = resolve_module_runtime_output(&module).expect("runtime output should resolve");
+    assert_eq!(output, "1");
+}
+
+#[test]
+fn nested_same_signature_handlers_keep_distinct_captures() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    let source = r#"
+effect Iter
+  next: Int -> Int
+
+main : Unit -> Unit
+main =
+  outer = "outer"
+  inner = "inner"
+  with
+    next n ->
+      print outer
+      resume n
+  in
+    with
+      next n ->
+        print inner
+        resume n
+    in
+      print (next 1)
+"#;
+    let module = parse_module(source).expect("parse should work");
+    let output = resolve_module_runtime_output(&module).expect("runtime output should resolve");
+    assert_eq!(output, "inner1");
+}
+
+#[test]
 fn list_literal_replays_handled_value() {
     let _guard = ENV_MUTEX.lock().unwrap();
     let source = r#"

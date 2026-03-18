@@ -174,12 +174,13 @@ impl<'m> RuntimeOutputResolver<'m> {
     ) -> InlineHandlerValue {
         let methods = clauses
             .iter()
-            .map(|clause| InlineHandlerMethod {
+            .enumerate()
+            .map(|(clause_index, clause)| InlineHandlerMethod {
                 effect_name: self.unique_effect_name_for_operation(&clause.name),
                 method: RuntimeHandlerMethod {
+                    clause_index,
                     name: clause.name.clone(),
                     params: clause.params.clone(),
-                    body: clause.body.clone(),
                     parsed_body: clause.parsed_body.clone(),
                 },
             })
@@ -589,9 +590,8 @@ impl<'m> RuntimeOutputResolver<'m> {
                     .methods
                     .iter()
                     .find(|m| {
-                        m.method.name == method.method.name
-                            && m.method.params == method.method.params
-                            && m.method.body == method.method.body
+                        inline.with_id == method.with_id
+                            && m.method.clause_index == method.method.clause_index
                     })
                     .map(|_| inline.captured_locals.clone())
             })
@@ -608,9 +608,8 @@ impl<'m> RuntimeOutputResolver<'m> {
                     .methods
                     .iter()
                     .find(|m| {
-                        m.method.name == method.method.name
-                            && m.method.params == method.method.params
-                            && m.method.body == method.method.body
+                        inline.with_id == method.with_id
+                            && m.method.clause_index == method.method.clause_index
                     })
                     .map(|_| inline.captured_callables.clone())
             })

@@ -49,13 +49,10 @@ fn collect_functions<'a>(
         let Some(runtime_body) = runtime_body_artifacts_from_decl(decl) else {
             continue;
         };
-        let Some(body) = runtime_body.body else {
-            continue;
-        };
         functions.insert(
             decl.name.as_str(),
             EvaluatedFunction {
-                body,
+                body: runtime_body.body,
                 parameter,
                 parsed_stmts: Some(runtime_body.stmts),
             },
@@ -187,9 +184,10 @@ impl<'a> IntEvaluator<'a> {
         let mut locals = HashMap::new();
         let callables = HashMap::new();
         seed_locals_from_parameter(&mut locals, function.parameter.as_deref(), arg);
+        let body = function.body.as_deref()?;
 
         let mut result_expr = None;
-        for line in code_lines(function.body.as_ref()) {
+        for line in code_lines(body) {
             if let Some((name, expr)) = split_binding(line) {
                 let value = self.descend()?.eval_expr(expr, &locals, &callables);
                 assign_local(name, value, &mut locals);
@@ -308,9 +306,10 @@ impl<'a> ListIntEvaluator<'a> {
     ) -> Option<Vec<i64>> {
         let mut locals = HashMap::new();
         seed_locals_from_parameter(&mut locals, function.parameter.as_deref(), arg);
+        let body = function.body.as_deref()?;
 
         let mut result_expr = None;
-        for line in code_lines(function.body.as_ref()) {
+        for line in code_lines(body) {
             if let Some((name, expr)) = split_binding(line) {
                 let value = self.descend()?.eval_expr(expr, &locals);
                 assign_local(name, value, &mut locals);
@@ -451,7 +450,7 @@ fn parse_list_int_literal(expr: &str) -> Option<Vec<i64>> {
 
 #[derive(Clone)]
 pub(crate) struct EvaluatedFunction<'a> {
-    pub(crate) body: Cow<'a, str>,
+    pub(crate) body: Option<Cow<'a, str>>,
     pub(crate) parameter: Option<Cow<'a, str>>,
     pub(crate) parsed_stmts: Option<Cow<'a, [Stmt]>>,
 }

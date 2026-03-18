@@ -74,7 +74,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                 }
             }
         } else {
-            for statement in statements(function.body.as_ref()) {
+            for statement in statements(function.body.as_deref()?) {
                 match statement {
                     Statement::Binding { name, expr } | Statement::MutBinding { name, expr } => {
                         let value = self.eval_value_with_context(
