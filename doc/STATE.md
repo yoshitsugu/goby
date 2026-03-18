@@ -1,39 +1,19 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-18 (G10 complete)
+Last updated: 2026-03-18
 
 ## Current Focus
 
-- Next active work: **Track G — Shared Typed IR Boundary**
-  - Detailed architecture and milestone tracker: `doc/PLAN_IR.md`
-  - Roadmap entry: `doc/PLAN.md` §4.7
-  - G1–G10 complete
+- No active save-point is currently locked.
 
 ## Immediate Next Steps
 
-1. Track G follow-up: keep `crates/goby-wasm/src/wasm_exec_plan.rs` as the single
-   formal backend-local semantic layer over shared IR.
-2. Do not add new ad-hoc source-language branching outside that layer or outside
-   `runtime_io_plan.rs`'s localized fallback-form recognition.
+1. Choose the next active roadmap item from `doc/PLAN.md`.
+2. Update this file again once the next work slice is started.
 
 ## Decisions To Carry Forward
 
-- Shared IR must become the semantic boundary for both native lowering and, eventually, portable fallback execution.
-- `goby-wasm` may perform backend-local analysis over IR, but it should not own source-language semantic canonicalization.
-- Existing typed-continuation metadata in `crates/goby-wasm/src/lower.rs` remains a
-  backend analysis product derived from shared IR rather than shared-IR-owned
-  language semantics.
-- Runtime-I/O support now uses IR-first capability analysis with a localized
-  backend fallback-form pass; new work should extend that backend pass rather
-  than reintroducing call-site source-shape checks.
-- Portable fallback now enters through shared-IR-derived runtime artifacts for
-  `main`, runtime declaration lookup, simple evaluators, and native capability
-  checks; raw parsed AST fallback remains only as an internal compatibility path
-  when IR lowering is unavailable.
-- `crates/goby-wasm/src/wasm_exec_plan.rs` is now the named backend-local layer
-  over shared IR for Wasm execution/planning inputs. Further Track G cleanup
-  should consolidate backend consumers onto that layer instead of adding new
-  parallel adapters.
+- None queued here right now; rely on committed code and `doc/PLAN.md`.
 
 ## Deferred Work Still Relevant Later
 
@@ -44,5 +24,5 @@ Last updated: 2026-03-18 (G10 complete)
 
 ## Restart Notes
 
-- `doc/PLAN_IR.md` is now the detailed execution document for Track G, including checkbox milestones `G1` through `G10`.
-- `doc/PLAN.md` was intentionally trimmed to keep only active or still-relevant planning items.
+- `doc/PLAN.md` is the roadmap reference.
+- Add a new focused save-point here when the next development slice starts.
