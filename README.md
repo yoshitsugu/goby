@@ -77,14 +77,4 @@ Detailed and evolving language rules are intentionally documented in
 
 ## License
 
-To match the project goals, licensing is split by artifact type:
-
-- **Code**: permissive (free to use, modify, and redistribute) under **MIT-0**.
-- **Language concept/spec text and design docs**: **CC BY-NC-ND 4.0**.
-- See `LICENSE-CODE` and `LICENSE-DOCS` for details.
-
-Notes:
-
-- This split is intentional: code reuse is encouraged, while direct copy/republish of
-  concept/spec documents is restricted.
-- Copyright protects concrete expression (text/code), not abstract ideas.
+MIT License. See `LICENSE` for details.
