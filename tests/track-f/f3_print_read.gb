@@ -1,0 +1,7 @@
+# Track F / F3 target
+# Expected: reads all of stdin and prints it to stdout (no newline appended).
+# Status: currently DynamicWasiIo (Echo recognizer); must route through general lowering after F3.
+main : Unit -> Unit can Print, Read
+main =
+  text = Read.read ()
+  Print.print text

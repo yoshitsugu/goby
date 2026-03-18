@@ -1,0 +1,9 @@
+# Track F / F4 target
+# Expected: reads stdin, splits on newlines, and prints each line with a newline.
+# Status: currently Unsupported for general lowering; must pass after F4.
+# Note: string.split / each helper-call ABI is required.
+main : Unit -> Unit can Print, Read
+main =
+  text = Read.read ()
+  lines = string.split text "\n"
+  each lines Print.println

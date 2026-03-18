@@ -19,6 +19,17 @@ fn read_example(name: &str) -> String {
     std::fs::read_to_string(path).expect("example file should exist")
 }
 
+fn read_track_f_fixture(name: &str) -> String {
+    let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    path.push("..");
+    path.push("..");
+    path.push("tests");
+    path.push("track-f");
+    path.push(name);
+    std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("track-f fixture '{}' should exist: {}", name, e))
+}
+
 #[test]
 fn native_codegen_capability_checker_rejects_hello_effect_boundary_subset() {
     let source = read_example("hello.gb");
@@ -869,5 +880,87 @@ main =
         crate::RuntimeIoExecutionKind::StaticOutput,
     );
     let wasm = compile_module(&module).expect("codegen should succeed");
+    assert_valid_wasm_module(&wasm);
+}
+
+// ---------------------------------------------------------------------------
+// Track F fixture tests
+// These tests assert the *current* classification of the Track F representative
+// programs (Unsupported until the general lowering path is implemented).
+// Remove the `#[ignore]` attribute and update the expected status when the
+// corresponding F-milestone lands.
+// ---------------------------------------------------------------------------
+
+/// F3 fixture current status: DynamicWasiIo (Echo recognizer handles this shape today).
+/// After F3 general lowering lands, update the expected kind to reflect the general path.
+/// When F3 convergence (F6) removes the Echo recognizer, update this test accordingly.
+#[test]
+fn track_f_f3_print_read_current_classification() {
+    let source = read_track_f_fixture("f3_print_read.gb");
+    let module = parse_module(&source).expect("f3_print_read.gb should parse");
+    // Currently handled by the DynamicWasiIo(Echo) recognizer in runtime_io_plan.rs.
+    // Track F / F3 goal: route through general lowering path instead.
+    assert_eq!(
+        runtime_io_execution_kind(&module).expect("classification should succeed"),
+        crate::RuntimeIoExecutionKind::DynamicWasiIo,
+        "F3 fixture is currently classified as DynamicWasiIo (Echo shape); \
+         update this assertion when the general lowering path takes over"
+    );
+}
+
+/// F3 fixture: `print (read())` — general lowering target.
+/// TODO: remove #[ignore] and verify valid Wasm when F3 is implemented.
+#[test]
+#[ignore = "Track F / F3: general lowering not yet implemented"]
+fn track_f_f3_print_read_is_general_lowered() {
+    let source = read_track_f_fixture("f3_print_read.gb");
+    let module = parse_module(&source).expect("f3_print_read.gb should parse");
+    let wasm = compile_module(&module).expect("F3 codegen should succeed");
+    assert_valid_wasm_module(&wasm);
+}
+
+/// F4 fixture current status: Unsupported.
+#[test]
+fn track_f_f4_split_each_is_currently_unsupported() {
+    let source = read_track_f_fixture("f4_split_each.gb");
+    let module = parse_module(&source).expect("f4_split_each.gb should parse");
+    assert_eq!(
+        runtime_io_execution_kind(&module).expect("classification should succeed"),
+        crate::RuntimeIoExecutionKind::Unsupported,
+        "F4 fixture should be Unsupported until general lowering is implemented"
+    );
+}
+
+/// F4 fixture: split + each — general lowering target.
+/// TODO: remove #[ignore] when F4 helper-call ABI is implemented.
+#[test]
+#[ignore = "Track F / F4: helper-call ABI not yet implemented"]
+fn track_f_f4_split_each_is_general_lowered() {
+    let source = read_track_f_fixture("f4_split_each.gb");
+    let module = parse_module(&source).expect("f4_split_each.gb should parse");
+    let wasm = compile_module(&module).expect("F4 codegen should succeed");
+    assert_valid_wasm_module(&wasm);
+}
+
+/// F5 fixture current status: Unsupported.
+#[test]
+fn track_f_f5_index_is_currently_unsupported() {
+    let source = read_track_f_fixture("f5_index.gb");
+    let module = parse_module(&source).expect("f5_index.gb should parse");
+    assert_eq!(
+        runtime_io_execution_kind(&module).expect("classification should succeed"),
+        crate::RuntimeIoExecutionKind::Unsupported,
+        "F5 fixture should be Unsupported until general lowering is implemented"
+    );
+}
+
+/// F5 fixture: split + index — general lowering target.
+/// TODO: remove #[ignore] when F5 collection/indexing is implemented.
+#[test]
+#[ignore = "Track F / F5: collection indexing not yet implemented"]
+fn track_f_f5_index_is_general_lowered() {
+    let source = read_track_f_fixture("f5_index.gb");
+    let module = parse_module(&source).expect("f5_index.gb should parse");
+    let wasm = compile_module(&module).expect("F5 codegen should succeed");
     assert_valid_wasm_module(&wasm);
 }
