@@ -531,12 +531,13 @@ it as the new baseline.
     backend-local for now, but is isolated as transitional backend planning
     rather than part of `compile_module`'s native-vs-fallback boundary logic.
 
-- [ ] G8. Handler and resume lowering is shared-IR based
+- [x] G8. Handler and resume lowering is shared-IR based
   - `with`, handler clauses, and `resume` lower into explicit shared IR forms.
-  - Backend-local effect-boundary representations sourced directly from AST-era
-    structures are retired.
-  - The effect lowering strategy is expressed in one canonical shared
-    intermediate representation.
+  - Wasm lowering-plan effect-boundary inspection now derives handler/resume
+    metadata from shared IR when lowering succeeds, with AST fallback retained
+    only for declarations outside current lowering coverage.
+  - Optimized effect-path gating no longer scans raw AST for `resume`; it uses
+    IR-derived lowering-plan metadata.
 
 - [ ] G9. Portable fallback aligns to the IR boundary
   - Portable fallback execution runs from shared IR directly, or from a thin

@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
+use goby_core::ir::{CompExpr, ValueExpr};
 use goby_core::{
     Expr, Module, Stmt, ast::InterpolatedPart, find_can_keyword_index, types::strip_effect,
 };
@@ -201,6 +202,7 @@ pub(crate) fn build_lowering_plan(module: &Module) -> LoweringPlan {
     let mut op_name_index: HashMap<String, Vec<EffectOperationRef>> = HashMap::new();
     let mut effect_name_to_id: HashMap<String, EffectId> = HashMap::new();
     let effect_dependency_graph = build_effect_dependency_graph(module);
+    let mut handler_resume_present = false;
 
     for (effect_idx, effect_decl) in module.effect_declarations.iter().enumerate() {
         let effect_id = effect_id_from_index(effect_idx);
@@ -253,11 +255,29 @@ pub(crate) fn build_lowering_plan(module: &Module) -> LoweringPlan {
                 &qualified_operation_index,
                 &op_name_index,
             );
+            calls = inspection.called_declarations;
+            referenced_operations = inspection.referenced_operations;
+        }
+        if let Ok(ir_decl) = goby_core::ir_lower::lower_declaration(decl) {
+            let mut inspection = IrInspection::default();
+            inspect_ir_comp(&ir_decl.body, &mut inspection);
+            if inspection.contains_with_handler || inspection.contains_resume {
+                is_effect_boundary = true;
+            }
+            handler_resume_present |= inspection.handler_resume_present;
+        } else if let Some(stmts) = decl.parsed_body.as_deref() {
+            let mut inspection = StmtInspection::default();
+            inspect_stmts(
+                stmts,
+                &mut inspection,
+                &declaration_names,
+                &qualified_operation_index,
+                &op_name_index,
+            );
             if inspection.contains_using || inspection.contains_resume {
                 is_effect_boundary = true;
             }
-            calls = inspection.called_declarations;
-            referenced_operations = inspection.referenced_operations;
+            handler_resume_present |= stmts_contain_handler_resume(stmts);
         } else {
             // Missing parsed body forces boundary mode until lowering coverage expands.
             is_effect_boundary = true;
@@ -309,12 +329,6 @@ pub(crate) fn build_lowering_plan(module: &Module) -> LoweringPlan {
         }
     }
 
-    let handler_resume_present = module
-        .declarations
-        .iter()
-        .filter_map(|d| d.parsed_body.as_deref())
-        .any(stmts_contain_handler_resume);
-
     LoweringPlan {
         declaration_styles,
         handler_resume_present,
@@ -344,6 +358,106 @@ struct StmtInspection {
     called_declarations: HashSet<String>,
     referenced_operations: Vec<EffectOperationRef>,
     referenced_operation_ids: HashSet<(EffectId, OpId)>,
+}
+
+#[derive(Default)]
+struct IrInspection {
+    contains_with_handler: bool,
+    contains_resume: bool,
+    handler_resume_present: bool,
+}
+
+fn inspect_ir_comp(comp: &CompExpr, out: &mut IrInspection) {
+    match comp {
+        CompExpr::Value(value) => inspect_ir_value(value, out),
+        CompExpr::Let { value, body, .. } => {
+            inspect_ir_comp(value, out);
+            inspect_ir_comp(body, out);
+        }
+        CompExpr::Seq { stmts, tail } => {
+            for stmt in stmts {
+                inspect_ir_comp(stmt, out);
+            }
+            inspect_ir_comp(tail, out);
+        }
+        CompExpr::If { cond, then_, else_ } => {
+            inspect_ir_value(cond, out);
+            inspect_ir_comp(then_, out);
+            inspect_ir_comp(else_, out);
+        }
+        CompExpr::Call { callee, args } => {
+            inspect_ir_value(callee, out);
+            for arg in args {
+                inspect_ir_value(arg, out);
+            }
+        }
+        CompExpr::PerformEffect { args, .. } => {
+            for arg in args {
+                inspect_ir_value(arg, out);
+            }
+        }
+        CompExpr::Handle { clauses } => {
+            for clause in clauses {
+                if ir_comp_contains_resume(&clause.body) {
+                    out.handler_resume_present = true;
+                }
+                inspect_ir_comp(&clause.body, out);
+            }
+        }
+        CompExpr::WithHandler { handler, body } => {
+            out.contains_with_handler = true;
+            inspect_ir_comp(handler, out);
+            inspect_ir_comp(body, out);
+        }
+        CompExpr::Resume { value } => {
+            out.contains_resume = true;
+            inspect_ir_value(value, out);
+        }
+    }
+}
+
+fn inspect_ir_value(value: &ValueExpr, out: &mut IrInspection) {
+    match value {
+        ValueExpr::BinOp { left, right, .. } => {
+            inspect_ir_value(left, out);
+            inspect_ir_value(right, out);
+        }
+        ValueExpr::Interp(parts) => {
+            for part in parts {
+                if let goby_core::ir::IrInterpPart::Expr(expr) = part {
+                    inspect_ir_value(expr, out);
+                }
+            }
+        }
+        ValueExpr::IntLit(_)
+        | ValueExpr::BoolLit(_)
+        | ValueExpr::StrLit(_)
+        | ValueExpr::Var(_)
+        | ValueExpr::GlobalRef { .. }
+        | ValueExpr::Unit => {}
+    }
+}
+
+fn ir_comp_contains_resume(comp: &CompExpr) -> bool {
+    match comp {
+        CompExpr::Resume { .. } => true,
+        CompExpr::Value(_) | CompExpr::Call { .. } | CompExpr::PerformEffect { .. } => false,
+        CompExpr::Let { value, body, .. } => {
+            ir_comp_contains_resume(value) || ir_comp_contains_resume(body)
+        }
+        CompExpr::Seq { stmts, tail } => {
+            stmts.iter().any(ir_comp_contains_resume) || ir_comp_contains_resume(tail)
+        }
+        CompExpr::If { then_, else_, .. } => {
+            ir_comp_contains_resume(then_) || ir_comp_contains_resume(else_)
+        }
+        CompExpr::Handle { clauses } => clauses
+            .iter()
+            .any(|clause| ir_comp_contains_resume(&clause.body)),
+        CompExpr::WithHandler { handler, body } => {
+            ir_comp_contains_resume(handler) || ir_comp_contains_resume(body)
+        }
+    }
 }
 
 fn inspect_stmts(

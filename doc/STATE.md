@@ -1,26 +1,26 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-18 (G7 complete)
+Last updated: 2026-03-18 (G8 complete)
 
 ## Current Focus
 
 - Next active work: **Track G — Shared Typed IR Boundary**
   - Detailed architecture and milestone tracker: `doc/PLAN_IR.md`
   - Roadmap entry: `doc/PLAN.md` §4.7
-  - G1–G7 complete; next is G8
+  - G1–G8 complete; next is G9
 
 ## Immediate Next Steps
 
-1. G8: Handler and resume lowering should become shared-IR based.
-   - Retire remaining AST-era/backend-local effect-boundary representations where shared IR can own them.
-   - Keep typed-continuation metadata derivable from shared IR or explicitly transitional.
+1. G9: Portable fallback should align to the shared IR boundary.
+   - Reduce fallback execution paths that still require raw parsed AST bodies.
+   - Keep fallback/native parity testable from the same shared-IR semantic handoff.
 2. Do not add new ad-hoc AST-shape branches to runtime-I/O planning while Track G is active.
 
 ## Decisions To Carry Forward
 
 - Shared IR must become the semantic boundary for both native lowering and, eventually, portable fallback execution.
 - `goby-wasm` may perform backend-local analysis over IR, but it should not own source-language semantic canonicalization.
-- Existing typed-continuation metadata in `crates/goby-wasm/src/lower.rs` is transitional; it is now isolated as backend planning state and should migrate into shared IR ownership or become a backend analysis product derived from shared IR.
+- Existing typed-continuation metadata in `crates/goby-wasm/src/lower.rs` is transitional; handler/resume gating now derives from IR-based lowering-plan metadata, and the remaining evidence payload should migrate into shared IR ownership or become a backend analysis product derived from shared IR.
 - Runtime-I/O support should move away from source-shape classification and toward IR-based capability analysis.
 
 ## Deferred Work Still Relevant Later

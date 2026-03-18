@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
+use goby_core::Module;
 use goby_core::ir::{CompExpr, IrBinOp, ValueExpr};
-use goby_core::{Expr, Module, Stmt, ast::InterpolatedPart};
 
 use crate::{
     CodegenError,
@@ -100,7 +100,7 @@ pub(crate) fn try_emit_native_module_with_handoff(
         .style_for("main")
         .unwrap_or(LoweringStyle::EffectBoundary);
     if main_style != LoweringStyle::DirectStyle {
-        let selection = select_effect_execution_mode(main_style, module);
+        let selection = select_effect_execution_mode(main_style, &lowering_plan);
         let main_requirement = lowering_plan.evidence_requirement_for("main").map(|req| {
             MainEvidenceRequirementSummary {
                 style: req.style(),
@@ -155,11 +155,11 @@ fn build_typed_continuation_ir(lowering_plan: &LoweringPlan) -> Option<TypedCont
 
 fn select_effect_execution_mode(
     main_style: LoweringStyle,
-    module: &Module,
+    lowering_plan: &LoweringPlan,
 ) -> EffectExecutionSelection {
     select_effect_execution_mode_with_inputs(
         main_style,
-        module,
+        lowering_plan.handler_resume_present(),
         runtime_force_portable_fallback_override_enabled(),
         compile_time_runtime_profile(),
         typed_continuation_optimization_gate_enabled(),
@@ -168,7 +168,7 @@ fn select_effect_execution_mode(
 
 fn select_effect_execution_mode_with_inputs(
     main_style: LoweringStyle,
-    module: &Module,
+    handler_resume_present: bool,
     force_portable_fallback_override: bool,
     runtime_profile: RuntimeProfile,
     optimization_gate_enabled: bool,
@@ -204,7 +204,7 @@ fn select_effect_execution_mode_with_inputs(
             runtime_profile,
         };
     }
-    if contains_unsupported_effect_construct_for_optimized_path(module) {
+    if contains_unsupported_effect_construct_for_optimized_path(handler_resume_present) {
         return EffectExecutionSelection {
             mode: EffectExecutionMode::PortableFallback,
             fallback_reason: Some(EffectModeFallbackReason::UnsupportedEffectConstruct),
@@ -218,12 +218,8 @@ fn select_effect_execution_mode_with_inputs(
     }
 }
 
-fn contains_unsupported_effect_construct_for_optimized_path(module: &Module) -> bool {
-    module
-        .declarations
-        .iter()
-        .filter_map(|decl| decl.parsed_body.as_deref())
-        .any(stmts_contain_resume)
+fn contains_unsupported_effect_construct_for_optimized_path(handler_resume_present: bool) -> bool {
+    handler_resume_present
 }
 
 fn compile_time_runtime_profile() -> RuntimeProfile {
@@ -245,73 +241,6 @@ fn runtime_force_portable_fallback_override_enabled() -> bool {
             .as_deref(),
         Some("1" | "true" | "TRUE" | "yes" | "on")
     )
-}
-
-fn stmts_contain_resume(stmts: &[Stmt]) -> bool {
-    stmts.iter().any(stmt_contains_resume)
-}
-
-fn stmt_contains_resume(stmt: &Stmt) -> bool {
-    match stmt {
-        Stmt::Binding { value, .. }
-        | Stmt::MutBinding { value, .. }
-        | Stmt::Assign { value, .. } => expr_contains_resume(value),
-        Stmt::Expr(expr, _) => expr_contains_resume(expr),
-    }
-}
-
-fn expr_contains_resume(expr: &Expr) -> bool {
-    match expr {
-        Expr::Resume { .. } => true,
-        Expr::Call { callee, arg, .. } => expr_contains_resume(callee) || expr_contains_resume(arg),
-        Expr::Pipeline { value, .. } => expr_contains_resume(value),
-        Expr::BinOp { left, right, .. } => {
-            expr_contains_resume(left) || expr_contains_resume(right)
-        }
-        Expr::If {
-            condition,
-            then_expr,
-            else_expr,
-        } => {
-            expr_contains_resume(condition)
-                || expr_contains_resume(then_expr)
-                || expr_contains_resume(else_expr)
-        }
-        Expr::Case { scrutinee, arms } => {
-            expr_contains_resume(scrutinee)
-                || arms.iter().any(|arm| expr_contains_resume(&arm.body))
-        }
-        Expr::ListLit { elements, spread } => {
-            elements.iter().any(expr_contains_resume)
-                || spread.as_ref().is_some_and(|s| expr_contains_resume(s))
-        }
-        Expr::TupleLit(items) => items.iter().any(expr_contains_resume),
-        Expr::Lambda { body, .. } => expr_contains_resume(body),
-        Expr::Handler { clauses } => clauses.iter().any(|clause| {
-            clause
-                .parsed_body
-                .as_ref()
-                .is_some_and(|stmts| stmts_contain_resume(stmts))
-        }),
-        Expr::With { handler, body } => expr_contains_resume(handler) || stmts_contain_resume(body),
-        Expr::Block(stmts) => stmts_contain_resume(stmts),
-        Expr::RecordConstruct { fields, .. } => {
-            fields.iter().any(|(_, value)| expr_contains_resume(value))
-        }
-        Expr::MethodCall { args, .. } => args.iter().any(expr_contains_resume),
-        Expr::InterpolatedString(parts) => parts.iter().any(|part| match part {
-            InterpolatedPart::Text(_) => false,
-            InterpolatedPart::Expr(expr) => expr_contains_resume(expr),
-        }),
-        Expr::Qualified { .. }
-        | Expr::Var { name: _, .. }
-        | Expr::StringLit(_)
-        | Expr::IntLit(_)
-        | Expr::BoolLit(_) => false,
-        Expr::ListIndex { list, index } => {
-            expr_contains_resume(list) || expr_contains_resume(index)
-        }
-    }
 }
 
 #[derive(Clone)]
@@ -715,10 +644,10 @@ main =
   in
     tick 1
 "#;
-        let module = parse_module(source).expect("source should parse");
+        let _module = parse_module(source).expect("source should parse");
         let selection = select_effect_execution_mode_with_inputs(
             super::LoweringStyle::EffectBoundary,
-            &module,
+            true,
             false,
             RuntimeProfile::Wasmtime,
             false,
@@ -744,10 +673,10 @@ main =
   in
     tick 1
 "#;
-        let module = parse_module(source).expect("source should parse");
+        let _module = parse_module(source).expect("source should parse");
         let selection = select_effect_execution_mode_with_inputs(
             super::LoweringStyle::EffectBoundary,
-            &module,
+            true,
             false,
             RuntimeProfile::Wasmtime,
             true,
@@ -772,7 +701,7 @@ main =
         let module = parse_module(source).expect("source should parse");
         let selection = select_effect_execution_mode_with_inputs(
             super::LoweringStyle::EffectBoundary,
-            &module,
+            false,
             false,
             RuntimeProfile::Wasmer,
             true,
@@ -798,10 +727,10 @@ main : Unit -> Unit can Tick
 main =
   print 1
 "#;
-        let module = parse_module(source).expect("source should parse");
+        let _module = parse_module(source).expect("source should parse");
         let selection = select_effect_execution_mode_with_inputs(
             super::LoweringStyle::EffectBoundary,
-            &module,
+            false,
             true,
             RuntimeProfile::Wasmer,
             true,
