@@ -11,7 +11,7 @@ use wasm_encoder::{
 };
 
 use crate::CodegenError;
-use crate::gen_lower::backend_ir::WasmBackendInstr;
+use crate::gen_lower::backend_ir::{SplitIndexOperand, WasmBackendInstr};
 use crate::gen_lower::value::{encode_string_ptr, encode_unit};
 use crate::layout::MemoryLayout;
 
@@ -21,9 +21,10 @@ const WASM_PAGE_BYTES: u32 = 65_536;
 const FD_READ_IDX: u32 = 0;
 const FD_WRITE_IDX: u32 = 1;
 
-// Number of I32 scratch locals used by SplitEachPrint.
-// scratch[0] = str_ptr, scratch[1] = str_len, scratch[2] = pos, scratch[3] = line_start
-const SPLIT_EACH_SCRATCH_I32: u32 = 4;
+// Number of I32 scratch locals used by the fused split instructions.
+// scratch[0] = str_ptr, scratch[1] = str_len, scratch[2] = pos,
+// scratch[3] = line_start, scratch[4] = target/remaining index
+const SPLIT_FUSED_SCRATCH_I32: u32 = 5;
 
 /// Tracks compilation state during emission.
 struct EmitContext {
@@ -57,15 +58,19 @@ impl EmitContext {
 
 /// Returns true if any `SplitEachPrint` instruction is present.
 fn needs_i32_scratch(instrs: &[WasmBackendInstr]) -> bool {
-    instrs
-        .iter()
-        .any(|i| matches!(i, WasmBackendInstr::SplitEachPrint { .. }))
+    instrs.iter().any(|i| {
+        matches!(
+            i,
+            WasmBackendInstr::SplitEachPrint { .. } | WasmBackendInstr::SplitGetPrint { .. }
+        )
+    })
 }
 
 /// Returns true if any `SplitEachPrint` with println is present (needs newline data segment).
 fn needs_newline_data(instrs: &[WasmBackendInstr]) -> bool {
     instrs.iter().any(|i| {
         matches!(i, WasmBackendInstr::SplitEachPrint { op, .. } if op == "println")
+            || matches!(i, WasmBackendInstr::SplitGetPrint { op, .. } if op == "println")
     })
 }
 
@@ -83,7 +88,11 @@ pub(crate) fn emit_general_module(
         .filter(|i| matches!(i, WasmBackendInstr::DeclareLocal { .. }))
         .count() as u32;
     let has_scratch = needs_i32_scratch(instrs);
-    let i32_scratch_count = if has_scratch { SPLIT_EACH_SCRATCH_I32 } else { 0 };
+    let i32_scratch_count = if has_scratch {
+        SPLIT_FUSED_SCRATCH_I32
+    } else {
+        0
+    };
     // I32 scratch locals start at index i64_count.
     let i32_base = i64_count;
 
@@ -224,7 +233,12 @@ fn emit_instrs(
                 });
             }
 
-            WasmBackendInstr::SplitEachPrint { text_local, sep_bytes, effect, op } => {
+            WasmBackendInstr::SplitEachPrint {
+                text_local,
+                sep_bytes,
+                effect,
+                op,
+            } => {
                 if sep_bytes.len() != 1 {
                     return Err(CodegenError {
                         message: format!(
@@ -251,6 +265,40 @@ fn emit_instrs(
                     nread_offset,
                     newline_ptr,
                 );
+            }
+
+            WasmBackendInstr::SplitGetPrint {
+                text_local,
+                sep_bytes,
+                index,
+                op,
+            } => {
+                if sep_bytes.len() != 1 {
+                    return Err(CodegenError {
+                        message: format!(
+                            "gen_lower/emit: SplitGetPrint requires 1-byte separator, got {} bytes",
+                            sep_bytes.len()
+                        ),
+                    });
+                }
+                if op != "print" && op != "println" {
+                    return Err(CodegenError {
+                        message: format!("gen_lower/emit: SplitGetPrint unsupported op '{op}'"),
+                    });
+                }
+                let text_idx = ctx.get(text_local)?;
+                emit_split_get_print(
+                    function,
+                    ctx,
+                    text_idx,
+                    sep_bytes[0],
+                    index,
+                    op == "println",
+                    i32_base,
+                    iovec_offset,
+                    nread_offset,
+                    newline_ptr,
+                )?;
             }
         }
     }
@@ -445,9 +493,7 @@ fn emit_effect_op(
 
         _ => {
             return Err(CodegenError {
-                message: format!(
-                    "gen_lower/emit: unsupported effect op '{effect}.{op}'"
-                ),
+                message: format!("gen_lower/emit: unsupported effect op '{effect}.{op}'"),
             });
         }
     }
@@ -478,9 +524,9 @@ fn emit_split_each_print(
     nread_offset: i32,
     newline_ptr: i32,
 ) {
-    let s_str_ptr = i32_base;      // scratch[0]: str_ptr (i32)
-    let s_str_len = i32_base + 1;  // scratch[1]: str_len (i32)
-    let s_pos = i32_base + 2;      // scratch[2]: scan position (i32)
+    let s_str_ptr = i32_base; // scratch[0]: str_ptr (i32)
+    let s_str_len = i32_base + 1; // scratch[1]: str_len (i32)
+    let s_pos = i32_base + 2; // scratch[2]: scan position (i32)
     let s_line_start = i32_base + 3; // scratch[3]: line start (i32)
 
     // --- Extract str_ptr and str_len from text_local (tagged I64) ---
@@ -493,7 +539,11 @@ fn emit_split_each_print(
 
     // str_len = mem[str_ptr] (the len prefix)
     function.instruction(&Instruction::LocalGet(s_str_ptr));
-    function.instruction(&Instruction::I32Load(MemArg { offset: 0, align: 2, memory_index: 0 }));
+    function.instruction(&Instruction::I32Load(MemArg {
+        offset: 0,
+        align: 2,
+        memory_index: 0,
+    }));
     function.instruction(&Instruction::LocalSet(s_str_len));
 
     // pos = 0; line_start = 0
@@ -510,7 +560,7 @@ fn emit_split_each_print(
 
     // Scan loop: for pos in 0..str_len
     function.instruction(&Instruction::Block(wasm_encoder::BlockType::Empty)); // block (break target)
-    function.instruction(&Instruction::Loop(wasm_encoder::BlockType::Empty));  // loop
+    function.instruction(&Instruction::Loop(wasm_encoder::BlockType::Empty)); // loop
 
     // if pos >= str_len: break
     function.instruction(&Instruction::LocalGet(s_pos));
@@ -522,7 +572,11 @@ fn emit_split_each_print(
     function.instruction(&Instruction::LocalGet(s_str_ptr));
     function.instruction(&Instruction::LocalGet(s_pos));
     function.instruction(&Instruction::I32Add);
-    function.instruction(&Instruction::I32Load8U(MemArg { offset: 4, align: 0, memory_index: 0 }));
+    function.instruction(&Instruction::I32Load8U(MemArg {
+        offset: 4,
+        align: 0,
+        memory_index: 0,
+    }));
 
     // if byte == sep_byte: emit slice and advance line_start
     function.instruction(&Instruction::I32Const(sep_byte as i32));
@@ -579,12 +633,186 @@ fn emit_split_each_print(
     function.instruction(&Instruction::I64Const(encode_unit()));
 }
 
+fn emit_abort(function: &mut Function) {
+    function.instruction(&Instruction::Unreachable);
+}
+
+fn emit_split_index_operand(
+    function: &mut Function,
+    ctx: &EmitContext,
+    index: &SplitIndexOperand,
+) -> Result<(), CodegenError> {
+    match index {
+        SplitIndexOperand::Const(value) => {
+            let encoded =
+                crate::gen_lower::value::encode_int(*value).map_err(|e| CodegenError {
+                    message: format!("gen_lower/emit: invalid SplitGetPrint index literal: {e}"),
+                })?;
+            function.instruction(&Instruction::I64Const(encoded));
+        }
+        SplitIndexOperand::Local(name) => {
+            let idx = ctx.get(name)?;
+            function.instruction(&Instruction::LocalGet(idx));
+        }
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn emit_split_get_print(
+    function: &mut Function,
+    ctx: &EmitContext,
+    text_local_idx: u32,
+    sep_byte: u8,
+    index: &SplitIndexOperand,
+    append_newline: bool,
+    i32_base: u32,
+    iovec_offset: i32,
+    nread_offset: i32,
+    newline_ptr: i32,
+) -> Result<(), CodegenError> {
+    let s_str_ptr = i32_base;
+    let s_str_len = i32_base + 1;
+    let s_pos = i32_base + 2;
+    let s_line_start = i32_base + 3;
+    let s_target = i32_base + 4;
+
+    emit_split_index_operand(function, ctx, index)?;
+    function.instruction(&Instruction::I64Const(4));
+    function.instruction(&Instruction::I64Shl);
+    function.instruction(&Instruction::I64Const(4));
+    function.instruction(&Instruction::I64ShrS);
+    function.instruction(&Instruction::I64Const(0));
+    function.instruction(&Instruction::I64LtS);
+    function.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
+    emit_abort(function);
+    function.instruction(&Instruction::End);
+
+    emit_split_index_operand(function, ctx, index)?;
+    function.instruction(&Instruction::I64Const(i64::from(i32::MAX)));
+    function.instruction(&Instruction::I64GtS);
+    function.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
+    emit_abort(function);
+    function.instruction(&Instruction::End);
+
+    emit_split_index_operand(function, ctx, index)?;
+    function.instruction(&Instruction::I64Const(4));
+    function.instruction(&Instruction::I64Shl);
+    function.instruction(&Instruction::I64Const(4));
+    function.instruction(&Instruction::I64ShrS);
+    function.instruction(&Instruction::I32WrapI64);
+    function.instruction(&Instruction::LocalSet(s_target));
+
+    function.instruction(&Instruction::LocalGet(text_local_idx));
+    function.instruction(&Instruction::I64Const(0xFFFF_FFFFi64));
+    function.instruction(&Instruction::I64And);
+    function.instruction(&Instruction::I32WrapI64);
+    function.instruction(&Instruction::LocalSet(s_str_ptr));
+
+    function.instruction(&Instruction::LocalGet(s_str_ptr));
+    function.instruction(&Instruction::I32Load(MemArg {
+        offset: 0,
+        align: 2,
+        memory_index: 0,
+    }));
+    function.instruction(&Instruction::LocalSet(s_str_len));
+
+    function.instruction(&Instruction::LocalGet(s_str_len));
+    function.instruction(&Instruction::I32Eqz);
+    function.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
+    emit_abort(function);
+    function.instruction(&Instruction::End);
+
+    function.instruction(&Instruction::I32Const(0));
+    function.instruction(&Instruction::LocalSet(s_pos));
+    function.instruction(&Instruction::I32Const(0));
+    function.instruction(&Instruction::LocalSet(s_line_start));
+
+    function.instruction(&Instruction::Block(wasm_encoder::BlockType::Empty));
+    function.instruction(&Instruction::Block(wasm_encoder::BlockType::Empty));
+    function.instruction(&Instruction::Loop(wasm_encoder::BlockType::Empty));
+
+    function.instruction(&Instruction::LocalGet(s_pos));
+    function.instruction(&Instruction::LocalGet(s_str_len));
+    function.instruction(&Instruction::I32GeU);
+    function.instruction(&Instruction::BrIf(1));
+
+    function.instruction(&Instruction::LocalGet(s_str_ptr));
+    function.instruction(&Instruction::LocalGet(s_pos));
+    function.instruction(&Instruction::I32Add);
+    function.instruction(&Instruction::I32Load8U(MemArg {
+        offset: 4,
+        align: 0,
+        memory_index: 0,
+    }));
+    function.instruction(&Instruction::I32Const(sep_byte as i32));
+    function.instruction(&Instruction::I32Eq);
+    function.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
+
+    function.instruction(&Instruction::LocalGet(s_target));
+    function.instruction(&Instruction::I32Eqz);
+    function.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
+    emit_write_slice(
+        function,
+        s_str_ptr,
+        s_pos,
+        s_line_start,
+        append_newline,
+        iovec_offset,
+        nread_offset,
+        newline_ptr,
+    );
+    function.instruction(&Instruction::Br(2));
+    function.instruction(&Instruction::Else);
+    function.instruction(&Instruction::LocalGet(s_target));
+    function.instruction(&Instruction::I32Const(1));
+    function.instruction(&Instruction::I32Sub);
+    function.instruction(&Instruction::LocalSet(s_target));
+    function.instruction(&Instruction::LocalGet(s_pos));
+    function.instruction(&Instruction::I32Const(1));
+    function.instruction(&Instruction::I32Add);
+    function.instruction(&Instruction::LocalSet(s_line_start));
+    function.instruction(&Instruction::End);
+
+    function.instruction(&Instruction::End);
+
+    function.instruction(&Instruction::LocalGet(s_pos));
+    function.instruction(&Instruction::I32Const(1));
+    function.instruction(&Instruction::I32Add);
+    function.instruction(&Instruction::LocalSet(s_pos));
+    function.instruction(&Instruction::Br(0));
+
+    function.instruction(&Instruction::End);
+    function.instruction(&Instruction::End);
+
+    function.instruction(&Instruction::LocalGet(s_target));
+    function.instruction(&Instruction::I32Eqz);
+    function.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
+    emit_write_slice(
+        function,
+        s_str_ptr,
+        s_str_len,
+        s_line_start,
+        append_newline,
+        iovec_offset,
+        nread_offset,
+        newline_ptr,
+    );
+    function.instruction(&Instruction::Else);
+    emit_abort(function);
+    function.instruction(&Instruction::End);
+
+    function.instruction(&Instruction::End);
+    function.instruction(&Instruction::I64Const(encode_unit()));
+    Ok(())
+}
+
 /// Emit fd_write for the slice [line_start .. end) of the string at str_ptr.
 /// The string data starts at str_ptr + 4 (after the len prefix).
 fn emit_write_slice(
     function: &mut Function,
     s_str_ptr: u32,
-    s_end: u32,       // local index for end position (pos or str_len)
+    s_end: u32, // local index for end position (pos or str_len)
     s_line_start: u32,
     append_newline: bool,
     iovec_offset: i32,
@@ -598,14 +826,22 @@ fn emit_write_slice(
     function.instruction(&Instruction::I32Add);
     function.instruction(&Instruction::LocalGet(s_line_start));
     function.instruction(&Instruction::I32Add);
-    function.instruction(&Instruction::I32Store(MemArg { offset: 0, align: 2, memory_index: 0 }));
+    function.instruction(&Instruction::I32Store(MemArg {
+        offset: 0,
+        align: 2,
+        memory_index: 0,
+    }));
 
     // iovec[1] = end - line_start  (length of this slice)
     function.instruction(&Instruction::I32Const(iovec_offset + 4));
     function.instruction(&Instruction::LocalGet(s_end));
     function.instruction(&Instruction::LocalGet(s_line_start));
     function.instruction(&Instruction::I32Sub);
-    function.instruction(&Instruction::I32Store(MemArg { offset: 0, align: 2, memory_index: 0 }));
+    function.instruction(&Instruction::I32Store(MemArg {
+        offset: 0,
+        align: 2,
+        memory_index: 0,
+    }));
 
     // fd_write(1, iovec_offset, 1, nread_offset)
     function.instruction(&Instruction::I32Const(1));
@@ -619,10 +855,18 @@ fn emit_write_slice(
         // Write newline byte (pre-populated in data section at newline_ptr).
         function.instruction(&Instruction::I32Const(iovec_offset));
         function.instruction(&Instruction::I32Const(newline_ptr));
-        function.instruction(&Instruction::I32Store(MemArg { offset: 0, align: 2, memory_index: 0 }));
+        function.instruction(&Instruction::I32Store(MemArg {
+            offset: 0,
+            align: 2,
+            memory_index: 0,
+        }));
         function.instruction(&Instruction::I32Const(iovec_offset + 4));
         function.instruction(&Instruction::I32Const(1));
-        function.instruction(&Instruction::I32Store(MemArg { offset: 0, align: 2, memory_index: 0 }));
+        function.instruction(&Instruction::I32Store(MemArg {
+            offset: 0,
+            align: 2,
+            memory_index: 0,
+        }));
         function.instruction(&Instruction::I32Const(1));
         function.instruction(&Instruction::I32Const(iovec_offset));
         function.instruction(&Instruction::I32Const(1));
@@ -635,7 +879,7 @@ fn emit_write_slice(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::gen_lower::backend_ir::WasmBackendInstr as I;
+    use crate::gen_lower::backend_ir::{SplitIndexOperand, WasmBackendInstr as I};
 
     fn default_layout() -> MemoryLayout {
         MemoryLayout::default()
@@ -650,12 +894,17 @@ mod tests {
     #[test]
     fn emit_read_then_print_produces_valid_wasm() {
         let instrs = vec![
-            I::EffectOp { effect: "Read".to_string(), op: "read".to_string() },
-            I::EffectOp { effect: "Print".to_string(), op: "print".to_string() },
+            I::EffectOp {
+                effect: "Read".to_string(),
+                op: "read".to_string(),
+            },
+            I::EffectOp {
+                effect: "Print".to_string(),
+                op: "print".to_string(),
+            },
             I::Drop,
         ];
-        let wasm = emit_general_module(&instrs, &default_layout())
-            .expect("emit should succeed");
+        let wasm = emit_general_module(&instrs, &default_layout()).expect("emit should succeed");
         assert_valid_wasm(&wasm);
     }
 
@@ -663,23 +912,35 @@ mod tests {
     fn emit_let_read_print_produces_valid_wasm() {
         // Corresponds to: text = Read.read(); Print.print(text)
         let instrs = vec![
-            I::DeclareLocal { name: "text".to_string() },
-            I::EffectOp { effect: "Read".to_string(), op: "read".to_string() },
-            I::StoreLocal { name: "text".to_string() },
-            I::LoadLocal { name: "text".to_string() },
-            I::EffectOp { effect: "Print".to_string(), op: "print".to_string() },
+            I::DeclareLocal {
+                name: "text".to_string(),
+            },
+            I::EffectOp {
+                effect: "Read".to_string(),
+                op: "read".to_string(),
+            },
+            I::StoreLocal {
+                name: "text".to_string(),
+            },
+            I::LoadLocal {
+                name: "text".to_string(),
+            },
+            I::EffectOp {
+                effect: "Print".to_string(),
+                op: "print".to_string(),
+            },
             I::Drop,
         ];
-        let wasm = emit_general_module(&instrs, &default_layout())
-            .expect("emit should succeed");
+        let wasm = emit_general_module(&instrs, &default_layout()).expect("emit should succeed");
         assert_valid_wasm(&wasm);
     }
 
     #[test]
     fn emit_unknown_effect_returns_error() {
-        let instrs = vec![
-            I::EffectOp { effect: "Foo".to_string(), op: "bar".to_string() },
-        ];
+        let instrs = vec![I::EffectOp {
+            effect: "Foo".to_string(),
+            op: "bar".to_string(),
+        }];
         assert!(emit_general_module(&instrs, &default_layout()).is_err());
     }
 
@@ -687,9 +948,16 @@ mod tests {
     fn emit_split_each_println_produces_valid_wasm() {
         // Corresponds to: text = Read.read(); SplitEachPrint(text, "\n", Print, println)
         let instrs = vec![
-            I::DeclareLocal { name: "text".to_string() },
-            I::EffectOp { effect: "Read".to_string(), op: "read".to_string() },
-            I::StoreLocal { name: "text".to_string() },
+            I::DeclareLocal {
+                name: "text".to_string(),
+            },
+            I::EffectOp {
+                effect: "Read".to_string(),
+                op: "read".to_string(),
+            },
+            I::StoreLocal {
+                name: "text".to_string(),
+            },
             I::SplitEachPrint {
                 text_local: "text".to_string(),
                 sep_bytes: b"\n".to_vec(),
@@ -700,6 +968,65 @@ mod tests {
         ];
         let wasm = emit_general_module(&instrs, &default_layout())
             .expect("emit SplitEachPrint should succeed");
+        assert_valid_wasm(&wasm);
+    }
+
+    #[test]
+    fn emit_split_get_println_produces_valid_wasm() {
+        let instrs = vec![
+            I::DeclareLocal {
+                name: "text".to_string(),
+            },
+            I::EffectOp {
+                effect: "Read".to_string(),
+                op: "read".to_string(),
+            },
+            I::StoreLocal {
+                name: "text".to_string(),
+            },
+            I::SplitGetPrint {
+                text_local: "text".to_string(),
+                sep_bytes: b"\n".to_vec(),
+                index: SplitIndexOperand::Const(1),
+                op: "println".to_string(),
+            },
+            I::Drop,
+        ];
+        let wasm = emit_general_module(&instrs, &default_layout())
+            .expect("emit SplitGetPrint should succeed");
+        assert_valid_wasm(&wasm);
+    }
+
+    #[test]
+    fn emit_split_get_print_with_local_index_produces_valid_wasm() {
+        let instrs = vec![
+            I::DeclareLocal {
+                name: "text".to_string(),
+            },
+            I::DeclareLocal {
+                name: "idx".to_string(),
+            },
+            I::EffectOp {
+                effect: "Read".to_string(),
+                op: "read".to_string(),
+            },
+            I::StoreLocal {
+                name: "text".to_string(),
+            },
+            I::I64Const(crate::gen_lower::value::encode_int(0).unwrap()),
+            I::StoreLocal {
+                name: "idx".to_string(),
+            },
+            I::SplitGetPrint {
+                text_local: "text".to_string(),
+                sep_bytes: b"\n".to_vec(),
+                index: SplitIndexOperand::Local("idx".to_string()),
+                op: "print".to_string(),
+            },
+            I::Drop,
+        ];
+        let wasm = emit_general_module(&instrs, &default_layout())
+            .expect("emit SplitGetPrint should succeed");
         assert_valid_wasm(&wasm);
     }
 }

@@ -1,9 +1,11 @@
 # Track F / F5 target
-# Expected: reads stdin, splits on newlines, and prints the second line (index 1).
+# Expected: reads stdin, splits on newlines, binds the second line (index 1),
+# and prints it.
 # Status: currently Unsupported; must pass after F5 dynamic collections/indexing.
 # Out-of-range index behavior: trap with diagnostic (policy defined in F5).
 main : Unit -> Unit can Print, Read
 main =
   text = Read.read ()
   lines = string.split text "\n"
-  Print.println (list.get lines 1)
+  line = list.get lines 1
+  Print.println line

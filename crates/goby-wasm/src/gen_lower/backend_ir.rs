@@ -7,6 +7,12 @@
 //! See `doc/wasm_runtime_architecture.md §3` for the design rationale and the
 //! mapping from Goby IR nodes to these instructions.
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum SplitIndexOperand {
+    Const(i64),
+    Local(String),
+}
+
 /// A backend instruction in the general Wasm lowering pipeline.
 ///
 /// # Goby IR → Backend IR mapping
@@ -20,6 +26,7 @@
 /// | `CompExpr::PerformEffect { effect, op, .. }` | `EffectOp { effect, op }` |
 /// | `CompExpr::Call { callee: GlobalRef { name }, .. }` | `CallHelper { name, arg_count }` |
 /// | fused `Let lines = split(text, sep); each lines Effect.op` | `SplitEachPrint { text_local, sep_bytes, effect, op }` |
+/// | fused `Let lines = split(text, sep); Let line = list.get(lines, idx); Print.op(line)` | `SplitGetPrint { text_local, sep_bytes, index, op }` |
 /// | discarded expression (stmt before tail) | lower expr + `Drop` |
 ///
 /// Unsupported IR nodes (`WithHandler`, `Handle`, `Resume`, `Lambda`) must produce
@@ -62,6 +69,19 @@ pub(crate) enum WasmBackendInstr {
         effect: String,
         op: String,
     },
+    /// Fused: split `text_local` on `sep_bytes`, select the zero-based `index`th
+    /// segment, then call `Print.op` on that segment.
+    ///
+    /// Equivalent to:
+    /// `segments = split(text_local, sep_bytes); Print.op(segments[index])`
+    ///
+    /// Restriction: `sep_bytes` must be exactly 1 byte.
+    SplitGetPrint {
+        text_local: String,
+        sep_bytes: Vec<u8>,
+        index: SplitIndexOperand,
+        op: String,
+    },
 }
 
 #[cfg(test)]
@@ -71,9 +91,15 @@ mod tests {
     #[test]
     fn backend_instr_variants_are_debug_cloneable() {
         let instrs = vec![
-            WasmBackendInstr::DeclareLocal { name: "x".to_string() },
-            WasmBackendInstr::LoadLocal { name: "x".to_string() },
-            WasmBackendInstr::StoreLocal { name: "x".to_string() },
+            WasmBackendInstr::DeclareLocal {
+                name: "x".to_string(),
+            },
+            WasmBackendInstr::LoadLocal {
+                name: "x".to_string(),
+            },
+            WasmBackendInstr::StoreLocal {
+                name: "x".to_string(),
+            },
             WasmBackendInstr::I64Const(42),
             WasmBackendInstr::EffectOp {
                 effect: "Print".to_string(),
@@ -88,6 +114,12 @@ mod tests {
                 text_local: "text".to_string(),
                 sep_bytes: b"\n".to_vec(),
                 effect: "Print".to_string(),
+                op: "println".to_string(),
+            },
+            WasmBackendInstr::SplitGetPrint {
+                text_local: "text".to_string(),
+                sep_bytes: b"\n".to_vec(),
+                index: SplitIndexOperand::Const(1),
                 op: "println".to_string(),
             },
         ];

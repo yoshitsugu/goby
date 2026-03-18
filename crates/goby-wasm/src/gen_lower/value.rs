@@ -192,12 +192,18 @@ mod tests {
 
     #[test]
     fn int_out_of_range_above() {
-        assert_eq!(encode_int(INT_MAX + 1), Err(ValueError::IntOutOfRange(INT_MAX + 1)));
+        assert_eq!(
+            encode_int(INT_MAX + 1),
+            Err(ValueError::IntOutOfRange(INT_MAX + 1))
+        );
     }
 
     #[test]
     fn int_out_of_range_below() {
-        assert_eq!(encode_int(INT_MIN - 1), Err(ValueError::IntOutOfRange(INT_MIN - 1)));
+        assert_eq!(
+            encode_int(INT_MIN - 1),
+            Err(ValueError::IntOutOfRange(INT_MIN - 1))
+        );
     }
 
     #[test]

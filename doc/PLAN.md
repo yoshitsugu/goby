@@ -639,7 +639,7 @@ Milestones:
     - regression tests proving helper-returned runtime values survive local binding and subsequent use.
     - helper ABI contract tests that fail clearly when call signatures/layout assumptions drift.
 
-- [ ] F5. Dynamic collections and indexing
+- [x] F5. Dynamic collections and indexing
   - add Wasm execution support for:
     - `goby/string.split` producing a runtime list value,
     - list indexing,

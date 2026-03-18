@@ -991,13 +991,44 @@ fn track_f_f5_index_is_currently_unsupported() {
 }
 
 /// F5 fixture: split + index — general lowering target.
-/// TODO: remove #[ignore] when F5 collection/indexing is implemented.
 #[test]
-#[ignore = "Track F / F5: collection indexing not yet implemented"]
 fn track_f_f5_index_is_general_lowered() {
     let source = read_track_f_fixture("f5_index.gb");
     let module = parse_module(&source).expect("f5_index.gb should parse");
     let wasm = compile_module(&module).expect("F5 codegen should succeed");
+    assert_valid_wasm_module(&wasm);
+}
+
+#[test]
+fn track_f_f5_parity_split_index_has_fd_read_and_fd_write() {
+    let source = read_track_f_fixture("f5_index.gb");
+    let module = parse_module(&source).expect("f5_index.gb should parse");
+    let wasm = compile_module(&module).expect("F5 codegen should succeed");
+    assert_valid_wasm_module(&wasm);
+    let fd_read = b"fd_read";
+    let fd_write = b"fd_write";
+    assert!(
+        wasm.windows(fd_read.len()).any(|w| w == fd_read),
+        "F5 general path should import fd_read"
+    );
+    assert!(
+        wasm.windows(fd_write.len()).any(|w| w == fd_write),
+        "F5 general path should import fd_write"
+    );
+}
+
+#[test]
+fn track_f_f5_parity_inline_split_index_compiles() {
+    let source = r#"
+main : Unit -> Unit can Print, Read
+main =
+  text = Read.read ()
+  lines = string.split text "\n"
+  line = list.get lines 1
+  Print.println line
+"#;
+    let module = parse_module(source).expect("inline f5 source should parse");
+    let wasm = compile_module(&module).expect("inline F5 codegen should succeed");
     assert_valid_wasm_module(&wasm);
 }
 

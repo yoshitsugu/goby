@@ -4,7 +4,7 @@
 
 use goby_core::ir::{CompExpr, ValueExpr};
 
-use crate::gen_lower::backend_ir::WasmBackendInstr;
+use crate::gen_lower::backend_ir::{SplitIndexOperand, WasmBackendInstr};
 use crate::gen_lower::value::{ValueError, encode_bool, encode_int, encode_unit};
 
 /// Error produced when the general lowering path encounters an unsupported IR node.
@@ -45,9 +45,14 @@ pub(crate) fn lower_comp(comp: &CompExpr) -> Result<Vec<WasmBackendInstr>, Lower
     match comp {
         CompExpr::Value(v) => lower_value(v),
 
-        CompExpr::Let { name, value, body, .. } => {
+        CompExpr::Let {
+            name, value, body, ..
+        } => {
             // F4: detect fused split-each pattern before general Let lowering.
             if let Some(result) = try_lower_split_each(name, value, body) {
+                return result;
+            }
+            if let Some(result) = try_lower_split_get_print(name, value, body) {
                 return result;
             }
             let mut instrs = vec![WasmBackendInstr::DeclareLocal { name: name.clone() }];
@@ -160,15 +165,16 @@ fn try_lower_split_each(
     // where lines_name == let_name
     let (effect, op) = match body {
         CompExpr::Call { callee, args }
-            if matches!(callee.as_ref(), ValueExpr::Var(n) if n == "each")
-                && args.len() == 2 =>
+            if matches!(callee.as_ref(), ValueExpr::Var(n) if n == "each") && args.len() == 2 =>
         {
             match (&args[0], &args[1]) {
-                (ValueExpr::Var(list_name), ValueExpr::GlobalRef { module: eff, name: op })
-                    if list_name == let_name =>
-                {
-                    (eff.as_str(), op.as_str())
-                }
+                (
+                    ValueExpr::Var(list_name),
+                    ValueExpr::GlobalRef {
+                        module: eff,
+                        name: op,
+                    },
+                ) if list_name == let_name => (eff.as_str(), op.as_str()),
                 _ => return None,
             }
         }
@@ -193,10 +199,97 @@ fn try_lower_split_each(
     }]))
 }
 
+fn try_lower_split_get_print(
+    let_name: &str,
+    value: &CompExpr,
+    body: &CompExpr,
+) -> Option<Result<Vec<WasmBackendInstr>, LowerError>> {
+    let (text_name, sep_str) = match value {
+        CompExpr::Call { callee, args }
+            if matches!(
+                callee.as_ref(),
+                ValueExpr::GlobalRef { module, name }
+                    if module == "string" && name == "split"
+            ) && args.len() == 2 =>
+        {
+            match (&args[0], &args[1]) {
+                (ValueExpr::Var(text), ValueExpr::StrLit(sep)) => (text.as_str(), sep.as_str()),
+                _ => return None,
+            }
+        }
+        _ => return None,
+    };
+
+    let (index, op) = match body {
+        CompExpr::Let {
+            name: item_name,
+            value,
+            body,
+            ..
+        } => {
+            let index = match value.as_ref() {
+                CompExpr::Call { callee, args }
+                    if matches!(
+                        callee.as_ref(),
+                        ValueExpr::GlobalRef { module, name }
+                            if module == "list" && name == "get"
+                    ) && args.len() == 2 =>
+                {
+                    match (&args[0], &args[1]) {
+                        (ValueExpr::Var(list_name), ValueExpr::IntLit(index))
+                            if list_name == let_name =>
+                        {
+                            SplitIndexOperand::Const(*index)
+                        }
+                        (ValueExpr::Var(list_name), ValueExpr::Var(index_name))
+                            if list_name == let_name =>
+                        {
+                            SplitIndexOperand::Local(index_name.clone())
+                        }
+                        _ => return None,
+                    }
+                }
+                _ => return None,
+            };
+
+            match body.as_ref() {
+                CompExpr::PerformEffect { effect, op, args }
+                    if effect == "Print"
+                        && (op == "print" || op == "println")
+                        && args.len() == 1 =>
+                {
+                    match &args[0] {
+                        ValueExpr::Var(name) if name == item_name => (index, op.as_str()),
+                        _ => return None,
+                    }
+                }
+                _ => return None,
+            }
+        }
+        _ => return None,
+    };
+
+    let sep_bytes = sep_str.as_bytes().to_vec();
+    if sep_bytes.len() != 1 {
+        return Some(Err(LowerError::UnsupportedForm {
+            node: format!(
+                "SplitGetPrint: multi-byte separator '{sep_str}' is not yet supported (F5+)"
+            ),
+        }));
+    }
+
+    Some(Ok(vec![WasmBackendInstr::SplitGetPrint {
+        text_local: text_name.to_string(),
+        sep_bytes,
+        index,
+        op: op.to_string(),
+    }]))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::gen_lower::backend_ir::WasmBackendInstr as I;
+    use crate::gen_lower::backend_ir::{SplitIndexOperand, WasmBackendInstr as I};
 
     #[test]
     fn lower_perform_read() {
@@ -226,7 +319,9 @@ mod tests {
         assert_eq!(
             instrs,
             vec![
-                I::LoadLocal { name: "x".to_string() },
+                I::LoadLocal {
+                    name: "x".to_string()
+                },
                 I::EffectOp {
                     effect: "Print".to_string(),
                     op: "print".to_string(),
@@ -256,11 +351,23 @@ mod tests {
         assert_eq!(
             instrs,
             vec![
-                I::DeclareLocal { name: "text".to_string() },
-                I::EffectOp { effect: "Read".to_string(), op: "read".to_string() },
-                I::StoreLocal { name: "text".to_string() },
-                I::LoadLocal { name: "text".to_string() },
-                I::EffectOp { effect: "Print".to_string(), op: "print".to_string() },
+                I::DeclareLocal {
+                    name: "text".to_string()
+                },
+                I::EffectOp {
+                    effect: "Read".to_string(),
+                    op: "read".to_string()
+                },
+                I::StoreLocal {
+                    name: "text".to_string()
+                },
+                I::LoadLocal {
+                    name: "text".to_string()
+                },
+                I::EffectOp {
+                    effect: "Print".to_string(),
+                    op: "print".to_string()
+                },
             ]
         );
     }
@@ -363,5 +470,96 @@ mod tests {
             lower_comp(&comp),
             Err(LowerError::UnsupportedForm { .. })
         ));
+    }
+
+    #[test]
+    fn lower_split_get_println_emits_fused_instr() {
+        let comp = CompExpr::Let {
+            name: "lines".to_string(),
+            ty: goby_core::ir::IrType::Unknown,
+            value: Box::new(CompExpr::Call {
+                callee: Box::new(ValueExpr::GlobalRef {
+                    module: "string".to_string(),
+                    name: "split".to_string(),
+                }),
+                args: vec![
+                    ValueExpr::Var("text".to_string()),
+                    ValueExpr::StrLit("\n".to_string()),
+                ],
+            }),
+            body: Box::new(CompExpr::Let {
+                name: "line".to_string(),
+                ty: goby_core::ir::IrType::Unknown,
+                value: Box::new(CompExpr::Call {
+                    callee: Box::new(ValueExpr::GlobalRef {
+                        module: "list".to_string(),
+                        name: "get".to_string(),
+                    }),
+                    args: vec![ValueExpr::Var("lines".to_string()), ValueExpr::IntLit(1)],
+                }),
+                body: Box::new(CompExpr::PerformEffect {
+                    effect: "Print".to_string(),
+                    op: "println".to_string(),
+                    args: vec![ValueExpr::Var("line".to_string())],
+                }),
+            }),
+        };
+        let instrs = lower_comp(&comp).expect("fused pattern should succeed");
+        assert_eq!(
+            instrs,
+            vec![I::SplitGetPrint {
+                text_local: "text".to_string(),
+                sep_bytes: b"\n".to_vec(),
+                index: SplitIndexOperand::Const(1),
+                op: "println".to_string(),
+            }]
+        );
+    }
+
+    #[test]
+    fn lower_split_get_print_with_local_index_emits_fused_instr() {
+        let comp = CompExpr::Let {
+            name: "lines".to_string(),
+            ty: goby_core::ir::IrType::Unknown,
+            value: Box::new(CompExpr::Call {
+                callee: Box::new(ValueExpr::GlobalRef {
+                    module: "string".to_string(),
+                    name: "split".to_string(),
+                }),
+                args: vec![
+                    ValueExpr::Var("text".to_string()),
+                    ValueExpr::StrLit("\n".to_string()),
+                ],
+            }),
+            body: Box::new(CompExpr::Let {
+                name: "line".to_string(),
+                ty: goby_core::ir::IrType::Unknown,
+                value: Box::new(CompExpr::Call {
+                    callee: Box::new(ValueExpr::GlobalRef {
+                        module: "list".to_string(),
+                        name: "get".to_string(),
+                    }),
+                    args: vec![
+                        ValueExpr::Var("lines".to_string()),
+                        ValueExpr::Var("idx".to_string()),
+                    ],
+                }),
+                body: Box::new(CompExpr::PerformEffect {
+                    effect: "Print".to_string(),
+                    op: "print".to_string(),
+                    args: vec![ValueExpr::Var("line".to_string())],
+                }),
+            }),
+        };
+        let instrs = lower_comp(&comp).expect("fused pattern should succeed");
+        assert_eq!(
+            instrs,
+            vec![I::SplitGetPrint {
+                text_local: "text".to_string(),
+                sep_bytes: b"\n".to_vec(),
+                index: SplitIndexOperand::Local("idx".to_string()),
+                op: "print".to_string(),
+            }]
+        );
     }
 }

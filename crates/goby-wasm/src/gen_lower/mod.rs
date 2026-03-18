@@ -27,8 +27,8 @@ pub(crate) mod emit;
 pub(crate) mod lower;
 pub(crate) mod value;
 
-use goby_core::ir::CompExpr;
 use goby_core::Module;
+use goby_core::ir::CompExpr;
 
 use crate::CodegenError;
 use crate::layout::MemoryLayout;

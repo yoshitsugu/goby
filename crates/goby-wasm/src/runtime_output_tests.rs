@@ -222,6 +222,40 @@ main =
 }
 
 #[test]
+fn resolves_runtime_output_for_track_f_f5_split_get_with_seeded_stdin() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    let source = r#"
+import goby/string ( split )
+
+main : Unit -> Unit can Print, Read
+main =
+  text = Read.read ()
+  lines = split(text, "\n")
+  Print.println (lines[1])
+"#;
+    let module = parse_module(source).expect("source should parse");
+    let output = resolve_with_seeded_stdin(&module, "first\nsecond\nthird");
+    assert_eq!(output.as_deref(), Some("second\n"));
+}
+
+#[test]
+fn track_f_f5_split_get_out_of_range_aborts_with_seeded_stdin() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    let source = r#"
+import goby/string ( split )
+
+main : Unit -> Unit can Print, Read
+main =
+  text = Read.read ()
+  lines = split(text, "\n")
+  Print.println (lines[9])
+"#;
+    let module = parse_module(source).expect("source should parse");
+    let output = resolve_with_seeded_stdin(&module, "first\nsecond");
+    assert_eq!(output, None);
+}
+
+#[test]
 fn resolves_runtime_output_for_effectful_callback_with_list_each_plain_import() {
     let _guard = ENV_MUTEX.lock().unwrap();
     let source = r#"
