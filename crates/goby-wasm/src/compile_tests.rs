@@ -909,9 +909,8 @@ fn track_f_f3_print_read_current_classification() {
 }
 
 /// F3 fixture: `print (read())` — general lowering target.
-/// TODO: remove #[ignore] and verify valid Wasm when F3 is implemented.
+/// F3 is implemented: general lowering path handles this shape.
 #[test]
-#[ignore = "Track F / F3: general lowering not yet implemented"]
 fn track_f_f3_print_read_is_general_lowered() {
     let source = read_track_f_fixture("f3_print_read.gb");
     let module = parse_module(&source).expect("f3_print_read.gb should parse");
@@ -962,5 +961,45 @@ fn track_f_f5_index_is_general_lowered() {
     let source = read_track_f_fixture("f5_index.gb");
     let module = parse_module(&source).expect("f5_index.gb should parse");
     let wasm = compile_module(&module).expect("F5 codegen should succeed");
+    assert_valid_wasm_module(&wasm);
+}
+
+// ---------------------------------------------------------------------------
+// F3 parity: programs previously handled by DynamicWasiIo(Echo) must produce
+// valid Wasm through the general lowering path.
+// ---------------------------------------------------------------------------
+
+/// Parity test: `print (read())` compiles via general path and produces valid Wasm
+/// with both fd_read and fd_write imports (same WASI interface as the old Echo path).
+#[test]
+fn track_f_f3_parity_print_read_has_fd_read_and_fd_write() {
+    let source = read_track_f_fixture("f3_print_read.gb");
+    let module = parse_module(&source).expect("f3_print_read.gb should parse");
+    let wasm = compile_module(&module).expect("F3 codegen should succeed");
+    assert_valid_wasm_module(&wasm);
+    // Verify Wasm binary contains both "fd_read" and "fd_write" import name strings.
+    let fd_read = b"fd_read";
+    let fd_write = b"fd_write";
+    assert!(
+        wasm.windows(fd_read.len()).any(|w| w == fd_read),
+        "F3 general path should import fd_read from WASI"
+    );
+    assert!(
+        wasm.windows(fd_write.len()).any(|w| w == fd_write),
+        "F3 general path should import fd_write from WASI"
+    );
+}
+
+/// Parity test: inline `print (read())` program also compiles via general path.
+#[test]
+fn track_f_f3_parity_inline_print_read_compiles() {
+    let source = r#"
+main : Unit -> Unit can Print, Read
+main =
+  text = Read.read ()
+  Print.print text
+"#;
+    let module = parse_module(source).expect("inline f3 source should parse");
+    let wasm = compile_module(&module).expect("inline F3 codegen should succeed");
     assert_valid_wasm_module(&wasm);
 }
