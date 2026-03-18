@@ -1,27 +1,10 @@
-use goby_core::{Module, Stmt};
+use goby_core::Module;
 
 use crate::lower;
-use crate::resolve_main_runtime_output_with_mode;
-
-fn main_body(module: &Module) -> &str {
-    module
-        .declarations
-        .iter()
-        .find(|decl| decl.name == "main")
-        .map(|decl| decl.body.as_str())
-        .expect("main should exist")
-}
-
-fn main_parsed_body(module: &Module) -> Option<&[Stmt]> {
-    module
-        .declarations
-        .iter()
-        .find(|decl| decl.name == "main")
-        .and_then(|decl| decl.parsed_body.as_deref())
-}
+use crate::resolve_module_runtime_output_with_mode;
 
 fn runtime_output_for_mode(module: &Module, mode: lower::EffectExecutionMode) -> Option<String> {
-    resolve_main_runtime_output_with_mode(module, main_body(module), main_parsed_body(module), mode)
+    resolve_module_runtime_output_with_mode(module, mode)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

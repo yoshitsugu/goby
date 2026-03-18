@@ -69,10 +69,12 @@ const ERR_CALLABLE_DISPATCH_DECL_PARAM: &str = "unsupported callable dispatch [E
 
 #[cfg(test)]
 pub(crate) use crate::runtime_entry::resolve_main_runtime_output;
-use crate::runtime_entry::resolve_main_runtime_output_for_compile;
+use crate::runtime_entry::resolve_module_runtime_output_for_compile;
 #[cfg(test)]
-pub(crate) use crate::runtime_entry::resolve_main_runtime_output_with_mode;
-use crate::runtime_entry::resolve_main_runtime_output_with_mode_and_stdin;
+pub(crate) use crate::runtime_entry::resolve_module_runtime_output_with_mode;
+#[cfg(test)]
+pub(crate) use crate::runtime_entry::resolve_main_runtime_output_with_mode_and_stdin;
+use crate::runtime_entry::resolve_module_runtime_output_with_mode_and_stdin;
 #[cfg(test)]
 pub(crate) use crate::runtime_parity::{
     assert_mode_parity, assert_perf_within_threshold, measure_runtime_mode_micros,
@@ -193,7 +195,7 @@ pub fn compile_module(module: &Module) -> Result<Vec<u8>, CodegenError> {
         return Ok(wasm);
     }
     let (runtime_mode, effect_boundary_handoff, main) = runtime_mode_and_handoff(module)?;
-    let Some((main_body, parsed_body)) = main else {
+    let Some((_main_body, _parsed_body)) = main else {
         return Err(CodegenError {
             message: ERR_MISSING_MAIN.to_string(),
         });
@@ -203,9 +205,8 @@ pub fn compile_module(module: &Module) -> Result<Vec<u8>, CodegenError> {
     if let Some(wasm) = io_classification.compile_module_wasm_or_error()? {
         return Ok(wasm);
     }
-    if let Some(text) =
-        resolve_main_runtime_output_for_compile(module, &main_body, parsed_body, runtime_mode)
-            .map_err(|message| CodegenError { message })?
+    if let Some(text) = resolve_module_runtime_output_for_compile(module, runtime_mode)
+        .map_err(|message| CodegenError { message })?
     {
         return print_codegen::compile_print_module(&text);
     }
@@ -251,7 +252,7 @@ pub fn execute_module_with_stdin(
     stdin_seed: Option<String>,
 ) -> Result<Option<String>, CodegenError> {
     let (runtime_mode, effect_boundary_handoff, main) = runtime_mode_and_handoff(module)?;
-    let Some((main_body, parsed_body)) = main else {
+    let Some((_main_body, _parsed_body)) = main else {
         return Err(CodegenError {
             message: ERR_MISSING_MAIN.to_string(),
         });
@@ -260,13 +261,9 @@ pub fn execute_module_with_stdin(
     let io_classification = classify_runtime_io_with_ir_fallback(module);
     io_classification.require_interpreter_bridge_stdin()?;
 
-    if let Some(text) = resolve_main_runtime_output_with_mode_and_stdin(
-        module,
-        &main_body,
-        parsed_body,
-        runtime_mode,
-        stdin_seed,
-    ) {
+    if let Some(text) =
+        resolve_module_runtime_output_with_mode_and_stdin(module, runtime_mode, stdin_seed)
+    {
         return Ok(Some(text));
     }
 

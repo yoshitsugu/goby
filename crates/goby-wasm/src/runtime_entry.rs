@@ -9,6 +9,45 @@ use crate::runtime_flow::RuntimeEvaluators;
 use crate::runtime_resolver::ResolvedRuntimeOutput;
 use crate::runtime_support::module_has_selective_import_symbol;
 
+fn main_runtime_parts(module: &Module) -> Option<(&str, Option<&[Stmt]>)> {
+    let main = module.declarations.iter().find(|decl| decl.name == "main")?;
+    Some((main.body.as_str(), main.parsed_body.as_deref()))
+}
+
+#[cfg(test)]
+pub(crate) fn resolve_module_runtime_output_with_mode(
+    module: &Module,
+    execution_mode: lower::EffectExecutionMode,
+) -> Option<String> {
+    let (body, parsed_stmts) = main_runtime_parts(module)?;
+    resolve_main_runtime_output_with_mode(module, body, parsed_stmts, execution_mode)
+}
+
+pub(crate) fn resolve_module_runtime_output_with_mode_and_stdin(
+    module: &Module,
+    execution_mode: lower::EffectExecutionMode,
+    stdin_seed: Option<String>,
+) -> Option<String> {
+    let (body, parsed_stmts) = main_runtime_parts(module)?;
+    resolve_main_runtime_output_with_mode_and_stdin(
+        module,
+        body,
+        parsed_stmts,
+        execution_mode,
+        stdin_seed,
+    )
+}
+
+pub(crate) fn resolve_module_runtime_output_for_compile(
+    module: &Module,
+    execution_mode: lower::EffectExecutionMode,
+) -> Result<Option<String>, String> {
+    let Some((body, parsed_stmts)) = main_runtime_parts(module) else {
+        return Ok(None);
+    };
+    resolve_main_runtime_output_for_compile(module, body, parsed_stmts, execution_mode)
+}
+
 #[cfg(test)]
 pub(crate) fn resolve_main_runtime_output(
     module: &Module,
