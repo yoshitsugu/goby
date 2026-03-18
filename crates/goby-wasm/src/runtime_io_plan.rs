@@ -1,4 +1,5 @@
 use goby_core::ast::InterpolatedPart;
+use goby_core::ir::{CompExpr, IrModule, ValueExpr};
 use goby_core::{Expr, Module, Stmt};
 
 use crate::CodegenError;
@@ -252,9 +253,7 @@ fn plan_static_output(stmts: &[Stmt]) -> Option<String> {
     Some(output)
 }
 
-pub(crate) fn classify_runtime_io_main(
-    module: &Module,
-) -> Result<RuntimeIoClassification, CodegenError> {
+pub fn runtime_io_execution_kind(module: &Module) -> Result<RuntimeIoExecutionKind, CodegenError> {
     let main = module
         .declarations
         .iter()
@@ -262,17 +261,300 @@ pub(crate) fn classify_runtime_io_main(
         .ok_or_else(|| CodegenError {
             message: "Wasm codegen requires a `main` declaration".to_string(),
         })?;
-    Ok(classify_runtime_io(module, main.parsed_body.as_deref()))
-}
-
-pub fn runtime_io_execution_kind(module: &Module) -> Result<RuntimeIoExecutionKind, CodegenError> {
-    Ok(match classify_runtime_io_main(module)? {
+    // G6: IR-based classification with AST fallback.
+    let classification =
+        classify_runtime_io_with_ir_fallback(module, main.parsed_body.as_deref());
+    Ok(match classification {
         RuntimeIoClassification::DynamicWasiIo(_) => RuntimeIoExecutionKind::DynamicWasiIo,
         RuntimeIoClassification::StaticOutput(_) => RuntimeIoExecutionKind::StaticOutput,
         RuntimeIoClassification::InterpreterBridge => RuntimeIoExecutionKind::InterpreterBridge,
         RuntimeIoClassification::Unsupported => RuntimeIoExecutionKind::Unsupported,
         RuntimeIoClassification::NotRuntimeIo => RuntimeIoExecutionKind::NotRuntimeIo,
     })
+}
+
+// ---------------------------------------------------------------------------
+// IR-based classification (G6)
+// ---------------------------------------------------------------------------
+
+/// Walk a `CompExpr` tree and return `true` if any `PerformEffect` node has
+/// `effect == "Read"` (i.e. the program performs a runtime read operation).
+///
+/// Only `PerformEffect` nodes are checked — bare `Var("read")` or `Call { callee: Var("read") }`
+/// (unqualified calls not lowered to `PerformEffect`) are not detected here.
+/// Programs using bare `read()` will fail IR lowering and fall back to AST classification.
+fn ir_has_read_op(comp: &CompExpr) -> bool {
+    match comp {
+        CompExpr::PerformEffect { effect, .. } if effect == "Read" => true,
+        CompExpr::PerformEffect { .. } => false,
+        CompExpr::Value(_) => false,
+        CompExpr::Let { value, body, .. } => ir_has_read_op(value) || ir_has_read_op(body),
+        CompExpr::Seq { stmts, tail } => {
+            stmts.iter().any(ir_has_read_op) || ir_has_read_op(tail)
+        }
+        CompExpr::If { then_, else_, .. } => ir_has_read_op(then_) || ir_has_read_op(else_),
+        CompExpr::Call { .. } => false,
+        CompExpr::Handle { clauses } => clauses.iter().any(|c| ir_has_read_op(&c.body)),
+        CompExpr::WithHandler { handler, body } => {
+            ir_has_read_op(handler) || ir_has_read_op(body)
+        }
+        CompExpr::Resume { .. } => false,
+    }
+}
+
+/// Attempt to detect an Echo plan from the IR body of `main`.
+///
+/// Recognizes the binding form (G5-lowerable), including alias chains of pure
+/// variable bindings between the Read and Print:
+/// ```text
+/// let text: ? = perform Read.read()|Read.read_line()
+/// in let alias: ? = text       -- optional pure alias chain
+/// in perform Print.print(alias)|Print.println(alias)
+/// ```
+///
+/// The inline form `print(read())` fails IR lowering entirely and falls back to AST
+/// classification, so it is handled outside this function.
+///
+/// `suffix_prints` are not detected in the IR path; programs with suffix prints that
+/// successfully lower will be detected by `ir_has_read_op` and return `Unsupported` if
+/// they don't match here. The `classify_runtime_io_with_ir_fallback` caller should then
+/// try the AST fallback when IR returns `Unsupported` for a known-alias-chain program.
+fn ir_plan_echo(comp: &CompExpr) -> Option<RuntimeIoPlan> {
+    // Match: let <name>: ? = perform Read.{read|read_line}()
+    //        [in let <alias>: ? = <name>]* (pure alias chain)
+    //        in perform Print.{print|println}(<terminal_name>)
+    let CompExpr::Let { name: bound_name, value, body, .. } = comp else {
+        return None;
+    };
+    // value must be a PerformEffect for Read.read or Read.read_line (no args)
+    let input_mode = match value.as_ref() {
+        CompExpr::PerformEffect { effect, op, args } if effect == "Read" && args.is_empty() => {
+            match op.as_str() {
+                "read" => InputReadMode::ReadAll,
+                "read_line" => InputReadMode::ReadLine,
+                _ => return None,
+            }
+        }
+        _ => return None,
+    };
+    // Walk through any pure alias-chain Let bindings to find the terminal name.
+    // Each intermediate Let must bind a variable directly to another variable.
+    let terminal_name = ir_resolve_echo_terminal_name(body, bound_name);
+    // Final Print must be PerformEffect with the terminal name as the single arg.
+    let output_mode = match body_after_alias_chain(body, bound_name) {
+        CompExpr::PerformEffect { effect, op, args } if effect == "Print" && args.len() == 1 => {
+            if !matches!(&args[0], ValueExpr::Var(v) if v == terminal_name) {
+                return None;
+            }
+            match op.as_str() {
+                "print" => OutputReadMode::Print,
+                "println" => OutputReadMode::Println,
+                _ => return None,
+            }
+        }
+        _ => return None,
+    };
+    Some(RuntimeIoPlan::Echo {
+        input_mode,
+        output_mode,
+        suffix_prints: vec![],
+    })
+}
+
+/// Walk a `Let`-chain that consists only of pure alias bindings (`let x: ? = y`) and
+/// return the terminal variable name to be passed to Print.
+///
+/// Stops and returns the current name as soon as a `Let` whose value is not a pure
+/// variable alias (or a non-`Let` node) is encountered.  The return is infallible;
+/// `Option` is not used because there is no error path.
+fn ir_resolve_echo_terminal_name<'a>(comp: &'a CompExpr, initial: &'a str) -> &'a str {
+    let mut current = initial;
+    let mut node = comp;
+    loop {
+        match node {
+            CompExpr::Let { name, value, body, .. } => {
+                match value.as_ref() {
+                    CompExpr::Value(ValueExpr::Var(src)) if src == current => {
+                        // Pure alias: `let name = current`
+                        current = name;
+                        node = body;
+                    }
+                    _ => return current,
+                }
+            }
+            _ => return current,
+        }
+    }
+}
+
+/// Walk through pure alias-chain `Let` bindings to reach the tail computation.
+fn body_after_alias_chain<'a>(comp: &'a CompExpr, initial: &str) -> &'a CompExpr {
+    let mut current_name = initial;
+    let mut node = comp;
+    loop {
+        match node {
+            CompExpr::Let { name, value, body, .. } => {
+                if matches!(value.as_ref(), CompExpr::Value(ValueExpr::Var(src)) if src == current_name)
+                {
+                    current_name = name;
+                    node = body;
+                } else {
+                    return node;
+                }
+            }
+            _ => return node,
+        }
+    }
+}
+
+/// Attempt to detect a StaticOutput plan from the IR body of `main`.
+///
+/// Recognizes bodies where every effectful statement is a bare `print`/`println` call
+/// (`Call { callee: Var("print"|"println"), args: [StrLit(text)] }`) and there are no
+/// Read operations.
+///
+/// NOTE: qualified `Print.print(...)` becomes `PerformEffect` in the IR and is NOT
+/// matched here. Programs using qualified Print calls that lower successfully but are
+/// not static will fall through to `NotRuntimeIo`.
+fn ir_plan_static_output(comp: &CompExpr) -> Option<String> {
+    let mut out = String::new();
+    let mut print_count = 0usize;
+    if !ir_collect_static_prints(comp, &mut out, &mut print_count) {
+        return None;
+    }
+    // A body with no print calls at all (e.g. `Value(Unit)`) is not StaticOutput.
+    // Note: `print ""` has one print call and produces an empty string — that IS
+    // a valid StaticOutput with empty text. We distinguish by counting calls, not
+    // by checking whether the accumulated string is empty.
+    if print_count == 0 {
+        return None;
+    }
+    Some(out)
+}
+
+/// Walk a `CompExpr` collecting static print output.
+///
+/// Returns `true` if the entire computation is either:
+/// - a `Call { callee: Var("print"|"println"), args: [StrLit] }` node, or
+/// - a `Seq` whose stmts are all such calls and whose tail is `Value(Unit)`, or
+/// - a `Value(Unit)` (empty / unit-returning tail).
+///
+/// Returns `false` if any node cannot be determined statically.
+/// `print_count` is incremented for each accepted print/println call.
+fn ir_collect_static_prints(comp: &CompExpr, out: &mut String, print_count: &mut usize) -> bool {
+    match comp {
+        CompExpr::Value(ValueExpr::Unit) => true,
+        CompExpr::Call { callee, args } => {
+            let ValueExpr::Var(name) = callee.as_ref() else {
+                return false;
+            };
+            if args.len() != 1 {
+                return false;
+            }
+            let ValueExpr::StrLit(text) = &args[0] else {
+                return false;
+            };
+            match name.as_str() {
+                "print" => {
+                    out.push_str(text);
+                    *print_count += 1;
+                    true
+                }
+                "println" => {
+                    out.push_str(text);
+                    out.push('\n');
+                    *print_count += 1;
+                    true
+                }
+                _ => false,
+            }
+        }
+        CompExpr::Seq { stmts, tail } => {
+            for s in stmts {
+                if !ir_collect_static_prints(s, out, print_count) {
+                    return false;
+                }
+            }
+            ir_collect_static_prints(tail, out, print_count)
+        }
+        _ => false,
+    }
+}
+
+/// Classify a Goby `IrModule`'s `main` body into a [`RuntimeIoClassification`].
+///
+/// This is the IR-based counterpart to [`classify_runtime_io`]. It consumes a
+/// successfully-lowered IR rather than raw parsed AST statement lists.
+///
+/// Classification order:
+/// 1. If the main body contains a `PerformEffect { effect: "Read", .. }` node:
+///    - Try to detect `DynamicWasiIo(Echo)` plan.
+///    - If no known plan matches → `Unsupported`.
+/// 2. If no Read op is present:
+///    - Try to detect `StaticOutput` (all-static bare print calls).
+///    - Otherwise → `NotRuntimeIo`.
+///
+/// # Limitations (G6 scope)
+///
+/// - Bare `read()` / `print x` calls are NOT lowered to `PerformEffect`; they produce
+///   `Call { callee: Var("read") }` IR nodes. Programs using bare effect names therefore
+///   return `NotRuntimeIo` from this function. Callers should fall back to AST
+///   classification via [`classify_runtime_io_with_ir_fallback`] for the complete result.
+/// - `SplitLinesEach` programs use `Pipeline`/`MethodCall` constructs that fail lowering.
+///   They are handled by the AST fallback in [`classify_runtime_io_with_ir_fallback`].
+/// - Echo plans with `suffix_prints` are not detected here. `ir_has_read_op` will still
+///   detect the Read op and the IR returns `Unsupported`. The
+///   [`classify_runtime_io_with_ir_fallback`] caller then promotes that to AST fallback.
+pub(crate) fn classify_runtime_io_from_ir(ir_module: &IrModule) -> RuntimeIoClassification {
+    let Some(main_decl) = ir_module.decls.iter().find(|d| d.name == "main") else {
+        return RuntimeIoClassification::NotRuntimeIo;
+    };
+    let body = &main_decl.body;
+    if ir_has_read_op(body) {
+        if let Some(plan) = ir_plan_echo(body) {
+            return RuntimeIoClassification::DynamicWasiIo(plan);
+        }
+        return RuntimeIoClassification::Unsupported;
+    }
+    if let Some(text) = ir_plan_static_output(body) {
+        return RuntimeIoClassification::StaticOutput(text);
+    }
+    RuntimeIoClassification::NotRuntimeIo
+}
+
+/// Classify runtime I/O with IR-based analysis preferred, falling back to AST when needed.
+///
+/// Strategy (G6):
+/// 1. Attempt IR lowering via `lower_module`.
+/// 2. If lowering fails → AST classification (covers inline echo, SplitLinesEach, etc.).
+/// 3. If lowering succeeds → IR classification.
+///    - If IR returns `DynamicWasiIo` or `StaticOutput` → definitive; use it.
+///    - If IR returns `NotRuntimeIo` or `Unsupported` → fall back to AST classification.
+///      `NotRuntimeIo` occurs when IR doesn't see effect ops (bare names); `Unsupported`
+///      occurs when IR detects Read but cannot match a known plan (e.g., echo with
+///      suffix prints, or alias-chain shapes the IR classifier doesn't cover).  The AST
+///      classifier may succeed for these cases.
+///    - `InterpreterBridge` is currently unreachable but treated as definitive if returned.
+pub(crate) fn classify_runtime_io_with_ir_fallback(
+    module: &Module,
+    parsed_body: Option<&[Stmt]>,
+) -> RuntimeIoClassification {
+    match goby_core::ir_lower::lower_module(module) {
+        Err(_) => classify_runtime_io(module, parsed_body),
+        Ok(ir) => {
+            let ir_result = classify_runtime_io_from_ir(&ir);
+            if matches!(
+                ir_result,
+                RuntimeIoClassification::NotRuntimeIo | RuntimeIoClassification::Unsupported
+            ) {
+                // IR may have missed bare-name effect calls or unrecognised plan shapes;
+                // consult AST classifier for a potentially better result.
+                classify_runtime_io(module, parsed_body)
+            } else {
+                ir_result
+            }
+        }
+    }
 }
 
 fn plan_runtime_io(module: &Module, stmts: &[Stmt]) -> Option<RuntimeIoPlan> {
@@ -1464,5 +1746,373 @@ main =
     fn unsupported_classification_rejects_interpreter_bridge_stdin() {
         let result = RuntimeIoClassification::Unsupported.require_interpreter_bridge_stdin();
         assert!(result.is_err());
+    }
+
+    // --- IR-based classification tests (G6) ---
+
+    mod ir_classify {
+        use goby_core::ir::{CompExpr, IrDecl, IrModule, IrType, ValueExpr};
+
+        use super::super::{
+            InputReadMode, OutputReadMode, RuntimeIoClassification, RuntimeIoPlan,
+            classify_runtime_io_from_ir,
+        };
+
+        fn ir_module_with_main(body: CompExpr) -> IrModule {
+            IrModule {
+                decls: vec![IrDecl {
+                    name: "main".into(),
+                    params: vec![],
+                    result_ty: IrType::Unit,
+                    residual_effects: vec!["Read".into(), "Print".into()],
+                    body,
+                }],
+            }
+        }
+
+        // --- ir_has_read_op / read detection ---
+
+        #[test]
+        fn ir_classify_read_binding_then_print_is_dynamic_wasi_io_echo() {
+            // IR for: text = Read.read(); Print.print(text)
+            // → Let { name: "text", value: PerformEffect(Read.read), body: PerformEffect(Print.print(text)) }
+            let body = CompExpr::Let {
+                name: "text".into(),
+                ty: IrType::Unknown,
+                value: Box::new(CompExpr::PerformEffect {
+                    effect: "Read".into(),
+                    op: "read".into(),
+                    args: vec![],
+                }),
+                body: Box::new(CompExpr::PerformEffect {
+                    effect: "Print".into(),
+                    op: "print".into(),
+                    args: vec![ValueExpr::Var("text".into())],
+                }),
+            };
+            let ir = ir_module_with_main(body);
+            assert_eq!(
+                classify_runtime_io_from_ir(&ir),
+                RuntimeIoClassification::DynamicWasiIo(RuntimeIoPlan::Echo {
+                    input_mode: InputReadMode::ReadAll,
+                    output_mode: OutputReadMode::Print,
+                    suffix_prints: vec![],
+                })
+            );
+        }
+
+        #[test]
+        fn ir_classify_read_line_binding_then_println_is_dynamic_wasi_io_echo() {
+            // IR for: text = Read.read_line(); Print.println(text)
+            let body = CompExpr::Let {
+                name: "line".into(),
+                ty: IrType::Unknown,
+                value: Box::new(CompExpr::PerformEffect {
+                    effect: "Read".into(),
+                    op: "read_line".into(),
+                    args: vec![],
+                }),
+                body: Box::new(CompExpr::PerformEffect {
+                    effect: "Print".into(),
+                    op: "println".into(),
+                    args: vec![ValueExpr::Var("line".into())],
+                }),
+            };
+            let ir = ir_module_with_main(body);
+            assert_eq!(
+                classify_runtime_io_from_ir(&ir),
+                RuntimeIoClassification::DynamicWasiIo(RuntimeIoPlan::Echo {
+                    input_mode: InputReadMode::ReadLine,
+                    output_mode: OutputReadMode::Println,
+                    suffix_prints: vec![],
+                })
+            );
+        }
+
+        #[test]
+        fn ir_classify_read_with_no_known_plan_is_unsupported() {
+            // IR with a Read op but no recognizable plan
+            let body = CompExpr::PerformEffect {
+                effect: "Read".into(),
+                op: "read".into(),
+                args: vec![],
+            };
+            let ir = ir_module_with_main(body);
+            assert_eq!(
+                classify_runtime_io_from_ir(&ir),
+                RuntimeIoClassification::Unsupported
+            );
+        }
+
+        #[test]
+        fn ir_classify_static_print_is_static_output() {
+            // IR for: print "hello"
+            // bare print → Call { callee: Var("print"), args: [StrLit("hello")] }
+            let body = CompExpr::Call {
+                callee: Box::new(ValueExpr::Var("print".into())),
+                args: vec![ValueExpr::StrLit("hello".into())],
+            };
+            let ir = ir_module_with_main(body);
+            assert_eq!(
+                classify_runtime_io_from_ir(&ir),
+                RuntimeIoClassification::StaticOutput("hello".to_string())
+            );
+        }
+
+        #[test]
+        fn ir_classify_static_println_is_static_output_with_newline() {
+            let body = CompExpr::Call {
+                callee: Box::new(ValueExpr::Var("println".into())),
+                args: vec![ValueExpr::StrLit("hi".into())],
+            };
+            let ir = ir_module_with_main(body);
+            assert_eq!(
+                classify_runtime_io_from_ir(&ir),
+                RuntimeIoClassification::StaticOutput("hi\n".to_string())
+            );
+        }
+
+        #[test]
+        fn ir_classify_seq_static_prints_is_static_output() {
+            // IR for: print "a"; println "b"
+            let body = CompExpr::Seq {
+                stmts: vec![CompExpr::Call {
+                    callee: Box::new(ValueExpr::Var("print".into())),
+                    args: vec![ValueExpr::StrLit("a".into())],
+                }],
+                tail: Box::new(CompExpr::Call {
+                    callee: Box::new(ValueExpr::Var("println".into())),
+                    args: vec![ValueExpr::StrLit("b".into())],
+                }),
+            };
+            let ir = ir_module_with_main(body);
+            assert_eq!(
+                classify_runtime_io_from_ir(&ir),
+                RuntimeIoClassification::StaticOutput("ab\n".to_string())
+            );
+        }
+
+        #[test]
+        fn ir_classify_unit_value_is_not_runtime_io() {
+            let body = CompExpr::Value(ValueExpr::Unit);
+            let ir = ir_module_with_main(body);
+            assert_eq!(
+                classify_runtime_io_from_ir(&ir),
+                RuntimeIoClassification::NotRuntimeIo
+            );
+        }
+
+        #[test]
+        fn ir_classify_no_main_is_not_runtime_io() {
+            let ir = IrModule { decls: vec![] };
+            assert_eq!(
+                classify_runtime_io_from_ir(&ir),
+                RuntimeIoClassification::NotRuntimeIo
+            );
+        }
+
+        #[test]
+        fn ir_classify_print_with_var_arg_is_not_runtime_io() {
+            // print x — not a StrLit, so not StaticOutput; no Read so not Unsupported
+            let body = CompExpr::Call {
+                callee: Box::new(ValueExpr::Var("print".into())),
+                args: vec![ValueExpr::Var("x".into())],
+            };
+            let ir = ir_module_with_main(body);
+            assert_eq!(
+                classify_runtime_io_from_ir(&ir),
+                RuntimeIoClassification::NotRuntimeIo
+            );
+        }
+
+        #[test]
+        fn ir_classify_print_empty_string_is_static_output() {
+            // print "" — one print call with empty string arg; should be StaticOutput("")
+            let body = CompExpr::Call {
+                callee: Box::new(ValueExpr::Var("print".into())),
+                args: vec![ValueExpr::StrLit("".into())],
+            };
+            let ir = ir_module_with_main(body);
+            assert_eq!(
+                classify_runtime_io_from_ir(&ir),
+                RuntimeIoClassification::StaticOutput("".to_string())
+            );
+        }
+
+        #[test]
+        fn ir_classify_read_echo_with_alias_chain_is_dynamic_wasi_io() {
+            // IR for: text = Read.read(); alias = text; Print.print(alias)
+            // → Let { name: "text", value: PerformEffect(Read.read),
+            //         body: Let { name: "alias", value: Value(Var("text")),
+            //                     body: PerformEffect(Print.print(alias)) } }
+            let body = CompExpr::Let {
+                name: "text".into(),
+                ty: IrType::Unknown,
+                value: Box::new(CompExpr::PerformEffect {
+                    effect: "Read".into(),
+                    op: "read".into(),
+                    args: vec![],
+                }),
+                body: Box::new(CompExpr::Let {
+                    name: "alias".into(),
+                    ty: IrType::Unknown,
+                    value: Box::new(CompExpr::Value(ValueExpr::Var("text".into()))),
+                    body: Box::new(CompExpr::PerformEffect {
+                        effect: "Print".into(),
+                        op: "print".into(),
+                        args: vec![ValueExpr::Var("alias".into())],
+                    }),
+                }),
+            };
+            let ir = ir_module_with_main(body);
+            assert_eq!(
+                classify_runtime_io_from_ir(&ir),
+                RuntimeIoClassification::DynamicWasiIo(RuntimeIoPlan::Echo {
+                    input_mode: InputReadMode::ReadAll,
+                    output_mode: OutputReadMode::Print,
+                    suffix_prints: vec![],
+                })
+            );
+        }
+
+        #[test]
+        fn ir_classify_read_echo_wrong_bound_name_in_print_is_unsupported() {
+            // let text = Read.read(); Print.print(other) — wrong variable → Unsupported
+            let body = CompExpr::Let {
+                name: "text".into(),
+                ty: IrType::Unknown,
+                value: Box::new(CompExpr::PerformEffect {
+                    effect: "Read".into(),
+                    op: "read".into(),
+                    args: vec![],
+                }),
+                body: Box::new(CompExpr::PerformEffect {
+                    effect: "Print".into(),
+                    op: "print".into(),
+                    args: vec![ValueExpr::Var("other".into())],
+                }),
+            };
+            let ir = ir_module_with_main(body);
+            assert_eq!(
+                classify_runtime_io_from_ir(&ir),
+                RuntimeIoClassification::Unsupported
+            );
+        }
+
+        // --- classify_runtime_io_with_ir_fallback integration tests ---
+
+        mod fallback {
+            use goby_core::parse_module;
+
+            use super::super::super::{
+                InputReadMode, OutputReadMode, RuntimeIoClassification, RuntimeIoPlan,
+                classify_runtime_io_with_ir_fallback,
+            };
+
+            #[test]
+            fn fallback_bare_read_echo_is_dynamic_wasi_io_via_ast() {
+                // `print (read())` uses bare names → IR lowering fails → AST fallback
+                let source = r#"
+main : Unit -> Unit can Print, Read
+main =
+  print (read())
+"#;
+                let module = parse_module(source).expect("parse should work");
+                let body = module
+                    .declarations
+                    .iter()
+                    .find(|d| d.name == "main")
+                    .and_then(|d| d.parsed_body.clone());
+                assert_eq!(
+                    classify_runtime_io_with_ir_fallback(&module, body.as_deref()),
+                    RuntimeIoClassification::DynamicWasiIo(RuntimeIoPlan::Echo {
+                        input_mode: InputReadMode::ReadAll,
+                        output_mode: OutputReadMode::Print,
+                        suffix_prints: vec![],
+                    }),
+                    "bare print(read()) should route through AST fallback to DynamicWasiIo"
+                );
+            }
+
+            #[test]
+            fn fallback_qualified_read_echo_is_dynamic_wasi_io_via_ir() {
+                // `Read.read_line()` + `Print.println` uses qualified names → IR lowering succeeds
+                let source = r#"
+main : Unit -> Unit can Print, Read
+main =
+  line = Read.read_line ()
+  Print.println line
+"#;
+                let module = parse_module(source).expect("parse should work");
+                let body = module
+                    .declarations
+                    .iter()
+                    .find(|d| d.name == "main")
+                    .and_then(|d| d.parsed_body.clone());
+                assert_eq!(
+                    classify_runtime_io_with_ir_fallback(&module, body.as_deref()),
+                    RuntimeIoClassification::DynamicWasiIo(RuntimeIoPlan::Echo {
+                        input_mode: InputReadMode::ReadLine,
+                        output_mode: OutputReadMode::Println,
+                        suffix_prints: vec![],
+                    }),
+                    "qualified Read.read_line() + Print.println should classify via IR path"
+                );
+            }
+
+            #[test]
+            fn fallback_bare_echo_with_suffix_print_is_dynamic_wasi_io_via_ast() {
+                // Bare `read_line()` lowers to a Call (not PerformEffect), so IR returns
+                // NotRuntimeIo, which triggers AST fallback → DynamicWasiIo(Echo with suffix).
+                let source = r#"
+main : Unit -> Unit can Print, Read
+main =
+  line = read_line()
+  println line
+  print "done"
+"#;
+                let module = parse_module(source).expect("parse should work");
+                let body = module
+                    .declarations
+                    .iter()
+                    .find(|d| d.name == "main")
+                    .and_then(|d| d.parsed_body.clone());
+                assert_eq!(
+                    classify_runtime_io_with_ir_fallback(&module, body.as_deref()),
+                    RuntimeIoClassification::DynamicWasiIo(RuntimeIoPlan::Echo {
+                        input_mode: InputReadMode::ReadLine,
+                        output_mode: OutputReadMode::Println,
+                        suffix_prints: vec![super::super::super::StaticPrintSuffix {
+                            text: "done".into(),
+                            output_mode: OutputReadMode::Print,
+                        }],
+                    }),
+                    "bare echo with suffix should fall back to AST DynamicWasiIo"
+                );
+            }
+
+            #[test]
+            fn fallback_bare_not_runtime_io_uses_ast_result() {
+                // A non-IO program with bare print and local binding → NotRuntimeIo from IR,
+                // then AST fallback also returns NotRuntimeIo.
+                let source = r#"
+main : Unit -> Unit
+main =
+  x = 42
+  println x
+"#;
+                let module = parse_module(source).expect("parse should work");
+                let body = module
+                    .declarations
+                    .iter()
+                    .find(|d| d.name == "main")
+                    .and_then(|d| d.parsed_body.clone());
+                // Both IR and AST should agree on NotRuntimeIo (not StaticOutput since arg is Var)
+                assert_eq!(
+                    classify_runtime_io_with_ir_fallback(&module, body.as_deref()),
+                    RuntimeIoClassification::NotRuntimeIo
+                );
+            }
+        }
     }
 }

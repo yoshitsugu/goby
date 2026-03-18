@@ -49,7 +49,7 @@ use crate::runtime_flow::{
     ResolvedEffectHandler, ResolvedHandlerMethod, ResumeToken, RuntimeDeclInfo, RuntimeError,
     RuntimeEvaluators, RuntimeHandlerMethod, StoreOp, WithId,
 };
-use crate::runtime_io_plan::classify_runtime_io;
+use crate::runtime_io_plan::classify_runtime_io_with_ir_fallback;
 pub use crate::runtime_io_plan::{RuntimeIoExecutionKind, runtime_io_execution_kind};
 use crate::runtime_support::{eval_string_expr, parse_pipeline};
 use crate::runtime_value::{RuntimeLocals, RuntimeValue, runtime_value_option_eq};
@@ -198,7 +198,9 @@ pub fn compile_module(module: &Module) -> Result<Vec<u8>, CodegenError> {
             message: ERR_MISSING_MAIN.to_string(),
         });
     };
-    if let Some(wasm) = classify_runtime_io(module, parsed_body).compile_module_wasm_or_error()? {
+    // G6: IR-based classification with AST fallback.
+    let io_classification = classify_runtime_io_with_ir_fallback(module, parsed_body);
+    if let Some(wasm) = io_classification.compile_module_wasm_or_error()? {
         return Ok(wasm);
     }
     if let Some(text) =
@@ -254,7 +256,9 @@ pub fn execute_module_with_stdin(
             message: ERR_MISSING_MAIN.to_string(),
         });
     };
-    classify_runtime_io(module, parsed_body).require_interpreter_bridge_stdin()?;
+    // G6: IR-based classification with AST fallback.
+    let io_classification = classify_runtime_io_with_ir_fallback(module, parsed_body);
+    io_classification.require_interpreter_bridge_stdin()?;
 
     if let Some(text) = resolve_main_runtime_output_with_mode_and_stdin(
         module,
