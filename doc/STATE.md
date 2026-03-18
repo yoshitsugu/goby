@@ -1,19 +1,20 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-18
+Last updated: 2026-03-19
 
 ## Current Focus
 
-- Track F F6 is complete.
+- Track F F1-F5 are complete; F6 convergence is still in progress.
 - Track D5 has started with a first `goby lint` slice.
 - `goby lint <file.gb>` now exists for human-readable warnings.
 - First rule implemented: unreachable `case` arm after wildcard `_`.
 
 ## Immediate Next Steps
 
-1. D5 rule 2: add unused local binding lint on top of the new lint command path.
-2. Add JSON output mode for lint diagnostics once multiple rules exist.
-3. Continue D5 in priority order after validating warning UX and exit-code policy.
+1. Continue Track F F6 convergence by shrinking `RuntimeIoPlan` usage in the normal runtime-I/O compile path.
+2. D5 rule 2: add unused local binding lint on top of the new lint command path.
+3. Add JSON output mode for lint diagnostics once multiple rules exist.
+4. Continue D5 in priority order after validating warning UX and exit-code policy.
 
 ## Decisions To Carry Forward
 
@@ -29,6 +30,9 @@ Last updated: 2026-03-18
   `DynamicWasiIo` so convergence progress is observable in tests and callers.
 - `RuntimeIoPlan` is no longer the semantic source of truth; any remaining plan-backed
   lowering is treated and documented as an optimization layer with parity obligations.
+- `compile_module` still falls back to `runtime_io_plan` after `gen_lower`; Track F is not
+  fully converged until that remaining special-case path is either deleted or reduced to
+  documented optimization-only use.
 - `goby lint` currently exits non-zero when warnings are emitted and reuses the same
   caret-snippet diagnostic renderer as `goby check`.
 - Diagnostic severity now supports `Warning` in addition to `Error`.
@@ -45,4 +49,5 @@ Last updated: 2026-03-18
 
 - `doc/PLAN.md` is the roadmap reference.
 - For Track F restart context, read `crates/goby-wasm/src/gen_lower/mod.rs`,
-  `crates/goby-wasm/src/runtime_io_plan.rs`, and the `tests/track-f/` fixtures.
+  `crates/goby-wasm/src/runtime_io_plan.rs`, `crates/goby-wasm/src/lib.rs`, and the
+  `tests/track-f/` fixtures.

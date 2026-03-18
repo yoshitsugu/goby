@@ -676,7 +676,7 @@ Milestones:
       - out-of-range index behavior is tested and matches the chosen policy.
     - unit tests for collection/indexing layout invariants where possible, not only end-to-end tests.
 
-- [x] F6. Convergence and deletion of special cases
+- [ ] F6. Convergence and deletion of special cases
   - route currently special-cased runtime-I/O programs through the new general lowering path.
   - keep specialized fast paths only if they remain a strict optimization layer on top of the same semantics.
   - remove or sharply reduce `RuntimeIoPlan`-specific handwritten emitters once parity is proven.
@@ -684,6 +684,8 @@ Milestones:
     - runtime I/O support is explained primarily in terms of the general lowering architecture,
       not a catalog of recognized shapes.
     - any remaining handwritten fast path is documented explicitly as an optimization, not as the semantic source of truth.
+    - plain `Echo` / `SplitLinesEach`-style runtime-I/O programs no longer require `RuntimeIoPlan`
+      classification in the normal `compile_module` path.
   - required validation artifacts:
     - parity tests for old shape-specific programs now passing through the general path.
     - deletion or deprecation plan for the remaining `RuntimeIoPlan` machinery is committed.
