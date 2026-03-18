@@ -119,16 +119,36 @@ unit tests without Wasm emission, and the emitter can be tested against known in
 - Backend IR expresses computation in terms of Wasm locals, linear memory, and function calls.
 - `wasm_encoder` emission translates backend IR to binary; it contains no semantic logic.
 
-**Categories of instructions needed** (exact variants defined in F2 implementation):
-- Local variable management: declare, load, store locals.
-- Scalar operations: i64 arithmetic, comparisons.
-- Memory operations: alloc string/list, read/write fields.
-- Direct function calls: call a named Wasm function (imported or defined).
-- Effect op dispatch: emit the WASI call for a known effect operation (`Read.read`, `Print.print`, etc.).
-- Control flow: conditional branch (for `if`).
+**Locked enum definition** (committed in F2):
 
-Exact enum variants are **not locked here**; that is F2's job.
-F2 must update this document with the final enum definition before merging.
+```rust
+pub(crate) enum WasmBackendInstr {
+    DeclareLocal { name: String },   // allocate a named Wasm local slot
+    LoadLocal    { name: String },   // push local (tagged i64) onto stack
+    StoreLocal   { name: String },   // pop stack top into local slot
+    I64Const(i64),                   // push compile-time-known tagged i64
+    EffectOp { effect: String, op: String }, // WASI-backed effect call
+    CallHelper { name: String, arg_count: usize }, // Goby-internal helper call
+    Drop,                            // discard top-of-stack value
+}
+```
+
+**Goby IR → Backend IR mapping:**
+
+| Goby IR node | Backend IR instruction(s) |
+|---|---|
+| `CompExpr::Let { name, value, body }` | lower `value` → `StoreLocal { name }`, lower `body` |
+| `CompExpr::Value(ValueExpr::Var(name))` | `LoadLocal { name }` |
+| `CompExpr::Value(ValueExpr::IntLit(n))` | `I64Const(encode_int(n))` |
+| `CompExpr::Value(ValueExpr::Unit)` | `I64Const(encode_unit())` |
+| `CompExpr::PerformEffect { effect, op, .. }` | `EffectOp { effect, op }` |
+| `CompExpr::Call { callee: GlobalRef { name }, .. }` | `CallHelper { name, arg_count }` |
+| discarded expression (stmt before tail) | lower expr + `Drop` |
+
+Unsupported IR nodes (`WithHandler`, `Handle`, `Resume`, lambdas) must produce
+`LowerError::UnsupportedForm` — never panic.
+
+Future extension points (scalar ops, control flow for `if`) are added as new variants in later milestones.
 
 ---
 
