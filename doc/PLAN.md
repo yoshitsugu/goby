@@ -609,7 +609,7 @@ Milestones:
     - at least one backend-facing test/spec fixture describing expected runtime representation behavior.
     - explicit encode/decode or layout invariant tests for the chosen representation.
 
-- [ ] F3. General runtime execution core in Wasm
+- [x] F3. General runtime execution core in Wasm
   - implement general lowering/execution for:
     - local bindings,
     - variable lookup,
