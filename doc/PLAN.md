@@ -680,6 +680,13 @@ Milestones:
   - route currently special-cased runtime-I/O programs through the new general lowering path.
   - keep specialized fast paths only if they remain a strict optimization layer on top of the same semantics.
   - remove or sharply reduce `RuntimeIoPlan`-specific handwritten emitters once parity is proven.
+  - current convergence status:
+    - plain `Read.read` echo, `Read.read` echo with static suffix prints, and plain
+      `SplitLinesEach` already share the backend-IR/general-emitter path.
+    - remaining blockers before F6 can be checked complete:
+      - bare prelude `read` / `read_line` still bypass IR lowering and fall back to AST classification,
+      - `Read.read_line` still lacks fully general Wasm stdin-cursor/runtime-allocation support,
+      - transformed or suffix-bearing split callbacks still depend on `RuntimeIoPlan`.
   - done when:
     - runtime I/O support is explained primarily in terms of the general lowering architecture,
       not a catalog of recognized shapes.

@@ -37,6 +37,17 @@ Last updated: 2026-03-19
   `DynamicWasiIo` so convergence progress is observable in tests and callers.
 - `RuntimeIoPlan` is no longer the semantic source of truth; any remaining plan-backed
   lowering is treated and documented as an optimization layer with parity obligations.
+- Plain `RuntimeIoPlan::Echo` for `Read.read`, `Read.read` echo with static suffix prints,
+  and plain `RuntimeIoPlan::SplitLinesEach` now delegate Wasm emission to the shared
+  backend-IR/general-emitter path.
+- General lowering now supports static string values in backend IR, so qualified
+  `Read.read()` programs followed by static `Print.print`/`Print.println` suffixes can
+  classify as `GeneralLowered` instead of `DynamicWasiIo`.
+- Specialized builders still remain for `read_line` and transform-heavy split shapes.
+- Remaining F6 blockers are:
+  - bare prelude `read` / `read_line` names still fall out of IR lowering and rely on AST fallback,
+  - `read_line` does not yet have a fully general Wasm stdin-cursor/runtime-allocation story,
+  - transformed or suffix-bearing split callbacks still depend on `RuntimeIoPlan`.
 - `compile_module` still falls back to `runtime_io_plan` after `gen_lower`; Track F is not
   fully converged until that remaining special-case path is either deleted or reduced to
   documented optimization-only use.

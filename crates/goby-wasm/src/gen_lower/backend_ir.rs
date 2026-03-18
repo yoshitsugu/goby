@@ -23,6 +23,7 @@ pub(crate) enum SplitIndexOperand {
 /// | `CompExpr::Value(ValueExpr::Var(name))` | `LoadLocal { name }` |
 /// | `CompExpr::Value(ValueExpr::IntLit(n))` | `I64Const(encode_int(n))` |
 /// | `CompExpr::Value(ValueExpr::Unit)` | `I64Const(encode_unit())` |
+/// | `CompExpr::Value(ValueExpr::StrLit(text))` | `PushStaticString { text }` |
 /// | `CompExpr::PerformEffect { effect, op, .. }` | `EffectOp { effect, op }` |
 /// | `CompExpr::Call { callee: GlobalRef { name }, .. }` | `CallHelper { name, arg_count }` |
 /// | fused `Let lines = split(text, sep); each lines Effect.op` | `SplitEachPrint { text_local, sep_bytes, effect, op }` |
@@ -41,6 +42,11 @@ pub(crate) enum WasmBackendInstr {
     StoreLocal { name: String },
     /// Push a compile-time-known tagged i64 literal (already encoded via `value.rs`).
     I64Const(i64),
+    /// Push a tagged string pointer to a compile-time-known static string blob.
+    ///
+    /// The emitter places the blob in linear memory as `(len: i32, bytes...)`
+    /// and pushes an encoded string pointer to that blob.
+    PushStaticString { text: String },
     /// Perform a WASI-backed effect operation.
     ///
     /// Arguments are expected to have been pushed onto the stack before this instruction.
@@ -101,6 +107,9 @@ mod tests {
                 name: "x".to_string(),
             },
             WasmBackendInstr::I64Const(42),
+            WasmBackendInstr::PushStaticString {
+                text: "hello".to_string(),
+            },
             WasmBackendInstr::EffectOp {
                 effect: "Print".to_string(),
                 op: "print".to_string(),

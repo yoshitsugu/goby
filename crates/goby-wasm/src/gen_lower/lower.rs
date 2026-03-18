@@ -110,15 +110,14 @@ pub(crate) fn lower_comp(comp: &CompExpr) -> Result<Vec<WasmBackendInstr>, Lower
 
 /// Lower a `ValueExpr` to a flat sequence of `WasmBackendInstr`.
 ///
-/// `StrLit` returns `UnsupportedForm` — string heap allocation is F4.
 pub(crate) fn lower_value(v: &ValueExpr) -> Result<Vec<WasmBackendInstr>, LowerError> {
     match v {
         ValueExpr::Unit => Ok(vec![WasmBackendInstr::I64Const(encode_unit())]),
         ValueExpr::IntLit(n) => Ok(vec![WasmBackendInstr::I64Const(encode_int(*n)?)]),
         ValueExpr::BoolLit(b) => Ok(vec![WasmBackendInstr::I64Const(encode_bool(*b))]),
-        ValueExpr::StrLit(_) => Err(LowerError::UnsupportedForm {
-            node: "StrLit (string heap allocation is F4)".to_string(),
-        }),
+        ValueExpr::StrLit(text) => Ok(vec![WasmBackendInstr::PushStaticString {
+            text: text.clone(),
+        }]),
         ValueExpr::Var(name) => Ok(vec![WasmBackendInstr::LoadLocal { name: name.clone() }]),
         ValueExpr::GlobalRef { module, name } => Ok(vec![WasmBackendInstr::LoadLocal {
             name: format!("{}.{}", module, name),
@@ -392,12 +391,15 @@ mod tests {
     }
 
     #[test]
-    fn lower_str_lit_returns_err() {
+    fn lower_str_lit_emits_static_string_push() {
         let v = ValueExpr::StrLit("x".to_string());
-        assert!(matches!(
-            lower_value(&v),
-            Err(LowerError::UnsupportedForm { .. })
-        ));
+        let instrs = lower_value(&v).expect("static string lowering should succeed");
+        assert_eq!(
+            instrs,
+            vec![I::PushStaticString {
+                text: "x".to_string()
+            }]
+        );
     }
 
     #[test]

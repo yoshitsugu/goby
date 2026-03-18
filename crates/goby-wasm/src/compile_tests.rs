@@ -695,6 +695,25 @@ main =
 }
 
 #[test]
+fn compile_module_general_lowers_qualified_read_with_static_suffixes() {
+    let source = r#"
+main : Unit -> Unit can Print, Read
+main =
+  text = Read.read ()
+  Print.println text
+  Print.print "done"
+"#;
+    let module = parse_module(source).expect("source should parse");
+    assert_eq!(
+        runtime_io_execution_kind(&module).expect("classification should succeed"),
+        crate::RuntimeIoExecutionKind::GeneralLowered,
+        "qualified read + static suffixes should route through the general lowering path"
+    );
+    let wasm = compile_module(&module).expect("codegen should succeed");
+    assert_valid_wasm_module(&wasm);
+}
+
+#[test]
 fn compile_module_rejects_unsupported_runtime_io_shape() {
     let source = r#"
 main : Unit -> Unit can Print, Read

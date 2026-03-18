@@ -4,6 +4,8 @@ use goby_core::{Expr, Module, Stmt};
 
 use crate::CodegenError;
 use crate::backend::WasmProgramBuilder;
+use crate::gen_lower::backend_ir::WasmBackendInstr;
+use crate::gen_lower::emit::emit_general_module;
 use crate::layout::MemoryLayout;
 use crate::runtime_flow::DirectCallHead;
 use crate::runtime_support::{flatten_direct_call, module_has_selective_import_symbol};
@@ -30,7 +32,7 @@ pub(crate) struct StaticPrintSuffix {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum RuntimeIoPlan {
     /// Temporary optimization path for echo-family programs that are not yet
-    /// normalized into the general lowering pipeline.
+    /// fully normalized into the general lowering pipeline.
     ///
     /// Semantic source of truth:
     /// - general lowering module/docs in `gen_lower/`
@@ -44,8 +46,8 @@ pub(crate) enum RuntimeIoPlan {
         output_mode: OutputReadMode,
         suffix_prints: Vec<StaticPrintSuffix>,
     },
-    /// Temporary optimization path for split-callback programs that still use
-    /// the specialized builder rather than direct general lowering.
+    /// Temporary optimization path for split-callback programs that are not yet
+    /// fully normalized into the general lowering pipeline.
     ///
     /// This is an optimization layer, not the semantic source of truth.
     SplitLinesEach {
@@ -80,6 +82,10 @@ pub enum RuntimeIoExecutionKind {
 
 impl RuntimeIoPlan {
     pub(crate) fn emit_wasm(self) -> Result<Vec<u8>, CodegenError> {
+        if let Some(instrs) = self.clone().to_general_backend_instrs()? {
+            return emit_general_module(&instrs, &MemoryLayout::default());
+        }
+
         let builder = WasmProgramBuilder::new(MemoryLayout::default());
         match self {
             RuntimeIoPlan::Echo {
@@ -113,6 +119,93 @@ impl RuntimeIoPlan {
                         &suffix_prints,
                     ),
                 }
+            }
+        }
+    }
+
+    fn to_general_backend_instrs(self) -> Result<Option<Vec<WasmBackendInstr>>, CodegenError> {
+        const TEXT_LOCAL: &str = "__goby_runtime_io_text";
+
+        match self {
+            RuntimeIoPlan::Echo {
+                input_mode,
+                output_mode,
+                suffix_prints,
+            } => {
+                if !matches!(input_mode, InputReadMode::ReadAll) {
+                    return Ok(None);
+                }
+
+                let print_op = match output_mode {
+                    OutputReadMode::Print => "print",
+                    OutputReadMode::Println => "println",
+                };
+
+                let mut instrs = vec![
+                    WasmBackendInstr::DeclareLocal {
+                        name: TEXT_LOCAL.to_string(),
+                    },
+                    WasmBackendInstr::EffectOp {
+                        effect: "Read".to_string(),
+                        op: "read".to_string(),
+                    },
+                    WasmBackendInstr::StoreLocal {
+                        name: TEXT_LOCAL.to_string(),
+                    },
+                    WasmBackendInstr::LoadLocal {
+                        name: TEXT_LOCAL.to_string(),
+                    },
+                    WasmBackendInstr::EffectOp {
+                        effect: "Print".to_string(),
+                        op: print_op.to_string(),
+                    },
+                ];
+                for suffix in suffix_prints {
+                    let suffix_op = match suffix.output_mode {
+                        OutputReadMode::Print => "print",
+                        OutputReadMode::Println => "println",
+                    };
+                    instrs.push(WasmBackendInstr::PushStaticString { text: suffix.text });
+                    instrs.push(WasmBackendInstr::EffectOp {
+                        effect: "Print".to_string(),
+                        op: suffix_op.to_string(),
+                    });
+                }
+
+                Ok(Some(instrs))
+            }
+            RuntimeIoPlan::SplitLinesEach {
+                output_mode,
+                suffix_prints,
+                transform,
+            } => {
+                if !suffix_prints.is_empty() || transform.is_some() {
+                    return Ok(None);
+                }
+
+                let print_op = match output_mode {
+                    OutputReadMode::Print => "print",
+                    OutputReadMode::Println => "println",
+                };
+
+                Ok(Some(vec![
+                    WasmBackendInstr::DeclareLocal {
+                        name: TEXT_LOCAL.to_string(),
+                    },
+                    WasmBackendInstr::EffectOp {
+                        effect: "Read".to_string(),
+                        op: "read".to_string(),
+                    },
+                    WasmBackendInstr::StoreLocal {
+                        name: TEXT_LOCAL.to_string(),
+                    },
+                    WasmBackendInstr::SplitEachPrint {
+                        text_local: TEXT_LOCAL.to_string(),
+                        sep_bytes: b"\n".to_vec(),
+                        effect: "Print".to_string(),
+                        op: print_op.to_string(),
+                    },
+                ]))
             }
         }
     }
@@ -200,8 +293,11 @@ impl RuntimeIoClassification {
 ///
 /// The general lowering pipeline is now the primary semantic path for Track F
 /// representative programs. `RuntimeIoPlan` remains only for a shrinking set of
-/// optimization-oriented shapes that have not yet been normalized into general
-/// lowering. New semantic capability should go to general lowering first.
+/// optimization-oriented shapes that have not yet been fully normalized into general
+/// lowering. Plain `Read.read` echo, `Read.read` echo with static suffix prints, and
+/// plain split-each plans already delegate Wasm emission to the shared
+/// backend-IR/general-emitter path. New semantic capability should go to general
+/// lowering first.
 ///
 /// Deprecation plan for the remaining `RuntimeIoPlan` machinery:
 /// 1. move plain echo-family shapes into general lowering or an IR-normalization step,
@@ -1796,6 +1892,89 @@ main =
     fn unsupported_classification_rejects_interpreter_bridge_stdin() {
         let result = RuntimeIoClassification::Unsupported.require_interpreter_bridge_stdin();
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn plain_echo_plan_can_delegate_to_general_backend_instrs() {
+        let plan = RuntimeIoPlan::Echo {
+            input_mode: InputReadMode::ReadAll,
+            output_mode: OutputReadMode::Print,
+            suffix_prints: vec![],
+        };
+        let instrs = plan
+            .to_general_backend_instrs()
+            .expect("general delegation should not hard-fail");
+        assert!(
+            instrs.is_some(),
+            "plain echo should delegate to shared backend IR"
+        );
+    }
+
+    #[test]
+    fn read_all_echo_plan_with_suffixes_can_delegate_to_general_backend_instrs() {
+        let plan = RuntimeIoPlan::Echo {
+            input_mode: InputReadMode::ReadAll,
+            output_mode: OutputReadMode::Println,
+            suffix_prints: vec![StaticPrintSuffix {
+                text: "!".to_string(),
+                output_mode: OutputReadMode::Print,
+            }],
+        };
+        let instrs = plan
+            .to_general_backend_instrs()
+            .expect("delegation check should not hard-fail");
+        assert!(
+            instrs.is_some(),
+            "read-all echo with static suffixes should delegate to shared backend IR"
+        );
+    }
+
+    #[test]
+    fn read_line_echo_stays_on_specialized_emitter_path_for_now() {
+        let plan = RuntimeIoPlan::Echo {
+            input_mode: InputReadMode::ReadLine,
+            output_mode: OutputReadMode::Println,
+            suffix_prints: vec![],
+        };
+        let instrs = plan
+            .to_general_backend_instrs()
+            .expect("delegation check should not hard-fail");
+        assert!(
+            instrs.is_none(),
+            "read_line echo still uses the specialized path in this convergence slice"
+        );
+    }
+
+    #[test]
+    fn plain_split_each_plan_can_delegate_to_general_backend_instrs() {
+        let plan = RuntimeIoPlan::SplitLinesEach {
+            output_mode: OutputReadMode::Println,
+            suffix_prints: vec![],
+            transform: None,
+        };
+        let instrs = plan
+            .to_general_backend_instrs()
+            .expect("general delegation should not hard-fail");
+        assert!(
+            instrs.is_some(),
+            "plain split-each should delegate to shared backend IR"
+        );
+    }
+
+    #[test]
+    fn transformed_split_each_stays_on_specialized_emitter_path() {
+        let plan = RuntimeIoPlan::SplitLinesEach {
+            output_mode: OutputReadMode::Println,
+            suffix_prints: vec![],
+            transform: Some(("".to_string(), "!".to_string())),
+        };
+        let instrs = plan
+            .to_general_backend_instrs()
+            .expect("delegation check should not hard-fail");
+        assert!(
+            instrs.is_none(),
+            "transformed split-each should remain on the specialized path for now"
+        );
     }
 
     // --- IR-based classification tests (G6) ---

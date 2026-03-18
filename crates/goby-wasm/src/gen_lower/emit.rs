@@ -26,6 +26,77 @@ const FD_WRITE_IDX: u32 = 1;
 // scratch[0] = str_ptr, scratch[1] = str_len, scratch[2] = pos,
 // scratch[3] = line_start, scratch[4] = target/remaining index
 const SPLIT_FUSED_SCRATCH_I32: u32 = 5;
+// Generic effects need two i32 scratch locals:
+// scratch[0] = generic string ptr / read_line scan pos
+// scratch[1] = read_line total len
+const GENERIC_EFFECT_SCRATCH_I32: u32 = 2;
+
+#[derive(Debug, Clone)]
+struct StaticStringPool {
+    ptrs: HashMap<String, i32>,
+    segments: Vec<(i32, Vec<u8>)>,
+    bytes_used: u32,
+}
+
+impl StaticStringPool {
+    fn build(instrs: &[WasmBackendInstr]) -> Result<Self, CodegenError> {
+        let mut ptrs = HashMap::new();
+        let mut segments = Vec::new();
+        let mut cursor = WASM_PAGE_BYTES;
+
+        for instr in instrs {
+            let WasmBackendInstr::PushStaticString { text } = instr else {
+                continue;
+            };
+            if ptrs.contains_key(text) {
+                continue;
+            }
+
+            let text_len = u32::try_from(text.len()).map_err(|_| CodegenError {
+                message: "gen_lower/emit: static string is too large to encode".to_string(),
+            })?;
+            let blob_len = 4u32.checked_add(text_len).ok_or_else(|| CodegenError {
+                message: "gen_lower/emit: static string blob size overflow".to_string(),
+            })?;
+            cursor = cursor.checked_sub(blob_len).ok_or_else(|| CodegenError {
+                message: "gen_lower/emit: static string pool overflow".to_string(),
+            })?;
+            let ptr = i32::try_from(cursor).map_err(|_| CodegenError {
+                message: "gen_lower/emit: static string pointer does not fit in i32".to_string(),
+            })?;
+
+            let mut blob = Vec::with_capacity(blob_len as usize);
+            blob.extend_from_slice(
+                &i32::try_from(text_len)
+                    .map_err(|_| CodegenError {
+                        message: "gen_lower/emit: static string length does not fit in i32"
+                            .to_string(),
+                    })?
+                    .to_le_bytes(),
+            );
+            blob.extend_from_slice(text.as_bytes());
+
+            ptrs.insert(text.clone(), ptr);
+            segments.push((ptr, blob));
+        }
+
+        Ok(Self {
+            ptrs,
+            segments,
+            bytes_used: WASM_PAGE_BYTES - cursor,
+        })
+    }
+
+    fn ptr(&self, text: &str) -> Result<i32, CodegenError> {
+        self.ptrs.get(text).copied().ok_or_else(|| CodegenError {
+            message: format!("gen_lower/emit: missing static string pool entry for '{text}'"),
+        })
+    }
+
+    fn is_empty(&self) -> bool {
+        self.segments.is_empty()
+    }
+}
 
 /// Tracks compilation state during emission.
 struct EmitContext {
@@ -58,13 +129,29 @@ impl EmitContext {
 }
 
 /// Returns true if any `SplitEachPrint` instruction is present.
-fn needs_i32_scratch(instrs: &[WasmBackendInstr]) -> bool {
-    instrs.iter().any(|i| {
+fn required_i32_scratch_count(instrs: &[WasmBackendInstr]) -> u32 {
+    let split = instrs.iter().any(|i| {
         matches!(
             i,
             WasmBackendInstr::SplitEachPrint { .. } | WasmBackendInstr::SplitGetPrint { .. }
         )
-    })
+    });
+    let generic_effects = instrs.iter().any(|i| {
+        matches!(
+            i,
+            WasmBackendInstr::EffectOp { effect, op }
+                if (effect == "Print" && (op == "print" || op == "println"))
+                    || (effect == "Read" && op == "read_line")
+        )
+    });
+
+    let split_count = if split { SPLIT_FUSED_SCRATCH_I32 } else { 0 };
+    let generic_count = if generic_effects {
+        GENERIC_EFFECT_SCRATCH_I32
+    } else {
+        0
+    };
+    split_count.max(generic_count)
 }
 
 /// Returns true if any `SplitEachPrint` with println is present (needs newline data segment).
@@ -83,17 +170,20 @@ pub(crate) fn emit_general_module(
     instrs: &[WasmBackendInstr],
     layout: &MemoryLayout,
 ) -> Result<Vec<u8>, CodegenError> {
+    let static_strings = StaticStringPool::build(instrs)?;
+    if layout.heap_base + static_strings.bytes_used + 4 > WASM_PAGE_BYTES {
+        return Err(CodegenError {
+            message: "gen_lower/emit: static string pool leaves no room for runtime stdin buffer"
+                .to_string(),
+        });
+    }
+
     // --- Pre-scan: count declared I64 locals and detect I32 scratch needs ---
     let i64_count = instrs
         .iter()
         .filter(|i| matches!(i, WasmBackendInstr::DeclareLocal { .. }))
         .count() as u32;
-    let has_scratch = needs_i32_scratch(instrs);
-    let i32_scratch_count = if has_scratch {
-        SPLIT_FUSED_SCRATCH_I32
-    } else {
-        0
-    };
+    let i32_scratch_count = required_i32_scratch_count(instrs);
     // I32 scratch locals start at index i64_count.
     let i32_base = i64_count;
 
@@ -160,17 +250,29 @@ pub(crate) fn emit_general_module(
     let mut function = Function::new(locals_vec);
 
     let mut ctx = EmitContext::new();
-    emit_instrs(&mut function, &mut ctx, instrs, layout, i32_base)?;
+    emit_instrs(
+        &mut function,
+        &mut ctx,
+        instrs,
+        layout,
+        i32_base,
+        &static_strings,
+    )?;
     function.instruction(&Instruction::End);
     let mut code = CodeSection::new();
     code.function(&function);
     module.section(&code);
 
     // Data section: newline byte for println (if needed).
-    if needs_newline_data(instrs) {
+    if needs_newline_data(instrs) || !static_strings.is_empty() {
         let newline_ptr = (layout.heap_base - 1) as i32;
         let mut data = DataSection::new();
-        data.active(0, &ConstExpr::i32_const(newline_ptr), b"\n".to_vec());
+        if needs_newline_data(instrs) {
+            data.active(0, &ConstExpr::i32_const(newline_ptr), b"\n".to_vec());
+        }
+        for (ptr, bytes) in &static_strings.segments {
+            data.active(0, &ConstExpr::i32_const(*ptr), bytes.clone());
+        }
         module.section(&data);
     }
 
@@ -183,11 +285,12 @@ fn emit_instrs(
     instrs: &[WasmBackendInstr],
     layout: &MemoryLayout,
     i32_base: u32,
+    static_strings: &StaticStringPool,
 ) -> Result<(), CodegenError> {
     let iovec_offset = layout.iovec_offset as i32;
     let nread_offset = layout.nwritten_offset as i32;
     let buffer_ptr = layout.heap_base as i32;
-    let buffer_len = (WASM_PAGE_BYTES - layout.heap_base) as i32 - 4; // reserve 4 bytes for len prefix
+    let buffer_len = (WASM_PAGE_BYTES - layout.heap_base - static_strings.bytes_used) as i32 - 4; // reserve 4 bytes for len prefix
     let newline_ptr = (layout.heap_base - 1) as i32;
 
     for instr in instrs {
@@ -211,6 +314,11 @@ fn emit_instrs(
                 function.instruction(&Instruction::I64Const(*v));
             }
 
+            WasmBackendInstr::PushStaticString { text } => {
+                let ptr = static_strings.ptr(text)?;
+                function.instruction(&Instruction::I64Const(encode_string_ptr(ptr as u32)));
+            }
+
             WasmBackendInstr::Drop => {
                 function.instruction(&Instruction::Drop);
             }
@@ -225,6 +333,7 @@ fn emit_instrs(
                     buffer_ptr,
                     buffer_len,
                     newline_ptr,
+                    i32_base,
                 )?;
             }
 
@@ -322,6 +431,7 @@ fn emit_effect_op(
     buffer_ptr: i32,
     buffer_len: i32,
     newline_ptr: i32,
+    i32_base: u32,
 ) -> Result<(), CodegenError> {
     match (effect, op) {
         ("Read", "read") => {
@@ -372,51 +482,14 @@ fn emit_effect_op(
             function.instruction(&Instruction::I64Const(tagged_ptr));
         }
 
-        ("Print", "print") | ("Print", "println") => {
-            let append_newline = op == "println";
-
-            // Stack top is a tagged-i64 string ptr.
-            // Extract the i32 pointer: mask with 0xFFFFFFFF, then i32.wrap_i64.
-            // ptr → string layout: [len: i32, bytes...]
-            // We need to call fd_write(1, iovec, 1, nwritten) with ptr+4, len.
-
-            // We have the tagged i64 on the Wasm value stack.
-            // Compute: ptr_i32 = i32.wrap_i64(tagged & 0xFFFFFFFF)
-            function.instruction(&Instruction::I64Const(0xFFFF_FFFFi64));
-            function.instruction(&Instruction::I64And);
-            function.instruction(&Instruction::I32WrapI64);
-            // Stack: [ ptr_i32 ]
-
-            // Load len from memory[ptr_i32]
-            // We need ptr_i32 for both computing data_ptr = ptr_i32+4 and loading len.
-            // Use tee_local trick if we had a local — but we don't own a local here.
-            // Alternative: compute iovec in two steps using the ptr value twice.
-            // We'll use I32Store with offset to avoid needing to duplicate ptr_i32.
-            //
-            // Plan:
-            //   ptr_i32 is on stack.
-            //   len = i32.load(ptr_i32, offset=0)
-            //   data_ptr = ptr_i32 + 4
-            //   iovec[0] = data_ptr, iovec[1] = len → fd_write
-
-            // We need ptr_i32 twice (for len load and data_ptr computation).
-            // Emit I32Const(iovec_offset) first, then rearrange via I32Store tricks.
-            // Since we can't duplicate stack without tee_local, and we don't have a free
-            // local index here, we use a fixed constant: buffer_ptr is always layout.heap_base.
-            // For F3, the string always lives at heap_base, so ptr_i32 == buffer_ptr.
-            // We can hardcode:
-
-            // Actually we do have ptr_i32 on stack. Let's store it into a well-known
-            // memory slot (nread_offset+4 is free — our layout has 4 bytes at offset 12).
-            // But that's fragile. Instead, since F3 programs only have one string variable
-            // and it always points to heap_base, we pop ptr_i32 and use constants.
-
-            // Drop the ptr_i32 since we know the string is always at buffer_ptr.
-            function.instruction(&Instruction::Drop);
-
+        ("Read", "read_line") => {
+            // This currently supports the single-read-line shapes that Track F
+            // still routes through `RuntimeIoPlan`. The result string is backed
+            // by the same stdin buffer used for `Read.read`.
             let data_ptr = buffer_ptr + 4;
+            let scan_idx_local = i32_base;
+            let total_len_local = i32_base + 1;
 
-            // Load len from buffer_ptr (the length prefix).
             // iovec[0] = data_ptr
             function.instruction(&Instruction::I32Const(iovec_offset));
             function.instruction(&Instruction::I32Const(data_ptr));
@@ -425,9 +498,105 @@ fn emit_effect_op(
                 align: 2,
                 memory_index: 0,
             }));
-            // iovec[1] = memory[buffer_ptr] (the len)
+            // iovec[1] = buffer_len
             function.instruction(&Instruction::I32Const(iovec_offset + 4));
+            function.instruction(&Instruction::I32Const(buffer_len));
+            function.instruction(&Instruction::I32Store(MemArg {
+                offset: 0,
+                align: 2,
+                memory_index: 0,
+            }));
+            // fd_read(0, iovec_offset, 1, nread_offset)
+            function.instruction(&Instruction::I32Const(0));
+            function.instruction(&Instruction::I32Const(iovec_offset));
+            function.instruction(&Instruction::I32Const(1));
+            function.instruction(&Instruction::I32Const(nread_offset));
+            function.instruction(&Instruction::Call(FD_READ_IDX));
+            function.instruction(&Instruction::Drop);
+
+            function.instruction(&Instruction::I32Const(nread_offset));
+            function.instruction(&Instruction::I32Load(MemArg {
+                offset: 0,
+                align: 2,
+                memory_index: 0,
+            }));
+            function.instruction(&Instruction::LocalSet(total_len_local));
+            function.instruction(&Instruction::I32Const(0));
+            function.instruction(&Instruction::LocalSet(scan_idx_local));
+
+            function.instruction(&Instruction::Block(wasm_encoder::BlockType::Empty));
+            function.instruction(&Instruction::Loop(wasm_encoder::BlockType::Empty));
+            function.instruction(&Instruction::LocalGet(scan_idx_local));
+            function.instruction(&Instruction::LocalGet(total_len_local));
+            function.instruction(&Instruction::I32GeU);
+            function.instruction(&Instruction::BrIf(1));
+
+            function.instruction(&Instruction::I32Const(data_ptr));
+            function.instruction(&Instruction::LocalGet(scan_idx_local));
+            function.instruction(&Instruction::I32Add);
+            function.instruction(&Instruction::I32Load8U(MemArg {
+                offset: 0,
+                align: 0,
+                memory_index: 0,
+            }));
+            function.instruction(&Instruction::I32Const(10));
+            function.instruction(&Instruction::I32Eq);
+            function.instruction(&Instruction::BrIf(1));
+
+            function.instruction(&Instruction::I32Const(data_ptr));
+            function.instruction(&Instruction::LocalGet(scan_idx_local));
+            function.instruction(&Instruction::I32Add);
+            function.instruction(&Instruction::I32Load8U(MemArg {
+                offset: 0,
+                align: 0,
+                memory_index: 0,
+            }));
+            function.instruction(&Instruction::I32Const(13));
+            function.instruction(&Instruction::I32Eq);
+            function.instruction(&Instruction::BrIf(1));
+
+            function.instruction(&Instruction::LocalGet(scan_idx_local));
+            function.instruction(&Instruction::I32Const(1));
+            function.instruction(&Instruction::I32Add);
+            function.instruction(&Instruction::LocalSet(scan_idx_local));
+            function.instruction(&Instruction::Br(0));
+            function.instruction(&Instruction::End);
+            function.instruction(&Instruction::End);
+
             function.instruction(&Instruction::I32Const(buffer_ptr));
+            function.instruction(&Instruction::LocalGet(scan_idx_local));
+            function.instruction(&Instruction::I32Store(MemArg {
+                offset: 0,
+                align: 2,
+                memory_index: 0,
+            }));
+
+            function.instruction(&Instruction::I64Const(encode_string_ptr(buffer_ptr as u32)));
+        }
+
+        ("Print", "print") | ("Print", "println") => {
+            let append_newline = op == "println";
+            let ptr_local = i32_base;
+
+            // Stack top is a tagged-i64 string ptr.
+            function.instruction(&Instruction::I64Const(0xFFFF_FFFFi64));
+            function.instruction(&Instruction::I64And);
+            function.instruction(&Instruction::I32WrapI64);
+            function.instruction(&Instruction::LocalSet(ptr_local));
+
+            // iovec[0] = data_ptr
+            function.instruction(&Instruction::I32Const(iovec_offset));
+            function.instruction(&Instruction::LocalGet(ptr_local));
+            function.instruction(&Instruction::I32Const(4));
+            function.instruction(&Instruction::I32Add);
+            function.instruction(&Instruction::I32Store(MemArg {
+                offset: 0,
+                align: 2,
+                memory_index: 0,
+            }));
+            // iovec[1] = memory[ptr_local] (the len)
+            function.instruction(&Instruction::I32Const(iovec_offset + 4));
+            function.instruction(&Instruction::LocalGet(ptr_local));
             function.instruction(&Instruction::I32Load(MemArg {
                 offset: 0,
                 align: 2,
@@ -1028,6 +1197,23 @@ mod tests {
         ];
         let wasm = emit_general_module(&instrs, &default_layout())
             .expect("emit SplitGetPrint should succeed");
+        assert_valid_wasm(&wasm);
+    }
+
+    #[test]
+    fn emit_static_string_print_produces_valid_wasm() {
+        let instrs = vec![
+            I::PushStaticString {
+                text: "done".to_string(),
+            },
+            I::EffectOp {
+                effect: "Print".to_string(),
+                op: "print".to_string(),
+            },
+            I::Drop,
+        ];
+        let wasm = emit_general_module(&instrs, &default_layout())
+            .expect("emit static string print should succeed");
         assert_valid_wasm(&wasm);
     }
 }
