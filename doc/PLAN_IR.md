@@ -554,16 +554,20 @@ it as the new baseline.
   - Fallback/native parity can be tested from the same IR input for supported
     programs.
 
-- [ ] G10. Track G architecture is complete
+- [x] G10. Track G architecture is complete
   - `goby-wasm` may keep one explicit backend-local semantic layer over shared
     IR (currently `wasm_exec_plan.rs`) for Wasm-specific execution/planning
     needs, but it must be the only such layer and must not become a second
     source-language canonicalization boundary.
+  - Backend-local typed-continuation evidence remains acceptable as a Wasm
+    analysis product derived from shared IR; it is no longer treated as a
+    candidate shared-IR ownership boundary.
   - Shared typed IR is the canonical semantic handoff.
   - Backend compilation decisions are made from IR rather than source AST
     spelling.
   - Runtime I/O and other effectful execution paths no longer depend on ad-hoc
-    source-shape classifiers.
+    call-site source-shape classifiers; any remaining fallback-form recognition
+    is localized backend policy derived from the shared-IR handoff.
 
 ## 14. Expected Breakages During Migration
 

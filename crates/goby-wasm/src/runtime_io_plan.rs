@@ -157,10 +157,10 @@ impl RuntimeIoClassification {
 ///
 /// | Variant | Condition |
 /// |---------|-----------|
-/// | `DynamicWasiIo(plan)` | Body contains `Read.read`/`Read.read_line` usage **and** matches a known [`RuntimeIoPlan`] shape that can be lowered to a WASI Wasm module. |
+/// | `DynamicWasiIo(plan)` | Body contains `Read.read`/`Read.read_line` usage **and** matches a recognized [`RuntimeIoPlan`] form that can be lowered to a WASI Wasm module. |
 /// | `StaticOutput(text)` | Body contains **no** runtime-read calls **and** every statement is a direct `print`/`println` with a string-literal argument.  The output is statically known at compile time. |
-/// | `InterpreterBridge` | Body contains runtime-read calls that fall into the narrow temporary interpreter-bridge subset.  The current detection surface is empty — no program shapes route here now that the transformed split-callback family was promoted to `DynamicWasiIo`.  The variant and CLI fallback path are retained as an extension point for future shapes that need interpreter-backed execution during Wasm lowering development. |
-/// | `Unsupported` | Body contains runtime-read calls but matches neither a known [`RuntimeIoPlan`] nor the narrow temporary interpreter-bridge subset. |
+/// | `InterpreterBridge` | Body contains runtime-read calls that fall into the narrow temporary interpreter-bridge subset.  The current detection surface is empty — no programs route here now that the transformed split-callback family was promoted to `DynamicWasiIo`.  The variant and CLI fallback path are retained as an extension point for future interpreter-backed forms during Wasm lowering development. |
+/// | `Unsupported` | Body contains runtime-read calls but matches neither a recognized [`RuntimeIoPlan`] nor the narrow temporary interpreter-bridge subset. |
 /// | `NotRuntimeIo` | Body contains **no** runtime-read calls and is not a `StaticOutput` program (e.g. complex static evaluation via local bindings, arithmetic, etc.).  Falls through to `resolve_main_runtime_output_for_compile`. |
 ///
 /// # Safety contract
@@ -183,8 +183,8 @@ impl RuntimeIoClassification {
 ///
 /// # Stopping rule (F3a)
 ///
-/// All runtime-I/O AST-pattern matching lives in this module — **not** in `lib.rs` or
-/// any other call site.  When adding support for a new runtime-I/O program shape:
+/// All runtime-I/O fallback form recognition lives in this module — **not** in `lib.rs` or
+/// any other call site.  When adding support for a new runtime-I/O program form:
 ///
 /// 1. Extend [`RuntimeIoPlan`] with a new variant (or extend an existing plan variant).
 /// 2. Add or extend a lowering arm in [`RuntimeIoPlan::emit_wasm`].
@@ -193,9 +193,9 @@ impl RuntimeIoClassification {
 ///    directly from `classify_runtime_io`), not through `plan_runtime_io`.  New
 ///    static-output shapes should extend `plan_static_output` instead.
 ///
-/// Do **not** add new AST-pattern conditionals anywhere outside this module —
+/// Do **not** add new runtime-I/O capability conditionals anywhere outside this module —
 /// not in `compile_module`, `execute_module_with_stdin`, the CLI, or any other caller.
-/// Those entry points must stay policy-free; all shape decisions belong here.
+/// Those entry points must stay policy-free; all classification decisions belong here.
 pub(crate) fn classify_runtime_io(
     module: &Module,
     parsed_body: Option<&[Stmt]>,
@@ -218,7 +218,7 @@ pub(crate) fn classify_runtime_io(
 /// Detect programs where every statement is a direct `print`/`println` call with a
 /// string-literal argument.  Returns the concatenated output string (with newlines
 /// appended for `println` calls).  Returns `None` if the body contains anything that
-/// cannot be determined purely by AST shape.
+/// cannot be determined purely by the fallback statement form.
 ///
 /// Scope: intentionally limited to `StringLit` arguments only.  Programs that call
 /// `print` with non-literal arguments (variables, integer literals, arithmetic, etc.)
@@ -494,13 +494,13 @@ fn ir_collect_static_prints(comp: &CompExpr, out: &mut String, print_count: &mut
 ///
 /// - Bare `read()` / `print x` calls are NOT lowered to `PerformEffect`; they produce
 ///   `Call { callee: Var("read") }` IR nodes. Programs using bare effect names therefore
-///   return `NotRuntimeIo` from this function. Callers should fall back to AST
+///   return `NotRuntimeIo` from this function. Callers should fall back to statement-form
 ///   classification via [`classify_runtime_io_with_ir_fallback`] for the complete result.
 /// - `SplitLinesEach` programs use `Pipeline`/`MethodCall` constructs that fail lowering.
-///   They are handled by the AST fallback in [`classify_runtime_io_with_ir_fallback`].
+///   They are handled by the statement-form fallback in [`classify_runtime_io_with_ir_fallback`].
 /// - Echo plans with `suffix_prints` are not detected here. `ir_has_read_op` will still
 ///   detect the Read op and the IR returns `Unsupported`. The
-///   [`classify_runtime_io_with_ir_fallback`] caller then promotes that to AST fallback.
+///   [`classify_runtime_io_with_ir_fallback`] caller then promotes that to statement-form fallback.
 #[allow(dead_code)]
 pub(crate) fn classify_runtime_io_from_ir(ir_module: &IrModule) -> RuntimeIoClassification {
     let Some(main_decl) = ir_module.decls.iter().find(|d| d.name == "main") else {
@@ -523,33 +523,38 @@ fn classify_runtime_io_from_ir_decl(main_decl: &goby_core::ir::IrDecl) -> Runtim
     RuntimeIoClassification::NotRuntimeIo
 }
 
-/// Classify runtime I/O with IR-based analysis preferred, falling back to AST when needed.
+/// Classify runtime I/O with IR-based analysis preferred, falling back to runtime statement
+/// forms derived from `wasm_exec_plan` when needed.
 ///
 /// Strategy (G6):
-/// 1. Attempt IR lowering for `main`.
-/// 2. If lowering fails → AST classification (covers inline echo, SplitLinesEach, etc.).
+/// 1. Build `main`'s `WasmDeclExecPlan`.
+/// 2. If IR lowering for `main` fails → statement-form classification (covers inline echo,
+///    SplitLinesEach, etc.).
 /// 3. If lowering succeeds → IR classification.
 ///    - If IR returns `DynamicWasiIo` or `StaticOutput` → definitive; use it.
-///    - If IR returns `NotRuntimeIo` or `Unsupported` → fall back to AST classification.
+///    - If IR returns `NotRuntimeIo` or `Unsupported` → fall back to statement-form classification.
 ///      `NotRuntimeIo` occurs when IR doesn't see effect ops (bare names); `Unsupported`
 ///      occurs when IR detects Read but cannot match a known plan (e.g., echo with
-///      suffix prints, or alias-chain shapes the IR classifier doesn't cover).  The AST
+///      suffix prints, or alias-chain forms the IR classifier doesn't cover).  The fallback
 ///      classifier may succeed for these cases.
 ///    - `InterpreterBridge` is currently unreachable but treated as definitive if returned.
 pub(crate) fn classify_runtime_io_with_ir_fallback(module: &Module) -> RuntimeIoClassification {
-    let parsed_body = module
-        .declarations
-        .iter()
-        .find(|decl| decl.name == "main")
-        .and_then(|decl| decl.parsed_body.as_deref());
-    let ir_result = main_exec_plan(module)
-        .and_then(|plan| plan.ir_decl)
-        .map(|ir_decl| classify_runtime_io_from_ir_decl(&ir_decl));
+    let Some(main_plan) = main_exec_plan(module) else {
+        return RuntimeIoClassification::NotRuntimeIo;
+    };
+    let parsed_body = main_plan
+        .runtime
+        .as_ref()
+        .map(|runtime| runtime.stmts.as_ref());
+    let ir_result = main_plan
+        .ir_decl
+        .as_ref()
+        .map(classify_runtime_io_from_ir_decl);
     match ir_result {
         None => classify_runtime_io(module, parsed_body),
         Some(RuntimeIoClassification::NotRuntimeIo | RuntimeIoClassification::Unsupported) => {
-            // IR may have missed bare-name effect calls or unrecognised plan shapes;
-            // consult AST classifier for a potentially better result.
+            // IR may have missed bare-name effect calls or unrecognised runtime-I/O forms;
+            // consult the statement-form classifier for a potentially better result.
             classify_runtime_io(module, parsed_body)
         }
         Some(other) => other,
