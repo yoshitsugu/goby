@@ -521,11 +521,15 @@ it as the new baseline.
   - Unsupported cases are reported as IR/backend capability limits rather than
     source-pattern mismatches.
 
-- [ ] G7. Native Wasm compilation routes through shared IR
-  - `compile_module` no longer depends on raw AST shape for native-vs-fallback
-    decisions in the runtime-I/O path.
-  - The remaining typed-continuation/effect-boundary metadata is derived from
-    shared IR or clearly isolated as a temporary backend pass over IR.
+- [x] G7. Native Wasm compilation routes through shared IR
+  - `compile_module` no longer passes parsed `main` statement lists into the
+    runtime-I/O classifier; the compile entrypoint now depends on the
+    shared-IR-first classifier boundary.
+  - Direct-style static-output emission in `goby-wasm` now evaluates
+    shared-IR-lowered declarations instead of raw AST statement trees.
+  - The remaining typed-continuation/effect-boundary metadata stays
+    backend-local for now, but is isolated as transitional backend planning
+    rather than part of `compile_module`'s native-vs-fallback boundary logic.
 
 - [ ] G8. Handler and resume lowering is shared-IR based
   - `with`, handler clauses, and `resume` lower into explicit shared IR forms.

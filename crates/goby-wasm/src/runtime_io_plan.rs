@@ -88,17 +88,14 @@ impl RuntimeIoPlan {
             } => {
                 let append_newline = matches!(output_mode, OutputReadMode::Println);
                 match transform {
-                    None => builder.emit_read_split_lines_each_print_module(
+                    None => builder
+                        .emit_read_split_lines_each_print_module(append_newline, &suffix_prints),
+                    Some((prefix, suffix)) => builder.emit_read_split_lines_each_transform_module(
+                        &prefix,
+                        &suffix,
                         append_newline,
                         &suffix_prints,
                     ),
-                    Some((prefix, suffix)) => builder
-                        .emit_read_split_lines_each_transform_module(
-                            &prefix,
-                            &suffix,
-                            append_newline,
-                            &suffix_prints,
-                        ),
                 }
             }
         }
@@ -254,16 +251,8 @@ fn plan_static_output(stmts: &[Stmt]) -> Option<String> {
 }
 
 pub fn runtime_io_execution_kind(module: &Module) -> Result<RuntimeIoExecutionKind, CodegenError> {
-    let main = module
-        .declarations
-        .iter()
-        .find(|d| d.name == "main")
-        .ok_or_else(|| CodegenError {
-            message: "Wasm codegen requires a `main` declaration".to_string(),
-        })?;
     // G6: IR-based classification with AST fallback.
-    let classification =
-        classify_runtime_io_with_ir_fallback(module, main.parsed_body.as_deref());
+    let classification = classify_runtime_io_with_ir_fallback(module);
     Ok(match classification {
         RuntimeIoClassification::DynamicWasiIo(_) => RuntimeIoExecutionKind::DynamicWasiIo,
         RuntimeIoClassification::StaticOutput(_) => RuntimeIoExecutionKind::StaticOutput,
@@ -289,15 +278,11 @@ fn ir_has_read_op(comp: &CompExpr) -> bool {
         CompExpr::PerformEffect { .. } => false,
         CompExpr::Value(_) => false,
         CompExpr::Let { value, body, .. } => ir_has_read_op(value) || ir_has_read_op(body),
-        CompExpr::Seq { stmts, tail } => {
-            stmts.iter().any(ir_has_read_op) || ir_has_read_op(tail)
-        }
+        CompExpr::Seq { stmts, tail } => stmts.iter().any(ir_has_read_op) || ir_has_read_op(tail),
         CompExpr::If { then_, else_, .. } => ir_has_read_op(then_) || ir_has_read_op(else_),
         CompExpr::Call { .. } => false,
         CompExpr::Handle { clauses } => clauses.iter().any(|c| ir_has_read_op(&c.body)),
-        CompExpr::WithHandler { handler, body } => {
-            ir_has_read_op(handler) || ir_has_read_op(body)
-        }
+        CompExpr::WithHandler { handler, body } => ir_has_read_op(handler) || ir_has_read_op(body),
         CompExpr::Resume { .. } => false,
     }
 }
@@ -323,7 +308,13 @@ fn ir_plan_echo(comp: &CompExpr) -> Option<RuntimeIoPlan> {
     // Match: let <name>: ? = perform Read.{read|read_line}()
     //        [in let <alias>: ? = <name>]* (pure alias chain)
     //        in perform Print.{print|println}(<terminal_name>)
-    let CompExpr::Let { name: bound_name, value, body, .. } = comp else {
+    let CompExpr::Let {
+        name: bound_name,
+        value,
+        body,
+        ..
+    } = comp
+    else {
         return None;
     };
     // value must be a PerformEffect for Read.read or Read.read_line (no args)
@@ -372,7 +363,9 @@ fn ir_resolve_echo_terminal_name<'a>(comp: &'a CompExpr, initial: &'a str) -> &'
     let mut node = comp;
     loop {
         match node {
-            CompExpr::Let { name, value, body, .. } => {
+            CompExpr::Let {
+                name, value, body, ..
+            } => {
                 match value.as_ref() {
                     CompExpr::Value(ValueExpr::Var(src)) if src == current => {
                         // Pure alias: `let name = current`
@@ -393,7 +386,9 @@ fn body_after_alias_chain<'a>(comp: &'a CompExpr, initial: &str) -> &'a CompExpr
     let mut node = comp;
     loop {
         match node {
-            CompExpr::Let { name, value, body, .. } => {
+            CompExpr::Let {
+                name, value, body, ..
+            } => {
                 if matches!(value.as_ref(), CompExpr::Value(ValueExpr::Var(src)) if src == current_name)
                 {
                     current_name = name;
@@ -535,10 +530,12 @@ pub(crate) fn classify_runtime_io_from_ir(ir_module: &IrModule) -> RuntimeIoClas
 ///      suffix prints, or alias-chain shapes the IR classifier doesn't cover).  The AST
 ///      classifier may succeed for these cases.
 ///    - `InterpreterBridge` is currently unreachable but treated as definitive if returned.
-pub(crate) fn classify_runtime_io_with_ir_fallback(
-    module: &Module,
-    parsed_body: Option<&[Stmt]>,
-) -> RuntimeIoClassification {
+pub(crate) fn classify_runtime_io_with_ir_fallback(module: &Module) -> RuntimeIoClassification {
+    let parsed_body = module
+        .declarations
+        .iter()
+        .find(|decl| decl.name == "main")
+        .and_then(|decl| decl.parsed_body.as_deref());
     match goby_core::ir_lower::lower_module(module) {
         Err(_) => classify_runtime_io(module, parsed_body),
         Ok(ir) => {
@@ -621,7 +618,10 @@ fn plan_bound_echo_shape(
 }
 
 fn callee_output_mode<'a>(callee: &'a Expr, scope_stmts: &'a [Stmt]) -> Option<&'a str> {
-    let Expr::Var { name: output_name, .. } = callee else {
+    let Expr::Var {
+        name: output_name, ..
+    } = callee
+    else {
         return None;
     };
     let resolved_name =
@@ -703,7 +703,9 @@ fn is_read_all_expr(expr: &Expr) -> bool {
     match expr {
         Expr::Call { callee, arg, .. } if arg.is_unit_value() => match callee.as_ref() {
             Expr::Var { name, .. } => name == "read",
-            Expr::Qualified { receiver, member, .. } => receiver == "Read" && member == "read",
+            Expr::Qualified {
+                receiver, member, ..
+            } => receiver == "Read" && member == "read",
             _ => false,
         },
         _ => false,
@@ -714,7 +716,9 @@ fn is_read_line_expr(expr: &Expr) -> bool {
     match expr {
         Expr::Call { callee, arg, .. } if arg.is_unit_value() => match callee.as_ref() {
             Expr::Var { name, .. } => name == "read_line",
-            Expr::Qualified { receiver, member, .. } => receiver == "Read" && member == "read_line",
+            Expr::Qualified {
+                receiver, member, ..
+            } => receiver == "Read" && member == "read_line",
             _ => false,
         },
         _ => false,
@@ -774,7 +778,9 @@ fn imported_head_matches_symbol(
 
 fn stmt_binding_parts(stmt: &Stmt) -> Option<(&str, &Expr)> {
     match stmt {
-        Stmt::Binding { name, value, .. } | Stmt::MutBinding { name, value, .. } => Some((name, value)),
+        Stmt::Binding { name, value, .. } | Stmt::MutBinding { name, value, .. } => {
+            Some((name, value))
+        }
         _ => None,
     }
 }
@@ -826,7 +832,9 @@ fn resolve_alias_chain_source_name<'a>(stmts: &'a [Stmt], target_name: &'a str) 
                     continue;
                 };
                 if alias_name == current_name
-                    && let Expr::Var { name: source_name, .. } = alias_value
+                    && let Expr::Var {
+                        name: source_name, ..
+                    } = alias_value
                 {
                     current_name = source_name;
                 }
@@ -874,7 +882,9 @@ fn split_lines_binding_name<'a>(
 
 fn expr_resolves_to_name(expr: &Expr, stmts: &[Stmt], expected_name: &str) -> bool {
     match expr {
-        Expr::Var { name, .. } => resolve_alias_chain_source_name(stmts, name) == Some(expected_name),
+        Expr::Var { name, .. } => {
+            resolve_alias_chain_source_name(stmts, name) == Some(expected_name)
+        }
         _ => false,
     }
 }
@@ -903,9 +913,10 @@ fn split_lines_each_callback_plan(
 
     match each_args[1] {
         Expr::Var { name, .. } => {
-            let mode = callback_output_mode_name(
-                resolve_alias_chain_source_name(callback_scope_stmts, name)?,
-            )?;
+            let mode = callback_output_mode_name(resolve_alias_chain_source_name(
+                callback_scope_stmts,
+                name,
+            )?)?;
             Some((mode, None))
         }
         Expr::Lambda { param, body } => match body.as_ref() {
@@ -985,7 +996,8 @@ fn matches_passthrough_interpolated_string(arg: &Expr, param: &str) -> bool {
         match part {
             InterpolatedPart::Text(text) if text.is_empty() => {}
             InterpolatedPart::Expr(expr)
-                if !saw_param_expr && matches!(expr.as_ref(), Expr::Var { name, .. } if name == param) =>
+                if !saw_param_expr
+                    && matches!(expr.as_ref(), Expr::Var { name, .. } if name == param) =>
             {
                 saw_param_expr = true;
             }
@@ -1047,7 +1059,11 @@ fn split_trailing_static_print_suffixes(
 fn split_lines_each_plan(
     module: &Module,
     stmts: &[Stmt],
-) -> Option<(OutputReadMode, Vec<StaticPrintSuffix>, Option<(String, String)>)> {
+) -> Option<(
+    OutputReadMode,
+    Vec<StaticPrintSuffix>,
+    Option<(String, String)>,
+)> {
     let [read_stmt, rest @ ..] = stmts else {
         return None;
     };
@@ -1077,12 +1093,9 @@ fn split_lines_each_plan(
             else {
                 continue;
             };
-            if let Some((output_mode, transform)) = split_lines_each_callback_plan(
-                module,
-                pre_each_stmts,
-                iterated_name,
-                each_expr,
-            ) {
+            if let Some((output_mode, transform)) =
+                split_lines_each_callback_plan(module, pre_each_stmts, iterated_name, each_expr)
+            {
                 return Some((output_mode, suffix_prints, transform));
             }
         }
@@ -2018,13 +2031,13 @@ main =
   print (read())
 "#;
                 let module = parse_module(source).expect("parse should work");
-                let body = module
+                let _body = module
                     .declarations
                     .iter()
                     .find(|d| d.name == "main")
                     .and_then(|d| d.parsed_body.clone());
                 assert_eq!(
-                    classify_runtime_io_with_ir_fallback(&module, body.as_deref()),
+                    classify_runtime_io_with_ir_fallback(&module),
                     RuntimeIoClassification::DynamicWasiIo(RuntimeIoPlan::Echo {
                         input_mode: InputReadMode::ReadAll,
                         output_mode: OutputReadMode::Print,
@@ -2044,13 +2057,13 @@ main =
   Print.println line
 "#;
                 let module = parse_module(source).expect("parse should work");
-                let body = module
+                let _body = module
                     .declarations
                     .iter()
                     .find(|d| d.name == "main")
                     .and_then(|d| d.parsed_body.clone());
                 assert_eq!(
-                    classify_runtime_io_with_ir_fallback(&module, body.as_deref()),
+                    classify_runtime_io_with_ir_fallback(&module),
                     RuntimeIoClassification::DynamicWasiIo(RuntimeIoPlan::Echo {
                         input_mode: InputReadMode::ReadLine,
                         output_mode: OutputReadMode::Println,
@@ -2072,13 +2085,13 @@ main =
   print "done"
 "#;
                 let module = parse_module(source).expect("parse should work");
-                let body = module
+                let _body = module
                     .declarations
                     .iter()
                     .find(|d| d.name == "main")
                     .and_then(|d| d.parsed_body.clone());
                 assert_eq!(
-                    classify_runtime_io_with_ir_fallback(&module, body.as_deref()),
+                    classify_runtime_io_with_ir_fallback(&module),
                     RuntimeIoClassification::DynamicWasiIo(RuntimeIoPlan::Echo {
                         input_mode: InputReadMode::ReadLine,
                         output_mode: OutputReadMode::Println,
@@ -2102,14 +2115,14 @@ main =
   println x
 "#;
                 let module = parse_module(source).expect("parse should work");
-                let body = module
+                let _body = module
                     .declarations
                     .iter()
                     .find(|d| d.name == "main")
                     .and_then(|d| d.parsed_body.clone());
                 // Both IR and AST should agree on NotRuntimeIo (not StaticOutput since arg is Var)
                 assert_eq!(
-                    classify_runtime_io_with_ir_fallback(&module, body.as_deref()),
+                    classify_runtime_io_with_ir_fallback(&module),
                     RuntimeIoClassification::NotRuntimeIo
                 );
             }

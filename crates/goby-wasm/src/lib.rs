@@ -199,7 +199,7 @@ pub fn compile_module(module: &Module) -> Result<Vec<u8>, CodegenError> {
         });
     };
     // G6: IR-based classification with AST fallback.
-    let io_classification = classify_runtime_io_with_ir_fallback(module, parsed_body);
+    let io_classification = classify_runtime_io_with_ir_fallback(module);
     if let Some(wasm) = io_classification.compile_module_wasm_or_error()? {
         return Ok(wasm);
     }
@@ -257,7 +257,7 @@ pub fn execute_module_with_stdin(
         });
     };
     // G6: IR-based classification with AST fallback.
-    let io_classification = classify_runtime_io_with_ir_fallback(module, parsed_body);
+    let io_classification = classify_runtime_io_with_ir_fallback(module);
     io_classification.require_interpreter_bridge_stdin()?;
 
     if let Some(text) = resolve_main_runtime_output_with_mode_and_stdin(
