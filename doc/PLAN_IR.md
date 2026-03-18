@@ -505,7 +505,7 @@ it as the new baseline.
   - `goby-wasm` no longer needs to invent new backend-only intermediate forms to
     describe effect boundaries.
 
-- [ ] G5. Runtime I/O lowers through IR
+- [x] G5. Runtime I/O lowers through IR
   - `Read` / `Print` paths lower into explicit IR nodes.
   - Normalization covers trivial alias chains and pure intermediate transforms.
   - Equivalent source programs such as `print(read())` and `text = read(); print text`
