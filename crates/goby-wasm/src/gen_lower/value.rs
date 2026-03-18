@@ -1,7 +1,6 @@
 //! Runtime value representation for the general Wasm lowering path.
 //!
-//! All runtime values are encoded as tagged `i64` words per
-//! `doc/wasm_runtime_architecture.md §2`:
+//! All runtime values are encoded as tagged `i64` words:
 //!
 //! - Tag in bits 63–60 (high 4 bits).
 //! - Payload in bits 59–0 (lower 60 bits).

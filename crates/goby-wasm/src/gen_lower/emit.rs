@@ -1,6 +1,7 @@
 //! `WasmBackendInstr` → Wasm bytes emission for the general lowering path.
 //!
-//! See `doc/wasm_runtime_architecture.md §4` for the effect-op WASI call mapping.
+//! This module owns the concrete WASI import mapping for Track F `Read`/`Print`
+//! effect operations.
 
 use std::collections::HashMap;
 

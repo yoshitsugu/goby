@@ -541,7 +541,8 @@ Milestones:
   - explicitly decide whether the backend targets:
     - a low-level VM-like instruction stream hosted in Wasm memory, or
     - direct lowering from Goby IR to Wasm control/data flow.
-  - produce a durable architecture document (proposed path: `doc/wasm_runtime_architecture.md`) that fixes:
+  - produce a durable architecture note (initially landed as `doc/wasm_runtime_architecture.md`;
+    after Track F completion the maintained reference may move into code-adjacent module docs) that fixes:
     - pipeline layers and the responsibility of each layer,
     - lowering input format,
     - backend IR shape, if one is used,

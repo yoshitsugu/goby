@@ -4,8 +4,8 @@
 //! `wasm_encoder`. Its purpose is to be independently testable: backend IR can
 //! be constructed in unit tests without Wasm emission.
 //!
-//! See `doc/wasm_runtime_architecture.md §3` for the design rationale and the
-//! mapping from Goby IR nodes to these instructions.
+//! The design rationale and the Goby IR mapping are documented in this module
+//! and in `gen_lower/mod.rs`.
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum SplitIndexOperand {

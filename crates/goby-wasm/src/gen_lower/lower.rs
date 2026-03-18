@@ -1,6 +1,6 @@
 //! Goby IR → `WasmBackendInstr` lowering for the general Wasm path.
 //!
-//! See `doc/wasm_runtime_architecture.md §3` for the IR → Backend IR mapping.
+//! The IR → backend-IR mapping is documented in `backend_ir.rs`.
 
 use goby_core::ir::{CompExpr, ValueExpr};
 

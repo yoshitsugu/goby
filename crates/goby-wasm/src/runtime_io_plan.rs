@@ -33,7 +33,7 @@ pub(crate) enum RuntimeIoPlan {
     /// normalized into the general lowering pipeline.
     ///
     /// Semantic source of truth:
-    /// - general lowering architecture in `doc/wasm_runtime_architecture.md`
+    /// - general lowering module/docs in `gen_lower/`
     /// - fallback runtime/interpreter parity tests
     ///
     /// Proof obligation while this optimization remains:

@@ -17,7 +17,8 @@ Last updated: 2026-03-18
 
 ## Decisions To Carry Forward
 
-- Architecture locked in `doc/wasm_runtime_architecture.md`.
+- Track F architecture is now carried by the `gen_lower/` module docs, `runtime_io_plan.rs`
+  convergence notes, and the Track F regression tests.
 - `gen_lower/` must not import from `runtime_io_plan.rs`.
 - General lowering path only activates when IR body contains `PerformEffect` nodes.
 - F4 uses fused pattern (SplitEachPrint) — no intermediate list in memory.
@@ -43,4 +44,5 @@ Last updated: 2026-03-18
 ## Restart Notes
 
 - `doc/PLAN.md` is the roadmap reference.
-- `doc/wasm_runtime_architecture.md` is the architecture reference for Track F.
+- For Track F restart context, read `crates/goby-wasm/src/gen_lower/mod.rs`,
+  `crates/goby-wasm/src/runtime_io_plan.rs`, and the `tests/track-f/` fixtures.

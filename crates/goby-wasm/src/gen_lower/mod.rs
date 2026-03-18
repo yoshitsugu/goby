@@ -3,20 +3,21 @@
 
 //! General Wasm lowering — Track F.
 //!
-//! This module implements the general lowering pipeline described in
-//! `doc/wasm_runtime_architecture.md §7`:
+//! This module implements the Track F general lowering pipeline:
 //!
 //! ```text
 //! Goby IR (CompExpr / ValueExpr)
-//!   ↓  gen_lower/lower.rs (future)
+//!   ↓  gen_lower/lower.rs
 //! Backend IR (WasmBackendInstr)
-//!   ↓  backend.rs / gen_lower/emit.rs (future)
+//!   ↓  gen_lower/emit.rs
 //! wasm_encoder calls
 //! ```
 //!
 //! # Module ownership
 //! - `value`: `RtValue` tagged-i64 representation and encode/decode helpers.
 //! - `backend_ir`: `WasmBackendInstr` flat instruction set (variants locked in F2).
+//! - `lower`: Goby IR → backend IR lowering, including Track F fused split patterns.
+//! - `emit`: backend IR → Wasm emission, including WASI-backed `Read`/`Print`.
 //!
 //! # Import rules
 //! This module and its submodules must NOT import from `runtime_io_plan.rs`.
