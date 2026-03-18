@@ -4,29 +4,31 @@ Last updated: 2026-03-18
 
 ## Current Focus
 
-- Track F F3 is complete: `gen_lower/lower.rs` and `gen_lower/emit.rs` implemented.
-  - `lower_comp`/`lower_value` map Goby IR → `WasmBackendInstr`
-  - `emit_general_module` maps `WasmBackendInstr` → Wasm bytes via WASI fd_read/fd_write
-  - `try_general_lower_module` wired into `compile_module` before shape-specific classification
-  - `track_f_f3_print_read_is_general_lowered` passes (no longer `#[ignore]`)
-- Next milestone is F4: helper-call ABI for `string.split` and list iteration.
+- Track F F4 is complete: fused `SplitEachPrint` backend IR instruction handles
+  `string.split text "\n"` + `each lines Print.println` pattern inline.
+  `track_f_f4_split_each_is_general_lowered` passes.
+- Next milestone is F5: `list.get` indexing for `Print.println (list.get lines 1)`.
 
 ## Immediate Next Steps
 
-1. F4: implement `CallHelper` emission in `gen_lower/emit.rs`:
-   - Helper functions for `string.split` → returns a list ptr
-   - `each` iteration over lists
-2. F4 done when `track_f_f4_split_each_is_general_lowered` test passes (remove `#[ignore]`).
-3. F5 follows: collection indexing (`list.get`).
+1. F5: implement `list.get` in the general lowering path.
+   - IR: `Call(GlobalRef("list","get"), [Var("lines"), IntLit(1)])`
+   - Requires: intermediate list representation (from split result) consumable by index
+   - OR: detect fused `split + get(idx)` pattern similar to F4's fused approach
+2. F5 done when `track_f_f5_index_is_general_lowered` test passes (remove `#[ignore]`).
+3. F6 follows: convergence — route old shape-specific programs through general path;
+   delete/reduce RuntimeIoPlan machinery.
 
 ## Decisions To Carry Forward
 
 - Architecture locked in `doc/wasm_runtime_architecture.md`.
 - `gen_lower/` must not import from `runtime_io_plan.rs`.
 - General lowering path only activates when IR body contains `PerformEffect` nodes.
-- `Print.print/println` EffectOp pushes `encode_unit()` onto stack after writing stdout.
-- String layout: len (i32) at `heap_base`, bytes at `heap_base+4`.
-- For F3 programs, there is only one string in flight at a time (single heap_base).
+- F4 uses fused pattern (SplitEachPrint) — no intermediate list in memory.
+- For F5, must decide: fused `SplitGetPrint` pattern vs. real list representation.
+  - Fused is simpler but less general; real list enables F5 and future list ops.
+- String layout: len (i32) at heap_base, bytes at heap_base+4.
+- I32 scratch locals (4 total) declared when SplitEachPrint is present.
 
 ## Deferred Work Still Relevant Later
 

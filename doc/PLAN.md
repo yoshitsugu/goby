@@ -627,7 +627,7 @@ Milestones:
     - unit tests for backend IR lowering or execution-step invariants, if backend IR is used.
     - tests covering explicit error returns instead of panics for unsupported lowering states.
 
-- [ ] F4. Dynamic runtime values and helper-call boundary
+- [x] F4. Dynamic runtime values and helper-call boundary
   - add general runtime execution support for direct calls to supported stdlib/runtime helpers.
   - first required target is the helper boundary needed by `goby/string.split`.
   - ensure the chosen helper-call model matches the F1 architecture decision rather than introducing a parallel execution path.
