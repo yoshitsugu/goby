@@ -52,7 +52,10 @@ pub enum ValueExpr {
     /// Local variable reference.
     Var(String),
     /// Qualified global reference (e.g. `Module.name`).
-    GlobalRef { module: String, name: String },
+    GlobalRef {
+        module: String,
+        name: String,
+    },
     BinOp {
         op: IrBinOp,
         left: Box<ValueExpr>,
@@ -111,9 +114,7 @@ pub enum CompExpr {
     ///
     /// Lowered from `Expr::Handler { clauses }`. Corresponds to the handler
     /// value that can be passed to a `with` expression.
-    Handle {
-        clauses: Vec<IrHandlerClause>,
-    },
+    Handle { clauses: Vec<IrHandlerClause> },
     /// Install a handler over a body computation.
     ///
     /// Lowered from `Expr::With { handler, body }`.
@@ -124,9 +125,7 @@ pub enum CompExpr {
     /// Resume from an effect handler continuation.
     ///
     /// Lowered from `Expr::Resume { value }`.
-    Resume {
-        value: Box<ValueExpr>,
-    },
+    Resume { value: Box<ValueExpr> },
 }
 
 /// A single operation clause in a handler expression.
@@ -299,7 +298,12 @@ fn fmt_comp(out: &mut String, c: &CompExpr, depth: usize) {
             fmt_value(out, v);
             out.push('\n');
         }
-        CompExpr::Let { name, ty, value, body } => {
+        CompExpr::Let {
+            name,
+            ty,
+            value,
+            body,
+        } => {
             indent(out, depth);
             out.push_str("let ");
             out.push_str(name);
@@ -524,13 +528,21 @@ mod tests {
 
     #[test]
     fn print_int_lit() {
-        let m = simple_module(vec![simple_decl("answer", IrType::Int, val(ValueExpr::IntLit(42)))]);
+        let m = simple_module(vec![simple_decl(
+            "answer",
+            IrType::Int,
+            val(ValueExpr::IntLit(42)),
+        )]);
         insta::assert_snapshot!(fmt_ir(&m));
     }
 
     #[test]
     fn print_bool_lit() {
-        let m = simple_module(vec![simple_decl("flag", IrType::Bool, val(ValueExpr::BoolLit(true)))]);
+        let m = simple_module(vec![simple_decl(
+            "flag",
+            IrType::Bool,
+            val(ValueExpr::BoolLit(true)),
+        )]);
         insta::assert_snapshot!(fmt_ir(&m));
     }
 
@@ -733,7 +745,11 @@ mod tests {
 
     #[test]
     fn validate_ok_simple() {
-        let m = simple_module(vec![simple_decl("ok", IrType::Int, val(ValueExpr::IntLit(1)))]);
+        let m = simple_module(vec![simple_decl(
+            "ok",
+            IrType::Int,
+            val(ValueExpr::IntLit(1)),
+        )]);
         assert!(validate_ir(&m).is_ok());
     }
 
@@ -745,7 +761,11 @@ mod tests {
             CompExpr::Handle { clauses: vec![] },
         )]);
         let err = validate_ir(&m).unwrap_err();
-        assert!(err.message.contains("at least one clause"), "{}", err.message);
+        assert!(
+            err.message.contains("at least one clause"),
+            "{}",
+            err.message
+        );
     }
 
     #[test]
@@ -778,7 +798,11 @@ mod tests {
             },
         )]);
         let err = validate_ir(&m).unwrap_err();
-        assert!(err.message.contains("at least one argument"), "{}", err.message);
+        assert!(
+            err.message.contains("at least one argument"),
+            "{}",
+            err.message
+        );
     }
 
     #[test]

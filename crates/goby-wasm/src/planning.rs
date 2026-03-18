@@ -596,8 +596,20 @@ fn inspect_expr(
             }
         }
         Expr::ListIndex { list, index } => {
-            inspect_expr(list, out, declaration_names, qualified_operation_index, op_name_index);
-            inspect_expr(index, out, declaration_names, qualified_operation_index, op_name_index);
+            inspect_expr(
+                list,
+                out,
+                declaration_names,
+                qualified_operation_index,
+                op_name_index,
+            );
+            inspect_expr(
+                index,
+                out,
+                declaration_names,
+                qualified_operation_index,
+                op_name_index,
+            );
         }
     }
 }
@@ -775,7 +787,9 @@ fn collect_operation_refs(
     qualified_operation_index: &HashMap<(String, String), EffectOperationRef>,
     op_name_index: &HashMap<String, Vec<EffectOperationRef>>,
 ) {
-    if let Expr::Qualified { receiver, member, .. } = expr
+    if let Expr::Qualified {
+        receiver, member, ..
+    } = expr
         && let Some(op_ref) = qualified_operation_index.get(&(receiver.clone(), member.clone()))
     {
         record_operation_ref(out, op_ref);

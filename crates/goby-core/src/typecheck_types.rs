@@ -70,11 +70,12 @@ pub(crate) fn validate_type_declarations(
                             message: format!("duplicate field `{}` in type `{}`", field.name, name),
                         });
                     }
-                    let parsed = parse_type_expr(&field.type_annotation).ok_or_else(|| TypecheckError {
-                        declaration: Some(name.clone()),
-                        span: None, // expr span not yet available
-                        message: format!("invalid field type `{}`", field.type_annotation),
-                    })?;
+                    let parsed =
+                        parse_type_expr(&field.type_annotation).ok_or_else(|| TypecheckError {
+                            declaration: Some(name.clone()),
+                            span: None, // expr span not yet available
+                            message: format!("invalid field type `{}`", field.type_annotation),
+                        })?;
                     validate_type_expr_names(&parsed, &known_type_names, name)?;
                 }
             }

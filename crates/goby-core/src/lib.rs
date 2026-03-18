@@ -3,12 +3,11 @@
 //! This crate currently provides a minimal AST, parser, and typechecker for MVP bootstrapping.
 
 pub mod analysis;
-pub mod ir;
-pub mod ir_lower;
 pub mod ast;
 pub mod diagnostic;
 pub mod formatter;
-pub mod symbol_index;
+pub mod ir;
+pub mod ir_lower;
 pub mod parser;
 mod parser_expr;
 mod parser_pattern;
@@ -21,6 +20,7 @@ mod path_util;
 pub mod span;
 pub mod stdlib;
 pub mod str_util;
+pub mod symbol_index;
 pub mod typecheck;
 mod typecheck_ambiguity;
 mod typecheck_annotation;
@@ -46,15 +46,15 @@ pub use ast::{
 };
 pub use diagnostic::{Diagnostic, Severity};
 pub use formatter::format_module;
+pub use parser::{ParseError, parse_body_stmts, parse_module};
+pub use parser_util::is_identifier;
+pub use span::{line_col_to_offset, offset_to_line_col};
 pub use symbol_index::{
     DeclSymbol, EffectMemberSymbol, LocalBindingSymbol, SymbolIndex, SymbolInfo,
     build_symbol_index, def_line_of, infer_local_bindings,
 };
-pub use parser::{ParseError, parse_body_stmts, parse_module};
-pub use parser_util::is_identifier;
-pub use typecheck_annotation::find_can_keyword_index;
-pub use span::{line_col_to_offset, offset_to_line_col};
 pub use typecheck::{
     TypecheckError, typecheck_module, typecheck_module_collect,
     typecheck_module_collect_with_context, typecheck_module_with_context,
 };
+pub use typecheck_annotation::find_can_keyword_index;

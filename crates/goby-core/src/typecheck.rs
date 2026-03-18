@@ -80,10 +80,11 @@ pub fn typecheck_module_collect_with_context(
     stdlib_root: Option<&Path>,
 ) -> Vec<TypecheckError> {
     let stdlib_root_path = default_typecheck_stdlib_root(stdlib_root);
-    let validation = match validate_module_phase(module, source_path, stdlib_root, &stdlib_root_path) {
-        Ok(v) => v,
-        Err(e) => return vec![e],
-    };
+    let validation =
+        match validate_module_phase(module, source_path, stdlib_root, &stdlib_root_path) {
+            Ok(v) => v,
+            Err(e) => return vec![e],
+        };
     let checking = match build_checking_phase(module, &stdlib_root_path, &validation) {
         Ok(c) => c,
         Err(e) => return vec![e],
@@ -448,8 +449,7 @@ main =
     log \"hello\"
 ";
         let module = parse_module(source).expect("should parse");
-        let err = typecheck_module(&module)
-            .expect_err("unknown qualified operation should fail");
+        let err = typecheck_module(&module).expect_err("unknown qualified operation should fail");
         assert!(err.message.contains("unknown effect operation"));
         assert!(err.message.contains("Log.nonexistent"));
     }
@@ -903,10 +903,12 @@ main : Unit -> Unit
 main = ()
 ";
         let module = parse_module(source).expect("should parse");
-        let err = typecheck_module(&module)
-            .expect_err("can clause on effect member should fail");
+        let err = typecheck_module(&module).expect_err("can clause on effect member should fail");
         assert_eq!(err.declaration.as_deref(), Some("Trace"));
-        assert!(err.message.contains("can clauses on effect members are not supported"));
+        assert!(
+            err.message
+                .contains("can clauses on effect members are not supported")
+        );
     }
 
     #[test]
@@ -2436,7 +2438,10 @@ main =
         let module = parse_module(source).expect("should parse");
         let err = typecheck_module(&module).expect_err("void annotation should fail");
         let span = err.span.expect("legacy void error must have a span");
-        assert_eq!(span.line, 1, "span.line should point to f's declaration line");
+        assert_eq!(
+            span.line, 1,
+            "span.line should point to f's declaration line"
+        );
         assert_eq!(span.col, 1);
         assert!(err.message.contains("void"));
     }
@@ -2448,7 +2453,10 @@ main =
         let module = parse_module(source).expect("should parse");
         let err = typecheck_module(&module).expect_err("unknown effect should fail");
         let span = err.span.expect("unknown effect error must have a span");
-        assert_eq!(span.line, 1, "span.line should point to f's declaration line");
+        assert_eq!(
+            span.line, 1,
+            "span.line should point to f's declaration line"
+        );
         assert_eq!(span.col, 1);
         assert!(err.message.contains("Ghost"));
     }
@@ -2461,7 +2469,10 @@ main =
         let module = parse_module(source).expect("should parse");
         let err = typecheck_module(&module).expect_err("duplicate effect should fail");
         let span = err.span.expect("duplicate effect error must have a span");
-        assert_eq!(span.line, 4, "span.line should point to the second (duplicate) effect header");
+        assert_eq!(
+            span.line, 4,
+            "span.line should point to the second (duplicate) effect header"
+        );
         assert_eq!(span.col, 1);
         assert!(err.message.contains("duplicate"));
     }
@@ -2472,8 +2483,13 @@ main =
         let source = "f : Int\nf = 1\n\nf : String\nf = \"x\"\n";
         let module = parse_module(source).expect("should parse");
         let err = typecheck_module(&module).expect_err("duplicate declaration should fail");
-        let span = err.span.expect("duplicate declaration error must have a span");
-        assert_eq!(span.line, 4, "span.line should point to the second (duplicate) declaration");
+        let span = err
+            .span
+            .expect("duplicate declaration error must have a span");
+        assert_eq!(
+            span.line, 4,
+            "span.line should point to the second (duplicate) declaration"
+        );
         assert_eq!(span.col, 1);
         assert!(err.message.contains("duplicate"));
     }
@@ -3181,8 +3197,11 @@ main =
         let module = parse_module(source).expect("should parse");
         let errors = typecheck_module_collect(&module);
         assert_eq!(errors.len(), 1);
-        assert!(errors[0].message.contains("String") || errors[0].message.contains("Int"),
-            "unexpected error message: {}", errors[0].message);
+        assert!(
+            errors[0].message.contains("String") || errors[0].message.contains("Int"),
+            "unexpected error message: {}",
+            errors[0].message
+        );
     }
 
     #[test]
@@ -3193,10 +3212,16 @@ main =
         let errors = typecheck_module_collect(&module);
         assert_eq!(errors.len(), 2, "expected 2 errors, got: {:?}", errors);
         // Errors are in declaration order: add first, mul second
-        assert!(errors[0].declaration.as_deref() == Some("add"),
-            "first error should be from 'add', got: {:?}", errors[0].declaration);
-        assert!(errors[1].declaration.as_deref() == Some("mul"),
-            "second error should be from 'mul', got: {:?}", errors[1].declaration);
+        assert!(
+            errors[0].declaration.as_deref() == Some("add"),
+            "first error should be from 'add', got: {:?}",
+            errors[0].declaration
+        );
+        assert!(
+            errors[1].declaration.as_deref() == Some("mul"),
+            "second error should be from 'mul', got: {:?}",
+            errors[1].declaration
+        );
     }
 
     #[test]
@@ -3205,7 +3230,12 @@ main =
         let source = "add x = x + 1\nadd y = y + 2\n";
         let module = parse_module(source).expect("should parse");
         let errors = typecheck_module_collect(&module);
-        assert_eq!(errors.len(), 1, "expected exactly 1 structural error, got: {:?}", errors);
+        assert_eq!(
+            errors.len(),
+            1,
+            "expected exactly 1 structural error, got: {:?}",
+            errors
+        );
     }
 
     #[test]
@@ -3222,15 +3252,20 @@ main =
         // 'add' has a param-arity mismatch (caught by declaration_param_types).
         // 'mul' has a body type mismatch (caught by check_body_stmts).
         // Both errors must appear even though 'add' fails at an earlier stage.
-        let source =
-            "add : Int -> Int -> Int\nadd x = x\n\nmul : Int -> Int\nmul x = \"wrong\"\n";
+        let source = "add : Int -> Int -> Int\nadd x = x\n\nmul : Int -> Int\nmul x = \"wrong\"\n";
         let module = parse_module(source).expect("should parse");
         let errors = typecheck_module_collect(&module);
         assert_eq!(errors.len(), 2, "expected 2 errors, got: {:?}", errors);
-        assert_eq!(errors[0].declaration.as_deref(), Some("add"),
-            "first error should be from 'add'");
-        assert_eq!(errors[1].declaration.as_deref(), Some("mul"),
-            "second error should be from 'mul'");
+        assert_eq!(
+            errors[0].declaration.as_deref(),
+            Some("add"),
+            "first error should be from 'add'"
+        );
+        assert_eq!(
+            errors[1].declaration.as_deref(),
+            Some("mul"),
+            "second error should be from 'mul'"
+        );
     }
 
     #[test]
@@ -3242,9 +3277,15 @@ main =
         let module = parse_module(source).expect("should parse");
         let errors = typecheck_module_collect(&module);
         assert_eq!(errors.len(), 2, "expected 2 errors, got: {:?}", errors);
-        assert_eq!(errors[0].declaration.as_deref(), Some("a"),
-            "first error should be from 'a'");
-        assert_eq!(errors[1].declaration.as_deref(), Some("b"),
-            "second error should be from 'b'");
+        assert_eq!(
+            errors[0].declaration.as_deref(),
+            Some("a"),
+            "first error should be from 'a'"
+        );
+        assert_eq!(
+            errors[1].declaration.as_deref(),
+            Some("b"),
+            "second error should be from 'b'"
+        );
     }
 }

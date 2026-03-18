@@ -108,7 +108,13 @@ fn render_diagnostic(
 
 /// Convenience wrapper: convert a `Diagnostic` and render it.
 fn render_diag(file: &str, source: &str, diag: goby_core::Diagnostic) -> String {
-    render_diagnostic(file, source, diag.span.as_ref(), diag.declaration.as_deref(), &diag.message)
+    render_diagnostic(
+        file,
+        source,
+        diag.span.as_ref(),
+        diag.declaration.as_deref(),
+        &diag.message,
+    )
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -166,7 +172,11 @@ fn run() -> Result<(), CliError> {
 
     let module = goby_core::parse_module(&source).map_err(|err| {
         // Normalise col==1 sentinel (unknown column) to span: None via Diagnostic.
-        CliError::Runtime(render_diag(&cli.file, &source, goby_core::Diagnostic::from(err)))
+        CliError::Runtime(render_diag(
+            &cli.file,
+            &source,
+            goby_core::Diagnostic::from(err),
+        ))
     })?;
 
     let typecheck_errors = goby_core::typecheck_module_collect_with_context(
@@ -220,9 +230,8 @@ fn run_command(module: &goby_core::Module, file: &str) -> Result<(), CliError> {
     match goby_wasm::compile_module(module) {
         Ok(bytes) => {
             let output = output_wasm_path(file);
-            std::fs::write(&output, &bytes).map_err(|err| {
-                CliError::Runtime(format!("failed to write {}: {}", output, err))
-            })?;
+            std::fs::write(&output, &bytes)
+                .map_err(|err| CliError::Runtime(format!("failed to write {}: {}", output, err)))?;
             print_parse_summary(module.declarations.len(), file);
             println!("generated wasm: {}", output);
             match execute_wasm(&output)? {
@@ -281,7 +290,11 @@ where
 
     match command_raw.as_str() {
         "run" | "check" => {
-            let command = if command_raw == "run" { Command::Run } else { Command::Check };
+            let command = if command_raw == "run" {
+                Command::Run
+            } else {
+                Command::Check
+            };
             let file = args
                 .next()
                 .ok_or_else(|| CliError::Usage("missing input file".to_string()))?;
@@ -306,7 +319,10 @@ where
             if let Some(extra) = args.next() {
                 return Err(CliError::Usage(format!("unexpected argument: {}", extra)));
             }
-            Ok(CliArgs { command: Command::Fmt { check }, file })
+            Ok(CliArgs {
+                command: Command::Fmt { check },
+                file,
+            })
         }
         _ => Err(CliError::Usage(format!("unknown command: {}", command_raw))),
     }

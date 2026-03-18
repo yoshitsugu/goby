@@ -1,6 +1,8 @@
 use std::collections::HashSet;
 
-use crate::ast::{EffectDecl, EffectMember, EmbedDecl, ImportDecl, ImportKind, Span, TypeDeclaration};
+use crate::ast::{
+    EffectDecl, EffectMember, EmbedDecl, ImportDecl, ImportKind, Span, TypeDeclaration,
+};
 use crate::parser::ParseError;
 use crate::parser_util::{
     collect_indented_body, is_camel_case_identifier, is_identifier, is_indented,

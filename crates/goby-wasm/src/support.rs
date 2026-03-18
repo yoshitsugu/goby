@@ -37,7 +37,10 @@ mod tests {
     #[test]
     fn supports_current_native_list_item_expressions() {
         assert!(is_supported_list_item_expr(&Expr::IntLit(1)));
-        assert!(is_supported_list_item_expr(&Expr::Var { name: "x".to_string(), span: None }));
+        assert!(is_supported_list_item_expr(&Expr::Var {
+            name: "x".to_string(),
+            span: None
+        }));
         assert!(!is_supported_list_item_expr(&Expr::BoolLit(true)));
     }
 

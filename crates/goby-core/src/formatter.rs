@@ -23,9 +23,9 @@
 //! correct column offsets.
 
 use crate::ast::{
-    BinOpKind, CaseArm, CasePattern, Declaration, EmbedDecl, EffectDecl, Expr, HandlerClause,
-    ImportDecl, ImportKind, InterpolatedPart, ListPatternItem, ListPatternTail, Module, RecordField,
-    Stmt, TypeDeclaration,
+    BinOpKind, CaseArm, CasePattern, Declaration, EffectDecl, EmbedDecl, Expr, HandlerClause,
+    ImportDecl, ImportKind, InterpolatedPart, ListPatternItem, ListPatternTail, Module,
+    RecordField, Stmt, TypeDeclaration,
 };
 
 const INDENT: &str = "  ";
@@ -101,8 +101,7 @@ pub(crate) fn format_expr(expr: &Expr, indent: usize) -> String {
             out
         }
         Expr::ListLit { elements, spread } => {
-            let mut parts: Vec<String> =
-                elements.iter().map(|e| format_expr(e, indent)).collect();
+            let mut parts: Vec<String> = elements.iter().map(|e| format_expr(e, indent)).collect();
             if let Some(tail) = spread {
                 parts.push(format!("..{}", format_expr(tail, indent)));
             }
@@ -113,8 +112,13 @@ pub(crate) fn format_expr(expr: &Expr, indent: usize) -> String {
             format!("({})", parts.join(", "))
         }
         Expr::Var { name, .. } => name.clone(),
-        Expr::Qualified { receiver, member, .. } => format!("{}.{}", receiver, member),
-        Expr::RecordConstruct { constructor, fields } => {
+        Expr::Qualified {
+            receiver, member, ..
+        } => format!("{}.{}", receiver, member),
+        Expr::RecordConstruct {
+            constructor,
+            fields,
+        } => {
             let field_strs: Vec<String> = fields
                 .iter()
                 .map(|(name, val)| format!("{}: {}", name, format_expr(val, indent)))
@@ -154,9 +158,12 @@ pub(crate) fn format_expr(expr: &Expr, indent: usize) -> String {
             };
             format!("{} {}", c, a)
         }
-        Expr::MethodCall { receiver, method, args } => {
-            let arg_strs: Vec<String> =
-                args.iter().map(|a| format_expr(a, indent)).collect();
+        Expr::MethodCall {
+            receiver,
+            method,
+            args,
+        } => {
+            let arg_strs: Vec<String> = args.iter().map(|a| format_expr(a, indent)).collect();
             format!("{}.{}({})", receiver, method, arg_strs.join(", "))
         }
         Expr::Pipeline { value, callee } => {
@@ -185,16 +192,16 @@ pub(crate) fn format_expr(expr: &Expr, indent: usize) -> String {
         }
         Expr::Block(stmts) => format_stmts(stmts, indent),
         Expr::Case { scrutinee, arms } => format_case_expr(scrutinee, arms, indent),
-        Expr::If { condition, then_expr, else_expr } => {
-            format_if_expr(condition, then_expr, else_expr, indent)
-        }
+        Expr::If {
+            condition,
+            then_expr,
+            else_expr,
+        } => format_if_expr(condition, then_expr, else_expr, indent),
         Expr::ListIndex { list, index } => {
             let l_raw = format_expr(list, indent);
             let i = format_expr(index, indent);
             // Chained ListIndex does not need extra parens; other complex sub-exprs do.
-            let l = if list.needs_parens_as_subexpr()
-                && !matches!(**list, Expr::ListIndex { .. })
-            {
+            let l = if list.needs_parens_as_subexpr() && !matches!(**list, Expr::ListIndex { .. }) {
                 format!("({})", l_raw)
             } else {
                 l_raw
@@ -243,12 +250,7 @@ fn format_case_expr(scrutinee: &Expr, arms: &[CaseArm], indent: usize) -> String
 /// else
 ///   <else>
 /// ```
-fn format_if_expr(
-    condition: &Expr,
-    then_expr: &Expr,
-    else_expr: &Expr,
-    indent: usize,
-) -> String {
+fn format_if_expr(condition: &Expr, then_expr: &Expr, else_expr: &Expr, indent: usize) -> String {
     let cond = format_expr(condition, indent);
     // Format sub-expressions at indent+1, then indent the whole result.
     let then_str = format_expr(then_expr, indent + 1);
@@ -554,7 +556,11 @@ fn format_expr_rhs(expr: &Expr, indent: usize) -> String {
             // the correct indentation.
             format_case_expr_rhs(scrutinee, arms, indent)
         }
-        Expr::If { condition, then_expr, else_expr } => {
+        Expr::If {
+            condition,
+            then_expr,
+            else_expr,
+        } => {
             // Emit inline: `if cond\n  then\n<indent_pad>else\n  else_`.
             // The `else` keyword is at `indent` so that `parse_multiline_rhs_expr`
             // (which prefixes the binding line's indent) places it correctly.
@@ -657,12 +663,19 @@ pub(crate) fn format_type_declaration(td: &TypeDeclaration) -> String {
         TypeDeclaration::Union { name, constructors } => {
             format!("type {} = {}", name, constructors.join(" | "))
         }
-        TypeDeclaration::Record { name, constructor, fields } => {
+        TypeDeclaration::Record {
+            name,
+            constructor,
+            fields,
+        } => {
             let field_strs: Vec<String> = fields
                 .iter()
-                .map(|RecordField { name: fname, type_annotation }| {
-                    format!("{}: {}", fname, type_annotation)
-                })
+                .map(
+                    |RecordField {
+                         name: fname,
+                         type_annotation,
+                     }| { format!("{}: {}", fname, type_annotation) },
+                )
                 .collect();
             format!("type {} = {}({})", name, constructor, field_strs.join(", "))
         }
@@ -771,15 +784,17 @@ pub fn format_module(module: &Module) -> String {
 
     // imports (all on consecutive lines, no blank line between them)
     if !module.imports.is_empty() {
-        let block: Vec<String> =
-            module.imports.iter().map(format_import_decl).collect();
+        let block: Vec<String> = module.imports.iter().map(format_import_decl).collect();
         sections.push(block.join("\n"));
     }
 
     // embed declarations
     if !module.embed_declarations.is_empty() {
-        let block: Vec<String> =
-            module.embed_declarations.iter().map(format_embed_decl).collect();
+        let block: Vec<String> = module
+            .embed_declarations
+            .iter()
+            .map(format_embed_decl)
+            .collect();
         sections.push(block.join("\n"));
     }
 
@@ -1041,7 +1056,10 @@ mod tests {
             module_path: "goby/env".to_string(),
             kind: ImportKind::Selective(vec!["fetch_env_var".to_string()]),
         };
-        assert_eq!(format_import_decl(&imp), "import goby/env ( fetch_env_var )");
+        assert_eq!(
+            format_import_decl(&imp),
+            "import goby/env ( fetch_env_var )"
+        );
     }
 
     #[test]
@@ -1142,18 +1160,29 @@ mod tests {
         let body = vec![Stmt::Expr(Expr::IntLit(42), None)];
         let out = format_with_expr(&handler, &body, 0);
         assert!(out.starts_with("with\n"), "got: {:?}", out);
-        assert!(out.contains("\nin\n"), "should have `in` keyword: {:?}", out);
+        assert!(
+            out.contains("\nin\n"),
+            "should have `in` keyword: {:?}",
+            out
+        );
         assert!(out.contains("  42"), "should have indented body: {:?}", out);
     }
 
     #[test]
     fn format_with_named_handler_uses_inline_form() {
         // Variable handler: uses `with h` (form a).
-        let handler = Expr::Var { name: "h".to_string(), span: None };
+        let handler = Expr::Var {
+            name: "h".to_string(),
+            span: None,
+        };
         let body = vec![Stmt::Expr(Expr::IntLit(1), None)];
         let out = format_with_expr(&handler, &body, 0);
         assert!(out.starts_with("with h\n"), "got: {:?}", out);
-        assert!(out.contains("\nin\n"), "should have `in` keyword: {:?}", out);
+        assert!(
+            out.contains("\nin\n"),
+            "should have `in` keyword: {:?}",
+            out
+        );
     }
 
     // --- Idempotency tests over examples/ ---
@@ -1165,7 +1194,8 @@ mod tests {
     fn assert_idempotent(label: &str, src: &str) {
         let module1 = parse_module(src).expect(&format!("{}: first parse failed", label));
         let fmt1 = format_module(&module1);
-        let module2 = parse_module(&fmt1).expect(&format!("{}: second parse failed:\n{}", label, fmt1));
+        let module2 =
+            parse_module(&fmt1).expect(&format!("{}: second parse failed:\n{}", label, fmt1));
         let fmt2 = format_module(&module2);
         assert_eq!(fmt1, fmt2, "{}: fmt(fmt(src)) != fmt(src)", label);
     }
@@ -1182,27 +1212,42 @@ mod tests {
 
     #[test]
     fn idempotent_control_flow() {
-        assert_idempotent("control_flow", include_str!("../../../examples/control_flow.gb"));
+        assert_idempotent(
+            "control_flow",
+            include_str!("../../../examples/control_flow.gb"),
+        );
     }
 
     #[test]
     fn idempotent_case_arm_block() {
-        assert_idempotent("case_arm_block", include_str!("../../../examples/case_arm_block.gb"));
+        assert_idempotent(
+            "case_arm_block",
+            include_str!("../../../examples/case_arm_block.gb"),
+        );
     }
 
     #[test]
     fn idempotent_basic_types() {
-        assert_idempotent("basic_types", include_str!("../../../examples/basic_types.gb"));
+        assert_idempotent(
+            "basic_types",
+            include_str!("../../../examples/basic_types.gb"),
+        );
     }
 
     #[test]
     fn idempotent_list_index() {
-        assert_idempotent("list_index", include_str!("../../../examples/list_index.gb"));
+        assert_idempotent(
+            "list_index",
+            include_str!("../../../examples/list_index.gb"),
+        );
     }
 
     #[test]
     fn idempotent_list_spread() {
-        assert_idempotent("list_spread", include_str!("../../../examples/list_spread.gb"));
+        assert_idempotent(
+            "list_spread",
+            include_str!("../../../examples/list_spread.gb"),
+        );
     }
 
     #[test]
@@ -1217,7 +1262,10 @@ mod tests {
 
     #[test]
     fn idempotent_generic_types() {
-        assert_idempotent("generic_types", include_str!("../../../examples/generic_types.gb"));
+        assert_idempotent(
+            "generic_types",
+            include_str!("../../../examples/generic_types.gb"),
+        );
     }
 
     #[test]
@@ -1227,7 +1275,10 @@ mod tests {
 
     #[test]
     fn idempotent_effect_generic() {
-        assert_idempotent("effect_generic", include_str!("../../../examples/effect_generic.gb"));
+        assert_idempotent(
+            "effect_generic",
+            include_str!("../../../examples/effect_generic.gb"),
+        );
     }
 
     #[test]
@@ -1242,12 +1293,18 @@ mod tests {
 
     #[test]
     fn idempotent_iterator_unified() {
-        assert_idempotent("iterator_unified", include_str!("../../../examples/iterator_unified.gb"));
+        assert_idempotent(
+            "iterator_unified",
+            include_str!("../../../examples/iterator_unified.gb"),
+        );
     }
 
     #[test]
     fn idempotent_function_reference() {
-        assert_idempotent("function_reference", include_str!("../../../examples/function_reference.gb"));
+        assert_idempotent(
+            "function_reference",
+            include_str!("../../../examples/function_reference.gb"),
+        );
     }
 
     #[test]

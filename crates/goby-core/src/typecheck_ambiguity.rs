@@ -39,7 +39,9 @@ pub(crate) fn ensure_no_ambiguous_refs_in_expr(
             Ok(())
         }
         Expr::Var { name, .. } => ensure_name_not_ambiguous(name, env, decl_name),
-        Expr::Qualified { receiver, member, .. } => {
+        Expr::Qualified {
+            receiver, member, ..
+        } => {
             if let Some(index) = parse_tuple_member_index(member) {
                 let receiver_ty = env.lookup(receiver);
                 let resolved_receiver_ty = env.resolve_alias(&receiver_ty, 0);

@@ -10,9 +10,8 @@ use crate::{
     },
     typecheck_build::{build_type_env, ensure_no_ambiguous_globals},
     typecheck_effect::{
-        build_effect_map, build_required_effects_map,
-        builtin_effect_names, ops_from_can_clause, validate_effect_declarations,
-        validate_effect_member_effect_clauses,
+        build_effect_map, build_required_effects_map, builtin_effect_names, ops_from_can_clause,
+        validate_effect_declarations, validate_effect_member_effect_clauses,
     },
     typecheck_env::{EffectMap, ImportedEffectDecl, Ty, TypeEnv},
     typecheck_resume::check_resume_in_stmts,

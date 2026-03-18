@@ -98,9 +98,7 @@ pub(crate) fn validate_effect_declarations(module: &Module) -> Result<(), Typech
     Ok(())
 }
 
-pub(crate) fn validate_effect_member_effect_clauses(
-    module: &Module,
-) -> Result<(), TypecheckError> {
+pub(crate) fn validate_effect_member_effect_clauses(module: &Module) -> Result<(), TypecheckError> {
     for effect_decl in &module.effect_declarations {
         let declared_type_params: HashSet<String> =
             effect_decl.type_params.iter().cloned().collect();

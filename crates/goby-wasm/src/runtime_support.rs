@@ -18,7 +18,9 @@ pub(crate) fn flatten_direct_call(expr: &Expr) -> Option<(DirectCallHead, Vec<&E
                 args.reverse();
                 return Some((DirectCallHead::Bare(name.clone()), args));
             }
-            Expr::Qualified { receiver, member, .. } => {
+            Expr::Qualified {
+                receiver, member, ..
+            } => {
                 args.reverse();
                 return Some((
                     DirectCallHead::Qualified {

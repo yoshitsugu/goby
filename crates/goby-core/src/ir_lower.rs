@@ -40,7 +40,9 @@ impl std::fmt::Display for LowerError {
 impl std::error::Error for LowerError {}
 
 fn err(msg: impl Into<String>) -> LowerError {
-    LowerError { message: msg.into() }
+    LowerError {
+        message: msg.into(),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -89,15 +91,19 @@ pub fn lower_module(module: &Module) -> Result<IrModule, LowerError> {
 
 /// Lower a single `Declaration` to an `IrDecl`.
 pub fn lower_declaration(decl: &Declaration) -> Result<IrDecl, LowerError> {
-    let stmts = decl.parsed_body.as_deref().ok_or_else(|| {
-        err(format!("declaration `{}` has no parsed body", decl.name))
-    })?;
+    let stmts = decl
+        .parsed_body
+        .as_deref()
+        .ok_or_else(|| err(format!("declaration `{}` has no parsed body", decl.name)))?;
 
     let body = lower_stmts(stmts)?;
 
     // Parameters: types are unknown at this stage.
-    let params: Vec<(String, IrType)> =
-        decl.params.iter().map(|p| (p.clone(), IrType::Unknown)).collect();
+    let params: Vec<(String, IrType)> = decl
+        .params
+        .iter()
+        .map(|p| (p.clone(), IrType::Unknown))
+        .collect();
 
     // Extract residual effects from the `can` clause in the type annotation.
     let residual_effects = extract_residual_effects(decl.type_annotation.as_deref());
@@ -115,7 +121,9 @@ pub fn lower_declaration(decl: &Declaration) -> Result<IrDecl, LowerError> {
 /// Returns an empty Vec if no `can` clause is present.
 fn extract_residual_effects(annotation: Option<&str>) -> Vec<String> {
     let Some(ann) = annotation else { return vec![] };
-    let Some(idx) = crate::find_can_keyword_index(ann) else { return vec![] };
+    let Some(idx) = crate::find_can_keyword_index(ann) else {
+        return vec![];
+    };
     let effects_raw = ann[idx + 3..].trim();
     effects_raw
         .split(',')
@@ -186,12 +194,18 @@ fn lower_stmts_slice(stmts: &[Stmt]) -> Result<CompExpr, LowerError> {
                 // Use Seq to sequence a discarded expression with the rest.
                 // Avoid Vec::insert(0, ...) to prevent O(n²) growth for long Seq chains.
                 match tail {
-                    CompExpr::Seq { stmts: mut seq_stmts, tail } => {
+                    CompExpr::Seq {
+                        stmts: mut seq_stmts,
+                        tail,
+                    } => {
                         // Prepend by building a new vec: head + existing stmts.
                         let mut merged = Vec::with_capacity(1 + seq_stmts.len());
                         merged.push(head_comp);
                         merged.append(&mut seq_stmts);
-                        Ok(CompExpr::Seq { stmts: merged, tail })
+                        Ok(CompExpr::Seq {
+                            stmts: merged,
+                            tail,
+                        })
                     }
                     other => Ok(CompExpr::Seq {
                         stmts: vec![head_comp],
@@ -223,7 +237,11 @@ fn lower_expr_as_comp(expr: &Expr) -> Result<CompExpr, LowerError> {
 /// Lower compound expressions that are not pure values.
 fn lower_expr_as_comp_non_value(expr: &Expr) -> Result<CompExpr, LowerError> {
     match expr {
-        Expr::If { condition, then_expr, else_expr } => {
+        Expr::If {
+            condition,
+            then_expr,
+            else_expr,
+        } => {
             let cond = lower_value_required(condition, "if condition")?;
             let then_ = lower_expr_as_comp(then_expr)?;
             let else_ = lower_expr_as_comp(else_expr)?;
@@ -240,7 +258,10 @@ fn lower_expr_as_comp_non_value(expr: &Expr) -> Result<CompExpr, LowerError> {
 
             // G5: if the callee is a qualified reference to a known effect operation,
             // lower to PerformEffect instead of Call.
-            if let Expr::Qualified { receiver, member, .. } = callee_expr {
+            if let Expr::Qualified {
+                receiver, member, ..
+            } = callee_expr
+            {
                 if is_effect_op(receiver, member) {
                     // Filter out unit args (TupleLit([])) — these arise from no-arg effect
                     // calls like `Read.read()` which the parser produces as `Read.read(())`.
@@ -288,9 +309,13 @@ fn lower_expr_as_comp_non_value(expr: &Expr) -> Result<CompExpr, LowerError> {
         Expr::Resume { value } => {
             // Resume requires a pure value to resume with.
             let ir_value = lower_value_required(value, "resume value")?;
-            Ok(CompExpr::Resume { value: Box::new(ir_value) })
+            Ok(CompExpr::Resume {
+                value: Box::new(ir_value),
+            })
         }
-        Expr::MethodCall { receiver, method, .. } => Err(err(format!(
+        Expr::MethodCall {
+            receiver, method, ..
+        } => Err(err(format!(
             "method call `{}.{}` is not supported in the pure IR subset",
             receiver, method
         ))),
@@ -341,7 +366,9 @@ fn try_lower_value(expr: &Expr) -> Result<Option<ValueExpr>, LowerError> {
         // `lower_value_required`, so effect-op `Qualified` names never reach here as
         // callees. Bare effect-op references (e.g. `let f = Read.read`) are allowed
         // as first-class values and produce `GlobalRef`; they are not `PerformEffect`.
-        Expr::Qualified { receiver, member, .. } => Ok(Some(ValueExpr::GlobalRef {
+        Expr::Qualified {
+            receiver, member, ..
+        } => Ok(Some(ValueExpr::GlobalRef {
             module: receiver.clone(),
             name: member.clone(),
         })),
@@ -362,17 +389,15 @@ fn try_lower_value(expr: &Expr) -> Result<Option<ValueExpr>, LowerError> {
                     InterpolatedPart::Text(t) => {
                         ir_parts.push(IrInterpPart::Text(t.clone()));
                     }
-                    InterpolatedPart::Expr(inner) => {
-                        match try_lower_value(inner)? {
-                            Some(v) => ir_parts.push(IrInterpPart::Expr(v)),
-                            None => {
-                                return Err(err(
-                                    "interpolated string contains a non-pure expression; \
+                    InterpolatedPart::Expr(inner) => match try_lower_value(inner)? {
+                        Some(v) => ir_parts.push(IrInterpPart::Expr(v)),
+                        None => {
+                            return Err(err(
+                                "interpolated string contains a non-pure expression; \
                                      only pure values are supported in the pure IR subset (G3)",
-                                ));
-                            }
+                            ));
                         }
-                    }
+                    },
                 }
             }
             Ok(Some(ValueExpr::Interp(ir_parts)))
@@ -441,7 +466,9 @@ fn lower_handler_expr(clauses: &[crate::ast::HandlerClause]) -> Result<CompExpr,
             body,
         });
     }
-    Ok(CompExpr::Handle { clauses: ir_clauses })
+    Ok(CompExpr::Handle {
+        clauses: ir_clauses,
+    })
 }
 
 fn lower_binop(op: &BinOpKind) -> IrBinOp {
@@ -506,7 +533,11 @@ mod tests {
     }
 
     fn binding(name: &str, value: Expr) -> Stmt {
-        Stmt::Binding { name: name.to_string(), value, span: None }
+        Stmt::Binding {
+            name: name.to_string(),
+            value,
+            span: None,
+        }
     }
 
     // --- acceptance tests (snapshot) ---
@@ -515,7 +546,9 @@ mod tests {
     fn lower_int_lit() {
         let decl = decl_with_body("answer", vec![expr_stmt(Expr::IntLit(42))]);
         let ir_decl = lower_declaration(&decl).unwrap();
-        let m = IrModule { decls: vec![ir_decl] };
+        let m = IrModule {
+            decls: vec![ir_decl],
+        };
         assert!(validate_ir(&m).is_ok());
         insta::assert_snapshot!(fmt_ir(&m));
     }
@@ -524,7 +557,9 @@ mod tests {
     fn lower_bool_lit() {
         let decl = decl_with_body("flag", vec![expr_stmt(Expr::BoolLit(false))]);
         let ir_decl = lower_declaration(&decl).unwrap();
-        let m = IrModule { decls: vec![ir_decl] };
+        let m = IrModule {
+            decls: vec![ir_decl],
+        };
         assert!(validate_ir(&m).is_ok());
         insta::assert_snapshot!(fmt_ir(&m));
     }
@@ -533,7 +568,9 @@ mod tests {
     fn lower_str_lit() {
         let decl = decl_with_body("msg", vec![expr_stmt(Expr::StringLit("hello".into()))]);
         let ir_decl = lower_declaration(&decl).unwrap();
-        let m = IrModule { decls: vec![ir_decl] };
+        let m = IrModule {
+            decls: vec![ir_decl],
+        };
         assert!(validate_ir(&m).is_ok());
         insta::assert_snapshot!(fmt_ir(&m));
     }
@@ -542,19 +579,20 @@ mod tests {
     fn lower_var() {
         let decl = decl_with_params("id", vec!["x"], vec![expr_stmt(Expr::var("x"))]);
         let ir_decl = lower_declaration(&decl).unwrap();
-        let m = IrModule { decls: vec![ir_decl] };
+        let m = IrModule {
+            decls: vec![ir_decl],
+        };
         assert!(validate_ir(&m).is_ok());
         insta::assert_snapshot!(fmt_ir(&m));
     }
 
     #[test]
     fn lower_qualified() {
-        let decl = decl_with_body(
-            "ref_io",
-            vec![expr_stmt(Expr::qualified("Print", "print"))],
-        );
+        let decl = decl_with_body("ref_io", vec![expr_stmt(Expr::qualified("Print", "print"))]);
         let ir_decl = lower_declaration(&decl).unwrap();
-        let m = IrModule { decls: vec![ir_decl] };
+        let m = IrModule {
+            decls: vec![ir_decl],
+        };
         assert!(validate_ir(&m).is_ok());
         insta::assert_snapshot!(fmt_ir(&m));
     }
@@ -571,7 +609,9 @@ mod tests {
             })],
         );
         let ir_decl = lower_declaration(&decl).unwrap();
-        let m = IrModule { decls: vec![ir_decl] };
+        let m = IrModule {
+            decls: vec![ir_decl],
+        };
         assert!(validate_ir(&m).is_ok());
         insta::assert_snapshot!(fmt_ir(&m));
     }
@@ -613,7 +653,9 @@ mod tests {
             })],
         );
         let ir_decl = lower_declaration(&decl).unwrap();
-        let m = IrModule { decls: vec![ir_decl] };
+        let m = IrModule {
+            decls: vec![ir_decl],
+        };
         assert!(validate_ir(&m).is_ok());
         insta::assert_snapshot!(fmt_ir(&m));
     }
@@ -622,13 +664,12 @@ mod tests {
     fn lower_let_binding() {
         let decl = decl_with_body(
             "with_let",
-            vec![
-                binding("x", Expr::IntLit(10)),
-                expr_stmt(Expr::var("x")),
-            ],
+            vec![binding("x", Expr::IntLit(10)), expr_stmt(Expr::var("x"))],
         );
         let ir_decl = lower_declaration(&decl).unwrap();
-        let m = IrModule { decls: vec![ir_decl] };
+        let m = IrModule {
+            decls: vec![ir_decl],
+        };
         assert!(validate_ir(&m).is_ok());
         insta::assert_snapshot!(fmt_ir(&m));
     }
@@ -648,7 +689,9 @@ mod tests {
             ],
         );
         let ir_decl = lower_declaration(&decl).unwrap();
-        let m = IrModule { decls: vec![ir_decl] };
+        let m = IrModule {
+            decls: vec![ir_decl],
+        };
         assert!(validate_ir(&m).is_ok());
         insta::assert_snapshot!(fmt_ir(&m));
     }
@@ -663,7 +706,9 @@ mod tests {
             ]))],
         );
         let ir_decl = lower_declaration(&decl).unwrap();
-        let m = IrModule { decls: vec![ir_decl] };
+        let m = IrModule {
+            decls: vec![ir_decl],
+        };
         assert!(validate_ir(&m).is_ok());
         insta::assert_snapshot!(fmt_ir(&m));
     }
@@ -682,9 +727,15 @@ mod tests {
             arg: Box::new(Expr::var("b")),
             span: None,
         };
-        let decl = decl_with_params("call_test", vec!["f", "a", "b"], vec![expr_stmt(outer_call)]);
+        let decl = decl_with_params(
+            "call_test",
+            vec!["f", "a", "b"],
+            vec![expr_stmt(outer_call)],
+        );
         let ir_decl = lower_declaration(&decl).unwrap();
-        let m = IrModule { decls: vec![ir_decl] };
+        let m = IrModule {
+            decls: vec![ir_decl],
+        };
         assert!(validate_ir(&m).is_ok());
         insta::assert_snapshot!(fmt_ir(&m));
     }
@@ -701,7 +752,9 @@ mod tests {
             ]))],
         );
         let ir_decl = lower_declaration(&decl).unwrap();
-        let m = IrModule { decls: vec![ir_decl] };
+        let m = IrModule {
+            decls: vec![ir_decl],
+        };
         assert!(validate_ir(&m).is_ok());
         insta::assert_snapshot!(fmt_ir(&m));
     }
@@ -733,7 +786,9 @@ mod tests {
             })],
         );
         let ir_decl = lower_declaration(&decl).unwrap();
-        let m = IrModule { decls: vec![ir_decl] };
+        let m = IrModule {
+            decls: vec![ir_decl],
+        };
         assert!(validate_ir(&m).is_ok());
         insta::assert_snapshot!(fmt_ir(&m));
     }
@@ -744,10 +799,14 @@ mod tests {
         let decl = decl_with_params(
             "do_resume",
             vec!["x"],
-            vec![expr_stmt(Expr::Resume { value: Box::new(Expr::var("x")) })],
+            vec![expr_stmt(Expr::Resume {
+                value: Box::new(Expr::var("x")),
+            })],
         );
         let ir_decl = lower_declaration(&decl).unwrap();
-        let m = IrModule { decls: vec![ir_decl] };
+        let m = IrModule {
+            decls: vec![ir_decl],
+        };
         assert!(validate_ir(&m).is_ok());
         insta::assert_snapshot!(fmt_ir(&m));
     }
@@ -756,7 +815,11 @@ mod tests {
     fn reject_mut_binding() {
         let decl = decl_with_body(
             "mut_bind",
-            vec![Stmt::MutBinding { name: "x".into(), value: Expr::IntLit(1), span: None }],
+            vec![Stmt::MutBinding {
+                name: "x".into(),
+                value: Expr::IntLit(1),
+                span: None,
+            }],
         );
         let err = lower_declaration(&decl).unwrap_err();
         assert!(err.message.contains("mutable binding"), "{}", err.message);
@@ -801,15 +864,17 @@ mod tests {
                     name: "read".into(),
                     params: vec!["resume".into()],
                     body: String::new(),
-                    parsed_body: Some(vec![
-                        expr_stmt(Expr::Resume { value: Box::new(Expr::StringLit("hi".into())) }),
-                    ]),
+                    parsed_body: Some(vec![expr_stmt(Expr::Resume {
+                        value: Box::new(Expr::StringLit("hi".into())),
+                    })]),
                     span: Span::point(1, 1),
                 }],
             })],
         );
         let ir_decl = lower_declaration(&decl).unwrap();
-        let m = IrModule { decls: vec![ir_decl] };
+        let m = IrModule {
+            decls: vec![ir_decl],
+        };
         assert!(validate_ir(&m).is_ok());
         insta::assert_snapshot!(fmt_ir(&m));
     }
@@ -818,7 +883,11 @@ mod tests {
     fn reject_assign() {
         let decl = decl_with_body(
             "assign_test",
-            vec![Stmt::Assign { name: "x".into(), value: Expr::IntLit(1), span: None }],
+            vec![Stmt::Assign {
+                name: "x".into(),
+                value: Expr::IntLit(1),
+                span: None,
+            }],
         );
         let err = lower_declaration(&decl).unwrap_err();
         assert!(err.message.contains("assignment"), "{}", err.message);
@@ -832,7 +901,9 @@ mod tests {
         // `let x: Int = 5 in x`, yielding the bound value as the block result.
         let decl = decl_with_body("lone_bind", vec![binding("x", Expr::IntLit(5))]);
         let ir_decl = lower_declaration(&decl).unwrap();
-        let m = IrModule { decls: vec![ir_decl] };
+        let m = IrModule {
+            decls: vec![ir_decl],
+        };
         assert!(validate_ir(&m).is_ok());
         // Verify structure: should be Let { name: "x", body: Value(Var("x")) }
         match &m.decls[0].body {
@@ -914,7 +985,9 @@ mod tests {
         let mut decl = decl_with_body("io_fn", vec![expr_stmt(Expr::IntLit(42))]);
         decl.type_annotation = Some("Unit -> Unit can IO".into());
         let ir_decl = lower_declaration(&decl).unwrap();
-        let m = IrModule { decls: vec![ir_decl] };
+        let m = IrModule {
+            decls: vec![ir_decl],
+        };
         assert!(validate_ir(&m).is_ok());
         insta::assert_snapshot!(fmt_ir(&m));
     }
@@ -939,11 +1012,16 @@ mod tests {
         };
         let with_expr = Expr::With {
             handler: Box::new(handler_expr),
-            body: vec![binding("result", Expr::var("result")), expr_stmt(Expr::var("result"))],
+            body: vec![
+                binding("result", Expr::var("result")),
+                expr_stmt(Expr::var("result")),
+            ],
         };
         let decl = decl_with_body("main_effect", vec![expr_stmt(with_expr)]);
         let ir_decl = lower_declaration(&decl).unwrap();
-        let m = IrModule { decls: vec![ir_decl] };
+        let m = IrModule {
+            decls: vec![ir_decl],
+        };
         assert!(validate_ir(&m).is_ok());
         insta::assert_snapshot!(fmt_ir(&m));
     }
@@ -960,7 +1038,9 @@ mod tests {
         };
         let decl = decl_with_body("say_hello", vec![expr_stmt(call)]);
         let ir_decl = lower_declaration(&decl).unwrap();
-        let m = IrModule { decls: vec![ir_decl] };
+        let m = IrModule {
+            decls: vec![ir_decl],
+        };
         assert!(validate_ir(&m).is_ok());
         // Verify structural form.
         assert!(
@@ -982,7 +1062,9 @@ mod tests {
         };
         let decl = decl_with_body("do_read", vec![expr_stmt(call)]);
         let ir_decl = lower_declaration(&decl).unwrap();
-        let m = IrModule { decls: vec![ir_decl] };
+        let m = IrModule {
+            decls: vec![ir_decl],
+        };
         assert!(validate_ir(&m).is_ok());
         // Verify args list is empty (unit arg was stripped).
         assert!(
@@ -1004,7 +1086,9 @@ mod tests {
         };
         let decl = decl_with_body("do_read_line", vec![expr_stmt(call)]);
         let ir_decl = lower_declaration(&decl).unwrap();
-        let m = IrModule { decls: vec![ir_decl] };
+        let m = IrModule {
+            decls: vec![ir_decl],
+        };
         assert!(validate_ir(&m).is_ok());
         assert!(
             matches!(&m.decls[0].body, CompExpr::PerformEffect { effect, op, args }
@@ -1025,7 +1109,9 @@ mod tests {
         };
         let decl = decl_with_params("say_line", vec!["x"], vec![expr_stmt(call)]);
         let ir_decl = lower_declaration(&decl).unwrap();
-        let m = IrModule { decls: vec![ir_decl] };
+        let m = IrModule {
+            decls: vec![ir_decl],
+        };
         assert!(validate_ir(&m).is_ok());
         assert!(
             matches!(&m.decls[0].body, CompExpr::PerformEffect { effect, op, args }
@@ -1054,23 +1140,29 @@ mod tests {
     /// Count `PerformEffect` nodes with matching effect/op in a CompExpr tree.
     fn count_perform(comp: &CompExpr, effect: &str, op: &str) -> usize {
         match comp {
-            CompExpr::PerformEffect { effect: e, op: o, .. } if e == effect && o == op => 1,
+            CompExpr::PerformEffect {
+                effect: e, op: o, ..
+            } if e == effect && o == op => 1,
             CompExpr::PerformEffect { .. } => 0,
             CompExpr::Value(_) => 0,
             CompExpr::Let { value, body, .. } => {
                 count_perform(value, effect, op) + count_perform(body, effect, op)
             }
             CompExpr::Seq { stmts, tail } => {
-                stmts.iter().map(|s| count_perform(s, effect, op)).sum::<usize>()
+                stmts
+                    .iter()
+                    .map(|s| count_perform(s, effect, op))
+                    .sum::<usize>()
                     + count_perform(tail, effect, op)
             }
             CompExpr::If { then_, else_, .. } => {
                 count_perform(then_, effect, op) + count_perform(else_, effect, op)
             }
             CompExpr::Call { .. } => 0,
-            CompExpr::Handle { clauses } => {
-                clauses.iter().map(|c| count_perform(&c.body, effect, op)).sum()
-            }
+            CompExpr::Handle { clauses } => clauses
+                .iter()
+                .map(|c| count_perform(&c.body, effect, op))
+                .sum(),
             CompExpr::WithHandler { handler, body } => {
                 count_perform(handler, effect, op) + count_perform(body, effect, op)
             }
@@ -1120,7 +1212,9 @@ mod tests {
             vec![binding("text", read_call), expr_stmt(print_call)],
         );
         let ir_decl = lower_declaration(&decl).unwrap();
-        let m = IrModule { decls: vec![ir_decl] };
+        let m = IrModule {
+            decls: vec![ir_decl],
+        };
         assert!(validate_ir(&m).is_ok());
         // Structural assertions: must have exactly one Read.read and one Print.print node.
         assert_eq!(
@@ -1154,7 +1248,9 @@ mod tests {
             ],
         );
         let ir_decl = lower_declaration(&decl).unwrap();
-        let m = IrModule { decls: vec![ir_decl] };
+        let m = IrModule {
+            decls: vec![ir_decl],
+        };
         assert!(validate_ir(&m).is_ok());
         // Structural assertions: must have exactly one Read.read and one Print.print node.
         assert_eq!(

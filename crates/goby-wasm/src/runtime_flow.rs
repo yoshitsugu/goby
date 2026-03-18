@@ -242,4 +242,3 @@ pub(crate) enum DirectCallHead {
     Bare(String),
     Qualified { receiver: String, member: String },
 }
-

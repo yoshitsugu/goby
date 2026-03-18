@@ -119,10 +119,13 @@ where
             let (handler, next_i) =
                 parse_handler_expr_from_lines(lines, i + 1, this_indent, parse_expr)?;
             let (body, after_with) = parse_with_in_body(lines, next_i, this_indent, parse_expr)?;
-            stmts.push(Stmt::Expr(Expr::With {
-                handler: Box::new(handler),
-                body,
-            }, Some(stmt_span)));
+            stmts.push(Stmt::Expr(
+                Expr::With {
+                    handler: Box::new(handler),
+                    body,
+                },
+                Some(stmt_span),
+            ));
             i = after_with;
             continue;
         }
@@ -130,10 +133,13 @@ where
         if let Some(handler_src) = trimmed.strip_prefix("with ") {
             let handler = parse_expr(handler_src.trim())?;
             let (body, after_with) = parse_with_in_body(lines, i + 1, this_indent, parse_expr)?;
-            stmts.push(Stmt::Expr(Expr::With {
-                handler: Box::new(handler),
-                body,
-            }, Some(stmt_span)));
+            stmts.push(Stmt::Expr(
+                Expr::With {
+                    handler: Box::new(handler),
+                    body,
+                },
+                Some(stmt_span),
+            ));
             i = after_with;
             continue;
         }
@@ -151,11 +157,14 @@ where
                     parse_multiline_expr(lines, next_i, parse_expr)
             {
                 let callee = parse_expr(trimmed)?;
-                stmts.push(Stmt::Expr(Expr::Call {
-                    callee: Box::new(callee),
-                    arg: Box::new(multi_expr),
-                    span: Some(stmt_span),
-                }, Some(stmt_span)));
+                stmts.push(Stmt::Expr(
+                    Expr::Call {
+                        callee: Box::new(callee),
+                        arg: Box::new(multi_expr),
+                        span: Some(stmt_span),
+                    },
+                    Some(stmt_span),
+                ));
                 i = next_i + consumed;
                 continue;
             }
@@ -325,11 +334,14 @@ where
     }
 
     Some((
-        Stmt::Expr(Expr::Call {
-            callee: Box::new(parse_expr(callee_src)?),
-            arg: Box::new(arg),
-        span: None,
-        }, None),
+        Stmt::Expr(
+            Expr::Call {
+                callee: Box::new(parse_expr(callee_src)?),
+                arg: Box::new(arg),
+                span: None,
+            },
+            None,
+        ),
         close_idx + 1,
     ))
 }
@@ -1222,7 +1234,10 @@ else
     fn parses_qualified_handler_clause_name() {
         let body = "with\n  Log.log msg ->\n    resume ()\nin\n  Log.log \"hello\"";
         let stmts = parse_body_stmts(body);
-        assert!(stmts.is_some(), "qualified handler clause name should parse");
+        assert!(
+            stmts.is_some(),
+            "qualified handler clause name should parse"
+        );
         if let Some(stmts) = stmts {
             if let crate::ast::Stmt::Expr(crate::ast::Expr::With { handler, .. }, _) = &stmts[0] {
                 if let crate::ast::Expr::Handler { clauses } = handler.as_ref() {
@@ -1270,7 +1285,10 @@ else
         // 4-space indent → clause_col = 5.
         let source = "effect Log\n  log: String -> Unit\nmain =\n  with\n    log msg ->\n      print msg\n      resume ()\n  in\n    log \"hi\"\n";
         let module = parse_module(source).expect("source should parse");
-        let stmts = module.declarations[0].parsed_body.as_ref().expect("body should parse");
+        let stmts = module.declarations[0]
+            .parsed_body
+            .as_ref()
+            .expect("body should parse");
         match &stmts[0] {
             crate::ast::Stmt::Expr(crate::ast::Expr::With { handler, .. }, _) => {
                 match handler.as_ref() {
@@ -1298,7 +1316,10 @@ else
         //   index 3: "    _ -> \"other\"" → arms[1].span.line = 4, col = 5
         let source = "f x =\n  case x\n    1 -> \"one\"\n    _ -> \"other\"\n";
         let module = parse_module(source).expect("source should parse");
-        let stmts = module.declarations[0].parsed_body.as_ref().expect("body should parse");
+        let stmts = module.declarations[0]
+            .parsed_body
+            .as_ref()
+            .expect("body should parse");
         match &stmts[0] {
             crate::ast::Stmt::Expr(crate::ast::Expr::Case { arms, .. }, _) => {
                 assert_eq!(arms.len(), 2);
@@ -1344,7 +1365,9 @@ else
         // Body line 1: "x = 1"  → span.line=1, span.col=1 (no indent)
         let stmts = parse_body_stmts("x = 1\nx + 2").expect("should parse");
         match &stmts[0] {
-            Stmt::Binding { span: Some(span), .. } => {
+            Stmt::Binding {
+                span: Some(span), ..
+            } => {
                 assert_eq!(span.line, 1, "line");
                 assert_eq!(span.col, 1, "col");
             }
@@ -1357,7 +1380,11 @@ else
         // Body line 1: "x = 1", line 2: "y = 2"
         let stmts = parse_body_stmts("x = 1\ny = 2").expect("should parse");
         match &stmts[1] {
-            Stmt::Binding { name, span: Some(span), .. } => {
+            Stmt::Binding {
+                name,
+                span: Some(span),
+                ..
+            } => {
                 assert_eq!(name, "y");
                 assert_eq!(span.line, 2, "second binding should be on body line 2");
                 assert_eq!(span.col, 1);
@@ -1370,7 +1397,9 @@ else
     fn mut_binding_stmt_carries_span() {
         let stmts = parse_body_stmts("mut n = 0\nn").expect("should parse");
         match &stmts[0] {
-            Stmt::MutBinding { span: Some(span), .. } => {
+            Stmt::MutBinding {
+                span: Some(span), ..
+            } => {
                 assert_eq!(span.line, 1);
                 assert_eq!(span.col, 1);
             }
@@ -1382,7 +1411,11 @@ else
     fn assign_stmt_carries_span() {
         let stmts = parse_body_stmts("mut n = 0\nn := 1\nn").expect("should parse");
         match &stmts[1] {
-            Stmt::Assign { name, span: Some(span), .. } => {
+            Stmt::Assign {
+                name,
+                span: Some(span),
+                ..
+            } => {
                 assert_eq!(name, "n");
                 assert_eq!(span.line, 2);
                 assert_eq!(span.col, 1);
@@ -1412,7 +1445,9 @@ else
         // Here the whole body is at 2-space indent.
         let stmts = parse_body_stmts("  x = 1\n  x").expect("should parse");
         match &stmts[0] {
-            Stmt::Binding { span: Some(span), .. } => {
+            Stmt::Binding {
+                span: Some(span), ..
+            } => {
                 // baseline = 2, col = baseline + 1 = 3
                 assert_eq!(span.col, 3);
             }

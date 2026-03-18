@@ -237,9 +237,13 @@ pub(crate) fn inject_type_constructors(
                 fields,
             } => {
                 let mut field_map = HashMap::new();
-                let params: Vec<Ty> = fields.iter().map(|f| ty_from_annotation(&f.type_annotation)).collect();
-                for (field_name, field_ty) in
-                    fields.iter().map(|f| (&f.name, ty_from_annotation(&f.type_annotation)))
+                let params: Vec<Ty> = fields
+                    .iter()
+                    .map(|f| ty_from_annotation(&f.type_annotation))
+                    .collect();
+                for (field_name, field_ty) in fields
+                    .iter()
+                    .map(|f| (&f.name, ty_from_annotation(&f.type_annotation)))
                 {
                     field_map.insert(field_name.clone(), field_ty);
                 }

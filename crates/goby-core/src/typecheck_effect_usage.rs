@@ -95,10 +95,7 @@ fn infer_handler_covered_ops_strict(
                     return Err(TypecheckError {
                         declaration: Some(decl_name.to_string()),
                         span: None, // expr span not yet available
-                        message: format!(
-                            "duplicate handler clause for operation `{}`",
-                            bare_name
-                        ),
+                        message: format!("duplicate handler clause for operation `{}`", bare_name),
                     });
                 }
                 covered.insert(bare_name.clone());
@@ -229,9 +226,9 @@ pub(crate) fn check_unhandled_effects_in_expr(
     fn effect_op_call_target_and_args(expr: &Expr) -> Option<(String, Vec<&Expr>)> {
         match expr {
             Expr::Var { name, .. } => Some((name.clone(), Vec::new())),
-            Expr::Qualified { receiver, member, .. } => {
-                Some((format!("{}.{}", receiver, member), Vec::new()))
-            }
+            Expr::Qualified {
+                receiver, member, ..
+            } => Some((format!("{}.{}", receiver, member), Vec::new())),
             Expr::Call { callee, arg, .. } => {
                 let (target, mut args) = effect_op_call_target_and_args(callee)?;
                 args.push(arg.as_ref());
@@ -308,7 +305,9 @@ pub(crate) fn check_unhandled_effects_in_expr(
                 decl_name,
             )
         }
-        Expr::Qualified { receiver, member, .. } => {
+        Expr::Qualified {
+            receiver, member, ..
+        } => {
             let qualified = format!("{}.{}", receiver, member);
             if env.is_effect_op(&qualified) && !covered_ops.contains(qualified.as_str()) {
                 return Err(TypecheckError {

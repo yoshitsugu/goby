@@ -554,7 +554,9 @@ impl<'m> RuntimeOutputResolver<'m> {
                 self.eval_expr_to_option(expr, locals, callables, evaluators, depth)
             }
             Expr::Call { callee, arg: _, .. } => {
-                if let Expr::Var { name: ctor_name, .. } = callee.as_ref()
+                if let Expr::Var {
+                    name: ctor_name, ..
+                } = callee.as_ref()
                     && self.single_field_constructor_field(ctor_name).is_some()
                 {
                     return self.eval_expr_to_option(expr, locals, callables, evaluators, depth);
@@ -580,7 +582,9 @@ impl<'m> RuntimeOutputResolver<'m> {
             Expr::RecordConstruct { .. } => {
                 self.eval_expr_to_option(expr, locals, callables, evaluators, depth)
             }
-            Expr::Qualified { receiver, member, .. } => match locals.get(receiver) {
+            Expr::Qualified {
+                receiver, member, ..
+            } => match locals.get(receiver) {
                 Some(RuntimeValue::Record { fields, .. }) => fields.get(member).cloned(),
                 Some(RuntimeValue::Tuple(items)) => {
                     let index = member.parse::<usize>().ok()?;

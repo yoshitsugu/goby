@@ -802,8 +802,7 @@ fn parse_error_output_matches_fixture() {
 fn typecheck_error_output_matches_fixture() {
     let root = repo_root();
     let input = "crates/goby-cli/tests/fixtures/typecheck_error_input.gb";
-    let expected_path =
-        root.join("crates/goby-cli/tests/fixtures/typecheck_error_expected.txt");
+    let expected_path = root.join("crates/goby-cli/tests/fixtures/typecheck_error_expected.txt");
     assert!(
         root.join(input).exists(),
         "fixture input must exist at {}",
@@ -823,7 +822,10 @@ fn typecheck_error_output_matches_fixture() {
         .output()
         .expect("cli should execute");
 
-    assert!(!output.status.success(), "typecheck error input should fail");
+    assert!(
+        !output.status.success(),
+        "typecheck error input should fail"
+    );
     let actual = String::from_utf8_lossy(&output.stderr);
     assert_eq!(
         actual.trim_end_matches('\n'),
@@ -934,5 +936,8 @@ fn fmt_rewrites_file_in_place() {
     );
 
     let actual = fs::read_to_string(&tmp_file).expect("should read result");
-    assert_eq!(actual, expected_src, "file should be rewritten to formatted form");
+    assert_eq!(
+        actual, expected_src,
+        "file should be rewritten to formatted form"
+    );
 }

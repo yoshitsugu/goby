@@ -40,7 +40,9 @@ fn infer_expr_ty(expr: &Expr, env: &TypeEnv) -> Ty {
             Ty::Tuple(tys)
         }
         Expr::Var { name, .. } => env.lookup(name),
-        Expr::Qualified { receiver, member, .. } => {
+        Expr::Qualified {
+            receiver, member, ..
+        } => {
             let receiver_ty = env.lookup(receiver);
             let resolved_receiver_ty = env.resolve_alias(&receiver_ty, 0);
             if let Ty::Tuple(items) = &resolved_receiver_ty
@@ -289,10 +291,7 @@ pub(crate) fn check_list_index_constraints(
             return Err(TypecheckError {
                 declaration: Some(decl_name.to_string()),
                 span: None, // expr span not yet available
-                message: format!(
-                    "list index must be `Int`, but got `{}`",
-                    ty_name(other)
-                ),
+                message: format!("list index must be `Int`, but got `{}`", ty_name(other)),
             });
         }
     }
@@ -717,8 +716,8 @@ main =
 
     #[test]
     fn list_index_rejects_non_int_index() {
-        let module =
-            parse_module("xs : List Int\nxs = [1, 2]\nv : Int\nv = xs[True]\n").expect("should parse");
+        let module = parse_module("xs : List Int\nxs = [1, 2]\nv : Int\nv = xs[True]\n")
+            .expect("should parse");
         let err = typecheck_module(&module).expect_err("bool index should fail");
         assert!(
             err.message.contains("list index must be `Int`"),
@@ -729,11 +728,11 @@ main =
 
     #[test]
     fn list_index_rejects_non_list_receiver() {
-        let module =
-            parse_module("n : Int\nn = 42\nv : Int\nv = n[0]\n").expect("should parse");
+        let module = parse_module("n : Int\nn = 42\nv : Int\nv = n[0]\n").expect("should parse");
         let err = typecheck_module(&module).expect_err("int receiver index should fail");
         assert!(
-            err.message.contains("list index requires a `List` receiver"),
+            err.message
+                .contains("list index requires a `List` receiver"),
             "unexpected message: {}",
             err.message
         );

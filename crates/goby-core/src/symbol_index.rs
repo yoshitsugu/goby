@@ -118,7 +118,10 @@ pub fn infer_local_bindings(decl: &Declaration) -> Vec<LocalBindingSymbol> {
 
     let mut local_env = TypeEnv {
         globals: HashMap::new(),
-        locals: param_tys.iter().map(|(n, t)| (n.clone(), t.clone())).collect(),
+        locals: param_tys
+            .iter()
+            .map(|(n, t)| (n.clone(), t.clone()))
+            .collect(),
         type_aliases: HashMap::new(),
         record_types: HashMap::new(),
     };
@@ -189,7 +192,11 @@ fn collect_stmts(stmts: &[Stmt], env: &mut TypeEnv, result: &mut Vec<LocalBindin
 /// `Declaration.line` points to the type-annotation line when an annotation is
 /// present; the actual definition line is one line below it in that case.
 pub fn def_line_of(decl: &Declaration) -> usize {
-    if decl.type_annotation.is_some() { decl.line + 1 } else { decl.line }
+    if decl.type_annotation.is_some() {
+        decl.line + 1
+    } else {
+        decl.line
+    }
 }
 
 /// Build a `SymbolIndex` from a parsed (or typechecked) `Module`.
@@ -323,7 +330,12 @@ mod tests {
         // `y = x + 1` where x : Int  →  y : Int
         let src = "add : Int -> Int\nadd x =\n  y = x + 1\n  y\n";
         let bindings = decl_bindings(src);
-        assert_eq!(bindings.len(), 1, "expected one binding, got: {:?}", bindings);
+        assert_eq!(
+            bindings.len(),
+            1,
+            "expected one binding, got: {:?}",
+            bindings
+        );
         assert_eq!(bindings[0].name, "y");
         assert_eq!(bindings[0].ty_str, "Int");
         // body string starts with a leading '\n' (from collect_indented_body),
@@ -338,7 +350,12 @@ mod tests {
         // `mut z = 0`  →  z : Int
         let src = "foo : Int -> Int\nfoo x =\n  mut z = 0\n  z\n";
         let bindings = decl_bindings(src);
-        assert_eq!(bindings.len(), 1, "expected one binding, got: {:?}", bindings);
+        assert_eq!(
+            bindings.len(),
+            1,
+            "expected one binding, got: {:?}",
+            bindings
+        );
         assert_eq!(bindings[0].name, "z");
         assert_eq!(bindings[0].ty_str, "Int");
         // "  mut z = 0": indent=2 → sp.col=3 ("mut" start), name starts at sp.col+4=7.
@@ -361,7 +378,12 @@ mod tests {
         let src = "foo : Int -> Int\nfoo x =\n  y = some_global_fn x\n  y\n";
         let bindings = decl_bindings(src);
         // y depends on some_global_fn which is not in locals → Ty::Unknown → omitted
-        assert!(bindings.is_empty(), "expected empty, got: {:?}\n\nSource:\n{}", bindings, src);
+        assert!(
+            bindings.is_empty(),
+            "expected empty, got: {:?}\n\nSource:\n{}",
+            bindings,
+            src
+        );
     }
 
     #[test]
@@ -377,8 +399,15 @@ mod tests {
         //   6: "    y"
         let src = "main =\n  with\n    log str ->\n      resume ()\n  in\n    y = 42\n    y\n";
         let bindings = decl_bindings(src);
-        assert!(!bindings.is_empty(), "expected at least one binding, got none\nsrc:\n{}", src);
-        let y = bindings.iter().find(|b| b.name == "y").expect("binding 'y' not found");
+        assert!(
+            !bindings.is_empty(),
+            "expected at least one binding, got none\nsrc:\n{}",
+            src
+        );
+        let y = bindings
+            .iter()
+            .find(|b| b.name == "y")
+            .expect("binding 'y' not found");
         assert_eq!(y.ty_str, "Int");
         // body_relative_line=6 → source line 6 (def_line=1, 1+6-1=6, LSP line 5)
         assert_eq!(y.body_relative_line, 6);

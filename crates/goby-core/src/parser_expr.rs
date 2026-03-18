@@ -1275,10 +1275,7 @@ mod tests {
             Some(Expr::MethodCall {
                 receiver: "l".to_string(),
                 method: "join".to_string(),
-                args: vec![
-                    Expr::var("paths"),
-                    Expr::StringLit("\n".to_string()),
-                ],
+                args: vec![Expr::var("paths"), Expr::StringLit("\n".to_string()),],
             })
         );
     }
@@ -1389,7 +1386,10 @@ mod tests {
         // Document the actual parse so regressions are caught.
         assert_eq!(
             parse_expr("f xs[0]"),
-            Some(list_index(Expr::call(Expr::var("f"), Expr::var("xs")), Expr::IntLit(0)))
+            Some(list_index(
+                Expr::call(Expr::var("f"), Expr::var("xs")),
+                Expr::IntLit(0)
+            ))
         );
     }
 
@@ -1414,7 +1414,10 @@ mod tests {
         // f()[0]
         assert_eq!(
             parse_expr("f()[0]"),
-            Some(list_index(Expr::call(Expr::var("f"), Expr::unit_value()), Expr::IntLit(0)))
+            Some(list_index(
+                Expr::call(Expr::var("f"), Expr::unit_value()),
+                Expr::IntLit(0)
+            ))
         );
     }
 

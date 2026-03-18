@@ -274,9 +274,21 @@ pub enum Expr {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Stmt {
-    Binding { name: String, value: Expr, span: Option<Span> },
-    MutBinding { name: String, value: Expr, span: Option<Span> },
-    Assign { name: String, value: Expr, span: Option<Span> },
+    Binding {
+        name: String,
+        value: Expr,
+        span: Option<Span>,
+    },
+    MutBinding {
+        name: String,
+        value: Expr,
+        span: Option<Span>,
+    },
+    Assign {
+        name: String,
+        value: Expr,
+        span: Option<Span>,
+    },
     Expr(Expr, Option<Span>),
 }
 
@@ -284,17 +296,28 @@ impl Expr {
     /// Construct a `Var` expression with no span (most common case in the parser
     /// and test code; spans are populated later where source position is known).
     pub fn var(name: impl Into<String>) -> Self {
-        Expr::Var { name: name.into(), span: None }
+        Expr::Var {
+            name: name.into(),
+            span: None,
+        }
     }
 
     /// Construct a `Qualified` expression with no span.
     pub fn qualified(receiver: impl Into<String>, member: impl Into<String>) -> Self {
-        Expr::Qualified { receiver: receiver.into(), member: member.into(), span: None }
+        Expr::Qualified {
+            receiver: receiver.into(),
+            member: member.into(),
+            span: None,
+        }
     }
 
     /// Construct a curried `Call` expression with no span.
     pub fn call(callee: Expr, arg: Expr) -> Self {
-        Expr::Call { callee: Box::new(callee), arg: Box::new(arg), span: None }
+        Expr::Call {
+            callee: Box::new(callee),
+            arg: Box::new(arg),
+            span: None,
+        }
     }
 
     pub fn unit_value() -> Self {
@@ -336,7 +359,9 @@ impl Expr {
             Expr::StringLit(s) => Some(format!("\"{}\"", s)),
             Expr::InterpolatedString(_) => None,
             Expr::Var { name, .. } => Some(name.clone()),
-            Expr::Qualified { receiver, member, .. } => Some(format!("{}.{}", receiver, member)),
+            Expr::Qualified {
+                receiver, member, ..
+            } => Some(format!("{}.{}", receiver, member)),
             Expr::RecordConstruct {
                 constructor,
                 fields,

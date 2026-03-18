@@ -170,8 +170,10 @@ impl RuntimeValue {
             Self::Unit => "Unit".to_string(),
             Self::Bool(b) => if *b { "True" } else { "False" }.to_string(),
             Self::Tuple(items) => {
-                let parts: Vec<String> =
-                    items.iter().map(|v| v.format_text(quoted_strings)).collect();
+                let parts: Vec<String> = items
+                    .iter()
+                    .map(|v| v.format_text(quoted_strings))
+                    .collect();
                 format!("({})", parts.join(", "))
             }
             Self::ListInt(values) => format_list_int(values),

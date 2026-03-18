@@ -44,9 +44,7 @@ fn main() {
     let (connection, io_threads) = Connection::stdio();
 
     let server_caps = serde_json::to_value(ServerCapabilities {
-        text_document_sync: Some(TextDocumentSyncCapability::Kind(
-            TextDocumentSyncKind::FULL,
-        )),
+        text_document_sync: Some(TextDocumentSyncCapability::Kind(TextDocumentSyncKind::FULL)),
         hover_provider: Some(HoverProviderCapability::Simple(true)),
         definition_provider: Some(OneOf::Left(true)),
         ..ServerCapabilities::default()
@@ -137,7 +135,11 @@ fn handle_request(
                 Ok(p) => p,
                 Err(e) => return e,
             };
-        let uri = params.text_document_position_params.text_document.uri.clone();
+        let uri = params
+            .text_document_position_params
+            .text_document
+            .uri
+            .clone();
         let pos = params.text_document_position_params.position;
         let source = store.docs.get(&uri).map(|s| s.as_str()).unwrap_or("");
         let result = definition_at(source, &uri, stdlib_root, pos);
@@ -328,7 +330,9 @@ fn handle_notification(
                 store.upsert(uri.clone(), change.text.clone());
                 publish_diagnostics(connection, uri, &change.text, stdlib_root);
             } else {
-                eprintln!("goby-lsp: didChange with empty content_changes; diagnostics not updated");
+                eprintln!(
+                    "goby-lsp: didChange with empty content_changes; diagnostics not updated"
+                );
             }
         }
         <DidCloseTextDocument as lsp_types::notification::Notification>::METHOD => {
@@ -361,7 +365,11 @@ fn publish_diagnostics(
 }
 
 fn send_diagnostics(connection: &Connection, uri: Url, diagnostics: Vec<lsp_types::Diagnostic>) {
-    let params = PublishDiagnosticsParams { uri, diagnostics, version: None };
+    let params = PublishDiagnosticsParams {
+        uri,
+        diagnostics,
+        version: None,
+    };
     let notif = Notification::new(
         <PublishDiagnostics as lsp_types::notification::Notification>::METHOD.to_string(),
         params,
@@ -380,8 +388,14 @@ fn analyze(source: &str, stdlib_root: Option<&Path>) -> Vec<lsp_types::Diagnosti
     let Some(stdlib) = stdlib_root else {
         return vec![lsp_types::Diagnostic {
             range: Range {
-                start: Position { line: 0, character: 0 },
-                end: Position { line: 0, character: 0 },
+                start: Position {
+                    line: 0,
+                    character: 0,
+                },
+                end: Position {
+                    line: 0,
+                    character: 0,
+                },
             },
             severity: Some(DiagnosticSeverity::ERROR),
             message: "goby-lsp: stdlib root not found; set GOBY_STDLIB_ROOT".to_string(),
@@ -429,8 +443,14 @@ fn to_lsp_diagnostic(source: &str, diag: &goby_core::Diagnostic) -> lsp_types::D
 fn span_to_lsp_range(source: &str, span: Option<&goby_core::Span>) -> Range {
     let Some(span) = span else {
         return Range {
-            start: Position { line: 0, character: 0 },
-            end: Position { line: 0, character: 0 },
+            start: Position {
+                line: 0,
+                character: 0,
+            },
+            end: Position {
+                line: 0,
+                character: 0,
+            },
         };
     };
 
@@ -453,7 +473,10 @@ fn span_to_lsp_range(source: &str, span: Option<&goby_core::Span>) -> Range {
 /// (treats `\r` as part of line text, preserving byte-offset parity on CRLF inputs).
 fn span_point_to_lsp_position(source: &str, line: usize, col: usize) -> Position {
     if line == 0 {
-        return Position { line: 0, character: 0 };
+        return Position {
+            line: 0,
+            character: 0,
+        };
     }
     let lsp_line = (line - 1) as u32;
 
@@ -471,7 +494,10 @@ fn span_point_to_lsp_position(source: &str, line: usize, col: usize) -> Position
     let prefix = &src_line[..byte_offset];
     let character = prefix.chars().map(|c| c.len_utf16() as u32).sum();
 
-    Position { line: lsp_line, character }
+    Position {
+        line: lsp_line,
+        character,
+    }
 }
 
 /// In-memory document store: tracks the current text of open documents.
@@ -522,7 +548,7 @@ mod tests {
     use lsp_types::{
         ClientCapabilities, DidChangeTextDocumentParams, DidCloseTextDocumentParams,
         DidOpenTextDocumentParams, InitializeParams, TextDocumentContentChangeEvent,
-        TextDocumentIdentifier, TextDocumentItem, VersionedTextDocumentIdentifier, Url,
+        TextDocumentIdentifier, TextDocumentItem, Url, VersionedTextDocumentIdentifier,
         notification::{DidChangeTextDocument, DidCloseTextDocument, DidOpenTextDocument},
         request::Request as _,
     };
@@ -530,14 +556,31 @@ mod tests {
     // --- span_to_lsp_range ---
 
     fn make_span(line: usize, col: usize, end_line: usize, end_col: usize) -> Span {
-        Span { line, col, end_line, end_col }
+        Span {
+            line,
+            col,
+            end_line,
+            end_col,
+        }
     }
 
     #[test]
     fn span_to_lsp_range_none_returns_zero() {
         let r = span_to_lsp_range("hello", None);
-        assert_eq!(r.start, Position { line: 0, character: 0 });
-        assert_eq!(r.end, Position { line: 0, character: 0 });
+        assert_eq!(
+            r.start,
+            Position {
+                line: 0,
+                character: 0
+            }
+        );
+        assert_eq!(
+            r.end,
+            Position {
+                line: 0,
+                character: 0
+            }
+        );
     }
 
     #[test]
@@ -546,7 +589,13 @@ mod tests {
         let source = "hello world";
         let span = make_span(1, 3, 1, 3);
         let r = span_to_lsp_range(source, Some(&span));
-        assert_eq!(r.start, Position { line: 0, character: 2 });
+        assert_eq!(
+            r.start,
+            Position {
+                line: 0,
+                character: 2
+            }
+        );
     }
 
     #[test]
@@ -555,8 +604,20 @@ mod tests {
         let source = "abc\ndefg\nhij";
         let span = make_span(2, 1, 2, 5);
         let r = span_to_lsp_range(source, Some(&span));
-        assert_eq!(r.start, Position { line: 1, character: 0 });
-        assert_eq!(r.end, Position { line: 1, character: 4 });
+        assert_eq!(
+            r.start,
+            Position {
+                line: 1,
+                character: 0
+            }
+        );
+        assert_eq!(
+            r.end,
+            Position {
+                line: 1,
+                character: 4
+            }
+        );
     }
 
     #[test]
@@ -565,8 +626,20 @@ mod tests {
         let source = "abc\ndefg";
         let span = make_span(1, 2, 2, 3);
         let r = span_to_lsp_range(source, Some(&span));
-        assert_eq!(r.start, Position { line: 0, character: 1 });
-        assert_eq!(r.end, Position { line: 1, character: 2 });
+        assert_eq!(
+            r.start,
+            Position {
+                line: 0,
+                character: 1
+            }
+        );
+        assert_eq!(
+            r.end,
+            Position {
+                line: 1,
+                character: 2
+            }
+        );
     }
 
     #[test]
@@ -576,7 +649,13 @@ mod tests {
         let source = "aé b";
         let span = make_span(1, 4, 1, 4); // byte offset 3 = after 'a'(1) + 'é'(2)
         let r = span_to_lsp_range(source, Some(&span));
-        assert_eq!(r.start, Position { line: 0, character: 2 });
+        assert_eq!(
+            r.start,
+            Position {
+                line: 0,
+                character: 2
+            }
+        );
     }
 
     #[test]
@@ -587,7 +666,13 @@ mod tests {
         let span = make_span(1, 4, 1, 4);
         let r = span_to_lsp_range(source, Some(&span));
         // prefix bytes [0..3] = "あ" → 1 UTF-16 code unit
-        assert_eq!(r.start, Position { line: 0, character: 1 });
+        assert_eq!(
+            r.start,
+            Position {
+                line: 0,
+                character: 1
+            }
+        );
     }
 
     #[test]
@@ -598,7 +683,13 @@ mod tests {
         let span = make_span(1, 5, 1, 5);
         let r = span_to_lsp_range(source, Some(&span));
         // prefix bytes [0..4] = "😀" → 2 UTF-16 code units
-        assert_eq!(r.start, Position { line: 0, character: 2 });
+        assert_eq!(
+            r.start,
+            Position {
+                line: 0,
+                character: 2
+            }
+        );
     }
 
     #[test]
@@ -606,9 +697,17 @@ mod tests {
         // end_line == 0 is not produced by current Span constructors but is handled
         // defensively: collapse end to start.
         let source = "abc";
-        let span = Span { line: 1, col: 2, end_line: 0, end_col: 0 };
+        let span = Span {
+            line: 1,
+            col: 2,
+            end_line: 0,
+            end_col: 0,
+        };
         let r = span_to_lsp_range(source, Some(&span));
-        assert_eq!(r.start, r.end, "end should collapse to start when end_line == 0");
+        assert_eq!(
+            r.start, r.end,
+            "end should collapse to start when end_line == 0"
+        );
     }
 
     // --- DocumentStore ---
@@ -646,7 +745,11 @@ mod tests {
         };
         let source = "main : Unit -> Unit can Print\nmain = print \"hello\"\n";
         let diags = analyze(source, Some(&root));
-        assert!(diags.is_empty(), "expected no diagnostics, got: {:?}", diags);
+        assert!(
+            diags.is_empty(),
+            "expected no diagnostics, got: {:?}",
+            diags
+        );
     }
 
     #[test]
@@ -668,7 +771,10 @@ mod tests {
         assert_eq!(diags.len(), 1);
         assert_eq!(diags[0].severity, Some(DiagnosticSeverity::ERROR));
         // Verify this is a parse error, not the synthetic stdlib-missing error.
-        assert!(!diags[0].message.contains("stdlib root not found"), "got stdlib error instead of parse error");
+        assert!(
+            !diags[0].message.contains("stdlib root not found"),
+            "got stdlib error instead of parse error"
+        );
         assert!(!diags[0].message.is_empty());
     }
 
@@ -738,8 +844,9 @@ mod tests {
 
     fn make_exit_notif() -> LspNotification {
         LspNotification {
-            method: <lsp_types::notification::Exit as lsp_types::notification::Notification>::METHOD
-                .to_string(),
+            method:
+                <lsp_types::notification::Exit as lsp_types::notification::Notification>::METHOD
+                    .to_string(),
             params: serde_json::json!(null),
         }
     }
@@ -760,14 +867,23 @@ mod tests {
             server_conn.initialize(server_caps).unwrap();
             run_server(server_conn);
         });
-        client_conn.sender.send(make_initialize_request().into()).unwrap();
+        client_conn
+            .sender
+            .send(make_initialize_request().into())
+            .unwrap();
         let _ = client_conn.receiver.recv().unwrap(); // init response
-        client_conn.sender.send(make_initialized_notif().into()).unwrap();
+        client_conn
+            .sender
+            .send(make_initialized_notif().into())
+            .unwrap();
         (client_conn, server_thread)
     }
 
     fn shutdown_server(client_conn: Connection, server_thread: std::thread::JoinHandle<()>) {
-        client_conn.sender.send(make_shutdown_request().into()).unwrap();
+        client_conn
+            .sender
+            .send(make_shutdown_request().into())
+            .unwrap();
         let _ = client_conn.receiver.recv().unwrap(); // shutdown response
         client_conn.sender.send(make_exit_notif().into()).unwrap();
         server_thread.join().unwrap();
@@ -856,7 +972,10 @@ mod tests {
 
         let params = recv_publish_diagnostics(&client_conn);
         assert_eq!(params.diagnostics.len(), 1);
-        assert_eq!(params.diagnostics[0].severity, Some(DiagnosticSeverity::ERROR));
+        assert_eq!(
+            params.diagnostics[0].severity,
+            Some(DiagnosticSeverity::ERROR)
+        );
         assert!(!params.diagnostics[0].message.is_empty());
 
         shutdown_server(client_conn, server_thread);
@@ -908,8 +1027,15 @@ mod tests {
         let params = recv_publish_diagnostics(&client_conn);
         // One diagnostic: parse error (or "stdlib not found" when stdlib is absent).
         // Either way exactly one ERROR is expected.
-        assert_eq!(params.diagnostics.len(), 1, "broken source should produce one diagnostic");
-        assert_eq!(params.diagnostics[0].severity, Some(DiagnosticSeverity::ERROR));
+        assert_eq!(
+            params.diagnostics.len(),
+            1,
+            "broken source should produce one diagnostic"
+        );
+        assert_eq!(
+            params.diagnostics[0].severity,
+            Some(DiagnosticSeverity::ERROR)
+        );
 
         shutdown_server(client_conn, server_thread);
     }
@@ -960,7 +1086,13 @@ mod tests {
     fn word_at_position_on_identifier() {
         let source = "add x = x + 1\n";
         // "add" starts at LSP col 0; cursor on col 1 (middle of "add")
-        let word = word_at_position(source, Position { line: 0, character: 1 });
+        let word = word_at_position(
+            source,
+            Position {
+                line: 0,
+                character: 1,
+            },
+        );
         assert_eq!(word.as_deref(), Some("add"));
     }
 
@@ -968,14 +1100,26 @@ mod tests {
     fn word_at_position_on_whitespace_returns_none() {
         let source = "add x = x\n";
         // space between "add" and "x"
-        let word = word_at_position(source, Position { line: 0, character: 3 });
+        let word = word_at_position(
+            source,
+            Position {
+                line: 0,
+                character: 3,
+            },
+        );
         assert!(word.is_none());
     }
 
     #[test]
     fn word_at_position_past_end_of_line_returns_none() {
         let source = "foo\n";
-        let word = word_at_position(source, Position { line: 0, character: 100 });
+        let word = word_at_position(
+            source,
+            Position {
+                line: 0,
+                character: 100,
+            },
+        );
         assert!(word.is_none());
     }
 
@@ -985,7 +1129,14 @@ mod tests {
     fn hover_at_top_level_function_with_annotation() {
         let source = "add : Int -> Int -> Int\nadd x y = x + y\n";
         // cursor on "add" definition line (LSP line 1, char 0)
-        let hover = hover_at(source, None, Position { line: 1, character: 0 });
+        let hover = hover_at(
+            source,
+            None,
+            Position {
+                line: 1,
+                character: 0,
+            },
+        );
         let hover = hover.expect("expected hover");
         if let HoverContents::Markup(mc) = hover.contents {
             assert_eq!(mc.value, "add : Int -> Int -> Int");
@@ -998,7 +1149,14 @@ mod tests {
     fn hover_at_unknown_position_returns_none() {
         let source = "add x = x + 1\n";
         // cursor on whitespace
-        let hover = hover_at(source, None, Position { line: 0, character: 3 });
+        let hover = hover_at(
+            source,
+            None,
+            Position {
+                line: 0,
+                character: 3,
+            },
+        );
         assert!(hover.is_none());
     }
 
@@ -1006,7 +1164,14 @@ mod tests {
     fn hover_at_unknown_name_returns_none() {
         let source = "add x = x + 1\n";
         // "x" is a parameter, not in SymbolIndex
-        let hover = hover_at(source, None, Position { line: 0, character: 4 });
+        let hover = hover_at(
+            source,
+            None,
+            Position {
+                line: 0,
+                character: 4,
+            },
+        );
         assert!(hover.is_none());
     }
 
@@ -1014,11 +1179,22 @@ mod tests {
     fn hover_at_effect_member() {
         let source = "effect Print\n  println : String -> ()\n";
         // cursor on "println" (LSP line 1, char 2)
-        let hover = hover_at(source, None, Position { line: 1, character: 2 });
+        let hover = hover_at(
+            source,
+            None,
+            Position {
+                line: 1,
+                character: 2,
+            },
+        );
         let hover = hover.expect("expected hover for effect member");
         if let HoverContents::Markup(mc) = hover.contents {
             assert!(mc.value.contains("println"), "hover text: {}", mc.value);
-            assert!(mc.value.contains("String -> ()"), "hover text: {}", mc.value);
+            assert!(
+                mc.value.contains("String -> ()"),
+                "hover text: {}",
+                mc.value
+            );
         } else {
             panic!("expected Markup hover contents");
         }
@@ -1031,7 +1207,15 @@ mod tests {
         let source = "add : Int -> Int -> Int\nadd x y = x + y\n";
         let uri = Url::parse("file:///test.gb").unwrap();
         // cursor on "add" definition line (LSP line 1, char 0)
-        let result = definition_at(source, &uri, None, Position { line: 1, character: 0 });
+        let result = definition_at(
+            source,
+            &uri,
+            None,
+            Position {
+                line: 1,
+                character: 0,
+            },
+        );
         let result = result.expect("expected definition response");
         if let GotoDefinitionResponse::Scalar(loc) = result {
             assert_eq!(loc.uri, uri);
@@ -1047,7 +1231,15 @@ mod tests {
         let source = "add x = x + 1\n";
         let uri = Url::parse("file:///test.gb").unwrap();
         // "x" is not in SymbolIndex
-        let result = definition_at(source, &uri, None, Position { line: 0, character: 4 });
+        let result = definition_at(
+            source,
+            &uri,
+            None,
+            Position {
+                line: 0,
+                character: 4,
+            },
+        );
         assert!(result.is_none());
     }
 
@@ -1094,7 +1286,10 @@ mod tests {
             params: serde_json::to_value(lsp_types::HoverParams {
                 text_document_position_params: lsp_types::TextDocumentPositionParams {
                     text_document: lsp_types::TextDocumentIdentifier { uri: uri.clone() },
-                    position: Position { line: 1, character: 0 },
+                    position: Position {
+                        line: 1,
+                        character: 0,
+                    },
                 },
                 work_done_progress_params: lsp_types::WorkDoneProgressParams::default(),
             })
@@ -1130,7 +1325,10 @@ mod tests {
             params: serde_json::to_value(lsp_types::GotoDefinitionParams {
                 text_document_position_params: lsp_types::TextDocumentPositionParams {
                     text_document: lsp_types::TextDocumentIdentifier { uri: uri.clone() },
-                    position: Position { line: 1, character: 0 },
+                    position: Position {
+                        line: 1,
+                        character: 0,
+                    },
                 },
                 work_done_progress_params: lsp_types::WorkDoneProgressParams::default(),
                 partial_result_params: lsp_types::PartialResultParams::default(),
@@ -1168,7 +1366,10 @@ mod tests {
         // body_relative_line for "y = x + 1" = 2 (body starts with '\n')
         // source_line = 2 + 2 - 1 = 3; cursor_source_line = 2 + 1 = 3 ✓
         let source = "add : Int -> Int\nadd x =\n  y = x + 1\n  y\n";
-        let pos = Position { line: 2, character: 2 }; // "y" on line 2 (0-indexed)
+        let pos = Position {
+            line: 2,
+            character: 2,
+        }; // "y" on line 2 (0-indexed)
         let result = hover_at(source, None, pos);
         assert!(result.is_some(), "expected hover for local binding 'y'");
         if let Some(hover) = result {
@@ -1188,7 +1389,10 @@ mod tests {
         //   line 2 (LSP): "  mut z = 0"   ← cursor here on "z"
         //   line 3 (LSP): "  z"
         let source = "foo : Int -> Int\nfoo x =\n  mut z = 0\n  z\n";
-        let pos = Position { line: 2, character: 6 }; // "z" in "  mut z = 0"
+        let pos = Position {
+            line: 2,
+            character: 6,
+        }; // "z" in "  mut z = 0"
         let result = hover_at(source, None, pos);
         assert!(result.is_some(), "expected hover for local binding 'z'");
         if let Some(hover) = result {
@@ -1205,18 +1409,32 @@ mod tests {
         // Cursor on the USE site of "y" (line 3), not the definition (line 2).
         // Use-site hover is out of scope; should return None.
         let source = "add : Int -> Int\nadd x =\n  y = x + 1\n  y\n";
-        let pos = Position { line: 3, character: 2 }; // "y" on line 3 (the tail expr)
+        let pos = Position {
+            line: 3,
+            character: 2,
+        }; // "y" on line 3 (the tail expr)
         let result = hover_at(source, None, pos);
-        assert!(result.is_none(), "use-site hover should return None, got: {:?}", result);
+        assert!(
+            result.is_none(),
+            "use-site hover should return None, got: {:?}",
+            result
+        );
     }
 
     #[test]
     fn local_binding_hover_unknown_type_returns_none() {
         // Binding depends on an unknown global → Ty::Unknown → not emitted.
         let source = "foo : Int -> Int\nfoo x =\n  y = some_global_fn x\n  y\n";
-        let pos = Position { line: 2, character: 2 };
+        let pos = Position {
+            line: 2,
+            character: 2,
+        };
         let result = hover_at(source, None, pos);
-        assert!(result.is_none(), "unknown-type binding should return None, got: {:?}", result);
+        assert!(
+            result.is_none(),
+            "unknown-type binding should return None, got: {:?}",
+            result
+        );
     }
 
     #[test]
@@ -1231,7 +1449,10 @@ mod tests {
         // body_relative_line = 2 (body starts with '\n')
         // source_line = 1 + 2 - 1 = 2; cursor_source_line = 1 + 1 = 2 ✓
         let source = "answer =\n  x = 42\n  x\n";
-        let pos = Position { line: 1, character: 2 }; // "x" on line 1 (0-indexed)
+        let pos = Position {
+            line: 1,
+            character: 2,
+        }; // "x" on line 1 (0-indexed)
         let result = hover_at(source, None, pos);
         assert!(result.is_some(), "expected hover for local binding 'x'");
         if let Some(hover) = result {
@@ -1253,7 +1474,10 @@ mod tests {
         //   line 3 (LSP): "  b = a + 2"   ← cursor on "b"
         //   line 4 (LSP): "  b"
         let source = "f : Int -> Int\nf x =\n  a = x + 1\n  b = a + 2\n  b\n";
-        let pos = Position { line: 3, character: 2 }; // "b" on line 3
+        let pos = Position {
+            line: 3,
+            character: 2,
+        }; // "b" on line 3
         let result = hover_at(source, None, pos);
         assert!(result.is_some(), "expected hover for local binding 'b'");
         if let Some(hover) = result {
@@ -1275,9 +1499,16 @@ mod tests {
         //   line 3 (LSP): "  n := n + 1"   ← reassignment (cursor here → None)
         //   line 4 (LSP): "  n"
         let source = "count : Int -> Int\ncount x =\n  mut n = x\n  n := n + 1\n  n\n";
-        let pos = Position { line: 3, character: 2 }; // "n" on the Assign line
+        let pos = Position {
+            line: 3,
+            character: 2,
+        }; // "n" on the Assign line
         let result = hover_at(source, None, pos);
-        assert!(result.is_none(), "reassignment LHS hover should return None, got: {:?}", result);
+        assert!(
+            result.is_none(),
+            "reassignment LHS hover should return None, got: {:?}",
+            result
+        );
     }
 
     #[test]
@@ -1285,7 +1516,10 @@ mod tests {
         // Cursor exactly on the LHS "x" in "  x = n + 1" should return hover.
         // LHS "x": indent 2, col 3 (1-indexed), character 2 (0-indexed).
         let source = "f : Int -> Int\nf n =\n  x = n + 1\n  x\n";
-        let pos = Position { line: 2, character: 2 }; // LHS "x"
+        let pos = Position {
+            line: 2,
+            character: 2,
+        }; // LHS "x"
         let result = hover_at(source, None, pos);
         assert!(result.is_some(), "expected hover on LHS 'x', got None");
         if let Some(hover) = result {
@@ -1304,16 +1538,40 @@ mod tests {
         // Source:
         //   line 2: "  ab = x + 1"  ← LHS "ab" col 3, len 2 → col range [3,5)
         let source = "f : Int -> Int\nf x =\n  ab = x + 1\n  ab\n";
-        let pos_lhs_start = Position { line: 2, character: 2 }; // 'a' of "ab"
-        let pos_lhs_end = Position { line: 2, character: 3 };   // 'b' of "ab"
+        let pos_lhs_start = Position {
+            line: 2,
+            character: 2,
+        }; // 'a' of "ab"
+        let pos_lhs_end = Position {
+            line: 2,
+            character: 3,
+        }; // 'b' of "ab"
         // character: 4 is one past end of "ab" (exclusive upper bound test)
-        let pos_just_past = Position { line: 2, character: 4 };
+        let pos_just_past = Position {
+            line: 2,
+            character: 4,
+        };
         // character: 7 is 'x' in "x + 1" — different name, filtered by name check (not col guard)
-        let pos_rhs = Position { line: 2, character: 7 };
-        assert!(hover_at(source, None, pos_lhs_start).is_some(), "LHS start should hover");
-        assert!(hover_at(source, None, pos_lhs_end).is_some(), "LHS end char should hover");
-        assert!(hover_at(source, None, pos_just_past).is_none(), "one past name end should not hover");
-        assert!(hover_at(source, None, pos_rhs).is_none(), "RHS 'x' (different name) should not hover");
+        let pos_rhs = Position {
+            line: 2,
+            character: 7,
+        };
+        assert!(
+            hover_at(source, None, pos_lhs_start).is_some(),
+            "LHS start should hover"
+        );
+        assert!(
+            hover_at(source, None, pos_lhs_end).is_some(),
+            "LHS end char should hover"
+        );
+        assert!(
+            hover_at(source, None, pos_just_past).is_none(),
+            "one past name end should not hover"
+        );
+        assert!(
+            hover_at(source, None, pos_rhs).is_none(),
+            "RHS 'x' (different name) should not hover"
+        );
     }
 
     #[test]
@@ -1331,8 +1589,14 @@ mod tests {
         //   LHS 'n': col 3, char 2. Range [3, 4).
         //   RHS 'n': col 7, char 6. Outside range → None.
         let source = "f : Int -> Int\nf n =\n  n = n + 1\n  n\n";
-        let pos_lhs = Position { line: 2, character: 2 }; // LHS 'n' at col 3
-        let pos_rhs = Position { line: 2, character: 6 }; // RHS 'n' at col 7
+        let pos_lhs = Position {
+            line: 2,
+            character: 2,
+        }; // LHS 'n' at col 3
+        let pos_rhs = Position {
+            line: 2,
+            character: 6,
+        }; // RHS 'n' at col 7
         let lhs_result = hover_at(source, None, pos_lhs);
         assert!(lhs_result.is_some(), "LHS 'n' should hover, got None");
         if let Some(hover) = lhs_result {
@@ -1361,9 +1625,15 @@ mod tests {
         //   6: "    y"
         // "    y = 42": indent=4, body_relative_col=5, LSP character=4.
         let source = "main =\n  with\n    log str ->\n      resume ()\n  in\n    y = 42\n    y\n";
-        let pos = Position { line: 5, character: 4 }; // 'y' in "    y = 42"
+        let pos = Position {
+            line: 5,
+            character: 4,
+        }; // 'y' in "    y = 42"
         let result = hover_at(source, None, pos);
-        assert!(result.is_some(), "expected hover on 'y' in with body, got None");
+        assert!(
+            result.is_some(),
+            "expected hover on 'y' in with body, got None"
+        );
         if let Some(hover) = result {
             if let HoverContents::Markup(mc) = hover.contents {
                 assert_eq!(mc.value, "y : Int");

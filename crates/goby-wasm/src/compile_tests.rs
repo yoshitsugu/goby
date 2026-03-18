@@ -727,8 +727,7 @@ main =
         crate::RuntimeIoExecutionKind::DynamicWasiIo,
         "transformed split callback should now classify as DynamicWasiIo"
     );
-    let wasm =
-        compile_module(&module).expect("transformed split callback should compile to Wasm");
+    let wasm = compile_module(&module).expect("transformed split callback should compile to Wasm");
     assert_valid_wasm_module(&wasm);
 }
 
