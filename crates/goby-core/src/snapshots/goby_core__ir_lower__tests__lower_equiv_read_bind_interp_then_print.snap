@@ -1,0 +1,13 @@
+---
+source: crates/goby-core/src/ir_lower.rs
+assertion_line: 1147
+expression: fmt_ir(&m)
+---
+decl prog3: ? =
+  let text: ? =
+    perform Read.read()
+  in
+    let decorated: Str =
+      interp(expr(text), "!")
+    in
+      perform Print.print(decorated)

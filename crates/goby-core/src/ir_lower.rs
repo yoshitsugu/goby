@@ -1,13 +1,19 @@
-//! AST-to-IR lowering for the pure typed subset (Track G3).
+//! AST-to-IR lowering (Track G3–G5).
 //!
-//! This module lowers a typed subset of the Goby AST into the shared IR
-//! defined in `ir.rs`. Only pure expressions are accepted; effectful forms
-//! (`With`, `Handler`, `Resume`, `Lambda`, `MethodCall`, `Pipeline`) return a
-//! `LowerError`.
+//! This module lowers a subset of the Goby AST into the shared IR defined in
+//! `ir.rs`. The supported subset includes:
+//! - pure expressions: literals, vars, binops, blocks, conditionals, interpolation
+//! - direct function calls
+//! - effect handler forms: `With`, `Handler`, `Resume` (G4)
+//! - qualified effect operation calls lowered to `PerformEffect` nodes (G5)
+//!
+//! Unsupported forms (`Lambda`, `MethodCall`, `Pipeline`, `Case`, list/tuple
+//! expressions) return a `LowerError`.
 //!
 //! # Curried calls
 //! The AST uses curried single-argument `Expr::Call { callee, arg }` chains.
 //! This lowerer collects the full chain into a flat multi-argument IR `Call` node.
+//! Qualified effect calls are intercepted before arg lowering to emit `PerformEffect`.
 //!
 //! # Type information
 //! The typechecker does not currently expose a typed AST. All IR nodes are
@@ -35,6 +41,33 @@ impl std::error::Error for LowerError {}
 
 fn err(msg: impl Into<String>) -> LowerError {
     LowerError { message: msg.into() }
+}
+
+// ---------------------------------------------------------------------------
+// Effect operation table
+// ---------------------------------------------------------------------------
+
+/// Returns `true` if `(module, op)` is a known built-in effect operation.
+///
+/// Matching is case-sensitive; module names are PascalCase, op names are snake_case.
+///
+/// Hard-coded table for G5:
+/// - `Read`: `read`, `read_line`
+/// - `Print`: `print`, `println`
+///
+/// Qualified calls that match this table are lowered to `CompExpr::PerformEffect`
+/// instead of `CompExpr::Call`.
+///
+/// # TODO (G6+)
+/// This table is hard-coded. The AST already carries `EffectDecl` / `EffectMember`
+/// from user-defined `effect` declarations. A future track should derive this table
+/// dynamically from resolved effect declarations so user-defined effects with the
+/// same name as builtins are handled correctly.
+fn is_effect_op(module: &str, op: &str) -> bool {
+    matches!(
+        (module, op),
+        ("Read", "read") | ("Read", "read_line") | ("Print", "print") | ("Print", "println")
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -204,6 +237,31 @@ fn lower_expr_as_comp_non_value(expr: &Expr) -> Result<CompExpr, LowerError> {
         Expr::Call { .. } => {
             // Collect curried call chain into flat IR Call.
             let (callee_expr, args_exprs) = collect_call_chain(expr);
+
+            // G5: if the callee is a qualified reference to a known effect operation,
+            // lower to PerformEffect instead of Call.
+            if let Expr::Qualified { receiver, member, .. } = callee_expr {
+                if is_effect_op(receiver, member) {
+                    // Filter out unit args (TupleLit([])) — these arise from no-arg effect
+                    // calls like `Read.read()` which the parser produces as `Read.read(())`.
+                    // Assumption: unit args only appear when the caller wrote `()` explicitly
+                    // for a zero-argument operation. A non-unit arg after a unit arg would
+                    // survive the filter and be included in the PerformEffect args list.
+                    let mut args = Vec::new();
+                    for a in &args_exprs {
+                        if matches!(a, Expr::TupleLit(items) if items.is_empty()) {
+                            continue;
+                        }
+                        args.push(lower_value_required(a, "effect operation argument")?);
+                    }
+                    return Ok(CompExpr::PerformEffect {
+                        effect: receiver.clone(),
+                        op: member.clone(),
+                        args,
+                    });
+                }
+            }
+
             let callee = lower_value_required(callee_expr, "call callee")?;
             let mut args = Vec::new();
             for a in args_exprs {
@@ -277,6 +335,12 @@ fn try_lower_value(expr: &Expr) -> Result<Option<ValueExpr>, LowerError> {
         Expr::StringLit(s) => Ok(Some(ValueExpr::StrLit(s.clone()))),
         Expr::TupleLit(items) if items.is_empty() => Ok(Some(ValueExpr::Unit)),
         Expr::Var { name, .. } => Ok(Some(ValueExpr::Var(name.clone()))),
+        // A bare `Qualified` (not wrapped in a `Call`) becomes a `GlobalRef` value.
+        // Invariant: when a `Qualified` is the callee of a `Call`, the `Call` arm in
+        // `lower_expr_as_comp_non_value` intercepts it *before* calling
+        // `lower_value_required`, so effect-op `Qualified` names never reach here as
+        // callees. Bare effect-op references (e.g. `let f = Read.read`) are allowed
+        // as first-class values and produce `GlobalRef`; they are not `PerformEffect`.
         Expr::Qualified { receiver, member, .. } => Ok(Some(ValueExpr::GlobalRef {
             module: receiver.clone(),
             name: member.clone(),
@@ -882,5 +946,262 @@ mod tests {
         let m = IrModule { decls: vec![ir_decl] };
         assert!(validate_ir(&m).is_ok());
         insta::assert_snapshot!(fmt_ir(&m));
+    }
+
+    // --- PerformEffect lowering snapshot tests (G5) ---
+
+    #[test]
+    fn lower_print_print_literal() {
+        // Print.print("hello") → perform Print.print("hello")
+        let call = Expr::Call {
+            callee: Box::new(Expr::qualified("Print", "print")),
+            arg: Box::new(Expr::StringLit("hello".into())),
+            span: None,
+        };
+        let decl = decl_with_body("say_hello", vec![expr_stmt(call)]);
+        let ir_decl = lower_declaration(&decl).unwrap();
+        let m = IrModule { decls: vec![ir_decl] };
+        assert!(validate_ir(&m).is_ok());
+        // Verify structural form.
+        assert!(
+            matches!(&m.decls[0].body, CompExpr::PerformEffect { effect, op, args }
+                if effect == "Print" && op == "print" && args.len() == 1),
+            "expected PerformEffect{{Print, print, [arg]}}, got {:?}",
+            m.decls[0].body
+        );
+        insta::assert_snapshot!(fmt_ir(&m));
+    }
+
+    #[test]
+    fn lower_read_read_no_args() {
+        // Read.read() → perform Read.read() with empty args
+        let call = Expr::Call {
+            callee: Box::new(Expr::qualified("Read", "read")),
+            arg: Box::new(Expr::TupleLit(vec![])), // unit arg
+            span: None,
+        };
+        let decl = decl_with_body("do_read", vec![expr_stmt(call)]);
+        let ir_decl = lower_declaration(&decl).unwrap();
+        let m = IrModule { decls: vec![ir_decl] };
+        assert!(validate_ir(&m).is_ok());
+        // Verify args list is empty (unit arg was stripped).
+        assert!(
+            matches!(&m.decls[0].body, CompExpr::PerformEffect { effect, op, args }
+                if effect == "Read" && op == "read" && args.is_empty()),
+            "expected PerformEffect{{Read, read, []}} but got {:?}",
+            m.decls[0].body
+        );
+        insta::assert_snapshot!(fmt_ir(&m));
+    }
+
+    #[test]
+    fn lower_read_read_line_no_args() {
+        // Read.read_line() → perform Read.read_line() with empty args
+        let call = Expr::Call {
+            callee: Box::new(Expr::qualified("Read", "read_line")),
+            arg: Box::new(Expr::TupleLit(vec![])),
+            span: None,
+        };
+        let decl = decl_with_body("do_read_line", vec![expr_stmt(call)]);
+        let ir_decl = lower_declaration(&decl).unwrap();
+        let m = IrModule { decls: vec![ir_decl] };
+        assert!(validate_ir(&m).is_ok());
+        assert!(
+            matches!(&m.decls[0].body, CompExpr::PerformEffect { effect, op, args }
+                if effect == "Read" && op == "read_line" && args.is_empty()),
+            "expected PerformEffect{{Read, read_line, []}} but got {:?}",
+            m.decls[0].body
+        );
+        insta::assert_snapshot!(fmt_ir(&m));
+    }
+
+    #[test]
+    fn lower_print_println_with_var() {
+        // Print.println(x) → perform Print.println(x)
+        let call = Expr::Call {
+            callee: Box::new(Expr::qualified("Print", "println")),
+            arg: Box::new(Expr::var("x")),
+            span: None,
+        };
+        let decl = decl_with_params("say_line", vec!["x"], vec![expr_stmt(call)]);
+        let ir_decl = lower_declaration(&decl).unwrap();
+        let m = IrModule { decls: vec![ir_decl] };
+        assert!(validate_ir(&m).is_ok());
+        assert!(
+            matches!(&m.decls[0].body, CompExpr::PerformEffect { effect, op, args }
+                if effect == "Print" && op == "println" && args.len() == 1),
+            "expected PerformEffect{{Print, println, [x]}}, got {:?}",
+            m.decls[0].body
+        );
+        insta::assert_snapshot!(fmt_ir(&m));
+    }
+
+    // --- Equivalence tests for the three canonical Read/Print programs (G5) ---
+    //
+    // These three programs are semantically equivalent but differ in surface form.
+    // After G5 lowering, all three must contain explicit PerformEffect nodes for
+    // Read.read and Print.print — i.e., the IR expresses "what happens", not "how
+    // it was written".
+
+    fn make_qualified_call(module: &str, op: &str, arg: Option<Expr>) -> Expr {
+        Expr::Call {
+            callee: Box::new(Expr::qualified(module, op)),
+            arg: Box::new(arg.unwrap_or(Expr::TupleLit(vec![]))),
+            span: None,
+        }
+    }
+
+    /// Count `PerformEffect` nodes with matching effect/op in a CompExpr tree.
+    fn count_perform(comp: &CompExpr, effect: &str, op: &str) -> usize {
+        match comp {
+            CompExpr::PerformEffect { effect: e, op: o, .. } if e == effect && o == op => 1,
+            CompExpr::PerformEffect { .. } => 0,
+            CompExpr::Value(_) => 0,
+            CompExpr::Let { value, body, .. } => {
+                count_perform(value, effect, op) + count_perform(body, effect, op)
+            }
+            CompExpr::Seq { stmts, tail } => {
+                stmts.iter().map(|s| count_perform(s, effect, op)).sum::<usize>()
+                    + count_perform(tail, effect, op)
+            }
+            CompExpr::If { then_, else_, .. } => {
+                count_perform(then_, effect, op) + count_perform(else_, effect, op)
+            }
+            CompExpr::Call { .. } => 0,
+            CompExpr::Handle { clauses } => {
+                clauses.iter().map(|c| count_perform(&c.body, effect, op)).sum()
+            }
+            CompExpr::WithHandler { handler, body } => {
+                count_perform(handler, effect, op) + count_perform(body, effect, op)
+            }
+            CompExpr::Resume { .. } => 0,
+        }
+    }
+
+    #[test]
+    fn lower_equiv_inline_effect_arg_is_rejected() {
+        // Program 1 (inline form): Print.print(Read.read())
+        //
+        // `Read.read()` used as an argument to `Print.print` is a nested effectful call.
+        // `lower_value_required` only accepts pure value expressions; `Read.read()` is
+        // an effect operation, not a pure value.
+        //
+        // G5 scope: this form cannot be lowered directly. The canonical equivalent is
+        // the binding form (Program 2): `text = Read.read(); Print.print(text)`.
+        // Verifying this expected error is part of the G5 test coverage.
+        let inner_read = make_qualified_call("Read", "read", None);
+        let outer_print = Expr::Call {
+            callee: Box::new(Expr::qualified("Print", "print")),
+            arg: Box::new(inner_read),
+            span: None,
+        };
+        let decl = decl_with_body("prog1", vec![expr_stmt(outer_print)]);
+        let result = lower_declaration(&decl);
+        assert!(
+            result.is_err(),
+            "expected lowering error for nested effectful arg, got {:?}",
+            result
+        );
+        let msg = result.unwrap_err().message;
+        assert!(
+            msg.contains("pure value"),
+            "expected 'pure value' in error, got: {}",
+            msg
+        );
+    }
+
+    #[test]
+    fn lower_equiv_read_bind_then_print() {
+        // Program 2: text = Read.read(); Print.print(text)
+        let read_call = make_qualified_call("Read", "read", None);
+        let print_call = make_qualified_call("Print", "print", Some(Expr::var("text")));
+        let decl = decl_with_body(
+            "prog2",
+            vec![binding("text", read_call), expr_stmt(print_call)],
+        );
+        let ir_decl = lower_declaration(&decl).unwrap();
+        let m = IrModule { decls: vec![ir_decl] };
+        assert!(validate_ir(&m).is_ok());
+        // Structural assertions: must have exactly one Read.read and one Print.print node.
+        assert_eq!(
+            count_perform(&m.decls[0].body, "Read", "read"),
+            1,
+            "expected 1 PerformEffect{{Read, read}}"
+        );
+        assert_eq!(
+            count_perform(&m.decls[0].body, "Print", "print"),
+            1,
+            "expected 1 PerformEffect{{Print, print}}"
+        );
+        insta::assert_snapshot!(fmt_ir(&m));
+    }
+
+    #[test]
+    fn lower_equiv_read_bind_interp_then_print() {
+        // Program 3: text = Read.read(); decorated = "${text}!"; Print.print(decorated)
+        let read_call = make_qualified_call("Read", "read", None);
+        let interp = Expr::InterpolatedString(vec![
+            InterpolatedPart::Expr(Box::new(Expr::var("text"))),
+            InterpolatedPart::Text("!".into()),
+        ]);
+        let print_call = make_qualified_call("Print", "print", Some(Expr::var("decorated")));
+        let decl = decl_with_body(
+            "prog3",
+            vec![
+                binding("text", read_call),
+                binding("decorated", interp),
+                expr_stmt(print_call),
+            ],
+        );
+        let ir_decl = lower_declaration(&decl).unwrap();
+        let m = IrModule { decls: vec![ir_decl] };
+        assert!(validate_ir(&m).is_ok());
+        // Structural assertions: must have exactly one Read.read and one Print.print node.
+        assert_eq!(
+            count_perform(&m.decls[0].body, "Read", "read"),
+            1,
+            "expected 1 PerformEffect{{Read, read}}"
+        );
+        assert_eq!(
+            count_perform(&m.decls[0].body, "Print", "print"),
+            1,
+            "expected 1 PerformEffect{{Print, print}}"
+        );
+        insta::assert_snapshot!(fmt_ir(&m));
+    }
+
+    #[test]
+    fn lower_non_effect_qualified_call_stays_as_call() {
+        // Math.sqrt(x) is not a known effect op — must lower to Call, not PerformEffect.
+        let call = Expr::Call {
+            callee: Box::new(Expr::qualified("Math", "sqrt")),
+            arg: Box::new(Expr::var("x")),
+            span: None,
+        };
+        let decl = decl_with_params("use_math", vec!["x"], vec![expr_stmt(call)]);
+        let ir_decl = lower_declaration(&decl).unwrap();
+        assert!(
+            matches!(ir_decl.body, CompExpr::Call { .. }),
+            "non-effect qualified call must lower to Call, not PerformEffect; got {:?}",
+            ir_decl.body
+        );
+    }
+
+    // --- is_effect_op unit tests ---
+
+    #[test]
+    fn is_effect_op_true_cases() {
+        assert!(is_effect_op("Read", "read"));
+        assert!(is_effect_op("Read", "read_line"));
+        assert!(is_effect_op("Print", "print"));
+        assert!(is_effect_op("Print", "println"));
+    }
+
+    #[test]
+    fn is_effect_op_false_cases() {
+        assert!(!is_effect_op("Read", "nonexistent"));
+        assert!(!is_effect_op("Other", "print"));
+        assert!(!is_effect_op("", "read"));
+        assert!(!is_effect_op("Read", ""));
     }
 }

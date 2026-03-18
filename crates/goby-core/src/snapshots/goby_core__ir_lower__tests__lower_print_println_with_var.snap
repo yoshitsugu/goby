@@ -1,0 +1,7 @@
+---
+source: crates/goby-core/src/ir_lower.rs
+assertion_line: 1013
+expression: fmt_ir(&m)
+---
+decl say_line(x: ?): ? =
+  perform Print.println(x)

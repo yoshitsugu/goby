@@ -1,0 +1,10 @@
+---
+source: crates/goby-core/src/ir_lower.rs
+assertion_line: 1113
+expression: fmt_ir(&m)
+---
+decl prog2: ? =
+  let text: ? =
+    perform Read.read()
+  in
+    perform Print.print(text)
