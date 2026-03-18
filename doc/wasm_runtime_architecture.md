@@ -217,16 +217,18 @@ are locked before F2 implementation starts and must not change without a migrati
 ### Runtime memory helpers (Goby-internal, defined in emitted Wasm)
 
 These are emitted as Wasm functions within the module (not imported).
-
-> **Note**: the exact signatures below are tentative until F2 merges the `gen_lower/` module.
-> F2 must confirm or revise these signatures and update this section.
+Signatures confirmed in F2 based on the `CallHelper { name, arg_count }` backend IR interface
+and the `value.rs` tagged-i64 representation.
 
 ```
-goby_alloc_string(len: i32) -> i32   # returns pointer to (len: i32, bytes...) in heap
-goby_alloc_list(cap: i32) -> i32     # returns pointer to (len: i32, items: [i64]...) in heap
-goby_string_split(ptr: i32, sep_ptr: i32) -> i32  # returns List pointer
-goby_list_get(list_ptr: i32, idx: i32) -> i64     # returns tagged i64; traps on OOB
+goby_alloc_string(len: i32) -> i32   # returns i32 pointer to (len: i32, bytes...) in heap
+goby_alloc_list(cap: i32) -> i32     # returns i32 pointer to (len: i32, items: [i64]...) in heap
+goby_string_split(ptr: i32, sep_ptr: i32) -> i32  # returns i32 List pointer (wrapped in encode_list_ptr by caller)
+goby_list_get(list_ptr: i32, idx: i32) -> i64     # returns tagged i64 (encode_* value); traps on OOB
 ```
+
+`CallHelper` naming convention: the `name` field matches the Goby-internal function name exactly
+(e.g. `"goby_string_split"`). `arg_count` must equal the number of arguments pushed before the call.
 
 **Memory layout**: linear memory starts at byte 0.
 - Bytes 0–7: iovec slot (ptr at 0, len at 4) used by `fd_write` / `fd_read`.
