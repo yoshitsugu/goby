@@ -11,6 +11,8 @@ Notes:
 - `doc/LANGUAGE_SPEC.md` is the source of truth for current language
   syntax and semantics.
 - `PLAN.md` is the top-level roadmap and execution-planning document.
+- `doc/PLAN_IR.md` is the active detailed plan for IR-lowering completion and is
+  the current highest-priority execution track.
 - When language syntax or semantics change, update
   `doc/LANGUAGE_SPEC.md` in the same change.
 - When language syntax changes, also verify whether syntax
@@ -328,6 +330,17 @@ Based on `examples/*.gb`:
 Post-MVP work focuses on reducing fallback-runtime special cases and making
 execution paths more predictable.
 
+Priority rule:
+
+- top priority is now IR-lowering completion and IR-boundary redesign work tracked in
+  `doc/PLAN_IR.md`.
+- active backend/runtime work should prefer unblocking itself by improving shared IR and
+  AST-to-IR lowering rather than by adding more source-shape-specific recognizers.
+- when there is tension between a local unblock and the long-term IR architecture,
+  choose the option that improves or preserves the long-term IR architecture.
+- progress for this top-priority track is tracked by the checkbox milestones in
+  `doc/PLAN_IR.md`; when a milestone is reached, update its checkbox in the same change.
+
 ### 4.1 Completed Work (Summary)
 
 - Effect call dispatch in `main` body (`bare` / `qualified` / `pipeline`) is implemented.
@@ -492,6 +505,14 @@ Acceptance criteria:
 Goal: replace runtime-I/O shape matching (`Echo`, `SplitLinesEach`, etc.) with a
 general lowering path that can compile effectful `main` bodies from IR/owned runtime
 representation to Wasm without enumerating per-program patterns.
+
+Dependency / priority note:
+
+- Track F now depends on the IR-lowering plan in `doc/PLAN_IR.md` and must follow it as
+  the higher-priority architecture source for front-end/shared-IR boundary decisions.
+- if Track F work discovers that a language construct is blocked primarily by AST-to-IR
+  lowering, the default action is to fix the IR boundary rather than add another Wasm-side
+  recognizer or fallback classification.
 
 Why this is a separate track:
 
