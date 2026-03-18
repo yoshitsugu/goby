@@ -11,6 +11,7 @@ use crate::{
         DeclarationLoweringMode, EffectId, EffectOperationRef, LoweringPlan, LoweringStyle,
         build_lowering_plan,
     },
+    wasm_exec_plan::{decl_exec_plan, main_exec_plan},
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -278,8 +279,7 @@ fn collect_phase2_output_text_from_ir(
     lowering_plan: &LoweringPlan,
 ) -> Option<String> {
     let env = EvalEnv::from_module(module, lowering_plan);
-    let main_decl = env.declarations.get("main")?;
-    let main_ir = goby_core::ir_lower::lower_declaration(main_decl).ok()?;
+    let main_ir = main_exec_plan(module)?.ir_decl?;
     let mut outputs = Vec::new();
     eval_comp(&main_ir.body, &HashMap::new(), &env, 0, &mut outputs)?;
     Some(outputs.join(""))
@@ -443,7 +443,7 @@ fn eval_named_function(
         return None;
     }
     let decl = env.declarations.get(fn_name)?;
-    let ir_decl = goby_core::ir_lower::lower_declaration(decl).ok()?;
+    let ir_decl = decl_exec_plan(decl).ir_decl?;
     if ir_decl.params.len() != args.len() {
         return None;
     }
