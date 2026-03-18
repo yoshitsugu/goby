@@ -931,13 +931,50 @@ fn track_f_f4_split_each_is_currently_unsupported() {
 }
 
 /// F4 fixture: split + each — general lowering target.
-/// TODO: remove #[ignore] when F4 helper-call ABI is implemented.
+/// F4 is implemented: fused SplitEachPrint handles the split+each pattern.
 #[test]
-#[ignore = "Track F / F4: helper-call ABI not yet implemented"]
 fn track_f_f4_split_each_is_general_lowered() {
     let source = read_track_f_fixture("f4_split_each.gb");
     let module = parse_module(&source).expect("f4_split_each.gb should parse");
     let wasm = compile_module(&module).expect("F4 codegen should succeed");
+    assert_valid_wasm_module(&wasm);
+}
+
+// ---------------------------------------------------------------------------
+// F4 parity: split+each programs produce valid Wasm with fd_read and fd_write.
+// ---------------------------------------------------------------------------
+
+/// Parity test: f4 fixture compiles via general path and has fd_read + fd_write imports.
+#[test]
+fn track_f_f4_parity_split_each_has_fd_read_and_fd_write() {
+    let source = read_track_f_fixture("f4_split_each.gb");
+    let module = parse_module(&source).expect("f4_split_each.gb should parse");
+    let wasm = compile_module(&module).expect("F4 codegen should succeed");
+    assert_valid_wasm_module(&wasm);
+    let fd_read = b"fd_read";
+    let fd_write = b"fd_write";
+    assert!(
+        wasm.windows(fd_read.len()).any(|w| w == fd_read),
+        "F4 general path should import fd_read"
+    );
+    assert!(
+        wasm.windows(fd_write.len()).any(|w| w == fd_write),
+        "F4 general path should import fd_write"
+    );
+}
+
+/// Parity test: inline split+each form also compiles via general path.
+#[test]
+fn track_f_f4_parity_inline_split_each_compiles() {
+    let source = r#"
+main : Unit -> Unit can Print, Read
+main =
+  text = Read.read ()
+  lines = string.split text "\n"
+  each lines Print.println
+"#;
+    let module = parse_module(source).expect("inline f4 source should parse");
+    let wasm = compile_module(&module).expect("inline F4 codegen should succeed");
     assert_valid_wasm_module(&wasm);
 }
 

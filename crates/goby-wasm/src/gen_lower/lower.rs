@@ -46,6 +46,10 @@ pub(crate) fn lower_comp(comp: &CompExpr) -> Result<Vec<WasmBackendInstr>, Lower
         CompExpr::Value(v) => lower_value(v),
 
         CompExpr::Let { name, value, body, .. } => {
+            // F4: detect fused split-each pattern before general Let lowering.
+            if let Some(result) = try_lower_split_each(name, value, body) {
+                return result;
+            }
             let mut instrs = vec![WasmBackendInstr::DeclareLocal { name: name.clone() }];
             instrs.extend(lower_comp(value)?);
             instrs.push(WasmBackendInstr::StoreLocal { name: name.clone() });
@@ -118,6 +122,75 @@ pub(crate) fn lower_value(v: &ValueExpr) -> Result<Vec<WasmBackendInstr>, LowerE
             node: format!("{:?}", other),
         }),
     }
+}
+
+/// Try to match the fused split-each pattern:
+///
+/// ```text
+/// let <lines_name> = string.split(<text_var>, <sep_lit>)
+/// in each <lines_name> <Effect>.<op>
+/// ```
+///
+/// Returns `Some(Ok([SplitEachPrint {...}]))` when matched,
+/// `Some(Err(UnsupportedForm))` when partially matched but not fully supported,
+/// `None` when the pattern does not apply (fall through to general Let lowering).
+fn try_lower_split_each(
+    let_name: &str,
+    value: &CompExpr,
+    body: &CompExpr,
+) -> Option<Result<Vec<WasmBackendInstr>, LowerError>> {
+    // value must be Call(GlobalRef("string","split"), [Var(text), StrLit(sep)])
+    let (text_name, sep_str) = match value {
+        CompExpr::Call { callee, args }
+            if matches!(
+                callee.as_ref(),
+                ValueExpr::GlobalRef { module, name }
+                    if module == "string" && name == "split"
+            ) && args.len() == 2 =>
+        {
+            match (&args[0], &args[1]) {
+                (ValueExpr::Var(text), ValueExpr::StrLit(sep)) => (text.as_str(), sep.as_str()),
+                _ => return None,
+            }
+        }
+        _ => return None,
+    };
+
+    // body must be Call(Var("each"), [Var(lines_name), GlobalRef(effect, op)])
+    // where lines_name == let_name
+    let (effect, op) = match body {
+        CompExpr::Call { callee, args }
+            if matches!(callee.as_ref(), ValueExpr::Var(n) if n == "each")
+                && args.len() == 2 =>
+        {
+            match (&args[0], &args[1]) {
+                (ValueExpr::Var(list_name), ValueExpr::GlobalRef { module: eff, name: op })
+                    if list_name == let_name =>
+                {
+                    (eff.as_str(), op.as_str())
+                }
+                _ => return None,
+            }
+        }
+        _ => return None,
+    };
+
+    // Restriction: sep must be exactly 1 byte for F4.
+    let sep_bytes = sep_str.as_bytes().to_vec();
+    if sep_bytes.len() != 1 {
+        return Some(Err(LowerError::UnsupportedForm {
+            node: format!(
+                "SplitEachPrint: multi-byte separator '{sep_str}' is not yet supported (F5+)"
+            ),
+        }));
+    }
+
+    Some(Ok(vec![WasmBackendInstr::SplitEachPrint {
+        text_local: text_name.to_string(),
+        sep_bytes,
+        effect: effect.to_string(),
+        op: op.to_string(),
+    }]))
 }
 
 #[cfg(test)]
@@ -216,6 +289,78 @@ mod tests {
         let v = ValueExpr::StrLit("x".to_string());
         assert!(matches!(
             lower_value(&v),
+            Err(LowerError::UnsupportedForm { .. })
+        ));
+    }
+
+    #[test]
+    fn lower_split_each_emits_fused_instr() {
+        // let lines = string.split(text, "\n") in each lines Print.println
+        let comp = CompExpr::Let {
+            name: "lines".to_string(),
+            ty: goby_core::ir::IrType::Unknown,
+            value: Box::new(CompExpr::Call {
+                callee: Box::new(ValueExpr::GlobalRef {
+                    module: "string".to_string(),
+                    name: "split".to_string(),
+                }),
+                args: vec![
+                    ValueExpr::Var("text".to_string()),
+                    ValueExpr::StrLit("\n".to_string()),
+                ],
+            }),
+            body: Box::new(CompExpr::Call {
+                callee: Box::new(ValueExpr::Var("each".to_string())),
+                args: vec![
+                    ValueExpr::Var("lines".to_string()),
+                    ValueExpr::GlobalRef {
+                        module: "Print".to_string(),
+                        name: "println".to_string(),
+                    },
+                ],
+            }),
+        };
+        let instrs = lower_comp(&comp).expect("fused pattern should succeed");
+        assert_eq!(instrs.len(), 1);
+        assert!(
+            matches!(&instrs[0], I::SplitEachPrint { text_local, sep_bytes, effect, op }
+                if text_local == "text"
+                    && sep_bytes == b"\n"
+                    && effect == "Print"
+                    && op == "println"),
+            "expected SplitEachPrint, got {:?}",
+            instrs[0]
+        );
+    }
+
+    #[test]
+    fn lower_split_each_multichar_sep_returns_err() {
+        let comp = CompExpr::Let {
+            name: "lines".to_string(),
+            ty: goby_core::ir::IrType::Unknown,
+            value: Box::new(CompExpr::Call {
+                callee: Box::new(ValueExpr::GlobalRef {
+                    module: "string".to_string(),
+                    name: "split".to_string(),
+                }),
+                args: vec![
+                    ValueExpr::Var("text".to_string()),
+                    ValueExpr::StrLit("\r\n".to_string()), // 2-byte sep
+                ],
+            }),
+            body: Box::new(CompExpr::Call {
+                callee: Box::new(ValueExpr::Var("each".to_string())),
+                args: vec![
+                    ValueExpr::Var("lines".to_string()),
+                    ValueExpr::GlobalRef {
+                        module: "Print".to_string(),
+                        name: "println".to_string(),
+                    },
+                ],
+            }),
+        };
+        assert!(matches!(
+            lower_comp(&comp),
             Err(LowerError::UnsupportedForm { .. })
         ));
     }

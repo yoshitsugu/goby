@@ -19,6 +19,7 @@
 /// | `CompExpr::Value(ValueExpr::Unit)` | `I64Const(encode_unit())` |
 /// | `CompExpr::PerformEffect { effect, op, .. }` | `EffectOp { effect, op }` |
 /// | `CompExpr::Call { callee: GlobalRef { name }, .. }` | `CallHelper { name, arg_count }` |
+/// | fused `Let lines = split(text, sep); each lines Effect.op` | `SplitEachPrint { text_local, sep_bytes, effect, op }` |
 /// | discarded expression (stmt before tail) | lower expr + `Drop` |
 ///
 /// Unsupported IR nodes (`WithHandler`, `Handle`, `Resume`, `Lambda`) must produce
@@ -45,6 +46,22 @@ pub(crate) enum WasmBackendInstr {
     CallHelper { name: String, arg_count: usize },
     /// Discard the top-of-stack value.
     Drop,
+    /// Fused: split `text_local` (a tagged-i64 string) on `sep_bytes`, then call
+    /// `effect.op` on each resulting segment.
+    ///
+    /// Equivalent to: `for segment in split(text_local, sep_bytes): effect.op(segment)`.
+    ///
+    /// Lowered from the combined IR pattern:
+    /// `Let lines = Call(GlobalRef("string","split"), [Var(text), StrLit(sep)])`
+    /// followed by `Call(Var("each"), [Var(lines), GlobalRef(effect, op)])`.
+    ///
+    /// Restriction: `sep_bytes` must be exactly 1 byte (multi-byte separators are F5+).
+    SplitEachPrint {
+        text_local: String,
+        sep_bytes: Vec<u8>,
+        effect: String,
+        op: String,
+    },
 }
 
 #[cfg(test)]
@@ -67,6 +84,12 @@ mod tests {
                 arg_count: 2,
             },
             WasmBackendInstr::Drop,
+            WasmBackendInstr::SplitEachPrint {
+                text_local: "text".to_string(),
+                sep_bytes: b"\n".to_vec(),
+                effect: "Print".to_string(),
+                op: "println".to_string(),
+            },
         ];
         // Verify all variants round-trip through Clone and PartialEq.
         let cloned = instrs.clone();
