@@ -12,6 +12,7 @@ usage: goby <command> [options] <file.gb>
 commands:
   run    <file.gb>           compile and run a Goby program
   check  <file.gb>           parse and typecheck a Goby program
+  lint   <file.gb>           parse, typecheck, and run lint checks
   fmt    [--check] <file.gb> format a Goby source file in-place
                              (comments are stripped — Option A policy)
                              with --check: exit 1 if the file is not formatted";
@@ -22,20 +23,25 @@ commands:
 /// Without a span: `file: error: message` (plus optional ` in 'declaration'`).
 fn render_header(
     file: &str,
+    severity: goby_core::Severity,
     span: Option<&Span>,
     declaration: Option<&str>,
     message: &str,
 ) -> String {
+    let severity_label = match severity {
+        goby_core::Severity::Error => "error",
+        goby_core::Severity::Warning => "warning",
+    };
     let decl_suffix = match declaration {
         Some(name) => format!(" in '{}'", name),
         None => String::new(),
     };
     match span {
         Some(s) => format!(
-            "{}:{}:{}: error: {}{}",
-            file, s.line, s.col, message, decl_suffix
+            "{}:{}:{}: {}: {}{}",
+            file, s.line, s.col, severity_label, message, decl_suffix
         ),
-        None => format!("{}: error: {}{}", file, message, decl_suffix),
+        None => format!("{}: {}: {}{}", file, severity_label, message, decl_suffix),
     }
 }
 
@@ -88,11 +94,12 @@ fn render_snippet(source: &str, span: &Span) -> String {
 fn render_diagnostic(
     file: &str,
     source: &str,
+    severity: goby_core::Severity,
     span: Option<&Span>,
     declaration: Option<&str>,
     message: &str,
 ) -> String {
-    let header = render_header(file, span, declaration, message);
+    let header = render_header(file, severity, span, declaration, message);
     match span {
         None => header,
         Some(s) => {
@@ -111,6 +118,7 @@ fn render_diag(file: &str, source: &str, diag: goby_core::Diagnostic) -> String 
     render_diagnostic(
         file,
         source,
+        diag.severity,
         diag.span.as_ref(),
         diag.declaration.as_deref(),
         &diag.message,
@@ -121,6 +129,7 @@ fn render_diag(file: &str, source: &str, diag: goby_core::Diagnostic) -> String 
 enum Command {
     Run,
     Check,
+    Lint,
     Fmt { check: bool },
 }
 
@@ -197,6 +206,7 @@ fn run() -> Result<(), CliError> {
         Command::Check => {
             print_parse_summary(module.declarations.len(), &cli.file);
         }
+        Command::Lint => run_lint_command(&module, &cli.file, &source)?,
         Command::Fmt { .. } => unreachable!("handled above"),
     }
 
@@ -274,6 +284,20 @@ fn run_command(module: &goby_core::Module, file: &str) -> Result<(), CliError> {
     Ok(())
 }
 
+fn run_lint_command(module: &goby_core::Module, file: &str, source: &str) -> Result<(), CliError> {
+    let diagnostics = goby_core::lint_module(module);
+    if diagnostics.is_empty() {
+        print_parse_summary(module.declarations.len(), file);
+        return Ok(());
+    }
+    let rendered = diagnostics
+        .into_iter()
+        .map(|diag| render_diag(file, source, diag))
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    Err(CliError::Runtime(rendered))
+}
+
 fn parse_args() -> Result<CliArgs, CliError> {
     parse_args_from(env::args())
 }
@@ -289,9 +313,11 @@ where
         .ok_or_else(|| CliError::Usage("missing command".to_string()))?;
 
     match command_raw.as_str() {
-        "run" | "check" => {
+        "run" | "check" | "lint" => {
             let command = if command_raw == "run" {
                 Command::Run
+            } else if command_raw == "lint" {
+                Command::Lint
             } else {
                 Command::Check
             };
@@ -512,6 +538,14 @@ mod tests {
     }
 
     #[test]
+    fn parses_lint_args() {
+        let cli = parse_args_from(to_args(&["goby", "lint", "examples/hello.gb"]))
+            .expect("lint args should parse");
+        assert_eq!(cli.command, Command::Lint);
+        assert_eq!(cli.file, "examples/hello.gb");
+    }
+
+    #[test]
     fn rejects_unknown_command() {
         let err = parse_args_from(to_args(&["goby", "build", "examples/hello.gb"]))
             .expect_err("unknown command should fail");
@@ -560,27 +594,64 @@ mod tests {
     #[test]
     fn render_header_span_present_no_declaration() {
         let span = Span::point(3, 5);
-        let h = render_header("foo.gb", Some(&span), None, "type mismatch");
+        let h = render_header(
+            "foo.gb",
+            goby_core::Severity::Error,
+            Some(&span),
+            None,
+            "type mismatch",
+        );
         assert_eq!(h, "foo.gb:3:5: error: type mismatch");
     }
 
     #[test]
     fn render_header_span_present_with_declaration() {
         let span = Span::point(3, 5);
-        let h = render_header("foo.gb", Some(&span), Some("add"), "type mismatch");
+        let h = render_header(
+            "foo.gb",
+            goby_core::Severity::Error,
+            Some(&span),
+            Some("add"),
+            "type mismatch",
+        );
         assert_eq!(h, "foo.gb:3:5: error: type mismatch in 'add'");
     }
 
     #[test]
     fn render_header_span_absent_no_declaration() {
-        let h = render_header("foo.gb", None, None, "unknown symbol");
+        let h = render_header(
+            "foo.gb",
+            goby_core::Severity::Error,
+            None,
+            None,
+            "unknown symbol",
+        );
         assert_eq!(h, "foo.gb: error: unknown symbol");
     }
 
     #[test]
     fn render_header_span_absent_with_declaration() {
-        let h = render_header("foo.gb", None, Some("main"), "body type mismatch");
+        let h = render_header(
+            "foo.gb",
+            goby_core::Severity::Error,
+            None,
+            Some("main"),
+            "body type mismatch",
+        );
         assert_eq!(h, "foo.gb: error: body type mismatch in 'main'");
+    }
+
+    #[test]
+    fn render_header_warning_span_present() {
+        let span = Span::point(3, 5);
+        let h = render_header(
+            "foo.gb",
+            goby_core::Severity::Warning,
+            Some(&span),
+            Some("f"),
+            "lint warning",
+        );
+        assert_eq!(h, "foo.gb:3:5: warning: lint warning in 'f'");
     }
 
     // --- render_diagnostic smoke tests ---
@@ -588,7 +659,14 @@ mod tests {
     #[test]
     fn render_diagnostic_span_absent_returns_header_only() {
         let source = "f = 1\n";
-        let result = render_diagnostic("f.gb", source, None, Some("f"), "type error");
+        let result = render_diagnostic(
+            "f.gb",
+            source,
+            goby_core::Severity::Error,
+            None,
+            Some("f"),
+            "type error",
+        );
         assert_eq!(result, "f.gb: error: type error in 'f'");
     }
 
@@ -596,7 +674,14 @@ mod tests {
     fn render_diagnostic_span_present_includes_snippet() {
         let source = "f = 1\n";
         let span = Span::point(1, 5);
-        let result = render_diagnostic("f.gb", source, Some(&span), Some("f"), "type error");
+        let result = render_diagnostic(
+            "f.gb",
+            source,
+            goby_core::Severity::Error,
+            Some(&span),
+            Some("f"),
+            "type error",
+        );
         assert!(result.starts_with("f.gb:1:5: error: type error in 'f'\n"));
         assert!(result.contains("| f = 1"));
         assert!(result.contains('^'));

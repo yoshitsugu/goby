@@ -363,7 +363,7 @@ Lint rules are ordered by ascending analysis cost. The cheapest infrastructure
 comes first to unblock the framework early; user-value ranking is noted in
 parentheses for prioritization.
 
-1. **Unreachable `case` arm**: wildcard `_` arm followed by more arms (purely syntactic, cheapest).
+1. **Unreachable `case` arm**: wildcard `_` arm followed by more arms (implemented).
    User value: medium — catches subtle logic errors in pattern matching.
 2. **Unused local binding**: `x = expr` where `x` is never referenced afterward
    (needs local-use tracking across `Expr`/`Stmt` spans from D1a).

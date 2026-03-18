@@ -72,6 +72,69 @@ fn check_command_succeeds_for_function_example() {
 }
 
 #[test]
+fn lint_command_succeeds_for_clean_source() {
+    let root = repo_root();
+    let output = command_for_goby_cli()
+        .arg("lint")
+        .arg("examples/function.gb")
+        .current_dir(&root)
+        .output()
+        .expect("cli should execute");
+
+    assert!(
+        output.status.success(),
+        "expected success, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("parsed and typechecked"),
+        "unexpected stdout: {}",
+        stdout
+    );
+}
+
+#[test]
+fn lint_command_reports_unreachable_case_arm_warning() {
+    let root = repo_root();
+    let sandbox = TempDirGuard::new("lint_unreachable_case_arm");
+    let input = sandbox.join("lint_warning.gb");
+    fs::write(
+        &input,
+        r#"f : Int -> Int
+f n =
+  case n
+    _ -> 0
+    1 -> 1
+"#,
+    )
+    .expect("temporary input should be writable");
+
+    let output = command_for_goby_cli()
+        .arg("lint")
+        .arg(&input)
+        .current_dir(&root)
+        .output()
+        .expect("cli should execute");
+
+    assert!(
+        !output.status.success(),
+        "expected lint warning to produce non-zero exit"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("warning: unreachable case arm [unreachable-arm]"),
+        "unexpected stderr: {}",
+        stderr
+    );
+    assert!(
+        stderr.contains("in 'f'"),
+        "expected declaration context in stderr: {}",
+        stderr
+    );
+}
+
+#[test]
 fn check_command_uses_default_stdlib_root_for_file_based_symbol() {
     let root = repo_root();
     let sandbox = TempDirGuard::new("check_default_stdlib_root");

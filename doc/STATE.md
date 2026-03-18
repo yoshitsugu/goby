@@ -5,20 +5,15 @@ Last updated: 2026-03-18
 ## Current Focus
 
 - Track F F6 is complete.
-- F3/F4/F5 representative runtime-I/O programs now classify as `GeneralLowered`
-  and compile through the general lowering path.
-- Remaining `RuntimeIoPlan` shapes are explicitly documented as optimization-only
-  paths rather than semantic source-of-truth code paths.
-- Size guardrail tests now cover both general-lowered Track F fixtures and a
-  remaining optimization-backed transformed split callback.
+- Track D5 has started with a first `goby lint` slice.
+- `goby lint <file.gb>` now exists for human-readable warnings.
+- First rule implemented: unreachable `case` arm after wildcard `_`.
 
 ## Immediate Next Steps
 
-1. If desired, continue shrinking `RuntimeIoPlan::Echo` by normalizing more bare-name
-   read/print forms into general lowering.
-2. Revisit whether transformed split-callback optimization should move into
-   general lowering proper or remain as a documented fast path.
-3. Start the next roadmap item outside Track F convergence.
+1. D5 rule 2: add unused local binding lint on top of the new lint command path.
+2. Add JSON output mode for lint diagnostics once multiple rules exist.
+3. Continue D5 in priority order after validating warning UX and exit-code policy.
 
 ## Decisions To Carry Forward
 
@@ -33,6 +28,9 @@ Last updated: 2026-03-18
   `DynamicWasiIo` so convergence progress is observable in tests and callers.
 - `RuntimeIoPlan` is no longer the semantic source of truth; any remaining plan-backed
   lowering is treated and documented as an optimization layer with parity obligations.
+- `goby lint` currently exits non-zero when warnings are emitted and reuses the same
+  caret-snippet diagnostic renderer as `goby check`.
+- Diagnostic severity now supports `Warning` in addition to `Error`.
 - String layout: len (i32) at heap_base, bytes at heap_base+4.
 - I32 scratch locals (5 total) are declared when fused split instructions are present.
 

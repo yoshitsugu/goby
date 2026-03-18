@@ -8,6 +8,7 @@ pub mod diagnostic;
 pub mod formatter;
 pub mod ir;
 pub mod ir_lower;
+pub mod lint;
 pub mod parser;
 mod parser_expr;
 mod parser_pattern;
@@ -46,6 +47,7 @@ pub use ast::{
 };
 pub use diagnostic::{Diagnostic, Severity};
 pub use formatter::format_module;
+pub use lint::lint_module;
 pub use parser::{ParseError, parse_body_stmts, parse_module};
 pub use parser_util::is_identifier;
 pub use span::{line_col_to_offset, offset_to_line_col};
