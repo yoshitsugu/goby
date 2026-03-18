@@ -1,11 +1,11 @@
 use std::path::PathBuf;
 use std::sync::Mutex;
 
-use goby_core::{Module, Stmt, parse_module};
+use goby_core::{Module, parse_module};
 
 use crate::{
-    assert_mode_parity, lower, resolve_main_runtime_output,
-    resolve_main_runtime_output_with_mode_and_stdin,
+    assert_mode_parity, lower, resolve_module_runtime_output,
+    resolve_module_runtime_output_with_mode_and_stdin,
 };
 
 static ENV_MUTEX: Mutex<()> = Mutex::new(());
@@ -19,28 +19,9 @@ fn read_example(name: &str) -> String {
     std::fs::read_to_string(path).expect("example file should exist")
 }
 
-fn main_body(module: &Module) -> &str {
-    module
-        .declarations
-        .iter()
-        .find(|decl| decl.name == "main")
-        .map(|decl| decl.body.as_str())
-        .expect("main should exist")
-}
-
-fn main_parsed_body(module: &Module) -> Option<&[Stmt]> {
-    module
-        .declarations
-        .iter()
-        .find(|decl| decl.name == "main")
-        .and_then(|decl| decl.parsed_body.as_deref())
-}
-
 fn resolve_with_seeded_stdin(module: &Module, stdin: &str) -> Option<String> {
-    resolve_main_runtime_output_with_mode_and_stdin(
+    resolve_module_runtime_output_with_mode_and_stdin(
         module,
-        main_body(module),
-        main_parsed_body(module),
         lower::EffectExecutionMode::PortableFallback,
         Some(stdin.to_string()),
     )
@@ -51,9 +32,7 @@ fn locks_runtime_output_for_function_example() {
     let _guard = ENV_MUTEX.lock().unwrap();
     let source = read_example("function.gb");
     let module = parse_module(&source).expect("parse should work");
-    let output =
-        resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
-            .expect("runtime output should resolve");
+    let output = resolve_module_runtime_output(&module).expect("runtime output should resolve");
     assert_eq!(output, "90[30, 40, 50][60, 70]something15");
 }
 
@@ -72,9 +51,7 @@ main =
   callback_after_print (|n| -> n + 5)
 "#;
     let module = parse_module(source).expect("parse should work");
-    let output =
-        resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
-            .expect("runtime output should resolve");
+    let output = resolve_module_runtime_output(&module).expect("runtime output should resolve");
     assert_eq!(output, "something15");
 }
 
@@ -92,9 +69,7 @@ main =
   each_two (|n| -> print "${n}")
 "#;
     let module = parse_module(source).expect("parse should work");
-    let output =
-        resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
-            .expect("runtime output should resolve");
+    let output = resolve_module_runtime_output(&module).expect("runtime output should resolve");
     assert_eq!(output, "12");
 }
 
@@ -116,9 +91,7 @@ main =
   each_two log_num
 "#;
     let module = parse_module(source).expect("parse should work");
-    let output =
-        resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
-            .expect("runtime output should resolve");
+    let output = resolve_module_runtime_output(&module).expect("runtime output should resolve");
     assert_eq!(output, "12");
 }
 
@@ -144,9 +117,7 @@ main =
   wrapper log_num
 "#;
     let module = parse_module(source).expect("parse should work");
-    let output =
-        resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
-            .expect("runtime output should resolve");
+    let output = resolve_module_runtime_output(&module).expect("runtime output should resolve");
     assert_eq!(output, "12");
 }
 
@@ -165,9 +136,7 @@ main =
   each_two (|n| -> print "${n + base}")
 "#;
     let module = parse_module(source).expect("parse should work");
-    let output =
-        resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
-            .expect("runtime output should resolve");
+    let output = resolve_module_runtime_output(&module).expect("runtime output should resolve");
     assert_eq!(output, "4142");
 }
 
@@ -203,9 +172,7 @@ main =
   each [3, 5] (|n| -> print "${n}")
 "#;
     let module = parse_module(source).expect("parse should work");
-    let output =
-        resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
-            .expect("runtime output should resolve");
+    let output = resolve_module_runtime_output(&module).expect("runtime output should resolve");
     assert_eq!(output, "35");
 }
 
@@ -220,9 +187,7 @@ main =
   list.each [2, 4] (|n| -> print "${n}")
 "#;
     let module = parse_module(source).expect("parse should work");
-    let output =
-        resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
-            .expect("runtime output should resolve");
+    let output = resolve_module_runtime_output(&module).expect("runtime output should resolve");
     assert_eq!(output, "24");
 }
 
@@ -237,9 +202,7 @@ main =
   l.each [6, 8] (|n| -> print "${n}")
 "#;
     let module = parse_module(source).expect("parse should work");
-    let output =
-        resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
-            .expect("runtime output should resolve");
+    let output = resolve_module_runtime_output(&module).expect("runtime output should resolve");
     assert_eq!(output, "68");
 }
 
@@ -254,9 +217,7 @@ main =
   each [10, 12] (|n| -> print "${n}")
 "#;
     let module = parse_module(source).expect("parse should work");
-    let output =
-        resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
-            .expect("runtime output should resolve");
+    let output = resolve_module_runtime_output(&module).expect("runtime output should resolve");
     assert_eq!(output, "1012");
 }
 
@@ -279,9 +240,7 @@ main =
     list.each [1, 3] (|n| -> log n)
 "#;
     let module = parse_module(source).expect("parse should work");
-    let output =
-        resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
-            .expect("runtime output should resolve");
+    let output = resolve_module_runtime_output(&module).expect("runtime output should resolve");
     assert_eq!(output, "13");
 }
 
@@ -304,9 +263,7 @@ main =
     l.each [5, 7] (|n| -> log n)
 "#;
     let module = parse_module(source).expect("parse should work");
-    let output =
-        resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
-            .expect("runtime output should resolve");
+    let output = resolve_module_runtime_output(&module).expect("runtime output should resolve");
     assert_eq!(output, "57");
 }
 
@@ -329,9 +286,7 @@ main =
     each [9, 11] (|n| -> log n)
 "#;
     let module = parse_module(source).expect("parse should work");
-    let output =
-        resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
-            .expect("runtime output should resolve");
+    let output = resolve_module_runtime_output(&module).expect("runtime output should resolve");
     assert_eq!(output, "911");
 }
 
@@ -347,9 +302,7 @@ main =
   list.each ns (|i| -> println(i * 10))
 "#;
     let module = parse_module(source).expect("parse should work");
-    let output =
-        resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
-            .expect("runtime output should resolve");
+    let output = resolve_module_runtime_output(&module).expect("runtime output should resolve");
     assert_eq!(output, "10\n20\n30\n");
 }
 
@@ -364,9 +317,7 @@ main =
   list.each ["go", "by"] (|s| -> println s)
 "#;
     let module = parse_module(source).expect("parse should work");
-    let output =
-        resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
-            .expect("runtime output should resolve");
+    let output = resolve_module_runtime_output(&module).expect("runtime output should resolve");
     assert_eq!(output, "go\nby\n");
 }
 
@@ -381,9 +332,7 @@ main =
   each ["go", "by"] (|s| -> println(s))
 "#;
     let module = parse_module(source).expect("parse should work");
-    let output =
-        resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
-            .expect("runtime output should resolve");
+    let output = resolve_module_runtime_output(&module).expect("runtime output should resolve");
     assert_eq!(output, "go\nby\n");
 }
 
@@ -400,9 +349,7 @@ main =
   each lines (|line| -> println(line))
 "#;
     let module = parse_module(source).expect("parse should work");
-    let output =
-        resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
-            .expect("runtime output should resolve");
+    let output = resolve_module_runtime_output(&module).expect("runtime output should resolve");
     assert_eq!(output, "hogehoge\nfugafuga\n");
 }
 
@@ -417,9 +364,7 @@ main =
   print (graphemes "a👨‍👩‍👧‍👦b")
 "#;
     let module = parse_module(source).expect("parse should work");
-    let output =
-        resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
-            .expect("runtime output should resolve");
+    let output = resolve_module_runtime_output(&module).expect("runtime output should resolve");
     assert_eq!(
         output,
         "[\"a\", \"👨\u{200d}👩\u{200d}👧\u{200d}👦\", \"b\"]"
@@ -485,9 +430,7 @@ main =
   print (map [1, 2, 3] (|n| -> n * 10))
 "#;
     let module = parse_module(source).expect("parse should work");
-    let output =
-        resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
-            .expect("runtime output should resolve");
+    let output = resolve_module_runtime_output(&module).expect("runtime output should resolve");
     assert_eq!(output, "[10, 20, 30]");
 }
 
@@ -502,9 +445,7 @@ main =
   print (list.map ["go", "by"] (|s| -> "${s}!"))
 "#;
     let module = parse_module(source).expect("parse should work");
-    let output =
-        resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
-            .expect("runtime output should resolve");
+    let output = resolve_module_runtime_output(&module).expect("runtime output should resolve");
     assert_eq!(output, "[\"go!\", \"by!\"]");
 }
 
@@ -519,8 +460,7 @@ main =
   list.each [1, 2] 1
 "#;
     let module = parse_module(source).expect("parse should work");
-    let output =
-        resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module));
+    let output = resolve_module_runtime_output(&module);
     assert_eq!(
         output.as_deref(),
         Some(
@@ -543,8 +483,7 @@ main =
   each_two 1
 "#;
     let module = parse_module(source).expect("parse should work");
-    let output =
-        resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module));
+    let output = resolve_module_runtime_output(&module);
     assert_eq!(
         output.as_deref(),
         Some(
@@ -562,9 +501,7 @@ main =
   print (__goby_string_length "hello")
 "#;
     let module = parse_module(source).expect("parse should work");
-    let output =
-        resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
-            .expect("runtime output should resolve");
+    let output = resolve_module_runtime_output(&module).expect("runtime output should resolve");
     assert_eq!(output, "5");
 }
 
@@ -578,9 +515,7 @@ main =
   print (__goby_env_fetch_env_var "GOBY_INTRINSIC_TEST_PATH")
 "#;
     let module = parse_module(source).expect("parse should work");
-    let output =
-        resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
-            .expect("runtime output should resolve");
+    let output = resolve_module_runtime_output(&module).expect("runtime output should resolve");
     unsafe { std::env::remove_var("GOBY_INTRINSIC_TEST_PATH") };
     assert_eq!(output, "intrinsic-ok");
 }
@@ -596,9 +531,7 @@ main =
   print (fetch_env_var "GOBY_ENV_BRIDGE_TEST_PATH")
 "#;
     let module = parse_module(source).expect("parse should work");
-    let output =
-        resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
-            .expect("runtime output should resolve");
+    let output = resolve_module_runtime_output(&module).expect("runtime output should resolve");
     unsafe { std::env::remove_var("GOBY_ENV_BRIDGE_TEST_PATH") };
     assert_eq!(output, "env-bridge-ok");
 }
@@ -613,9 +546,7 @@ main =
   print (string.length "hello")
 "#;
     let module = parse_module(source).expect("parse should work");
-    let output =
-        resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
-            .expect("runtime output should resolve");
+    let output = resolve_module_runtime_output(&module).expect("runtime output should resolve");
     assert_eq!(output, "5");
 }
 
@@ -629,9 +560,7 @@ main =
   print (length "hello")
 "#;
     let module = parse_module(source).expect("parse should work");
-    let output =
-        resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
-            .expect("runtime output should resolve");
+    let output = resolve_module_runtime_output(&module).expect("runtime output should resolve");
     assert_eq!(output, "5");
 }
 
@@ -654,8 +583,7 @@ main =
     print parse("x")
 "#;
     let module = parse_module(source).expect("parse should work");
-    let output =
-        resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module));
+    let output = resolve_module_runtime_output(&module);
     assert_eq!(output.as_deref(), Some("42-1"));
 }
 
@@ -678,9 +606,7 @@ main =
     print n
 "#;
     let module = parse_module(source).expect("parse should work");
-    let output =
-        resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
-            .expect("runtime output should resolve");
+    let output = resolve_module_runtime_output(&module).expect("runtime output should resolve");
     assert_eq!(output, "3");
 }
 
@@ -706,9 +632,7 @@ main =
   print out.current
 "#;
     let module = parse_module(source).expect("parse should work");
-    let output =
-        resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
-            .expect("runtime output should resolve");
+    let output = resolve_module_runtime_output(&module).expect("runtime output should resolve");
     assert_eq!(output, "a👨\u{200d}👩\u{200d}👧\u{200d}👦b");
 }
 
@@ -729,9 +653,7 @@ main =
     print n
 "#;
     let module = parse_module(source).expect("parse should work");
-    let output =
-        resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
-            .expect("runtime output should resolve");
+    let output = resolve_module_runtime_output(&module).expect("runtime output should resolve");
     assert_eq!(output, "1");
 }
 
@@ -751,9 +673,7 @@ main =
     print (yield "x" 41)
 "#;
     let module = parse_module(source).expect("parse should work");
-    let output =
-        resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
-            .expect("runtime output should resolve");
+    let output = resolve_module_runtime_output(&module).expect("runtime output should resolve");
     assert_eq!(output, "(True, 42)");
 }
 
@@ -766,9 +686,7 @@ main =
   print ("alpha" == "alpha")
 "#;
     let module = parse_module(source).expect("parse should work");
-    let output =
-        resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
-            .expect("runtime output should resolve");
+    let output = resolve_module_runtime_output(&module).expect("runtime output should resolve");
     assert_eq!(output, "True");
 }
 
@@ -780,8 +698,7 @@ main : Unit -> Unit
 main = ()
 "#;
     let module = parse_module(source).expect("parse should work");
-    let output =
-        resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module));
+    let output = resolve_module_runtime_output(&module);
     assert!(
         output.is_none(),
         "unit literal main without print should produce no runtime output"
@@ -801,9 +718,7 @@ main =
     print 0
 "#;
     let module = parse_module(source).expect("parse should work");
-    let output =
-        resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
-            .expect("runtime output should resolve");
+    let output = resolve_module_runtime_output(&module).expect("runtime output should resolve");
     assert_eq!(output, "42");
 }
 
@@ -824,9 +739,7 @@ main =
     print pair.0
 "#;
     let module = parse_module(source).expect("parse should work");
-    let output =
-        resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
-            .expect("runtime output should resolve");
+    let output = resolve_module_runtime_output(&module).expect("runtime output should resolve");
     assert_eq!(output, "1");
 }
 
@@ -861,8 +774,7 @@ main =
   print Status.0
 "#;
     let module = parse_module(source).expect("parse should work");
-    let output =
-        resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module));
+    let output = resolve_module_runtime_output(&module);
     assert!(
         output.is_none(),
         "numeric member access on non-tuple receiver should not produce runtime output"
@@ -880,9 +792,7 @@ main =
   print ys
 "#;
     let module = parse_module(source).expect("parse should work");
-    let output =
-        resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
-            .expect("runtime output should resolve");
+    let output = resolve_module_runtime_output(&module).expect("runtime output should resolve");
     assert_eq!(output, "[\"a\", \"b\"]");
 }
 
@@ -892,9 +802,7 @@ fn locks_runtime_output_for_effect_gb() {
     unsafe { std::env::set_var("GOBY_PATH", "hello") };
     let source = read_example("effect.gb");
     let module = parse_module(&source).expect("effect.gb should parse");
-    let output =
-        resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
-            .expect("runtime output should resolve");
+    let output = resolve_module_runtime_output(&module).expect("runtime output should resolve");
     unsafe { std::env::remove_var("GOBY_PATH") };
     assert_eq!(output, "13donedevelopment");
 }
@@ -904,9 +812,7 @@ fn locks_runtime_output_for_iterator_gb() {
     let _guard = ENV_MUTEX.lock().unwrap();
     let source = read_example("iterator.gb");
     let module = parse_module(&source).expect("iterator.gb should parse");
-    let output =
-        resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
-            .expect("runtime output should resolve");
+    let output = resolve_module_runtime_output(&module).expect("runtime output should resolve");
     assert_eq!(output, "tick:atick:btick:c");
 }
 
@@ -915,8 +821,6 @@ fn locks_runtime_output_for_iterator_unified_gb() {
     let _guard = ENV_MUTEX.lock().unwrap();
     let source = read_example("iterator_unified.gb");
     let module = parse_module(&source).expect("iterator_unified.gb should parse");
-    let output =
-        resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
-            .expect("runtime output should resolve");
+    let output = resolve_module_runtime_output(&module).expect("runtime output should resolve");
     assert_eq!(output, "tick:atick:btick:c31");
 }

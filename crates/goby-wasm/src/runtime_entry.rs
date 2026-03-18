@@ -10,8 +10,16 @@ use crate::runtime_resolver::ResolvedRuntimeOutput;
 use crate::runtime_support::module_has_selective_import_symbol;
 
 fn main_runtime_parts(module: &Module) -> Option<(&str, Option<&[Stmt]>)> {
-    let main = module.declarations.iter().find(|decl| decl.name == "main")?;
+    let main = module
+        .declarations
+        .iter()
+        .find(|decl| decl.name == "main")?;
     Some((main.body.as_str(), main.parsed_body.as_deref()))
+}
+
+#[cfg(test)]
+pub(crate) fn resolve_module_runtime_output(module: &Module) -> Option<String> {
+    resolve_module_runtime_output_with_mode(module, lower::EffectExecutionMode::PortableFallback)
 }
 
 #[cfg(test)]
@@ -20,7 +28,14 @@ pub(crate) fn resolve_module_runtime_output_with_mode(
     execution_mode: lower::EffectExecutionMode,
 ) -> Option<String> {
     let (body, parsed_stmts) = main_runtime_parts(module)?;
-    resolve_main_runtime_output_with_mode(module, body, parsed_stmts, execution_mode)
+    resolve_main_runtime_output_with_mode_internal(
+        module,
+        body,
+        parsed_stmts,
+        execution_mode,
+        None,
+        true,
+    )
 }
 
 pub(crate) fn resolve_module_runtime_output_with_mode_and_stdin(
@@ -29,7 +44,7 @@ pub(crate) fn resolve_module_runtime_output_with_mode_and_stdin(
     stdin_seed: Option<String>,
 ) -> Option<String> {
     let (body, parsed_stmts) = main_runtime_parts(module)?;
-    resolve_main_runtime_output_with_mode_and_stdin(
+    resolve_main_runtime_output_with_mode_and_stdin_internal(
         module,
         body,
         parsed_stmts,
@@ -48,40 +63,7 @@ pub(crate) fn resolve_module_runtime_output_for_compile(
     resolve_main_runtime_output_for_compile(module, body, parsed_stmts, execution_mode)
 }
 
-#[cfg(test)]
-pub(crate) fn resolve_main_runtime_output(
-    module: &Module,
-    body: &str,
-    parsed_stmts: Option<&[Stmt]>,
-) -> Option<String> {
-    resolve_main_runtime_output_with_mode_internal(
-        module,
-        body,
-        parsed_stmts,
-        lower::EffectExecutionMode::PortableFallback,
-        None,
-        true,
-    )
-}
-
-#[cfg(test)]
-pub(crate) fn resolve_main_runtime_output_with_mode(
-    module: &Module,
-    body: &str,
-    parsed_stmts: Option<&[Stmt]>,
-    execution_mode: lower::EffectExecutionMode,
-) -> Option<String> {
-    resolve_main_runtime_output_with_mode_internal(
-        module,
-        body,
-        parsed_stmts,
-        execution_mode,
-        None,
-        true,
-    )
-}
-
-pub(crate) fn resolve_main_runtime_output_with_mode_and_stdin(
+fn resolve_main_runtime_output_with_mode_and_stdin_internal(
     module: &Module,
     body: &str,
     parsed_stmts: Option<&[Stmt]>,

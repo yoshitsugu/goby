@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use goby_core::{Module, Stmt, parse_module};
+use goby_core::parse_module;
 
 use super::*;
 
@@ -17,23 +17,6 @@ fn read_example(name: &str) -> String {
     path.push("examples");
     path.push(name);
     std::fs::read_to_string(path).expect("example file should exist")
-}
-
-fn main_body(module: &Module) -> &str {
-    module
-        .declarations
-        .iter()
-        .find(|decl| decl.name == "main")
-        .map(|decl| decl.body.as_str())
-        .expect("main should exist")
-}
-
-fn main_parsed_body(module: &Module) -> Option<&[Stmt]> {
-    module
-        .declarations
-        .iter()
-        .find(|decl| decl.name == "main")
-        .and_then(|decl| decl.parsed_body.as_deref())
 }
 
 #[test]
@@ -116,8 +99,7 @@ main =
     let module = parse_module(source).expect("source should parse");
     let wasm = compile_module(&module).expect("codegen should succeed");
     let expected_text =
-        resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
-            .expect("runtime output should resolve");
+        resolve_module_runtime_output(&module).expect("runtime output should resolve");
     assert_eq!(expected_text, "42True");
     assert_valid_wasm_module(&wasm);
 }
@@ -152,8 +134,7 @@ main =
     let module = parse_module(source).expect("source should parse");
     let wasm = compile_module(&module).expect("codegen should succeed");
     let expected_text =
-        resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
-            .expect("runtime output should resolve");
+        resolve_module_runtime_output(&module).expect("runtime output should resolve");
     assert_eq!(expected_text, "42");
     assert_valid_wasm_module(&wasm);
 }
@@ -202,8 +183,7 @@ main =
     assert_eq!(fallback::native_unsupported_reason_kind(&module), None);
     let wasm = compile_module(&module).expect("codegen should succeed");
     let expected_text =
-        resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
-            .expect("runtime output should resolve");
+        resolve_module_runtime_output(&module).expect("runtime output should resolve");
     assert_eq!(expected_text, "90");
     assert_valid_wasm_module(&wasm);
 }
@@ -228,8 +208,7 @@ main =
     assert_eq!(fallback::native_unsupported_reason_kind(&module), None);
     let wasm = compile_module(&module).expect("codegen should succeed");
     let expected_text =
-        resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
-            .expect("runtime output should resolve");
+        resolve_module_runtime_output(&module).expect("runtime output should resolve");
     assert_eq!(expected_text, "42");
     assert_valid_wasm_module(&wasm);
 }
@@ -258,8 +237,7 @@ main =
     assert_eq!(fallback::native_unsupported_reason(&module), None);
     let wasm = compile_module(&module).expect("codegen should succeed");
     let expected_text =
-        resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
-            .expect("runtime output should resolve");
+        resolve_module_runtime_output(&module).expect("runtime output should resolve");
     assert_eq!(expected_text, "[10, 20]");
     assert_valid_wasm_module(&wasm);
 }
@@ -279,8 +257,7 @@ main =
     );
     let wasm = compile_module(&module).expect("codegen should succeed");
     let expected_text =
-        resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
-            .expect("runtime output should resolve");
+        resolve_module_runtime_output(&module).expect("runtime output should resolve");
     assert_eq!(expected_text, "[1, 2, 3]");
     assert_valid_wasm_module(&wasm);
 }
@@ -299,8 +276,7 @@ main =
     );
     let wasm = compile_module(&module).expect("codegen should succeed");
     let expected_text =
-        resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
-            .expect("runtime output should resolve");
+        resolve_module_runtime_output(&module).expect("runtime output should resolve");
     assert_eq!(expected_text, "[4, 5, 6]");
     assert_valid_wasm_module(&wasm);
 }
@@ -325,8 +301,7 @@ main =
     );
     let wasm = compile_module(&module).expect("codegen should succeed");
     let expected_text =
-        resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
-            .expect("runtime output should resolve");
+        resolve_module_runtime_output(&module).expect("runtime output should resolve");
     assert_eq!(expected_text, "30");
     assert_valid_wasm_module(&wasm);
 }
@@ -350,8 +325,7 @@ main =
     );
     let wasm = compile_module(&module).expect("codegen should succeed");
     let expected_text =
-        resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
-            .expect("runtime output should resolve");
+        resolve_module_runtime_output(&module).expect("runtime output should resolve");
     assert_eq!(expected_text, "Five!");
     assert_valid_wasm_module(&wasm);
 }
@@ -366,8 +340,7 @@ fn compile_module_emits_valid_wasm_for_control_flow_example_via_fallback() {
     );
     let wasm = compile_module(&module).expect("codegen should succeed");
     let expected_text =
-        resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
-            .expect("runtime output should resolve");
+        resolve_module_runtime_output(&module).expect("runtime output should resolve");
     assert_eq!(expected_text, "Five!5030");
     assert_valid_wasm_module(&wasm);
 }
@@ -859,8 +832,7 @@ main =
     );
     let wasm = compile_module(&module).expect("codegen should succeed");
     let expected_text =
-        resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
-            .expect("runtime output should resolve");
+        resolve_module_runtime_output(&module).expect("runtime output should resolve");
     assert_eq!(expected_text, "hello\n");
     assert_valid_wasm_module(&wasm);
 }

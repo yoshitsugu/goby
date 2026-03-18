@@ -540,6 +540,12 @@ it as the new baseline.
     IR-derived lowering-plan metadata.
 
 - [ ] G9. Portable fallback aligns to the IR boundary
+  - `compile_module`, interpreter execution, runtime parity, and runtime-output
+    tests now enter fallback execution through module-centric wrappers rather
+    than passing `main.body` / `main.parsed_body` across call boundaries.
+  - Remaining raw AST dependence is still inside fallback runtime internals; the
+    next slices should replace or isolate those internals behind the same
+    module/shared-IR semantic boundary.
   - Portable fallback execution runs from shared IR directly, or from a thin
     adapter over the same IR-owned semantic boundary.
   - Fallback/native parity can be tested from the same IR input for supported

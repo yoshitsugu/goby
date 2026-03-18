@@ -1,27 +1,10 @@
 use std::sync::Mutex;
 
-use goby_core::{Module, Stmt, parse_module};
+use goby_core::parse_module;
 
-use crate::{assert_mode_parity, fallback, resolve_main_runtime_output};
+use crate::{assert_mode_parity, fallback, resolve_module_runtime_output};
 
 static ENV_MUTEX: Mutex<()> = Mutex::new(());
-
-fn main_body(module: &Module) -> &str {
-    module
-        .declarations
-        .iter()
-        .find(|decl| decl.name == "main")
-        .map(|decl| decl.body.as_str())
-        .expect("main should exist")
-}
-
-fn main_parsed_body(module: &Module) -> Option<&[Stmt]> {
-    module
-        .declarations
-        .iter()
-        .find(|decl| decl.name == "main")
-        .and_then(|decl| decl.parsed_body.as_deref())
-}
 
 #[test]
 fn resolves_runtime_output_for_list_spread_int_values() {
@@ -36,9 +19,7 @@ main =
         !fallback::supports_native_codegen(&module),
         "list spread currently routes through fallback runtime path"
     );
-    let output =
-        resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
-            .expect("runtime output should resolve");
+    let output = resolve_module_runtime_output(&module).expect("runtime output should resolve");
     assert_eq!(output, "[1, 2, 3]");
 }
 
@@ -55,9 +36,7 @@ main =
         !fallback::supports_native_codegen(&module),
         "list spread currently routes through fallback runtime path"
     );
-    let output =
-        resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
-            .expect("runtime output should resolve");
+    let output = resolve_module_runtime_output(&module).expect("runtime output should resolve");
     assert_eq!(output, "[\"a\", \"b\", \"c\"]");
 }
 
@@ -78,9 +57,7 @@ main =
     print xs
 "#;
     let module = parse_module(source).expect("parse should work");
-    let output =
-        resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
-            .expect("runtime output should resolve");
+    let output = resolve_module_runtime_output(&module).expect("runtime output should resolve");
     assert_eq!(output, "[1, 2]");
 }
 
@@ -125,9 +102,7 @@ main =
     print box.value
 "#;
     let module = parse_module(source).expect("parse should work");
-    let output =
-        resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
-            .expect("runtime output should resolve");
+    let output = resolve_module_runtime_output(&module).expect("runtime output should resolve");
     assert_eq!(output, "1");
 }
 
@@ -181,9 +156,7 @@ main =
       raise Error(next ())
 "#;
     let module = parse_module(source).expect("parse should work");
-    let output =
-        resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module))
-            .expect("runtime output should resolve");
+    let output = resolve_module_runtime_output(&module).expect("runtime output should resolve");
     assert_eq!(output, "oops");
 }
 
@@ -912,8 +885,7 @@ main =
   print v
 "#;
     let module = parse_module(source).expect("parse should work");
-    let output =
-        resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module));
+    let output = resolve_module_runtime_output(&module);
     // OOB triggers abort: no output produced
     assert_eq!(output, None);
 }
@@ -933,8 +905,7 @@ main =
   print v
 "#;
     let module = parse_module(source).expect("parse should work");
-    let output =
-        resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module));
+    let output = resolve_module_runtime_output(&module);
     // Negative index aborts: no output produced
     assert_eq!(output, None);
 }
@@ -954,8 +925,7 @@ main =
   print v
 "#;
     let module = parse_module(source).expect("parse should work");
-    let output =
-        resolve_main_runtime_output(&module, main_body(&module), main_parsed_body(&module));
+    let output = resolve_module_runtime_output(&module);
     // OOB on string list triggers abort: no output produced
     assert_eq!(output, None);
 }
