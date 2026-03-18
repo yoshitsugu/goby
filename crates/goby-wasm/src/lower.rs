@@ -388,14 +388,41 @@ fn eval_value(
                 (IrBinOp::Add, NativeValue::Int(a), NativeValue::Int(b)) => {
                     Some(NativeValue::Int(a.checked_add(b)?))
                 }
+                (IrBinOp::Sub, NativeValue::Int(a), NativeValue::Int(b)) => {
+                    Some(NativeValue::Int(a.checked_sub(b)?))
+                }
                 (IrBinOp::Mul, NativeValue::Int(a), NativeValue::Int(b)) => {
                     Some(NativeValue::Int(a.checked_mul(b)?))
+                }
+                (IrBinOp::Div, NativeValue::Int(a), NativeValue::Int(b)) if b != 0 => {
+                    Some(NativeValue::Int(a / b))
+                }
+                (IrBinOp::Mod, NativeValue::Int(a), NativeValue::Int(b)) if b != 0 => {
+                    Some(NativeValue::Int(a % b))
                 }
                 (IrBinOp::Eq, NativeValue::Int(a), NativeValue::Int(b)) => {
                     Some(NativeValue::Bool(a == b))
                 }
                 (IrBinOp::Eq, NativeValue::Bool(a), NativeValue::Bool(b)) => {
                     Some(NativeValue::Bool(a == b))
+                }
+                (IrBinOp::Eq, NativeValue::String(a), NativeValue::String(b)) => {
+                    Some(NativeValue::Bool(a == b))
+                }
+                (IrBinOp::Eq, NativeValue::Unit, NativeValue::Unit) => {
+                    Some(NativeValue::Bool(true))
+                }
+                (IrBinOp::Lt, NativeValue::Int(a), NativeValue::Int(b)) => {
+                    Some(NativeValue::Bool(a < b))
+                }
+                (IrBinOp::Gt, NativeValue::Int(a), NativeValue::Int(b)) => {
+                    Some(NativeValue::Bool(a > b))
+                }
+                (IrBinOp::Le, NativeValue::Int(a), NativeValue::Int(b)) => {
+                    Some(NativeValue::Bool(a <= b))
+                }
+                (IrBinOp::Ge, NativeValue::Int(a), NativeValue::Int(b)) => {
+                    Some(NativeValue::Bool(a >= b))
                 }
                 _ => None,
             }

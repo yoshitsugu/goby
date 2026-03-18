@@ -747,7 +747,13 @@ These items are intentionally kept as short placeholders until they become activ
 - Type annotation placement: where annotations are required vs optional outside current MVP subset.
 - Tuple/record roadmap: record update syntax, pattern matching on record fields.
 - Import system: filesystem-backed/local package resolution, dependency graph rules.
-- Equality/comparison: operator set (`!=`, `<`, `>`, etc.) and type constraints.
+- Equality/comparison:
+  - implemented operator set now includes `==`, `<`, `>`, `<=`, `>=`, `+`, `-`, `*`, `/`, `%`.
+  - still open:
+    - exact long-term policy for equality over all language-level value categories,
+    - `!=`,
+    - whether spaced single-argument calls should accept unparenthesized binary-expression arguments
+      such as `println 1 + 1` without changing the broader precedence model.
 
 ## 6. Research References (2026-03-01 survey)
 

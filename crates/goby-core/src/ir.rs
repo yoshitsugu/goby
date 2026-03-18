@@ -35,10 +35,15 @@ pub enum IrType {
 pub enum IrBinOp {
     And,
     Add,
+    Sub,
     Mul,
+    Div,
+    Mod,
     Eq,
     Lt,
     Gt,
+    Le,
+    Ge,
 }
 
 /// A pure value expression that does not perform effects.
@@ -278,10 +283,15 @@ fn fmt_value(out: &mut String, v: &ValueExpr) {
             out.push_str(match op {
                 IrBinOp::And => "&&",
                 IrBinOp::Add => "+",
+                IrBinOp::Sub => "-",
                 IrBinOp::Mul => "*",
+                IrBinOp::Div => "/",
+                IrBinOp::Mod => "%",
                 IrBinOp::Eq => "==",
                 IrBinOp::Lt => "<",
                 IrBinOp::Gt => ">",
+                IrBinOp::Le => "<=",
+                IrBinOp::Ge => ">=",
             });
             out.push(' ');
             fmt_value(out, right);

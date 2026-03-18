@@ -15,7 +15,19 @@ pub(crate) fn is_supported_list_item_expr(expr: &Expr) -> bool {
 }
 
 pub(crate) fn is_supported_binop_kind(op: &BinOpKind) -> bool {
-    matches!(op, BinOpKind::Add | BinOpKind::Mul | BinOpKind::Eq)
+    matches!(
+        op,
+        BinOpKind::Add
+            | BinOpKind::Sub
+            | BinOpKind::Mul
+            | BinOpKind::Div
+            | BinOpKind::Mod
+            | BinOpKind::Eq
+            | BinOpKind::Lt
+            | BinOpKind::Gt
+            | BinOpKind::Le
+            | BinOpKind::Ge
+    )
 }
 
 #[cfg(test)]
@@ -47,7 +59,14 @@ mod tests {
     #[test]
     fn supports_current_native_binop_kinds() {
         assert!(is_supported_binop_kind(&BinOpKind::Add));
+        assert!(is_supported_binop_kind(&BinOpKind::Sub));
         assert!(is_supported_binop_kind(&BinOpKind::Mul));
+        assert!(is_supported_binop_kind(&BinOpKind::Div));
+        assert!(is_supported_binop_kind(&BinOpKind::Mod));
         assert!(is_supported_binop_kind(&BinOpKind::Eq));
+        assert!(is_supported_binop_kind(&BinOpKind::Lt));
+        assert!(is_supported_binop_kind(&BinOpKind::Gt));
+        assert!(is_supported_binop_kind(&BinOpKind::Le));
+        assert!(is_supported_binop_kind(&BinOpKind::Ge));
     }
 }

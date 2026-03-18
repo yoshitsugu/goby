@@ -43,6 +43,22 @@ pub(crate) fn parse_expr(src: &str) -> Option<Expr> {
         });
     }
 
+    if let Some((left, right)) = split_top_level_le(src) {
+        return Some(Expr::BinOp {
+            op: BinOpKind::Le,
+            left: Box::new(parse_expr(left)?),
+            right: Box::new(parse_expr(right)?),
+        });
+    }
+
+    if let Some((left, right)) = split_top_level_ge(src) {
+        return Some(Expr::BinOp {
+            op: BinOpKind::Ge,
+            left: Box::new(parse_expr(left)?),
+            right: Box::new(parse_expr(right)?),
+        });
+    }
+
     if let Some((left, right)) = split_top_level_binop(src, '<') {
         return Some(Expr::BinOp {
             op: BinOpKind::Lt,
@@ -67,9 +83,33 @@ pub(crate) fn parse_expr(src: &str) -> Option<Expr> {
         });
     }
 
+    if let Some((left, right)) = split_top_level_binop(src, '-') {
+        return Some(Expr::BinOp {
+            op: BinOpKind::Sub,
+            left: Box::new(parse_expr(left)?),
+            right: Box::new(parse_expr(right)?),
+        });
+    }
+
     if let Some((left, right)) = split_top_level_binop(src, '*') {
         return Some(Expr::BinOp {
             op: BinOpKind::Mul,
+            left: Box::new(parse_expr(left)?),
+            right: Box::new(parse_expr(right)?),
+        });
+    }
+
+    if let Some((left, right)) = split_top_level_binop(src, '/') {
+        return Some(Expr::BinOp {
+            op: BinOpKind::Div,
+            left: Box::new(parse_expr(left)?),
+            right: Box::new(parse_expr(right)?),
+        });
+    }
+
+    if let Some((left, right)) = split_top_level_binop(src, '%') {
+        return Some(Expr::BinOp {
+            op: BinOpKind::Mod,
             left: Box::new(parse_expr(left)?),
             right: Box::new(parse_expr(right)?),
         });
@@ -374,6 +414,14 @@ fn split_top_level_binop(src: &str, op: char) -> Option<(&str, &str)> {
 
 fn split_top_level_eq(src: &str) -> Option<(&str, &str)> {
     split_top_level_double_token(src, "==")
+}
+
+fn split_top_level_le(src: &str) -> Option<(&str, &str)> {
+    split_top_level_double_token(src, "<=")
+}
+
+fn split_top_level_ge(src: &str) -> Option<(&str, &str)> {
+    split_top_level_double_token(src, ">=")
 }
 
 fn split_top_level_double_token<'a>(src: &'a str, token: &str) -> Option<(&'a str, &'a str)> {
@@ -948,6 +996,18 @@ mod tests {
     }
 
     #[test]
+    fn parses_subtraction() {
+        assert_eq!(
+            parse_expr("a - b"),
+            Some(Expr::BinOp {
+                op: BinOpKind::Sub,
+                left: Box::new(Expr::var("a")),
+                right: Box::new(Expr::var("b")),
+            })
+        );
+    }
+
+    #[test]
     fn parses_equality() {
         assert_eq!(
             parse_expr("a == b"),
@@ -978,6 +1038,26 @@ mod tests {
     }
 
     #[test]
+    fn parses_division_and_modulo() {
+        assert_eq!(
+            parse_expr("b / 3"),
+            Some(Expr::BinOp {
+                op: BinOpKind::Div,
+                left: Box::new(Expr::var("b")),
+                right: Box::new(Expr::IntLit(3)),
+            })
+        );
+        assert_eq!(
+            parse_expr("b % 3"),
+            Some(Expr::BinOp {
+                op: BinOpKind::Mod,
+                left: Box::new(Expr::var("b")),
+                right: Box::new(Expr::IntLit(3)),
+            })
+        );
+    }
+
+    #[test]
     fn parses_operator_precedence_mul_higher_than_add() {
         assert_eq!(
             parse_expr("1 + 2 * 3"),
@@ -989,6 +1069,26 @@ mod tests {
                     left: Box::new(Expr::IntLit(2)),
                     right: Box::new(Expr::IntLit(3)),
                 }),
+            })
+        );
+    }
+
+    #[test]
+    fn parses_comparison_family() {
+        assert_eq!(
+            parse_expr("a <= b"),
+            Some(Expr::BinOp {
+                op: BinOpKind::Le,
+                left: Box::new(Expr::var("a")),
+                right: Box::new(Expr::var("b")),
+            })
+        );
+        assert_eq!(
+            parse_expr("a >= b"),
+            Some(Expr::BinOp {
+                op: BinOpKind::Ge,
+                left: Box::new(Expr::var("a")),
+                right: Box::new(Expr::var("b")),
             })
         );
     }

@@ -171,10 +171,15 @@ fn ir_binop_to_ast(op: &IrBinOp) -> BinOpKind {
     match op {
         IrBinOp::And => BinOpKind::And,
         IrBinOp::Add => BinOpKind::Add,
+        IrBinOp::Sub => BinOpKind::Sub,
         IrBinOp::Mul => BinOpKind::Mul,
+        IrBinOp::Div => BinOpKind::Div,
+        IrBinOp::Mod => BinOpKind::Mod,
         IrBinOp::Eq => BinOpKind::Eq,
         IrBinOp::Lt => BinOpKind::Lt,
         IrBinOp::Gt => BinOpKind::Gt,
+        IrBinOp::Le => BinOpKind::Le,
+        IrBinOp::Ge => BinOpKind::Ge,
     }
 }
 

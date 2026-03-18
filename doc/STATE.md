@@ -18,6 +18,13 @@ Last updated: 2026-03-19
 
 ## Decisions To Carry Forward
 
+- Integer operator support now includes `+`, `-`, `*`, `/`, `%`, `<`, `>`, `<=`, `>=`,
+  with runtime/typecheck/native-support coverage for the current subset.
+- Equality is now aligned for the current runtime-supported comparable subset
+  (`Int`, `Bool`, `String`, `Unit`, tuples/lists/records where runtime equality exists).
+- Spaced single-argument calls still require parentheses around binary-expression arguments
+  under the current parser precedence; for example `println (1 + 1)` works while
+  `println 1 + 1` remains a planned syntax/precedence decision.
 - Track F architecture is now carried by the `gen_lower/` module docs, `runtime_io_plan.rs`
   convergence notes, and the Track F regression tests.
 - `gen_lower/` must not import from `runtime_io_plan.rs`.

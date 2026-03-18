@@ -4,7 +4,7 @@ use crate::runtime_eval::{AstLambdaCallable, IntCallable};
 use crate::runtime_flow::{
     DirectCallHead, Out, ResolvedHandlerMethod, RuntimeError, RuntimeEvaluators,
 };
-use crate::runtime_value::{RuntimeLocals, RuntimeValue};
+use crate::runtime_value::{RuntimeLocals, RuntimeValue, runtime_value_eq};
 use crate::{MAX_EVAL_DEPTH, RuntimeOutputResolver};
 
 impl<'m> RuntimeOutputResolver<'m> {
@@ -414,25 +414,26 @@ impl<'m> RuntimeOutputResolver<'m> {
         lv: RuntimeValue,
         rv: RuntimeValue,
     ) -> Option<RuntimeValue> {
+        if matches!(op, goby_core::BinOpKind::Eq) {
+            return Some(RuntimeValue::Bool(runtime_value_eq(&lv, &rv)));
+        }
         match (lv, rv) {
             (RuntimeValue::Bool(l), RuntimeValue::Bool(r)) => match op {
                 goby_core::BinOpKind::And => Some(RuntimeValue::Bool(l && r)),
-                goby_core::BinOpKind::Eq => Some(RuntimeValue::Bool(l == r)),
                 _ => None,
             },
             (RuntimeValue::Int(l), RuntimeValue::Int(r)) => match op {
                 goby_core::BinOpKind::Add => l.checked_add(r).map(RuntimeValue::Int),
+                goby_core::BinOpKind::Sub => l.checked_sub(r).map(RuntimeValue::Int),
                 goby_core::BinOpKind::Mul => l.checked_mul(r).map(RuntimeValue::Int),
-                goby_core::BinOpKind::Eq => Some(RuntimeValue::Bool(l == r)),
+                goby_core::BinOpKind::Div => (r != 0).then_some(RuntimeValue::Int(l / r)),
+                goby_core::BinOpKind::Mod => (r != 0).then_some(RuntimeValue::Int(l % r)),
                 goby_core::BinOpKind::Lt => Some(RuntimeValue::Bool(l < r)),
                 goby_core::BinOpKind::Gt => Some(RuntimeValue::Bool(l > r)),
+                goby_core::BinOpKind::Le => Some(RuntimeValue::Bool(l <= r)),
+                goby_core::BinOpKind::Ge => Some(RuntimeValue::Bool(l >= r)),
                 _ => None,
             },
-            (RuntimeValue::String(l), RuntimeValue::String(r))
-                if matches!(op, goby_core::BinOpKind::Eq) =>
-            {
-                Some(RuntimeValue::Bool(l == r))
-            }
             _ => None,
         }
     }

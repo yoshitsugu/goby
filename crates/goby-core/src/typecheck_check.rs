@@ -90,11 +90,15 @@ fn infer_expr_ty(expr: &Expr, env: &TypeEnv) -> Ty {
             match (op, &lt, &rt) {
                 (BinOpKind::And, Ty::Bool, Ty::Bool) => Ty::Bool,
                 (BinOpKind::Add, Ty::Int, Ty::Int) => Ty::Int,
+                (BinOpKind::Sub, Ty::Int, Ty::Int) => Ty::Int,
                 (BinOpKind::Mul, Ty::Int, Ty::Int) => Ty::Int,
-                (BinOpKind::Eq, Ty::Int, Ty::Int) => Ty::Bool,
-                (BinOpKind::Eq, Ty::Str, Ty::Str) => Ty::Bool,
+                (BinOpKind::Div, Ty::Int, Ty::Int) => Ty::Int,
+                (BinOpKind::Mod, Ty::Int, Ty::Int) => Ty::Int,
+                (BinOpKind::Eq, _, _) if is_equality_comparable(env, &lt, &rt) => Ty::Bool,
                 (BinOpKind::Lt, Ty::Int, Ty::Int) => Ty::Bool,
                 (BinOpKind::Gt, Ty::Int, Ty::Int) => Ty::Bool,
+                (BinOpKind::Le, Ty::Int, Ty::Int) => Ty::Bool,
+                (BinOpKind::Ge, Ty::Int, Ty::Int) => Ty::Bool,
                 (_, Ty::Unknown, _) | (_, _, Ty::Unknown) => Ty::Unknown,
                 _ => Ty::Unknown,
             }
@@ -182,6 +186,25 @@ fn infer_expr_ty(expr: &Expr, env: &TypeEnv) -> Ty {
                 _ => Ty::Unknown,
             }
         }
+    }
+}
+
+fn is_equality_comparable(env: &TypeEnv, left: &Ty, right: &Ty) -> bool {
+    let left = env.resolve_alias(left, 0);
+    let right = env.resolve_alias(right, 0);
+    if !env.are_compatible(&left, &right) || !env.are_compatible(&right, &left) {
+        return false;
+    }
+    equality_type_supported(&left)
+}
+
+fn equality_type_supported(ty: &Ty) -> bool {
+    match ty {
+        Ty::Int | Ty::Bool | Ty::Str | Ty::Unit => true,
+        Ty::List(inner) => equality_type_supported(inner),
+        Ty::Tuple(items) => items.iter().all(equality_type_supported),
+        Ty::Con { args, .. } => args.iter().all(equality_type_supported),
+        Ty::Var(_) | Ty::Fun { .. } | Ty::Handler { .. } | Ty::Unknown => false,
     }
 }
 
@@ -748,6 +771,28 @@ main =
     fn infers_string_equality_as_bool() {
         let module = parse_module("flag : Bool\nflag = \"a\" == \"a\"\n").expect("should parse");
         typecheck_module(&module).expect("string equality result should typecheck as Bool");
+    }
+
+    #[test]
+    fn infers_bool_equality_as_bool() {
+        let module = parse_module("flag : Bool\nflag = True == False\n").expect("should parse");
+        typecheck_module(&module).expect("bool equality result should typecheck as Bool");
+    }
+
+    #[test]
+    fn infers_int_comparison_family() {
+        let module = parse_module(
+            "a : Bool\na = 3 > 2\nb : Bool\nb = 3 < 2\nc : Bool\nc = 3 >= 2\nd : Bool\nd = 3 <= 2\n",
+        )
+        .expect("should parse");
+        typecheck_module(&module).expect("comparison family should typecheck as Bool");
+    }
+
+    #[test]
+    fn infers_sub_div_mod_as_int() {
+        let module = parse_module("a : Int\na = 5 - 1\nb : Int\nb = 5 / 2\nc : Int\nc = 5 % 2\n")
+            .expect("should parse");
+        typecheck_module(&module).expect("sub/div/mod should typecheck as Int");
     }
 
     #[test]

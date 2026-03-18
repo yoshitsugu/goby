@@ -149,10 +149,15 @@ pub struct Declaration {
 pub enum BinOpKind {
     And,
     Add,
+    Sub,
     Mul,
+    Div,
+    Mod,
     Eq,
     Lt,
     Gt,
+    Le,
+    Ge,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -391,10 +396,15 @@ impl Expr {
                 let op_str = match op {
                     BinOpKind::And => "&&",
                     BinOpKind::Add => "+",
+                    BinOpKind::Sub => "-",
                     BinOpKind::Mul => "*",
+                    BinOpKind::Div => "/",
+                    BinOpKind::Mod => "%",
                     BinOpKind::Eq => "==",
                     BinOpKind::Lt => "<",
                     BinOpKind::Gt => ">",
+                    BinOpKind::Le => "<=",
+                    BinOpKind::Ge => ">=",
                 };
                 let l_raw = left.to_str_repr()?;
                 let r_raw = right.to_str_repr()?;

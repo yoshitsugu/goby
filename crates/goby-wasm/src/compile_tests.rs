@@ -116,6 +116,34 @@ main =
 }
 
 #[test]
+fn compile_module_supports_extended_int_operator_family() {
+    let source = r#"
+main : Unit -> Unit
+main =
+  println (1 + 1)
+  println (5 - 1)
+  println (5 / 2)
+  println (3 * 3)
+  println (5 % 2)
+  println (3 > 1 + 1)
+  println (2 < 1 - 1)
+  println (8 >= 1 + 3)
+  println (8 <= 5 - 3)
+  println (2 == 1 + 1)
+  println (2 == 1 - 1)
+"#;
+    let module = parse_module(source).expect("source should parse");
+    let wasm = compile_module(&module).expect("codegen should succeed");
+    let expected_text =
+        resolve_module_runtime_output(&module).expect("runtime output should resolve");
+    assert_eq!(
+        expected_text,
+        "2\n4\n2\n9\n1\nTrue\nFalse\nTrue\nFalse\nTrue\nFalse\n"
+    );
+    assert_valid_wasm_module(&wasm);
+}
+
+#[test]
 fn native_codegen_capability_checker_accepts_direct_function_call_subset() {
     let source = r#"
 double : Int -> Int

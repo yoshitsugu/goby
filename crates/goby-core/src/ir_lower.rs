@@ -475,10 +475,15 @@ fn lower_binop(op: &BinOpKind) -> IrBinOp {
     match op {
         BinOpKind::And => IrBinOp::And,
         BinOpKind::Add => IrBinOp::Add,
+        BinOpKind::Sub => IrBinOp::Sub,
         BinOpKind::Mul => IrBinOp::Mul,
+        BinOpKind::Div => IrBinOp::Div,
+        BinOpKind::Mod => IrBinOp::Mod,
         BinOpKind::Eq => IrBinOp::Eq,
         BinOpKind::Lt => IrBinOp::Lt,
         BinOpKind::Gt => IrBinOp::Gt,
+        BinOpKind::Le => IrBinOp::Le,
+        BinOpKind::Ge => IrBinOp::Ge,
     }
 }
 

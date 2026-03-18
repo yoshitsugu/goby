@@ -129,10 +129,15 @@ pub(crate) fn format_expr(expr: &Expr, indent: usize) -> String {
             let op_str = match op {
                 BinOpKind::And => "&&",
                 BinOpKind::Add => "+",
+                BinOpKind::Sub => "-",
                 BinOpKind::Mul => "*",
+                BinOpKind::Div => "/",
+                BinOpKind::Mod => "%",
                 BinOpKind::Eq => "==",
                 BinOpKind::Lt => "<",
                 BinOpKind::Gt => ">",
+                BinOpKind::Le => "<=",
+                BinOpKind::Ge => ">=",
             };
             let l_raw = format_expr(left, indent);
             let r_raw = format_expr(right, indent);

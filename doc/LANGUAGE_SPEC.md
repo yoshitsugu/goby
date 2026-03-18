@@ -79,9 +79,13 @@ Some focused areas may also have companion plan documents such as
   - when a function-typed argument is expected, a named function may be passed directly
     (for example: `map xs add_ten`)
 - Operators:
-  - precedence: `|>` < `&&` < `==` / `<` / `>` < `+` < `*` < call/application
-  - `|>`, `&&`, `==`, `<`, `>`, `+`, `*` are left-associative
+  - precedence: `|>` < `&&` < `==` / `<` / `>` / `<=` / `>=` < `+` / `-` < `*` / `/` / `%` < call/application
+  - `|>`, `&&`, `==`, `<`, `>`, `<=`, `>=`, `+`, `-`, `*`, `/`, `%` are left-associative
   - binary operators require spaces around operators
+  - current parser still requires parentheses when passing a binary operator expression as the
+    argument to a spaced single-argument call:
+    - `println (1 + 1)` is supported
+    - `println 1 + 1` is not yet supported under the current call/application precedence
 - Conditionals/case:
   - `if ... else ...` expression form
   - multiline `if` branches may be either a single expression or an indented statement block; block branches return the last expression value

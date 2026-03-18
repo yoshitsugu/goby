@@ -11,7 +11,8 @@
 //! - `Stmt::Binding` with value expressions in the native value subset.
 //! - `Stmt::Expr(print <value>)` and `<value> |> print`.
 //! - Value expressions: `IntLit`, `BoolLit`, `StringLit`, `Var`, `ListLit(IntLit)`,
-//!   `BinOp(+|*|==)`, `If`, `Case` (patterns: `IntLit|StringLit|BoolLit|Wildcard`),
+//!   `BinOp(+|-|*|/|%|==|<|>|<=|>=)`, `If`, `Case`
+//!   (patterns: `IntLit|StringLit|BoolLit|Wildcard`),
 //!   `Call` to a direct named declaration whose body is also natively supported.
 //!
 //! ## Intentional fallback boundaries (Phase A)
