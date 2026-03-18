@@ -1,0 +1,15 @@
+---
+source: crates/goby-core/src/ir_lower.rs
+assertion_line: 884
+expression: fmt_ir(&m)
+---
+decl main_effect: ? =
+  with
+    handler
+      read(resume) ->
+        resume "input"
+  do
+    let result: ? =
+      result
+    in
+      result

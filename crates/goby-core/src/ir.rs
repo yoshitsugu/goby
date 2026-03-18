@@ -9,8 +9,9 @@
 //! - Backend analysis and lowering: `goby-wasm` (consumes IR)
 //!
 //! # Effect nodes
-//! `PerformEffect`, `Handle`, and `Resume` are reserved as structural nodes.
-//! Full lowering of effect handlers is deferred to Track G4+.
+//! `PerformEffect`, `Handle`, `WithHandler`, and `Resume` represent the effect
+//! boundary. As of G4, `With`/`Handler`/`Resume` from the AST lower into these
+//! nodes. Full `PerformEffect` lowering from qualified calls is deferred to G5.
 
 /// A type annotation carried by IR nodes.
 ///
@@ -96,20 +97,47 @@ pub enum CompExpr {
         callee: Box<ValueExpr>,
         args: Vec<ValueExpr>,
     },
-    /// Effect operation invocation (reserved; full lowering in G4+).
+    /// Effect operation invocation.
+    ///
+    /// As of G4, this node is constructable and printable. Lowering from
+    /// qualified AST calls (e.g. `Read.read()`) into `PerformEffect` requires
+    /// an effect-table lookup and is deferred to G5.
     PerformEffect {
         effect: String,
         op: String,
         args: Vec<ValueExpr>,
     },
-    /// Handler installation (reserved structural stub; full lowering in G4+).
+    /// Handler expression: a set of operation clauses for one or more effects.
+    ///
+    /// Lowered from `Expr::Handler { clauses }`. Corresponds to the handler
+    /// value that can be passed to a `with` expression.
     Handle {
+        clauses: Vec<IrHandlerClause>,
+    },
+    /// Install a handler over a body computation.
+    ///
+    /// Lowered from `Expr::With { handler, body }`.
+    WithHandler {
+        handler: Box<CompExpr>,
         body: Box<CompExpr>,
     },
-    /// Resume from an effect handler (reserved structural stub; full lowering in G4+).
+    /// Resume from an effect handler continuation.
+    ///
+    /// Lowered from `Expr::Resume { value }`.
     Resume {
         value: Box<ValueExpr>,
     },
+}
+
+/// A single operation clause in a handler expression.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IrHandlerClause {
+    /// The operation name handled (e.g. `"read"`, `"print"`).
+    pub op_name: String,
+    /// Parameter names for this operation clause.
+    pub params: Vec<String>,
+    /// Body of the clause.
+    pub body: CompExpr,
 }
 
 /// A top-level declaration in the IR.
@@ -118,6 +146,9 @@ pub struct IrDecl {
     pub name: String,
     pub params: Vec<(String, IrType)>,
     pub result_ty: IrType,
+    /// Residual effects declared in the type annotation (e.g. `can Read, Print`).
+    /// Empty if no `can` clause is present or no annotation is available.
+    pub residual_effects: Vec<String>,
     pub body: CompExpr,
 }
 
@@ -165,6 +196,10 @@ fn fmt_decl(out: &mut String, decl: &IrDecl, depth: usize) {
     }
     out.push_str(": ");
     fmt_type(out, &decl.result_ty);
+    if !decl.residual_effects.is_empty() {
+        out.push_str(" can ");
+        out.push_str(&decl.residual_effects.join(", "));
+    }
     out.push_str(" =\n");
     fmt_comp(out, &decl.body, depth + 1);
 }
@@ -324,9 +359,27 @@ fn fmt_comp(out: &mut String, c: &CompExpr, depth: usize) {
             }
             out.push_str(")\n");
         }
-        CompExpr::Handle { body } => {
+        CompExpr::Handle { clauses } => {
             indent(out, depth);
-            out.push_str("handle\n");
+            out.push_str("handler\n");
+            for clause in clauses {
+                indent(out, depth + 1);
+                out.push_str(&clause.op_name);
+                if !clause.params.is_empty() {
+                    out.push('(');
+                    out.push_str(&clause.params.join(", "));
+                    out.push(')');
+                }
+                out.push_str(" ->\n");
+                fmt_comp(out, &clause.body, depth + 2);
+            }
+        }
+        CompExpr::WithHandler { handler, body } => {
+            indent(out, depth);
+            out.push_str("with\n");
+            fmt_comp(out, handler, depth + 1);
+            indent(out, depth);
+            out.push_str("do\n");
             fmt_comp(out, body, depth + 1);
         }
         CompExpr::Resume { value } => {
@@ -358,13 +411,13 @@ impl std::error::Error for IrValidateError {}
 
 /// Validate structural well-formedness of an `IrModule`.
 ///
-/// Scope (Track G2): structural checks only.
-/// Undefined-variable-reference checking is deferred to G4+.
+/// Structural checks include:
+/// - `Call` nodes must have at least one argument.
+/// - `Handle` nodes must have at least one clause.
+/// - Each `IrHandlerClause` body is recursively validated.
+/// - `WithHandler` handler and body are recursively validated.
 ///
-/// Checks:
-/// - Reserved stub nodes (`Handle`, `Resume`) must not have non-trivial bodies
-///   (Handle body must not itself be Handle/Resume stubs at the top level — this
-///   is a placeholder constraint until G4 fleshes out the invariant).
+/// Undefined-variable-reference checking is deferred to G5+.
 pub fn validate_ir(module: &IrModule) -> Result<(), IrValidateError> {
     for decl in &module.decls {
         validate_comp(&decl.body, &decl.name)?;
@@ -402,24 +455,23 @@ fn validate_comp(c: &CompExpr, decl_name: &str) -> Result<(), IrValidateError> {
             }
         }
         CompExpr::PerformEffect { .. } => Ok(()),
-        CompExpr::Handle { body } => {
-            // Reserved stub: body must not itself be a bare Handle or Resume at top level
-            // (those would indicate malformed nesting in the stub phase).
-            match body.as_ref() {
-                CompExpr::Handle { .. } => Err(IrValidateError {
+        CompExpr::Handle { clauses } => {
+            if clauses.is_empty() {
+                return Err(IrValidateError {
                     message: format!(
-                        "in decl `{}`: nested Handle stubs are not valid",
+                        "in decl `{}`: Handle node must have at least one clause",
                         decl_name
                     ),
-                }),
-                CompExpr::Resume { .. } => Err(IrValidateError {
-                    message: format!(
-                        "in decl `{}`: Resume directly inside Handle stub is not valid",
-                        decl_name
-                    ),
-                }),
-                other => validate_comp(other, decl_name),
+                });
             }
+            for clause in clauses {
+                validate_comp(&clause.body, decl_name)?;
+            }
+            Ok(())
+        }
+        CompExpr::WithHandler { handler, body } => {
+            validate_comp(handler, decl_name)?;
+            validate_comp(body, decl_name)
         }
         CompExpr::Resume { .. } => Ok(()),
     }
@@ -441,173 +493,238 @@ mod tests {
         CompExpr::Value(v)
     }
 
+    /// Build a simple `IrDecl` with no params, no residual effects.
+    fn simple_decl(name: &str, result_ty: IrType, body: CompExpr) -> IrDecl {
+        IrDecl {
+            name: name.into(),
+            params: vec![],
+            result_ty,
+            residual_effects: vec![],
+            body,
+        }
+    }
+
+    /// Build a simple `IrDecl` with params but no residual effects.
+    fn decl_with_params_ir(
+        name: &str,
+        params: Vec<(&str, IrType)>,
+        result_ty: IrType,
+        body: CompExpr,
+    ) -> IrDecl {
+        IrDecl {
+            name: name.into(),
+            params: params.into_iter().map(|(n, t)| (n.into(), t)).collect(),
+            result_ty,
+            residual_effects: vec![],
+            body,
+        }
+    }
+
     // --- printer tests ---
 
     #[test]
     fn print_int_lit() {
-        let m = simple_module(vec![IrDecl {
-            name: "answer".into(),
-            params: vec![],
-            result_ty: IrType::Int,
-            body: val(ValueExpr::IntLit(42)),
-        }]);
+        let m = simple_module(vec![simple_decl("answer", IrType::Int, val(ValueExpr::IntLit(42)))]);
         insta::assert_snapshot!(fmt_ir(&m));
     }
 
     #[test]
     fn print_bool_lit() {
-        let m = simple_module(vec![IrDecl {
-            name: "flag".into(),
-            params: vec![],
-            result_ty: IrType::Bool,
-            body: val(ValueExpr::BoolLit(true)),
-        }]);
+        let m = simple_module(vec![simple_decl("flag", IrType::Bool, val(ValueExpr::BoolLit(true)))]);
         insta::assert_snapshot!(fmt_ir(&m));
     }
 
     #[test]
     fn print_str_lit() {
-        let m = simple_module(vec![IrDecl {
-            name: "greeting".into(),
-            params: vec![],
-            result_ty: IrType::Str,
-            body: val(ValueExpr::StrLit("hello".into())),
-        }]);
+        let m = simple_module(vec![simple_decl(
+            "greeting",
+            IrType::Str,
+            val(ValueExpr::StrLit("hello".into())),
+        )]);
         insta::assert_snapshot!(fmt_ir(&m));
     }
 
     #[test]
     fn print_var() {
-        let m = simple_module(vec![IrDecl {
-            name: "f".into(),
-            params: vec![("x".into(), IrType::Int)],
-            result_ty: IrType::Int,
-            body: val(ValueExpr::Var("x".into())),
-        }]);
+        let m = simple_module(vec![decl_with_params_ir(
+            "f",
+            vec![("x", IrType::Int)],
+            IrType::Int,
+            val(ValueExpr::Var("x".into())),
+        )]);
         insta::assert_snapshot!(fmt_ir(&m));
     }
 
     #[test]
     fn print_global_ref() {
-        let m = simple_module(vec![IrDecl {
-            name: "use_io".into(),
-            params: vec![],
-            result_ty: IrType::Unknown,
-            body: CompExpr::Call {
+        let m = simple_module(vec![simple_decl(
+            "use_io",
+            IrType::Unknown,
+            CompExpr::Call {
                 callee: Box::new(ValueExpr::GlobalRef {
                     module: "Print".into(),
                     name: "print".into(),
                 }),
                 args: vec![ValueExpr::StrLit("hi".into())],
             },
-        }]);
+        )]);
         insta::assert_snapshot!(fmt_ir(&m));
     }
 
     #[test]
     fn print_binop_all_ops() {
         let ops = [
-            (IrBinOp::And, "&&"),
-            (IrBinOp::Add, "+"),
-            (IrBinOp::Mul, "*"),
-            (IrBinOp::Eq, "=="),
-            (IrBinOp::Lt, "<"),
-            (IrBinOp::Gt, ">"),
+            IrBinOp::And,
+            IrBinOp::Add,
+            IrBinOp::Mul,
+            IrBinOp::Eq,
+            IrBinOp::Lt,
+            IrBinOp::Gt,
         ];
-        for (op, _sym) in ops {
-            let m = simple_module(vec![IrDecl {
-                name: "op_test".into(),
-                params: vec![],
-                result_ty: IrType::Unknown,
-                body: val(ValueExpr::BinOp {
+        for op in ops {
+            let m = simple_module(vec![simple_decl(
+                "op_test",
+                IrType::Unknown,
+                val(ValueExpr::BinOp {
                     op,
                     left: Box::new(ValueExpr::IntLit(1)),
                     right: Box::new(ValueExpr::IntLit(2)),
                 }),
-            }]);
-            // Just ensure no panic; snapshot covers the Add case below.
+            )]);
             let _ = fmt_ir(&m);
         }
     }
 
     #[test]
     fn print_binop_add_snapshot() {
-        let m = simple_module(vec![IrDecl {
-            name: "add".into(),
-            params: vec![("a".into(), IrType::Int), ("b".into(), IrType::Int)],
-            result_ty: IrType::Int,
-            body: val(ValueExpr::BinOp {
+        let m = simple_module(vec![decl_with_params_ir(
+            "add",
+            vec![("a", IrType::Int), ("b", IrType::Int)],
+            IrType::Int,
+            val(ValueExpr::BinOp {
                 op: IrBinOp::Add,
                 left: Box::new(ValueExpr::Var("a".into())),
                 right: Box::new(ValueExpr::Var("b".into())),
             }),
-        }]);
+        )]);
         insta::assert_snapshot!(fmt_ir(&m));
     }
 
     #[test]
     fn print_let() {
-        let m = simple_module(vec![IrDecl {
-            name: "with_let".into(),
-            params: vec![],
-            result_ty: IrType::Int,
-            body: CompExpr::Let {
+        let m = simple_module(vec![simple_decl(
+            "with_let",
+            IrType::Int,
+            CompExpr::Let {
                 name: "x".into(),
                 ty: IrType::Int,
                 value: Box::new(val(ValueExpr::IntLit(10))),
                 body: Box::new(val(ValueExpr::Var("x".into()))),
             },
-        }]);
+        )]);
         insta::assert_snapshot!(fmt_ir(&m));
     }
 
     #[test]
     fn print_if() {
-        let m = simple_module(vec![IrDecl {
-            name: "check".into(),
-            params: vec![("b".into(), IrType::Bool)],
-            result_ty: IrType::Int,
-            body: CompExpr::If {
+        let m = simple_module(vec![decl_with_params_ir(
+            "check",
+            vec![("b", IrType::Bool)],
+            IrType::Int,
+            CompExpr::If {
                 cond: Box::new(ValueExpr::Var("b".into())),
                 then_: Box::new(val(ValueExpr::IntLit(1))),
                 else_: Box::new(val(ValueExpr::IntLit(0))),
             },
-        }]);
+        )]);
         insta::assert_snapshot!(fmt_ir(&m));
     }
 
     #[test]
     fn print_seq() {
-        let m = simple_module(vec![IrDecl {
-            name: "seq_example".into(),
-            params: vec![],
-            result_ty: IrType::Unit,
-            body: CompExpr::Seq {
-                stmts: vec![
-                    CompExpr::Call {
-                        callee: Box::new(ValueExpr::GlobalRef {
-                            module: "Print".into(),
-                            name: "print".into(),
-                        }),
-                        args: vec![ValueExpr::StrLit("a".into())],
-                    },
-                ],
+        let m = simple_module(vec![simple_decl(
+            "seq_example",
+            IrType::Unit,
+            CompExpr::Seq {
+                stmts: vec![CompExpr::Call {
+                    callee: Box::new(ValueExpr::GlobalRef {
+                        module: "Print".into(),
+                        name: "print".into(),
+                    }),
+                    args: vec![ValueExpr::StrLit("a".into())],
+                }],
                 tail: Box::new(val(ValueExpr::Unit)),
             },
-        }]);
+        )]);
         insta::assert_snapshot!(fmt_ir(&m));
     }
 
     #[test]
     fn print_call() {
-        let m = simple_module(vec![IrDecl {
-            name: "invoke".into(),
-            params: vec![],
-            result_ty: IrType::Unknown,
-            body: CompExpr::Call {
+        let m = simple_module(vec![simple_decl(
+            "invoke",
+            IrType::Unknown,
+            CompExpr::Call {
                 callee: Box::new(ValueExpr::Var("f".into())),
                 args: vec![ValueExpr::IntLit(1), ValueExpr::IntLit(2)],
             },
+        )]);
+        insta::assert_snapshot!(fmt_ir(&m));
+    }
+
+    #[test]
+    fn print_handler_with_clause() {
+        let m = simple_module(vec![simple_decl(
+            "my_handler",
+            IrType::Unknown,
+            CompExpr::Handle {
+                clauses: vec![IrHandlerClause {
+                    op_name: "read".into(),
+                    params: vec!["resume".into()],
+                    body: CompExpr::Resume {
+                        value: Box::new(ValueExpr::StrLit("hello".into())),
+                    },
+                }],
+            },
+        )]);
+        insta::assert_snapshot!(fmt_ir(&m));
+    }
+
+    #[test]
+    fn print_with_handler() {
+        let m = simple_module(vec![simple_decl(
+            "main_with",
+            IrType::Unit,
+            CompExpr::WithHandler {
+                handler: Box::new(CompExpr::Handle {
+                    clauses: vec![IrHandlerClause {
+                        op_name: "print".into(),
+                        params: vec!["msg".into(), "resume".into()],
+                        body: CompExpr::Resume {
+                            value: Box::new(ValueExpr::Unit),
+                        },
+                    }],
+                }),
+                body: Box::new(CompExpr::Call {
+                    callee: Box::new(ValueExpr::GlobalRef {
+                        module: "Print".into(),
+                        name: "print".into(),
+                    }),
+                    args: vec![ValueExpr::StrLit("hello".into())],
+                }),
+            },
+        )]);
+        insta::assert_snapshot!(fmt_ir(&m));
+    }
+
+    #[test]
+    fn print_decl_with_residual_effects() {
+        let m = simple_module(vec![IrDecl {
+            name: "effectful_fn".into(),
+            params: vec![],
+            result_ty: IrType::Unit,
+            residual_effects: vec!["Read".into(), "Print".into()],
+            body: val(ValueExpr::Unit),
         }]);
         insta::assert_snapshot!(fmt_ir(&m));
     }
@@ -616,69 +733,61 @@ mod tests {
 
     #[test]
     fn validate_ok_simple() {
-        let m = simple_module(vec![IrDecl {
-            name: "ok".into(),
-            params: vec![],
-            result_ty: IrType::Int,
-            body: val(ValueExpr::IntLit(1)),
-        }]);
+        let m = simple_module(vec![simple_decl("ok", IrType::Int, val(ValueExpr::IntLit(1)))]);
         assert!(validate_ir(&m).is_ok());
     }
 
     #[test]
-    fn validate_err_nested_handle_stubs() {
-        let m = simple_module(vec![IrDecl {
-            name: "bad".into(),
-            params: vec![],
-            result_ty: IrType::Unknown,
-            body: CompExpr::Handle {
-                body: Box::new(CompExpr::Handle {
-                    body: Box::new(val(ValueExpr::Unit)),
-                }),
-            },
-        }]);
+    fn validate_err_empty_handle_clauses() {
+        let m = simple_module(vec![simple_decl(
+            "bad_handler",
+            IrType::Unknown,
+            CompExpr::Handle { clauses: vec![] },
+        )]);
         let err = validate_ir(&m).unwrap_err();
-        assert!(err.message.contains("nested Handle"), "{}", err.message);
+        assert!(err.message.contains("at least one clause"), "{}", err.message);
     }
 
     #[test]
-    fn validate_err_resume_inside_handle_stub() {
-        let m = simple_module(vec![IrDecl {
-            name: "bad".into(),
-            params: vec![],
-            result_ty: IrType::Unknown,
-            body: CompExpr::Handle {
-                body: Box::new(CompExpr::Resume {
-                    value: Box::new(ValueExpr::Unit),
+    fn validate_ok_with_handler() {
+        let m = simple_module(vec![simple_decl(
+            "ok_with",
+            IrType::Unit,
+            CompExpr::WithHandler {
+                handler: Box::new(CompExpr::Handle {
+                    clauses: vec![IrHandlerClause {
+                        op_name: "read".into(),
+                        params: vec![],
+                        body: val(ValueExpr::Unit),
+                    }],
                 }),
+                body: Box::new(val(ValueExpr::Unit)),
             },
-        }]);
-        let err = validate_ir(&m).unwrap_err();
-        assert!(err.message.contains("Resume"), "{}", err.message);
+        )]);
+        assert!(validate_ir(&m).is_ok());
     }
 
     #[test]
     fn validate_err_empty_args_call() {
-        let m = simple_module(vec![IrDecl {
-            name: "bad_call".into(),
-            params: vec![],
-            result_ty: IrType::Unknown,
-            body: CompExpr::Call {
+        let m = simple_module(vec![simple_decl(
+            "bad_call",
+            IrType::Unknown,
+            CompExpr::Call {
                 callee: Box::new(ValueExpr::Var("f".into())),
                 args: vec![],
             },
-        }]);
+        )]);
         let err = validate_ir(&m).unwrap_err();
         assert!(err.message.contains("at least one argument"), "{}", err.message);
     }
 
     #[test]
     fn validate_ok_let_if() {
-        let m = simple_module(vec![IrDecl {
-            name: "f".into(),
-            params: vec![("x".into(), IrType::Bool)],
-            result_ty: IrType::Int,
-            body: CompExpr::Let {
+        let m = simple_module(vec![decl_with_params_ir(
+            "f",
+            vec![("x", IrType::Bool)],
+            IrType::Int,
+            CompExpr::Let {
                 name: "v".into(),
                 ty: IrType::Int,
                 value: Box::new(CompExpr::If {
@@ -688,7 +797,7 @@ mod tests {
                 }),
                 body: Box::new(val(ValueExpr::Var("v".into()))),
             },
-        }]);
+        )]);
         assert!(validate_ir(&m).is_ok());
     }
 }

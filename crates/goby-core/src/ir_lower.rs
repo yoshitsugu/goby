@@ -16,7 +16,7 @@
 
 use crate::ast::{BinOpKind, Declaration, Expr, InterpolatedPart, Module, Stmt};
 use crate::ir::{
-    CompExpr, IrBinOp, IrDecl, IrInterpPart, IrModule, IrType, ValueExpr,
+    CompExpr, IrBinOp, IrDecl, IrHandlerClause, IrInterpPart, IrModule, IrType, ValueExpr,
 };
 
 /// An error produced when an AST node cannot be lowered to IR.
@@ -66,12 +66,30 @@ pub fn lower_declaration(decl: &Declaration) -> Result<IrDecl, LowerError> {
     let params: Vec<(String, IrType)> =
         decl.params.iter().map(|p| (p.clone(), IrType::Unknown)).collect();
 
+    // Extract residual effects from the `can` clause in the type annotation.
+    let residual_effects = extract_residual_effects(decl.type_annotation.as_deref());
+
     Ok(IrDecl {
         name: decl.name.clone(),
         params,
         result_ty: IrType::Unknown,
+        residual_effects,
         body,
     })
+}
+
+/// Extract effect names from a `can EffectA, EffectB` clause in a type annotation.
+/// Returns an empty Vec if no `can` clause is present.
+fn extract_residual_effects(annotation: Option<&str>) -> Vec<String> {
+    let Some(ann) = annotation else { return vec![] };
+    let Some(idx) = crate::find_can_keyword_index(ann) else { return vec![] };
+    let effects_raw = ann[idx + 3..].trim();
+    effects_raw
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -200,15 +218,20 @@ fn lower_expr_as_comp_non_value(expr: &Expr) -> Result<CompExpr, LowerError> {
             "lambda `\\{}` is not supported in the pure IR subset (G3); deferred to a later track",
             param
         ))),
-        Expr::Handler { .. } => Err(err(
-            "handler expressions are not supported in the pure IR subset (G3); deferred to G4+",
-        )),
-        Expr::With { .. } => Err(err(
-            "with expressions are not supported in the pure IR subset (G3); deferred to G4+",
-        )),
-        Expr::Resume { .. } => Err(err(
-            "resume is not supported in the pure IR subset (G3); deferred to G4+",
-        )),
+        Expr::Handler { clauses } => lower_handler_expr(clauses),
+        Expr::With { handler, body } => {
+            let ir_handler = lower_expr_as_comp(handler)?;
+            let ir_body = lower_stmts(body)?;
+            Ok(CompExpr::WithHandler {
+                handler: Box::new(ir_handler),
+                body: Box::new(ir_body),
+            })
+        }
+        Expr::Resume { value } => {
+            // Resume requires a pure value to resume with.
+            let ir_value = lower_value_required(value, "resume value")?;
+            Ok(CompExpr::Resume { value: Box::new(ir_value) })
+        }
         Expr::MethodCall { receiver, method, .. } => Err(err(format!(
             "method call `{}.{}` is not supported in the pure IR subset",
             receiver, method
@@ -332,6 +355,29 @@ fn collect_call_chain(expr: &Expr) -> (&Expr, Vec<&Expr>) {
     }
     args.reverse();
     (cur, args)
+}
+
+/// Lower a `Handler { clauses }` expression to an IR `Handle` node.
+fn lower_handler_expr(clauses: &[crate::ast::HandlerClause]) -> Result<CompExpr, LowerError> {
+    if clauses.is_empty() {
+        return Err(err("handler expression must have at least one clause"));
+    }
+    let mut ir_clauses = Vec::with_capacity(clauses.len());
+    for clause in clauses {
+        let stmts = clause.parsed_body.as_deref().ok_or_else(|| {
+            err(format!(
+                "handler clause `{}` has no parsed body",
+                clause.name
+            ))
+        })?;
+        let body = lower_stmts(stmts)?;
+        ir_clauses.push(IrHandlerClause {
+            op_name: clause.name.clone(),
+            params: clause.params.clone(),
+            body,
+        });
+    }
+    Ok(CompExpr::Handle { clauses: ir_clauses })
 }
 
 fn lower_binop(op: &BinOpKind) -> IrBinOp {
@@ -612,26 +658,34 @@ mod tests {
     }
 
     #[test]
-    fn reject_with_expr() {
-        let decl = decl_with_body(
-            "with_with",
+    fn lower_with_expr() {
+        // with h do {}  -> WithHandler { handler: Value(Var("h")), body: Value(Unit) }
+        let decl = decl_with_params(
+            "use_handler",
+            vec!["h"],
             vec![expr_stmt(Expr::With {
                 handler: Box::new(Expr::var("h")),
                 body: vec![],
             })],
         );
-        let err = lower_declaration(&decl).unwrap_err();
-        assert!(err.message.contains("with"), "{}", err.message);
+        let ir_decl = lower_declaration(&decl).unwrap();
+        let m = IrModule { decls: vec![ir_decl] };
+        assert!(validate_ir(&m).is_ok());
+        insta::assert_snapshot!(fmt_ir(&m));
     }
 
     #[test]
-    fn reject_resume() {
-        let decl = decl_with_body(
-            "with_resume",
-            vec![expr_stmt(Expr::Resume { value: Box::new(Expr::var("v")) })],
+    fn lower_resume() {
+        // resume x  -> Resume { value: Var("x") }
+        let decl = decl_with_params(
+            "do_resume",
+            vec!["x"],
+            vec![expr_stmt(Expr::Resume { value: Box::new(Expr::var("x")) })],
         );
-        let err = lower_declaration(&decl).unwrap_err();
-        assert!(err.message.contains("resume"), "{}", err.message);
+        let ir_decl = lower_declaration(&decl).unwrap();
+        let m = IrModule { decls: vec![ir_decl] };
+        assert!(validate_ir(&m).is_ok());
+        insta::assert_snapshot!(fmt_ir(&m));
     }
 
     #[test]
@@ -662,13 +716,38 @@ mod tests {
     }
 
     #[test]
-    fn reject_handler() {
+    fn lower_handler_empty_clauses_is_error() {
+        // An empty handler expression should return LowerError.
         let decl = decl_with_body(
-            "with_handler",
+            "bad_handler",
             vec![expr_stmt(Expr::Handler { clauses: vec![] })],
         );
         let err = lower_declaration(&decl).unwrap_err();
-        assert!(err.message.contains("handler"), "{}", err.message);
+        assert!(err.message.contains("clause"), "{}", err.message);
+    }
+
+    #[test]
+    fn lower_handler_with_clause() {
+        use crate::ast::{HandlerClause, Span};
+        // handler { read resume -> resume "hi" }
+        let decl = decl_with_body(
+            "read_handler",
+            vec![expr_stmt(Expr::Handler {
+                clauses: vec![HandlerClause {
+                    name: "read".into(),
+                    params: vec!["resume".into()],
+                    body: String::new(),
+                    parsed_body: Some(vec![
+                        expr_stmt(Expr::Resume { value: Box::new(Expr::StringLit("hi".into())) }),
+                    ]),
+                    span: Span::point(1, 1),
+                }],
+            })],
+        );
+        let ir_decl = lower_declaration(&decl).unwrap();
+        let m = IrModule { decls: vec![ir_decl] };
+        assert!(validate_ir(&m).is_ok());
+        insta::assert_snapshot!(fmt_ir(&m));
     }
 
     #[test]
@@ -747,5 +826,61 @@ mod tests {
         };
         let err = lower_module(&m).unwrap_err();
         assert!(err.message.contains("lambda"), "{}", err.message);
+    }
+
+    // --- residual effects tests ---
+
+    #[test]
+    fn lower_declaration_extracts_residual_effects() {
+        let mut decl = decl_with_body("effectful", vec![expr_stmt(Expr::IntLit(1))]);
+        decl.type_annotation = Some("Unit -> Unit can Read, Print".into());
+        let ir_decl = lower_declaration(&decl).unwrap();
+        assert_eq!(ir_decl.residual_effects, vec!["Read", "Print"]);
+    }
+
+    #[test]
+    fn lower_declaration_no_can_clause() {
+        let decl = decl_with_body("pure_fn", vec![expr_stmt(Expr::IntLit(1))]);
+        let ir_decl = lower_declaration(&decl).unwrap();
+        assert!(ir_decl.residual_effects.is_empty());
+    }
+
+    #[test]
+    fn lower_declaration_residual_effects_in_fmt() {
+        let mut decl = decl_with_body("io_fn", vec![expr_stmt(Expr::IntLit(42))]);
+        decl.type_annotation = Some("Unit -> Unit can IO".into());
+        let ir_decl = lower_declaration(&decl).unwrap();
+        let m = IrModule { decls: vec![ir_decl] };
+        assert!(validate_ir(&m).is_ok());
+        insta::assert_snapshot!(fmt_ir(&m));
+    }
+
+    // --- parse-to-IR snapshot test for with/handler ---
+
+    #[test]
+    fn lower_with_handler_end_to_end() {
+        use crate::ast::{HandlerClause, Span};
+        // Simulates: handler { read resume -> resume "input" }
+        // then: with my_handler do { read () }
+        let handler_expr = Expr::Handler {
+            clauses: vec![HandlerClause {
+                name: "read".into(),
+                params: vec!["resume".into()],
+                body: String::new(),
+                parsed_body: Some(vec![expr_stmt(Expr::Resume {
+                    value: Box::new(Expr::StringLit("input".into())),
+                })]),
+                span: Span::point(1, 1),
+            }],
+        };
+        let with_expr = Expr::With {
+            handler: Box::new(handler_expr),
+            body: vec![binding("result", Expr::var("result")), expr_stmt(Expr::var("result"))],
+        };
+        let decl = decl_with_body("main_effect", vec![expr_stmt(with_expr)]);
+        let ir_decl = lower_declaration(&decl).unwrap();
+        let m = IrModule { decls: vec![ir_decl] };
+        assert!(validate_ir(&m).is_ok());
+        insta::assert_snapshot!(fmt_ir(&m));
     }
 }

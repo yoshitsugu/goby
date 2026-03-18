@@ -499,7 +499,7 @@ it as the new baseline.
     conditionals, and direct calls.
   - Snapshot tests lock representative pure IR output.
 
-- [ ] G4. Effect boundary ownership is reserved in shared IR
+- [x] G4. Effect boundary ownership is reserved in shared IR
   - Shared IR contains explicit representation for effect operations and handler
     boundaries, even if some lowering paths remain incomplete.
   - `goby-wasm` no longer needs to invent new backend-only intermediate forms to
