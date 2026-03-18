@@ -578,7 +578,7 @@ Milestones:
     - `text = read(); lines = split text "\n"; each lines println`
     - `text = read(); lines = split text "\n"; println(lines[1])`
 
-- [ ] F2. Runtime value and memory model
+- [x] F2. Runtime value and memory model
   - define Wasm-side runtime representations with extensibility in mind rather than only for one workflow.
   - define representations for:
     - `Unit`,
