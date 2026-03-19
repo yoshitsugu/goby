@@ -1109,6 +1109,41 @@ main =
     assert_valid_wasm_module(&wasm);
 }
 
+#[test]
+fn compile_module_parity_list_index_sugar_matches_canonical_helper_spelling() {
+    let sugar_source = r#"
+import goby/string ( split )
+
+main : Unit -> Unit can Print, Read
+main =
+  text = read ()
+  lines = split text "\n"
+  println(lines[1])
+"#;
+    let helper_source = r#"
+import goby/list ( get )
+import goby/string ( split )
+
+main : Unit -> Unit can Print, Read
+main =
+  text = read ()
+  lines = split text "\n"
+  line = get lines 1
+  println line
+"#;
+    let sugar_module = parse_module(sugar_source).expect("sugar source should parse");
+    let helper_module = parse_module(helper_source).expect("helper source should parse");
+    assert_eq!(
+        runtime_io_execution_kind(&sugar_module).expect("classification should succeed"),
+        runtime_io_execution_kind(&helper_module).expect("classification should succeed"),
+        "list index sugar and canonical helper spelling should converge at backend planning time"
+    );
+    let sugar_wasm = compile_module(&sugar_module).expect("sugar shape should compile");
+    let helper_wasm = compile_module(&helper_module).expect("helper shape should compile");
+    assert_valid_wasm_module(&sugar_wasm);
+    assert_valid_wasm_module(&helper_wasm);
+}
+
 // ---------------------------------------------------------------------------
 // Plain read+print parity: programs previously handled by handwritten runtime-I/O plans must
 // produce valid Wasm through the general lowering path.

@@ -469,7 +469,7 @@ All implementation under this plan must preserve:
   - validation checklist:
     - semantically equivalent effect-call spellings produce equivalent IR snapshots
     - backend/runtime tests that previously depended on spelling differences are simplified or deleted
-- [ ] IR5. Collections lowering
+- [x] IR5. Collections lowering
   - lower list literal, spread, and indexing through the new architecture
   - implementation checklist:
     - lower list literals and spread in the same slice as their canonical IR representation
@@ -607,10 +607,9 @@ Reason for this order:
 
 The recommended next implementation slice is:
 
-1. advance IR5 by finishing collection-family lowering beyond the now-landed shared-IR vocabulary,
-2. advance IR6 by lowering `case` into the explicit shared-IR control-flow nodes,
-3. advance IR7/IR8/IR9 by choosing the first end-to-end lowering slice among lambdas, product data, or mutation,
-4. keep deleting diagnostics and comments that still imply "shared IR cannot represent this" when the real gap is lowering or backend support.
+1. advance IR6 by lowering `case` into the explicit shared-IR control-flow nodes,
+2. advance IR7/IR8/IR9 by choosing the first end-to-end lowering slice among lambdas, product data, or mutation,
+3. keep deleting diagnostics and comments that still imply "shared IR cannot represent this" when the real gap is lowering or backend support.
 
 Recommended file entry points for that slice:
 
