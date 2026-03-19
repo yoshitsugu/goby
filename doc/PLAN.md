@@ -433,8 +433,11 @@ Locked design choice:
 
 - do **not** add a backend-only direct helper for `string.graphemes`.
 - do **not** widen planner or AST-shaped runtime fallbacks for this family.
+- do **not** duplicate Unicode grapheme segmentation semantics inside emitted
+  raw Wasm.
 - instead, make `__goby_string_each_grapheme` and the minimal supporting list
-  intrinsic path executable through the converged backend architecture.
+  intrinsic path executable through the converged backend architecture by
+  moving Track E execution onto a host-provided backend-intrinsic runtime.
 
 Additional locked boundaries:
 
@@ -444,15 +447,25 @@ Additional locked boundaries:
   `goby/string.graphemes` by introducing a narrow intrinsic-aware execution path
   for stdlib decl bodies that are already lowered through the converged
   front-end boundary.
+- Track E no longer assumes that all backend-intrinsic Wasm is executed via raw
+  `wasmtime run <module.wasm>`.
+- instead, backend-intrinsic Wasm for this track is executed through a Goby
+  host runtime that instantiates the module, wires WASI plus Goby-specific host
+  functions, and preserves the same stdlib ownership boundary.
 - new backend primitive work must use explicit backend IR variants or an
   equivalent non-stringly representation; do **not** encode new intrinsic
   ownership as ad hoc helper-name strings.
 - grapheme segmentation must have a single semantic authority; backend work must
   reuse the existing Unicode Extended Grapheme Cluster definition rather than
   creating a second independent interpretation.
+- the single semantic authority for grapheme segmentation must remain in Rust
+  host code; emitted Wasm may request grapheme iteration services, but it must
+  not embed a second independent EGC implementation.
 - list/string allocation for this track must reuse the existing tagged-value and
   list/string memory layout ABI already used by the backend; do **not** add a
   second private representation for grapheme helpers.
+- host-provided backend intrinsics are a runtime substrate beneath backend IR,
+  not new user-surface functions and not a second stdlib implementation.
 
 Scope boundary for this track:
 
@@ -461,6 +474,9 @@ Scope boundary for this track:
     `__goby_string_each_grapheme`,
   - backend IR representation and execution support for
     `__goby_list_push_string` as needed by stdlib `goby/string.gb`,
+  - a Goby-owned Wasm execution path that can instantiate backend-intrinsic
+    modules with host-provided intrinsic functions while preserving existing
+    WASI behavior,
   - a narrow intrinsic-aware execution path for stdlib decl bodies that lets
     `goby/string.graphemes` execute inside runtime-`Read` programs without
     requiring full arbitrary-handler support in general Wasm lowering,
@@ -469,7 +485,8 @@ Scope boundary for this track:
   - a full general solution for all handler-heavy stdlib code,
   - backend support for arbitrary iterator contracts beyond what this stdlib
     family requires,
-  - new direct surface helpers that bypass stdlib ownership.
+  - new direct surface helpers that bypass stdlib ownership,
+  - re-implementing Unicode grapheme segmentation inside raw emitted Wasm.
 
 Milestones:
 
@@ -496,31 +513,45 @@ Milestones:
     - emitter support can be checked structurally at classification time,
     - no new intrinsic in this track depends on stringly helper-name dispatch.
 
-- [ ] E3. Wasm emitter execution for grapheme iteration
-  - implement backend execution for `__goby_string_each_grapheme`.
-  - preserve Unicode Extended Grapheme Cluster semantics.
-  - keep a single semantic authority for grapheme segmentation; backend work
-    must reuse that authority rather than defining a separate interpretation.
+- [ ] E3. Host runtime boundary for backend intrinsics
+  - replace the raw-`wasmtime run` assumption for this track with a Goby-owned
+    execution path that instantiates Wasm modules and wires both WASI imports
+    and Goby-specific host intrinsics.
+  - keep this boundary narrow:
+    - no arbitrary new host callback surface,
+    - only the explicit backend intrinsic family needed by Track E,
+    - no second semantic authority for grapheme segmentation.
   - progress:
     - grapheme segmentation semantics are now centralized in a dedicated
       backend/runtime helper module, and the existing runtime decl/intrinsic
       paths consume that shared authority instead of calling
       `unicode-segmentation` ad hoc in multiple places.
     - backend intrinsic lowering now distinguishes the unary count-style and
-      binary state-threading forms of `__goby_string_each_grapheme`, so E3 can
-      target explicit fixed-arity backend contracts instead of an overloaded
-      placeholder.
+      binary state-threading forms of `__goby_string_each_grapheme`, so the
+      future host runtime can target explicit fixed-arity backend contracts.
     - the shared semantics layer now exposes grapheme byte spans in addition to
-      materialized strings, giving the future Wasm emitter a backend-oriented
-      boundary model for copying slices without redefining segmentation.
+      materialized strings, giving the host runtime a backend-oriented boundary
+      model for copying slices without redefining segmentation.
   - done when:
-    - the semantic-authority choice is explicit in code/docs,
-    - a runtime-`Read` program can execute stdlib `goby/string.graphemes`
-      through the backend path.
+    - the runtime boundary is explicit in code/docs,
+    - a Goby-owned Wasm execution path exists for backend-intrinsic modules,
+    - raw `wasmtime run` is no longer treated as the required execution model
+      for Track E modules.
 
-- [ ] E4. Wasm emitter execution for string-list accumulation
-  - implement backend execution for `__goby_list_push_string` on top of the
-    converged tagged-value and list/string allocation ABI.
+- [ ] E4. Host-provided grapheme intrinsic execution
+  - implement host-side execution for `__goby_string_each_grapheme`.
+  - preserve Unicode Extended Grapheme Cluster semantics by delegating to the
+    shared Rust semantic authority.
+  - do not re-encode the grapheme algorithm inside emitted Wasm.
+  - done when:
+    - unary and binary intrinsic forms execute through the host runtime,
+    - emitted Wasm uses the explicit backend intrinsic contract rather than an
+      ad hoc side channel,
+    - backend-path tests prove parity with the existing runtime intrinsic path.
+
+- [ ] E5. Host-provided string-list accumulation parity
+  - complete the host/runtime execution boundary for `__goby_list_push_string`
+    on top of the converged tagged-value and list/string allocation ABI.
   - keep list/string memory layout shared with existing collection helper
     emission.
   - progress:
@@ -529,10 +560,10 @@ Milestones:
       coverage now locks `split -> list_push_string -> list.get -> print`.
   - done when:
     - no second list/string runtime representation is introduced for this track,
-    - stdlib `goby/string.graphemes` can accumulate list results without
-      planner fallback.
+    - stdlib `goby/string.graphemes` can accumulate list results through the
+      host-backed backend path without planner fallback.
 
-- [ ] E5. Stdlib `graphemes` parity in runtime-`Read` programs
+- [ ] E6. Stdlib `graphemes` parity in runtime-`Read` programs
   - add end-to-end coverage for:
     - `text = read (); parts = graphemes text; println(parts[1])`
     - qualified and selective-import spellings,
@@ -543,10 +574,12 @@ Milestones:
       but backend-path parity and the remaining spelling/empty-input cases are
       still open.
   - done when:
-    - compile tests and wasmtime CLI integration tests cover the runtime-stdin
-      path and pass.
+    - compile tests and Goby-owned runtime integration tests cover the
+      runtime-stdin path and pass,
+    - `goby run` executes this family through the backend path instead of the
+      temporary interpreter bridge.
 
-- [ ] E6. Prepare split handoff to stdlib-only ownership
+- [ ] E7. Prepare split handoff to stdlib-only ownership
   - after grapheme iteration primitives land, continue moving
     `goby/string.split` onto the stdlib path for empty-delimiter and
     single-grapheme-delimiter cases without backend-only direct helpers.
@@ -558,6 +591,18 @@ Milestones:
 Execution order:
 
 1. E1 before code changes.
+2. E2 before any new runtime boundary work.
+3. E3 before E4 and E5.
+4. E4 and E5 before E6.
+5. E6 before E7.
+
+Process note:
+
+- when a milestone in this track is completed, update the checkbox in the same
+  change that lands the milestone.
+- if five implementation attempts fail without preserving the locked boundaries
+  above, stop the slice and reopen the design explicitly rather than adding a
+  workaround.
 2. E2 before E3/E4 implementation.
 3. E3 and E4 may advance together, but neither should be faked with new
    planner/runtime fallback recognizers.
