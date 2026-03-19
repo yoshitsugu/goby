@@ -475,6 +475,12 @@ Additional locked boundaries:
 - only grapheme iteration crosses the host boundary in this track;
   `__goby_list_push_string` remains an in-Wasm backend intrinsic on the
   converged tagged list/string ABI.
+- the backend boundary must distinguish host-backed intrinsics from in-Wasm
+  intrinsics explicitly; do not let that ownership difference live only as
+  branching inside `emit.rs`.
+- the current imported-`goby/string.graphemes` `InterpreterBridge` special case
+  is temporary migration scaffolding; Track E must replace it with the converged
+  backend-path execution boundary rather than leaving both paths in parallel.
 
 Scope boundary for this track:
 
@@ -538,6 +544,13 @@ Milestones:
     - fixed function signatures,
     - explicit memory and pointer ownership rules,
     - `goby-wasm` ownership of import ordering / linker wiring.
+  - lock the backend ownership split before implementation:
+    - host-backed grapheme intrinsics are represented explicitly at the backend
+      boundary,
+    - in-Wasm intrinsics such as `__goby_list_push_string` remain explicitly on
+      the emitter-owned side,
+    - this split must not be encoded only as ad hoc intrinsic-name branching in
+      the emitter.
   - progress:
     - grapheme segmentation semantics are now centralized in a dedicated
       backend/runtime helper module, and the existing runtime decl/intrinsic
@@ -553,6 +566,8 @@ Milestones:
     - the runtime boundary is explicit in code/docs,
     - `goby-wasm` exposes the execution API that owns Track E runtime wiring,
     - the host intrinsic ABI is documented and tested,
+    - the backend ownership split between host-backed and in-Wasm intrinsics is
+      documented and reflected in code structure,
     - a Goby-owned Wasm execution path exists for backend-intrinsic modules,
     - raw `wasmtime run` is no longer treated as the required execution model
       for Track E modules.
@@ -598,7 +613,9 @@ Milestones:
       temporary interpreter bridge,
     - the current imported-`goby/string.graphemes` special case and
       `InterpreterBridge` dependency for this family are removed rather than
-      left in parallel.
+      left in parallel,
+    - stdlib `goby/string.graphemes` calls no longer require a runtime-decl
+      special case outside the converged Track E backend execution boundary.
 
 - [ ] E7. Prepare split handoff to stdlib-only ownership
   - after grapheme iteration primitives land, continue moving
