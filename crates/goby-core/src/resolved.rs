@@ -132,10 +132,6 @@ pub enum ResolvedExpr {
         then_expr: Box<ResolvedExpr>,
         else_expr: Box<ResolvedExpr>,
     },
-    ListIndex {
-        list: Box<ResolvedExpr>,
-        index: Box<ResolvedExpr>,
-    },
 }
 
 pub fn resolve_module(module: &Module) -> ResolvedModule {
@@ -410,10 +406,23 @@ impl Resolver {
                 then_expr: Box::new(self.resolve_expr(then_expr)),
                 else_expr: Box::new(self.resolve_expr(else_expr)),
             },
-            Expr::ListIndex { list, index } => ResolvedExpr::ListIndex {
-                list: Box::new(self.resolve_expr(list)),
-                index: Box::new(self.resolve_expr(index)),
-            },
+            Expr::ListIndex { list, index } => self.resolve_list_index(list, index),
+        }
+    }
+
+    fn resolve_list_index(&mut self, list: &Expr, index: &Expr) -> ResolvedExpr {
+        let callee = ResolvedExpr::Call {
+            callee: Box::new(ResolvedExpr::Ref(ResolvedRef::Helper {
+                module: "list".to_string(),
+                name: "get".to_string(),
+            })),
+            arg: Box::new(self.resolve_expr(list)),
+            span: None,
+        };
+        ResolvedExpr::Call {
+            callee: Box::new(callee),
+            arg: Box::new(self.resolve_expr(index)),
+            span: None,
         }
     }
 
@@ -655,6 +664,47 @@ mod tests {
                     module: "list".to_string(),
                     name: "get".to_string(),
                 }),
+                None,
+            )]
+        );
+    }
+
+    #[test]
+    fn resolves_list_index_to_canonical_list_get_call() {
+        let decl = Declaration {
+            name: "main".to_string(),
+            type_annotation: None,
+            params: vec![],
+            body: String::new(),
+            parsed_body: Some(vec![Stmt::Expr(
+                Expr::ListIndex {
+                    list: Box::new(Expr::var("lines")),
+                    index: Box::new(Expr::IntLit(1)),
+                },
+                None,
+            )]),
+            line: 1,
+            col: 1,
+        };
+
+        let resolved = resolve_declaration(&decl);
+        assert_eq!(
+            resolved.body,
+            vec![ResolvedStmt::Expr(
+                ResolvedExpr::Call {
+                    callee: Box::new(ResolvedExpr::Call {
+                        callee: Box::new(ResolvedExpr::Ref(ResolvedRef::Helper {
+                            module: "list".to_string(),
+                            name: "get".to_string(),
+                        })),
+                        arg: Box::new(ResolvedExpr::Ref(ResolvedRef::ValueName(
+                            "lines".to_string(),
+                        ))),
+                        span: None,
+                    }),
+                    arg: Box::new(ResolvedExpr::IntLit(1)),
+                    span: None,
+                },
                 None,
             )]
         );

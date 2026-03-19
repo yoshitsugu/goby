@@ -223,57 +223,6 @@ fn lower_expr_as_comp_non_value(
                 args,
             })
         }
-        ResolvedExpr::ListIndex { list, index } => {
-            let receiver_value = try_lower_value(ctx, list)?;
-            let index_value = try_lower_value(ctx, index)?;
-            match (receiver_value, index_value) {
-                (Some(receiver_value), Some(index_value)) => Ok(CompExpr::Call {
-                    callee: Box::new(ValueExpr::GlobalRef {
-                        module: "list".to_string(),
-                        name: "get".to_string(),
-                    }),
-                    args: vec![receiver_value, index_value],
-                }),
-                (receiver_value_opt, index_value_opt) => {
-                    let receiver_tmp = ctx.fresh_tmp("list_index_receiver");
-                    let index_tmp = ctx.fresh_tmp("list_index_index");
-                    let call = CompExpr::Call {
-                        callee: Box::new(ValueExpr::GlobalRef {
-                            module: "list".to_string(),
-                            name: "get".to_string(),
-                        }),
-                        args: vec![
-                            receiver_value_opt
-                                .clone()
-                                .unwrap_or_else(|| ValueExpr::Var(receiver_tmp.clone())),
-                            index_value_opt
-                                .clone()
-                                .unwrap_or_else(|| ValueExpr::Var(index_tmp.clone())),
-                        ],
-                    };
-                    let with_index = if index_value_opt.is_some() {
-                        call
-                    } else {
-                        CompExpr::Let {
-                            name: index_tmp,
-                            ty: IrType::Unknown,
-                            value: Box::new(lower_expr_as_comp(ctx, index)?),
-                            body: Box::new(call),
-                        }
-                    };
-                    if receiver_value_opt.is_some() {
-                        Ok(with_index)
-                    } else {
-                        Ok(CompExpr::Let {
-                            name: receiver_tmp,
-                            ty: IrType::Unknown,
-                            value: Box::new(lower_expr_as_comp(ctx, list)?),
-                            body: Box::new(with_index),
-                        })
-                    }
-                }
-            }
-        }
         ResolvedExpr::Lambda { param, .. } => Err(err(format!(
             "lambda `\\{}` is not supported in shared IR yet",
             param
@@ -374,7 +323,6 @@ fn try_lower_value(
         | ResolvedExpr::Pipeline { .. }
         | ResolvedExpr::Case { .. }
         | ResolvedExpr::ListLit { .. }
-        | ResolvedExpr::ListIndex { .. }
         | ResolvedExpr::RecordConstruct { .. } => Ok(None),
         ResolvedExpr::TupleLit(_) => Ok(None),
     }
@@ -1318,9 +1266,68 @@ mod tests {
                         if module == "list" && name == "get")
                         && args.len() == 2
             ),
-            "expected list.get IR call, got {:?}",
+            "expected resolved-form canonicalization to list.get IR call, got {:?}",
             ir_decl.body
         );
+    }
+
+    #[test]
+    fn lower_bare_and_qualified_effect_calls_converge_to_same_ir() {
+        let bare_decl = decl_with_body(
+            "bare",
+            vec![
+                binding(
+                    "text",
+                    Expr::Call {
+                        callee: Box::new(Expr::var("read")),
+                        arg: Box::new(Expr::TupleLit(vec![])),
+                        span: None,
+                    },
+                ),
+                expr_stmt(Expr::Call {
+                    callee: Box::new(Expr::var("print")),
+                    arg: Box::new(Expr::var("text")),
+                    span: None,
+                }),
+            ],
+        );
+        let qualified_decl = decl_with_body(
+            "qualified",
+            vec![
+                binding("text", make_qualified_call("Read", "read", None)),
+                expr_stmt(make_qualified_call(
+                    "Print",
+                    "print",
+                    Some(Expr::var("text")),
+                )),
+            ],
+        );
+
+        let bare_ir = lower_declaration(&bare_decl).unwrap();
+        let qualified_ir = lower_declaration(&qualified_decl).unwrap();
+        assert_eq!(bare_ir.body, qualified_ir.body);
+    }
+
+    #[test]
+    fn lower_list_index_and_canonical_helper_call_converge_to_same_ir() {
+        let indexed_decl = decl_with_body(
+            "indexed",
+            vec![expr_stmt(Expr::ListIndex {
+                list: Box::new(Expr::var("lines")),
+                index: Box::new(Expr::IntLit(1)),
+            })],
+        );
+        let helper_decl = decl_with_body(
+            "helper",
+            vec![expr_stmt(Expr::call(
+                Expr::call(Expr::qualified("list", "get"), Expr::var("lines")),
+                Expr::IntLit(1),
+            ))],
+        );
+
+        let indexed_ir = lower_declaration(&indexed_decl).unwrap();
+        let helper_ir = lower_declaration(&helper_decl).unwrap();
+        assert_eq!(indexed_ir.body, helper_ir.body);
     }
 
     #[test]
