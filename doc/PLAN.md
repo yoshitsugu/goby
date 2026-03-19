@@ -452,6 +452,9 @@ Additional locked boundaries:
 - instead, backend-intrinsic Wasm for this track is executed through a Goby
   host runtime that instantiates the module, wires WASI plus Goby-specific host
   functions, and preserves the same stdlib ownership boundary.
+- the ownership boundary for that runtime lives in `goby-wasm`, not in
+  `goby-cli`; the CLI should remain a thin caller of a `goby-wasm` execution
+  API rather than growing a third execution subsystem.
 - new backend primitive work must use explicit backend IR variants or an
   equivalent non-stringly representation; do **not** encode new intrinsic
   ownership as ad hoc helper-name strings.
@@ -461,11 +464,17 @@ Additional locked boundaries:
 - the single semantic authority for grapheme segmentation must remain in Rust
   host code; emitted Wasm may request grapheme iteration services, but it must
   not embed a second independent EGC implementation.
+- host-provided backend intrinsics must cross an explicit Wasm import ABI owned
+  by `goby-wasm`; signatures, memory ownership, and import numbering must be
+  fixed before implementation rather than inferred ad hoc in the emitter.
 - list/string allocation for this track must reuse the existing tagged-value and
   list/string memory layout ABI already used by the backend; do **not** add a
   second private representation for grapheme helpers.
 - host-provided backend intrinsics are a runtime substrate beneath backend IR,
   not new user-surface functions and not a second stdlib implementation.
+- only grapheme iteration crosses the host boundary in this track;
+  `__goby_list_push_string` remains an in-Wasm backend intrinsic on the
+  converged tagged list/string ABI.
 
 Scope boundary for this track:
 
@@ -517,10 +526,18 @@ Milestones:
   - replace the raw-`wasmtime run` assumption for this track with a Goby-owned
     execution path that instantiates Wasm modules and wires both WASI imports
     and Goby-specific host intrinsics.
+  - place this execution boundary in `goby-wasm`, with a reusable execution API
+    that the CLI calls, instead of letting `goby-cli` own Track E runtime
+    branching.
   - keep this boundary narrow:
     - no arbitrary new host callback surface,
     - only the explicit backend intrinsic family needed by Track E,
     - no second semantic authority for grapheme segmentation.
+  - lock the host intrinsic ABI before implementation:
+    - explicit Wasm imports for Track E intrinsics,
+    - fixed function signatures,
+    - explicit memory and pointer ownership rules,
+    - `goby-wasm` ownership of import ordering / linker wiring.
   - progress:
     - grapheme segmentation semantics are now centralized in a dedicated
       backend/runtime helper module, and the existing runtime decl/intrinsic
@@ -534,6 +551,8 @@ Milestones:
       model for copying slices without redefining segmentation.
   - done when:
     - the runtime boundary is explicit in code/docs,
+    - `goby-wasm` exposes the execution API that owns Track E runtime wiring,
+    - the host intrinsic ABI is documented and tested,
     - a Goby-owned Wasm execution path exists for backend-intrinsic modules,
     - raw `wasmtime run` is no longer treated as the required execution model
       for Track E modules.
@@ -549,11 +568,10 @@ Milestones:
       ad hoc side channel,
     - backend-path tests prove parity with the existing runtime intrinsic path.
 
-- [ ] E5. Host-provided string-list accumulation parity
-  - complete the host/runtime execution boundary for `__goby_list_push_string`
-    on top of the converged tagged-value and list/string allocation ABI.
-  - keep list/string memory layout shared with existing collection helper
-    emission.
+- [ ] E5. In-Wasm list accumulation parity
+  - keep `__goby_list_push_string` as an in-Wasm backend intrinsic on top of
+    the converged tagged-value and list/string allocation ABI.
+  - do not move list accumulation across the host boundary.
   - progress:
     - direct backend emission for `__goby_list_push_string` is landed on top of
       the existing tagged list/string layout, and helper-chain regression
@@ -561,7 +579,7 @@ Milestones:
   - done when:
     - no second list/string runtime representation is introduced for this track,
     - stdlib `goby/string.graphemes` can accumulate list results through the
-      host-backed backend path without planner fallback.
+      backend path without planner fallback.
 
 - [ ] E6. Stdlib `graphemes` parity in runtime-`Read` programs
   - add end-to-end coverage for:
@@ -577,7 +595,10 @@ Milestones:
     - compile tests and Goby-owned runtime integration tests cover the
       runtime-stdin path and pass,
     - `goby run` executes this family through the backend path instead of the
-      temporary interpreter bridge.
+      temporary interpreter bridge,
+    - the current imported-`goby/string.graphemes` special case and
+      `InterpreterBridge` dependency for this family are removed rather than
+      left in parallel.
 
 - [ ] E7. Prepare split handoff to stdlib-only ownership
   - after grapheme iteration primitives land, continue moving
