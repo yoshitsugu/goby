@@ -57,7 +57,7 @@ fn lower_comp_with_aliases(
         CompExpr::Let {
             name, value, body, ..
         } => {
-            // F4: detect fused split-each pattern before general Let lowering.
+            // Detect fused split-each pattern before general Let lowering.
             if let Some(result) = try_lower_split_each(name, value, body, aliases) {
                 return result;
             }
@@ -180,12 +180,12 @@ fn try_lower_split_each(
     let mut body_aliases = aliases.clone();
     let (effect, op) = find_split_each_callback(let_name, body, &mut body_aliases)?;
 
-    // Restriction: sep must be exactly 1 byte for F4.
+    // Current restriction: sep must be exactly 1 byte.
     let sep_bytes = sep.as_bytes().to_vec();
     if sep_bytes.len() != 1 {
         return Some(Err(LowerError::UnsupportedForm {
             node: format!(
-                "SplitEachPrint: multi-byte separator '{}' is not yet supported (F5+)",
+                "SplitEachPrint: multi-byte separator '{}' is not yet supported",
                 sep
             ),
         }));
@@ -213,7 +213,7 @@ fn try_lower_split_get_print(
     if sep_bytes.len() != 1 {
         return Some(Err(LowerError::UnsupportedForm {
             node: format!(
-                "SplitGetPrint: multi-byte separator '{}' is not yet supported (F5+)",
+                "SplitGetPrint: multi-byte separator '{}' is not yet supported",
                 sep
             ),
         }));

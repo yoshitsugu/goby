@@ -1,6 +1,6 @@
-# Track F / F3 target
+# Runtime-I/O general-lowering fixture: plain read + print
 # Expected: reads all of stdin and prints it to stdout (no newline appended).
-# Status: currently passes, but still routes through DynamicWasiIo (Echo recognizer) rather than full general lowering.
+# Status: currently passes via general lowering.
 main : Unit -> Unit can Print, Read
 main =
   text = Read.read ()

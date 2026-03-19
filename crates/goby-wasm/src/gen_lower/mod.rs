@@ -1,9 +1,9 @@
-// Suppress dead_code warnings for Track F stubs — these will be used in F3+.
+// Suppress dead_code warnings while the general lowering surface continues to expand.
 #![allow(dead_code)]
 
-//! General Wasm lowering — Track F.
+//! General Wasm lowering for runtime-I/O programs.
 //!
-//! This module implements the Track F general lowering pipeline:
+//! This module implements the shared general lowering pipeline:
 //!
 //! ```text
 //! Goby IR (CompExpr / ValueExpr)
@@ -15,8 +15,8 @@
 //!
 //! # Module ownership
 //! - `value`: `RtValue` tagged-i64 representation and encode/decode helpers.
-//! - `backend_ir`: `WasmBackendInstr` flat instruction set (variants locked in F2).
-//! - `lower`: Goby IR → backend IR lowering, including Track F fused split patterns.
+//! - `backend_ir`: `WasmBackendInstr` flat instruction set.
+//! - `lower`: Goby IR → backend IR lowering, including fused split patterns.
 //! - `emit`: backend IR → Wasm emission, including WASI-backed `Read`/`Print`.
 //!
 //! # Import rules
@@ -36,7 +36,7 @@ use crate::layout::MemoryLayout;
 use crate::wasm_exec_plan::main_exec_plan;
 
 /// Returns `true` if the IR body contains at least one `PerformEffect` node for `Read`.
-/// Track F general lowering is intentionally scoped to runtime-stdin programs.
+/// General lowering is intentionally scoped to runtime-stdin programs.
 fn has_runtime_read_effect(comp: &CompExpr) -> bool {
     match comp {
         CompExpr::PerformEffect { effect, .. } => effect == "Read",

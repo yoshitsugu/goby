@@ -1,4 +1,4 @@
-# Track F / F4 target
+# Runtime-I/O general-lowering fixture: split + each
 # Expected: reads stdin, splits on newlines, and prints each line with a newline.
 # Status: currently passes via general lowering.
 # Note: string.split / each helper-call ABI is required.

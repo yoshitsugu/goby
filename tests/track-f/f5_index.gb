@@ -1,8 +1,8 @@
-# Track F / F5 target
+# Runtime-I/O general-lowering fixture: split + index
 # Expected: reads stdin, splits on newlines, binds the second line (index 1),
 # and prints it.
 # Status: currently passes via general lowering.
-# Out-of-range index behavior: trap with diagnostic (policy defined in F5).
+# Out-of-range index behavior: trap with diagnostic.
 main : Unit -> Unit can Print, Read
 main =
   text = Read.read ()

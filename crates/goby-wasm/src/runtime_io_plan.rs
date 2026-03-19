@@ -289,9 +289,9 @@ impl RuntimeIoClassification {
 /// `InterpreterBridge` is currently unreachable because no shapes are detected for it;
 /// the detection step has been removed until a concrete future shape requires it.
 ///
-/// # Convergence status (F6)
+/// # Convergence status
 ///
-/// The general lowering pipeline is now the primary semantic path for Track F
+/// The general lowering pipeline is now the primary semantic path for
 /// representative programs. `RuntimeIoPlan` remains only for a shrinking set of
 /// optimization-oriented shapes that have not yet been fully normalized into general
 /// lowering. Plain echo-family programs (including bare names, `read_line`, static suffixes,
@@ -304,7 +304,7 @@ impl RuntimeIoClassification {
 /// 2. keep only optimization-only paths with explicit parity coverage,
 /// 3. delete plan variants once no caller relies on their handwritten emitters.
 ///
-/// # Historical stopping rule (F3a)
+/// # Historical stopping rule
 ///
 /// All runtime-I/O fallback form recognition lives in this module — **not** in `lib.rs` or
 /// any other call site.  When adding support for a new runtime-I/O program form:
@@ -396,7 +396,7 @@ pub fn runtime_io_execution_kind(module: &Module) -> Result<RuntimeIoExecutionKi
 /// Walk a `CompExpr` tree and return `true` if any `PerformEffect` node has
 /// `effect == "Read"` (i.e. the program performs a runtime read operation).
 ///
-/// The Track F general path is keyed off shared IR `PerformEffect(Read, ..)` nodes.
+/// The general path is keyed off shared IR `PerformEffect(Read, ..)` nodes.
 /// Runtime-I/O programs that still fail to reach that form are treated as remaining
 /// normalization gaps rather than as the intended steady-state classification path.
 fn ir_has_read_op(comp: &CompExpr) -> bool {

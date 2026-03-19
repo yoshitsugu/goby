@@ -1,6 +1,6 @@
 //! `WasmBackendInstr` → Wasm bytes emission for the general lowering path.
 //!
-//! This module owns the concrete WASI import mapping for Track F `Read`/`Print`
+//! This module owns the concrete WASI import mapping for runtime `Read`/`Print`
 //! effect operations.
 
 use std::collections::HashMap;
@@ -483,8 +483,8 @@ fn emit_effect_op(
         }
 
         ("Read", "read_line") => {
-            // This currently supports the single-read-line shapes that Track F
-            // still routes through `RuntimeIoPlan`. The result string is backed
+            // This currently supports the single-read-line shapes that still
+            // route through `RuntimeIoPlan`. The result string is backed
             // by the same stdin buffer used for `Read.read`.
             let data_ptr = buffer_ptr + 4;
             let scan_idx_local = i32_base;
@@ -619,8 +619,8 @@ fn emit_effect_op(
                 // Write a newline byte stored at newline_ptr.
                 // We need a newline byte in memory. Use a data segment or write it dynamically.
                 // For simplicity, we'll write the '\n' byte directly to newline_ptr first,
-                // then issue fd_write. Actually we should use a data segment, but for F3
-                // we can store the byte at runtime.
+                // then issue fd_write. Actually we should use a data segment, but for the
+                // current plain read+print subset we can store the byte at runtime.
                 function.instruction(&Instruction::I32Const(newline_ptr));
                 function.instruction(&Instruction::I32Const(10)); // '\n'
                 function.instruction(&Instruction::I32Store8(MemArg {
@@ -652,7 +652,8 @@ fn emit_effect_op(
             }
 
             // After print, push Unit value so the expression has a value on the stack.
-            // (For F3 programs, print is always in tail position or in a stmt that's Dropped.)
+            // For the current plain read+print subset, print is always in tail position
+            // or in a stmt that's Dropped.
             // Actually the general lowering doesn't expect a return value from EffectOp
             // for print — but the IR treats PerformEffect as an expression. The lowered
             // sequence has EffectOp followed by Drop (for stmt) or StoreLocal.

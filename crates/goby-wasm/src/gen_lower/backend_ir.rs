@@ -68,7 +68,7 @@ pub(crate) enum WasmBackendInstr {
     /// `Let lines = Call(GlobalRef("string","split"), [Var(text), StrLit(sep)])`
     /// followed by `Call(Var("each"), [Var(lines), GlobalRef(effect, op)])`.
     ///
-    /// Restriction: `sep_bytes` must be exactly 1 byte (multi-byte separators are F5+).
+    /// Restriction: `sep_bytes` must be exactly 1 byte.
     SplitEachPrint {
         text_local: String,
         sep_bytes: Vec<u8>,

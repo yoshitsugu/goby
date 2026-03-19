@@ -192,7 +192,7 @@ pub fn compile_module(module: &Module) -> Result<Vec<u8>, CodegenError> {
     {
         return Ok(wasm);
     }
-    // F3: attempt general lowering path before shape-specific classification.
+    // Attempt general lowering before shape-specific classification.
     if let Some(wasm) = gen_lower::try_general_lower_module(module)? {
         return Ok(wasm);
     }

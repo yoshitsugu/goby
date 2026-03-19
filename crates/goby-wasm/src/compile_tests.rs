@@ -582,7 +582,7 @@ fn native_fallback_path_matrix_for_examples() {
     }
 }
 
-// F3a round-trip tests: assert that classify_runtime_io returns DynamicWasiIo for known
+// Round-trip tests: assert that classify_runtime_io returns DynamicWasiIo for known
 // dynamic-Wasm shapes AND that compile_module produces valid Wasm for each.
 // These tests mirror the StaticOutput round-trip tests below and confirm that the
 // planning boundary (all shape decisions in runtime_io_plan.rs) is working end-to-end.
@@ -952,13 +952,13 @@ main =
 }
 
 // ---------------------------------------------------------------------------
-// Track F fixture tests
-// These tests lock the convergence state of the Track F representative programs.
-// F3/F4/F5 should now classify as GeneralLowered rather than old handwritten
+// Runtime-I/O general-lowering fixtures
+// These tests lock the convergence state of the representative read/split/index
+// programs. They should classify as GeneralLowered rather than old handwritten
 // RuntimeIoPlan categories.
 // ---------------------------------------------------------------------------
 
-/// F3 fixture current status: GeneralLowered.
+/// Plain read+print fixture current status: GeneralLowered.
 #[test]
 fn track_f_f3_print_read_current_classification() {
     let source = read_track_f_fixture("f3_print_read.gb");
@@ -966,21 +966,20 @@ fn track_f_f3_print_read_current_classification() {
     assert_eq!(
         runtime_io_execution_kind(&module).expect("classification should succeed"),
         crate::RuntimeIoExecutionKind::GeneralLowered,
-        "F3 fixture should report GeneralLowered once the general path is the semantic source of truth"
+        "plain read+print fixture should report GeneralLowered once the general path is the semantic source of truth"
     );
 }
 
-/// F3 fixture: `print (read())` — general lowering target.
-/// F3 is implemented: general lowering path handles this shape.
+/// Plain read+print fixture: `print (read())`.
 #[test]
 fn track_f_f3_print_read_is_general_lowered() {
     let source = read_track_f_fixture("f3_print_read.gb");
     let module = parse_module(&source).expect("f3_print_read.gb should parse");
-    let wasm = compile_module(&module).expect("F3 codegen should succeed");
+    let wasm = compile_module(&module).expect("plain read+print codegen should succeed");
     assert_valid_wasm_module(&wasm);
 }
 
-/// F4 fixture current status: GeneralLowered.
+/// Split+each fixture current status: GeneralLowered.
 #[test]
 fn track_f_f4_split_each_is_currently_unsupported() {
     let source = read_track_f_fixture("f4_split_each.gb");
@@ -988,22 +987,21 @@ fn track_f_f4_split_each_is_currently_unsupported() {
     assert_eq!(
         runtime_io_execution_kind(&module).expect("classification should succeed"),
         crate::RuntimeIoExecutionKind::GeneralLowered,
-        "F4 fixture should report GeneralLowered once the fused general path owns this shape"
+        "split+each fixture should report GeneralLowered once the fused general path owns this shape"
     );
 }
 
-/// F4 fixture: split + each — general lowering target.
-/// F4 is implemented: fused SplitEachPrint handles the split+each pattern.
+/// Split+each fixture.
 #[test]
 fn track_f_f4_split_each_is_general_lowered() {
     let source = read_track_f_fixture("f4_split_each.gb");
     let module = parse_module(&source).expect("f4_split_each.gb should parse");
-    let wasm = compile_module(&module).expect("F4 codegen should succeed");
+    let wasm = compile_module(&module).expect("split+each codegen should succeed");
     assert_valid_wasm_module(&wasm);
 }
 
 // ---------------------------------------------------------------------------
-// F4 parity: split+each programs produce valid Wasm with fd_read and fd_write.
+// Split+each parity: programs produce valid Wasm with fd_read and fd_write.
 // ---------------------------------------------------------------------------
 
 /// Parity test: f4 fixture compiles via general path and has fd_read + fd_write imports.
@@ -1011,17 +1009,17 @@ fn track_f_f4_split_each_is_general_lowered() {
 fn track_f_f4_parity_split_each_has_fd_read_and_fd_write() {
     let source = read_track_f_fixture("f4_split_each.gb");
     let module = parse_module(&source).expect("f4_split_each.gb should parse");
-    let wasm = compile_module(&module).expect("F4 codegen should succeed");
+    let wasm = compile_module(&module).expect("split+each codegen should succeed");
     assert_valid_wasm_module(&wasm);
     let fd_read = b"fd_read";
     let fd_write = b"fd_write";
     assert!(
         wasm.windows(fd_read.len()).any(|w| w == fd_read),
-        "F4 general path should import fd_read"
+        "split+each general path should import fd_read"
     );
     assert!(
         wasm.windows(fd_write.len()).any(|w| w == fd_write),
-        "F4 general path should import fd_write"
+        "split+each general path should import fd_write"
     );
 }
 
@@ -1036,11 +1034,11 @@ main =
   each lines Print.println
 "#;
     let module = parse_module(source).expect("inline f4 source should parse");
-    let wasm = compile_module(&module).expect("inline F4 codegen should succeed");
+    let wasm = compile_module(&module).expect("inline split+each codegen should succeed");
     assert_valid_wasm_module(&wasm);
 }
 
-/// F5 fixture current status: GeneralLowered.
+/// Split+index fixture current status: GeneralLowered.
 #[test]
 fn track_f_f5_index_is_currently_unsupported() {
     let source = read_track_f_fixture("f5_index.gb");
@@ -1048,16 +1046,16 @@ fn track_f_f5_index_is_currently_unsupported() {
     assert_eq!(
         runtime_io_execution_kind(&module).expect("classification should succeed"),
         crate::RuntimeIoExecutionKind::GeneralLowered,
-        "F5 fixture should report GeneralLowered once the fused general path owns this shape"
+        "split+index fixture should report GeneralLowered once the fused general path owns this shape"
     );
 }
 
-/// F5 fixture: split + index — general lowering target.
+/// Split+index fixture.
 #[test]
 fn track_f_f5_index_is_general_lowered() {
     let source = read_track_f_fixture("f5_index.gb");
     let module = parse_module(&source).expect("f5_index.gb should parse");
-    let wasm = compile_module(&module).expect("F5 codegen should succeed");
+    let wasm = compile_module(&module).expect("split+index codegen should succeed");
     assert_valid_wasm_module(&wasm);
 }
 
@@ -1065,17 +1063,17 @@ fn track_f_f5_index_is_general_lowered() {
 fn track_f_f5_parity_split_index_has_fd_read_and_fd_write() {
     let source = read_track_f_fixture("f5_index.gb");
     let module = parse_module(&source).expect("f5_index.gb should parse");
-    let wasm = compile_module(&module).expect("F5 codegen should succeed");
+    let wasm = compile_module(&module).expect("split+index codegen should succeed");
     assert_valid_wasm_module(&wasm);
     let fd_read = b"fd_read";
     let fd_write = b"fd_write";
     assert!(
         wasm.windows(fd_read.len()).any(|w| w == fd_read),
-        "F5 general path should import fd_read"
+        "split+index general path should import fd_read"
     );
     assert!(
         wasm.windows(fd_write.len()).any(|w| w == fd_write),
-        "F5 general path should import fd_write"
+        "split+index general path should import fd_write"
     );
 }
 
@@ -1090,12 +1088,12 @@ main =
   Print.println line
 "#;
     let module = parse_module(source).expect("inline f5 source should parse");
-    let wasm = compile_module(&module).expect("inline F5 codegen should succeed");
+    let wasm = compile_module(&module).expect("inline split+index codegen should succeed");
     assert_valid_wasm_module(&wasm);
 }
 
 // ---------------------------------------------------------------------------
-// F3 parity: programs previously handled by handwritten runtime-I/O plans must
+// Plain read+print parity: programs previously handled by handwritten runtime-I/O plans must
 // produce valid Wasm through the general lowering path.
 // ---------------------------------------------------------------------------
 
@@ -1105,18 +1103,18 @@ main =
 fn track_f_f3_parity_print_read_has_fd_read_and_fd_write() {
     let source = read_track_f_fixture("f3_print_read.gb");
     let module = parse_module(&source).expect("f3_print_read.gb should parse");
-    let wasm = compile_module(&module).expect("F3 codegen should succeed");
+    let wasm = compile_module(&module).expect("plain read+print codegen should succeed");
     assert_valid_wasm_module(&wasm);
     // Verify Wasm binary contains both "fd_read" and "fd_write" import name strings.
     let fd_read = b"fd_read";
     let fd_write = b"fd_write";
     assert!(
         wasm.windows(fd_read.len()).any(|w| w == fd_read),
-        "F3 general path should import fd_read from WASI"
+        "plain read+print general path should import fd_read from WASI"
     );
     assert!(
         wasm.windows(fd_write.len()).any(|w| w == fd_write),
-        "F3 general path should import fd_write from WASI"
+        "plain read+print general path should import fd_write from WASI"
     );
 }
 
@@ -1130,7 +1128,7 @@ main =
   Print.print text
 "#;
     let module = parse_module(source).expect("inline f3 source should parse");
-    let wasm = compile_module(&module).expect("inline F3 codegen should succeed");
+    let wasm = compile_module(&module).expect("inline plain read+print codegen should succeed");
     assert_valid_wasm_module(&wasm);
 }
 

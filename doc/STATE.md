@@ -4,7 +4,6 @@ Last updated: 2026-03-19
 
 ## Current Focus
 
-- Track F is complete through F6; plain runtime-I/O shapes now use the general lowering path.
 - Track D5 has started with a first `goby lint` slice.
 - `goby lint <file.gb>` now exists for human-readable warnings.
 - First rule implemented: unreachable `case` arm after wildcard `_`.
@@ -25,12 +24,13 @@ Last updated: 2026-03-19
 - Spaced single-argument calls still require parentheses around binary-expression arguments
   under the current parser precedence; for example `println (1 + 1)` works while
   `println 1 + 1` remains a planned syntax/precedence decision.
-- Track F architecture is now carried by the `gen_lower/` module docs, `runtime_io_plan.rs`
-  convergence notes, and the Track F regression tests.
+- General runtime-I/O lowering architecture is now carried by the `gen_lower/` module docs,
+  `runtime_io_plan.rs` convergence notes, and the runtime-I/O regression tests.
 - `gen_lower/` must not import from `runtime_io_plan.rs`.
 - General lowering path only activates when IR body contains `PerformEffect` nodes.
-- F4 uses fused pattern (SplitEachPrint) — no intermediate list in memory.
-- F5 also uses a fused pattern (SplitGetPrint) rather than a heap-allocated list.
+- Split-each lowering uses a fused `SplitEachPrint` pattern rather than materializing an
+  intermediate list in memory.
+- Split-index lowering uses a fused `SplitGetPrint` pattern rather than a heap-allocated list.
 - Out-of-range indexed split access aborts the Wasm program via generated trap checks,
   matching the existing runtime abort policy.
 - Public runtime-I/O classification now distinguishes `GeneralLowered` from
@@ -65,6 +65,6 @@ Last updated: 2026-03-19
 ## Restart Notes
 
 - `doc/PLAN.md` is the roadmap reference.
-- For Track F restart context, read `crates/goby-wasm/src/gen_lower/mod.rs`,
+- For general runtime-I/O lowering context, read `crates/goby-wasm/src/gen_lower/mod.rs`,
   `crates/goby-wasm/src/runtime_io_plan.rs`, `crates/goby-wasm/src/lib.rs`, and the
   `tests/track-f/` fixtures.
