@@ -509,7 +509,7 @@ All implementation under this plan must preserve:
   - validation checklist:
     - direct IR tests cover captures and call sites
     - backend unsupported cases, if any, are reported as backend limitations
-- [ ] IR8. Product-data lowering
+- [x] IR8. Product-data lowering
   - lower non-unit tuples and record construction into shared IR
   - implementation checklist:
     - lower tuples and records in one product-data slice
@@ -620,10 +620,9 @@ Reason for this order:
 
 The recommended next implementation slice is:
 
-1. advance IR8 for tuples/records before starting lambda lowering,
-2. advance IR7 only after product-data lowering has established the non-closure value path,
-3. leave IR9 last among the currently open semantic families unless new evidence shows mutation is blocking another milestone,
-4. keep deleting diagnostics and comments that still imply "shared IR cannot represent this" when the real gap is lowering or backend support.
+1. advance IR7 now that product-data lowering has established the non-closure value path,
+2. leave IR9 last among the currently open semantic families unless new evidence shows mutation is blocking another milestone,
+3. keep deleting diagnostics and comments that still imply "shared IR cannot represent this" when the real gap is lowering or backend support.
 
 Recommended file entry points for that slice:
 

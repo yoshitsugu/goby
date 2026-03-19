@@ -471,4 +471,30 @@ choose n =
                 && matches!(value, Expr::Call { .. })
         ));
     }
+
+    #[test]
+    fn runtime_artifacts_from_ir_decl_bridge_effectful_tuple_shape() {
+        let module = parse_module(
+            r#"
+pair : Unit -> (String, Int) can Read
+pair _ =
+  (read (), 2)
+"#,
+        )
+        .expect("parse should work");
+        let decl = module
+            .declarations
+            .iter()
+            .find(|decl| decl.name == "pair")
+            .expect("pair should exist");
+        let ir_decl =
+            goby_core::ir_lower::lower_declaration(decl).expect("IR lowering should work");
+        let runtime =
+            runtime_artifacts_from_ir_decl(&ir_decl).expect("runtime artifacts should exist");
+        let body = runtime.body.expect("body should render");
+        assert_eq!(
+            body,
+            "__goby_ir_tuple_item_0 = Read.read ()\n(__goby_ir_tuple_item_0, 2)"
+        );
+    }
 }

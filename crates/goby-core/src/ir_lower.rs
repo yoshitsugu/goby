@@ -257,14 +257,11 @@ fn lower_expr_as_comp_non_value(
         ResolvedExpr::ListLit { elements, spread } => {
             lower_list_literal(ctx, elements, spread.as_deref())
         }
-        ResolvedExpr::TupleLit(items) if !items.is_empty() => Err(err(format!(
-            "tuple-literal lowering is not implemented yet for {} item(s)",
-            items.len()
-        ))),
-        ResolvedExpr::RecordConstruct { constructor, .. } => Err(err(format!(
-            "record-construction lowering is not implemented yet for `{}`",
-            constructor
-        ))),
+        ResolvedExpr::TupleLit(items) if !items.is_empty() => lower_tuple_literal(ctx, items),
+        ResolvedExpr::RecordConstruct {
+            constructor,
+            fields,
+        } => lower_record_construct(ctx, constructor, fields),
         other => match try_lower_value(ctx, other)? {
             Some(v) => Ok(CompExpr::Value(v)),
             None => Err(err(format!("unsupported expression form: {:?}", other))),
@@ -299,6 +296,32 @@ fn try_lower_value(
             Ok(Some(ValueExpr::ListLit {
                 elements: ir_elements,
                 spread: ir_spread,
+            }))
+        }
+        ResolvedExpr::TupleLit(items) => {
+            let mut ir_items = Vec::with_capacity(items.len());
+            for item in items {
+                let Some(ir_item) = try_lower_value(ctx, item)? else {
+                    return Ok(None);
+                };
+                ir_items.push(ir_item);
+            }
+            Ok(Some(ValueExpr::TupleLit(ir_items)))
+        }
+        ResolvedExpr::RecordConstruct {
+            constructor,
+            fields,
+        } => {
+            let mut ir_fields = Vec::with_capacity(fields.len());
+            for (name, value) in fields {
+                let Some(ir_value) = try_lower_value(ctx, value)? else {
+                    return Ok(None);
+                };
+                ir_fields.push((name.clone(), ir_value));
+            }
+            Ok(Some(ValueExpr::RecordLit {
+                constructor: constructor.clone(),
+                fields: ir_fields,
             }))
         }
         ResolvedExpr::Ref(reference) => Ok(Some(lower_ref_value(reference))),
@@ -341,9 +364,7 @@ fn try_lower_value(
         | ResolvedExpr::Resume { .. }
         | ResolvedExpr::MethodCall { .. }
         | ResolvedExpr::Pipeline { .. }
-        | ResolvedExpr::Case { .. }
-        | ResolvedExpr::RecordConstruct { .. } => Ok(None),
-        ResolvedExpr::TupleLit(_) => Ok(None),
+        | ResolvedExpr::Case { .. } => Ok(None),
     }
 }
 
@@ -387,6 +408,65 @@ fn lower_list_literal(
         .into_iter()
         .rev()
         .fold(list_value, |body, (name, value)| CompExpr::Let {
+            name,
+            ty: IrType::Unknown,
+            value: Box::new(value),
+            body: Box::new(body),
+        }))
+}
+
+fn lower_tuple_literal(ctx: &mut LowerCtx, items: &[ResolvedExpr]) -> Result<CompExpr, LowerError> {
+    let mut pending = Vec::new();
+    let mut ir_items = Vec::with_capacity(items.len());
+
+    for item in items {
+        if let Some(value) = try_lower_value(ctx, item)? {
+            ir_items.push(value);
+        } else {
+            let tmp = ctx.fresh_tmp("tuple_item");
+            pending.push((tmp.clone(), lower_expr_as_comp(ctx, item)?));
+            ir_items.push(ValueExpr::Var(tmp));
+        }
+    }
+
+    let tuple_value = CompExpr::Value(ValueExpr::TupleLit(ir_items));
+    Ok(pending
+        .into_iter()
+        .rev()
+        .fold(tuple_value, |body, (name, value)| CompExpr::Let {
+            name,
+            ty: IrType::Unknown,
+            value: Box::new(value),
+            body: Box::new(body),
+        }))
+}
+
+fn lower_record_construct(
+    ctx: &mut LowerCtx,
+    constructor: &str,
+    fields: &[(String, ResolvedExpr)],
+) -> Result<CompExpr, LowerError> {
+    let mut pending = Vec::new();
+    let mut ir_fields = Vec::with_capacity(fields.len());
+
+    for (name, value) in fields {
+        if let Some(ir_value) = try_lower_value(ctx, value)? {
+            ir_fields.push((name.clone(), ir_value));
+        } else {
+            let tmp = ctx.fresh_tmp("record_field");
+            pending.push((tmp.clone(), lower_expr_as_comp(ctx, value)?));
+            ir_fields.push((name.clone(), ValueExpr::Var(tmp)));
+        }
+    }
+
+    let record_value = CompExpr::Value(ValueExpr::RecordLit {
+        constructor: constructor.to_string(),
+        fields: ir_fields,
+    });
+    Ok(pending
+        .into_iter()
+        .rev()
+        .fold(record_value, |body, (name, value)| CompExpr::Let {
             name,
             ty: IrType::Unknown,
             value: Box::new(value),
@@ -1136,6 +1216,94 @@ mod tests {
         assert!(
             matches!(ir_decl.body, CompExpr::Let { .. }),
             "effectful list spread should ANF-normalize through let, got {:?}",
+            ir_decl.body
+        );
+    }
+
+    #[test]
+    fn lower_pure_tuple_literal() {
+        let decl = decl_with_body(
+            "pair",
+            vec![expr_stmt(Expr::TupleLit(vec![
+                Expr::IntLit(1),
+                Expr::StringLit("x".to_string()),
+            ]))],
+        );
+        let ir_decl = lower_declaration(&decl).unwrap();
+        let m = IrModule {
+            decls: vec![ir_decl],
+        };
+        assert!(validate_ir(&m).is_ok());
+        assert_eq!(fmt_ir(&m), "decl pair: ? =\n  (1, \"x\")\n\n");
+    }
+
+    #[test]
+    fn lower_tuple_literal_with_effectful_item_normalizes_via_let() {
+        let decl = decl_with_body(
+            "pair",
+            vec![expr_stmt(Expr::TupleLit(vec![
+                Expr::Call {
+                    callee: Box::new(Expr::var("read")),
+                    arg: Box::new(Expr::TupleLit(vec![])),
+                    span: None,
+                },
+                Expr::IntLit(2),
+            ]))],
+        );
+        let ir_decl = lower_declaration(&decl).unwrap();
+        assert!(
+            matches!(ir_decl.body, CompExpr::Let { .. }),
+            "effectful tuple item should ANF-normalize through let, got {:?}",
+            ir_decl.body
+        );
+    }
+
+    #[test]
+    fn lower_pure_record_construct() {
+        let decl = decl_with_body(
+            "pair",
+            vec![expr_stmt(Expr::RecordConstruct {
+                constructor: "Pair".to_string(),
+                fields: vec![
+                    ("left".to_string(), Expr::IntLit(1)),
+                    ("right".to_string(), Expr::StringLit("x".to_string())),
+                ],
+            })],
+        );
+        let ir_decl = lower_declaration(&decl).unwrap();
+        let m = IrModule {
+            decls: vec![ir_decl],
+        };
+        assert!(validate_ir(&m).is_ok());
+        assert_eq!(
+            fmt_ir(&m),
+            "decl pair: ? =\n  Pair(left: 1, right: \"x\")\n\n"
+        );
+    }
+
+    #[test]
+    fn lower_record_construct_with_effectful_field_normalizes_via_let() {
+        let decl = decl_with_body(
+            "pair",
+            vec![expr_stmt(Expr::RecordConstruct {
+                constructor: "Pair".to_string(),
+                fields: vec![
+                    (
+                        "left".to_string(),
+                        Expr::Call {
+                            callee: Box::new(Expr::var("read")),
+                            arg: Box::new(Expr::TupleLit(vec![])),
+                            span: None,
+                        },
+                    ),
+                    ("right".to_string(), Expr::IntLit(2)),
+                ],
+            })],
+        );
+        let ir_decl = lower_declaration(&decl).unwrap();
+        assert!(
+            matches!(ir_decl.body, CompExpr::Let { .. }),
+            "effectful record field should ANF-normalize through let, got {:?}",
             ir_decl.body
         );
     }
