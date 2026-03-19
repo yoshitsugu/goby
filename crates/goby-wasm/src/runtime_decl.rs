@@ -1,7 +1,7 @@
 use super::*;
+use crate::grapheme_semantics::collect_extended_graphemes;
 use crate::runtime_support::flatten_direct_call;
 use crate::wasm_exec_plan::decl_exec_plan;
-use unicode_segmentation::UnicodeSegmentation;
 
 impl<'m> RuntimeOutputResolver<'m> {
     pub(super) fn try_eval_imported_decl_call_as_value(
@@ -54,9 +54,9 @@ impl<'m> RuntimeOutputResolver<'m> {
                 depth + 1,
             )?;
             return match value {
-                RuntimeValue::String(s) => Some(RuntimeValue::ListString(
-                    s.graphemes(true).map(|part| part.to_string()).collect(),
-                )),
+                RuntimeValue::String(s) => {
+                    Some(RuntimeValue::ListString(collect_extended_graphemes(&s)))
+                }
                 _ => None,
             };
         }

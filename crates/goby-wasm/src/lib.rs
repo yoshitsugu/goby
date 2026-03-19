@@ -4,6 +4,7 @@ mod call;
 mod compile_tests;
 mod fallback;
 mod gen_lower;
+mod grapheme_semantics;
 mod layout;
 mod lower;
 mod planning;
@@ -34,9 +35,6 @@ mod runtime_value;
 mod support;
 mod wasm_exec_plan;
 
-use std::collections::{HashMap, HashSet};
-use unicode_segmentation::UnicodeSegmentation;
-
 use crate::runtime_env::{
     EmbeddedEffectRuntime, RuntimeImportContext, effective_runtime_imports,
     load_runtime_import_context, runtime_import_selects_name,
@@ -59,6 +57,7 @@ use goby_core::{
     CasePattern, Expr, HandlerClause, ListPatternItem, ListPatternTail, Module, Stmt,
     ast::InterpolatedPart, types::parse_function_type,
 };
+use std::collections::{HashMap, HashSet};
 const ERR_MISSING_MAIN: &str = "Wasm codegen requires a `main` declaration";
 pub(crate) const BUILTIN_PRINT: &str = "print";
 const PRELUDE_MODULE_PATH: &str = "goby/prelude";

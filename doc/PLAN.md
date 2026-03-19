@@ -501,6 +501,11 @@ Milestones:
   - preserve Unicode Extended Grapheme Cluster semantics.
   - keep a single semantic authority for grapheme segmentation; backend work
     must reuse that authority rather than defining a separate interpretation.
+  - progress:
+    - grapheme segmentation semantics are now centralized in a dedicated
+      backend/runtime helper module, and the existing runtime decl/intrinsic
+      paths consume that shared authority instead of calling
+      `unicode-segmentation` ad hoc in multiple places.
   - done when:
     - the semantic-authority choice is explicit in code/docs,
     - a runtime-`Read` program can execute stdlib `goby/string.graphemes`

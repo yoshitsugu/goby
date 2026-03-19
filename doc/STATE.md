@@ -37,6 +37,10 @@ Last updated: 2026-03-19
   - `__goby_list_push_string` now emits through the shared tagged list/string ABI in general Wasm lowering,
   - regression coverage locks a runtime-`Read` helper chain `split -> __goby_list_push_string -> list.get -> print`,
   - remaining work is E3 semantic grapheme iteration, not list accumulation layout.
+- Track E E3 semantic-authority groundwork is landed:
+  - Unicode Extended Grapheme Cluster segmentation now lives behind a dedicated backend/runtime helper module,
+  - imported `goby/string.graphemes` evaluation and `__goby_string_each_grapheme` runtime intrinsic execution both use that shared authority,
+  - remaining E3 work is emitter-side execution, not deciding semantics in multiple places.
 - Remaining helper work is incremental family expansion on top of the emitter ABI, not a reason to restore planner or AST-shaped fallback.
 - The IR-lowering roadmap is complete; follow-up work should stay within the converged lowering architecture.
 - Then inspect:

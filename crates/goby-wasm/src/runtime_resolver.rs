@@ -349,36 +349,52 @@ impl<'m> RuntimeOutputResolver<'m> {
                     };
                     let mut yielded_count: i64 = 0;
                     let mut state = RuntimeValue::Unit;
-                    for grapheme in value.graphemes(true) {
+                    let mut ok = true;
+                    let _ = for_each_extended_grapheme(value, |grapheme| {
                         let resumed = match self.dispatch_handler_method_as_value_with_args_flow(
                             &method,
-                            &[RuntimeValue::String(grapheme.to_string()), state],
+                            &[RuntimeValue::String(grapheme.to_string()), state.clone()],
                             evaluators,
                             depth + 1,
                         ) {
                             Out::Done(value) => value,
                             Out::Err(RuntimeError::Abort { .. }) => {
                                 self.mark_runtime_abort();
-                                return None;
+                                ok = false;
+                                return ControlFlow::Break;
                             }
                             Out::Suspend(_)
                             | Out::Escape(_)
-                            | Out::Err(RuntimeError::Unsupported) => return None,
+                            | Out::Err(RuntimeError::Unsupported) => {
+                                ok = false;
+                                return ControlFlow::Break;
+                            }
                         };
                         let RuntimeValue::Tuple(items) = resumed else {
-                            return None;
+                            ok = false;
+                            return ControlFlow::Break;
                         };
                         if items.len() != 2 {
-                            return None;
+                            ok = false;
+                            return ControlFlow::Break;
                         }
                         let RuntimeValue::Bool(keep_going) = items[0] else {
-                            return None;
+                            ok = false;
+                            return ControlFlow::Break;
                         };
                         state = items[1].clone();
-                        yielded_count = yielded_count.checked_add(1)?;
+                        let Some(next_count) = yielded_count.checked_add(1) else {
+                            ok = false;
+                            return ControlFlow::Break;
+                        };
+                        yielded_count = next_count;
                         if !keep_going {
-                            break;
+                            return ControlFlow::Break;
                         }
+                        ControlFlow::Continue
+                    });
+                    if !ok {
+                        return None;
                     }
                     Some(RuntimeValue::Int(yielded_count))
                 }
@@ -388,35 +404,47 @@ impl<'m> RuntimeOutputResolver<'m> {
                         return None;
                     };
                     let mut state = initial_state.clone();
-                    for grapheme in value.graphemes(true) {
+                    let mut ok = true;
+                    let _ = for_each_extended_grapheme(value, |grapheme| {
                         let resumed = match self.dispatch_handler_method_as_value_with_args_flow(
                             &method,
-                            &[RuntimeValue::String(grapheme.to_string()), state],
+                            &[RuntimeValue::String(grapheme.to_string()), state.clone()],
                             evaluators,
                             depth + 1,
                         ) {
                             Out::Done(value) => value,
                             Out::Err(RuntimeError::Abort { .. }) => {
                                 self.mark_runtime_abort();
-                                return None;
+                                ok = false;
+                                return ControlFlow::Break;
                             }
                             Out::Suspend(_)
                             | Out::Escape(_)
-                            | Out::Err(RuntimeError::Unsupported) => return None,
+                            | Out::Err(RuntimeError::Unsupported) => {
+                                ok = false;
+                                return ControlFlow::Break;
+                            }
                         };
                         let RuntimeValue::Tuple(items) = resumed else {
-                            return None;
+                            ok = false;
+                            return ControlFlow::Break;
                         };
                         if items.len() != 2 {
-                            return None;
+                            ok = false;
+                            return ControlFlow::Break;
                         }
                         let RuntimeValue::Bool(keep_going) = items[0] else {
-                            return None;
+                            ok = false;
+                            return ControlFlow::Break;
                         };
                         state = items[1].clone();
                         if !keep_going {
-                            break;
+                            return ControlFlow::Break;
                         }
+                        ControlFlow::Continue
+                    });
+                    if !ok {
+                        return None;
                     }
                     Some(state)
                 }
@@ -738,3 +766,4 @@ impl<'m> RuntimeOutputResolver<'m> {
         None
     }
 }
+use crate::grapheme_semantics::{ControlFlow, for_each_extended_grapheme};
