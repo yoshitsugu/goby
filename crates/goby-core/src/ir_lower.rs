@@ -6,7 +6,8 @@
 
 use crate::ast::{BinOpKind, Declaration, Module};
 use crate::ir::{
-    CompExpr, IrBinOp, IrDecl, IrHandlerClause, IrInterpPart, IrModule, IrType, ValueExpr,
+    CompExpr, IrBinOp, IrCaseArm, IrCasePattern, IrDecl, IrHandlerClause, IrInterpPart,
+    IrListPatternItem, IrListPatternTail, IrModule, IrType, ValueExpr,
 };
 use crate::resolved::{
     ResolvedDeclaration, ResolvedExpr, ResolvedHandlerClause, ResolvedInterpolatedPart,
@@ -252,7 +253,7 @@ fn lower_expr_as_comp_non_value(
             "pipeline lowering is not implemented yet for `|> {}`; shared IR uses canonical call forms",
             callee
         ))),
-        ResolvedExpr::Case { .. } => Err(err("case-expression lowering is not implemented yet")),
+        ResolvedExpr::Case { scrutinee, arms } => lower_case_expr(ctx, scrutinee, arms),
         ResolvedExpr::ListLit { elements, spread } => {
             lower_list_literal(ctx, elements, spread.as_deref())
         }
@@ -391,6 +392,85 @@ fn lower_list_literal(
             value: Box::new(value),
             body: Box::new(body),
         }))
+}
+
+fn lower_case_expr(
+    ctx: &mut LowerCtx,
+    scrutinee: &ResolvedExpr,
+    arms: &[crate::resolved::ResolvedCaseArm],
+) -> Result<CompExpr, LowerError> {
+    if arms.is_empty() {
+        return Err(err("case expression must have at least one arm"));
+    }
+
+    let mut ir_arms = Vec::with_capacity(arms.len());
+    for arm in arms {
+        ir_arms.push(IrCaseArm {
+            pattern: lower_case_pattern(&arm.pattern),
+            body: lower_expr_as_comp(ctx, arm.body.as_ref())?,
+        });
+    }
+
+    lower_expr_to_value_anf(ctx, scrutinee, "case_scrutinee", move |ir_scrutinee| {
+        Ok(CompExpr::Case {
+            scrutinee: Box::new(ir_scrutinee),
+            arms: ir_arms,
+        })
+    })
+}
+
+fn lower_case_pattern(pattern: &crate::ast::CasePattern) -> IrCasePattern {
+    match pattern {
+        crate::ast::CasePattern::IntLit(n) => IrCasePattern::IntLit(*n),
+        crate::ast::CasePattern::StringLit(text) => IrCasePattern::StringLit(text.clone()),
+        crate::ast::CasePattern::BoolLit(flag) => IrCasePattern::BoolLit(*flag),
+        crate::ast::CasePattern::EmptyList => IrCasePattern::EmptyList,
+        crate::ast::CasePattern::ListPattern { items, tail } => IrCasePattern::ListPattern {
+            items: items.iter().map(lower_list_pattern_item).collect(),
+            tail: tail.as_ref().map(lower_list_pattern_tail),
+        },
+        crate::ast::CasePattern::Wildcard => IrCasePattern::Wildcard,
+    }
+}
+
+fn lower_list_pattern_item(item: &crate::ast::ListPatternItem) -> IrListPatternItem {
+    match item {
+        crate::ast::ListPatternItem::IntLit(n) => IrListPatternItem::IntLit(*n),
+        crate::ast::ListPatternItem::StringLit(text) => IrListPatternItem::StringLit(text.clone()),
+        crate::ast::ListPatternItem::Bind(name) => IrListPatternItem::Bind(name.clone()),
+        crate::ast::ListPatternItem::Wildcard => IrListPatternItem::Wildcard,
+    }
+}
+
+fn lower_list_pattern_tail(tail: &crate::ast::ListPatternTail) -> IrListPatternTail {
+    match tail {
+        crate::ast::ListPatternTail::Ignore => IrListPatternTail::Ignore,
+        crate::ast::ListPatternTail::Bind(name) => IrListPatternTail::Bind(name.clone()),
+    }
+}
+
+fn lower_expr_to_value_anf<F>(
+    ctx: &mut LowerCtx,
+    expr: &ResolvedExpr,
+    stem: &str,
+    build: F,
+) -> Result<CompExpr, LowerError>
+where
+    F: FnOnce(ValueExpr) -> Result<CompExpr, LowerError>,
+{
+    if let Some(value) = try_lower_value(ctx, expr)? {
+        return build(value);
+    }
+
+    let tmp = ctx.fresh_tmp(stem);
+    let value_comp = lower_expr_as_comp(ctx, expr)?;
+    let body = build(ValueExpr::Var(tmp.clone()))?;
+    Ok(CompExpr::Let {
+        name: tmp,
+        ty: IrType::Unknown,
+        value: Box::new(value_comp),
+        body: Box::new(body),
+    })
 }
 
 fn lower_value_required(
@@ -552,8 +632,11 @@ fn ref_name(reference: &ResolvedRef) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ast::{BinOpKind, Declaration, Expr, InterpolatedPart, Stmt};
-    use crate::ir::{CompExpr, IrModule, ValueExpr, fmt_ir, validate_ir};
+    use crate::ast::{
+        BinOpKind, CaseArm, CasePattern, Declaration, Expr, InterpolatedPart, ListPatternItem,
+        ListPatternTail, Span, Stmt,
+    };
+    use crate::ir::{CompExpr, IrCasePattern, IrModule, ValueExpr, fmt_ir, validate_ir};
 
     /// Build a minimal Declaration with a pre-parsed body.
     fn decl_with_body(name: &str, stmts: Vec<Stmt>) -> Declaration {
@@ -710,6 +793,138 @@ mod tests {
         };
         assert!(validate_ir(&m).is_ok());
         insta::assert_snapshot!(fmt_ir(&m));
+    }
+
+    #[test]
+    fn lower_case_expr() {
+        let decl = decl_with_params(
+            "select",
+            vec!["n"],
+            vec![expr_stmt(Expr::Case {
+                scrutinee: Box::new(Expr::var("n")),
+                arms: vec![
+                    CaseArm {
+                        pattern: CasePattern::IntLit(0),
+                        body: Box::new(Expr::IntLit(10)),
+                        span: Span::point(1, 1),
+                    },
+                    CaseArm {
+                        pattern: CasePattern::ListPattern {
+                            items: vec![
+                                ListPatternItem::Bind("x".to_string()),
+                                ListPatternItem::Wildcard,
+                            ],
+                            tail: Some(ListPatternTail::Bind("xs".to_string())),
+                        },
+                        body: Box::new(Expr::IntLit(20)),
+                        span: Span::point(2, 1),
+                    },
+                    CaseArm {
+                        pattern: CasePattern::Wildcard,
+                        body: Box::new(Expr::IntLit(30)),
+                        span: Span::point(3, 1),
+                    },
+                ],
+            })],
+        );
+        let ir_decl = lower_declaration(&decl).unwrap();
+        let m = IrModule {
+            decls: vec![ir_decl],
+        };
+        assert!(validate_ir(&m).is_ok());
+        assert_eq!(
+            fmt_ir(&m),
+            "decl select(n: ?): ? =\n  case n of\n    0 ->\n      10\n    [x, _, ..xs] ->\n      20\n    _ ->\n      30\n\n"
+        );
+    }
+
+    #[test]
+    fn lower_case_with_effectful_scrutinee_normalizes_via_let() {
+        let decl = decl_with_body(
+            "main",
+            vec![expr_stmt(Expr::Case {
+                scrutinee: Box::new(Expr::call(
+                    Expr::qualified("Read", "read"),
+                    Expr::unit_value(),
+                )),
+                arms: vec![
+                    CaseArm {
+                        pattern: CasePattern::StringLit("ok".to_string()),
+                        body: Box::new(Expr::StringLit("yes".to_string())),
+                        span: Span::point(1, 1),
+                    },
+                    CaseArm {
+                        pattern: CasePattern::Wildcard,
+                        body: Box::new(Expr::StringLit("no".to_string())),
+                        span: Span::point(2, 1),
+                    },
+                ],
+            })],
+        );
+        let ir_decl = lower_declaration(&decl).expect("case lowering should succeed");
+        match &ir_decl.body {
+            CompExpr::Let {
+                name, value, body, ..
+            } => {
+                assert!(name.starts_with("__goby_ir_case_scrutinee_"));
+                assert!(matches!(
+                    value.as_ref(),
+                    CompExpr::PerformEffect { effect, op, args }
+                        if effect == "Read" && op == "read" && args.is_empty()
+                ));
+                assert!(matches!(
+                    body.as_ref(),
+                    CompExpr::Case { scrutinee, .. }
+                        if matches!(scrutinee.as_ref(), ValueExpr::Var(var) if var == name)
+                ));
+            }
+            other => {
+                panic!("expected effectful scrutinee to ANF-normalize through let, got {other:?}")
+            }
+        }
+    }
+
+    #[test]
+    fn lower_case_arm_body_effect_call() {
+        let decl = decl_with_body(
+            "main",
+            vec![expr_stmt(Expr::Case {
+                scrutinee: Box::new(Expr::IntLit(0)),
+                arms: vec![
+                    CaseArm {
+                        pattern: CasePattern::IntLit(0),
+                        body: Box::new(Expr::call(
+                            Expr::qualified("Print", "println"),
+                            Expr::StringLit("zero".to_string()),
+                        )),
+                        span: Span::point(1, 1),
+                    },
+                    CaseArm {
+                        pattern: CasePattern::Wildcard,
+                        body: Box::new(Expr::call(
+                            Expr::qualified("Print", "println"),
+                            Expr::StringLit("other".to_string()),
+                        )),
+                        span: Span::point(2, 1),
+                    },
+                ],
+            })],
+        );
+        let ir_decl = lower_declaration(&decl).expect("case lowering should succeed");
+        match &ir_decl.body {
+            CompExpr::Case { arms, .. } => {
+                assert_eq!(arms.len(), 2);
+                assert!(matches!(arms[0].pattern, IrCasePattern::IntLit(0)));
+                assert!(matches!(
+                    arms[0].body,
+                    CompExpr::PerformEffect { ref effect, ref op, ref args }
+                        if effect == "Print"
+                            && op == "println"
+                            && matches!(args.as_slice(), [ValueExpr::StrLit(text)] if text == "zero")
+                ));
+            }
+            other => panic!("expected case body, got {other:?}"),
+        }
     }
 
     #[test]

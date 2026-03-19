@@ -489,7 +489,7 @@ All implementation under this plan must preserve:
   - validation checklist:
     - AST-to-IR tests cover literal/spread/index combinations
     - at least one backend parity test proves syntax sugar and canonical helper spellings converge
-- [ ] IR6. Control-flow lowering
+- [x] IR6. Control-flow lowering
   - lower `case` and related branch forms into shared IR
   - implementation checklist:
     - lower `case` with all currently supported pattern families
@@ -620,11 +620,10 @@ Reason for this order:
 
 The recommended next implementation slice is:
 
-1. advance IR6 by lowering `case` into the explicit shared-IR control-flow nodes,
-2. after IR6, advance IR8 for tuples/records before starting lambda lowering,
-3. advance IR7 only after product-data lowering has established the non-closure value path,
-4. leave IR9 last among the currently open semantic families unless new evidence shows mutation is blocking another milestone,
-5. keep deleting diagnostics and comments that still imply "shared IR cannot represent this" when the real gap is lowering or backend support.
+1. advance IR8 for tuples/records before starting lambda lowering,
+2. advance IR7 only after product-data lowering has established the non-closure value path,
+3. leave IR9 last among the currently open semantic families unless new evidence shows mutation is blocking another milestone,
+4. keep deleting diagnostics and comments that still imply "shared IR cannot represent this" when the real gap is lowering or backend support.
 
 Recommended file entry points for that slice:
 

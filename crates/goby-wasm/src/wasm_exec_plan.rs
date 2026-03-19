@@ -431,4 +431,44 @@ main =
             "text = Read.read ()\nlines = string.split text \"\n\"\n__goby_ir_effect_arg_0 = list.get lines 1\nPrint.println __goby_ir_effect_arg_0"
         );
     }
+
+    #[test]
+    fn runtime_artifacts_from_ir_decl_bridge_effectful_case_shape() {
+        let module = parse_module(
+            r#"
+effect Pred
+  flag: Int -> Bool
+effect Iter
+  next: Int -> Int
+
+choose : Int -> Int
+choose n =
+  case flag n
+    True  -> next 5
+    False -> next 0
+"#,
+        )
+        .expect("parse should work");
+        let decl = module
+            .declarations
+            .iter()
+            .find(|decl| decl.name == "choose")
+            .expect("choose should exist");
+        let ir_decl =
+            goby_core::ir_lower::lower_declaration(decl).expect("IR lowering should work");
+        let runtime =
+            runtime_artifacts_from_ir_decl(&ir_decl).expect("runtime artifacts should exist");
+        assert!(
+            runtime.body.is_none(),
+            "multi-line case bridge is expected to preserve stmts even when compact body rendering is unavailable"
+        );
+        assert!(matches!(
+            runtime.stmts.as_ref(),
+            [
+                Stmt::Binding { name, value, .. },
+                Stmt::Expr(Expr::Case { .. }, _)
+            ] if name == "__goby_ir_case_scrutinee_0"
+                && matches!(value, Expr::Call { .. })
+        ));
+    }
 }
