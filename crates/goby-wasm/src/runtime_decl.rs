@@ -1,5 +1,5 @@
 use super::*;
-use crate::grapheme_semantics::collect_extended_graphemes;
+use crate::grapheme_semantics::collect_extended_grapheme_spans;
 use crate::runtime_support::flatten_direct_call;
 use crate::wasm_exec_plan::decl_exec_plan;
 
@@ -54,9 +54,12 @@ impl<'m> RuntimeOutputResolver<'m> {
                 depth + 1,
             )?;
             return match value {
-                RuntimeValue::String(s) => {
-                    Some(RuntimeValue::ListString(collect_extended_graphemes(&s)))
-                }
+                RuntimeValue::String(s) => Some(RuntimeValue::ListString(
+                    collect_extended_grapheme_spans(&s)
+                        .into_iter()
+                        .map(|span| s[span.start..span.end].to_string())
+                        .collect(),
+                )),
                 _ => None,
             };
         }

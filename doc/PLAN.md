@@ -510,6 +510,9 @@ Milestones:
       binary state-threading forms of `__goby_string_each_grapheme`, so E3 can
       target explicit fixed-arity backend contracts instead of an overloaded
       placeholder.
+    - the shared semantics layer now exposes grapheme byte spans in addition to
+      materialized strings, giving the future Wasm emitter a backend-oriented
+      boundary model for copying slices without redefining segmentation.
   - done when:
     - the semantic-authority choice is explicit in code/docs,
     - a runtime-`Read` program can execute stdlib `goby/string.graphemes`

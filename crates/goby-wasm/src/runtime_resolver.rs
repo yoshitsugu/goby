@@ -1,5 +1,6 @@
 use super::*;
 use crate::call::flatten_named_call;
+use crate::grapheme_semantics::{ControlFlow, GraphemeSpan, for_each_extended_grapheme_span};
 
 pub(super) struct ResolvedRuntimeOutput {
     pub(super) output: Option<String>,
@@ -350,7 +351,8 @@ impl<'m> RuntimeOutputResolver<'m> {
                     let mut yielded_count: i64 = 0;
                     let mut state = RuntimeValue::Unit;
                     let mut ok = true;
-                    let _ = for_each_extended_grapheme(value, |grapheme| {
+                    let _ = for_each_extended_grapheme_span(value, |span| {
+                        let grapheme = self.grapheme_from_span(value, span);
                         let resumed = match self.dispatch_handler_method_as_value_with_args_flow(
                             &method,
                             &[RuntimeValue::String(grapheme.to_string()), state.clone()],
@@ -405,7 +407,8 @@ impl<'m> RuntimeOutputResolver<'m> {
                     };
                     let mut state = initial_state.clone();
                     let mut ok = true;
-                    let _ = for_each_extended_grapheme(value, |grapheme| {
+                    let _ = for_each_extended_grapheme_span(value, |span| {
+                        let grapheme = self.grapheme_from_span(value, span);
                         let resumed = match self.dispatch_handler_method_as_value_with_args_flow(
                             &method,
                             &[RuntimeValue::String(grapheme.to_string()), state.clone()],
@@ -472,6 +475,10 @@ impl<'m> RuntimeOutputResolver<'m> {
             }
             _ => None,
         }
+    }
+
+    fn grapheme_from_span<'a>(&self, value: &'a str, span: GraphemeSpan) -> &'a str {
+        &value[span.start..span.end]
     }
 
     pub(super) fn match_list_pattern_int(
@@ -766,4 +773,3 @@ impl<'m> RuntimeOutputResolver<'m> {
         None
     }
 }
-use crate::grapheme_semantics::{ControlFlow, for_each_extended_grapheme};

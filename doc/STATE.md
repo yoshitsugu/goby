@@ -41,6 +41,7 @@ Last updated: 2026-03-19
   - Unicode Extended Grapheme Cluster segmentation now lives behind a dedicated backend/runtime helper module,
   - imported `goby/string.graphemes` evaluation and `__goby_string_each_grapheme` runtime intrinsic execution both use that shared authority,
   - backend lowering now splits unary and binary `__goby_string_each_grapheme` forms into explicit fixed-arity intrinsic variants,
+  - the shared grapheme layer now exposes byte-span boundaries as well as string materialization, so emitter work can target slice copying instead of re-deriving segmentation rules,
   - remaining E3 work is emitter-side execution, not deciding semantics or overloading contracts in multiple places.
 - Remaining helper work is incremental family expansion on top of the emitter ABI, not a reason to restore planner or AST-shaped fallback.
 - The IR-lowering roadmap is complete; follow-up work should stay within the converged lowering architecture.
