@@ -11,8 +11,8 @@ Notes:
 - `doc/LANGUAGE_SPEC.md` is the source of truth for current language
   syntax and semantics.
 - `PLAN.md` is the top-level roadmap and execution-planning document.
-- `doc/PLAN_IR.md` is the active detailed plan for IR-lowering completion and is
-  the current highest-priority execution track.
+- `doc/PLAN_IR.md` is the completed detailed roadmap for IR-lowering convergence and
+  remains the reference when new lowering-boundary issues appear.
 - When language syntax or semantics change, update
   `doc/LANGUAGE_SPEC.md` in the same change.
 - When language syntax changes, also verify whether syntax
@@ -332,14 +332,14 @@ execution paths more predictable.
 
 Priority rule:
 
-- top priority is now IR-lowering completion and IR-boundary redesign work tracked in
-  `doc/PLAN_IR.md`.
+- IR-lowering completion and IR-boundary redesign work is tracked as completed in
+  `doc/PLAN_IR.md`; use it as the architectural reference for follow-up work.
 - active backend/runtime work should prefer unblocking itself by improving shared IR and
   AST-to-IR lowering rather than by adding more source-shape-specific recognizers.
 - when there is tension between a local unblock and the long-term IR architecture,
   choose the option that improves or preserves the long-term IR architecture.
-- progress for this top-priority track is tracked by the checkbox milestones in
-  `doc/PLAN_IR.md`; when a milestone is reached, update its checkbox in the same change.
+- if future work reopens an architectural lowering gap, extend `doc/PLAN_IR.md`
+  before adding new boundary-specific workarounds.
 
 ### 4.1 Completed Work (Summary)
 
