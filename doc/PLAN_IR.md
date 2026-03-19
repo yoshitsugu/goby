@@ -274,18 +274,18 @@ Initial inventory table:
 | Bare / qualified / selective-import builtin effect ops (`read`, `Read.read`, `import goby/prelude ( read, print )`) | lowers cleanly to shared IR for the builtin spellings covered today | `EffectOpRef(effect, op)` | resolved form | `PerformEffect` | no ad-hoc spelling-based desugar after resolved form | IR3, IR4 | `crates/goby-core/src/ir_lower.rs` convergence tests; runtime-I/O parity tests |
 | Direct helper calls (`string.split`, `list.get`, `list.each`) | lowers cleanly for the current helper family once the callee reaches resolved form; remaining collection construction work is separate | `HelperRef(module, name)` | resolved form | canonical `Call(GlobalRef(module, name), ...)` | yes, by canonical helper-call form only | IR3, IR4, IR5 | split/index lowering tests in `goby-wasm` and `goby-core` |
 | List index sugar (`lines[1]`) | now normalized before shared IR construction | canonical helper-call family `HelperRef(list.get)` | resolved form | canonical `Call(GlobalRef("list", "get"), [list, index])` | yes, via the locked helper-call strategy only | IR3, IR5 | `resolved.rs` list-index normalization test; `lower_list_index_and_canonical_helper_call_converge_to_same_ir` |
-| Pipelines | not yet lowered cleanly | ordinary call chain or explicit pipeline IR, to be locked in IR0 | not yet normalized | TBD in IR0 / IR2 | TBD in IR0 | IR0, IR2 | parser and runtime pipeline tests already exist |
-| Method calls | not yet lowered cleanly | qualified/member call canonical form, to be locked in IR0 | not yet normalized | TBD in IR0 / IR2 | TBD in IR0 | IR0, IR2 | parser method-call tests |
+| Pipelines | shared IR coverage is locked; lowering is still pending | canonical call-family semantics | IR lowering | canonical `Call(...)` form, with no pipeline-specific IR node | yes, only as canonical call desugaring | IR0, IR2, IR6, IR7 | parser and runtime pipeline tests already exist |
+| Method calls | shared IR coverage is locked; lowering is still pending | canonical call-family semantics | IR lowering | canonical `Call(...)` form, with no method-call-specific IR node | yes, only as canonical call desugaring | IR0, IR2, IR6, IR7 | parser method-call tests |
 | List literals / spread | lowers cleanly to shared IR; backend execution support is still partial | explicit list-value construction semantic form | IR lowering (after resolved child expressions) | `ValueExpr::ListLit { elements, spread }` | no extra helper/desugar boundary beyond ANF normalization of non-pure children | IR2, IR5 | `ir.rs`/`ir_lower.rs` list literal snapshots; runtime list tests still cover backend parity |
-| `case` | not yet lowered cleanly to shared IR | branch/match semantic form | not yet normalized | explicit `case`/match IR or equivalent canonical control-flow form | limited; only if semantics stay explicit | IR2, IR6 | parser/type/runtime `case` tests |
-| Lambda / higher-order values | not yet lowered cleanly to shared IR | function-value / closure semantic form | not yet normalized | closure IR or canonical lifted form | yes, only with explicit capture semantics | IR2, IR7 | runtime higher-order/lambda parity tests |
-| Non-unit tuples | not yet lowered cleanly to shared IR | tuple value semantic form | not yet normalized | tuple IR / product-data IR | yes, if canonical and backend-independent | IR2, IR8 | parser/runtime tuple tests |
-| Record construction | not yet lowered cleanly to shared IR | record value semantic form | not yet normalized | record/product-data IR | yes, if canonical and backend-independent | IR2, IR8 | parser/runtime record tests |
-| Mutable locals / assignment | intentionally still outside shared IR | mutable local semantic form | not yet normalized | mutable binding / assignment IR | no permanent exception outside IR | IR0, IR2, IR9 | parser/runtime mutation tests |
+| `case` | shared IR coverage landed; lowering is still pending | branch/match semantic form | IR lowering | explicit `CompExpr::Case` plus `IrCasePattern` | limited; only if semantics stay explicit | IR2, IR6 | `ir.rs` direct snapshots/validation plus parser/type/runtime `case` tests |
+| Lambda / higher-order values | shared IR coverage landed; lowering is still pending | function-value / closure semantic form | IR lowering | `ValueExpr::Lambda { param, body }` | no extra desugaring until capture semantics are explicit | IR2, IR7 | `ir.rs` direct snapshots plus runtime higher-order/lambda parity tests |
+| Non-unit tuples | shared IR coverage landed; lowering is still pending | tuple value semantic form | IR lowering | `ValueExpr::TupleLit` | yes, only as canonical product-data value form | IR2, IR8 | `ir.rs` tuple snapshot plus parser/runtime tuple tests |
+| Record construction | shared IR coverage landed; lowering is still pending | record value semantic form | IR lowering | `ValueExpr::RecordLit { constructor, fields }` | yes, only as canonical product-data value form | IR2, IR8 | `ir.rs` record snapshot plus parser/runtime record tests |
+| Mutable locals / assignment | shared IR coverage landed; lowering is still pending | mutable local semantic form | IR lowering | `CompExpr::LetMut` and `CompExpr::Assign` | no permanent exception outside IR | IR0, IR2, IR9 | `ir.rs` direct snapshots/validation plus parser/runtime mutation tests |
 
 ### IR2. Shared IR Expansion
 
-Goal: add or normalize shared IR forms so supported source constructs can lower cleanly.
+Goal: add or normalize shared IR forms so the currently supported language surface is representable without subset-only exclusions.
 
 Entry condition:
 
@@ -293,15 +293,22 @@ Entry condition:
 - shared IR expansion must not proceed by teaching raw AST-based heuristics to compensate for
   an unresolved front-end boundary.
 
-Likely work items:
+Locked decisions for this milestone:
 
-- list/index representation,
-- collection literals and spread representation,
-- tuple values beyond unit,
-- case representation,
-- lambda/function-value representation,
-- mutable local / assignment representation,
-- canonical representation for effect operations independent of surface spelling.
+- list values remain explicit shared-IR values (`ValueExpr::ListLit`),
+- tuple values beyond unit use `ValueExpr::TupleLit`,
+- record construction uses `ValueExpr::RecordLit`,
+- `case` uses explicit shared-IR control-flow (`CompExpr::Case` + `IrCasePattern`),
+- lambda/function values use `ValueExpr::Lambda`,
+- mutable locals and assignment use `CompExpr::LetMut` and `CompExpr::Assign`,
+- method calls and pipelines do not get dedicated IR nodes; both must canonicalize into ordinary
+  call-family IR during lowering.
+
+Rejected alternatives:
+
+- do not keep mutable forms outside shared IR as a "temporary" architectural exception,
+- do not add pipeline-specific or method-call-specific IR nodes when canonical call-family IR is sufficient,
+- do not force tuples/records through backend-specific helper encodings at the shared-IR layer.
 
 Design bar:
 
@@ -310,7 +317,8 @@ Design bar:
 
 Done when:
 
-- the target IR can express the supported language surface without the current subset exclusions.
+- the target IR can express the supported language surface without the old subset exclusions,
+- remaining failures are clearly about lowering implementation or backend execution, not missing IR vocabulary.
 
 Required artifacts:
 
@@ -429,7 +437,7 @@ All implementation under this plan must preserve:
     - there is no remaining "misc unsupported" bucket in the document
     - each unsupported construct names a next milestone or explicit non-goal
     - semantically equivalent spellings share the same canonical semantic form entry
-- [ ] IR2. Shared IR expansion
+- [x] IR2. Shared IR expansion
   - add or normalize IR forms needed to represent the currently supported language surface
   - implementation checklist:
     - update `crates/goby-core/src/ir.rs`
@@ -599,10 +607,10 @@ Reason for this order:
 
 The recommended next implementation slice is:
 
-1. advance IR2 by deciding which remaining semantic families need new shared-IR nodes versus canonical desugaring,
-2. advance IR4 by adding IR snapshots that prove bare/imported/qualified effect-call spellings converge through the resolved boundary,
-3. start IR5 by locking the collection strategy for list literals/spread/indexing against the now-landed resolved form,
-4. remove any stale comments or helper code that still describe `ir_lower` as raw-AST name-pattern matching.
+1. advance IR5 by finishing collection-family lowering beyond the now-landed shared-IR vocabulary,
+2. advance IR6 by lowering `case` into the explicit shared-IR control-flow nodes,
+3. advance IR7/IR8/IR9 by choosing the first end-to-end lowering slice among lambdas, product data, or mutation,
+4. keep deleting diagnostics and comments that still imply "shared IR cannot represent this" when the real gap is lowering or backend support.
 
 Recommended file entry points for that slice:
 
@@ -614,9 +622,9 @@ Recommended file entry points for that slice:
 
 Definition of done for the next slice:
 
-- `ir.rs` documents the canonical strategy chosen for the next semantic family,
 - `ir_lower` continues to lower through `Resolved*` inputs without reintroducing raw-name heuristics,
-- new AST-to-IR / IR snapshot tests prove semantic convergence for covered call/effect families,
+- the next slice finishes one remaining lowering family against the now-complete shared-IR vocabulary,
+- new AST-to-IR / IR snapshot tests prove the family now fails, if at all, for lowering/backend reasons rather than missing IR shape,
 - `doc/STATE.md` names only the active next milestone and any exact unfinished sub-steps.
 
 ## 12. Non-Goals for This Document

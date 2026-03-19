@@ -57,6 +57,18 @@ pub enum ValueExpr {
         elements: Vec<ValueExpr>,
         spread: Option<Box<ValueExpr>>,
     },
+    /// Tuple literal. The empty tuple is the unit value.
+    TupleLit(Vec<ValueExpr>),
+    /// Record construction using a constructor and named field values.
+    RecordLit {
+        constructor: String,
+        fields: Vec<(String, ValueExpr)>,
+    },
+    /// Lambda value. Creation is pure even when the body computation is effectful.
+    Lambda {
+        param: String,
+        body: Box<CompExpr>,
+    },
     /// Interpolated string with pure parts only.
     Interp(Vec<IrInterpPart>),
     /// Local variable reference.
@@ -94,6 +106,13 @@ pub enum CompExpr {
         value: Box<CompExpr>,
         body: Box<CompExpr>,
     },
+    /// Mutable local let-binding: `let mut name: ty = value; body`.
+    LetMut {
+        name: String,
+        ty: IrType,
+        value: Box<CompExpr>,
+        body: Box<CompExpr>,
+    },
     /// Sequential evaluation: evaluate each statement, then the tail.
     Seq {
         stmts: Vec<CompExpr>,
@@ -109,6 +128,13 @@ pub enum CompExpr {
     Call {
         callee: Box<ValueExpr>,
         args: Vec<ValueExpr>,
+    },
+    /// Assignment to a mutable local. Produces `Unit`.
+    Assign { name: String, value: Box<CompExpr> },
+    /// Pattern-matching case expression.
+    Case {
+        scrutinee: Box<ValueExpr>,
+        arms: Vec<IrCaseArm>,
     },
     /// Effect operation invocation.
     ///
@@ -147,6 +173,43 @@ pub struct IrHandlerClause {
     pub params: Vec<String>,
     /// Body of the clause.
     pub body: CompExpr,
+}
+
+/// A single arm in a `case` expression.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IrCaseArm {
+    pub pattern: IrCasePattern,
+    pub body: CompExpr,
+}
+
+/// A list-pattern element in a `case` arm.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum IrListPatternItem {
+    IntLit(i64),
+    StringLit(String),
+    Bind(String),
+    Wildcard,
+}
+
+/// A list-pattern tail in a `case` arm.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum IrListPatternTail {
+    Ignore,
+    Bind(String),
+}
+
+/// A `case` pattern in shared IR.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum IrCasePattern {
+    IntLit(i64),
+    StringLit(String),
+    BoolLit(bool),
+    EmptyList,
+    ListPattern {
+        items: Vec<IrListPatternItem>,
+        tail: Option<IrListPatternTail>,
+    },
+    Wildcard,
 }
 
 /// A top-level declaration in the IR.
@@ -271,6 +334,38 @@ fn fmt_value(out: &mut String, v: &ValueExpr) {
             }
             out.push(']');
         }
+        ValueExpr::TupleLit(items) => {
+            out.push('(');
+            for (i, item) in items.iter().enumerate() {
+                if i > 0 {
+                    out.push_str(", ");
+                }
+                fmt_value(out, item);
+            }
+            out.push(')');
+        }
+        ValueExpr::RecordLit {
+            constructor,
+            fields,
+        } => {
+            out.push_str(constructor);
+            out.push('(');
+            for (i, (name, value)) in fields.iter().enumerate() {
+                if i > 0 {
+                    out.push_str(", ");
+                }
+                out.push_str(name);
+                out.push_str(": ");
+                fmt_value(out, value);
+            }
+            out.push(')');
+        }
+        ValueExpr::Lambda { param, body } => {
+            out.push('\\');
+            out.push_str(param);
+            out.push_str(" ->\n");
+            fmt_comp(out, body, 1);
+        }
         ValueExpr::Interp(parts) => {
             out.push_str("interp(");
             for (i, part) in parts.iter().enumerate() {
@@ -347,6 +442,23 @@ fn fmt_comp(out: &mut String, c: &CompExpr, depth: usize) {
             out.push_str("in\n");
             fmt_comp(out, body, depth + 1);
         }
+        CompExpr::LetMut {
+            name,
+            ty,
+            value,
+            body,
+        } => {
+            indent(out, depth);
+            out.push_str("let mut ");
+            out.push_str(name);
+            out.push_str(": ");
+            fmt_type(out, ty);
+            out.push_str(" =\n");
+            fmt_comp(out, value, depth + 1);
+            indent(out, depth);
+            out.push_str("in\n");
+            fmt_comp(out, body, depth + 1);
+        }
         CompExpr::Seq { stmts, tail } => {
             indent(out, depth);
             out.push_str("seq\n");
@@ -379,6 +491,25 @@ fn fmt_comp(out: &mut String, c: &CompExpr, depth: usize) {
                 fmt_value(out, a);
             }
             out.push_str(")\n");
+        }
+        CompExpr::Assign { name, value } => {
+            indent(out, depth);
+            out.push_str("assign ");
+            out.push_str(name);
+            out.push_str(" =\n");
+            fmt_comp(out, value, depth + 1);
+        }
+        CompExpr::Case { scrutinee, arms } => {
+            indent(out, depth);
+            out.push_str("case ");
+            fmt_value(out, scrutinee);
+            out.push_str(" of\n");
+            for arm in arms {
+                indent(out, depth + 1);
+                fmt_case_pattern(out, &arm.pattern);
+                out.push_str(" ->\n");
+                fmt_comp(out, &arm.body, depth + 2);
+            }
         }
         CompExpr::PerformEffect { effect, op, args } => {
             indent(out, depth);
@@ -427,6 +558,49 @@ fn fmt_comp(out: &mut String, c: &CompExpr, depth: usize) {
     }
 }
 
+fn fmt_case_pattern(out: &mut String, pattern: &IrCasePattern) {
+    match pattern {
+        IrCasePattern::IntLit(n) => out.push_str(&n.to_string()),
+        IrCasePattern::StringLit(s) => {
+            out.push('"');
+            out.push_str(&escape_str(s));
+            out.push('"');
+        }
+        IrCasePattern::BoolLit(b) => out.push_str(if *b { "true" } else { "false" }),
+        IrCasePattern::EmptyList => out.push_str("[]"),
+        IrCasePattern::ListPattern { items, tail } => {
+            out.push('[');
+            for (i, item) in items.iter().enumerate() {
+                if i > 0 {
+                    out.push_str(", ");
+                }
+                match item {
+                    IrListPatternItem::IntLit(n) => out.push_str(&n.to_string()),
+                    IrListPatternItem::StringLit(s) => {
+                        out.push('"');
+                        out.push_str(&escape_str(s));
+                        out.push('"');
+                    }
+                    IrListPatternItem::Bind(name) => out.push_str(name),
+                    IrListPatternItem::Wildcard => out.push('_'),
+                }
+            }
+            if let Some(tail) = tail {
+                if !items.is_empty() {
+                    out.push_str(", ");
+                }
+                out.push_str("..");
+                match tail {
+                    IrListPatternTail::Ignore => out.push('_'),
+                    IrListPatternTail::Bind(name) => out.push_str(name),
+                }
+            }
+            out.push(']');
+        }
+        IrCasePattern::Wildcard => out.push('_'),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // IR validation
 // ---------------------------------------------------------------------------
@@ -464,7 +638,7 @@ pub fn validate_ir(module: &IrModule) -> Result<(), IrValidateError> {
 fn validate_comp(c: &CompExpr, decl_name: &str) -> Result<(), IrValidateError> {
     match c {
         CompExpr::Value(value) => validate_value(value, decl_name),
-        CompExpr::Let { value, body, .. } => {
+        CompExpr::Let { value, body, .. } | CompExpr::LetMut { value, body, .. } => {
             validate_comp(value, decl_name)?;
             validate_comp(body, decl_name)
         }
@@ -494,6 +668,23 @@ fn validate_comp(c: &CompExpr, decl_name: &str) -> Result<(), IrValidateError> {
                 }
                 Ok(())
             }
+        }
+        CompExpr::Assign { value, .. } => validate_comp(value, decl_name),
+        CompExpr::Case { scrutinee, arms } => {
+            if arms.is_empty() {
+                return Err(IrValidateError {
+                    message: format!(
+                        "in decl `{}`: Case node must have at least one arm",
+                        decl_name
+                    ),
+                });
+            }
+            validate_value(scrutinee, decl_name)?;
+            for arm in arms {
+                validate_case_pattern(&arm.pattern, decl_name)?;
+                validate_comp(&arm.body, decl_name)?;
+            }
+            Ok(())
         }
         CompExpr::PerformEffect { args, .. } => {
             for arg in args {
@@ -534,6 +725,19 @@ fn validate_value(value: &ValueExpr, decl_name: &str) -> Result<(), IrValidateEr
             }
             Ok(())
         }
+        ValueExpr::TupleLit(items) => {
+            for item in items {
+                validate_value(item, decl_name)?;
+            }
+            Ok(())
+        }
+        ValueExpr::RecordLit { fields, .. } => {
+            for (_, value) in fields {
+                validate_value(value, decl_name)?;
+            }
+            Ok(())
+        }
+        ValueExpr::Lambda { body, .. } => validate_comp(body, decl_name),
         ValueExpr::Interp(parts) => {
             for part in parts {
                 if let IrInterpPart::Expr(expr) = part {
@@ -555,6 +759,28 @@ fn validate_value(value: &ValueExpr, decl_name: &str) -> Result<(), IrValidateEr
             let _ = decl_name;
             Ok(())
         }
+    }
+}
+
+fn validate_case_pattern(pattern: &IrCasePattern, decl_name: &str) -> Result<(), IrValidateError> {
+    match pattern {
+        IrCasePattern::ListPattern { items, tail } => {
+            let _ = tail;
+            if items.is_empty() && tail.is_none() {
+                return Err(IrValidateError {
+                    message: format!(
+                        "in decl `{}`: ListPattern must bind at least one item or tail",
+                        decl_name
+                    ),
+                });
+            }
+            Ok(())
+        }
+        IrCasePattern::IntLit(_)
+        | IrCasePattern::StringLit(_)
+        | IrCasePattern::BoolLit(_)
+        | IrCasePattern::EmptyList
+        | IrCasePattern::Wildcard => Ok(()),
     }
 }
 
@@ -641,6 +867,52 @@ mod tests {
             val(ValueExpr::ListLit {
                 elements: vec![ValueExpr::IntLit(1), ValueExpr::IntLit(2)],
                 spread: Some(Box::new(ValueExpr::Var("tail".into()))),
+            }),
+        )]);
+        insta::assert_snapshot!(fmt_ir(&m));
+    }
+
+    #[test]
+    fn print_tuple_lit() {
+        let m = simple_module(vec![simple_decl(
+            "pair",
+            IrType::Unknown,
+            val(ValueExpr::TupleLit(vec![
+                ValueExpr::IntLit(1),
+                ValueExpr::BoolLit(true),
+            ])),
+        )]);
+        insta::assert_snapshot!(fmt_ir(&m));
+    }
+
+    #[test]
+    fn print_record_lit() {
+        let m = simple_module(vec![simple_decl(
+            "pair",
+            IrType::Unknown,
+            val(ValueExpr::RecordLit {
+                constructor: "Pair".into(),
+                fields: vec![
+                    ("left".into(), ValueExpr::IntLit(1)),
+                    ("right".into(), ValueExpr::IntLit(2)),
+                ],
+            }),
+        )]);
+        insta::assert_snapshot!(fmt_ir(&m));
+    }
+
+    #[test]
+    fn print_lambda_value() {
+        let m = simple_module(vec![simple_decl(
+            "make_increment",
+            IrType::Unknown,
+            val(ValueExpr::Lambda {
+                param: "x".into(),
+                body: Box::new(CompExpr::Value(ValueExpr::BinOp {
+                    op: IrBinOp::Add,
+                    left: Box::new(ValueExpr::Var("x".into())),
+                    right: Box::new(ValueExpr::IntLit(1)),
+                })),
             }),
         )]);
         insta::assert_snapshot!(fmt_ir(&m));
@@ -775,6 +1047,52 @@ mod tests {
     }
 
     #[test]
+    fn print_case() {
+        let m = simple_module(vec![simple_decl(
+            "inspect",
+            IrType::Unknown,
+            CompExpr::Case {
+                scrutinee: Box::new(ValueExpr::Var("items".into())),
+                arms: vec![
+                    IrCaseArm {
+                        pattern: IrCasePattern::EmptyList,
+                        body: val(ValueExpr::IntLit(0)),
+                    },
+                    IrCaseArm {
+                        pattern: IrCasePattern::ListPattern {
+                            items: vec![IrListPatternItem::Bind("head".into())],
+                            tail: Some(IrListPatternTail::Bind("tail".into())),
+                        },
+                        body: val(ValueExpr::Var("head".into())),
+                    },
+                ],
+            },
+        )]);
+        insta::assert_snapshot!(fmt_ir(&m));
+    }
+
+    #[test]
+    fn print_let_mut_and_assign() {
+        let m = simple_module(vec![simple_decl(
+            "mutate",
+            IrType::Unknown,
+            CompExpr::LetMut {
+                name: "counter".into(),
+                ty: IrType::Int,
+                value: Box::new(val(ValueExpr::IntLit(0))),
+                body: Box::new(CompExpr::Seq {
+                    stmts: vec![CompExpr::Assign {
+                        name: "counter".into(),
+                        value: Box::new(val(ValueExpr::IntLit(1))),
+                    }],
+                    tail: Box::new(val(ValueExpr::Var("counter".into()))),
+                }),
+            },
+        )]);
+        insta::assert_snapshot!(fmt_ir(&m));
+    }
+
+    #[test]
     fn print_handler_with_clause() {
         let m = simple_module(vec![simple_decl(
             "my_handler",
@@ -864,6 +1182,42 @@ mod tests {
     }
 
     #[test]
+    fn validate_ok_tuple_record_lambda_case_and_mutation() {
+        let m = simple_module(vec![simple_decl(
+            "ok_ir2",
+            IrType::Unknown,
+            CompExpr::LetMut {
+                name: "state".into(),
+                ty: IrType::Unknown,
+                value: Box::new(val(ValueExpr::RecordLit {
+                    constructor: "Pair".into(),
+                    fields: vec![(
+                        "items".into(),
+                        ValueExpr::TupleLit(vec![
+                            ValueExpr::IntLit(1),
+                            ValueExpr::Lambda {
+                                param: "x".into(),
+                                body: Box::new(val(ValueExpr::Var("x".into()))),
+                            },
+                        ]),
+                    )],
+                })),
+                body: Box::new(CompExpr::Case {
+                    scrutinee: Box::new(ValueExpr::Var("xs".into())),
+                    arms: vec![IrCaseArm {
+                        pattern: IrCasePattern::Wildcard,
+                        body: CompExpr::Assign {
+                            name: "state".into(),
+                            value: Box::new(val(ValueExpr::Var("state".into()))),
+                        },
+                    }],
+                }),
+            },
+        )]);
+        assert!(validate_ir(&m).is_ok());
+    }
+
+    #[test]
     fn validate_err_empty_handle_clauses() {
         let m = simple_module(vec![simple_decl(
             "bad_handler",
@@ -910,6 +1264,45 @@ mod tests {
         let err = validate_ir(&m).unwrap_err();
         assert!(
             err.message.contains("at least one argument"),
+            "{}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn validate_err_empty_case_arms() {
+        let m = simple_module(vec![simple_decl(
+            "bad_case",
+            IrType::Unknown,
+            CompExpr::Case {
+                scrutinee: Box::new(ValueExpr::Var("xs".into())),
+                arms: vec![],
+            },
+        )]);
+        let err = validate_ir(&m).unwrap_err();
+        assert!(err.message.contains("at least one arm"), "{}", err.message);
+    }
+
+    #[test]
+    fn validate_err_empty_list_pattern() {
+        let m = simple_module(vec![simple_decl(
+            "bad_pattern",
+            IrType::Unknown,
+            CompExpr::Case {
+                scrutinee: Box::new(ValueExpr::Var("xs".into())),
+                arms: vec![IrCaseArm {
+                    pattern: IrCasePattern::ListPattern {
+                        items: vec![],
+                        tail: None,
+                    },
+                    body: val(ValueExpr::Unit),
+                }],
+            },
+        )]);
+        let err = validate_ir(&m).unwrap_err();
+        assert!(
+            err.message
+                .contains("ListPattern must bind at least one item or tail"),
             "{}",
             err.message
         );

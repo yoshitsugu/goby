@@ -127,11 +127,11 @@ fn lower_stmts_slice(ctx: &mut LowerCtx, stmts: &[ResolvedStmt]) -> Result<CompE
             })
         }
         [ResolvedStmt::MutBinding { name, .. }] => Err(err(format!(
-            "mutable binding `{}` is not supported in shared IR yet",
+            "mutable binding lowering is not implemented yet for `{}`",
             name
         ))),
         [ResolvedStmt::Assign { target, .. }] => Err(err(format!(
-            "assignment to `{}` is not supported in shared IR yet",
+            "assignment lowering is not implemented yet for `{}`",
             ref_name(target)
         ))),
         [head, rest @ ..] => match head {
@@ -168,11 +168,11 @@ fn lower_stmts_slice(ctx: &mut LowerCtx, stmts: &[ResolvedStmt]) -> Result<CompE
                 }
             }
             ResolvedStmt::MutBinding { name, .. } => Err(err(format!(
-                "mutable binding `{}` is not supported in shared IR yet",
+                "mutable binding lowering is not implemented yet for `{}`",
                 name
             ))),
             ResolvedStmt::Assign { target, .. } => Err(err(format!(
-                "assignment to `{}` is not supported in shared IR yet",
+                "assignment lowering is not implemented yet for `{}`",
                 ref_name(target)
             ))),
         },
@@ -224,7 +224,7 @@ fn lower_expr_as_comp_non_value(
             })
         }
         ResolvedExpr::Lambda { param, .. } => Err(err(format!(
-            "lambda `\\{}` is not supported in shared IR yet",
+            "lambda lowering is not implemented yet for `\\{}`",
             param
         ))),
         ResolvedExpr::Handler { clauses } => lower_handler_expr(ctx, clauses),
@@ -245,24 +245,23 @@ fn lower_expr_as_comp_non_value(
         ResolvedExpr::MethodCall {
             receiver, method, ..
         } => Err(err(format!(
-            "method call `{}.{}` is not supported in shared IR yet",
+            "method call lowering is not implemented yet for `{}.{}`; shared IR uses canonical call forms",
             receiver, method
         ))),
         ResolvedExpr::Pipeline { callee, .. } => Err(err(format!(
-            "pipeline `|> {}` is not supported in shared IR yet",
+            "pipeline lowering is not implemented yet for `|> {}`; shared IR uses canonical call forms",
             callee
         ))),
-        ResolvedExpr::Case { .. } => {
-            Err(err("case expressions are not supported in shared IR yet"))
-        }
+        ResolvedExpr::Case { .. } => Err(err("case-expression lowering is not implemented yet")),
         ResolvedExpr::ListLit { elements, spread } => {
             lower_list_literal(ctx, elements, spread.as_deref())
         }
-        ResolvedExpr::TupleLit(items) if !items.is_empty() => Err(err(
-            "non-unit tuple literals are not supported in shared IR yet",
-        )),
+        ResolvedExpr::TupleLit(items) if !items.is_empty() => Err(err(format!(
+            "tuple-literal lowering is not implemented yet for {} item(s)",
+            items.len()
+        ))),
         ResolvedExpr::RecordConstruct { constructor, .. } => Err(err(format!(
-            "record construction `{}` is not supported in shared IR yet",
+            "record-construction lowering is not implemented yet for `{}`",
             constructor
         ))),
         other => match try_lower_value(ctx, other)? {
@@ -1260,7 +1259,7 @@ mod tests {
             } if e == effect && o == op => 1,
             CompExpr::PerformEffect { .. } => 0,
             CompExpr::Value(_) => 0,
-            CompExpr::Let { value, body, .. } => {
+            CompExpr::Let { value, body, .. } | CompExpr::LetMut { value, body, .. } => {
                 count_perform(value, effect, op) + count_perform(body, effect, op)
             }
             CompExpr::Seq { stmts, tail } => {
@@ -1274,6 +1273,11 @@ mod tests {
                 count_perform(then_, effect, op) + count_perform(else_, effect, op)
             }
             CompExpr::Call { .. } => 0,
+            CompExpr::Assign { value, .. } => count_perform(value, effect, op),
+            CompExpr::Case { arms, .. } => arms
+                .iter()
+                .map(|arm| count_perform(&arm.body, effect, op))
+                .sum(),
             CompExpr::Handle { clauses } => clauses
                 .iter()
                 .map(|c| count_perform(&c.body, effect, op))

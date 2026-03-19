@@ -301,6 +301,9 @@ fn eval_comp(
         CompExpr::Value(value) => eval_value(value, bindings, env, depth + 1),
         CompExpr::Let {
             name, value, body, ..
+        }
+        | CompExpr::LetMut {
+            name, value, body, ..
         } => {
             let bound = eval_comp(value, bindings, env, depth + 1, outputs)?;
             let mut locals = bindings.clone();
@@ -355,6 +358,7 @@ fn eval_comp(
                 None
             }
         }
+        CompExpr::Assign { .. } | CompExpr::Case { .. } => None,
         CompExpr::Handle { .. } | CompExpr::WithHandler { .. } | CompExpr::Resume { .. } => None,
     }
 }
@@ -370,7 +374,10 @@ fn eval_value(
         ValueExpr::IntLit(n) => Some(NativeValue::Int(*n)),
         ValueExpr::BoolLit(b) => Some(NativeValue::Bool(*b)),
         ValueExpr::Unit => Some(NativeValue::Unit),
-        ValueExpr::ListLit { .. } => None,
+        ValueExpr::ListLit { .. }
+        | ValueExpr::TupleLit(_)
+        | ValueExpr::RecordLit { .. }
+        | ValueExpr::Lambda { .. } => None,
         ValueExpr::Var(name) => bindings.get(name).cloned().or_else(|| {
             if (env.declarations.contains_key(name.as_str())
                 && env.lowering_plan.is_direct_style(name.as_str()))

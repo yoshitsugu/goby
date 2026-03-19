@@ -1,0 +1,14 @@
+---
+source: crates/goby-core/src/ir.rs
+assertion_line: 1092
+expression: fmt_ir(&m)
+---
+decl mutate: ? =
+  let mut counter: Int =
+    0
+  in
+    seq
+      assign counter =
+        1
+    =>
+      counter

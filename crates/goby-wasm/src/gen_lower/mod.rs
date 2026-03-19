@@ -40,7 +40,7 @@ use crate::wasm_exec_plan::main_exec_plan;
 fn has_runtime_read_effect(comp: &CompExpr) -> bool {
     match comp {
         CompExpr::PerformEffect { effect, .. } => effect == "Read",
-        CompExpr::Let { value, body, .. } => {
+        CompExpr::Let { value, body, .. } | CompExpr::LetMut { value, body, .. } => {
             has_runtime_read_effect(value) || has_runtime_read_effect(body)
         }
         CompExpr::Seq { stmts, tail } => {
@@ -50,6 +50,8 @@ fn has_runtime_read_effect(comp: &CompExpr) -> bool {
             has_runtime_read_effect(then_) || has_runtime_read_effect(else_)
         }
         CompExpr::Call { .. } | CompExpr::Value(_) => false,
+        CompExpr::Assign { value, .. } => has_runtime_read_effect(value),
+        CompExpr::Case { arms, .. } => arms.iter().any(|arm| has_runtime_read_effect(&arm.body)),
         CompExpr::Handle { .. } | CompExpr::WithHandler { .. } | CompExpr::Resume { .. } => false,
     }
 }

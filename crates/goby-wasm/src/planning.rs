@@ -379,8 +379,10 @@ fn inspect_ir_comp(
     qualified_operation_index: &HashMap<(String, String), EffectOperationRef>,
 ) {
     match comp {
-        CompExpr::Value(value) => inspect_ir_value(value, out),
-        CompExpr::Let { value, body, .. } => {
+        CompExpr::Value(value) => {
+            inspect_ir_value(value, out, declaration_names, qualified_operation_index)
+        }
+        CompExpr::Let { value, body, .. } | CompExpr::LetMut { value, body, .. } => {
             inspect_ir_comp(value, out, declaration_names, qualified_operation_index);
             inspect_ir_comp(body, out, declaration_names, qualified_operation_index);
         }
@@ -391,12 +393,12 @@ fn inspect_ir_comp(
             inspect_ir_comp(tail, out, declaration_names, qualified_operation_index);
         }
         CompExpr::If { cond, then_, else_ } => {
-            inspect_ir_value(cond, out);
+            inspect_ir_value(cond, out, declaration_names, qualified_operation_index);
             inspect_ir_comp(then_, out, declaration_names, qualified_operation_index);
             inspect_ir_comp(else_, out, declaration_names, qualified_operation_index);
         }
         CompExpr::Call { callee, args } => {
-            inspect_ir_value(callee, out);
+            inspect_ir_value(callee, out, declaration_names, qualified_operation_index);
             if let ValueExpr::Var(name) = callee.as_ref()
                 && declaration_names.contains(name)
             {
@@ -410,7 +412,16 @@ fn inspect_ir_comp(
                 out.referenced_operations.push(op_ref.clone());
             }
             for arg in args {
-                inspect_ir_value(arg, out);
+                inspect_ir_value(arg, out, declaration_names, qualified_operation_index);
+            }
+        }
+        CompExpr::Assign { value, .. } => {
+            inspect_ir_comp(value, out, declaration_names, qualified_operation_index);
+        }
+        CompExpr::Case { scrutinee, arms } => {
+            inspect_ir_value(scrutinee, out, declaration_names, qualified_operation_index);
+            for arm in arms {
+                inspect_ir_comp(&arm.body, out, declaration_names, qualified_operation_index);
             }
         }
         CompExpr::PerformEffect { effect, op, args } => {
@@ -422,7 +433,7 @@ fn inspect_ir_comp(
                 out.referenced_operations.push(op_ref.clone());
             }
             for arg in args {
-                inspect_ir_value(arg, out);
+                inspect_ir_value(arg, out, declaration_names, qualified_operation_index);
             }
         }
         CompExpr::Handle { clauses } => {
@@ -445,29 +456,47 @@ fn inspect_ir_comp(
         }
         CompExpr::Resume { value } => {
             out.contains_resume = true;
-            inspect_ir_value(value, out);
+            inspect_ir_value(value, out, declaration_names, qualified_operation_index);
         }
     }
 }
 
-fn inspect_ir_value(value: &ValueExpr, out: &mut IrInspection) {
+fn inspect_ir_value(
+    value: &ValueExpr,
+    out: &mut IrInspection,
+    declaration_names: &HashSet<String>,
+    qualified_operation_index: &HashMap<(String, String), EffectOperationRef>,
+) {
     match value {
         ValueExpr::ListLit { elements, spread } => {
             for element in elements {
-                inspect_ir_value(element, out);
+                inspect_ir_value(element, out, declaration_names, qualified_operation_index);
             }
             if let Some(tail) = spread {
-                inspect_ir_value(tail, out);
+                inspect_ir_value(tail, out, declaration_names, qualified_operation_index);
             }
         }
+        ValueExpr::TupleLit(items) => {
+            for item in items {
+                inspect_ir_value(item, out, declaration_names, qualified_operation_index);
+            }
+        }
+        ValueExpr::RecordLit { fields, .. } => {
+            for (_, value) in fields {
+                inspect_ir_value(value, out, declaration_names, qualified_operation_index);
+            }
+        }
+        ValueExpr::Lambda { body, .. } => {
+            inspect_ir_comp(body, out, declaration_names, qualified_operation_index);
+        }
         ValueExpr::BinOp { left, right, .. } => {
-            inspect_ir_value(left, out);
-            inspect_ir_value(right, out);
+            inspect_ir_value(left, out, declaration_names, qualified_operation_index);
+            inspect_ir_value(right, out, declaration_names, qualified_operation_index);
         }
         ValueExpr::Interp(parts) => {
             for part in parts {
                 if let goby_core::ir::IrInterpPart::Expr(expr) = part {
-                    inspect_ir_value(expr, out);
+                    inspect_ir_value(expr, out, declaration_names, qualified_operation_index);
                 }
             }
         }
@@ -484,7 +513,7 @@ fn ir_comp_contains_resume(comp: &CompExpr) -> bool {
     match comp {
         CompExpr::Resume { .. } => true,
         CompExpr::Value(_) | CompExpr::Call { .. } | CompExpr::PerformEffect { .. } => false,
-        CompExpr::Let { value, body, .. } => {
+        CompExpr::Let { value, body, .. } | CompExpr::LetMut { value, body, .. } => {
             ir_comp_contains_resume(value) || ir_comp_contains_resume(body)
         }
         CompExpr::Seq { stmts, tail } => {
@@ -493,6 +522,8 @@ fn ir_comp_contains_resume(comp: &CompExpr) -> bool {
         CompExpr::If { then_, else_, .. } => {
             ir_comp_contains_resume(then_) || ir_comp_contains_resume(else_)
         }
+        CompExpr::Assign { value, .. } => ir_comp_contains_resume(value),
+        CompExpr::Case { arms, .. } => arms.iter().any(|arm| ir_comp_contains_resume(&arm.body)),
         CompExpr::Handle { clauses } => clauses
             .iter()
             .any(|clause| ir_comp_contains_resume(&clause.body)),

@@ -404,10 +404,14 @@ fn ir_has_read_op(comp: &CompExpr) -> bool {
         CompExpr::PerformEffect { effect, .. } if effect == "Read" => true,
         CompExpr::PerformEffect { .. } => false,
         CompExpr::Value(_) => false,
-        CompExpr::Let { value, body, .. } => ir_has_read_op(value) || ir_has_read_op(body),
+        CompExpr::Let { value, body, .. } | CompExpr::LetMut { value, body, .. } => {
+            ir_has_read_op(value) || ir_has_read_op(body)
+        }
         CompExpr::Seq { stmts, tail } => stmts.iter().any(ir_has_read_op) || ir_has_read_op(tail),
         CompExpr::If { then_, else_, .. } => ir_has_read_op(then_) || ir_has_read_op(else_),
         CompExpr::Call { .. } => false,
+        CompExpr::Assign { value, .. } => ir_has_read_op(value),
+        CompExpr::Case { arms, .. } => arms.iter().any(|arm| ir_has_read_op(&arm.body)),
         CompExpr::Handle { clauses } => clauses.iter().any(|c| ir_has_read_op(&c.body)),
         CompExpr::WithHandler { handler, body } => ir_has_read_op(handler) || ir_has_read_op(body),
         CompExpr::Resume { .. } => false,

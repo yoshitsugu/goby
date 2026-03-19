@@ -1,7 +1,13 @@
 use std::borrow::Cow;
 
-use goby_core::ast::{BinOpKind, HandlerClause, InterpolatedPart};
-use goby_core::ir::{CompExpr, IrBinOp, IrDecl, IrHandlerClause, ValueExpr};
+use goby_core::ast::{
+    BinOpKind, CaseArm, CasePattern, HandlerClause, InterpolatedPart, ListPatternItem,
+    ListPatternTail,
+};
+use goby_core::ir::{
+    CompExpr, IrBinOp, IrCaseArm, IrCasePattern, IrDecl, IrHandlerClause, IrListPatternItem,
+    IrListPatternTail, ValueExpr,
+};
 use goby_core::{Declaration, Expr, Module, Stmt};
 
 pub(crate) struct WasmRuntimeArtifacts<'a> {
@@ -63,6 +69,17 @@ fn comp_to_stmts(comp: &CompExpr) -> Option<Vec<Stmt>> {
             stmts.extend(comp_to_stmts(body)?);
             Some(stmts)
         }
+        CompExpr::LetMut {
+            name, value, body, ..
+        } => {
+            let mut stmts = vec![Stmt::MutBinding {
+                name: name.clone(),
+                value: comp_to_expr(value)?,
+                span: None,
+            }];
+            stmts.extend(comp_to_stmts(body)?);
+            Some(stmts)
+        }
         CompExpr::Seq { stmts, tail } => {
             let mut out = Vec::new();
             for stmt in stmts {
@@ -71,6 +88,11 @@ fn comp_to_stmts(comp: &CompExpr) -> Option<Vec<Stmt>> {
             out.extend(comp_to_stmts(tail)?);
             Some(out)
         }
+        CompExpr::Assign { name, value } => Some(vec![Stmt::Assign {
+            name: name.clone(),
+            value: comp_to_expr(value)?,
+            span: None,
+        }]),
         other => Some(vec![Stmt::Expr(comp_to_expr(other)?, None)]),
     }
 }
@@ -78,7 +100,10 @@ fn comp_to_stmts(comp: &CompExpr) -> Option<Vec<Stmt>> {
 fn comp_to_expr(comp: &CompExpr) -> Option<Expr> {
     match comp {
         CompExpr::Value(value) => value_to_expr(value),
-        CompExpr::Let { .. } | CompExpr::Seq { .. } => Some(Expr::Block(comp_to_stmts(comp)?)),
+        CompExpr::Let { .. }
+        | CompExpr::LetMut { .. }
+        | CompExpr::Seq { .. }
+        | CompExpr::Assign { .. } => Some(Expr::Block(comp_to_stmts(comp)?)),
         CompExpr::If { cond, then_, else_ } => Some(Expr::If {
             condition: Box::new(value_to_expr(cond)?),
             then_expr: Box::new(comp_to_expr(then_)?),
@@ -121,6 +146,13 @@ fn comp_to_expr(comp: &CompExpr) -> Option<Expr> {
         CompExpr::Resume { value } => Some(Expr::Resume {
             value: Box::new(value_to_expr(value)?),
         }),
+        CompExpr::Case { scrutinee, arms } => Some(Expr::Case {
+            scrutinee: Box::new(value_to_expr(scrutinee)?),
+            arms: arms
+                .iter()
+                .map(ir_case_arm_to_ast)
+                .collect::<Option<Vec<_>>>()?,
+        }),
     }
 }
 
@@ -151,6 +183,26 @@ fn value_to_expr(value: &ValueExpr) -> Option<Expr> {
                 None => None,
             },
         }),
+        ValueExpr::TupleLit(items) => Some(Expr::TupleLit(
+            items
+                .iter()
+                .map(value_to_expr)
+                .collect::<Option<Vec<_>>>()?,
+        )),
+        ValueExpr::RecordLit {
+            constructor,
+            fields,
+        } => Some(Expr::RecordConstruct {
+            constructor: constructor.clone(),
+            fields: fields
+                .iter()
+                .map(|(name, value)| Some((name.clone(), value_to_expr(value)?)))
+                .collect::<Option<Vec<_>>>()?,
+        }),
+        ValueExpr::Lambda { param, body } => Some(Expr::Lambda {
+            param: param.clone(),
+            body: Box::new(comp_to_expr(body)?),
+        }),
         ValueExpr::Interp(parts) => Some(Expr::InterpolatedString(
             parts
                 .iter()
@@ -176,6 +228,44 @@ fn ir_interp_part_to_ast(part: &goby_core::ir::IrInterpPart) -> Option<Interpola
         goby_core::ir::IrInterpPart::Expr(expr) => {
             Some(InterpolatedPart::Expr(Box::new(value_to_expr(expr)?)))
         }
+    }
+}
+
+fn ir_case_arm_to_ast(arm: &IrCaseArm) -> Option<CaseArm> {
+    Some(CaseArm {
+        pattern: ir_case_pattern_to_ast(&arm.pattern),
+        body: Box::new(comp_to_expr(&arm.body)?),
+        span: goby_core::Span::point(1, 1),
+    })
+}
+
+fn ir_case_pattern_to_ast(pattern: &IrCasePattern) -> CasePattern {
+    match pattern {
+        IrCasePattern::IntLit(n) => CasePattern::IntLit(*n),
+        IrCasePattern::StringLit(text) => CasePattern::StringLit(text.clone()),
+        IrCasePattern::BoolLit(flag) => CasePattern::BoolLit(*flag),
+        IrCasePattern::EmptyList => CasePattern::EmptyList,
+        IrCasePattern::ListPattern { items, tail } => CasePattern::ListPattern {
+            items: items.iter().map(ir_list_pattern_item_to_ast).collect(),
+            tail: tail.as_ref().map(ir_list_pattern_tail_to_ast),
+        },
+        IrCasePattern::Wildcard => CasePattern::Wildcard,
+    }
+}
+
+fn ir_list_pattern_item_to_ast(item: &IrListPatternItem) -> ListPatternItem {
+    match item {
+        IrListPatternItem::IntLit(n) => ListPatternItem::IntLit(*n),
+        IrListPatternItem::StringLit(text) => ListPatternItem::StringLit(text.clone()),
+        IrListPatternItem::Bind(name) => ListPatternItem::Bind(name.clone()),
+        IrListPatternItem::Wildcard => ListPatternItem::Wildcard,
+    }
+}
+
+fn ir_list_pattern_tail_to_ast(tail: &IrListPatternTail) -> ListPatternTail {
+    match tail {
+        IrListPatternTail::Ignore => ListPatternTail::Ignore,
+        IrListPatternTail::Bind(name) => ListPatternTail::Bind(name.clone()),
     }
 }
 

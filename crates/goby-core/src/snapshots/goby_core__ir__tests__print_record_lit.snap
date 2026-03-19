@@ -1,0 +1,7 @@
+---
+source: crates/goby-core/src/ir.rs
+assertion_line: 901
+expression: fmt_ir(&m)
+---
+decl pair: ? =
+  Pair(left: 1, right: 2)
