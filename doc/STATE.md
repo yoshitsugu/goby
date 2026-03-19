@@ -12,7 +12,7 @@ Last updated: 2026-03-19
 
 1. Keep future lowering work aligned with `resolved form -> shared IR -> backend`.
 2. Treat backend limitations as backend limitations rather than restoring AST-shaped recognizers.
-3. Finish the remaining `CallHelper` backend gap by designing an emitter-level helper ABI for collection-producing helpers, rather than widening planner fallback again.
+3. Extend emitter-side helper coverage family by family from the converged ABI, rather than widening planner fallback again.
 4. Reopen `doc/PLAN_IR.md` only if a genuinely new architectural gap appears.
 
 ## Restart Notes
@@ -23,7 +23,9 @@ Last updated: 2026-03-19
 - General Wasm lowering classification now checks emitter support instead of assuming every lowered backend IR sequence is emit-ready.
 - Wasm compile-path tests now run structural validation with `wasmparser::Validator`, which caught and now guards against invalid-stack-shape regressions.
 - Runtime-I/O plans that delegate to general backend emission append an explicit final `Drop`, matching the `_start : () -> ()` Wasm contract.
-- The remaining backend architecture gap is not IR lowering; it is helper emission for non-fused `CallHelper` families such as collection-producing helpers.
+- Non-fused `CallHelper` emission is landed for `string.split`, `list.get`, and `string.length`, backed by a downward bump-allocation ABI for runtime strings/lists in general Wasm lowering.
+- Non-fused helper shapes now execute end to end in wasmtime for `split -> drop` and `split -> list.get -> alias -> println`.
+- Remaining helper work is incremental family expansion on top of the emitter ABI, not a reason to restore planner or AST-shaped fallback.
 - The IR-lowering roadmap is complete; follow-up work should stay within the converged lowering architecture.
 - Then inspect:
   - `crates/goby-wasm/src/fallback.rs`

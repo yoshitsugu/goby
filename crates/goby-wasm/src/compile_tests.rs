@@ -963,7 +963,7 @@ main =
 }
 
 #[test]
-fn runtime_io_execution_kind_does_not_claim_general_lowering_for_unemitted_helpers() {
+fn runtime_io_execution_kind_general_lowers_supported_non_fused_helpers() {
     let source = r#"
 import goby/string
 
@@ -974,17 +974,13 @@ main =
   print "ok"
 "#;
     let module = parse_module(source).expect("source should parse");
-    assert_ne!(
+    assert_eq!(
         runtime_io_execution_kind(&module).expect("classification should succeed"),
         crate::RuntimeIoExecutionKind::GeneralLowered,
-        "helper calls without emitter support must not classify as GeneralLowered"
+        "supported helper calls should classify as GeneralLowered"
     );
-    let err = compile_module(&module).expect_err("unsupported helper emission should fail cleanly");
-    assert!(
-        !err.message.contains("CallHelper"),
-        "classification mismatch should not leak raw CallHelper emission error: {}",
-        err.message
-    );
+    let wasm = compile_module(&module).expect("supported helper emission should compile");
+    assert_valid_wasm_module(&wasm);
 }
 
 #[test]
@@ -1213,6 +1209,29 @@ main =
     let helper_wasm = compile_module(&helper_module).expect("helper shape should compile");
     assert_valid_wasm_module(&sugar_wasm);
     assert_valid_wasm_module(&helper_wasm);
+}
+
+#[test]
+fn compile_module_general_lowers_non_fused_split_and_list_get_helpers() {
+    let source = r#"
+import goby/string
+import goby/list
+
+main : Unit -> Unit can Print, Read
+main =
+  text = read ()
+  lines = string.split text "\n"
+  line = list.get lines 1
+  echoed = line
+  println echoed
+"#;
+    let module = parse_module(source).expect("source should parse");
+    assert_eq!(
+        runtime_io_execution_kind(&module).expect("classification should succeed"),
+        crate::RuntimeIoExecutionKind::GeneralLowered,
+    );
+    let wasm = compile_module(&module).expect("non-fused helper chain should compile");
+    assert_valid_wasm_module(&wasm);
 }
 
 // ---------------------------------------------------------------------------

@@ -473,6 +473,111 @@ main =
 }
 
 #[test]
+fn run_command_executes_non_fused_split_helper_runtime_program_via_wasmtime_stdin() {
+    let root = repo_root();
+    let sandbox = TempDirGuard::new("run_non_fused_split_helper_runtime_program");
+    let input = sandbox.join("split_helper.gb");
+    fs::write(
+        &input,
+        r#"
+import goby/string
+
+main : Unit -> Unit can Print, Read
+main =
+  text = read ()
+  _lines = string.split text "\n"
+  print "ok"
+"#,
+    )
+    .expect("temporary input should be writable");
+
+    let mut child = command_for_goby_cli()
+        .arg("run")
+        .arg(&input)
+        .current_dir(&root)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("cli should execute");
+    child
+        .stdin
+        .as_mut()
+        .expect("stdin pipe should exist")
+        .write_all(b"alpha\nbeta\n")
+        .expect("stdin should be writable");
+    let output = child
+        .wait_with_output()
+        .expect("cli output should be readable");
+
+    assert!(
+        output.status.success(),
+        "expected success, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("ok"),
+        "expected static print after helper split to succeed, stdout: {}",
+        stdout
+    );
+}
+
+#[test]
+fn run_command_executes_non_fused_split_get_helper_runtime_program_via_wasmtime_stdin() {
+    let root = repo_root();
+    let sandbox = TempDirGuard::new("run_non_fused_split_get_helper_runtime_program");
+    let input = sandbox.join("split_get_helper.gb");
+    fs::write(
+        &input,
+        r#"
+import goby/string
+import goby/list
+
+main : Unit -> Unit can Print, Read
+main =
+  text = read ()
+  lines = string.split text "\n"
+  line = list.get lines 1
+  echoed = line
+  println echoed
+"#,
+    )
+    .expect("temporary input should be writable");
+
+    let mut child = command_for_goby_cli()
+        .arg("run")
+        .arg(&input)
+        .current_dir(&root)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("cli should execute");
+    child
+        .stdin
+        .as_mut()
+        .expect("stdin pipe should exist")
+        .write_all(b"alpha\nbeta\n")
+        .expect("stdin should be writable");
+    let output = child
+        .wait_with_output()
+        .expect("cli output should be readable");
+
+    assert!(
+        output.status.success(),
+        "expected success, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("beta\n"),
+        "expected second split line via non-fused helpers, stdout: {}",
+        stdout
+    );
+}
+
+#[test]
 #[cfg(unix)]
 fn run_command_rejects_repeated_read_after_exhaustion_shape_with_explicit_boundary_error() {
     let root = repo_root();

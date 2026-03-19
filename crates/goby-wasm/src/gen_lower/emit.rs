@@ -13,7 +13,7 @@ use wasm_encoder::{
 
 use crate::CodegenError;
 use crate::gen_lower::backend_ir::{SplitIndexOperand, WasmBackendInstr};
-use crate::gen_lower::value::{encode_string_ptr, encode_unit};
+use crate::gen_lower::value::{TAG_INT, TAG_LIST, TAG_STRING, encode_string_ptr, encode_unit};
 use crate::layout::MemoryLayout;
 
 const WASM_PAGE_BYTES: u32 = 65_536;
@@ -30,6 +30,25 @@ const SPLIT_FUSED_SCRATCH_I32: u32 = 5;
 // scratch[0] = generic string ptr / read_line scan pos
 // scratch[1] = read_line total len
 const GENERIC_EFFECT_SCRATCH_I32: u32 = 2;
+// Non-fused helper emission needs two transient i64 locals for helper arguments.
+const HELPER_SCRATCH_I64: u32 = 2;
+// Helper emission i32 scratch layout:
+// scratch[0] = text/string/list ptr
+// scratch[1] = text/string/list len
+// scratch[2] = sep ptr / decoded index
+// scratch[3] = sep len
+// scratch[4] = scan pos
+// scratch[5] = segment start
+// scratch[6] = item count
+// scratch[7] = auxiliary pointer
+// scratch[8] = list ptr
+// scratch[9] = allocation size temp
+// scratch[10] = copy or match index
+// scratch[11] = alloc cursor (persistent)
+// scratch[12] = heap floor (persistent)
+const HELPER_SCRATCH_I32: u32 = 13;
+const HELPER_ALLOC_CURSOR_OFFSET: u32 = 11;
+const HELPER_HEAP_FLOOR_OFFSET: u32 = 12;
 
 #[derive(Debug, Clone)]
 struct StaticStringPool {
@@ -128,6 +147,24 @@ impl EmitContext {
     }
 }
 
+#[derive(Clone, Copy)]
+struct HelperEmitState {
+    i64_base: u32,
+    i32_base: u32,
+    alloc_cursor_local: u32,
+    heap_floor_local: u32,
+}
+
+fn align_up_i32(value: i32, align: i32) -> i32 {
+    debug_assert!((align as u32).is_power_of_two());
+    (value + (align - 1)) & !(align - 1)
+}
+
+fn align_down_i32(value: i32, align: i32) -> i32 {
+    debug_assert!((align as u32).is_power_of_two());
+    value & !(align - 1)
+}
+
 /// Returns true if any `SplitEachPrint` instruction is present.
 fn required_i32_scratch_count(instrs: &[WasmBackendInstr]) -> u32 {
     let split = instrs.iter().any(|i| {
@@ -151,7 +188,26 @@ fn required_i32_scratch_count(instrs: &[WasmBackendInstr]) -> u32 {
     } else {
         0
     };
-    split_count.max(generic_count)
+    let helper_count = if instrs
+        .iter()
+        .any(|i| matches!(i, WasmBackendInstr::CallHelper { .. }))
+    {
+        HELPER_SCRATCH_I32
+    } else {
+        0
+    };
+    split_count.max(generic_count).max(helper_count)
+}
+
+fn required_i64_scratch_count(instrs: &[WasmBackendInstr]) -> u32 {
+    if instrs
+        .iter()
+        .any(|i| matches!(i, WasmBackendInstr::CallHelper { .. }))
+    {
+        HELPER_SCRATCH_I64
+    } else {
+        0
+    }
 }
 
 /// Returns true if any `SplitEachPrint` with println is present (needs newline data segment).
@@ -167,9 +223,15 @@ fn needs_newline_data(instrs: &[WasmBackendInstr]) -> bool {
 /// The module imports `fd_read` and `fd_write` from `wasi_snapshot_preview1`,
 /// exports `memory` and `_start`, and contains one function (`main`).
 pub(crate) fn supports_instrs(instrs: &[WasmBackendInstr]) -> bool {
-    !instrs
-        .iter()
-        .any(|instr| matches!(instr, WasmBackendInstr::CallHelper { .. }))
+    instrs.iter().all(|instr| match instr {
+        WasmBackendInstr::CallHelper { name, arg_count } => {
+            matches!(
+                (name.as_str(), arg_count),
+                ("string.split", 2) | ("list.get", 2) | ("string.length", 1)
+            )
+        }
+        _ => true,
+    })
 }
 
 pub(crate) fn emit_general_module(
@@ -185,10 +247,12 @@ pub(crate) fn emit_general_module(
     }
 
     // --- Pre-scan: count declared I64 locals and detect I32 scratch needs ---
-    let i64_count = instrs
+    let named_i64_count = instrs
         .iter()
         .filter(|i| matches!(i, WasmBackendInstr::DeclareLocal { .. }))
         .count() as u32;
+    let helper_i64_scratch_count = required_i64_scratch_count(instrs);
+    let i64_count = named_i64_count + helper_i64_scratch_count;
     let i32_scratch_count = required_i32_scratch_count(instrs);
     // I32 scratch locals start at index i64_count.
     let i32_base = i64_count;
@@ -261,6 +325,8 @@ pub(crate) fn emit_general_module(
         &mut ctx,
         instrs,
         layout,
+        named_i64_count,
+        helper_i64_scratch_count,
         i32_base,
         &static_strings,
     )?;
@@ -290,6 +356,8 @@ fn emit_instrs(
     ctx: &mut EmitContext,
     instrs: &[WasmBackendInstr],
     layout: &MemoryLayout,
+    named_i64_count: u32,
+    helper_i64_scratch_count: u32,
     i32_base: u32,
     static_strings: &StaticStringPool,
 ) -> Result<(), CodegenError> {
@@ -298,6 +366,33 @@ fn emit_instrs(
     let buffer_ptr = layout.heap_base as i32;
     let buffer_len = (WASM_PAGE_BYTES - layout.heap_base - static_strings.bytes_used) as i32 - 4; // reserve 4 bytes for len prefix
     let newline_ptr = (layout.heap_base - 1) as i32;
+    let helper_i64_base = named_i64_count;
+    let helper_state = if helper_i64_scratch_count > 0 {
+        let alloc_cursor_local = i32_base + HELPER_ALLOC_CURSOR_OFFSET;
+        let heap_floor_local = i32_base + HELPER_HEAP_FLOOR_OFFSET;
+        let initial_cursor = align_down_i32(
+            i32::try_from(WASM_PAGE_BYTES - static_strings.bytes_used).map_err(|_| {
+                CodegenError {
+                    message: "gen_lower/emit: helper allocation cursor does not fit in i32"
+                        .to_string(),
+                }
+            })?,
+            8,
+        );
+        let initial_floor = align_up_i32(buffer_ptr + 4, 8);
+        function.instruction(&Instruction::I32Const(initial_cursor));
+        function.instruction(&Instruction::LocalSet(alloc_cursor_local));
+        function.instruction(&Instruction::I32Const(initial_floor));
+        function.instruction(&Instruction::LocalSet(heap_floor_local));
+        Some(HelperEmitState {
+            i64_base: helper_i64_base,
+            i32_base,
+            alloc_cursor_local,
+            heap_floor_local,
+        })
+    } else {
+        None
+    };
 
     for instr in instrs {
         match instr {
@@ -340,13 +435,19 @@ fn emit_instrs(
                     buffer_len,
                     newline_ptr,
                     i32_base,
+                    helper_state.as_ref(),
                 )?;
             }
 
-            WasmBackendInstr::CallHelper { name, .. } => {
-                return Err(CodegenError {
-                    message: format!("gen_lower/emit: CallHelper '{name}' is not yet supported"),
-                });
+            WasmBackendInstr::CallHelper { name, arg_count } => {
+                emit_helper_call(
+                    function,
+                    ctx,
+                    name,
+                    *arg_count,
+                    i32_base,
+                    helper_state.as_ref(),
+                )?;
             }
 
             WasmBackendInstr::SplitEachPrint {
@@ -421,6 +522,481 @@ fn emit_instrs(
     Ok(())
 }
 
+fn emit_update_heap_floor_from_buffer(
+    function: &mut Function,
+    heap_floor_local: u32,
+    buffer_ptr: i32,
+    nread_offset: i32,
+) {
+    function.instruction(&Instruction::I32Const(nread_offset));
+    function.instruction(&Instruction::I32Load(MemArg {
+        offset: 0,
+        align: 2,
+        memory_index: 0,
+    }));
+    function.instruction(&Instruction::I32Const(buffer_ptr + 4));
+    function.instruction(&Instruction::I32Add);
+    function.instruction(&Instruction::I32Const(7));
+    function.instruction(&Instruction::I32Add);
+    function.instruction(&Instruction::I32Const(!7));
+    function.instruction(&Instruction::I32And);
+    function.instruction(&Instruction::LocalSet(heap_floor_local));
+}
+
+fn emit_update_heap_floor_from_local_len(
+    function: &mut Function,
+    heap_floor_local: u32,
+    buffer_ptr: i32,
+    len_local: u32,
+) {
+    function.instruction(&Instruction::LocalGet(len_local));
+    function.instruction(&Instruction::I32Const(buffer_ptr + 4));
+    function.instruction(&Instruction::I32Add);
+    function.instruction(&Instruction::I32Const(7));
+    function.instruction(&Instruction::I32Add);
+    function.instruction(&Instruction::I32Const(!7));
+    function.instruction(&Instruction::I32And);
+    function.instruction(&Instruction::LocalSet(heap_floor_local));
+}
+
+fn emit_helper_call(
+    function: &mut Function,
+    ctx: &EmitContext,
+    name: &str,
+    arg_count: usize,
+    i32_base: u32,
+    helper_state: Option<&HelperEmitState>,
+) -> Result<(), CodegenError> {
+    let helper_state = helper_state.ok_or_else(|| CodegenError {
+        message: format!("gen_lower/emit: helper '{name}' requires helper scratch state"),
+    })?;
+    match (name, arg_count) {
+        ("string.split", 2) => emit_string_split_helper(function, helper_state),
+        ("list.get", 2) => emit_list_get_helper(function, helper_state),
+        ("string.length", 1) => emit_string_length_helper(function, helper_state),
+        _ => Err(CodegenError {
+            message: format!(
+                "gen_lower/emit: CallHelper '{name}' with {arg_count} args is not supported"
+            ),
+        }),
+    }?;
+    let _ = (ctx, i32_base);
+    Ok(())
+}
+
+fn emit_decode_string_ptr(
+    function: &mut Function,
+    helper_state: &HelperEmitState,
+    source_i64_local: u32,
+    ptr_local: u32,
+    len_local: u32,
+) {
+    function.instruction(&Instruction::LocalGet(source_i64_local));
+    function.instruction(&Instruction::I64Const((TAG_STRING as i64) << 60));
+    function.instruction(&Instruction::I64And);
+    function.instruction(&Instruction::I64Const((TAG_STRING as i64) << 60));
+    function.instruction(&Instruction::I64Ne);
+    function.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
+    emit_abort(function);
+    function.instruction(&Instruction::End);
+
+    function.instruction(&Instruction::LocalGet(source_i64_local));
+    function.instruction(&Instruction::I64Const(0xFFFF_FFFFi64));
+    function.instruction(&Instruction::I64And);
+    function.instruction(&Instruction::I32WrapI64);
+    function.instruction(&Instruction::LocalSet(ptr_local));
+
+    function.instruction(&Instruction::LocalGet(ptr_local));
+    function.instruction(&Instruction::I32Load(MemArg {
+        offset: 0,
+        align: 2,
+        memory_index: 0,
+    }));
+    function.instruction(&Instruction::LocalSet(len_local));
+
+    let _ = helper_state;
+}
+
+fn emit_push_tagged_ptr(function: &mut Function, ptr_local: u32, tag: u8) {
+    function.instruction(&Instruction::LocalGet(ptr_local));
+    function.instruction(&Instruction::I64ExtendI32U);
+    function.instruction(&Instruction::I64Const((tag as i64) << 60));
+    function.instruction(&Instruction::I64Or);
+}
+
+fn emit_alloc_from_top(
+    function: &mut Function,
+    helper_state: &HelperEmitState,
+    size_local: u32,
+    result_local: u32,
+) {
+    function.instruction(&Instruction::LocalGet(helper_state.alloc_cursor_local));
+    function.instruction(&Instruction::LocalGet(size_local));
+    function.instruction(&Instruction::I32Sub);
+    function.instruction(&Instruction::I32Const(!7));
+    function.instruction(&Instruction::I32And);
+    function.instruction(&Instruction::LocalTee(result_local));
+    function.instruction(&Instruction::LocalGet(helper_state.heap_floor_local));
+    function.instruction(&Instruction::I32LtU);
+    function.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
+    emit_abort(function);
+    function.instruction(&Instruction::End);
+    function.instruction(&Instruction::LocalGet(result_local));
+    function.instruction(&Instruction::LocalSet(helper_state.alloc_cursor_local));
+}
+
+fn emit_store_list_item(
+    function: &mut Function,
+    list_ptr_local: u32,
+    item_count_local: u32,
+    item_ptr_local: u32,
+) {
+    function.instruction(&Instruction::LocalGet(list_ptr_local));
+    function.instruction(&Instruction::I32Const(4));
+    function.instruction(&Instruction::I32Add);
+    function.instruction(&Instruction::LocalGet(item_count_local));
+    function.instruction(&Instruction::I32Const(8));
+    function.instruction(&Instruction::I32Mul);
+    function.instruction(&Instruction::I32Add);
+    emit_push_tagged_ptr(function, item_ptr_local, TAG_STRING);
+    function.instruction(&Instruction::I64Store(MemArg {
+        offset: 0,
+        align: 3,
+        memory_index: 0,
+    }));
+}
+
+fn emit_copy_string_slice_to_alloc(
+    function: &mut Function,
+    source_ptr_local: u32,
+    start_local: u32,
+    end_local: u32,
+    dest_ptr_local: u32,
+    copy_idx_local: u32,
+) {
+    function.instruction(&Instruction::LocalGet(end_local));
+    function.instruction(&Instruction::LocalGet(start_local));
+    function.instruction(&Instruction::I32Sub);
+    function.instruction(&Instruction::LocalSet(copy_idx_local));
+
+    function.instruction(&Instruction::LocalGet(dest_ptr_local));
+    function.instruction(&Instruction::LocalGet(copy_idx_local));
+    function.instruction(&Instruction::I32Store(MemArg {
+        offset: 0,
+        align: 2,
+        memory_index: 0,
+    }));
+
+    function.instruction(&Instruction::I32Const(0));
+    function.instruction(&Instruction::LocalSet(copy_idx_local));
+
+    function.instruction(&Instruction::Block(wasm_encoder::BlockType::Empty));
+    function.instruction(&Instruction::Loop(wasm_encoder::BlockType::Empty));
+    function.instruction(&Instruction::LocalGet(copy_idx_local));
+    function.instruction(&Instruction::LocalGet(end_local));
+    function.instruction(&Instruction::LocalGet(start_local));
+    function.instruction(&Instruction::I32Sub);
+    function.instruction(&Instruction::I32GeU);
+    function.instruction(&Instruction::BrIf(1));
+
+    function.instruction(&Instruction::LocalGet(dest_ptr_local));
+    function.instruction(&Instruction::I32Const(4));
+    function.instruction(&Instruction::I32Add);
+    function.instruction(&Instruction::LocalGet(copy_idx_local));
+    function.instruction(&Instruction::I32Add);
+
+    function.instruction(&Instruction::LocalGet(source_ptr_local));
+    function.instruction(&Instruction::I32Const(4));
+    function.instruction(&Instruction::I32Add);
+    function.instruction(&Instruction::LocalGet(start_local));
+    function.instruction(&Instruction::I32Add);
+    function.instruction(&Instruction::LocalGet(copy_idx_local));
+    function.instruction(&Instruction::I32Add);
+    function.instruction(&Instruction::I32Load8U(MemArg {
+        offset: 0,
+        align: 0,
+        memory_index: 0,
+    }));
+    function.instruction(&Instruction::I32Store8(MemArg {
+        offset: 0,
+        align: 0,
+        memory_index: 0,
+    }));
+
+    function.instruction(&Instruction::LocalGet(copy_idx_local));
+    function.instruction(&Instruction::I32Const(1));
+    function.instruction(&Instruction::I32Add);
+    function.instruction(&Instruction::LocalSet(copy_idx_local));
+    function.instruction(&Instruction::Br(0));
+    function.instruction(&Instruction::End);
+    function.instruction(&Instruction::End);
+}
+
+fn emit_string_split_helper(
+    function: &mut Function,
+    helper_state: &HelperEmitState,
+) -> Result<(), CodegenError> {
+    let text_i64 = helper_state.i64_base;
+    let sep_i64 = helper_state.i64_base + 1;
+    let s_text_ptr = helper_state.i32_base;
+    let s_text_len = helper_state.i32_base + 1;
+    let s_sep_ptr = helper_state.i32_base + 2;
+    let s_sep_len = helper_state.i32_base + 3;
+    let s_pos = helper_state.i32_base + 4;
+    let s_start = helper_state.i32_base + 5;
+    let s_item_count = helper_state.i32_base + 6;
+    let s_aux_ptr = helper_state.i32_base + 7;
+    let s_list_ptr = helper_state.i32_base + 8;
+    let s_alloc_size = helper_state.i32_base + 9;
+    let s_iter = helper_state.i32_base + 10;
+
+    function.instruction(&Instruction::LocalSet(sep_i64));
+    function.instruction(&Instruction::LocalSet(text_i64));
+
+    emit_decode_string_ptr(function, helper_state, text_i64, s_text_ptr, s_text_len);
+    emit_decode_string_ptr(function, helper_state, sep_i64, s_sep_ptr, s_sep_len);
+
+    function.instruction(&Instruction::LocalGet(s_sep_len));
+    function.instruction(&Instruction::I32Eqz);
+    function.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
+    emit_abort(function);
+    function.instruction(&Instruction::End);
+
+    function.instruction(&Instruction::LocalGet(s_text_len));
+    function.instruction(&Instruction::I32Const(1));
+    function.instruction(&Instruction::I32Add);
+    function.instruction(&Instruction::I32Const(8));
+    function.instruction(&Instruction::I32Mul);
+    function.instruction(&Instruction::I32Const(4));
+    function.instruction(&Instruction::I32Add);
+    function.instruction(&Instruction::LocalSet(s_alloc_size));
+    emit_alloc_from_top(function, helper_state, s_alloc_size, s_list_ptr);
+
+    function.instruction(&Instruction::I32Const(0));
+    function.instruction(&Instruction::LocalSet(s_item_count));
+    function.instruction(&Instruction::I32Const(0));
+    function.instruction(&Instruction::LocalSet(s_pos));
+    function.instruction(&Instruction::I32Const(0));
+    function.instruction(&Instruction::LocalSet(s_start));
+
+    function.instruction(&Instruction::Block(wasm_encoder::BlockType::Empty));
+    function.instruction(&Instruction::Loop(wasm_encoder::BlockType::Empty));
+    function.instruction(&Instruction::LocalGet(s_pos));
+    function.instruction(&Instruction::LocalGet(s_text_len));
+    function.instruction(&Instruction::I32GtU);
+    function.instruction(&Instruction::BrIf(1));
+
+    function.instruction(&Instruction::I32Const(0));
+    function.instruction(&Instruction::LocalSet(s_iter));
+
+    function.instruction(&Instruction::LocalGet(s_pos));
+    function.instruction(&Instruction::LocalGet(s_sep_len));
+    function.instruction(&Instruction::I32Add);
+    function.instruction(&Instruction::LocalGet(s_text_len));
+    function.instruction(&Instruction::I32LeU);
+    function.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
+    function.instruction(&Instruction::Block(wasm_encoder::BlockType::Empty));
+    function.instruction(&Instruction::Loop(wasm_encoder::BlockType::Empty));
+    function.instruction(&Instruction::LocalGet(s_iter));
+    function.instruction(&Instruction::LocalGet(s_sep_len));
+    function.instruction(&Instruction::I32GeU);
+    function.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
+    function.instruction(&Instruction::I32Const(1));
+    function.instruction(&Instruction::LocalSet(s_iter));
+    function.instruction(&Instruction::Br(2));
+    function.instruction(&Instruction::End);
+
+    function.instruction(&Instruction::LocalGet(s_text_ptr));
+    function.instruction(&Instruction::I32Const(4));
+    function.instruction(&Instruction::I32Add);
+    function.instruction(&Instruction::LocalGet(s_pos));
+    function.instruction(&Instruction::I32Add);
+    function.instruction(&Instruction::LocalGet(s_iter));
+    function.instruction(&Instruction::I32Add);
+    function.instruction(&Instruction::I32Load8U(MemArg {
+        offset: 0,
+        align: 0,
+        memory_index: 0,
+    }));
+    function.instruction(&Instruction::LocalGet(s_sep_ptr));
+    function.instruction(&Instruction::I32Const(4));
+    function.instruction(&Instruction::I32Add);
+    function.instruction(&Instruction::LocalGet(s_iter));
+    function.instruction(&Instruction::I32Add);
+    function.instruction(&Instruction::I32Load8U(MemArg {
+        offset: 0,
+        align: 0,
+        memory_index: 0,
+    }));
+    function.instruction(&Instruction::I32Ne);
+    function.instruction(&Instruction::BrIf(1));
+
+    function.instruction(&Instruction::LocalGet(s_iter));
+    function.instruction(&Instruction::I32Const(1));
+    function.instruction(&Instruction::I32Add);
+    function.instruction(&Instruction::LocalSet(s_iter));
+    function.instruction(&Instruction::Br(0));
+    function.instruction(&Instruction::End);
+    function.instruction(&Instruction::End);
+    function.instruction(&Instruction::End);
+
+    function.instruction(&Instruction::LocalGet(s_iter));
+    function.instruction(&Instruction::I32Const(1));
+    function.instruction(&Instruction::I32Eq);
+    function.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
+    function.instruction(&Instruction::LocalGet(s_pos));
+    function.instruction(&Instruction::LocalGet(s_start));
+    function.instruction(&Instruction::I32Sub);
+    function.instruction(&Instruction::I32Const(4));
+    function.instruction(&Instruction::I32Add);
+    function.instruction(&Instruction::LocalSet(s_alloc_size));
+    emit_alloc_from_top(function, helper_state, s_alloc_size, s_aux_ptr);
+    emit_copy_string_slice_to_alloc(function, s_text_ptr, s_start, s_pos, s_aux_ptr, s_iter);
+    emit_store_list_item(function, s_list_ptr, s_item_count, s_aux_ptr);
+    function.instruction(&Instruction::LocalGet(s_item_count));
+    function.instruction(&Instruction::I32Const(1));
+    function.instruction(&Instruction::I32Add);
+    function.instruction(&Instruction::LocalSet(s_item_count));
+    function.instruction(&Instruction::LocalGet(s_pos));
+    function.instruction(&Instruction::LocalGet(s_sep_len));
+    function.instruction(&Instruction::I32Add);
+    function.instruction(&Instruction::LocalSet(s_pos));
+    function.instruction(&Instruction::LocalGet(s_pos));
+    function.instruction(&Instruction::LocalSet(s_start));
+    function.instruction(&Instruction::Br(1));
+    function.instruction(&Instruction::End);
+
+    function.instruction(&Instruction::LocalGet(s_pos));
+    function.instruction(&Instruction::I32Const(1));
+    function.instruction(&Instruction::I32Add);
+    function.instruction(&Instruction::LocalSet(s_pos));
+    function.instruction(&Instruction::Br(0));
+    function.instruction(&Instruction::End);
+    function.instruction(&Instruction::End);
+
+    function.instruction(&Instruction::LocalGet(s_text_len));
+    function.instruction(&Instruction::LocalGet(s_start));
+    function.instruction(&Instruction::I32Sub);
+    function.instruction(&Instruction::I32Const(4));
+    function.instruction(&Instruction::I32Add);
+    function.instruction(&Instruction::LocalSet(s_alloc_size));
+    emit_alloc_from_top(function, helper_state, s_alloc_size, s_aux_ptr);
+    emit_copy_string_slice_to_alloc(function, s_text_ptr, s_start, s_text_len, s_aux_ptr, s_iter);
+    emit_store_list_item(function, s_list_ptr, s_item_count, s_aux_ptr);
+    function.instruction(&Instruction::LocalGet(s_item_count));
+    function.instruction(&Instruction::I32Const(1));
+    function.instruction(&Instruction::I32Add);
+    function.instruction(&Instruction::LocalSet(s_item_count));
+
+    function.instruction(&Instruction::LocalGet(s_list_ptr));
+    function.instruction(&Instruction::LocalGet(s_item_count));
+    function.instruction(&Instruction::I32Store(MemArg {
+        offset: 0,
+        align: 2,
+        memory_index: 0,
+    }));
+    emit_push_tagged_ptr(function, s_list_ptr, TAG_LIST);
+    Ok(())
+}
+
+fn emit_list_get_helper(
+    function: &mut Function,
+    helper_state: &HelperEmitState,
+) -> Result<(), CodegenError> {
+    let list_i64 = helper_state.i64_base;
+    let index_i64 = helper_state.i64_base + 1;
+    let s_list_ptr = helper_state.i32_base;
+    let s_list_len = helper_state.i32_base + 1;
+    let s_index = helper_state.i32_base + 2;
+
+    function.instruction(&Instruction::LocalSet(index_i64));
+    function.instruction(&Instruction::LocalSet(list_i64));
+
+    function.instruction(&Instruction::LocalGet(list_i64));
+    function.instruction(&Instruction::I64Const((TAG_LIST as i64) << 60));
+    function.instruction(&Instruction::I64And);
+    function.instruction(&Instruction::I64Const((TAG_LIST as i64) << 60));
+    function.instruction(&Instruction::I64Ne);
+    function.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
+    emit_abort(function);
+    function.instruction(&Instruction::End);
+
+    function.instruction(&Instruction::LocalGet(index_i64));
+    function.instruction(&Instruction::I64Const((TAG_INT as i64) << 60));
+    function.instruction(&Instruction::I64And);
+    function.instruction(&Instruction::I64Const((TAG_INT as i64) << 60));
+    function.instruction(&Instruction::I64Ne);
+    function.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
+    emit_abort(function);
+    function.instruction(&Instruction::End);
+
+    function.instruction(&Instruction::LocalGet(index_i64));
+    function.instruction(&Instruction::I64Const(4));
+    function.instruction(&Instruction::I64Shl);
+    function.instruction(&Instruction::I64Const(4));
+    function.instruction(&Instruction::I64ShrS);
+    function.instruction(&Instruction::I32WrapI64);
+    function.instruction(&Instruction::LocalSet(s_index));
+
+    function.instruction(&Instruction::LocalGet(s_index));
+    function.instruction(&Instruction::I32Const(0));
+    function.instruction(&Instruction::I32LtS);
+    function.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
+    emit_abort(function);
+    function.instruction(&Instruction::End);
+
+    function.instruction(&Instruction::LocalGet(list_i64));
+    function.instruction(&Instruction::I64Const(0xFFFF_FFFFi64));
+    function.instruction(&Instruction::I64And);
+    function.instruction(&Instruction::I32WrapI64);
+    function.instruction(&Instruction::LocalSet(s_list_ptr));
+
+    function.instruction(&Instruction::LocalGet(s_list_ptr));
+    function.instruction(&Instruction::I32Load(MemArg {
+        offset: 0,
+        align: 2,
+        memory_index: 0,
+    }));
+    function.instruction(&Instruction::LocalSet(s_list_len));
+
+    function.instruction(&Instruction::LocalGet(s_index));
+    function.instruction(&Instruction::LocalGet(s_list_len));
+    function.instruction(&Instruction::I32GeU);
+    function.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
+    emit_abort(function);
+    function.instruction(&Instruction::End);
+
+    function.instruction(&Instruction::LocalGet(s_list_ptr));
+    function.instruction(&Instruction::I32Const(4));
+    function.instruction(&Instruction::I32Add);
+    function.instruction(&Instruction::LocalGet(s_index));
+    function.instruction(&Instruction::I32Const(8));
+    function.instruction(&Instruction::I32Mul);
+    function.instruction(&Instruction::I32Add);
+    function.instruction(&Instruction::I64Load(MemArg {
+        offset: 0,
+        align: 3,
+        memory_index: 0,
+    }));
+    Ok(())
+}
+
+fn emit_string_length_helper(
+    function: &mut Function,
+    helper_state: &HelperEmitState,
+) -> Result<(), CodegenError> {
+    let string_i64 = helper_state.i64_base;
+    let s_ptr = helper_state.i32_base;
+    let s_len = helper_state.i32_base + 1;
+    function.instruction(&Instruction::LocalSet(string_i64));
+    emit_decode_string_ptr(function, helper_state, string_i64, s_ptr, s_len);
+    function.instruction(&Instruction::LocalGet(s_len));
+    function.instruction(&Instruction::I64ExtendI32S);
+    function.instruction(&Instruction::I64Const((TAG_INT as i64) << 60));
+    function.instruction(&Instruction::I64Or);
+    Ok(())
+}
+
 /// Emit Wasm instructions for a single effect operation.
 ///
 /// # Effect / Op mapping
@@ -438,6 +1014,7 @@ fn emit_effect_op(
     buffer_len: i32,
     newline_ptr: i32,
     i32_base: u32,
+    helper_state: Option<&HelperEmitState>,
 ) -> Result<(), CodegenError> {
     match (effect, op) {
         ("Read", "read") => {
@@ -482,6 +1059,15 @@ fn emit_effect_op(
                 align: 2,
                 memory_index: 0,
             }));
+
+            if let Some(helper_state) = helper_state {
+                emit_update_heap_floor_from_buffer(
+                    function,
+                    helper_state.heap_floor_local,
+                    buffer_ptr,
+                    nread_offset,
+                );
+            }
 
             // Push tagged-i64 string pointer (points to buffer_ptr where len prefix lives).
             let tagged_ptr = encode_string_ptr(buffer_ptr as u32);
@@ -576,6 +1162,15 @@ fn emit_effect_op(
                 align: 2,
                 memory_index: 0,
             }));
+
+            if let Some(helper_state) = helper_state {
+                emit_update_heap_floor_from_local_len(
+                    function,
+                    helper_state.heap_floor_local,
+                    buffer_ptr,
+                    scan_idx_local,
+                );
+            }
 
             function.instruction(&Instruction::I64Const(encode_string_ptr(buffer_ptr as u32)));
         }
