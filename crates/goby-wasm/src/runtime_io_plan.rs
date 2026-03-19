@@ -294,10 +294,10 @@ impl RuntimeIoClassification {
 /// The general lowering pipeline is now the primary semantic path for Track F
 /// representative programs. `RuntimeIoPlan` remains only for a shrinking set of
 /// optimization-oriented shapes that have not yet been fully normalized into general
-/// lowering. Plain `Read.read` echo, `Read.read` echo with static suffix prints, and
-/// plain split-each plans already delegate Wasm emission to the shared
-/// backend-IR/general-emitter path. New semantic capability should go to general
-/// lowering first.
+/// lowering. Plain echo-family programs (including bare names, `read_line`, static suffixes,
+/// and local print aliases) and plain split/index families now route through the shared
+/// backend-IR/general-emitter path in the normal compile flow. New semantic capability should
+/// go to general lowering first.
 ///
 /// Deprecation plan for the remaining `RuntimeIoPlan` machinery:
 /// 1. move plain echo-family shapes into general lowering or an IR-normalization step,
@@ -396,9 +396,9 @@ pub fn runtime_io_execution_kind(module: &Module) -> Result<RuntimeIoExecutionKi
 /// Walk a `CompExpr` tree and return `true` if any `PerformEffect` node has
 /// `effect == "Read"` (i.e. the program performs a runtime read operation).
 ///
-/// Only `PerformEffect` nodes are checked — bare `Var("read")` or `Call { callee: Var("read") }`
-/// (unqualified calls not lowered to `PerformEffect`) are not detected here.
-/// Programs using bare `read()` will fail IR lowering and fall back to AST classification.
+/// The Track F general path is keyed off shared IR `PerformEffect(Read, ..)` nodes.
+/// Runtime-I/O programs that still fail to reach that form are treated as remaining
+/// normalization gaps rather than as the intended steady-state classification path.
 fn ir_has_read_op(comp: &CompExpr) -> bool {
     match comp {
         CompExpr::PerformEffect { effect, .. } if effect == "Read" => true,

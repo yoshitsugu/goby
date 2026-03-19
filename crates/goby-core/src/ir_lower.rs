@@ -45,6 +45,19 @@ fn err(msg: impl Into<String>) -> LowerError {
     }
 }
 
+#[derive(Default)]
+struct LowerCtx {
+    next_tmp: usize,
+}
+
+impl LowerCtx {
+    fn fresh_tmp(&mut self, stem: &str) -> String {
+        let name = format!("__goby_ir_{stem}_{}", self.next_tmp);
+        self.next_tmp += 1;
+        name
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Effect operation table
 // ---------------------------------------------------------------------------
@@ -72,6 +85,25 @@ fn is_effect_op(module: &str, op: &str) -> bool {
     )
 }
 
+fn bare_effect_op(name: &str) -> Option<(&'static str, &'static str)> {
+    match name {
+        "read" => Some(("Read", "read")),
+        "read_line" => Some(("Read", "read_line")),
+        "print" => Some(("Print", "print")),
+        "println" => Some(("Print", "println")),
+        _ => None,
+    }
+}
+
+fn bare_helper_ref(name: &str) -> Option<(&'static str, &'static str)> {
+    match name {
+        "split" => Some(("string", "split")),
+        "each" => Some(("list", "each")),
+        "get" => Some(("list", "get")),
+        _ => None,
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Public entry points
 // ---------------------------------------------------------------------------
@@ -91,12 +123,13 @@ pub fn lower_module(module: &Module) -> Result<IrModule, LowerError> {
 
 /// Lower a single `Declaration` to an `IrDecl`.
 pub fn lower_declaration(decl: &Declaration) -> Result<IrDecl, LowerError> {
+    let mut ctx = LowerCtx::default();
     let stmts = decl
         .parsed_body
         .as_deref()
         .ok_or_else(|| err(format!("declaration `{}` has no parsed body", decl.name)))?;
 
-    let body = lower_stmts(stmts)?;
+    let body = lower_stmts(&mut ctx, stmts)?;
 
     // Parameters: types are unknown at this stage.
     let params: Vec<(String, IrType)> = decl
@@ -142,26 +175,26 @@ fn extract_residual_effects(annotation: Option<&str>) -> Vec<String> {
 /// An empty statement list is lowered to `Value(Unit)`.
 /// A single `Stmt::Expr` is lowered as its tail value.
 /// Multiple statements are lowered into a `Let`/`Seq` chain.
-fn lower_stmts(stmts: &[Stmt]) -> Result<CompExpr, LowerError> {
+fn lower_stmts(ctx: &mut LowerCtx, stmts: &[Stmt]) -> Result<CompExpr, LowerError> {
     if stmts.is_empty() {
         return Ok(CompExpr::Value(ValueExpr::Unit));
     }
 
     // Build from right to left so we can construct Let chains.
-    lower_stmts_slice(stmts)
+    lower_stmts_slice(ctx, stmts)
 }
 
-fn lower_stmts_slice(stmts: &[Stmt]) -> Result<CompExpr, LowerError> {
+fn lower_stmts_slice(ctx: &mut LowerCtx, stmts: &[Stmt]) -> Result<CompExpr, LowerError> {
     match stmts {
         [] => Ok(CompExpr::Value(ValueExpr::Unit)),
-        [Stmt::Expr(expr, _)] => lower_expr_as_comp(expr),
+        [Stmt::Expr(expr, _)] => lower_expr_as_comp(ctx, expr),
         [Stmt::Binding { name, value, .. }] => {
             // A lone binding as the final statement is lowered to `let name = value in name`.
             // The binding's own value is exposed as the block result.
             // This is an explicit semantics choice: the block yields the bound value.
             // Backends that expect Unit-returning blocks should handle this at
             // their own IR analysis layer.
-            let val_comp = lower_expr_as_comp(value)?;
+            let val_comp = lower_expr_as_comp(ctx, value)?;
             Ok(CompExpr::Let {
                 name: name.clone(),
                 ty: infer_type_from_expr(value),
@@ -179,8 +212,8 @@ fn lower_stmts_slice(stmts: &[Stmt]) -> Result<CompExpr, LowerError> {
         ))),
         [head, rest @ ..] => match head {
             Stmt::Binding { name, value, .. } => {
-                let val_comp = lower_expr_as_comp(value)?;
-                let body = lower_stmts_slice(rest)?;
+                let val_comp = lower_expr_as_comp(ctx, value)?;
+                let body = lower_stmts_slice(ctx, rest)?;
                 Ok(CompExpr::Let {
                     name: name.clone(),
                     ty: infer_type_from_expr(value),
@@ -189,8 +222,8 @@ fn lower_stmts_slice(stmts: &[Stmt]) -> Result<CompExpr, LowerError> {
                 })
             }
             Stmt::Expr(expr, _) => {
-                let head_comp = lower_expr_as_comp(expr)?;
-                let tail = lower_stmts_slice(rest)?;
+                let head_comp = lower_expr_as_comp(ctx, expr)?;
+                let tail = lower_stmts_slice(ctx, rest)?;
                 // Use Seq to sequence a discarded expression with the rest.
                 // Avoid Vec::insert(0, ...) to prevent O(n²) growth for long Seq chains.
                 match tail {
@@ -226,81 +259,134 @@ fn lower_stmts_slice(stmts: &[Stmt]) -> Result<CompExpr, LowerError> {
 }
 
 /// Lower an `Expr` as a `CompExpr`.
-fn lower_expr_as_comp(expr: &Expr) -> Result<CompExpr, LowerError> {
+fn lower_expr_as_comp(ctx: &mut LowerCtx, expr: &Expr) -> Result<CompExpr, LowerError> {
     // First try as a pure value.
-    match try_lower_value(expr)? {
+    match try_lower_value(ctx, expr)? {
         Some(v) => Ok(CompExpr::Value(v)),
-        None => lower_expr_as_comp_non_value(expr),
+        None => lower_expr_as_comp_non_value(ctx, expr),
     }
 }
 
 /// Lower compound expressions that are not pure values.
-fn lower_expr_as_comp_non_value(expr: &Expr) -> Result<CompExpr, LowerError> {
+fn lower_expr_as_comp_non_value(ctx: &mut LowerCtx, expr: &Expr) -> Result<CompExpr, LowerError> {
     match expr {
         Expr::If {
             condition,
             then_expr,
             else_expr,
         } => {
-            let cond = lower_value_required(condition, "if condition")?;
-            let then_ = lower_expr_as_comp(then_expr)?;
-            let else_ = lower_expr_as_comp(else_expr)?;
+            let cond = lower_value_required(ctx, condition, "if condition")?;
+            let then_ = lower_expr_as_comp(ctx, then_expr)?;
+            let else_ = lower_expr_as_comp(ctx, else_expr)?;
             Ok(CompExpr::If {
                 cond: Box::new(cond),
                 then_: Box::new(then_),
                 else_: Box::new(else_),
             })
         }
-        Expr::Block(stmts) => lower_stmts(stmts),
+        Expr::Block(stmts) => lower_stmts(ctx, stmts),
         Expr::Call { .. } => {
             // Collect curried call chain into flat IR Call.
             let (callee_expr, args_exprs) = collect_call_chain(expr);
 
-            // G5: if the callee is a qualified reference to a known effect operation,
-            // lower to PerformEffect instead of Call.
-            if let Expr::Qualified {
-                receiver, member, ..
-            } = callee_expr
-            {
-                if is_effect_op(receiver, member) {
-                    // Filter out unit args (TupleLit([])) — these arise from no-arg effect
-                    // calls like `Read.read()` which the parser produces as `Read.read(())`.
-                    // Assumption: unit args only appear when the caller wrote `()` explicitly
-                    // for a zero-argument operation. A non-unit arg after a unit arg would
-                    // survive the filter and be included in the PerformEffect args list.
-                    let mut args = Vec::new();
-                    for a in &args_exprs {
-                        if matches!(a, Expr::TupleLit(items) if items.is_empty()) {
-                            continue;
-                        }
-                        args.push(lower_value_required(a, "effect operation argument")?);
-                    }
-                    return Ok(CompExpr::PerformEffect {
-                        effect: receiver.clone(),
-                        op: member.clone(),
-                        args,
-                    });
+            let bare_effect = match callee_expr {
+                Expr::Var { name, .. } => {
+                    bare_effect_op(name).map(|(effect, op)| (effect.to_string(), op.to_string()))
                 }
+                _ => None,
+            };
+            let qualified_effect = match callee_expr {
+                Expr::Qualified {
+                    receiver, member, ..
+                } if is_effect_op(receiver, member) => Some((receiver.clone(), member.clone())),
+                _ => None,
+            };
+
+            if let Some((effect, op)) = qualified_effect.or(bare_effect) {
+                return lower_effect_call(ctx, &effect, &op, &args_exprs);
             }
 
-            let callee = lower_value_required(callee_expr, "call callee")?;
+            let callee = match callee_expr {
+                Expr::Var { name, .. } => {
+                    if let Some((module, helper)) = bare_helper_ref(name) {
+                        ValueExpr::GlobalRef {
+                            module: module.to_string(),
+                            name: helper.to_string(),
+                        }
+                    } else {
+                        lower_value_required(ctx, callee_expr, "call callee")?
+                    }
+                }
+                _ => lower_value_required(ctx, callee_expr, "call callee")?,
+            };
             let mut args = Vec::new();
             for a in args_exprs {
-                args.push(lower_value_required(a, "call argument")?);
+                args.push(lower_value_required(ctx, a, "call argument")?);
             }
             Ok(CompExpr::Call {
                 callee: Box::new(callee),
                 args,
             })
         }
+        Expr::ListIndex { list, index } => {
+            let receiver_value = try_lower_value(ctx, list)?;
+            let index_value = try_lower_value(ctx, index)?;
+            match (receiver_value, index_value) {
+                (Some(receiver_value), Some(index_value)) => Ok(CompExpr::Call {
+                    callee: Box::new(ValueExpr::GlobalRef {
+                        module: "list".to_string(),
+                        name: "get".to_string(),
+                    }),
+                    args: vec![receiver_value, index_value],
+                }),
+                (receiver_value_opt, index_value_opt) => {
+                    let receiver_tmp = ctx.fresh_tmp("list_index_receiver");
+                    let index_tmp = ctx.fresh_tmp("list_index_index");
+                    let call = CompExpr::Call {
+                        callee: Box::new(ValueExpr::GlobalRef {
+                            module: "list".to_string(),
+                            name: "get".to_string(),
+                        }),
+                        args: vec![
+                            receiver_value_opt
+                                .clone()
+                                .unwrap_or_else(|| ValueExpr::Var(receiver_tmp.clone())),
+                            index_value_opt
+                                .clone()
+                                .unwrap_or_else(|| ValueExpr::Var(index_tmp.clone())),
+                        ],
+                    };
+                    let with_index = if index_value_opt.is_some() {
+                        call
+                    } else {
+                        CompExpr::Let {
+                            name: index_tmp,
+                            ty: IrType::Unknown,
+                            value: Box::new(lower_expr_as_comp(ctx, index)?),
+                            body: Box::new(call),
+                        }
+                    };
+                    if receiver_value_opt.is_some() {
+                        Ok(with_index)
+                    } else {
+                        Ok(CompExpr::Let {
+                            name: receiver_tmp,
+                            ty: IrType::Unknown,
+                            value: Box::new(lower_expr_as_comp(ctx, list)?),
+                            body: Box::new(with_index),
+                        })
+                    }
+                }
+            }
+        }
         Expr::Lambda { param, .. } => Err(err(format!(
             "lambda `\\{}` is not supported in the pure IR subset (G3); deferred to a later track",
             param
         ))),
-        Expr::Handler { clauses } => lower_handler_expr(clauses),
+        Expr::Handler { clauses } => lower_handler_expr(ctx, clauses),
         Expr::With { handler, body } => {
-            let ir_handler = lower_expr_as_comp(handler)?;
-            let ir_body = lower_stmts(body)?;
+            let ir_handler = lower_expr_as_comp(ctx, handler)?;
+            let ir_body = lower_stmts(ctx, body)?;
             Ok(CompExpr::WithHandler {
                 handler: Box::new(ir_handler),
                 body: Box::new(ir_body),
@@ -308,7 +394,7 @@ fn lower_expr_as_comp_non_value(expr: &Expr) -> Result<CompExpr, LowerError> {
         }
         Expr::Resume { value } => {
             // Resume requires a pure value to resume with.
-            let ir_value = lower_value_required(value, "resume value")?;
+            let ir_value = lower_value_required(ctx, value, "resume value")?;
             Ok(CompExpr::Resume {
                 value: Box::new(ir_value),
             })
@@ -329,9 +415,6 @@ fn lower_expr_as_comp_non_value(expr: &Expr) -> Result<CompExpr, LowerError> {
         Expr::ListLit { .. } => Err(err(
             "list literals are not supported in the pure IR subset (G3)",
         )),
-        Expr::ListIndex { .. } => Err(err(
-            "list indexing is not supported in the pure IR subset (G3)",
-        )),
         Expr::TupleLit(items) if !items.is_empty() => Err(err(
             "non-unit tuple literals are not supported in the pure IR subset (G3)",
         )),
@@ -341,7 +424,7 @@ fn lower_expr_as_comp_non_value(expr: &Expr) -> Result<CompExpr, LowerError> {
         ))),
         other => {
             // Fallback: attempt as value one more time (handles unit tuple, etc.)
-            match try_lower_value(other)? {
+            match try_lower_value(ctx, other)? {
                 Some(v) => Ok(CompExpr::Value(v)),
                 None => Err(err(format!("unsupported expression form: {:?}", other))),
             }
@@ -353,7 +436,7 @@ fn lower_expr_as_comp_non_value(expr: &Expr) -> Result<CompExpr, LowerError> {
 ///
 /// Returns `Ok(None)` if the expression is not a pure value form (e.g., it is
 /// an `If` or `Block`). Returns `Err` if the form is explicitly unsupported.
-fn try_lower_value(expr: &Expr) -> Result<Option<ValueExpr>, LowerError> {
+fn try_lower_value(ctx: &mut LowerCtx, expr: &Expr) -> Result<Option<ValueExpr>, LowerError> {
     match expr {
         Expr::IntLit(n) => Ok(Some(ValueExpr::IntLit(*n))),
         Expr::BoolLit(b) => Ok(Some(ValueExpr::BoolLit(*b))),
@@ -374,8 +457,8 @@ fn try_lower_value(expr: &Expr) -> Result<Option<ValueExpr>, LowerError> {
         })),
         Expr::BinOp { op, left, right } => {
             let ir_op = lower_binop(op);
-            let l = lower_value_required(left, "binary operator left operand")?;
-            let r = lower_value_required(right, "binary operator right operand")?;
+            let l = lower_value_required(ctx, left, "binary operator left operand")?;
+            let r = lower_value_required(ctx, right, "binary operator right operand")?;
             Ok(Some(ValueExpr::BinOp {
                 op: ir_op,
                 left: Box::new(l),
@@ -389,7 +472,7 @@ fn try_lower_value(expr: &Expr) -> Result<Option<ValueExpr>, LowerError> {
                     InterpolatedPart::Text(t) => {
                         ir_parts.push(IrInterpPart::Text(t.clone()));
                     }
-                    InterpolatedPart::Expr(inner) => match try_lower_value(inner)? {
+                    InterpolatedPart::Expr(inner) => match try_lower_value(ctx, inner)? {
                         Some(v) => ir_parts.push(IrInterpPart::Expr(v)),
                         None => {
                             return Err(err(
@@ -421,8 +504,12 @@ fn try_lower_value(expr: &Expr) -> Result<Option<ValueExpr>, LowerError> {
 }
 
 /// Lower an `Expr` as a `ValueExpr`, returning an error if not possible.
-fn lower_value_required(expr: &Expr, context: &str) -> Result<ValueExpr, LowerError> {
-    match try_lower_value(expr)? {
+fn lower_value_required(
+    ctx: &mut LowerCtx,
+    expr: &Expr,
+    context: &str,
+) -> Result<ValueExpr, LowerError> {
+    match try_lower_value(ctx, expr)? {
         Some(v) => Ok(v),
         None => Err(err(format!(
             "{} must be a pure value expression in the pure IR subset",
@@ -447,7 +534,10 @@ fn collect_call_chain(expr: &Expr) -> (&Expr, Vec<&Expr>) {
 }
 
 /// Lower a `Handler { clauses }` expression to an IR `Handle` node.
-fn lower_handler_expr(clauses: &[crate::ast::HandlerClause]) -> Result<CompExpr, LowerError> {
+fn lower_handler_expr(
+    ctx: &mut LowerCtx,
+    clauses: &[crate::ast::HandlerClause],
+) -> Result<CompExpr, LowerError> {
     if clauses.is_empty() {
         return Err(err("handler expression must have at least one clause"));
     }
@@ -459,7 +549,7 @@ fn lower_handler_expr(clauses: &[crate::ast::HandlerClause]) -> Result<CompExpr,
                 clause.name
             ))
         })?;
-        let body = lower_stmts(stmts)?;
+        let body = lower_stmts(ctx, stmts)?;
         ir_clauses.push(IrHandlerClause {
             op_name: clause.name.clone(),
             params: clause.params.clone(),
@@ -469,6 +559,59 @@ fn lower_handler_expr(clauses: &[crate::ast::HandlerClause]) -> Result<CompExpr,
     Ok(CompExpr::Handle {
         clauses: ir_clauses,
     })
+}
+
+fn lower_effect_call(
+    ctx: &mut LowerCtx,
+    effect: &str,
+    op: &str,
+    args_exprs: &[&Expr],
+) -> Result<CompExpr, LowerError> {
+    let filtered_args: Vec<&Expr> = args_exprs
+        .iter()
+        .copied()
+        .filter(|arg| !matches!(arg, Expr::TupleLit(items) if items.is_empty()))
+        .collect();
+
+    match filtered_args.as_slice() {
+        [] => Ok(CompExpr::PerformEffect {
+            effect: effect.to_string(),
+            op: op.to_string(),
+            args: vec![],
+        }),
+        [arg] => match try_lower_value(ctx, arg)? {
+            Some(value) => Ok(CompExpr::PerformEffect {
+                effect: effect.to_string(),
+                op: op.to_string(),
+                args: vec![value],
+            }),
+            None => {
+                let tmp = ctx.fresh_tmp("effect_arg");
+                let body = CompExpr::PerformEffect {
+                    effect: effect.to_string(),
+                    op: op.to_string(),
+                    args: vec![ValueExpr::Var(tmp.clone())],
+                };
+                Ok(CompExpr::Let {
+                    name: tmp,
+                    ty: IrType::Unknown,
+                    value: Box::new(lower_expr_as_comp(ctx, arg)?),
+                    body: Box::new(body),
+                })
+            }
+        },
+        _ => {
+            let mut args = Vec::new();
+            for arg in filtered_args {
+                args.push(lower_value_required(ctx, arg, "effect operation argument")?);
+            }
+            Ok(CompExpr::PerformEffect {
+                effect: effect.to_string(),
+                op: op.to_string(),
+                args,
+            })
+        }
+    }
 }
 
 fn lower_binop(op: &BinOpKind) -> IrBinOp {
@@ -1176,16 +1319,11 @@ mod tests {
     }
 
     #[test]
-    fn lower_equiv_inline_effect_arg_is_rejected() {
+    fn lower_equiv_inline_effect_arg_normalizes_to_let() {
         // Program 1 (inline form): Print.print(Read.read())
         //
-        // `Read.read()` used as an argument to `Print.print` is a nested effectful call.
-        // `lower_value_required` only accepts pure value expressions; `Read.read()` is
-        // an effect operation, not a pure value.
-        //
-        // G5 scope: this form cannot be lowered directly. The canonical equivalent is
-        // the binding form (Program 2): `text = Read.read(); Print.print(text)`.
-        // Verifying this expected error is part of the G5 test coverage.
+        // This now ANF-normalizes to the binding form:
+        // `tmp = Read.read(); Print.print(tmp)`.
         let inner_read = make_qualified_call("Read", "read", None);
         let outer_print = Expr::Call {
             callee: Box::new(Expr::qualified("Print", "print")),
@@ -1193,17 +1331,9 @@ mod tests {
             span: None,
         };
         let decl = decl_with_body("prog1", vec![expr_stmt(outer_print)]);
-        let result = lower_declaration(&decl);
         assert!(
-            result.is_err(),
-            "expected lowering error for nested effectful arg, got {:?}",
-            result
-        );
-        let msg = result.unwrap_err().message;
-        assert!(
-            msg.contains("pure value"),
-            "expected 'pure value' in error, got: {}",
-            msg
+            matches!(lower_declaration(&decl).unwrap().body, CompExpr::Let { .. }),
+            "nested effect arg should lower via ANF let binding"
         );
     }
 
@@ -1233,6 +1363,73 @@ mod tests {
             "expected 1 PerformEffect{{Print, print}}"
         );
         insta::assert_snapshot!(fmt_ir(&m));
+    }
+
+    #[test]
+    fn lower_bare_read_bind_then_print() {
+        let read_call = Expr::Call {
+            callee: Box::new(Expr::var("read")),
+            arg: Box::new(Expr::TupleLit(vec![])),
+            span: None,
+        };
+        let print_call = Expr::Call {
+            callee: Box::new(Expr::var("print")),
+            arg: Box::new(Expr::var("text")),
+            span: None,
+        };
+        let decl = decl_with_body(
+            "prog_bare",
+            vec![binding("text", read_call), expr_stmt(print_call)],
+        );
+        let ir_decl = lower_declaration(&decl).unwrap();
+        let m = IrModule {
+            decls: vec![ir_decl],
+        };
+        assert!(validate_ir(&m).is_ok());
+        assert_eq!(count_perform(&m.decls[0].body, "Read", "read"), 1);
+        assert_eq!(count_perform(&m.decls[0].body, "Print", "print"), 1);
+    }
+
+    #[test]
+    fn lower_bare_print_with_nested_read_introduces_temp_binding() {
+        let read_call = Expr::Call {
+            callee: Box::new(Expr::var("read")),
+            arg: Box::new(Expr::TupleLit(vec![])),
+            span: None,
+        };
+        let print_call = Expr::Call {
+            callee: Box::new(Expr::var("print")),
+            arg: Box::new(read_call),
+            span: None,
+        };
+        let decl = decl_with_body("prog_nested", vec![expr_stmt(print_call)]);
+        let ir_decl = lower_declaration(&decl).expect("nested bare effect should lower via let");
+        assert!(
+            matches!(ir_decl.body, CompExpr::Let { .. }),
+            "expected ANF let binding around nested effect arg, got {:?}",
+            ir_decl.body
+        );
+    }
+
+    #[test]
+    fn lower_list_index_to_list_get_call() {
+        let expr = Expr::ListIndex {
+            list: Box::new(Expr::var("lines")),
+            index: Box::new(Expr::IntLit(1)),
+        };
+        let decl = decl_with_body("idx", vec![expr_stmt(expr)]);
+        let ir_decl = lower_declaration(&decl).expect("list index should lower");
+        assert!(
+            matches!(
+                &ir_decl.body,
+                CompExpr::Call { callee, args }
+                    if matches!(callee.as_ref(), ValueExpr::GlobalRef { module, name }
+                        if module == "list" && name == "get")
+                        && args.len() == 2
+            ),
+            "expected list.get IR call, got {:?}",
+            ir_decl.body
+        );
     }
 
     #[test]

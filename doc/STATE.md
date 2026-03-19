@@ -4,17 +4,17 @@ Last updated: 2026-03-19
 
 ## Current Focus
 
-- Track F F1-F5 are complete; F6 convergence is still in progress.
+- Track F is complete through F6; plain runtime-I/O shapes now use the general lowering path.
 - Track D5 has started with a first `goby lint` slice.
 - `goby lint <file.gb>` now exists for human-readable warnings.
 - First rule implemented: unreachable `case` arm after wildcard `_`.
 
 ## Immediate Next Steps
 
-1. Continue Track F F6 convergence by shrinking `RuntimeIoPlan` usage in the normal runtime-I/O compile path.
-2. D5 rule 2: add unused local binding lint on top of the new lint command path.
-3. Add JSON output mode for lint diagnostics once multiple rules exist.
-4. Continue D5 in priority order after validating warning UX and exit-code policy.
+1. D5 rule 2: add unused local binding lint on top of the new lint command path.
+2. Add JSON output mode for lint diagnostics once multiple rules exist.
+3. Continue D5 in priority order after validating warning UX and exit-code policy.
+4. Start deleting or shrinking optimization-only `RuntimeIoPlan` cases as follow-up cleanup, beginning with transformed split callbacks.
 
 ## Decisions To Carry Forward
 
@@ -43,14 +43,13 @@ Last updated: 2026-03-19
 - General lowering now supports static string values in backend IR, so qualified
   `Read.read()` programs followed by static `Print.print`/`Print.println` suffixes can
   classify as `GeneralLowered` instead of `DynamicWasiIo`.
-- Specialized builders still remain for `read_line` and transform-heavy split shapes.
-- Remaining F6 blockers are:
-  - bare prelude `read` / `read_line` names still fall out of IR lowering and rely on AST fallback,
-  - `read_line` does not yet have a fully general Wasm stdin-cursor/runtime-allocation story,
-  - transformed or suffix-bearing split callbacks still depend on `RuntimeIoPlan`.
-- `compile_module` still falls back to `runtime_io_plan` after `gen_lower`; Track F is not
-  fully converged until that remaining special-case path is either deleted or reduced to
-  documented optimization-only use.
+- Bare prelude `read` / `read_line` and `print` / `println` now lower into shared IR,
+  including nested effect arguments and list indexing.
+- General lowering now resolves pure local alias chains around effect/helper targets, so
+  plain echo-family programs with local print aliases and split-family programs with
+  delimiter/callback aliases also classify as `GeneralLowered`.
+- Specialized `RuntimeIoPlan` paths now remain only as optimization-oriented fallback for
+  transform-heavy split callbacks; normal plain runtime-I/O compilation no longer depends on them.
 - `goby lint` currently exits non-zero when warnings are emitted and reuses the same
   caret-snippet diagnostic renderer as `goby check`.
 - Diagnostic severity now supports `Warning` in addition to `Error`.

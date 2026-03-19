@@ -35,19 +35,55 @@ use crate::CodegenError;
 use crate::layout::MemoryLayout;
 use crate::wasm_exec_plan::main_exec_plan;
 
-/// Returns `true` if the IR body contains at least one `PerformEffect` node.
-/// Only programs with effect operations are candidates for the general lowering path.
-fn has_perform_effect(comp: &CompExpr) -> bool {
+/// Returns `true` if the IR body contains at least one `PerformEffect` node for `Read`.
+/// Track F general lowering is intentionally scoped to runtime-stdin programs.
+fn has_runtime_read_effect(comp: &CompExpr) -> bool {
     match comp {
-        CompExpr::PerformEffect { .. } => true,
-        CompExpr::Let { value, body, .. } => has_perform_effect(value) || has_perform_effect(body),
-        CompExpr::Seq { stmts, tail } => {
-            stmts.iter().any(has_perform_effect) || has_perform_effect(tail)
+        CompExpr::PerformEffect { effect, .. } => effect == "Read",
+        CompExpr::Let { value, body, .. } => {
+            has_runtime_read_effect(value) || has_runtime_read_effect(body)
         }
-        CompExpr::If { then_, else_, .. } => has_perform_effect(then_) || has_perform_effect(else_),
+        CompExpr::Seq { stmts, tail } => {
+            stmts.iter().any(has_runtime_read_effect) || has_runtime_read_effect(tail)
+        }
+        CompExpr::If { then_, else_, .. } => {
+            has_runtime_read_effect(then_) || has_runtime_read_effect(else_)
+        }
         CompExpr::Call { .. } | CompExpr::Value(_) => false,
         CompExpr::Handle { .. } | CompExpr::WithHandler { .. } | CompExpr::Resume { .. } => false,
     }
+}
+
+fn read_line_instrs_are_supported(instrs: &[backend_ir::WasmBackendInstr]) -> bool {
+    let read_line_count = instrs
+        .iter()
+        .filter(|instr| {
+            matches!(
+                instr,
+                backend_ir::WasmBackendInstr::EffectOp { effect, op }
+                    if effect == "Read" && op == "read_line"
+            )
+        })
+        .count();
+    if read_line_count == 0 {
+        return true;
+    }
+    if read_line_count != 1 {
+        return false;
+    }
+
+    !instrs.iter().any(|instr| {
+        matches!(
+            instr,
+            backend_ir::WasmBackendInstr::EffectOp { effect, op }
+                if effect == "Read" && op == "read"
+        ) || matches!(
+            instr,
+            backend_ir::WasmBackendInstr::CallHelper { .. }
+                | backend_ir::WasmBackendInstr::SplitEachPrint { .. }
+                | backend_ir::WasmBackendInstr::SplitGetPrint { .. }
+        )
+    })
 }
 
 /// Attempt to lower a module's `main` body through the general lowering path.
@@ -68,7 +104,7 @@ fn lower_module_to_instrs(
     };
 
     // Only handle programs with effect operations.
-    if !has_perform_effect(&ir_decl.body) {
+    if !has_runtime_read_effect(&ir_decl.body) {
         return Ok(None);
     }
 
@@ -81,6 +117,9 @@ fn lower_module_to_instrs(
             });
         }
     };
+    if !read_line_instrs_are_supported(&instrs) {
+        return Ok(None);
+    }
     Ok(Some(instrs))
 }
 

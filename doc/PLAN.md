@@ -676,17 +676,17 @@ Milestones:
       - out-of-range index behavior is tested and matches the chosen policy.
     - unit tests for collection/indexing layout invariants where possible, not only end-to-end tests.
 
-- [ ] F6. Convergence and deletion of special cases
+- [x] F6. Convergence and deletion of special cases
   - route currently special-cased runtime-I/O programs through the new general lowering path.
   - keep specialized fast paths only if they remain a strict optimization layer on top of the same semantics.
   - remove or sharply reduce `RuntimeIoPlan`-specific handwritten emitters once parity is proven.
   - current convergence status:
-    - plain `Read.read` echo, `Read.read` echo with static suffix prints, and plain
-      `SplitLinesEach` already share the backend-IR/general-emitter path.
-    - remaining blockers before F6 can be checked complete:
-      - bare prelude `read` / `read_line` still bypass IR lowering and fall back to AST classification,
-      - `Read.read_line` still lacks fully general Wasm stdin-cursor/runtime-allocation support,
-      - transformed or suffix-bearing split callbacks still depend on `RuntimeIoPlan`.
+    - plain echo-family programs now route through general lowering for both bare and qualified
+      `read` / `read_line`, including static suffix prints and local print/println aliases.
+    - plain split-family programs now route through general lowering for direct callbacks,
+      forwarded list aliases, local callback aliases, delimiter alias chains, and split-get index access.
+    - `RuntimeIoPlan` remains only for transform-heavy split callbacks and related optimization-oriented
+      fallback shapes; it is no longer the semantic source of truth for plain runtime-I/O programs.
   - done when:
     - runtime I/O support is explained primarily in terms of the general lowering architecture,
       not a catalog of recognized shapes.

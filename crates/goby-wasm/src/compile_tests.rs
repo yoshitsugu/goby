@@ -597,8 +597,8 @@ main =
     let module = parse_module(source).expect("source should parse");
     assert_eq!(
         runtime_io_execution_kind(&module).expect("classification should succeed"),
-        crate::RuntimeIoExecutionKind::DynamicWasiIo,
-        "print(read()) should classify as DynamicWasiIo"
+        crate::RuntimeIoExecutionKind::GeneralLowered,
+        "print(read()) should classify as GeneralLowered"
     );
     let wasm = compile_module(&module).expect("codegen should succeed");
     assert_valid_wasm_module(&wasm);
@@ -614,8 +614,8 @@ main =
     let module = parse_module(source).expect("source should parse");
     assert_eq!(
         runtime_io_execution_kind(&module).expect("classification should succeed"),
-        crate::RuntimeIoExecutionKind::DynamicWasiIo,
-        "println(read_line()) should classify as DynamicWasiIo"
+        crate::RuntimeIoExecutionKind::GeneralLowered,
+        "println(read_line()) should classify as GeneralLowered"
     );
     let wasm = compile_module(&module).expect("codegen should succeed");
     assert_valid_wasm_module(&wasm);
@@ -631,8 +631,8 @@ main =
     let module = parse_module(source).expect("source should parse");
     assert_eq!(
         runtime_io_execution_kind(&module).expect("classification should succeed"),
-        crate::RuntimeIoExecutionKind::DynamicWasiIo,
-        "println(read()) should classify as DynamicWasiIo"
+        crate::RuntimeIoExecutionKind::GeneralLowered,
+        "println(read()) should classify as GeneralLowered"
     );
     let wasm = compile_module(&module).expect("codegen should succeed");
     assert_valid_wasm_module(&wasm);
@@ -648,8 +648,8 @@ main =
     let module = parse_module(source).expect("source should parse");
     assert_eq!(
         runtime_io_execution_kind(&module).expect("classification should succeed"),
-        crate::RuntimeIoExecutionKind::DynamicWasiIo,
-        "print(read_line()) should classify as DynamicWasiIo"
+        crate::RuntimeIoExecutionKind::GeneralLowered,
+        "print(read_line()) should classify as GeneralLowered"
     );
     let wasm = compile_module(&module).expect("codegen should succeed");
     assert_valid_wasm_module(&wasm);
@@ -667,8 +667,8 @@ main =
     let module = parse_module(source).expect("source should parse");
     assert_eq!(
         runtime_io_execution_kind(&module).expect("classification should succeed"),
-        crate::RuntimeIoExecutionKind::DynamicWasiIo,
-        "read_line echo with static suffix should classify as DynamicWasiIo"
+        crate::RuntimeIoExecutionKind::GeneralLowered,
+        "read_line echo with static suffix should classify as GeneralLowered"
     );
     let wasm = compile_module(&module).expect("codegen should succeed");
     assert_valid_wasm_module(&wasm);
@@ -687,8 +687,8 @@ main =
     let module = parse_module(source).expect("source should parse");
     assert_eq!(
         runtime_io_execution_kind(&module).expect("classification should succeed"),
-        crate::RuntimeIoExecutionKind::DynamicWasiIo,
-        "read echo with local output alias should classify as DynamicWasiIo"
+        crate::RuntimeIoExecutionKind::GeneralLowered,
+        "read echo with local output alias should classify as GeneralLowered"
     );
     let wasm = compile_module(&module).expect("codegen should succeed");
     assert_valid_wasm_module(&wasm);
@@ -776,7 +776,7 @@ main : Unit -> Unit can Print, Read
 main =
   print (read())
 "#,
-            crate::RuntimeIoExecutionKind::DynamicWasiIo,
+            crate::RuntimeIoExecutionKind::GeneralLowered,
         ),
         (
             "dynamic_echo_alias",
@@ -787,7 +787,7 @@ main =
   printer = print
   printer text
 "#,
-            crate::RuntimeIoExecutionKind::DynamicWasiIo,
+            crate::RuntimeIoExecutionKind::GeneralLowered,
         ),
         (
             "dynamic_split_passthrough",
@@ -867,8 +867,29 @@ main =
     let module = parse_module(source).expect("source should parse");
     assert_eq!(
         runtime_io_execution_kind(&module).expect("classification should succeed"),
-        crate::RuntimeIoExecutionKind::DynamicWasiIo,
-        "read + split + each println should classify as DynamicWasiIo"
+        crate::RuntimeIoExecutionKind::GeneralLowered,
+        "read + split + each println should classify as GeneralLowered"
+    );
+    let wasm = compile_module(&module).expect("codegen should succeed");
+    assert_valid_wasm_module(&wasm);
+}
+
+#[test]
+fn compile_module_general_lowers_bare_split_index_println_program() {
+    let source = r#"
+import goby/string ( split )
+
+main : Unit -> Unit can Print, Read
+main =
+  text = read ()
+  lines = split text "\n"
+  println(lines[1])
+"#;
+    let module = parse_module(source).expect("source should parse");
+    assert_eq!(
+        runtime_io_execution_kind(&module).expect("classification should succeed"),
+        crate::RuntimeIoExecutionKind::GeneralLowered,
+        "bare read + bare split + list index + bare println should classify as GeneralLowered"
     );
     let wasm = compile_module(&module).expect("codegen should succeed");
     assert_valid_wasm_module(&wasm);

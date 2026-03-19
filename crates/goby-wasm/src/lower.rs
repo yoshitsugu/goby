@@ -338,10 +338,24 @@ fn eval_comp(
             }
             apply_callable(callee_value, arg_values, env, depth + 1)
         }
-        CompExpr::PerformEffect { .. }
-        | CompExpr::Handle { .. }
-        | CompExpr::WithHandler { .. }
-        | CompExpr::Resume { .. } => None,
+        CompExpr::PerformEffect { effect, op, args } => {
+            if effect == "Print" && args.len() == 1 {
+                let value = eval_value(&args[0], bindings, env, depth + 1)?;
+                match op.as_str() {
+                    "print" => outputs.push(value.as_output_text()),
+                    "println" => {
+                        let mut line = value.as_output_text();
+                        line.push('\n');
+                        outputs.push(line);
+                    }
+                    _ => return None,
+                }
+                Some(NativeValue::Unit)
+            } else {
+                None
+            }
+        }
+        CompExpr::Handle { .. } | CompExpr::WithHandler { .. } | CompExpr::Resume { .. } => None,
     }
 }
 

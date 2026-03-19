@@ -2,6 +2,8 @@
 //!
 //! The IR → backend-IR mapping is documented in `backend_ir.rs`.
 
+use std::collections::HashMap;
+
 use goby_core::ir::{CompExpr, ValueExpr};
 
 use crate::gen_lower::backend_ir::{SplitIndexOperand, WasmBackendInstr};
@@ -42,6 +44,13 @@ impl From<ValueError> for LowerError {
 /// Supported IR nodes: `Value`, `Let`, `Seq`, `PerformEffect`, `Call` (GlobalRef callee only).
 /// All other nodes produce `Err(LowerError::UnsupportedForm)`.
 pub(crate) fn lower_comp(comp: &CompExpr) -> Result<Vec<WasmBackendInstr>, LowerError> {
+    lower_comp_with_aliases(comp, &HashMap::new())
+}
+
+fn lower_comp_with_aliases(
+    comp: &CompExpr,
+    aliases: &HashMap<String, AliasValue>,
+) -> Result<Vec<WasmBackendInstr>, LowerError> {
     match comp {
         CompExpr::Value(v) => lower_value(v),
 
@@ -49,26 +58,40 @@ pub(crate) fn lower_comp(comp: &CompExpr) -> Result<Vec<WasmBackendInstr>, Lower
             name, value, body, ..
         } => {
             // F4: detect fused split-each pattern before general Let lowering.
-            if let Some(result) = try_lower_split_each(name, value, body) {
+            if let Some(result) = try_lower_split_each(name, value, body, aliases) {
                 return result;
             }
-            if let Some(result) = try_lower_split_get_print(name, value, body) {
+            if let Some(result) = try_lower_split_get_print(name, value, body, aliases) {
                 return result;
+            }
+            if let Some(alias) = alias_value_from_comp(value) {
+                let mut scoped_aliases = aliases.clone();
+                scoped_aliases.insert(name.clone(), alias);
+                let body_instrs = lower_comp_with_aliases(body, &scoped_aliases)?;
+                if !instrs_load_local(&body_instrs, name) {
+                    return Ok(body_instrs);
+                }
             }
             let mut instrs = vec![WasmBackendInstr::DeclareLocal { name: name.clone() }];
-            instrs.extend(lower_comp(value)?);
+            instrs.extend(lower_comp_with_aliases(value, aliases)?);
             instrs.push(WasmBackendInstr::StoreLocal { name: name.clone() });
-            instrs.extend(lower_comp(body)?);
+            if let Some(alias) = alias_value_from_comp(value) {
+                let mut scoped_aliases = aliases.clone();
+                scoped_aliases.insert(name.clone(), alias);
+                instrs.extend(lower_comp_with_aliases(body, &scoped_aliases)?);
+            } else {
+                instrs.extend(lower_comp_with_aliases(body, aliases)?);
+            }
             Ok(instrs)
         }
 
         CompExpr::Seq { stmts, tail } => {
             let mut instrs = Vec::new();
             for stmt in stmts {
-                instrs.extend(lower_comp(stmt)?);
+                instrs.extend(lower_comp_with_aliases(stmt, aliases)?);
                 instrs.push(WasmBackendInstr::Drop);
             }
-            instrs.extend(lower_comp(tail)?);
+            instrs.extend(lower_comp_with_aliases(tail, aliases)?);
             Ok(instrs)
         }
 
@@ -85,7 +108,14 @@ pub(crate) fn lower_comp(comp: &CompExpr) -> Result<Vec<WasmBackendInstr>, Lower
         }
 
         CompExpr::Call { callee, args } => {
-            if let ValueExpr::GlobalRef { module, name } = callee.as_ref() {
+            if let Some((effect, op)) = resolve_effect_call_target(callee, aliases) {
+                let mut instrs = Vec::new();
+                for arg in args {
+                    instrs.extend(lower_value(arg)?);
+                }
+                instrs.push(WasmBackendInstr::EffectOp { effect, op });
+                Ok(instrs)
+            } else if let Some((module, name)) = resolve_helper_call_target(callee, aliases) {
                 let mut instrs = Vec::new();
                 for arg in args {
                     instrs.extend(lower_value(arg)?);
@@ -97,7 +127,7 @@ pub(crate) fn lower_comp(comp: &CompExpr) -> Result<Vec<WasmBackendInstr>, Lower
                 Ok(instrs)
             } else {
                 Err(LowerError::UnsupportedForm {
-                    node: format!("Call with non-GlobalRef callee: {:?}", callee),
+                    node: format!("Call with unsupported callee: {:?}", callee),
                 })
             }
         }
@@ -131,8 +161,10 @@ pub(crate) fn lower_value(v: &ValueExpr) -> Result<Vec<WasmBackendInstr>, LowerE
 /// Try to match the fused split-each pattern:
 ///
 /// ```text
-/// let <lines_name> = string.split(<text_var>, <sep_lit>)
-/// in each <lines_name> <Effect>.<op>
+/// let* <aliases_before>
+/// let <lines_name> = string.split(<text_var>, <sep>)
+/// let* <aliases_after>
+/// in each <lines_name-or-alias> <callback-or-alias>
 /// ```
 ///
 /// Returns `Some(Ok([SplitEachPrint {...}]))` when matched,
@@ -142,59 +174,28 @@ fn try_lower_split_each(
     let_name: &str,
     value: &CompExpr,
     body: &CompExpr,
+    aliases: &HashMap<String, AliasValue>,
 ) -> Option<Result<Vec<WasmBackendInstr>, LowerError>> {
-    // value must be Call(GlobalRef("string","split"), [Var(text), StrLit(sep)])
-    let (text_name, sep_str) = match value {
-        CompExpr::Call { callee, args }
-            if matches!(
-                callee.as_ref(),
-                ValueExpr::GlobalRef { module, name }
-                    if module == "string" && name == "split"
-            ) && args.len() == 2 =>
-        {
-            match (&args[0], &args[1]) {
-                (ValueExpr::Var(text), ValueExpr::StrLit(sep)) => (text.as_str(), sep.as_str()),
-                _ => return None,
-            }
-        }
-        _ => return None,
-    };
-
-    // body must be Call(Var("each"), [Var(lines_name), GlobalRef(effect, op)])
-    // where lines_name == let_name
-    let (effect, op) = match body {
-        CompExpr::Call { callee, args }
-            if matches!(callee.as_ref(), ValueExpr::Var(n) if n == "each") && args.len() == 2 =>
-        {
-            match (&args[0], &args[1]) {
-                (
-                    ValueExpr::Var(list_name),
-                    ValueExpr::GlobalRef {
-                        module: eff,
-                        name: op,
-                    },
-                ) if list_name == let_name => (eff.as_str(), op.as_str()),
-                _ => return None,
-            }
-        }
-        _ => return None,
-    };
+    let (text_local, sep) = split_call_parts(value, aliases)?;
+    let mut body_aliases = aliases.clone();
+    let (effect, op) = find_split_each_callback(let_name, body, &mut body_aliases)?;
 
     // Restriction: sep must be exactly 1 byte for F4.
-    let sep_bytes = sep_str.as_bytes().to_vec();
+    let sep_bytes = sep.as_bytes().to_vec();
     if sep_bytes.len() != 1 {
         return Some(Err(LowerError::UnsupportedForm {
             node: format!(
-                "SplitEachPrint: multi-byte separator '{sep_str}' is not yet supported (F5+)"
+                "SplitEachPrint: multi-byte separator '{}' is not yet supported (F5+)",
+                sep
             ),
         }));
     }
 
     Some(Ok(vec![WasmBackendInstr::SplitEachPrint {
-        text_local: text_name.to_string(),
+        text_local,
         sep_bytes,
-        effect: effect.to_string(),
-        op: op.to_string(),
+        effect,
+        op,
     }]))
 }
 
@@ -202,24 +203,71 @@ fn try_lower_split_get_print(
     let_name: &str,
     value: &CompExpr,
     body: &CompExpr,
+    aliases: &HashMap<String, AliasValue>,
 ) -> Option<Result<Vec<WasmBackendInstr>, LowerError>> {
-    let (text_name, sep_str) = match value {
-        CompExpr::Call { callee, args }
-            if matches!(
-                callee.as_ref(),
-                ValueExpr::GlobalRef { module, name }
-                    if module == "string" && name == "split"
-            ) && args.len() == 2 =>
-        {
-            match (&args[0], &args[1]) {
-                (ValueExpr::Var(text), ValueExpr::StrLit(sep)) => (text.as_str(), sep.as_str()),
-                _ => return None,
-            }
-        }
-        _ => return None,
-    };
+    let (text_local, sep) = split_call_parts(value, aliases)?;
+    let mut body_aliases = aliases.clone();
+    let (index, op) = find_split_get_print(let_name, body, &mut body_aliases)?;
 
-    let (index, op) = match body {
+    let sep_bytes = sep.as_bytes().to_vec();
+    if sep_bytes.len() != 1 {
+        return Some(Err(LowerError::UnsupportedForm {
+            node: format!(
+                "SplitGetPrint: multi-byte separator '{}' is not yet supported (F5+)",
+                sep
+            ),
+        }));
+    }
+
+    Some(Ok(vec![WasmBackendInstr::SplitGetPrint {
+        text_local,
+        sep_bytes,
+        index,
+        op,
+    }]))
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum AliasValue {
+    Var(String),
+    Str(String),
+    GlobalRef { module: String, name: String },
+}
+
+fn find_split_each_callback(
+    lines_name: &str,
+    comp: &CompExpr,
+    aliases: &mut HashMap<String, AliasValue>,
+) -> Option<(String, String)> {
+    match comp {
+        CompExpr::Let {
+            name, value, body, ..
+        } => {
+            if let Some(alias) = alias_value_from_comp(value) {
+                aliases.insert(name.clone(), alias);
+                let result = find_split_each_callback(lines_name, body, aliases);
+                aliases.remove(name);
+                return result;
+            }
+            None
+        }
+        CompExpr::Call { callee, args } if is_each_callee(callee, aliases) && args.len() == 2 => {
+            let list_name = resolve_local_name(&args[0], aliases)?;
+            if list_name != lines_name {
+                return None;
+            }
+            resolve_print_callback(&args[1], aliases)
+        }
+        _ => None,
+    }
+}
+
+fn find_split_get_print(
+    lines_name: &str,
+    comp: &CompExpr,
+    aliases: &mut HashMap<String, AliasValue>,
+) -> Option<(SplitIndexOperand, String)> {
+    match comp {
         CompExpr::Let {
             name: item_name,
             value,
@@ -228,23 +276,15 @@ fn try_lower_split_get_print(
         } => {
             let index = match value.as_ref() {
                 CompExpr::Call { callee, args }
-                    if matches!(
-                        callee.as_ref(),
-                        ValueExpr::GlobalRef { module, name }
-                            if module == "list" && name == "get"
-                    ) && args.len() == 2 =>
+                    if is_helper_global(callee, aliases, "list", "get") && args.len() == 2 =>
                 {
-                    match (&args[0], &args[1]) {
-                        (ValueExpr::Var(list_name), ValueExpr::IntLit(index))
-                            if list_name == let_name =>
-                        {
-                            SplitIndexOperand::Const(*index)
-                        }
-                        (ValueExpr::Var(list_name), ValueExpr::Var(index_name))
-                            if list_name == let_name =>
-                        {
-                            SplitIndexOperand::Local(index_name.clone())
-                        }
+                    let list_name = resolve_local_name(&args[0], aliases)?;
+                    if list_name != lines_name {
+                        return None;
+                    }
+                    match &args[1] {
+                        ValueExpr::IntLit(index) => SplitIndexOperand::Const(*index),
+                        ValueExpr::Var(index_name) => SplitIndexOperand::Local(index_name.clone()),
                         _ => return None,
                     }
                 }
@@ -257,32 +297,218 @@ fn try_lower_split_get_print(
                         && (op == "print" || op == "println")
                         && args.len() == 1 =>
                 {
-                    match &args[0] {
-                        ValueExpr::Var(name) if name == item_name => (index, op.as_str()),
-                        _ => return None,
+                    let printed_name = resolve_local_name(&args[0], aliases)?;
+                    if printed_name == item_name {
+                        Some((index, op.clone()))
+                    } else {
+                        None
                     }
                 }
-                _ => return None,
+                _ => None,
             }
         }
-        _ => return None,
-    };
-
-    let sep_bytes = sep_str.as_bytes().to_vec();
-    if sep_bytes.len() != 1 {
-        return Some(Err(LowerError::UnsupportedForm {
-            node: format!(
-                "SplitGetPrint: multi-byte separator '{sep_str}' is not yet supported (F5+)"
-            ),
-        }));
+        _ => None,
     }
+}
 
-    Some(Ok(vec![WasmBackendInstr::SplitGetPrint {
-        text_local: text_name.to_string(),
-        sep_bytes,
-        index,
-        op: op.to_string(),
-    }]))
+fn alias_value_from_comp(comp: &CompExpr) -> Option<AliasValue> {
+    match comp {
+        CompExpr::Value(ValueExpr::Var(name)) => Some(AliasValue::Var(name.clone())),
+        CompExpr::Value(ValueExpr::StrLit(text)) => Some(AliasValue::Str(text.clone())),
+        CompExpr::Value(ValueExpr::GlobalRef { module, name }) => Some(AliasValue::GlobalRef {
+            module: module.clone(),
+            name: name.clone(),
+        }),
+        _ => None,
+    }
+}
+
+fn split_call_parts(
+    comp: &CompExpr,
+    aliases: &HashMap<String, AliasValue>,
+) -> Option<(String, String)> {
+    match comp {
+        CompExpr::Call { callee, args }
+            if is_helper_global(callee, aliases, "string", "split") && args.len() == 2 =>
+        {
+            let text_local = resolve_local_name(&args[0], aliases)?.to_string();
+            let sep = resolve_str_arg(&args[1], aliases)?.to_string();
+            Some((text_local, sep))
+        }
+        _ => None,
+    }
+}
+
+fn is_each_callee(callee: &ValueExpr, aliases: &HashMap<String, AliasValue>) -> bool {
+    matches!(callee, ValueExpr::Var(name) if name == "each")
+        || is_helper_global(callee, aliases, "list", "each")
+}
+
+fn is_helper_global(
+    callee: &ValueExpr,
+    aliases: &HashMap<String, AliasValue>,
+    module: &str,
+    name: &str,
+) -> bool {
+    match callee {
+        ValueExpr::GlobalRef {
+            module: callee_module,
+            name: callee_name,
+        } => callee_module == module && callee_name == name,
+        ValueExpr::Var(var) => {
+            resolve_global_ref(var, aliases).is_some_and(|(callee_module, callee_name)| {
+                callee_module == module && callee_name == name
+            })
+        }
+        _ => false,
+    }
+}
+
+fn resolve_print_callback(
+    callback: &ValueExpr,
+    aliases: &HashMap<String, AliasValue>,
+) -> Option<(String, String)> {
+    match callback {
+        ValueExpr::GlobalRef { module, name }
+            if module == "Print" && (name == "print" || name == "println") =>
+        {
+            Some((module.clone(), name.clone()))
+        }
+        ValueExpr::Var(name) if name == "print" || name == "println" => {
+            Some(("Print".to_string(), name.clone()))
+        }
+        ValueExpr::Var(name) => {
+            if let Some(op) = resolve_var_alias(name, aliases)
+                && (op == "print" || op == "println")
+            {
+                return Some(("Print".to_string(), op.to_string()));
+            }
+            let (module, op) = resolve_global_ref(name, aliases)?;
+            if module == "Print" && (op == "print" || op == "println") {
+                Some(("Print".to_string(), op.to_string()))
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
+fn resolve_local_name<'a>(
+    value: &'a ValueExpr,
+    aliases: &'a HashMap<String, AliasValue>,
+) -> Option<&'a str> {
+    match value {
+        ValueExpr::Var(name) => resolve_var_alias(name, aliases),
+        _ => None,
+    }
+}
+
+fn resolve_var_alias<'a>(
+    name: &'a str,
+    aliases: &'a HashMap<String, AliasValue>,
+) -> Option<&'a str> {
+    match aliases.get(name) {
+        Some(AliasValue::Var(next)) => resolve_var_alias(next.as_str(), aliases),
+        Some(AliasValue::Str(_)) | Some(AliasValue::GlobalRef { .. }) => None,
+        None => Some(name),
+    }
+}
+
+fn resolve_str_arg<'a>(
+    value: &'a ValueExpr,
+    aliases: &'a HashMap<String, AliasValue>,
+) -> Option<&'a str> {
+    match value {
+        ValueExpr::StrLit(text) => Some(text.as_str()),
+        ValueExpr::Var(name) => resolve_str_alias(name, aliases),
+        _ => None,
+    }
+}
+
+fn resolve_str_alias<'a>(
+    name: &'a str,
+    aliases: &'a HashMap<String, AliasValue>,
+) -> Option<&'a str> {
+    match aliases.get(name) {
+        Some(AliasValue::Str(text)) => Some(text.as_str()),
+        Some(AliasValue::Var(next)) => resolve_str_alias(next.as_str(), aliases),
+        Some(AliasValue::GlobalRef { .. }) | None => None,
+    }
+}
+
+fn resolve_global_ref<'a>(
+    name: &'a str,
+    aliases: &'a HashMap<String, AliasValue>,
+) -> Option<(&'a str, &'a str)> {
+    match aliases.get(name) {
+        Some(AliasValue::GlobalRef { module, name }) => Some((module.as_str(), name.as_str())),
+        Some(AliasValue::Var(next)) => resolve_global_ref(next.as_str(), aliases),
+        Some(AliasValue::Str(_)) | None => None,
+    }
+}
+
+fn resolve_effect_call_target(
+    callee: &ValueExpr,
+    aliases: &HashMap<String, AliasValue>,
+) -> Option<(String, String)> {
+    match callee {
+        ValueExpr::GlobalRef { module, name } if is_effect_pair(module.as_str(), name.as_str()) => {
+            Some((module.clone(), name.clone()))
+        }
+        ValueExpr::Var(name) if name == "print" || name == "println" => {
+            Some(("Print".to_string(), name.clone()))
+        }
+        ValueExpr::Var(name) if name == "read" || name == "read_line" => {
+            Some(("Read".to_string(), name.clone()))
+        }
+        ValueExpr::Var(name) => {
+            if let Some(op) = resolve_var_alias(name, aliases)
+                && (op == "print" || op == "println")
+            {
+                return Some(("Print".to_string(), op.to_string()));
+            }
+            if let Some(op) = resolve_var_alias(name, aliases)
+                && (op == "read" || op == "read_line")
+            {
+                return Some(("Read".to_string(), op.to_string()));
+            }
+            let (module, op) = resolve_global_ref(name, aliases)?;
+            if is_effect_pair(module, op) {
+                Some((module.to_string(), op.to_string()))
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
+fn resolve_helper_call_target<'a>(
+    callee: &'a ValueExpr,
+    aliases: &'a HashMap<String, AliasValue>,
+) -> Option<(&'a str, &'a str)> {
+    match callee {
+        ValueExpr::GlobalRef { module, name } => Some((module.as_str(), name.as_str())),
+        ValueExpr::Var(name) => resolve_global_ref(name, aliases),
+        _ => None,
+    }
+}
+
+fn is_effect_pair(module: &str, op: &str) -> bool {
+    matches!(
+        (module, op),
+        ("Print", "print") | ("Print", "println") | ("Read", "read") | ("Read", "read_line")
+    )
+}
+
+fn instrs_load_local(instrs: &[WasmBackendInstr], name: &str) -> bool {
+    instrs.iter().any(|instr| {
+        matches!(
+            instr,
+            WasmBackendInstr::LoadLocal { name: local_name } if local_name == name
+        )
+    })
 }
 
 #[cfg(test)]
@@ -384,6 +610,32 @@ mod tests {
     }
 
     #[test]
+    fn lower_local_print_alias_call_emits_effect_op() {
+        let comp = CompExpr::Let {
+            name: "printer".to_string(),
+            ty: goby_core::ir::IrType::Unknown,
+            value: Box::new(CompExpr::Value(ValueExpr::Var("print".to_string()))),
+            body: Box::new(CompExpr::Call {
+                callee: Box::new(ValueExpr::Var("printer".to_string())),
+                args: vec![ValueExpr::Var("text".to_string())],
+            }),
+        };
+        let instrs = lower_comp(&comp).expect("local print alias call should lower");
+        assert_eq!(
+            instrs,
+            vec![
+                I::LoadLocal {
+                    name: "text".to_string()
+                },
+                I::EffectOp {
+                    effect: "Print".to_string(),
+                    op: "print".to_string(),
+                },
+            ]
+        );
+    }
+
+    #[test]
     fn lower_int_lit_zero() {
         let v = ValueExpr::IntLit(0);
         let instrs = lower_value(&v).expect("should encode 0");
@@ -439,6 +691,81 @@ mod tests {
                     && op == "println"),
             "expected SplitEachPrint, got {:?}",
             instrs[0]
+        );
+    }
+
+    #[test]
+    fn lower_split_each_with_bare_println_callback_emits_fused_instr() {
+        let comp = CompExpr::Let {
+            name: "lines".to_string(),
+            ty: goby_core::ir::IrType::Unknown,
+            value: Box::new(CompExpr::Call {
+                callee: Box::new(ValueExpr::GlobalRef {
+                    module: "string".to_string(),
+                    name: "split".to_string(),
+                }),
+                args: vec![
+                    ValueExpr::Var("text".to_string()),
+                    ValueExpr::StrLit("\n".to_string()),
+                ],
+            }),
+            body: Box::new(CompExpr::Call {
+                callee: Box::new(ValueExpr::GlobalRef {
+                    module: "list".to_string(),
+                    name: "each".to_string(),
+                }),
+                args: vec![
+                    ValueExpr::Var("lines".to_string()),
+                    ValueExpr::Var("println".to_string()),
+                ],
+            }),
+        };
+        let instrs = lower_comp(&comp).expect("fused bare-callback pattern should succeed");
+        assert!(
+            matches!(&instrs[0], I::SplitEachPrint { effect, op, .. }
+                if effect == "Print" && op == "println"),
+            "expected bare println callback to lower to SplitEachPrint, got {:?}",
+            instrs
+        );
+    }
+
+    #[test]
+    fn lower_split_each_with_prebound_callback_alias_emits_fused_instr() {
+        let comp = CompExpr::Let {
+            name: "printer".to_string(),
+            ty: goby_core::ir::IrType::Unknown,
+            value: Box::new(CompExpr::Value(ValueExpr::Var("println".to_string()))),
+            body: Box::new(CompExpr::Let {
+                name: "lines".to_string(),
+                ty: goby_core::ir::IrType::Unknown,
+                value: Box::new(CompExpr::Call {
+                    callee: Box::new(ValueExpr::GlobalRef {
+                        module: "string".to_string(),
+                        name: "split".to_string(),
+                    }),
+                    args: vec![
+                        ValueExpr::Var("text".to_string()),
+                        ValueExpr::StrLit("\n".to_string()),
+                    ],
+                }),
+                body: Box::new(CompExpr::Call {
+                    callee: Box::new(ValueExpr::GlobalRef {
+                        module: "list".to_string(),
+                        name: "each".to_string(),
+                    }),
+                    args: vec![
+                        ValueExpr::Var("lines".to_string()),
+                        ValueExpr::Var("printer".to_string()),
+                    ],
+                }),
+            }),
+        };
+        let instrs = lower_comp(&comp).expect("prebound callback alias pattern should succeed");
+        assert!(
+            matches!(&instrs[0], I::SplitEachPrint { effect, op, .. }
+                if effect == "Print" && op == "println"),
+            "expected prebound callback alias to lower to SplitEachPrint, got {:?}",
+            instrs
         );
     }
 

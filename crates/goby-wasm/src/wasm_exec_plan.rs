@@ -32,6 +32,13 @@ fn runtime_artifacts_from_decl_and_ir<'a>(
     decl: &'a Declaration,
     ir_decl: Option<&IrDecl>,
 ) -> Option<WasmRuntimeArtifacts<'a>> {
+    if let Some(stmts) = decl.parsed_body.as_deref() {
+        return Some(WasmRuntimeArtifacts {
+            body: Some(Cow::Borrowed(decl.body.as_str())),
+            stmts: Cow::Borrowed(stmts),
+        });
+    }
+
     if let Some(ir_decl) = ir_decl {
         let stmts = comp_to_stmts(&ir_decl.body)?;
         let body = stmts_to_body_source(&stmts).map(Cow::Owned);
@@ -40,12 +47,7 @@ fn runtime_artifacts_from_decl_and_ir<'a>(
             stmts: Cow::Owned(stmts),
         });
     }
-
-    let stmts = decl.parsed_body.as_deref()?;
-    Some(WasmRuntimeArtifacts {
-        body: Some(Cow::Borrowed(decl.body.as_str())),
-        stmts: Cow::Borrowed(stmts),
-    })
+    None
 }
 
 fn comp_to_stmts(comp: &CompExpr) -> Option<Vec<Stmt>> {
