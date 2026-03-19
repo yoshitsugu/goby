@@ -18,7 +18,8 @@ pub(crate) enum BackendIntrinsic {
     StringSplit,
     ListGet,
     StringLength,
-    StringEachGrapheme,
+    StringEachGraphemeCount,
+    StringEachGraphemeState,
     ListPushString,
 }
 
@@ -28,7 +29,8 @@ impl BackendIntrinsic {
             BackendIntrinsic::StringSplit => 2,
             BackendIntrinsic::ListGet => 2,
             BackendIntrinsic::StringLength => 1,
-            BackendIntrinsic::StringEachGrapheme => 1,
+            BackendIntrinsic::StringEachGraphemeCount => 1,
+            BackendIntrinsic::StringEachGraphemeState => 2,
             BackendIntrinsic::ListPushString => 2,
         }
     }

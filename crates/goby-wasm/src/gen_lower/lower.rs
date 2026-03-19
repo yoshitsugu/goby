@@ -115,7 +115,9 @@ fn lower_comp_with_aliases(
                 }
                 instrs.push(WasmBackendInstr::EffectOp { effect, op });
                 Ok(instrs)
-            } else if let Some(intrinsic) = resolve_intrinsic_call_target(callee, aliases) {
+            } else if let Some(intrinsic) =
+                resolve_intrinsic_call_target(callee, aliases, args.len())
+            {
                 let mut instrs = Vec::new();
                 for arg in args {
                     instrs.extend(lower_value(arg)?);
@@ -497,13 +499,14 @@ fn resolve_effect_call_target(
 fn resolve_intrinsic_call_target(
     callee: &ValueExpr,
     aliases: &HashMap<String, AliasValue>,
+    arg_count: usize,
 ) -> Option<BackendIntrinsic> {
     match callee {
         ValueExpr::GlobalRef { module, name } => {
             backend_intrinsic_for(module.as_str(), name.as_str())
         }
         ValueExpr::Var(name) => {
-            if let Some(intrinsic) = backend_intrinsic_for_bare(name) {
+            if let Some(intrinsic) = backend_intrinsic_for_bare(name, arg_count) {
                 return Some(intrinsic);
             }
             let (module, name) = resolve_global_ref(name, aliases)?;
@@ -522,9 +525,13 @@ fn backend_intrinsic_for(module: &str, name: &str) -> Option<BackendIntrinsic> {
     }
 }
 
-fn backend_intrinsic_for_bare(name: &str) -> Option<BackendIntrinsic> {
+fn backend_intrinsic_for_bare(name: &str, arg_count: usize) -> Option<BackendIntrinsic> {
     match name {
-        "__goby_string_each_grapheme" => Some(BackendIntrinsic::StringEachGrapheme),
+        "__goby_string_each_grapheme" => match arg_count {
+            1 => Some(BackendIntrinsic::StringEachGraphemeCount),
+            2 => Some(BackendIntrinsic::StringEachGraphemeState),
+            _ => None,
+        },
         "__goby_list_push_string" => Some(BackendIntrinsic::ListPushString),
         "__goby_string_length" => Some(BackendIntrinsic::StringLength),
         _ => None,
@@ -727,7 +734,33 @@ mod tests {
                     name: "text".to_string()
                 },
                 I::Intrinsic {
-                    intrinsic: BackendIntrinsic::StringEachGrapheme
+                    intrinsic: BackendIntrinsic::StringEachGraphemeCount
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn lower_runtime_intrinsic_bare_name_state_mode_emits_explicit_intrinsic() {
+        let comp = CompExpr::Call {
+            callee: Box::new(ValueExpr::Var("__goby_string_each_grapheme".to_string())),
+            args: vec![
+                ValueExpr::Var("text".to_string()),
+                ValueExpr::Var("state".to_string()),
+            ],
+        };
+        let instrs = lower_comp(&comp).expect("runtime intrinsic state mode should lower");
+        assert_eq!(
+            instrs,
+            vec![
+                I::LoadLocal {
+                    name: "text".to_string()
+                },
+                I::LoadLocal {
+                    name: "state".to_string()
+                },
+                I::Intrinsic {
+                    intrinsic: BackendIntrinsic::StringEachGraphemeState
                 },
             ]
         );

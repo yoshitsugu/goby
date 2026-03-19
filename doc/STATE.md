@@ -40,7 +40,8 @@ Last updated: 2026-03-19
 - Track E E3 semantic-authority groundwork is landed:
   - Unicode Extended Grapheme Cluster segmentation now lives behind a dedicated backend/runtime helper module,
   - imported `goby/string.graphemes` evaluation and `__goby_string_each_grapheme` runtime intrinsic execution both use that shared authority,
-  - remaining E3 work is emitter-side execution, not deciding semantics in multiple places.
+  - backend lowering now splits unary and binary `__goby_string_each_grapheme` forms into explicit fixed-arity intrinsic variants,
+  - remaining E3 work is emitter-side execution, not deciding semantics or overloading contracts in multiple places.
 - Remaining helper work is incremental family expansion on top of the emitter ABI, not a reason to restore planner or AST-shaped fallback.
 - The IR-lowering roadmap is complete; follow-up work should stay within the converged lowering architecture.
 - Then inspect:

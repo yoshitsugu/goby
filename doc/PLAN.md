@@ -506,6 +506,10 @@ Milestones:
       backend/runtime helper module, and the existing runtime decl/intrinsic
       paths consume that shared authority instead of calling
       `unicode-segmentation` ad hoc in multiple places.
+    - backend intrinsic lowering now distinguishes the unary count-style and
+      binary state-threading forms of `__goby_string_each_grapheme`, so E3 can
+      target explicit fixed-arity backend contracts instead of an overloaded
+      placeholder.
   - done when:
     - the semantic-authority choice is explicit in code/docs,
     - a runtime-`Read` program can execute stdlib `goby/string.graphemes`
