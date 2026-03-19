@@ -517,7 +517,7 @@ All implementation under this plan must preserve:
   - validation checklist:
     - IR tests cover construction and representative consumption sites
     - any remaining backend limitation is documented as such rather than left as lowering failure
-- [ ] IR9. Mutable-form lowering
+- [x] IR9. Mutable-form lowering
   - lower mutable locals and assignment into shared IR
   - implementation checklist:
     - choose the shared-IR representation for mutable locals
@@ -620,36 +620,34 @@ Reason for this order:
 
 The recommended next implementation slice is:
 
-1. advance IR9 for mutation as the remaining open semantic family,
-2. keep deleting diagnostics and comments that still imply "shared IR cannot represent this" when the real gap is lowering or backend support,
-3. continue shrinking backend/runtime fallback assumptions that only remain as optimization layers.
+1. advance IR10 by converting remaining "not lowerable" failures into backend-boundary failures,
+2. remove or narrow fallback/recognizer paths that only survive because of pre-convergence AST assumptions,
+3. prepare IR11 by deleting comments, docs, and planner language that still treats the pure subset as the governing architecture.
 
 Recommended file entry points for that slice:
 
 - `doc/PLAN_IR.md`
-- `crates/goby-core/src/resolved.rs`
-- `crates/goby-core/src/ir_lower.rs`
-- `crates/goby-core/src/ir.rs`
-- the backend/runtime tests that currently encode spelling-specific equivalence cases
+- `crates/goby-wasm/src/lower.rs`
+- `crates/goby-wasm/src/fallback.rs`
+- `crates/goby-wasm/src/runtime_io_plan.rs`
+- the backend/runtime tests that still encode pre-convergence fallback expectations
 
-Recommended milestone order after IR5:
+Recommended milestone order after IR9:
 
-1. IR6 `case`
-2. IR8 tuples/records
-3. IR7 lambdas / higher-order values
-4. IR9 mutation
+1. IR10 backend boundary convergence
+2. IR11 pure-subset deletion
 
 Reason for this order:
 
-- it keeps control flow ahead of new callable-environment design,
-- it separates product-data execution support from closure design,
-- it leaves the most cross-cutting stateful family, mutation, until after the value/control-flow families are stable.
+- it turns the remaining work from "missing language-family lowering" into backend cleanup and boundary cleanup,
+- it forces old fallback dependencies to justify themselves as optimizations or disappear,
+- it leaves terminology cleanup until the code already reflects the intended architecture.
 
 Definition of done for the next slice:
 
 - `ir_lower` continues to lower through `Resolved*` inputs without reintroducing raw-name heuristics,
-- the next slice finishes one remaining lowering family against the now-complete shared-IR vocabulary,
-- new AST-to-IR / IR snapshot tests prove the family now fails, if at all, for lowering/backend reasons rather than missing IR shape,
+- the next slice removes at least one concrete fallback/recognizer or rewrites one family of diagnostics to backend-boundary wording,
+- new tests prove representative unsupported cases fail, if at all, because of backend/runtime support rather than missing IR shape,
 - `doc/STATE.md` names only the active next milestone and any exact unfinished sub-steps.
 
 ## 12. Non-Goals for This Document

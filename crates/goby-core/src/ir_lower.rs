@@ -127,14 +127,22 @@ fn lower_stmts_slice(ctx: &mut LowerCtx, stmts: &[ResolvedStmt]) -> Result<CompE
                 body: Box::new(CompExpr::Value(ValueExpr::Var(name.clone()))),
             })
         }
-        [ResolvedStmt::MutBinding { name, .. }] => Err(err(format!(
-            "mutable binding lowering is not implemented yet for `{}`",
-            name
-        ))),
-        [ResolvedStmt::Assign { target, .. }] => Err(err(format!(
-            "assignment lowering is not implemented yet for `{}`",
-            ref_name(target)
-        ))),
+        [ResolvedStmt::MutBinding { name, value, .. }] => {
+            let val_comp = lower_expr_as_comp(ctx, value)?;
+            Ok(CompExpr::LetMut {
+                name: name.clone(),
+                ty: infer_type_from_expr(value),
+                value: Box::new(val_comp),
+                body: Box::new(CompExpr::Value(ValueExpr::Var(name.clone()))),
+            })
+        }
+        [ResolvedStmt::Assign { target, value, .. }] => {
+            let target_name = mutable_target_name(target)?;
+            Ok(CompExpr::Assign {
+                name: target_name.to_string(),
+                value: Box::new(lower_expr_as_comp(ctx, value)?),
+            })
+        }
         [head, rest @ ..] => match head {
             ResolvedStmt::Binding { name, value, .. } => {
                 let val_comp = lower_expr_as_comp(ctx, value)?;
@@ -168,14 +176,41 @@ fn lower_stmts_slice(ctx: &mut LowerCtx, stmts: &[ResolvedStmt]) -> Result<CompE
                     }),
                 }
             }
-            ResolvedStmt::MutBinding { name, .. } => Err(err(format!(
-                "mutable binding lowering is not implemented yet for `{}`",
-                name
-            ))),
-            ResolvedStmt::Assign { target, .. } => Err(err(format!(
-                "assignment lowering is not implemented yet for `{}`",
-                ref_name(target)
-            ))),
+            ResolvedStmt::MutBinding { name, value, .. } => {
+                let val_comp = lower_expr_as_comp(ctx, value)?;
+                let body = lower_stmts_slice(ctx, rest)?;
+                Ok(CompExpr::LetMut {
+                    name: name.clone(),
+                    ty: infer_type_from_expr(value),
+                    value: Box::new(val_comp),
+                    body: Box::new(body),
+                })
+            }
+            ResolvedStmt::Assign { target, value, .. } => {
+                let head_comp = CompExpr::Assign {
+                    name: mutable_target_name(target)?.to_string(),
+                    value: Box::new(lower_expr_as_comp(ctx, value)?),
+                };
+                let tail = lower_stmts_slice(ctx, rest)?;
+                match tail {
+                    CompExpr::Seq {
+                        stmts: mut seq_stmts,
+                        tail,
+                    } => {
+                        let mut merged = Vec::with_capacity(1 + seq_stmts.len());
+                        merged.push(head_comp);
+                        merged.append(&mut seq_stmts);
+                        Ok(CompExpr::Seq {
+                            stmts: merged,
+                            tail,
+                        })
+                    }
+                    other => Ok(CompExpr::Seq {
+                        stmts: vec![head_comp],
+                        tail: Box::new(other),
+                    }),
+                }
+            }
         },
     }
 }
@@ -705,6 +740,16 @@ fn ref_name(reference: &ResolvedRef) -> &str {
         ResolvedRef::Helper { name, .. }
         | ResolvedRef::EffectOp { op: name, .. }
         | ResolvedRef::Global { name, .. } => name,
+    }
+}
+
+fn mutable_target_name(reference: &ResolvedRef) -> Result<&str, LowerError> {
+    match reference {
+        ResolvedRef::Local(name) | ResolvedRef::ValueName(name) => Ok(name),
+        other => Err(err(format!(
+            "assignment target must be a mutable local, got `{}`",
+            ref_name(other)
+        ))),
     }
 }
 
@@ -1355,7 +1400,7 @@ mod tests {
     }
 
     #[test]
-    fn reject_mut_binding() {
+    fn lower_mut_binding() {
         let decl = decl_with_body(
             "mut_bind",
             vec![Stmt::MutBinding {
@@ -1364,8 +1409,29 @@ mod tests {
                 span: None,
             }],
         );
-        let err = lower_declaration(&decl).unwrap_err();
-        assert!(err.message.contains("mutable binding"), "{}", err.message);
+        let ir_decl = lower_declaration(&decl).unwrap();
+        let m = IrModule {
+            decls: vec![ir_decl],
+        };
+        assert!(validate_ir(&m).is_ok());
+        match &m.decls[0].body {
+            CompExpr::LetMut {
+                name, value, body, ..
+            } => {
+                assert_eq!(name, "x");
+                assert!(
+                    matches!(value.as_ref(), CompExpr::Value(ValueExpr::IntLit(1))),
+                    "mutable binding value should lower directly, got {:?}",
+                    value
+                );
+                assert!(
+                    matches!(body.as_ref(), CompExpr::Value(ValueExpr::Var(v)) if v == "x"),
+                    "single mutable binding should yield the bound variable, got {:?}",
+                    body
+                );
+            }
+            other => panic!("expected LetMut, got {:?}", other),
+        }
     }
 
     #[test]
@@ -1423,17 +1489,58 @@ mod tests {
     }
 
     #[test]
-    fn reject_assign() {
+    fn lower_assign() {
+        let decl = decl_with_body(
+            "assign_test",
+            vec![
+                Stmt::MutBinding {
+                    name: "x".into(),
+                    value: Expr::IntLit(1),
+                    span: None,
+                },
+                Stmt::Assign {
+                    name: "x".into(),
+                    value: Expr::IntLit(2),
+                    span: None,
+                },
+            ],
+        );
+        let ir_decl = lower_declaration(&decl).unwrap();
+        let m = IrModule {
+            decls: vec![ir_decl],
+        };
+        assert!(validate_ir(&m).is_ok());
+        match &m.decls[0].body {
+            CompExpr::LetMut { name, body, .. } => {
+                assert_eq!(name, "x");
+                match body.as_ref() {
+                    CompExpr::Assign { name, value } => {
+                        assert_eq!(name, "x");
+                        assert!(
+                            matches!(value.as_ref(), CompExpr::Value(ValueExpr::IntLit(2))),
+                            "expected assignment value to lower directly, got {:?}",
+                            value
+                        );
+                    }
+                    other => panic!("expected Assign after mutable binding, got {:?}", other),
+                }
+            }
+            other => panic!("expected outer LetMut, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn reject_assign_to_non_local_target() {
         let decl = decl_with_body(
             "assign_test",
             vec![Stmt::Assign {
-                name: "x".into(),
+                name: "print".into(),
                 value: Expr::IntLit(1),
                 span: None,
             }],
         );
         let err = lower_declaration(&decl).unwrap_err();
-        assert!(err.message.contains("assignment"), "{}", err.message);
+        assert!(err.message.contains("assignment target"), "{}", err.message);
     }
 
     // --- lone binding semantics test ---
