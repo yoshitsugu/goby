@@ -335,9 +335,20 @@ Recommended sequence:
 1. Resolution boundary and effect-call normalization
 2. Collections: list literal, spread, indexing
 3. Control flow: case and related branch lowering
-4. Function values: lambda and higher-order capture model
-5. Product data: tuples and records
+4. Product data: tuples and records
+5. Function values: lambda and higher-order capture model
 6. Mutable forms: mutable locals and assignment
+
+Reason for this order:
+
+- `case` is the next control-flow family that still forces downstream runtime/backend
+  code to compensate for a missing shared-IR path.
+- product data is a cleaner next step than lambdas because tuples/records already have
+  explicit shared-IR vocabulary and do not require capture or callable-environment design.
+- lambda lowering should come after product-data lowering so closure/capture design is not
+  mixed with first-time product-data execution support in the same architectural slice.
+- mutation should remain last among the currently open semantic families because its
+  semantics interact with handlers/resume and potentially with future closure environments.
 
 For each slice:
 
@@ -484,6 +495,8 @@ All implementation under this plan must preserve:
     - lower `case` with all currently supported pattern families
     - ensure effectful scrutinees and branch bodies survive lowering without AST fallback
     - update any runtime path that still assumes `case` is interpreter-only
+    - remove or narrow any backend/runtime fallback that still exists only because `case`
+      does not yet lower through the normal shared-IR path
   - validation checklist:
     - IR snapshots exist for both pure and effectful `case`
     - branch semantics match existing runtime behavior
@@ -608,8 +621,10 @@ Reason for this order:
 The recommended next implementation slice is:
 
 1. advance IR6 by lowering `case` into the explicit shared-IR control-flow nodes,
-2. advance IR7/IR8/IR9 by choosing the first end-to-end lowering slice among lambdas, product data, or mutation,
-3. keep deleting diagnostics and comments that still imply "shared IR cannot represent this" when the real gap is lowering or backend support.
+2. after IR6, advance IR8 for tuples/records before starting lambda lowering,
+3. advance IR7 only after product-data lowering has established the non-closure value path,
+4. leave IR9 last among the currently open semantic families unless new evidence shows mutation is blocking another milestone,
+5. keep deleting diagnostics and comments that still imply "shared IR cannot represent this" when the real gap is lowering or backend support.
 
 Recommended file entry points for that slice:
 
@@ -618,6 +633,19 @@ Recommended file entry points for that slice:
 - `crates/goby-core/src/ir_lower.rs`
 - `crates/goby-core/src/ir.rs`
 - the backend/runtime tests that currently encode spelling-specific equivalence cases
+
+Recommended milestone order after IR5:
+
+1. IR6 `case`
+2. IR8 tuples/records
+3. IR7 lambdas / higher-order values
+4. IR9 mutation
+
+Reason for this order:
+
+- it keeps control flow ahead of new callable-environment design,
+- it separates product-data execution support from closure design,
+- it leaves the most cross-cutting stateful family, mutation, until after the value/control-flow families are stable.
 
 Definition of done for the next slice:
 

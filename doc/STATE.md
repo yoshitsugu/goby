@@ -6,13 +6,13 @@ Last updated: 2026-03-19
 
 - `doc/PLAN_IR.md` is the active roadmap.
 - IR0, IR1, IR2, IR3, IR4, and IR5 are landed.
-- Current priority is IR6, then IR7/IR8/IR9 by clean semantic-family slices.
+- Current priority order is IR6, then IR8, then IR7, then IR9.
 
 ## Immediate Next Steps
 
 1. Start IR6 by lowering `case` through `CompExpr::Case` and `IrCasePattern`.
 2. Ensure effectful scrutinees and branch bodies survive lowering without AST fallback.
-3. After IR6, move to IR7/IR8/IR9 by choosing the first end-to-end lowering slice among lambdas, product data, or mutation.
+3. After IR6, move to IR8 for tuples/records before starting lambda lowering.
 
 ## Restart Notes
 
