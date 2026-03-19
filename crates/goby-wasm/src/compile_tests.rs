@@ -1235,6 +1235,29 @@ main =
 }
 
 #[test]
+fn compile_module_general_lowers_list_push_string_helper_chain() {
+    let source = r#"
+import goby/string
+import goby/list
+
+main : Unit -> Unit can Print, Read
+main =
+  text = read ()
+  base = string.split text "\n"
+  pushed = __goby_list_push_string base "tail"
+  line = list.get pushed 2
+  print line
+"#;
+    let module = parse_module(source).expect("source should parse");
+    assert_eq!(
+        runtime_io_execution_kind(&module).expect("classification should succeed"),
+        crate::RuntimeIoExecutionKind::GeneralLowered,
+    );
+    let wasm = compile_module(&module).expect("list push helper chain should compile");
+    assert_valid_wasm_module(&wasm);
+}
+
+#[test]
 fn runtime_io_execution_kind_routes_read_graphemes_program_to_interpreter_bridge() {
     let source = r#"
 import goby/string ( graphemes )

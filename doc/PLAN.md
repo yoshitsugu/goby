@@ -511,6 +511,10 @@ Milestones:
     converged tagged-value and list/string allocation ABI.
   - keep list/string memory layout shared with existing collection helper
     emission.
+  - progress:
+    - direct backend emission for `__goby_list_push_string` is landed on top of
+      the existing tagged list/string layout, and helper-chain regression
+      coverage now locks `split -> list_push_string -> list.get -> print`.
   - done when:
     - no second list/string runtime representation is introduced for this track,
     - stdlib `goby/string.graphemes` can accumulate list results without

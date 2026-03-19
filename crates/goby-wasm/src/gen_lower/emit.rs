@@ -230,6 +230,7 @@ pub(crate) fn supports_instrs(instrs: &[WasmBackendInstr]) -> bool {
                 BackendIntrinsic::StringSplit
                     | BackendIntrinsic::ListGet
                     | BackendIntrinsic::StringLength
+                    | BackendIntrinsic::ListPushString
             )
         }
         _ => true,
@@ -568,6 +569,7 @@ fn emit_helper_call(
         BackendIntrinsic::StringSplit => emit_string_split_helper(function, helper_state),
         BackendIntrinsic::ListGet => emit_list_get_helper(function, helper_state),
         BackendIntrinsic::StringLength => emit_string_length_helper(function, helper_state),
+        BackendIntrinsic::ListPushString => emit_list_push_string_helper(function, helper_state),
         _ => Err(CodegenError {
             message: format!("gen_lower/emit: intrinsic '{intrinsic:?}' is not yet supported"),
         }),
@@ -986,6 +988,136 @@ fn emit_string_length_helper(
     function.instruction(&Instruction::I64ExtendI32S);
     function.instruction(&Instruction::I64Const((TAG_INT as i64) << 60));
     function.instruction(&Instruction::I64Or);
+    Ok(())
+}
+
+fn emit_list_push_string_helper(
+    function: &mut Function,
+    helper_state: &HelperEmitState,
+) -> Result<(), CodegenError> {
+    let list_i64 = helper_state.i64_base;
+    let string_i64 = helper_state.i64_base + 1;
+    let s_list_ptr = helper_state.i32_base;
+    let s_list_len = helper_state.i32_base + 1;
+    let s_string_ptr = helper_state.i32_base + 2;
+    let s_string_len = helper_state.i32_base + 3;
+    let s_new_list_ptr = helper_state.i32_base + 7;
+    let s_alloc_size = helper_state.i32_base + 9;
+    let s_iter = helper_state.i32_base + 10;
+
+    function.instruction(&Instruction::LocalSet(string_i64));
+    function.instruction(&Instruction::LocalSet(list_i64));
+
+    function.instruction(&Instruction::LocalGet(list_i64));
+    function.instruction(&Instruction::I64Const((TAG_LIST as i64) << 60));
+    function.instruction(&Instruction::I64And);
+    function.instruction(&Instruction::I64Const((TAG_LIST as i64) << 60));
+    function.instruction(&Instruction::I64Ne);
+    function.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
+    emit_abort(function);
+    function.instruction(&Instruction::End);
+
+    emit_decode_string_ptr(
+        function,
+        helper_state,
+        string_i64,
+        s_string_ptr,
+        s_string_len,
+    );
+
+    function.instruction(&Instruction::LocalGet(list_i64));
+    function.instruction(&Instruction::I64Const(0xFFFF_FFFFi64));
+    function.instruction(&Instruction::I64And);
+    function.instruction(&Instruction::I32WrapI64);
+    function.instruction(&Instruction::LocalSet(s_list_ptr));
+
+    function.instruction(&Instruction::LocalGet(s_list_ptr));
+    function.instruction(&Instruction::I32Load(MemArg {
+        offset: 0,
+        align: 2,
+        memory_index: 0,
+    }));
+    function.instruction(&Instruction::LocalSet(s_list_len));
+
+    function.instruction(&Instruction::LocalGet(s_list_len));
+    function.instruction(&Instruction::I32Const(1));
+    function.instruction(&Instruction::I32Add);
+    function.instruction(&Instruction::I32Const(8));
+    function.instruction(&Instruction::I32Mul);
+    function.instruction(&Instruction::I32Const(4));
+    function.instruction(&Instruction::I32Add);
+    function.instruction(&Instruction::LocalSet(s_alloc_size));
+    emit_alloc_from_top(function, helper_state, s_alloc_size, s_new_list_ptr);
+
+    function.instruction(&Instruction::I32Const(0));
+    function.instruction(&Instruction::LocalSet(s_iter));
+
+    function.instruction(&Instruction::Block(wasm_encoder::BlockType::Empty));
+    function.instruction(&Instruction::Loop(wasm_encoder::BlockType::Empty));
+    function.instruction(&Instruction::LocalGet(s_iter));
+    function.instruction(&Instruction::LocalGet(s_list_len));
+    function.instruction(&Instruction::I32GeU);
+    function.instruction(&Instruction::BrIf(1));
+
+    function.instruction(&Instruction::LocalGet(s_new_list_ptr));
+    function.instruction(&Instruction::I32Const(4));
+    function.instruction(&Instruction::I32Add);
+    function.instruction(&Instruction::LocalGet(s_iter));
+    function.instruction(&Instruction::I32Const(8));
+    function.instruction(&Instruction::I32Mul);
+    function.instruction(&Instruction::I32Add);
+
+    function.instruction(&Instruction::LocalGet(s_list_ptr));
+    function.instruction(&Instruction::I32Const(4));
+    function.instruction(&Instruction::I32Add);
+    function.instruction(&Instruction::LocalGet(s_iter));
+    function.instruction(&Instruction::I32Const(8));
+    function.instruction(&Instruction::I32Mul);
+    function.instruction(&Instruction::I32Add);
+    function.instruction(&Instruction::I64Load(MemArg {
+        offset: 0,
+        align: 3,
+        memory_index: 0,
+    }));
+    function.instruction(&Instruction::I64Store(MemArg {
+        offset: 0,
+        align: 3,
+        memory_index: 0,
+    }));
+
+    function.instruction(&Instruction::LocalGet(s_iter));
+    function.instruction(&Instruction::I32Const(1));
+    function.instruction(&Instruction::I32Add);
+    function.instruction(&Instruction::LocalSet(s_iter));
+    function.instruction(&Instruction::Br(0));
+    function.instruction(&Instruction::End);
+    function.instruction(&Instruction::End);
+
+    function.instruction(&Instruction::LocalGet(s_new_list_ptr));
+    function.instruction(&Instruction::I32Const(4));
+    function.instruction(&Instruction::I32Add);
+    function.instruction(&Instruction::LocalGet(s_list_len));
+    function.instruction(&Instruction::I32Const(8));
+    function.instruction(&Instruction::I32Mul);
+    function.instruction(&Instruction::I32Add);
+    emit_push_tagged_ptr(function, s_string_ptr, TAG_STRING);
+    function.instruction(&Instruction::I64Store(MemArg {
+        offset: 0,
+        align: 3,
+        memory_index: 0,
+    }));
+
+    function.instruction(&Instruction::LocalGet(s_new_list_ptr));
+    function.instruction(&Instruction::LocalGet(s_list_len));
+    function.instruction(&Instruction::I32Const(1));
+    function.instruction(&Instruction::I32Add);
+    function.instruction(&Instruction::I32Store(MemArg {
+        offset: 0,
+        align: 2,
+        memory_index: 0,
+    }));
+
+    emit_push_tagged_ptr(function, s_new_list_ptr, TAG_LIST);
     Ok(())
 }
 
@@ -1824,6 +1956,64 @@ mod tests {
         ];
         let wasm = emit_general_module(&instrs, &default_layout())
             .expect("emit static string print should succeed");
+        assert_valid_wasm(&wasm);
+    }
+
+    #[test]
+    fn supports_list_push_string_intrinsic() {
+        let instrs = vec![
+            I::PushStaticString {
+                text: "left\nright".to_string(),
+            },
+            I::PushStaticString {
+                text: "\n".to_string(),
+            },
+            I::Intrinsic {
+                intrinsic: BackendIntrinsic::StringSplit,
+            },
+            I::PushStaticString {
+                text: "tail".to_string(),
+            },
+            I::Intrinsic {
+                intrinsic: BackendIntrinsic::ListPushString,
+            },
+            I::PushStaticString {
+                text: "2".to_string(),
+            },
+        ];
+        assert!(supports_instrs(&instrs));
+    }
+
+    #[test]
+    fn emit_list_push_string_produces_valid_wasm() {
+        let instrs = vec![
+            I::PushStaticString {
+                text: "left\nright".to_string(),
+            },
+            I::PushStaticString {
+                text: "\n".to_string(),
+            },
+            I::Intrinsic {
+                intrinsic: BackendIntrinsic::StringSplit,
+            },
+            I::PushStaticString {
+                text: "tail".to_string(),
+            },
+            I::Intrinsic {
+                intrinsic: BackendIntrinsic::ListPushString,
+            },
+            I::I64Const(crate::gen_lower::value::encode_int(2).unwrap()),
+            I::Intrinsic {
+                intrinsic: BackendIntrinsic::ListGet,
+            },
+            I::EffectOp {
+                effect: "Print".to_string(),
+                op: "print".to_string(),
+            },
+            I::Drop,
+        ];
+        let wasm = emit_general_module(&instrs, &default_layout())
+            .expect("emit ListPushString helper chain should succeed");
         assert_valid_wasm(&wasm);
     }
 }
