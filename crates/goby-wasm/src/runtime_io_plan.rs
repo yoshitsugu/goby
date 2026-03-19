@@ -10,7 +10,7 @@ use crate::gen_lower::emit::emit_general_module;
 use crate::layout::MemoryLayout;
 use crate::runtime_flow::DirectCallHead;
 use crate::runtime_support::{flatten_direct_call, module_has_selective_import_symbol};
-use crate::wasm_exec_plan::main_exec_plan;
+use crate::wasm_exec_plan::{main_exec_plan, runtime_artifacts_from_ir_decl};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum InputReadMode {
@@ -700,6 +700,11 @@ pub(crate) fn classify_runtime_io_with_ir_fallback(module: &Module) -> RuntimeIo
         .runtime
         .as_ref()
         .map(|runtime| runtime.stmts.as_ref());
+    let ir_runtime_body = main_plan
+        .ir_decl
+        .as_ref()
+        .and_then(|ir_decl| runtime_artifacts_from_ir_decl(ir_decl))
+        .map(|runtime| runtime.stmts.into_owned());
     let ir_result = main_plan
         .ir_decl
         .as_ref()
@@ -709,7 +714,7 @@ pub(crate) fn classify_runtime_io_with_ir_fallback(module: &Module) -> RuntimeIo
         Some(RuntimeIoClassification::NotRuntimeIo | RuntimeIoClassification::Unsupported) => {
             // IR may have missed bare-name effect calls or unrecognised runtime-I/O forms;
             // consult the statement-form classifier for a potentially better result.
-            classify_runtime_io(module, parsed_body)
+            classify_runtime_io(module, ir_runtime_body.as_deref().or(parsed_body))
         }
         Some(other) => other,
     }

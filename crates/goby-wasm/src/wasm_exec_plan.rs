@@ -34,6 +34,17 @@ pub(crate) fn decl_exec_plan(decl: &Declaration) -> WasmDeclExecPlan<'_> {
     WasmDeclExecPlan { ir_decl, runtime }
 }
 
+pub(crate) fn runtime_artifacts_from_ir_decl(
+    ir_decl: &IrDecl,
+) -> Option<WasmRuntimeArtifacts<'static>> {
+    let stmts = comp_to_stmts(&ir_decl.body)?;
+    let body = stmts_to_body_source(&stmts).map(Cow::Owned);
+    Some(WasmRuntimeArtifacts {
+        body,
+        stmts: Cow::Owned(stmts),
+    })
+}
+
 fn runtime_artifacts_from_decl_and_ir<'a>(
     decl: &'a Declaration,
     ir_decl: Option<&IrDecl>,
@@ -45,16 +56,7 @@ fn runtime_artifacts_from_decl_and_ir<'a>(
         });
     }
 
-    if let Some(ir_decl) = ir_decl {
-        let stmts = comp_to_stmts(&ir_decl.body)?;
-        let body = stmts_to_body_source(&stmts).map(Cow::Owned);
-        return Some(WasmRuntimeArtifacts {
-            body,
-            stmts: Cow::Owned(stmts),
-        });
-    }
-
-    None
+    ir_decl.and_then(runtime_artifacts_from_ir_decl)
 }
 
 fn comp_to_stmts(comp: &CompExpr) -> Option<Vec<Stmt>> {
@@ -402,6 +404,31 @@ main =
                     transform: None,
                 }
             )
+        );
+    }
+
+    #[test]
+    fn runtime_artifacts_from_ir_decl_prefers_canonical_bridge_shape() {
+        let module = parse_module(
+            r#"
+import goby/string ( split )
+
+main : Unit -> Unit can Print, Read
+main =
+  text = read ()
+  lines = split text "\n"
+  println(lines[1])
+"#,
+        )
+        .expect("parse should work");
+        let plan = main_exec_plan(&module).expect("main should exist");
+        let ir_decl = plan.ir_decl.expect("IR should lower");
+        let runtime =
+            runtime_artifacts_from_ir_decl(&ir_decl).expect("runtime artifacts should exist");
+        let body = runtime.body.expect("body should exist");
+        assert_eq!(
+            body,
+            "text = Read.read ()\nlines = string.split text \"\n\"\n__goby_ir_effect_arg_0 = list.get lines 1\nPrint.println __goby_ir_effect_arg_0"
         );
     }
 }
