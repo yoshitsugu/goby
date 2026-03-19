@@ -110,6 +110,8 @@ Locked direction:
 
 - shared IR should be constructed from a name-resolved / symbol-resolved front-end form,
   not directly from raw AST spelling alone,
+- the project should use a distinct resolved front-end form as the lowering input to shared IR,
+  rather than incrementally attaching more ad-hoc resolution fields onto the raw/typed AST,
 - effect operations should lower from resolved operation identity, not from textual patterns
   like "qualified name happens to look like `Read.read`",
 - ordinary callable references should already distinguish at least:
@@ -125,6 +127,8 @@ Implication:
 
 - effect-call normalization is not just an `ir_lower.rs` rewrite. It depends on introducing
   or exposing resolved symbol information as a first-class lowering input.
+- `ir_lower` should ultimately consume the resolved front-end form, not raw AST plus local
+  name-pattern heuristics.
 
 ## 4. Scope of "Complete IR Lowering"
 
@@ -180,6 +184,8 @@ Deliverables:
 - a construct inventory table in this document or a linked follow-up note,
 - for each construct:
   - current status,
+  - canonical semantic form,
+  - normalization boundary,
   - target IR form,
   - whether desugaring is allowed,
   - blockers,
@@ -211,10 +217,22 @@ Additional requirement:
   - lowers cleanly to shared IR,
   - lowers to shared IR but not yet executable in some backend,
   - cannot yet lower to shared IR.
+- the inventory must make it impossible for semantically equivalent spellings to look
+  "covered" while still lowering through different rules.
+  At minimum, each row must identify:
+  - the canonical semantic form,
+  - the stage where normalization occurs
+    (`parser`, `resolved form`, `IR lowering`, or `not yet normalized`).
 
 ### IR2. Shared IR Expansion
 
 Goal: add or normalize shared IR forms so supported source constructs can lower cleanly.
+
+Entry condition:
+
+- IR3 is complete for the semantic family being expanded.
+- shared IR expansion must not proceed by teaching raw AST-based heuristics to compensate for
+  an unresolved front-end boundary.
 
 Likely work items:
 
@@ -316,6 +334,8 @@ All implementation under this plan must preserve:
   - lock mutable-form inclusion in shared IR scope
   - lock initial decisions for list index, pipelines, method calls, and effect-op identity
   - implementation checklist:
+    - explicitly lock the use of a distinct resolved front-end form
+    - name the owning input type that will feed `ir_lower`
     - write the construct-to-IR decision table for:
       - list index,
       - pipelines,
@@ -330,6 +350,8 @@ All implementation under this plan must preserve:
     - add a short "first implementation slice" note naming the exact files expected to change first
   - validation checklist:
     - `doc/PLAN_IR.md` contains the locked decisions and ownership notes
+    - the document explicitly rejects "keep extending typed AST with ad-hoc resolution-only fields"
+      as the default architecture
     - any conflicting comments in `goby-core` are updated in the same slice
 - [ ] IR1. Construct inventory and mapping table
   - enumerate all AST constructs and their lowering state
@@ -339,12 +361,15 @@ All implementation under this plan must preserve:
     - include one row per user-visible AST family, not only per parser enum
     - mark each row with:
       - lowering status,
+      - canonical semantic form,
+      - normalization boundary,
       - canonical IR target,
       - owner milestone,
       - representative test file or test name
   - validation checklist:
     - there is no remaining "misc unsupported" bucket in the document
     - each unsupported construct names a next milestone or explicit non-goal
+    - semantically equivalent spellings share the same canonical semantic form entry
 - [ ] IR2. Shared IR expansion
   - add or normalize IR forms needed to represent the currently supported language surface
   - implementation checklist:
@@ -360,12 +385,13 @@ All implementation under this plan must preserve:
 - [ ] IR3. Resolved lowering input
   - introduce or expose the resolved/symbol-bound lowering input needed for stable effect/call lowering
   - implementation checklist:
-    - choose whether to extend the typed AST or add a new resolved front-end layer
+    - introduce the distinct resolved front-end form chosen in IR0
     - make symbol identity available to `ir_lower`
     - ensure effect operations, helpers, top-level declarations, and locals are distinguishable without textual guessing
     - remove now-obsolete raw-name heuristics where the resolved layer replaces them
   - validation checklist:
     - tests cover bare/imported/qualified spellings lowering through the same resolved identity
+    - `ir_lower` input type is the resolved front-end form rather than raw AST
     - `ir_lower` no longer needs ad-hoc name-pattern logic for the covered forms
 - [ ] IR4. Calls and effect-call normalization
   - converge bare/imported/qualified effect-call spellings before or at the IR boundary
@@ -427,7 +453,8 @@ All implementation under this plan must preserve:
     - rewrite diagnostics that still imply "syntax not lowerable" when the real issue is backend support
     - shrink fallback classification that compensates for now-fixed IR gaps
   - validation checklist:
-    - at least one deleted fallback/recognizer is mentioned in the landing slice
+    - each landing slice names the specific fallback/recognizer removed or narrowed
+    - if a fallback remains, the slice states why it remains and why it is an optimization rather than a semantic dependency
     - representative unsupported cases fail with backend-oriented errors
 - [ ] IR11. Pure-subset deletion
   - remove "pure IR subset" as the governing model in docs/comments/code paths
@@ -507,19 +534,21 @@ The recommended next implementation slice is:
 
 1. finish IR0 by locking the concrete resolved-input strategy,
 2. start IR1 by adding the construct inventory table,
-3. begin IR3/IR4 only after those two pieces are written down in this file.
+3. begin IR3 only after those two pieces are written down in this file,
+4. defer IR2/IR4 code changes until the resolved front-end form boundary is explicit.
 
 Recommended file entry points for that slice:
 
 - `doc/PLAN_IR.md`
-- `crates/goby-core/src/ir.rs`
 - `crates/goby-core/src/ir_lower.rs`
 - the front-end resolution/typecheck modules that already own symbol identity
+- `crates/goby-core/src/ir.rs` only if the resolved-form decision demonstrates an immediate shared-IR change is required
 
 Definition of done for the next slice:
 
 - `PLAN_IR` names the resolved lowering input and ownership boundary explicitly,
 - the construct inventory table exists with milestone ownership,
+- the document records canonical semantic form / normalization boundary for the first inventory rows,
 - `doc/STATE.md` can be reduced to a short note pointing back to this plan and the next IR milestone.
 
 ## 12. Non-Goals for This Document
