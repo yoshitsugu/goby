@@ -11,8 +11,8 @@ Last updated: 2026-03-19
 ## Immediate Next Steps
 
 1. Finish IR5 so collection lowering fails, if at all, for backend reasons rather than missing shared-IR shape.
-2. Start IR6 by lowering `case` through `CompExpr::Case` and `IrCasePattern`.
-3. Keep diagnostics and backend fallbacks aligned with the fact that shared IR can now represent tuples, records, lambdas, `case`, and mutation.
+2. Before switching runtime execution plans to prefer IR artifacts over parsed AST, normalize the runtime/native/static-output layers so canonical bridge spellings (`Read.read`, `Print.println`, `list.get`, `string.split`) are accepted as the same semantic family.
+3. Start IR6 by lowering `case` through `CompExpr::Case` and `IrCasePattern`.
 
 ## Restart Notes
 

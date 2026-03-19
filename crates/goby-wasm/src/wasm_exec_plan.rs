@@ -53,6 +53,7 @@ fn runtime_artifacts_from_decl_and_ir<'a>(
             stmts: Cow::Owned(stmts),
         });
     }
+
     None
 }
 
@@ -330,5 +331,42 @@ main =
         let plan = main_exec_plan(&module).expect("main should exist");
         let runtime = plan.runtime.expect("runtime plan should exist");
         assert!(matches!(runtime.stmts[0], Stmt::Expr(Expr::With { .. }, _)));
+    }
+
+    #[test]
+    fn ir_bridge_normalizes_collection_shape_for_runtime_artifacts() {
+        let module = parse_module(
+            r#"
+import goby/string ( split )
+
+main : Unit -> Unit can Print, Read
+main =
+  text = read ()
+  lines = split text "\n"
+  println(lines[1])
+"#,
+        )
+        .expect("parse should work");
+        let decl = module
+            .declarations
+            .iter()
+            .find(|decl| decl.name == "main")
+            .expect("main should exist");
+        let ir_decl =
+            goby_core::ir_lower::lower_declaration(decl).expect("IR lowering should work");
+        let stmts = comp_to_stmts(&ir_decl.body).expect("IR bridge should build stmts");
+        let body = stmts_to_body_source(&stmts).expect("IR bridge should render source");
+        assert_eq!(
+            body,
+            "text = Read.read ()\nlines = string.split text \"\n\"\n__goby_ir_effect_arg_0 = list.get lines 1\nPrint.println __goby_ir_effect_arg_0"
+        );
+        let stmt_src = match &stmts[3] {
+            Stmt::Expr(expr, _) => expr.to_str_repr(),
+            other => panic!("expected trailing expr stmt, got {:?}", other),
+        };
+        assert_eq!(
+            stmt_src.as_deref(),
+            Some("Print.println __goby_ir_effect_arg_0")
+        );
     }
 }
