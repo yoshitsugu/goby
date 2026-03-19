@@ -315,29 +315,129 @@ All implementation under this plan must preserve:
   - lock the resolved-front-end -> shared IR pipeline shape
   - lock mutable-form inclusion in shared IR scope
   - lock initial decisions for list index, pipelines, method calls, and effect-op identity
+  - implementation checklist:
+    - write the construct-to-IR decision table for:
+      - list index,
+      - pipelines,
+      - method calls,
+      - mutable locals / assignment,
+      - effect operation references
+    - identify the concrete owning modules for:
+      - resolved input representation,
+      - shared IR definitions,
+      - AST-to-IR lowering,
+      - lowering tests
+    - add a short "first implementation slice" note naming the exact files expected to change first
+  - validation checklist:
+    - `doc/PLAN_IR.md` contains the locked decisions and ownership notes
+    - any conflicting comments in `goby-core` are updated in the same slice
 - [ ] IR1. Construct inventory and mapping table
   - enumerate all AST constructs and their lowering state
   - mark each gap as IR gap vs backend gap
+  - implementation checklist:
+    - add the inventory table to this document
+    - include one row per user-visible AST family, not only per parser enum
+    - mark each row with:
+      - lowering status,
+      - canonical IR target,
+      - owner milestone,
+      - representative test file or test name
+  - validation checklist:
+    - there is no remaining "misc unsupported" bucket in the document
+    - each unsupported construct names a next milestone or explicit non-goal
 - [ ] IR2. Shared IR expansion
   - add or normalize IR forms needed to represent the currently supported language surface
+  - implementation checklist:
+    - update `crates/goby-core/src/ir.rs`
+    - update IR printers / validators alongside any new node or invariant
+    - add direct IR construction tests for each new semantic family
+    - document whether each family is:
+      - a new IR node,
+      - a canonical desugaring into existing IR
+  - validation checklist:
+    - every new IR form has at least one printer or snapshot assertion
+    - IR validation errors are explicit and user-comprehensible where relevant
 - [ ] IR3. Resolved lowering input
   - introduce or expose the resolved/symbol-bound lowering input needed for stable effect/call lowering
+  - implementation checklist:
+    - choose whether to extend the typed AST or add a new resolved front-end layer
+    - make symbol identity available to `ir_lower`
+    - ensure effect operations, helpers, top-level declarations, and locals are distinguishable without textual guessing
+    - remove now-obsolete raw-name heuristics where the resolved layer replaces them
+  - validation checklist:
+    - tests cover bare/imported/qualified spellings lowering through the same resolved identity
+    - `ir_lower` no longer needs ad-hoc name-pattern logic for the covered forms
 - [ ] IR4. Calls and effect-call normalization
   - converge bare/imported/qualified effect-call spellings before or at the IR boundary
+  - implementation checklist:
+    - normalize ordinary call targets and effect-op targets using resolved identity
+    - cover aliasing cases that should remain semantically equivalent
+    - update runtime-I/O/general-lowering tests that currently exist only because of spelling differences
+  - validation checklist:
+    - semantically equivalent effect-call spellings produce equivalent IR snapshots
+    - backend/runtime tests that previously depended on spelling differences are simplified or deleted
 - [ ] IR5. Collections lowering
   - lower list literal, spread, and indexing through the new architecture
+  - implementation checklist:
+    - lower list literals and spread in the same slice as their canonical IR representation
+    - lower indexing via the locked IR strategy from IR0
+    - update collection-related backend assumptions that currently recognize syntax-shaped forms
+  - validation checklist:
+    - AST-to-IR tests cover literal/spread/index combinations
+    - at least one backend parity test proves syntax sugar and canonical helper spellings converge
 - [ ] IR6. Control-flow lowering
   - lower `case` and related branch forms into shared IR
+  - implementation checklist:
+    - lower `case` with all currently supported pattern families
+    - ensure effectful scrutinees and branch bodies survive lowering without AST fallback
+    - update any runtime path that still assumes `case` is interpreter-only
+  - validation checklist:
+    - IR snapshots exist for both pure and effectful `case`
+    - branch semantics match existing runtime behavior
 - [ ] IR7. Function-value lowering
   - lower lambda and higher-order function-value forms into shared IR
+  - implementation checklist:
+    - define closure/capture representation at shared-IR level or explicit desugaring boundary
+    - lower lambda syntax and named higher-order references in one semantic family
+    - update call lowering assumptions that currently require only direct/global callees
+  - validation checklist:
+    - direct IR tests cover captures and call sites
+    - backend unsupported cases, if any, are reported as backend limitations
 - [ ] IR8. Product-data lowering
   - lower non-unit tuples and record construction into shared IR
+  - implementation checklist:
+    - lower tuples and records in one product-data slice
+    - update equality / access assumptions where they currently rely on AST/runtime-only handling
+  - validation checklist:
+    - IR tests cover construction and representative consumption sites
+    - any remaining backend limitation is documented as such rather than left as lowering failure
 - [ ] IR9. Mutable-form lowering
   - lower mutable locals and assignment into shared IR
+  - implementation checklist:
+    - choose the shared-IR representation for mutable locals
+    - lower `mut` binding and assignment in the same slice
+    - update resume/handler/runtime assumptions if mutable state can cross those boundaries
+  - validation checklist:
+    - mutation semantics are covered by IR tests and existing runtime parity tests
+    - mutable forms no longer fail at AST-to-IR time
 - [ ] IR10. Backend boundary convergence
   - make backend limitations show up as backend limitations rather than IR-construction failures
+  - implementation checklist:
+    - remove backend workarounds that only exist for pre-convergence AST/IR mismatch
+    - rewrite diagnostics that still imply "syntax not lowerable" when the real issue is backend support
+    - shrink fallback classification that compensates for now-fixed IR gaps
+  - validation checklist:
+    - at least one deleted fallback/recognizer is mentioned in the landing slice
+    - representative unsupported cases fail with backend-oriented errors
 - [ ] IR11. Pure-subset deletion
   - remove "pure IR subset" as the governing model in docs/comments/code paths
+  - implementation checklist:
+    - rewrite stale comments, test names, and diagnostics
+    - remove dead code branches that only exist for the old subset framing
+    - update surrounding docs to describe one stable lowering model
+  - validation checklist:
+    - repo search no longer shows the old model as active architecture
+    - `doc/STATE.md` restart notes reference the new model only
 
 Milestone update rule:
 
@@ -389,8 +489,40 @@ Reason for this order:
 - when a slice completes a milestone, mark the checkbox in this file in the same change.
 - if implementation learns that a locked architectural decision is wrong, update this file first
   with the new decision and rationale before continuing to spread code changes.
+- each implementation slice should follow this order unless there is a documented reason not to:
+  1. update `doc/PLAN_IR.md` if the slice locks or changes a design decision,
+  2. update shared IR definitions,
+  3. update lowering implementation,
+  4. update focused AST-to-IR / IR tests,
+  5. update downstream backend/runtime assumptions,
+  6. run `cargo fmt` and `cargo test`.
+- prefer slices that complete one semantic family end-to-end rather than touching many families shallowly.
+- when deleting fallback logic, do it in the same slice that proves the shared-IR path covers the replaced behavior.
+- if a slice cannot finish a milestone, leave the checkbox unchecked and add a short note in
+  `doc/STATE.md` naming the exact unfinished sub-steps.
 
-## 11. Non-Goals for This Document
+## 11. Suggested Next Slice
+
+The recommended next implementation slice is:
+
+1. finish IR0 by locking the concrete resolved-input strategy,
+2. start IR1 by adding the construct inventory table,
+3. begin IR3/IR4 only after those two pieces are written down in this file.
+
+Recommended file entry points for that slice:
+
+- `doc/PLAN_IR.md`
+- `crates/goby-core/src/ir.rs`
+- `crates/goby-core/src/ir_lower.rs`
+- the front-end resolution/typecheck modules that already own symbol identity
+
+Definition of done for the next slice:
+
+- `PLAN_IR` names the resolved lowering input and ownership boundary explicitly,
+- the construct inventory table exists with milestone ownership,
+- `doc/STATE.md` can be reduced to a short note pointing back to this plan and the next IR milestone.
+
+## 12. Non-Goals for This Document
 
 This plan does not itself lock:
 
