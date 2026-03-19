@@ -527,6 +527,14 @@ Reason for this order:
 - when deleting fallback logic, do it in the same slice that proves the shared-IR path covers the replaced behavior.
 - if a slice cannot finish a milestone, leave the checkbox unchecked and add a short note in
   `doc/STATE.md` naming the exact unfinished sub-steps.
+- development rule for this phase:
+  - this project is currently used by one person, so temporary breakage during development is acceptable.
+  - optimize for the long-term design from the start, even when that means the codebase stays broken for a while mid-slice.
+  - do not accept architectural compromises just because the principled design is harder to land.
+  - avoid "small safe" steps that accumulate ad-hoc structure and make the long-term design worse.
+  - if an implementation approach fails repeatedly, do not gradually degrade the design to force it through.
+  - after 5 serious implementation attempts on the same design path without a clean result, stop the work,
+    summarize the blocker, and explicitly ask for a direction check before continuing.
 
 ## 11. Suggested Next Slice
 
