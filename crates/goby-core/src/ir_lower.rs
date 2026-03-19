@@ -1437,6 +1437,71 @@ mod tests {
     }
 
     #[test]
+    fn lower_imported_and_qualified_effect_calls_converge_to_same_ir() {
+        let imported_module = crate::ast::Module {
+            imports: vec![crate::ast::ImportDecl {
+                module_path: "goby/prelude".to_string(),
+                kind: crate::ast::ImportKind::Selective(vec![
+                    "read".to_string(),
+                    "print".to_string(),
+                ]),
+            }],
+            embed_declarations: vec![],
+            type_declarations: vec![],
+            effect_declarations: vec![],
+            declarations: vec![Declaration {
+                name: "main".to_string(),
+                type_annotation: None,
+                params: vec![],
+                body: String::new(),
+                parsed_body: Some(vec![
+                    binding(
+                        "text",
+                        Expr::Call {
+                            callee: Box::new(Expr::var("read")),
+                            arg: Box::new(Expr::TupleLit(vec![])),
+                            span: None,
+                        },
+                    ),
+                    expr_stmt(Expr::Call {
+                        callee: Box::new(Expr::var("print")),
+                        arg: Box::new(Expr::var("text")),
+                        span: None,
+                    }),
+                ]),
+                line: 1,
+                col: 1,
+            }],
+        };
+        let qualified_module = crate::ast::Module {
+            imports: vec![],
+            embed_declarations: vec![],
+            type_declarations: vec![],
+            effect_declarations: vec![],
+            declarations: vec![Declaration {
+                name: "main".to_string(),
+                type_annotation: None,
+                params: vec![],
+                body: String::new(),
+                parsed_body: Some(vec![
+                    binding("text", make_qualified_call("Read", "read", None)),
+                    expr_stmt(make_qualified_call(
+                        "Print",
+                        "print",
+                        Some(Expr::var("text")),
+                    )),
+                ]),
+                line: 1,
+                col: 1,
+            }],
+        };
+
+        let imported_ir = lower_module(&imported_module).unwrap();
+        let qualified_ir = lower_module(&qualified_module).unwrap();
+        assert_eq!(imported_ir.decls[0].body, qualified_ir.decls[0].body);
+    }
+
+    #[test]
     fn lower_list_index_and_canonical_helper_call_converge_to_same_ir() {
         let indexed_decl = decl_with_body(
             "indexed",

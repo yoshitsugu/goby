@@ -488,6 +488,11 @@ fn module_basename(module_path: &str) -> &str {
 }
 
 fn imported_symbol_ref(module: &str, name: &str) -> ResolvedRef {
+    if module == "prelude" {
+        if let Some(builtin) = builtin_bare_ref(name) {
+            return builtin;
+        }
+    }
     builtin_qualified_ref(module, name).unwrap_or_else(|| ResolvedRef::Global {
         module: module.to_string(),
         name: name.to_string(),
@@ -614,6 +619,41 @@ mod tests {
                 }),
                 None,
             )]
+        );
+    }
+
+    #[test]
+    fn resolves_selective_import_from_prelude_to_effect_identity() {
+        let module = module_with_imports(
+            vec![ImportDecl {
+                module_path: "goby/prelude".to_string(),
+                kind: ImportKind::Selective(vec!["read".to_string(), "print".to_string()]),
+            }],
+            vec![
+                Stmt::Expr(Expr::var("read"), None),
+                Stmt::Expr(Expr::var("print"), None),
+            ],
+        );
+
+        let resolved = resolve_module(&module);
+        assert_eq!(
+            resolved.declarations[0].body,
+            vec![
+                ResolvedStmt::Expr(
+                    ResolvedExpr::Ref(ResolvedRef::EffectOp {
+                        effect: "Read".to_string(),
+                        op: "read".to_string(),
+                    }),
+                    None,
+                ),
+                ResolvedStmt::Expr(
+                    ResolvedExpr::Ref(ResolvedRef::EffectOp {
+                        effect: "Print".to_string(),
+                        op: "print".to_string(),
+                    }),
+                    None,
+                ),
+            ]
         );
     }
 

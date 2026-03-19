@@ -1133,6 +1133,22 @@ main =
 }
 
 #[test]
+fn compile_module_parity_selective_prelude_read_print_compiles() {
+    let source = r#"
+import goby/prelude ( read, print )
+
+main : Unit -> Unit can Print, Read
+main =
+  text = read ()
+  print text
+"#;
+    let module = parse_module(source).expect("prelude selective source should parse");
+    let wasm = compile_module(&module)
+        .expect("selective-import prelude read+print should compile via the general path");
+    assert_valid_wasm_module(&wasm);
+}
+
+#[test]
 fn track_f_f6_runtime_io_wasm_size_guardrails_hold() {
     let general_sources = [
         read_track_f_fixture("f3_print_read.gb"),

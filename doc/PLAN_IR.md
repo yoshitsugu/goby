@@ -271,7 +271,7 @@ Initial inventory table:
 
 | Construct family | Current status | Canonical semantic form | Normalization boundary | Canonical IR target | Desugaring allowed | Owner milestone | Representative tests / notes |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| Bare / qualified builtin effect ops (`read`, `Read.read`, `print`, `Print.print`) | lowers cleanly to shared IR for the builtin spellings covered today; broader import-driven effect identity remains to be generalized | `EffectOpRef(effect, op)` | resolved form | `PerformEffect` | no ad-hoc spelling-based desugar after resolved form | IR3, IR4 | `crates/goby-core/src/ir_lower.rs` convergence tests; runtime-I/O parity tests |
+| Bare / qualified / selective-import builtin effect ops (`read`, `Read.read`, `import goby/prelude ( read, print )`) | lowers cleanly to shared IR for the builtin spellings covered today | `EffectOpRef(effect, op)` | resolved form | `PerformEffect` | no ad-hoc spelling-based desugar after resolved form | IR3, IR4 | `crates/goby-core/src/ir_lower.rs` convergence tests; runtime-I/O parity tests |
 | Direct helper calls (`string.split`, `list.get`, `list.each`) | lowers cleanly for the current helper family once the callee reaches resolved form; remaining collection construction work is separate | `HelperRef(module, name)` | resolved form | canonical `Call(GlobalRef(module, name), ...)` | yes, by canonical helper-call form only | IR3, IR4, IR5 | split/index lowering tests in `goby-wasm` and `goby-core` |
 | List index sugar (`lines[1]`) | now normalized before shared IR construction | canonical helper-call family `HelperRef(list.get)` | resolved form | canonical `Call(GlobalRef("list", "get"), [list, index])` | yes, via the locked helper-call strategy only | IR3, IR5 | `resolved.rs` list-index normalization test; `lower_list_index_and_canonical_helper_call_converge_to_same_ir` |
 | Pipelines | not yet lowered cleanly | ordinary call chain or explicit pipeline IR, to be locked in IR0 | not yet normalized | TBD in IR0 / IR2 | TBD in IR0 | IR0, IR2 | parser and runtime pipeline tests already exist |
@@ -452,7 +452,7 @@ All implementation under this plan must preserve:
     - tests cover bare/imported/qualified spellings lowering through the same resolved identity
     - `ir_lower` input type is the resolved front-end form rather than raw AST
     - `ir_lower` no longer needs ad-hoc name-pattern logic for the covered forms
-- [ ] IR4. Calls and effect-call normalization
+- [x] IR4. Calls and effect-call normalization
   - converge bare/imported/qualified effect-call spellings before or at the IR boundary
   - implementation checklist:
     - normalize ordinary call targets and effect-op targets using resolved identity
