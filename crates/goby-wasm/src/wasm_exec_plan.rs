@@ -369,4 +369,39 @@ main =
             Some("Print.println __goby_ir_effect_arg_0")
         );
     }
+
+    #[test]
+    fn canonical_ir_bridge_split_each_shape_classifies_with_selective_imports() {
+        let module = parse_module(
+            r#"
+import goby/list ( each )
+import goby/string ( split )
+
+main : Unit -> Unit can Print, Read
+main =
+  text = read ()
+  lines = split text "\n"
+  each lines Print.println
+"#,
+        )
+        .expect("parse should work");
+        let decl = module
+            .declarations
+            .iter()
+            .find(|decl| decl.name == "main")
+            .expect("main should exist");
+        let ir_decl =
+            goby_core::ir_lower::lower_declaration(decl).expect("IR lowering should work");
+        let stmts = comp_to_stmts(&ir_decl.body).expect("IR bridge should build stmts");
+        assert_eq!(
+            crate::runtime_io_plan::classify_runtime_io(&module, Some(&stmts)),
+            crate::runtime_io_plan::RuntimeIoClassification::DynamicWasiIo(
+                crate::runtime_io_plan::RuntimeIoPlan::SplitLinesEach {
+                    output_mode: crate::runtime_io_plan::OutputReadMode::Println,
+                    suffix_prints: vec![],
+                    transform: None,
+                }
+            )
+        );
+    }
 }

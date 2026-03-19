@@ -948,11 +948,22 @@ fn imported_head_matches_symbol(
     module_path: &str,
     symbol: &str,
 ) -> bool {
+    let Some(canonical_receiver) = module_path.rsplit('/').next() else {
+        return false;
+    };
     match head {
         DirectCallHead::Bare(name) if name == symbol => {
             module_has_selective_import_symbol(module, module_path, symbol)
         }
         DirectCallHead::Qualified { receiver, member } if member == symbol => {
+            if receiver == canonical_receiver
+                && module
+                    .imports
+                    .iter()
+                    .any(|import| import.module_path == module_path)
+            {
+                return true;
+            }
             module.imports.iter().any(|import| {
                 if import.module_path != module_path {
                     return false;
@@ -1065,13 +1076,34 @@ fn split_lines_binding_name<'a>(
     text_name: &str,
 ) -> Option<&'a str> {
     let (lines_name, split_value) = stmt_binding_parts(stmt)?;
-    let (split_head, split_args) = flatten_direct_call(split_value)?;
-    if !imported_head_matches_symbol(module, &split_head, "goby/string", "split")
-        || split_args.len() != 2
-        || !expr_resolves_to_name(split_args[0], pre_split_stmts, text_name)
-        || !expr_is_newline_delimiter(split_args[1], pre_split_stmts)
-    {
-        return None;
+    match split_value {
+        Expr::MethodCall {
+            receiver,
+            method,
+            args,
+        } => {
+            let split_head = DirectCallHead::Qualified {
+                receiver: receiver.clone(),
+                member: method.clone(),
+            };
+            if !imported_head_matches_symbol(module, &split_head, "goby/string", "split")
+                || args.len() != 2
+                || !expr_resolves_to_name(&args[0], pre_split_stmts, text_name)
+                || !expr_is_newline_delimiter(&args[1], pre_split_stmts)
+            {
+                return None;
+            }
+        }
+        _ => {
+            let (split_head, split_args) = flatten_direct_call(split_value)?;
+            if !imported_head_matches_symbol(module, &split_head, "goby/string", "split")
+                || split_args.len() != 2
+                || !expr_resolves_to_name(split_args[0], pre_split_stmts, text_name)
+                || !expr_is_newline_delimiter(split_args[1], pre_split_stmts)
+            {
+                return None;
+            }
+        }
     }
     Some(lines_name)
 }
@@ -1628,6 +1660,31 @@ main =
   delim = "\n"
   lines = split(text, delim)
   each lines Print.println
+"#,
+        );
+        assert_eq!(
+            classify_runtime_io(&module, body.as_deref()),
+            RuntimeIoClassification::DynamicWasiIo(RuntimeIoPlan::SplitLinesEach {
+                output_mode: OutputReadMode::Println,
+                suffix_prints: vec![],
+                transform: None,
+            })
+        );
+    }
+
+    #[test]
+    fn plans_split_each_with_selective_imports_and_canonical_qualifiers() {
+        let (module, body) = main_stmts(
+            r#"
+import goby/list ( each )
+import goby/string ( split )
+
+main : Unit -> Unit can Print, Read
+main =
+  text = read()
+  delim = "\n"
+  lines = string.split(text, delim)
+  list.each lines (|line| -> Print.println line)
 "#,
         );
         assert_eq!(

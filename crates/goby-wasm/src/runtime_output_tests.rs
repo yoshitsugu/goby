@@ -222,6 +222,21 @@ main =
 }
 
 #[test]
+fn resolves_runtime_output_for_list_each_with_selective_import_and_canonical_qualifier() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    let source = r#"
+import goby/list ( each )
+
+main : Unit -> Unit
+main =
+  list.each [14, 16] (|n| -> print "${n}")
+"#;
+    let module = parse_module(source).expect("parse should work");
+    let output = resolve_module_runtime_output(&module).expect("runtime output should resolve");
+    assert_eq!(output, "1416");
+}
+
+#[test]
 fn resolves_runtime_output_for_track_f_f5_split_get_with_seeded_stdin() {
     let _guard = ENV_MUTEX.lock().unwrap();
     let source = r#"
@@ -596,6 +611,38 @@ main =
     let module = parse_module(source).expect("parse should work");
     let output = resolve_module_runtime_output(&module).expect("runtime output should resolve");
     assert_eq!(output, "5");
+}
+
+#[test]
+fn runtime_resolves_goby_string_length_via_selective_import_and_canonical_qualifier() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    let source = r#"
+import goby/string ( length )
+main : Unit -> Unit
+main =
+  print (string.length "hello")
+"#;
+    let module = parse_module(source).expect("parse should work");
+    let output = resolve_module_runtime_output(&module).expect("runtime output should resolve");
+    assert_eq!(output, "5");
+}
+
+#[test]
+fn resolves_runtime_output_for_imported_string_split_with_selective_import_and_canonical_qualifier()
+{
+    let _guard = ENV_MUTEX.lock().unwrap();
+    let source = r#"
+import goby/string ( split )
+import goby/list ( each )
+
+main : Unit -> Unit
+main =
+  lines = string.split("go\nby", "\n")
+  each lines (|line| -> Print.println line)
+"#;
+    let module = parse_module(source).expect("parse should work");
+    let output = resolve_module_runtime_output(&module).expect("runtime output should resolve");
+    assert_eq!(output, "go\nby\n");
 }
 
 #[test]

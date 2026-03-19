@@ -132,6 +132,13 @@ impl<'m> RuntimeOutputResolver<'m> {
                     })
             }
             DirectCallHead::Qualified { receiver, member } if member == "split" => {
+                if receiver == "string"
+                    && effective_runtime_imports(self.current_runtime_module())
+                        .into_iter()
+                        .any(|import| import.module_path == "goby/string")
+                {
+                    return true;
+                }
                 effective_runtime_imports(self.current_runtime_module())
                     .into_iter()
                     .any(|import| {
@@ -164,6 +171,13 @@ impl<'m> RuntimeOutputResolver<'m> {
                     })
             }
             DirectCallHead::Qualified { receiver, member } if member == "graphemes" => {
+                if receiver == "string"
+                    && effective_runtime_imports(self.current_runtime_module())
+                        .into_iter()
+                        .any(|import| import.module_path == "goby/string")
+                {
+                    return true;
+                }
                 effective_runtime_imports(self.current_runtime_module())
                     .into_iter()
                     .any(|import| {
@@ -722,6 +736,12 @@ impl<'m> RuntimeOutputResolver<'m> {
             }
             DirectCallHead::Qualified { receiver, member } => {
                 for import in effective_runtime_imports(self.current_runtime_module()) {
+                    let canonical_receiver = import.module_path.rsplit('/').next()?;
+                    if receiver == canonical_receiver {
+                        let module = self.runtime_imports.modules.get(&import.module_path)?;
+                        let decl = module.declarations.iter().find(|d| d.name == *member)?;
+                        return Self::runtime_decl_info_from_decl(decl, Some(import.module_path));
+                    }
                     let matches_receiver = match &import.kind {
                         goby_core::ImportKind::Plain => import
                             .module_path
