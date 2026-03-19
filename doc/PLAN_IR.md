@@ -130,6 +130,49 @@ Implication:
 - `ir_lower` should ultimately consume the resolved front-end form, not raw AST plus local
   name-pattern heuristics.
 
+### 3.5 Locked Resolved-Input Strategy
+
+The chosen direction is:
+
+- introduce a distinct resolved front-end form between AST/typecheck and shared IR,
+- do not treat the existing AST or typed AST as the long-term lowering input,
+- do not continue the pattern of attaching more one-off resolution-only fields directly to
+  raw AST nodes in order to unblock one lowering gap.
+
+Planned shape:
+
+`Parsed AST -> typecheck/name resolution -> ResolvedModule / ResolvedDecl / ResolvedExpr -> shared IR`
+
+Minimum semantic identities that the resolved form must carry:
+
+- `LocalRef`
+  - for lexical local bindings and parameters
+- `DeclRef`
+  - for top-level function or value declarations
+- `HelperRef`
+  - for stdlib/runtime helper calls such as `goby/string.split` and `goby/list.get`
+- `EffectOpRef`
+  - for effect operations such as `Read.read`, `Read.read_line`, `Print.print`, `Print.println`
+- `TypeCtorRef` or equivalent product-data constructor identity
+  - if tuples/records/constructors continue to need distinct lowering-time meaning
+
+Ownership boundary:
+
+- parser continues to own syntax only,
+- typecheck / symbol-resolution layer owns semantic identity,
+- resolved form owns the normalized callable/effect references consumed by `ir_lower`,
+- shared IR owns semantic execution structure, not raw source spelling.
+
+Initial implementation note:
+
+- the first version of the resolved form does not need to cover every AST family at once,
+  but for any family it does cover, `ir_lower` should consume the resolved form rather than
+  re-deriving meaning from raw syntax.
+- the first families to move should be:
+  - effect operations,
+  - helper calls,
+  - local / top-level callable references.
+
 ## 4. Scope of "Complete IR Lowering"
 
 For this track, "complete" does not mean every backend can execute every feature immediately.
@@ -223,6 +266,22 @@ Additional requirement:
   - the canonical semantic form,
   - the stage where normalization occurs
     (`parser`, `resolved form`, `IR lowering`, or `not yet normalized`).
+
+Initial inventory table:
+
+| Construct family | Current status | Canonical semantic form | Normalization boundary | Canonical IR target | Desugaring allowed | Owner milestone | Representative tests / notes |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Bare / imported / qualified effect ops (`read`, `Read.read`, imported aliases) | partially lowerable; some spellings still depend on ad-hoc rules | `EffectOpRef(effect, op)` | resolved form | `PerformEffect` | no ad-hoc spelling-based desugar after resolved form | IR3, IR4 | `crates/goby-core/src/ir_lower.rs` effect-call tests; runtime-I/O parity tests |
+| Direct helper calls (`string.split`, `list.get`, `list.each`) | partially lowerable; some sugar converges only late | `HelperRef(module, name)` | resolved form | `Call(GlobalRef/HelperRef canonical target)` or dedicated IR decided by IR2 | yes, if one canonical helper-call form is chosen | IR3, IR4, IR5 | split/index lowering tests in `goby-wasm` and `goby-core` |
+| List index sugar (`lines[1]`) | lowerable today only via canonical rewrite, not yet governed by resolved-form architecture | same semantic family as `HelperRef(list.get)` or explicit index IR, to be locked in IR0 | IR lowering today; target is resolved form + canonical IR strategy | helper-call canonical form or dedicated IR node | yes, but only via the IR0-locked canonical strategy | IR0, IR5 | `lower_list_index_to_list_get_call` and split-index runtime tests |
+| Pipelines | not yet lowered cleanly | ordinary call chain or explicit pipeline IR, to be locked in IR0 | not yet normalized | TBD in IR0 / IR2 | TBD in IR0 | IR0, IR2 | parser and runtime pipeline tests already exist |
+| Method calls | not yet lowered cleanly | qualified/member call canonical form, to be locked in IR0 | not yet normalized | TBD in IR0 / IR2 | TBD in IR0 | IR0, IR2 | parser method-call tests |
+| List literals / spread | not yet lowered cleanly to shared IR | collection construction semantic form | not yet normalized | list literal/spread IR or canonical constructor/helper form | yes, if semantics remain backend-independent | IR2, IR5 | parser list/spread tests; runtime list tests |
+| `case` | not yet lowered cleanly to shared IR | branch/match semantic form | not yet normalized | explicit `case`/match IR or equivalent canonical control-flow form | limited; only if semantics stay explicit | IR2, IR6 | parser/type/runtime `case` tests |
+| Lambda / higher-order values | not yet lowered cleanly to shared IR | function-value / closure semantic form | not yet normalized | closure IR or canonical lifted form | yes, only with explicit capture semantics | IR2, IR7 | runtime higher-order/lambda parity tests |
+| Non-unit tuples | not yet lowered cleanly to shared IR | tuple value semantic form | not yet normalized | tuple IR / product-data IR | yes, if canonical and backend-independent | IR2, IR8 | parser/runtime tuple tests |
+| Record construction | not yet lowered cleanly to shared IR | record value semantic form | not yet normalized | record/product-data IR | yes, if canonical and backend-independent | IR2, IR8 | parser/runtime record tests |
+| Mutable locals / assignment | intentionally still outside shared IR | mutable local semantic form | not yet normalized | mutable binding / assignment IR | no permanent exception outside IR | IR0, IR2, IR9 | parser/runtime mutation tests |
 
 ### IR2. Shared IR Expansion
 

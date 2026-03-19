@@ -6,14 +6,14 @@ Last updated: 2026-03-19
 
 - `doc/PLAN_IR.md` is the active execution plan.
 - Current priority is IR0 -> IR1:
-  - lock the concrete resolved-lowering-input strategy,
-  - add the construct inventory and mapping table.
+  - implement the distinct resolved front-end form chosen in `PLAN_IR`,
+  - continue expanding the construct inventory and mapping table.
 
 ## Immediate Next Steps
 
 1. Update `doc/PLAN_IR.md` with the concrete resolved-input decision if it changes while implementing.
-2. Add the IR construct inventory table and assign each gap to an IR milestone.
-3. Start implementation from the resolved-input / effect-call-normalization boundary only after 1 and 2 are written down.
+2. Start the resolved-form implementation for callable/effect identity.
+3. Expand the inventory table as new semantic families are analyzed.
 
 ## Restart Notes
 
