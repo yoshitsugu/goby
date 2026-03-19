@@ -5,7 +5,7 @@ lowering to durable, long-term-complete coverage.
 
 Purpose:
 
-- eliminate the current "pure IR subset" ceiling as the main architecture limit,
+- eliminate the old narrow-IR ceiling as the main architecture limit,
 - stop growing backend support around AST-shape fallbacks and recognizers,
 - make IR the normal semantic handoff between the front-end and backends,
 - prefer principled IR evolution over local rewrites that only unblock one syntax form.
@@ -42,7 +42,7 @@ Therefore:
 
 ## 2. Problem Statement
 
-The current IR lowering is still organized around a "pure IR subset" model. That model was
+The current IR lowering is still organized around an overly narrow legacy IR model. That model was
 useful as a bootstrap phase, but it is now the main blocker.
 
 Today, the lowerer still rejects or incompletely models major AST forms, including:
@@ -68,7 +68,7 @@ This creates three bad outcomes:
 
 ### 3.1 Core Direction
 
-Goby should move from a "pure subset IR" mindset to a "language-semantic IR" mindset.
+Goby should move from a narrowly scoped legacy IR mindset to a language-semantic IR mindset.
 
 That means:
 
@@ -196,7 +196,7 @@ For avoidance of doubt:
 
 ### IR0. Architecture Lock
 
-Goal: replace the "pure IR subset" framing with an explicit long-term IR charter.
+Goal: replace the legacy narrow-IR framing with an explicit long-term IR charter.
 
 Deliverables:
 
@@ -388,7 +388,7 @@ Required work:
 
 Done when:
 
-- "pure IR subset" is no longer the governing architecture concept,
+- the legacy narrow-IR ceiling is no longer the governing architecture concept,
 - the codebase communicates one stable lowering model.
 
 ## 6. Invariants
@@ -536,14 +536,14 @@ All implementation under this plan must preserve:
     - each landing slice names the specific fallback/recognizer removed or narrowed
     - if a fallback remains, the slice states why it remains and why it is an optimization rather than a semantic dependency
     - representative unsupported cases fail with backend-oriented errors
-- [ ] IR11. Pure-subset deletion
-  - remove "pure IR subset" as the governing model in docs/comments/code paths
+- [x] IR11. Legacy framing cleanup
+  - remove the old narrow-IR framing as the governing model in docs/comments/code paths
   - implementation checklist:
     - rewrite stale comments, test names, and diagnostics
-    - remove dead code branches that only exist for the old subset framing
+    - remove dead code branches that only exist for the old legacy framing
     - update surrounding docs to describe one stable lowering model
   - validation checklist:
-    - repo search no longer shows the old model as active architecture
+    - repo search no longer shows the old legacy framing as active architecture
     - `doc/STATE.md` restart notes reference the new model only
 
 Milestone update rule:
@@ -618,36 +618,28 @@ Reason for this order:
 
 ## 11. Suggested Next Slice
 
-The recommended next implementation slice is:
+The IR-lowering roadmap is complete.
 
-1. advance IR11 by deleting stale "pure subset" wording from code comments, diagnostics, and planning text,
-2. remove dead branches and names that only exist for the old subset framing,
-3. keep the final cleanup honest by only deleting wording that no longer matches runtime/backend behavior.
+Recommended follow-up behavior:
 
-Recommended file entry points for that slice:
+1. keep future language work on the resolved-form -> shared-IR -> backend boundary,
+2. treat backend limitations as backend limitations rather than reopening AST-shaped special cases,
+3. update this document only when a new architectural gap is discovered.
+
+Recommended file entry points for future follow-up:
 
 - `doc/PLAN_IR.md`
 - `doc/STATE.md`
 - `crates/goby-wasm/src/fallback.rs`
 - `crates/goby-wasm/src/lower.rs`
-- repo-wide comments/tests/docs that still mention the pure subset as active architecture
+- repo-wide comments/tests/docs that describe lowering boundaries
 
-Recommended milestone order after IR10:
-
-1. IR11 pure-subset deletion
-
-Reason for this order:
-
-- backend-boundary wording is now in place for representative unsupported families,
-- the remaining work is mostly terminology and dead-path cleanup,
-- deleting the old framing last reduces the risk of papering over a still-live architectural dependency.
-
-Definition of done for the next slice:
+Definition of done for this roadmap:
 
 - `ir_lower` continues to lower through `Resolved*` inputs without reintroducing raw-name heuristics,
-- the next slice deletes or rewrites stale "pure subset" wording in code and docs without changing behavior,
-- repo search no longer presents the pure subset as active architecture,
-- `doc/STATE.md` names only the active next milestone and any exact unfinished sub-steps.
+- code and docs describe one stable lowering model without reviving the old narrow-IR framing,
+- repo search no longer presents the old legacy framing as active architecture,
+- `doc/STATE.md` points to this document as a completed roadmap rather than an open milestone queue.
 
 ## 12. Non-Goals for This Document
 
