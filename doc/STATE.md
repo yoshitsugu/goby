@@ -11,12 +11,13 @@ Last updated: 2026-03-19
 ## Immediate Next Steps
 
 1. Finish IR5 so collection lowering fails, if at all, for backend reasons rather than missing shared-IR shape.
-2. Before switching runtime execution plans to prefer IR artifacts over parsed AST, normalize the runtime/native/static-output layers so canonical bridge spellings (`Read.read`, `Print.println`, `list.get`, `string.split`) are accepted as the same semantic family.
+2. Before switching runtime execution plans to prefer IR artifacts over parsed AST, finish the remaining helper-family normalization so `list.get` / `string.split` are accepted across runtime/native/static-output paths with the same canonical semantics as their sugared spellings.
 3. Start IR6 by lowering `case` through `CompExpr::Case` and `IrCasePattern`.
 
 ## Restart Notes
 
 - Read `doc/PLAN_IR.md` first.
+- `Read` / `Print` family normalization is landed in runtime fallback classification, including qualified and method-style AST shapes such as `Print.print (Read.read ())` and qualified split callbacks like `each lines Print.println`.
 - Then inspect:
   - `crates/goby-core/src/ir.rs`
   - `crates/goby-core/src/resolved.rs`

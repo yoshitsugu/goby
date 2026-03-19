@@ -29,8 +29,8 @@ use goby_core::{Expr, Module, Stmt, types::parse_function_type};
 
 use crate::{
     call::{
-        DirectCallTargetError, PrintCallError, extract_direct_print_call_arg, flatten_named_call,
-        resolve_direct_call_target,
+        DirectCallTargetError, PrintCallError, direct_print_call, extract_direct_print_call_arg,
+        flatten_named_call, resolve_direct_call_target,
     },
     planning::build_lowering_plan,
     support::{is_supported_binop_kind, is_supported_case_pattern, is_supported_list_item_expr},
@@ -263,6 +263,9 @@ fn unsupported_value_expr_reason(
             None
         }
         Expr::Call { .. } => {
+            if direct_print_call(expr).is_ok() {
+                return Some(UnsupportedReason::PrintNotValueExpr);
+            }
             let Some((name, args)) = flatten_named_call(expr) else {
                 // Allow callable-value application (`f 1`, where `f` is a local/lambda)
                 // when both callee and argument expressions are in the native value subset.

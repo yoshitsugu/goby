@@ -951,6 +951,23 @@ main =
     assert_valid_wasm_module(&wasm);
 }
 
+#[test]
+fn compile_module_routes_qualified_print_literals_through_static_output() {
+    let source = r#"
+main : Unit -> Unit can Print
+main =
+  Print.print "a"
+  Print.println "b"
+"#;
+    let module = parse_module(source).expect("source should parse");
+    assert_eq!(
+        runtime_io_execution_kind(&module).expect("classification should succeed"),
+        crate::RuntimeIoExecutionKind::StaticOutput,
+    );
+    let wasm = compile_module(&module).expect("codegen should succeed");
+    assert_valid_wasm_module(&wasm);
+}
+
 // ---------------------------------------------------------------------------
 // Runtime-I/O general-lowering fixtures
 // These tests lock the convergence state of the representative read/split/index

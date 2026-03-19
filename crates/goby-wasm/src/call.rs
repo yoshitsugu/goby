@@ -41,6 +41,12 @@ pub(crate) enum PrintCallError {
     NonDirectCallee,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PrintCallKind {
+    Print,
+    Println,
+}
+
 pub(crate) fn resolve_direct_call_target<'a>(
     module: &'a Module,
     name: &str,
@@ -56,16 +62,47 @@ pub(crate) fn resolve_direct_call_target<'a>(
 }
 
 pub(crate) fn extract_direct_print_call_arg(expr: &Expr) -> Result<&Expr, PrintCallError> {
-    let Some((name, args)) = flatten_named_call(expr) else {
-        return Err(PrintCallError::NonDirectCallee);
-    };
-    if name != "print" {
-        return Err(PrintCallError::NotPrint);
+    direct_print_call(expr).map(|(_, arg)| arg)
+}
+
+pub(crate) fn direct_print_call(expr: &Expr) -> Result<(PrintCallKind, &Expr), PrintCallError> {
+    let mut args = Vec::new();
+    let mut cur = expr;
+    loop {
+        match cur {
+            Expr::Call { callee, arg, .. } => {
+                args.push(arg.as_ref());
+                cur = callee.as_ref();
+            }
+            Expr::Var { name, .. } => {
+                args.reverse();
+                return classify_print_head(Some(name.as_str()), None, args);
+            }
+            Expr::Qualified {
+                receiver, member, ..
+            } => {
+                args.reverse();
+                return classify_print_head(Some(member.as_str()), Some(receiver.as_str()), args);
+            }
+            _ => return Err(PrintCallError::NonDirectCallee),
+        }
     }
+}
+
+fn classify_print_head<'a>(
+    member: Option<&str>,
+    receiver: Option<&str>,
+    args: Vec<&'a Expr>,
+) -> Result<(PrintCallKind, &'a Expr), PrintCallError> {
+    let kind = match (receiver, member) {
+        (None, Some("print")) | (Some("Print"), Some("print")) => PrintCallKind::Print,
+        (None, Some("println")) | (Some("Print"), Some("println")) => PrintCallKind::Println,
+        _ => return Err(PrintCallError::NotPrint),
+    };
     if args.len() != 1 {
         return Err(PrintCallError::ArityNotOne);
     }
-    Ok(args[0])
+    Ok((kind, args[0]))
 }
 
 #[cfg(test)]
@@ -140,6 +177,17 @@ main =
         let expr = parse_expr(source);
         assert!(extract_direct_print_call_arg(&expr).is_ok());
 
+        let qualified_print = parse_expr(
+            r#"
+main : Unit -> Unit
+main =
+  Print.println "hello"
+"#,
+        );
+        let (kind, arg) = direct_print_call(&qualified_print).expect("qualified print should work");
+        assert_eq!(kind, PrintCallKind::Println);
+        assert_eq!(arg, &Expr::StringLit("hello".into()));
+
         let not_print = parse_expr(
             r#"
 id : Int -> Int
@@ -176,7 +224,7 @@ main =
         );
         assert_eq!(
             extract_direct_print_call_arg(&non_direct),
-            Err(PrintCallError::NonDirectCallee)
+            Err(PrintCallError::NotPrint)
         );
     }
 }

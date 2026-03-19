@@ -4,6 +4,7 @@ use goby_core::{Expr, Module, Stmt};
 
 use crate::CodegenError;
 use crate::backend::WasmProgramBuilder;
+use crate::call::{PrintCallKind, direct_print_call, extract_direct_print_call_arg};
 use crate::gen_lower::backend_ir::WasmBackendInstr;
 use crate::gen_lower::emit::emit_general_module;
 use crate::layout::MemoryLayout;
@@ -535,13 +536,8 @@ fn body_after_alias_chain<'a>(comp: &'a CompExpr, initial: &str) -> &'a CompExpr
 
 /// Attempt to detect a StaticOutput plan from the IR body of `main`.
 ///
-/// Recognizes bodies where every effectful statement is a bare `print`/`println` call
-/// (`Call { callee: Var("print"|"println"), args: [StrLit(text)] }`) and there are no
-/// Read operations.
-///
-/// NOTE: qualified `Print.print(...)` becomes `PerformEffect` in the IR and is NOT
-/// matched here. Programs using qualified Print calls that lower successfully but are
-/// not static will fall through to `NotRuntimeIo`.
+/// Recognizes bodies where every effectful statement is a static Print-family call
+/// and there are no Read operations.
 fn ir_plan_static_output(comp: &CompExpr) -> Option<String> {
     let mut out = String::new();
     let mut print_count = 0usize;
@@ -561,7 +557,7 @@ fn ir_plan_static_output(comp: &CompExpr) -> Option<String> {
 /// Walk a `CompExpr` collecting static print output.
 ///
 /// Returns `true` if the entire computation is either:
-/// - a `Call { callee: Var("print"|"println"), args: [StrLit] }` node, or
+/// - a direct bare/qualified Print-family call with a string literal argument, or
 /// - a `Seq` whose stmts are all such calls and whose tail is `Value(Unit)`, or
 /// - a `Value(Unit)` (empty / unit-returning tail).
 ///
@@ -571,16 +567,30 @@ fn ir_collect_static_prints(comp: &CompExpr, out: &mut String, print_count: &mut
     match comp {
         CompExpr::Value(ValueExpr::Unit) => true,
         CompExpr::Call { callee, args } => {
-            let ValueExpr::Var(name) = callee.as_ref() else {
-                return false;
-            };
             if args.len() != 1 {
                 return false;
             }
             let ValueExpr::StrLit(text) = &args[0] else {
                 return false;
             };
-            match name.as_str() {
+            let Some(newline) = ir_static_print_mode(callee) else {
+                return false;
+            };
+            out.push_str(text);
+            if newline {
+                out.push('\n');
+            }
+            *print_count += 1;
+            true
+        }
+        CompExpr::PerformEffect { effect, op, args } => {
+            if effect != "Print" || args.len() != 1 {
+                return false;
+            }
+            let ValueExpr::StrLit(text) = &args[0] else {
+                return false;
+            };
+            match op.as_str() {
                 "print" => {
                     out.push_str(text);
                     *print_count += 1;
@@ -607,6 +617,20 @@ fn ir_collect_static_prints(comp: &CompExpr, out: &mut String, print_count: &mut
     }
 }
 
+fn ir_static_print_mode(callee: &ValueExpr) -> Option<bool> {
+    match callee {
+        ValueExpr::Var(name) if name == "print" => Some(false),
+        ValueExpr::Var(name) if name == "println" => Some(true),
+        ValueExpr::GlobalRef { module, name } if module == "Print" && name == "print" => {
+            Some(false)
+        }
+        ValueExpr::GlobalRef { module, name } if module == "Print" && name == "println" => {
+            Some(true)
+        }
+        _ => None,
+    }
+}
+
 /// Classify a Goby `IrModule`'s `main` body into a [`RuntimeIoClassification`].
 ///
 /// This is the IR-based counterpart to [`classify_runtime_io`]. It consumes a
@@ -617,7 +641,7 @@ fn ir_collect_static_prints(comp: &CompExpr, out: &mut String, print_count: &mut
 ///    - Try to detect `DynamicWasiIo(Echo)` plan.
 ///    - If no known plan matches → `Unsupported`.
 /// 2. If no Read op is present:
-///    - Try to detect `StaticOutput` (all-static bare print calls).
+///    - Try to detect `StaticOutput` (all-static Print-family calls).
 ///    - Otherwise → `NotRuntimeIo`.
 ///
 /// # Limitations (G6 scope)
@@ -740,30 +764,37 @@ fn plan_bound_echo_shape(
         return None;
     }
     match callee_output_mode(callee, scope_stmts)? {
-        "print" => Some(RuntimeIoPlan::Echo {
+        OutputReadMode::Print => Some(RuntimeIoPlan::Echo {
             input_mode,
             output_mode: OutputReadMode::Print,
             suffix_prints,
         }),
-        "println" => Some(RuntimeIoPlan::Echo {
+        OutputReadMode::Println => Some(RuntimeIoPlan::Echo {
             input_mode,
             output_mode: OutputReadMode::Println,
             suffix_prints,
         }),
-        _ => None,
     }
 }
 
-fn callee_output_mode<'a>(callee: &'a Expr, scope_stmts: &'a [Stmt]) -> Option<&'a str> {
-    let Expr::Var {
-        name: output_name, ..
-    } = callee
-    else {
-        return None;
-    };
-    let resolved_name =
-        resolve_alias_chain_source_name(scope_stmts, output_name).unwrap_or(output_name);
-    matches!(resolved_name, "print" | "println").then_some(resolved_name)
+fn callee_output_mode(callee: &Expr, scope_stmts: &[Stmt]) -> Option<OutputReadMode> {
+    callback_output_mode_expr(callee, scope_stmts)
+}
+
+fn callback_output_mode_expr(expr: &Expr, scope_stmts: &[Stmt]) -> Option<OutputReadMode> {
+    match expr {
+        Expr::Var {
+            name: output_name, ..
+        } => {
+            let resolved_name =
+                resolve_alias_chain_source_name(scope_stmts, output_name).unwrap_or(output_name);
+            callback_output_mode_name(resolved_name)
+        }
+        Expr::Qualified {
+            receiver, member, ..
+        } if receiver == "Print" => callback_output_mode_name(member),
+        _ => None,
+    }
 }
 
 fn stmt_contains_runtime_read(stmt: &Stmt) -> bool {
@@ -843,8 +874,18 @@ fn is_read_all_expr(expr: &Expr) -> bool {
             Expr::Qualified {
                 receiver, member, ..
             } => receiver == "Read" && member == "read",
+            Expr::MethodCall {
+                receiver,
+                method,
+                args,
+            } => receiver == "Read" && method == "read" && args.is_empty(),
             _ => false,
         },
+        Expr::MethodCall {
+            receiver,
+            method,
+            args,
+        } => receiver == "Read" && method == "read" && args.iter().all(Expr::is_unit_value),
         _ => false,
     }
 }
@@ -856,18 +897,40 @@ fn is_read_line_expr(expr: &Expr) -> bool {
             Expr::Qualified {
                 receiver, member, ..
             } => receiver == "Read" && member == "read_line",
+            Expr::MethodCall {
+                receiver,
+                method,
+                args,
+            } => receiver == "Read" && method == "read_line" && args.is_empty(),
             _ => false,
         },
+        Expr::MethodCall {
+            receiver,
+            method,
+            args,
+        } => receiver == "Read" && method == "read_line" && args.iter().all(Expr::is_unit_value),
         _ => false,
     }
 }
 
 fn output_read_mode(expr: &Expr) -> Option<(InputReadMode, OutputReadMode)> {
-    let Expr::Call { callee, arg, .. } = expr else {
-        return None;
-    };
-    let Expr::Var { name, .. } = callee.as_ref() else {
-        return None;
+    let (output_mode, arg) = match expr {
+        Expr::MethodCall {
+            receiver,
+            method,
+            args,
+        } if receiver == "Print" && args.len() == 1 => {
+            let output_mode = callback_output_mode_name(method)?;
+            (output_mode, &args[0])
+        }
+        _ => {
+            let (kind, arg) = direct_print_call(expr).ok()?;
+            let output_mode = match kind {
+                PrintCallKind::Print => OutputReadMode::Print,
+                PrintCallKind::Println => OutputReadMode::Println,
+            };
+            (output_mode, arg)
+        }
     };
     let input_mode = if is_read_all_expr(arg) {
         InputReadMode::ReadAll
@@ -876,11 +939,7 @@ fn output_read_mode(expr: &Expr) -> Option<(InputReadMode, OutputReadMode)> {
     } else {
         return None;
     };
-    match name.as_str() {
-        "print" => Some((input_mode, OutputReadMode::Print)),
-        "println" => Some((input_mode, OutputReadMode::Println)),
-        _ => None,
-    }
+    Some((input_mode, output_mode))
 }
 
 fn imported_head_matches_symbol(
@@ -1056,14 +1115,12 @@ fn split_lines_each_callback_plan(
             )?)?;
             Some((mode, None))
         }
+        Expr::Qualified {
+            receiver, member, ..
+        } if receiver == "Print" => Some((callback_output_mode_name(member)?, None)),
         Expr::Lambda { param, body } => match body.as_ref() {
             Expr::Call { callee, arg, .. } => {
-                let mode = match callee.as_ref() {
-                    Expr::Var { name, .. } => callback_output_mode_name(
-                        resolve_alias_chain_source_name(callback_scope_stmts, name)?,
-                    )?,
-                    _ => return None,
-                };
+                let mode = callback_output_mode_expr(callee, callback_scope_stmts)?;
                 if callback_arg_matches_line_passthrough(arg, param) {
                     Some((mode, None))
                 } else if let Some((prefix, suffix)) = extract_transform(arg, param) {
@@ -1153,14 +1210,14 @@ fn callback_output_mode_name(name: &str) -> Option<OutputReadMode> {
 }
 
 fn static_print_suffix(stmt: &Stmt) -> Option<StaticPrintSuffix> {
-    let Stmt::Expr(Expr::Call { callee, arg, .. }, _) = stmt else {
+    let Stmt::Expr(expr, _) = stmt else {
         return None;
     };
-    let Expr::Var { name, .. } = callee.as_ref() else {
-        return None;
+    let output_mode = match direct_print_call(expr).ok()?.0 {
+        PrintCallKind::Print => OutputReadMode::Print,
+        PrintCallKind::Println => OutputReadMode::Println,
     };
-    let output_mode = callback_output_mode_name(name)?;
-    let Expr::StringLit(text) = arg.as_ref() else {
+    let Expr::StringLit(text) = extract_direct_print_call_arg(expr).ok()? else {
         return None;
     };
     Some(StaticPrintSuffix {
@@ -1246,7 +1303,7 @@ mod tests {
 
     use super::{
         InputReadMode, OutputReadMode, RuntimeIoClassification, RuntimeIoPlan, StaticPrintSuffix,
-        classify_runtime_io,
+        classify_runtime_io, output_read_mode, split_lines_each_callback_plan, static_print_suffix,
     };
 
     fn main_stmts(source: &str) -> (goby_core::Module, Option<Vec<Stmt>>) {
@@ -1276,6 +1333,45 @@ main =
                 input_mode: InputReadMode::ReadAll,
                 output_mode: OutputReadMode::Print,
                 suffix_prints: vec![],
+            })
+        );
+    }
+
+    #[test]
+    fn helper_output_read_mode_accepts_qualified_print_and_read() {
+        let (_module, body) = main_stmts(
+            r#"
+main : Unit -> Unit can Print, Read
+main =
+  Print.print (Read.read ())
+"#,
+        );
+        let body = body.expect("main body should parse");
+        let expr = match &body[0] {
+            Stmt::Expr(expr, _) => expr,
+            other => panic!("expected expr stmt, got {other:?}"),
+        };
+        assert_eq!(
+            output_read_mode(expr),
+            Some((InputReadMode::ReadAll, OutputReadMode::Print)),
+            "expr shape: {expr:#?}"
+        );
+    }
+
+    #[test]
+    fn helper_static_print_suffix_accepts_qualified_print_family() {
+        let (_module, body) = main_stmts(
+            r#"
+main : Unit -> Unit can Print
+main =
+  Print.println "done"
+"#,
+        );
+        assert_eq!(
+            static_print_suffix(&body.expect("main body should parse")[0]),
+            Some(StaticPrintSuffix {
+                text: "done".to_string(),
+                output_mode: OutputReadMode::Println,
             })
         );
     }
@@ -1494,6 +1590,57 @@ main =
     }
 
     #[test]
+    fn helper_split_each_callback_accepts_qualified_println_callback() {
+        let (module, body) = main_stmts(
+            r#"
+import goby/list ( each )
+import goby/string ( split )
+
+main : Unit -> Unit can Print, Read
+main =
+  text = read()
+  delim = "\n"
+  lines = split(text, delim)
+  each lines Print.println
+"#,
+        );
+        let body = body.expect("main body should parse");
+        let each_expr = match &body[3] {
+            Stmt::Expr(expr, _) => expr,
+            other => panic!("expected expr stmt, got {other:?}"),
+        };
+        assert_eq!(
+            split_lines_each_callback_plan(&module, &body[..3], "lines", each_expr),
+            Some((OutputReadMode::Println, None))
+        );
+    }
+
+    #[test]
+    fn plans_split_each_with_qualified_println_callback() {
+        let (module, body) = main_stmts(
+            r#"
+import goby/list ( each )
+import goby/string ( split )
+
+main : Unit -> Unit can Print, Read
+main =
+  text = read()
+  delim = "\n"
+  lines = split(text, delim)
+  each lines Print.println
+"#,
+        );
+        assert_eq!(
+            classify_runtime_io(&module, body.as_deref()),
+            RuntimeIoClassification::DynamicWasiIo(RuntimeIoPlan::SplitLinesEach {
+                output_mode: OutputReadMode::Println,
+                suffix_prints: vec![],
+                transform: None,
+            })
+        );
+    }
+
+    #[test]
     fn plans_split_each_forwarded_local_print_callback_alias() {
         let (module, body) = main_stmts(
             r#"
@@ -1650,6 +1797,36 @@ main =
   print (read())
   println "done"
   print "!"
+"#,
+        );
+        assert_eq!(
+            classify_runtime_io(&module, body.as_deref()),
+            RuntimeIoClassification::DynamicWasiIo(RuntimeIoPlan::Echo {
+                input_mode: InputReadMode::ReadAll,
+                output_mode: OutputReadMode::Print,
+                suffix_prints: vec![
+                    StaticPrintSuffix {
+                        text: "done".to_string(),
+                        output_mode: OutputReadMode::Println,
+                    },
+                    StaticPrintSuffix {
+                        text: "!".to_string(),
+                        output_mode: OutputReadMode::Print,
+                    },
+                ],
+            })
+        );
+    }
+
+    #[test]
+    fn plans_qualified_read_echo_with_qualified_static_print_suffixes() {
+        let (module, body) = main_stmts(
+            r#"
+main : Unit -> Unit can Print, Read
+main =
+  Print.print (Read.read ())
+  Print.println "done"
+  Print.print "!"
 "#,
         );
         assert_eq!(
@@ -2106,6 +2283,20 @@ main =
         }
 
         #[test]
+        fn ir_classify_qualified_static_println_is_static_output_with_newline() {
+            let body = CompExpr::PerformEffect {
+                effect: "Print".into(),
+                op: "println".into(),
+                args: vec![ValueExpr::StrLit("hi".into())],
+            };
+            let ir = ir_module_with_main(body);
+            assert_eq!(
+                classify_runtime_io_from_ir(&ir),
+                RuntimeIoClassification::StaticOutput("hi\n".to_string())
+            );
+        }
+
+        #[test]
         fn ir_classify_seq_static_prints_is_static_output() {
             // IR for: print "a"; println "b"
             let body = CompExpr::Seq {
@@ -2115,6 +2306,27 @@ main =
                 }],
                 tail: Box::new(CompExpr::Call {
                     callee: Box::new(ValueExpr::Var("println".into())),
+                    args: vec![ValueExpr::StrLit("b".into())],
+                }),
+            };
+            let ir = ir_module_with_main(body);
+            assert_eq!(
+                classify_runtime_io_from_ir(&ir),
+                RuntimeIoClassification::StaticOutput("ab\n".to_string())
+            );
+        }
+
+        #[test]
+        fn ir_classify_seq_qualified_static_prints_is_static_output() {
+            let body = CompExpr::Seq {
+                stmts: vec![CompExpr::PerformEffect {
+                    effect: "Print".into(),
+                    op: "print".into(),
+                    args: vec![ValueExpr::StrLit("a".into())],
+                }],
+                tail: Box::new(CompExpr::PerformEffect {
+                    effect: "Print".into(),
+                    op: "println".into(),
                     args: vec![ValueExpr::StrLit("b".into())],
                 }),
             };
