@@ -8,7 +8,8 @@
 //! ## Supported native subset (Phase A)
 //!
 //! - `main : Unit -> Unit` annotation required.
-//! - `Stmt::Binding` with value expressions in the native value subset.
+//! - `Stmt::Binding` / `Stmt::MutBinding` with value expressions in the native value subset,
+//!   as long as no assignment is required at runtime.
 //! - `Stmt::Expr(print <value>)` and `<value> |> print`.
 //! - Value expressions: `IntLit`, `BoolLit`, `StringLit`, `Var`, `ListLit(IntLit)`,
 //!   `BinOp(+|-|*|/|%|==|<|>|<=|>=)`, `If`, `Case`
@@ -20,6 +21,8 @@
 //! The following constructs force the entire module onto the fallback (interpreter) path:
 //! - [`UnsupportedReason::CallTargetBodyNotNativeSupported`]: declarations reachable from `main`
 //!   that contain forms outside the native subset (for example effect handler bodies).
+//! - [`UnsupportedReason::MutableAssignmentNotNativeSupported`]: assignment requires mutable
+//!   runtime state that the direct native evaluator does not implement yet.
 //! - [`UnsupportedReason::UnsupportedValueExpr`]: expression forms not yet lowered
 //!   (e.g. method calls, record operations).
 
@@ -49,6 +52,7 @@ pub(crate) enum UnsupportedReason {
     PrintArityNotOne,
     UnsupportedPipelineCallee,
     UnsupportedStatementExpr,
+    MutableAssignmentNotNativeSupported,
     UnsupportedListItemExpr,
     UnsupportedBinop,
     CaseHasNoArms,
@@ -72,6 +76,7 @@ impl UnsupportedReason {
             Self::PrintArityNotOne => "print_arity_not_one",
             Self::UnsupportedPipelineCallee => "unsupported_pipeline_callee",
             Self::UnsupportedStatementExpr => "unsupported_statement_expr",
+            Self::MutableAssignmentNotNativeSupported => "mutable_assignment_not_native_supported",
             Self::UnsupportedListItemExpr => "unsupported_list_item_expr",
             Self::UnsupportedBinop => "unsupported_binop",
             Self::CaseHasNoArms => "case_has_no_arms",
@@ -144,9 +149,8 @@ fn unsupported_stmt_reason(
 ) -> Option<UnsupportedReason> {
     match stmt {
         Stmt::Binding { value, .. } => unsupported_value_expr_reason(value, module, stack),
-        Stmt::MutBinding { .. } | Stmt::Assign { .. } => {
-            Some(UnsupportedReason::UnsupportedStatementExpr)
-        }
+        Stmt::MutBinding { value, .. } => unsupported_value_expr_reason(value, module, stack),
+        Stmt::Assign { .. } => Some(UnsupportedReason::MutableAssignmentNotNativeSupported),
         Stmt::Expr(expr, _) => unsupported_stmt_expr_reason(expr, module, stack),
     }
 }
@@ -251,7 +255,7 @@ fn unsupported_value_expr_reason(
                         }
                     }
                     Stmt::Assign { .. } => {
-                        return Some(UnsupportedReason::UnsupportedStatementExpr);
+                        return Some(UnsupportedReason::MutableAssignmentNotNativeSupported);
                     }
                     Stmt::Expr(expr, _) => {
                         if let Some(reason) = unsupported_value_expr_reason(expr, module, stack) {

@@ -526,7 +526,7 @@ All implementation under this plan must preserve:
   - validation checklist:
     - mutation semantics are covered by IR tests and existing runtime parity tests
     - mutable forms no longer fail at AST-to-IR time
-- [ ] IR10. Backend boundary convergence
+- [x] IR10. Backend boundary convergence
   - make backend limitations show up as backend limitations rather than IR-construction failures
   - implementation checklist:
     - remove backend workarounds that only exist for pre-convergence AST/IR mismatch
@@ -620,34 +620,33 @@ Reason for this order:
 
 The recommended next implementation slice is:
 
-1. advance IR10 by converting remaining "not lowerable" failures into backend-boundary failures,
-2. remove or narrow fallback/recognizer paths that only survive because of pre-convergence AST assumptions,
-3. prepare IR11 by deleting comments, docs, and planner language that still treats the pure subset as the governing architecture.
+1. advance IR11 by deleting stale "pure subset" wording from code comments, diagnostics, and planning text,
+2. remove dead branches and names that only exist for the old subset framing,
+3. keep the final cleanup honest by only deleting wording that no longer matches runtime/backend behavior.
 
 Recommended file entry points for that slice:
 
 - `doc/PLAN_IR.md`
-- `crates/goby-wasm/src/lower.rs`
+- `doc/STATE.md`
 - `crates/goby-wasm/src/fallback.rs`
-- `crates/goby-wasm/src/runtime_io_plan.rs`
-- the backend/runtime tests that still encode pre-convergence fallback expectations
+- `crates/goby-wasm/src/lower.rs`
+- repo-wide comments/tests/docs that still mention the pure subset as active architecture
 
-Recommended milestone order after IR9:
+Recommended milestone order after IR10:
 
-1. IR10 backend boundary convergence
-2. IR11 pure-subset deletion
+1. IR11 pure-subset deletion
 
 Reason for this order:
 
-- it turns the remaining work from "missing language-family lowering" into backend cleanup and boundary cleanup,
-- it forces old fallback dependencies to justify themselves as optimizations or disappear,
-- it leaves terminology cleanup until the code already reflects the intended architecture.
+- backend-boundary wording is now in place for representative unsupported families,
+- the remaining work is mostly terminology and dead-path cleanup,
+- deleting the old framing last reduces the risk of papering over a still-live architectural dependency.
 
 Definition of done for the next slice:
 
 - `ir_lower` continues to lower through `Resolved*` inputs without reintroducing raw-name heuristics,
-- the next slice removes at least one concrete fallback/recognizer or rewrites one family of diagnostics to backend-boundary wording,
-- new tests prove representative unsupported cases fail, if at all, because of backend/runtime support rather than missing IR shape,
+- the next slice deletes or rewrites stale "pure subset" wording in code and docs without changing behavior,
+- repo search no longer presents the pure subset as active architecture,
 - `doc/STATE.md` names only the active next milestone and any exact unfinished sub-steps.
 
 ## 12. Non-Goals for This Document

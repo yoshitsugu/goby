@@ -144,6 +144,48 @@ main =
 }
 
 #[test]
+fn native_codegen_capability_checker_accepts_mut_binding_without_assignment() {
+    let source = r#"
+main : Unit -> Unit
+main =
+  mut x = 1
+  print x
+"#;
+    let module = parse_module(source).expect("source should parse");
+    assert!(
+        fallback::supports_native_codegen(&module),
+        "mut binding without assignment should use the native direct path"
+    );
+    assert_eq!(fallback::native_unsupported_reason_kind(&module), None);
+    let wasm = compile_module(&module).expect("codegen should succeed");
+    let expected_text =
+        resolve_module_runtime_output(&module).expect("runtime output should resolve");
+    assert_eq!(expected_text, "1");
+    assert_valid_wasm_module(&wasm);
+}
+
+#[test]
+fn native_codegen_capability_checker_reports_assignment_as_backend_limitation() {
+    let source = r#"
+main : Unit -> Unit
+main =
+  mut x = 1
+  x := 2
+  print x
+"#;
+    let module = parse_module(source).expect("source should parse");
+    assert_eq!(
+        fallback::native_unsupported_reason_kind(&module),
+        Some(fallback::UnsupportedReason::MutableAssignmentNotNativeSupported),
+        "assignment should be reported as a native backend limitation"
+    );
+    assert_eq!(
+        fallback::native_unsupported_reason(&module),
+        Some("mutable_assignment_not_native_supported")
+    );
+}
+
+#[test]
 fn native_codegen_capability_checker_accepts_direct_function_call_subset() {
     let source = r#"
 double : Int -> Int

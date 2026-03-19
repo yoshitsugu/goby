@@ -113,7 +113,7 @@ fn unresolved_runtime_output_error(
     if let Some(reason) = fallback::native_unsupported_reason(module) {
         return CodegenError {
             message: format!(
-                "main body contains unsupported constructs that cannot be lowered natively or resolved as static output (native_unsupported_reason={})",
+                "main body requires backend features not yet supported by native lowering or static-output resolution (native_backend_limitation={})",
                 reason
             ),
         };
@@ -121,7 +121,7 @@ fn unresolved_runtime_output_error(
 
     CodegenError {
         message:
-            "main body contains unsupported constructs that cannot be lowered natively or resolved as static output"
+            "main body requires backend features not yet supported by native lowering or static-output resolution"
                 .to_string(),
     }
 }
@@ -183,8 +183,8 @@ fn runtime_mode_and_handoff(
 ///
 /// Returns [`CodegenError`] when:
 /// - `main` declaration is missing.
-/// - `main` body contains constructs that are neither natively lowerable nor
-///   resolvable as static print output.
+/// - `main` body requires backend/runtime features that are neither supported by
+///   native lowering nor resolvable as static print output.
 /// - Internal Wasm encoding fails (e.g. string literal too large).
 pub fn compile_module(module: &Module) -> Result<Vec<u8>, CodegenError> {
     if let lower::NativeLoweringResult::Emitted(wasm) =
