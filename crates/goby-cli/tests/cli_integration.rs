@@ -888,6 +888,67 @@ main =
 }
 
 #[test]
+fn run_command_executes_graphemes_program_with_interpreter_bridge_stdin() {
+    let root = repo_root();
+    let sandbox = TempDirGuard::new("run_graphemes_interpreter_bridge");
+    let input = sandbox.join("graphemes.gb");
+    fs::write(
+        &input,
+        r#"
+import goby/string ( graphemes )
+
+main : Unit -> Unit can Print, Read
+main =
+  text = read ()
+  parts = graphemes text
+  println(parts[1])
+"#,
+    )
+    .expect("temporary input should be writable");
+
+    let mut child = command_for_goby_cli()
+        .arg("run")
+        .arg(&input)
+        .current_dir(&root)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("cli should execute");
+    child
+        .stdin
+        .as_mut()
+        .expect("stdin pipe should exist")
+        .write_all("a👨‍👩‍👧‍👦b".as_bytes())
+        .expect("stdin should be writable");
+    let output = child
+        .wait_with_output()
+        .expect("cli output should be readable");
+
+    assert!(
+        output.status.success(),
+        "expected interpreter-bridge execution to succeed, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("parsed and typechecked"),
+        "unexpected stdout: {}",
+        stdout
+    );
+    assert!(
+        stdout.contains("👨‍👩‍👧‍👦"),
+        "expected grapheme-aware output, stdout: {}",
+        stdout
+    );
+    assert!(
+        !stdout.contains("generated wasm"),
+        "interpreter bridge should not claim Wasm generation, stdout: {}",
+        stdout
+    );
+}
+
+#[test]
 fn check_command_rejects_legacy_syntax_by_default() {
     let root = repo_root();
     let sandbox = TempDirGuard::new("check_legacy_warnings");

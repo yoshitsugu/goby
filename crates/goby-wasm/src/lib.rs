@@ -231,12 +231,9 @@ pub fn compile_module(module: &Module) -> Result<Vec<u8>, CodegenError> {
 /// - This function is intended to be called only from the CLI `run` command.
 ///   It is `pub` only because the CLI lives in a separate crate.
 ///
-/// **Current status**: `InterpreterBridge` is currently unreachable from
-/// `classify_runtime_io` — all previously bridged shapes have been promoted to
-/// `DynamicWasiIo`.  Calling this function on any real program will therefore
-/// always fail the classification guard below with `Err`.  The function is retained
-/// as an extension point for future shapes that need interpreter-backed execution
-/// while Wasm lowering is being developed.
+/// **Current status**: `InterpreterBridge` is currently reserved for the narrow
+/// Track E grapheme-backed stdlib subset in runtime-`Read` programs.  This is
+/// intentionally not a generic fallback for arbitrary unsupported runtime shapes.
 ///
 /// # Errors
 ///

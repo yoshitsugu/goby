@@ -259,10 +259,9 @@ fn run_command(module: &goby_core::Module, file: &str) -> Result<(), CliError> {
         // This is a temporary fallback: as DynamicWasiIo support grows, fewer
         // programs should reach this branch.
         //
-        // NOTE: `InterpreterBridge` is currently unreachable from `classify_runtime_io`
-        // because all previously bridged shapes have been promoted to `DynamicWasiIo`.
-        // This arm is retained as an extension point for future shapes that need
-        // interpreter-backed execution while Wasm lowering is developed.
+        // NOTE: `InterpreterBridge` is intentionally narrow. It currently exists
+        // for the Track E grapheme-backed stdlib decl subset and should not turn
+        // into a generic fallback for arbitrary unsupported runtime programs.
         Err(_err)
             if matches!(
                 goby_wasm::runtime_io_execution_kind(module),

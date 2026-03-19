@@ -29,6 +29,10 @@ Last updated: 2026-03-19
   - the grapheme/list backend work is locked to a narrow intrinsic-aware stdlib-decl execution path rather than arbitrary handler support in general Wasm lowering,
   - backend lowering now uses explicit backend intrinsics instead of stringly helper-name dispatch for new grapheme-track primitives,
   - `__goby_string_each_grapheme` and `__goby_list_push_string` lower structurally but remain emitter-unsupported until E3/E4.
+- Track E bridge slice is landed for the current selective-import `goby/string.graphemes` runtime-`Read` path:
+  - runtime-I/O classification now routes `read -> graphemes -> print/index` programs to `InterpreterBridge` instead of generic `Unsupported`,
+  - CLI `run` executes that subset through seeded-stdin interpreter runtime rather than pretending it is Wasm-lowerable,
+  - end-to-end regression coverage now locks emoji-family grapheme behavior for the bridge path.
 - Remaining helper work is incremental family expansion on top of the emitter ABI, not a reason to restore planner or AST-shaped fallback.
 - The IR-lowering roadmap is complete; follow-up work should stay within the converged lowering architecture.
 - Then inspect:

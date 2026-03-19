@@ -1235,7 +1235,7 @@ main =
 }
 
 #[test]
-fn runtime_io_execution_kind_does_not_claim_general_lowering_for_unemitted_grapheme_intrinsic() {
+fn runtime_io_execution_kind_routes_read_graphemes_program_to_interpreter_bridge() {
     let source = r#"
 import goby/string ( graphemes )
 
@@ -1246,16 +1246,17 @@ main =
   println(parts[1])
 "#;
     let module = parse_module(source).expect("source should parse");
-    assert_ne!(
+    assert_eq!(
         runtime_io_execution_kind(&module).expect("classification should succeed"),
-        crate::RuntimeIoExecutionKind::GeneralLowered,
-        "grapheme intrinsic path should not claim general lowering until emitter support exists"
+        crate::RuntimeIoExecutionKind::InterpreterBridge,
+        "grapheme-backed stdlib decl path should use the narrow interpreter bridge"
     );
     let err = compile_module(&module)
-        .expect_err("unsupported grapheme intrinsic path should fail cleanly");
+        .expect_err("interpreter-bridge grapheme path should not compile directly to Wasm");
     assert!(
-        !err.message.contains("StringEachGrapheme"),
-        "classification mismatch should not leak raw intrinsic emission error: {}",
+        err.message
+            .contains("compile-time fallback cannot consume stdin"),
+        "compile path should explain the runtime stdin bridge requirement: {}",
         err.message
     );
 }

@@ -522,6 +522,10 @@ Milestones:
     - qualified and selective-import spellings,
     - emoji-family grapheme clusters,
     - empty-input compatibility behavior.
+  - progress:
+    - the selective-import interpreter-bridge slice is landed and covered,
+      but backend-path parity and the remaining spelling/empty-input cases are
+      still open.
   - done when:
     - compile tests and wasmtime CLI integration tests cover the runtime-stdin
       path and pass.

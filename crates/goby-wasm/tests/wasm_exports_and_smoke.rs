@@ -656,6 +656,48 @@ main =
 }
 
 #[test]
+fn runtime_io_execution_kind_reports_interpreter_bridge_for_read_graphemes_program() {
+    let module = parse_module(
+        r#"
+import goby/string ( graphemes )
+
+main : Unit -> Unit can Print, Read
+main =
+  text = read ()
+  parts = graphemes text
+  println(parts[1])
+"#,
+    )
+    .expect("parse should work");
+    assert_eq!(
+        runtime_io_execution_kind(&module).expect("classification should work"),
+        RuntimeIoExecutionKind::InterpreterBridge
+    );
+}
+
+#[test]
+fn execute_module_with_stdin_runs_interpreter_bridge_graphemes_program() {
+    let module = parse_module(
+        r#"
+import goby/string ( graphemes )
+
+main : Unit -> Unit can Print, Read
+main =
+  text = read ()
+  parts = graphemes text
+  println(parts[1])
+"#,
+    )
+    .expect("parse should work");
+    let output = execute_module_with_stdin(&module, Some("a👨‍👩‍👧‍👦b".to_string()))
+        .expect("interpreter bridge should execute grapheme-backed stdlib decl path");
+    assert_eq!(
+        output.as_deref(),
+        Some("👨\u{200d}👩\u{200d}👧\u{200d}👦\n")
+    );
+}
+
+#[test]
 fn execute_module_with_stdin_rejects_dynamic_wasi_io_program() {
     let module = parse_module(
         r#"
