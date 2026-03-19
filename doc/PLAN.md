@@ -411,7 +411,150 @@ Done when:
   - Defer until after D6c.
   - Keep as optional editor tooling follow-up rather than active architecture work.
 
-### 4.4 Review Follow-ups (Backlog)
+### 4.4 Active Track E: Backend Intrinsics for Unicode Grapheme Iteration
+
+Goal: support `goby/string.graphemes` and the stdlib grapheme-driven parts of
+`goby/string.split` by making `__goby_string_each_grapheme` a backend-level
+primitive, instead of adding more surface-level helper special cases.
+
+Why this track exists:
+
+- `goby/string.graphemes` is already defined in stdlib on top of
+  `__goby_string_each_grapheme` and `__goby_list_push_string`.
+- adding a direct `string.graphemes` Wasm helper would duplicate ownership
+  between stdlib and backend and would not help the broader stdlib iterator
+  path.
+- the long-term design should preserve:
+  - stdlib surface APIs as stdlib-owned,
+  - shared IR as the canonical lowered program form,
+  - backend intrinsics as a small primitive substrate beneath stdlib.
+
+Locked design choice:
+
+- do **not** add a backend-only direct helper for `string.graphemes`.
+- do **not** widen planner or AST-shaped runtime fallbacks for this family.
+- instead, make `__goby_string_each_grapheme` and the minimal supporting list
+  intrinsic path executable through the converged backend architecture.
+
+Additional locked boundaries:
+
+- Track E does **not** make general Wasm lowering understand arbitrary handler /
+  resume programs.
+- Track E instead unblocks runtime-`Read` programs that call stdlib
+  `goby/string.graphemes` by introducing a narrow intrinsic-aware execution path
+  for stdlib decl bodies that are already lowered through the converged
+  front-end boundary.
+- new backend primitive work must use explicit backend IR variants or an
+  equivalent non-stringly representation; do **not** encode new intrinsic
+  ownership as ad hoc helper-name strings.
+- grapheme segmentation must have a single semantic authority; backend work must
+  reuse the existing Unicode Extended Grapheme Cluster definition rather than
+  creating a second independent interpretation.
+- list/string allocation for this track must reuse the existing tagged-value and
+  list/string memory layout ABI already used by the backend; do **not** add a
+  second private representation for grapheme helpers.
+
+Scope boundary for this track:
+
+- in scope:
+  - backend IR representation and execution support for
+    `__goby_string_each_grapheme`,
+  - backend IR representation and execution support for
+    `__goby_list_push_string` as needed by stdlib `goby/string.gb`,
+  - a narrow intrinsic-aware execution path for stdlib decl bodies that lets
+    `goby/string.graphemes` execute inside runtime-`Read` programs without
+    requiring full arbitrary-handler support in general Wasm lowering,
+  - parity and regression coverage for `graphemes`-driven stdlib behavior.
+- out of scope for the first slice:
+  - a full general solution for all handler-heavy stdlib code,
+  - backend support for arbitrary iterator contracts beyond what this stdlib
+    family requires,
+  - new direct surface helpers that bypass stdlib ownership.
+
+Milestones:
+
+- [ ] E1. Intrinsic boundary lock
+  - document and freeze the lowering boundary for runtime intrinsics used by
+    stdlib string helpers.
+  - explicitly treat `__goby_string_each_grapheme` and
+    `__goby_list_push_string` as backend primitives, not user-surface helpers.
+  - explicitly lock the execution boundary:
+    - no arbitrary handler/resume support expansion in general Wasm lowering,
+    - use a narrow intrinsic-aware stdlib-decl execution path instead.
+  - done when:
+    - planning/docs consistently describe these names as backend primitives
+      under stdlib ownership,
+    - the execution boundary is stated unambiguously in docs.
+
+- [ ] E2. Backend IR support for grapheme/list intrinsics
+  - extend backend IR and backend lowering so intrinsic calls are modeled as
+    first-class backend operations rather than opaque helper strings.
+  - keep the primitive set minimal and specific to the stdlib ownership
+    boundary.
+  - done when:
+    - lowering distinguishes these intrinsics from ordinary stdlib helper calls,
+    - emitter support can be checked structurally at classification time,
+    - no new intrinsic in this track depends on stringly helper-name dispatch.
+
+- [ ] E3. Wasm emitter execution for grapheme iteration
+  - implement backend execution for `__goby_string_each_grapheme`.
+  - preserve Unicode Extended Grapheme Cluster semantics.
+  - keep a single semantic authority for grapheme segmentation; backend work
+    must reuse that authority rather than defining a separate interpretation.
+  - done when:
+    - the semantic-authority choice is explicit in code/docs,
+    - a runtime-`Read` program can execute stdlib `goby/string.graphemes`
+      through the backend path.
+
+- [ ] E4. Wasm emitter execution for string-list accumulation
+  - implement backend execution for `__goby_list_push_string` on top of the
+    converged tagged-value and list/string allocation ABI.
+  - keep list/string memory layout shared with existing collection helper
+    emission.
+  - done when:
+    - no second list/string runtime representation is introduced for this track,
+    - stdlib `goby/string.graphemes` can accumulate list results without
+      planner fallback.
+
+- [ ] E5. Stdlib `graphemes` parity in runtime-`Read` programs
+  - add end-to-end coverage for:
+    - `text = read (); parts = graphemes text; println(parts[1])`
+    - qualified and selective-import spellings,
+    - emoji-family grapheme clusters,
+    - empty-input compatibility behavior.
+  - done when:
+    - compile tests and wasmtime CLI integration tests cover the runtime-stdin
+      path and pass.
+
+- [ ] E6. Prepare split handoff to stdlib-only ownership
+  - after grapheme iteration primitives land, continue moving
+    `goby/string.split` onto the stdlib path for empty-delimiter and
+    single-grapheme-delimiter cases without backend-only direct helpers.
+  - keep this aligned with `doc/PLAN_STANDARD_LIBRARY.md`.
+  - done when:
+    - the remaining `split` builtin work is clearly reduced to the documented
+      stdlib track.
+
+Execution order:
+
+1. E1 before code changes.
+2. E2 before E3/E4 implementation.
+3. E3 and E4 may advance together, but neither should be faked with new
+   planner/runtime fallback recognizers.
+4. E5 before declaring the track’s first useful slice complete.
+5. E6 only after `graphemes` itself works through the backend path.
+
+Development process note:
+
+- temporary breakage during implementation is acceptable.
+- do not compromise the boundary by adding direct `string.graphemes` helpers or
+  new AST-shape-specific fallback logic.
+- if five serious implementation attempts fail to make the primitive path work,
+  stop and revisit the design before adding a workaround.
+- when a milestone is reached, update its checkbox from `[ ]` to `[x]` in the
+  same change that lands the milestone.
+
+### 4.5 Review Follow-ups (Backlog)
 
 The following items were identified in a focused code review and are tracked as
 near/mid-term engineering debt after current active tracks.
