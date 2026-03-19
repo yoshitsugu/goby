@@ -12,7 +12,7 @@ Last updated: 2026-03-19
 
 1. Keep future lowering work aligned with `resolved form -> shared IR -> backend`.
 2. Treat backend limitations as backend limitations rather than restoring AST-shaped recognizers.
-3. Extend emitter-side helper coverage family by family from the converged ABI, rather than widening planner fallback again.
+3. Continue Track E from `E3 -> E4 -> E5`: implement backend execution for explicit grapheme/list intrinsics without widening planner fallback.
 4. Reopen `doc/PLAN_IR.md` only if a genuinely new architectural gap appears.
 
 ## Restart Notes
@@ -25,6 +25,10 @@ Last updated: 2026-03-19
 - Runtime-I/O plans that delegate to general backend emission append an explicit final `Drop`, matching the `_start : () -> ()` Wasm contract.
 - Non-fused `CallHelper` emission is landed for `string.split`, `list.get`, and `string.length`, backed by a downward bump-allocation ABI for runtime strings/lists in general Wasm lowering.
 - Non-fused helper shapes now execute end to end in wasmtime for `split -> drop` and `split -> list.get -> alias -> println`.
+- Track E E1/E2 are landed:
+  - the grapheme/list backend work is locked to a narrow intrinsic-aware stdlib-decl execution path rather than arbitrary handler support in general Wasm lowering,
+  - backend lowering now uses explicit backend intrinsics instead of stringly helper-name dispatch for new grapheme-track primitives,
+  - `__goby_string_each_grapheme` and `__goby_list_push_string` lower structurally but remain emitter-unsupported until E3/E4.
 - Remaining helper work is incremental family expansion on top of the emitter ABI, not a reason to restore planner or AST-shaped fallback.
 - The IR-lowering roadmap is complete; follow-up work should stay within the converged lowering architecture.
 - Then inspect:

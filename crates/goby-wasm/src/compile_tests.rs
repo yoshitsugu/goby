@@ -1234,6 +1234,32 @@ main =
     assert_valid_wasm_module(&wasm);
 }
 
+#[test]
+fn runtime_io_execution_kind_does_not_claim_general_lowering_for_unemitted_grapheme_intrinsic() {
+    let source = r#"
+import goby/string ( graphemes )
+
+main : Unit -> Unit can Print, Read
+main =
+  text = read ()
+  parts = graphemes text
+  println(parts[1])
+"#;
+    let module = parse_module(source).expect("source should parse");
+    assert_ne!(
+        runtime_io_execution_kind(&module).expect("classification should succeed"),
+        crate::RuntimeIoExecutionKind::GeneralLowered,
+        "grapheme intrinsic path should not claim general lowering until emitter support exists"
+    );
+    let err = compile_module(&module)
+        .expect_err("unsupported grapheme intrinsic path should fail cleanly");
+    assert!(
+        !err.message.contains("StringEachGrapheme"),
+        "classification mismatch should not leak raw intrinsic emission error: {}",
+        err.message
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Plain read+print parity: programs previously handled by handwritten runtime-I/O plans must
 // produce valid Wasm through the general lowering path.

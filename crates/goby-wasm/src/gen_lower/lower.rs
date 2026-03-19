@@ -6,7 +6,7 @@ use std::collections::HashMap;
 
 use goby_core::ir::{CompExpr, ValueExpr};
 
-use crate::gen_lower::backend_ir::{SplitIndexOperand, WasmBackendInstr};
+use crate::gen_lower::backend_ir::{BackendIntrinsic, SplitIndexOperand, WasmBackendInstr};
 use crate::gen_lower::value::{ValueError, encode_bool, encode_int, encode_unit};
 
 /// Error produced when the general lowering path encounters an unsupported IR node.
@@ -115,15 +115,22 @@ fn lower_comp_with_aliases(
                 }
                 instrs.push(WasmBackendInstr::EffectOp { effect, op });
                 Ok(instrs)
-            } else if let Some((module, name)) = resolve_helper_call_target(callee, aliases) {
+            } else if let Some(intrinsic) = resolve_intrinsic_call_target(callee, aliases) {
                 let mut instrs = Vec::new();
                 for arg in args {
                     instrs.extend(lower_value(arg)?);
                 }
-                instrs.push(WasmBackendInstr::CallHelper {
-                    name: format!("{}.{}", module, name),
-                    arg_count: args.len(),
-                });
+                if args.len() != intrinsic.arity() {
+                    return Err(LowerError::UnsupportedForm {
+                        node: format!(
+                            "Intrinsic call with wrong arity: {:?} expected {}, got {}",
+                            intrinsic,
+                            intrinsic.arity(),
+                            args.len()
+                        ),
+                    });
+                }
+                instrs.push(WasmBackendInstr::Intrinsic { intrinsic });
                 Ok(instrs)
             } else {
                 Err(LowerError::UnsupportedForm {
@@ -487,13 +494,39 @@ fn resolve_effect_call_target(
     }
 }
 
-fn resolve_helper_call_target<'a>(
-    callee: &'a ValueExpr,
-    aliases: &'a HashMap<String, AliasValue>,
-) -> Option<(&'a str, &'a str)> {
+fn resolve_intrinsic_call_target(
+    callee: &ValueExpr,
+    aliases: &HashMap<String, AliasValue>,
+) -> Option<BackendIntrinsic> {
     match callee {
-        ValueExpr::GlobalRef { module, name } => Some((module.as_str(), name.as_str())),
-        ValueExpr::Var(name) => resolve_global_ref(name, aliases),
+        ValueExpr::GlobalRef { module, name } => {
+            backend_intrinsic_for(module.as_str(), name.as_str())
+        }
+        ValueExpr::Var(name) => {
+            if let Some(intrinsic) = backend_intrinsic_for_bare(name) {
+                return Some(intrinsic);
+            }
+            let (module, name) = resolve_global_ref(name, aliases)?;
+            backend_intrinsic_for(module, name)
+        }
+        _ => None,
+    }
+}
+
+fn backend_intrinsic_for(module: &str, name: &str) -> Option<BackendIntrinsic> {
+    match (module, name) {
+        ("string", "split") => Some(BackendIntrinsic::StringSplit),
+        ("list", "get") => Some(BackendIntrinsic::ListGet),
+        ("string", "length") => Some(BackendIntrinsic::StringLength),
+        _ => None,
+    }
+}
+
+fn backend_intrinsic_for_bare(name: &str) -> Option<BackendIntrinsic> {
+    match name {
+        "__goby_string_each_grapheme" => Some(BackendIntrinsic::StringEachGrapheme),
+        "__goby_list_push_string" => Some(BackendIntrinsic::ListPushString),
+        "__goby_string_length" => Some(BackendIntrinsic::StringLength),
         _ => None,
     }
 }
@@ -654,6 +687,49 @@ mod tests {
             vec![I::PushStaticString {
                 text: "x".to_string()
             }]
+        );
+    }
+
+    #[test]
+    fn lower_string_length_call_emits_explicit_intrinsic() {
+        let comp = CompExpr::Call {
+            callee: Box::new(ValueExpr::GlobalRef {
+                module: "string".to_string(),
+                name: "length".to_string(),
+            }),
+            args: vec![ValueExpr::StrLit("hello".to_string())],
+        };
+        let instrs = lower_comp(&comp).expect("string.length should lower");
+        assert_eq!(
+            instrs,
+            vec![
+                I::PushStaticString {
+                    text: "hello".to_string()
+                },
+                I::Intrinsic {
+                    intrinsic: BackendIntrinsic::StringLength
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn lower_runtime_intrinsic_bare_name_emits_explicit_intrinsic() {
+        let comp = CompExpr::Call {
+            callee: Box::new(ValueExpr::Var("__goby_string_each_grapheme".to_string())),
+            args: vec![ValueExpr::Var("text".to_string())],
+        };
+        let instrs = lower_comp(&comp).expect("runtime intrinsic should lower");
+        assert_eq!(
+            instrs,
+            vec![
+                I::LoadLocal {
+                    name: "text".to_string()
+                },
+                I::Intrinsic {
+                    intrinsic: BackendIntrinsic::StringEachGrapheme
+                },
+            ]
         );
     }
 

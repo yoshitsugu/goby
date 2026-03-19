@@ -473,7 +473,7 @@ Scope boundary for this track:
 
 Milestones:
 
-- [ ] E1. Intrinsic boundary lock
+- [x] E1. Intrinsic boundary lock
   - document and freeze the lowering boundary for runtime intrinsics used by
     stdlib string helpers.
   - explicitly treat `__goby_string_each_grapheme` and
@@ -486,7 +486,7 @@ Milestones:
       under stdlib ownership,
     - the execution boundary is stated unambiguously in docs.
 
-- [ ] E2. Backend IR support for grapheme/list intrinsics
+- [x] E2. Backend IR support for grapheme/list intrinsics
   - extend backend IR and backend lowering so intrinsic calls are modeled as
     first-class backend operations rather than opaque helper strings.
   - keep the primitive set minimal and specific to the stdlib ownership

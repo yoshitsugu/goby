@@ -13,6 +13,27 @@ pub(crate) enum SplitIndexOperand {
     Local(String),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BackendIntrinsic {
+    StringSplit,
+    ListGet,
+    StringLength,
+    StringEachGrapheme,
+    ListPushString,
+}
+
+impl BackendIntrinsic {
+    pub(crate) fn arity(self) -> usize {
+        match self {
+            BackendIntrinsic::StringSplit => 2,
+            BackendIntrinsic::ListGet => 2,
+            BackendIntrinsic::StringLength => 1,
+            BackendIntrinsic::StringEachGrapheme => 1,
+            BackendIntrinsic::ListPushString => 2,
+        }
+    }
+}
+
 /// A backend instruction in the general Wasm lowering pipeline.
 ///
 /// # Goby IR → Backend IR mapping
@@ -25,7 +46,7 @@ pub(crate) enum SplitIndexOperand {
 /// | `CompExpr::Value(ValueExpr::Unit)` | `I64Const(encode_unit())` |
 /// | `CompExpr::Value(ValueExpr::StrLit(text))` | `PushStaticString { text }` |
 /// | `CompExpr::PerformEffect { effect, op, .. }` | `EffectOp { effect, op }` |
-/// | `CompExpr::Call { callee: GlobalRef { name }, .. }` | `CallHelper { name, arg_count }` |
+/// | `CompExpr::Call { callee: GlobalRef { name }, .. }` | `Intrinsic { intrinsic }` |
 /// | fused `Let lines = split(text, sep); each lines Effect.op` | `SplitEachPrint { text_local, sep_bytes, effect, op }` |
 /// | fused `Let lines = split(text, sep); Let line = list.get(lines, idx); Print.op(line)` | `SplitGetPrint { text_local, sep_bytes, index, op }` |
 /// | discarded expression (stmt before tail) | lower expr + `Drop` |
@@ -51,12 +72,11 @@ pub(crate) enum WasmBackendInstr {
     ///
     /// Arguments are expected to have been pushed onto the stack before this instruction.
     EffectOp { effect: String, op: String },
-    /// Call a Wasm-internal helper function by name.
+    /// Call a Wasm-internal backend intrinsic.
     ///
-    /// `arg_count` arguments must be on the stack before this instruction.
-    /// The callee is a Goby-internal helper (e.g. `goby_string_split`, `goby_list_get`),
-    /// not a WASI import.
-    CallHelper { name: String, arg_count: usize },
+    /// The intrinsic's fixed arity arguments must be on the stack before this instruction.
+    /// These intrinsics form the backend primitive substrate beneath stdlib helpers.
+    Intrinsic { intrinsic: BackendIntrinsic },
     /// Discard the top-of-stack value.
     Drop,
     /// Fused: split `text_local` (a tagged-i64 string) on `sep_bytes`, then call
@@ -114,9 +134,8 @@ mod tests {
                 effect: "Print".to_string(),
                 op: "print".to_string(),
             },
-            WasmBackendInstr::CallHelper {
-                name: "goby_string_split".to_string(),
-                arg_count: 2,
+            WasmBackendInstr::Intrinsic {
+                intrinsic: BackendIntrinsic::StringSplit,
             },
             WasmBackendInstr::Drop,
             WasmBackendInstr::SplitEachPrint {

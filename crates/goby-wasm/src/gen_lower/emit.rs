@@ -12,7 +12,7 @@ use wasm_encoder::{
 };
 
 use crate::CodegenError;
-use crate::gen_lower::backend_ir::{SplitIndexOperand, WasmBackendInstr};
+use crate::gen_lower::backend_ir::{BackendIntrinsic, SplitIndexOperand, WasmBackendInstr};
 use crate::gen_lower::value::{TAG_INT, TAG_LIST, TAG_STRING, encode_string_ptr, encode_unit};
 use crate::layout::MemoryLayout;
 
@@ -190,7 +190,7 @@ fn required_i32_scratch_count(instrs: &[WasmBackendInstr]) -> u32 {
     };
     let helper_count = if instrs
         .iter()
-        .any(|i| matches!(i, WasmBackendInstr::CallHelper { .. }))
+        .any(|i| matches!(i, WasmBackendInstr::Intrinsic { .. }))
     {
         HELPER_SCRATCH_I32
     } else {
@@ -202,7 +202,7 @@ fn required_i32_scratch_count(instrs: &[WasmBackendInstr]) -> u32 {
 fn required_i64_scratch_count(instrs: &[WasmBackendInstr]) -> u32 {
     if instrs
         .iter()
-        .any(|i| matches!(i, WasmBackendInstr::CallHelper { .. }))
+        .any(|i| matches!(i, WasmBackendInstr::Intrinsic { .. }))
     {
         HELPER_SCRATCH_I64
     } else {
@@ -224,10 +224,12 @@ fn needs_newline_data(instrs: &[WasmBackendInstr]) -> bool {
 /// exports `memory` and `_start`, and contains one function (`main`).
 pub(crate) fn supports_instrs(instrs: &[WasmBackendInstr]) -> bool {
     instrs.iter().all(|instr| match instr {
-        WasmBackendInstr::CallHelper { name, arg_count } => {
+        WasmBackendInstr::Intrinsic { intrinsic } => {
             matches!(
-                (name.as_str(), arg_count),
-                ("string.split", 2) | ("list.get", 2) | ("string.length", 1)
+                intrinsic,
+                BackendIntrinsic::StringSplit
+                    | BackendIntrinsic::ListGet
+                    | BackendIntrinsic::StringLength
             )
         }
         _ => true,
@@ -439,15 +441,8 @@ fn emit_instrs(
                 )?;
             }
 
-            WasmBackendInstr::CallHelper { name, arg_count } => {
-                emit_helper_call(
-                    function,
-                    ctx,
-                    name,
-                    *arg_count,
-                    i32_base,
-                    helper_state.as_ref(),
-                )?;
+            WasmBackendInstr::Intrinsic { intrinsic } => {
+                emit_helper_call(function, ctx, *intrinsic, i32_base, helper_state.as_ref())?;
             }
 
             WasmBackendInstr::SplitEachPrint {
@@ -562,22 +557,19 @@ fn emit_update_heap_floor_from_local_len(
 fn emit_helper_call(
     function: &mut Function,
     ctx: &EmitContext,
-    name: &str,
-    arg_count: usize,
+    intrinsic: BackendIntrinsic,
     i32_base: u32,
     helper_state: Option<&HelperEmitState>,
 ) -> Result<(), CodegenError> {
     let helper_state = helper_state.ok_or_else(|| CodegenError {
-        message: format!("gen_lower/emit: helper '{name}' requires helper scratch state"),
+        message: format!("gen_lower/emit: intrinsic '{intrinsic:?}' requires helper scratch state"),
     })?;
-    match (name, arg_count) {
-        ("string.split", 2) => emit_string_split_helper(function, helper_state),
-        ("list.get", 2) => emit_list_get_helper(function, helper_state),
-        ("string.length", 1) => emit_string_length_helper(function, helper_state),
+    match intrinsic {
+        BackendIntrinsic::StringSplit => emit_string_split_helper(function, helper_state),
+        BackendIntrinsic::ListGet => emit_list_get_helper(function, helper_state),
+        BackendIntrinsic::StringLength => emit_string_length_helper(function, helper_state),
         _ => Err(CodegenError {
-            message: format!(
-                "gen_lower/emit: CallHelper '{name}' with {arg_count} args is not supported"
-            ),
+            message: format!("gen_lower/emit: intrinsic '{intrinsic:?}' is not yet supported"),
         }),
     }?;
     let _ = (ctx, i32_base);

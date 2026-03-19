@@ -81,7 +81,7 @@ fn read_line_instrs_are_supported(instrs: &[backend_ir::WasmBackendInstr]) -> bo
                 if effect == "Read" && op == "read"
         ) || matches!(
             instr,
-            backend_ir::WasmBackendInstr::CallHelper { .. }
+            backend_ir::WasmBackendInstr::Intrinsic { .. }
                 | backend_ir::WasmBackendInstr::SplitEachPrint { .. }
                 | backend_ir::WasmBackendInstr::SplitGetPrint { .. }
         )
