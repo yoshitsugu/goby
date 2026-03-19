@@ -390,7 +390,14 @@ main =
         .as_mut()
         .expect("stdin pipe should exist")
         .write_all(b"alpha\nbeta\ngamma")
-        .expect("stdin should be writable");
+        .or_else(|err| {
+            if err.kind() == std::io::ErrorKind::BrokenPipe {
+                Ok(())
+            } else {
+                Err(err)
+            }
+        })
+        .expect("stdin should be writable or the process should fail early");
     let output = child
         .wait_with_output()
         .expect("cli output should be readable");

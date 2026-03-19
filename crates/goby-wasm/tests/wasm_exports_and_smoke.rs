@@ -5,6 +5,7 @@ use goby_core::parse_module;
 use goby_wasm::{
     RuntimeIoExecutionKind, compile_module, execute_module_with_stdin, runtime_io_execution_kind,
 };
+use wasmparser::Validator;
 
 /// Serializes tests that read or write process-wide environment variables.
 static ENV_MUTEX: Mutex<()> = Mutex::new(());
@@ -13,6 +14,9 @@ fn assert_valid_wasm_module(wasm: &[u8]) {
     assert!(wasm.len() >= 8, "module too short: {} bytes", wasm.len());
     assert_eq!(&wasm[..4], &[0x00, 0x61, 0x73, 0x6d], "bad wasm magic");
     assert_eq!(&wasm[4..8], &[0x01, 0x00, 0x00, 0x00], "bad wasm version");
+    Validator::new()
+        .validate_all(wasm)
+        .expect("module should pass wasm validation");
 }
 
 fn read_example(name: &str) -> String {

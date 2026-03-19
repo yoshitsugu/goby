@@ -290,6 +290,7 @@ impl<'m> RuntimeOutputResolver<'m> {}
 #[cfg(test)]
 mod tests {
     use goby_core::parse_module;
+    use wasmparser::Validator;
 
     use super::*;
 
@@ -297,6 +298,9 @@ mod tests {
         assert!(wasm.len() >= 8, "module too short: {} bytes", wasm.len());
         assert_eq!(&wasm[..4], &[0x00, 0x61, 0x73, 0x6d], "bad wasm magic");
         assert_eq!(&wasm[4..8], &[0x01, 0x00, 0x00, 0x00], "bad wasm version");
+        Validator::new()
+            .validate_all(wasm)
+            .expect("module should pass wasm validation");
     }
 
     #[test]

@@ -130,13 +130,19 @@ fn lower_module_to_instrs(
 }
 
 pub(crate) fn supports_general_lower_module(module: &Module) -> Result<bool, CodegenError> {
-    Ok(lower_module_to_instrs(module)?.is_some())
+    let Some(instrs) = lower_module_to_instrs(module)? else {
+        return Ok(false);
+    };
+    Ok(emit::supports_instrs(&instrs))
 }
 
 pub(crate) fn try_general_lower_module(module: &Module) -> Result<Option<Vec<u8>>, CodegenError> {
     let Some(instrs) = lower_module_to_instrs(module)? else {
         return Ok(None);
     };
+    if !emit::supports_instrs(&instrs) {
+        return Ok(None);
+    }
     let layout = MemoryLayout::default();
     let wasm = emit::emit_general_module(&instrs, &layout)?;
     Ok(Some(wasm))

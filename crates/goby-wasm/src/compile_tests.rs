@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use goby_core::parse_module;
+use wasmparser::Validator;
 
 use super::*;
 
@@ -8,6 +9,9 @@ fn assert_valid_wasm_module(wasm: &[u8]) {
     assert!(wasm.len() >= 8, "module too short: {} bytes", wasm.len());
     assert_eq!(&wasm[..4], &[0x00, 0x61, 0x73, 0x6d], "bad wasm magic");
     assert_eq!(&wasm[4..8], &[0x01, 0x00, 0x00, 0x00], "bad wasm version");
+    Validator::new()
+        .validate_all(wasm)
+        .expect("module should pass wasm validation");
 }
 
 fn read_example(name: &str) -> String {
@@ -956,6 +960,31 @@ main =
         resolve_module_runtime_output(&module).expect("runtime output should resolve");
     assert_eq!(expected_text, "hello\n");
     assert_valid_wasm_module(&wasm);
+}
+
+#[test]
+fn runtime_io_execution_kind_does_not_claim_general_lowering_for_unemitted_helpers() {
+    let source = r#"
+import goby/string
+
+main : Unit -> Unit can Print, Read
+main =
+  text = read ()
+  _lines = string.split text "\n"
+  print "ok"
+"#;
+    let module = parse_module(source).expect("source should parse");
+    assert_ne!(
+        runtime_io_execution_kind(&module).expect("classification should succeed"),
+        crate::RuntimeIoExecutionKind::GeneralLowered,
+        "helper calls without emitter support must not classify as GeneralLowered"
+    );
+    let err = compile_module(&module).expect_err("unsupported helper emission should fail cleanly");
+    assert!(
+        !err.message.contains("CallHelper"),
+        "classification mismatch should not leak raw CallHelper emission error: {}",
+        err.message
+    );
 }
 
 #[test]

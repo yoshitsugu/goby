@@ -166,6 +166,12 @@ fn needs_newline_data(instrs: &[WasmBackendInstr]) -> bool {
 ///
 /// The module imports `fd_read` and `fd_write` from `wasi_snapshot_preview1`,
 /// exports `memory` and `_start`, and contains one function (`main`).
+pub(crate) fn supports_instrs(instrs: &[WasmBackendInstr]) -> bool {
+    !instrs
+        .iter()
+        .any(|instr| matches!(instr, WasmBackendInstr::CallHelper { .. }))
+}
+
 pub(crate) fn emit_general_module(
     instrs: &[WasmBackendInstr],
     layout: &MemoryLayout,
@@ -1063,6 +1069,7 @@ fn emit_write_slice(
 mod tests {
     use super::*;
     use crate::gen_lower::backend_ir::{SplitIndexOperand, WasmBackendInstr as I};
+    use wasmparser::Validator;
 
     fn default_layout() -> MemoryLayout {
         MemoryLayout::default()
@@ -1072,6 +1079,9 @@ mod tests {
         assert!(wasm.len() >= 8, "module too short: {} bytes", wasm.len());
         assert_eq!(&wasm[..4], &[0x00, 0x61, 0x73, 0x6d], "bad wasm magic");
         assert_eq!(&wasm[4..8], &[0x01, 0x00, 0x00, 0x00], "bad wasm version");
+        Validator::new()
+            .validate_all(wasm)
+            .expect("module should pass wasm validation");
     }
 
     #[test]

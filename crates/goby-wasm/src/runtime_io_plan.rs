@@ -83,7 +83,8 @@ pub enum RuntimeIoExecutionKind {
 
 impl RuntimeIoPlan {
     pub(crate) fn emit_wasm(self) -> Result<Vec<u8>, CodegenError> {
-        if let Some(instrs) = self.clone().to_general_backend_instrs()? {
+        if let Some(mut instrs) = self.clone().to_general_backend_instrs()? {
+            instrs.push(WasmBackendInstr::Drop);
             return emit_general_module(&instrs, &MemoryLayout::default());
         }
 
