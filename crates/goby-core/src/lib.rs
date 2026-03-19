@@ -18,6 +18,7 @@ mod parser_test_support;
 mod parser_top;
 mod parser_util;
 mod path_util;
+pub mod resolved;
 pub mod span;
 pub mod stdlib;
 pub mod str_util;
@@ -50,6 +51,11 @@ pub use formatter::format_module;
 pub use lint::lint_module;
 pub use parser::{ParseError, parse_body_stmts, parse_module};
 pub use parser_util::is_identifier;
+pub use resolved::{
+    ResolvedCaseArm, ResolvedDeclaration, ResolvedExpr, ResolvedHandlerClause,
+    ResolvedInterpolatedPart, ResolvedModule, ResolvedRef, ResolvedStmt, resolve_declaration,
+    resolve_module,
+};
 pub use span::{line_col_to_offset, offset_to_line_col};
 pub use symbol_index::{
     DeclSymbol, EffectMemberSymbol, LocalBindingSymbol, SymbolIndex, SymbolInfo,

@@ -388,7 +388,7 @@ All implementation under this plan must preserve:
 
 ## 7. Milestones
 
-- [ ] IR0. Architecture lock
+- [x] IR0. Architecture lock
   - lock the resolved-front-end -> shared IR pipeline shape
   - lock mutable-form inclusion in shared IR scope
   - lock initial decisions for list index, pipelines, method calls, and effect-op identity
@@ -412,7 +412,7 @@ All implementation under this plan must preserve:
     - the document explicitly rejects "keep extending typed AST with ad-hoc resolution-only fields"
       as the default architecture
     - any conflicting comments in `goby-core` are updated in the same slice
-- [ ] IR1. Construct inventory and mapping table
+- [x] IR1. Construct inventory and mapping table
   - enumerate all AST constructs and their lowering state
   - mark each gap as IR gap vs backend gap
   - implementation checklist:
@@ -441,7 +441,7 @@ All implementation under this plan must preserve:
   - validation checklist:
     - every new IR form has at least one printer or snapshot assertion
     - IR validation errors are explicit and user-comprehensible where relevant
-- [ ] IR3. Resolved lowering input
+- [x] IR3. Resolved lowering input
   - introduce or expose the resolved/symbol-bound lowering input needed for stable effect/call lowering
   - implementation checklist:
     - introduce the distinct resolved front-end form chosen in IR0
@@ -599,24 +599,25 @@ Reason for this order:
 
 The recommended next implementation slice is:
 
-1. finish IR0 by locking the concrete resolved-input strategy,
-2. start IR1 by adding the construct inventory table,
-3. begin IR3 only after those two pieces are written down in this file,
-4. defer IR2/IR4 code changes until the resolved front-end form boundary is explicit.
+1. advance IR2 by deciding which remaining semantic families need new shared-IR nodes versus canonical desugaring,
+2. advance IR4 by adding IR snapshots that prove bare/imported/qualified effect-call spellings converge through the resolved boundary,
+3. start IR5 by locking the collection strategy for list literals/spread/indexing against the now-landed resolved form,
+4. remove any stale comments or helper code that still describe `ir_lower` as raw-AST name-pattern matching.
 
 Recommended file entry points for that slice:
 
 - `doc/PLAN_IR.md`
+- `crates/goby-core/src/resolved.rs`
 - `crates/goby-core/src/ir_lower.rs`
-- the front-end resolution/typecheck modules that already own symbol identity
-- `crates/goby-core/src/ir.rs` only if the resolved-form decision demonstrates an immediate shared-IR change is required
+- `crates/goby-core/src/ir.rs`
+- the backend/runtime tests that currently encode spelling-specific equivalence cases
 
 Definition of done for the next slice:
 
-- `PLAN_IR` names the resolved lowering input and ownership boundary explicitly,
-- the construct inventory table exists with milestone ownership,
-- the document records canonical semantic form / normalization boundary for the first inventory rows,
-- `doc/STATE.md` can be reduced to a short note pointing back to this plan and the next IR milestone.
+- `ir.rs` documents the canonical strategy chosen for the next semantic family,
+- `ir_lower` continues to lower through `Resolved*` inputs without reintroducing raw-name heuristics,
+- new AST-to-IR / IR snapshot tests prove semantic convergence for covered call/effect families,
+- `doc/STATE.md` names only the active next milestone and any exact unfinished sub-steps.
 
 ## 12. Non-Goals for This Document
 
