@@ -52,6 +52,11 @@ pub enum ValueExpr {
     IntLit(i64),
     BoolLit(bool),
     StrLit(String),
+    /// List literal with optional spread tail.
+    ListLit {
+        elements: Vec<ValueExpr>,
+        spread: Option<Box<ValueExpr>>,
+    },
     /// Interpolated string with pure parts only.
     Interp(Vec<IrInterpPart>),
     /// Local variable reference.
@@ -249,6 +254,23 @@ fn fmt_value(out: &mut String, v: &ValueExpr) {
             out.push_str(&escape_str(s));
             out.push('"');
         }
+        ValueExpr::ListLit { elements, spread } => {
+            out.push('[');
+            for (i, element) in elements.iter().enumerate() {
+                if i > 0 {
+                    out.push_str(", ");
+                }
+                fmt_value(out, element);
+            }
+            if let Some(tail) = spread {
+                if !elements.is_empty() {
+                    out.push_str(", ");
+                }
+                out.push_str("..");
+                fmt_value(out, tail);
+            }
+            out.push(']');
+        }
         ValueExpr::Interp(parts) => {
             out.push_str("interp(");
             for (i, part) in parts.iter().enumerate() {
@@ -441,7 +463,7 @@ pub fn validate_ir(module: &IrModule) -> Result<(), IrValidateError> {
 
 fn validate_comp(c: &CompExpr, decl_name: &str) -> Result<(), IrValidateError> {
     match c {
-        CompExpr::Value(_) => Ok(()),
+        CompExpr::Value(value) => validate_value(value, decl_name),
         CompExpr::Let { value, body, .. } => {
             validate_comp(value, decl_name)?;
             validate_comp(body, decl_name)
@@ -452,11 +474,12 @@ fn validate_comp(c: &CompExpr, decl_name: &str) -> Result<(), IrValidateError> {
             }
             validate_comp(tail, decl_name)
         }
-        CompExpr::If { then_, else_, .. } => {
+        CompExpr::If { cond, then_, else_ } => {
             validate_comp(then_, decl_name)?;
+            validate_value(cond, decl_name)?;
             validate_comp(else_, decl_name)
         }
-        CompExpr::Call { args, .. } => {
+        CompExpr::Call { callee, args } => {
             if args.is_empty() {
                 Err(IrValidateError {
                     message: format!(
@@ -465,10 +488,19 @@ fn validate_comp(c: &CompExpr, decl_name: &str) -> Result<(), IrValidateError> {
                     ),
                 })
             } else {
+                validate_value(callee, decl_name)?;
+                for arg in args {
+                    validate_value(arg, decl_name)?;
+                }
                 Ok(())
             }
         }
-        CompExpr::PerformEffect { .. } => Ok(()),
+        CompExpr::PerformEffect { args, .. } => {
+            for arg in args {
+                validate_value(arg, decl_name)?;
+            }
+            Ok(())
+        }
         CompExpr::Handle { clauses } => {
             if clauses.is_empty() {
                 return Err(IrValidateError {
@@ -487,7 +519,42 @@ fn validate_comp(c: &CompExpr, decl_name: &str) -> Result<(), IrValidateError> {
             validate_comp(handler, decl_name)?;
             validate_comp(body, decl_name)
         }
-        CompExpr::Resume { .. } => Ok(()),
+        CompExpr::Resume { value } => validate_value(value, decl_name),
+    }
+}
+
+fn validate_value(value: &ValueExpr, decl_name: &str) -> Result<(), IrValidateError> {
+    match value {
+        ValueExpr::ListLit { elements, spread } => {
+            for element in elements {
+                validate_value(element, decl_name)?;
+            }
+            if let Some(tail) = spread {
+                validate_value(tail, decl_name)?;
+            }
+            Ok(())
+        }
+        ValueExpr::Interp(parts) => {
+            for part in parts {
+                if let IrInterpPart::Expr(expr) = part {
+                    validate_value(expr, decl_name)?;
+                }
+            }
+            Ok(())
+        }
+        ValueExpr::BinOp { left, right, .. } => {
+            validate_value(left, decl_name)?;
+            validate_value(right, decl_name)
+        }
+        ValueExpr::IntLit(_)
+        | ValueExpr::BoolLit(_)
+        | ValueExpr::StrLit(_)
+        | ValueExpr::Var(_)
+        | ValueExpr::GlobalRef { .. }
+        | ValueExpr::Unit => {
+            let _ = decl_name;
+            Ok(())
+        }
     }
 }
 
@@ -562,6 +629,19 @@ mod tests {
             "greeting",
             IrType::Str,
             val(ValueExpr::StrLit("hello".into())),
+        )]);
+        insta::assert_snapshot!(fmt_ir(&m));
+    }
+
+    #[test]
+    fn print_list_lit_with_spread() {
+        let m = simple_module(vec![simple_decl(
+            "items",
+            IrType::Unknown,
+            val(ValueExpr::ListLit {
+                elements: vec![ValueExpr::IntLit(1), ValueExpr::IntLit(2)],
+                spread: Some(Box::new(ValueExpr::Var("tail".into()))),
+            }),
         )]);
         insta::assert_snapshot!(fmt_ir(&m));
     }
@@ -759,6 +839,26 @@ mod tests {
             "ok",
             IrType::Int,
             val(ValueExpr::IntLit(1)),
+        )]);
+        assert!(validate_ir(&m).is_ok());
+    }
+
+    #[test]
+    fn validate_ok_list_lit_with_nested_values() {
+        let m = simple_module(vec![simple_decl(
+            "items",
+            IrType::Unknown,
+            val(ValueExpr::ListLit {
+                elements: vec![
+                    ValueExpr::IntLit(1),
+                    ValueExpr::BinOp {
+                        op: IrBinOp::Add,
+                        left: Box::new(ValueExpr::IntLit(2)),
+                        right: Box::new(ValueExpr::IntLit(3)),
+                    },
+                ],
+                spread: Some(Box::new(ValueExpr::Var("rest".into()))),
+            }),
         )]);
         assert!(validate_ir(&m).is_ok());
     }

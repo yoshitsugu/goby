@@ -452,6 +452,14 @@ fn inspect_ir_comp(
 
 fn inspect_ir_value(value: &ValueExpr, out: &mut IrInspection) {
     match value {
+        ValueExpr::ListLit { elements, spread } => {
+            for element in elements {
+                inspect_ir_value(element, out);
+            }
+            if let Some(tail) = spread {
+                inspect_ir_value(tail, out);
+            }
+        }
         ValueExpr::BinOp { left, right, .. } => {
             inspect_ir_value(left, out);
             inspect_ir_value(right, out);

@@ -255,8 +255,8 @@ fn lower_expr_as_comp_non_value(
         ResolvedExpr::Case { .. } => {
             Err(err("case expressions are not supported in shared IR yet"))
         }
-        ResolvedExpr::ListLit { .. } => {
-            Err(err("list literals are not supported in shared IR yet"))
+        ResolvedExpr::ListLit { elements, spread } => {
+            lower_list_literal(ctx, elements, spread.as_deref())
         }
         ResolvedExpr::TupleLit(items) if !items.is_empty() => Err(err(
             "non-unit tuple literals are not supported in shared IR yet",
@@ -281,6 +281,26 @@ fn try_lower_value(
         ResolvedExpr::BoolLit(b) => Ok(Some(ValueExpr::BoolLit(*b))),
         ResolvedExpr::StringLit(s) => Ok(Some(ValueExpr::StrLit(s.clone()))),
         ResolvedExpr::TupleLit(items) if items.is_empty() => Ok(Some(ValueExpr::Unit)),
+        ResolvedExpr::ListLit { elements, spread } => {
+            let mut ir_elements = Vec::with_capacity(elements.len());
+            for element in elements {
+                let Some(ir_element) = try_lower_value(ctx, element)? else {
+                    return Ok(None);
+                };
+                ir_elements.push(ir_element);
+            }
+            let ir_spread = match spread {
+                Some(tail) => Some(Box::new(match try_lower_value(ctx, tail)? {
+                    Some(value) => value,
+                    None => return Ok(None),
+                })),
+                None => None,
+            };
+            Ok(Some(ValueExpr::ListLit {
+                elements: ir_elements,
+                spread: ir_spread,
+            }))
+        }
         ResolvedExpr::Ref(reference) => Ok(Some(lower_ref_value(reference))),
         ResolvedExpr::BinOp { op, left, right } => {
             let ir_op = lower_binop(op);
@@ -322,10 +342,56 @@ fn try_lower_value(
         | ResolvedExpr::MethodCall { .. }
         | ResolvedExpr::Pipeline { .. }
         | ResolvedExpr::Case { .. }
-        | ResolvedExpr::ListLit { .. }
         | ResolvedExpr::RecordConstruct { .. } => Ok(None),
         ResolvedExpr::TupleLit(_) => Ok(None),
     }
+}
+
+fn lower_list_literal(
+    ctx: &mut LowerCtx,
+    elements: &[ResolvedExpr],
+    spread: Option<&ResolvedExpr>,
+) -> Result<CompExpr, LowerError> {
+    let mut pending = Vec::new();
+    let mut ir_elements = Vec::with_capacity(elements.len());
+
+    for element in elements {
+        if let Some(value) = try_lower_value(ctx, element)? {
+            ir_elements.push(value);
+        } else {
+            let tmp = ctx.fresh_tmp("list_element");
+            pending.push((tmp.clone(), lower_expr_as_comp(ctx, element)?));
+            ir_elements.push(ValueExpr::Var(tmp));
+        }
+    }
+
+    let ir_spread = match spread {
+        Some(tail) => {
+            if let Some(value) = try_lower_value(ctx, tail)? {
+                Some(Box::new(value))
+            } else {
+                let tmp = ctx.fresh_tmp("list_spread");
+                pending.push((tmp.clone(), lower_expr_as_comp(ctx, tail)?));
+                Some(Box::new(ValueExpr::Var(tmp)))
+            }
+        }
+        None => None,
+    };
+
+    let list_value = CompExpr::Value(ValueExpr::ListLit {
+        elements: ir_elements,
+        spread: ir_spread,
+    });
+
+    Ok(pending
+        .into_iter()
+        .rev()
+        .fold(list_value, |body, (name, value)| CompExpr::Let {
+            name,
+            ty: IrType::Unknown,
+            value: Box::new(value),
+            body: Box::new(body),
+        }))
 }
 
 fn lower_value_required(
@@ -796,6 +862,68 @@ mod tests {
         };
         assert!(validate_ir(&m).is_ok());
         insta::assert_snapshot!(fmt_ir(&m));
+    }
+
+    #[test]
+    fn lower_pure_list_literal() {
+        let decl = decl_with_body(
+            "items",
+            vec![expr_stmt(Expr::ListLit {
+                elements: vec![Expr::IntLit(1), Expr::IntLit(2)],
+                spread: None,
+            })],
+        );
+        let ir_decl = lower_declaration(&decl).unwrap();
+        let m = IrModule {
+            decls: vec![ir_decl],
+        };
+        assert!(validate_ir(&m).is_ok());
+        insta::assert_snapshot!(fmt_ir(&m));
+    }
+
+    #[test]
+    fn lower_list_literal_with_effectful_element_normalizes_via_let() {
+        let decl = decl_with_body(
+            "items",
+            vec![expr_stmt(Expr::ListLit {
+                elements: vec![
+                    Expr::Call {
+                        callee: Box::new(Expr::var("read")),
+                        arg: Box::new(Expr::TupleLit(vec![])),
+                        span: None,
+                    },
+                    Expr::IntLit(2),
+                ],
+                spread: None,
+            })],
+        );
+        let ir_decl = lower_declaration(&decl).unwrap();
+        assert!(
+            matches!(ir_decl.body, CompExpr::Let { .. }),
+            "effectful list element should ANF-normalize through let, got {:?}",
+            ir_decl.body
+        );
+    }
+
+    #[test]
+    fn lower_list_literal_with_effectful_spread_normalizes_via_let() {
+        let decl = decl_with_body(
+            "items",
+            vec![expr_stmt(Expr::ListLit {
+                elements: vec![Expr::IntLit(1)],
+                spread: Some(Box::new(Expr::Call {
+                    callee: Box::new(Expr::var("read")),
+                    arg: Box::new(Expr::TupleLit(vec![])),
+                    span: None,
+                })),
+            })],
+        );
+        let ir_decl = lower_declaration(&decl).unwrap();
+        assert!(
+            matches!(ir_decl.body, CompExpr::Let { .. }),
+            "effectful list spread should ANF-normalize through let, got {:?}",
+            ir_decl.body
+        );
     }
 
     #[test]

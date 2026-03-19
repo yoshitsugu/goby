@@ -141,6 +141,16 @@ fn value_to_expr(value: &ValueExpr) -> Option<Expr> {
         ValueExpr::IntLit(n) => Some(Expr::IntLit(*n)),
         ValueExpr::BoolLit(b) => Some(Expr::BoolLit(*b)),
         ValueExpr::StrLit(text) => Some(Expr::StringLit(text.clone())),
+        ValueExpr::ListLit { elements, spread } => Some(Expr::ListLit {
+            elements: elements
+                .iter()
+                .map(value_to_expr)
+                .collect::<Option<Vec<_>>>()?,
+            spread: match spread {
+                Some(tail) => Some(Box::new(value_to_expr(tail)?)),
+                None => None,
+            },
+        }),
         ValueExpr::Interp(parts) => Some(Expr::InterpolatedString(
             parts
                 .iter()

@@ -148,6 +148,9 @@ pub(crate) fn lower_value(v: &ValueExpr) -> Result<Vec<WasmBackendInstr>, LowerE
         ValueExpr::StrLit(text) => Ok(vec![WasmBackendInstr::PushStaticString {
             text: text.clone(),
         }]),
+        ValueExpr::ListLit { .. } => Err(LowerError::UnsupportedForm {
+            node: "ListLit".to_string(),
+        }),
         ValueExpr::Var(name) => Ok(vec![WasmBackendInstr::LoadLocal { name: name.clone() }]),
         ValueExpr::GlobalRef { module, name } => Ok(vec![WasmBackendInstr::LoadLocal {
             name: format!("{}.{}", module, name),

@@ -370,6 +370,7 @@ fn eval_value(
         ValueExpr::IntLit(n) => Some(NativeValue::Int(*n)),
         ValueExpr::BoolLit(b) => Some(NativeValue::Bool(*b)),
         ValueExpr::Unit => Some(NativeValue::Unit),
+        ValueExpr::ListLit { .. } => None,
         ValueExpr::Var(name) => bindings.get(name).cloned().or_else(|| {
             if (env.declarations.contains_key(name.as_str())
                 && env.lowering_plan.is_direct_style(name.as_str()))

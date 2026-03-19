@@ -13,12 +13,15 @@ Last updated: 2026-03-19
 - added a distinct resolved front-end form in `crates/goby-core/src/resolved.rs`
 - `crates/goby-core/src/ir_lower.rs` now lowers through `ResolvedModule` / `ResolvedDeclaration`
 - bare/imported/qualified helper/effect identity no longer depends on raw-name heuristics inside `ir_lower`
+- list index now canonicalizes to `list.get` at the resolved boundary
+- shared IR now carries `ValueExpr::ListLit { elements, spread }`
+- list literals/spread lower through ANF into shared IR instead of failing at the lowering boundary
 
 ## Immediate Next Steps
 
-1. Decide the next shared-IR expansion boundary in `crates/goby-core/src/ir.rs`.
-2. Add convergence-focused IR tests for equivalent effect-call spellings.
-3. Lock the collection lowering strategy for list literal/spread/indexing on top of the resolved boundary.
+1. Continue IR2 by deciding the shared-IR representation for the next semantic family after lists.
+2. Continue IR4 by broadening convergence tests around equivalent effect/helper spellings.
+3. Continue IR5 with the remaining collection gap beyond list values, or move to tuples/records if that gives a cleaner IR slice.
 
 ## Restart Notes
 
