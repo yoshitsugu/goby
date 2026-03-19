@@ -410,6 +410,63 @@ main =
 
 #[test]
 #[cfg(unix)]
+fn run_command_executes_split_index_runtime_program_via_wasmtime_stdin() {
+    let root = repo_root();
+    let sandbox = TempDirGuard::new("run_split_index_runtime_program");
+    let input = sandbox.join("split_index.gb");
+    fs::write(
+        &input,
+        r#"
+import goby/string ( split )
+
+main : Unit -> Unit can Print, Read
+main =
+  text = read ()
+  lines = split text "\n"
+  println(lines[1])
+"#,
+    )
+    .expect("temporary input should be writable");
+
+    let mut child = command_for_goby_cli()
+        .arg("run")
+        .arg(&input)
+        .current_dir(&root)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("cli should execute");
+    child
+        .stdin
+        .as_mut()
+        .expect("stdin pipe should exist")
+        .write_all(b"alpha\nbeta\n")
+        .expect("stdin should be writable");
+    let output = child
+        .wait_with_output()
+        .expect("cli output should be readable");
+
+    assert!(
+        output.status.success(),
+        "expected success, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("generated wasm"),
+        "split-index runtime program should compile to Wasm, stdout: {}",
+        stdout
+    );
+    assert!(
+        stdout.contains("beta\n"),
+        "expected second split line to be printed, stdout: {}",
+        stdout
+    );
+}
+
+#[test]
+#[cfg(unix)]
 fn run_command_rejects_repeated_read_after_exhaustion_shape_with_explicit_boundary_error() {
     let root = repo_root();
     let sandbox = TempDirGuard::new("run_repeated_reads_boundary");

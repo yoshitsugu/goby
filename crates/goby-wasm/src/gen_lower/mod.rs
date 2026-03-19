@@ -110,7 +110,7 @@ fn lower_module_to_instrs(
         return Ok(None);
     }
 
-    let instrs = match lower::lower_comp(&ir_decl.body) {
+    let mut instrs = match lower::lower_comp(&ir_decl.body) {
         Ok(i) => i,
         Err(lower::LowerError::UnsupportedForm { .. }) => return Ok(None),
         Err(lower::LowerError::IntOutOfRange(n)) => {
@@ -119,6 +119,10 @@ fn lower_module_to_instrs(
             });
         }
     };
+    // `main` is emitted as Wasm `_start` with result type `() -> ()`.
+    // The shared IR/body still yields a final Goby value, so the general lowering
+    // path must explicitly discard it before emission.
+    instrs.push(backend_ir::WasmBackendInstr::Drop);
     if !read_line_instrs_are_supported(&instrs) {
         return Ok(None);
     }
@@ -136,4 +140,32 @@ pub(crate) fn try_general_lower_module(module: &Module) -> Result<Option<Vec<u8>
     let layout = MemoryLayout::default();
     let wasm = emit::emit_general_module(&instrs, &layout)?;
     Ok(Some(wasm))
+}
+
+#[cfg(test)]
+mod tests {
+    use goby_core::parse_module;
+
+    use super::*;
+    use crate::gen_lower::backend_ir::WasmBackendInstr;
+
+    #[test]
+    fn general_lowered_main_discards_final_goby_value() {
+        let module = parse_module(
+            r#"
+main : Unit -> Unit can Print, Read
+main =
+  println (read())
+"#,
+        )
+        .expect("source should parse");
+        let instrs = lower_module_to_instrs(&module)
+            .expect("lowering should not error")
+            .expect("general lowering should apply");
+        assert!(
+            matches!(instrs.last(), Some(WasmBackendInstr::Drop)),
+            "general-lowered main must end with Drop so `_start` leaves no stack value: {:?}",
+            instrs
+        );
+    }
 }

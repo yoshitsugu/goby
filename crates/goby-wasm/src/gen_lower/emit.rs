@@ -860,6 +860,10 @@ fn emit_split_get_print(
     function.instruction(&Instruction::End);
 
     emit_split_index_operand(function, ctx, index)?;
+    function.instruction(&Instruction::I64Const(4));
+    function.instruction(&Instruction::I64Shl);
+    function.instruction(&Instruction::I64Const(4));
+    function.instruction(&Instruction::I64ShrS);
     function.instruction(&Instruction::I64Const(i64::from(i32::MAX)));
     function.instruction(&Instruction::I64GtS);
     function.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
@@ -933,7 +937,9 @@ fn emit_split_get_print(
         nread_offset,
         newline_ptr,
     );
-    function.instruction(&Instruction::Br(2));
+    function.instruction(&Instruction::I32Const(-1));
+    function.instruction(&Instruction::LocalSet(s_target));
+    function.instruction(&Instruction::Br(3));
     function.instruction(&Instruction::Else);
     function.instruction(&Instruction::LocalGet(s_target));
     function.instruction(&Instruction::I32Const(1));
@@ -957,6 +963,11 @@ fn emit_split_get_print(
     function.instruction(&Instruction::End);
 
     function.instruction(&Instruction::LocalGet(s_target));
+    function.instruction(&Instruction::I32Const(0));
+    function.instruction(&Instruction::I32LtS);
+    function.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
+    function.instruction(&Instruction::Else);
+    function.instruction(&Instruction::LocalGet(s_target));
     function.instruction(&Instruction::I32Eqz);
     function.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
     emit_write_slice(
@@ -971,6 +982,7 @@ fn emit_split_get_print(
     );
     function.instruction(&Instruction::Else);
     emit_abort(function);
+    function.instruction(&Instruction::End);
     function.instruction(&Instruction::End);
 
     function.instruction(&Instruction::End);
