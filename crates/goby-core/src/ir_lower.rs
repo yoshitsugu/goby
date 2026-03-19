@@ -224,10 +224,10 @@ fn lower_expr_as_comp_non_value(
                 args,
             })
         }
-        ResolvedExpr::Lambda { param, .. } => Err(err(format!(
-            "lambda lowering is not implemented yet for `\\{}`",
-            param
-        ))),
+        ResolvedExpr::Lambda { param, body } => Ok(CompExpr::Value(ValueExpr::Lambda {
+            param: param.clone(),
+            body: Box::new(lower_expr_as_comp(ctx, body)?),
+        })),
         ResolvedExpr::Handler { clauses } => lower_handler_expr(ctx, clauses),
         ResolvedExpr::With { handler, body } => {
             let ir_handler = lower_expr_as_comp(ctx, handler)?;
@@ -278,6 +278,10 @@ fn try_lower_value(
         ResolvedExpr::BoolLit(b) => Ok(Some(ValueExpr::BoolLit(*b))),
         ResolvedExpr::StringLit(s) => Ok(Some(ValueExpr::StrLit(s.clone()))),
         ResolvedExpr::TupleLit(items) if items.is_empty() => Ok(Some(ValueExpr::Unit)),
+        ResolvedExpr::Lambda { param, body } => Ok(Some(ValueExpr::Lambda {
+            param: param.clone(),
+            body: Box::new(lower_expr_as_comp(ctx, body)?),
+        })),
         ResolvedExpr::ListLit { elements, spread } => {
             let mut ir_elements = Vec::with_capacity(elements.len());
             for element in elements {
@@ -358,7 +362,6 @@ fn try_lower_value(
         ResolvedExpr::If { .. }
         | ResolvedExpr::Block(_)
         | ResolvedExpr::Call { .. }
-        | ResolvedExpr::Lambda { .. }
         | ResolvedExpr::Handler { .. }
         | ResolvedExpr::With { .. }
         | ResolvedExpr::Resume { .. }
@@ -1109,7 +1112,7 @@ mod tests {
     // --- rejection tests ---
 
     #[test]
-    fn reject_lambda() {
+    fn lower_lambda_value() {
         let decl = decl_with_body(
             "with_lambda",
             vec![expr_stmt(Expr::Lambda {
@@ -1117,8 +1120,51 @@ mod tests {
                 body: Box::new(Expr::var("x")),
             })],
         );
-        let err = lower_declaration(&decl).unwrap_err();
-        assert!(err.message.contains("lambda"), "{}", err.message);
+        let ir_decl = lower_declaration(&decl).unwrap();
+        let m = IrModule {
+            decls: vec![ir_decl],
+        };
+        assert!(validate_ir(&m).is_ok());
+        assert_eq!(fmt_ir(&m), "decl with_lambda: ? =\n  \\x ->\n  x\n\n\n");
+    }
+
+    #[test]
+    fn lower_lambda_with_capture_and_effectful_body() {
+        let decl = decl_with_body(
+            "captured",
+            vec![
+                binding("base", Expr::IntLit(40)),
+                expr_stmt(Expr::Lambda {
+                    param: "x".into(),
+                    body: Box::new(Expr::call(
+                        Expr::qualified("Print", "println"),
+                        Expr::InterpolatedString(vec![InterpolatedPart::Expr(Box::new(
+                            Expr::BinOp {
+                                op: BinOpKind::Add,
+                                left: Box::new(Expr::var("x")),
+                                right: Box::new(Expr::var("base")),
+                            },
+                        ))]),
+                    )),
+                }),
+            ],
+        );
+        let ir_decl = lower_declaration(&decl).expect("lambda lowering should succeed");
+        match &ir_decl.body {
+            CompExpr::Let { body, .. } => {
+                assert!(matches!(
+                    body.as_ref(),
+                    CompExpr::Value(ValueExpr::Lambda { param, body })
+                        if param == "x"
+                            && matches!(
+                                body.as_ref(),
+                                CompExpr::PerformEffect { effect, op, .. }
+                                    if effect == "Print" && op == "println"
+                            )
+                ));
+            }
+            other => panic!("expected let-bound capture feeding lambda, got {other:?}"),
+        }
     }
 
     #[test]
@@ -1438,7 +1484,7 @@ mod tests {
     }
 
     #[test]
-    fn lower_module_fails_on_effectful_decl() {
+    fn lower_module_supports_lambda_decl() {
         use crate::ast::Module;
         let m = Module {
             imports: vec![],
@@ -1448,7 +1494,7 @@ mod tests {
             declarations: vec![
                 decl_with_body("ok", vec![expr_stmt(Expr::IntLit(1))]),
                 decl_with_body(
-                    "bad",
+                    "lambda_fn",
                     vec![expr_stmt(Expr::Lambda {
                         param: "x".into(),
                         body: Box::new(Expr::var("x")),
@@ -1456,8 +1502,9 @@ mod tests {
                 ),
             ],
         };
-        let err = lower_module(&m).unwrap_err();
-        assert!(err.message.contains("lambda"), "{}", err.message);
+        let ir = lower_module(&m).unwrap();
+        assert_eq!(ir.decls.len(), 2);
+        assert!(validate_ir(&ir).is_ok());
     }
 
     // --- residual effects tests ---

@@ -497,4 +497,28 @@ pair _ =
             "__goby_ir_tuple_item_0 = Read.read ()\n(__goby_ir_tuple_item_0, 2)"
         );
     }
+
+    #[test]
+    fn runtime_artifacts_from_ir_decl_bridge_lambda_capture_shape() {
+        let module = parse_module(
+            r#"
+capture : Unit -> (Int -> Int)
+capture _ =
+  base = 40
+  |n| -> n + base
+"#,
+        )
+        .expect("parse should work");
+        let decl = module
+            .declarations
+            .iter()
+            .find(|decl| decl.name == "capture")
+            .expect("capture should exist");
+        let ir_decl =
+            goby_core::ir_lower::lower_declaration(decl).expect("IR lowering should work");
+        let runtime =
+            runtime_artifacts_from_ir_decl(&ir_decl).expect("runtime artifacts should exist");
+        let body = runtime.body.expect("body should render");
+        assert_eq!(body, "base = 40\n|n| -> n + base");
+    }
 }

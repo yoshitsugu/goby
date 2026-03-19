@@ -790,11 +790,21 @@ fn callback_output_mode_expr(expr: &Expr, scope_stmts: &[Stmt]) -> Option<Output
     match expr {
         Expr::Var {
             name: output_name, ..
-        } => {
-            let resolved_name =
-                resolve_alias_chain_source_name(scope_stmts, output_name).unwrap_or(output_name);
-            callback_output_mode_name(resolved_name)
-        }
+        } => resolve_output_mode_name(scope_stmts, output_name),
+        Expr::Qualified {
+            receiver, member, ..
+        } if receiver == "Print" => callback_output_mode_name(member),
+        _ => None,
+    }
+}
+
+fn resolve_output_mode_name(scope_stmts: &[Stmt], name: &str) -> Option<OutputReadMode> {
+    if let Some(mode) = callback_output_mode_name(name) {
+        return Some(mode);
+    }
+    let value = binding_value_by_name(scope_stmts, name)?;
+    match value {
+        Expr::Var { name: inner, .. } => resolve_output_mode_name(scope_stmts, inner),
         Expr::Qualified {
             receiver, member, ..
         } if receiver == "Print" => callback_output_mode_name(member),
@@ -1146,11 +1156,7 @@ fn split_lines_each_callback_plan(
 
     match each_args[1] {
         Expr::Var { name, .. } => {
-            let mode = callback_output_mode_name(resolve_alias_chain_source_name(
-                callback_scope_stmts,
-                name,
-            )?)?;
-            Some((mode, None))
+            Some((resolve_output_mode_name(callback_scope_stmts, name)?, None))
         }
         Expr::Qualified {
             receiver, member, ..

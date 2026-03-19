@@ -500,7 +500,7 @@ All implementation under this plan must preserve:
   - validation checklist:
     - IR snapshots exist for both pure and effectful `case`
     - branch semantics match existing runtime behavior
-- [ ] IR7. Function-value lowering
+- [x] IR7. Function-value lowering
   - lower lambda and higher-order function-value forms into shared IR
   - implementation checklist:
     - define closure/capture representation at shared-IR level or explicit desugaring boundary
@@ -620,9 +620,9 @@ Reason for this order:
 
 The recommended next implementation slice is:
 
-1. advance IR7 now that product-data lowering has established the non-closure value path,
-2. leave IR9 last among the currently open semantic families unless new evidence shows mutation is blocking another milestone,
-3. keep deleting diagnostics and comments that still imply "shared IR cannot represent this" when the real gap is lowering or backend support.
+1. advance IR9 for mutation as the remaining open semantic family,
+2. keep deleting diagnostics and comments that still imply "shared IR cannot represent this" when the real gap is lowering or backend support,
+3. continue shrinking backend/runtime fallback assumptions that only remain as optimization layers.
 
 Recommended file entry points for that slice:
 
