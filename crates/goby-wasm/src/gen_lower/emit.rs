@@ -14,13 +14,18 @@ use wasm_encoder::{
 use crate::CodegenError;
 use crate::gen_lower::backend_ir::{BackendIntrinsic, SplitIndexOperand, WasmBackendInstr};
 use crate::gen_lower::value::{TAG_INT, TAG_LIST, TAG_STRING, encode_string_ptr, encode_unit};
+use crate::host_runtime::{
+    HOST_INTRINSIC_IMPORTS, IntrinsicExecutionBoundary, host_import_for_intrinsic,
+};
 use crate::layout::MemoryLayout;
 
 const WASM_PAGE_BYTES: u32 = 65_536;
 
-// Import function indices (fd_read=0, fd_write=1).
+// Import function indices begin with the WASI pair and may be extended with
+// `goby-wasm` owned Track E host intrinsics.
 const FD_READ_IDX: u32 = 0;
 const FD_WRITE_IDX: u32 = 1;
+const HOST_IMPORT_BASE_IDX: u32 = 2;
 
 // Number of I32 scratch locals used by the fused split instructions.
 // scratch[0] = str_ptr, scratch[1] = str_len, scratch[2] = pos,
@@ -224,15 +229,9 @@ fn needs_newline_data(instrs: &[WasmBackendInstr]) -> bool {
 /// exports `memory` and `_start`, and contains one function (`main`).
 pub(crate) fn supports_instrs(instrs: &[WasmBackendInstr]) -> bool {
     instrs.iter().all(|instr| match instr {
-        WasmBackendInstr::Intrinsic { intrinsic } => {
-            matches!(
-                intrinsic,
-                BackendIntrinsic::StringSplit
-                    | BackendIntrinsic::ListGet
-                    | BackendIntrinsic::StringLength
-                    | BackendIntrinsic::ListPushString
-            )
-        }
+        WasmBackendInstr::Intrinsic { intrinsic } => match intrinsic.execution_boundary() {
+            IntrinsicExecutionBoundary::HostImport | IntrinsicExecutionBoundary::InWasm => true,
+        },
         _ => true,
     })
 }
@@ -257,6 +256,18 @@ pub(crate) fn emit_general_module(
     let helper_i64_scratch_count = required_i64_scratch_count(instrs);
     let i64_count = named_i64_count + helper_i64_scratch_count;
     let i32_scratch_count = required_i32_scratch_count(instrs);
+    let uses_host_intrinsics = instrs.iter().any(|instr| {
+        matches!(
+            instr,
+            WasmBackendInstr::Intrinsic { intrinsic }
+                if intrinsic.execution_boundary() == IntrinsicExecutionBoundary::HostImport
+        )
+    });
+    let used_host_imports: Vec<_> = if uses_host_intrinsics {
+        HOST_INTRINSIC_IMPORTS.to_vec()
+    } else {
+        Vec::new()
+    };
     // I32 scratch locals start at index i64_count.
     let i32_base = i64_count;
 
@@ -271,6 +282,17 @@ pub(crate) fn emit_general_module(
         [ValType::I32, ValType::I32, ValType::I32, ValType::I32],
         [ValType::I32],
     );
+    let host_intrinsic_type_indices: Vec<u32> = used_host_imports
+        .iter()
+        .map(|import| {
+            let idx = types.len();
+            types.ty().function(
+                import.params().iter().copied(),
+                import.results().iter().copied(),
+            );
+            idx
+        })
+        .collect();
     // type 1: main () -> ()
     let main_type = types.len();
     types.ty().function([], []);
@@ -288,6 +310,16 @@ pub(crate) fn emit_general_module(
         "fd_write",
         EntityType::Function(fd_io_type),
     );
+    for (import, type_idx) in used_host_imports
+        .iter()
+        .zip(host_intrinsic_type_indices.iter().copied())
+    {
+        imports.import(
+            import.module(),
+            import.name(),
+            EntityType::Function(type_idx),
+        );
+    }
     module.section(&imports);
 
     // Function section (one function: main, type index = main_type = 1)
@@ -306,10 +338,14 @@ pub(crate) fn emit_general_module(
     });
     module.section(&memories);
 
-    // Export section — _start is function index 2 (0,1 = imports, 2 = main)
+    // Export section — `_start` follows the imported functions.
     let mut exports = ExportSection::new();
     exports.export("memory", ExportKind::Memory, 0);
-    exports.export("_start", ExportKind::Func, 2);
+    exports.export(
+        "_start",
+        ExportKind::Func,
+        HOST_IMPORT_BASE_IDX + used_host_imports.len() as u32,
+    );
     module.section(&exports);
 
     // Code section
@@ -569,10 +605,24 @@ fn emit_helper_call(
         BackendIntrinsic::StringSplit => emit_string_split_helper(function, helper_state),
         BackendIntrinsic::ListGet => emit_list_get_helper(function, helper_state),
         BackendIntrinsic::StringLength => emit_string_length_helper(function, helper_state),
+        BackendIntrinsic::StringEachGraphemeCount | BackendIntrinsic::StringEachGraphemeState => {
+            let host_import = host_import_for_intrinsic(intrinsic).ok_or_else(|| CodegenError {
+                message: format!(
+                    "gen_lower/emit: missing host import mapping for intrinsic '{intrinsic:?}'"
+                ),
+            })?;
+            let host_offset = HOST_INTRINSIC_IMPORTS
+                .iter()
+                .position(|candidate| candidate == &host_import)
+                .ok_or_else(|| CodegenError {
+                    message: format!(
+                        "gen_lower/emit: missing host import index for '{host_import:?}'"
+                    ),
+                })? as u32;
+            function.instruction(&Instruction::Call(HOST_IMPORT_BASE_IDX + host_offset));
+            Ok(())
+        }
         BackendIntrinsic::ListPushString => emit_list_push_string_helper(function, helper_state),
-        _ => Err(CodegenError {
-            message: format!("gen_lower/emit: intrinsic '{intrinsic:?}' is not yet supported"),
-        }),
     }?;
     let _ = (ctx, i32_base);
     Ok(())
@@ -1982,6 +2032,46 @@ mod tests {
             },
         ];
         assert!(supports_instrs(&instrs));
+    }
+
+    #[test]
+    fn supports_track_e_host_grapheme_intrinsics() {
+        let instrs = vec![
+            I::PushStaticString {
+                text: "a👨‍👩‍👧‍👦b".to_string(),
+            },
+            I::Intrinsic {
+                intrinsic: BackendIntrinsic::StringEachGraphemeCount,
+            },
+            I::Drop,
+        ];
+        assert!(supports_instrs(&instrs));
+    }
+
+    #[test]
+    fn emit_track_e_host_imports_for_grapheme_intrinsics() {
+        let instrs = vec![
+            I::PushStaticString {
+                text: "a👨‍👩‍👧‍👦b".to_string(),
+            },
+            I::Intrinsic {
+                intrinsic: BackendIntrinsic::StringEachGraphemeCount,
+            },
+            I::Drop,
+        ];
+        let wasm = emit_general_module(&instrs, &default_layout())
+            .expect("emit host-backed grapheme intrinsic should succeed");
+        assert_valid_wasm(&wasm);
+        assert!(
+            wasm.windows(b"goby:runtime/track-e".len())
+                .any(|w| w == b"goby:runtime/track-e"),
+            "expected Track E host import module name in Wasm import section"
+        );
+        assert!(
+            wasm.windows(b"__goby_string_each_grapheme_count".len())
+                .any(|w| w == b"__goby_string_each_grapheme_count"),
+            "expected grapheme count host import name in Wasm import section"
+        );
     }
 
     #[test]

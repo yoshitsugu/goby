@@ -7,6 +7,8 @@
 //! The design rationale and the Goby IR mapping are documented in this module
 //! and in `gen_lower/mod.rs`.
 
+use crate::host_runtime::IntrinsicExecutionBoundary;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum SplitIndexOperand {
     Const(i64),
@@ -32,6 +34,17 @@ impl BackendIntrinsic {
             BackendIntrinsic::StringEachGraphemeCount => 1,
             BackendIntrinsic::StringEachGraphemeState => 2,
             BackendIntrinsic::ListPushString => 2,
+        }
+    }
+
+    pub(crate) const fn execution_boundary(self) -> IntrinsicExecutionBoundary {
+        match self {
+            BackendIntrinsic::StringEachGraphemeCount
+            | BackendIntrinsic::StringEachGraphemeState => IntrinsicExecutionBoundary::HostImport,
+            BackendIntrinsic::StringSplit
+            | BackendIntrinsic::ListGet
+            | BackendIntrinsic::StringLength
+            | BackendIntrinsic::ListPushString => IntrinsicExecutionBoundary::InWasm,
         }
     }
 }

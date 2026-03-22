@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-19
+Last updated: 2026-03-23
 
 ## Current Focus
 
@@ -46,6 +46,11 @@ Last updated: 2026-03-19
   - backend lowering now splits unary and binary `__goby_string_each_grapheme` forms into explicit fixed-arity intrinsic variants,
   - the shared grapheme layer now exposes byte-span boundaries as well as string materialization, so the future host runtime can target slice copying instead of re-deriving segmentation rules,
   - remaining work is the host runtime execution path, not deciding semantics or overloading contracts in multiple places.
+- Track E E3 boundary-progress is now landed:
+  - backend intrinsics now distinguish host-backed vs in-Wasm ownership explicitly at the backend boundary,
+  - general Wasm emission owns a fixed Track E host import ABI for grapheme intrinsics and emits it only for modules that actually need it,
+  - `goby-wasm` now owns the runtime-stdin execution API that the CLI calls for the current Track E bridge path,
+  - remaining E3 work is the actual Goby-owned Wasm instantiation/runtime wiring for those host imports, not the ABI split or CLI ownership boundary.
 - Remaining helper work is incremental family expansion on top of the emitter ABI, not a reason to restore planner or AST-shaped fallback.
 - The IR-lowering roadmap is complete; follow-up work should stay within the converged lowering architecture.
 - Then inspect:

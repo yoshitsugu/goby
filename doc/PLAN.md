@@ -562,6 +562,15 @@ Milestones:
     - the shared semantics layer now exposes grapheme byte spans in addition to
       materialized strings, giving the host runtime a backend-oriented boundary
       model for copying slices without redefining segmentation.
+    - backend IR now records whether a Track E intrinsic is host-backed or
+      emitter-owned, instead of leaving that ownership split as implicit
+      branching in the emitter.
+    - general Wasm emission now owns a fixed Track E host import ABI for the
+      grapheme intrinsic family and only emits those imports for modules that
+      actually use host-backed intrinsics.
+    - `goby-wasm` now exposes the runtime-stdin execution API that owns the
+      current Track E branch, so `goby-cli` no longer special-cases
+      `InterpreterBridge` directly.
   - done when:
     - the runtime boundary is explicit in code/docs,
     - `goby-wasm` exposes the execution API that owns Track E runtime wiring,

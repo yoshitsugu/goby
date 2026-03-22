@@ -251,33 +251,23 @@ fn run_command(module: &goby_core::Module, file: &str) -> Result<(), CliError> {
                 }
             }
         }
-        // compile_module returns Err for InterpreterBridge programs because
-        // compile_module_wasm_or_error explicitly rejects them (they cannot be
-        // compiled to a static Wasm module at this time).  We re-check the
-        // classification here rather than inspecting `_err` directly so that the
-        // bridge path is gated on the planner's decision, not on the error message.
-        // This is a temporary fallback: as DynamicWasiIo support grows, fewer
-        // programs should reach this branch.
-        //
-        // NOTE: `InterpreterBridge` is intentionally narrow. It currently exists
-        // for the Track E grapheme-backed stdlib decl subset and should not turn
-        // into a generic fallback for arbitrary unsupported runtime programs.
-        Err(_err)
-            if matches!(
-                goby_wasm::runtime_io_execution_kind(module),
-                Ok(goby_wasm::RuntimeIoExecutionKind::InterpreterBridge)
-            ) =>
-        {
+        // Track E runtime-stdin execution ownership lives in `goby-wasm`.
+        // The CLI stays a thin caller and should not special-case
+        // `InterpreterBridge` semantics itself.
+        Err(_err) => {
             let stdin_text = read_stdin_to_string()?;
-            let output = goby_wasm::execute_module_with_stdin(module, Some(stdin_text))
-                .map_err(|err| CliError::Runtime(format!("runtime error: {}", err.message)))?;
-            print_parse_summary(module.declarations.len(), file);
-            if let Some(text) = output {
-                print!("{}", text);
+            if let Some(output) =
+                goby_wasm::execute_runtime_module_with_stdin(module, Some(stdin_text))
+                    .map_err(|err| CliError::Runtime(format!("runtime error: {}", err.message)))?
+            {
+                print_parse_summary(module.declarations.len(), file);
+                print!("{}", output);
+            } else {
+                return Err(CliError::Runtime(format!(
+                    "codegen error: {}",
+                    _err.message
+                )));
             }
-        }
-        Err(err) => {
-            return Err(CliError::Runtime(format!("codegen error: {}", err.message)));
         }
     }
     Ok(())

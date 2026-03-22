@@ -5,6 +5,7 @@ mod compile_tests;
 mod fallback;
 mod gen_lower;
 mod grapheme_semantics;
+mod host_runtime;
 mod layout;
 mod lower;
 mod planning;
@@ -261,6 +262,30 @@ pub fn execute_module_with_stdin(
     ))
 }
 
+/// Execute a runtime-stdin Goby module through the `goby-wasm` owned execution boundary.
+///
+/// This API owns Track E runtime branching for `goby-cli`: callers should not
+/// inspect `RuntimeIoExecutionKind` and special-case `InterpreterBridge`
+/// themselves. Non-Track-E Wasm execution remains outside this API for now.
+///
+/// Current behavior:
+/// - `InterpreterBridge` delegates to the narrow seeded-stdin runtime path.
+/// - all other execution kinds return `Ok(None)` so the caller can continue with
+///   its normal Wasm file execution flow.
+pub fn execute_runtime_module_with_stdin(
+    module: &Module,
+    stdin_seed: Option<String>,
+) -> Result<Option<String>, CodegenError> {
+    match runtime_io_execution_kind(module)? {
+        RuntimeIoExecutionKind::InterpreterBridge => execute_module_with_stdin(module, stdin_seed),
+        RuntimeIoExecutionKind::GeneralLowered
+        | RuntimeIoExecutionKind::DynamicWasiIo
+        | RuntimeIoExecutionKind::StaticOutput
+        | RuntimeIoExecutionKind::Unsupported
+        | RuntimeIoExecutionKind::NotRuntimeIo => Ok(None),
+    }
+}
+
 pub(crate) struct RuntimeOutputResolver<'m> {
     pub(crate) locals: RuntimeLocals,
     pub(crate) module: &'m Module,
@@ -332,5 +357,25 @@ main =
         let module = parse_module(source).expect("parse should work");
         let wasm = compile_module(&module).expect("codegen should succeed");
         assert_valid_wasm_module(&wasm);
+    }
+
+    #[test]
+    fn execute_runtime_module_with_stdin_owns_interpreter_bridge_branch() {
+        let module = parse_module(
+            r#"
+import goby/string ( graphemes )
+
+main : Unit -> Unit can Print, Read
+main =
+  text = read ()
+  parts = graphemes text
+  println(parts[1])
+"#,
+        )
+        .expect("parse should work");
+
+        let output = execute_runtime_module_with_stdin(&module, Some("a👨‍👩‍👧‍👦b".to_string()))
+            .expect("Track E bridge execution should be owned by goby-wasm");
+        assert_eq!(output.as_deref(), Some("👨‍👩‍👧‍👦\n"));
     }
 }
