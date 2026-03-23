@@ -12,7 +12,7 @@ Last updated: 2026-03-23
 
 1. Keep future lowering work aligned with `resolved form -> shared IR -> backend`.
 2. Treat backend limitations as backend limitations rather than restoring AST-shaped recognizers.
-3. Continue Track E from `E3 -> E4 -> E5 -> E6`: switch this family from raw `wasmtime run` assumptions to a Goby-owned host runtime for backend intrinsics, then complete grapheme/list parity on that boundary.
+3. Continue Track E from `E5 -> E6`: E3 and E4 are complete. Next is E5 (in-Wasm list accumulation parity — confirm stdlib `graphemes` accumulation path, or defer condition 2 to E6 if with/yield in GeneralLowered is required), then E6.
 4. Reopen `doc/PLAN_IR.md` only if a genuinely new architectural gap appears.
 
 ## Restart Notes
@@ -46,11 +46,16 @@ Last updated: 2026-03-23
   - backend lowering now splits unary and binary `__goby_string_each_grapheme` forms into explicit fixed-arity intrinsic variants,
   - the shared grapheme layer now exposes byte-span boundaries as well as string materialization, so the future host runtime can target slice copying instead of re-deriving segmentation rules,
   - remaining work is the host runtime execution path, not deciding semantics or overloading contracts in multiple places.
-- Track E E3 boundary-progress is now landed:
+- Track E E3 and E4 are now complete:
   - backend intrinsics now distinguish host-backed vs in-Wasm ownership explicitly at the backend boundary,
   - general Wasm emission owns a fixed Track E host import ABI for grapheme intrinsics and emits it only for modules that actually need it,
   - `goby-wasm` now owns the runtime-stdin execution API that the CLI calls for the current Track E bridge path,
-  - remaining E3 work is the actual Goby-owned Wasm instantiation/runtime wiring for those host imports, not the ABI split or CLI ownership boundary.
+  - the Goby-owned Wasm runtime (wasmtime + WASI + host bump allocator) is wired in `wasm_exec.rs` and provides `__goby_string_each_grapheme_count` and `__goby_string_each_grapheme_state` host imports,
+  - a bump allocator (CAS loop over top 4 KB of Wasm memory page) handles span.start 1..=3 grapheme header placement safely,
+  - E4 parity test confirms that grapheme count programs compile to Wasm containing the host import name (unconditional gate, no skip).
+- Track E E5 (in-Wasm list accumulation parity):
+  - condition 1 (no second list/string runtime representation) is satisfied: `__goby_list_push_string` emits through the shared tagged ABI,
+  - condition 2 (stdlib `goby/string.graphemes` accumulates list results through backend path) requires with/yield support in GeneralLowered, which is E6 scope; E5 condition 2 is deferred to E6.
 - Remaining helper work is incremental family expansion on top of the emitter ABI, not a reason to restore planner or AST-shaped fallback.
 - The IR-lowering roadmap is complete; follow-up work should stay within the converged lowering architecture.
 - Then inspect:

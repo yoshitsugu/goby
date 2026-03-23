@@ -392,6 +392,39 @@ main =
     }
 
     #[test]
+    fn e4_backend_path_grapheme_count_compiles_with_host_import() {
+        // E4 parity test: proves that `__goby_string_each_grapheme` (count form, 1-arg)
+        // compiles to Wasm and emits the host import name
+        // `__goby_string_each_grapheme_count` in the Wasm binary.
+        // This is an unconditional parity gate for E4 — must NOT skip on compile failure.
+        let module = parse_module(
+            r#"
+main : Unit -> Unit can Print, Read
+main =
+  text = read ()
+  n = __goby_string_each_grapheme text
+  print n
+"#,
+        )
+        .expect("parse should work");
+
+        assert_eq!(
+            runtime_io_execution_kind(&module).expect("classification should succeed"),
+            RuntimeIoExecutionKind::GeneralLowered,
+            "grapheme count (1-arg) program with read must classify as GeneralLowered"
+        );
+
+        let wasm = compile_module(&module)
+            .expect("E4: grapheme count program must compile to Wasm without error");
+
+        let import_name = b"__goby_string_each_grapheme_count";
+        assert!(
+            wasm.windows(import_name.len()).any(|w| w == import_name),
+            "E4: compiled Wasm must contain the track-e host import '__goby_string_each_grapheme_count'"
+        );
+    }
+
+    #[test]
     fn execute_runtime_module_with_stdin_routes_general_lowered_through_goby_owned_runtime() {
         // `print(read())` is a GeneralLowered program (no Track E host intrinsics needed).
         // This test verifies that the GeneralLowered arm in execute_runtime_module_with_stdin
@@ -412,6 +445,34 @@ main =
             output.as_deref(),
             Some("hello from wasm"),
             "GeneralLowered path should execute via run_wasm_bytes_with_stdin and return stdout"
+        );
+    }
+
+    #[test]
+    fn e5_split_list_get_print_executes_via_goby_owned_wasm_runtime() {
+        // E5 condition 1 execution gate: `__goby_list_push_string` accumulation path
+        // (split -> list.get -> print) executes end-to-end through the Goby-owned Wasm runtime
+        // without introducing a second list/string runtime representation.
+        use goby_core::parse_module;
+        let module = parse_module(
+            r#"
+import goby/string ( split )
+
+main : Unit -> Unit can Print, Read
+main =
+  text = read ()
+  lines = split text "\n"
+  println(lines[1])
+"#,
+        )
+        .expect("parse should work");
+
+        let output = execute_runtime_module_with_stdin(&module, Some("alpha\nbeta\ngamma".to_string()))
+            .expect("E5: split -> list.get -> println must execute via Goby-owned Wasm runtime");
+        assert_eq!(
+            output.as_deref(),
+            Some("beta\n"),
+            "E5: list index 1 of split('alpha\\nbeta\\ngamma', '\\n') must be 'beta'"
         );
     }
 }

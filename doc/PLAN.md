@@ -528,7 +528,7 @@ Milestones:
     - emitter support can be checked structurally at classification time,
     - no new intrinsic in this track depends on stringly helper-name dispatch.
 
-- [ ] E3. Host runtime boundary for backend intrinsics
+- [x] E3. Host runtime boundary for backend intrinsics
   - replace the raw-`wasmtime run` assumption for this track with a Goby-owned
     execution path that instantiates Wasm modules and wires both WASI imports
     and Goby-specific host intrinsics.
@@ -581,7 +581,7 @@ Milestones:
     - raw `wasmtime run` is no longer treated as the required execution model
       for Track E modules.
 
-- [ ] E4. Host-provided grapheme intrinsic execution
+- [x] E4. Host-provided grapheme intrinsic execution
   - implement host-side execution for `__goby_string_each_grapheme`.
   - preserve Unicode Extended Grapheme Cluster semantics by delegating to the
     shared Rust semantic authority.
