@@ -4,7 +4,7 @@
 
 use std::collections::HashMap;
 
-use goby_core::ir::{CompExpr, ValueExpr};
+use goby_core::ir::{CompExpr, IrInterpPart, ValueExpr};
 
 use crate::gen_lower::backend_ir::{BackendIntrinsic, SplitIndexOperand, WasmBackendInstr};
 use crate::gen_lower::value::{ValueError, encode_bool, encode_int, encode_unit};
@@ -206,6 +206,31 @@ pub(crate) fn lower_value(v: &ValueExpr) -> Result<Vec<WasmBackendInstr>, LowerE
             let mut instrs = lower_value(left)?;
             instrs.extend(lower_value(right)?);
             instrs.push(WasmBackendInstr::BinOp { op: op.clone() });
+            Ok(instrs)
+        }
+        ValueExpr::Interp(parts) => {
+            if parts.is_empty() {
+                return Ok(vec![WasmBackendInstr::PushStaticString {
+                    text: String::new(),
+                }]);
+            }
+            // Emit all parts, then n-1 StringConcat calls to fold left-to-right.
+            let mut instrs = Vec::new();
+            for part in parts {
+                match part {
+                    IrInterpPart::Text(t) => {
+                        instrs.push(WasmBackendInstr::PushStaticString { text: t.clone() });
+                    }
+                    IrInterpPart::Expr(e) => {
+                        instrs.extend(lower_value(e)?);
+                    }
+                }
+            }
+            for _ in 0..parts.len() - 1 {
+                instrs.push(WasmBackendInstr::Intrinsic {
+                    intrinsic: BackendIntrinsic::StringConcat,
+                });
+            }
             Ok(instrs)
         }
         other => Err(LowerError::UnsupportedForm {
@@ -1179,10 +1204,7 @@ mod tests {
                         module: "list".to_string(),
                         name: "get".to_string(),
                     }),
-                    args: vec![
-                        ValueExpr::Var("parts".to_string()),
-                        ValueExpr::IntLit(1),
-                    ],
+                    args: vec![ValueExpr::Var("parts".to_string()), ValueExpr::IntLit(1)],
                 }),
                 body: Box::new(CompExpr::PerformEffect {
                     effect: "Print".to_string(),
@@ -1274,10 +1296,17 @@ mod tests {
         assert_eq!(
             instrs,
             vec![
-                I::DeclareLocal { name: "x".to_string() },
+                I::DeclareLocal {
+                    name: "x".to_string()
+                },
                 I::I64Const(encode_int(1).unwrap()),
-                I::StoreLocal { name: "x".to_string() },
-                I::EffectOp { effect: "Read".to_string(), op: "read".to_string() },
+                I::StoreLocal {
+                    name: "x".to_string()
+                },
+                I::EffectOp {
+                    effect: "Read".to_string(),
+                    op: "read".to_string()
+                },
             ]
         );
     }
@@ -1295,7 +1324,9 @@ mod tests {
             instrs,
             vec![
                 I::I64Const(encode_int(2).unwrap()),
-                I::StoreLocal { name: "x".to_string() },
+                I::StoreLocal {
+                    name: "x".to_string()
+                },
                 I::I64Const(encode_unit()),
             ]
         );
@@ -1327,16 +1358,25 @@ mod tests {
         assert_eq!(
             instrs,
             vec![
-                I::DeclareLocal { name: "x".to_string() },
+                I::DeclareLocal {
+                    name: "x".to_string()
+                },
                 I::I64Const(encode_int(1).unwrap()),
-                I::StoreLocal { name: "x".to_string() },
+                I::StoreLocal {
+                    name: "x".to_string()
+                },
                 // Seq: Assign stmt + Drop
                 I::I64Const(encode_int(2).unwrap()),
-                I::StoreLocal { name: "x".to_string() },
+                I::StoreLocal {
+                    name: "x".to_string()
+                },
                 I::I64Const(encode_unit()),
                 I::Drop,
                 // Seq tail
-                I::EffectOp { effect: "Read".to_string(), op: "read".to_string() },
+                I::EffectOp {
+                    effect: "Read".to_string(),
+                    op: "read".to_string()
+                },
             ]
         );
     }
@@ -1361,10 +1401,7 @@ mod tests {
                         module: "list".to_string(),
                         name: "get".to_string(),
                     }),
-                    args: vec![
-                        ValueExpr::Var("parts".to_string()),
-                        ValueExpr::IntLit(1),
-                    ],
+                    args: vec![ValueExpr::Var("parts".to_string()), ValueExpr::IntLit(1)],
                 }),
                 body: Box::new(CompExpr::PerformEffect {
                     effect: "Print".to_string(),

@@ -74,13 +74,14 @@ impl StaticStringPool {
 
         // collect_all_instrs is defined later in this file, after all helper fns.
         // To avoid forward-reference issues, inline the recursion here.
-        fn visit_instrs<'a>(
-            instrs: &'a [WasmBackendInstr],
-            out: &mut Vec<&'a WasmBackendInstr>,
-        ) {
+        fn visit_instrs<'a>(instrs: &'a [WasmBackendInstr], out: &mut Vec<&'a WasmBackendInstr>) {
             for instr in instrs {
                 out.push(instr);
-                if let WasmBackendInstr::If { then_instrs, else_instrs } = instr {
+                if let WasmBackendInstr::If {
+                    then_instrs,
+                    else_instrs,
+                } = instr
+                {
                     visit_instrs(then_instrs, out);
                     visit_instrs(else_instrs, out);
                 }
@@ -200,7 +201,11 @@ fn collect_all_instrs(instrs: &[WasmBackendInstr]) -> Vec<&WasmBackendInstr> {
     let mut result = Vec::new();
     for instr in instrs {
         result.push(instr);
-        if let WasmBackendInstr::If { then_instrs, else_instrs } = instr {
+        if let WasmBackendInstr::If {
+            then_instrs,
+            else_instrs,
+        } = instr
+        {
             result.extend(collect_all_instrs(then_instrs));
             result.extend(collect_all_instrs(else_instrs));
         }
@@ -609,7 +614,10 @@ fn emit_instrs(
                     newline_ptr,
                 )?;
             }
-            WasmBackendInstr::If { then_instrs, else_instrs } => {
+            WasmBackendInstr::If {
+                then_instrs,
+                else_instrs,
+            } => {
                 // Convert tagged Bool on stack to i32: extract payload bit 0.
                 function.instruction(&Instruction::I64Const(1));
                 function.instruction(&Instruction::I64And);
@@ -697,7 +705,9 @@ fn emit_helper_call(
         BackendIntrinsic::StringSplit => emit_string_split_helper(function, helper_state),
         BackendIntrinsic::ListGet => emit_list_get_helper(function, helper_state),
         BackendIntrinsic::StringLength => emit_string_length_helper(function, helper_state),
-        BackendIntrinsic::StringEachGraphemeCount | BackendIntrinsic::StringEachGraphemeState => {
+        BackendIntrinsic::StringEachGraphemeCount
+        | BackendIntrinsic::StringEachGraphemeState
+        | BackendIntrinsic::StringConcat => {
             let host_import = host_import_for_intrinsic(intrinsic).ok_or_else(|| CodegenError {
                 message: format!(
                     "gen_lower/emit: missing host import mapping for intrinsic '{intrinsic:?}'"
@@ -1329,10 +1339,7 @@ fn emit_bin_op(
                 Some(base) => (base, base + 1),
                 None => {
                     return Err(CodegenError {
-                        message: format!(
-                            "BinOp::{} requires helper scratch i64 locals",
-                            $op_name
-                        ),
+                        message: format!("BinOp::{} requires helper scratch i64 locals", $op_name),
                     });
                 }
             }
@@ -2423,8 +2430,8 @@ mod tests {
             },
             I::Drop,
         ];
-        let wasm = emit_general_module(&instrs, &default_layout())
-            .expect("emit BinOp Add should succeed");
+        let wasm =
+            emit_general_module(&instrs, &default_layout()).expect("emit BinOp Add should succeed");
         assert_valid_wasm(&wasm);
     }
 
@@ -2441,8 +2448,8 @@ mod tests {
             },
             I::Drop,
         ];
-        let wasm = emit_general_module(&instrs, &default_layout())
-            .expect("emit BinOp Eq should succeed");
+        let wasm =
+            emit_general_module(&instrs, &default_layout()).expect("emit BinOp Eq should succeed");
         assert_valid_wasm(&wasm);
     }
 
@@ -2455,8 +2462,8 @@ mod tests {
             I::BinOp { op: IrBinOp::Sub },
             I::Drop,
         ];
-        let wasm = emit_general_module(&instrs, &default_layout())
-            .expect("emit BinOp Sub should succeed");
+        let wasm =
+            emit_general_module(&instrs, &default_layout()).expect("emit BinOp Sub should succeed");
         assert_valid_wasm(&wasm);
     }
 
@@ -2469,8 +2476,8 @@ mod tests {
             I::BinOp { op: IrBinOp::Lt },
             I::Drop,
         ];
-        let wasm = emit_general_module(&instrs, &default_layout())
-            .expect("emit BinOp Lt should succeed");
+        let wasm =
+            emit_general_module(&instrs, &default_layout()).expect("emit BinOp Lt should succeed");
         assert_valid_wasm(&wasm);
     }
 
@@ -2483,8 +2490,8 @@ mod tests {
             I::BinOp { op: IrBinOp::And },
             I::Drop,
         ];
-        let wasm = emit_general_module(&instrs, &default_layout())
-            .expect("emit BinOp And should succeed");
+        let wasm =
+            emit_general_module(&instrs, &default_layout()).expect("emit BinOp And should succeed");
         assert_valid_wasm(&wasm);
     }
 
@@ -2500,8 +2507,8 @@ mod tests {
             I::BinOp { op: IrBinOp::Mul },
             I::Drop,
         ];
-        let wasm = emit_general_module(&instrs, &default_layout())
-            .expect("emit BinOp Mul should succeed");
+        let wasm =
+            emit_general_module(&instrs, &default_layout()).expect("emit BinOp Mul should succeed");
         assert_valid_wasm(&wasm);
     }
 
@@ -2516,17 +2523,12 @@ mod tests {
             I::Drop,
             I::I64Const(crate::gen_lower::value::encode_bool(true)),
             I::If {
-                then_instrs: vec![I::I64Const(
-                    crate::gen_lower::value::encode_int(1).unwrap(),
-                )],
-                else_instrs: vec![I::I64Const(
-                    crate::gen_lower::value::encode_int(2).unwrap(),
-                )],
+                then_instrs: vec![I::I64Const(crate::gen_lower::value::encode_int(1).unwrap())],
+                else_instrs: vec![I::I64Const(crate::gen_lower::value::encode_int(2).unwrap())],
             },
             I::Drop,
         ];
-        let wasm =
-            emit_general_module(&instrs, &default_layout()).expect("emit If should succeed");
+        let wasm = emit_general_module(&instrs, &default_layout()).expect("emit If should succeed");
         assert_valid_wasm(&wasm);
     }
 
@@ -2552,14 +2554,12 @@ mod tests {
                         )],
                     },
                 ],
-                else_instrs: vec![I::I64Const(
-                    crate::gen_lower::value::encode_int(3).unwrap(),
-                )],
+                else_instrs: vec![I::I64Const(crate::gen_lower::value::encode_int(3).unwrap())],
             },
             I::Drop,
         ];
-        let wasm = emit_general_module(&instrs, &default_layout())
-            .expect("emit nested If should succeed");
+        let wasm =
+            emit_general_module(&instrs, &default_layout()).expect("emit nested If should succeed");
         assert_valid_wasm(&wasm);
     }
 }

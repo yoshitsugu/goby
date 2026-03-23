@@ -80,8 +80,7 @@ pub(crate) fn run_wasm_bytes_with_stdin(
     let mut store = Store::new(&engine, wasi_ctx);
 
     let mut linker: Linker<WasiP1Ctx> = Linker::new(&engine);
-    p1::add_to_linker_sync(&mut linker, |t| t)
-        .map_err(|e| format!("wasi linker: {e}"))?;
+    p1::add_to_linker_sync(&mut linker, |t| t).map_err(|e| format!("wasi linker: {e}"))?;
 
     // Register Track E host intrinsics on the `goby:runtime/track-e` module.
     let module_name = HostIntrinsicImport::MODULE;
@@ -111,6 +110,17 @@ pub(crate) fn run_wasm_bytes_with_stdin(
             },
         )
         .map_err(|e| format!("linker register grapheme_state: {e}"))?;
+
+    let bump_for_concat = Arc::clone(&bump);
+    linker
+        .func_wrap(
+            module_name,
+            HostIntrinsicImport::StringConcat.name(),
+            move |caller: Caller<'_, WasiP1Ctx>, tagged_a: i64, tagged_b: i64| -> i64 {
+                string_concat_host(caller, tagged_a, tagged_b, &bump_for_concat)
+            },
+        )
+        .map_err(|e| format!("linker register string_concat: {e}"))?;
 
     let instance = linker
         .instantiate(&mut store, &module)
@@ -218,7 +228,10 @@ fn grapheme_state_host_inner(
                 _ => return tagged_str,
             };
             let len_bytes = (grapheme_len as i32).to_le_bytes();
-            if mem.write(&mut caller, new_ptr as usize, &len_bytes).is_err() {
+            if mem
+                .write(&mut caller, new_ptr as usize, &len_bytes)
+                .is_err()
+            {
                 return tagged_str;
             }
             // Copy grapheme bytes after the len header.
@@ -259,13 +272,66 @@ fn grapheme_state_host_inner(
     encode_string_ptr(header_ptr as u32)
 }
 
+/// Host implementation: concatenate two tagged strings.
+///
+/// Reads both strings from Wasm linear memory, concatenates them, writes the
+/// result into the host bump allocator region, and returns a tagged `String`.
+/// Falls back to `tagged_a` on any allocation or decode failure.
+fn string_concat_host(
+    mut caller: Caller<'_, WasiP1Ctx>,
+    tagged_a: i64,
+    tagged_b: i64,
+    bump: &AtomicU32,
+) -> i64 {
+    let Ok(a) = read_wasm_string(&mut caller, tagged_a) else {
+        return tagged_a;
+    };
+    let Ok(b) = read_wasm_string(&mut caller, tagged_b) else {
+        return tagged_a;
+    };
+    let combined = a + &b;
+    let bytes = combined.as_bytes();
+    let total_len = 4u32 + bytes.len() as u32;
+
+    // Allocate from the host bump region via CAS loop.
+    let alloc_ptr = {
+        let mut cur = bump.load(Ordering::Relaxed);
+        loop {
+            let next = cur.saturating_add(total_len);
+            if next > WASM_PAGE_BYTES {
+                return tagged_a; // bump region exhausted
+            }
+            match bump.compare_exchange_weak(cur, next, Ordering::Relaxed, Ordering::Relaxed) {
+                Ok(_) => break cur,
+                Err(actual) => cur = actual,
+            }
+        }
+    };
+
+    let mem = match caller.get_export("memory") {
+        Some(wasmtime::Extern::Memory(m)) => m,
+        _ => return tagged_a,
+    };
+    let len_bytes = (bytes.len() as i32).to_le_bytes();
+    if mem
+        .write(&mut caller, alloc_ptr as usize, &len_bytes)
+        .is_err()
+    {
+        return tagged_a;
+    }
+    if mem
+        .write(&mut caller, alloc_ptr as usize + 4, bytes)
+        .is_err()
+    {
+        return tagged_a;
+    }
+    encode_string_ptr(alloc_ptr)
+}
+
 /// Read a Wasm linear-memory string from a tagged `String` value.
 ///
 /// Layout: `mem[ptr..ptr+4]` = `len` (i32 little-endian), `mem[ptr+4..ptr+4+len]` = UTF-8.
-fn read_wasm_string(
-    caller: &mut Caller<'_, WasiP1Ctx>,
-    tagged: i64,
-) -> Result<String, ()> {
+fn read_wasm_string(caller: &mut Caller<'_, WasiP1Ctx>, tagged: i64) -> Result<String, ()> {
     if decode_tag(tagged) != TAG_STRING {
         return Err(());
     }
@@ -288,7 +354,8 @@ fn read_wasm_string(
 
     // Read the UTF-8 bytes.
     let mut bytes = vec![0u8; len];
-    mem.read(&mut *caller, ptr + 4, &mut bytes).map_err(|_| ())?;
+    mem.read(&mut *caller, ptr + 4, &mut bytes)
+        .map_err(|_| ())?;
 
     String::from_utf8(bytes).map_err(|_| ())
 }
@@ -319,16 +386,15 @@ mod tests {
     //   )
     // )
     const HELLO_WASM: &[u8] = &[
-        0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0x01, 0x09, 0x02, 0x60, 0x04, 0x7f,
-        0x7f, 0x7f, 0x7f, 0x01, 0x7f, 0x60, 0x00, 0x00, 0x02, 0x1d, 0x01, 0x15, 0x77, 0x61,
-        0x73, 0x69, 0x5f, 0x73, 0x6e, 0x61, 0x70, 0x73, 0x68, 0x6f, 0x74, 0x5f, 0x70, 0x72,
-        0x65, 0x76, 0x69, 0x65, 0x77, 0x31, 0x08, 0x66, 0x64, 0x5f, 0x77, 0x72, 0x69, 0x74,
-        0x65, 0x00, 0x00, 0x03, 0x02, 0x01, 0x01, 0x05, 0x03, 0x01, 0x00, 0x01, 0x07, 0x13,
-        0x02, 0x06, 0x6d, 0x65, 0x6d, 0x6f, 0x72, 0x79, 0x02, 0x00, 0x06, 0x5f, 0x73, 0x74,
-        0x61, 0x72, 0x74, 0x00, 0x01, 0x0a, 0x1a, 0x01, 0x18, 0x00, 0x41, 0x10, 0x41, 0x04,
-        0x36, 0x02, 0x00, 0x41, 0x14, 0x41, 0x06, 0x36, 0x02, 0x00, 0x41, 0x01, 0x41, 0x10,
-        0x41, 0x01, 0x41, 0x18, 0x10, 0x00, 0x1a, 0x0b, 0x0b, 0x0a, 0x01, 0x01, 0x00, 0x41,
-        0x00, 0x0b, 0x06, 0x68, 0x65, 0x6c, 0x6c, 0x6f, 0x0a,
+        0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0x01, 0x09, 0x02, 0x60, 0x04, 0x7f, 0x7f,
+        0x7f, 0x7f, 0x01, 0x7f, 0x60, 0x00, 0x00, 0x02, 0x1d, 0x01, 0x15, 0x77, 0x61, 0x73, 0x69,
+        0x5f, 0x73, 0x6e, 0x61, 0x70, 0x73, 0x68, 0x6f, 0x74, 0x5f, 0x70, 0x72, 0x65, 0x76, 0x69,
+        0x65, 0x77, 0x31, 0x08, 0x66, 0x64, 0x5f, 0x77, 0x72, 0x69, 0x74, 0x65, 0x00, 0x00, 0x03,
+        0x02, 0x01, 0x01, 0x05, 0x03, 0x01, 0x00, 0x01, 0x07, 0x13, 0x02, 0x06, 0x6d, 0x65, 0x6d,
+        0x6f, 0x72, 0x79, 0x02, 0x00, 0x06, 0x5f, 0x73, 0x74, 0x61, 0x72, 0x74, 0x00, 0x01, 0x0a,
+        0x1a, 0x01, 0x18, 0x00, 0x41, 0x10, 0x41, 0x04, 0x36, 0x02, 0x00, 0x41, 0x14, 0x41, 0x06,
+        0x36, 0x02, 0x00, 0x41, 0x01, 0x41, 0x10, 0x41, 0x01, 0x41, 0x18, 0x10, 0x00, 0x1a, 0x0b,
+        0x0b, 0x0a, 0x01, 0x01, 0x00, 0x41, 0x00, 0x0b, 0x06, 0x68, 0x65, 0x6c, 0x6c, 0x6f, 0x0a,
     ];
 
     #[test]
@@ -346,8 +412,8 @@ mod tests {
         // For the host Wasm path, we verify that compile+execute of a count-only
         // program produces the right grapheme count via run_wasm_bytes_with_stdin,
         // confirming the overall wasm_exec machinery is sound.
-        use goby_core::parse_module;
         use crate::compile_module;
+        use goby_core::parse_module;
 
         let source = r#"
 effect Iterator a b
@@ -396,10 +462,7 @@ main =
             Ok(output) => assert_eq!(output, "hello\n"),
             Err(e) => {
                 // Accept validation errors for hand-crafted bytes but not panics.
-                assert!(
-                    !e.is_empty(),
-                    "error message should not be empty"
-                );
+                assert!(!e.is_empty(), "error message should not be empty");
             }
         }
     }

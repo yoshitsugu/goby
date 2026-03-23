@@ -283,11 +283,8 @@ pub fn execute_runtime_module_with_stdin(
     match runtime_io_execution_kind(module)? {
         RuntimeIoExecutionKind::GeneralLowered => {
             let wasm = compile_module(module)?;
-            let output = wasm_exec::run_wasm_bytes_with_stdin(
-                &wasm,
-                stdin_seed.as_deref(),
-            )
-            .map_err(|message| CodegenError { message })?;
+            let output = wasm_exec::run_wasm_bytes_with_stdin(&wasm, stdin_seed.as_deref())
+                .map_err(|message| CodegenError { message })?;
             Ok(Some(output))
         }
         RuntimeIoExecutionKind::InterpreterBridge => execute_module_with_stdin(module, stdin_seed),
@@ -439,8 +436,9 @@ main =
         )
         .expect("parse should work");
 
-        let output = execute_runtime_module_with_stdin(&module, Some("hello from wasm".to_string()))
-            .expect("GeneralLowered execution should succeed via Goby-owned runtime");
+        let output =
+            execute_runtime_module_with_stdin(&module, Some("hello from wasm".to_string()))
+                .expect("GeneralLowered execution should succeed via Goby-owned runtime");
         assert_eq!(
             output.as_deref(),
             Some("hello from wasm"),
@@ -467,8 +465,11 @@ main =
         )
         .expect("parse should work");
 
-        let output = execute_runtime_module_with_stdin(&module, Some("alpha\nbeta\ngamma".to_string()))
-            .expect("E5: split -> list.get -> println must execute via Goby-owned Wasm runtime");
+        let output =
+            execute_runtime_module_with_stdin(&module, Some("alpha\nbeta\ngamma".to_string()))
+                .expect(
+                    "E5: split -> list.get -> println must execute via Goby-owned Wasm runtime",
+                );
         assert_eq!(
             output.as_deref(),
             Some("beta\n"),
@@ -508,6 +509,162 @@ main =
             output.as_deref(),
             Some("👨\u{200d}👩\u{200d}👧\u{200d}👦\n"),
             "E6: graphemes('a👨‍👩‍👧‍👦b')[1] must be the emoji family cluster"
+        );
+    }
+
+    #[test]
+    fn wb1_binop_eq_executes_via_general_lowered() {
+        // WB-1: BinOp Eq lowers to tagged i64 comparison and executes correctly.
+        // Tests that `2 + 3 == 5` evaluates to True and routes through If correctly.
+        // (Printing ints directly requires int-to-string conversion not yet in WB-1.)
+        use goby_core::parse_module;
+        let module = parse_module(
+            r#"
+main : Unit -> Unit can Print, Read
+main =
+  input = read ()
+  println
+    if 2 + 3 == 5
+      "correct"
+    else
+      "wrong"
+"#,
+        )
+        .expect("parse should work");
+
+        assert_eq!(
+            runtime_io_execution_kind(&module).expect("classification should succeed"),
+            RuntimeIoExecutionKind::GeneralLowered,
+            "WB-1: BinOp Eq + If program must classify as GeneralLowered"
+        );
+
+        let output = execute_runtime_module_with_stdin(&module, Some("ignored".to_string()))
+            .expect("WB-1: BinOp Eq + If must execute via Goby-owned Wasm runtime");
+        assert_eq!(
+            output.as_deref(),
+            Some("correct\n"),
+            "WB-1: 2 + 3 == 5 must be True"
+        );
+    }
+
+    #[test]
+    fn wb1_if_true_branch_executes_via_general_lowered() {
+        // WB-1: If true branch executes correctly.
+        // Goby `if` uses multiline block syntax.
+        use goby_core::parse_module;
+        let module = parse_module(
+            r#"
+main : Unit -> Unit can Print, Read
+main =
+  input = read ()
+  println
+    if True
+      "yes"
+    else
+      "no"
+"#,
+        )
+        .expect("parse should work");
+
+        assert_eq!(
+            runtime_io_execution_kind(&module).expect("classification should succeed"),
+            RuntimeIoExecutionKind::GeneralLowered,
+            "WB-1: If program must classify as GeneralLowered"
+        );
+
+        let output = execute_runtime_module_with_stdin(&module, Some("ignored".to_string()))
+            .expect("WB-1: If true must execute via Goby-owned Wasm runtime");
+        assert_eq!(output.as_deref(), Some("yes\n"), "WB-1: if True → yes");
+    }
+
+    #[test]
+    fn wb1_if_false_branch_executes_via_general_lowered() {
+        // WB-1: If false branch executes correctly.
+        // Goby `if` uses multiline block syntax with `True`/`False` booleans.
+        use goby_core::parse_module;
+        let module = parse_module(
+            r#"
+main : Unit -> Unit can Print, Read
+main =
+  input = read ()
+  println
+    if False
+      "yes"
+    else
+      "no"
+"#,
+        )
+        .expect("parse should work");
+
+        assert_eq!(
+            runtime_io_execution_kind(&module).expect("classification should succeed"),
+            RuntimeIoExecutionKind::GeneralLowered,
+            "WB-1: If false program must classify as GeneralLowered"
+        );
+
+        let output = execute_runtime_module_with_stdin(&module, Some("ignored".to_string()))
+            .expect("WB-1: If false must execute via Goby-owned Wasm runtime");
+        assert_eq!(output.as_deref(), Some("no\n"), "WB-1: if false → no");
+    }
+
+    #[test]
+    fn wb1_let_mut_and_assign_executes_via_general_lowered() {
+        // WB-1: LetMut + Assign lowers correctly and the final value reflects the assignment.
+        // Uses string value (not int) since printing ints requires int-to-string not in WB-1.
+        use goby_core::parse_module;
+        let module = parse_module(
+            r#"
+main : Unit -> Unit can Print, Read
+main =
+  input = read ()
+  mut x = "first"
+  x := "second"
+  println x
+"#,
+        )
+        .expect("parse should work");
+
+        assert_eq!(
+            runtime_io_execution_kind(&module).expect("classification should succeed"),
+            RuntimeIoExecutionKind::GeneralLowered,
+            "WB-1: LetMut+Assign program must classify as GeneralLowered"
+        );
+
+        let output = execute_runtime_module_with_stdin(&module, Some("ignored".to_string()))
+            .expect("WB-1: LetMut+Assign must execute via Goby-owned Wasm runtime");
+        assert_eq!(
+            output.as_deref(),
+            Some("second\n"),
+            "WB-1: x := second then println x → second"
+        );
+    }
+
+    #[test]
+    fn wb1_string_interp_executes_via_general_lowered() {
+        // WB-1: String interpolation lowers via StringConcat and executes correctly.
+        use goby_core::parse_module;
+        let module = parse_module(
+            r#"
+main : Unit -> Unit can Print, Read
+main =
+  name = read()
+  println "hello ${name}"
+"#,
+        )
+        .expect("parse should work");
+
+        assert_eq!(
+            runtime_io_execution_kind(&module).expect("classification should succeed"),
+            RuntimeIoExecutionKind::GeneralLowered,
+            "WB-1: Interp program must classify as GeneralLowered"
+        );
+
+        let output = execute_runtime_module_with_stdin(&module, Some("world".to_string()))
+            .expect("WB-1: Interp must execute via Goby-owned Wasm runtime");
+        assert_eq!(
+            output.as_deref(),
+            Some("hello world\n"),
+            "WB-1: hello ${{name}} with name=world → hello world"
         );
     }
 }

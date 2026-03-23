@@ -16,10 +16,13 @@ pub(crate) enum IntrinsicExecutionBoundary {
 /// - arguments and returns use Goby's tagged `i64` runtime value ABI,
 /// - only grapheme iteration crosses the host boundary,
 /// - list accumulation stays in Wasm (`ListPushString`).
+// All variants use the `String` prefix intentionally — these are string-domain host imports.
+#[allow(clippy::enum_variant_names)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum HostIntrinsicImport {
     StringEachGraphemeCount,
     StringEachGraphemeState,
+    StringConcat,
 }
 
 impl HostIntrinsicImport {
@@ -34,6 +37,7 @@ impl HostIntrinsicImport {
         match self {
             Self::StringEachGraphemeCount => "__goby_string_each_grapheme_count",
             Self::StringEachGraphemeState => "__goby_string_each_grapheme_state",
+            Self::StringConcat => "__goby_string_concat",
         }
     }
 
@@ -42,6 +46,7 @@ impl HostIntrinsicImport {
         match self {
             Self::StringEachGraphemeCount => &[ValType::I64],
             Self::StringEachGraphemeState => &[ValType::I64, ValType::I64],
+            Self::StringConcat => &[ValType::I64, ValType::I64],
         }
     }
 
@@ -51,9 +56,10 @@ impl HostIntrinsicImport {
     }
 }
 
-pub(crate) const HOST_INTRINSIC_IMPORTS: [HostIntrinsicImport; 2] = [
+pub(crate) const HOST_INTRINSIC_IMPORTS: [HostIntrinsicImport; 3] = [
     HostIntrinsicImport::StringEachGraphemeCount,
     HostIntrinsicImport::StringEachGraphemeState,
+    HostIntrinsicImport::StringConcat,
 ];
 
 pub(crate) const fn host_import_for_intrinsic(
@@ -66,6 +72,7 @@ pub(crate) const fn host_import_for_intrinsic(
         BackendIntrinsic::StringEachGraphemeState => {
             Some(HostIntrinsicImport::StringEachGraphemeState)
         }
+        BackendIntrinsic::StringConcat => Some(HostIntrinsicImport::StringConcat),
         BackendIntrinsic::StringSplit
         | BackendIntrinsic::ListGet
         | BackendIntrinsic::StringLength

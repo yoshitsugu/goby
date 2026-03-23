@@ -25,6 +25,7 @@ pub(crate) enum BackendIntrinsic {
     StringEachGraphemeCount,
     StringEachGraphemeState,
     ListPushString,
+    StringConcat,
 }
 
 impl BackendIntrinsic {
@@ -36,13 +37,15 @@ impl BackendIntrinsic {
             BackendIntrinsic::StringEachGraphemeCount => 1,
             BackendIntrinsic::StringEachGraphemeState => 2,
             BackendIntrinsic::ListPushString => 2,
+            BackendIntrinsic::StringConcat => 2,
         }
     }
 
     pub(crate) const fn execution_boundary(self) -> IntrinsicExecutionBoundary {
         match self {
             BackendIntrinsic::StringEachGraphemeCount
-            | BackendIntrinsic::StringEachGraphemeState => IntrinsicExecutionBoundary::HostImport,
+            | BackendIntrinsic::StringEachGraphemeState
+            | BackendIntrinsic::StringConcat => IntrinsicExecutionBoundary::HostImport,
             BackendIntrinsic::StringSplit
             | BackendIntrinsic::ListGet
             | BackendIntrinsic::StringLength

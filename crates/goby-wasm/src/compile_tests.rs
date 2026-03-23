@@ -760,7 +760,9 @@ main =
 }
 
 #[test]
-fn compile_module_rejects_unsupported_runtime_io_shape() {
+fn compile_module_interpolated_read_transform_is_general_lowered() {
+    // WB-1: Interp lowering is now supported. "${text}!" with a dynamic Var
+    // lowers via StringConcat and classifies as GeneralLowered.
     let source = r#"
 main : Unit -> Unit can Print, Read
 main =
@@ -771,16 +773,11 @@ main =
     let module = parse_module(source).expect("source should parse");
     assert_eq!(
         runtime_io_execution_kind(&module).expect("classification should succeed"),
-        crate::RuntimeIoExecutionKind::Unsupported,
-        "interpolated read transform should classify as Unsupported"
+        crate::RuntimeIoExecutionKind::GeneralLowered,
+        "interpolated read transform should now classify as GeneralLowered"
     );
-    let err =
-        compile_module(&module).expect_err("unsupported runtime I/O shape should fail codegen");
-    assert!(
-        err.message.contains("unsupported"),
-        "unexpected error message: {}",
-        err.message
-    );
+    let wasm = compile_module(&module).expect("codegen should succeed");
+    assert_valid_wasm_module(&wasm);
 }
 
 #[test]
@@ -864,7 +861,7 @@ main =
             crate::RuntimeIoExecutionKind::DynamicWasiIo,
         ),
         (
-            "unsupported_read_transform",
+            "general_lowered_interp_read_transform",
             r#"
 main : Unit -> Unit can Print, Read
 main =
@@ -872,7 +869,8 @@ main =
   decorated = "${text}!"
   print decorated
 "#,
-            crate::RuntimeIoExecutionKind::Unsupported,
+            // WB-1: Interp lowering is now supported via StringConcat.
+            crate::RuntimeIoExecutionKind::GeneralLowered,
         ),
         (
             "unsupported_mixed_read_line_then_read",

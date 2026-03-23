@@ -638,7 +638,8 @@ main =
 }
 
 #[test]
-fn runtime_io_execution_kind_reports_unsupported_for_non_bridge_read_transform() {
+fn runtime_io_execution_kind_reports_general_lowered_for_interp_read_transform() {
+    // WB-1: Interp lowering is now supported via StringConcat.
     let module = parse_module(
         r#"
 main : Unit -> Unit can Print, Read
@@ -651,7 +652,7 @@ main =
     .expect("parse should work");
     assert_eq!(
         runtime_io_execution_kind(&module).expect("classification should work"),
-        RuntimeIoExecutionKind::Unsupported
+        RuntimeIoExecutionKind::GeneralLowered
     );
 }
 

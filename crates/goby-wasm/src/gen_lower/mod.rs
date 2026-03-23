@@ -64,7 +64,11 @@ fn read_line_instrs_are_supported(instrs: &[backend_ir::WasmBackendInstr]) -> bo
     ) {
         for instr in instrs {
             out.push(instr);
-            if let backend_ir::WasmBackendInstr::If { then_instrs, else_instrs } = instr {
+            if let backend_ir::WasmBackendInstr::If {
+                then_instrs,
+                else_instrs,
+            } = instr
+            {
                 collect_all(then_instrs, out);
                 collect_all(else_instrs, out);
             }
