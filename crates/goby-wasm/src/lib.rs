@@ -34,6 +34,7 @@ mod runtime_support;
 mod runtime_unit;
 mod runtime_value;
 mod support;
+mod wasm_exec;
 mod wasm_exec_plan;
 
 use crate::runtime_env::{
@@ -266,20 +267,31 @@ pub fn execute_module_with_stdin(
 ///
 /// This API owns Track E runtime branching for `goby-cli`: callers should not
 /// inspect `RuntimeIoExecutionKind` and special-case `InterpreterBridge`
-/// themselves. Non-Track-E Wasm execution remains outside this API for now.
+/// themselves.
 ///
 /// Current behavior:
-/// - `InterpreterBridge` delegates to the narrow seeded-stdin runtime path.
-/// - all other execution kinds return `Ok(None)` so the caller can continue with
+/// - `GeneralLowered`: compiles the module and executes it via the Goby-owned
+///   Wasm runtime, which wires `goby:runtime/track-e` host intrinsics. This
+///   path replaces the raw `wasmtime run` process launch for Track E modules.
+/// - `InterpreterBridge`: delegates to the narrow seeded-stdin runtime path.
+/// - All other execution kinds return `Ok(None)` so the caller can continue with
 ///   its normal Wasm file execution flow.
 pub fn execute_runtime_module_with_stdin(
     module: &Module,
     stdin_seed: Option<String>,
 ) -> Result<Option<String>, CodegenError> {
     match runtime_io_execution_kind(module)? {
+        RuntimeIoExecutionKind::GeneralLowered => {
+            let wasm = compile_module(module)?;
+            let output = wasm_exec::run_wasm_bytes_with_stdin(
+                &wasm,
+                stdin_seed.as_deref(),
+            )
+            .map_err(|message| CodegenError { message })?;
+            Ok(Some(output))
+        }
         RuntimeIoExecutionKind::InterpreterBridge => execute_module_with_stdin(module, stdin_seed),
-        RuntimeIoExecutionKind::GeneralLowered
-        | RuntimeIoExecutionKind::DynamicWasiIo
+        RuntimeIoExecutionKind::DynamicWasiIo
         | RuntimeIoExecutionKind::StaticOutput
         | RuntimeIoExecutionKind::Unsupported
         | RuntimeIoExecutionKind::NotRuntimeIo => Ok(None),
@@ -377,5 +389,29 @@ main =
         let output = execute_runtime_module_with_stdin(&module, Some("a👨‍👩‍👧‍👦b".to_string()))
             .expect("Track E bridge execution should be owned by goby-wasm");
         assert_eq!(output.as_deref(), Some("👨‍👩‍👧‍👦\n"));
+    }
+
+    #[test]
+    fn execute_runtime_module_with_stdin_routes_general_lowered_through_goby_owned_runtime() {
+        // `print(read())` is a GeneralLowered program (no Track E host intrinsics needed).
+        // This test verifies that the GeneralLowered arm in execute_runtime_module_with_stdin
+        // compiles the module and executes it via the Goby-owned Wasm runtime, returning
+        // Ok(Some(output)) rather than Ok(None) (which would fall through to external wasmtime).
+        let module = parse_module(
+            r#"
+main : Unit -> Unit can Print, Read
+main =
+  print (read ())
+"#,
+        )
+        .expect("parse should work");
+
+        let output = execute_runtime_module_with_stdin(&module, Some("hello from wasm".to_string()))
+            .expect("GeneralLowered execution should succeed via Goby-owned runtime");
+        assert_eq!(
+            output.as_deref(),
+            Some("hello from wasm"),
+            "GeneralLowered path should execute via run_wasm_bytes_with_stdin and return stdout"
+        );
     }
 }
