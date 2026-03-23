@@ -137,6 +137,15 @@ fn lower_comp_with_aliases(
                 }
                 instrs.push(WasmBackendInstr::Intrinsic { intrinsic });
                 Ok(instrs)
+            } else if let goby_core::ir::ValueExpr::GlobalRef { name, .. } = callee.as_ref() {
+                // Top-level user declaration call (WB-2A).
+                // Arguments are already lowered and pushed onto the stack above.
+                let mut instrs = Vec::new();
+                for arg in args {
+                    instrs.extend(lower_value(arg)?);
+                }
+                instrs.push(WasmBackendInstr::DeclCall { decl_name: name.clone() });
+                Ok(instrs)
             } else {
                 Err(LowerError::UnsupportedForm {
                     node: format!("Call with unsupported callee: {:?}", callee),
@@ -1426,6 +1435,45 @@ mod tests {
                     op: "println".to_string(),
                 },
             ]
+        );
+    }
+
+    #[test]
+    fn lower_globalref_decl_call_emits_decl_call() {
+        // WB-2A Step 1: Call with a GlobalRef callee that is not an effect or intrinsic
+        // must emit DeclCall, not UnsupportedForm.
+        let comp = CompExpr::Call {
+            callee: Box::new(ValueExpr::GlobalRef {
+                module: "mymod".to_string(),
+                name: "add".to_string(),
+            }),
+            args: vec![
+                ValueExpr::IntLit(2),
+                ValueExpr::IntLit(3),
+            ],
+        };
+        let instrs = lower_comp(&comp).expect("GlobalRef decl call should lower to DeclCall");
+        assert!(
+            matches!(instrs.last(), Some(I::DeclCall { decl_name }) if decl_name == "add"),
+            "last instruction must be DeclCall {{ decl_name: \"add\" }}, got: {:?}",
+            instrs
+        );
+        // Args must be pushed before DeclCall.
+        assert_eq!(instrs.len(), 3, "2 arg pushes + 1 DeclCall");
+    }
+
+    #[test]
+    fn lower_var_callee_is_still_unsupported() {
+        // Var(name) callee (function-value call) is not yet supported in WB-2A Step 1.
+        let comp = CompExpr::Call {
+            callee: Box::new(ValueExpr::Var("f".to_string())),
+            args: vec![ValueExpr::IntLit(1)],
+        };
+        let result = lower_comp(&comp);
+        assert!(
+            matches!(result, Err(LowerError::UnsupportedForm { .. })),
+            "Var callee should remain UnsupportedForm: {:?}",
+            result
         );
     }
 }

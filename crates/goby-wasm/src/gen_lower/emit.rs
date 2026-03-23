@@ -274,10 +274,13 @@ fn needs_newline_data(instrs: &[WasmBackendInstr]) -> bool {
 /// The module imports `fd_read` and `fd_write` from `wasi_snapshot_preview1`,
 /// exports `memory` and `_start`, and contains one function (`main`).
 pub(crate) fn supports_instrs(instrs: &[WasmBackendInstr]) -> bool {
-    instrs.iter().all(|instr| match instr {
+    collect_all_instrs(instrs).iter().all(|instr| match instr {
         WasmBackendInstr::Intrinsic { intrinsic } => match intrinsic.execution_boundary() {
             IntrinsicExecutionBoundary::HostImport | IntrinsicExecutionBoundary::InWasm => true,
         },
+        // DeclCall is supported only after WB-2A Step 3 wires up the func-idx table.
+        // Until then, block emit so the module falls through to the interpreter bridge.
+        WasmBackendInstr::DeclCall { .. } => false,
         _ => true,
     })
 }
@@ -648,6 +651,18 @@ fn emit_instrs(
                     static_strings,
                 )?;
                 function.instruction(&Instruction::End);
+            }
+
+            WasmBackendInstr::DeclCall { decl_name } => {
+                // WB-2A Step 3 will wire this up to a real func_idx lookup.
+                // This arm is unreachable in Step 1 because `supports_instrs` blocks
+                // any instruction list containing DeclCall from reaching emit_general_module.
+                return Err(CodegenError {
+                    message: format!(
+                        "gen_lower/emit: DeclCall '{decl_name}' reached emit_instrs before \
+                         func-idx table was wired up (internal error)"
+                    ),
+                });
             }
         }
     }

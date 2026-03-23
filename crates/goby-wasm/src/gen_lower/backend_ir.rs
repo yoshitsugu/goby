@@ -66,7 +66,8 @@ impl BackendIntrinsic {
 /// | `CompExpr::Value(ValueExpr::Unit)` | `I64Const(encode_unit())` |
 /// | `CompExpr::Value(ValueExpr::StrLit(text))` | `PushStaticString { text }` |
 /// | `CompExpr::PerformEffect { effect, op, .. }` | `EffectOp { effect, op }` |
-/// | `CompExpr::Call { callee: GlobalRef { name }, .. }` | `Intrinsic { intrinsic }` |
+/// | `CompExpr::Call { callee: GlobalRef { name }, .. }` (intrinsic) | `Intrinsic { intrinsic }` |
+/// | `CompExpr::Call { callee: GlobalRef { name }, .. }` (user decl) | `[push args..., DeclCall { decl_name }]` |
 /// | fused `Let lines = split(text, sep); each lines Effect.op` | `SplitEachPrint { text_local, sep_bytes, effect, op }` |
 /// | fused `Let lines = split(text, sep); Let line = list.get(lines, idx); Print.op(line)` | `SplitGetPrint { text_local, sep_bytes, index, op }` |
 /// | fused `Let parts = graphemes(text); Let item = list.get(parts, N); Print.op(item)` | `[LoadLocal(text), I64Const(N), Intrinsic(StringEachGraphemeState), EffectOp(Print, op)]` |
@@ -128,6 +129,19 @@ pub(crate) enum WasmBackendInstr {
     /// String equality is not supported in WB-1; `Eq` with string operands returns
     /// `UnsupportedForm` at lowering time.
     BinOp { op: IrBinOp },
+    /// Call a user-defined top-level declaration by name.
+    ///
+    /// Arguments must be pushed onto the stack (left-to-right) before this instruction.
+    /// The callee returns exactly one tagged i64 result.
+    ///
+    /// `decl_name` is the unqualified function name as it appears in the IR.
+    /// The emitter resolves it to a Wasm function index using the module-level
+    /// `decl_name → func_idx` table built during `emit_general_module`.
+    ///
+    /// Design note (WB-2A): function values passed as arguments (`Var(name)` callee)
+    /// are not yet supported here; they will use `call_indirect` via a funcref table
+    /// in WB-2B/WB-3. See `backend_ir.rs` design comments for the ABI decision.
+    DeclCall { decl_name: String },
     /// Fused: split `text_local` (a tagged-i64 string) on `sep_bytes`, then call
     /// `effect.op` on each resulting segment.
     ///
