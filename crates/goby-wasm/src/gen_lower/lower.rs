@@ -144,6 +144,30 @@ fn lower_comp_with_aliases(
             }
         }
 
+        CompExpr::LetMut {
+            name, value, body, ..
+        } => {
+            // LetMut uses the same model as Let: DeclareLocal, lower value, StoreLocal, lower body.
+            // Fused pattern checks are intentionally skipped for LetMut.
+            let mut instrs = vec![WasmBackendInstr::DeclareLocal { name: name.clone() }];
+            instrs.extend(lower_comp_with_aliases(value, aliases)?);
+            instrs.push(WasmBackendInstr::StoreLocal { name: name.clone() });
+            instrs.extend(lower_comp_with_aliases(body, aliases)?);
+            Ok(instrs)
+        }
+
+        CompExpr::Assign { name, value } => {
+            // Assign lowers the value and stores it in the existing named local.
+            // No DeclareLocal is emitted because the local was already declared by the enclosing LetMut.
+            let mut instrs = lower_comp_with_aliases(value, aliases)?;
+            instrs.push(WasmBackendInstr::StoreLocal { name: name.clone() });
+            // Assign produces Unit.
+            instrs.push(WasmBackendInstr::I64Const(
+                crate::gen_lower::value::encode_unit(),
+            ));
+            Ok(instrs)
+        }
+
         other => Err(LowerError::UnsupportedForm {
             node: format!("{:?}", other),
         }),
@@ -1165,6 +1189,93 @@ mod tests {
                     effect: "Print".to_string(),
                     op: "println".to_string(),
                 },
+            ]
+        );
+    }
+
+    // --- WB-1 Step 1: LetMut / Assign ---
+
+    #[test]
+    fn lower_let_mut_emits_declare_store_body() {
+        use crate::gen_lower::value::encode_int;
+        // `mut x = 1; PerformEffect(Read, read)`
+        let comp = CompExpr::LetMut {
+            name: "x".to_string(),
+            ty: goby_core::ir::IrType::Int,
+            value: Box::new(CompExpr::Value(ValueExpr::IntLit(1))),
+            body: Box::new(CompExpr::PerformEffect {
+                effect: "Read".to_string(),
+                op: "read".to_string(),
+                args: vec![],
+            }),
+        };
+        let instrs = lower_comp(&comp).expect("LetMut should lower");
+        assert_eq!(
+            instrs,
+            vec![
+                I::DeclareLocal { name: "x".to_string() },
+                I::I64Const(encode_int(1).unwrap()),
+                I::StoreLocal { name: "x".to_string() },
+                I::EffectOp { effect: "Read".to_string(), op: "read".to_string() },
+            ]
+        );
+    }
+
+    #[test]
+    fn lower_assign_emits_store_then_unit() {
+        use crate::gen_lower::value::{encode_int, encode_unit};
+        // `x := 2` inside a LetMut body (simulated as standalone Assign)
+        let comp = CompExpr::Assign {
+            name: "x".to_string(),
+            value: Box::new(CompExpr::Value(ValueExpr::IntLit(2))),
+        };
+        let instrs = lower_comp(&comp).expect("Assign should lower");
+        assert_eq!(
+            instrs,
+            vec![
+                I::I64Const(encode_int(2).unwrap()),
+                I::StoreLocal { name: "x".to_string() },
+                I::I64Const(encode_unit()),
+            ]
+        );
+    }
+
+    #[test]
+    fn lower_let_mut_with_assign_sequence() {
+        use crate::gen_lower::value::{encode_int, encode_unit};
+        // mut x = 1
+        // x := 2
+        // Read.read  (tail — provides Read effect for GeneralLowered path)
+        let comp = CompExpr::LetMut {
+            name: "x".to_string(),
+            ty: goby_core::ir::IrType::Int,
+            value: Box::new(CompExpr::Value(ValueExpr::IntLit(1))),
+            body: Box::new(CompExpr::Seq {
+                stmts: vec![CompExpr::Assign {
+                    name: "x".to_string(),
+                    value: Box::new(CompExpr::Value(ValueExpr::IntLit(2))),
+                }],
+                tail: Box::new(CompExpr::PerformEffect {
+                    effect: "Read".to_string(),
+                    op: "read".to_string(),
+                    args: vec![],
+                }),
+            }),
+        };
+        let instrs = lower_comp(&comp).expect("LetMut+Assign sequence should lower");
+        assert_eq!(
+            instrs,
+            vec![
+                I::DeclareLocal { name: "x".to_string() },
+                I::I64Const(encode_int(1).unwrap()),
+                I::StoreLocal { name: "x".to_string() },
+                // Seq: Assign stmt + Drop
+                I::I64Const(encode_int(2).unwrap()),
+                I::StoreLocal { name: "x".to_string() },
+                I::I64Const(encode_unit()),
+                I::Drop,
+                // Seq tail
+                I::EffectOp { effect: "Read".to_string(), op: "read".to_string() },
             ]
         );
     }
