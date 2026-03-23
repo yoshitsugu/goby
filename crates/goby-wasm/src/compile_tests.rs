@@ -1258,7 +1258,10 @@ main =
 }
 
 #[test]
-fn runtime_io_execution_kind_routes_read_graphemes_program_to_interpreter_bridge() {
+fn runtime_io_execution_kind_routes_read_graphemes_program_to_general_lowered() {
+    // E6: `graphemes(text)[N]` now lowers through the fused graphemes-index pattern
+    // to `__goby_string_each_grapheme_state`, so classification is GeneralLowered
+    // rather than InterpreterBridge.
     let source = r#"
 import goby/string ( graphemes )
 
@@ -1271,17 +1274,11 @@ main =
     let module = parse_module(source).expect("source should parse");
     assert_eq!(
         runtime_io_execution_kind(&module).expect("classification should succeed"),
-        crate::RuntimeIoExecutionKind::InterpreterBridge,
-        "grapheme-backed stdlib decl path should use the narrow interpreter bridge"
+        crate::RuntimeIoExecutionKind::GeneralLowered,
+        "graphemes + index pattern should now classify as GeneralLowered via fused lowering"
     );
-    let err = compile_module(&module)
-        .expect_err("interpreter-bridge grapheme path should not compile directly to Wasm");
-    assert!(
-        err.message
-            .contains("compile-time fallback cannot consume stdin"),
-        "compile path should explain the runtime stdin bridge requirement: {}",
-        err.message
-    );
+    let wasm = compile_module(&module).expect("E6: graphemes + index program must compile to Wasm");
+    assert_valid_wasm_module(&wasm);
 }
 
 // ---------------------------------------------------------------------------

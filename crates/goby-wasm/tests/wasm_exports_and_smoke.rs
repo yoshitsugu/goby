@@ -656,7 +656,9 @@ main =
 }
 
 #[test]
-fn runtime_io_execution_kind_reports_interpreter_bridge_for_read_graphemes_program() {
+fn runtime_io_execution_kind_reports_general_lowered_for_read_graphemes_program() {
+    // E6: graphemes + index pattern now lowers through fused graphemes-index path
+    // to __goby_string_each_grapheme_state, so classification is GeneralLowered.
     let module = parse_module(
         r#"
 import goby/string ( graphemes )
@@ -671,7 +673,7 @@ main =
     .expect("parse should work");
     assert_eq!(
         runtime_io_execution_kind(&module).expect("classification should work"),
-        RuntimeIoExecutionKind::InterpreterBridge
+        RuntimeIoExecutionKind::GeneralLowered
     );
 }
 

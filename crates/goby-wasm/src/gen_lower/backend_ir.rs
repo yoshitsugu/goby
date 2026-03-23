@@ -64,6 +64,7 @@ impl BackendIntrinsic {
 /// | `CompExpr::Call { callee: GlobalRef { name }, .. }` | `Intrinsic { intrinsic }` |
 /// | fused `Let lines = split(text, sep); each lines Effect.op` | `SplitEachPrint { text_local, sep_bytes, effect, op }` |
 /// | fused `Let lines = split(text, sep); Let line = list.get(lines, idx); Print.op(line)` | `SplitGetPrint { text_local, sep_bytes, index, op }` |
+/// | fused `Let parts = graphemes(text); Let item = list.get(parts, N); Print.op(item)` | `[LoadLocal(text), I64Const(N), Intrinsic(StringEachGraphemeState), EffectOp(Print, op)]` |
 /// | discarded expression (stmt before tail) | lower expr + `Drop` |
 ///
 /// Unsupported IR nodes (`WithHandler`, `Handle`, `Resume`, `Lambda`) must produce

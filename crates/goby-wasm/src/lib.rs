@@ -475,4 +475,39 @@ main =
             "E5: list index 1 of split('alpha\\nbeta\\ngamma', '\\n') must be 'beta'"
         );
     }
+
+    #[test]
+    fn e6_graphemes_index_executes_via_goby_owned_wasm_runtime() {
+        // E6 end-to-end execution gate: graphemes(text)[1] executes through the
+        // fused graphemes-index lowering path and returns the correct grapheme cluster.
+        // This test proves that __goby_string_each_grapheme_state executes correctly
+        // for an emoji-family input via the Goby-owned Wasm runtime (GeneralLowered path).
+        use goby_core::parse_module;
+        let module = parse_module(
+            r#"
+import goby/string ( graphemes )
+
+main : Unit -> Unit can Print, Read
+main =
+  text = read ()
+  parts = graphemes text
+  println(parts[1])
+"#,
+        )
+        .expect("parse should work");
+
+        assert_eq!(
+            runtime_io_execution_kind(&module).expect("classification should succeed"),
+            RuntimeIoExecutionKind::GeneralLowered,
+            "E6: graphemes + index program must classify as GeneralLowered"
+        );
+
+        let output = execute_runtime_module_with_stdin(&module, Some("a👨‍👩‍👧‍👦b".to_string()))
+            .expect("E6: graphemes + index must execute via Goby-owned Wasm runtime");
+        assert_eq!(
+            output.as_deref(),
+            Some("👨\u{200d}👩\u{200d}👧\u{200d}👦\n"),
+            "E6: graphemes('a👨‍👩‍👧‍👦b')[1] must be the emoji family cluster"
+        );
+    }
 }
