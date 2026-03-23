@@ -347,13 +347,16 @@ main =
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        stdout.contains("generated wasm"),
-        "dynamic read program should compile to Wasm, stdout: {}",
+        stdout.contains("parsed and typechecked"),
+        "unexpected stdout: {}",
         stdout
     );
+    // GeneralLowered programs now execute via the Goby-owned Wasm runtime
+    // (run_wasm_bytes_with_stdin), so they do not generate a wasm file or
+    // invoke wasmtime externally.
     assert!(
         stdout.contains("a\nb"),
-        "expected stdin to reach fake wasmtime, stdout: {}",
+        "expected stdin to be echoed by print(read()), stdout: {}",
         stdout
     );
 }
@@ -461,10 +464,12 @@ main =
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        stdout.contains("generated wasm"),
-        "split-index runtime program should compile to Wasm, stdout: {}",
+        stdout.contains("parsed and typechecked"),
+        "unexpected stdout: {}",
         stdout
     );
+    // split + index programs are now GeneralLowered and execute via the Goby-owned
+    // Wasm runtime (run_wasm_bytes_with_stdin), so "generated wasm" is not printed.
     assert!(
         stdout.contains("beta\n"),
         "expected second split line to be printed, stdout: {}",

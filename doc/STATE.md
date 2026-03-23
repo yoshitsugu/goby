@@ -12,7 +12,7 @@ Last updated: 2026-03-23
 
 1. Keep future lowering work aligned with `resolved form -> shared IR -> backend`.
 2. Treat backend limitations as backend limitations rather than restoring AST-shaped recognizers.
-3. Continue Track E from `E5 -> E6`: E3 and E4 are complete. Next is E5 (in-Wasm list accumulation parity — confirm stdlib `graphemes` accumulation path, or defer condition 2 to E6 if with/yield in GeneralLowered is required), then E6.
+3. Continue Track E at E7: E3–E6 are complete. Next is E7 (prepare split handoff to stdlib-only ownership) — remaining graphemes patterns (full iteration, for-each) can be deferred until after E7 groundwork.
 4. Reopen `doc/PLAN_IR.md` only if a genuinely new architectural gap appears.
 
 ## Restart Notes
@@ -55,7 +55,11 @@ Last updated: 2026-03-23
   - E4 parity test confirms that grapheme count programs compile to Wasm containing the host import name (unconditional gate, no skip).
 - Track E E5 (in-Wasm list accumulation parity):
   - condition 1 (no second list/string runtime representation) is satisfied: `__goby_list_push_string` emits through the shared tagged ABI,
-  - condition 2 (stdlib `goby/string.graphemes` accumulates list results through backend path) requires with/yield support in GeneralLowered, which is E6 scope; E5 condition 2 is deferred to E6.
+  - condition 2 (stdlib `goby/string.graphemes` accumulates list results through backend path) is addressed in E6 via the fused graphemes-index pattern.
+- Track E E6 (stdlib graphemes parity) is now complete:
+  - a fused `graphemes(text)[N]` lowering pattern rewrites the `graphemes + list.get + Print` IR sequence to `__goby_string_each_grapheme_state(text, N)` directly,
+  - `graphemes + index` programs now classify as `GeneralLowered` and execute through the Goby-owned Wasm runtime with correct emoji-family output,
+  - remaining graphemes patterns (full list iteration, for-each) are deferred to E7.
 - Remaining helper work is incremental family expansion on top of the emitter ABI, not a reason to restore planner or AST-shaped fallback.
 - The IR-lowering roadmap is complete; follow-up work should stay within the converged lowering architecture.
 - Then inspect:

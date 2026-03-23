@@ -612,16 +612,21 @@ Milestones:
     - stdlib `goby/string.graphemes` can accumulate list results through the
       backend path without planner fallback.
 
-- [ ] E6. Stdlib `graphemes` parity in runtime-`Read` programs
+- [x] E6. Stdlib `graphemes` parity in runtime-`Read` programs
   - add end-to-end coverage for:
     - `text = read (); parts = graphemes text; println(parts[1])`
     - qualified and selective-import spellings,
     - emoji-family grapheme clusters,
     - empty-input compatibility behavior.
   - progress:
-    - the selective-import interpreter-bridge slice is landed and covered,
-      but backend-path parity and the remaining spelling/empty-input cases are
-      still open.
+    - the selective-import interpreter-bridge slice is landed and covered.
+    - a fused `graphemes(text)[N]` lowering pattern is now in place: it rewrites
+      `let parts = graphemes(text); let item = list.get(parts, N); Print.op(item)`
+      to `__goby_string_each_grapheme_state(text, N)` directly, bypassing
+      `WithHandler`/`Resume` in the general lowering path.
+    - `graphemes + index` programs now classify as `GeneralLowered` and execute
+      through the Goby-owned Wasm runtime with correct emoji-family output.
+    - remaining graphemes patterns (full iteration, for-each) are deferred to E7.
   - done when:
     - compile tests and Goby-owned runtime integration tests cover the
       runtime-stdin path and pass,

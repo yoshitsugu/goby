@@ -237,36 +237,53 @@ fn run_fmt(file: &str, source: &str, check: bool) -> Result<(), CliError> {
 }
 
 fn run_command(module: &goby_core::Module, file: &str) -> Result<(), CliError> {
-    match goby_wasm::compile_module(module) {
-        Ok(bytes) => {
-            let output = output_wasm_path(file);
-            std::fs::write(&output, &bytes)
-                .map_err(|err| CliError::Runtime(format!("failed to write {}: {}", output, err)))?;
-            print_parse_summary(module.declarations.len(), file);
-            println!("generated wasm: {}", output);
-            match execute_wasm(&output)? {
-                ExecutionOutcome::Executed => {}
-                ExecutionOutcome::SkippedNoWasmtime => {
-                    println!("wasmtime not found; skipped wasm execution")
-                }
-            }
-        }
-        // Track E runtime-stdin execution ownership lives in `goby-wasm`.
-        // The CLI stays a thin caller and should not special-case
-        // `InterpreterBridge` semantics itself.
-        Err(_err) => {
-            let stdin_text = read_stdin_to_string()?;
-            if let Some(output) =
-                goby_wasm::execute_runtime_module_with_stdin(module, Some(stdin_text))
-                    .map_err(|err| CliError::Runtime(format!("runtime error: {}", err.message)))?
-            {
+    // Track E runtime-stdin execution ownership lives in `goby-wasm`.
+    // Check the execution kind first: GeneralLowered and InterpreterBridge programs
+    // are executed via the Goby-owned Wasm runtime (which wires host intrinsics and
+    // reads stdin internally).  All other kinds fall through to compile + file-based
+    // execution so that stdin is not consumed before wasmtime runs.
+    let needs_stdin_execution = match goby_wasm::runtime_io_execution_kind(module)
+        .map_err(|err| CliError::Runtime(format!("classification error: {}", err.message)))?
+    {
+        goby_wasm::RuntimeIoExecutionKind::GeneralLowered
+        | goby_wasm::RuntimeIoExecutionKind::InterpreterBridge => true,
+        _ => false,
+    };
+
+    if needs_stdin_execution {
+        let stdin_text = read_stdin_to_string()?;
+        match goby_wasm::execute_runtime_module_with_stdin(module, Some(stdin_text))
+            .map_err(|err| CliError::Runtime(format!("runtime error: {}", err.message)))?
+        {
+            Some(output) => {
                 print_parse_summary(module.declarations.len(), file);
                 print!("{}", output);
-            } else {
-                return Err(CliError::Runtime(format!(
-                    "codegen error: {}",
-                    _err.message
-                )));
+            }
+            None => {
+                return Err(CliError::Runtime(
+                    "runtime-stdin execution produced no output".to_string(),
+                ));
+            }
+        }
+    } else {
+        // Not a runtime-stdin program: compile and execute via file-based Wasm.
+        match goby_wasm::compile_module(module) {
+            Ok(bytes) => {
+                let output = output_wasm_path(file);
+                std::fs::write(&output, &bytes).map_err(|err| {
+                    CliError::Runtime(format!("failed to write {}: {}", output, err))
+                })?;
+                print_parse_summary(module.declarations.len(), file);
+                println!("generated wasm: {}", output);
+                match execute_wasm(&output)? {
+                    ExecutionOutcome::Executed => {}
+                    ExecutionOutcome::SkippedNoWasmtime => {
+                        println!("wasmtime not found; skipped wasm execution")
+                    }
+                }
+            }
+            Err(err) => {
+                return Err(CliError::Runtime(format!("codegen error: {}", err.message)));
             }
         }
     }
