@@ -97,6 +97,15 @@ pub(crate) enum WasmBackendInstr {
     Intrinsic { intrinsic: BackendIntrinsic },
     /// Discard the top-of-stack value.
     Drop,
+    /// Conditional expression.
+    ///
+    /// The condition (a tagged Bool) must be on the Wasm stack before this instruction.
+    /// The emitter converts it to an i32 (0 or 1) and emits a Wasm `if/else/end` block.
+    /// Both branches produce exactly one tagged i64 result.
+    If {
+        then_instrs: Vec<WasmBackendInstr>,
+        else_instrs: Vec<WasmBackendInstr>,
+    },
     /// Binary operation on two tagged i64 values.
     ///
     /// Both operands are expected to be on the Wasm stack (left operand deeper, right on top).

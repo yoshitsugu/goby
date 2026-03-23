@@ -72,7 +72,24 @@ impl StaticStringPool {
         let mut segments = Vec::new();
         let mut cursor = WASM_PAGE_BYTES;
 
-        for instr in instrs {
+        // collect_all_instrs is defined later in this file, after all helper fns.
+        // To avoid forward-reference issues, inline the recursion here.
+        fn visit_instrs<'a>(
+            instrs: &'a [WasmBackendInstr],
+            out: &mut Vec<&'a WasmBackendInstr>,
+        ) {
+            for instr in instrs {
+                out.push(instr);
+                if let WasmBackendInstr::If { then_instrs, else_instrs } = instr {
+                    visit_instrs(then_instrs, out);
+                    visit_instrs(else_instrs, out);
+                }
+            }
+        }
+        let mut all_instrs = Vec::new();
+        visit_instrs(instrs, &mut all_instrs);
+
+        for instr in all_instrs {
             let WasmBackendInstr::PushStaticString { text } = instr else {
                 continue;
             };
@@ -174,15 +191,32 @@ fn align_down_i32(value: i32, align: i32) -> i32 {
     value & !(align - 1)
 }
 
-/// Returns true if any `SplitEachPrint` instruction is present.
+/// Collect all instructions in a potentially-nested instruction list into a flat vec.
+///
+/// `WasmBackendInstr::If` contains nested `then_instrs` / `else_instrs`. All pre-scan
+/// functions (scratch counts, static string pool, etc.) must recurse into these to avoid
+/// emitting locals or data segments that reference missing declarations.
+fn collect_all_instrs(instrs: &[WasmBackendInstr]) -> Vec<&WasmBackendInstr> {
+    let mut result = Vec::new();
+    for instr in instrs {
+        result.push(instr);
+        if let WasmBackendInstr::If { then_instrs, else_instrs } = instr {
+            result.extend(collect_all_instrs(then_instrs));
+            result.extend(collect_all_instrs(else_instrs));
+        }
+    }
+    result
+}
+
 fn required_i32_scratch_count(instrs: &[WasmBackendInstr]) -> u32 {
-    let split = instrs.iter().any(|i| {
+    let all = collect_all_instrs(instrs);
+    let split = all.iter().any(|i| {
         matches!(
             i,
             WasmBackendInstr::SplitEachPrint { .. } | WasmBackendInstr::SplitGetPrint { .. }
         )
     });
-    let generic_effects = instrs.iter().any(|i| {
+    let generic_effects = all.iter().any(|i| {
         matches!(
             i,
             WasmBackendInstr::EffectOp { effect, op }
@@ -197,7 +231,7 @@ fn required_i32_scratch_count(instrs: &[WasmBackendInstr]) -> u32 {
     } else {
         0
     };
-    let helper_count = if instrs
+    let helper_count = if all
         .iter()
         .any(|i| matches!(i, WasmBackendInstr::Intrinsic { .. }))
     {
@@ -210,7 +244,8 @@ fn required_i32_scratch_count(instrs: &[WasmBackendInstr]) -> u32 {
 
 fn required_i64_scratch_count(instrs: &[WasmBackendInstr]) -> u32 {
     use goby_core::ir::IrBinOp;
-    let needs_scratch = instrs.iter().any(|i| match i {
+    let all = collect_all_instrs(instrs);
+    let needs_scratch = all.iter().any(|i| match i {
         WasmBackendInstr::Intrinsic { .. } => true,
         WasmBackendInstr::BinOp { op } => {
             matches!(op, IrBinOp::Mul | IrBinOp::Div | IrBinOp::Mod)
@@ -222,7 +257,8 @@ fn required_i64_scratch_count(instrs: &[WasmBackendInstr]) -> u32 {
 
 /// Returns true if any `SplitEachPrint` with println is present (needs newline data segment).
 fn needs_newline_data(instrs: &[WasmBackendInstr]) -> bool {
-    instrs.iter().any(|i| {
+    let all = collect_all_instrs(instrs);
+    all.iter().any(|i| {
         matches!(i, WasmBackendInstr::SplitEachPrint { op, .. } if op == "println")
             || matches!(i, WasmBackendInstr::SplitGetPrint { op, .. } if op == "println")
     })
@@ -254,14 +290,16 @@ pub(crate) fn emit_general_module(
     }
 
     // --- Pre-scan: count declared I64 locals and detect I32 scratch needs ---
-    let named_i64_count = instrs
+    // Use collect_all_instrs to recurse into nested If branches.
+    let all_instrs = collect_all_instrs(instrs);
+    let named_i64_count = all_instrs
         .iter()
         .filter(|i| matches!(i, WasmBackendInstr::DeclareLocal { .. }))
         .count() as u32;
     let helper_i64_scratch_count = required_i64_scratch_count(instrs);
     let i64_count = named_i64_count + helper_i64_scratch_count;
     let i32_scratch_count = required_i32_scratch_count(instrs);
-    let uses_host_intrinsics = instrs.iter().any(|instr| {
+    let uses_host_intrinsics = all_instrs.iter().any(|instr| {
         matches!(
             instr,
             WasmBackendInstr::Intrinsic { intrinsic }
@@ -570,6 +608,38 @@ fn emit_instrs(
                     nread_offset,
                     newline_ptr,
                 )?;
+            }
+            WasmBackendInstr::If { then_instrs, else_instrs } => {
+                // Convert tagged Bool on stack to i32: extract payload bit 0.
+                function.instruction(&Instruction::I64Const(1));
+                function.instruction(&Instruction::I64And);
+                function.instruction(&Instruction::I32WrapI64);
+                // Wasm if/else/end block: both branches produce one tagged i64.
+                function.instruction(&Instruction::If(wasm_encoder::BlockType::Result(
+                    wasm_encoder::ValType::I64,
+                )));
+                emit_instrs(
+                    function,
+                    ctx,
+                    then_instrs,
+                    layout,
+                    named_i64_count,
+                    helper_i64_scratch_count,
+                    i32_base,
+                    static_strings,
+                )?;
+                function.instruction(&Instruction::Else);
+                emit_instrs(
+                    function,
+                    ctx,
+                    else_instrs,
+                    layout,
+                    named_i64_count,
+                    helper_i64_scratch_count,
+                    i32_base,
+                    static_strings,
+                )?;
+                function.instruction(&Instruction::End);
             }
         }
     }
@@ -2432,6 +2502,64 @@ mod tests {
         ];
         let wasm = emit_general_module(&instrs, &default_layout())
             .expect("emit BinOp Mul should succeed");
+        assert_valid_wasm(&wasm);
+    }
+
+    #[test]
+    fn emit_if_both_branches_produce_valid_wasm() {
+        // if true then 1 else 2 (with Read effect wrapper to satisfy has_runtime_read_effect)
+        let instrs = vec![
+            I::EffectOp {
+                effect: "Read".to_string(),
+                op: "read".to_string(),
+            },
+            I::Drop,
+            I::I64Const(crate::gen_lower::value::encode_bool(true)),
+            I::If {
+                then_instrs: vec![I::I64Const(
+                    crate::gen_lower::value::encode_int(1).unwrap(),
+                )],
+                else_instrs: vec![I::I64Const(
+                    crate::gen_lower::value::encode_int(2).unwrap(),
+                )],
+            },
+            I::Drop,
+        ];
+        let wasm =
+            emit_general_module(&instrs, &default_layout()).expect("emit If should succeed");
+        assert_valid_wasm(&wasm);
+    }
+
+    #[test]
+    fn emit_nested_if_produces_valid_wasm() {
+        // if true then (if false then 1 else 2) else 3
+        let instrs = vec![
+            I::EffectOp {
+                effect: "Read".to_string(),
+                op: "read".to_string(),
+            },
+            I::Drop,
+            I::I64Const(crate::gen_lower::value::encode_bool(true)),
+            I::If {
+                then_instrs: vec![
+                    I::I64Const(crate::gen_lower::value::encode_bool(false)),
+                    I::If {
+                        then_instrs: vec![I::I64Const(
+                            crate::gen_lower::value::encode_int(1).unwrap(),
+                        )],
+                        else_instrs: vec![I::I64Const(
+                            crate::gen_lower::value::encode_int(2).unwrap(),
+                        )],
+                    },
+                ],
+                else_instrs: vec![I::I64Const(
+                    crate::gen_lower::value::encode_int(3).unwrap(),
+                )],
+            },
+            I::Drop,
+        ];
+        let wasm = emit_general_module(&instrs, &default_layout())
+            .expect("emit nested If should succeed");
         assert_valid_wasm(&wasm);
     }
 }

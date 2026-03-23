@@ -57,7 +57,23 @@ fn has_runtime_read_effect(comp: &CompExpr) -> bool {
 }
 
 fn read_line_instrs_are_supported(instrs: &[backend_ir::WasmBackendInstr]) -> bool {
-    let read_line_count = instrs
+    // Collect all instructions recursively (WB-1: If branches may contain EffectOp).
+    fn collect_all<'a>(
+        instrs: &'a [backend_ir::WasmBackendInstr],
+        out: &mut Vec<&'a backend_ir::WasmBackendInstr>,
+    ) {
+        for instr in instrs {
+            out.push(instr);
+            if let backend_ir::WasmBackendInstr::If { then_instrs, else_instrs } = instr {
+                collect_all(then_instrs, out);
+                collect_all(else_instrs, out);
+            }
+        }
+    }
+    let mut all = Vec::new();
+    collect_all(instrs, &mut all);
+
+    let read_line_count = all
         .iter()
         .filter(|instr| {
             matches!(
@@ -74,7 +90,7 @@ fn read_line_instrs_are_supported(instrs: &[backend_ir::WasmBackendInstr]) -> bo
         return false;
     }
 
-    !instrs.iter().any(|instr| {
+    !all.iter().any(|instr| {
         matches!(
             instr,
             backend_ir::WasmBackendInstr::EffectOp { effect, op }

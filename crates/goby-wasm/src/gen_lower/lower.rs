@@ -144,6 +144,17 @@ fn lower_comp_with_aliases(
             }
         }
 
+        CompExpr::If { cond, then_, else_ } => {
+            let mut instrs = lower_value(cond)?;
+            let then_instrs = lower_comp_with_aliases(then_, aliases)?;
+            let else_instrs = lower_comp_with_aliases(else_, aliases)?;
+            instrs.push(WasmBackendInstr::If {
+                then_instrs,
+                else_instrs,
+            });
+            Ok(instrs)
+        }
+
         CompExpr::LetMut {
             name, value, body, ..
         } => {
