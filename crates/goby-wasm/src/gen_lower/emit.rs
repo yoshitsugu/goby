@@ -67,7 +67,15 @@ struct StaticStringPool {
 }
 
 impl StaticStringPool {
+    /// Build a pool from a single instruction list (main only, no aux decls).
     fn build(instrs: &[WasmBackendInstr]) -> Result<Self, CodegenError> {
+        Self::build_from_all(std::iter::once(instrs))
+    }
+
+    /// Build a pool from main instructions plus any number of aux decl instruction lists.
+    fn build_from_all<'a>(
+        all_slices: impl Iterator<Item = &'a [WasmBackendInstr]>,
+    ) -> Result<Self, CodegenError> {
         let mut ptrs = HashMap::new();
         let mut segments = Vec::new();
         let mut cursor = WASM_PAGE_BYTES;
@@ -88,7 +96,9 @@ impl StaticStringPool {
             }
         }
         let mut all_instrs = Vec::new();
-        visit_instrs(instrs, &mut all_instrs);
+        for slice in all_slices {
+            visit_instrs(slice, &mut all_instrs);
+        }
 
         for instr in all_instrs {
             let WasmBackendInstr::PushStaticString { text } = instr else {
@@ -150,6 +160,9 @@ struct EmitContext {
     locals: HashMap<String, u32>,
     /// Count of allocated locals.
     next_local: u32,
+    /// Map from declaration name to Wasm function index (WB-2A).
+    /// Built by `emit_general_module` before emitting any function body.
+    decl_func_indices: HashMap<String, u32>,
 }
 
 impl EmitContext {
@@ -157,6 +170,15 @@ impl EmitContext {
         Self {
             locals: HashMap::new(),
             next_local: 0,
+            decl_func_indices: HashMap::new(),
+        }
+    }
+
+    fn with_decl_indices(decl_func_indices: HashMap<String, u32>) -> Self {
+        Self {
+            locals: HashMap::new(),
+            next_local: 0,
+            decl_func_indices,
         }
     }
 
@@ -171,6 +193,18 @@ impl EmitContext {
         self.locals.get(name).copied().ok_or_else(|| CodegenError {
             message: format!("gen_lower/emit: unknown local '{name}'"),
         })
+    }
+
+    fn decl_func_idx(&self, decl_name: &str) -> Result<u32, CodegenError> {
+        self.decl_func_indices.get(decl_name).copied().ok_or_else(|| CodegenError {
+            message: format!("gen_lower/emit: unknown declaration '{decl_name}' in DeclCall"),
+        })
+    }
+
+    /// Reset local state between functions (keep decl_func_indices shared).
+    fn reset_locals(&mut self) {
+        self.locals.clear();
+        self.next_local = 0;
     }
 }
 
@@ -273,6 +307,18 @@ fn needs_newline_data(instrs: &[WasmBackendInstr]) -> bool {
 ///
 /// The module imports `fd_read` and `fd_write` from `wasi_snapshot_preview1`,
 /// exports `memory` and `_start`, and contains one function (`main`).
+/// A lowered auxiliary declaration (non-`main` top-level function) ready for emission.
+///
+/// `params_count` is the number of function parameters, each of type tagged i64.
+/// `instrs` is the lowered body; it may contain `DeclCall` which will be resolved
+/// against the module-wide `decl_name → func_idx` table during `emit_general_module`.
+#[derive(Debug, Clone)]
+pub(crate) struct AuxDecl {
+    pub(crate) decl_name: String,
+    pub(crate) params_count: usize,
+    pub(crate) instrs: Vec<WasmBackendInstr>,
+}
+
 pub(crate) fn supports_instrs(instrs: &[WasmBackendInstr]) -> bool {
     collect_all_instrs(instrs).iter().all(|instr| match instr {
         WasmBackendInstr::Intrinsic { intrinsic } => match intrinsic.execution_boundary() {
@@ -289,7 +335,23 @@ pub(crate) fn emit_general_module(
     instrs: &[WasmBackendInstr],
     layout: &MemoryLayout,
 ) -> Result<Vec<u8>, CodegenError> {
-    let static_strings = StaticStringPool::build(instrs)?;
+    emit_general_module_with_aux(instrs, &[], layout)
+}
+
+/// Emit a Wasm module containing `main` (`instrs`) and zero or more auxiliary declarations.
+///
+/// `aux_decls` are compiled as Wasm functions placed *after* `main` in the function section
+/// so that the `_start` export index (`main`) stays stable regardless of how many aux decls
+/// are added.  The `decl_name → func_idx` table is built here and threaded through
+/// `emit_instrs` via `EmitContext`.
+pub(crate) fn emit_general_module_with_aux(
+    instrs: &[WasmBackendInstr],
+    aux_decls: &[AuxDecl],
+    layout: &MemoryLayout,
+) -> Result<Vec<u8>, CodegenError> {
+    let static_strings = StaticStringPool::build_from_all(
+        std::iter::once(instrs).chain(aux_decls.iter().map(|d| d.instrs.as_slice())),
+    )?;
     if layout.heap_base + static_strings.bytes_used + 4 > WASM_PAGE_BYTES {
         return Err(CodegenError {
             message: "gen_lower/emit: static string pool leaves no room for runtime stdin buffer"
@@ -297,30 +359,36 @@ pub(crate) fn emit_general_module(
         });
     }
 
-    // --- Pre-scan: count declared I64 locals and detect I32 scratch needs ---
+    // --- Pre-scan for main: count declared I64 locals and detect I32 scratch needs ---
     // Use collect_all_instrs to recurse into nested If branches.
-    let all_instrs = collect_all_instrs(instrs);
-    let named_i64_count = all_instrs
+    let all_main_instrs = collect_all_instrs(instrs);
+    let main_named_i64_count = all_main_instrs
         .iter()
         .filter(|i| matches!(i, WasmBackendInstr::DeclareLocal { .. }))
         .count() as u32;
-    let helper_i64_scratch_count = required_i64_scratch_count(instrs);
-    let i64_count = named_i64_count + helper_i64_scratch_count;
-    let i32_scratch_count = required_i32_scratch_count(instrs);
-    let uses_host_intrinsics = all_instrs.iter().any(|instr| {
-        matches!(
-            instr,
-            WasmBackendInstr::Intrinsic { intrinsic }
-                if intrinsic.execution_boundary() == IntrinsicExecutionBoundary::HostImport
-        )
+    let main_helper_i64_scratch_count = required_i64_scratch_count(instrs);
+    let main_i64_count = main_named_i64_count + main_helper_i64_scratch_count;
+    let main_i32_scratch_count = required_i32_scratch_count(instrs);
+    let main_i32_base = main_i64_count;
+
+    // Check whether any instruction list (main or aux) uses host intrinsics.
+    let all_slices_iter = || {
+        std::iter::once(instrs).chain(aux_decls.iter().map(|d| d.instrs.as_slice()))
+    };
+    let uses_host_intrinsics = all_slices_iter().any(|slice| {
+        collect_all_instrs(slice).iter().any(|instr| {
+            matches!(
+                instr,
+                WasmBackendInstr::Intrinsic { intrinsic }
+                    if intrinsic.execution_boundary() == IntrinsicExecutionBoundary::HostImport
+            )
+        })
     });
     let used_host_imports: Vec<_> = if uses_host_intrinsics {
         HOST_INTRINSIC_IMPORTS.to_vec()
     } else {
         Vec::new()
     };
-    // I32 scratch locals start at index i64_count.
-    let i32_base = i64_count;
 
     // --- Build module sections ---
     let mut module = Module::new();
@@ -344,9 +412,20 @@ pub(crate) fn emit_general_module(
             idx
         })
         .collect();
-    // type 1: main () -> ()
+    // type N: main () -> ()
     let main_type = types.len();
     types.ty().function([], []);
+
+    // types for aux decls: each takes (params_count × i64) → i64
+    let aux_type_indices: Vec<u32> = aux_decls
+        .iter()
+        .map(|decl| {
+            let idx = types.len();
+            let params: Vec<ValType> = vec![ValType::I64; decl.params_count];
+            types.ty().function(params, [ValType::I64]);
+            idx
+        })
+        .collect();
     module.section(&types);
 
     // Import section
@@ -373,10 +452,24 @@ pub(crate) fn emit_general_module(
     }
     module.section(&imports);
 
-    // Function section (one function: main, type index = main_type = 1)
+    // Function section: main first, then aux decls.
+    // Keeping main first means _start index = HOST_IMPORT_BASE_IDX + used_host_imports.len()
+    // regardless of how many aux decls are added.
+    let main_func_idx = HOST_IMPORT_BASE_IDX + used_host_imports.len() as u32;
     let mut functions = FunctionSection::new();
     functions.function(main_type);
+    for aux_type_idx in &aux_type_indices {
+        functions.function(*aux_type_idx);
+    }
     module.section(&functions);
+
+    // Build decl_name → func_idx table for DeclCall resolution.
+    // aux decls start at main_func_idx + 1.
+    let decl_func_indices: HashMap<String, u32> = aux_decls
+        .iter()
+        .enumerate()
+        .map(|(i, decl)| (decl.decl_name.clone(), main_func_idx + 1 + i as u32))
+        .collect();
 
     // Memory section
     let mut memories = MemorySection::new();
@@ -389,47 +482,96 @@ pub(crate) fn emit_general_module(
     });
     module.section(&memories);
 
-    // Export section — `_start` follows the imported functions.
+    // Export section — `_start` is always main (index stable across aux additions).
     let mut exports = ExportSection::new();
     exports.export("memory", ExportKind::Memory, 0);
-    exports.export(
-        "_start",
-        ExportKind::Func,
-        HOST_IMPORT_BASE_IDX + used_host_imports.len() as u32,
-    );
+    exports.export("_start", ExportKind::Func, main_func_idx);
     module.section(&exports);
 
-    // Code section
-    let mut locals_vec: Vec<(u32, ValType)> = Vec::new();
-    if i64_count > 0 {
-        locals_vec.push((i64_count, ValType::I64));
-    }
-    if i32_scratch_count > 0 {
-        locals_vec.push((i32_scratch_count, ValType::I32));
-    }
-    let mut function = Function::new(locals_vec);
-
-    let mut ctx = EmitContext::new();
-    emit_instrs(
-        &mut function,
-        &mut ctx,
-        instrs,
-        layout,
-        named_i64_count,
-        helper_i64_scratch_count,
-        i32_base,
-        &static_strings,
-    )?;
-    function.instruction(&Instruction::End);
+    // Code section — main function first.
     let mut code = CodeSection::new();
-    code.function(&function);
+    {
+        let mut locals_vec: Vec<(u32, ValType)> = Vec::new();
+        if main_i64_count > 0 {
+            locals_vec.push((main_i64_count, ValType::I64));
+        }
+        if main_i32_scratch_count > 0 {
+            locals_vec.push((main_i32_scratch_count, ValType::I32));
+        }
+        let mut function = Function::new(locals_vec);
+        let mut ctx = EmitContext::with_decl_indices(decl_func_indices.clone());
+        emit_instrs(
+            &mut function,
+            &mut ctx,
+            instrs,
+            layout,
+            main_named_i64_count,
+            main_helper_i64_scratch_count,
+            main_i32_base,
+            &static_strings,
+        )?;
+        function.instruction(&Instruction::End);
+        code.function(&function);
+    }
+
+    // Aux decl functions (after main).
+    for decl in aux_decls {
+        let aux_all = collect_all_instrs(&decl.instrs);
+        let aux_named_i64_count = aux_all
+            .iter()
+            .filter(|i| matches!(i, WasmBackendInstr::DeclareLocal { .. }))
+            .count() as u32;
+        let aux_helper_i64_scratch_count = required_i64_scratch_count(&decl.instrs);
+        // Aux decl params are Wasm function parameters (i64 each), not DeclareLocal slots.
+        // In Wasm, function params are locals[0..params_count-1]; body locals follow after.
+        let aux_param_count = decl.params_count as u32;
+        let aux_i64_count = aux_named_i64_count + aux_helper_i64_scratch_count;
+        let aux_i32_scratch_count = required_i32_scratch_count(&decl.instrs);
+        let aux_i32_base = aux_param_count + aux_i64_count;
+
+        let mut locals_vec: Vec<(u32, ValType)> = Vec::new();
+        if aux_i64_count > 0 {
+            locals_vec.push((aux_i64_count, ValType::I64));
+        }
+        if aux_i32_scratch_count > 0 {
+            locals_vec.push((aux_i32_scratch_count, ValType::I32));
+        }
+        let mut function = Function::new(locals_vec);
+
+        // Params occupy local indices 0..params_count in Wasm; body locals follow.
+        // EmitContext must know about the param locals so LoadLocal/StoreLocal work.
+        // We build the context with params pre-declared (no DeclareLocal emitted for them).
+        let mut ctx = EmitContext::with_decl_indices(decl_func_indices.clone());
+        // Register param locals by name is non-trivial without parameter names in AuxDecl.
+        // For now, body-local lookups start at aux_param_count offset.
+        // The body instructions use DeclareLocal for body locals; param access is via
+        // LoadLocal with integer-like names — this is resolved in Step 3.
+        // For Step 2, aux decl bodies must not contain DeclCall or complex locals.
+        // named_i64_count passed to emit_instrs counts DeclareLocal in body only.
+        // Offset: params are 0..aux_param_count-1, body locals follow from aux_param_count.
+        ctx.next_local = aux_param_count; // body locals start after params
+        emit_instrs(
+            &mut function,
+            &mut ctx,
+            &decl.instrs,
+            layout,
+            aux_named_i64_count,
+            aux_helper_i64_scratch_count,
+            aux_i32_base,
+            &static_strings,
+        )?;
+        function.instruction(&Instruction::End);
+        code.function(&function);
+    }
     module.section(&code);
 
     // Data section: newline byte for println (if needed).
-    if needs_newline_data(instrs) || !static_strings.is_empty() {
+    let needs_newline = needs_newline_data(instrs)
+        || aux_decls.iter().any(|d| needs_newline_data(&d.instrs));
+    if needs_newline || !static_strings.is_empty() {
         let newline_ptr = (layout.heap_base - 1) as i32;
         let mut data = DataSection::new();
-        if needs_newline_data(instrs) {
+        if needs_newline {
             data.active(0, &ConstExpr::i32_const(newline_ptr), b"\n".to_vec());
         }
         for (ptr, bytes) in &static_strings.segments {
