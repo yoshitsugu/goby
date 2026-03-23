@@ -1,653 +1,522 @@
 # Goby IR Lowering Plan
 
-This document is the active execution plan for bringing Goby's AST-to-IR
-lowering to durable, long-term-complete coverage.
+Last updated: 2026-03-23
+
+This document is the active architecture reference for Goby's compilation pipeline
+and the long-term plan for Wasm backend lowering.
+
+Related documents:
+
+- `doc/LANGUAGE_SPEC.md` — source of truth for language syntax and semantics.
+- `doc/PLAN.md` — top-level roadmap.
+- `doc/PLAN_STANDARD_LIBRARY.md` — stdlib split/grapheme work (C4–C8).
+- `doc/STATE.md` — current focus and restart notes.
+
+---
+
+## 1. Compilation Pipeline (Stable)
+
+```
+Parsed AST
+  → typecheck / name resolution
+  → ResolvedModule / ResolvedDecl / ResolvedExpr   (crates/goby-core/src/resolved.rs)
+  → shared IR                                       (crates/goby-core/src/ir.rs)
+  → backend IR / WasmBackendInstr                   (crates/goby-wasm/src/gen_lower/)
+  → Wasm binary / interpreter
+```
 
-Purpose:
+IR0–IR11 are complete. The resolved-form → shared IR boundary is stable.
+Semantically equivalent surface spellings converge before the IR boundary.
+
+**Locked design rules:**
+
+1. Do not add backend-specific AST recognizers for constructs that belong in IR.
+2. Semantically equivalent surface forms must produce equivalent IR.
+3. Backend limitations are expressed as backend limitations, not IR-construction failures.
+4. Fused patterns in `lower.rs` (`SplitEachPrint`, `SplitGetPrint`, `graphemes-get-print`)
+   are deletion targets, not extension points. Each WB phase identifies which ones it makes
+   obsolete.
+
+---
+
+## 2. Current IR → Wasm Coverage
+
+`lower_comp` in `crates/goby-wasm/src/gen_lower/lower.rs` currently handles 5 of 13
+`CompExpr` variants. All others fall through to `UnsupportedForm`.
+
+`Call` is handled only for effect calls and backend intrinsics. Calls to ordinary
+top-level declarations (including recursive stdlib functions like `map`/`each`) return
+`UnsupportedForm`. This is the key gap that blocks WB-2A.
+
+### CompExpr (13 variants)
+
+| Variant | Status | Target phase |
+|---------|--------|-------------|
+| `Value` | ✅ handled | — |
+| `Let` | ✅ handled (fused patterns inside) | — |
+| `Seq` | ✅ handled | — |
+| `PerformEffect` | ✅ handled (Print/Read effects only) | — |
+| `Call` | ✅ partial — effect/intrinsic only | WB-2A: extend to decl calls |
+| `If` | ❌ | WB-1 |
+| `LetMut` | ❌ | WB-1 |
+| `Assign` | ❌ | WB-1 |
+| `Case` | ❌ | WB-2B |
+| `Handle` | ❌ | WB-3 |
+| `WithHandler` | ❌ | WB-3 |
+| `Resume` | ❌ | WB-3 |
+
+### ValueExpr (12 variants)
+
+| Variant | Status | Target phase |
+|---------|--------|-------------|
+| `Unit` | ✅ handled | — |
+| `IntLit` | ✅ handled | — |
+| `BoolLit` | ✅ handled | — |
+| `StrLit` | ✅ handled | — |
+| `Var` | ✅ handled | — |
+| `GlobalRef` | ✅ handled | — |
+| `BinOp` | ❌ | WB-1 |
+| `Interp` | ❌ | WB-1 |
+| `ListLit` | ❌ | WB-2B |
+| `TupleLit` | ❌ | WB-2B |
+| `RecordLit` | ❌ | WB-2B |
+| `Lambda` | ❌ | WB-3 |
+
+---
+
+## 3. Why the Phase Order Is Fixed
+
+### WB-3 (effects) must be designed before WB-3's Lambda
+
+`Lambda` and `Handle`/`WithHandler` share one design question: how are captured variables
+passed to a function emitted as a separate Wasm function? The effect handler calling
+convention is more constrained (it must integrate with `PerformEffect` dispatch and the
+`EffectId`/`OpId` boundary), so it must be locked first. `Lambda` follows the same
+convention.
+
+### WB-2A (decl calls) must precede WB-2B (Case/data)
+
+`stdlib/goby/list.gb` `map` and `each` are recursive functions that take function arguments.
+They use `Case` but also call `each`/`map` recursively and call the `f` argument. Even after
+`Case` is lowered (WB-2B), `map`/`each` will still fail because ordinary decl calls are
+unsupported. WB-2A must land first.
+
+### WB-3 legality analysis precedes WB-3 emission
 
-- eliminate the old narrow-IR ceiling as the main architecture limit,
-- stop growing backend support around AST-shape fallbacks and recognizers,
-- make IR the normal semantic handoff between the front-end and backends,
-- prefer principled IR evolution over local rewrites that only unblock one syntax form.
+The language spec (`doc/LANGUAGE_SPEC.md` §resume) defines multi-resume progression as
+valid: a handler clause may call `resume` multiple times, each one restarting the continuation
+from the next resumable point. Phase WB-3A (direct-call lowering) covers only the one-shot
+tail-resumptive subset. The emit layer must therefore first determine whether a given
+`WithHandler`/`Resume` is in the safe subset; programs outside that subset must produce an
+explicit `BackendLimitation` error, not a silent wrong result or miscompilation.
 
-Relationship to other documents:
+---
 
-- `doc/LANGUAGE_SPEC.md` remains the source of truth for current language syntax and semantics.
-- `doc/PLAN.md` remains the top-level roadmap.
-- `doc/PLAN_IR.md` is the detailed plan for the IR-lowering work that now takes top priority.
+## 4. Effect Handler Lowering: Strategy Survey
 
-## 1. Why This Is Top Priority
+### 4.1 Why this is the hard problem
 
-Current backend friction is not primarily a Wasm problem. It is an IR-boundary
-problem.
+`WithHandler`/`Resume`/`PerformEffect` require non-local control transfer: when an effect
+operation is performed, execution transfers to the nearest enclosing handler, then optionally
+resumes from the call site. Wasm's structured control flow does not natively support this.
 
-Examples:
+### 4.2 Strategy A — Selective CPS (chosen for WB-3A)
 
-- `Read.read` / `Print.println` work better than bare prelude names because the current
-  lowerer recognizes only some effect-call shapes.
-- `list.get lines 1` is lowerable while `lines[1]` is not, even though they express the
-  same semantics.
-- runtime support keeps needing fallback logic because semantically ordinary programs do
-  not reach the shared IR in a stable, backend-friendly form.
+**Primary sources:**
+- Daan Leijen, "Type Directed Compilation of Row-Typed Algebraic Effects", POPL 2017.
+  MSR preprint: https://www.microsoft.com/en-us/research/wp-content/uploads/2016/12/algeff.pdf
+- Daniel Hillerström, Sam Lindley, Robert Atkey, KC Sivaramakrishnan,
+  "Continuation Passing Style for Effect Handlers", FSCD 2017.
+  https://homepages.inf.ed.ac.uk/slindley/papers/handlers-cps.pdf
+- wasm_of_ocaml (Tarides / Jane Street):
+  https://tarides.com/blog/2023-11-01-webassembly-support-for-ocaml-introducing-wasm-of-ocaml/
 
-If this is addressed with one-off rewrites at the backend boundary, Goby will accumulate
-architecture debt in exactly the place where it most needs one semantic source of truth.
+Only functions in the dynamic scope of a handler that performs non-tail resumptions are
+CPS-transformed. The continuation becomes an explicit function parameter.
 
-Therefore:
+For **one-shot tail-resumptive** handlers (the only pattern in Goby's current stdlib),
+selective CPS degenerates to direct-call lowering: the continuation is never heap-allocated,
+`resume` at the tail of a handler clause becomes a Wasm `return_call`. No overhead.
+
+**Scope gate:** this fast path is only legal when the handler is provably one-shot and
+tail-resumptive (legality analysis, see §5 WB-3). The language spec permits multi-resume;
+the fast path is a subset optimisation, not a semantic redefinition.
+
+### 4.3 Strategy B — Evidence Passing
+
+**Primary sources:**
+- Ningning Xie and Daan Leijen, "Generalized Evidence Passing for Effect Handlers", ICFP 2021.
+  DOI: 10.1145/3473576
+  MSR preprint: https://www.microsoft.com/en-us/research/wp-content/uploads/2021/03/multip-tr-v2.pdf
+- Koka language, `src/Compile/Options.hs`: `--target=wasm` routes through C backend
+  (`target=C Wasm`), compiled via Emscripten (`emcc`). No direct Wasm backend exists in Koka.
+  Source: https://github.com/koka-lang/koka
+
+Evidence is threaded as an implicit extra parameter through all functions in handler scope.
+O(1) handler lookup. Designed for C as a compilation target (Koka: C → Emscripten → Wasm).
+More parameter-plumbing overhead per call than Strategy A for the one-shot case.
 
-- IR lowering completeness takes precedence over adding more backend-side recognizers.
-- when a supported language construct fails to lower, default action is to improve IR
-  design/lowering, not to special-case that construct in Wasm or interpreter plumbing.
-- temporary breakage is acceptable while converging on the better IR architecture.
+**Ruling:** not chosen for WB-3A. Higher implementation complexity than selective CPS for
+no benefit given Goby's current one-shot usage pattern.
+
+### 4.4 Strategy C — WasmFX / Stack Switching (target for WB-3B)
 
-## 2. Problem Statement
-
-The current IR lowering is still organized around an overly narrow legacy IR model. That model was
-useful as a bootstrap phase, but it is now the main blocker.
-
-Today, the lowerer still rejects or incompletely models major AST forms, including:
-
-- lambda expressions,
-- method calls,
-- pipelines,
-- case expressions,
-- list literals,
-- list indexing,
-- non-unit tuples,
-- record construction,
-- mutable binding / assignment forms,
-- some effect-call forms that depend on AST surface spelling rather than semantic identity.
-
-This creates three bad outcomes:
-
-1. semantically equivalent programs lower differently depending on syntax spelling,
-2. backends need fallback classification or handwritten recognizers,
-3. future features will keep reopening the same boundary instead of extending one durable IR.
-
-## 3. Architectural Direction
-
-### 3.1 Core Direction
-
-Goby should move from a narrowly scoped legacy IR mindset to a language-semantic IR mindset.
-
-That means:
-
-- the shared IR should be able to represent the language constructs that Goby intends to run,
-  even when those constructs are not yet optimized in every backend,
-- AST-to-IR lowering should preserve semantics, not enforce an artificial purity gate,
-- backend-specific simplification or fusion should happen after IR construction, not by making
-  IR artificially too small to express the source program.
-
-### 3.2 Design Rules
-
-1. Do not add backend-specific ad-hoc AST recognizers when the construct belongs in IR.
-2. Do not encode source-syntax accidents into semantic lowering behavior.
-3. Prefer explicit IR nodes over hidden rewrite conventions when the semantics are first-class.
-4. Allow desugaring only when it is semantics-preserving and stable across backends.
-5. Treat IR as the shared semantic contract for:
-   - runtime/interpreter behavior,
-   - Wasm lowering,
-   - future tooling/analysis consumers.
-
-### 3.3 Preferred Shape
-
-Preferred long-term shape:
-
-`AST -> resolved AST / symbol-resolved form -> shared IR -> backend IR / analysis IR -> executable backend`
-
-Not preferred:
-
-- `AST -> special-case backend matcher -> Wasm`
-- `AST -> interpreter-only behavior` for ordinary language constructs
-- "support" implemented primarily by recognizing a small catalog of source shapes
-
-### 3.4 Resolution Boundary
-
-IR lowering should not infer semantic identity from raw surface spelling when that
-identity can be resolved earlier.
-
-Locked direction:
-
-- shared IR should be constructed from a name-resolved / symbol-resolved front-end form,
-  not directly from raw AST spelling alone,
-- the project should use a distinct resolved front-end form as the lowering input to shared IR,
-  rather than incrementally attaching more ad-hoc resolution fields onto the raw/typed AST,
-- effect operations should lower from resolved operation identity, not from textual patterns
-  like "qualified name happens to look like `Read.read`",
-- ordinary callable references should already distinguish at least:
-  - local bindings,
-  - top-level declarations,
-  - stdlib/helper references,
-  - effect operation references,
-- semantically equivalent spellings such as bare prelude names, imported names, and
-  qualified names should converge before or at the resolved-to-IR boundary, not later in
-  backend-specific code.
-
-Implication:
-
-- effect-call normalization is not just an `ir_lower.rs` rewrite. It depends on introducing
-  or exposing resolved symbol information as a first-class lowering input.
-- `ir_lower` should ultimately consume the resolved front-end form, not raw AST plus local
-  name-pattern heuristics.
-
-### 3.5 Locked Resolved-Input Strategy
-
-The chosen direction is:
-
-- introduce a distinct resolved front-end form between AST/typecheck and shared IR,
-- do not treat the existing AST or typed AST as the long-term lowering input,
-- do not continue the pattern of attaching more one-off resolution-only fields directly to
-  raw AST nodes in order to unblock one lowering gap.
-
-Planned shape:
-
-`Parsed AST -> typecheck/name resolution -> ResolvedModule / ResolvedDecl / ResolvedExpr -> shared IR`
-
-Minimum semantic identities that the resolved form must carry:
-
-- `LocalRef`
-  - for lexical local bindings and parameters
-- `DeclRef`
-  - for top-level function or value declarations
-- `HelperRef`
-  - for stdlib/runtime helper calls such as `goby/string.split` and `goby/list.get`
-- `EffectOpRef`
-  - for effect operations such as `Read.read`, `Read.read_line`, `Print.print`, `Print.println`
-- `TypeCtorRef` or equivalent product-data constructor identity
-  - if tuples/records/constructors continue to need distinct lowering-time meaning
-
-Ownership boundary:
-
-- parser continues to own syntax only,
-- typecheck / symbol-resolution layer owns semantic identity,
-- resolved form owns the normalized callable/effect references consumed by `ir_lower`,
-- shared IR owns semantic execution structure, not raw source spelling.
-
-Initial implementation note:
-
-- the first version of the resolved form does not need to cover every AST family at once,
-  but for any family it does cover, `ir_lower` should consume the resolved form rather than
-  re-deriving meaning from raw syntax.
-- the first families to move should be:
-  - effect operations,
-  - helper calls,
-  - local / top-level callable references.
-
-## 4. Scope of "Complete IR Lowering"
-
-For this track, "complete" does not mean every backend can execute every feature immediately.
-It means the front-end can lower the language's supported constructs into shared IR without
-depending on syntax-shaped escape hatches.
-
-Completion target:
-
-- all currently supported source constructs have a defined AST-to-IR mapping,
-- semantically equivalent surface forms lower to semantically equivalent IR,
-- unsupported execution in a backend is expressed as a backend limitation, not an IR-construction failure,
-- new language work must extend IR intentionally rather than reintroducing subset-only lowering.
-
-For avoidance of doubt:
-
-- mutable local forms already present in the language surface are in scope for this track.
-- "complete IR lowering" does not permit leaving shipped mutable forms outside shared IR as a
-  permanent exception.
-
-## 5. Work Breakdown
-
-### IR0. Architecture Lock
-
-Goal: replace the legacy narrow-IR framing with an explicit long-term IR charter.
-
-Deliverables:
-
-- document the role of shared IR in `goby-core`,
-- define which constructs must exist directly in IR vs which may desugar,
-- define lowering invariants and error policy.
-
-Required decisions:
-
-- whether list index lowers to a dedicated IR node or a canonical helper-call form,
-- whether pipelines lower to ordinary calls at AST-to-IR time or stay explicit in IR,
-- whether method call syntax is only sugar over qualified/global calls or has distinct semantics,
-- what resolved front-end representation feeds shared IR and which symbol identities it must carry,
-- how mutable locals and assignment are represented in shared IR.
-
-Done when:
-
-- this plan is accepted as the active direction,
-- `doc/PLAN.md` points to this plan as the top-priority track,
-- later implementation work can follow one coherent rule set instead of local choices.
-
-### IR1. Inventory and Mapping Table
-
-Goal: enumerate every AST construct and define its lowering status.
-
-Deliverables:
-
-- a construct inventory table in this document or a linked follow-up note,
-- for each construct:
-  - current status,
-  - canonical semantic form,
-  - normalization boundary,
-  - target IR form,
-  - whether desugaring is allowed,
-  - blockers,
-  - representative tests.
-
-Minimum inventory categories:
-
-- literals and operators,
-- local bindings and sequencing,
-- function calls,
-- effect operations,
-- handlers / with / resume,
-- lambda / higher-order values,
-- if / case,
-- list literals / spread / indexing,
-- tuples / tuple index,
-- records,
-- mutable forms,
-- import/prelude-driven name resolution interactions.
-
-Done when:
-
-- there is no "unknown unsupported set" left,
-- each lowering gap is attached to an owned milestone.
-
-Additional requirement:
-
-- the inventory must distinguish three states instead of only "supported/unsupported":
-  - lowers cleanly to shared IR,
-  - lowers to shared IR but not yet executable in some backend,
-  - cannot yet lower to shared IR.
-- the inventory must make it impossible for semantically equivalent spellings to look
-  "covered" while still lowering through different rules.
-  At minimum, each row must identify:
-  - the canonical semantic form,
-  - the stage where normalization occurs
-    (`parser`, `resolved form`, `IR lowering`, or `not yet normalized`).
-
-Initial inventory table:
-
-| Construct family | Current status | Canonical semantic form | Normalization boundary | Canonical IR target | Desugaring allowed | Owner milestone | Representative tests / notes |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| Bare / qualified / selective-import builtin effect ops (`read`, `Read.read`, `import goby/prelude ( read, print )`) | lowers cleanly to shared IR for the builtin spellings covered today | `EffectOpRef(effect, op)` | resolved form | `PerformEffect` | no ad-hoc spelling-based desugar after resolved form | IR3, IR4 | `crates/goby-core/src/ir_lower.rs` convergence tests; runtime-I/O parity tests |
-| Direct helper calls (`string.split`, `list.get`, `list.each`) | lowers cleanly for the current helper family once the callee reaches resolved form; remaining collection construction work is separate | `HelperRef(module, name)` | resolved form | canonical `Call(GlobalRef(module, name), ...)` | yes, by canonical helper-call form only | IR3, IR4, IR5 | split/index lowering tests in `goby-wasm` and `goby-core` |
-| List index sugar (`lines[1]`) | now normalized before shared IR construction | canonical helper-call family `HelperRef(list.get)` | resolved form | canonical `Call(GlobalRef("list", "get"), [list, index])` | yes, via the locked helper-call strategy only | IR3, IR5 | `resolved.rs` list-index normalization test; `lower_list_index_and_canonical_helper_call_converge_to_same_ir` |
-| Pipelines | lowers through the converged canonical call-family path | canonical call-family semantics | IR lowering | canonical `Call(...)` form, with no pipeline-specific IR node | yes, only as canonical call desugaring | IR0, IR2, IR6, IR7 | parser and runtime pipeline tests already exist |
-| Method calls | lowers through the converged canonical call-family path | canonical call-family semantics | IR lowering | canonical `Call(...)` form, with no method-call-specific IR node | yes, only as canonical call desugaring | IR0, IR2, IR6, IR7 | parser method-call tests |
-| List literals / spread | lowers cleanly to shared IR; backend execution support is still partial | explicit list-value construction semantic form | IR lowering (after resolved child expressions) | `ValueExpr::ListLit { elements, spread }` | no extra helper/desugar boundary beyond ANF normalization of non-pure children | IR2, IR5 | `ir.rs`/`ir_lower.rs` list literal snapshots; runtime list tests still cover backend parity |
-| `case` | lowers cleanly to shared IR through explicit control-flow semantics | branch/match semantic form | IR lowering | explicit `CompExpr::Case` plus `IrCasePattern` | limited; only if semantics stay explicit | IR2, IR6 | `ir.rs` direct snapshots/validation plus parser/type/runtime `case` tests |
-| Lambda / higher-order values | lowers cleanly to shared IR through explicit function-value semantics | function-value / closure semantic form | IR lowering | `ValueExpr::Lambda { param, body }` | no extra desugaring until capture semantics are explicit | IR2, IR7 | `ir.rs` direct snapshots plus runtime higher-order/lambda parity tests |
-| Non-unit tuples | lowers cleanly to shared IR through canonical product-data value form | tuple value semantic form | IR lowering | `ValueExpr::TupleLit` | yes, only as canonical product-data value form | IR2, IR8 | `ir.rs` tuple snapshot plus parser/runtime tuple tests |
-| Record construction | lowers cleanly to shared IR through canonical product-data value form | record value semantic form | IR lowering | `ValueExpr::RecordLit { constructor, fields }` | yes, only as canonical product-data value form | IR2, IR8 | `ir.rs` record snapshot plus parser/runtime record tests |
-| Mutable locals / assignment | lowers cleanly to shared IR; current limits are backend/runtime capability limits only | mutable local semantic form | IR lowering | `CompExpr::LetMut` and `CompExpr::Assign` | no permanent exception outside IR | IR0, IR2, IR9 | `ir.rs` direct snapshots/validation plus parser/runtime mutation tests |
-
-### IR2. Shared IR Expansion
-
-Goal: add or normalize shared IR forms so the currently supported language surface is representable without subset-only exclusions.
-
-Entry condition:
-
-- IR3 is complete for the semantic family being expanded.
-- shared IR expansion must not proceed by teaching raw AST-based heuristics to compensate for
-  an unresolved front-end boundary.
-
-Locked decisions for this milestone:
-
-- list values remain explicit shared-IR values (`ValueExpr::ListLit`),
-- tuple values beyond unit use `ValueExpr::TupleLit`,
-- record construction uses `ValueExpr::RecordLit`,
-- `case` uses explicit shared-IR control-flow (`CompExpr::Case` + `IrCasePattern`),
-- lambda/function values use `ValueExpr::Lambda`,
-- mutable locals and assignment use `CompExpr::LetMut` and `CompExpr::Assign`,
-- method calls and pipelines do not get dedicated IR nodes; both must canonicalize into ordinary
-  call-family IR during lowering.
-
-Rejected alternatives:
-
-- do not keep mutable forms outside shared IR as a "temporary" architectural exception,
-- do not add pipeline-specific or method-call-specific IR nodes when canonical call-family IR is sufficient,
-- do not force tuples/records through backend-specific helper encodings at the shared-IR layer.
-
-Design bar:
-
-- no new IR node should exist only to satisfy one current backend workaround,
-- each addition must have a semantics explanation and a plausible path to multiple consumers.
-
-Done when:
-
-- the target IR can express the supported language surface without the old subset exclusions,
-- remaining failures are clearly about lowering implementation or backend execution, not missing IR vocabulary.
-
-Required artifacts:
-
-- IR design notes or inline docs for each newly introduced semantic family,
-- one focused test or snapshot that demonstrates each new IR form directly,
-- a short rejected-alternatives note when choosing between "new IR node" and "desugar to existing IR".
-
-### IR3. Lowering Implementation by Semantic Family
-
-Goal: implement lowering in coherent ownership slices instead of syntax-by-syntax patching.
-
-Recommended sequence:
-
-1. Resolution boundary and effect-call normalization
-2. Collections: list literal, spread, indexing
-3. Control flow: case and related branch lowering
-4. Product data: tuples and records
-5. Function values: lambda and higher-order capture model
-6. Mutable forms: mutable locals and assignment
-
-Reason for this order:
-
-- `case` is the next control-flow family that still forces downstream runtime/backend
-  code to compensate for a missing shared-IR path.
-- product data is a cleaner next step than lambdas because tuples/records already have
-  explicit shared-IR vocabulary and do not require capture or callable-environment design.
-- lambda lowering should come after product-data lowering so closure/capture design is not
-  mixed with first-time product-data execution support in the same architectural slice.
-- mutation should remain last among the currently open semantic families because its
-  semantics interact with handlers/resume and potentially with future closure environments.
-
-For each slice:
-
-- update IR definitions first when needed,
-- lower all related AST forms together,
-- add focused snapshots / unit tests,
-- remove now-obsolete fallback assumptions in downstream code where practical.
-
-### IR4. Backend Boundary Convergence
-
-Goal: make backends consume IR as the normal path.
-
-Required outcomes:
-
-- Wasm lowering should not depend on source-syntax distinctions like `lines[1]` vs `list.get lines 1`,
-- Wasm/runtime behavior should not depend on source-syntax distinctions like `read`, imported `read`,
-  and `Read.read`,
-- runtime-I/O support should explain failures in backend terms, not in "this syntax failed IR lowering" terms,
-- fallback/interpreter paths should consume equivalent semantics from IR or a clearly aligned runtime representation.
-
-Done when:
-
-- `runtime_io_plan.rs` and similar layers no longer need to compensate for ordinary IR-lowering gaps,
-- backend unsupported cases are mostly about execution capability, not front-end shape mismatch.
-
-### IR5. Deletion of the "Pure IR Subset" Model
-
-Goal: remove the old conceptual model from docs, comments, and code paths.
-
-Required work:
-
-- rename/rewrite comments that describe the lowerer as a subset-only path,
-- remove stale unsupported diagnostics that are only true because of the old architecture,
-- ensure new unsupported errors mean either:
-  - genuinely unsupported language feature, or
-  - intentionally deferred backend execution support.
-
-Done when:
-
-- the legacy narrow-IR ceiling is no longer the governing architecture concept,
-- the codebase communicates one stable lowering model.
+**Primary sources:**
+- Luna Phipps-Costin, Andreas Rossberg, Arjun Guha, Daan Leijen, Daniel Hillerström,
+  KC Sivaramakrishnan, Matija Pretnar, Sam Lindley,
+  "Continuing WebAssembly with Effect Handlers", OOPSLA 2023.
+  DOI: 10.1145/3622814
+  arXiv preprint: https://arxiv.org/abs/2308.08347
+  WasmFX project: https://wasmfx.dev/
+- WebAssembly stack-switching proposal (W3C CG, **Phase 3** as of 2026-03):
+  https://github.com/WebAssembly/proposals (stack switching listed under Phase 3)
+  https://github.com/WebAssembly/stack-switching
+  Explainer: https://github.com/WebAssembly/stack-switching/blob/main/proposals/stack-switching/Explainer.md
+- Wasmtime implementation tracking (x64 initial, other ISAs deferred):
+  https://github.com/bytecodealliance/wasmtime/issues/10248
+
+Adds `suspend <tag>` / `resume <ft> (on $tag handler_block)` instructions to Wasm.
+Maps 1:1 to Goby's IR:
+
+```
+PerformEffect { effect, op, args }  →  suspend $op_tag
+WithHandler { handler, body }       →  resume $ft (on $op_tag handler_block)
+Resume { value }                    →  (implicit: handled by suspend/resume semantics)
+```
+
+No source-level transformation required. Supports multi-resume natively.
+
+**Status (2026-03):** Phase 3 (implementation phase). Wasmtime has x64 implementation;
+ARM64 and other ISAs are deferred. Not available in browsers. The WasmFX fork of Wasmtime
+(`https://github.com/wasmfx/wasmfxtime`) is the current research prototype.
+
+**Key property:** Goby's IR is intentionally kept structurally 1:1 with WasmFX instruction
+semantics. Migrating from WB-3A to WB-3B requires replacing only the emit layer, not IR or
+the lowering pipeline.
+
+### 4.5 Strategy D — Asyncify (ruled out)
+
+**Source:** https://kripken.github.io/blog/wasm/2019/07/16/asyncify.html
+
+A Wasm-binary-to-binary rewrite pass. Requires Binaryen as post-compilation dependency.
+Does not integrate into a hand-written emitter. 50–100% binary size overhead. Cannot express
+multi-shot continuations or compositional handler nesting. **Ruled out.**
+
+---
+
+## 5. Implementation Phases and Milestones
+
+### Phase WB-1: Pure control flow and operators
+
+No dependency on effect handler design or data layout decisions.
+
+**Scope:**
+
+| Construct | Wasm mapping | Notes |
+|-----------|-------------|-------|
+| `CompExpr::If` | `if/else/end` | Condition: tagged i64 bool → `i32` for Wasm `if` |
+| `ValueExpr::BinOp` — integer arithmetic | `i64.add`, `i64.sub`, `i64.mul`, `i64.div_s` | Untag before op, retag result |
+| `ValueExpr::BinOp` — integer comparison | `i64.eq`, `i64.ne`, `i64.lt_s`, `i64.le_s`, `i64.gt_s`, `i64.ge_s` | Result: tagged bool |
+| `ValueExpr::BinOp` — string equality | `__goby_string_eq` helper | Reuse existing string ABI |
+| `ValueExpr::Interp` | sequential `__goby_string_concat` helper calls | Concat pairs left-to-right |
+| `CompExpr::LetMut` | allocate new mutable `local.set` slot | Same model as native fallback |
+| `CompExpr::Assign` | `local.set` to existing mutable slot | Same model as native fallback |
+
+**Entry files:**
+- `crates/goby-wasm/src/gen_lower/lower.rs` — add match arms to `lower_comp` / `lower_value`
+- `crates/goby-wasm/src/gen_lower/emit.rs` — add Wasm instruction emission for new `WasmBackendInstr` variants
+- `crates/goby-wasm/src/gen_lower/backend_ir.rs` — add `If`, `BinOp`, etc. to `WasmBackendInstr`
+
+**Milestones:**
+
+- [ ] WB-1-M1. `ValueExpr::BinOp` (arithmetic and comparison) lowered and emitted
+  - done when: `2 + 3` and `x == y` programs classify as `GeneralLowered` and execute correctly
+  - regression: unit test in `lower.rs` + execution test in `lib.rs`
+- [ ] WB-1-M2. `ValueExpr::Interp` lowered and emitted
+  - done when: string interpolation programs classify as `GeneralLowered`
+  - regression: execution test with multi-part interpolation
+- [ ] WB-1-M3. `CompExpr::If` lowered and emitted
+  - done when: `if cond then expr1 else expr2` programs classify as `GeneralLowered`
+  - regression: both branch outcomes tested
+- [ ] WB-1-M4. `CompExpr::LetMut` and `CompExpr::Assign` lowered and emitted
+  - done when: simple `mut x = 1; x := 2; print x` programs classify as `GeneralLowered`
+  - regression: mutation parity with interpreter result
+- [ ] WB-1-M5. Quality gates pass: `cargo fmt`, `cargo check`, `cargo test`, `cargo clippy -- -D warnings`
+
+### Phase WB-2A: Uniform call ABI for top-level declarations
+
+Prerequisite: WB-1 complete.
+
+**Problem:** `lower_comp` handles `Call` only for effect calls and backend intrinsics.
+Ordinary top-level declaration calls (including recursive calls like `map xxs f` and
+function-argument calls like `f x`) produce `UnsupportedForm`. This must be fixed before
+`Case`/`ListLit` (WB-2B) because `map`/`each` use both.
+
+**Scope:**
+
+| Construct | Wasm mapping | Notes |
+|-----------|-------------|-------|
+| `Call { callee: GlobalRef(module, name), args }` — top-level decl call | Wasm `call $decl_fn_idx` | Module-level functions compiled as Wasm functions; index table built during module emit |
+| `Call { callee: Var(name), args }` — local function variable call | Wasm `call_indirect` or `call_ref` | Needed for calling `f` in `map xs f`; requires function-value representation decision |
+| Recursive calls (same function calling itself) | Wasm direct `call` (self-reference by index) | Standard for ANF recursive functions |
+
+**Function-value representation decision (locked here):**
+`Var(name)` calling a function argument requires a calling convention for function values.
+The language has two distinct cases (LANGUAGE_SPEC.md §anonymous functions):
+
+- `map xs add_ten` — passing a named top-level declaration as a function value. No free
+  variables; no environment needed. Representation: tagged i64 handle encoding the Wasm
+  function index (lightweight, no closure allocation).
+- `map xs (|x| -> x + offset)` — passing a lambda that captures `offset` from the enclosing
+  scope. Requires an environment. Representation: tagged i64 pointer to a heap-allocated
+  closure object `{ code_idx: i32, env_ptr: i32, env_fields... }`.
+
+These two representations are **distinguished at the call site**: calling a top-level handle
+uses direct `call_indirect` with a null env; calling a closure object uses `call_indirect`
+with the env pointer passed as an extra leading parameter.
+
+This split must be locked in WB-2A even though lambda emission is deferred to WB-3, because
+WB-2A establishes the `Var(name)` call convention that WB-3 must extend — not replace.
+If WB-2A assumed only top-level handles and WB-3 changed the ABI, all WB-2A call sites would
+need to be rewritten. The two-representation design avoids that redesign.
+
+**EffectId / OpId boundary:** when extending `Call` dispatch, lock the `EffectId`/`OpId`
+representation at the backend boundary simultaneously. Dispatch table entries for effect
+operations must use the same identity scheme that WB-3 will need. Do not design this twice.
+
+**Milestones:**
+
+- [ ] WB-2A-M1. Top-level `GlobalRef` decl calls compile to direct Wasm `call`
+  - done when: a program calling a non-intrinsic top-level function classifies as `GeneralLowered`
+  - regression: unit test in `lower.rs`; execution test calling a simple helper function
+- [ ] WB-2A-M2. Recursive decl calls (same function) work correctly
+  - done when: a directly recursive function (e.g., countdown) compiles and executes
+  - regression: execution test with base case and recursive case
+- [ ] WB-2A-M3. `Var(name)` function-argument calls work via funcref table
+  - done when: `each [1,2,3] print_fn` compiles and executes (after WB-2B ListLit)
+  - regression: execution test with a higher-order call
+- [ ] WB-2A-M4. `EffectId`/`OpId` backend boundary locked (no stringly dispatch for new work)
+  - done when: effect dispatch in `lower.rs` uses a typed identity, not raw string matching
+  - regression: existing effect dispatch tests continue to pass
+- [ ] WB-2A-M5. Quality gates pass
+
+### Phase WB-2B: Pattern matching and structured data
+
+Prerequisite: WB-2A complete. Independent of effect handler design.
+
+**In-scope patterns** (from `IrCasePattern` in `crates/goby-core/src/ir.rs`):
+`IntLit`, `StringLit`, `BoolLit`, `EmptyList`, `ListPattern { items, tail }`, `Wildcard`.
+
+**Out of scope (no record/constructor patterns in current IR):** record and constructor
+patterns do not exist in the current language spec or `IrCasePattern`. They are a future
+language-expansion item, not a backend-convergence item. Do not add them here.
+
+**Scope:**
+
+| Construct | Wasm mapping | Notes |
+|-----------|-------------|-------|
+| `CompExpr::Case` — `IntLit` / `BoolLit` / `StringLit` / `Wildcard` patterns | `if/else` chain comparing tagged i64 | No `br_table` needed for small arities |
+| `CompExpr::Case` — `EmptyList` / `ListPattern` patterns | extract tag bits from tagged i64; nil sentinel check; head/tail pointer extraction | Reuse existing list ABI from Track E |
+| `ValueExpr::ListLit` | bump-alloc one cell per element + tagged pointer | Extend existing bump allocator from Track E |
+| `ValueExpr::TupleLit` | bump-alloc + store fields; tagged i64 pointer | Uniform tagged i64 ABI — no multi-value optimisation. ABI uniformity takes precedence over local performance; optimisation is deferred until the ABI is proved stable. |
+| `ValueExpr::RecordLit` | bump-alloc + store fields in IR field order; constructor tag at offset 0; tagged i64 pointer | Constructor identity = index into module-level constructor table |
+
+**Milestones:**
+
+- [ ] WB-2B-M1. `CompExpr::Case` with literal and wildcard patterns lowered
+  - done when: `case x { 0 -> "zero" | _ -> "other" }` classifies as `GeneralLowered`
+  - regression: all literal pattern types; wildcard; exhaustive and non-exhaustive arms
+- [ ] WB-2B-M2. `CompExpr::Case` with list patterns lowered
+  - done when: `case xs { [] -> 0 | [h, ..t] -> 1 }` classifies as `GeneralLowered`
+  - regression: empty list; head/tail; prefix patterns
+- [ ] WB-2B-M3. `ValueExpr::ListLit` lowered
+  - done when: `[1, 2, 3]` literal classifies as `GeneralLowered`
+  - regression: empty list; non-empty list; list returned from function
+- [ ] WB-2B-M4. `ValueExpr::TupleLit` lowered (tagged i64, heap-allocated)
+  - done when: `(1, "hello")` classifies as `GeneralLowered`
+  - regression: tuple construction; tuple field access (if field access is in scope)
+- [ ] WB-2B-M5. `ValueExpr::RecordLit` lowered
+  - done when: a record construction expression classifies as `GeneralLowered`
+  - regression: record construction; field access
+- [ ] WB-2B-M6. `stdlib/goby/list.gb` `map` and `each` classify as `GeneralLowered` end-to-end
+  - this is the primary done condition for WB-2 as a whole
+  - regression: `map [1,2,3] f` and `each [1,2,3] f` execute with correct output
+- [ ] WB-2B-M7. Fused patterns made obsolete by WB-2 are identified and deleted
+  - at minimum: document which fused patterns can be removed; delete if safe
+- [ ] WB-2B-M8. Quality gates pass
+
+### Phase WB-3: Function values and effect handlers
+
+Prerequisite: WB-2A and WB-2B complete. Effect handler strategy locked (§4).
+
+**Calling convention (locked in WB-2A):** captured variables are passed as explicit
+extra Wasm function parameters. Not Wasm globals. This is required for correctness under
+recursion and nested handlers.
+
+#### WB-3 Step 1: Legality analysis
+
+Before any emission work, implement static analysis that classifies each `WithHandler` node:
+
+- **one-shot tail-resumptive:** every path through every clause body either (a) calls
+  `resume` exactly once at the tail position, or (b) exits the `with` scope without
+  calling `resume`. No `resume` appears in a non-tail position or in a loop.
+- **other (multi-resume or non-tail):** any other pattern.
+
+Programs in the one-shot tail-resumptive subset → proceed to WB-3A direct-call lowering.
+Programs outside the subset → `BackendLimitation` error, not `UnsupportedForm`.
+
+This analysis runs at the IR level, not the source level. It does not require modifying IR.
+
+#### WB-3 Step 2: WB-3A direct-call lowering (one-shot tail-resumptive only)
+
+For `WithHandler` nodes that pass legality analysis:
+
+```
+WithHandler {
+  handler: Handle { clauses: [
+    IrHandlerClause {
+      op_name: "yield",
+      params: ["grapheme", "step"],
+      body: ... Resume { value: (True, next_state) }   -- tail position
+    }
+  ]},
+  body: <uses PerformEffect(Iterator, yield, args)>
+}
+```
+
+Wasm emission:
+
+```wasm
+;; Handler clause → named Wasm function.
+;; Signature: op params + captured vars from enclosing scope as explicit params.
+(func $handler_Iterator_yield_{scope_id}
+      (param $grapheme i64) (param $step i64)
+      (param $captured_prefix i64)        ;; captured var, explicit param
+      (result i64)
+  ;; ... clause body ...
+  ;; Resume { value } at tail position → return_call to continuation function
+  return_call $body_continuation_{scope_id}
+)
+
+;; Body computation:
+;; PerformEffect { effect: "Iterator", op: "yield", args } → call $handler_yield_{scope_id}
+(func $body_continuation_{scope_id} ...
+  i64.const <tagged "a">
+  i64.const <tagged state>
+  i64.const <captured prefix>
+  call $handler_Iterator_yield_{scope_id}
+)
+```
+
+The `(Bool, State)` state-threading pattern used by `graphemes` and `split`:
+- `resume (True, next_state)` → `return_call $continuation` (Wasm tail call)
+- no `resume` (scope exit) → return sentinel / escape value directly
+
+#### WB-3 Step 3: Lambda lowering
+
+`ValueExpr::Lambda { param, body }` → named Wasm function following the same
+function-value representation established in WB-2A (funcref table entry, tagged i64 handle).
+Captured variables: same convention as handler functions (explicit extra parameters).
+
+**Milestones:**
+
+- [ ] WB-3-M1. Legality analysis for one-shot tail-resumptive `WithHandler` implemented
+  - done when: programs are correctly classified as safe or `BackendLimitation`
+  - regression: unit tests covering: tail resume ✓, non-tail resume ✗, multi-resume ✗,
+    scope-exit without resume ✓, nested handlers ✓/✗ as appropriate
+- [ ] WB-3-M2. `Handle` / `WithHandler` / `Resume` (tail) lowered for safe subset
+  - done when: `examples/iterator.gb` classifies as `GeneralLowered` and executes correctly
+  - regression: iterator output matches interpreter result
+- [ ] WB-3-M3. `ValueExpr::Lambda` lowered
+  - done when: a lambda expression passed to `map` classifies as `GeneralLowered`
+  - regression: `map [1,2,3] (fn x -> x + 1)` executes correctly
+- [ ] WB-3-M4. `stdlib/goby/string.gb` `graphemes` classifies as `GeneralLowered` end-to-end
+  - without relying on Track E host-intrinsic bridge
+  - regression: emoji-family grapheme output matches current bridge output
+- [ ] WB-3-M5. Fused patterns made obsolete by WB-3 identified and deleted
+  - `SplitEachPrint`, `SplitGetPrint`, `graphemes-get-print` are primary candidates
+  - Track E host-intrinsic bridge may be retained as an optional optimisation but must
+    no longer be required for correctness
+- [ ] WB-3-M6. `InterpreterBridge` usage reviewed; reduce to genuinely Wasm-incompatible programs
+- [ ] WB-3-M7. Integration test: the following program executes correctly via `GeneralLowered`
+  end-to-end (stdin provided at runtime):
+
+  ```goby
+  import goby/list ( each )
+  import goby/string ( split, graphemes )
+
+  main : Unit -> Unit can Print, Read
+  main =
+    text = read ()
+    lines = split text "\n"
+    rolls = map lines graphemes
+    map (rolls[2]) println
+  ```
+
+  This program exercises the full WB-1 through WB-3 stack simultaneously:
+  - `split text "\n"` — WB-2A: top-level decl call (`GlobalRef("string","split")`)
+  - `map lines graphemes` — WB-2A: decl call + top-level function passed as value
+  - `map` internals — WB-2A + WB-2B: recursive decl call + `Case` + `Var` function-arg call (`f x`)
+  - `graphemes` internals — WB-3: `WithHandler` / `Resume` (one-shot tail-resumptive)
+  - `rolls[2]` — existing `list.get` intrinsic
+  - `map (rolls[2]) println` — WB-2A: decl call + effect op as function value
+
+  Done when: given stdin `"line0\nline1\nline2\nline3"`, the program prints each grapheme
+  of `"line2"` on a separate line, matching interpreter output.
+
+- [ ] WB-3-M8. Quality gates pass
+
+### Phase WB-3B (future): WasmFX typed continuations
+
+**Prerequisite:** WebAssembly stack-switching proposal reaches Phase 4 (standardized);
+Wasmtime supports it on x64 and ARM64.
+
+**Scope:** replace WB-3A emit logic for `WithHandler`/`PerformEffect`/`Resume` with
+`suspend`/`resume` Wasm instructions. IR is unchanged. Enables non-tail `Resume` and
+multi-resume progression without source-level CPS transformation.
+
+Note: WasmFX removes the need for IR/emit redesign and allows non-tail/multi-resume to be
+expressed naturally. It does not make a general claim about runtime heap allocation for
+continuations — the runtime cost profile depends on the Wasmtime implementation details
+(see https://github.com/bytecodealliance/wasmtime/issues/10248).
+
+**Milestone:**
+
+- [ ] WB-3B-M1. WasmFX emission implemented behind a feature flag; parity tests pass
+  against WB-3A output
+
+---
 
 ## 6. Invariants
 
 All implementation under this plan must preserve:
 
-1. Panic-free lowering for user-controlled source in normal compiler flows.
-2. Explicit, readable lowering errors when a construct is truly unsupported.
-3. One semantic source of truth across front-end, fallback runtime, and Wasm lowering.
-4. No new backend-specific AST shape recognizers for constructs that belong in shared IR.
-5. Semantically equivalent source forms must not diverge purely because of syntactic spelling.
-6. Tests must lock semantics at the IR boundary, not only end-to-end runtime behavior.
-7. Shipped mutable forms must not bypass shared IR as a permanent architecture exception.
-8. Name/effect resolution responsibilities must be explicit; the lowerer must not silently
-   recreate ad-hoc resolution logic from raw syntax when resolved identity should already exist.
+1. **IR shape is not modified for backend convenience.** Backend requirements are expressed
+   as emit-layer transformations.
+2. **`WithHandler`/`PerformEffect`/`Resume` IR shape is kept structurally 1:1 with WasmFX
+   instruction semantics.** Phase WB-3B must be a pure emit-layer substitution.
+3. **Tagged i64 ABI is the single runtime value representation.** All new data types
+   (tuples, records, function values) use heap-allocated tagged i64 pointers. Multi-value
+   or unboxed layout is explicitly deferred as a post-ABI-stability optimisation.
+4. **Tail-resumptive `Resume` → Wasm `return_call`.** Non-tail or multi-resume →
+   explicit `BackendLimitation` error until WB-3B. Silent wrong results are not acceptable.
+5. **Captured variables → explicit Wasm function parameters, not Wasm globals.** Required
+   for correctness under recursion and nested handlers.
+6. **`EffectId`/`OpId` boundary is locked in WB-2A and not redesigned in WB-3.** Effect
+   dispatch must use a typed identity scheme from WB-2A onward.
+7. **Fused patterns are not extended.** Each phase names which fused patterns it makes
+   obsolete and deletes them in the same change.
 
-## 7. Milestones
+---
 
-- [x] IR0. Architecture lock
-  - lock the resolved-front-end -> shared IR pipeline shape
-  - lock mutable-form inclusion in shared IR scope
-  - lock initial decisions for list index, pipelines, method calls, and effect-op identity
-  - implementation checklist:
-    - explicitly lock the use of a distinct resolved front-end form
-    - name the owning input type that will feed `ir_lower`
-    - write the construct-to-IR decision table for:
-      - list index,
-      - pipelines,
-      - method calls,
-      - mutable locals / assignment,
-      - effect operation references
-    - identify the concrete owning modules for:
-      - resolved input representation,
-      - shared IR definitions,
-      - AST-to-IR lowering,
-      - lowering tests
-    - add a short "first implementation slice" note naming the exact files expected to change first
-  - validation checklist:
-    - `doc/PLAN_IR.md` contains the locked decisions and ownership notes
-    - the document explicitly rejects "keep extending typed AST with ad-hoc resolution-only fields"
-      as the default architecture
-    - any conflicting comments in `goby-core` are updated in the same slice
-- [x] IR1. Construct inventory and mapping table
-  - enumerate all AST constructs and their lowering state
-  - mark each gap as IR gap vs backend gap
-  - implementation checklist:
-    - add the inventory table to this document
-    - include one row per user-visible AST family, not only per parser enum
-    - mark each row with:
-      - lowering status,
-      - canonical semantic form,
-      - normalization boundary,
-      - canonical IR target,
-      - owner milestone,
-      - representative test file or test name
-  - validation checklist:
-    - there is no remaining "misc unsupported" bucket in the document
-    - each unsupported construct names a next milestone or explicit non-goal
-    - semantically equivalent spellings share the same canonical semantic form entry
-- [x] IR2. Shared IR expansion
-  - add or normalize IR forms needed to represent the currently supported language surface
-  - implementation checklist:
-    - update `crates/goby-core/src/ir.rs`
-    - update IR printers / validators alongside any new node or invariant
-    - add direct IR construction tests for each new semantic family
-    - document whether each family is:
-      - a new IR node,
-      - a canonical desugaring into existing IR
-  - validation checklist:
-    - every new IR form has at least one printer or snapshot assertion
-    - IR validation errors are explicit and user-comprehensible where relevant
-- [x] IR3. Resolved lowering input
-  - introduce or expose the resolved/symbol-bound lowering input needed for stable effect/call lowering
-  - implementation checklist:
-    - introduce the distinct resolved front-end form chosen in IR0
-    - make symbol identity available to `ir_lower`
-    - ensure effect operations, helpers, top-level declarations, and locals are distinguishable without textual guessing
-    - remove now-obsolete raw-name heuristics where the resolved layer replaces them
-  - validation checklist:
-    - tests cover bare/imported/qualified spellings lowering through the same resolved identity
-    - `ir_lower` input type is the resolved front-end form rather than raw AST
-    - `ir_lower` no longer needs ad-hoc name-pattern logic for the covered forms
-- [x] IR4. Calls and effect-call normalization
-  - converge bare/imported/qualified effect-call spellings before or at the IR boundary
-  - implementation checklist:
-    - normalize ordinary call targets and effect-op targets using resolved identity
-    - cover aliasing cases that should remain semantically equivalent
-    - update runtime-I/O/general-lowering tests that currently exist only because of spelling differences
-  - validation checklist:
-    - semantically equivalent effect-call spellings produce equivalent IR snapshots
-    - backend/runtime tests that previously depended on spelling differences are simplified or deleted
-- [x] IR5. Collections lowering
-  - lower list literal, spread, and indexing through the new architecture
-  - implementation checklist:
-    - lower list literals and spread in the same slice as their canonical IR representation
-    - lower indexing via the locked IR strategy from IR0
-    - update collection-related backend assumptions that currently recognize syntax-shaped forms
-  - validation checklist:
-    - AST-to-IR tests cover literal/spread/index combinations
-    - at least one backend parity test proves syntax sugar and canonical helper spellings converge
-- [x] IR6. Control-flow lowering
-  - lower `case` and related branch forms into shared IR
-  - implementation checklist:
-    - lower `case` with all currently supported pattern families
-    - ensure effectful scrutinees and branch bodies survive lowering without AST fallback
-    - update any runtime path that still assumes `case` is interpreter-only
-    - remove or narrow any backend/runtime fallback that still exists only because `case`
-      does not yet lower through the normal shared-IR path
-  - validation checklist:
-    - IR snapshots exist for both pure and effectful `case`
-    - branch semantics match existing runtime behavior
-- [x] IR7. Function-value lowering
-  - lower lambda and higher-order function-value forms into shared IR
-  - implementation checklist:
-    - define closure/capture representation at shared-IR level or explicit desugaring boundary
-    - lower lambda syntax and named higher-order references in one semantic family
-    - update call lowering assumptions that currently require only direct/global callees
-  - validation checklist:
-    - direct IR tests cover captures and call sites
-    - backend unsupported cases, if any, are reported as backend limitations
-- [x] IR8. Product-data lowering
-  - lower non-unit tuples and record construction into shared IR
-  - implementation checklist:
-    - lower tuples and records in one product-data slice
-    - update equality / access assumptions where they currently rely on AST/runtime-only handling
-  - validation checklist:
-    - IR tests cover construction and representative consumption sites
-    - any remaining backend limitation is documented as such rather than left as lowering failure
-- [x] IR9. Mutable-form lowering
-  - lower mutable locals and assignment into shared IR
-  - implementation checklist:
-    - choose the shared-IR representation for mutable locals
-    - lower `mut` binding and assignment in the same slice
-    - update resume/handler/runtime assumptions if mutable state can cross those boundaries
-  - validation checklist:
-    - mutation semantics are covered by IR tests and existing runtime parity tests
-    - mutable forms no longer fail at AST-to-IR time
-- [x] IR10. Backend boundary convergence
-  - make backend limitations show up as backend limitations rather than IR-construction failures
-  - implementation checklist:
-    - remove backend workarounds that only exist for pre-convergence AST/IR mismatch
-    - rewrite diagnostics that still imply "syntax not lowerable" when the real issue is backend support
-    - shrink fallback classification that compensates for now-fixed IR gaps
-  - validation checklist:
-    - each landing slice names the specific fallback/recognizer removed or narrowed
-    - if a fallback remains, the slice states why it remains and why it is an optimization rather than a semantic dependency
-    - representative unsupported cases fail with backend-oriented errors
-- [x] IR11. Legacy framing cleanup
-  - remove the old narrow-IR framing as the governing model in docs/comments/code paths
-  - implementation checklist:
-    - rewrite stale comments, test names, and diagnostics
-    - remove dead code branches that only exist for the old legacy framing
-    - update surrounding docs to describe one stable lowering model
-  - validation checklist:
-    - repo search no longer shows the old legacy framing as active architecture
-    - `doc/STATE.md` restart notes reference the new model only
+## 7. Non-Goals
 
-Milestone update rule:
-
-- when a milestone is reached, update this checklist in `doc/PLAN_IR.md` by changing its checkbox
-  from `[ ]` to `[x]` in the same change that lands the milestone outcome.
-- do not check a milestone based only on discussion or partial implementation; the representative
-  code, tests, and document updates for that milestone must land together.
-- if a milestone grows too large or ambiguous, split it into child milestones in this document
-  before continuing implementation.
-
-## 8. Testing Strategy
-
-For each milestone, prefer this pyramid:
-
-- AST-to-IR unit tests,
-- IR snapshot tests,
-- backend lowering tests from shared IR,
-- runtime/Wasm parity tests for representative programs.
-
-Representative parity cases must include:
-
-- bare and qualified effect-call spellings,
-- direct helper-call spelling vs sugared syntax spelling,
-- collection/indexing programs such as `lines[1]`,
-- control-flow forms whose branches contain effects,
-- higher-order forms once lambda lowering is introduced.
-
-## 9. Immediate First Implementation Targets
-
-These are the first targets after the planning slice lands:
-
-1. lock the resolved-lowering-input strategy and symbol identity boundaries,
-2. lock the IR representation strategy for list indexing and related collection forms,
-3. implement effect-call normalization so bare prelude forms and qualified forms do not diverge semantically,
-4. implement lowering for list indexing without introducing backend-specific shortcuts,
-5. use those changes to remove at least one existing Wasm/runtime fallback distinction.
-
-Reason for this order:
-
-- it directly addresses the current `Read.read` / `read`, `list.get` / `[]` inconsistency,
-- it fixes the semantic-identity boundary first instead of teaching `ir_lower` more spelling-specific tricks,
-- it tests the plan on a real backend pain point,
-- it improves architecture quality without committing to a throwaway workaround.
-
-## 10. Development Process Notes
-
-- treat this file as the active progress tracker for the IR-lowering program.
-- every implementation slice under this program should mention which IR milestone it advances.
-- when a slice completes a milestone, mark the checkbox in this file in the same change.
-- if implementation learns that a locked architectural decision is wrong, update this file first
-  with the new decision and rationale before continuing to spread code changes.
-- each implementation slice should follow this order unless there is a documented reason not to:
-  1. update `doc/PLAN_IR.md` if the slice locks or changes a design decision,
-  2. update shared IR definitions,
-  3. update lowering implementation,
-  4. update focused AST-to-IR / IR tests,
-  5. update downstream backend/runtime assumptions,
-  6. run `cargo fmt` and `cargo test`.
-- prefer slices that complete one semantic family end-to-end rather than touching many families shallowly.
-- when deleting fallback logic, do it in the same slice that proves the shared-IR path covers the replaced behavior.
-- if a slice cannot finish a milestone, leave the checkbox unchecked and add a short note in
-  `doc/STATE.md` naming the exact unfinished sub-steps.
-- development rule for this phase:
-  - this project is currently used by one person, so temporary breakage during development is acceptable.
-  - optimize for the long-term design from the start, even when that means the codebase stays broken for a while mid-slice.
-  - do not accept architectural compromises just because the principled design is harder to land.
-  - avoid "small safe" steps that accumulate ad-hoc structure and make the long-term design worse.
-  - if an implementation approach fails repeatedly, do not gradually degrade the design to force it through.
-  - after 5 serious implementation attempts on the same design path without a clean result, stop the work,
-    summarize the blocker, and explicitly ask for a direction check before continuing.
-
-## 11. Suggested Next Slice
-
-The IR-lowering roadmap is complete.
-
-Recommended follow-up behavior:
-
-1. keep future language work on the resolved-form -> shared-IR -> backend boundary,
-2. treat backend limitations as backend limitations rather than reopening AST-shaped special cases,
-3. update this document only when a new architectural gap is discovered.
-
-Recommended file entry points for future follow-up:
-
-- `doc/PLAN_IR.md`
-- `doc/STATE.md`
-- `crates/goby-wasm/src/fallback.rs`
-- `crates/goby-wasm/src/lower.rs`
-- repo-wide comments/tests/docs that describe lowering boundaries
-
-Definition of done for this roadmap:
-
-- `ir_lower` continues to lower through `Resolved*` inputs without reintroducing raw-name heuristics,
-- code and docs describe one stable lowering model without reviving the old narrow-IR framing,
-- repo search no longer presents the old legacy framing as active architecture,
-- `doc/STATE.md` points to this document as a completed roadmap rather than an open milestone queue.
-
-## 12. Non-Goals for This Document
-
-This plan does not itself lock:
-
-- final semantics for every future language feature,
-- backend optimization strategy,
-- interpreter deletion timing,
-- exact commit slicing.
-
-Those decisions can remain incremental as long as they obey the architecture and invariants above.
+- Multi-shot continuations (same continuation called more than once): deferred to WB-3B.
+- Record and constructor case patterns: language-expansion item, not backend-convergence.
+- Tuple multi-value unboxing: post-ABI-stability optimisation, not in any current phase.
+- Wasm GC proposal integration: not required for current value representation.
+- Browser Wasm target: current target is Wasmtime (WASI). Browser compatibility is a
+  separate track.
+- Interpreter deletion: the interpreter remains as the reference semantics and fallback.
+- Effect polymorphism in Wasm: not in scope until WB-3 is proved correct for
+  monomorphic cases.

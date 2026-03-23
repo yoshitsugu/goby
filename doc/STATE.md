@@ -4,71 +4,42 @@ Last updated: 2026-03-23
 
 ## Current Focus
 
-- `doc/PLAN_IR.md` is the active roadmap.
-- IR0 through IR11 are landed.
-- The IR-lowering roadmap is complete.
+- IR0–IR11 complete. `doc/PLAN_IR.md` now contains the Wasm backend lowering design (§4–§5).
+- Track E E1–E7 complete.
+- Next active work: `doc/PLAN_STANDARD_LIBRARY.md` C4-S1, OR `doc/PLAN_IR.md` Phase WB-1.
 
 ## Immediate Next Steps
 
-1. Keep future lowering work aligned with `resolved form -> shared IR -> backend`.
-2. Treat backend limitations as backend limitations rather than restoring AST-shaped recognizers.
-3. Continue with stdlib split work: Track E E1–E7 are all complete. Next is `doc/PLAN_STANDARD_LIBRARY.md` C4-S1 (unblock `List String` record field type) to enable the multi-grapheme delimiter stdlib path.
-4. Reopen `doc/PLAN_IR.md` only if a genuinely new architectural gap appears.
+Two independent tracks. Either can be started next:
 
-## Restart Notes
+**Track stdlib (C4-S1):**
+Unblock `List String` as a record field type in the type checker.
+Exit criterion: `cargo run -p goby-cli -- check stdlib/goby/string.gb` no longer fails on the state record field type.
+See `doc/PLAN_STANDARD_LIBRARY.md` §5.
 
-- Read `doc/PLAN_IR.md` first.
-- Mutation lowering is landed through shared IR: `mut` bindings lower to `CompExpr::LetMut`, assignment lowers to `CompExpr::Assign`, and non-local assignment targets are rejected during IR lowering.
-- Backend-boundary convergence is landed for the current representative slice: native fallback no longer rejects `mut` bindings without assignment, and assignment is reported as an explicit native backend limitation rather than a generic unsupported statement.
-- General Wasm lowering classification now checks emitter support instead of assuming every lowered backend IR sequence is emit-ready.
-- Wasm compile-path tests now run structural validation with `wasmparser::Validator`, which caught and now guards against invalid-stack-shape regressions.
-- Runtime-I/O plans that delegate to general backend emission append an explicit final `Drop`, matching the `_start : () -> ()` Wasm contract.
-- Non-fused `CallHelper` emission is landed for `string.split`, `list.get`, and `string.length`, backed by a downward bump-allocation ABI for runtime strings/lists in general Wasm lowering.
-- Non-fused helper shapes now execute end to end in wasmtime for `split -> drop` and `split -> list.get -> alias -> println`.
-- Track E E1/E2 are landed:
-  - the grapheme/list backend work is locked to a narrow intrinsic-aware stdlib-decl execution path rather than arbitrary handler support in general Wasm lowering,
-  - backend lowering now uses explicit backend intrinsics instead of stringly helper-name dispatch for new grapheme-track primitives,
-  - `__goby_string_each_grapheme` and `__goby_list_push_string` lower structurally but remain emitter-unsupported until E3/E4.
-- Track E boundary correction is now locked in the roadmap:
-  - raw `wasmtime run` is no longer the required execution model for backend-intrinsic grapheme modules,
-  - the next step is a Goby-owned Wasm runtime boundary that can provide explicit backend intrinsics as host functions while reusing the single Rust grapheme semantic authority.
-- Track E bridge slice is landed for the current selective-import `goby/string.graphemes` runtime-`Read` path:
-  - runtime-I/O classification now routes `read -> graphemes -> print/index` programs to `InterpreterBridge` instead of generic `Unsupported`,
-  - CLI `run` executes that subset through seeded-stdin interpreter runtime rather than pretending it is Wasm-lowerable,
-  - end-to-end regression coverage now locks emoji-family grapheme behavior for the bridge path.
-- Track E list substrate is partially landed:
-  - `__goby_list_push_string` now emits through the shared tagged list/string ABI in general Wasm lowering,
-  - regression coverage locks a runtime-`Read` helper chain `split -> __goby_list_push_string -> list.get -> print`,
-  - remaining work is the host runtime boundary and grapheme execution path, not list accumulation layout.
-- Track E grapheme semantic-authority groundwork is landed:
-  - Unicode Extended Grapheme Cluster segmentation now lives behind a dedicated backend/runtime helper module,
-  - imported `goby/string.graphemes` evaluation and `__goby_string_each_grapheme` runtime intrinsic execution both use that shared authority,
-  - backend lowering now splits unary and binary `__goby_string_each_grapheme` forms into explicit fixed-arity intrinsic variants,
-  - the shared grapheme layer now exposes byte-span boundaries as well as string materialization, so the future host runtime can target slice copying instead of re-deriving segmentation rules,
-  - remaining work is the host runtime execution path, not deciding semantics or overloading contracts in multiple places.
-- Track E E3 and E4 are now complete:
-  - backend intrinsics now distinguish host-backed vs in-Wasm ownership explicitly at the backend boundary,
-  - general Wasm emission owns a fixed Track E host import ABI for grapheme intrinsics and emits it only for modules that actually need it,
-  - `goby-wasm` now owns the runtime-stdin execution API that the CLI calls for the current Track E bridge path,
-  - the Goby-owned Wasm runtime (wasmtime + WASI + host bump allocator) is wired in `wasm_exec.rs` and provides `__goby_string_each_grapheme_count` and `__goby_string_each_grapheme_state` host imports,
-  - a bump allocator (CAS loop over top 4 KB of Wasm memory page) handles span.start 1..=3 grapheme header placement safely,
-  - E4 parity test confirms that grapheme count programs compile to Wasm containing the host import name (unconditional gate, no skip).
-- Track E E5 (in-Wasm list accumulation parity):
-  - condition 1 (no second list/string runtime representation) is satisfied: `__goby_list_push_string` emits through the shared tagged ABI,
-  - condition 2 (stdlib `goby/string.graphemes` accumulates list results through backend path) is addressed in E6 via the fused graphemes-index pattern.
-- Track E E5–E7 are now complete:
-  - E5: both conditions satisfied — no second list/string representation, and
-    graphemes accumulation through backend path is addressed in E6.
-  - E7: split handoff prepared — stdlib already implements empty and
-    single-grapheme delimiter paths; multi-grapheme delimiter falls back to
-    runtime builtin pending C4-S1 type-checker fix.
-- Track E E6 (stdlib graphemes parity) is now complete:
-  - a fused `graphemes(text)[N]` lowering pattern rewrites the `graphemes + list.get + Print` IR sequence to `__goby_string_each_grapheme_state(text, N)` directly,
-  - `graphemes + index` programs now classify as `GeneralLowered` and execute through the Goby-owned Wasm runtime with correct emoji-family output,
-  - remaining graphemes patterns (full list iteration, for-each) are deferred to E7.
-- Remaining helper work is incremental family expansion on top of the emitter ABI, not a reason to restore planner or AST-shaped fallback.
-- The IR-lowering roadmap is complete; follow-up work should stay within the converged lowering architecture.
-- Then inspect:
-  - `crates/goby-wasm/src/fallback.rs`
-  - `crates/goby-wasm/src/lower.rs`
-  - `doc/PLAN_IR.md`
+**Track Wasm backend (Phase WB-1):**
+Add `If`, `BinOp`, `Interp`, `LetMut`, `Assign` to `lower_comp` / `lower_value`.
+Entry files: `crates/goby-wasm/src/gen_lower/lower.rs`, `crates/goby-wasm/src/gen_lower/emit.rs`.
+Exit criterion: simple programs using `if` and arithmetic classify as `GeneralLowered`.
+See `doc/PLAN_IR.md` §5 Phase WB-1.
+
+## Architecture State
+
+- Resolved-form → shared IR boundary is stable (IR0–IR11 done).
+- Wasm backend lowering design is locked in `doc/PLAN_IR.md`:
+  - Phase WB-1: pure control flow and operators
+  - Phase WB-2: pattern matching and structured data
+  - Phase WB-3: function values and effect handlers (direct-call lowering, one-shot tail-resumptive)
+  - Phase WB-3B (future): WasmFX stack switching when proposal reaches Phase 4
+- Effect handler strategy: selective CPS degenerating to direct-call lowering for one-shot
+  tail-resumptive handlers; captured vars as explicit Wasm function parameters.
+- Fused patterns (`SplitEachPrint`, `SplitGetPrint`, `graphemes-get-print`) are deletion targets,
+  not extension points. They become obsolete after Phase WB-2/WB-3.
+
+## Key Entry Points
+
+- `doc/PLAN_IR.md` — Wasm backend lowering design and phase plan
+- `doc/PLAN_STANDARD_LIBRARY.md` — stdlib split/grapheme C4–C8
+- `crates/goby-wasm/src/gen_lower/lower.rs` — `lower_comp` (add Phase WB-1 variants here)
+- `crates/goby-wasm/src/gen_lower/emit.rs` — Wasm instruction emission
+- `crates/goby-wasm/src/gen_lower/backend_ir.rs` — backend IR instruction set
