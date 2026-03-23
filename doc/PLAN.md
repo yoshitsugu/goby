@@ -600,6 +600,13 @@ Milestones:
     - direct backend emission for `__goby_list_push_string` is landed on top of
       the existing tagged list/string layout, and helper-chain regression
       coverage now locks `split -> list_push_string -> list.get -> print`.
+    - condition 1 (no second list/string runtime representation) is satisfied:
+      `__goby_list_push_string` emits through the shared tagged ABI, and an
+      end-to-end execution test locks the `split -> list.get -> println` chain
+      through the Goby-owned Wasm runtime.
+    - condition 2 (stdlib `goby/string.graphemes` accumulates list results through
+      the backend path) requires `graphemes(text)[N]` to lower through the general
+      path; this is addressed in E6 via a fused `graphemes + list.get` pattern.
   - done when:
     - no second list/string runtime representation is introduced for this track,
     - stdlib `goby/string.graphemes` can accumulate list results through the
