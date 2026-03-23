@@ -2,7 +2,7 @@
 //!
 //! The IR → backend-IR mapping is documented in `backend_ir.rs`.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use goby_core::ir::{CompExpr, IrInterpPart, ValueExpr};
 
@@ -44,12 +44,24 @@ impl From<ValueError> for LowerError {
 /// Supported IR nodes: `Value`, `Let`, `Seq`, `PerformEffect`, `Call` (GlobalRef callee only).
 /// All other nodes produce `Err(LowerError::UnsupportedForm)`.
 pub(crate) fn lower_comp(comp: &CompExpr) -> Result<Vec<WasmBackendInstr>, LowerError> {
-    lower_comp_with_aliases(comp, &HashMap::new())
+    lower_comp_inner(comp, &HashMap::new(), &HashSet::new())
 }
 
-fn lower_comp_with_aliases(
+/// Like `lower_comp` but with a set of known top-level declaration names.
+///
+/// A `Call { callee: Var(name), .. }` where `name` is in `known_decls` is lowered
+/// as `DeclCall { decl_name: name }` rather than `UnsupportedForm`.
+pub(crate) fn lower_comp_with_decls(
+    comp: &CompExpr,
+    known_decls: &HashSet<String>,
+) -> Result<Vec<WasmBackendInstr>, LowerError> {
+    lower_comp_inner(comp, &HashMap::new(), known_decls)
+}
+
+fn lower_comp_inner(
     comp: &CompExpr,
     aliases: &HashMap<String, AliasValue>,
+    known_decls: &HashSet<String>,
 ) -> Result<Vec<WasmBackendInstr>, LowerError> {
     match comp {
         CompExpr::Value(v) => lower_value(v),
@@ -70,20 +82,20 @@ fn lower_comp_with_aliases(
             if let Some(alias) = alias_value_from_comp(value) {
                 let mut scoped_aliases = aliases.clone();
                 scoped_aliases.insert(name.clone(), alias);
-                let body_instrs = lower_comp_with_aliases(body, &scoped_aliases)?;
+                let body_instrs = lower_comp_inner(body, &scoped_aliases, known_decls)?;
                 if !instrs_load_local(&body_instrs, name) {
                     return Ok(body_instrs);
                 }
             }
             let mut instrs = vec![WasmBackendInstr::DeclareLocal { name: name.clone() }];
-            instrs.extend(lower_comp_with_aliases(value, aliases)?);
+            instrs.extend(lower_comp_inner(value, aliases, known_decls)?);
             instrs.push(WasmBackendInstr::StoreLocal { name: name.clone() });
             if let Some(alias) = alias_value_from_comp(value) {
                 let mut scoped_aliases = aliases.clone();
                 scoped_aliases.insert(name.clone(), alias);
-                instrs.extend(lower_comp_with_aliases(body, &scoped_aliases)?);
+                instrs.extend(lower_comp_inner(body, &scoped_aliases, known_decls)?);
             } else {
-                instrs.extend(lower_comp_with_aliases(body, aliases)?);
+                instrs.extend(lower_comp_inner(body, aliases, known_decls)?);
             }
             Ok(instrs)
         }
@@ -91,10 +103,10 @@ fn lower_comp_with_aliases(
         CompExpr::Seq { stmts, tail } => {
             let mut instrs = Vec::new();
             for stmt in stmts {
-                instrs.extend(lower_comp_with_aliases(stmt, aliases)?);
+                instrs.extend(lower_comp_inner(stmt, aliases, known_decls)?);
                 instrs.push(WasmBackendInstr::Drop);
             }
-            instrs.extend(lower_comp_with_aliases(tail, aliases)?);
+            instrs.extend(lower_comp_inner(tail, aliases, known_decls)?);
             Ok(instrs)
         }
 
@@ -138,14 +150,33 @@ fn lower_comp_with_aliases(
                 instrs.push(WasmBackendInstr::Intrinsic { intrinsic });
                 Ok(instrs)
             } else if let goby_core::ir::ValueExpr::GlobalRef { name, .. } = callee.as_ref() {
-                // Top-level user declaration call (WB-2A).
-                // Arguments are already lowered and pushed onto the stack above.
+                // Top-level user declaration call via GlobalRef (WB-2A).
                 let mut instrs = Vec::new();
                 for arg in args {
                     instrs.extend(lower_value(arg)?);
                 }
-                instrs.push(WasmBackendInstr::DeclCall { decl_name: name.clone() });
+                instrs.push(WasmBackendInstr::DeclCall {
+                    decl_name: name.clone(),
+                });
                 Ok(instrs)
+            } else if let goby_core::ir::ValueExpr::Var(name) = callee.as_ref() {
+                // Top-level user declaration call via Var (WB-2A).
+                // Goby IR lowers `ResolvedRef::Decl` as `Var(name)`, so we recognise
+                // known top-level decl names here.
+                if known_decls.contains(name.as_str()) {
+                    let mut instrs = Vec::new();
+                    for arg in args {
+                        instrs.extend(lower_value(arg)?);
+                    }
+                    instrs.push(WasmBackendInstr::DeclCall {
+                        decl_name: name.clone(),
+                    });
+                    Ok(instrs)
+                } else {
+                    Err(LowerError::UnsupportedForm {
+                        node: format!("Call with unsupported callee: {:?}", callee),
+                    })
+                }
             } else {
                 Err(LowerError::UnsupportedForm {
                     node: format!("Call with unsupported callee: {:?}", callee),
@@ -155,8 +186,8 @@ fn lower_comp_with_aliases(
 
         CompExpr::If { cond, then_, else_ } => {
             let mut instrs = lower_value(cond)?;
-            let then_instrs = lower_comp_with_aliases(then_, aliases)?;
-            let else_instrs = lower_comp_with_aliases(else_, aliases)?;
+            let then_instrs = lower_comp_inner(then_, aliases, known_decls)?;
+            let else_instrs = lower_comp_inner(else_, aliases, known_decls)?;
             instrs.push(WasmBackendInstr::If {
                 then_instrs,
                 else_instrs,
@@ -170,16 +201,16 @@ fn lower_comp_with_aliases(
             // LetMut uses the same model as Let: DeclareLocal, lower value, StoreLocal, lower body.
             // Fused pattern checks are intentionally skipped for LetMut.
             let mut instrs = vec![WasmBackendInstr::DeclareLocal { name: name.clone() }];
-            instrs.extend(lower_comp_with_aliases(value, aliases)?);
+            instrs.extend(lower_comp_inner(value, aliases, known_decls)?);
             instrs.push(WasmBackendInstr::StoreLocal { name: name.clone() });
-            instrs.extend(lower_comp_with_aliases(body, aliases)?);
+            instrs.extend(lower_comp_inner(body, aliases, known_decls)?);
             Ok(instrs)
         }
 
         CompExpr::Assign { name, value } => {
             // Assign lowers the value and stores it in the existing named local.
             // No DeclareLocal is emitted because the local was already declared by the enclosing LetMut.
-            let mut instrs = lower_comp_with_aliases(value, aliases)?;
+            let mut instrs = lower_comp_inner(value, aliases, known_decls)?;
             instrs.push(WasmBackendInstr::StoreLocal { name: name.clone() });
             // Assign produces Unit.
             instrs.push(WasmBackendInstr::I64Const(
@@ -1447,10 +1478,7 @@ mod tests {
                 module: "mymod".to_string(),
                 name: "add".to_string(),
             }),
-            args: vec![
-                ValueExpr::IntLit(2),
-                ValueExpr::IntLit(3),
-            ],
+            args: vec![ValueExpr::IntLit(2), ValueExpr::IntLit(3)],
         };
         let instrs = lower_comp(&comp).expect("GlobalRef decl call should lower to DeclCall");
         assert!(

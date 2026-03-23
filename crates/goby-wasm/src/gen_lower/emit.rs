@@ -196,9 +196,12 @@ impl EmitContext {
     }
 
     fn decl_func_idx(&self, decl_name: &str) -> Result<u32, CodegenError> {
-        self.decl_func_indices.get(decl_name).copied().ok_or_else(|| CodegenError {
-            message: format!("gen_lower/emit: unknown declaration '{decl_name}' in DeclCall"),
-        })
+        self.decl_func_indices
+            .get(decl_name)
+            .copied()
+            .ok_or_else(|| CodegenError {
+                message: format!("gen_lower/emit: unknown declaration '{decl_name}' in DeclCall"),
+            })
     }
 
     /// Reset local state between functions (keep decl_func_indices shared).
@@ -309,13 +312,14 @@ fn needs_newline_data(instrs: &[WasmBackendInstr]) -> bool {
 /// exports `memory` and `_start`, and contains one function (`main`).
 /// A lowered auxiliary declaration (non-`main` top-level function) ready for emission.
 ///
-/// `params_count` is the number of function parameters, each of type tagged i64.
+/// `param_names` holds the ordered parameter names as they appear in the IR declaration.
+/// Each parameter is a tagged i64 and occupies a Wasm local at indices 0..param_names.len()-1.
 /// `instrs` is the lowered body; it may contain `DeclCall` which will be resolved
 /// against the module-wide `decl_name → func_idx` table during `emit_general_module`.
 #[derive(Debug, Clone)]
 pub(crate) struct AuxDecl {
     pub(crate) decl_name: String,
-    pub(crate) params_count: usize,
+    pub(crate) param_names: Vec<String>,
     pub(crate) instrs: Vec<WasmBackendInstr>,
 }
 
@@ -324,9 +328,9 @@ pub(crate) fn supports_instrs(instrs: &[WasmBackendInstr]) -> bool {
         WasmBackendInstr::Intrinsic { intrinsic } => match intrinsic.execution_boundary() {
             IntrinsicExecutionBoundary::HostImport | IntrinsicExecutionBoundary::InWasm => true,
         },
-        // DeclCall is supported only after WB-2A Step 3 wires up the func-idx table.
-        // Until then, block emit so the module falls through to the interpreter bridge.
-        WasmBackendInstr::DeclCall { .. } => false,
+        // DeclCall is fully supported: emit_general_module_with_aux builds the
+        // decl_name → func_idx table and threads it through EmitContext.
+        WasmBackendInstr::DeclCall { .. } => true,
         _ => true,
     })
 }
@@ -372,9 +376,8 @@ pub(crate) fn emit_general_module_with_aux(
     let main_i32_base = main_i64_count;
 
     // Check whether any instruction list (main or aux) uses host intrinsics.
-    let all_slices_iter = || {
-        std::iter::once(instrs).chain(aux_decls.iter().map(|d| d.instrs.as_slice()))
-    };
+    let all_slices_iter =
+        || std::iter::once(instrs).chain(aux_decls.iter().map(|d| d.instrs.as_slice()));
     let uses_host_intrinsics = all_slices_iter().any(|slice| {
         collect_all_instrs(slice).iter().any(|instr| {
             matches!(
@@ -416,12 +419,12 @@ pub(crate) fn emit_general_module_with_aux(
     let main_type = types.len();
     types.ty().function([], []);
 
-    // types for aux decls: each takes (params_count × i64) → i64
+    // types for aux decls: each takes (param_names.len() × i64) → i64
     let aux_type_indices: Vec<u32> = aux_decls
         .iter()
         .map(|decl| {
             let idx = types.len();
-            let params: Vec<ValType> = vec![ValType::I64; decl.params_count];
+            let params: Vec<ValType> = vec![ValType::I64; decl.param_names.len()];
             types.ty().function(params, [ValType::I64]);
             idx
         })
@@ -523,8 +526,8 @@ pub(crate) fn emit_general_module_with_aux(
             .count() as u32;
         let aux_helper_i64_scratch_count = required_i64_scratch_count(&decl.instrs);
         // Aux decl params are Wasm function parameters (i64 each), not DeclareLocal slots.
-        // In Wasm, function params are locals[0..params_count-1]; body locals follow after.
-        let aux_param_count = decl.params_count as u32;
+        // In Wasm, function params are locals[0..param_names.len()-1]; body locals follow after.
+        let aux_param_count = decl.param_names.len() as u32;
         let aux_i64_count = aux_named_i64_count + aux_helper_i64_scratch_count;
         let aux_i32_scratch_count = required_i32_scratch_count(&decl.instrs);
         let aux_i32_base = aux_param_count + aux_i64_count;
@@ -538,18 +541,17 @@ pub(crate) fn emit_general_module_with_aux(
         }
         let mut function = Function::new(locals_vec);
 
-        // Params occupy local indices 0..params_count in Wasm; body locals follow.
-        // EmitContext must know about the param locals so LoadLocal/StoreLocal work.
-        // We build the context with params pre-declared (no DeclareLocal emitted for them).
+        // Params occupy local indices 0..param_names.len()-1 in Wasm; body locals follow.
+        // Pre-register param names in EmitContext so LoadLocal/StoreLocal resolve correctly.
         let mut ctx = EmitContext::with_decl_indices(decl_func_indices.clone());
-        // Register param locals by name is non-trivial without parameter names in AuxDecl.
-        // For now, body-local lookups start at aux_param_count offset.
-        // The body instructions use DeclareLocal for body locals; param access is via
-        // LoadLocal with integer-like names — this is resolved in Step 3.
-        // For Step 2, aux decl bodies must not contain DeclCall or complex locals.
-        // named_i64_count passed to emit_instrs counts DeclareLocal in body only.
-        // Offset: params are 0..aux_param_count-1, body locals follow from aux_param_count.
-        ctx.next_local = aux_param_count; // body locals start after params
+        for param_name in &decl.param_names {
+            // Wasm assigns local indices for params in declaration order before any body locals.
+            // We mirror that: declare each param name with an explicit local index.
+            ctx.locals.insert(param_name.clone(), ctx.next_local);
+            ctx.next_local += 1;
+        }
+        // After params, body locals start from aux_param_count.
+        // named_i64_count passed to emit_instrs counts only DeclareLocal in body.
         emit_instrs(
             &mut function,
             &mut ctx,
@@ -566,8 +568,8 @@ pub(crate) fn emit_general_module_with_aux(
     module.section(&code);
 
     // Data section: newline byte for println (if needed).
-    let needs_newline = needs_newline_data(instrs)
-        || aux_decls.iter().any(|d| needs_newline_data(&d.instrs));
+    let needs_newline =
+        needs_newline_data(instrs) || aux_decls.iter().any(|d| needs_newline_data(&d.instrs));
     if needs_newline || !static_strings.is_empty() {
         let newline_ptr = (layout.heap_base - 1) as i32;
         let mut data = DataSection::new();
@@ -796,15 +798,8 @@ fn emit_instrs(
             }
 
             WasmBackendInstr::DeclCall { decl_name } => {
-                // WB-2A Step 3 will wire this up to a real func_idx lookup.
-                // This arm is unreachable in Step 1 because `supports_instrs` blocks
-                // any instruction list containing DeclCall from reaching emit_general_module.
-                return Err(CodegenError {
-                    message: format!(
-                        "gen_lower/emit: DeclCall '{decl_name}' reached emit_instrs before \
-                         func-idx table was wired up (internal error)"
-                    ),
-                });
+                let func_idx = ctx.decl_func_idx(decl_name)?;
+                function.instruction(&Instruction::Call(func_idx));
             }
         }
     }

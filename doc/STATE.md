@@ -1,27 +1,34 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-23
+Last updated: 2026-03-24
 
 ## Current Focus
 
 - IR0–IR11 complete. `doc/PLAN_IR.md` now contains the Wasm backend lowering design (§4–§5).
 - Track E E1–E7 complete.
-- Next active work: `doc/PLAN_STANDARD_LIBRARY.md` C4-S1, OR `doc/PLAN_IR.md` Phase WB-1.
+- Phase WB-1 complete (2026-03-24): `If`, `BinOp`, `Interp`, `LetMut`, `Assign` all lowered and emitted.
+- Phase WB-2A complete (2026-03-24): top-level `DeclCall` (direct Wasm `call`), aux decls, recursion.
+  - `lower_comp_with_decls` passes `known_decls` set so `Var(name)` callee resolves as `DeclCall`.
+  - `emit_general_module_with_aux` places main first, aux after; builds `decl_name → func_idx` table.
+  - Helper-call and recursive-call execution tests pass.
+- Next active work: Phase WB-2B (ListLit, pattern matching).
+
+## Track Priority
+
+**Wasm backend (WB) is the primary track.** Complete WB phases in order before starting stdlib work.
+Rationale: the IR/backend pipeline must stabilise before the stdlib can depend on it.
+stdlib track (C4-S1 onwards) is deferred until WB is in a stable state.
 
 ## Immediate Next Steps
 
-Two independent tracks. Either can be started next:
+**Track Wasm backend (Phase WB-2B) — primary:**
+Add `ListLit` / `List` pattern matching support.
+See `doc/PLAN_IR.md` §5 Phase WB-2B.
 
-**Track stdlib (C4-S1):**
+**Track stdlib (C4-S1) — deferred:**
 Unblock `List String` as a record field type in the type checker.
 Exit criterion: `cargo run -p goby-cli -- check stdlib/goby/string.gb` no longer fails on the state record field type.
 See `doc/PLAN_STANDARD_LIBRARY.md` §5.
-
-**Track Wasm backend (Phase WB-1):**
-Add `If`, `BinOp`, `Interp`, `LetMut`, `Assign` to `lower_comp` / `lower_value`.
-Entry files: `crates/goby-wasm/src/gen_lower/lower.rs`, `crates/goby-wasm/src/gen_lower/emit.rs`.
-Exit criterion: simple programs using `if` and arithmetic classify as `GeneralLowered`.
-See `doc/PLAN_IR.md` §5 Phase WB-1.
 
 ## Architecture State
 

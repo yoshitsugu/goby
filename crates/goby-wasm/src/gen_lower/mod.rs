@@ -28,10 +28,13 @@ pub(crate) mod emit;
 pub(crate) mod lower;
 pub(crate) mod value;
 
+use std::collections::HashSet;
+
 use goby_core::Module;
 use goby_core::ir::CompExpr;
 
 use crate::CodegenError;
+use crate::gen_lower::emit::AuxDecl;
 use crate::layout::MemoryLayout;
 use crate::wasm_exec_plan::main_exec_plan;
 
@@ -108,14 +111,41 @@ fn read_line_instrs_are_supported(instrs: &[backend_ir::WasmBackendInstr]) -> bo
     })
 }
 
+/// Lower a single auxiliary (non-main) declaration body.
+///
+/// Unlike `main`, aux decls do not require a Read effect — they are helper functions
+/// called by `main`. Returns `None` if the body contains unsupported forms.
+fn lower_aux_decl(
+    name: &str,
+    param_names: Vec<String>,
+    body: &CompExpr,
+    known_decls: &HashSet<String>,
+) -> Result<Option<AuxDecl>, CodegenError> {
+    let instrs = match lower::lower_comp_with_decls(body, known_decls) {
+        Ok(i) => i,
+        Err(lower::LowerError::UnsupportedForm { .. }) => return Ok(None),
+        Err(lower::LowerError::IntOutOfRange(n)) => {
+            return Err(CodegenError {
+                message: format!("integer {n} is outside the 60-bit representable range"),
+            });
+        }
+    };
+    Ok(Some(AuxDecl {
+        decl_name: name.to_string(),
+        param_names,
+        instrs,
+    }))
+}
+
 /// Attempt to lower a module's `main` body through the general lowering path.
 ///
-/// Returns `Ok(Some(wasm))` when the general path succeeds,
+/// Returns `Ok(Some((main_instrs, aux_decls)))` when the general path succeeds,
 /// `Ok(None)` when the IR contains unsupported forms (fall through to next path),
 /// or `Err` on hard codegen failures.
+#[allow(clippy::type_complexity)]
 fn lower_module_to_instrs(
     module: &Module,
-) -> Result<Option<Vec<backend_ir::WasmBackendInstr>>, CodegenError> {
+) -> Result<Option<(Vec<backend_ir::WasmBackendInstr>, Vec<AuxDecl>)>, CodegenError> {
     let plan = match main_exec_plan(module) {
         Some(p) => p,
         None => return Ok(None),
@@ -125,12 +155,21 @@ fn lower_module_to_instrs(
         None => return Ok(None),
     };
 
-    // Only handle programs with effect operations.
+    // Only handle programs where main has a Read effect.
     if !has_runtime_read_effect(&ir_decl.body) {
         return Ok(None);
     }
 
-    let mut instrs = match lower::lower_comp(&ir_decl.body) {
+    // Collect names of all non-main top-level declarations so callee `Var(name)` can be
+    // recognised as a DeclCall during lowering.
+    let known_decls: std::collections::HashSet<String> = module
+        .declarations
+        .iter()
+        .filter(|d| d.name != "main")
+        .map(|d| d.name.clone())
+        .collect();
+
+    let mut main_instrs = match lower::lower_comp_with_decls(&ir_decl.body, &known_decls) {
         Ok(i) => i,
         Err(lower::LowerError::UnsupportedForm { .. }) => return Ok(None),
         Err(lower::LowerError::IntOutOfRange(n)) => {
@@ -142,29 +181,55 @@ fn lower_module_to_instrs(
     // `main` is emitted as Wasm `_start` with result type `() -> ()`.
     // The shared IR/body still yields a final Goby value, so the general lowering
     // path must explicitly discard it before emission.
-    instrs.push(backend_ir::WasmBackendInstr::Drop);
-    if !read_line_instrs_are_supported(&instrs) {
+    main_instrs.push(backend_ir::WasmBackendInstr::Drop);
+    if !read_line_instrs_are_supported(&main_instrs) {
         return Ok(None);
     }
-    Ok(Some(instrs))
+
+    // Lower auxiliary declarations (non-main top-level functions).
+    // These do not need a Read effect; they are helpers called by main.
+    let mut aux_decls = Vec::new();
+    for goby_decl in module.declarations.iter().filter(|d| d.name != "main") {
+        let Ok(aux_ir_decl) = goby_core::ir_lower::lower_declaration(goby_decl) else {
+            // IR lowering failed for this decl — fall back to interpreter path.
+            return Ok(None);
+        };
+        let param_names: Vec<String> = aux_ir_decl.params.iter().map(|(n, _)| n.clone()).collect();
+        match lower_aux_decl(
+            &aux_ir_decl.name,
+            param_names,
+            &aux_ir_decl.body,
+            &known_decls,
+        )? {
+            Some(aux) => aux_decls.push(aux),
+            None => {
+                // If any aux decl cannot be lowered, fall back to the interpreter path.
+                return Ok(None);
+            }
+        }
+    }
+
+    Ok(Some((main_instrs, aux_decls)))
 }
 
 pub(crate) fn supports_general_lower_module(module: &Module) -> Result<bool, CodegenError> {
-    let Some(instrs) = lower_module_to_instrs(module)? else {
+    let Some((instrs, aux_decls)) = lower_module_to_instrs(module)? else {
         return Ok(false);
     };
-    Ok(emit::supports_instrs(&instrs))
+    let aux_supported = aux_decls.iter().all(|d| emit::supports_instrs(&d.instrs));
+    Ok(emit::supports_instrs(&instrs) && aux_supported)
 }
 
 pub(crate) fn try_general_lower_module(module: &Module) -> Result<Option<Vec<u8>>, CodegenError> {
-    let Some(instrs) = lower_module_to_instrs(module)? else {
+    let Some((instrs, aux_decls)) = lower_module_to_instrs(module)? else {
         return Ok(None);
     };
-    if !emit::supports_instrs(&instrs) {
+    let aux_supported = aux_decls.iter().all(|d| emit::supports_instrs(&d.instrs));
+    if !emit::supports_instrs(&instrs) || !aux_supported {
         return Ok(None);
     }
     let layout = MemoryLayout::default();
-    let wasm = emit::emit_general_module(&instrs, &layout)?;
+    let wasm = emit::emit_general_module_with_aux(&instrs, &aux_decls, &layout)?;
     Ok(Some(wasm))
 }
 
@@ -185,7 +250,7 @@ main =
 "#,
         )
         .expect("source should parse");
-        let instrs = lower_module_to_instrs(&module)
+        let (instrs, _aux) = lower_module_to_instrs(&module)
             .expect("lowering should not error")
             .expect("general lowering should apply");
         assert!(

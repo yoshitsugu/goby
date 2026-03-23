@@ -667,4 +667,74 @@ main =
             "WB-1: hello ${{name}} with name=world → hello world"
         );
     }
+
+    #[test]
+    fn wb2a_helper_decl_call_executes_via_general_lowered() {
+        // WB-2A: A top-level helper function called from main is compiled via DeclCall.
+        use goby_core::parse_module;
+        let module = parse_module(
+            r#"
+greet : String -> Unit can Print
+greet name =
+  println "hello ${name}"
+
+main : Unit -> Unit can Print, Read
+main =
+  input = read()
+  greet input
+"#,
+        )
+        .expect("parse should work");
+
+        assert_eq!(
+            runtime_io_execution_kind(&module).expect("classification should succeed"),
+            RuntimeIoExecutionKind::GeneralLowered,
+            "WB-2A: helper decl call program must classify as GeneralLowered"
+        );
+
+        let output = execute_runtime_module_with_stdin(&module, Some("world".to_string()))
+            .expect("WB-2A: helper decl call must execute via Goby-owned Wasm runtime");
+        assert_eq!(
+            output.as_deref(),
+            Some("hello world\n"),
+            "WB-2A: greet(world) → hello world"
+        );
+    }
+
+    #[test]
+    fn wb2a_recursive_decl_call_executes_via_general_lowered() {
+        // WB-2A: A recursive helper function is compiled and executes correctly.
+        use goby_core::parse_module;
+        let module = parse_module(
+            r#"
+repeat : Int -> String -> Unit can Print
+repeat n s =
+  if n == 0
+    ()
+  else
+    println s
+    repeat (n - 1) s
+
+main : Unit -> Unit can Print, Read
+main =
+  input = read()
+  repeat 3 input
+"#,
+        )
+        .expect("parse should work");
+
+        assert_eq!(
+            runtime_io_execution_kind(&module).expect("classification should succeed"),
+            RuntimeIoExecutionKind::GeneralLowered,
+            "WB-2A: recursive decl call program must classify as GeneralLowered"
+        );
+
+        let output = execute_runtime_module_with_stdin(&module, Some("hi".to_string()))
+            .expect("WB-2A: recursive decl call must execute via Goby-owned Wasm runtime");
+        assert_eq!(
+            output.as_deref(),
+            Some("hi\nhi\nhi\n"),
+            "WB-2A: repeat 3 hi → hi x3"
+        );
+    }
 }
