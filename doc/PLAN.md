@@ -592,7 +592,7 @@ Milestones:
       ad hoc side channel,
     - backend-path tests prove parity with the existing runtime intrinsic path.
 
-- [ ] E5. In-Wasm list accumulation parity
+- [x] E5. In-Wasm list accumulation parity
   - keep `__goby_list_push_string` as an in-Wasm backend intrinsic on top of
     the converged tagged-value and list/string allocation ABI.
   - do not move list accumulation across the host boundary.
@@ -638,11 +638,25 @@ Milestones:
     - stdlib `goby/string.graphemes` calls no longer require a runtime-decl
       special case outside the converged Track E backend execution boundary.
 
-- [ ] E7. Prepare split handoff to stdlib-only ownership
+- [x] E7. Prepare split handoff to stdlib-only ownership
   - after grapheme iteration primitives land, continue moving
     `goby/string.split` onto the stdlib path for empty-delimiter and
     single-grapheme-delimiter cases without backend-only direct helpers.
   - keep this aligned with `doc/PLAN_STANDARD_LIBRARY.md`.
+  - progress:
+    - `stdlib/goby/string.gb` already implements `split_with_empty_delimiter`
+      and `split_with_single_delimiter` as stdlib-only paths using
+      `__goby_string_each_grapheme` and `__goby_list_push_string`.
+    - the multi-grapheme delimiter case still falls back to the runtime builtin
+      `string.split(value, sep)` call; this is the only remaining direct
+      runtime dependency.
+    - the remaining work (multi-grapheme delimiter stdlib implementation,
+      runtime builtin retirement, regression coverage) is fully documented in
+      `doc/PLAN_STANDARD_LIBRARY.md` as milestones C4-S1 through C8.
+    - the backend intrinsic `StringSplit` and fused `SplitEachPrint`/
+      `SplitGetPrint` instructions remain for the byte-level split path used
+      by the general Wasm lowering backend; these are independent of the
+      stdlib `string.split` call and do not need to be retired in this track.
   - done when:
     - the remaining `split` builtin work is clearly reduced to the documented
       stdlib track.

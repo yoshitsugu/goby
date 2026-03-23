@@ -12,7 +12,7 @@ Last updated: 2026-03-23
 
 1. Keep future lowering work aligned with `resolved form -> shared IR -> backend`.
 2. Treat backend limitations as backend limitations rather than restoring AST-shaped recognizers.
-3. Continue Track E at E7: E3–E6 are complete. Next is E7 (prepare split handoff to stdlib-only ownership) — remaining graphemes patterns (full iteration, for-each) can be deferred until after E7 groundwork.
+3. Continue with stdlib split work: Track E E1–E7 are all complete. Next is `doc/PLAN_STANDARD_LIBRARY.md` C4-S1 (unblock `List String` record field type) to enable the multi-grapheme delimiter stdlib path.
 4. Reopen `doc/PLAN_IR.md` only if a genuinely new architectural gap appears.
 
 ## Restart Notes
@@ -56,6 +56,12 @@ Last updated: 2026-03-23
 - Track E E5 (in-Wasm list accumulation parity):
   - condition 1 (no second list/string runtime representation) is satisfied: `__goby_list_push_string` emits through the shared tagged ABI,
   - condition 2 (stdlib `goby/string.graphemes` accumulates list results through backend path) is addressed in E6 via the fused graphemes-index pattern.
+- Track E E5–E7 are now complete:
+  - E5: both conditions satisfied — no second list/string representation, and
+    graphemes accumulation through backend path is addressed in E6.
+  - E7: split handoff prepared — stdlib already implements empty and
+    single-grapheme delimiter paths; multi-grapheme delimiter falls back to
+    runtime builtin pending C4-S1 type-checker fix.
 - Track E E6 (stdlib graphemes parity) is now complete:
   - a fused `graphemes(text)[N]` lowering pattern rewrites the `graphemes + list.get + Print` IR sequence to `__goby_string_each_grapheme_state(text, N)` directly,
   - `graphemes + index` programs now classify as `GeneralLowered` and execute through the Goby-owned Wasm runtime with correct emoji-family output,

@@ -23,22 +23,28 @@ completed historical work and recovered from git history if needed.
 
 ## 2. Current State
 
-Already true today:
+Already true today (updated 2026-03-23, Track E E7 handoff):
 
 - file-based stdlib import resolution exists,
 - stdlib-only `@embed` is implemented,
 - intrinsic bridge names for current stdlib support exist,
-- `__goby_string_each_grapheme` and `__goby_list_push_string` are implemented,
+- `__goby_string_each_grapheme` and `__goby_list_push_string` are implemented
+  and fully wired: `graphemes(text)[N]` executes through the Goby-owned Wasm
+  runtime (GeneralLowered path) with correct Unicode EGC output,
 - `String == String` works through the normal `==` operator,
 - `stdlib/goby/string.gb` already contains iterator-driven `split` paths for:
-  - empty delimiter,
-  - single-grapheme delimiter.
+  - empty delimiter (`split_with_empty_delimiter`),
+  - single-grapheme delimiter (`split_with_single_delimiter`).
+- the backend intrinsic `StringSplit` and fused `SplitEachPrint`/`SplitGetPrint`
+  instructions exist for the byte-level split path used by general Wasm lowering;
+  these are independent of the stdlib `string.split` call.
 
 Still not finished:
 
 - multi-grapheme delimiters still depend on the runtime `string.split(...)`
-  builtin path,
-- stdlib state/type plumbing for the final `split` implementation is incomplete,
+  builtin path (the `else` branch of `split` in `stdlib/goby/string.gb`),
+- stdlib state/type plumbing for the final `split` implementation is incomplete
+  (`List String` as a record field type is not yet accepted by the type checker),
 - the runtime builtin branch cannot yet be deleted.
 
 ## 3. Locked Behavior
