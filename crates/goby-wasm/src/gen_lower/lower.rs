@@ -191,6 +191,12 @@ pub(crate) fn lower_value(v: &ValueExpr) -> Result<Vec<WasmBackendInstr>, LowerE
         ValueExpr::GlobalRef { module, name } => Ok(vec![WasmBackendInstr::LoadLocal {
             name: format!("{}.{}", module, name),
         }]),
+        ValueExpr::BinOp { op, left, right } => {
+            let mut instrs = lower_value(left)?;
+            instrs.extend(lower_value(right)?);
+            instrs.push(WasmBackendInstr::BinOp { op: op.clone() });
+            Ok(instrs)
+        }
         other => Err(LowerError::UnsupportedForm {
             node: format!("{:?}", other),
         }),
@@ -1189,6 +1195,50 @@ mod tests {
                     effect: "Print".to_string(),
                     op: "println".to_string(),
                 },
+            ]
+        );
+    }
+
+    // --- WB-1 Step 2: BinOp lowering ---
+
+    #[test]
+    fn lower_binop_add_emits_left_right_binop() {
+        use crate::gen_lower::backend_ir::WasmBackendInstr as I;
+        use crate::gen_lower::value::encode_int;
+        use goby_core::ir::IrBinOp;
+        let v = ValueExpr::BinOp {
+            op: IrBinOp::Add,
+            left: Box::new(ValueExpr::IntLit(2)),
+            right: Box::new(ValueExpr::IntLit(3)),
+        };
+        let instrs = lower_value(&v).expect("BinOp Add should lower");
+        assert_eq!(
+            instrs,
+            vec![
+                I::I64Const(encode_int(2).unwrap()),
+                I::I64Const(encode_int(3).unwrap()),
+                I::BinOp { op: IrBinOp::Add },
+            ]
+        );
+    }
+
+    #[test]
+    fn lower_binop_eq_emits_left_right_binop() {
+        use crate::gen_lower::backend_ir::WasmBackendInstr as I;
+        use crate::gen_lower::value::encode_int;
+        use goby_core::ir::IrBinOp;
+        let v = ValueExpr::BinOp {
+            op: IrBinOp::Eq,
+            left: Box::new(ValueExpr::IntLit(5)),
+            right: Box::new(ValueExpr::IntLit(5)),
+        };
+        let instrs = lower_value(&v).expect("BinOp Eq should lower");
+        assert_eq!(
+            instrs,
+            vec![
+                I::I64Const(encode_int(5).unwrap()),
+                I::I64Const(encode_int(5).unwrap()),
+                I::BinOp { op: IrBinOp::Eq },
             ]
         );
     }

@@ -7,6 +7,8 @@
 //! The design rationale and the Goby IR mapping are documented in this module
 //! and in `gen_lower/mod.rs`.
 
+use goby_core::ir::IrBinOp;
+
 use crate::host_runtime::IntrinsicExecutionBoundary;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -95,6 +97,25 @@ pub(crate) enum WasmBackendInstr {
     Intrinsic { intrinsic: BackendIntrinsic },
     /// Discard the top-of-stack value.
     Drop,
+    /// Binary operation on two tagged i64 values.
+    ///
+    /// Both operands are expected to be on the Wasm stack (left operand deeper, right on top).
+    /// The result replaces both operands with a single tagged i64.
+    ///
+    /// # Int arithmetic (`Add`, `Sub`, `Mul`, `Div`, `Mod`)
+    /// Operands must be tagged Int. The emitter untaggs, applies the Wasm i64 op,
+    /// and retags the result as Int. `Mod` uses `i64.rem_s` (truncated division).
+    ///
+    /// # Int comparison (`Eq`, `Lt`, `Gt`, `Le`, `Ge`)
+    /// Operands must be tagged Int. The emitter untags, compares, and produces a tagged Bool.
+    ///
+    /// # Bool logical and (`And`)
+    /// Operands must be tagged Bool. The emitter extracts payload bits, applies `i64.and`,
+    /// and retags the result as Bool.
+    ///
+    /// String equality is not supported in WB-1; `Eq` with string operands returns
+    /// `UnsupportedForm` at lowering time.
+    BinOp { op: IrBinOp },
     /// Fused: split `text_local` (a tagged-i64 string) on `sep_bytes`, then call
     /// `effect.op` on each resulting segment.
     ///

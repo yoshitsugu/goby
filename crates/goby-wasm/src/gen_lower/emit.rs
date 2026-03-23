@@ -13,7 +13,11 @@ use wasm_encoder::{
 
 use crate::CodegenError;
 use crate::gen_lower::backend_ir::{BackendIntrinsic, SplitIndexOperand, WasmBackendInstr};
-use crate::gen_lower::value::{TAG_INT, TAG_LIST, TAG_STRING, encode_string_ptr, encode_unit};
+use goby_core::ir::IrBinOp;
+
+use crate::gen_lower::value::{
+    TAG_BOOL, TAG_INT, TAG_LIST, TAG_STRING, encode_string_ptr, encode_unit,
+};
 use crate::host_runtime::{
     HOST_INTRINSIC_IMPORTS, IntrinsicExecutionBoundary, host_import_for_intrinsic,
 };
@@ -205,14 +209,15 @@ fn required_i32_scratch_count(instrs: &[WasmBackendInstr]) -> u32 {
 }
 
 fn required_i64_scratch_count(instrs: &[WasmBackendInstr]) -> u32 {
-    if instrs
-        .iter()
-        .any(|i| matches!(i, WasmBackendInstr::Intrinsic { .. }))
-    {
-        HELPER_SCRATCH_I64
-    } else {
-        0
-    }
+    use goby_core::ir::IrBinOp;
+    let needs_scratch = instrs.iter().any(|i| match i {
+        WasmBackendInstr::Intrinsic { .. } => true,
+        WasmBackendInstr::BinOp { op } => {
+            matches!(op, IrBinOp::Mul | IrBinOp::Div | IrBinOp::Mod)
+        }
+        _ => false,
+    });
+    if needs_scratch { HELPER_SCRATCH_I64 } else { 0 }
 }
 
 /// Returns true if any `SplitEachPrint` with println is present (needs newline data segment).
@@ -406,7 +411,14 @@ fn emit_instrs(
     let buffer_len = (WASM_PAGE_BYTES - layout.heap_base - static_strings.bytes_used) as i32 - 4; // reserve 4 bytes for len prefix
     let newline_ptr = (layout.heap_base - 1) as i32;
     let helper_i64_base = named_i64_count;
-    let helper_state = if helper_i64_scratch_count > 0 {
+    // `helper_state` is constructed only when Intrinsic instructions are present.
+    // Intrinsics require HELPER_SCRATCH_I32 i32 locals (alloc cursor / heap floor pattern).
+    // BinOp Mul/Div/Mod need only i64 scratch; those are provided via `helper_i64_base` directly
+    // in `emit_bin_op`, without requiring the full HelperEmitState.
+    let has_intrinsic = instrs
+        .iter()
+        .any(|i| matches!(i, WasmBackendInstr::Intrinsic { .. }));
+    let helper_state = if has_intrinsic && helper_i64_scratch_count > 0 {
         let alloc_cursor_local = i32_base + HELPER_ALLOC_CURSOR_OFFSET;
         let heap_floor_local = i32_base + HELPER_HEAP_FLOOR_OFFSET;
         let initial_cursor = align_down_i32(
@@ -461,6 +473,16 @@ fn emit_instrs(
 
             WasmBackendInstr::Drop => {
                 function.instruction(&Instruction::Drop);
+            }
+
+            WasmBackendInstr::BinOp { op } => {
+                // Pass the i64 scratch base (starts at named_i64_count) when available.
+                let i64_scratch_base = if helper_i64_scratch_count > 0 {
+                    Some(helper_i64_base)
+                } else {
+                    None
+                };
+                emit_bin_op(function, op, i64_scratch_base)?;
             }
 
             WasmBackendInstr::EffectOp { effect, op } => {
@@ -1169,6 +1191,213 @@ fn emit_list_push_string_helper(
 
     emit_push_tagged_ptr(function, s_new_list_ptr, TAG_LIST);
     Ok(())
+}
+
+/// Emit Wasm instructions for `WasmBackendInstr::BinOp`.
+///
+/// Both operands are expected on the stack as tagged i64 values (left deeper, right on top).
+/// The result is a single tagged i64 pushed onto the stack.
+///
+/// # Add / Sub
+/// `(left_tagged ± right_tagged) & PAYLOAD_MASK | TAG_INT_SHIFT` is correct because any carry
+/// into the tag region (bits 60–63) is removed by the PAYLOAD_MASK before retagging.
+///
+/// # Mul / Div / Mod
+/// The tag bits corrupt the product/quotient, so both operands must be sign-extended to plain
+/// i64 before the operation. Two scratch i64 locals (`i64_scratch_base` and `+1`) are used.
+/// `Mod` uses `i64.rem_s` (truncated division, same as Rust `%`).
+///
+/// # Eq / Lt / Gt / Le / Ge
+/// Both tagged Int values have the same upper 4 bits (TAG_INT = 0x1), so the signed 64-bit
+/// comparison of the tagged words equals the signed comparison of the 60-bit payloads.
+/// Eq is also correct for Bool values (same tag). The other comparisons are **only** correct
+/// for Int operands; passing Bool values gives an unspecified but deterministic result
+/// (Bool values have TAG_BOOL=0x2, which is larger than any Int's upper 4 bits).
+///
+/// # And
+/// Bool: `TAG_BOOL<<60 | payload`. `i64.and` on two tagged Bools gives `TAG_BOOL<<60 | (a & b)`
+/// because `TAG_BOOL & TAG_BOOL == TAG_BOOL` (0x2 & 0x2 = 0x2). No retagging needed.
+///
+/// `i64_scratch_base` is the index of the first scratch i64 local (allocated when
+/// `required_i64_scratch_count > 0`). Mul/Div/Mod require two consecutive scratch i64 locals.
+fn emit_bin_op(
+    function: &mut Function,
+    op: &IrBinOp,
+    i64_scratch_base: Option<u32>,
+) -> Result<(), CodegenError> {
+    const PAYLOAD_MASK: i64 = (1i64 << 60) - 1;
+    const TAG_INT_SHIFT: i64 = (TAG_INT as i64) << 60;
+    const TAG_BOOL_SHIFT: i64 = (TAG_BOOL as i64) << 60;
+
+    // Helper: retag an i64 arithmetic result as Int (mask + tag).
+    macro_rules! retag_int {
+        ($f:expr) => {
+            $f.instruction(&Instruction::I64Const(PAYLOAD_MASK));
+            $f.instruction(&Instruction::I64And);
+            $f.instruction(&Instruction::I64Const(TAG_INT_SHIFT));
+            $f.instruction(&Instruction::I64Or);
+        };
+    }
+
+    // Helper: convert an i32 comparison result (0 or 1) to a tagged Bool i64.
+    macro_rules! bool_from_i32 {
+        ($f:expr) => {
+            $f.instruction(&Instruction::I64ExtendI32U);
+            $f.instruction(&Instruction::I64Const(TAG_BOOL_SHIFT));
+            $f.instruction(&Instruction::I64Or);
+        };
+    }
+
+    // For Mul/Div/Mod, we must untag both operands before operating because
+    // tag bits corrupt the product/quotient. We use two scratch i64 locals:
+    //   scratch[0] = sign-extended right operand
+    //   scratch[1] = sign-extended left operand
+    // Both are stashed, sign-extended, then brought back via LocalGet.
+    macro_rules! require_scratch {
+        ($base:expr, $op_name:literal) => {
+            match $base {
+                Some(base) => (base, base + 1),
+                None => {
+                    return Err(CodegenError {
+                        message: format!(
+                            "BinOp::{} requires helper scratch i64 locals",
+                            $op_name
+                        ),
+                    });
+                }
+            }
+        };
+    }
+
+    match op {
+        IrBinOp::Add => {
+            // (left_tagged + right_tagged) may carry into the tag region (bits 60-63),
+            // but PAYLOAD_MASK removes those bits before TAG_INT_SHIFT is OR-ed in.
+            // Modular 60-bit arithmetic is correct.
+            function.instruction(&Instruction::I64Add);
+            retag_int!(function);
+            Ok(())
+        }
+        IrBinOp::Sub => {
+            // (left_tagged - right_tagged): tag bits cancel (TAG - TAG = 0) in bits 60-63,
+            // but borrow could affect them; PAYLOAD_MASK removes tag-region bits before retagging.
+            function.instruction(&Instruction::I64Sub);
+            retag_int!(function);
+            Ok(())
+        }
+        IrBinOp::Mul => {
+            // Tag bits corrupt the product — must sign-extend both operands first.
+            // Stack before: [..., left_tagged, right_tagged]  (right is on top)
+            // Sign-extension of 60-bit payload: local.set s; local.get s; i64.const 4;
+            //   i64.shl; i64.const 4; i64.shr_s
+            let (scratch0, scratch1) = require_scratch!(i64_scratch_base, "Mul");
+            // Stash right_tagged, sign-extend → scratch0.
+            function.instruction(&Instruction::LocalSet(scratch0));
+            function.instruction(&Instruction::LocalGet(scratch0));
+            function.instruction(&Instruction::I64Const(4));
+            function.instruction(&Instruction::I64Shl);
+            function.instruction(&Instruction::I64Const(4));
+            function.instruction(&Instruction::I64ShrS);
+            function.instruction(&Instruction::LocalSet(scratch0));
+            // Stash left_tagged, sign-extend → scratch1.
+            function.instruction(&Instruction::LocalSet(scratch1));
+            function.instruction(&Instruction::LocalGet(scratch1));
+            function.instruction(&Instruction::I64Const(4));
+            function.instruction(&Instruction::I64Shl);
+            function.instruction(&Instruction::I64Const(4));
+            function.instruction(&Instruction::I64ShrS);
+            function.instruction(&Instruction::LocalSet(scratch1));
+            // Compute left_sext * right_sext and retag.
+            function.instruction(&Instruction::LocalGet(scratch1));
+            function.instruction(&Instruction::LocalGet(scratch0));
+            function.instruction(&Instruction::I64Mul);
+            retag_int!(function);
+            Ok(())
+        }
+        IrBinOp::Div => {
+            let (scratch0, scratch1) = require_scratch!(i64_scratch_base, "Div");
+            function.instruction(&Instruction::LocalSet(scratch0));
+            function.instruction(&Instruction::LocalGet(scratch0));
+            function.instruction(&Instruction::I64Const(4));
+            function.instruction(&Instruction::I64Shl);
+            function.instruction(&Instruction::I64Const(4));
+            function.instruction(&Instruction::I64ShrS);
+            function.instruction(&Instruction::LocalSet(scratch0));
+            function.instruction(&Instruction::LocalSet(scratch1));
+            function.instruction(&Instruction::LocalGet(scratch1));
+            function.instruction(&Instruction::I64Const(4));
+            function.instruction(&Instruction::I64Shl);
+            function.instruction(&Instruction::I64Const(4));
+            function.instruction(&Instruction::I64ShrS);
+            function.instruction(&Instruction::LocalSet(scratch1));
+            function.instruction(&Instruction::LocalGet(scratch1));
+            function.instruction(&Instruction::LocalGet(scratch0));
+            function.instruction(&Instruction::I64DivS);
+            retag_int!(function);
+            Ok(())
+        }
+        IrBinOp::Mod => {
+            // i64.rem_s follows truncated division semantics (same as Rust %).
+            let (scratch0, scratch1) = require_scratch!(i64_scratch_base, "Mod");
+            function.instruction(&Instruction::LocalSet(scratch0));
+            function.instruction(&Instruction::LocalGet(scratch0));
+            function.instruction(&Instruction::I64Const(4));
+            function.instruction(&Instruction::I64Shl);
+            function.instruction(&Instruction::I64Const(4));
+            function.instruction(&Instruction::I64ShrS);
+            function.instruction(&Instruction::LocalSet(scratch0));
+            function.instruction(&Instruction::LocalSet(scratch1));
+            function.instruction(&Instruction::LocalGet(scratch1));
+            function.instruction(&Instruction::I64Const(4));
+            function.instruction(&Instruction::I64Shl);
+            function.instruction(&Instruction::I64Const(4));
+            function.instruction(&Instruction::I64ShrS);
+            function.instruction(&Instruction::LocalSet(scratch1));
+            function.instruction(&Instruction::LocalGet(scratch1));
+            function.instruction(&Instruction::LocalGet(scratch0));
+            function.instruction(&Instruction::I64RemS);
+            retag_int!(function);
+            Ok(())
+        }
+        IrBinOp::Eq => {
+            // Two tagged Ints are equal iff their tagged representations are equal
+            // (same tag bits + same payload). i64.eq is correct without untagging.
+            function.instruction(&Instruction::I64Eq);
+            bool_from_i32!(function);
+            Ok(())
+        }
+        IrBinOp::Lt => {
+            // left_tagged = TAG_INT<<60 | left_payload (both have identical upper 4 bits = 0001).
+            // As 64-bit signed numbers, both are positive (bit 63 = 0). The signed comparison
+            // of the 64-bit values equals the signed comparison of the 60-bit payloads
+            // because the upper 4 bits are identical.
+            function.instruction(&Instruction::I64LtS);
+            bool_from_i32!(function);
+            Ok(())
+        }
+        IrBinOp::Gt => {
+            function.instruction(&Instruction::I64GtS);
+            bool_from_i32!(function);
+            Ok(())
+        }
+        IrBinOp::Le => {
+            function.instruction(&Instruction::I64LeS);
+            bool_from_i32!(function);
+            Ok(())
+        }
+        IrBinOp::Ge => {
+            function.instruction(&Instruction::I64GeS);
+            bool_from_i32!(function);
+            Ok(())
+        }
+        IrBinOp::And => {
+            // Bool: TAG_BOOL<<60 | 0 (false) or TAG_BOOL<<60 | 1 (true).
+            // (TAG<<60 | a) & (TAG<<60 | b) = TAG<<60 | (a & b).
+            // TAG_BOOL & TAG_BOOL = TAG_BOOL (0x2 & 0x2 = 0x2). Correctly tagged.
+            function.instruction(&Instruction::I64And);
+            Ok(())
+        }
+    }
 }
 
 /// Emit Wasm instructions for a single effect operation.
@@ -2104,6 +2333,105 @@ mod tests {
         ];
         let wasm = emit_general_module(&instrs, &default_layout())
             .expect("emit ListPushString helper chain should succeed");
+        assert_valid_wasm(&wasm);
+    }
+
+    // --- WB-1 Step 2: BinOp emission ---
+
+    #[test]
+    fn emit_binop_add_produces_valid_wasm() {
+        use goby_core::ir::IrBinOp;
+        // Emit: I64Const(encode_int(2)), I64Const(encode_int(3)), BinOp(Add), EffectOp(Print,print), Drop
+        // This simulates `2 + 3` with a Print effect so the module is valid.
+        let instrs = vec![
+            I::I64Const(crate::gen_lower::value::encode_int(2).unwrap()),
+            I::I64Const(crate::gen_lower::value::encode_int(3).unwrap()),
+            I::BinOp { op: IrBinOp::Add },
+            I::EffectOp {
+                effect: "Print".to_string(),
+                op: "print".to_string(),
+            },
+            I::Drop,
+        ];
+        let wasm = emit_general_module(&instrs, &default_layout())
+            .expect("emit BinOp Add should succeed");
+        assert_valid_wasm(&wasm);
+    }
+
+    #[test]
+    fn emit_binop_eq_comparison_produces_valid_wasm() {
+        use goby_core::ir::IrBinOp;
+        let instrs = vec![
+            I::I64Const(crate::gen_lower::value::encode_int(5).unwrap()),
+            I::I64Const(crate::gen_lower::value::encode_int(5).unwrap()),
+            I::BinOp { op: IrBinOp::Eq },
+            I::EffectOp {
+                effect: "Print".to_string(),
+                op: "print".to_string(),
+            },
+            I::Drop,
+        ];
+        let wasm = emit_general_module(&instrs, &default_layout())
+            .expect("emit BinOp Eq should succeed");
+        assert_valid_wasm(&wasm);
+    }
+
+    #[test]
+    fn emit_binop_sub_produces_valid_wasm() {
+        use goby_core::ir::IrBinOp;
+        let instrs = vec![
+            I::I64Const(crate::gen_lower::value::encode_int(10).unwrap()),
+            I::I64Const(crate::gen_lower::value::encode_int(3).unwrap()),
+            I::BinOp { op: IrBinOp::Sub },
+            I::Drop,
+        ];
+        let wasm = emit_general_module(&instrs, &default_layout())
+            .expect("emit BinOp Sub should succeed");
+        assert_valid_wasm(&wasm);
+    }
+
+    #[test]
+    fn emit_binop_lt_produces_valid_wasm() {
+        use goby_core::ir::IrBinOp;
+        let instrs = vec![
+            I::I64Const(crate::gen_lower::value::encode_int(1).unwrap()),
+            I::I64Const(crate::gen_lower::value::encode_int(2).unwrap()),
+            I::BinOp { op: IrBinOp::Lt },
+            I::Drop,
+        ];
+        let wasm = emit_general_module(&instrs, &default_layout())
+            .expect("emit BinOp Lt should succeed");
+        assert_valid_wasm(&wasm);
+    }
+
+    #[test]
+    fn emit_binop_and_produces_valid_wasm() {
+        use goby_core::ir::IrBinOp;
+        let instrs = vec![
+            I::I64Const(crate::gen_lower::value::encode_bool(true)),
+            I::I64Const(crate::gen_lower::value::encode_bool(false)),
+            I::BinOp { op: IrBinOp::And },
+            I::Drop,
+        ];
+        let wasm = emit_general_module(&instrs, &default_layout())
+            .expect("emit BinOp And should succeed");
+        assert_valid_wasm(&wasm);
+    }
+
+    #[test]
+    fn emit_binop_mul_with_scratch_produces_valid_wasm() {
+        use goby_core::ir::IrBinOp;
+        // Mul requires scratch i64 locals (required_i64_scratch_count returns 2 for BinOp::Mul).
+        // We avoid EffectOp here because Print.print needs i32 scratch locals which would
+        // require HELPER_SCRATCH_I32 i32 locals — not needed for Mul alone.
+        let instrs = vec![
+            I::I64Const(crate::gen_lower::value::encode_int(3).unwrap()),
+            I::I64Const(crate::gen_lower::value::encode_int(4).unwrap()),
+            I::BinOp { op: IrBinOp::Mul },
+            I::Drop,
+        ];
+        let wasm = emit_general_module(&instrs, &default_layout())
+            .expect("emit BinOp Mul should succeed");
         assert_valid_wasm(&wasm);
     }
 }
