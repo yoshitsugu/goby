@@ -229,19 +229,19 @@ No dependency on effect handler design or data layout decisions.
 
 **Milestones:**
 
-- [ ] WB-1-M1. `ValueExpr::BinOp` (arithmetic and comparison) lowered and emitted
+- [x] WB-1-M1. `ValueExpr::BinOp` (arithmetic and comparison) lowered and emitted
   - done when: `2 + 3` and `x == y` programs classify as `GeneralLowered` and execute correctly
   - regression: unit test in `lower.rs` + execution test in `lib.rs`
-- [ ] WB-1-M2. `ValueExpr::Interp` lowered and emitted
+- [x] WB-1-M2. `ValueExpr::Interp` lowered and emitted
   - done when: string interpolation programs classify as `GeneralLowered`
   - regression: execution test with multi-part interpolation
-- [ ] WB-1-M3. `CompExpr::If` lowered and emitted
+- [x] WB-1-M3. `CompExpr::If` lowered and emitted
   - done when: `if cond then expr1 else expr2` programs classify as `GeneralLowered`
   - regression: both branch outcomes tested
-- [ ] WB-1-M4. `CompExpr::LetMut` and `CompExpr::Assign` lowered and emitted
+- [x] WB-1-M4. `CompExpr::LetMut` and `CompExpr::Assign` lowered and emitted
   - done when: simple `mut x = 1; x := 2; print x` programs classify as `GeneralLowered`
   - regression: mutation parity with interpreter result
-- [ ] WB-1-M5. Quality gates pass: `cargo fmt`, `cargo check`, `cargo test`, `cargo clippy -- -D warnings`
+- [x] WB-1-M5. Quality gates pass: `cargo fmt`, `cargo check`, `cargo test`, `cargo clippy -- -D warnings`
 
 ### Phase WB-2A: Uniform call ABI for top-level declarations
 
@@ -286,10 +286,10 @@ operations must use the same identity scheme that WB-3 will need. Do not design 
 
 **Milestones:**
 
-- [ ] WB-2A-M1. Top-level `GlobalRef` decl calls compile to direct Wasm `call`
+- [x] WB-2A-M1. Top-level `GlobalRef` decl calls compile to direct Wasm `call`
   - done when: a program calling a non-intrinsic top-level function classifies as `GeneralLowered`
   - regression: unit test in `lower.rs`; execution test calling a simple helper function
-- [ ] WB-2A-M2. Recursive decl calls (same function) work correctly
+- [x] WB-2A-M2. Recursive decl calls (same function) work correctly
   - done when: a directly recursive function (e.g., countdown) compiles and executes
   - regression: execution test with base case and recursive case
 - [ ] WB-2A-M3. `Var(name)` function-argument calls work via funcref table
@@ -323,13 +323,13 @@ language-expansion item, not a backend-convergence item. Do not add them here.
 
 **Milestones:**
 
-- [ ] WB-2B-M1. `CompExpr::Case` with literal and wildcard patterns lowered
+- [x] WB-2B-M1. `CompExpr::Case` with literal and wildcard patterns lowered
   - done when: `case x { 0 -> "zero" | _ -> "other" }` classifies as `GeneralLowered`
   - regression: all literal pattern types; wildcard; exhaustive and non-exhaustive arms
-- [ ] WB-2B-M2. `CompExpr::Case` with list patterns lowered
+- [x] WB-2B-M2. `CompExpr::Case` with list patterns lowered
   - done when: `case xs { [] -> 0 | [h, ..t] -> 1 }` classifies as `GeneralLowered`
   - regression: empty list; head/tail; prefix patterns
-- [ ] WB-2B-M3. `ValueExpr::ListLit` lowered
+- [x] WB-2B-M3. `ValueExpr::ListLit` lowered
   - done when: `[1, 2, 3]` literal classifies as `GeneralLowered`
   - regression: empty list; non-empty list; list returned from function
 - [ ] WB-2B-M4. `ValueExpr::TupleLit` lowered (tagged i64, heap-allocated)
