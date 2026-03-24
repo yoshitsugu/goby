@@ -341,8 +341,15 @@ language-expansion item, not a backend-convergence item. Do not add them here.
 - [x] WB-2B-M6. `stdlib/goby/list.gb` `map` and `each` classify as `GeneralLowered` end-to-end
   - this is the primary done condition for WB-2 as a whole
   - regression: `map [1,2,3] f` and `each [1,2,3] f` execute with correct output
-- [ ] WB-2B-M7. Fused patterns made obsolete by WB-2 are identified and deleted
-  - at minimum: document which fused patterns can be removed; delete if safe
+- [x] WB-2B-M7. Fused patterns made obsolete by WB-2 are identified and deleted
+  - removed in WB-2B: `lower.rs` fused `SplitEachPrint` / `SplitGetPrint` recognition
+    for `string.split` + `list.each` / `list.get` shapes; these now lower through
+    normal `StringSplit` / `ListGet` / `ListEach*` general-path instructions
+  - retained for later phases:
+    - `graphemes-get-print` in `lower.rs` remains until WB-3 makes stdlib `graphemes`
+      fully general-lowered
+    - backend-IR `SplitEachPrint` / `SplitGetPrint` remain available for
+      `RuntimeIoPlan::DynamicWasiIo` as optional byte-split optimisations
 - [ ] WB-2B-M8. Quality gates pass
 
 ### Phase WB-3: Function values and effect handlers
