@@ -158,9 +158,6 @@ Based on `examples/*.gb`:
 - Handler dispatch: lexical nearest-handler stack walk (no alphabetical fallback).
 - Runtime execution model: prefer native lowering for the supported subset; fallback to
   compile-time interpreter (`resolve_main_runtime_output`) for unsupported forms.
-  - active convergence rule (2026-03-25): do not add new runtime-shape-specific fallback
-    planning for `read -> split -> map(graphemes) -> list.get -> each(println)`;
-    that family should be made to execute through `GeneralLowered`.
 
 ### 2.1 Syntax and Parsing
 

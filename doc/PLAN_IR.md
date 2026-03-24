@@ -472,6 +472,13 @@ Captured variables: same convention as handler functions (explicit extra paramet
 
   (ANF form required: `row2 = rolls[2]` because `list.get` is a call, not a pure value)
 
+  Locked usage rule for this milestone:
+  - `map` is the pure list-transform operator.
+  - `each` is the effectful list-iteration operator.
+  - Do not expand this milestone to support `map ... println` or any equivalent
+    effectful-`map` behavior. If user-facing examples need per-element effects, rewrite them
+    to `each`.
+
   This program is the representative acceptance shape for the current lowering boundary:
   `Read -> top-level decl call -> higher-order pure list transform -> list element access ->
   higher-order effectful list iteration`.
@@ -491,13 +498,50 @@ Captured variables: same convention as handler functions (explicit extra paramet
   - so WB-3-M7 remains open until the exact shape above, plus equivalent alias/import
     variants, execute without `RuntimeIoPlan` special-casing.
 
+  Implementation plan (must be followed in order):
+  1. Add classification tests first.
+     - Add a test for the exact ANF program above that asserts
+       `runtime_io_execution_kind(module) == GeneralLowered`.
+     - Add the same assertion for:
+       - a local-alias variant,
+       - a selective-import / canonical-qualified variant.
+  2. Add runtime-output tests for the same set of programs.
+     - These tests must execute the program with stdin and assert the emitted grapheme lines.
+  3. Make the failure observable before changing lowering behavior.
+     - If the new classification test fails, instrument the general-lowering entrypoint so the
+       failing stage is explicit in tests/logging:
+       - main-body lowering rejected,
+       - auxiliary decl lowering rejected,
+       - emit support rejected,
+       - runtime-I/O classification fell through after lowering rejection.
+     - Do not start by adding a new special-case runtime plan.
+  4. Fix the general path itself.
+     - Update `gen_lower` / emitter / aux-decl registration / gating so the representative shape
+       reaches `GeneralLowered`.
+     - Preserve the existing ownership boundary:
+       - `PLAN_IR` owns the composed-shape lowering,
+       - `PLAN_STANDARD_LIBRARY` continues to own final `string.split` stdlib migration.
+  5. Re-run the tests from steps 1 and 2, then full quality gates.
+
+  Explicit non-goals / anti-adhoc rules:
+  - Do not add a new `RuntimeIoPlan` variant for this shape.
+  - Do not reintroduce a `graphemes`-specific interpreter bridge or fused backend recognizer.
+  - Do not add a backend-only semantic shortcut for `string.graphemes` or effectful `map`.
+  - Do not mark the milestone complete based only on stdout parity; the program family must also
+    classify as `GeneralLowered`.
+
   Done when:
   - the exact program above executes via `GeneralLowered`,
+  - the exact program above classifies as `GeneralLowered`,
   - semantically equivalent variants with local alias chains and selective imports also
-    execute via `GeneralLowered`,
+    execute and classify via `GeneralLowered`,
   - no new `RuntimeIoPlan` branch is introduced for this shape.
 
   Regression:
+  - classification test for the exact program above:
+    `runtime_io_execution_kind(module) == GeneralLowered`,
+  - classification test for a local-alias variant,
+  - classification test for a selective-import / canonical-qualified variant,
   - runtime-output test for the exact program above,
   - variant with local aliases between `split`, `map`, `list.get`, and `each`,
   - variant using selective imports / canonical-qualified names.

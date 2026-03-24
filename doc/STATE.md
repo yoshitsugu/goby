@@ -56,10 +56,19 @@ outer `mut` locals through stdlib-style `with ... in` bodies.
 Close the representative composed runtime-`Read` stdlib path:
 `read -> split -> map(graphemes) -> list.get -> each(println)`.
 Exit criteria:
+- exact-shape classification test added,
 - exact-shape runtime-output regression test added,
 - equivalent alias/import variants added,
-- all of them execute via `GeneralLowered`,
+- all of them classify and execute via `GeneralLowered`,
 - no new `RuntimeIoPlan` branch is added for this shape.
+Required execution order:
+1. add classification tests,
+2. add runtime-output tests,
+3. expose the failing general-lowering stage if tests fail,
+4. repair `gen_lower` / emitter / aux-decl registration / gating,
+5. run quality gates.
+Anti-adhoc rule:
+- do not solve this slice by adding a new runtime-shape-specific fallback or bridge path.
 
 **Track stdlib (C4-S2) — next:**
 Stabilize the shared iterator state contract by keeping `GraphemeState` in
