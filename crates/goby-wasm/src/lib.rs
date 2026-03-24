@@ -842,4 +842,72 @@ main =
             "WB-2B: bool_to_str True → yes"
         );
     }
+
+    // ------------------------------------------------------------------
+    // WB-2B-M3: ListLit emission tests
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn wb2b_list_lit_classifies_as_general_lowered() {
+        // WB-2B-M3: a function containing a list literal classifies as GeneralLowered.
+        // Uses read() to satisfy the runtime-read-effect gate.
+        // Uses a string list because println expects a String value.
+        use goby_core::parse_module;
+        let module = parse_module(
+            r#"
+main : Unit -> Unit can Print, Read
+main =
+  _ = read()
+  xs = ["alpha", "beta", "gamma"]
+  println (list.get xs 1)
+"#,
+        )
+        .expect("parse should work");
+
+        assert_eq!(
+            runtime_io_execution_kind(&module).expect("classification should succeed"),
+            RuntimeIoExecutionKind::GeneralLowered,
+            "WB-2B-M3: list lit program must classify as GeneralLowered"
+        );
+
+        let output = execute_runtime_module_with_stdin(&module, Some(String::new()))
+            .expect("WB-2B-M3: list lit must execute via Goby-owned Wasm runtime");
+        assert_eq!(
+            output.as_deref(),
+            Some("beta\n"),
+            "WB-2B-M3: list [alpha,beta,gamma], get(1) → beta"
+        );
+    }
+
+    #[test]
+    fn wb2b_list_lit_empty_classifies_as_general_lowered() {
+        // WB-2B-M3: empty list literal ([]) + case emits correctly as GeneralLowered.
+        use goby_core::parse_module;
+        let module = parse_module(
+            r#"
+main : Unit -> Unit can Print, Read
+main =
+  _ = read()
+  xs = []
+  case xs
+    [] -> println "empty"
+    _ -> println "not empty"
+"#,
+        )
+        .expect("parse should work");
+
+        assert_eq!(
+            runtime_io_execution_kind(&module).expect("classification should succeed"),
+            RuntimeIoExecutionKind::GeneralLowered,
+            "WB-2B-M3: empty list lit program must classify as GeneralLowered"
+        );
+
+        let output = execute_runtime_module_with_stdin(&module, Some(String::new()))
+            .expect("WB-2B-M3: empty list lit must execute");
+        assert_eq!(
+            output.as_deref(),
+            Some("empty\n"),
+            "WB-2B-M3: [] case → empty"
+        );
+    }
 }

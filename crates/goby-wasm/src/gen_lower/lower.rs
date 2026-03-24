@@ -322,9 +322,18 @@ pub(crate) fn lower_value(v: &ValueExpr) -> Result<Vec<WasmBackendInstr>, LowerE
         ValueExpr::StrLit(text) => Ok(vec![WasmBackendInstr::PushStaticString {
             text: text.clone(),
         }]),
-        ValueExpr::ListLit { .. } => Err(LowerError::UnsupportedForm {
-            node: "ListLit".to_string(),
-        }),
+        ValueExpr::ListLit { elements, spread } => {
+            if spread.is_some() {
+                return Err(LowerError::UnsupportedForm {
+                    node: "ListLit with spread".to_string(),
+                });
+            }
+            let mut element_instrs = Vec::with_capacity(elements.len());
+            for elem in elements {
+                element_instrs.push(lower_value(elem)?);
+            }
+            Ok(vec![WasmBackendInstr::ListLit { element_instrs }])
+        }
         ValueExpr::Var(name) => Ok(vec![WasmBackendInstr::LoadLocal { name: name.clone() }]),
         ValueExpr::GlobalRef { module, name } => Ok(vec![WasmBackendInstr::LoadLocal {
             name: format!("{}.{}", module, name),

@@ -636,13 +636,16 @@ fn emit_instrs(
     // in `emit_bin_op`, without requiring the full HelperEmitState.
     // Use collect_all_instrs to detect Intrinsic and ListLit in nested branches
     // (CaseMatch arms, If branches, ListLit elements).
-    let has_intrinsic = collect_all_instrs(instrs).iter().any(|i| {
+    // ListLit only needs the i32 scratch pool (bump allocator) but not i64 scratch.
+    let has_intrinsic_or_list_lit = collect_all_instrs(instrs).iter().any(|i| {
         matches!(
             i,
             WasmBackendInstr::Intrinsic { .. } | WasmBackendInstr::ListLit { .. }
         )
     });
-    let helper_state = if has_intrinsic && helper_i64_scratch_count > 0 {
+    // Initialize helper_state when i32 scratch is available (required for Intrinsic and ListLit).
+    // ListLit only needs i32 scratch (bump allocator), not i64 scratch.
+    let helper_state = if has_intrinsic_or_list_lit {
         let alloc_cursor_local = i32_base + HELPER_ALLOC_CURSOR_OFFSET;
         let heap_floor_local = i32_base + HELPER_HEAP_FLOOR_OFFSET;
         let initial_cursor = align_down_i32(
@@ -854,12 +857,51 @@ fn emit_instrs(
                 )?;
             }
 
-            // WB-2B Step 5: ListLit emission.
-            WasmBackendInstr::ListLit { .. } => {
-                return Err(CodegenError {
-                    message: "gen_lower/emit: ListLit emission not yet implemented (WB-2B Step 5)"
+            WasmBackendInstr::ListLit { element_instrs } => {
+                let hs = helper_state.as_ref().ok_or_else(|| CodegenError {
+                    message: "gen_lower/emit: ListLit requires helper state (bump allocator)"
                         .to_string(),
-                });
+                })?;
+                let s_list_ptr = hs.i32_base + 7;
+                let s_alloc_size = hs.i32_base + 9;
+                let n = element_instrs.len() as i32;
+                // alloc_size = 4 + 8 * n
+                function.instruction(&Instruction::I32Const(4 + 8 * n));
+                function.instruction(&Instruction::LocalSet(s_alloc_size));
+                emit_alloc_from_top(function, hs, s_alloc_size, s_list_ptr);
+                // Write length header: i32 at [s_list_ptr + 0]
+                function.instruction(&Instruction::LocalGet(s_list_ptr));
+                function.instruction(&Instruction::I32Const(n));
+                function.instruction(&Instruction::I32Store(MemArg {
+                    offset: 0,
+                    align: 2,
+                    memory_index: 0,
+                }));
+                // Write each element: i64 at [s_list_ptr + 4 + i*8]
+                for (i, elem_instrs) in element_instrs.iter().enumerate() {
+                    // address = s_list_ptr + 4 + i*8
+                    function.instruction(&Instruction::LocalGet(s_list_ptr));
+                    function.instruction(&Instruction::I32Const(4 + 8 * i as i32));
+                    function.instruction(&Instruction::I32Add);
+                    // push element value (tagged i64)
+                    emit_instrs(
+                        function,
+                        ctx,
+                        elem_instrs,
+                        layout,
+                        named_i64_count,
+                        helper_i64_scratch_count,
+                        i32_base,
+                        static_strings,
+                    )?;
+                    function.instruction(&Instruction::I64Store(MemArg {
+                        offset: 0,
+                        align: 3,
+                        memory_index: 0,
+                    }));
+                }
+                // Push tagged list pointer as result
+                emit_push_tagged_ptr(function, s_list_ptr, TAG_LIST);
             }
         }
     }
