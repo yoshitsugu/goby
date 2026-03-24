@@ -93,11 +93,7 @@ impl StaticStringPool {
                         visit_instrs(then_instrs, out);
                         visit_instrs(else_instrs, out);
                     }
-                    WasmBackendInstr::CaseMatch {
-                        scrutinee_instrs,
-                        arms,
-                    } => {
-                        visit_instrs(scrutinee_instrs, out);
+                    WasmBackendInstr::CaseMatch { arms, .. } => {
                         for arm in arms {
                             visit_instrs(&arm.body_instrs, out);
                         }
@@ -262,11 +258,7 @@ fn collect_all_instrs(instrs: &[WasmBackendInstr]) -> Vec<&WasmBackendInstr> {
                 result.extend(collect_all_instrs(then_instrs));
                 result.extend(collect_all_instrs(else_instrs));
             }
-            WasmBackendInstr::CaseMatch {
-                scrutinee_instrs,
-                arms,
-            } => {
-                result.extend(collect_all_instrs(scrutinee_instrs));
+            WasmBackendInstr::CaseMatch { arms, .. } => {
                 for arm in arms {
                     result.extend(collect_all_instrs(&arm.body_instrs));
                 }
@@ -642,9 +634,14 @@ fn emit_instrs(
     // Intrinsics require HELPER_SCRATCH_I32 i32 locals (alloc cursor / heap floor pattern).
     // BinOp Mul/Div/Mod need only i64 scratch; those are provided via `helper_i64_base` directly
     // in `emit_bin_op`, without requiring the full HelperEmitState.
-    let has_intrinsic = instrs
-        .iter()
-        .any(|i| matches!(i, WasmBackendInstr::Intrinsic { .. }));
+    // Use collect_all_instrs to detect Intrinsic and ListLit in nested branches
+    // (CaseMatch arms, If branches, ListLit elements).
+    let has_intrinsic = collect_all_instrs(instrs).iter().any(|i| {
+        matches!(
+            i,
+            WasmBackendInstr::Intrinsic { .. } | WasmBackendInstr::ListLit { .. }
+        )
+    });
     let helper_state = if has_intrinsic && helper_i64_scratch_count > 0 {
         let alloc_cursor_local = i32_base + HELPER_ALLOC_CURSOR_OFFSET;
         let heap_floor_local = i32_base + HELPER_HEAP_FLOOR_OFFSET;
@@ -839,12 +836,29 @@ fn emit_instrs(
                 function.instruction(&Instruction::Call(func_idx));
             }
 
-            // WB-2B: CaseMatch and ListLit emission implemented in Step 4/5.
-            WasmBackendInstr::CaseMatch { .. } | WasmBackendInstr::ListLit { .. } => {
+            WasmBackendInstr::CaseMatch {
+                scrutinee_local,
+                arms,
+            } => {
+                emit_case_match(
+                    function,
+                    ctx,
+                    scrutinee_local,
+                    arms,
+                    layout,
+                    named_i64_count,
+                    helper_i64_scratch_count,
+                    i32_base,
+                    static_strings,
+                    &helper_state,
+                )?;
+            }
+
+            // WB-2B Step 5: ListLit emission.
+            WasmBackendInstr::ListLit { .. } => {
                 return Err(CodegenError {
-                    message: format!(
-                        "gen_lower/emit: CaseMatch/ListLit emission not yet implemented (WB-2B)"
-                    ),
+                    message: "gen_lower/emit: ListLit emission not yet implemented (WB-2B Step 5)"
+                        .to_string(),
                 });
             }
         }
@@ -2083,6 +2097,306 @@ fn emit_split_each_print(
     function.instruction(&Instruction::I64Const(encode_unit()));
 }
 
+/// Emit a `CaseMatch` instruction: scrutinee into scratch, then an if/else arm chain.
+///
+/// Each arm tests the scrutinee against its pattern and emits the arm body.
+/// The last arm must be `Wildcard` (unconditional). If the last arm is not
+/// `Wildcard`, an `unreachable` is emitted after the chain.
+///
+/// Result type: every arm must leave exactly one tagged i64 on the Wasm stack.
+/// The entire construct is wrapped in a block/br so all arm results go to the
+/// same merge point (Wasm `block (result i64) ... end`).
+#[allow(clippy::too_many_arguments)]
+fn emit_case_match(
+    function: &mut Function,
+    ctx: &mut EmitContext,
+    scrutinee_local: &str,
+    arms: &[crate::gen_lower::backend_ir::CaseArmInstr],
+    layout: &MemoryLayout,
+    named_i64_count: u32,
+    helper_i64_scratch_count: u32,
+    i32_base: u32,
+    static_strings: &StaticStringPool,
+    helper_state: &Option<HelperEmitState>,
+) -> Result<(), CodegenError> {
+    use crate::gen_lower::backend_ir::BackendCasePattern;
+
+    if arms.is_empty() {
+        return Err(CodegenError {
+            message: "gen_lower/emit: CaseMatch has no arms".to_string(),
+        });
+    }
+
+    // The scrutinee value is already stored in the named local (DeclareLocal + eval + StoreLocal
+    // are emitted by lower_case *before* the CaseMatch instruction).
+    let scrutinee_idx = ctx.get(scrutinee_local)?;
+
+    // Wrap the whole match in a block with result i64, so `br 0` exits with a value.
+    function.instruction(&Instruction::Block(wasm_encoder::BlockType::Result(
+        ValType::I64,
+    )));
+
+    let mut remaining_arms = arms;
+    while let Some((arm, rest)) = remaining_arms.split_first() {
+        remaining_arms = rest;
+
+        match &arm.pattern {
+            BackendCasePattern::Wildcard => {
+                // Unconditional: emit body directly, then br out of block.
+                emit_instrs(
+                    function,
+                    ctx,
+                    &arm.body_instrs,
+                    layout,
+                    named_i64_count,
+                    helper_i64_scratch_count,
+                    i32_base,
+                    static_strings,
+                )?;
+                function.instruction(&Instruction::Br(0));
+                // Any arms after Wildcard are unreachable; stop emitting.
+                break;
+            }
+
+            BackendCasePattern::IntLit(n) => {
+                let encoded = crate::gen_lower::value::encode_int(*n).map_err(|e| {
+                    CodegenError {
+                        message: format!("gen_lower/emit: CaseMatch IntLit out of range: {e}"),
+                    }
+                })?;
+                // Untag scrutinee and literal, compare.
+                // Comparison: tag-strip both then i64.eq
+                // Actually simpler: compare the full tagged i64 directly (tag + payload unique).
+                function.instruction(&Instruction::LocalGet(scrutinee_idx));
+                function.instruction(&Instruction::I64Const(encoded));
+                function.instruction(&Instruction::I64Eq);
+                function.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
+                emit_instrs(
+                    function,
+                    ctx,
+                    &arm.body_instrs,
+                    layout,
+                    named_i64_count,
+                    helper_i64_scratch_count,
+                    i32_base,
+                    static_strings,
+                )?;
+                function.instruction(&Instruction::Br(1)); // br out of enclosing block
+                function.instruction(&Instruction::End); // end if
+            }
+
+            BackendCasePattern::BoolLit(b) => {
+                let encoded = crate::gen_lower::value::encode_bool(*b);
+                function.instruction(&Instruction::LocalGet(scrutinee_idx));
+                function.instruction(&Instruction::I64Const(encoded));
+                function.instruction(&Instruction::I64Eq);
+                function.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
+                emit_instrs(
+                    function,
+                    ctx,
+                    &arm.body_instrs,
+                    layout,
+                    named_i64_count,
+                    helper_i64_scratch_count,
+                    i32_base,
+                    static_strings,
+                )?;
+                function.instruction(&Instruction::Br(1));
+                function.instruction(&Instruction::End);
+            }
+
+            BackendCasePattern::StrLit(pattern_text) => {
+                // Inline byte-wise string comparison (no host import needed).
+                // Algorithm:
+                //   pat_ptr, pat_len = decode_string(static pattern)
+                //   scr_ptr, scr_len = decode_string(scrutinee)
+                //   match = (pat_len == scr_len) && byte_loop_eq(pat, scr, pat_len)
+                let hs = helper_state.ok_or_else(|| CodegenError {
+                    message: "gen_lower/emit: StrLit case pattern needs helper scratch (no ListLit/Intrinsic in scope?)".to_string(),
+                })?;
+                // i32 scratch locals (borrowing from helper pool):
+                // We need 4 i32 locals: pat_ptr, pat_len, scr_ptr, scr_len, + loop_iter
+                // Use the generic helper i32 slots starting at hs.i32_base.
+                // These slots are also used by Intrinsic helpers, but CaseMatch patterns
+                // are not interleaved with running intrinsics, so reuse is safe.
+                let s_pat_ptr = hs.i32_base;
+                let s_pat_len = hs.i32_base + 1;
+                let s_scr_ptr = hs.i32_base + 2;
+                let s_scr_len = hs.i32_base + 3;
+                let s_loop_iter = hs.i32_base + 4;
+
+                // Push static string for pattern.
+                let pat_ptr = static_strings.ptr(pattern_text)?;
+                function.instruction(&Instruction::I32Const(pat_ptr));
+                function.instruction(&Instruction::LocalSet(s_pat_ptr));
+                function.instruction(&Instruction::I32Const(pat_ptr));
+                function.instruction(&Instruction::I32Load(MemArg {
+                    offset: 0,
+                    align: 2,
+                    memory_index: 0,
+                }));
+                function.instruction(&Instruction::LocalSet(s_pat_len));
+
+                // Decode scrutinee string pointer.
+                // First verify it's a string tag:
+                function.instruction(&Instruction::LocalGet(scrutinee_idx));
+                function.instruction(&Instruction::I64Const((TAG_STRING as i64) << 60));
+                function.instruction(&Instruction::I64And);
+                function.instruction(&Instruction::I64Const((TAG_STRING as i64) << 60));
+                function.instruction(&Instruction::I64Eq);
+                function.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
+                // Is a string: decode ptr
+                function.instruction(&Instruction::LocalGet(scrutinee_idx));
+                function.instruction(&Instruction::I64Const(0xFFFF_FFFFi64));
+                function.instruction(&Instruction::I64And);
+                function.instruction(&Instruction::I32WrapI64);
+                function.instruction(&Instruction::LocalSet(s_scr_ptr));
+                function.instruction(&Instruction::LocalGet(s_scr_ptr));
+                function.instruction(&Instruction::I32Load(MemArg {
+                    offset: 0,
+                    align: 2,
+                    memory_index: 0,
+                }));
+                function.instruction(&Instruction::LocalSet(s_scr_len));
+                // Compare lengths:
+                function.instruction(&Instruction::LocalGet(s_pat_len));
+                function.instruction(&Instruction::LocalGet(s_scr_len));
+                function.instruction(&Instruction::I32Eq);
+                function.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
+                // Same length: byte loop
+                function.instruction(&Instruction::I32Const(0));
+                function.instruction(&Instruction::LocalSet(s_loop_iter));
+                function.instruction(&Instruction::Block(wasm_encoder::BlockType::Empty)); // block_outer
+                function.instruction(&Instruction::Loop(wasm_encoder::BlockType::Empty));  // loop
+                // if iter >= len → break out (full match)
+                function.instruction(&Instruction::LocalGet(s_loop_iter));
+                function.instruction(&Instruction::LocalGet(s_pat_len));
+                function.instruction(&Instruction::I32GeU);
+                function.instruction(&Instruction::BrIf(1)); // br block_outer → match succeeded
+                // load pat byte
+                function.instruction(&Instruction::LocalGet(s_pat_ptr));
+                function.instruction(&Instruction::I32Const(4));
+                function.instruction(&Instruction::I32Add);
+                function.instruction(&Instruction::LocalGet(s_loop_iter));
+                function.instruction(&Instruction::I32Add);
+                function.instruction(&Instruction::I32Load8U(MemArg {
+                    offset: 0,
+                    align: 0,
+                    memory_index: 0,
+                }));
+                // load scr byte
+                function.instruction(&Instruction::LocalGet(s_scr_ptr));
+                function.instruction(&Instruction::I32Const(4));
+                function.instruction(&Instruction::I32Add);
+                function.instruction(&Instruction::LocalGet(s_loop_iter));
+                function.instruction(&Instruction::I32Add);
+                function.instruction(&Instruction::I32Load8U(MemArg {
+                    offset: 0,
+                    align: 0,
+                    memory_index: 0,
+                }));
+                function.instruction(&Instruction::I32Ne);
+                function.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
+                // Bytes differ → jump out of loop + if → no match
+                function.instruction(&Instruction::Br(3)); // br out of loop + block_outer + if(same len)
+                function.instruction(&Instruction::End); // end if (bytes differ)
+                // iter++
+                function.instruction(&Instruction::LocalGet(s_loop_iter));
+                function.instruction(&Instruction::I32Const(1));
+                function.instruction(&Instruction::I32Add);
+                function.instruction(&Instruction::LocalSet(s_loop_iter));
+                function.instruction(&Instruction::Br(0)); // loop back
+                function.instruction(&Instruction::End); // end loop
+                function.instruction(&Instruction::End); // end block_outer
+                // Strings are equal → emit body + br out
+                emit_instrs(
+                    function,
+                    ctx,
+                    &arm.body_instrs,
+                    layout,
+                    named_i64_count,
+                    helper_i64_scratch_count,
+                    i32_base,
+                    static_strings,
+                )?;
+                function.instruction(&Instruction::Br(2)); // br out of: if(same len) + outer block
+                function.instruction(&Instruction::End); // end if (same len)
+                function.instruction(&Instruction::End); // end if (is string)
+            }
+
+            BackendCasePattern::EmptyList => {
+                // Emit true iff scrutinee is a List with len == 0.
+                // Check: tag bits == TAG_LIST
+                function.instruction(&Instruction::LocalGet(scrutinee_idx));
+                function.instruction(&Instruction::I64Const((TAG_LIST as i64) << 60));
+                function.instruction(&Instruction::I64And);
+                function.instruction(&Instruction::I64Const((TAG_LIST as i64) << 60));
+                function.instruction(&Instruction::I64Eq);
+                function.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
+                // Extract pointer, load len (i32 at offset 0).
+                // We need a temp i32 local. Use the helper i32 pool if available.
+                // For EmptyList we just need one i32: the pointer.
+                let s_ptr = if let Some(hs) = helper_state {
+                    hs.i32_base
+                } else {
+                    // No helper state: allocate a fresh i32 local via ctx.
+                    // This happens if the function has no Intrinsic/ListLit but does have EmptyList pattern.
+                    // We'll declare an extra local.
+                    // Note: this local won't be declared in the header unless we pre-scan.
+                    // Safer: fail with a clear error.
+                    return Err(CodegenError {
+                        message: "gen_lower/emit: EmptyList pattern needs helper scratch (add a ListLit or Intrinsic to the function, or ensure helper state is initialized)".to_string(),
+                    });
+                };
+                function.instruction(&Instruction::LocalGet(scrutinee_idx));
+                function.instruction(&Instruction::I64Const(0xFFFF_FFFFi64));
+                function.instruction(&Instruction::I64And);
+                function.instruction(&Instruction::I32WrapI64);
+                function.instruction(&Instruction::LocalSet(s_ptr));
+                function.instruction(&Instruction::LocalGet(s_ptr));
+                function.instruction(&Instruction::I32Load(MemArg {
+                    offset: 0,
+                    align: 2,
+                    memory_index: 0,
+                }));
+                function.instruction(&Instruction::I32Eqz);
+                function.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
+                emit_instrs(
+                    function,
+                    ctx,
+                    &arm.body_instrs,
+                    layout,
+                    named_i64_count,
+                    helper_i64_scratch_count,
+                    i32_base,
+                    static_strings,
+                )?;
+                function.instruction(&Instruction::Br(2)); // out of: if(len==0) + if(is list) + block
+                function.instruction(&Instruction::End); // end if (len == 0)
+                function.instruction(&Instruction::End); // end if (is list)
+            }
+
+            BackendCasePattern::ListPattern { .. } => {
+                // WB-2B Step 6: ListPattern emission.
+                return Err(CodegenError {
+                    message: "gen_lower/emit: ListPattern emission not yet implemented (WB-2B Step 6)".to_string(),
+                });
+            }
+        }
+    }
+
+    // If the last arm was not Wildcard, emit unreachable as a safety net.
+    if !matches!(arms.last(), Some(a) if a.pattern == BackendCasePattern::Wildcard) {
+        function.instruction(&Instruction::Unreachable);
+        // Still need to produce a value for the block type; push a dummy.
+        // (unreachable makes this dead code, but wasm-encoder requires a type-valid block)
+        function.instruction(&Instruction::I64Const(0));
+    }
+
+    function.instruction(&Instruction::End); // end block (result i64)
+    Ok(())
+}
+
 fn emit_abort(function: &mut Function) {
     function.instruction(&Instruction::Unreachable);
 }
@@ -2758,6 +3072,40 @@ mod tests {
         ];
         let wasm =
             emit_general_module(&instrs, &default_layout()).expect("emit nested If should succeed");
+        assert_valid_wasm(&wasm);
+    }
+
+    #[test]
+    fn emit_case_match_int_lit_and_wildcard_produces_valid_wasm() {
+        use crate::gen_lower::backend_ir::{BackendCasePattern, CaseArmInstr};
+        use crate::gen_lower::value::{encode_int, encode_unit};
+        let x_val = encode_int(2).unwrap();
+        let one_val = encode_int(1).unwrap();
+        let instrs = vec![
+            I::DeclareLocal {
+                name: "x".to_string(),
+            },
+            I::I64Const(x_val),
+            I::StoreLocal {
+                name: "x".to_string(),
+            },
+            I::CaseMatch {
+                scrutinee_local: "x".to_string(),
+                arms: vec![
+                    CaseArmInstr {
+                        pattern: BackendCasePattern::IntLit(1),
+                        body_instrs: vec![I::I64Const(one_val)],
+                    },
+                    CaseArmInstr {
+                        pattern: BackendCasePattern::Wildcard,
+                        body_instrs: vec![I::I64Const(encode_unit())],
+                    },
+                ],
+            },
+            I::Drop,
+        ];
+        let wasm = emit_general_module(&instrs, &default_layout())
+            .expect("emit CaseMatch int+wildcard should succeed");
         assert_valid_wasm(&wasm);
     }
 }

@@ -229,7 +229,16 @@ fn lower_comp_inner(
     }
 }
 
-/// Lower a `CompExpr::Case` to a `CaseMatch` backend IR instruction.
+/// Lower a `CompExpr::Case` to backend IR.
+///
+/// Emits:
+///   1. `DeclareLocal { name: scrutinee_local }`
+///   2. scrutinee value instructions
+///   3. `StoreLocal { name: scrutinee_local }`
+///   4. `CaseMatch { scrutinee_local, arms }`
+///
+/// The scrutinee local name is `__case_N` where N is a unique counter derived
+/// from the arm count to avoid collisions in nested case expressions.
 fn lower_case(
     scrutinee: &ValueExpr,
     arms: &[goby_core::ir::IrCaseArm],
@@ -238,6 +247,12 @@ fn lower_case(
 ) -> Result<Vec<WasmBackendInstr>, LowerError> {
     use crate::gen_lower::backend_ir::{BackendCasePattern, BackendListPatternItem, CaseArmInstr};
     use goby_core::ir::{IrCasePattern, IrListPatternItem, IrListPatternTail};
+
+    // Generate a unique scrutinee local name.
+    // Use a static counter for uniqueness across nested case expressions.
+    static CASE_COUNTER: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    let counter = CASE_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let scrutinee_local = format!("__case_scrutinee_{counter}");
 
     let scrutinee_instrs = lower_value(scrutinee)?;
 
@@ -278,10 +293,23 @@ fn lower_case(
         });
     }
 
-    Ok(vec![WasmBackendInstr::CaseMatch {
-        scrutinee_instrs,
+    let mut instrs = Vec::new();
+    // 1. Declare the scrutinee local (so it appears in the Wasm function header pre-scan).
+    instrs.push(WasmBackendInstr::DeclareLocal {
+        name: scrutinee_local.clone(),
+    });
+    // 2. Evaluate the scrutinee.
+    instrs.extend(scrutinee_instrs);
+    // 3. Store into the local.
+    instrs.push(WasmBackendInstr::StoreLocal {
+        name: scrutinee_local.clone(),
+    });
+    // 4. The CaseMatch instruction reads from the local.
+    instrs.push(WasmBackendInstr::CaseMatch {
+        scrutinee_local,
         arms: backend_arms,
-    }])
+    });
+    Ok(instrs)
 }
 
 /// Lower a `ValueExpr` to a flat sequence of `WasmBackendInstr`.
@@ -1588,18 +1616,26 @@ mod tests {
             ],
         };
         let result = lower_comp(&comp).expect("Case lowering should succeed");
-        // Must produce exactly one CaseMatch instruction.
-        assert_eq!(result.len(), 1);
-        let WasmBackendInstr::CaseMatch { scrutinee_instrs, arms } = &result[0] else {
-            panic!("expected CaseMatch, got {:?}", result[0]);
-        };
-        // Scrutinee is LoadLocal("x")
+        // lower_case emits: DeclareLocal, scrutinee instrs, StoreLocal, CaseMatch
+        assert_eq!(result.len(), 4, "expected 4 instrs (declare+eval+store+CaseMatch)");
+        // result[0] = DeclareLocal
+        assert!(matches!(&result[0], WasmBackendInstr::DeclareLocal { .. }));
+        // result[1] = scrutinee: LoadLocal("x")
         assert_eq!(
-            scrutinee_instrs,
-            &[WasmBackendInstr::LoadLocal {
+            result[1],
+            WasmBackendInstr::LoadLocal {
                 name: "x".to_string()
-            }]
+            }
         );
+        // result[2] = StoreLocal
+        assert!(matches!(&result[2], WasmBackendInstr::StoreLocal { .. }));
+        // result[3] = CaseMatch
+        let WasmBackendInstr::CaseMatch { scrutinee_local, arms } = &result[3] else {
+            panic!("expected CaseMatch, got {:?}", result[3]);
+        };
+        // scrutinee_local matches the DeclareLocal name
+        let WasmBackendInstr::DeclareLocal { name: decl_name } = &result[0] else { unreachable!() };
+        assert_eq!(scrutinee_local, decl_name);
         assert_eq!(arms.len(), 2);
         assert_eq!(arms[0].pattern, BackendCasePattern::IntLit(0));
         assert_eq!(arms[1].pattern, BackendCasePattern::Wildcard);
@@ -1624,7 +1660,8 @@ mod tests {
             ],
         };
         let result = lower_comp(&comp).expect("Case bool lowering should succeed");
-        let WasmBackendInstr::CaseMatch { arms, .. } = &result[0] else {
+        assert_eq!(result.len(), 4, "expected 4 instrs (declare+eval+store+CaseMatch)");
+        let WasmBackendInstr::CaseMatch { arms, .. } = &result[3] else {
             panic!("expected CaseMatch");
         };
         assert_eq!(arms[0].pattern, BackendCasePattern::BoolLit(true));
@@ -1649,7 +1686,8 @@ mod tests {
             ],
         };
         let result = lower_comp(&comp).expect("Case str lit lowering should succeed");
-        let WasmBackendInstr::CaseMatch { arms, .. } = &result[0] else {
+        assert_eq!(result.len(), 4, "expected 4 instrs (declare+eval+store+CaseMatch)");
+        let WasmBackendInstr::CaseMatch { arms, .. } = &result[3] else {
             panic!("expected CaseMatch");
         };
         assert_eq!(
@@ -1677,7 +1715,8 @@ mod tests {
             ],
         };
         let result = lower_comp(&comp).expect("Case empty list lowering should succeed");
-        let WasmBackendInstr::CaseMatch { arms, .. } = &result[0] else {
+        assert_eq!(result.len(), 4, "expected 4 instrs (declare+eval+store+CaseMatch)");
+        let WasmBackendInstr::CaseMatch { arms, .. } = &result[3] else {
             panic!("expected CaseMatch");
         };
         assert_eq!(arms[0].pattern, BackendCasePattern::EmptyList);
@@ -1706,7 +1745,8 @@ mod tests {
             ],
         };
         let result = lower_comp(&comp).expect("Case list pattern lowering should succeed");
-        let WasmBackendInstr::CaseMatch { arms, .. } = &result[0] else {
+        assert_eq!(result.len(), 4, "expected 4 instrs (declare+eval+store+CaseMatch)");
+        let WasmBackendInstr::CaseMatch { arms, .. } = &result[3] else {
             panic!("expected CaseMatch");
         };
         assert_eq!(
@@ -1734,7 +1774,8 @@ mod tests {
             }],
         };
         let result = lower_comp(&comp).expect("Case list pattern with ignore tail should succeed");
-        let WasmBackendInstr::CaseMatch { arms, .. } = &result[0] else {
+        assert_eq!(result.len(), 4, "expected 4 instrs (declare+eval+store+CaseMatch)");
+        let WasmBackendInstr::CaseMatch { arms, .. } = &result[3] else {
             panic!("expected CaseMatch");
         };
         // Ignore tail → tail = None in backend pattern
@@ -1776,7 +1817,8 @@ mod tests {
         };
         let result =
             lower_comp_with_decls(&comp, &known).expect("Case with DeclCall arm should succeed");
-        let WasmBackendInstr::CaseMatch { arms, .. } = &result[0] else {
+        assert_eq!(result.len(), 4, "expected 4 instrs (declare+eval+store+CaseMatch)");
+        let WasmBackendInstr::CaseMatch { arms, .. } = &result[3] else {
             panic!("expected CaseMatch");
         };
         // The first arm body should contain a DeclCall for "helper"

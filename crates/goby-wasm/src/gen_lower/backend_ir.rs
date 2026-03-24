@@ -192,23 +192,21 @@ pub(crate) enum WasmBackendInstr {
     /// are not yet supported here; they will use `call_indirect` via a funcref table
     /// in WB-2B/WB-3. See `backend_ir.rs` design comments for the ABI decision.
     DeclCall { decl_name: String },
-    /// Pattern-match the scrutinee (top of stack before this instruction) against
-    /// a sequence of arms, returning the value of the first matching arm's body.
+    /// Pattern-match the scrutinee against a sequence of arms.
     ///
     /// # Stack discipline
-    /// The scrutinee is expected to be on the stack *before* this instruction.
-    /// The emitter pops it into a scratch local (or re-pushes per arm) and produces
-    /// exactly one tagged i64 result.
+    /// Before this instruction, the lowering phase emits:
+    ///   `DeclareLocal { name: scrutinee_local }` + scrutinee value instrs + `StoreLocal { name: scrutinee_local }`
+    /// `CaseMatch` itself does not push the scrutinee; it reads it from `scrutinee_local`.
+    /// The result is exactly one tagged i64 (the matched arm body value).
     ///
     /// Arms are tested in order. The last arm must be `Wildcard`.
-    /// If no arm matches (i.e. no `Wildcard` and no literal match), the emitter
-    /// emits an `unreachable` instruction after the arm chain.
     CaseMatch {
-        /// Instructions that produce the scrutinee on the stack.
+        /// Name of the local that holds the scrutinee value.
         ///
-        /// Separated from the arms so the emitter can place the scrutinee into a
-        /// scratch local before entering the arm chain.
-        scrutinee_instrs: Vec<WasmBackendInstr>,
+        /// This local must have been declared and populated (via `DeclareLocal` +
+        /// scrutinee instructions + `StoreLocal`) *before* this `CaseMatch` instruction.
+        scrutinee_local: String,
         arms: Vec<CaseArmInstr>,
     },
     /// Construct a list value from a fixed number of element instruction sequences.
@@ -303,7 +301,7 @@ mod tests {
     fn case_match_and_list_lit_round_trip() {
         // CaseMatch with literal, EmptyList, ListPattern, and Wildcard arms.
         let case_instr = WasmBackendInstr::CaseMatch {
-            scrutinee_instrs: vec![WasmBackendInstr::I64Const(0)],
+            scrutinee_local: "__case_scrutinee_0".to_string(),
             arms: vec![
                 CaseArmInstr {
                     pattern: BackendCasePattern::IntLit(0),

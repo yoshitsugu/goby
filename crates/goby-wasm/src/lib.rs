@@ -737,4 +737,109 @@ main =
             "WB-2A: repeat 3 hi → hi x3"
         );
     }
+
+    // ------------------------------------------------------------------
+    // WB-2B: Case emission tests
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn wb2b_case_int_lit_matches_and_executes_via_general_lowered() {
+        // WB-2B-M1: case with integer literal patterns.
+        // classify_int x = case x { 1 -> "one" | 2 -> "two" | _ -> "other" }
+        use goby_core::parse_module;
+        let module = parse_module(
+            r#"
+classify_int : Int -> String
+classify_int x =
+  case x
+    1 -> "one"
+    2 -> "two"
+    _ -> "other"
+
+main : Unit -> Unit can Print, Read
+main =
+  input = read ()
+  println (classify_int 2)
+"#,
+        )
+        .expect("parse should work");
+
+        assert_eq!(
+            runtime_io_execution_kind(&module).expect("classification should succeed"),
+            RuntimeIoExecutionKind::GeneralLowered,
+            "WB-2B: case int lit program must classify as GeneralLowered"
+        );
+
+        let output = execute_runtime_module_with_stdin(&module, Some("ignored".to_string()))
+            .expect("WB-2B: case int lit must execute via Goby-owned Wasm runtime");
+        assert_eq!(
+            output.as_deref(),
+            Some("two\n"),
+            "WB-2B: classify_int 2 → two"
+        );
+    }
+
+    #[test]
+    fn wb2b_case_int_lit_wildcard_branch_executes() {
+        // WB-2B-M1: wildcard arm is taken when no literal matches.
+        use goby_core::parse_module;
+        let module = parse_module(
+            r#"
+classify_int : Int -> String
+classify_int x =
+  case x
+    1 -> "one"
+    _ -> "other"
+
+main : Unit -> Unit can Print, Read
+main =
+  input = read ()
+  println (classify_int 99)
+"#,
+        )
+        .expect("parse should work");
+
+        let output = execute_runtime_module_with_stdin(&module, Some("ignored".to_string()))
+            .expect("WB-2B: case wildcard must execute");
+        assert_eq!(
+            output.as_deref(),
+            Some("other\n"),
+            "WB-2B: classify_int 99 → other"
+        );
+    }
+
+    #[test]
+    fn wb2b_case_bool_lit_matches_via_general_lowered() {
+        // WB-2B-M1: case with boolean literal pattern.
+        use goby_core::parse_module;
+        let module = parse_module(
+            r#"
+bool_to_str : Bool -> String
+bool_to_str b =
+  case b
+    True -> "yes"
+    _ -> "no"
+
+main : Unit -> Unit can Print, Read
+main =
+  input = read ()
+  println (bool_to_str True)
+"#,
+        )
+        .expect("parse should work");
+
+        assert_eq!(
+            runtime_io_execution_kind(&module).expect("classification should succeed"),
+            RuntimeIoExecutionKind::GeneralLowered,
+            "WB-2B: case bool lit program must classify as GeneralLowered"
+        );
+
+        let output = execute_runtime_module_with_stdin(&module, Some("ignored".to_string()))
+            .expect("WB-2B: case bool lit must execute");
+        assert_eq!(
+            output.as_deref(),
+            Some("yes\n"),
+            "WB-2B: bool_to_str True → yes"
+        );
+    }
 }
