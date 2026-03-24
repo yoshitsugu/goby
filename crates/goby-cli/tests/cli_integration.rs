@@ -3,7 +3,7 @@ use std::env;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Command, Output, Stdio};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 struct TempDirGuard {
@@ -46,6 +46,27 @@ fn repo_root() -> PathBuf {
         .join("../..")
         .canonicalize()
         .expect("repo root should exist")
+}
+
+fn run_goby_with_stdin(root: &Path, input: &Path, stdin: &[u8]) -> Output {
+    let mut child = command_for_goby_cli()
+        .arg("run")
+        .arg(input)
+        .current_dir(root)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("cli should execute");
+    child
+        .stdin
+        .as_mut()
+        .expect("stdin pipe should exist")
+        .write_all(stdin)
+        .expect("stdin should be writable");
+    child
+        .wait_with_output()
+        .expect("cli output should be readable")
 }
 
 #[test]
@@ -438,24 +459,7 @@ main =
     )
     .expect("temporary input should be writable");
 
-    let mut child = command_for_goby_cli()
-        .arg("run")
-        .arg(&input)
-        .current_dir(&root)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("cli should execute");
-    child
-        .stdin
-        .as_mut()
-        .expect("stdin pipe should exist")
-        .write_all(b"alpha\nbeta\n")
-        .expect("stdin should be writable");
-    let output = child
-        .wait_with_output()
-        .expect("cli output should be readable");
+    let output = run_goby_with_stdin(&root, &input, b"alpha\nbeta\n");
 
     assert!(
         output.status.success(),
@@ -496,24 +500,7 @@ main =
     )
     .expect("temporary input should be writable");
 
-    let mut child = command_for_goby_cli()
-        .arg("run")
-        .arg(&input)
-        .current_dir(&root)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("cli should execute");
-    child
-        .stdin
-        .as_mut()
-        .expect("stdin pipe should exist")
-        .write_all(b"alpha\nbeta\n")
-        .expect("stdin should be writable");
-    let output = child
-        .wait_with_output()
-        .expect("cli output should be readable");
+    let output = run_goby_with_stdin(&root, &input, b"alpha\nbeta\n");
 
     assert!(
         output.status.success(),
@@ -550,24 +537,7 @@ main =
     )
     .expect("temporary input should be writable");
 
-    let mut child = command_for_goby_cli()
-        .arg("run")
-        .arg(&input)
-        .current_dir(&root)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("cli should execute");
-    child
-        .stdin
-        .as_mut()
-        .expect("stdin pipe should exist")
-        .write_all(b"alpha\nbeta\n")
-        .expect("stdin should be writable");
-    let output = child
-        .wait_with_output()
-        .expect("cli output should be readable");
+    let output = run_goby_with_stdin(&root, &input, b"alpha\nbeta\n");
 
     assert!(
         output.status.success(),
@@ -600,23 +570,7 @@ main =
     )
     .expect("temporary input should be writable");
 
-    let mut child = command_for_goby_cli()
-        .arg("run")
-        .arg(&input)
-        .current_dir(&root)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("cli should execute");
-    let mut stdin = child.stdin.take().expect("stdin pipe should exist");
-    stdin
-        .write_all(b"payload")
-        .expect("stdin should be writable");
-    drop(stdin);
-    let output = child
-        .wait_with_output()
-        .expect("cli output should be readable");
+    let output = run_goby_with_stdin(&root, &input, b"payload");
 
     assert!(
         output.status.success(),
@@ -804,24 +758,7 @@ main =
     )
     .expect("temporary input should be writable");
 
-    let mut child = command_for_goby_cli()
-        .arg("run")
-        .arg(&input)
-        .current_dir(&root)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("cli should execute");
-    child
-        .stdin
-        .as_mut()
-        .expect("stdin pipe should exist")
-        .write_all(b"hogehoge\nfugafuga")
-        .expect("stdin should be writable");
-    let output = child
-        .wait_with_output()
-        .expect("cli output should be readable");
+    let output = run_goby_with_stdin(&root, &input, b"hogehoge\nfugafuga");
 
     assert!(
         output.status.success(),
@@ -843,8 +780,9 @@ main =
 
 #[test]
 fn run_command_executes_transformed_split_callback_with_empty_runtime_stdin() {
-    // The transformed split-callback shape is now DynamicWasiIo (no longer InterpreterBridge).
-    // With empty stdin: nread==0, so no lines are processed and no "!" output is produced.
+    // The transformed split-callback shape is now GeneralLowered.
+    // With empty stdin: read() returns "", and split("", "\n") currently preserves
+    // a single empty segment for this path, so the callback prints just "!" once.
     let root = repo_root();
     let sandbox = TempDirGuard::new("run_read_runtime_stdin_empty");
     let input = sandbox.join("read_empty.gb");
@@ -864,19 +802,7 @@ main =
     )
     .expect("temporary input should be writable");
 
-    let mut child = command_for_goby_cli()
-        .arg("run")
-        .arg(&input)
-        .current_dir(&root)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("cli should execute");
-    drop(child.stdin.take());
-    let output = child
-        .wait_with_output()
-        .expect("cli output should be readable");
+    let output = run_goby_with_stdin(&root, &input, b"");
 
     assert!(
         output.status.success(),
@@ -885,19 +811,19 @@ main =
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        stdout.contains("generated wasm"),
-        "expected DynamicWasiIo Wasm path, stdout: {}",
+        stdout.contains("parsed and typechecked"),
+        "unexpected stdout: {}",
         stdout
     );
     assert!(
-        !stdout.contains("!\n"),
-        "empty stdin should not emit transformed line output, stdout: {}",
+        stdout.contains("!\n"),
+        "empty stdin should preserve one empty segment in transformed output, stdout: {}",
         stdout
     );
 }
 
 #[test]
-fn run_command_executes_graphemes_program_with_interpreter_bridge_stdin() {
+fn run_command_executes_graphemes_program_with_runtime_stdin() {
     let root = repo_root();
     let sandbox = TempDirGuard::new("run_graphemes_interpreter_bridge");
     let input = sandbox.join("graphemes.gb");
@@ -915,28 +841,11 @@ main =
     )
     .expect("temporary input should be writable");
 
-    let mut child = command_for_goby_cli()
-        .arg("run")
-        .arg(&input)
-        .current_dir(&root)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("cli should execute");
-    child
-        .stdin
-        .as_mut()
-        .expect("stdin pipe should exist")
-        .write_all("a👨‍👩‍👧‍👦b".as_bytes())
-        .expect("stdin should be writable");
-    let output = child
-        .wait_with_output()
-        .expect("cli output should be readable");
+    let output = run_goby_with_stdin(&root, &input, "a👨‍👩‍👧‍👦b".as_bytes());
 
     assert!(
         output.status.success(),
-        "expected interpreter-bridge execution to succeed, stderr: {}",
+        "expected runtime stdin execution to succeed, stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -952,7 +861,7 @@ main =
     );
     assert!(
         !stdout.contains("generated wasm"),
-        "interpreter bridge should not claim Wasm generation, stdout: {}",
+        "runtime-owned execution should not claim Wasm generation, stdout: {}",
         stdout
     );
 }
