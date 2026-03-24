@@ -35,7 +35,12 @@ pub(crate) struct LambdaAuxDecl {
 fn comp_has_free_var(comp: &CompExpr, allowed_vars: &HashSet<String>) -> bool {
     match comp {
         CompExpr::Value(v) => value_has_free_var(v, allowed_vars),
-        CompExpr::Let { name, value, body, .. } | CompExpr::LetMut { name, value, body, .. } => {
+        CompExpr::Let {
+            name, value, body, ..
+        }
+        | CompExpr::LetMut {
+            name, value, body, ..
+        } => {
             if comp_has_free_var(value, allowed_vars) {
                 return true;
             }
@@ -100,9 +105,9 @@ fn value_has_free_var(value: &ValueExpr, allowed_vars: &HashSet<String>) -> bool
             elements.iter().any(|e| value_has_free_var(e, allowed_vars))
         }
         ValueExpr::TupleLit(items) => items.iter().any(|i| value_has_free_var(i, allowed_vars)),
-        ValueExpr::RecordLit { fields, .. } => {
-            fields.iter().any(|(_, v)| value_has_free_var(v, allowed_vars))
-        }
+        ValueExpr::RecordLit { fields, .. } => fields
+            .iter()
+            .any(|(_, v)| value_has_free_var(v, allowed_vars)),
         ValueExpr::Interp(parts) => parts.iter().any(|p| match p {
             goby_core::ir::IrInterpPart::Expr(e) => value_has_free_var(e, allowed_vars),
             goby_core::ir::IrInterpPart::Text(_) => false,
@@ -226,7 +231,12 @@ fn lower_comp_inner(
             if let Some(alias) = alias_value_from_comp(value) {
                 let mut scoped_aliases = aliases.clone();
                 scoped_aliases.insert(name.clone(), alias);
-                instrs.extend(lower_comp_inner(body, &scoped_aliases, known_decls, lambda_decls)?);
+                instrs.extend(lower_comp_inner(
+                    body,
+                    &scoped_aliases,
+                    known_decls,
+                    lambda_decls,
+                )?);
             } else {
                 instrs.extend(lower_comp_inner(body, aliases, known_decls, lambda_decls)?);
             }
@@ -298,7 +308,8 @@ fn lower_comp_inner(
                 if let Some(op) = resolve_print_callback(&args[1], aliases) {
                     Ok(vec![WasmBackendInstr::ListEachEffect { list_instrs, op }])
                 } else {
-                    let func_instrs = lower_value_as_arg(&args[1], aliases, known_decls, lambda_decls)?;
+                    let func_instrs =
+                        lower_value_as_arg(&args[1], aliases, known_decls, lambda_decls)?;
                     Ok(vec![WasmBackendInstr::ListEach {
                         list_instrs,
                         func_instrs,
@@ -323,8 +334,12 @@ fn lower_comp_inner(
             {
                 // stdlib string.graphemes: lower as StringGraphemesList host intrinsic (WB-3-M4).
                 // Returns a tagged List String containing all Unicode Extended Grapheme Clusters.
-                let mut instrs =
-                    lower_comp_inner(&CompExpr::Value(args[0].clone()), aliases, known_decls, lambda_decls)?;
+                let mut instrs = lower_comp_inner(
+                    &CompExpr::Value(args[0].clone()),
+                    aliases,
+                    known_decls,
+                    lambda_decls,
+                )?;
                 instrs.push(WasmBackendInstr::Intrinsic {
                     intrinsic: BackendIntrinsic::StringGraphemesList,
                 });
@@ -364,7 +379,8 @@ fn lower_comp_inner(
                     if let Some(op) = resolve_print_callback(&args[1], aliases) {
                         Ok(vec![WasmBackendInstr::ListEachEffect { list_instrs, op }])
                     } else {
-                        let func_instrs = lower_value_as_arg(&args[1], aliases, known_decls, lambda_decls)?;
+                        let func_instrs =
+                            lower_value_as_arg(&args[1], aliases, known_decls, lambda_decls)?;
                         Ok(vec![WasmBackendInstr::ListEach {
                             list_instrs,
                             func_instrs,
@@ -375,8 +391,10 @@ fn lower_comp_inner(
                     && args.len() == 2
                 {
                     // Var resolves to list.map (bare name or alias via `import goby/list (map)`).
-                    let list_instrs = lower_value_as_arg(&args[0], aliases, known_decls, lambda_decls)?;
-                    let func_instrs = lower_value_as_arg(&args[1], aliases, known_decls, lambda_decls)?;
+                    let list_instrs =
+                        lower_value_as_arg(&args[0], aliases, known_decls, lambda_decls)?;
+                    let func_instrs =
+                        lower_value_as_arg(&args[1], aliases, known_decls, lambda_decls)?;
                     Ok(vec![WasmBackendInstr::ListMap {
                         list_instrs,
                         func_instrs,
@@ -697,9 +715,7 @@ fn lower_value_as_arg(
             });
             Ok(vec![WasmBackendInstr::PushFuncHandle { decl_name }])
         }
-        ValueExpr::GlobalRef { module, name }
-            if module == "string" && name == "graphemes" =>
-        {
+        ValueExpr::GlobalRef { module, name } if module == "string" && name == "graphemes" => {
             let n = LAMBDA_COUNTER.fetch_add(1, AtomicOrdering::Relaxed);
             let decl_name = format!("__graphemes_wrapper_{n}");
             let param_name = "__s".to_string();
@@ -948,9 +964,7 @@ fn instrs_load_local(instrs: &[WasmBackendInstr], name: &str) -> bool {
         | WasmBackendInstr::ListMap {
             list_instrs,
             func_instrs,
-        } => {
-            instrs_load_local(list_instrs, name) || instrs_load_local(func_instrs, name)
-        }
+        } => instrs_load_local(list_instrs, name) || instrs_load_local(func_instrs, name),
         WasmBackendInstr::ListEachEffect { list_instrs, .. } => {
             instrs_load_local(list_instrs, name)
         }
@@ -958,9 +972,9 @@ fn instrs_load_local(instrs: &[WasmBackendInstr], name: &str) -> bool {
             then_instrs,
             else_instrs,
         } => instrs_load_local(then_instrs, name) || instrs_load_local(else_instrs, name),
-        WasmBackendInstr::CaseMatch { arms, .. } => {
-            arms.iter().any(|arm| instrs_load_local(&arm.body_instrs, name))
-        }
+        WasmBackendInstr::CaseMatch { arms, .. } => arms
+            .iter()
+            .any(|arm| instrs_load_local(&arm.body_instrs, name)),
         WasmBackendInstr::ListLit { element_instrs } => {
             element_instrs.iter().any(|e| instrs_load_local(e, name))
         }
@@ -1278,7 +1292,6 @@ mod tests {
             "split+list.get should include intrinsic-based lowering: {instrs:?}"
         );
     }
-
 
     // --- WB-1 Step 2: BinOp lowering ---
 
@@ -1964,11 +1977,17 @@ mod tests {
             }),
             args: vec![ValueExpr::Var("text".to_string())],
         };
-        let instrs = lower_comp(&comp).expect("string.graphemes GlobalRef should lower to intrinsic");
+        let instrs =
+            lower_comp(&comp).expect("string.graphemes GlobalRef should lower to intrinsic");
         assert!(
             matches!(
                 instrs.as_slice(),
-                [I::LoadLocal { .. }, I::Intrinsic { intrinsic: BackendIntrinsic::StringGraphemesList }]
+                [
+                    I::LoadLocal { .. },
+                    I::Intrinsic {
+                        intrinsic: BackendIntrinsic::StringGraphemesList
+                    }
+                ]
             ),
             "expected [LoadLocal, Intrinsic(StringGraphemesList)], got: {:?}",
             instrs
@@ -1983,15 +2002,20 @@ mod tests {
             callee: Box::new(ValueExpr::Var("graphemes".to_string())),
             args: vec![ValueExpr::Var("text".to_string())],
         };
-        let instrs = lower_comp(&comp).expect("graphemes Var (bare name) should lower to intrinsic");
+        let instrs =
+            lower_comp(&comp).expect("graphemes Var (bare name) should lower to intrinsic");
         assert!(
             matches!(
                 instrs.as_slice(),
-                [I::LoadLocal { .. }, I::Intrinsic { intrinsic: BackendIntrinsic::StringGraphemesList }]
+                [
+                    I::LoadLocal { .. },
+                    I::Intrinsic {
+                        intrinsic: BackendIntrinsic::StringGraphemesList
+                    }
+                ]
             ),
             "expected [LoadLocal, Intrinsic(StringGraphemesList)], got: {:?}",
             instrs
         );
     }
-
 }

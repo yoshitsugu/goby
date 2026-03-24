@@ -1058,12 +1058,10 @@ main =
     // stdin: "line0\nline1\nline2\nline3"
     // lines = ["line0","line1","line2","line3"]
     // rolls[2] = graphemes "line2" = ["l","i","n","e","2"]
-    let output = execute_runtime_module_with_stdin(
-        &module,
-        Some("line0\nline1\nline2\nline3".to_string()),
-    )
-    .expect("execution should succeed")
-    .expect("output should be Some");
+    let output =
+        execute_runtime_module_with_stdin(&module, Some("line0\nline1\nline2\nline3".to_string()))
+            .expect("execution should succeed")
+            .expect("output should be Some");
     assert_eq!(output, "l\ni\nn\ne\n2\n");
 }
 

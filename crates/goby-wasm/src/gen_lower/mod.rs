@@ -313,8 +313,7 @@ fn has_lambda_in_comp(comp: &CompExpr) -> bool {
         }
         CompExpr::Assign { value, .. } => has_lambda_in_comp(value),
         CompExpr::Case { scrutinee, arms } => {
-            has_lambda_in_value(scrutinee)
-                || arms.iter().any(|arm| has_lambda_in_comp(&arm.body))
+            has_lambda_in_value(scrutinee) || arms.iter().any(|arm| has_lambda_in_comp(&arm.body))
         }
         CompExpr::Handle { .. } | CompExpr::WithHandler { .. } | CompExpr::Resume { .. } => false,
     }

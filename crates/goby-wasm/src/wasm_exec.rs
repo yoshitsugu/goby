@@ -385,10 +385,7 @@ fn graphemes_list_host(
     //   list header: 4 bytes (i32 count)
     //   N elements:  8 bytes each (tagged i64)
     //   Each grapheme string: 4 bytes (i32 len) + grapheme bytes
-    let grapheme_bytes_total: u32 = spans
-        .iter()
-        .map(|s| 4u32 + (s.end - s.start) as u32)
-        .sum();
+    let grapheme_bytes_total: u32 = spans.iter().map(|s| 4u32 + (s.end - s.start) as u32).sum();
     let total_needed = 4 + 8 * n + grapheme_bytes_total;
 
     // Allocate the entire block at once via CAS loop.
@@ -448,10 +445,7 @@ fn graphemes_list_host(
         }
         // Write grapheme bytes.
         let bytes = &str_val.as_bytes()[span.start..span.end];
-        if mem
-            .write(&mut caller, str_ptr as usize + 4, bytes)
-            .is_err()
-        {
+        if mem.write(&mut caller, str_ptr as usize + 4, bytes).is_err() {
             return encode_list_ptr(0);
         }
 

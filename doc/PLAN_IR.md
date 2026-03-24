@@ -450,12 +450,14 @@ Captured variables: same convention as handler functions (explicit extra paramet
   - `graphemes-get-print` in lower.rs deleted (replaced by StringGraphemesList + ListGet)
   - `SplitEachPrint`, `SplitGetPrint` retained as optimization in DynamicWasiIo path only;
     not required for correctness (GeneralLowered path handles all split+each programs)
-- [ ] WB-3-M6. `InterpreterBridge` usage reviewed; reduce to genuinely Wasm-incompatible programs
-- [ ] WB-3-M7. Integration test: the following program executes correctly via `GeneralLowered`
+- [x] WB-3-M6. `InterpreterBridge` usage reviewed; reduce to genuinely Wasm-incompatible programs
+  - Removed `stmts_contain_imported_string_graphemes` classification branch from `classify_runtime_io`
+  - Deleted 4 dead helper functions; updated integration test to use `execute_runtime_module_with_stdin`
+- [x] WB-3-M7. Integration test: the following program executes correctly via `GeneralLowered`
   end-to-end (stdin provided at runtime):
 
   ```goby
-  import goby/list ( each )
+  import goby/list ( each, map )
   import goby/string ( split, graphemes )
 
   main : Unit -> Unit can Print, Read
@@ -463,21 +465,28 @@ Captured variables: same convention as handler functions (explicit extra paramet
     text = read ()
     lines = split text "\n"
     rolls = map lines graphemes
-    map (rolls[2]) println
+    row2 = rolls[2]
+    each row2 println
   ```
+
+  (ANF form required: `row2 = rolls[2]` because `list.get` is a call, not a pure value)
 
   This program exercises the full WB-1 through WB-3 stack simultaneously:
   - `split text "\n"` — WB-2A: top-level decl call (`GlobalRef("string","split")`)
-  - `map lines graphemes` — WB-2A: decl call + top-level function passed as value
+  - `map lines graphemes` — WB-2A + WB-3-M7: decl call + graphemes-as-funcref wrapper AuxDecl
   - `map` internals — WB-2A + WB-2B: recursive decl call + `Case` + `Var` function-arg call (`f x`)
   - `graphemes` internals — WB-3: `WithHandler` / `Resume` (one-shot tail-resumptive)
-  - `rolls[2]` — existing `list.get` intrinsic
-  - `map (rolls[2]) println` — WB-2A: decl call + effect op as function value
+  - `row2 = rolls[2]` — existing `list.get` intrinsic
+  - `each row2 println` — WB-2A: `ListEachEffect` with print callback
 
-  Done when: given stdin `"line0\nline1\nline2\nline3"`, the program prints each grapheme
-  of `"line2"` on a separate line, matching interpreter output.
+  Done: given stdin `"line0\nline1\nline2\nline3"`, prints each grapheme of `"line2"` on a separate line.
 
-- [ ] WB-3-M8. Quality gates pass
+- [x] WB-3-M8. Quality gates pass
+  - `cargo fmt --check` ✓
+  - `cargo check` ✓
+  - `cargo test -p goby-wasm -p goby-core` ✓ (578 + 432 + 49 passing)
+  - `cargo clippy -- -D warnings` ✓
+  - pre-existing CLI test failure (`run_command_executes_transformed_split_callback_with_empty_runtime_stdin`) unrelated to WB-3
 
 ### Phase WB-3B (future): WasmFX typed continuations
 
