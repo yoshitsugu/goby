@@ -27,8 +27,9 @@ Last updated: 2026-03-24
   option-aware Wasm emission helper so strategy parity tests run through the same
   `try_general_lower_module` entrypoint used by `compile_module`.
 - WB-3B remains externally blocked as of 2026-03-24:
-  - WebAssembly official proposals tracker still lists Stack Switching in Phase 2.
+  - WebAssembly official proposals tracker does not yet satisfy the Phase 4 restart condition.
   - Local `wasm-encoder` source exposes no stack-switching/WasmFX instruction support.
+- WB-3B is on hold until all restart conditions in `doc/PLAN_IR.md` Phase WB-3B are met.
 - **WB-3 is complete.** All 13 `CompExpr` variants and all 12 `ValueExpr` variants are handled in the `GeneralLowered` path (within supported subsets).
 
 ## Track Priority
@@ -45,8 +46,8 @@ Exit criterion: `cargo run -p goby-cli -- check stdlib/goby/string.gb` no longer
 See `doc/PLAN_STANDARD_LIBRARY.md` §5.
 
 **Track WB-3B (future, deferred):**
-WasmFX typed continuations — prerequisite: WebAssembly stack-switching proposal reaches Phase 4.
-See `doc/PLAN_IR.md` Phase WB-3B.
+WasmFX typed continuations — currently on hold.
+Restart only when the external prerequisites in `doc/PLAN_IR.md` Phase WB-3B are satisfied.
 
 ## Architecture State
 

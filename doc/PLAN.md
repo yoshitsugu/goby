@@ -339,6 +339,12 @@ Priority rule:
   within their supported subsets. See `doc/STATE.md` for current status.
 - current active focus is stdlib track C4-S1 from `doc/PLAN_STANDARD_LIBRARY.md`:
   unblock `List String` as a record field type in the type checker.
+- WB-3B is explicitly on hold:
+  - in-repo preparation work is complete enough for now; see `doc/PLAN_IR.md`.
+  - restart only when both of the following are true:
+    - WebAssembly stack switching has reached Phase 4 (or equivalent standardization readiness).
+    - the local toolchain (`wasm-encoder` plus runtime support such as Wasmtime on required ISAs)
+      can emit/validate/run the needed WasmFX instructions honestly.
 - active backend/runtime work should prefer unblocking itself by improving shared IR and
   AST-to-IR lowering rather than by adding more source-shape-specific recognizers.
 - when there is tension between a local unblock and the long-term IR architecture,

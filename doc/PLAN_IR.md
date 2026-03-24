@@ -168,8 +168,9 @@ no benefit given Goby's current one-shot usage pattern.
   DOI: 10.1145/3622814
   arXiv preprint: https://arxiv.org/abs/2308.08347
   WasmFX project: https://wasmfx.dev/
-- WebAssembly stack-switching proposal (W3C CG, **Phase 3** as of 2026-03):
-  https://github.com/WebAssembly/proposals (stack switching listed under Phase 3)
+- WebAssembly stack-switching proposal (W3C CG; not yet at the Phase 4 restart threshold
+  as of 2026-03-24):
+  https://github.com/WebAssembly/proposals
   https://github.com/WebAssembly/stack-switching
   Explainer: https://github.com/WebAssembly/stack-switching/blob/main/proposals/stack-switching/Explainer.md
 - Wasmtime implementation tracking (x64 initial, other ISAs deferred):
@@ -490,15 +491,22 @@ Captured variables: same convention as handler functions (explicit extra paramet
 
 ### Phase WB-3B (future): WasmFX typed continuations
 
+**Status:** on hold pending external prerequisites.
+
 **Prerequisite:** WebAssembly stack-switching proposal reaches Phase 4 (standardized);
 Wasmtime supports it on x64 and ARM64.
 
 **External blocker status (2026-03-24):**
-- WebAssembly official proposals tracker lists **Stack Switching** in **Phase 2**
-  (`Proposed Spec Text Available`), so the standardization prerequisite is not yet met.
+- WebAssembly official proposals tracker does not yet satisfy the Phase 4 restart condition,
+  so the standardization prerequisite is not yet met.
 - Current local `wasm-encoder` source in the Cargo registry exposes no stack-switching /
   WasmFX instruction support, so the required emit-layer swap cannot be implemented honestly
   in this repository yet.
+
+**Restart conditions:**
+- the WebAssembly stack-switching proposal reaches Phase 4 (or equivalent standardized-ready state);
+- local codegen tooling can encode the required WasmFX instructions;
+- local runtime support can validate and execute the emitted modules on the supported ISA set.
 
 **Scope:** replace WB-3A emit logic for `WithHandler`/`PerformEffect`/`Resume` with
 `suspend`/`resume` Wasm instructions. IR is unchanged. Enables non-tail `Resume` and
