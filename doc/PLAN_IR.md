@@ -436,7 +436,7 @@ Captured variables: same convention as handler functions (explicit extra paramet
   - done when: programs are correctly classified as safe or `BackendLimitation`
   - regression: unit tests covering: tail resume ✓, non-tail resume ✗, multi-resume ✗,
     scope-exit without resume ✓, nested handlers ✓/✗ as appropriate
-- [ ] WB-3-M2. `Handle` / `WithHandler` / `Resume` (tail) lowered for safe subset
+- [x] WB-3-M2. `Handle` / `WithHandler` / `Resume` (tail) lowered for safe subset
   - done when: `examples/iterator.gb` classifies as `GeneralLowered` and executes correctly
   - regression: iterator output matches interpreter result
 - [ ] WB-3-M3. `ValueExpr::Lambda` lowered

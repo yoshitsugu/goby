@@ -29,8 +29,10 @@ Last updated: 2026-03-24
 - Phase WB-3 M1 complete (2026-03-24): IR-level legality analysis now classifies each `WithHandler`
   as one-shot tail-resumptive or outside the supported subset.
   - Non-tail `resume` now reports `BackendLimitation` instead of falling through as generic unsupported codegen.
-  - Safe one-shot handlers report an explicit "WB-3A direct-call lowering not implemented yet" boundary.
-- Next active work: Phase WB-3 M2 (direct-call lowering for safe `Handle` / `WithHandler` / tail `Resume`).
+- Phase WB-3 M2 complete (2026-03-24): safe `Handle` / `WithHandler` / tail `Resume` now normalize
+  to handler-free IR before general lowering.
+  - `examples/iterator.gb` now classifies as `GeneralLowered` and executes correctly through the Wasm-owned path.
+- Next active work: Phase WB-3 M3 (`ValueExpr::Lambda` lowering for general Wasm emission).
 
 ## Track Priority
 
@@ -40,8 +42,8 @@ stdlib track (C4-S1 onwards) is deferred until WB is in a stable state.
 
 ## Immediate Next Steps
 
-**Track Wasm backend (Phase WB-3 M2) — primary:**
-Implement direct-call lowering for safe `Handle` / `WithHandler` / tail `Resume` nodes.
+**Track Wasm backend (Phase WB-3 M3) — primary:**
+Implement `ValueExpr::Lambda` lowering using the existing funcref-table function-value representation.
 See `doc/PLAN_IR.md` §5 Phase WB-3.
 
 **Track stdlib (C4-S1) — deferred:**
@@ -73,7 +75,7 @@ See `doc/PLAN_STANDARD_LIBRARY.md` §5.
 - WB-3 current state:
   - `WithHandler` legality analysis is implemented at the IR level
   - unsupported handler shapes now fail as `BackendLimitation`
-  - safe handler shapes are identified and ready for WB-3A lowering
+  - safe handler shapes now lower via handler-free normalization into the general Wasm path
 - Effect handler strategy: selective CPS degenerating to direct-call lowering for one-shot
   tail-resumptive handlers; captured vars as explicit Wasm function parameters.
 - Fused patterns (`SplitEachPrint`, `SplitGetPrint`, `graphemes-get-print`) are deletion targets,

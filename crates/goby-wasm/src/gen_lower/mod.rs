@@ -1,9 +1,10 @@
 // Suppress dead_code warnings while the general lowering surface continues to expand.
 #![allow(dead_code)]
 
-//! General Wasm lowering for runtime-I/O programs.
+//! General Wasm lowering for Wasm-owned runtime programs.
 //!
-//! This module implements the shared general lowering pipeline:
+//! This module implements the shared lowering pipeline for the Wasm-owned execution
+//! subset, including runtime-`Read` programs and the WB-3 safe handler subset:
 //!
 //! ```text
 //! Goby IR (CompExpr / ValueExpr)
@@ -34,13 +35,14 @@ use goby_core::Module;
 use goby_core::ir::CompExpr;
 
 use crate::CodegenError;
+use crate::effect_handler_legality::analyze_module_handler_legality;
+use crate::effect_handler_lowering::lower_safe_handlers_in_comp;
 use crate::gen_lower::backend_ir::{BackendEffectOp, BackendReadOp};
 use crate::gen_lower::emit::AuxDecl;
 use crate::layout::MemoryLayout;
+use crate::wasm_exec_plan::decl_exec_plan;
 use crate::wasm_exec_plan::main_exec_plan;
 
-/// Returns `true` if the IR body contains at least one `PerformEffect` node for `Read`.
-/// General lowering is intentionally scoped to runtime-stdin programs.
 fn has_runtime_read_effect(comp: &CompExpr) -> bool {
     match comp {
         CompExpr::PerformEffect { effect, .. } => effect == "Read",
@@ -58,6 +60,255 @@ fn has_runtime_read_effect(comp: &CompExpr) -> bool {
         CompExpr::Case { arms, .. } => arms.iter().any(|arm| has_runtime_read_effect(&arm.body)),
         CompExpr::Handle { .. } | CompExpr::WithHandler { .. } | CompExpr::Resume { .. } => false,
     }
+}
+
+fn has_handler_constructs(comp: &CompExpr) -> bool {
+    match comp {
+        CompExpr::Handle { .. } | CompExpr::WithHandler { .. } | CompExpr::Resume { .. } => true,
+        CompExpr::Value(value) => value_has_handler_constructs(value),
+        CompExpr::Let { value, body, .. } | CompExpr::LetMut { value, body, .. } => {
+            has_handler_constructs(value) || has_handler_constructs(body)
+        }
+        CompExpr::Seq { stmts, tail } => {
+            stmts.iter().any(has_handler_constructs) || has_handler_constructs(tail)
+        }
+        CompExpr::If { then_, else_, .. } => {
+            has_handler_constructs(then_) || has_handler_constructs(else_)
+        }
+        CompExpr::Call { .. } => false,
+        CompExpr::Assign { value, .. } => has_handler_constructs(value),
+        CompExpr::Case { arms, .. } => arms.iter().any(|arm| has_handler_constructs(&arm.body)),
+        CompExpr::PerformEffect { .. } => false,
+    }
+}
+
+fn has_handler_rewrite_entrypoints(comp: &CompExpr) -> bool {
+    match comp {
+        CompExpr::WithHandler { .. } | CompExpr::Resume { .. } => true,
+        CompExpr::Handle { clauses } => clauses
+            .iter()
+            .any(|clause| has_handler_rewrite_entrypoints(&clause.body)),
+        CompExpr::Value(value) => value_has_handler_rewrite_entrypoints(value),
+        CompExpr::Let { value, body, .. } | CompExpr::LetMut { value, body, .. } => {
+            has_handler_rewrite_entrypoints(value) || has_handler_rewrite_entrypoints(body)
+        }
+        CompExpr::Seq { stmts, tail } => {
+            stmts.iter().any(has_handler_rewrite_entrypoints)
+                || has_handler_rewrite_entrypoints(tail)
+        }
+        CompExpr::If { then_, else_, .. } => {
+            has_handler_rewrite_entrypoints(then_) || has_handler_rewrite_entrypoints(else_)
+        }
+        CompExpr::Call { .. } => false,
+        CompExpr::Assign { value, .. } => has_handler_rewrite_entrypoints(value),
+        CompExpr::Case { arms, .. } => arms
+            .iter()
+            .any(|arm| has_handler_rewrite_entrypoints(&arm.body)),
+        CompExpr::PerformEffect { .. } => false,
+    }
+}
+
+fn value_has_handler_constructs(value: &goby_core::ir::ValueExpr) -> bool {
+    match value {
+        goby_core::ir::ValueExpr::ListLit { elements, spread } => {
+            elements.iter().any(value_has_handler_constructs)
+                || spread.as_deref().is_some_and(value_has_handler_constructs)
+        }
+        goby_core::ir::ValueExpr::TupleLit(items) => items.iter().any(value_has_handler_constructs),
+        goby_core::ir::ValueExpr::RecordLit { fields, .. } => fields
+            .iter()
+            .any(|(_, value)| value_has_handler_constructs(value)),
+        goby_core::ir::ValueExpr::Lambda { body, .. } => has_handler_constructs(body),
+        goby_core::ir::ValueExpr::Interp(parts) => parts.iter().any(|part| match part {
+            goby_core::ir::IrInterpPart::Text(_) => false,
+            goby_core::ir::IrInterpPart::Expr(value) => value_has_handler_constructs(value),
+        }),
+        goby_core::ir::ValueExpr::BinOp { left, right, .. } => {
+            value_has_handler_constructs(left) || value_has_handler_constructs(right)
+        }
+        goby_core::ir::ValueExpr::IntLit(_)
+        | goby_core::ir::ValueExpr::BoolLit(_)
+        | goby_core::ir::ValueExpr::StrLit(_)
+        | goby_core::ir::ValueExpr::Var(_)
+        | goby_core::ir::ValueExpr::GlobalRef { .. }
+        | goby_core::ir::ValueExpr::Unit => false,
+    }
+}
+
+fn value_has_handler_rewrite_entrypoints(value: &goby_core::ir::ValueExpr) -> bool {
+    match value {
+        goby_core::ir::ValueExpr::ListLit { elements, spread } => {
+            elements.iter().any(value_has_handler_rewrite_entrypoints)
+                || spread
+                    .as_deref()
+                    .is_some_and(value_has_handler_rewrite_entrypoints)
+        }
+        goby_core::ir::ValueExpr::TupleLit(items) => {
+            items.iter().any(value_has_handler_rewrite_entrypoints)
+        }
+        goby_core::ir::ValueExpr::RecordLit { fields, .. } => fields
+            .iter()
+            .any(|(_, value)| value_has_handler_rewrite_entrypoints(value)),
+        goby_core::ir::ValueExpr::Lambda { body, .. } => has_handler_rewrite_entrypoints(body),
+        goby_core::ir::ValueExpr::Interp(parts) => parts.iter().any(|part| match part {
+            goby_core::ir::IrInterpPart::Text(_) => false,
+            goby_core::ir::IrInterpPart::Expr(value) => {
+                value_has_handler_rewrite_entrypoints(value)
+            }
+        }),
+        goby_core::ir::ValueExpr::BinOp { left, right, .. } => {
+            value_has_handler_rewrite_entrypoints(left)
+                || value_has_handler_rewrite_entrypoints(right)
+        }
+        goby_core::ir::ValueExpr::IntLit(_)
+        | goby_core::ir::ValueExpr::BoolLit(_)
+        | goby_core::ir::ValueExpr::StrLit(_)
+        | goby_core::ir::ValueExpr::Var(_)
+        | goby_core::ir::ValueExpr::GlobalRef { .. }
+        | goby_core::ir::ValueExpr::Unit => false,
+    }
+}
+
+fn contains_future_handler_intrinsics(comp: &CompExpr) -> bool {
+    match comp {
+        CompExpr::Call { callee, .. } => matches!(
+            callee.as_ref(),
+            goby_core::ir::ValueExpr::Var(name) if name == "__goby_string_each_grapheme"
+        ),
+        CompExpr::Value(value) => value_contains_future_handler_intrinsics(value),
+        CompExpr::Let { value, body, .. } | CompExpr::LetMut { value, body, .. } => {
+            contains_future_handler_intrinsics(value) || contains_future_handler_intrinsics(body)
+        }
+        CompExpr::Seq { stmts, tail } => {
+            stmts.iter().any(contains_future_handler_intrinsics)
+                || contains_future_handler_intrinsics(tail)
+        }
+        CompExpr::If { then_, else_, .. } => {
+            contains_future_handler_intrinsics(then_) || contains_future_handler_intrinsics(else_)
+        }
+        CompExpr::Assign { value, .. } => contains_future_handler_intrinsics(value),
+        CompExpr::Case { arms, .. } => arms
+            .iter()
+            .any(|arm| contains_future_handler_intrinsics(&arm.body)),
+        CompExpr::PerformEffect { .. }
+        | CompExpr::Handle { .. }
+        | CompExpr::WithHandler { .. }
+        | CompExpr::Resume { .. } => false,
+    }
+}
+
+fn value_contains_future_handler_intrinsics(value: &goby_core::ir::ValueExpr) -> bool {
+    match value {
+        goby_core::ir::ValueExpr::ListLit { elements, spread } => {
+            elements
+                .iter()
+                .any(value_contains_future_handler_intrinsics)
+                || spread
+                    .as_deref()
+                    .is_some_and(value_contains_future_handler_intrinsics)
+        }
+        goby_core::ir::ValueExpr::TupleLit(items) => {
+            items.iter().any(value_contains_future_handler_intrinsics)
+        }
+        goby_core::ir::ValueExpr::RecordLit { fields, .. } => fields
+            .iter()
+            .any(|(_, value)| value_contains_future_handler_intrinsics(value)),
+        goby_core::ir::ValueExpr::Lambda { body, .. } => contains_future_handler_intrinsics(body),
+        goby_core::ir::ValueExpr::Interp(parts) => parts.iter().any(|part| match part {
+            goby_core::ir::IrInterpPart::Text(_) => false,
+            goby_core::ir::IrInterpPart::Expr(value) => {
+                value_contains_future_handler_intrinsics(value)
+            }
+        }),
+        goby_core::ir::ValueExpr::BinOp { left, right, .. } => {
+            value_contains_future_handler_intrinsics(left)
+                || value_contains_future_handler_intrinsics(right)
+        }
+        goby_core::ir::ValueExpr::IntLit(_)
+        | goby_core::ir::ValueExpr::BoolLit(_)
+        | goby_core::ir::ValueExpr::StrLit(_)
+        | goby_core::ir::ValueExpr::Var(_)
+        | goby_core::ir::ValueExpr::GlobalRef { .. }
+        | goby_core::ir::ValueExpr::Unit => false,
+    }
+}
+
+fn comp_has_effect_boundary_activity(comp: &CompExpr) -> bool {
+    match comp {
+        CompExpr::PerformEffect { .. }
+        | CompExpr::Handle { .. }
+        | CompExpr::WithHandler { .. }
+        | CompExpr::Resume { .. } => true,
+        CompExpr::Value(value) => value_has_effect_boundary_activity(value),
+        CompExpr::Let { value, body, .. } | CompExpr::LetMut { value, body, .. } => {
+            comp_has_effect_boundary_activity(value) || comp_has_effect_boundary_activity(body)
+        }
+        CompExpr::Seq { stmts, tail } => {
+            stmts.iter().any(comp_has_effect_boundary_activity)
+                || comp_has_effect_boundary_activity(tail)
+        }
+        CompExpr::If { then_, else_, .. } => {
+            comp_has_effect_boundary_activity(then_) || comp_has_effect_boundary_activity(else_)
+        }
+        CompExpr::Call { .. } => false,
+        CompExpr::Assign { value, .. } => comp_has_effect_boundary_activity(value),
+        CompExpr::Case { arms, .. } => arms
+            .iter()
+            .any(|arm| comp_has_effect_boundary_activity(&arm.body)),
+    }
+}
+
+fn value_has_effect_boundary_activity(value: &goby_core::ir::ValueExpr) -> bool {
+    match value {
+        goby_core::ir::ValueExpr::ListLit { elements, spread } => {
+            elements.iter().any(value_has_effect_boundary_activity)
+                || spread
+                    .as_deref()
+                    .is_some_and(value_has_effect_boundary_activity)
+        }
+        goby_core::ir::ValueExpr::TupleLit(items) => {
+            items.iter().any(value_has_effect_boundary_activity)
+        }
+        goby_core::ir::ValueExpr::RecordLit { fields, .. } => fields
+            .iter()
+            .any(|(_, value)| value_has_effect_boundary_activity(value)),
+        goby_core::ir::ValueExpr::Lambda { body, .. } => comp_has_effect_boundary_activity(body),
+        goby_core::ir::ValueExpr::Interp(parts) => parts.iter().any(|part| match part {
+            goby_core::ir::IrInterpPart::Text(_) => false,
+            goby_core::ir::IrInterpPart::Expr(value) => value_has_effect_boundary_activity(value),
+        }),
+        goby_core::ir::ValueExpr::BinOp { left, right, .. } => {
+            value_has_effect_boundary_activity(left) || value_has_effect_boundary_activity(right)
+        }
+        goby_core::ir::ValueExpr::IntLit(_)
+        | goby_core::ir::ValueExpr::BoolLit(_)
+        | goby_core::ir::ValueExpr::StrLit(_)
+        | goby_core::ir::ValueExpr::Var(_)
+        | goby_core::ir::ValueExpr::GlobalRef { .. }
+        | goby_core::ir::ValueExpr::Unit => false,
+    }
+}
+
+fn has_effectful_non_main_decl(module: &Module) -> bool {
+    module
+        .declarations
+        .iter()
+        .filter(|decl| decl.name != "main")
+        .filter_map(|decl| decl_exec_plan(decl).ir_decl)
+        .any(|decl| comp_has_effect_boundary_activity(&decl.body))
+}
+
+fn rewrite_safe_handlers_if_present(
+    body: &CompExpr,
+    allow_safe_handler_lowering: bool,
+) -> Result<Option<CompExpr>, CodegenError> {
+    if !has_handler_rewrite_entrypoints(body) {
+        return Ok(Some(body.clone()));
+    }
+    if !allow_safe_handler_lowering {
+        return Ok(None);
+    }
+    Ok(Some(lower_safe_handlers_in_comp(body)?))
 }
 
 fn read_line_instrs_are_supported(instrs: &[backend_ir::WasmBackendInstr]) -> bool {
@@ -123,8 +374,12 @@ fn lower_aux_decl(
     param_names: Vec<String>,
     body: &CompExpr,
     known_decls: &HashSet<String>,
+    allow_safe_handler_lowering: bool,
 ) -> Result<Option<AuxDecl>, CodegenError> {
-    let instrs = match lower::lower_comp_with_decls(body, known_decls) {
+    let Some(body) = rewrite_safe_handlers_if_present(body, allow_safe_handler_lowering)? else {
+        return Ok(None);
+    };
+    let instrs = match lower::lower_comp_with_decls(&body, known_decls) {
         Ok(i) => i,
         Err(lower::LowerError::UnsupportedForm { .. }) => return Ok(None),
         Err(lower::LowerError::IntOutOfRange(n)) => {
@@ -157,9 +412,25 @@ fn lower_module_to_instrs(
         Some(d) => d,
         None => return Ok(None),
     };
+    let handler_legality = analyze_module_handler_legality(module)?;
+    let allow_safe_handler_lowering = handler_legality.all_one_shot_tail_resumptive();
+    let Some(main_body) =
+        rewrite_safe_handlers_if_present(&ir_decl.body, allow_safe_handler_lowering)?
+    else {
+        return Ok(None);
+    };
 
-    // Only handle programs where main has a Read effect.
-    if !has_runtime_read_effect(&ir_decl.body) {
+    let main_is_handler_only_candidate =
+        !has_runtime_read_effect(&ir_decl.body) && has_handler_rewrite_entrypoints(&ir_decl.body);
+    if main_is_handler_only_candidate
+        && (contains_future_handler_intrinsics(&ir_decl.body)
+            || has_effectful_non_main_decl(module)
+            || module.declarations.iter().any(|decl| decl.name != "main"))
+    {
+        return Ok(None);
+    }
+
+    if !has_runtime_read_effect(&ir_decl.body) && !has_handler_rewrite_entrypoints(&ir_decl.body) {
         return Ok(None);
     }
 
@@ -172,7 +443,7 @@ fn lower_module_to_instrs(
         .map(|d| d.name.clone())
         .collect();
 
-    let mut main_instrs = match lower::lower_comp_with_decls(&ir_decl.body, &known_decls) {
+    let mut main_instrs = match lower::lower_comp_with_decls(&main_body, &known_decls) {
         Ok(i) => i,
         Err(lower::LowerError::UnsupportedForm { .. }) => return Ok(None),
         Err(lower::LowerError::IntOutOfRange(n)) => {
@@ -203,6 +474,7 @@ fn lower_module_to_instrs(
             param_names,
             &aux_ir_decl.body,
             &known_decls,
+            allow_safe_handler_lowering,
         )? {
             Some(aux) => aux_decls.push(aux),
             None => {
@@ -260,6 +532,32 @@ main =
             matches!(instrs.last(), Some(WasmBackendInstr::Drop)),
             "general-lowered main must end with Drop so `_start` leaves no stack value: {:?}",
             instrs
+        );
+    }
+
+    #[test]
+    fn safe_handler_only_main_is_a_general_lower_candidate() {
+        let module = parse_module(
+            r#"
+effect Tick
+  tick: Unit -> Unit
+
+main : Unit -> Unit can Tick
+main =
+  with
+    tick _ ->
+      resume ()
+  in
+    tick ()
+"#,
+        )
+        .expect("source should parse");
+
+        assert!(
+            lower_module_to_instrs(&module)
+                .expect("lowering should not error")
+                .is_some(),
+            "safe handler-only main should enter general lowering"
         );
     }
 }

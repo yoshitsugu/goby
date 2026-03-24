@@ -3,6 +3,7 @@ mod call;
 #[cfg(test)]
 mod compile_tests;
 mod effect_handler_legality;
+mod effect_handler_lowering;
 mod fallback;
 mod gen_lower;
 mod grapheme_semantics;

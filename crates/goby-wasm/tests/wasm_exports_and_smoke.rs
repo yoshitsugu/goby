@@ -790,7 +790,7 @@ main =
 }
 
 #[test]
-fn compile_module_reports_pending_wb3a_for_safe_tail_resume_handler() {
+fn compile_module_accepts_safe_tail_resume_handler() {
     let module = parse_module(
         r#"
 effect Tick
@@ -806,13 +806,28 @@ main =
 "#,
     )
     .expect("parse should work");
-    let err = compile_module(&module).expect_err("compile should report pending WB-3A lowering");
-    assert!(
-        err.message
-            .contains("WB-3A direct-call lowering is not implemented yet"),
-        "unexpected error message: {}",
-        err.message
+    let wasm = compile_module(&module).expect("compile should succeed for safe tail handler");
+    assert_valid_wasm_module(&wasm);
+}
+
+#[test]
+fn iterator_example_classifies_as_general_lowered() {
+    let source = read_example("iterator.gb");
+    let module = parse_module(&source).expect("iterator.gb should parse");
+    assert_eq!(
+        runtime_io_execution_kind(&module).expect("classification should work"),
+        RuntimeIoExecutionKind::GeneralLowered
     );
+}
+
+#[test]
+fn iterator_example_executes_via_general_lowered_wasm_path() {
+    let source = read_example("iterator.gb");
+    let module = parse_module(&source).expect("iterator.gb should parse");
+    let output = goby_wasm::execute_runtime_module_with_stdin(&module, None)
+        .expect("iterator should execute")
+        .expect("iterator should run via Wasm-owned path");
+    assert_eq!(output, "tick:atick:btick:c");
 }
 
 #[test]
