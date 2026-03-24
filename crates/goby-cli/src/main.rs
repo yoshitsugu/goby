@@ -242,13 +242,12 @@ fn run_command(module: &goby_core::Module, file: &str) -> Result<(), CliError> {
     // are executed via the Goby-owned Wasm runtime (which wires host intrinsics and
     // reads stdin internally).  All other kinds fall through to compile + file-based
     // execution so that stdin is not consumed before wasmtime runs.
-    let needs_stdin_execution = match goby_wasm::runtime_io_execution_kind(module)
-        .map_err(|err| CliError::Runtime(format!("classification error: {}", err.message)))?
-    {
+    let needs_stdin_execution = matches!(
+        goby_wasm::runtime_io_execution_kind(module)
+            .map_err(|err| CliError::Runtime(format!("classification error: {}", err.message)))?,
         goby_wasm::RuntimeIoExecutionKind::GeneralLowered
-        | goby_wasm::RuntimeIoExecutionKind::InterpreterBridge => true,
-        _ => false,
-    };
+            | goby_wasm::RuntimeIoExecutionKind::InterpreterBridge
+    );
 
     if needs_stdin_execution {
         let stdin_text = read_stdin_to_string()?;

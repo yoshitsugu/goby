@@ -866,7 +866,7 @@ fn parse_list_index_suffix(src: &str) -> Option<Expr> {
                             backslashes += 1;
                             j -= 1;
                         }
-                        if backslashes % 2 == 0 {
+                        if backslashes.is_multiple_of(2) {
                             // Unescaped `"` — this is the opening quote; done.
                             break;
                         }

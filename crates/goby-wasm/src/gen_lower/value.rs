@@ -77,7 +77,7 @@ pub(crate) fn encode_unit() -> i64 {
 /// # Errors
 /// Returns [`ValueError::IntOutOfRange`] if `n` is outside `[INT_MIN, INT_MAX]`.
 pub(crate) fn encode_int(n: i64) -> Result<i64, ValueError> {
-    if n < INT_MIN || n > INT_MAX {
+    if !(INT_MIN..=INT_MAX).contains(&n) {
         return Err(ValueError::IntOutOfRange(n));
     }
     // Mask to 60 bits to avoid sign-bit bleed into the tag region.

@@ -140,29 +140,29 @@ fn collect_stmts(stmts: &[Stmt], env: &mut TypeEnv, result: &mut Vec<LocalBindin
             Stmt::Binding { name, value, span } => {
                 let ty = check_expr(value, env);
                 env.locals.insert(name.clone(), ty.clone());
-                if ty != Ty::Unknown {
-                    if let Some(sp) = span {
-                        result.push(LocalBindingSymbol {
-                            name: name.clone(),
-                            body_relative_line: sp.line,
-                            body_relative_col: sp.col,
-                            ty_str: ty_name(&ty),
-                        });
-                    }
+                if ty != Ty::Unknown
+                    && let Some(sp) = span
+                {
+                    result.push(LocalBindingSymbol {
+                        name: name.clone(),
+                        body_relative_line: sp.line,
+                        body_relative_col: sp.col,
+                        ty_str: ty_name(&ty),
+                    });
                 }
             }
             Stmt::MutBinding { name, value, span } => {
                 let ty = check_expr(value, env);
                 env.locals.insert(name.clone(), ty.clone());
-                if ty != Ty::Unknown {
-                    if let Some(sp) = span {
-                        result.push(LocalBindingSymbol {
-                            name: name.clone(),
-                            body_relative_line: sp.line,
-                            body_relative_col: sp.col + 4,
-                            ty_str: ty_name(&ty),
-                        });
-                    }
+                if ty != Ty::Unknown
+                    && let Some(sp) = span
+                {
+                    result.push(LocalBindingSymbol {
+                        name: name.clone(),
+                        body_relative_line: sp.line,
+                        body_relative_col: sp.col + 4,
+                        ty_str: ty_name(&ty),
+                    });
                 }
             }
             Stmt::Assign { name, value, .. } => {

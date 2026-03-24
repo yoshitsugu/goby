@@ -350,7 +350,12 @@ language-expansion item, not a backend-convergence item. Do not add them here.
       fully general-lowered
     - backend-IR `SplitEachPrint` / `SplitGetPrint` remain available for
       `RuntimeIoPlan::DynamicWasiIo` as optional byte-split optimisations
-- [ ] WB-2B-M8. Quality gates pass
+- [x] WB-2B-M8. Quality gates pass
+  - completed gates for the WB-2 slice:
+    - `cargo fmt --check`
+    - `cargo check`
+    - `cargo test`
+    - `cargo clippy -- -D warnings`
 
 ### Phase WB-3: Function values and effect handlers
 

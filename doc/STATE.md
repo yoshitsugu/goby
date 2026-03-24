@@ -19,7 +19,13 @@ Last updated: 2026-03-24
   - `string.split` + `list.each` / `list.get` now lower through the normal general path.
   - retained for later: `graphemes-get-print` in `lower.rs`, and backend-IR
     `SplitEachPrint` / `SplitGetPrint` as optional `RuntimeIoPlan` optimisations.
-- Next active work: Phase WB-2B-M8 (full quality gates / release-clean state for WB-2).
+- Phase WB-2B M8 complete (2026-03-24): WB-2 quality gates passed.
+  - `cargo fmt --check`
+  - `cargo check`
+  - `cargo test`
+  - `cargo clippy -- -D warnings`
+- WB-2 is now complete.
+- Next active work: Phase WB-3 Step 1 (handler legality analysis for one-shot tail-resumptive lowering).
 
 ## Track Priority
 
@@ -29,8 +35,8 @@ stdlib track (C4-S1 onwards) is deferred until WB is in a stable state.
 
 ## Immediate Next Steps
 
-**Track Wasm backend (Phase WB-2B-M8) — primary:**
-Run and stabilise full quality gates for the completed WB-2 slice.
+**Track Wasm backend (Phase WB-3 Step 1) — primary:**
+Implement legality analysis for `WithHandler` nodes before effect-handler lowering.
 See `doc/PLAN_IR.md` §5 Phase WB-2B.
 
 **Track stdlib (C4-S1) — deferred:**
@@ -54,6 +60,10 @@ See `doc/PLAN_STANDARD_LIBRARY.md` §5.
   - stdlib `list.each` / `list.map`
 - Removed as WB-2-obsolete:
   - `gen_lower/lower.rs` fused split recognition for `string.split` + `list.each` / `list.get`
+- WB-2 exit state:
+  - pure control flow/operators complete
+  - decl calls / recursion complete
+  - pattern matching and structured data complete for current IR surface
 - Effect handler strategy: selective CPS degenerating to direct-call lowering for one-shot
   tail-resumptive handlers; captured vars as explicit Wasm function parameters.
 - Fused patterns (`SplitEachPrint`, `SplitGetPrint`, `graphemes-get-print`) are deletion targets,

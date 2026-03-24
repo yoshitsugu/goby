@@ -491,14 +491,15 @@ fn is_simple_callee(expr: &Expr) -> bool {
 /// ```
 /// All other expressions fall through to `apply_indent(format_expr(...), indent)`.
 fn format_expr_stmt(expr: &Expr, indent: usize) -> String {
-    if let Expr::Call { callee, arg, .. } = expr {
-        if is_simple_callee(callee) && matches!(**arg, Expr::Case { .. } | Expr::If { .. }) {
-            let callee_str = format_expr(callee, indent);
-            let arg_str = format_expr(arg, indent + 1);
-            let arg_indented = apply_indent(&arg_str, indent + 1);
-            let pad = indent_str(indent);
-            return format!("{}{}\n{}", pad, callee_str, arg_indented);
-        }
+    if let Expr::Call { callee, arg, .. } = expr
+        && is_simple_callee(callee)
+        && matches!(**arg, Expr::Case { .. } | Expr::If { .. })
+    {
+        let callee_str = format_expr(callee, indent);
+        let arg_str = format_expr(arg, indent + 1);
+        let arg_indented = apply_indent(&arg_str, indent + 1);
+        let pad = indent_str(indent);
+        return format!("{}{}\n{}", pad, callee_str, arg_indented);
     }
     let expr_str = format_expr(expr, indent);
     apply_indent(&expr_str, indent)

@@ -367,7 +367,7 @@ fn eval_value(
     value: &ValueExpr,
     bindings: &HashMap<String, NativeValue>,
     env: &EvalEnv<'_>,
-    depth: usize,
+    _depth: usize,
 ) -> Option<NativeValue> {
     match value {
         ValueExpr::StrLit(s) => Some(NativeValue::String(s.clone())),
@@ -404,8 +404,8 @@ fn eval_value(
             }
         }
         ValueExpr::BinOp { op, left, right } => {
-            let lhs = eval_value(left, bindings, env, depth + 1)?;
-            let rhs = eval_value(right, bindings, env, depth + 1)?;
+            let lhs = eval_value(left, bindings, env, _depth + 1)?;
+            let rhs = eval_value(right, bindings, env, _depth + 1)?;
             match (op, lhs, rhs) {
                 (IrBinOp::Add, NativeValue::Int(a), NativeValue::Int(b)) => {
                     Some(NativeValue::Int(a.checked_add(b)?))
@@ -455,7 +455,9 @@ fn eval_value(
                 match part {
                     goby_core::ir::IrInterpPart::Text(text) => out.push_str(text),
                     goby_core::ir::IrInterpPart::Expr(expr) => {
-                        out.push_str(&eval_value(expr, bindings, env, depth + 1)?.as_output_text());
+                        out.push_str(
+                            &eval_value(expr, bindings, env, _depth + 1)?.as_output_text(),
+                        );
                     }
                 }
             }

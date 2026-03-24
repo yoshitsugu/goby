@@ -820,6 +820,7 @@ pub(crate) fn emit_general_module_with_aux(
     Ok(module.finish())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn emit_instrs(
     function: &mut Function,
     ctx: &mut EmitContext,
@@ -2147,6 +2148,7 @@ fn emit_bin_op(
 /// - `Read.read`    → `fd_read(0, iovec, 1, nread)`; push tagged-i64 string ptr
 /// - `Print.print`  → consume tagged-i64 string ptr from stack; `fd_write(1, iovec, 1, nwritten)`
 /// - `Print.println` → same as `print` + write `\n`
+#[allow(clippy::too_many_arguments)]
 fn emit_effect_op(
     function: &mut Function,
     effect: &str,
@@ -3579,6 +3581,7 @@ fn emit_split_get_print(
 
 /// Emit fd_write for the slice [line_start .. end) of the string at str_ptr.
 /// The string data starts at str_ptr + 4 (after the len prefix).
+#[allow(clippy::too_many_arguments)]
 fn emit_write_slice(
     function: &mut Function,
     s_str_ptr: u32,

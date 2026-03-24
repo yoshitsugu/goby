@@ -488,10 +488,10 @@ fn module_basename(module_path: &str) -> &str {
 }
 
 fn imported_symbol_ref(module: &str, name: &str) -> ResolvedRef {
-    if module == "prelude" {
-        if let Some(builtin) = builtin_bare_ref(name) {
-            return builtin;
-        }
+    if module == "prelude"
+        && let Some(builtin) = builtin_bare_ref(name)
+    {
+        return builtin;
     }
     builtin_qualified_ref(module, name).unwrap_or_else(|| ResolvedRef::Global {
         module: module.to_string(),

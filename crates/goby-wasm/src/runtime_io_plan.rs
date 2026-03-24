@@ -83,7 +83,7 @@ pub enum RuntimeIoExecutionKind {
 
 impl RuntimeIoPlan {
     pub(crate) fn emit_wasm(self) -> Result<Vec<u8>, CodegenError> {
-        if let Some(mut instrs) = self.clone().to_general_backend_instrs()? {
+        if let Some(mut instrs) = self.clone().into_general_backend_instrs()? {
             instrs.push(WasmBackendInstr::Drop);
             return emit_general_module(&instrs, &MemoryLayout::default());
         }
@@ -125,7 +125,7 @@ impl RuntimeIoPlan {
         }
     }
 
-    fn to_general_backend_instrs(self) -> Result<Option<Vec<WasmBackendInstr>>, CodegenError> {
+    fn into_general_backend_instrs(self) -> Result<Option<Vec<WasmBackendInstr>>, CodegenError> {
         const TEXT_LOCAL: &str = "__goby_runtime_io_text";
 
         match self {
@@ -2268,7 +2268,7 @@ main =
             suffix_prints: vec![],
         };
         let instrs = plan
-            .to_general_backend_instrs()
+            .into_general_backend_instrs()
             .expect("general delegation should not hard-fail");
         assert!(
             instrs.is_some(),
@@ -2287,7 +2287,7 @@ main =
             }],
         };
         let instrs = plan
-            .to_general_backend_instrs()
+            .into_general_backend_instrs()
             .expect("delegation check should not hard-fail");
         assert!(
             instrs.is_some(),
@@ -2303,7 +2303,7 @@ main =
             suffix_prints: vec![],
         };
         let instrs = plan
-            .to_general_backend_instrs()
+            .into_general_backend_instrs()
             .expect("delegation check should not hard-fail");
         assert!(
             instrs.is_none(),
@@ -2319,7 +2319,7 @@ main =
             transform: None,
         };
         let instrs = plan
-            .to_general_backend_instrs()
+            .into_general_backend_instrs()
             .expect("general delegation should not hard-fail");
         assert!(
             instrs.is_some(),
@@ -2335,7 +2335,7 @@ main =
             transform: Some(("".to_string(), "!".to_string())),
         };
         let instrs = plan
-            .to_general_backend_instrs()
+            .into_general_backend_instrs()
             .expect("delegation check should not hard-fail");
         assert!(
             instrs.is_none(),

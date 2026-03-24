@@ -584,7 +584,7 @@ main =
 
 #[test]
 #[cfg(unix)]
-fn run_command_rejects_repeated_read_after_exhaustion_shape_with_explicit_boundary_error() {
+fn run_command_executes_repeated_read_after_exhaustion_shape() {
     let root = repo_root();
     let sandbox = TempDirGuard::new("run_repeated_reads_boundary");
     let input = sandbox.join("repeated_reads.gb");
@@ -609,21 +609,25 @@ main =
         .stderr(Stdio::piped())
         .spawn()
         .expect("cli should execute");
-    drop(child.stdin.take());
+    let mut stdin = child.stdin.take().expect("stdin pipe should exist");
+    stdin
+        .write_all(b"payload")
+        .expect("stdin should be writable");
+    drop(stdin);
     let output = child
         .wait_with_output()
         .expect("cli output should be readable");
 
     assert!(
-        !output.status.success(),
-        "expected unsupported-shape failure, stderr: {}",
+        output.status.success(),
+        "expected repeated-read shape to execute, stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        stderr.contains("unsupported"),
-        "expected explicit unsupported-boundary error, stderr: {}",
-        stderr
+        stdout.contains("|"),
+        "expected repeated-read runtime execution in stdout, stdout: {}",
+        stdout
     );
 }
 

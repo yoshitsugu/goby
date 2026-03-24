@@ -246,7 +246,7 @@ fn lower_expr_as_comp_non_value(
             let (callee_expr, args_exprs) = collect_call_chain(expr);
 
             if let ResolvedExpr::Ref(ResolvedRef::EffectOp { effect, op }) = callee_expr {
-                return lower_effect_call(ctx, &effect, &op, &args_exprs);
+                return lower_effect_call(ctx, effect, op, &args_exprs);
             }
 
             let callee = lower_value_required(ctx, callee_expr, "call callee")?;
