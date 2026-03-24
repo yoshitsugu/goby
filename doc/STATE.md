@@ -18,6 +18,10 @@ Last updated: 2026-03-24
   - M6: `InterpreterBridge` graphemes classification removed; 4 dead helper functions deleted.
   - M7: `graphemes`-as-funcref wrapper AuxDecl; full WB-1–WB-3 integration test (`split + map + graphemes + each`).
   - M8: quality gates pass (`cargo fmt`, `cargo check`, `cargo test`, `cargo clippy -- -D warnings`).
+- WB-3B prep slice in progress (2026-03-24): `gen_lower/emit.rs` now has an
+  `EffectEmitStrategy` boundary and `wasmfx-experimental` feature flag so future WasmFX work can
+  replace the emit path without redesigning IR/lowering; current strategies are parity-tested to
+  emit identical bytes for supported effect ops.
 - **WB-3 is complete.** All 13 `CompExpr` variants and all 12 `ValueExpr` variants are handled in the `GeneralLowered` path (within supported subsets).
 
 ## Track Priority

@@ -492,6 +492,33 @@ pub(crate) struct AuxDecl {
     pub(crate) instrs: Vec<WasmBackendInstr>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum EffectEmitStrategy {
+    Wb3DirectCall,
+    Wb3BWasmFxExperimental,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct EmitOptions {
+    pub(crate) effect_emit_strategy: EffectEmitStrategy,
+}
+
+impl Default for EmitOptions {
+    fn default() -> Self {
+        Self {
+            effect_emit_strategy: default_effect_emit_strategy(),
+        }
+    }
+}
+
+fn default_effect_emit_strategy() -> EffectEmitStrategy {
+    if cfg!(feature = "wasmfx-experimental") {
+        EffectEmitStrategy::Wb3BWasmFxExperimental
+    } else {
+        EffectEmitStrategy::Wb3DirectCall
+    }
+}
+
 pub(crate) fn supports_instrs(instrs: &[WasmBackendInstr]) -> bool {
     collect_all_instrs(instrs).iter().all(|instr| match instr {
         WasmBackendInstr::Intrinsic { intrinsic } => match intrinsic.execution_boundary() {
@@ -521,6 +548,15 @@ pub(crate) fn emit_general_module_with_aux(
     instrs: &[WasmBackendInstr],
     aux_decls: &[AuxDecl],
     layout: &MemoryLayout,
+) -> Result<Vec<u8>, CodegenError> {
+    emit_general_module_with_aux_and_options(instrs, aux_decls, layout, EmitOptions::default())
+}
+
+pub(crate) fn emit_general_module_with_aux_and_options(
+    instrs: &[WasmBackendInstr],
+    aux_decls: &[AuxDecl],
+    layout: &MemoryLayout,
+    options: EmitOptions,
 ) -> Result<Vec<u8>, CodegenError> {
     let static_strings = StaticStringPool::build_from_all(
         std::iter::once(instrs).chain(aux_decls.iter().map(|d| d.instrs.as_slice())),
@@ -761,6 +797,7 @@ pub(crate) fn emit_general_module_with_aux(
             main_helper_i64_scratch_count,
             main_i32_base,
             &static_strings,
+            options,
         )?;
         function.instruction(&Instruction::End);
         code.function(&function);
@@ -817,6 +854,7 @@ pub(crate) fn emit_general_module_with_aux(
             aux_helper_i64_scratch_count,
             aux_i32_base,
             &static_strings,
+            options,
         )?;
         function.instruction(&Instruction::End);
         code.function(&function);
@@ -851,6 +889,7 @@ fn emit_instrs(
     helper_i64_scratch_count: u32,
     i32_base: u32,
     static_strings: &StaticStringPool,
+    options: EmitOptions,
 ) -> Result<(), CodegenError> {
     let iovec_offset = layout.iovec_offset as i32;
     let nread_offset = layout.nwritten_offset as i32;
@@ -940,6 +979,7 @@ fn emit_instrs(
                     newline_ptr,
                     i32_base,
                     helper_state.as_ref(),
+                    options.effect_emit_strategy,
                 )?;
             }
 
@@ -1022,6 +1062,7 @@ fn emit_instrs(
                     helper_i64_scratch_count,
                     i32_base,
                     static_strings,
+                    options,
                 )?;
                 function.instruction(&Instruction::Else);
                 emit_instrs(
@@ -1033,6 +1074,7 @@ fn emit_instrs(
                     helper_i64_scratch_count,
                     i32_base,
                     static_strings,
+                    options,
                 )?;
                 function.instruction(&Instruction::End);
             }
@@ -1057,6 +1099,7 @@ fn emit_instrs(
                     i32_base,
                     static_strings,
                     &helper_state,
+                    options,
                 )?;
             }
 
@@ -1096,6 +1139,7 @@ fn emit_instrs(
                         helper_i64_scratch_count,
                         i32_base,
                         static_strings,
+                        options,
                     )?;
                     function.instruction(&Instruction::I64Store(MemArg {
                         offset: 0,
@@ -1138,6 +1182,7 @@ fn emit_instrs(
                         helper_i64_scratch_count,
                         i32_base,
                         static_strings,
+                        options,
                     )?;
                     function.instruction(&Instruction::I64Store(MemArg {
                         offset: 0,
@@ -1183,6 +1228,7 @@ fn emit_instrs(
                         helper_i64_scratch_count,
                         i32_base,
                         static_strings,
+                        options,
                     )?;
                     function.instruction(&Instruction::I64Store(MemArg {
                         offset: 0,
@@ -1233,6 +1279,7 @@ fn emit_instrs(
                     helper_i64_scratch_count,
                     i32_base,
                     static_strings,
+                    options,
                 )?;
                 emit_list_each_effect(
                     function,
@@ -1263,6 +1310,7 @@ fn emit_instrs(
                     helper_i64_scratch_count,
                     i32_base,
                     static_strings,
+                    options,
                 )?;
                 emit_instrs(
                     function,
@@ -1273,6 +1321,7 @@ fn emit_instrs(
                     helper_i64_scratch_count,
                     i32_base,
                     static_strings,
+                    options,
                 )?;
                 emit_list_each(function, &hs, type_idx);
             }
@@ -1296,6 +1345,7 @@ fn emit_instrs(
                     helper_i64_scratch_count,
                     i32_base,
                     static_strings,
+                    options,
                 )?;
                 emit_instrs(
                     function,
@@ -1306,6 +1356,7 @@ fn emit_instrs(
                     helper_i64_scratch_count,
                     i32_base,
                     static_strings,
+                    options,
                 )?;
                 emit_list_map(function, &hs, type_idx)?;
             }
@@ -2156,6 +2207,39 @@ fn emit_effect_op(
     newline_ptr: i32,
     i32_base: u32,
     helper_state: Option<&HelperEmitState>,
+    strategy: EffectEmitStrategy,
+) -> Result<(), CodegenError> {
+    match strategy {
+        // WB-3B is specified as an emit-layer swap only. Until the toolchain can
+        // encode WasmFX suspend/resume instructions, the experimental path keeps
+        // byte-for-byte parity with the shipped WB-3A direct-call emitter.
+        EffectEmitStrategy::Wb3DirectCall | EffectEmitStrategy::Wb3BWasmFxExperimental => {
+            emit_effect_op_wb3_direct(
+                function,
+                op,
+                iovec_offset,
+                nread_offset,
+                buffer_ptr,
+                buffer_len,
+                newline_ptr,
+                i32_base,
+                helper_state,
+            )
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn emit_effect_op_wb3_direct(
+    function: &mut Function,
+    op: &BackendEffectOp,
+    iovec_offset: i32,
+    nread_offset: i32,
+    buffer_ptr: i32,
+    buffer_len: i32,
+    newline_ptr: i32,
+    i32_base: u32,
+    helper_state: Option<&HelperEmitState>,
 ) -> Result<(), CodegenError> {
     match op {
         BackendEffectOp::Read(BackendReadOp::Read) => {
@@ -2929,6 +3013,7 @@ fn emit_case_match(
     i32_base: u32,
     static_strings: &StaticStringPool,
     helper_state: &Option<HelperEmitState>,
+    options: EmitOptions,
 ) -> Result<(), CodegenError> {
     use crate::gen_lower::backend_ir::BackendCasePattern;
 
@@ -2963,6 +3048,7 @@ fn emit_case_match(
                     helper_i64_scratch_count,
                     i32_base,
                     static_strings,
+                    options,
                 )?;
                 function.instruction(&Instruction::Br(0));
                 // Any arms after Wildcard are unreachable; stop emitting.
@@ -2990,6 +3076,7 @@ fn emit_case_match(
                     helper_i64_scratch_count,
                     i32_base,
                     static_strings,
+                    options,
                 )?;
                 function.instruction(&Instruction::Br(1)); // br out of enclosing block
                 function.instruction(&Instruction::End); // end if
@@ -3010,6 +3097,7 @@ fn emit_case_match(
                     helper_i64_scratch_count,
                     i32_base,
                     static_strings,
+                    options,
                 )?;
                 function.instruction(&Instruction::Br(1));
                 function.instruction(&Instruction::End);
@@ -3128,6 +3216,7 @@ fn emit_case_match(
                     helper_i64_scratch_count,
                     i32_base,
                     static_strings,
+                    options,
                 )?;
                 function.instruction(&Instruction::Br(2)); // br out of: if(same len) + outer block
                 function.instruction(&Instruction::End); // end if (same len)
@@ -3173,6 +3262,7 @@ fn emit_case_match(
                     helper_i64_scratch_count,
                     i32_base,
                     static_strings,
+                    options,
                 )?;
                 function.instruction(&Instruction::Br(2)); // out of: if(len==0) + if(is list) + block
                 function.instruction(&Instruction::End); // end if (len == 0)
@@ -3363,6 +3453,7 @@ fn emit_case_match(
                     helper_i64_scratch_count,
                     i32_base,
                     static_strings,
+                    options,
                 )?;
                 function.instruction(&Instruction::Br(2));
                 function.instruction(&Instruction::End); // end if_len
@@ -3673,6 +3764,42 @@ mod tests {
         ];
         let wasm = emit_general_module(&instrs, &default_layout()).expect("emit should succeed");
         assert_valid_wasm(&wasm);
+    }
+
+    #[test]
+    fn wasmfx_experimental_strategy_matches_direct_effect_emission_for_current_ops() {
+        let instrs = vec![
+            I::EffectOp {
+                op: BackendEffectOp::Read(BackendReadOp::Read),
+            },
+            I::EffectOp {
+                op: BackendEffectOp::Print(BackendPrintOp::Println),
+            },
+            I::Drop,
+        ];
+        let direct = emit_general_module_with_aux_and_options(
+            &instrs,
+            &[],
+            &default_layout(),
+            EmitOptions {
+                effect_emit_strategy: EffectEmitStrategy::Wb3DirectCall,
+            },
+        )
+        .expect("direct emit should succeed");
+        let wasmfx = emit_general_module_with_aux_and_options(
+            &instrs,
+            &[],
+            &default_layout(),
+            EmitOptions {
+                effect_emit_strategy: EffectEmitStrategy::Wb3BWasmFxExperimental,
+            },
+        )
+        .expect("experimental wasmfx emit should succeed");
+        assert_eq!(
+            wasmfx, direct,
+            "current effect ops should remain byte-identical across emit strategies"
+        );
+        assert_valid_wasm(&wasmfx);
     }
 
     #[test]

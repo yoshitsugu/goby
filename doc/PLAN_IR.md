@@ -505,6 +505,10 @@ continuations — the runtime cost profile depends on the Wasmtime implementatio
 **Milestone:**
 
 - [ ] WB-3B-M1. WasmFX emission implemented behind a feature flag; parity tests pass
+  - prep landed: `crates/goby-wasm/src/gen_lower/emit.rs` now routes effect emission through
+    `EffectEmitStrategy`, with `wasmfx-experimental` selecting the future WB-3B boundary.
+  - current state: the experimental strategy intentionally reuses WB-3A direct-call emission
+    until WasmFX opcodes/tooling are available, and byte-parity is regression-tested.
   against WB-3A output
 
 ---

@@ -9,6 +9,7 @@ crate-type = ["rlib"]
 [features]
 default = []
 typed-continuation-optimized = []
+wasmfx-experimental = []
 
 [dependencies]
 goby-core = { path = "../goby-core" }
