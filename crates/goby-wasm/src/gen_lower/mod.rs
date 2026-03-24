@@ -574,6 +574,13 @@ pub(crate) fn supports_general_lower_module(module: &Module) -> Result<bool, Cod
 }
 
 pub(crate) fn try_general_lower_module(module: &Module) -> Result<Option<Vec<u8>>, CodegenError> {
+    try_general_lower_module_with_options(module, emit::EmitOptions::default())
+}
+
+fn try_general_lower_module_with_options(
+    module: &Module,
+    options: emit::EmitOptions,
+) -> Result<Option<Vec<u8>>, CodegenError> {
     let Some((instrs, aux_decls)) = lower_module_to_instrs(module)? else {
         return Ok(None);
     };
@@ -582,7 +589,8 @@ pub(crate) fn try_general_lower_module(module: &Module) -> Result<Option<Vec<u8>
         return Ok(None);
     }
     let layout = MemoryLayout::default();
-    let wasm = emit::emit_general_module_with_aux(&instrs, &aux_decls, &layout)?;
+    let wasm =
+        emit::emit_general_module_with_aux_and_options(&instrs, &aux_decls, &layout, options)?;
     Ok(Some(wasm))
 }
 
@@ -595,31 +603,25 @@ mod tests {
     use crate::gen_lower::emit::{EffectEmitStrategy, EmitOptions};
 
     fn assert_strategy_parity(module: &goby_core::Module) {
-        let (instrs, aux) = lower_module_to_instrs(module)
-            .expect("lowering should not error")
-            .expect("general lowering should apply");
-        let layout = MemoryLayout::default();
-        let direct = emit::emit_general_module_with_aux_and_options(
-            &instrs,
-            &aux,
-            &layout,
+        let direct = try_general_lower_module_with_options(
+            module,
             EmitOptions {
                 effect_emit_strategy: EffectEmitStrategy::Wb3DirectCall,
             },
         )
-        .expect("WB-3A direct emission should succeed");
-        let wasmfx = emit::emit_general_module_with_aux_and_options(
-            &instrs,
-            &aux,
-            &layout,
+        .expect("WB-3A lowering should not error")
+        .expect("WB-3A general lowering should apply");
+        let wasmfx = try_general_lower_module_with_options(
+            module,
             EmitOptions {
                 effect_emit_strategy: EffectEmitStrategy::Wb3BWasmFxExperimental,
             },
         )
-        .expect("WB-3B experimental emission should succeed");
+        .expect("WB-3B lowering should not error")
+        .expect("WB-3B general lowering should apply");
         assert_eq!(
             wasmfx, direct,
-            "emit strategies should stay byte-identical until WasmFX opcode support lands"
+            "general lowering should stay byte-identical across emit strategies until WasmFX opcode support lands"
         );
     }
 

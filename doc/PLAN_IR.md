@@ -510,6 +510,9 @@ continuations — the runtime cost profile depends on the Wasmtime implementatio
   - current state: the experimental strategy intentionally reuses WB-3A direct-call emission
     until WasmFX opcodes/tooling are available, and byte-parity is regression-tested for both
     direct effect-op emission and whole general-lowered modules (safe handlers + aux decl calls).
+  - compile-path prep landed: `gen_lower::try_general_lower_module` now delegates through an
+    option-aware helper so WB-3B feature-path tests exercise the same general-lowering entrypoint
+    that `compile_module` uses, rather than bypassing it with lower-level emit helpers.
   against WB-3A output
 
 ---
