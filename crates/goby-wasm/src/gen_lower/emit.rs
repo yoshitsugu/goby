@@ -85,13 +85,29 @@ impl StaticStringPool {
         fn visit_instrs<'a>(instrs: &'a [WasmBackendInstr], out: &mut Vec<&'a WasmBackendInstr>) {
             for instr in instrs {
                 out.push(instr);
-                if let WasmBackendInstr::If {
-                    then_instrs,
-                    else_instrs,
-                } = instr
-                {
-                    visit_instrs(then_instrs, out);
-                    visit_instrs(else_instrs, out);
+                match instr {
+                    WasmBackendInstr::If {
+                        then_instrs,
+                        else_instrs,
+                    } => {
+                        visit_instrs(then_instrs, out);
+                        visit_instrs(else_instrs, out);
+                    }
+                    WasmBackendInstr::CaseMatch {
+                        scrutinee_instrs,
+                        arms,
+                    } => {
+                        visit_instrs(scrutinee_instrs, out);
+                        for arm in arms {
+                            visit_instrs(&arm.body_instrs, out);
+                        }
+                    }
+                    WasmBackendInstr::ListLit { element_instrs } => {
+                        for elem in element_instrs {
+                            visit_instrs(elem, out);
+                        }
+                    }
+                    _ => {}
                 }
             }
         }
@@ -238,13 +254,29 @@ fn collect_all_instrs(instrs: &[WasmBackendInstr]) -> Vec<&WasmBackendInstr> {
     let mut result = Vec::new();
     for instr in instrs {
         result.push(instr);
-        if let WasmBackendInstr::If {
-            then_instrs,
-            else_instrs,
-        } = instr
-        {
-            result.extend(collect_all_instrs(then_instrs));
-            result.extend(collect_all_instrs(else_instrs));
+        match instr {
+            WasmBackendInstr::If {
+                then_instrs,
+                else_instrs,
+            } => {
+                result.extend(collect_all_instrs(then_instrs));
+                result.extend(collect_all_instrs(else_instrs));
+            }
+            WasmBackendInstr::CaseMatch {
+                scrutinee_instrs,
+                arms,
+            } => {
+                result.extend(collect_all_instrs(scrutinee_instrs));
+                for arm in arms {
+                    result.extend(collect_all_instrs(&arm.body_instrs));
+                }
+            }
+            WasmBackendInstr::ListLit { element_instrs } => {
+                for elem in element_instrs {
+                    result.extend(collect_all_instrs(elem));
+                }
+            }
+            _ => {}
         }
     }
     result
@@ -273,10 +305,15 @@ fn required_i32_scratch_count(instrs: &[WasmBackendInstr]) -> u32 {
     } else {
         0
     };
-    let helper_count = if all
-        .iter()
-        .any(|i| matches!(i, WasmBackendInstr::Intrinsic { .. }))
-    {
+    let helper_count = if all.iter().any(|i| {
+        matches!(
+            i,
+            // Intrinsic helpers use the HELPER_SCRATCH_I32 pool.
+            WasmBackendInstr::Intrinsic { .. }
+                // ListLit uses emit_alloc_from_top which requires the same pool.
+                | WasmBackendInstr::ListLit { .. }
+        )
+    }) {
         HELPER_SCRATCH_I32
     } else {
         0
@@ -800,6 +837,15 @@ fn emit_instrs(
             WasmBackendInstr::DeclCall { decl_name } => {
                 let func_idx = ctx.decl_func_idx(decl_name)?;
                 function.instruction(&Instruction::Call(func_idx));
+            }
+
+            // WB-2B: CaseMatch and ListLit emission implemented in Step 4/5.
+            WasmBackendInstr::CaseMatch { .. } | WasmBackendInstr::ListLit { .. } => {
+                return Err(CodegenError {
+                    message: format!(
+                        "gen_lower/emit: CaseMatch/ListLit emission not yet implemented (WB-2B)"
+                    ),
+                });
             }
         }
     }

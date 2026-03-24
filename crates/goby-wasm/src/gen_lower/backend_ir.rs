@@ -11,6 +11,56 @@ use goby_core::ir::IrBinOp;
 
 use crate::host_runtime::IntrinsicExecutionBoundary;
 
+// ---------------------------------------------------------------------------
+// Case pattern types (WB-2B)
+// ---------------------------------------------------------------------------
+
+/// A single item in a `BackendCasePattern::ListPattern`.
+///
+/// Each item corresponds to one `IrListPatternItem` from the IR.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum BackendListPatternItem {
+    /// Match an exact integer literal at this position.
+    IntLit(i64),
+    /// Match an exact string literal at this position.
+    StrLit(String),
+    /// Bind the item at this position to a local variable.
+    Bind(String),
+    /// Ignore the item at this position (wildcard `_`).
+    Wildcard,
+}
+
+/// A compiled pattern in a `CaseArmInstr`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum BackendCasePattern {
+    /// Match an exact integer value (tagged i64 Int).
+    IntLit(i64),
+    /// Match an exact boolean value (tagged i64 Bool).
+    BoolLit(bool),
+    /// Match an exact string value (byte-wise comparison in Wasm).
+    StrLit(String),
+    /// Match an empty list (`len == 0`).
+    EmptyList,
+    /// Match a non-empty list with at least `items.len()` elements.
+    ///
+    /// Each element in `items` may match a literal or bind a name.
+    /// `tail` is `Some(name)` to bind the remaining suffix as a sub-list,
+    /// or `None` to require that the list has exactly `items.len()` elements.
+    ListPattern {
+        items: Vec<BackendListPatternItem>,
+        tail: Option<String>,
+    },
+    /// Unconditional arm (always matches, must be the last arm).
+    Wildcard,
+}
+
+/// A single arm in a `WasmBackendInstr::CaseMatch`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CaseArmInstr {
+    pub(crate) pattern: BackendCasePattern,
+    pub(crate) body_instrs: Vec<WasmBackendInstr>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum SplitIndexOperand {
     Const(i64),
@@ -142,6 +192,36 @@ pub(crate) enum WasmBackendInstr {
     /// are not yet supported here; they will use `call_indirect` via a funcref table
     /// in WB-2B/WB-3. See `backend_ir.rs` design comments for the ABI decision.
     DeclCall { decl_name: String },
+    /// Pattern-match the scrutinee (top of stack before this instruction) against
+    /// a sequence of arms, returning the value of the first matching arm's body.
+    ///
+    /// # Stack discipline
+    /// The scrutinee is expected to be on the stack *before* this instruction.
+    /// The emitter pops it into a scratch local (or re-pushes per arm) and produces
+    /// exactly one tagged i64 result.
+    ///
+    /// Arms are tested in order. The last arm must be `Wildcard`.
+    /// If no arm matches (i.e. no `Wildcard` and no literal match), the emitter
+    /// emits an `unreachable` instruction after the arm chain.
+    CaseMatch {
+        /// Instructions that produce the scrutinee on the stack.
+        ///
+        /// Separated from the arms so the emitter can place the scrutinee into a
+        /// scratch local before entering the arm chain.
+        scrutinee_instrs: Vec<WasmBackendInstr>,
+        arms: Vec<CaseArmInstr>,
+    },
+    /// Construct a list value from a fixed number of element instruction sequences.
+    ///
+    /// Each inner `Vec<WasmBackendInstr>` produces one tagged i64 element.
+    /// The elements are pushed left-to-right onto the Wasm stack; the emitter then
+    /// allocates `4 + 8 * len` bytes via the bump allocator, writes the length
+    /// header (`i32`) and each element (`i64`), and pushes a tagged list pointer.
+    ///
+    /// An empty list (`element_instrs` is empty) allocates 4 bytes and writes len=0.
+    ListLit {
+        element_instrs: Vec<Vec<WasmBackendInstr>>,
+    },
     /// Fused: split `text_local` (a tagged-i64 string) on `sep_bytes`, then call
     /// `effect.op` on each resulting segment.
     ///
@@ -215,6 +295,67 @@ mod tests {
             },
         ];
         // Verify all variants round-trip through Clone and PartialEq.
+        let cloned = instrs.clone();
+        assert_eq!(instrs, cloned);
+    }
+
+    #[test]
+    fn case_match_and_list_lit_round_trip() {
+        // CaseMatch with literal, EmptyList, ListPattern, and Wildcard arms.
+        let case_instr = WasmBackendInstr::CaseMatch {
+            scrutinee_instrs: vec![WasmBackendInstr::I64Const(0)],
+            arms: vec![
+                CaseArmInstr {
+                    pattern: BackendCasePattern::IntLit(0),
+                    body_instrs: vec![WasmBackendInstr::PushStaticString {
+                        text: "zero".to_string(),
+                    }],
+                },
+                CaseArmInstr {
+                    pattern: BackendCasePattern::BoolLit(true),
+                    body_instrs: vec![WasmBackendInstr::PushStaticString {
+                        text: "true".to_string(),
+                    }],
+                },
+                CaseArmInstr {
+                    pattern: BackendCasePattern::StrLit("hello".to_string()),
+                    body_instrs: vec![WasmBackendInstr::PushStaticString {
+                        text: "matched".to_string(),
+                    }],
+                },
+                CaseArmInstr {
+                    pattern: BackendCasePattern::EmptyList,
+                    body_instrs: vec![WasmBackendInstr::I64Const(0)],
+                },
+                CaseArmInstr {
+                    pattern: BackendCasePattern::ListPattern {
+                        items: vec![
+                            BackendListPatternItem::IntLit(1),
+                            BackendListPatternItem::StrLit("x".to_string()),
+                            BackendListPatternItem::Bind("h".to_string()),
+                            BackendListPatternItem::Wildcard,
+                        ],
+                        tail: Some("rest".to_string()),
+                    },
+                    body_instrs: vec![WasmBackendInstr::LoadLocal {
+                        name: "h".to_string(),
+                    }],
+                },
+                CaseArmInstr {
+                    pattern: BackendCasePattern::Wildcard,
+                    body_instrs: vec![WasmBackendInstr::PushStaticString {
+                        text: "other".to_string(),
+                    }],
+                },
+            ],
+        };
+        let list_instr = WasmBackendInstr::ListLit {
+            element_instrs: vec![
+                vec![WasmBackendInstr::I64Const(1)],
+                vec![WasmBackendInstr::I64Const(2)],
+            ],
+        };
+        let instrs = vec![case_instr, list_instr];
         let cloned = instrs.clone();
         assert_eq!(instrs, cloned);
     }

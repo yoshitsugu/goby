@@ -219,10 +219,69 @@ fn lower_comp_inner(
             Ok(instrs)
         }
 
+        CompExpr::Case { scrutinee, arms } => {
+            lower_case(scrutinee, arms, aliases, known_decls)
+        }
+
         other => Err(LowerError::UnsupportedForm {
             node: format!("{:?}", other),
         }),
     }
+}
+
+/// Lower a `CompExpr::Case` to a `CaseMatch` backend IR instruction.
+fn lower_case(
+    scrutinee: &ValueExpr,
+    arms: &[goby_core::ir::IrCaseArm],
+    aliases: &HashMap<String, AliasValue>,
+    known_decls: &HashSet<String>,
+) -> Result<Vec<WasmBackendInstr>, LowerError> {
+    use crate::gen_lower::backend_ir::{BackendCasePattern, BackendListPatternItem, CaseArmInstr};
+    use goby_core::ir::{IrCasePattern, IrListPatternItem, IrListPatternTail};
+
+    let scrutinee_instrs = lower_value(scrutinee)?;
+
+    let mut backend_arms = Vec::new();
+    for arm in arms {
+        let pattern = match &arm.pattern {
+            IrCasePattern::IntLit(n) => BackendCasePattern::IntLit(*n),
+            IrCasePattern::BoolLit(b) => BackendCasePattern::BoolLit(*b),
+            IrCasePattern::StringLit(s) => BackendCasePattern::StrLit(s.clone()),
+            IrCasePattern::EmptyList => BackendCasePattern::EmptyList,
+            IrCasePattern::Wildcard => BackendCasePattern::Wildcard,
+            IrCasePattern::ListPattern { items, tail } => {
+                let backend_items: Vec<BackendListPatternItem> = items
+                    .iter()
+                    .map(|item| match item {
+                        IrListPatternItem::IntLit(n) => BackendListPatternItem::IntLit(*n),
+                        IrListPatternItem::StringLit(s) => {
+                            BackendListPatternItem::StrLit(s.clone())
+                        }
+                        IrListPatternItem::Bind(name) => BackendListPatternItem::Bind(name.clone()),
+                        IrListPatternItem::Wildcard => BackendListPatternItem::Wildcard,
+                    })
+                    .collect();
+                let backend_tail = match tail {
+                    Some(IrListPatternTail::Bind(name)) => Some(name.clone()),
+                    Some(IrListPatternTail::Ignore) | None => None,
+                };
+                BackendCasePattern::ListPattern {
+                    items: backend_items,
+                    tail: backend_tail,
+                }
+            }
+        };
+        let body_instrs = lower_comp_inner(&arm.body, aliases, known_decls)?;
+        backend_arms.push(CaseArmInstr {
+            pattern,
+            body_instrs,
+        });
+    }
+
+    Ok(vec![WasmBackendInstr::CaseMatch {
+        scrutinee_instrs,
+        arms: backend_arms,
+    }])
 }
 
 /// Lower a `ValueExpr` to a flat sequence of `WasmBackendInstr`.
@@ -1502,6 +1561,231 @@ mod tests {
             matches!(result, Err(LowerError::UnsupportedForm { .. })),
             "Var callee should remain UnsupportedForm: {:?}",
             result
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // WB-2B: Case lowering tests
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn case_int_lit_and_wildcard_produces_case_match() {
+        use crate::gen_lower::backend_ir::BackendCasePattern;
+        use goby_core::ir::{IrCaseArm, IrCasePattern};
+
+        // case x { 0 -> "zero" | _ -> "other" }
+        let comp = CompExpr::Case {
+            scrutinee: Box::new(ValueExpr::Var("x".to_string())),
+            arms: vec![
+                IrCaseArm {
+                    pattern: IrCasePattern::IntLit(0),
+                    body: CompExpr::Value(ValueExpr::StrLit("zero".to_string())),
+                },
+                IrCaseArm {
+                    pattern: IrCasePattern::Wildcard,
+                    body: CompExpr::Value(ValueExpr::StrLit("other".to_string())),
+                },
+            ],
+        };
+        let result = lower_comp(&comp).expect("Case lowering should succeed");
+        // Must produce exactly one CaseMatch instruction.
+        assert_eq!(result.len(), 1);
+        let WasmBackendInstr::CaseMatch { scrutinee_instrs, arms } = &result[0] else {
+            panic!("expected CaseMatch, got {:?}", result[0]);
+        };
+        // Scrutinee is LoadLocal("x")
+        assert_eq!(
+            scrutinee_instrs,
+            &[WasmBackendInstr::LoadLocal {
+                name: "x".to_string()
+            }]
+        );
+        assert_eq!(arms.len(), 2);
+        assert_eq!(arms[0].pattern, BackendCasePattern::IntLit(0));
+        assert_eq!(arms[1].pattern, BackendCasePattern::Wildcard);
+    }
+
+    #[test]
+    fn case_bool_lit_produces_case_match() {
+        use crate::gen_lower::backend_ir::BackendCasePattern;
+        use goby_core::ir::{IrCaseArm, IrCasePattern};
+
+        let comp = CompExpr::Case {
+            scrutinee: Box::new(ValueExpr::BoolLit(true)),
+            arms: vec![
+                IrCaseArm {
+                    pattern: IrCasePattern::BoolLit(true),
+                    body: CompExpr::Value(ValueExpr::StrLit("yes".to_string())),
+                },
+                IrCaseArm {
+                    pattern: IrCasePattern::Wildcard,
+                    body: CompExpr::Value(ValueExpr::StrLit("no".to_string())),
+                },
+            ],
+        };
+        let result = lower_comp(&comp).expect("Case bool lowering should succeed");
+        let WasmBackendInstr::CaseMatch { arms, .. } = &result[0] else {
+            panic!("expected CaseMatch");
+        };
+        assert_eq!(arms[0].pattern, BackendCasePattern::BoolLit(true));
+    }
+
+    #[test]
+    fn case_str_lit_produces_case_match() {
+        use crate::gen_lower::backend_ir::BackendCasePattern;
+        use goby_core::ir::{IrCaseArm, IrCasePattern};
+
+        let comp = CompExpr::Case {
+            scrutinee: Box::new(ValueExpr::Var("s".to_string())),
+            arms: vec![
+                IrCaseArm {
+                    pattern: IrCasePattern::StringLit("hello".to_string()),
+                    body: CompExpr::Value(ValueExpr::IntLit(1)),
+                },
+                IrCaseArm {
+                    pattern: IrCasePattern::Wildcard,
+                    body: CompExpr::Value(ValueExpr::IntLit(0)),
+                },
+            ],
+        };
+        let result = lower_comp(&comp).expect("Case str lit lowering should succeed");
+        let WasmBackendInstr::CaseMatch { arms, .. } = &result[0] else {
+            panic!("expected CaseMatch");
+        };
+        assert_eq!(
+            arms[0].pattern,
+            BackendCasePattern::StrLit("hello".to_string())
+        );
+    }
+
+    #[test]
+    fn case_empty_list_produces_case_match() {
+        use crate::gen_lower::backend_ir::BackendCasePattern;
+        use goby_core::ir::{IrCaseArm, IrCasePattern};
+
+        let comp = CompExpr::Case {
+            scrutinee: Box::new(ValueExpr::Var("xs".to_string())),
+            arms: vec![
+                IrCaseArm {
+                    pattern: IrCasePattern::EmptyList,
+                    body: CompExpr::Value(ValueExpr::IntLit(0)),
+                },
+                IrCaseArm {
+                    pattern: IrCasePattern::Wildcard,
+                    body: CompExpr::Value(ValueExpr::IntLit(1)),
+                },
+            ],
+        };
+        let result = lower_comp(&comp).expect("Case empty list lowering should succeed");
+        let WasmBackendInstr::CaseMatch { arms, .. } = &result[0] else {
+            panic!("expected CaseMatch");
+        };
+        assert_eq!(arms[0].pattern, BackendCasePattern::EmptyList);
+    }
+
+    #[test]
+    fn case_list_pattern_produces_case_match() {
+        use crate::gen_lower::backend_ir::{BackendCasePattern, BackendListPatternItem};
+        use goby_core::ir::{IrCaseArm, IrCasePattern, IrListPatternItem, IrListPatternTail};
+
+        // case xs { [h, ..t] -> h | _ -> 0 }
+        let comp = CompExpr::Case {
+            scrutinee: Box::new(ValueExpr::Var("xs".to_string())),
+            arms: vec![
+                IrCaseArm {
+                    pattern: IrCasePattern::ListPattern {
+                        items: vec![IrListPatternItem::Bind("h".to_string())],
+                        tail: Some(IrListPatternTail::Bind("t".to_string())),
+                    },
+                    body: CompExpr::Value(ValueExpr::Var("h".to_string())),
+                },
+                IrCaseArm {
+                    pattern: IrCasePattern::Wildcard,
+                    body: CompExpr::Value(ValueExpr::IntLit(0)),
+                },
+            ],
+        };
+        let result = lower_comp(&comp).expect("Case list pattern lowering should succeed");
+        let WasmBackendInstr::CaseMatch { arms, .. } = &result[0] else {
+            panic!("expected CaseMatch");
+        };
+        assert_eq!(
+            arms[0].pattern,
+            BackendCasePattern::ListPattern {
+                items: vec![BackendListPatternItem::Bind("h".to_string())],
+                tail: Some("t".to_string()),
+            }
+        );
+    }
+
+    #[test]
+    fn case_list_pattern_ignore_tail_produces_none() {
+        use crate::gen_lower::backend_ir::BackendCasePattern;
+        use goby_core::ir::{IrCaseArm, IrCasePattern, IrListPatternItem, IrListPatternTail};
+
+        let comp = CompExpr::Case {
+            scrutinee: Box::new(ValueExpr::Var("xs".to_string())),
+            arms: vec![IrCaseArm {
+                pattern: IrCasePattern::ListPattern {
+                    items: vec![IrListPatternItem::Bind("h".to_string())],
+                    tail: Some(IrListPatternTail::Ignore),
+                },
+                body: CompExpr::Value(ValueExpr::Var("h".to_string())),
+            }],
+        };
+        let result = lower_comp(&comp).expect("Case list pattern with ignore tail should succeed");
+        let WasmBackendInstr::CaseMatch { arms, .. } = &result[0] else {
+            panic!("expected CaseMatch");
+        };
+        // Ignore tail → tail = None in backend pattern
+        assert_eq!(
+            arms[0].pattern,
+            BackendCasePattern::ListPattern {
+                items: vec![crate::gen_lower::backend_ir::BackendListPatternItem::Bind(
+                    "h".to_string()
+                )],
+                tail: None,
+            }
+        );
+    }
+
+    #[test]
+    fn case_arm_body_with_decl_call() {
+        use goby_core::ir::{IrCaseArm, IrCasePattern};
+        use std::collections::HashSet;
+
+        // case x { 1 -> helper(x) | _ -> x }  where "helper" is a known decl
+        let mut known = HashSet::new();
+        known.insert("helper".to_string());
+
+        let comp = CompExpr::Case {
+            scrutinee: Box::new(ValueExpr::Var("x".to_string())),
+            arms: vec![
+                IrCaseArm {
+                    pattern: IrCasePattern::IntLit(1),
+                    body: CompExpr::Call {
+                        callee: Box::new(ValueExpr::Var("helper".to_string())),
+                        args: vec![ValueExpr::Var("x".to_string())],
+                    },
+                },
+                IrCaseArm {
+                    pattern: IrCasePattern::Wildcard,
+                    body: CompExpr::Value(ValueExpr::Var("x".to_string())),
+                },
+            ],
+        };
+        let result =
+            lower_comp_with_decls(&comp, &known).expect("Case with DeclCall arm should succeed");
+        let WasmBackendInstr::CaseMatch { arms, .. } = &result[0] else {
+            panic!("expected CaseMatch");
+        };
+        // The first arm body should contain a DeclCall for "helper"
+        assert!(
+            arms[0]
+                .body_instrs
+                .iter()
+                .any(|i| matches!(i, WasmBackendInstr::DeclCall { decl_name } if decl_name == "helper")),
+            "arm body should contain DeclCall(helper)"
         );
     }
 }
