@@ -1030,6 +1030,43 @@ main =
     assert_eq!(output, "a\n👨\u{200d}👩\u{200d}👧\u{200d}👦\nb\n");
 }
 
+/// WB-3-M7: Full WB-1 through WB-3 stack integration test.
+/// `map lines graphemes` requires passing `graphemes` as a function value to `map`.
+/// ANF form: `row2 = rolls[2]` is required because list.get is a call, not a pure value.
+#[test]
+fn wb3_m7_split_map_graphemes_executes_correctly() {
+    let module = parse_module(
+        r#"
+import goby/list ( each, map )
+import goby/string ( split, graphemes )
+
+main : Unit -> Unit can Print, Read
+main =
+  text = read ()
+  lines = split text "\n"
+  rolls = map lines graphemes
+  row2 = rolls[2]
+  each row2 println
+"#,
+    )
+    .expect("parse should work");
+    assert_eq!(
+        runtime_io_execution_kind(&module).expect("classification should succeed"),
+        RuntimeIoExecutionKind::GeneralLowered,
+        "wb3_m7 program must be GeneralLowered"
+    );
+    // stdin: "line0\nline1\nline2\nline3"
+    // lines = ["line0","line1","line2","line3"]
+    // rolls[2] = graphemes "line2" = ["l","i","n","e","2"]
+    let output = execute_runtime_module_with_stdin(
+        &module,
+        Some("line0\nline1\nline2\nline3".to_string()),
+    )
+    .expect("execution should succeed")
+    .expect("output should be Some");
+    assert_eq!(output, "l\ni\nn\ne\n2\n");
+}
+
 #[test]
 fn execute_module_with_stdin_rejects_not_runtime_io_program() {
     // NotRuntimeIo programs (complex static evaluation via variable bindings etc.)

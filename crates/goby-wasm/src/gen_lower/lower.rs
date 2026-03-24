@@ -298,7 +298,7 @@ fn lower_comp_inner(
                 if let Some(op) = resolve_print_callback(&args[1], aliases) {
                     Ok(vec![WasmBackendInstr::ListEachEffect { list_instrs, op }])
                 } else {
-                    let func_instrs = lower_value_as_arg(&args[1], known_decls, lambda_decls)?;
+                    let func_instrs = lower_value_as_arg(&args[1], aliases, known_decls, lambda_decls)?;
                     Ok(vec![WasmBackendInstr::ListEach {
                         list_instrs,
                         func_instrs,
@@ -310,8 +310,8 @@ fn lower_comp_inner(
                 && args.len() == 2
             {
                 // stdlib list.map: iterate list with funcref callback, return new list.
-                let list_instrs = lower_value_as_arg(&args[0], known_decls, lambda_decls)?;
-                let func_instrs = lower_value_as_arg(&args[1], known_decls, lambda_decls)?;
+                let list_instrs = lower_value_as_arg(&args[0], aliases, known_decls, lambda_decls)?;
+                let func_instrs = lower_value_as_arg(&args[1], aliases, known_decls, lambda_decls)?;
                 Ok(vec![WasmBackendInstr::ListMap {
                     list_instrs,
                     func_instrs,
@@ -333,7 +333,7 @@ fn lower_comp_inner(
                 // Top-level user declaration call via GlobalRef (WB-2A).
                 let mut instrs = Vec::new();
                 for arg in args {
-                    instrs.extend(lower_value_as_arg(arg, known_decls, lambda_decls)?);
+                    instrs.extend(lower_value_as_arg(arg, aliases, known_decls, lambda_decls)?);
                 }
                 instrs.push(WasmBackendInstr::DeclCall {
                     decl_name: name.clone(),
@@ -344,7 +344,7 @@ fn lower_comp_inner(
                     // Direct call to a known top-level declaration (WB-2A).
                     let mut instrs = Vec::new();
                     for arg in args {
-                        instrs.extend(lower_value_as_arg(arg, known_decls, lambda_decls)?);
+                        instrs.extend(lower_value_as_arg(arg, aliases, known_decls, lambda_decls)?);
                     }
                     instrs.push(WasmBackendInstr::DeclCall {
                         decl_name: name.clone(),
@@ -364,7 +364,7 @@ fn lower_comp_inner(
                     if let Some(op) = resolve_print_callback(&args[1], aliases) {
                         Ok(vec![WasmBackendInstr::ListEachEffect { list_instrs, op }])
                     } else {
-                        let func_instrs = lower_value_as_arg(&args[1], known_decls, lambda_decls)?;
+                        let func_instrs = lower_value_as_arg(&args[1], aliases, known_decls, lambda_decls)?;
                         Ok(vec![WasmBackendInstr::ListEach {
                             list_instrs,
                             func_instrs,
@@ -375,8 +375,8 @@ fn lower_comp_inner(
                     && args.len() == 2
                 {
                     // Var resolves to list.map (bare name or alias via `import goby/list (map)`).
-                    let list_instrs = lower_value_as_arg(&args[0], known_decls, lambda_decls)?;
-                    let func_instrs = lower_value_as_arg(&args[1], known_decls, lambda_decls)?;
+                    let list_instrs = lower_value_as_arg(&args[0], aliases, known_decls, lambda_decls)?;
+                    let func_instrs = lower_value_as_arg(&args[1], aliases, known_decls, lambda_decls)?;
                     Ok(vec![WasmBackendInstr::ListMap {
                         list_instrs,
                         func_instrs,
@@ -403,7 +403,7 @@ fn lower_comp_inner(
                     // Stack order: push args left-to-right, then push callee, then IndirectCall.
                     let mut instrs = Vec::new();
                     for arg in args {
-                        instrs.extend(lower_value_as_arg(arg, known_decls, lambda_decls)?);
+                        instrs.extend(lower_value_as_arg(arg, aliases, known_decls, lambda_decls)?);
                     }
                     instrs.push(WasmBackendInstr::LoadLocal { name: name.clone() });
                     instrs.push(WasmBackendInstr::IndirectCall);
@@ -664,6 +664,7 @@ pub(crate) fn lower_value(v: &ValueExpr) -> Result<Vec<WasmBackendInstr>, LowerE
 /// All other cases delegate to `lower_value`.
 fn lower_value_as_arg(
     v: &ValueExpr,
+    aliases: &HashMap<String, AliasValue>,
     known_decls: &HashSet<String>,
     lambda_decls: &mut Vec<LambdaAuxDecl>,
 ) -> Result<Vec<WasmBackendInstr>, LowerError> {
@@ -672,6 +673,49 @@ fn lower_value_as_arg(
             Ok(vec![WasmBackendInstr::PushFuncHandle {
                 decl_name: name.clone(),
             }])
+        }
+        // `graphemes` passed as a function value (e.g. `map lines graphemes`).
+        // Generate a wrapper AuxDecl that takes one param and calls StringGraphemesList.
+        ValueExpr::Var(name)
+            if name == "graphemes"
+                || resolve_global_ref(name, aliases) == Some(("string", "graphemes")) =>
+        {
+            let n = LAMBDA_COUNTER.fetch_add(1, AtomicOrdering::Relaxed);
+            let decl_name = format!("__graphemes_wrapper_{n}");
+            let param_name = "__s".to_string();
+            lambda_decls.push(LambdaAuxDecl {
+                decl_name: decl_name.clone(),
+                param_name: param_name.clone(),
+                instrs: vec![
+                    WasmBackendInstr::LoadLocal {
+                        name: param_name.clone(),
+                    },
+                    WasmBackendInstr::Intrinsic {
+                        intrinsic: BackendIntrinsic::StringGraphemesList,
+                    },
+                ],
+            });
+            Ok(vec![WasmBackendInstr::PushFuncHandle { decl_name }])
+        }
+        ValueExpr::GlobalRef { module, name }
+            if module == "string" && name == "graphemes" =>
+        {
+            let n = LAMBDA_COUNTER.fetch_add(1, AtomicOrdering::Relaxed);
+            let decl_name = format!("__graphemes_wrapper_{n}");
+            let param_name = "__s".to_string();
+            lambda_decls.push(LambdaAuxDecl {
+                decl_name: decl_name.clone(),
+                param_name: param_name.clone(),
+                instrs: vec![
+                    WasmBackendInstr::LoadLocal {
+                        name: param_name.clone(),
+                    },
+                    WasmBackendInstr::Intrinsic {
+                        intrinsic: BackendIntrinsic::StringGraphemesList,
+                    },
+                ],
+            });
+            Ok(vec![WasmBackendInstr::PushFuncHandle { decl_name }])
         }
         ValueExpr::Lambda { param, body } => {
             // The lambda param plus all known top-level declarations are in scope inside the body.
@@ -1949,4 +1993,5 @@ mod tests {
             instrs
         );
     }
+
 }
