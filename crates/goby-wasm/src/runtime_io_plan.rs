@@ -328,9 +328,6 @@ pub(crate) fn classify_runtime_io(
         return RuntimeIoClassification::DynamicWasiIo(plan);
     }
     let has_runtime_read = stmts.iter().any(stmt_contains_runtime_read);
-    if has_runtime_read && stmts_contain_imported_string_graphemes(module, stmts) {
-        return RuntimeIoClassification::InterpreterBridge;
-    }
     if has_runtime_read {
         return RuntimeIoClassification::Unsupported;
     }
@@ -820,118 +817,6 @@ fn stmt_contains_runtime_read(stmt: &Stmt) -> bool {
         | Stmt::MutBinding { value, .. }
         | Stmt::Assign { value, .. } => expr_contains_runtime_read(value),
         Stmt::Expr(expr, _) => expr_contains_runtime_read(expr),
-    }
-}
-
-fn stmts_contain_imported_string_graphemes(module: &Module, stmts: &[Stmt]) -> bool {
-    stmts
-        .iter()
-        .any(|stmt| stmt_contains_imported_string_graphemes(module, stmt))
-}
-
-fn stmt_contains_imported_string_graphemes(module: &Module, stmt: &Stmt) -> bool {
-    match stmt {
-        Stmt::Binding { value, .. }
-        | Stmt::MutBinding { value, .. }
-        | Stmt::Assign { value, .. } => expr_contains_imported_string_graphemes(module, value),
-        Stmt::Expr(expr, _) => expr_contains_imported_string_graphemes(module, expr),
-    }
-}
-
-fn expr_contains_imported_string_graphemes(module: &Module, expr: &Expr) -> bool {
-    if expr_matches_imported_string_graphemes_call(module, expr) {
-        return true;
-    }
-
-    match expr {
-        Expr::Call { callee, arg, .. } => {
-            expr_contains_imported_string_graphemes(module, callee)
-                || expr_contains_imported_string_graphemes(module, arg)
-        }
-        Expr::InterpolatedString(parts) => parts.iter().any(|part| match part {
-            InterpolatedPart::Text(_) => false,
-            InterpolatedPart::Expr(expr) => expr_contains_imported_string_graphemes(module, expr),
-        }),
-        Expr::ListLit { elements, spread } => {
-            elements
-                .iter()
-                .any(|expr| expr_contains_imported_string_graphemes(module, expr))
-                || spread
-                    .as_deref()
-                    .is_some_and(|expr| expr_contains_imported_string_graphemes(module, expr))
-        }
-        Expr::TupleLit(items) => items
-            .iter()
-            .any(|expr| expr_contains_imported_string_graphemes(module, expr)),
-        Expr::RecordConstruct { fields, .. } => fields
-            .iter()
-            .any(|(_, value)| expr_contains_imported_string_graphemes(module, value)),
-        Expr::BinOp { left, right, .. } => {
-            expr_contains_imported_string_graphemes(module, left)
-                || expr_contains_imported_string_graphemes(module, right)
-        }
-        Expr::MethodCall { args, .. } => args
-            .iter()
-            .any(|expr| expr_contains_imported_string_graphemes(module, expr)),
-        Expr::Pipeline { value, .. } => expr_contains_imported_string_graphemes(module, value),
-        Expr::Lambda { body, .. } => expr_contains_imported_string_graphemes(module, body),
-        Expr::Handler { clauses } => clauses.iter().any(|clause| {
-            clause
-                .parsed_body
-                .as_deref()
-                .is_some_and(|body| stmts_contain_imported_string_graphemes(module, body))
-        }),
-        Expr::With { handler, body } => {
-            expr_contains_imported_string_graphemes(module, handler)
-                || stmts_contain_imported_string_graphemes(module, body)
-        }
-        Expr::Resume { value } => expr_contains_imported_string_graphemes(module, value),
-        Expr::Block(stmts) => stmts_contain_imported_string_graphemes(module, stmts),
-        Expr::Case { scrutinee, arms } => {
-            expr_contains_imported_string_graphemes(module, scrutinee)
-                || arms
-                    .iter()
-                    .any(|arm| expr_contains_imported_string_graphemes(module, &arm.body))
-        }
-        Expr::If {
-            condition,
-            then_expr,
-            else_expr,
-        } => {
-            expr_contains_imported_string_graphemes(module, condition)
-                || expr_contains_imported_string_graphemes(module, then_expr)
-                || expr_contains_imported_string_graphemes(module, else_expr)
-        }
-        Expr::ListIndex { list, index } => {
-            expr_contains_imported_string_graphemes(module, list)
-                || expr_contains_imported_string_graphemes(module, index)
-        }
-        Expr::IntLit(_)
-        | Expr::BoolLit(_)
-        | Expr::StringLit(_)
-        | Expr::Var { .. }
-        | Expr::Qualified { .. } => false,
-    }
-}
-
-fn expr_matches_imported_string_graphemes_call(module: &Module, expr: &Expr) -> bool {
-    match expr {
-        Expr::MethodCall {
-            receiver,
-            method,
-            args,
-        } => {
-            let head = DirectCallHead::Qualified {
-                receiver: receiver.clone(),
-                member: method.clone(),
-            };
-            imported_head_matches_symbol(module, &head, "goby/string", "graphemes")
-                && args.len() == 1
-        }
-        _ => flatten_direct_call(expr).is_some_and(|(head, args)| {
-            imported_head_matches_symbol(module, &head, "goby/string", "graphemes")
-                && args.len() == 1
-        }),
     }
 }
 

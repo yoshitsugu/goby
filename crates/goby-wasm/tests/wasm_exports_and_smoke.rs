@@ -680,7 +680,7 @@ main =
 }
 
 #[test]
-fn execute_module_with_stdin_runs_interpreter_bridge_graphemes_program() {
+fn execute_runtime_module_with_stdin_runs_general_lowered_graphemes_program() {
     let module = parse_module(
         r#"
 import goby/string ( graphemes )
@@ -693,8 +693,8 @@ main =
 "#,
     )
     .expect("parse should work");
-    let output = execute_module_with_stdin(&module, Some("a👨‍👩‍👧‍👦b".to_string()))
-        .expect("interpreter bridge should execute grapheme-backed stdlib decl path");
+    let output = execute_runtime_module_with_stdin(&module, Some("a👨‍👩‍👧‍👦b".to_string()))
+        .expect("general lowered path should execute graphemes program");
     assert_eq!(
         output.as_deref(),
         Some("👨\u{200d}👩\u{200d}👧\u{200d}👦\n")
