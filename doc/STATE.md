@@ -26,7 +26,11 @@ Last updated: 2026-03-24
   - `cargo test`
   - `cargo clippy -- -D warnings`
 - WB-2 is now complete.
-- Next active work: Phase WB-3 Step 1 (handler legality analysis for one-shot tail-resumptive lowering).
+- Phase WB-3 M1 complete (2026-03-24): IR-level legality analysis now classifies each `WithHandler`
+  as one-shot tail-resumptive or outside the supported subset.
+  - Non-tail `resume` now reports `BackendLimitation` instead of falling through as generic unsupported codegen.
+  - Safe one-shot handlers report an explicit "WB-3A direct-call lowering not implemented yet" boundary.
+- Next active work: Phase WB-3 M2 (direct-call lowering for safe `Handle` / `WithHandler` / tail `Resume`).
 
 ## Track Priority
 
@@ -36,9 +40,9 @@ stdlib track (C4-S1 onwards) is deferred until WB is in a stable state.
 
 ## Immediate Next Steps
 
-**Track Wasm backend (Phase WB-3 Step 1) — primary:**
-Implement legality analysis for `WithHandler` nodes before effect-handler lowering.
-See `doc/PLAN_IR.md` §5 Phase WB-2B.
+**Track Wasm backend (Phase WB-3 M2) — primary:**
+Implement direct-call lowering for safe `Handle` / `WithHandler` / tail `Resume` nodes.
+See `doc/PLAN_IR.md` §5 Phase WB-3.
 
 **Track stdlib (C4-S1) — deferred:**
 Unblock `List String` as a record field type in the type checker.
@@ -66,6 +70,10 @@ See `doc/PLAN_STANDARD_LIBRARY.md` §5.
   - decl calls / recursion / higher-order funcref calls complete
   - backend effect dispatch identity is locked for general lowering
   - pattern matching and structured data complete for current IR surface
+- WB-3 current state:
+  - `WithHandler` legality analysis is implemented at the IR level
+  - unsupported handler shapes now fail as `BackendLimitation`
+  - safe handler shapes are identified and ready for WB-3A lowering
 - Effect handler strategy: selective CPS degenerating to direct-call lowering for one-shot
   tail-resumptive handlers; captured vars as explicit Wasm function parameters.
 - Fused patterns (`SplitEachPrint`, `SplitGetPrint`, `graphemes-get-print`) are deletion targets,

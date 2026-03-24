@@ -432,7 +432,7 @@ Captured variables: same convention as handler functions (explicit extra paramet
 
 **Milestones:**
 
-- [ ] WB-3-M1. Legality analysis for one-shot tail-resumptive `WithHandler` implemented
+- [x] WB-3-M1. Legality analysis for one-shot tail-resumptive `WithHandler` implemented
   - done when: programs are correctly classified as safe or `BackendLimitation`
   - regression: unit tests covering: tail resume ✓, non-tail resume ✗, multi-resume ✗,
     scope-exit without resume ✓, nested handlers ✓/✗ as appropriate

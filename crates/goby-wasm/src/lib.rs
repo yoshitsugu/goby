@@ -2,6 +2,7 @@ mod backend;
 mod call;
 #[cfg(test)]
 mod compile_tests;
+mod effect_handler_legality;
 mod fallback;
 mod gen_lower;
 mod grapheme_semantics;
@@ -95,15 +96,32 @@ fn unresolved_runtime_output_error(
     handoff: Option<lower::EffectBoundaryHandoff>,
 ) -> CodegenError {
     if let Some(handoff) = handoff {
+        if let Some((record, issue)) = handoff.handler_legality.first_issue() {
+            return CodegenError {
+                message: format!(
+                    "backend limitation [E-BACKEND-LIMITATION]: effect handler in '{}' is outside the one-shot tail-resumptive subset (ops={:?}, issue={})",
+                    record.decl_name,
+                    record.clause_ops,
+                    issue.as_str(),
+                ),
+            };
+        }
+        if handoff.handler_legality.all_one_shot_tail_resumptive() {
+            return CodegenError {
+                message: "main body uses one-shot tail-resumptive effect handlers, but WB-3A direct-call lowering is not implemented yet".to_string(),
+            };
+        }
         return CodegenError {
             message: format!(
-                "main lowered as effect boundary (style={:?}, selected_mode={:?}, selected_mode_fallback_reason={:?}, runtime_profile={:?}, typed_continuation_ir_present={}, handlers_resume={}, evidence_ops={}, evidence_requirements={}, evidence_fingerprint_hint={}); fallback runtime output could not be resolved",
+                "main lowered as effect boundary (style={:?}, selected_mode={:?}, selected_mode_fallback_reason={:?}, runtime_profile={:?}, typed_continuation_ir_present={}, handlers_resume={}, handler_with_count={}, handler_with_unsupported={}, evidence_ops={}, evidence_requirements={}, evidence_fingerprint_hint={}); fallback runtime output could not be resolved",
                 handoff.main_style,
                 handoff.selected_mode,
                 handoff.selected_mode_fallback_reason,
                 handoff.runtime_profile,
                 handoff.typed_continuation_ir.is_some(),
                 handoff.handler_resume_present,
+                handoff.handler_legality.records().len(),
+                handoff.handler_legality.has_unsupported(),
                 handoff.evidence_operation_table_len,
                 handoff.evidence_requirements_len,
                 handoff.evidence_fingerprint_hint,

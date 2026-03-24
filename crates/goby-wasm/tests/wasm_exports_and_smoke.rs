@@ -759,6 +759,63 @@ fn runtime_override_force_portable_is_reflected_in_boundary_diagnostics() {
 }
 
 #[test]
+fn compile_module_reports_backend_limitation_for_non_tail_resume_handler() {
+    let module = parse_module(
+        r#"
+effect Tick
+  tick: Unit -> Unit
+
+main : Unit -> Unit can Tick
+main =
+  with
+    tick _ ->
+      resume ()
+      ()
+  in
+    tick ()
+"#,
+    )
+    .expect("parse should work");
+    let err = compile_module(&module).expect_err("compile should reject unsupported handler");
+    assert!(
+        err.message.contains("E-BACKEND-LIMITATION"),
+        "unexpected error message: {}",
+        err.message
+    );
+    assert!(
+        err.message.contains("tail"),
+        "unexpected error message: {}",
+        err.message
+    );
+}
+
+#[test]
+fn compile_module_reports_pending_wb3a_for_safe_tail_resume_handler() {
+    let module = parse_module(
+        r#"
+effect Tick
+  tick: Unit -> Unit
+
+main : Unit -> Unit can Tick
+main =
+  with
+    tick _ ->
+      resume ()
+  in
+    tick ()
+"#,
+    )
+    .expect("parse should work");
+    let err = compile_module(&module).expect_err("compile should report pending WB-3A lowering");
+    assert!(
+        err.message
+            .contains("WB-3A direct-call lowering is not implemented yet"),
+        "unexpected error message: {}",
+        err.message
+    );
+}
+
+#[test]
 fn emits_valid_wasm_for_print_literal() {
     let module =
         parse_module("main : Unit -> Unit\nmain = print \"Hello Goby!\"\n").expect("parse");

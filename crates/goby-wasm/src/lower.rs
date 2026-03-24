@@ -6,6 +6,7 @@ use goby_core::ir::{CompExpr, IrBinOp, ValueExpr};
 use crate::{
     CodegenError,
     backend::WasmProgramBuilder,
+    effect_handler_legality::{HandlerLegalitySummary, analyze_module_handler_legality},
     layout::MemoryLayout,
     planning::{
         DeclarationLoweringMode, EffectId, EffectOperationRef, LoweringPlan, LoweringStyle,
@@ -52,6 +53,7 @@ pub(crate) struct EffectBoundaryHandoff {
     pub(crate) typed_continuation_ir: Option<TypedContinuationIr>,
     pub(crate) main_requirement: Option<MainEvidenceRequirementSummary>,
     pub(crate) handler_resume_present: bool,
+    pub(crate) handler_legality: HandlerLegalitySummary,
     pub(crate) evidence_operation_table_len: usize,
     pub(crate) evidence_requirements_len: usize,
     pub(crate) evidence_fingerprint_hint: usize,
@@ -96,12 +98,13 @@ pub(crate) fn try_emit_native_module_with_handoff(
         return Ok(NativeLoweringResult::NotLowered);
     }
     let lowering_plan = build_lowering_plan(module);
+    let handler_legality = analyze_module_handler_legality(module)?;
     let evidence_shape = lowering_plan.evidence_shape();
     let main_style = lowering_plan
         .style_for("main")
         .unwrap_or(LoweringStyle::EffectBoundary);
     if main_style != LoweringStyle::DirectStyle {
-        let selection = select_effect_execution_mode(main_style, &lowering_plan);
+        let selection = select_effect_execution_mode(main_style, &lowering_plan, &handler_legality);
         let main_requirement = lowering_plan.evidence_requirement_for("main").map(|req| {
             MainEvidenceRequirementSummary {
                 style: req.style(),
@@ -112,7 +115,7 @@ pub(crate) fn try_emit_native_module_with_handoff(
         });
         let typed_continuation_ir =
             if selection.mode == EffectExecutionMode::TypedContinuationOptimized {
-                build_typed_continuation_ir(&lowering_plan)
+                build_typed_continuation_ir(&lowering_plan, &handler_legality)
             } else {
                 None
             };
@@ -125,6 +128,7 @@ pub(crate) fn try_emit_native_module_with_handoff(
                 typed_continuation_ir,
                 main_requirement,
                 handler_resume_present: lowering_plan.handler_resume_present(),
+                handler_legality,
                 evidence_operation_table_len: evidence_shape.operation_table_len(),
                 evidence_requirements_len: evidence_shape.requirements_len(),
                 evidence_fingerprint_hint: evidence_shape.fingerprint_hint(),
@@ -143,24 +147,28 @@ pub(crate) fn try_emit_native_module_with_handoff(
     Ok(NativeLoweringResult::Emitted(wasm))
 }
 
-fn build_typed_continuation_ir(lowering_plan: &LoweringPlan) -> Option<TypedContinuationIr> {
+fn build_typed_continuation_ir(
+    lowering_plan: &LoweringPlan,
+    handler_legality: &HandlerLegalitySummary,
+) -> Option<TypedContinuationIr> {
     let evidence_shape = lowering_plan.evidence_shape();
     let main_requirement = lowering_plan.evidence_requirement_for("main")?;
     Some(TypedContinuationIr {
         operation_table: evidence_shape.operation_table().to_vec(),
         main_required_effects: main_requirement.required_effects().to_vec(),
         main_referenced_operations: main_requirement.referenced_operations().to_vec(),
-        one_shot_resume: true,
+        one_shot_resume: handler_legality.supports_wb3_direct_calling_subset(),
     })
 }
 
 fn select_effect_execution_mode(
     main_style: LoweringStyle,
-    lowering_plan: &LoweringPlan,
+    _lowering_plan: &LoweringPlan,
+    handler_legality: &HandlerLegalitySummary,
 ) -> EffectExecutionSelection {
     select_effect_execution_mode_with_inputs(
         main_style,
-        lowering_plan.handler_resume_present(),
+        handler_legality.has_unsupported(),
         runtime_force_portable_fallback_override_enabled(),
         compile_time_runtime_profile(),
         typed_continuation_optimization_gate_enabled(),
@@ -169,7 +177,7 @@ fn select_effect_execution_mode(
 
 fn select_effect_execution_mode_with_inputs(
     main_style: LoweringStyle,
-    handler_resume_present: bool,
+    handler_has_unsupported_constructs: bool,
     force_portable_fallback_override: bool,
     runtime_profile: RuntimeProfile,
     optimization_gate_enabled: bool,
@@ -205,7 +213,8 @@ fn select_effect_execution_mode_with_inputs(
             runtime_profile,
         };
     }
-    if contains_unsupported_effect_construct_for_optimized_path(handler_resume_present) {
+    if contains_unsupported_effect_construct_for_optimized_path(handler_has_unsupported_constructs)
+    {
         return EffectExecutionSelection {
             mode: EffectExecutionMode::PortableFallback,
             fallback_reason: Some(EffectModeFallbackReason::UnsupportedEffectConstruct),
@@ -219,8 +228,10 @@ fn select_effect_execution_mode_with_inputs(
     }
 }
 
-fn contains_unsupported_effect_construct_for_optimized_path(handler_resume_present: bool) -> bool {
-    handler_resume_present
+fn contains_unsupported_effect_construct_for_optimized_path(
+    handler_has_unsupported_constructs: bool,
+) -> bool {
+    handler_has_unsupported_constructs
 }
 
 fn compile_time_runtime_profile() -> RuntimeProfile {
@@ -612,6 +623,8 @@ fn apply_runtime_intrinsic(name: &str, args: &[NativeValue]) -> Option<NativeVal
 mod tests {
     use goby_core::parse_module;
 
+    use crate::effect_handler_legality::analyze_module_handler_legality;
+
     use super::{
         EffectExecutionMode, EffectModeFallbackReason, NativeLoweringResult, RuntimeProfile,
         build_lowering_plan, build_typed_continuation_ir, select_effect_execution_mode_with_inputs,
@@ -764,8 +777,44 @@ main =
         assert_eq!(selection.fallback_reason, None);
 
         let plan = build_lowering_plan(&module);
-        let ir = build_typed_continuation_ir(&plan).expect("typed continuation IR should be built");
+        let legality =
+            analyze_module_handler_legality(&module).expect("legality analysis should succeed");
+        let ir = build_typed_continuation_ir(&plan, &legality)
+            .expect("typed continuation IR should be built");
         assert!(ir.one_shot_resume);
+    }
+
+    #[test]
+    fn effect_mode_selection_allows_safe_tail_resume_handlers_when_gate_enabled() {
+        let module = parse_module(
+            r#"
+effect Tick
+  tick: Unit -> Unit
+
+main : Unit -> Unit can Tick
+main =
+  with
+    tick _ ->
+      resume ()
+  in
+    tick ()
+"#,
+        )
+        .expect("source should parse");
+        let legality =
+            analyze_module_handler_legality(&module).expect("legality analysis should succeed");
+        assert!(legality.all_one_shot_tail_resumptive());
+        let selection = select_effect_execution_mode_with_inputs(
+            super::LoweringStyle::EffectBoundary,
+            legality.has_unsupported(),
+            false,
+            RuntimeProfile::Wasmer,
+            true,
+        );
+        assert_eq!(
+            selection.mode,
+            EffectExecutionMode::TypedContinuationOptimized
+        );
     }
 
     #[test]
