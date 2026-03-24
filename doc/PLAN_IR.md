@@ -1,6 +1,6 @@
 # Goby IR Lowering Plan
 
-Last updated: 2026-03-24
+Last updated: 2026-03-25
 
 This document is the active architecture reference for Goby's compilation pipeline
 and the long-term plan for Wasm backend lowering.
@@ -454,7 +454,7 @@ Captured variables: same convention as handler functions (explicit extra paramet
 - [x] WB-3-M6. `InterpreterBridge` usage reviewed; reduce to genuinely Wasm-incompatible programs
   - Removed `stmts_contain_imported_string_graphemes` classification branch from `classify_runtime_io`
   - Deleted 4 dead helper functions; updated integration test to use `execute_runtime_module_with_stdin`
-- [x] WB-3-M7. Integration test: the following program executes correctly via `GeneralLowered`
+- [ ] WB-3-M7. Runtime-`Read` composed stdlib path executes via `GeneralLowered`
   end-to-end (stdin provided at runtime):
 
   ```goby
@@ -472,7 +472,11 @@ Captured variables: same convention as handler functions (explicit extra paramet
 
   (ANF form required: `row2 = rolls[2]` because `list.get` is a call, not a pure value)
 
-  This program exercises the full WB-1 through WB-3 stack simultaneously:
+  This program is the representative acceptance shape for the current lowering boundary:
+  `Read -> top-level decl call -> higher-order pure list transform -> list element access ->
+  higher-order effectful list iteration`.
+
+  It exercises the full WB-1 through WB-3 stack simultaneously:
   - `split text "\n"` — WB-2A: top-level decl call (`GlobalRef("string","split")`)
   - `map lines graphemes` — WB-2A + WB-3-M7: decl call + graphemes-as-funcref wrapper AuxDecl
   - `map` internals — WB-2A + WB-2B: recursive decl call + `Case` + `Var` function-arg call (`f x`)
@@ -480,7 +484,23 @@ Captured variables: same convention as handler functions (explicit extra paramet
   - `row2 = rolls[2]` — existing `list.get` intrinsic
   - `each row2 println` — WB-2A: `ListEachEffect` with print callback
 
-  Done: given stdin `"line0\nline1\nline2\nline3"`, prints each grapheme of `"line2"` on a separate line.
+  Current status (2026-03-25):
+  - the component capabilities listed above exist in the backend,
+  - but this composed runtime-`Read` shape does not yet consistently reach the
+    `GeneralLowered` execution path in the current tree,
+  - so WB-3-M7 remains open until the exact shape above, plus equivalent alias/import
+    variants, execute without `RuntimeIoPlan` special-casing.
+
+  Done when:
+  - the exact program above executes via `GeneralLowered`,
+  - semantically equivalent variants with local alias chains and selective imports also
+    execute via `GeneralLowered`,
+  - no new `RuntimeIoPlan` branch is introduced for this shape.
+
+  Regression:
+  - runtime-output test for the exact program above,
+  - variant with local aliases between `split`, `map`, `list.get`, and `each`,
+  - variant using selective imports / canonical-qualified names.
 
 - [x] WB-3-M8. Quality gates pass
   - `cargo fmt --check` ✓

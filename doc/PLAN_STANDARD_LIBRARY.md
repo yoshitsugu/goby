@@ -2,7 +2,7 @@
 
 Status: active follow-up only
 Owner: Goby core/runtime track
-Last updated: 2026-03-24
+Last updated: 2026-03-25
 
 ## 1. Scope
 
@@ -17,6 +17,15 @@ Current remaining stdlib track:
 - finish moving `goby/string.split` to stdlib-driven behavior,
 - remove the remaining direct runtime builtin path for `string.split`,
 - lock tests/docs around the final ownership boundary.
+
+This track is intentionally narrower than `doc/PLAN_IR.md`:
+
+- `PLAN_IR` owns making composed runtime-`Read` shapes reach `GeneralLowered`
+  end-to-end through the existing backend IR and Wasm emitter.
+- this document owns only the final semantics/ownership handoff for `goby/string.split`.
+- in particular, `list.map`, `list.each`, and `goby/string.graphemes` lowering convergence
+  are not split-track milestones here except where they are needed as parity coverage for
+  stdlib `split`.
 
 Everything else from the earlier stdlib bootstrap plan should be treated as
 completed historical work and recovered from git history if needed.
@@ -74,7 +83,10 @@ These semantics remain locked while finishing the work:
 
 - [ ] C6. Regression coverage
   - add split edge-case tests and Unicode grapheme behavior tests,
-  - add parity coverage for import/example paths that depend on `split`.
+  - add parity coverage for import/example paths that depend on `split`,
+  - add at least one composed-path regression using stdlib `split` in a higher-order
+    pipeline (for example: `split -> map(graphemes) -> list.get -> each`) once the
+    corresponding `PLAN_IR` convergence milestone lands.
 
 - [ ] C7. Docs sync
   - update active docs with final split ownership and intrinsic set.
