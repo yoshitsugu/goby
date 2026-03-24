@@ -439,7 +439,7 @@ Captured variables: same convention as handler functions (explicit extra paramet
 - [x] WB-3-M2. `Handle` / `WithHandler` / `Resume` (tail) lowered for safe subset
   - done when: `examples/iterator.gb` classifies as `GeneralLowered` and executes correctly
   - regression: iterator output matches interpreter result
-- [ ] WB-3-M3. `ValueExpr::Lambda` lowered
+- [x] WB-3-M3. `ValueExpr::Lambda` lowered
   - done when: a lambda expression passed to `map` classifies as `GeneralLowered`
   - regression: `map [1,2,3] (fn x -> x + 1)` executes correctly
 - [ ] WB-3-M4. `stdlib/goby/string.gb` `graphemes` classifies as `GeneralLowered` end-to-end

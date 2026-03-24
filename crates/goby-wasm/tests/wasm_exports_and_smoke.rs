@@ -3,7 +3,8 @@ use std::sync::Mutex;
 
 use goby_core::parse_module;
 use goby_wasm::{
-    RuntimeIoExecutionKind, compile_module, execute_module_with_stdin, runtime_io_execution_kind,
+    RuntimeIoExecutionKind, compile_module, execute_module_with_stdin,
+    execute_runtime_module_with_stdin, runtime_io_execution_kind,
 };
 use wasmparser::Validator;
 
@@ -568,8 +569,8 @@ main =
 
 #[test]
 fn compile_module_produces_wasm_for_transformed_split_callback() {
-    // Previously InterpreterBridge (execute_module_with_stdin path).
-    // Now DynamicWasiIo: compile_module produces a valid Wasm module.
+    // Previously DynamicWasiIo (pre WB-3-M3).
+    // Now GeneralLowered: Lambda lowering handles `|line| -> println "${line}!"` (WB-3-M3).
     let module = parse_module(
         r#"
 import goby/list ( each )
@@ -588,8 +589,8 @@ main =
     .expect("parse should work");
     assert_eq!(
         runtime_io_execution_kind(&module).expect("classification should work"),
-        RuntimeIoExecutionKind::DynamicWasiIo,
-        "transformed split callback should now classify as DynamicWasiIo"
+        RuntimeIoExecutionKind::GeneralLowered,
+        "transformed split callback should now classify as GeneralLowered (WB-3-M3)"
     );
     let wasm = compile_module(&module).expect("should compile to Wasm");
     assert_valid_wasm_module(&wasm);
@@ -597,7 +598,7 @@ main =
 }
 
 #[test]
-fn runtime_io_execution_kind_reports_dynamic_wasi_io_for_transformed_split_callback() {
+fn runtime_io_execution_kind_reports_general_lowered_for_transformed_split_callback() {
     let module = parse_module(
         r#"
 import goby/list ( each )
@@ -616,7 +617,7 @@ main =
     .expect("parse should work");
     assert_eq!(
         runtime_io_execution_kind(&module).expect("classification should work"),
-        RuntimeIoExecutionKind::DynamicWasiIo
+        RuntimeIoExecutionKind::GeneralLowered
     );
 }
 
@@ -869,6 +870,109 @@ main =
         err.message.contains("static output"),
         "unexpected error message: {}",
         err.message
+    );
+}
+
+// ─── WB-3-M3: Lambda lowering tests ───────────────────────────────────────────
+
+/// WB-3-M3: `map [1,2,3] (fn x -> x + 1)` classifies as GeneralLowered and compiles.
+///
+/// Done-when criterion from PLAN_IR.md WB-3-M3:
+/// "a lambda expression passed to map classifies as GeneralLowered"
+#[test]
+fn wb3_m3_map_with_lambda_classifies_as_general_lowered() {
+    let source = r#"
+import goby/list ( map )
+
+main : Unit -> Unit can Print, Read
+main =
+  text = read()
+  nums = [1, 2, 3]
+  doubled = map nums (|x| -> x + 1)
+  println text
+"#;
+    let module = parse_module(source).expect("source should parse");
+    assert_eq!(
+        runtime_io_execution_kind(&module).expect("classification should succeed"),
+        RuntimeIoExecutionKind::GeneralLowered,
+        "map with lambda should classify as GeneralLowered (WB-3-M3)"
+    );
+    let wasm = compile_module(&module).expect("map with lambda should compile to Wasm");
+    assert_valid_wasm_module(&wasm);
+}
+
+/// WB-3-M3: two lambdas in the same program both get unique AuxDecl entries.
+#[test]
+fn wb3_m3_two_lambdas_in_same_program_compile() {
+    let source = r#"
+import goby/list ( map, each )
+
+main : Unit -> Unit can Print, Read
+main =
+  text = read()
+  nums = [1, 2, 3]
+  doubled = map nums (|x| -> x + 1)
+  tripled = map nums (|x| -> x + 2)
+  println text
+"#;
+    let module = parse_module(source).expect("source should parse");
+    assert_eq!(
+        runtime_io_execution_kind(&module).expect("classification should succeed"),
+        RuntimeIoExecutionKind::GeneralLowered,
+        "program with two lambdas should classify as GeneralLowered (WB-3-M3)"
+    );
+    let wasm = compile_module(&module).expect("two-lambda program should compile to Wasm");
+    assert_valid_wasm_module(&wasm);
+}
+
+/// WB-3-M3: lambda with Print effect in body (`each lines (|line| -> println line)`).
+#[test]
+fn wb3_m3_each_with_lambda_body_having_effect_executes_correctly() {
+    let source = r#"
+import goby/list ( each )
+
+main : Unit -> Unit can Print, Read
+main =
+  text = read()
+  lines = [text]
+  each lines (|line| -> println line)
+"#;
+    let module = parse_module(source).expect("source should parse");
+    assert_eq!(
+        runtime_io_execution_kind(&module).expect("classification should succeed"),
+        RuntimeIoExecutionKind::GeneralLowered,
+        "each with lambda effect body should classify as GeneralLowered (WB-3-M3)"
+    );
+    let output = execute_runtime_module_with_stdin(&module, Some("hello".to_string()))
+        .expect("execution should not error")
+        .expect("execution should produce output");
+    assert_eq!(output, "hello\n");
+}
+
+/// WB-3-M3: lambda body referencing a free variable falls back to InterpreterBridge.
+///
+/// `base` is defined in the enclosing scope but is not the lambda param (`x`),
+/// making it a free variable (closure capture). WB-3A does not support closure
+/// capture, so this program should NOT classify as GeneralLowered.
+#[test]
+fn wb3_m3_lambda_with_free_variable_does_not_classify_as_general_lowered() {
+    let source = r#"
+import goby/list ( map )
+
+main : Unit -> Unit can Print, Read
+main =
+  text = read()
+  base = 10
+  nums = [1, 2, 3]
+  result = map nums (|x| -> x + base)
+  println text
+"#;
+    let module = parse_module(source).expect("source should parse");
+    let kind = runtime_io_execution_kind(&module).expect("classification should succeed");
+    assert_ne!(
+        kind,
+        RuntimeIoExecutionKind::GeneralLowered,
+        "lambda with free variable should not classify as GeneralLowered (closure not supported in WB-3A)"
     );
 }
 

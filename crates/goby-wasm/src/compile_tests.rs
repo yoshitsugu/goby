@@ -781,9 +781,9 @@ main =
 }
 
 #[test]
-fn compile_module_compiles_transformed_split_callback_as_dynamic_wasi_io() {
-    // Previously classified as InterpreterBridge and rejected by compile_module.
-    // Now classified as DynamicWasiIo and compiled to a valid Wasm module.
+fn compile_module_compiles_transformed_split_callback_as_general_lowered() {
+    // Previously classified as DynamicWasiIo (pre WB-3-M3).
+    // Now classified as GeneralLowered after Lambda lowering support was added (WB-3-M3).
     let source = r#"
 import goby/list ( each )
 import goby/string ( split )
@@ -798,8 +798,8 @@ main =
     let module = parse_module(source).expect("source should parse");
     assert_eq!(
         runtime_io_execution_kind(&module).expect("classification should succeed"),
-        crate::RuntimeIoExecutionKind::DynamicWasiIo,
-        "transformed split callback should now classify as DynamicWasiIo"
+        crate::RuntimeIoExecutionKind::GeneralLowered,
+        "transformed split callback should now classify as GeneralLowered (WB-3-M3)"
     );
     let wasm = compile_module(&module).expect("transformed split callback should compile to Wasm");
     assert_valid_wasm_module(&wasm);
@@ -833,6 +833,8 @@ main =
             crate::RuntimeIoExecutionKind::GeneralLowered,
         ),
         (
+            // WB-3-M3: Lambda lowering now handles `|line| -> println "${line}"`,
+            // so this program is promoted from DynamicWasiIo to GeneralLowered.
             "dynamic_split_passthrough",
             r#"
 import goby/list ( each )
@@ -844,9 +846,10 @@ main =
   lines = split(text, "\n")
   each lines (|line| -> println "${line}")
 "#,
-            crate::RuntimeIoExecutionKind::DynamicWasiIo,
+            crate::RuntimeIoExecutionKind::GeneralLowered,
         ),
         (
+            // WB-3-M3: Same as above with a suffix — now GeneralLowered.
             "dynamic_transformed_split_callback",
             r#"
 import goby/list ( each )
@@ -858,7 +861,7 @@ main =
   lines = split(text, "\n")
   each lines (|line| -> println "${line}!")
 "#,
-            crate::RuntimeIoExecutionKind::DynamicWasiIo,
+            crate::RuntimeIoExecutionKind::GeneralLowered,
         ),
         (
             "general_lowered_interp_read_transform",

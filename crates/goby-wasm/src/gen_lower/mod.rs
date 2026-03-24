@@ -39,6 +39,7 @@ use crate::effect_handler_legality::analyze_module_handler_legality;
 use crate::effect_handler_lowering::lower_safe_handlers_in_comp;
 use crate::gen_lower::backend_ir::{BackendEffectOp, BackendReadOp};
 use crate::gen_lower::emit::AuxDecl;
+use crate::gen_lower::lower::LambdaAuxDecl;
 use crate::layout::MemoryLayout;
 use crate::wasm_exec_plan::decl_exec_plan;
 use crate::wasm_exec_plan::main_exec_plan;
@@ -289,6 +290,57 @@ fn value_has_effect_boundary_activity(value: &goby_core::ir::ValueExpr) -> bool 
     }
 }
 
+/// Returns true if the computation contains a `ValueExpr::Lambda` anywhere in its tree.
+///
+/// Used to extend the GeneralLower routing gate: programs that use Lambda expressions
+/// (but have no Read effect or handler constructs) should still enter the GeneralLowered path
+/// once WB-3-M3 Lambda lowering is in place.
+fn has_lambda_in_comp(comp: &CompExpr) -> bool {
+    match comp {
+        CompExpr::Value(v) => has_lambda_in_value(v),
+        CompExpr::Let { value, body, .. } | CompExpr::LetMut { value, body, .. } => {
+            has_lambda_in_comp(value) || has_lambda_in_comp(body)
+        }
+        CompExpr::Seq { stmts, tail } => {
+            stmts.iter().any(has_lambda_in_comp) || has_lambda_in_comp(tail)
+        }
+        CompExpr::PerformEffect { args, .. } => args.iter().any(has_lambda_in_value),
+        CompExpr::Call { callee, args } => {
+            has_lambda_in_value(callee) || args.iter().any(has_lambda_in_value)
+        }
+        CompExpr::If { cond, then_, else_ } => {
+            has_lambda_in_value(cond) || has_lambda_in_comp(then_) || has_lambda_in_comp(else_)
+        }
+        CompExpr::Assign { value, .. } => has_lambda_in_comp(value),
+        CompExpr::Case { scrutinee, arms } => {
+            has_lambda_in_value(scrutinee)
+                || arms.iter().any(|arm| has_lambda_in_comp(&arm.body))
+        }
+        CompExpr::Handle { .. } | CompExpr::WithHandler { .. } | CompExpr::Resume { .. } => false,
+    }
+}
+
+fn has_lambda_in_value(v: &goby_core::ir::ValueExpr) -> bool {
+    match v {
+        goby_core::ir::ValueExpr::Lambda { .. } => true,
+        goby_core::ir::ValueExpr::BinOp { left, right, .. } => {
+            has_lambda_in_value(left) || has_lambda_in_value(right)
+        }
+        goby_core::ir::ValueExpr::ListLit { elements, .. } => {
+            elements.iter().any(has_lambda_in_value)
+        }
+        goby_core::ir::ValueExpr::TupleLit(items) => items.iter().any(has_lambda_in_value),
+        goby_core::ir::ValueExpr::RecordLit { fields, .. } => {
+            fields.iter().any(|(_, v)| has_lambda_in_value(v))
+        }
+        goby_core::ir::ValueExpr::Interp(parts) => parts.iter().any(|p| match p {
+            goby_core::ir::IrInterpPart::Expr(e) => has_lambda_in_value(e),
+            goby_core::ir::IrInterpPart::Text(_) => false,
+        }),
+        _ => false,
+    }
+}
+
 fn has_effectful_non_main_decl(module: &Module) -> bool {
     module
         .declarations
@@ -369,17 +421,19 @@ fn read_line_instrs_are_supported(instrs: &[backend_ir::WasmBackendInstr]) -> bo
 ///
 /// Unlike `main`, aux decls do not require a Read effect — they are helper functions
 /// called by `main`. Returns `None` if the body contains unsupported forms.
+/// Lambda expressions encountered during lowering are appended to `lambda_decls`.
 fn lower_aux_decl(
     name: &str,
     param_names: Vec<String>,
     body: &CompExpr,
     known_decls: &HashSet<String>,
     allow_safe_handler_lowering: bool,
+    lambda_decls: &mut Vec<LambdaAuxDecl>,
 ) -> Result<Option<AuxDecl>, CodegenError> {
     let Some(body) = rewrite_safe_handlers_if_present(body, allow_safe_handler_lowering)? else {
         return Ok(None);
     };
-    let instrs = match lower::lower_comp_with_decls(&body, known_decls) {
+    let instrs = match lower::lower_comp_collecting_lambdas(&body, known_decls, lambda_decls) {
         Ok(i) => i,
         Err(lower::LowerError::UnsupportedForm { .. }) => return Ok(None),
         Err(lower::LowerError::IntOutOfRange(n)) => {
@@ -430,7 +484,16 @@ fn lower_module_to_instrs(
         return Ok(None);
     }
 
-    if !has_runtime_read_effect(&ir_decl.body) && !has_handler_rewrite_entrypoints(&ir_decl.body) {
+    // Gate: only enter GeneralLowered for programs that require runtime capabilities.
+    // A program qualifies when it has:
+    //   - a runtime Read effect, OR
+    //   - safe handler constructs (WB-3 handler lowering), OR
+    //   - a Lambda expression (WB-3-M3 Lambda lowering).
+    // Pure-Print programs without any of the above can stay on the simpler paths.
+    if !has_runtime_read_effect(&ir_decl.body)
+        && !has_handler_rewrite_entrypoints(&ir_decl.body)
+        && !has_lambda_in_comp(&ir_decl.body)
+    {
         return Ok(None);
     }
 
@@ -443,15 +506,20 @@ fn lower_module_to_instrs(
         .map(|d| d.name.clone())
         .collect();
 
-    let mut main_instrs = match lower::lower_comp_with_decls(&main_body, &known_decls) {
-        Ok(i) => i,
-        Err(lower::LowerError::UnsupportedForm { .. }) => return Ok(None),
-        Err(lower::LowerError::IntOutOfRange(n)) => {
-            return Err(CodegenError {
-                message: format!("integer {n} is outside the 60-bit representable range"),
-            });
-        }
-    };
+    // Lambda auxiliary declarations collected during main and aux-decl lowering.
+    // They are appended AFTER user aux_decls so existing table slot indices remain stable.
+    let mut lambda_decls: Vec<LambdaAuxDecl> = Vec::new();
+
+    let mut main_instrs =
+        match lower::lower_comp_collecting_lambdas(&main_body, &known_decls, &mut lambda_decls) {
+            Ok(i) => i,
+            Err(lower::LowerError::UnsupportedForm { .. }) => return Ok(None),
+            Err(lower::LowerError::IntOutOfRange(n)) => {
+                return Err(CodegenError {
+                    message: format!("integer {n} is outside the 60-bit representable range"),
+                });
+            }
+        };
     // `main` is emitted as Wasm `_start` with result type `() -> ()`.
     // The shared IR/body still yields a final Goby value, so the general lowering
     // path must explicitly discard it before emission.
@@ -475,6 +543,7 @@ fn lower_module_to_instrs(
             &aux_ir_decl.body,
             &known_decls,
             allow_safe_handler_lowering,
+            &mut lambda_decls,
         )? {
             Some(aux) => aux_decls.push(aux),
             None => {
@@ -482,6 +551,16 @@ fn lower_module_to_instrs(
                 return Ok(None);
             }
         }
+    }
+
+    // Convert lambda decls to AuxDecl and append AFTER user aux_decls
+    // so that user-decl funcref table slot indices remain stable.
+    for lam in lambda_decls {
+        aux_decls.push(AuxDecl {
+            decl_name: lam.decl_name,
+            param_names: vec![lam.param_name],
+            instrs: lam.instrs,
+        });
     }
 
     Ok(Some((main_instrs, aux_decls)))
