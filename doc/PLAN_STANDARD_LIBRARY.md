@@ -32,7 +32,7 @@ completed historical work and recovered from git history if needed.
 
 ## 2. Current State
 
-Already true today (updated 2026-03-24):
+Already true today (updated 2026-03-25):
 
 - file-based stdlib import resolution exists,
 - stdlib-only `@embed` is implemented,
@@ -44,6 +44,9 @@ Already true today (updated 2026-03-24):
 - `stdlib/goby/string.gb` already contains iterator-driven `split` paths for:
   - empty delimiter (`split_with_empty_delimiter`),
   - single-grapheme delimiter (`split_with_single_delimiter`).
+- at least one composed-path regression using stdlib `split` in a higher-order pipeline
+  (`split -> map(graphemes) -> list.get -> each`) now exists through the `PLAN_IR` WB-3-M7
+  acceptance shape and its variants.
 - the backend intrinsic `StringSplit` and fused `SplitEachPrint`/`SplitGetPrint`
   instructions exist for the byte-level split path used by general Wasm lowering;
   these are independent of the stdlib `string.split` call.
@@ -83,10 +86,7 @@ These semantics remain locked while finishing the work:
 
 - [ ] C6. Regression coverage
   - add split edge-case tests and Unicode grapheme behavior tests,
-  - add parity coverage for import/example paths that depend on `split`,
-  - add at least one composed-path regression using stdlib `split` in a higher-order
-    pipeline (for example: `split -> map(graphemes) -> list.get -> each`) once the
-    corresponding `PLAN_IR` convergence milestone lands.
+  - add parity coverage for import/example paths that depend on `split`.
 
 - [ ] C7. Docs sync
   - update active docs with final split ownership and intrinsic set.

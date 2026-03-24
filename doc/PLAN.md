@@ -13,8 +13,6 @@ Notes:
 - `PLAN.md` is the top-level roadmap and execution-planning document.
 - `doc/PLAN_IR.md` is the completed detailed roadmap for IR-lowering convergence and
   remains the reference when new lowering-boundary issues appear.
-  Current note (2026-03-25): individual WB-1 through WB-3 capabilities are in place, but
-  one representative composed runtime-`Read` stdlib path remains open there as WB-3-M7.
 - When language syntax or semantics change, update
   `doc/LANGUAGE_SPEC.md` in the same change.
 - When language syntax changes, also verify whether syntax

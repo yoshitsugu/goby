@@ -1282,6 +1282,81 @@ main =
     assert_valid_wasm_module(&wasm);
 }
 
+#[test]
+fn runtime_io_execution_kind_general_lowers_read_split_map_graphemes_get_each_program() {
+    let source = r#"
+import goby/list ( each, map )
+import goby/string ( split, graphemes )
+
+main : Unit -> Unit can Print, Read
+main =
+  text = read ()
+  lines = split text "\n"
+  rolls = map lines graphemes
+  row2 = rolls[2]
+  each row2 println
+"#;
+    let module = parse_module(source).expect("source should parse");
+    assert_eq!(
+        runtime_io_execution_kind(&module).expect("classification should succeed"),
+        crate::RuntimeIoExecutionKind::GeneralLowered,
+        "read -> split -> map(graphemes) -> list.get -> each(println) should classify as GeneralLowered"
+    );
+    let wasm =
+        compile_module(&module).expect("composed read/split/map/graphemes/each should compile");
+    assert_valid_wasm_module(&wasm);
+}
+
+#[test]
+fn runtime_io_execution_kind_general_lowers_read_split_map_graphemes_get_each_alias_variant() {
+    let source = r#"
+import goby/list ( each, map )
+import goby/string ( split, graphemes )
+
+main : Unit -> Unit can Print, Read
+main =
+  input = read ()
+  raw_lines = split input "\n"
+  forwarded_lines = raw_lines
+  rows = map forwarded_lines graphemes
+  selected = rows[2]
+  chars = selected
+  each chars println
+"#;
+    let module = parse_module(source).expect("source should parse");
+    assert_eq!(
+        runtime_io_execution_kind(&module).expect("classification should succeed"),
+        crate::RuntimeIoExecutionKind::GeneralLowered,
+        "alias-chain variant should classify as GeneralLowered"
+    );
+    let wasm = compile_module(&module).expect("alias-chain variant should compile");
+    assert_valid_wasm_module(&wasm);
+}
+
+#[test]
+fn runtime_io_execution_kind_general_lowers_read_split_map_graphemes_get_each_canonical_variant() {
+    let source = r#"
+import goby/list
+import goby/string
+
+main : Unit -> Unit can Print, Read
+main =
+  text = read ()
+  lines = string.split text "\n"
+  rolls = list.map lines string.graphemes
+  row2 = list.get rolls 2
+  list.each row2 Print.println
+"#;
+    let module = parse_module(source).expect("source should parse");
+    assert_eq!(
+        runtime_io_execution_kind(&module).expect("classification should succeed"),
+        crate::RuntimeIoExecutionKind::GeneralLowered,
+        "canonical-qualified variant should classify as GeneralLowered"
+    );
+    let wasm = compile_module(&module).expect("canonical-qualified variant should compile");
+    assert_valid_wasm_module(&wasm);
+}
+
 // ---------------------------------------------------------------------------
 // Plain read+print parity: programs previously handled by handwritten runtime-I/O plans must
 // produce valid Wasm through the general lowering path.

@@ -9,16 +9,16 @@ Last updated: 2026-03-25
 - Phase WB-1 complete (2026-03-24): `If`, `BinOp`, `Interp`, `LetMut`, `Assign` all lowered and emitted.
 - Phase WB-2A complete (2026-03-24): top-level `DeclCall`, recursion, funcref-table indirect calls, typed backend effect identities.
 - Phase WB-2B complete (2026-03-24): `Case` literal/wildcard/list patterns, `ListLit`, `TupleLit`, `RecordLit`, stdlib `list.each` / `list.map`.
-- Phase WB-3 is partially complete (2026-03-25): `Handle` / `WithHandler` / tail `Resume` lowered for one-shot tail-resumptive subset; `ValueExpr::Lambda` lowered; `graphemes` end-to-end via `StringGraphemesList` host intrinsic; `InterpreterBridge` graphemes classification removed; remaining work is the composed runtime-`Read` stdlib path tracked as WB-3-M7 in `doc/PLAN_IR.md`.
+- Phase WB-3 complete (2026-03-25): `Handle` / `WithHandler` / tail `Resume` lowered for one-shot tail-resumptive subset; `ValueExpr::Lambda` lowered; `graphemes` end-to-end via `StringGraphemesList` host intrinsic; `InterpreterBridge` graphemes classification removed; the representative runtime-`Read` composed stdlib path is now covered by classification and execution regressions.
   - M1: legality analysis implemented.
   - M2: safe handler lowering complete; `examples/iterator.gb` executes via `GeneralLowered`.
   - M3: `ValueExpr::Lambda` lowered; `map [1,2,3] (fn x -> x+1)` executes correctly.
   - M4: `StringGraphemesList` host intrinsic; graphemes classifies as `GeneralLowered` end-to-end.
   - M5: `graphemes-get-print` fused pattern deleted; `SplitEachPrint`/`SplitGetPrint` retained in `DynamicWasiIo` path only.
   - M6: `InterpreterBridge` graphemes classification removed; 4 dead helper functions deleted.
-  - M7: `graphemes`-as-funcref wrapper AuxDecl exists, but the representative runtime-`Read`
-    composed path (`read -> split -> map(graphemes) -> list.get -> each(println)`) is not yet
-    closed end-to-end via `GeneralLowered`; milestone reopened in `doc/PLAN_IR.md`.
+  - M7: `graphemes`-as-funcref wrapper AuxDecl plus regression coverage for the representative
+    runtime-`Read` composed path (`read -> split -> map(graphemes) -> list.get -> each(println)`)
+    and required alias/import variants.
   - M8: quality gates pass (`cargo fmt`, `cargo check`, `cargo test`, `cargo clippy -- -D warnings`).
 - WB-3B prep slice in progress (2026-03-24): `gen_lower/emit.rs` now has an
   `EffectEmitStrategy` boundary and `wasmfx-experimental` feature flag so future WasmFX work can
@@ -32,16 +32,15 @@ Last updated: 2026-03-25
   - WebAssembly official proposals tracker does not yet satisfy the Phase 4 restart condition.
   - Local `wasm-encoder` source exposes no stack-switching/WasmFX instruction support.
 - WB-3B is on hold until all restart conditions in `doc/PLAN_IR.md` Phase WB-3B are met.
-- **WB-3 requires one follow-up convergence slice.** All 13 `CompExpr` variants and all 12
-  `ValueExpr` variants are lowered somewhere in the current backend, but the representative
-  runtime-`Read` composed stdlib path is not yet consistently reaching `GeneralLowered`.
+- **WB-3 is complete.** All 13 `CompExpr` variants and all 12 `ValueExpr` variants are handled
+  in the `GeneralLowered` path within the currently supported subsets, including the representative
+  runtime-`Read` composed stdlib path.
 
 ## Track Priority
 
-**Next active work: WB-3-M7 convergence, then stdlib track resumes at C4-S2.**
-The immediate backend task is to make the representative composed runtime-`Read` stdlib path
-execute via `GeneralLowered` without adding new `RuntimeIoPlan` branches. After that,
-stdlib work resumes at C4-S2.
+**Next active work: stdlib track resumes at C4-S2.**
+The representative WB-3-M7 composed runtime-`Read` path is now fixed by regression coverage,
+so the active work returns to the remaining stdlib split-ownership milestones.
 
 See `doc/PLAN_STANDARD_LIBRARY.md` for the remaining C4 milestones.
 
@@ -51,24 +50,6 @@ See `doc/PLAN_STANDARD_LIBRARY.md` for the remaining C4 milestones.
 `cargo run -p goby-cli -- check stdlib/goby/string.gb` now succeeds.
 The typechecker accepts the required `List String` state initialization shape and preserves
 outer `mut` locals through stdlib-style `with ... in` bodies.
-
-**Track WB-3-M7 convergence — primary:**
-Close the representative composed runtime-`Read` stdlib path:
-`read -> split -> map(graphemes) -> list.get -> each(println)`.
-Exit criteria:
-- exact-shape classification test added,
-- exact-shape runtime-output regression test added,
-- equivalent alias/import variants added,
-- all of them classify and execute via `GeneralLowered`,
-- no new `RuntimeIoPlan` branch is added for this shape.
-Required execution order:
-1. add classification tests,
-2. add runtime-output tests,
-3. expose the failing general-lowering stage if tests fail,
-4. repair `gen_lower` / emitter / aux-decl registration / gating,
-5. run quality gates.
-Anti-adhoc rule:
-- do not solve this slice by adding a new runtime-shape-specific fallback or bridge path.
 
 **Track stdlib (C4-S2) — next:**
 Stabilize the shared iterator state contract by keeping `GraphemeState` in
@@ -87,12 +68,10 @@ Restart only when the external prerequisites in `doc/PLAN_IR.md` Phase WB-3B are
 - Wasm backend lowering design is locked in `doc/PLAN_IR.md`:
   - Phase WB-1: pure control flow and operators ✓
   - Phase WB-2: pattern matching and structured data ✓
-  - Phase WB-3: function values and effect handlers (direct-call lowering, one-shot tail-resumptive)
-    with one remaining convergence slice (WB-3-M7)
+  - Phase WB-3: function values and effect handlers (direct-call lowering, one-shot tail-resumptive) ✓
   - Phase WB-3B (future): WasmFX stack switching when proposal reaches Phase 4
-- All `CompExpr` and `ValueExpr` variants have backend lowering coverage, but not every
-  representative runtime-`Read` composed stdlib path has reached stable `GeneralLowered`
-  execution yet.
+- All `CompExpr` and `ValueExpr` variants have backend lowering coverage, including the
+  representative runtime-`Read` composed stdlib path used as the acceptance shape for WB-3-M7.
 - `GeneralLowered` coverage includes:
   - Pure control flow: `If`, `BinOp`, `Interp`, `LetMut`, `Assign`
   - Pattern matching: `Case` with literal/list patterns
@@ -109,8 +88,6 @@ Restart only when the external prerequisites in `doc/PLAN_IR.md` Phase WB-3B are
 - WB-3 exit state:
   - non-tail / multi-resume handlers produce `BackendLimitation` error (not silent miscompilation)
   - lambda with free variables (closure capture) produces `UnsupportedForm` (WB-3B deferred)
-  - composed runtime-`Read` stdlib path (`split -> map(graphemes) -> list.get -> each`) remains
-    the active convergence target before WB-3 is treated as fully closed
 
 ## Key Entry Points
 

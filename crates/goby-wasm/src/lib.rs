@@ -936,6 +936,101 @@ main =
     }
 
     #[test]
+    fn wb3_m7_read_split_map_graphemes_get_each_executes() {
+        use goby_core::parse_module;
+        let module = parse_module(
+            r#"
+import goby/list ( each, map )
+import goby/string ( split, graphemes )
+
+main : Unit -> Unit can Print, Read
+main =
+  text = read ()
+  lines = split text "\n"
+  rolls = map lines graphemes
+  row2 = rolls[2]
+  each row2 println
+"#,
+        )
+        .expect("parse should work");
+
+        let output = execute_runtime_module_with_stdin(
+            &module,
+            Some("line0\nline1\nline2\nline3".to_string()),
+        )
+        .expect("WB-3-M7 exact shape must execute");
+        assert_eq!(
+            output.as_deref(),
+            Some("l\ni\nn\ne\n2\n"),
+            "WB-3-M7 exact shape should print each grapheme of line2"
+        );
+    }
+
+    #[test]
+    fn wb3_m7_read_split_map_graphemes_get_each_alias_variant_executes() {
+        use goby_core::parse_module;
+        let module = parse_module(
+            r#"
+import goby/list ( each, map )
+import goby/string ( split, graphemes )
+
+main : Unit -> Unit can Print, Read
+main =
+  input = read ()
+  raw_lines = split input "\n"
+  forwarded_lines = raw_lines
+  rows = map forwarded_lines graphemes
+  selected = rows[2]
+  chars = selected
+  each chars println
+"#,
+        )
+        .expect("parse should work");
+
+        let output = execute_runtime_module_with_stdin(
+            &module,
+            Some("line0\nline1\nline2\nline3".to_string()),
+        )
+        .expect("WB-3-M7 alias-chain variant must execute");
+        assert_eq!(
+            output.as_deref(),
+            Some("l\ni\nn\ne\n2\n"),
+            "WB-3-M7 alias-chain variant should print each grapheme of line2"
+        );
+    }
+
+    #[test]
+    fn wb3_m7_read_split_map_graphemes_get_each_canonical_variant_executes() {
+        use goby_core::parse_module;
+        let module = parse_module(
+            r#"
+import goby/list
+import goby/string
+
+main : Unit -> Unit can Print, Read
+main =
+  text = read ()
+  lines = string.split text "\n"
+  rolls = list.map lines string.graphemes
+  row2 = list.get rolls 2
+  list.each row2 Print.println
+"#,
+        )
+        .expect("parse should work");
+
+        let output = execute_runtime_module_with_stdin(
+            &module,
+            Some("line0\nline1\nline2\nline3".to_string()),
+        )
+        .expect("WB-3-M7 canonical-qualified variant must execute");
+        assert_eq!(
+            output.as_deref(),
+            Some("l\ni\nn\ne\n2\n"),
+            "WB-3-M7 canonical-qualified variant should print each grapheme of line2"
+        );
+    }
+
+    #[test]
     fn wb2b_empty_list_pattern_without_list_pattern_arm() {
         // WB-2B: EmptyList-only case (no ListPattern arm) must not fail with "helper state" error.
         // Regression test: before the fix, `needs_helper_state` did not cover EmptyList,

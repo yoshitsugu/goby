@@ -454,7 +454,7 @@ Captured variables: same convention as handler functions (explicit extra paramet
 - [x] WB-3-M6. `InterpreterBridge` usage reviewed; reduce to genuinely Wasm-incompatible programs
   - Removed `stmts_contain_imported_string_graphemes` classification branch from `classify_runtime_io`
   - Deleted 4 dead helper functions; updated integration test to use `execute_runtime_module_with_stdin`
-- [ ] WB-3-M7. Runtime-`Read` composed stdlib path executes via `GeneralLowered`
+- [x] WB-3-M7. Runtime-`Read` composed stdlib path executes via `GeneralLowered`
   end-to-end (stdin provided at runtime):
 
   ```goby
@@ -491,37 +491,12 @@ Captured variables: same convention as handler functions (explicit extra paramet
   - `row2 = rolls[2]` — existing `list.get` intrinsic
   - `each row2 println` — WB-2A: `ListEachEffect` with print callback
 
-  Current status (2026-03-25):
-  - the component capabilities listed above exist in the backend,
-  - but this composed runtime-`Read` shape does not yet consistently reach the
-    `GeneralLowered` execution path in the current tree,
-  - so WB-3-M7 remains open until the exact shape above, plus equivalent alias/import
-    variants, execute without `RuntimeIoPlan` special-casing.
-
-  Implementation plan (must be followed in order):
-  1. Add classification tests first.
-     - Add a test for the exact ANF program above that asserts
-       `runtime_io_execution_kind(module) == GeneralLowered`.
-     - Add the same assertion for:
-       - a local-alias variant,
-       - a selective-import / canonical-qualified variant.
-  2. Add runtime-output tests for the same set of programs.
-     - These tests must execute the program with stdin and assert the emitted grapheme lines.
-  3. Make the failure observable before changing lowering behavior.
-     - If the new classification test fails, instrument the general-lowering entrypoint so the
-       failing stage is explicit in tests/logging:
-       - main-body lowering rejected,
-       - auxiliary decl lowering rejected,
-       - emit support rejected,
-       - runtime-I/O classification fell through after lowering rejection.
-     - Do not start by adding a new special-case runtime plan.
-  4. Fix the general path itself.
-     - Update `gen_lower` / emitter / aux-decl registration / gating so the representative shape
-       reaches `GeneralLowered`.
-     - Preserve the existing ownership boundary:
-       - `PLAN_IR` owns the composed-shape lowering,
-       - `PLAN_STANDARD_LIBRARY` continues to own final `string.split` stdlib migration.
-  5. Re-run the tests from steps 1 and 2, then full quality gates.
+  Completion status (2026-03-25):
+  - the exact ANF program above classifies as `GeneralLowered`,
+  - the exact ANF program above executes correctly with runtime stdin,
+  - local-alias and selective-import / canonical-qualified variants also classify and execute
+    via `GeneralLowered`,
+  - no new `RuntimeIoPlan` branch, interpreter bridge, or fused recognizer was introduced.
 
   Explicit non-goals / anti-adhoc rules:
   - Do not add a new `RuntimeIoPlan` variant for this shape.
@@ -543,8 +518,8 @@ Captured variables: same convention as handler functions (explicit extra paramet
   - classification test for a local-alias variant,
   - classification test for a selective-import / canonical-qualified variant,
   - runtime-output test for the exact program above,
-  - variant with local aliases between `split`, `map`, `list.get`, and `each`,
-  - variant using selective imports / canonical-qualified names.
+  - runtime-output test for a local-alias variant,
+  - runtime-output test for a selective-import / canonical-qualified variant.
 
 - [x] WB-3-M8. Quality gates pass
   - `cargo fmt --check` ✓
