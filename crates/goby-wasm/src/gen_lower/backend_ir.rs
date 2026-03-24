@@ -104,6 +104,30 @@ impl BackendIntrinsic {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BackendReadOp {
+    Read,
+    ReadLine,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BackendPrintOp {
+    Print,
+    Println,
+}
+
+impl BackendPrintOp {
+    pub(crate) const fn append_newline(self) -> bool {
+        matches!(self, Self::Println)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BackendEffectOp {
+    Read(BackendReadOp),
+    Print(BackendPrintOp),
+}
+
 /// A backend instruction in the general Wasm lowering pipeline.
 ///
 /// # Goby IR → Backend IR mapping
@@ -115,12 +139,12 @@ impl BackendIntrinsic {
 /// | `CompExpr::Value(ValueExpr::IntLit(n))` | `I64Const(encode_int(n))` |
 /// | `CompExpr::Value(ValueExpr::Unit)` | `I64Const(encode_unit())` |
 /// | `CompExpr::Value(ValueExpr::StrLit(text))` | `PushStaticString { text }` |
-/// | `CompExpr::PerformEffect { effect, op, .. }` | `EffectOp { effect, op }` |
+/// | `CompExpr::PerformEffect { effect, op, .. }` | `EffectOp { op }` |
 /// | `CompExpr::Call { callee: GlobalRef { name }, .. }` (intrinsic) | `Intrinsic { intrinsic }` |
 /// | `CompExpr::Call { callee: GlobalRef { name }, .. }` (user decl) | `[push args..., DeclCall { decl_name }]` |
-/// | fused `Let lines = split(text, sep); each lines Effect.op` | `SplitEachPrint { text_local, sep_bytes, effect, op }` |
+/// | fused `Let lines = split(text, sep); each lines Effect.op` | `SplitEachPrint { text_local, sep_bytes, op }` |
 /// | fused `Let lines = split(text, sep); Let line = list.get(lines, idx); Print.op(line)` | `SplitGetPrint { text_local, sep_bytes, index, op }` |
-/// | fused `Let parts = graphemes(text); Let item = list.get(parts, N); Print.op(item)` | `[LoadLocal(text), I64Const(N), Intrinsic(StringEachGraphemeState), EffectOp(Print, op)]` |
+/// | fused `Let parts = graphemes(text); Let item = list.get(parts, N); Print.op(item)` | `[LoadLocal(text), I64Const(N), Intrinsic(StringEachGraphemeState), EffectOp { op: Print(op) }]` |
 /// | discarded expression (stmt before tail) | lower expr + `Drop` |
 ///
 /// Unsupported IR nodes (`WithHandler`, `Handle`, `Resume`, `Lambda`) must produce
@@ -143,7 +167,7 @@ pub(crate) enum WasmBackendInstr {
     /// Perform a WASI-backed effect operation.
     ///
     /// Arguments are expected to have been pushed onto the stack before this instruction.
-    EffectOp { effect: String, op: String },
+    EffectOp { op: BackendEffectOp },
     /// Call a Wasm-internal backend intrinsic.
     ///
     /// The intrinsic's fixed arity arguments must be on the stack before this instruction.
@@ -267,8 +291,7 @@ pub(crate) enum WasmBackendInstr {
     /// The result is a tagged Unit.
     ListEachEffect {
         list_instrs: Vec<WasmBackendInstr>,
-        effect: String,
-        op: String,
+        op: BackendPrintOp,
     },
     /// Iterate a list and call a function for each element (stdlib `list.each`).
     ///
@@ -313,8 +336,7 @@ pub(crate) enum WasmBackendInstr {
     SplitEachPrint {
         text_local: String,
         sep_bytes: Vec<u8>,
-        effect: String,
-        op: String,
+        op: BackendPrintOp,
     },
     /// Fused: split `text_local` on `sep_bytes`, select the zero-based `index`th
     /// segment, then call `Print.op` on that segment.
@@ -327,7 +349,7 @@ pub(crate) enum WasmBackendInstr {
         text_local: String,
         sep_bytes: Vec<u8>,
         index: SplitIndexOperand,
-        op: String,
+        op: BackendPrintOp,
     },
 }
 
@@ -352,8 +374,7 @@ mod tests {
                 text: "hello".to_string(),
             },
             WasmBackendInstr::EffectOp {
-                effect: "Print".to_string(),
-                op: "print".to_string(),
+                op: BackendEffectOp::Print(BackendPrintOp::Print),
             },
             WasmBackendInstr::Intrinsic {
                 intrinsic: BackendIntrinsic::StringSplit,
@@ -362,14 +383,13 @@ mod tests {
             WasmBackendInstr::SplitEachPrint {
                 text_local: "text".to_string(),
                 sep_bytes: b"\n".to_vec(),
-                effect: "Print".to_string(),
-                op: "println".to_string(),
+                op: BackendPrintOp::Println,
             },
             WasmBackendInstr::SplitGetPrint {
                 text_local: "text".to_string(),
                 sep_bytes: b"\n".to_vec(),
                 index: SplitIndexOperand::Const(1),
-                op: "println".to_string(),
+                op: BackendPrintOp::Println,
             },
         ];
         // Verify all variants round-trip through Clone and PartialEq.

@@ -5,7 +5,9 @@ use goby_core::{Expr, Module, Stmt};
 use crate::CodegenError;
 use crate::backend::WasmProgramBuilder;
 use crate::call::{PrintCallKind, direct_print_call, extract_direct_print_call_arg};
-use crate::gen_lower::backend_ir::WasmBackendInstr;
+use crate::gen_lower::backend_ir::{
+    BackendEffectOp, BackendPrintOp, BackendReadOp, WasmBackendInstr,
+};
 use crate::gen_lower::emit::emit_general_module;
 use crate::layout::MemoryLayout;
 use crate::runtime_flow::DirectCallHead;
@@ -139,8 +141,8 @@ impl RuntimeIoPlan {
                 }
 
                 let print_op = match output_mode {
-                    OutputReadMode::Print => "print",
-                    OutputReadMode::Println => "println",
+                    OutputReadMode::Print => BackendPrintOp::Print,
+                    OutputReadMode::Println => BackendPrintOp::Println,
                 };
 
                 let mut instrs = vec![
@@ -148,8 +150,7 @@ impl RuntimeIoPlan {
                         name: TEXT_LOCAL.to_string(),
                     },
                     WasmBackendInstr::EffectOp {
-                        effect: "Read".to_string(),
-                        op: "read".to_string(),
+                        op: BackendEffectOp::Read(BackendReadOp::Read),
                     },
                     WasmBackendInstr::StoreLocal {
                         name: TEXT_LOCAL.to_string(),
@@ -158,19 +159,17 @@ impl RuntimeIoPlan {
                         name: TEXT_LOCAL.to_string(),
                     },
                     WasmBackendInstr::EffectOp {
-                        effect: "Print".to_string(),
-                        op: print_op.to_string(),
+                        op: BackendEffectOp::Print(print_op),
                     },
                 ];
                 for suffix in suffix_prints {
                     let suffix_op = match suffix.output_mode {
-                        OutputReadMode::Print => "print",
-                        OutputReadMode::Println => "println",
+                        OutputReadMode::Print => BackendPrintOp::Print,
+                        OutputReadMode::Println => BackendPrintOp::Println,
                     };
                     instrs.push(WasmBackendInstr::PushStaticString { text: suffix.text });
                     instrs.push(WasmBackendInstr::EffectOp {
-                        effect: "Print".to_string(),
-                        op: suffix_op.to_string(),
+                        op: BackendEffectOp::Print(suffix_op),
                     });
                 }
 
@@ -186,8 +185,8 @@ impl RuntimeIoPlan {
                 }
 
                 let print_op = match output_mode {
-                    OutputReadMode::Print => "print",
-                    OutputReadMode::Println => "println",
+                    OutputReadMode::Print => BackendPrintOp::Print,
+                    OutputReadMode::Println => BackendPrintOp::Println,
                 };
 
                 Ok(Some(vec![
@@ -195,8 +194,7 @@ impl RuntimeIoPlan {
                         name: TEXT_LOCAL.to_string(),
                     },
                     WasmBackendInstr::EffectOp {
-                        effect: "Read".to_string(),
-                        op: "read".to_string(),
+                        op: BackendEffectOp::Read(BackendReadOp::Read),
                     },
                     WasmBackendInstr::StoreLocal {
                         name: TEXT_LOCAL.to_string(),
@@ -204,8 +202,7 @@ impl RuntimeIoPlan {
                     WasmBackendInstr::SplitEachPrint {
                         text_local: TEXT_LOCAL.to_string(),
                         sep_bytes: b"\n".to_vec(),
-                        effect: "Print".to_string(),
-                        op: print_op.to_string(),
+                        op: print_op,
                     },
                 ]))
             }

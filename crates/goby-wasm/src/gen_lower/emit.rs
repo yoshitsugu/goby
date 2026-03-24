@@ -12,7 +12,10 @@ use wasm_encoder::{
 };
 
 use crate::CodegenError;
-use crate::gen_lower::backend_ir::{BackendIntrinsic, SplitIndexOperand, WasmBackendInstr};
+use crate::gen_lower::backend_ir::{
+    BackendEffectOp, BackendIntrinsic, BackendPrintOp, BackendReadOp, SplitIndexOperand,
+    WasmBackendInstr,
+};
 use goby_core::ir::IrBinOp;
 
 use crate::gen_lower::value::{
@@ -409,9 +412,11 @@ fn required_i32_scratch_count(instrs: &[WasmBackendInstr]) -> u32 {
     let generic_effects = all.iter().any(|i| {
         matches!(
             i,
-            WasmBackendInstr::EffectOp { effect, op }
-                if (effect == "Print" && (op == "print" || op == "println"))
-                    || (effect == "Read" && op == "read_line")
+            WasmBackendInstr::EffectOp {
+                op: BackendEffectOp::Print(_)
+            } | WasmBackendInstr::EffectOp {
+                op: BackendEffectOp::Read(BackendReadOp::ReadLine)
+            }
         )
     });
 
@@ -448,9 +453,25 @@ fn required_i64_scratch_count(instrs: &[WasmBackendInstr]) -> u32 {
 fn needs_newline_data(instrs: &[WasmBackendInstr]) -> bool {
     let all = collect_all_instrs(instrs);
     all.iter().any(|i| {
-        matches!(i, WasmBackendInstr::SplitEachPrint { op, .. } if op == "println")
-            || matches!(i, WasmBackendInstr::SplitGetPrint { op, .. } if op == "println")
-            || matches!(i, WasmBackendInstr::ListEachEffect { op, .. } if op == "println")
+        matches!(
+            i,
+            WasmBackendInstr::SplitEachPrint {
+                op: BackendPrintOp::Println,
+                ..
+            }
+        ) || matches!(
+            i,
+            WasmBackendInstr::SplitGetPrint {
+                op: BackendPrintOp::Println,
+                ..
+            }
+        ) || matches!(
+            i,
+            WasmBackendInstr::ListEachEffect {
+                op: BackendPrintOp::Println,
+                ..
+            }
+        )
     })
 }
 
@@ -908,10 +929,9 @@ fn emit_instrs(
                 emit_bin_op(function, op, i64_scratch_base)?;
             }
 
-            WasmBackendInstr::EffectOp { effect, op } => {
+            WasmBackendInstr::EffectOp { op } => {
                 emit_effect_op(
                     function,
-                    effect,
                     op,
                     iovec_offset,
                     nread_offset,
@@ -930,7 +950,6 @@ fn emit_instrs(
             WasmBackendInstr::SplitEachPrint {
                 text_local,
                 sep_bytes,
-                effect,
                 op,
             } => {
                 if sep_bytes.len() != 1 {
@@ -941,19 +960,12 @@ fn emit_instrs(
                         ),
                     });
                 }
-                if effect != "Print" || (op != "print" && op != "println") {
-                    return Err(CodegenError {
-                        message: format!(
-                            "gen_lower/emit: SplitEachPrint unsupported callback '{effect}.{op}'"
-                        ),
-                    });
-                }
                 let text_idx = ctx.get(text_local)?;
                 emit_split_each_print(
                     function,
                     text_idx,
                     sep_bytes[0],
-                    op == "println",
+                    op.append_newline(),
                     i32_base,
                     iovec_offset,
                     nread_offset,
@@ -975,11 +987,6 @@ fn emit_instrs(
                         ),
                     });
                 }
-                if op != "print" && op != "println" {
-                    return Err(CodegenError {
-                        message: format!("gen_lower/emit: SplitGetPrint unsupported op '{op}'"),
-                    });
-                }
                 let text_idx = ctx.get(text_local)?;
                 emit_split_get_print(
                     function,
@@ -987,7 +994,7 @@ fn emit_instrs(
                     text_idx,
                     sep_bytes[0],
                     index,
-                    op == "println",
+                    op.append_newline(),
                     i32_base,
                     iovec_offset,
                     nread_offset,
@@ -1212,18 +1219,7 @@ fn emit_instrs(
                 });
             }
 
-            WasmBackendInstr::ListEachEffect {
-                list_instrs,
-                effect,
-                op,
-            } => {
-                if effect != "Print" || (op != "print" && op != "println") {
-                    return Err(CodegenError {
-                        message: format!(
-                            "gen_lower/emit: ListEachEffect unsupported callback '{effect}.{op}'"
-                        ),
-                    });
-                }
+            WasmBackendInstr::ListEachEffect { list_instrs, op } => {
                 let _hs = helper_state.ok_or_else(|| CodegenError {
                     message: "gen_lower/emit: ListEachEffect requires helper scratch state"
                         .to_string(),
@@ -1240,7 +1236,7 @@ fn emit_instrs(
                 )?;
                 emit_list_each_effect(
                     function,
-                    op == "println",
+                    op.append_newline(),
                     i32_base,
                     iovec_offset,
                     nread_offset,
@@ -2151,8 +2147,7 @@ fn emit_bin_op(
 #[allow(clippy::too_many_arguments)]
 fn emit_effect_op(
     function: &mut Function,
-    effect: &str,
-    op: &str,
+    op: &BackendEffectOp,
     iovec_offset: i32,
     nread_offset: i32,
     buffer_ptr: i32,
@@ -2161,8 +2156,8 @@ fn emit_effect_op(
     i32_base: u32,
     helper_state: Option<&HelperEmitState>,
 ) -> Result<(), CodegenError> {
-    match (effect, op) {
-        ("Read", "read") => {
+    match op {
+        BackendEffectOp::Read(BackendReadOp::Read) => {
             // Store string data at buffer_ptr+4, length at buffer_ptr.
             // Bytes land at buffer_ptr+4; we read into buffer_ptr+4 to leave room for the len prefix.
             let data_ptr = buffer_ptr + 4;
@@ -2219,7 +2214,7 @@ fn emit_effect_op(
             function.instruction(&Instruction::I64Const(tagged_ptr));
         }
 
-        ("Read", "read_line") => {
+        BackendEffectOp::Read(BackendReadOp::ReadLine) => {
             // This currently supports the single-read-line shapes that still
             // route through `RuntimeIoPlan`. The result string is backed
             // by the same stdin buffer used for `Read.read`.
@@ -2320,8 +2315,8 @@ fn emit_effect_op(
             function.instruction(&Instruction::I64Const(encode_string_ptr(buffer_ptr as u32)));
         }
 
-        ("Print", "print") | ("Print", "println") => {
-            let append_newline = op == "println";
+        BackendEffectOp::Print(print_op) => {
+            let append_newline = print_op.append_newline();
             let ptr_local = i32_base;
 
             // Stack top is a tagged-i64 string ptr.
@@ -2406,12 +2401,6 @@ fn emit_effect_op(
             // For consistency: push the unit-tagged i64.
             use crate::gen_lower::value::encode_unit;
             function.instruction(&Instruction::I64Const(encode_unit()));
-        }
-
-        _ => {
-            return Err(CodegenError {
-                message: format!("gen_lower/emit: unsupported effect op '{effect}.{op}'"),
-            });
         }
     }
     Ok(())
@@ -3652,7 +3641,9 @@ fn emit_write_slice(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::gen_lower::backend_ir::{SplitIndexOperand, WasmBackendInstr as I};
+    use crate::gen_lower::backend_ir::{
+        BackendEffectOp, BackendPrintOp, BackendReadOp, SplitIndexOperand, WasmBackendInstr as I,
+    };
     use wasmparser::Validator;
 
     fn default_layout() -> MemoryLayout {
@@ -3672,12 +3663,10 @@ mod tests {
     fn emit_read_then_print_produces_valid_wasm() {
         let instrs = vec![
             I::EffectOp {
-                effect: "Read".to_string(),
-                op: "read".to_string(),
+                op: BackendEffectOp::Read(BackendReadOp::Read),
             },
             I::EffectOp {
-                effect: "Print".to_string(),
-                op: "print".to_string(),
+                op: BackendEffectOp::Print(BackendPrintOp::Print),
             },
             I::Drop,
         ];
@@ -3693,8 +3682,7 @@ mod tests {
                 name: "text".to_string(),
             },
             I::EffectOp {
-                effect: "Read".to_string(),
-                op: "read".to_string(),
+                op: BackendEffectOp::Read(BackendReadOp::Read),
             },
             I::StoreLocal {
                 name: "text".to_string(),
@@ -3703,22 +3691,12 @@ mod tests {
                 name: "text".to_string(),
             },
             I::EffectOp {
-                effect: "Print".to_string(),
-                op: "print".to_string(),
+                op: BackendEffectOp::Print(BackendPrintOp::Print),
             },
             I::Drop,
         ];
         let wasm = emit_general_module(&instrs, &default_layout()).expect("emit should succeed");
         assert_valid_wasm(&wasm);
-    }
-
-    #[test]
-    fn emit_unknown_effect_returns_error() {
-        let instrs = vec![I::EffectOp {
-            effect: "Foo".to_string(),
-            op: "bar".to_string(),
-        }];
-        assert!(emit_general_module(&instrs, &default_layout()).is_err());
     }
 
     #[test]
@@ -3729,8 +3707,7 @@ mod tests {
                 name: "text".to_string(),
             },
             I::EffectOp {
-                effect: "Read".to_string(),
-                op: "read".to_string(),
+                op: BackendEffectOp::Read(BackendReadOp::Read),
             },
             I::StoreLocal {
                 name: "text".to_string(),
@@ -3738,8 +3715,7 @@ mod tests {
             I::SplitEachPrint {
                 text_local: "text".to_string(),
                 sep_bytes: b"\n".to_vec(),
-                effect: "Print".to_string(),
-                op: "println".to_string(),
+                op: BackendPrintOp::Println,
             },
             I::Drop,
         ];
@@ -3755,8 +3731,7 @@ mod tests {
                 name: "text".to_string(),
             },
             I::EffectOp {
-                effect: "Read".to_string(),
-                op: "read".to_string(),
+                op: BackendEffectOp::Read(BackendReadOp::Read),
             },
             I::StoreLocal {
                 name: "text".to_string(),
@@ -3765,7 +3740,7 @@ mod tests {
                 text_local: "text".to_string(),
                 sep_bytes: b"\n".to_vec(),
                 index: SplitIndexOperand::Const(1),
-                op: "println".to_string(),
+                op: BackendPrintOp::Println,
             },
             I::Drop,
         ];
@@ -3784,8 +3759,7 @@ mod tests {
                 name: "idx".to_string(),
             },
             I::EffectOp {
-                effect: "Read".to_string(),
-                op: "read".to_string(),
+                op: BackendEffectOp::Read(BackendReadOp::Read),
             },
             I::StoreLocal {
                 name: "text".to_string(),
@@ -3798,7 +3772,7 @@ mod tests {
                 text_local: "text".to_string(),
                 sep_bytes: b"\n".to_vec(),
                 index: SplitIndexOperand::Local("idx".to_string()),
-                op: "print".to_string(),
+                op: BackendPrintOp::Print,
             },
             I::Drop,
         ];
@@ -3814,8 +3788,7 @@ mod tests {
                 text: "done".to_string(),
             },
             I::EffectOp {
-                effect: "Print".to_string(),
-                op: "print".to_string(),
+                op: BackendEffectOp::Print(BackendPrintOp::Print),
             },
             I::Drop,
         ];
@@ -3912,8 +3885,7 @@ mod tests {
                 intrinsic: BackendIntrinsic::ListGet,
             },
             I::EffectOp {
-                effect: "Print".to_string(),
-                op: "print".to_string(),
+                op: BackendEffectOp::Print(BackendPrintOp::Print),
             },
             I::Drop,
         ];
@@ -3934,8 +3906,7 @@ mod tests {
             I::I64Const(crate::gen_lower::value::encode_int(3).unwrap()),
             I::BinOp { op: IrBinOp::Add },
             I::EffectOp {
-                effect: "Print".to_string(),
-                op: "print".to_string(),
+                op: BackendEffectOp::Print(BackendPrintOp::Print),
             },
             I::Drop,
         ];
@@ -3952,8 +3923,7 @@ mod tests {
             I::I64Const(crate::gen_lower::value::encode_int(5).unwrap()),
             I::BinOp { op: IrBinOp::Eq },
             I::EffectOp {
-                effect: "Print".to_string(),
-                op: "print".to_string(),
+                op: BackendEffectOp::Print(BackendPrintOp::Print),
             },
             I::Drop,
         ];
@@ -4026,8 +3996,7 @@ mod tests {
         // if true then 1 else 2 (with Read effect wrapper to satisfy has_runtime_read_effect)
         let instrs = vec![
             I::EffectOp {
-                effect: "Read".to_string(),
-                op: "read".to_string(),
+                op: BackendEffectOp::Read(BackendReadOp::Read),
             },
             I::Drop,
             I::I64Const(crate::gen_lower::value::encode_bool(true)),
@@ -4046,8 +4015,7 @@ mod tests {
         // if true then (if false then 1 else 2) else 3
         let instrs = vec![
             I::EffectOp {
-                effect: "Read".to_string(),
-                op: "read".to_string(),
+                op: BackendEffectOp::Read(BackendReadOp::Read),
             },
             I::Drop,
             I::I64Const(crate::gen_lower::value::encode_bool(true)),

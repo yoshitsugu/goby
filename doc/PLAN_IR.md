@@ -292,13 +292,13 @@ operations must use the same identity scheme that WB-3 will need. Do not design 
 - [x] WB-2A-M2. Recursive decl calls (same function) work correctly
   - done when: a directly recursive function (e.g., countdown) compiles and executes
   - regression: execution test with base case and recursive case
-- [ ] WB-2A-M3. `Var(name)` function-argument calls work via funcref table
+- [x] WB-2A-M3. `Var(name)` function-argument calls work via funcref table
   - done when: `each [1,2,3] print_fn` compiles and executes (after WB-2B ListLit)
   - regression: execution test with a higher-order call
-- [ ] WB-2A-M4. `EffectId`/`OpId` backend boundary locked (no stringly dispatch for new work)
+- [x] WB-2A-M4. `EffectId`/`OpId` backend boundary locked (no stringly dispatch for new work)
   - done when: effect dispatch in `lower.rs` uses a typed identity, not raw string matching
   - regression: existing effect dispatch tests continue to pass
-- [ ] WB-2A-M5. Quality gates pass
+- [x] WB-2A-M5. Quality gates pass
 
 ### Phase WB-2B: Pattern matching and structured data
 

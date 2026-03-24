@@ -7,10 +7,11 @@ Last updated: 2026-03-24
 - IR0–IR11 complete. `doc/PLAN_IR.md` now contains the Wasm backend lowering design (§4–§5).
 - Track E E1–E7 complete.
 - Phase WB-1 complete (2026-03-24): `If`, `BinOp`, `Interp`, `LetMut`, `Assign` all lowered and emitted.
-- Phase WB-2A complete (2026-03-24): top-level `DeclCall` (direct Wasm `call`), aux decls, recursion.
+- Phase WB-2A complete (2026-03-24): top-level `DeclCall`, recursion, funcref-table indirect calls, typed backend effect identities.
   - `lower_comp_with_decls` passes `known_decls` set so `Var(name)` callee resolves as `DeclCall`.
   - `emit_general_module_with_aux` places main first, aux after; builds `decl_name → func_idx` table.
-  - Helper-call and recursive-call execution tests pass.
+  - Higher-order helper-call and recursive-call execution tests pass.
+  - `gen_lower` backend IR now uses typed `BackendEffectOp` / `BackendPrintOp` instead of raw effect/op strings for general-lowering dispatch.
 - Phase WB-2B M1–M5 complete (2026-03-24): `Case` literal/wildcard patterns, list patterns, `ListLit`, `TupleLit`, and `RecordLit` lowered/emitted.
 - Phase WB-2B M6 complete (2026-03-24): `stdlib/goby/list.gb` `each` / `map` execute via `GeneralLowered`.
   - `each` uses `ListEach` / `IndirectCall` for named callbacks.
@@ -62,7 +63,8 @@ See `doc/PLAN_STANDARD_LIBRARY.md` §5.
   - `gen_lower/lower.rs` fused split recognition for `string.split` + `list.each` / `list.get`
 - WB-2 exit state:
   - pure control flow/operators complete
-  - decl calls / recursion complete
+  - decl calls / recursion / higher-order funcref calls complete
+  - backend effect dispatch identity is locked for general lowering
   - pattern matching and structured data complete for current IR surface
 - Effect handler strategy: selective CPS degenerating to direct-call lowering for one-shot
   tail-resumptive handlers; captured vars as explicit Wasm function parameters.

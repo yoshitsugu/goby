@@ -34,6 +34,7 @@ use goby_core::Module;
 use goby_core::ir::CompExpr;
 
 use crate::CodegenError;
+use crate::gen_lower::backend_ir::{BackendEffectOp, BackendReadOp};
 use crate::gen_lower::emit::AuxDecl;
 use crate::layout::MemoryLayout;
 use crate::wasm_exec_plan::main_exec_plan;
@@ -85,8 +86,9 @@ fn read_line_instrs_are_supported(instrs: &[backend_ir::WasmBackendInstr]) -> bo
         .filter(|instr| {
             matches!(
                 instr,
-                backend_ir::WasmBackendInstr::EffectOp { effect, op }
-                    if effect == "Read" && op == "read_line"
+                backend_ir::WasmBackendInstr::EffectOp {
+                    op: BackendEffectOp::Read(BackendReadOp::ReadLine)
+                }
             )
         })
         .count();
@@ -100,8 +102,9 @@ fn read_line_instrs_are_supported(instrs: &[backend_ir::WasmBackendInstr]) -> bo
     !all.iter().any(|instr| {
         matches!(
             instr,
-            backend_ir::WasmBackendInstr::EffectOp { effect, op }
-                if effect == "Read" && op == "read"
+            backend_ir::WasmBackendInstr::EffectOp {
+                op: BackendEffectOp::Read(BackendReadOp::Read)
+            }
         ) || matches!(
             instr,
             backend_ir::WasmBackendInstr::Intrinsic { .. }

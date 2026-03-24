@@ -6,7 +6,9 @@ use std::collections::{HashMap, HashSet};
 
 use goby_core::ir::{CompExpr, IrInterpPart, ValueExpr};
 
-use crate::gen_lower::backend_ir::{BackendIntrinsic, WasmBackendInstr};
+use crate::gen_lower::backend_ir::{
+    BackendEffectOp, BackendIntrinsic, BackendPrintOp, BackendReadOp, WasmBackendInstr,
+};
 use crate::gen_lower::value::{ValueError, encode_bool, encode_int, encode_unit};
 
 /// Error produced when the general lowering path encounters an unsupported IR node.
@@ -104,24 +106,24 @@ fn lower_comp_inner(
         }
 
         CompExpr::PerformEffect { effect, op, args } => {
+            let op = backend_effect_op(effect, op).ok_or_else(|| LowerError::UnsupportedForm {
+                node: format!("unsupported effect op '{effect}.{op}'"),
+            })?;
             let mut instrs = Vec::new();
             for arg in args {
                 instrs.extend(lower_value(arg)?);
             }
-            instrs.push(WasmBackendInstr::EffectOp {
-                effect: effect.clone(),
-                op: op.clone(),
-            });
+            instrs.push(WasmBackendInstr::EffectOp { op });
             Ok(instrs)
         }
 
         CompExpr::Call { callee, args } => {
-            if let Some((effect, op)) = resolve_effect_call_target(callee, aliases) {
+            if let Some(op) = resolve_effect_call_target(callee, aliases) {
                 let mut instrs = Vec::new();
                 for arg in args {
                     instrs.extend(lower_value(arg)?);
                 }
-                instrs.push(WasmBackendInstr::EffectOp { effect, op });
+                instrs.push(WasmBackendInstr::EffectOp { op });
                 Ok(instrs)
             } else if let Some(intrinsic) =
                 resolve_intrinsic_call_target(callee, aliases, args.len())
@@ -151,12 +153,8 @@ fn lower_comp_inner(
                 // or a user funcref (indirect call path).
                 let list_instrs =
                     lower_comp_inner(&CompExpr::Value(args[0].clone()), aliases, known_decls)?;
-                if let Some((eff, op)) = resolve_print_callback(&args[1], aliases) {
-                    Ok(vec![WasmBackendInstr::ListEachEffect {
-                        list_instrs,
-                        effect: eff,
-                        op,
-                    }])
+                if let Some(op) = resolve_print_callback(&args[1], aliases) {
+                    Ok(vec![WasmBackendInstr::ListEachEffect { list_instrs, op }])
                 } else {
                     let func_instrs = lower_value_as_arg(&args[1], known_decls)?;
                     Ok(vec![WasmBackendInstr::ListEach {
@@ -204,12 +202,8 @@ fn lower_comp_inner(
                     // Var resolves to list.each (bare name or alias via `import goby/list (each)`).
                     let list_instrs =
                         lower_comp_inner(&CompExpr::Value(args[0].clone()), aliases, known_decls)?;
-                    if let Some((eff, op)) = resolve_print_callback(&args[1], aliases) {
-                        Ok(vec![WasmBackendInstr::ListEachEffect {
-                            list_instrs,
-                            effect: eff,
-                            op,
-                        }])
+                    if let Some(op) = resolve_print_callback(&args[1], aliases) {
+                        Ok(vec![WasmBackendInstr::ListEachEffect { list_instrs, op }])
                     } else {
                         let func_instrs = lower_value_as_arg(&args[1], known_decls)?;
                         Ok(vec![WasmBackendInstr::ListEach {
@@ -534,8 +528,7 @@ fn try_lower_graphemes_get_print(
             intrinsic: BackendIntrinsic::StringEachGraphemeState,
         },
         WasmBackendInstr::EffectOp {
-            effect: "Print".to_string(),
-            op,
+            op: BackendEffectOp::Print(op),
         },
     ]))
 }
@@ -561,7 +554,7 @@ fn find_graphemes_get_print(
     parts_name: &str,
     comp: &CompExpr,
     aliases: &mut HashMap<String, AliasValue>,
-) -> Option<(i64, String)> {
+) -> Option<(i64, BackendPrintOp)> {
     match comp {
         CompExpr::Let {
             name: item_name,
@@ -593,7 +586,7 @@ fn find_graphemes_get_print(
                 {
                     let printed_name = resolve_local_name(&args[0], aliases)?;
                     if printed_name == item_name {
-                        Some((index, op.clone()))
+                        Some((index, backend_print_op(effect, op)?))
                     } else {
                         None
                     }
@@ -647,28 +640,19 @@ fn is_helper_global(
 fn resolve_print_callback(
     callback: &ValueExpr,
     aliases: &HashMap<String, AliasValue>,
-) -> Option<(String, String)> {
+) -> Option<BackendPrintOp> {
     match callback {
-        ValueExpr::GlobalRef { module, name }
-            if module == "Print" && (name == "print" || name == "println") =>
-        {
-            Some((module.clone(), name.clone()))
-        }
-        ValueExpr::Var(name) if name == "print" || name == "println" => {
-            Some(("Print".to_string(), name.clone()))
-        }
+        ValueExpr::GlobalRef { module, name } => backend_print_op(module, name),
+        ValueExpr::Var(name) if name == "print" => Some(BackendPrintOp::Print),
+        ValueExpr::Var(name) if name == "println" => Some(BackendPrintOp::Println),
         ValueExpr::Var(name) => {
             if let Some(op) = resolve_var_alias(name, aliases)
-                && (op == "print" || op == "println")
+                && let Some(print_op) = backend_print_op("Print", op)
             {
-                return Some(("Print".to_string(), op.to_string()));
+                return Some(print_op);
             }
             let (module, op) = resolve_global_ref(name, aliases)?;
-            if module == "Print" && (op == "print" || op == "println") {
-                Some(("Print".to_string(), op.to_string()))
-            } else {
-                None
-            }
+            backend_print_op(module, op)
         }
         _ => None,
     }
@@ -709,34 +693,30 @@ fn resolve_global_ref<'a>(
 fn resolve_effect_call_target(
     callee: &ValueExpr,
     aliases: &HashMap<String, AliasValue>,
-) -> Option<(String, String)> {
+) -> Option<BackendEffectOp> {
     match callee {
-        ValueExpr::GlobalRef { module, name } if is_effect_pair(module.as_str(), name.as_str()) => {
-            Some((module.clone(), name.clone()))
+        ValueExpr::GlobalRef { module, name } => backend_effect_op(module, name),
+        ValueExpr::Var(name) if name == "print" => {
+            Some(BackendEffectOp::Print(BackendPrintOp::Print))
         }
-        ValueExpr::Var(name) if name == "print" || name == "println" => {
-            Some(("Print".to_string(), name.clone()))
+        ValueExpr::Var(name) if name == "println" => {
+            Some(BackendEffectOp::Print(BackendPrintOp::Println))
         }
-        ValueExpr::Var(name) if name == "read" || name == "read_line" => {
-            Some(("Read".to_string(), name.clone()))
+        ValueExpr::Var(name) if name == "read" => Some(BackendEffectOp::Read(BackendReadOp::Read)),
+        ValueExpr::Var(name) if name == "read_line" => {
+            Some(BackendEffectOp::Read(BackendReadOp::ReadLine))
         }
         ValueExpr::Var(name) => {
-            if let Some(op) = resolve_var_alias(name, aliases)
-                && (op == "print" || op == "println")
-            {
-                return Some(("Print".to_string(), op.to_string()));
-            }
-            if let Some(op) = resolve_var_alias(name, aliases)
-                && (op == "read" || op == "read_line")
-            {
-                return Some(("Read".to_string(), op.to_string()));
+            if let Some(op) = resolve_var_alias(name, aliases) {
+                if let Some(effect_op) = backend_effect_op("Print", op) {
+                    return Some(effect_op);
+                }
+                if let Some(effect_op) = backend_effect_op("Read", op) {
+                    return Some(effect_op);
+                }
             }
             let (module, op) = resolve_global_ref(name, aliases)?;
-            if is_effect_pair(module, op) {
-                Some((module.to_string(), op.to_string()))
-            } else {
-                None
-            }
+            backend_effect_op(module, op)
         }
         _ => None,
     }
@@ -785,10 +765,25 @@ fn backend_intrinsic_for_bare(name: &str, arg_count: usize) -> Option<BackendInt
 }
 
 fn is_effect_pair(module: &str, op: &str) -> bool {
-    matches!(
-        (module, op),
-        ("Print", "print") | ("Print", "println") | ("Read", "read") | ("Read", "read_line")
-    )
+    backend_effect_op(module, op).is_some()
+}
+
+fn backend_print_op(module: &str, op: &str) -> Option<BackendPrintOp> {
+    match (module, op) {
+        ("Print", "print") => Some(BackendPrintOp::Print),
+        ("Print", "println") => Some(BackendPrintOp::Println),
+        _ => None,
+    }
+}
+
+fn backend_effect_op(module: &str, op: &str) -> Option<BackendEffectOp> {
+    match (module, op) {
+        ("Print", "print") => Some(BackendEffectOp::Print(BackendPrintOp::Print)),
+        ("Print", "println") => Some(BackendEffectOp::Print(BackendPrintOp::Println)),
+        ("Read", "read") => Some(BackendEffectOp::Read(BackendReadOp::Read)),
+        ("Read", "read_line") => Some(BackendEffectOp::Read(BackendReadOp::ReadLine)),
+        _ => None,
+    }
 }
 
 fn instrs_load_local(instrs: &[WasmBackendInstr], name: &str) -> bool {
@@ -803,7 +798,9 @@ fn instrs_load_local(instrs: &[WasmBackendInstr], name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::gen_lower::backend_ir::WasmBackendInstr as I;
+    use crate::gen_lower::backend_ir::{
+        BackendEffectOp, BackendIntrinsic, BackendPrintOp, BackendReadOp, WasmBackendInstr as I,
+    };
 
     #[test]
     fn lower_perform_read() {
@@ -816,8 +813,7 @@ mod tests {
         assert_eq!(
             instrs,
             vec![I::EffectOp {
-                effect: "Read".to_string(),
-                op: "read".to_string(),
+                op: BackendEffectOp::Read(BackendReadOp::Read),
             }]
         );
     }
@@ -837,8 +833,7 @@ mod tests {
                     name: "x".to_string()
                 },
                 I::EffectOp {
-                    effect: "Print".to_string(),
-                    op: "print".to_string(),
+                    op: BackendEffectOp::Print(BackendPrintOp::Print),
                 },
             ]
         );
@@ -869,8 +864,7 @@ mod tests {
                     name: "text".to_string()
                 },
                 I::EffectOp {
-                    effect: "Read".to_string(),
-                    op: "read".to_string()
+                    op: BackendEffectOp::Read(BackendReadOp::Read)
                 },
                 I::StoreLocal {
                     name: "text".to_string()
@@ -879,8 +873,7 @@ mod tests {
                     name: "text".to_string()
                 },
                 I::EffectOp {
-                    effect: "Print".to_string(),
-                    op: "print".to_string()
+                    op: BackendEffectOp::Print(BackendPrintOp::Print)
                 },
             ]
         );
@@ -917,8 +910,7 @@ mod tests {
                     name: "text".to_string()
                 },
                 I::EffectOp {
-                    effect: "Print".to_string(),
-                    op: "print".to_string(),
+                    op: BackendEffectOp::Print(BackendPrintOp::Print),
                 },
             ]
         );
@@ -1152,8 +1144,7 @@ mod tests {
                     intrinsic: BackendIntrinsic::StringEachGraphemeState,
                 },
                 I::EffectOp {
-                    effect: "Print".to_string(),
-                    op: "println".to_string(),
+                    op: BackendEffectOp::Print(BackendPrintOp::Println),
                 },
             ]
         );
@@ -1231,8 +1222,7 @@ mod tests {
                     name: "x".to_string()
                 },
                 I::EffectOp {
-                    effect: "Read".to_string(),
-                    op: "read".to_string()
+                    op: BackendEffectOp::Read(BackendReadOp::Read)
                 },
             ]
         );
@@ -1301,8 +1291,7 @@ mod tests {
                 I::Drop,
                 // Seq tail
                 I::EffectOp {
-                    effect: "Read".to_string(),
-                    op: "read".to_string()
+                    op: BackendEffectOp::Read(BackendReadOp::Read)
                 },
             ]
         );
@@ -1349,8 +1338,7 @@ mod tests {
                     intrinsic: BackendIntrinsic::StringEachGraphemeState,
                 },
                 I::EffectOp {
-                    effect: "Print".to_string(),
-                    op: "println".to_string(),
+                    op: BackendEffectOp::Print(BackendPrintOp::Println),
                 },
             ]
         );
