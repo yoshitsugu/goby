@@ -26,6 +26,9 @@ Last updated: 2026-03-24
 - WB-3B compile-path prep extended (2026-03-24): general lowering now exposes an internal
   option-aware Wasm emission helper so strategy parity tests run through the same
   `try_general_lower_module` entrypoint used by `compile_module`.
+- WB-3B remains externally blocked as of 2026-03-24:
+  - WebAssembly official proposals tracker still lists Stack Switching in Phase 2.
+  - Local `wasm-encoder` source exposes no stack-switching/WasmFX instruction support.
 - **WB-3 is complete.** All 13 `CompExpr` variants and all 12 `ValueExpr` variants are handled in the `GeneralLowered` path (within supported subsets).
 
 ## Track Priority

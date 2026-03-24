@@ -493,6 +493,13 @@ Captured variables: same convention as handler functions (explicit extra paramet
 **Prerequisite:** WebAssembly stack-switching proposal reaches Phase 4 (standardized);
 Wasmtime supports it on x64 and ARM64.
 
+**External blocker status (2026-03-24):**
+- WebAssembly official proposals tracker lists **Stack Switching** in **Phase 2**
+  (`Proposed Spec Text Available`), so the standardization prerequisite is not yet met.
+- Current local `wasm-encoder` source in the Cargo registry exposes no stack-switching /
+  WasmFX instruction support, so the required emit-layer swap cannot be implemented honestly
+  in this repository yet.
+
 **Scope:** replace WB-3A emit logic for `WithHandler`/`PerformEffect`/`Resume` with
 `suspend`/`resume` Wasm instructions. IR is unchanged. Enables non-tail `Resume` and
 multi-resume progression without source-level CPS transformation.

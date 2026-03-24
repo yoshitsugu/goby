@@ -625,6 +625,29 @@ mod tests {
         );
     }
 
+    fn assert_default_strategy_matches_selected_strategy(module: &goby_core::Module) {
+        let expected_strategy = if cfg!(feature = "wasmfx-experimental") {
+            EffectEmitStrategy::Wb3BWasmFxExperimental
+        } else {
+            EffectEmitStrategy::Wb3DirectCall
+        };
+        let default = try_general_lower_module(module)
+            .expect("default lowering should not error")
+            .expect("default general lowering should apply");
+        let explicit = try_general_lower_module_with_options(
+            module,
+            EmitOptions {
+                effect_emit_strategy: expected_strategy,
+            },
+        )
+        .expect("explicit lowering should not error")
+        .expect("explicit general lowering should apply");
+        assert_eq!(
+            default, explicit,
+            "default general-lowering path should match the feature-selected explicit strategy"
+        );
+    }
+
     #[test]
     fn general_lowered_main_discards_final_goby_value() {
         let module = parse_module(
@@ -694,6 +717,28 @@ main =
     }
 
     #[test]
+    fn safe_handler_only_module_default_strategy_matches_feature_selection() {
+        let module = parse_module(
+            r#"
+effect Tick
+  tick: String -> Unit
+
+main : Unit -> Unit can Tick, Print
+main =
+  with
+    tick value ->
+      print value
+      resume ()
+  in
+    tick "a"
+"#,
+        )
+        .expect("source should parse");
+
+        assert_default_strategy_matches_selected_strategy(&module);
+    }
+
+    #[test]
     fn helper_decl_read_module_has_emit_strategy_parity() {
         let module = parse_module(
             r#"
@@ -710,5 +755,24 @@ main =
         .expect("source should parse");
 
         assert_strategy_parity(&module);
+    }
+
+    #[test]
+    fn helper_decl_read_module_default_strategy_matches_feature_selection() {
+        let module = parse_module(
+            r#"
+greet : String -> Unit can Print
+greet name =
+  println "hello ${name}"
+
+main : Unit -> Unit can Print, Read
+main =
+  input = read()
+  greet input
+"#,
+        )
+        .expect("source should parse");
+
+        assert_default_strategy_matches_selected_strategy(&module);
     }
 }
