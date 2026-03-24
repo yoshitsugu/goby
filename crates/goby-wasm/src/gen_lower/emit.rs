@@ -1367,7 +1367,8 @@ fn emit_helper_call(
         BackendIntrinsic::StringLength => emit_string_length_helper(function, helper_state),
         BackendIntrinsic::StringEachGraphemeCount
         | BackendIntrinsic::StringEachGraphemeState
-        | BackendIntrinsic::StringConcat => {
+        | BackendIntrinsic::StringConcat
+        | BackendIntrinsic::StringGraphemesList => {
             let host_import = host_import_for_intrinsic(intrinsic).ok_or_else(|| CodegenError {
                 message: format!(
                     "gen_lower/emit: missing host import mapping for intrinsic '{intrinsic:?}'"

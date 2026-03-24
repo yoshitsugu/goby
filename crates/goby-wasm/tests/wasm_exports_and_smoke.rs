@@ -976,6 +976,60 @@ main =
     );
 }
 
+// ---------------------------------------------------------------------------
+// WB-3-M4: graphemes GeneralLowered end-to-end
+// ---------------------------------------------------------------------------
+
+#[test]
+fn wb3_m4_graphemes_each_classifies_as_general_lowered() {
+    // Uses `parts = graphemes text; each parts println` to get a List String and iterate it.
+    // Avoids the fused graphemes-get-print (index-access) pattern.
+    // Requires StringGraphemesList intrinsic to lower the graphemes call (WB-3-M4).
+    let source = r#"
+import goby/string ( graphemes )
+import goby/list ( each )
+
+main : Unit -> Unit can Print, Read
+main =
+  text = read()
+  parts = graphemes text
+  each parts println
+"#;
+    let module = parse_module(source).expect("source should parse");
+    assert_eq!(
+        runtime_io_execution_kind(&module).expect("classification should succeed"),
+        RuntimeIoExecutionKind::GeneralLowered,
+        "graphemes + each should classify as GeneralLowered end-to-end (WB-3-M4)"
+    );
+}
+
+#[test]
+fn wb3_m4_graphemes_each_executes_correctly() {
+    // Execution test: emoji-family input "a👨‍👩‍👧‍👦b" should print each grapheme cluster on its own line.
+    let source = r#"
+import goby/string ( graphemes )
+import goby/list ( each )
+
+main : Unit -> Unit can Print, Read
+main =
+  text = read()
+  parts = graphemes text
+  each parts println
+"#;
+    let module = parse_module(source).expect("source should parse");
+    // Confirm classification first.
+    assert_eq!(
+        runtime_io_execution_kind(&module).expect("classification should succeed"),
+        RuntimeIoExecutionKind::GeneralLowered,
+        "wb3_m4 execution test: program must be GeneralLowered"
+    );
+    let output = execute_runtime_module_with_stdin(&module, Some("a👨‍👩‍👧‍👦b".to_string()))
+        .expect("execution should succeed")
+        .expect("output should be Some");
+    // "a👨‍👩‍👧‍👦b" has 3 extended grapheme clusters: "a", "👨‍👩‍👧‍👦", "b"
+    assert_eq!(output, "a\n👨\u{200d}👩\u{200d}👧\u{200d}👦\nb\n");
+}
+
 #[test]
 fn execute_module_with_stdin_rejects_not_runtime_io_program() {
     // NotRuntimeIo programs (complex static evaluation via variable bindings etc.)

@@ -319,6 +319,19 @@ fn lower_comp_inner(
                     list_instrs,
                     func_instrs,
                 }])
+            } else if let goby_core::ir::ValueExpr::GlobalRef { module, name } = callee.as_ref()
+                && module == "string"
+                && name == "graphemes"
+                && args.len() == 1
+            {
+                // stdlib string.graphemes: lower as StringGraphemesList host intrinsic (WB-3-M4).
+                // Returns a tagged List String containing all Unicode Extended Grapheme Clusters.
+                let mut instrs =
+                    lower_comp_inner(&CompExpr::Value(args[0].clone()), aliases, known_decls, lambda_decls)?;
+                instrs.push(WasmBackendInstr::Intrinsic {
+                    intrinsic: BackendIntrinsic::StringGraphemesList,
+                });
+                Ok(instrs)
             } else if let goby_core::ir::ValueExpr::GlobalRef { name, .. } = callee.as_ref() {
                 // Top-level user declaration call via GlobalRef (WB-2A).
                 let mut instrs = Vec::new();
@@ -371,6 +384,22 @@ fn lower_comp_inner(
                         list_instrs,
                         func_instrs,
                     }])
+                } else if (name == "graphemes"
+                    || resolve_global_ref(name, aliases) == Some(("string", "graphemes")))
+                    && args.len() == 1
+                {
+                    // Var resolves to string.graphemes (bare name or alias via `import goby/string (graphemes)`).
+                    // Lower as StringGraphemesList host intrinsic (WB-3-M4).
+                    let mut instrs = lower_comp_inner(
+                        &CompExpr::Value(args[0].clone()),
+                        aliases,
+                        known_decls,
+                        lambda_decls,
+                    )?;
+                    instrs.push(WasmBackendInstr::Intrinsic {
+                        intrinsic: BackendIntrinsic::StringGraphemesList,
+                    });
+                    Ok(instrs)
                 } else {
                     // Runtime function-value call via `call_indirect` (WB-2A-M3).
                     // `name` is a local variable holding a TAG_FUNC tagged i64 handle.
@@ -2082,6 +2111,46 @@ mod tests {
             matches!(result, Err(LowerError::UnsupportedForm { .. })),
             "Lambda with free variable should be UnsupportedForm, got: {:?}",
             result
+        );
+    }
+
+    /// `Call(GlobalRef { "string", "graphemes" }, [Var("text")])` → `Intrinsic { StringGraphemesList }` (WB-3-M4).
+    #[test]
+    fn lower_string_graphemes_globalref_lowers_as_intrinsic() {
+        let comp = CompExpr::Call {
+            callee: Box::new(ValueExpr::GlobalRef {
+                module: "string".to_string(),
+                name: "graphemes".to_string(),
+            }),
+            args: vec![ValueExpr::Var("text".to_string())],
+        };
+        let instrs = lower_comp(&comp).expect("string.graphemes GlobalRef should lower to intrinsic");
+        assert!(
+            matches!(
+                instrs.as_slice(),
+                [I::LoadLocal { .. }, I::Intrinsic { intrinsic: BackendIntrinsic::StringGraphemesList }]
+            ),
+            "expected [LoadLocal, Intrinsic(StringGraphemesList)], got: {:?}",
+            instrs
+        );
+    }
+
+    /// `Var("graphemes")` resolving to `string.graphemes` via alias also lowers as intrinsic (WB-3-M4).
+    #[test]
+    fn lower_string_graphemes_alias_var_lowers_as_intrinsic() {
+        // Simulates: `import goby/string (graphemes)` → `graphemes` becomes a Var with GlobalRef alias.
+        let comp = CompExpr::Call {
+            callee: Box::new(ValueExpr::Var("graphemes".to_string())),
+            args: vec![ValueExpr::Var("text".to_string())],
+        };
+        let instrs = lower_comp(&comp).expect("graphemes Var (bare name) should lower to intrinsic");
+        assert!(
+            matches!(
+                instrs.as_slice(),
+                [I::LoadLocal { .. }, I::Intrinsic { intrinsic: BackendIntrinsic::StringGraphemesList }]
+            ),
+            "expected [LoadLocal, Intrinsic(StringGraphemesList)], got: {:?}",
+            instrs
         );
     }
 }

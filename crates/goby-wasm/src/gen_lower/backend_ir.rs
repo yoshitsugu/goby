@@ -76,6 +76,12 @@ pub(crate) enum BackendIntrinsic {
     StringEachGraphemeState,
     ListPushString,
     StringConcat,
+    /// Collect all Unicode Extended Grapheme Clusters from a string as a tagged list.
+    ///
+    /// Signature: `(tagged_str: i64) -> i64` (tagged `List String`).
+    /// Implemented as a host import; the host allocates grapheme strings and a list
+    /// in the host bump region and returns a tagged list pointer.
+    StringGraphemesList,
 }
 
 impl BackendIntrinsic {
@@ -88,6 +94,7 @@ impl BackendIntrinsic {
             BackendIntrinsic::StringEachGraphemeState => 2,
             BackendIntrinsic::ListPushString => 2,
             BackendIntrinsic::StringConcat => 2,
+            BackendIntrinsic::StringGraphemesList => 1,
         }
     }
 
@@ -95,7 +102,8 @@ impl BackendIntrinsic {
         match self {
             BackendIntrinsic::StringEachGraphemeCount
             | BackendIntrinsic::StringEachGraphemeState
-            | BackendIntrinsic::StringConcat => IntrinsicExecutionBoundary::HostImport,
+            | BackendIntrinsic::StringConcat
+            | BackendIntrinsic::StringGraphemesList => IntrinsicExecutionBoundary::HostImport,
             BackendIntrinsic::StringSplit
             | BackendIntrinsic::ListGet
             | BackendIntrinsic::StringLength
