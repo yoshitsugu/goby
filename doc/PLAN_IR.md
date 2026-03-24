@@ -446,10 +446,10 @@ Captured variables: same convention as handler functions (explicit extra paramet
   - without relying on Track E host-intrinsic bridge
   - regression: emoji-family grapheme output matches current bridge output
   - implemented via `StringGraphemesList` host intrinsic (`__goby_string_graphemes_list`)
-- [ ] WB-3-M5. Fused patterns made obsolete by WB-3 identified and deleted
-  - `SplitEachPrint`, `SplitGetPrint`, `graphemes-get-print` are primary candidates
-  - Track E host-intrinsic bridge may be retained as an optional optimisation but must
-    no longer be required for correctness
+- [x] WB-3-M5. Fused patterns made obsolete by WB-3 identified and deleted
+  - `graphemes-get-print` in lower.rs deleted (replaced by StringGraphemesList + ListGet)
+  - `SplitEachPrint`, `SplitGetPrint` retained as optimization in DynamicWasiIo path only;
+    not required for correctness (GeneralLowered path handles all split+each programs)
 - [ ] WB-3-M6. `InterpreterBridge` usage reviewed; reduce to genuinely Wasm-incompatible programs
 - [ ] WB-3-M7. Integration test: the following program executes correctly via `GeneralLowered`
   end-to-end (stdin provided at runtime):
