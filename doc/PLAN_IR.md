@@ -442,9 +442,10 @@ Captured variables: same convention as handler functions (explicit extra paramet
 - [x] WB-3-M3. `ValueExpr::Lambda` lowered
   - done when: a lambda expression passed to `map` classifies as `GeneralLowered`
   - regression: `map [1,2,3] (fn x -> x + 1)` executes correctly
-- [ ] WB-3-M4. `stdlib/goby/string.gb` `graphemes` classifies as `GeneralLowered` end-to-end
+- [x] WB-3-M4. `stdlib/goby/string.gb` `graphemes` classifies as `GeneralLowered` end-to-end
   - without relying on Track E host-intrinsic bridge
   - regression: emoji-family grapheme output matches current bridge output
+  - implemented via `StringGraphemesList` host intrinsic (`__goby_string_graphemes_list`)
 - [ ] WB-3-M5. Fused patterns made obsolete by WB-3 identified and deleted
   - `SplitEachPrint`, `SplitGetPrint`, `graphemes-get-print` are primary candidates
   - Track E host-intrinsic bridge may be retained as an optional optimisation but must
