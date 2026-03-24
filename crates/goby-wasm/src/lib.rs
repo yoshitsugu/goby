@@ -4,6 +4,7 @@ mod call;
 mod compile_tests;
 mod effect_handler_legality;
 mod effect_handler_lowering;
+mod execution_plan;
 mod fallback;
 mod gen_lower;
 mod grapheme_semantics;
@@ -53,7 +54,6 @@ use crate::runtime_flow::{
     ResolvedEffectHandler, ResolvedHandlerMethod, ResumeToken, RuntimeDeclInfo, RuntimeError,
     RuntimeEvaluators, RuntimeHandlerMethod, StoreOp, WithId,
 };
-use crate::runtime_io_plan::classify_runtime_io_with_ir_fallback;
 pub use crate::runtime_io_plan::{RuntimeIoExecutionKind, runtime_io_execution_kind};
 use crate::runtime_support::{eval_string_expr, parse_pipeline};
 use crate::runtime_value::{RuntimeLocals, RuntimeValue, runtime_value_option_eq};
@@ -62,7 +62,6 @@ use goby_core::{
     ast::InterpolatedPart, types::parse_function_type,
 };
 use std::collections::{HashMap, HashSet};
-const ERR_MISSING_MAIN: &str = "Wasm codegen requires a `main` declaration";
 pub(crate) const BUILTIN_PRINT: &str = "print";
 const PRELUDE_MODULE_PATH: &str = "goby/prelude";
 pub(crate) const MAX_EVAL_DEPTH: usize = 32;
@@ -74,11 +73,8 @@ const ERR_CALLABLE_DISPATCH_DECL_PARAM: &str = "unsupported callable dispatch [E
 
 #[cfg(test)]
 pub(crate) use crate::runtime_entry::resolve_module_runtime_output;
-use crate::runtime_entry::resolve_module_runtime_output_for_compile;
 #[cfg(test)]
 pub(crate) use crate::runtime_entry::resolve_module_runtime_output_with_mode;
-#[cfg(not(test))]
-use crate::runtime_entry::resolve_module_runtime_output_with_mode_and_stdin;
 #[cfg(test)]
 pub(crate) use crate::runtime_entry::resolve_module_runtime_output_with_mode_and_stdin;
 #[cfg(test)]
@@ -92,111 +88,6 @@ pub struct CodegenError {
     pub message: String,
 }
 
-fn unresolved_runtime_output_error(
-    module: &Module,
-    handoff: Option<lower::EffectBoundaryHandoff>,
-) -> CodegenError {
-    if let Some(handoff) = handoff {
-        if let Some((record, issue)) = handoff.handler_legality.first_issue() {
-            return CodegenError {
-                message: format!(
-                    "backend limitation [E-BACKEND-LIMITATION]: effect handler in '{}' is outside the one-shot tail-resumptive subset (ops={:?}, issue={})",
-                    record.decl_name,
-                    record.clause_ops,
-                    issue.as_str(),
-                ),
-            };
-        }
-        if handoff.handler_legality.all_one_shot_tail_resumptive() {
-            return CodegenError {
-                message: "main body uses one-shot tail-resumptive effect handlers, but WB-3A direct-call lowering is not implemented yet".to_string(),
-            };
-        }
-        return CodegenError {
-            message: format!(
-                "main lowered as effect boundary (style={:?}, selected_mode={:?}, selected_mode_fallback_reason={:?}, runtime_profile={:?}, typed_continuation_ir_present={}, handlers_resume={}, handler_with_count={}, handler_with_unsupported={}, evidence_ops={}, evidence_requirements={}, evidence_fingerprint_hint={}); fallback runtime output could not be resolved",
-                handoff.main_style,
-                handoff.selected_mode,
-                handoff.selected_mode_fallback_reason,
-                handoff.runtime_profile,
-                handoff.typed_continuation_ir.is_some(),
-                handoff.handler_resume_present,
-                handoff.handler_legality.records().len(),
-                handoff.handler_legality.has_unsupported(),
-                handoff.evidence_operation_table_len,
-                handoff.evidence_requirements_len,
-                handoff.evidence_fingerprint_hint,
-            ),
-        };
-    }
-
-    if let Some(reason) = fallback::native_unsupported_reason(module) {
-        return CodegenError {
-            message: format!(
-                "main body requires backend features not yet supported by native lowering or static-output resolution (native_backend_limitation={})",
-                reason
-            ),
-        };
-    }
-
-    CodegenError {
-        message:
-            "main body requires backend features not yet supported by native lowering or static-output resolution"
-                .to_string(),
-    }
-}
-
-#[allow(clippy::type_complexity)]
-fn runtime_mode_and_handoff(
-    module: &Module,
-) -> Result<
-    (
-        lower::EffectExecutionMode,
-        Option<lower::EffectBoundaryHandoff>,
-    ),
-    CodegenError,
-> {
-    module
-        .declarations
-        .iter()
-        .find(|d| d.name == "main")
-        .ok_or_else(|| CodegenError {
-            message: ERR_MISSING_MAIN.to_string(),
-        })?;
-
-    let native_attempt = lower::try_emit_native_module_with_handoff(module)?;
-    let mut effect_boundary_handoff: Option<lower::EffectBoundaryHandoff> = None;
-    match native_attempt {
-        lower::NativeLoweringResult::Emitted(_) => {}
-        lower::NativeLoweringResult::EffectBoundaryHandoff(handoff) => {
-            if handoff.main_style == planning::LoweringStyle::DirectStyle {
-                return Err(CodegenError {
-                    message:
-                        "internal lowering invariant violation: direct-style main produced boundary handoff"
-                            .to_string(),
-                });
-            }
-            if let Some(main_req) = handoff.main_requirement
-                && main_req.style == planning::LoweringStyle::DirectStyle
-                && main_req.passes_evidence
-            {
-                return Err(CodegenError {
-                    message: "internal lowering invariant violation: direct-style main requirement marked as evidence-passing".to_string(),
-                });
-            }
-            effect_boundary_handoff = Some(handoff);
-        }
-        lower::NativeLoweringResult::NotLowered => {}
-    }
-
-    let runtime_mode = effect_boundary_handoff
-        .as_ref()
-        .map(|handoff| handoff.selected_mode)
-        .unwrap_or(lower::EffectExecutionMode::PortableFallback);
-
-    Ok((runtime_mode, effect_boundary_handoff))
-}
-
 /// Compile a parsed Goby [`Module`] into a WASI Preview 1 Wasm binary.
 ///
 /// # Errors
@@ -207,31 +98,7 @@ fn runtime_mode_and_handoff(
 ///   native lowering nor resolvable as static print output.
 /// - Internal Wasm encoding fails (e.g. string literal too large).
 pub fn compile_module(module: &Module) -> Result<Vec<u8>, CodegenError> {
-    if let lower::NativeLoweringResult::Emitted(wasm) =
-        lower::try_emit_native_module_with_handoff(module)?
-    {
-        return Ok(wasm);
-    }
-    // Attempt general lowering before shape-specific classification.
-    if let Some(wasm) = gen_lower::try_general_lower_module(module)? {
-        return Ok(wasm);
-    }
-    let (runtime_mode, effect_boundary_handoff) = runtime_mode_and_handoff(module)?;
-    // G6: IR-based classification with AST fallback.
-    let io_classification = classify_runtime_io_with_ir_fallback(module);
-    if let Some(wasm) = io_classification.compile_module_wasm_or_error()? {
-        return Ok(wasm);
-    }
-    if let Some(text) = resolve_module_runtime_output_for_compile(module, runtime_mode)
-        .map_err(|message| CodegenError { message })?
-    {
-        return print_codegen::compile_print_module(&text);
-    }
-
-    Err(unresolved_runtime_output_error(
-        module,
-        effect_boundary_handoff,
-    ))
+    execution_plan::compile_module_entrypoint(module)
 }
 
 /// Execute an [`InterpreterBridge`][`crate::RuntimeIoExecutionKind::InterpreterBridge`]
@@ -265,21 +132,7 @@ pub fn execute_module_with_stdin(
     module: &Module,
     stdin_seed: Option<String>,
 ) -> Result<Option<String>, CodegenError> {
-    let (runtime_mode, effect_boundary_handoff) = runtime_mode_and_handoff(module)?;
-    // G6: IR-based classification with AST fallback.
-    let io_classification = classify_runtime_io_with_ir_fallback(module);
-    io_classification.require_interpreter_bridge_stdin()?;
-
-    if let Some(text) =
-        resolve_module_runtime_output_with_mode_and_stdin(module, runtime_mode, stdin_seed)
-    {
-        return Ok(Some(text));
-    }
-
-    Err(unresolved_runtime_output_error(
-        module,
-        effect_boundary_handoff,
-    ))
+    execution_plan::execute_module_with_stdin_entrypoint(module, stdin_seed)
 }
 
 /// Execute a runtime-stdin Goby module through the `goby-wasm` owned execution boundary.
@@ -299,19 +152,7 @@ pub fn execute_runtime_module_with_stdin(
     module: &Module,
     stdin_seed: Option<String>,
 ) -> Result<Option<String>, CodegenError> {
-    match runtime_io_execution_kind(module)? {
-        RuntimeIoExecutionKind::GeneralLowered => {
-            let wasm = compile_module(module)?;
-            let output = wasm_exec::run_wasm_bytes_with_stdin(&wasm, stdin_seed.as_deref())
-                .map_err(|message| CodegenError { message })?;
-            Ok(Some(output))
-        }
-        RuntimeIoExecutionKind::InterpreterBridge => execute_module_with_stdin(module, stdin_seed),
-        RuntimeIoExecutionKind::DynamicWasiIo
-        | RuntimeIoExecutionKind::StaticOutput
-        | RuntimeIoExecutionKind::Unsupported
-        | RuntimeIoExecutionKind::NotRuntimeIo => Ok(None),
-    }
+    execution_plan::execute_runtime_module_with_stdin_entrypoint(module, stdin_seed)
 }
 
 pub(crate) struct RuntimeOutputResolver<'m> {
