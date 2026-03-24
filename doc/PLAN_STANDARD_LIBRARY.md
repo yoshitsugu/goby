@@ -23,7 +23,7 @@ completed historical work and recovered from git history if needed.
 
 ## 2. Current State
 
-Already true today (updated 2026-03-23, Track E E7 handoff):
+Already true today (updated 2026-03-24):
 
 - file-based stdlib import resolution exists,
 - stdlib-only `@embed` is implemented,
@@ -43,8 +43,11 @@ Still not finished:
 
 - multi-grapheme delimiters still depend on the runtime `string.split(...)`
   builtin path (the `else` branch of `split` in `stdlib/goby/string.gb`),
-- stdlib state/type plumbing for the final `split` implementation is incomplete
-  (`List String` as a record field type is not yet accepted by the type checker),
+- stdlib state/type plumbing for the final `split` implementation is incomplete:
+  - plain record field annotations such as `type S = S(xs: List String)` are already accepted,
+  - but `stdlib/goby/string.gb` still fails because:
+    - `parts: []` style state initialization remains `List Unknown` in `GraphemeState` constructor flows,
+    - `grapheme_count` currently hits a local `mut` binding/typecheck failure (`mut n = 0` reported as undeclared assignment),
 - the runtime builtin branch cannot yet be deleted.
 
 ## 3. Locked Behavior
@@ -82,14 +85,21 @@ These semantics remain locked while finishing the work:
 ## 5. Step-By-Step Execution
 
 - [ ] C4-S1. Unblock stdlib state type declaration
-  - extend type declaration validation/type-expression handling so record fields
-    can use generic application types such as `List String`.
+  - update the typechecker/local-binding path so `stdlib/goby/string.gb` passes under the
+    current language/runtime architecture.
+  - concrete subproblems to close:
+    - `GraphemeState(... parts: [] ...)` must typecheck as `List String` in the relevant
+      constructor/state-update flows,
+    - `grapheme_count` local mutable binding (`mut n = 0`) must no longer be rejected as
+      an undeclared assignment.
   - add focused regression coverage:
     - positive: `type S = S(xs: List String)` accepted,
+    - positive: `GraphemeState(... parts: [] ...)`-style stdlib state initialization can
+      converge to `List String`,
+    - positive: `mut n = 0` local binding in stdlib-style declaration bodies typechecks,
     - negative: malformed generic field type still rejected.
   - exit criteria:
-    - `cargo run -p goby-cli -- check stdlib/goby/string.gb` no longer fails on
-      the state record field type.
+    - `cargo run -p goby-cli -- check stdlib/goby/string.gb` succeeds.
 
 - [ ] C4-S2. Stabilize iterator state contract in stdlib
   - keep `GraphemeState` in `stdlib/goby/iterator.gb` as the canonical shared
