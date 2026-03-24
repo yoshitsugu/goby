@@ -912,6 +912,70 @@ main =
     }
 
     // ------------------------------------------------------------------
+    // WB-2B-M4: TupleLit emission tests
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn wb2b_m4_tuple_lit_classifies_as_general_lowered() {
+        use goby_core::parse_module;
+        let module = parse_module(
+            r#"
+main : Unit -> Unit can Print, Read
+main =
+  _ = read()
+  pair = (1, "hello")
+  println "ok"
+"#,
+        )
+        .expect("parse should work");
+
+        assert_eq!(
+            runtime_io_execution_kind(&module).expect("classification should succeed"),
+            RuntimeIoExecutionKind::GeneralLowered,
+            "WB-2B-M4: tuple lit program must classify as GeneralLowered"
+        );
+
+        let output = execute_runtime_module_with_stdin(&module, Some(String::new()))
+            .expect("WB-2B-M4: tuple lit must execute");
+        assert_eq!(
+            output.as_deref(),
+            Some("ok\n"),
+            "WB-2B-M4: tuple path should execute"
+        );
+    }
+
+    #[test]
+    fn wb2b_m5_record_lit_classifies_as_general_lowered() {
+        use goby_core::parse_module;
+        let module = parse_module(
+            r#"
+type Pair = Pair(left: Int, right: String)
+
+main : Unit -> Unit can Print, Read
+main =
+  _ = read()
+  pair = Pair(left: 1, right: "hello")
+  println "ok"
+"#,
+        )
+        .expect("parse should work");
+
+        assert_eq!(
+            runtime_io_execution_kind(&module).expect("classification should succeed"),
+            RuntimeIoExecutionKind::GeneralLowered,
+            "WB-2B-M5: record lit program must classify as GeneralLowered"
+        );
+
+        let output = execute_runtime_module_with_stdin(&module, Some(String::new()))
+            .expect("WB-2B-M5: record lit must execute");
+        assert_eq!(
+            output.as_deref(),
+            Some("ok\n"),
+            "WB-2B-M5: record path should execute"
+        );
+    }
+
+    // ------------------------------------------------------------------
     // WB-2B-M2: ListPattern emission tests
     // ------------------------------------------------------------------
 
@@ -1035,11 +1099,7 @@ main =
 
         let output = execute_runtime_module_with_stdin(&module, Some(String::new()))
             .expect("WB-2B: empty-list-only case must execute");
-        assert_eq!(
-            output.as_deref(),
-            Some("yes\n"),
-            "WB-2B: is_empty [] → yes"
-        );
+        assert_eq!(output.as_deref(), Some("yes\n"), "WB-2B: is_empty [] → yes");
     }
 
     // ------------------------------------------------------------------

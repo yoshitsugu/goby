@@ -332,13 +332,13 @@ language-expansion item, not a backend-convergence item. Do not add them here.
 - [x] WB-2B-M3. `ValueExpr::ListLit` lowered
   - done when: `[1, 2, 3]` literal classifies as `GeneralLowered`
   - regression: empty list; non-empty list; list returned from function
-- [ ] WB-2B-M4. `ValueExpr::TupleLit` lowered (tagged i64, heap-allocated)
+- [x] WB-2B-M4. `ValueExpr::TupleLit` lowered (tagged i64, heap-allocated)
   - done when: `(1, "hello")` classifies as `GeneralLowered`
   - regression: tuple construction; tuple field access (if field access is in scope)
-- [ ] WB-2B-M5. `ValueExpr::RecordLit` lowered
+- [x] WB-2B-M5. `ValueExpr::RecordLit` lowered
   - done when: a record construction expression classifies as `GeneralLowered`
   - regression: record construction; field access
-- [ ] WB-2B-M6. `stdlib/goby/list.gb` `map` and `each` classify as `GeneralLowered` end-to-end
+- [x] WB-2B-M6. `stdlib/goby/list.gb` `map` and `each` classify as `GeneralLowered` end-to-end
   - this is the primary done condition for WB-2 as a whole
   - regression: `map [1,2,3] f` and `each [1,2,3] f` execute with correct output
 - [ ] WB-2B-M7. Fused patterns made obsolete by WB-2 are identified and deleted

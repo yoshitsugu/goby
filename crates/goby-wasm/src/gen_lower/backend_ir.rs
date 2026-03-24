@@ -238,6 +238,27 @@ pub(crate) enum WasmBackendInstr {
     ListLit {
         element_instrs: Vec<Vec<WasmBackendInstr>>,
     },
+    /// Construct a tuple value from a fixed number of element instruction sequences.
+    ///
+    /// Each inner `Vec<WasmBackendInstr>` produces one tagged i64 element.
+    /// The emitter allocates `4 + 8 * len` bytes via the bump allocator, writes
+    /// the tuple arity (`i32`) followed by each field value (`i64`), and pushes
+    /// a tagged tuple pointer.
+    ///
+    /// The empty tuple is represented as `Unit` at lowering time and therefore
+    /// never reaches this backend instruction.
+    TupleLit {
+        element_instrs: Vec<Vec<WasmBackendInstr>>,
+    },
+    /// Construct a record value from a constructor tag and field instruction sequences.
+    ///
+    /// The emitter allocates `8 + 8 * field_count` bytes via the bump allocator,
+    /// writes a module-local constructor tag (`i64`) at offset 0, writes each field
+    /// value (`i64`) in IR field order, and pushes a tagged record pointer.
+    RecordLit {
+        constructor: String,
+        field_instrs: Vec<Vec<WasmBackendInstr>>,
+    },
     /// Fused: iterate a list and call an effect operation on each element (e.g. `Print.println`).
     ///
     /// Equivalent to `for item in list: effect.op(item)`.

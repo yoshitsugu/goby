@@ -16,7 +16,7 @@ use crate::gen_lower::backend_ir::{BackendIntrinsic, SplitIndexOperand, WasmBack
 use goby_core::ir::IrBinOp;
 
 use crate::gen_lower::value::{
-    TAG_BOOL, TAG_INT, TAG_LIST, TAG_STRING, encode_string_ptr, encode_unit,
+    TAG_BOOL, TAG_INT, TAG_LIST, TAG_RECORD, TAG_STRING, TAG_TUPLE, encode_string_ptr, encode_unit,
 };
 use crate::host_runtime::{
     HOST_INTRINSIC_IMPORTS, IntrinsicExecutionBoundary, host_import_for_intrinsic,
@@ -60,8 +60,9 @@ const HELPER_ALLOC_CURSOR_OFFSET: u32 = 11;
 const HELPER_HEAP_FLOOR_OFFSET: u32 = 12;
 
 // Named offsets into the HELPER_SCRATCH_I32 pool (relative to i32_base).
-// These are used across emit_string_split_helper, emit_helper_call, emit_instrs (ListLit),
-// emit_case_match (ListPattern), and emit_list_push_string_helper.
+// These are used across emit_string_split_helper, emit_helper_call, emit_instrs
+// (ListLit/TupleLit/RecordLit), emit_case_match (ListPattern), and
+// emit_list_push_string_helper.
 const HS_TEXT_PTR: u32 = 0; // text/string/list ptr
 const HS_TEXT_LEN: u32 = 1; // text/string/list len
 const HS_SEP_PTR: u32 = 2; // sep ptr / decoded index
@@ -169,6 +170,8 @@ struct EmitContext {
     /// Type index for `(i64) -> i64` in the Wasm type section, used by `IndirectCall`.
     /// `None` when the module has no `IndirectCall` instructions.
     indirect_call_type_idx: Option<u32>,
+    /// Map from record constructor name to module-local numeric tag used in `RecordLit`.
+    record_ctor_tags: HashMap<String, u32>,
 }
 
 impl EmitContext {
@@ -179,6 +182,7 @@ impl EmitContext {
             decl_func_indices: HashMap::new(),
             decl_table_slots: HashMap::new(),
             indirect_call_type_idx: None,
+            record_ctor_tags: HashMap::new(),
         }
     }
 
@@ -189,6 +193,7 @@ impl EmitContext {
             decl_func_indices,
             decl_table_slots: HashMap::new(),
             indirect_call_type_idx: None,
+            record_ctor_tags: HashMap::new(),
         }
     }
 
@@ -229,6 +234,17 @@ impl EmitContext {
     fn reset_locals(&mut self) {
         self.locals.clear();
         self.next_local = 0;
+    }
+
+    fn record_ctor_tag(&self, constructor: &str) -> Result<u32, CodegenError> {
+        self.record_ctor_tags
+            .get(constructor)
+            .copied()
+            .ok_or_else(|| CodegenError {
+                message: format!(
+                    "gen_lower/emit: unknown record constructor '{constructor}' in RecordLit"
+                ),
+            })
     }
 }
 
@@ -277,6 +293,16 @@ fn collect_all_instrs(instrs: &[WasmBackendInstr]) -> Vec<&WasmBackendInstr> {
                     result.extend(collect_all_instrs(elem));
                 }
             }
+            WasmBackendInstr::TupleLit { element_instrs } => {
+                for elem in element_instrs {
+                    result.extend(collect_all_instrs(elem));
+                }
+            }
+            WasmBackendInstr::RecordLit { field_instrs, .. } => {
+                for field in field_instrs {
+                    result.extend(collect_all_instrs(field));
+                }
+            }
             WasmBackendInstr::ListEachEffect { list_instrs, .. } => {
                 result.extend(collect_all_instrs(list_instrs));
             }
@@ -297,7 +323,6 @@ fn collect_all_instrs(instrs: &[WasmBackendInstr]) -> Vec<&WasmBackendInstr> {
     result
 }
 
-
 /// Returns true when `instrs` require the `HelperEmitState` bump-allocator / i32 scratch pool.
 ///
 /// This is the single source of truth for the helper-state gate used both in
@@ -305,6 +330,8 @@ fn collect_all_instrs(instrs: &[WasmBackendInstr]) -> Vec<&WasmBackendInstr> {
 /// contains any of:
 /// - An `Intrinsic` instruction (uses the full HELPER_SCRATCH_I32 pool).
 /// - A `ListLit` instruction (uses bump allocator via `emit_alloc_from_top`).
+/// - A `TupleLit` instruction (uses bump allocator via `emit_alloc_from_top`).
+/// - A `RecordLit` instruction (uses bump allocator via `emit_alloc_from_top`).
 /// - A `CaseMatch` arm with a `ListPattern` (needs bump allocator for tail sub-list).
 /// - A `CaseMatch` arm with an `EmptyList` pattern (needs one i32 to load the list pointer).
 fn needs_helper_state(instrs: &[WasmBackendInstr]) -> bool {
@@ -314,6 +341,8 @@ fn needs_helper_state(instrs: &[WasmBackendInstr]) -> bool {
             i,
             WasmBackendInstr::Intrinsic { .. }
                 | WasmBackendInstr::ListLit { .. }
+                | WasmBackendInstr::TupleLit { .. }
+                | WasmBackendInstr::RecordLit { .. }
                 | WasmBackendInstr::ListEachEffect { .. }
                 | WasmBackendInstr::ListEach { .. }
                 | WasmBackendInstr::ListMap { .. }
@@ -347,6 +376,16 @@ fn needs_helper_state(instrs: &[WasmBackendInstr]) -> bool {
                     }
                     WasmBackendInstr::ListLit { element_instrs } => {
                         if element_instrs.iter().any(|e| has_heap_pattern(e)) {
+                            return true;
+                        }
+                    }
+                    WasmBackendInstr::TupleLit { element_instrs } => {
+                        if element_instrs.iter().any(|e| has_heap_pattern(e)) {
+                            return true;
+                        }
+                    }
+                    WasmBackendInstr::RecordLit { field_instrs, .. } => {
+                        if field_instrs.iter().any(|e| has_heap_pattern(e)) {
                             return true;
                         }
                     }
@@ -470,6 +509,17 @@ pub(crate) fn emit_general_module_with_aux(
             message: "gen_lower/emit: static string pool leaves no room for runtime stdin buffer"
                 .to_string(),
         });
+    }
+    let mut record_ctor_tags = HashMap::new();
+    for instr in std::iter::once(instrs).chain(aux_decls.iter().map(|d| d.instrs.as_slice())) {
+        for nested in collect_all_instrs(instr) {
+            if let WasmBackendInstr::RecordLit { constructor, .. } = nested
+                && !record_ctor_tags.contains_key(constructor)
+            {
+                let next = record_ctor_tags.len() as u32;
+                record_ctor_tags.insert(constructor.clone(), next);
+            }
+        }
     }
 
     // --- Pre-scan for main: count declared I64 locals and detect I32 scratch needs ---
@@ -679,6 +729,7 @@ pub(crate) fn emit_general_module_with_aux(
             decl_func_indices: decl_func_indices.clone(),
             decl_table_slots: decl_table_slots.clone(),
             indirect_call_type_idx,
+            record_ctor_tags: record_ctor_tags.clone(),
         };
         emit_instrs(
             &mut function,
@@ -726,6 +777,7 @@ pub(crate) fn emit_general_module_with_aux(
             decl_func_indices: decl_func_indices.clone(),
             decl_table_slots: decl_table_slots.clone(),
             indirect_call_type_idx,
+            record_ctor_tags: record_ctor_tags.clone(),
         };
         for param_name in &decl.param_names {
             // Wasm assigns local indices for params in declaration order before any body locals.
@@ -783,7 +835,7 @@ fn emit_instrs(
     let buffer_ptr = layout.heap_base as i32;
     let buffer_len = (WASM_PAGE_BYTES - layout.heap_base - static_strings.bytes_used) as i32 - 4; // reserve 4 bytes for len prefix
     let newline_ptr = (layout.heap_base - 1) as i32;
-    let helper_i64_base = named_i64_count;
+    let helper_i64_base = ctx.next_local + named_i64_count;
     // `helper_state` is constructed when bump allocator / i32 scratch is needed.
     // BinOp Mul/Div/Mod need only i64 scratch; those are provided via `helper_i64_base` directly
     // in `emit_bin_op`, without requiring the full HelperEmitState.
@@ -1047,6 +1099,92 @@ fn emit_instrs(
                 emit_push_tagged_ptr(function, s_list_ptr, TAG_LIST);
             }
 
+            WasmBackendInstr::TupleLit { element_instrs } => {
+                let hs = helper_state.as_ref().ok_or_else(|| CodegenError {
+                    message: "gen_lower/emit: TupleLit requires helper state (bump allocator)"
+                        .to_string(),
+                })?;
+                let s_tuple_ptr = hs.i32_base + HS_AUX_PTR;
+                let s_alloc_size = hs.i32_base + HS_ALLOC_SIZE;
+                let n = element_instrs.len() as i32;
+                function.instruction(&Instruction::I32Const(4 + 8 * n));
+                function.instruction(&Instruction::LocalSet(s_alloc_size));
+                emit_alloc_from_top(function, hs, s_alloc_size, s_tuple_ptr);
+                function.instruction(&Instruction::LocalGet(s_tuple_ptr));
+                function.instruction(&Instruction::I32Const(n));
+                function.instruction(&Instruction::I32Store(MemArg {
+                    offset: 0,
+                    align: 2,
+                    memory_index: 0,
+                }));
+                for (i, elem_instrs) in element_instrs.iter().enumerate() {
+                    function.instruction(&Instruction::LocalGet(s_tuple_ptr));
+                    function.instruction(&Instruction::I32Const(4 + 8 * i as i32));
+                    function.instruction(&Instruction::I32Add);
+                    emit_instrs(
+                        function,
+                        ctx,
+                        elem_instrs,
+                        layout,
+                        named_i64_count,
+                        helper_i64_scratch_count,
+                        i32_base,
+                        static_strings,
+                    )?;
+                    function.instruction(&Instruction::I64Store(MemArg {
+                        offset: 0,
+                        align: 3,
+                        memory_index: 0,
+                    }));
+                }
+                emit_push_tagged_ptr(function, s_tuple_ptr, TAG_TUPLE);
+            }
+
+            WasmBackendInstr::RecordLit {
+                constructor,
+                field_instrs,
+            } => {
+                let hs = helper_state.as_ref().ok_or_else(|| CodegenError {
+                    message: "gen_lower/emit: RecordLit requires helper state (bump allocator)"
+                        .to_string(),
+                })?;
+                let ctor_tag = ctx.record_ctor_tag(constructor)? as i64;
+                let s_record_ptr = hs.i32_base + HS_AUX_PTR;
+                let s_alloc_size = hs.i32_base + HS_ALLOC_SIZE;
+                let n = field_instrs.len() as i32;
+                function.instruction(&Instruction::I32Const(8 + 8 * n));
+                function.instruction(&Instruction::LocalSet(s_alloc_size));
+                emit_alloc_from_top(function, hs, s_alloc_size, s_record_ptr);
+                function.instruction(&Instruction::LocalGet(s_record_ptr));
+                function.instruction(&Instruction::I64Const(ctor_tag));
+                function.instruction(&Instruction::I64Store(MemArg {
+                    offset: 0,
+                    align: 3,
+                    memory_index: 0,
+                }));
+                for (i, field_instrs) in field_instrs.iter().enumerate() {
+                    function.instruction(&Instruction::LocalGet(s_record_ptr));
+                    function.instruction(&Instruction::I32Const(8 + 8 * i as i32));
+                    function.instruction(&Instruction::I32Add);
+                    emit_instrs(
+                        function,
+                        ctx,
+                        field_instrs,
+                        layout,
+                        named_i64_count,
+                        helper_i64_scratch_count,
+                        i32_base,
+                        static_strings,
+                    )?;
+                    function.instruction(&Instruction::I64Store(MemArg {
+                        offset: 0,
+                        align: 3,
+                        memory_index: 0,
+                    }));
+                }
+                emit_push_tagged_ptr(function, s_record_ptr, TAG_RECORD);
+            }
+
             WasmBackendInstr::PushFuncHandle { decl_name } => {
                 let table_slot = ctx.decl_table_slot(decl_name)?;
                 function.instruction(&Instruction::I64Const(
@@ -1063,7 +1201,9 @@ fn emit_instrs(
                 // call_indirect (i64) -> i64 via funcref table 0.
                 // `indirect_call_type_idx` is threaded from emit context.
                 let type_idx = ctx.indirect_call_type_idx.ok_or_else(|| CodegenError {
-                    message: "gen_lower/emit: IndirectCall without indirect_call_type_idx in EmitContext".to_string(),
+                    message:
+                        "gen_lower/emit: IndirectCall without indirect_call_type_idx in EmitContext"
+                            .to_string(),
                 })?;
                 function.instruction(&Instruction::CallIndirect {
                     type_index: type_idx,
@@ -1087,8 +1227,24 @@ fn emit_instrs(
                     message: "gen_lower/emit: ListEachEffect requires helper scratch state"
                         .to_string(),
                 })?;
-                emit_instrs(function, ctx, list_instrs, layout, named_i64_count, helper_i64_scratch_count, i32_base, static_strings)?;
-                emit_list_each_effect(function, op == "println", i32_base, iovec_offset, nread_offset, newline_ptr);
+                emit_instrs(
+                    function,
+                    ctx,
+                    list_instrs,
+                    layout,
+                    named_i64_count,
+                    helper_i64_scratch_count,
+                    i32_base,
+                    static_strings,
+                )?;
+                emit_list_each_effect(
+                    function,
+                    op == "println",
+                    i32_base,
+                    iovec_offset,
+                    nread_offset,
+                    newline_ptr,
+                );
             }
 
             WasmBackendInstr::ListEach {
@@ -1101,8 +1257,26 @@ fn emit_instrs(
                 let type_idx = ctx.indirect_call_type_idx.ok_or_else(|| CodegenError {
                     message: "gen_lower/emit: ListEach without indirect_call_type_idx".to_string(),
                 })?;
-                emit_instrs(function, ctx, list_instrs, layout, named_i64_count, helper_i64_scratch_count, i32_base, static_strings)?;
-                emit_instrs(function, ctx, func_instrs, layout, named_i64_count, helper_i64_scratch_count, i32_base, static_strings)?;
+                emit_instrs(
+                    function,
+                    ctx,
+                    list_instrs,
+                    layout,
+                    named_i64_count,
+                    helper_i64_scratch_count,
+                    i32_base,
+                    static_strings,
+                )?;
+                emit_instrs(
+                    function,
+                    ctx,
+                    func_instrs,
+                    layout,
+                    named_i64_count,
+                    helper_i64_scratch_count,
+                    i32_base,
+                    static_strings,
+                )?;
                 emit_list_each(function, &hs, type_idx);
             }
 
@@ -1116,8 +1290,26 @@ fn emit_instrs(
                 let type_idx = ctx.indirect_call_type_idx.ok_or_else(|| CodegenError {
                     message: "gen_lower/emit: ListMap without indirect_call_type_idx".to_string(),
                 })?;
-                emit_instrs(function, ctx, list_instrs, layout, named_i64_count, helper_i64_scratch_count, i32_base, static_strings)?;
-                emit_instrs(function, ctx, func_instrs, layout, named_i64_count, helper_i64_scratch_count, i32_base, static_strings)?;
+                emit_instrs(
+                    function,
+                    ctx,
+                    list_instrs,
+                    layout,
+                    named_i64_count,
+                    helper_i64_scratch_count,
+                    i32_base,
+                    static_strings,
+                )?;
+                emit_instrs(
+                    function,
+                    ctx,
+                    func_instrs,
+                    layout,
+                    named_i64_count,
+                    helper_i64_scratch_count,
+                    i32_base,
+                    static_strings,
+                )?;
                 emit_list_map(function, &hs, type_idx)?;
             }
         }
@@ -2365,11 +2557,11 @@ fn emit_split_each_print(
 /// I32 scratch slots used: HS_LIST_PTR (8), HS_ITEM_COUNT (6), HS_ITER (10).
 /// I64 scratch locals used: i64_base+0 (func handle), i64_base+1 (current element).
 fn emit_list_each(function: &mut Function, hs: &HelperEmitState, indirect_call_type_idx: u32) {
-    let s_func = hs.i64_base;        // i64 scratch: func handle
-    let s_elem = hs.i64_base + 1;    // i64 scratch: current element
-    let s_list_ptr = hs.i32_base + HS_LIST_PTR;   // i32 scratch: list pointer
-    let s_list_len = hs.i32_base + HS_ITEM_COUNT;  // i32 scratch: list length
-    let s_iter = hs.i32_base + HS_ITER;            // i32 scratch: loop counter
+    let s_func = hs.i64_base; // i64 scratch: func handle
+    let s_elem = hs.i64_base + 1; // i64 scratch: current element
+    let s_list_ptr = hs.i32_base + HS_LIST_PTR; // i32 scratch: list pointer
+    let s_list_len = hs.i32_base + HS_ITEM_COUNT; // i32 scratch: list length
+    let s_iter = hs.i32_base + HS_ITER; // i32 scratch: loop counter
 
     // Stack: [list_tagged, func_tagged]
     function.instruction(&Instruction::LocalSet(s_func));
@@ -2587,10 +2779,10 @@ fn emit_list_each_effect(
     nread_offset: i32,
     newline_ptr: i32,
 ) {
-    let ptr_local = i32_base;                        // for Print code: str_ptr
-    let s_list_ptr = i32_base + HS_LIST_PTR;         // i32 scratch: list pointer
-    let s_list_len = i32_base + HS_ITEM_COUNT;       // i32 scratch: list length
-    let s_iter = i32_base + HS_ITER;                 // i32 scratch: loop counter
+    let ptr_local = i32_base; // for Print code: str_ptr
+    let s_list_ptr = i32_base + HS_LIST_PTR; // i32 scratch: list pointer
+    let s_list_len = i32_base + HS_ITEM_COUNT; // i32 scratch: list length
+    let s_iter = i32_base + HS_ITER; // i32 scratch: loop counter
 
     // Stack: [list_tagged]
     // Decode list pointer
@@ -2786,11 +2978,10 @@ fn emit_case_match(
             }
 
             BackendCasePattern::IntLit(n) => {
-                let encoded = crate::gen_lower::value::encode_int(*n).map_err(|e| {
-                    CodegenError {
+                let encoded =
+                    crate::gen_lower::value::encode_int(*n).map_err(|e| CodegenError {
                         message: format!("gen_lower/emit: CaseMatch IntLit out of range: {e}"),
-                    }
-                })?;
+                    })?;
                 // Untag scrutinee and literal, compare.
                 // Comparison: tag-strip both then i64.eq
                 // Actually simpler: compare the full tagged i64 directly (tag + payload unique).
@@ -2894,7 +3085,7 @@ fn emit_case_match(
                 function.instruction(&Instruction::I32Const(0));
                 function.instruction(&Instruction::LocalSet(s_loop_iter));
                 function.instruction(&Instruction::Block(wasm_encoder::BlockType::Empty)); // block_outer
-                function.instruction(&Instruction::Loop(wasm_encoder::BlockType::Empty));  // loop
+                function.instruction(&Instruction::Loop(wasm_encoder::BlockType::Empty)); // loop
                 // if iter >= len → break out (full match)
                 function.instruction(&Instruction::LocalGet(s_loop_iter));
                 function.instruction(&Instruction::LocalGet(s_pat_len));
@@ -3081,7 +3272,9 @@ fn emit_case_match(
                         BackendListPatternItem::StrLit(_) => {
                             // String item literal matching not yet supported.
                             return Err(CodegenError {
-                                message: "gen_lower/emit: ListPattern StrLit item not yet supported".to_string(),
+                                message:
+                                    "gen_lower/emit: ListPattern StrLit item not yet supported"
+                                        .to_string(),
                             });
                         }
                         BackendListPatternItem::Wildcard => {
@@ -3907,6 +4100,43 @@ mod tests {
         ];
         let wasm = emit_general_module(&instrs, &default_layout())
             .expect("emit CaseMatch int+wildcard should succeed");
+        assert_valid_wasm(&wasm);
+    }
+
+    #[test]
+    fn emit_tuple_lit_produces_valid_wasm() {
+        let instrs = vec![
+            I::TupleLit {
+                element_instrs: vec![
+                    vec![I::I64Const(crate::gen_lower::value::encode_int(1).unwrap())],
+                    vec![I::PushStaticString {
+                        text: "hello".to_string(),
+                    }],
+                ],
+            },
+            I::Drop,
+        ];
+        let wasm =
+            emit_general_module(&instrs, &default_layout()).expect("emit TupleLit should succeed");
+        assert_valid_wasm(&wasm);
+    }
+
+    #[test]
+    fn emit_record_lit_produces_valid_wasm() {
+        let instrs = vec![
+            I::RecordLit {
+                constructor: "Pair".to_string(),
+                field_instrs: vec![
+                    vec![I::I64Const(crate::gen_lower::value::encode_int(1).unwrap())],
+                    vec![I::PushStaticString {
+                        text: "hello".to_string(),
+                    }],
+                ],
+            },
+            I::Drop,
+        ];
+        let wasm =
+            emit_general_module(&instrs, &default_layout()).expect("emit RecordLit should succeed");
         assert_valid_wasm(&wasm);
     }
 }

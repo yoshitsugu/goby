@@ -13,6 +13,8 @@
 //! # Pointer-bearing tags
 //! - `String` tag=0x3, payload=u32 pointer to `(len: i32, bytes...)` in linear memory
 //! - `List`   tag=0x4, payload=u32 pointer to `(len: i32, items: [i64]...)` in linear memory
+//! - `Tuple`  tag=0x6, payload=u32 pointer to `(len: i32, items: [i64]...)` in linear memory
+//! - `Record` tag=0x7, payload=u32 pointer to `(ctor_tag: i64, fields: [i64]...)` in linear memory
 
 /// Type tag for `Unit` values.
 pub(crate) const TAG_UNIT: u8 = 0x0;
@@ -29,6 +31,10 @@ pub(crate) const TAG_LIST: u8 = 0x4;
 /// A `Func` value encodes a Wasm funcref table *slot index* (not a raw Wasm function index)
 /// in the lower 32 bits.  The funcref table maps slots → aux-decl function indices.
 pub(crate) const TAG_FUNC: u8 = 0x5;
+/// Type tag for `Tuple` values (pointer-bearing).
+pub(crate) const TAG_TUPLE: u8 = 0x6;
+/// Type tag for `Record` values (pointer-bearing).
+pub(crate) const TAG_RECORD: u8 = 0x7;
 
 /// Bit mask for the lower 60 bits (payload region).
 const PAYLOAD_MASK: i64 = (1i64 << 60) - 1;
@@ -113,6 +119,24 @@ pub(crate) fn encode_func_handle(table_slot: u32) -> i64 {
     (TAG_FUNC as i64) << 60 | (table_slot as i64)
 }
 
+/// Encode a `Tuple` pointer value.
+///
+/// `ptr` is a u32 address into Wasm linear memory pointing to a
+/// `(len: i32, items: [i64]...)` layout.
+#[inline]
+pub(crate) fn encode_tuple_ptr(ptr: u32) -> i64 {
+    (TAG_TUPLE as i64) << 60 | (ptr as i64)
+}
+
+/// Encode a `Record` pointer value.
+///
+/// `ptr` is a u32 address into Wasm linear memory pointing to a
+/// `(ctor_tag: i64, fields: [i64]...)` layout.
+#[inline]
+pub(crate) fn encode_record_ptr(ptr: u32) -> i64 {
+    (TAG_RECORD as i64) << 60 | (ptr as i64)
+}
+
 /// Extract the funcref table slot index from an encoded `Func` value.
 ///
 /// Only valid when `decode_tag(v) == TAG_FUNC`.
@@ -142,7 +166,7 @@ pub(crate) fn decode_payload_int(v: i64) -> i64 {
 
 /// Extract the u32 pointer payload (lower 32 bits).
 ///
-/// Only valid when `decode_tag(v)` is `TAG_STRING` or `TAG_LIST`.
+/// Only valid when `decode_tag(v)` is `TAG_STRING`, `TAG_LIST`, `TAG_TUPLE`, or `TAG_RECORD`.
 #[inline]
 pub(crate) fn decode_payload_ptr(v: i64) -> u32 {
     (v & 0xFFFF_FFFF) as u32
@@ -279,6 +303,34 @@ mod tests {
     }
 
     #[test]
+    fn tuple_ptr_heap_base_round_trip() {
+        let v = encode_tuple_ptr(16);
+        assert_eq!(decode_tag(v), TAG_TUPLE);
+        assert_eq!(decode_payload_ptr(v), 16);
+    }
+
+    #[test]
+    fn tuple_ptr_max_round_trip() {
+        let v = encode_tuple_ptr(u32::MAX);
+        assert_eq!(decode_tag(v), TAG_TUPLE);
+        assert_eq!(decode_payload_ptr(v), u32::MAX);
+    }
+
+    #[test]
+    fn record_ptr_heap_base_round_trip() {
+        let v = encode_record_ptr(16);
+        assert_eq!(decode_tag(v), TAG_RECORD);
+        assert_eq!(decode_payload_ptr(v), 16);
+    }
+
+    #[test]
+    fn record_ptr_max_round_trip() {
+        let v = encode_record_ptr(u32::MAX);
+        assert_eq!(decode_tag(v), TAG_RECORD);
+        assert_eq!(decode_payload_ptr(v), u32::MAX);
+    }
+
+    #[test]
     fn tag_orthogonality() {
         let unit_tag = decode_tag(encode_unit());
         let int_tag = decode_tag(encode_int(0).unwrap());
@@ -286,8 +338,12 @@ mod tests {
         let str_tag = decode_tag(encode_string_ptr(0));
         let list_tag = decode_tag(encode_list_ptr(0));
         let func_tag = decode_tag(encode_func_handle(0));
-        // All six tags must be distinct.
-        let tags = [unit_tag, int_tag, bool_tag, str_tag, list_tag, func_tag];
+        let tuple_tag = decode_tag(encode_tuple_ptr(0));
+        let record_tag = decode_tag(encode_record_ptr(0));
+        // All runtime tags must be distinct.
+        let tags = [
+            unit_tag, int_tag, bool_tag, str_tag, list_tag, func_tag, tuple_tag, record_tag,
+        ];
         for i in 0..tags.len() {
             for j in (i + 1)..tags.len() {
                 assert_ne!(tags[i], tags[j], "tags[{i}] == tags[{j}]: not orthogonal");

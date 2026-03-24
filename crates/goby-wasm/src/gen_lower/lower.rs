@@ -156,7 +156,8 @@ fn lower_comp_inner(
             {
                 // stdlib list.each: check if callback is a Print effect op (fused path)
                 // or a user funcref (indirect call path).
-                let list_instrs = lower_comp_inner(&CompExpr::Value(args[0].clone()), aliases, known_decls)?;
+                let list_instrs =
+                    lower_comp_inner(&CompExpr::Value(args[0].clone()), aliases, known_decls)?;
                 if let Some((eff, op)) = resolve_print_callback(&args[1], aliases) {
                     Ok(vec![WasmBackendInstr::ListEachEffect {
                         list_instrs,
@@ -208,7 +209,8 @@ fn lower_comp_inner(
                     && args.len() == 2
                 {
                     // Var resolves to list.each (bare name or alias via `import goby/list (each)`).
-                    let list_instrs = lower_comp_inner(&CompExpr::Value(args[0].clone()), aliases, known_decls)?;
+                    let list_instrs =
+                        lower_comp_inner(&CompExpr::Value(args[0].clone()), aliases, known_decls)?;
                     if let Some((eff, op)) = resolve_print_callback(&args[1], aliases) {
                         Ok(vec![WasmBackendInstr::ListEachEffect {
                             list_instrs,
@@ -287,9 +289,7 @@ fn lower_comp_inner(
             Ok(instrs)
         }
 
-        CompExpr::Case { scrutinee, arms } => {
-            lower_case(scrutinee, arms, aliases, known_decls)
-        }
+        CompExpr::Case { scrutinee, arms } => lower_case(scrutinee, arms, aliases, known_decls),
 
         other => Err(LowerError::UnsupportedForm {
             node: format!("{:?}", other),
@@ -416,6 +416,29 @@ pub(crate) fn lower_value(v: &ValueExpr) -> Result<Vec<WasmBackendInstr>, LowerE
                 element_instrs.push(lower_value(elem)?);
             }
             Ok(vec![WasmBackendInstr::ListLit { element_instrs }])
+        }
+        ValueExpr::TupleLit(items) => {
+            if items.is_empty() {
+                return Ok(vec![WasmBackendInstr::I64Const(encode_unit())]);
+            }
+            let mut element_instrs = Vec::with_capacity(items.len());
+            for item in items {
+                element_instrs.push(lower_value(item)?);
+            }
+            Ok(vec![WasmBackendInstr::TupleLit { element_instrs }])
+        }
+        ValueExpr::RecordLit {
+            constructor,
+            fields,
+        } => {
+            let mut field_instrs = Vec::with_capacity(fields.len());
+            for (_, value) in fields {
+                field_instrs.push(lower_value(value)?);
+            }
+            Ok(vec![WasmBackendInstr::RecordLit {
+                constructor: constructor.clone(),
+                field_instrs,
+            }])
         }
         ValueExpr::Var(name) => Ok(vec![WasmBackendInstr::LoadLocal { name: name.clone() }]),
         ValueExpr::GlobalRef { module, name } => Ok(vec![WasmBackendInstr::LoadLocal {
@@ -1702,7 +1725,11 @@ mod tests {
         };
         let instrs = lower_comp(&comp).expect("Var callee IndirectCall should lower OK");
         // Expected: [I64Const(encode_int(1)), LoadLocal("f"), IndirectCall]
-        assert_eq!(instrs.len(), 3, "arg push + LoadLocal callee + IndirectCall");
+        assert_eq!(
+            instrs.len(),
+            3,
+            "arg push + LoadLocal callee + IndirectCall"
+        );
         assert!(
             matches!(instrs[1], I::LoadLocal { ref name } if name == "f"),
             "second instr must be LoadLocal(f), got: {:?}",
@@ -1747,7 +1774,11 @@ mod tests {
         let known_decls: HashSet<String> = ["add_one".to_string()].into();
         let instrs = lower_comp_inner(&comp, &HashMap::new(), &known_decls)
             .expect("funcref arg should lower OK");
-        assert_eq!(instrs.len(), 3, "PushFuncHandle + LoadLocal callee + IndirectCall");
+        assert_eq!(
+            instrs.len(),
+            3,
+            "PushFuncHandle + LoadLocal callee + IndirectCall"
+        );
         assert!(
             matches!(&instrs[0], I::PushFuncHandle { decl_name } if decl_name == "add_one"),
             "first instr must be PushFuncHandle(add_one), got: {:?}",
@@ -1790,7 +1821,11 @@ mod tests {
         };
         let result = lower_comp(&comp).expect("Case lowering should succeed");
         // lower_case emits: DeclareLocal, scrutinee instrs, StoreLocal, CaseMatch
-        assert_eq!(result.len(), 4, "expected 4 instrs (declare+eval+store+CaseMatch)");
+        assert_eq!(
+            result.len(),
+            4,
+            "expected 4 instrs (declare+eval+store+CaseMatch)"
+        );
         // result[0] = DeclareLocal
         assert!(matches!(&result[0], WasmBackendInstr::DeclareLocal { .. }));
         // result[1] = scrutinee: LoadLocal("x")
@@ -1803,11 +1838,17 @@ mod tests {
         // result[2] = StoreLocal
         assert!(matches!(&result[2], WasmBackendInstr::StoreLocal { .. }));
         // result[3] = CaseMatch
-        let WasmBackendInstr::CaseMatch { scrutinee_local, arms } = &result[3] else {
+        let WasmBackendInstr::CaseMatch {
+            scrutinee_local,
+            arms,
+        } = &result[3]
+        else {
             panic!("expected CaseMatch, got {:?}", result[3]);
         };
         // scrutinee_local matches the DeclareLocal name
-        let WasmBackendInstr::DeclareLocal { name: decl_name } = &result[0] else { unreachable!() };
+        let WasmBackendInstr::DeclareLocal { name: decl_name } = &result[0] else {
+            unreachable!()
+        };
         assert_eq!(scrutinee_local, decl_name);
         assert_eq!(arms.len(), 2);
         assert_eq!(arms[0].pattern, BackendCasePattern::IntLit(0));
@@ -1833,7 +1874,11 @@ mod tests {
             ],
         };
         let result = lower_comp(&comp).expect("Case bool lowering should succeed");
-        assert_eq!(result.len(), 4, "expected 4 instrs (declare+eval+store+CaseMatch)");
+        assert_eq!(
+            result.len(),
+            4,
+            "expected 4 instrs (declare+eval+store+CaseMatch)"
+        );
         let WasmBackendInstr::CaseMatch { arms, .. } = &result[3] else {
             panic!("expected CaseMatch");
         };
@@ -1859,7 +1904,11 @@ mod tests {
             ],
         };
         let result = lower_comp(&comp).expect("Case str lit lowering should succeed");
-        assert_eq!(result.len(), 4, "expected 4 instrs (declare+eval+store+CaseMatch)");
+        assert_eq!(
+            result.len(),
+            4,
+            "expected 4 instrs (declare+eval+store+CaseMatch)"
+        );
         let WasmBackendInstr::CaseMatch { arms, .. } = &result[3] else {
             panic!("expected CaseMatch");
         };
@@ -1888,7 +1937,11 @@ mod tests {
             ],
         };
         let result = lower_comp(&comp).expect("Case empty list lowering should succeed");
-        assert_eq!(result.len(), 4, "expected 4 instrs (declare+eval+store+CaseMatch)");
+        assert_eq!(
+            result.len(),
+            4,
+            "expected 4 instrs (declare+eval+store+CaseMatch)"
+        );
         let WasmBackendInstr::CaseMatch { arms, .. } = &result[3] else {
             panic!("expected CaseMatch");
         };
@@ -1919,7 +1972,11 @@ mod tests {
         };
         let result = lower_comp(&comp).expect("Case list pattern lowering should succeed");
         // DeclareLocal(scrutinee) + DeclareLocal(h) + DeclareLocal(t) + eval + StoreLocal + CaseMatch
-        assert_eq!(result.len(), 6, "expected 6 instrs for list pattern with h and tail t");
+        assert_eq!(
+            result.len(),
+            6,
+            "expected 6 instrs for list pattern with h and tail t"
+        );
         let WasmBackendInstr::CaseMatch { arms, .. } = &result[5] else {
             panic!("expected CaseMatch");
         };
@@ -1949,7 +2006,11 @@ mod tests {
         };
         let result = lower_comp(&comp).expect("Case list pattern with ignore tail should succeed");
         // DeclareLocal(scrutinee) + DeclareLocal(h) + eval + StoreLocal + CaseMatch
-        assert_eq!(result.len(), 5, "expected 5 instrs for list pattern with h (no tail)");
+        assert_eq!(
+            result.len(),
+            5,
+            "expected 5 instrs for list pattern with h (no tail)"
+        );
         let WasmBackendInstr::CaseMatch { arms, .. } = &result[4] else {
             panic!("expected CaseMatch");
         };
@@ -1992,17 +2053,74 @@ mod tests {
         };
         let result =
             lower_comp_with_decls(&comp, &known).expect("Case with DeclCall arm should succeed");
-        assert_eq!(result.len(), 4, "expected 4 instrs (declare+eval+store+CaseMatch)");
+        assert_eq!(
+            result.len(),
+            4,
+            "expected 4 instrs (declare+eval+store+CaseMatch)"
+        );
         let WasmBackendInstr::CaseMatch { arms, .. } = &result[3] else {
             panic!("expected CaseMatch");
         };
         // The first arm body should contain a DeclCall for "helper"
         assert!(
-            arms[0]
-                .body_instrs
-                .iter()
-                .any(|i| matches!(i, WasmBackendInstr::DeclCall { decl_name } if decl_name == "helper")),
+            arms[0].body_instrs.iter().any(
+                |i| matches!(i, WasmBackendInstr::DeclCall { decl_name } if decl_name == "helper")
+            ),
             "arm body should contain DeclCall(helper)"
+        );
+    }
+
+    #[test]
+    fn tuple_lit_lowers_to_backend_tuple_lit() {
+        let result = lower_value(&ValueExpr::TupleLit(vec![
+            ValueExpr::IntLit(1),
+            ValueExpr::StrLit("hello".to_string()),
+        ]))
+        .expect("TupleLit lowering should succeed");
+
+        let [WasmBackendInstr::TupleLit { element_instrs }] = result.as_slice() else {
+            panic!("expected a single TupleLit backend instruction");
+        };
+        assert_eq!(element_instrs.len(), 2, "tuple arity should be preserved");
+    }
+
+    #[test]
+    fn empty_tuple_lowers_to_unit() {
+        let result =
+            lower_value(&ValueExpr::TupleLit(vec![])).expect("empty tuple lowering should succeed");
+
+        assert_eq!(
+            result,
+            vec![WasmBackendInstr::I64Const(encode_unit())],
+            "empty tuple must lower to Unit"
+        );
+    }
+
+    #[test]
+    fn record_lit_lowers_to_backend_record_lit() {
+        let result = lower_value(&ValueExpr::RecordLit {
+            constructor: "Pair".to_string(),
+            fields: vec![
+                ("left".to_string(), ValueExpr::IntLit(1)),
+                ("right".to_string(), ValueExpr::StrLit("hello".to_string())),
+            ],
+        })
+        .expect("RecordLit lowering should succeed");
+
+        let [
+            WasmBackendInstr::RecordLit {
+                constructor,
+                field_instrs,
+            },
+        ] = result.as_slice()
+        else {
+            panic!("expected a single RecordLit backend instruction");
+        };
+        assert_eq!(constructor, "Pair");
+        assert_eq!(
+            field_instrs.len(),
+            2,
+            "record field count should be preserved"
         );
     }
 }
