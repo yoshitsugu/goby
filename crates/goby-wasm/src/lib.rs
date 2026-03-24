@@ -952,6 +952,37 @@ main =
     }
 
     #[test]
+    fn wb2b_empty_list_pattern_without_list_pattern_arm() {
+        // WB-2B: EmptyList-only case (no ListPattern arm) must not fail with "helper state" error.
+        // Regression test: before the fix, `needs_helper_state` did not cover EmptyList,
+        // so a function with only an EmptyList arm and no Intrinsic/ListLit would fail at emit time.
+        use goby_core::parse_module;
+        let module = parse_module(
+            r#"
+is_empty : List String -> String can {}
+is_empty xs =
+  case xs
+    [] -> "yes"
+    _ -> "no"
+
+main : Unit -> Unit can Print, Read
+main =
+  _ = read()
+  println (is_empty [])
+"#,
+        )
+        .expect("parse should work");
+
+        let output = execute_runtime_module_with_stdin(&module, Some(String::new()))
+            .expect("WB-2B: empty-list-only case must execute");
+        assert_eq!(
+            output.as_deref(),
+            Some("yes\n"),
+            "WB-2B: is_empty [] → yes"
+        );
+    }
+
+    #[test]
     fn wb2b_list_pattern_empty_branch_executes() {
         // WB-2B-M2: EmptyList branch taken when list has 0 elements.
         use goby_core::parse_module;

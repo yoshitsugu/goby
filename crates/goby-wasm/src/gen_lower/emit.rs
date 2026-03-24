@@ -59,6 +59,21 @@ const HELPER_SCRATCH_I32: u32 = 13;
 const HELPER_ALLOC_CURSOR_OFFSET: u32 = 11;
 const HELPER_HEAP_FLOOR_OFFSET: u32 = 12;
 
+// Named offsets into the HELPER_SCRATCH_I32 pool (relative to i32_base).
+// These are used across emit_string_split_helper, emit_helper_call, emit_instrs (ListLit),
+// emit_case_match (ListPattern), and emit_list_push_string_helper.
+const HS_TEXT_PTR: u32 = 0; // text/string/list ptr
+const HS_TEXT_LEN: u32 = 1; // text/string/list len
+const HS_SEP_PTR: u32 = 2; // sep ptr / decoded index
+const HS_SEP_LEN: u32 = 3; // sep len
+const HS_SCAN_POS: u32 = 4; // scan pos
+const HS_SEG_START: u32 = 5; // segment start
+const HS_ITEM_COUNT: u32 = 6; // item count
+const HS_AUX_PTR: u32 = 7; // auxiliary pointer (tail ptr in ListPattern, list ptr in ListLit)
+const HS_LIST_PTR: u32 = 8; // secondary list ptr
+const HS_ALLOC_SIZE: u32 = 9; // allocation size temp
+const HS_ITER: u32 = 10; // copy or match index
+
 #[derive(Debug, Clone)]
 struct StaticStringPool {
     ptrs: HashMap<String, i32>,
@@ -80,36 +95,9 @@ impl StaticStringPool {
         let mut segments = Vec::new();
         let mut cursor = WASM_PAGE_BYTES;
 
-        // collect_all_instrs is defined later in this file, after all helper fns.
-        // To avoid forward-reference issues, inline the recursion here.
-        fn visit_instrs<'a>(instrs: &'a [WasmBackendInstr], out: &mut Vec<&'a WasmBackendInstr>) {
-            for instr in instrs {
-                out.push(instr);
-                match instr {
-                    WasmBackendInstr::If {
-                        then_instrs,
-                        else_instrs,
-                    } => {
-                        visit_instrs(then_instrs, out);
-                        visit_instrs(else_instrs, out);
-                    }
-                    WasmBackendInstr::CaseMatch { arms, .. } => {
-                        for arm in arms {
-                            visit_instrs(&arm.body_instrs, out);
-                        }
-                    }
-                    WasmBackendInstr::ListLit { element_instrs } => {
-                        for elem in element_instrs {
-                            visit_instrs(elem, out);
-                        }
-                    }
-                    _ => {}
-                }
-            }
-        }
         let mut all_instrs = Vec::new();
         for slice in all_slices {
-            visit_instrs(slice, &mut all_instrs);
+            all_instrs.extend(collect_all_instrs(slice));
         }
 
         for instr in all_instrs {
@@ -274,39 +262,62 @@ fn collect_all_instrs(instrs: &[WasmBackendInstr]) -> Vec<&WasmBackendInstr> {
     result
 }
 
-/// Returns true if `instrs` (recursively) contains any `CaseMatch` arm with a `ListPattern`.
-/// `ListPattern` arms need the bump allocator (for tail sub-list allocation).
-fn has_list_pattern(instrs: &[WasmBackendInstr]) -> bool {
+
+/// Returns true when `instrs` require the `HelperEmitState` bump-allocator / i32 scratch pool.
+///
+/// This is the single source of truth for the helper-state gate used both in
+/// `emit_instrs` and `required_i32_scratch_count`.  A function needs helper state when it
+/// contains any of:
+/// - An `Intrinsic` instruction (uses the full HELPER_SCRATCH_I32 pool).
+/// - A `ListLit` instruction (uses bump allocator via `emit_alloc_from_top`).
+/// - A `CaseMatch` arm with a `ListPattern` (needs bump allocator for tail sub-list).
+/// - A `CaseMatch` arm with an `EmptyList` pattern (needs one i32 to load the list pointer).
+fn needs_helper_state(instrs: &[WasmBackendInstr]) -> bool {
     use crate::gen_lower::backend_ir::BackendCasePattern;
-    for instr in instrs {
-        match instr {
-            WasmBackendInstr::CaseMatch { arms, .. } => {
-                for arm in arms {
-                    if matches!(&arm.pattern, BackendCasePattern::ListPattern { .. }) {
-                        return true;
+    collect_all_instrs(instrs).iter().any(|i| {
+        matches!(
+            i,
+            WasmBackendInstr::Intrinsic { .. } | WasmBackendInstr::ListLit { .. }
+        )
+    }) || {
+        // Check for ListPattern or EmptyList patterns in CaseMatch arms.
+        fn has_heap_pattern(instrs: &[WasmBackendInstr]) -> bool {
+            for instr in instrs {
+                match instr {
+                    WasmBackendInstr::CaseMatch { arms, .. } => {
+                        for arm in arms {
+                            if matches!(
+                                &arm.pattern,
+                                BackendCasePattern::ListPattern { .. }
+                                    | BackendCasePattern::EmptyList
+                            ) {
+                                return true;
+                            }
+                            if has_heap_pattern(&arm.body_instrs) {
+                                return true;
+                            }
+                        }
                     }
-                    if has_list_pattern(&arm.body_instrs) {
-                        return true;
+                    WasmBackendInstr::If {
+                        then_instrs,
+                        else_instrs,
+                    } => {
+                        if has_heap_pattern(then_instrs) || has_heap_pattern(else_instrs) {
+                            return true;
+                        }
                     }
+                    WasmBackendInstr::ListLit { element_instrs } => {
+                        if element_instrs.iter().any(|e| has_heap_pattern(e)) {
+                            return true;
+                        }
+                    }
+                    _ => {}
                 }
             }
-            WasmBackendInstr::If {
-                then_instrs,
-                else_instrs,
-            } => {
-                if has_list_pattern(then_instrs) || has_list_pattern(else_instrs) {
-                    return true;
-                }
-            }
-            WasmBackendInstr::ListLit { element_instrs } => {
-                if element_instrs.iter().any(|e| has_list_pattern(e)) {
-                    return true;
-                }
-            }
-            _ => {}
+            false
         }
+        has_heap_pattern(instrs)
     }
-    false
 }
 
 fn required_i32_scratch_count(instrs: &[WasmBackendInstr]) -> u32 {
@@ -332,15 +343,7 @@ fn required_i32_scratch_count(instrs: &[WasmBackendInstr]) -> u32 {
     } else {
         0
     };
-    let helper_count = if all.iter().any(|i| {
-        matches!(
-            i,
-            // Intrinsic helpers use the HELPER_SCRATCH_I32 pool.
-            WasmBackendInstr::Intrinsic { .. }
-                // ListLit uses emit_alloc_from_top which requires the same pool.
-                | WasmBackendInstr::ListLit { .. }
-        )
-    }) || has_list_pattern(instrs) {
+    let helper_count = if needs_helper_state(instrs) {
         HELPER_SCRATCH_I32
     } else {
         0
@@ -665,22 +668,11 @@ fn emit_instrs(
     let buffer_len = (WASM_PAGE_BYTES - layout.heap_base - static_strings.bytes_used) as i32 - 4; // reserve 4 bytes for len prefix
     let newline_ptr = (layout.heap_base - 1) as i32;
     let helper_i64_base = named_i64_count;
-    // `helper_state` is constructed only when Intrinsic instructions are present.
-    // Intrinsics require HELPER_SCRATCH_I32 i32 locals (alloc cursor / heap floor pattern).
+    // `helper_state` is constructed when bump allocator / i32 scratch is needed.
     // BinOp Mul/Div/Mod need only i64 scratch; those are provided via `helper_i64_base` directly
     // in `emit_bin_op`, without requiring the full HelperEmitState.
-    // Use collect_all_instrs to detect Intrinsic and ListLit in nested branches
-    // (CaseMatch arms, If branches, ListLit elements).
-    // ListLit and ListPattern only need the i32 scratch pool (bump allocator) but not i64 scratch.
-    let has_intrinsic_or_list_lit = collect_all_instrs(instrs).iter().any(|i| {
-        matches!(
-            i,
-            WasmBackendInstr::Intrinsic { .. } | WasmBackendInstr::ListLit { .. }
-        )
-    }) || has_list_pattern(instrs);
-    // Initialize helper_state when i32 scratch is available (required for Intrinsic, ListLit,
-    // and ListPattern tail allocation).
-    let helper_state = if has_intrinsic_or_list_lit {
+    // `needs_helper_state` is the single source of truth for when the helper pool is required.
+    let helper_state = if needs_helper_state(instrs) {
         let alloc_cursor_local = i32_base + HELPER_ALLOC_CURSOR_OFFSET;
         let heap_floor_local = i32_base + HELPER_HEAP_FLOOR_OFFSET;
         let initial_cursor = align_down_i32(
@@ -897,8 +889,8 @@ fn emit_instrs(
                     message: "gen_lower/emit: ListLit requires helper state (bump allocator)"
                         .to_string(),
                 })?;
-                let s_list_ptr = hs.i32_base + 7;
-                let s_alloc_size = hs.i32_base + 9;
+                let s_list_ptr = hs.i32_base + HS_AUX_PTR;
+                let s_alloc_size = hs.i32_base + HS_ALLOC_SIZE;
                 let n = element_instrs.len() as i32;
                 // alloc_size = 4 + 8 * n
                 function.instruction(&Instruction::I32Const(4 + 8 * n));
@@ -1173,17 +1165,17 @@ fn emit_string_split_helper(
 ) -> Result<(), CodegenError> {
     let text_i64 = helper_state.i64_base;
     let sep_i64 = helper_state.i64_base + 1;
-    let s_text_ptr = helper_state.i32_base;
-    let s_text_len = helper_state.i32_base + 1;
-    let s_sep_ptr = helper_state.i32_base + 2;
-    let s_sep_len = helper_state.i32_base + 3;
-    let s_pos = helper_state.i32_base + 4;
-    let s_start = helper_state.i32_base + 5;
-    let s_item_count = helper_state.i32_base + 6;
-    let s_aux_ptr = helper_state.i32_base + 7;
-    let s_list_ptr = helper_state.i32_base + 8;
-    let s_alloc_size = helper_state.i32_base + 9;
-    let s_iter = helper_state.i32_base + 10;
+    let s_text_ptr = helper_state.i32_base + HS_TEXT_PTR;
+    let s_text_len = helper_state.i32_base + HS_TEXT_LEN;
+    let s_sep_ptr = helper_state.i32_base + HS_SEP_PTR;
+    let s_sep_len = helper_state.i32_base + HS_SEP_LEN;
+    let s_pos = helper_state.i32_base + HS_SCAN_POS;
+    let s_start = helper_state.i32_base + HS_SEG_START;
+    let s_item_count = helper_state.i32_base + HS_ITEM_COUNT;
+    let s_aux_ptr = helper_state.i32_base + HS_AUX_PTR;
+    let s_list_ptr = helper_state.i32_base + HS_LIST_PTR;
+    let s_alloc_size = helper_state.i32_base + HS_ALLOC_SIZE;
+    let s_iter = helper_state.i32_base + HS_ITER;
 
     function.instruction(&Instruction::LocalSet(sep_i64));
     function.instruction(&Instruction::LocalSet(text_i64));
@@ -1340,9 +1332,9 @@ fn emit_list_get_helper(
 ) -> Result<(), CodegenError> {
     let list_i64 = helper_state.i64_base;
     let index_i64 = helper_state.i64_base + 1;
-    let s_list_ptr = helper_state.i32_base;
-    let s_list_len = helper_state.i32_base + 1;
-    let s_index = helper_state.i32_base + 2;
+    let s_list_ptr = helper_state.i32_base + HS_TEXT_PTR;
+    let s_list_len = helper_state.i32_base + HS_TEXT_LEN;
+    let s_index = helper_state.i32_base + HS_SEP_PTR;
 
     function.instruction(&Instruction::LocalSet(index_i64));
     function.instruction(&Instruction::LocalSet(list_i64));
@@ -1421,8 +1413,8 @@ fn emit_string_length_helper(
     helper_state: &HelperEmitState,
 ) -> Result<(), CodegenError> {
     let string_i64 = helper_state.i64_base;
-    let s_ptr = helper_state.i32_base;
-    let s_len = helper_state.i32_base + 1;
+    let s_ptr = helper_state.i32_base + HS_TEXT_PTR;
+    let s_len = helper_state.i32_base + HS_TEXT_LEN;
     function.instruction(&Instruction::LocalSet(string_i64));
     emit_decode_string_ptr(function, helper_state, string_i64, s_ptr, s_len);
     function.instruction(&Instruction::LocalGet(s_len));
@@ -1438,13 +1430,13 @@ fn emit_list_push_string_helper(
 ) -> Result<(), CodegenError> {
     let list_i64 = helper_state.i64_base;
     let string_i64 = helper_state.i64_base + 1;
-    let s_list_ptr = helper_state.i32_base;
-    let s_list_len = helper_state.i32_base + 1;
-    let s_string_ptr = helper_state.i32_base + 2;
-    let s_string_len = helper_state.i32_base + 3;
-    let s_new_list_ptr = helper_state.i32_base + 7;
-    let s_alloc_size = helper_state.i32_base + 9;
-    let s_iter = helper_state.i32_base + 10;
+    let s_list_ptr = helper_state.i32_base + HS_TEXT_PTR;
+    let s_list_len = helper_state.i32_base + HS_TEXT_LEN;
+    let s_string_ptr = helper_state.i32_base + HS_SEP_PTR;
+    let s_string_len = helper_state.i32_base + HS_SEP_LEN;
+    let s_new_list_ptr = helper_state.i32_base + HS_AUX_PTR;
+    let s_alloc_size = helper_state.i32_base + HS_ALLOC_SIZE;
+    let s_iter = helper_state.i32_base + HS_ITER;
 
     function.instruction(&Instruction::LocalSet(string_i64));
     function.instruction(&Instruction::LocalSet(list_i64));
@@ -2296,11 +2288,11 @@ fn emit_case_match(
                 // Use the generic helper i32 slots starting at hs.i32_base.
                 // These slots are also used by Intrinsic helpers, but CaseMatch patterns
                 // are not interleaved with running intrinsics, so reuse is safe.
-                let s_pat_ptr = hs.i32_base;
-                let s_pat_len = hs.i32_base + 1;
-                let s_scr_ptr = hs.i32_base + 2;
-                let s_scr_len = hs.i32_base + 3;
-                let s_loop_iter = hs.i32_base + 4;
+                let s_pat_ptr = hs.i32_base + HS_TEXT_PTR;
+                let s_pat_len = hs.i32_base + HS_TEXT_LEN;
+                let s_scr_ptr = hs.i32_base + HS_SEP_PTR;
+                let s_scr_len = hs.i32_base + HS_SEP_LEN;
+                let s_loop_iter = hs.i32_base + HS_SCAN_POS;
 
                 // Push static string for pattern.
                 let pat_ptr = static_strings.ptr(pattern_text)?;
@@ -2410,21 +2402,14 @@ fn emit_case_match(
                 function.instruction(&Instruction::I64Const((TAG_LIST as i64) << 60));
                 function.instruction(&Instruction::I64Eq);
                 function.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
-                // Extract pointer, load len (i32 at offset 0).
-                // We need a temp i32 local. Use the helper i32 pool if available.
-                // For EmptyList we just need one i32: the pointer.
-                let s_ptr = if let Some(hs) = helper_state {
-                    hs.i32_base
-                } else {
-                    // No helper state: allocate a fresh i32 local via ctx.
-                    // This happens if the function has no Intrinsic/ListLit but does have EmptyList pattern.
-                    // We'll declare an extra local.
-                    // Note: this local won't be declared in the header unless we pre-scan.
-                    // Safer: fail with a clear error.
-                    return Err(CodegenError {
-                        message: "gen_lower/emit: EmptyList pattern needs helper scratch (add a ListLit or Intrinsic to the function, or ensure helper state is initialized)".to_string(),
-                    });
-                };
+                // Extract list pointer (one i32 local from helper pool), load len at offset 0.
+                // `needs_helper_state` returns true for any function with an EmptyList pattern,
+                // so helper_state is always Some here.  The error path is unreachable in practice.
+                let s_ptr = helper_state
+                    .map(|hs| hs.i32_base + HS_TEXT_PTR)
+                    .ok_or_else(|| CodegenError {
+                        message: "gen_lower/emit: EmptyList pattern requires helper state (internal error: needs_helper_state should have set this up)".to_string(),
+                    })?;
                 function.instruction(&Instruction::LocalGet(scrutinee_idx));
                 function.instruction(&Instruction::I64Const(0xFFFF_FFFFi64));
                 function.instruction(&Instruction::I64And);
@@ -2459,11 +2444,11 @@ fn emit_case_match(
                     message: "gen_lower/emit: ListPattern requires helper state (bump allocator)"
                         .to_string(),
                 })?;
-                let s_list_ptr = hs.i32_base;
-                let s_list_len = hs.i32_base + 1;
-                let s_alloc_size = hs.i32_base + 9;
-                let s_iter = hs.i32_base + 10;
-                let s_tail_ptr = hs.i32_base + 7;
+                let s_list_ptr = hs.i32_base + HS_TEXT_PTR;
+                let s_list_len = hs.i32_base + HS_TEXT_LEN;
+                let s_alloc_size = hs.i32_base + HS_ALLOC_SIZE;
+                let s_iter = hs.i32_base + HS_ITER;
+                let s_tail_ptr = hs.i32_base + HS_AUX_PTR;
                 let n_items = items.len() as i32;
 
                 // Check tag == TAG_LIST
