@@ -13,6 +13,7 @@ use crate::typecheck_render::ty_name;
 pub(crate) fn check_body_stmts(
     stmts: &[Stmt],
     env: &TypeEnv,
+    inherited_mutability: Option<&HashMap<String, bool>>,
     effect_map: &EffectMap,
     required_effects_map: &HashMap<String, Vec<String>>,
     decl_name: &str,
@@ -22,17 +23,18 @@ pub(crate) fn check_body_stmts(
 ) -> Result<(), TypecheckError> {
     let mut local_env = TypeEnv {
         globals: env.globals.clone(),
-        locals: param_tys
-            .iter()
-            .map(|(name, ty)| (name.to_string(), ty.clone()))
-            .collect(),
+        locals: env.locals.clone(),
         type_aliases: env.type_aliases.clone(),
         record_types: env.record_types.clone(),
     };
-    let mut local_mutability: HashMap<String, bool> = param_tys
-        .iter()
-        .map(|(name, _)| (name.to_string(), false))
-        .collect();
+    for (name, ty) in param_tys {
+        local_env.locals.insert((*name).to_string(), ty.clone());
+    }
+    let mut local_mutability: HashMap<String, bool> =
+        inherited_mutability.cloned().unwrap_or_default();
+    for (name, _) in param_tys {
+        local_mutability.insert((*name).to_string(), false);
+    }
 
     check_statement_sequence(
         stmts,
@@ -99,6 +101,7 @@ fn check_stmt(
             validate_stmt_value(
                 value,
                 local_env,
+                local_mutability,
                 required_effects_map,
                 effect_map,
                 covered_ops,
@@ -123,6 +126,7 @@ fn check_stmt(
             validate_stmt_value(
                 value,
                 local_env,
+                local_mutability,
                 required_effects_map,
                 effect_map,
                 covered_ops,
@@ -154,6 +158,7 @@ fn check_stmt(
             validate_stmt_value(
                 value,
                 local_env,
+                local_mutability,
                 required_effects_map,
                 effect_map,
                 covered_ops,
@@ -184,6 +189,7 @@ fn check_stmt(
         Stmt::Expr(expr, _) => validate_stmt_value(
             expr,
             local_env,
+            local_mutability,
             required_effects_map,
             effect_map,
             covered_ops,
@@ -195,6 +201,7 @@ fn check_stmt(
 fn validate_stmt_value(
     expr: &Expr,
     local_env: &TypeEnv,
+    local_mutability: &HashMap<String, bool>,
     required_effects_map: &HashMap<String, Vec<String>>,
     effect_map: &EffectMap,
     covered_ops: &HashSet<String>,
@@ -205,6 +212,7 @@ fn validate_stmt_value(
     check_unhandled_effects_in_expr(
         expr,
         local_env,
+        Some(local_mutability),
         required_effects_map,
         effect_map,
         covered_ops,

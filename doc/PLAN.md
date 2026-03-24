@@ -337,8 +337,10 @@ Priority rule:
 - Wasm backend phases WB-1 through WB-3 are complete (2026-03-24).
   All `CompExpr` and `ValueExpr` variants are handled in the `GeneralLowered` path
   within their supported subsets. See `doc/STATE.md` for current status.
-- current active focus is stdlib track C4-S1 from `doc/PLAN_STANDARD_LIBRARY.md`:
-  unblock `List String` as a record field type in the type checker.
+- current active focus is stdlib track C4-S2 from `doc/PLAN_STANDARD_LIBRARY.md`:
+  consolidate the shared iterator state contract so `stdlib/goby/iterator.gb`
+  owns the canonical `GraphemeState` shape and `stdlib/goby/string.gb` stops
+  carrying duplicated local declarations.
 - WB-3B is explicitly on hold:
   - in-repo preparation work is complete enough for now; see `doc/PLAN_IR.md`.
   - restart only when both of the following are true:

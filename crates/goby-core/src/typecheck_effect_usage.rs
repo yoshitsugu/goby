@@ -154,6 +154,7 @@ fn check_callee_required_effects(
 pub(crate) fn check_unhandled_effects_in_expr(
     expr: &Expr,
     env: &TypeEnv,
+    local_mutability: Option<&HashMap<String, bool>>,
     required_effects_map: &HashMap<String, Vec<String>>,
     effect_map: &EffectMap,
     covered_ops: &HashSet<String>,
@@ -243,6 +244,7 @@ pub(crate) fn check_unhandled_effects_in_expr(
             check_unhandled_effects_in_expr(
                 $e,
                 env,
+                local_mutability,
                 required_effects_map,
                 effect_map,
                 covered_ops,
@@ -253,6 +255,7 @@ pub(crate) fn check_unhandled_effects_in_expr(
             check_unhandled_effects_in_expr(
                 $e,
                 $child_env,
+                local_mutability,
                 required_effects_map,
                 effect_map,
                 covered_ops,
@@ -450,6 +453,7 @@ pub(crate) fn check_unhandled_effects_in_expr(
                     check_body_stmts(
                         stmts,
                         env,
+                        local_mutability,
                         effect_map,
                         required_effects_map,
                         decl_name,
@@ -470,6 +474,7 @@ pub(crate) fn check_unhandled_effects_in_expr(
             check_body_stmts(
                 body,
                 env,
+                local_mutability,
                 effect_map,
                 required_effects_map,
                 decl_name,
@@ -495,6 +500,7 @@ pub(crate) fn check_unhandled_effects_in_expr(
                         check_unhandled_effects_in_expr(
                             value,
                             &local_env,
+                            local_mutability,
                             required_effects_map,
                             effect_map,
                             covered_ops,
@@ -508,6 +514,7 @@ pub(crate) fn check_unhandled_effects_in_expr(
                         check_unhandled_effects_in_expr(
                             value,
                             &local_env,
+                            local_mutability,
                             required_effects_map,
                             effect_map,
                             covered_ops,
@@ -519,6 +526,7 @@ pub(crate) fn check_unhandled_effects_in_expr(
                         check_unhandled_effects_in_expr(
                             expr,
                             &local_env,
+                            local_mutability,
                             required_effects_map,
                             effect_map,
                             covered_ops,

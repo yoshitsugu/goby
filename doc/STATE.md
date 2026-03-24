@@ -34,15 +34,22 @@ Last updated: 2026-03-24
 
 ## Track Priority
 
-**Next active work: stdlib track (C4-S1) is now unblocked.** The Wasm backend pipeline (WB-1–WB-3) is stable. stdlib work can depend on it.
+**Next active work: stdlib track moves to C4-S2.** The Wasm backend pipeline (WB-1–WB-3) is stable, and C4-S1 is complete.
 
-See `doc/PLAN_STANDARD_LIBRARY.md` for the C4-S1 milestone plan.
+See `doc/PLAN_STANDARD_LIBRARY.md` for the remaining C4 milestones.
 
 ## Immediate Next Steps
 
-**Track stdlib (C4-S1) — primary (now unblocked):**
-Unblock `List String` as a record field type in the type checker.
-Exit criterion: `cargo run -p goby-cli -- check stdlib/goby/string.gb` no longer fails on the state record field type.
+**Track stdlib (C4-S1) — complete (2026-03-24):**
+`cargo run -p goby-cli -- check stdlib/goby/string.gb` now succeeds.
+The typechecker accepts the required `List String` state initialization shape and preserves
+outer `mut` locals through stdlib-style `with ... in` bodies.
+
+**Track stdlib (C4-S2) — primary:**
+Stabilize the shared iterator state contract by keeping `GraphemeState` in
+`stdlib/goby/iterator.gb` as the canonical declaration and removing duplicated local copies
+from `stdlib/goby/string.gb`.
+Exit criterion: no duplicated `Iterator` / `GraphemeState` declarations remain across stdlib modules.
 See `doc/PLAN_STANDARD_LIBRARY.md` §5.
 
 **Track WB-3B (future, deferred):**

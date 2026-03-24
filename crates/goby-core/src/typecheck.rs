@@ -2031,12 +2031,12 @@ effect Iterator a b
 f : String -> GraphemeState can Iterator
 f s =
   state = GraphemeState(grapheme: \"\", current: \"\")
-  out = state
+  mut out = state
   with
     yield grapheme step ->
       resume (True, step)
   in
-    out = __goby_string_each_grapheme s state
+    out := __goby_string_each_grapheme s state
   out
 ";
         fs::write(&source_path, source).expect("fixture file should be writable");
@@ -2086,6 +2086,53 @@ f =
             "unexpected message: {}",
             err.message
         );
+    }
+
+    #[test]
+    fn accepts_mut_binding_assignment_inside_with_body_under_stdlib_root() {
+        let sandbox = TempDirGuard::new("mut_binding_inside_with_body_stdlib");
+        let stdlib_root = sandbox.path.join("stdlib");
+        let source_path = stdlib_root.join("goby/string.gb");
+        fs::create_dir_all(source_path.parent().expect("parent should exist"))
+            .expect("stdlib path should be creatable");
+        let source = "\
+effect Iterator a b
+  yield : a -> b -> (Bool, b)
+
+f : Unit -> Int can Iterator
+f =
+  mut n = 0
+  with
+    yield _ _ ->
+      resume (True, ())
+  in
+    n := 1
+  n
+";
+        fs::write(&source_path, source).expect("fixture file should be writable");
+        let module = parse_module(source).expect("should parse");
+        typecheck_module_with_context(&module, Some(&source_path), Some(&stdlib_root))
+            .expect("mut binding should remain visible inside with body under stdlib root");
+    }
+
+    #[test]
+    fn accepts_record_field_list_string_via_empty_list_initialization_under_stdlib_root() {
+        let sandbox = TempDirGuard::new("record_field_list_string_empty_list_stdlib");
+        let stdlib_root = sandbox.path.join("stdlib");
+        let source_path = stdlib_root.join("goby/string.gb");
+        fs::create_dir_all(source_path.parent().expect("parent should exist"))
+            .expect("stdlib path should be creatable");
+        let source = "\
+type GraphemeState = GraphemeState(parts: List String)
+
+f : Unit -> GraphemeState
+f =
+  GraphemeState(parts: [])
+";
+        fs::write(&source_path, source).expect("fixture file should be writable");
+        let module = parse_module(source).expect("should parse");
+        typecheck_module_with_context(&module, Some(&source_path), Some(&stdlib_root))
+            .expect("empty-list state initialization should converge to List String");
     }
 
     #[test]

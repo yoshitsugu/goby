@@ -2,7 +2,7 @@
 
 Status: active follow-up only
 Owner: Goby core/runtime track
-Last updated: 2026-03-18
+Last updated: 2026-03-24
 
 ## 1. Scope
 
@@ -43,11 +43,14 @@ Still not finished:
 
 - multi-grapheme delimiters still depend on the runtime `string.split(...)`
   builtin path (the `else` branch of `split` in `stdlib/goby/string.gb`),
-- stdlib state/type plumbing for the final `split` implementation is incomplete:
-  - plain record field annotations such as `type S = S(xs: List String)` are already accepted,
-  - but `stdlib/goby/string.gb` still fails because:
-    - `parts: []` style state initialization remains `List Unknown` in `GraphemeState` constructor flows,
-    - `grapheme_count` currently hits a local `mut` binding/typecheck failure (`mut n = 0` reported as undeclared assignment),
+- stdlib state/type plumbing still needs cleanup before the final `split`
+  implementation is fully consolidated:
+  - `stdlib/goby/string.gb` now typechecks successfully,
+  - `parts: []` style state initialization now converges in `List String`
+    constructor/state-update flows,
+  - outer `mut` locals now remain visible inside stdlib-style `with ... in`
+    bodies,
+  - duplicated iterator state declarations are still present across stdlib modules,
 - the runtime builtin branch cannot yet be deleted.
 
 ## 3. Locked Behavior
@@ -84,26 +87,20 @@ These semantics remain locked while finishing the work:
 
 ## 5. Step-By-Step Execution
 
-- [ ] C4-S1. Unblock stdlib state type declaration
+- [x] C4-S1. Unblock stdlib state type declaration
   - update the typechecker/local-binding path so `stdlib/goby/string.gb` passes under the
     current language/runtime architecture.
-  - concrete subproblems to close:
-    - `GraphemeState(... parts: [] ...)` must typecheck as `List String` in the relevant
+  - completed 2026-03-24:
+    - `GraphemeState(... parts: [] ...)` now typechecks as `List String` in the relevant
       constructor/state-update flows,
-    - `grapheme_count` local mutable binding (`mut n = 0`) must no longer be rejected as
-      an undeclared assignment.
-  - add focused regression coverage:
-    - positive: `type S = S(xs: List String)` accepted,
-    - positive: `GraphemeState(... parts: [] ...)`-style stdlib state initialization can
-      converge to `List String`,
-    - positive: `mut n = 0` local binding in stdlib-style declaration bodies typechecks,
-    - negative: malformed generic field type still rejected.
-  - exit criteria:
-    - `cargo run -p goby-cli -- check stdlib/goby/string.gb` succeeds.
+    - `grapheme_count` local mutable binding (`mut n = 0`) no longer fails through nested
+      stdlib-style `with ... in` bodies,
+    - focused regression coverage added for both shapes,
+    - `cargo run -p goby-cli -- check stdlib/goby/string.gb` now succeeds.
 
 - [ ] C4-S2. Stabilize iterator state contract in stdlib
   - keep `GraphemeState` in `stdlib/goby/iterator.gb` as the canonical shared
-    state shape,
+  state shape,
   - make `stdlib/goby/string.gb` import and use that shared shape only,
   - remove duplicated local declarations once C4-S1 is done.
   - exit criteria:

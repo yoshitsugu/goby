@@ -117,6 +117,21 @@ impl TypeEnv {
     pub(crate) fn are_compatible(&self, expected: &Ty, actual: &Ty) -> bool {
         let expected = self.resolve_alias(expected, 0);
         let actual = self.resolve_alias(actual, 0);
+        match (&expected, &actual) {
+            (Ty::Unknown, _) | (_, Ty::Unknown) => return true,
+            (Ty::List(expected_inner), Ty::List(actual_inner)) => {
+                return self.are_compatible(expected_inner, actual_inner);
+            }
+            (Ty::Tuple(expected_items), Ty::Tuple(actual_items))
+                if expected_items.len() == actual_items.len() =>
+            {
+                return expected_items
+                    .iter()
+                    .zip(actual_items.iter())
+                    .all(|(expected, actual)| self.are_compatible(expected, actual));
+            }
+            _ => {}
+        }
         if let Ty::Con { name, args } = &expected
             && name == "Handler"
             && let Ty::Handler { covered_ops } = &actual

@@ -115,6 +115,7 @@ pub(crate) fn check_declaration_bodies(
         check_body_stmts(
             stmts,
             &checking.env,
+            None,
             &checking.effect_map,
             &checking.required_effects_map,
             &decl.name,
@@ -176,6 +177,7 @@ pub(crate) fn check_declaration_bodies_collect(
         if let Err(e) = check_body_stmts(
             stmts,
             &checking.env,
+            None,
             &checking.effect_map,
             &checking.required_effects_map,
             &decl.name,
