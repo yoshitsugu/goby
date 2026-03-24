@@ -298,6 +298,21 @@ fn lower_case(
     instrs.push(WasmBackendInstr::DeclareLocal {
         name: scrutinee_local.clone(),
     });
+    // 1b. Declare locals for all ListPattern Bind/tail variables (pre-scan must see them).
+    for arm in &backend_arms {
+        if let BackendCasePattern::ListPattern { items, tail } = &arm.pattern {
+            for item in items {
+                if let BackendListPatternItem::Bind(name) = item {
+                    instrs.push(WasmBackendInstr::DeclareLocal { name: name.clone() });
+                }
+            }
+            if let Some(tail_name) = tail {
+                instrs.push(WasmBackendInstr::DeclareLocal {
+                    name: tail_name.clone(),
+                });
+            }
+        }
+    }
     // 2. Evaluate the scrutinee.
     instrs.extend(scrutinee_instrs);
     // 3. Store into the local.
@@ -1754,8 +1769,9 @@ mod tests {
             ],
         };
         let result = lower_comp(&comp).expect("Case list pattern lowering should succeed");
-        assert_eq!(result.len(), 4, "expected 4 instrs (declare+eval+store+CaseMatch)");
-        let WasmBackendInstr::CaseMatch { arms, .. } = &result[3] else {
+        // DeclareLocal(scrutinee) + DeclareLocal(h) + DeclareLocal(t) + eval + StoreLocal + CaseMatch
+        assert_eq!(result.len(), 6, "expected 6 instrs for list pattern with h and tail t");
+        let WasmBackendInstr::CaseMatch { arms, .. } = &result[5] else {
             panic!("expected CaseMatch");
         };
         assert_eq!(
@@ -1783,8 +1799,9 @@ mod tests {
             }],
         };
         let result = lower_comp(&comp).expect("Case list pattern with ignore tail should succeed");
-        assert_eq!(result.len(), 4, "expected 4 instrs (declare+eval+store+CaseMatch)");
-        let WasmBackendInstr::CaseMatch { arms, .. } = &result[3] else {
+        // DeclareLocal(scrutinee) + DeclareLocal(h) + eval + StoreLocal + CaseMatch
+        assert_eq!(result.len(), 5, "expected 5 instrs for list pattern with h (no tail)");
+        let WasmBackendInstr::CaseMatch { arms, .. } = &result[4] else {
             panic!("expected CaseMatch");
         };
         // Ignore tail → tail = None in backend pattern

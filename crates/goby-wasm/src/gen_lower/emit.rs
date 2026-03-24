@@ -274,6 +274,41 @@ fn collect_all_instrs(instrs: &[WasmBackendInstr]) -> Vec<&WasmBackendInstr> {
     result
 }
 
+/// Returns true if `instrs` (recursively) contains any `CaseMatch` arm with a `ListPattern`.
+/// `ListPattern` arms need the bump allocator (for tail sub-list allocation).
+fn has_list_pattern(instrs: &[WasmBackendInstr]) -> bool {
+    use crate::gen_lower::backend_ir::BackendCasePattern;
+    for instr in instrs {
+        match instr {
+            WasmBackendInstr::CaseMatch { arms, .. } => {
+                for arm in arms {
+                    if matches!(&arm.pattern, BackendCasePattern::ListPattern { .. }) {
+                        return true;
+                    }
+                    if has_list_pattern(&arm.body_instrs) {
+                        return true;
+                    }
+                }
+            }
+            WasmBackendInstr::If {
+                then_instrs,
+                else_instrs,
+            } => {
+                if has_list_pattern(then_instrs) || has_list_pattern(else_instrs) {
+                    return true;
+                }
+            }
+            WasmBackendInstr::ListLit { element_instrs } => {
+                if element_instrs.iter().any(|e| has_list_pattern(e)) {
+                    return true;
+                }
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
 fn required_i32_scratch_count(instrs: &[WasmBackendInstr]) -> u32 {
     let all = collect_all_instrs(instrs);
     let split = all.iter().any(|i| {
@@ -305,7 +340,7 @@ fn required_i32_scratch_count(instrs: &[WasmBackendInstr]) -> u32 {
                 // ListLit uses emit_alloc_from_top which requires the same pool.
                 | WasmBackendInstr::ListLit { .. }
         )
-    }) {
+    }) || has_list_pattern(instrs) {
         HELPER_SCRATCH_I32
     } else {
         0
@@ -636,15 +671,15 @@ fn emit_instrs(
     // in `emit_bin_op`, without requiring the full HelperEmitState.
     // Use collect_all_instrs to detect Intrinsic and ListLit in nested branches
     // (CaseMatch arms, If branches, ListLit elements).
-    // ListLit only needs the i32 scratch pool (bump allocator) but not i64 scratch.
+    // ListLit and ListPattern only need the i32 scratch pool (bump allocator) but not i64 scratch.
     let has_intrinsic_or_list_lit = collect_all_instrs(instrs).iter().any(|i| {
         matches!(
             i,
             WasmBackendInstr::Intrinsic { .. } | WasmBackendInstr::ListLit { .. }
         )
-    });
-    // Initialize helper_state when i32 scratch is available (required for Intrinsic and ListLit).
-    // ListLit only needs i32 scratch (bump allocator), not i64 scratch.
+    }) || has_list_pattern(instrs);
+    // Initialize helper_state when i32 scratch is available (required for Intrinsic, ListLit,
+    // and ListPattern tail allocation).
     let helper_state = if has_intrinsic_or_list_lit {
         let alloc_cursor_local = i32_base + HELPER_ALLOC_CURSOR_OFFSET;
         let heap_floor_local = i32_base + HELPER_HEAP_FLOOR_OFFSET;
@@ -2418,11 +2453,192 @@ fn emit_case_match(
                 function.instruction(&Instruction::End); // end if (is list)
             }
 
-            BackendCasePattern::ListPattern { .. } => {
-                // WB-2B Step 6: ListPattern emission.
-                return Err(CodegenError {
-                    message: "gen_lower/emit: ListPattern emission not yet implemented (WB-2B Step 6)".to_string(),
-                });
+            BackendCasePattern::ListPattern { items, tail } => {
+                use crate::gen_lower::backend_ir::BackendListPatternItem;
+                let hs = helper_state.ok_or_else(|| CodegenError {
+                    message: "gen_lower/emit: ListPattern requires helper state (bump allocator)"
+                        .to_string(),
+                })?;
+                let s_list_ptr = hs.i32_base;
+                let s_list_len = hs.i32_base + 1;
+                let s_alloc_size = hs.i32_base + 9;
+                let s_iter = hs.i32_base + 10;
+                let s_tail_ptr = hs.i32_base + 7;
+                let n_items = items.len() as i32;
+
+                // Check tag == TAG_LIST
+                function.instruction(&Instruction::LocalGet(scrutinee_idx));
+                function.instruction(&Instruction::I64Const((TAG_LIST as i64) << 60));
+                function.instruction(&Instruction::I64And);
+                function.instruction(&Instruction::I64Const((TAG_LIST as i64) << 60));
+                function.instruction(&Instruction::I64Eq);
+                function.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
+                // Is a list: extract ptr, load len
+                function.instruction(&Instruction::LocalGet(scrutinee_idx));
+                function.instruction(&Instruction::I64Const(0xFFFF_FFFFi64));
+                function.instruction(&Instruction::I64And);
+                function.instruction(&Instruction::I32WrapI64);
+                function.instruction(&Instruction::LocalSet(s_list_ptr));
+                function.instruction(&Instruction::LocalGet(s_list_ptr));
+                function.instruction(&Instruction::I32Load(MemArg {
+                    offset: 0,
+                    align: 2,
+                    memory_index: 0,
+                }));
+                function.instruction(&Instruction::LocalSet(s_list_len));
+
+                // Length check
+                function.instruction(&Instruction::LocalGet(s_list_len));
+                function.instruction(&Instruction::I32Const(n_items));
+                if tail.is_some() {
+                    function.instruction(&Instruction::I32GeU);
+                } else {
+                    function.instruction(&Instruction::I32Eq);
+                }
+                function.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
+
+                // Item matching: for each item, validate/bind
+                // Mismatch → br 0 (exit if_len, fall through if_list → fall through arm)
+                for (i, item) in items.iter().enumerate() {
+                    let elem_offset = 4 + 8 * i as i32;
+                    match item {
+                        BackendListPatternItem::Bind(name) => {
+                            let name_local = ctx.get(name)?;
+                            function.instruction(&Instruction::LocalGet(s_list_ptr));
+                            function.instruction(&Instruction::I32Const(elem_offset));
+                            function.instruction(&Instruction::I32Add);
+                            function.instruction(&Instruction::I64Load(MemArg {
+                                offset: 0,
+                                align: 3,
+                                memory_index: 0,
+                            }));
+                            function.instruction(&Instruction::LocalSet(name_local));
+                        }
+                        BackendListPatternItem::IntLit(n) => {
+                            let encoded = crate::gen_lower::value::encode_int(*n).map_err(|e| {
+                                CodegenError {
+                                    message: format!(
+                                        "gen_lower/emit: ListPattern IntLit out of range: {e}"
+                                    ),
+                                }
+                            })?;
+                            // Load element; compare. Mismatch → exit if_len.
+                            function.instruction(&Instruction::LocalGet(s_list_ptr));
+                            function.instruction(&Instruction::I32Const(elem_offset));
+                            function.instruction(&Instruction::I32Add);
+                            function.instruction(&Instruction::I64Load(MemArg {
+                                offset: 0,
+                                align: 3,
+                                memory_index: 0,
+                            }));
+                            function.instruction(&Instruction::I64Const(encoded));
+                            function.instruction(&Instruction::I64Ne);
+                            function.instruction(&Instruction::BrIf(0)); // exit if_len
+                        }
+                        BackendListPatternItem::StrLit(_) => {
+                            // String item literal matching not yet supported.
+                            return Err(CodegenError {
+                                message: "gen_lower/emit: ListPattern StrLit item not yet supported".to_string(),
+                            });
+                        }
+                        BackendListPatternItem::Wildcard => {
+                            // Nothing to do.
+                        }
+                    }
+                }
+
+                // Tail binding: allocate sub-list of (s_list_len - n_items) elements
+                if let Some(tail_name) = tail {
+                    let tail_local = ctx.get(tail_name)?;
+                    // alloc_size = 4 + 8 * (s_list_len - n_items)
+                    // = 4 + 8*s_list_len - 8*n_items
+                    function.instruction(&Instruction::LocalGet(s_list_len));
+                    function.instruction(&Instruction::I32Const(n_items));
+                    function.instruction(&Instruction::I32Sub);
+                    function.instruction(&Instruction::I32Const(8));
+                    function.instruction(&Instruction::I32Mul);
+                    function.instruction(&Instruction::I32Const(4));
+                    function.instruction(&Instruction::I32Add);
+                    function.instruction(&Instruction::LocalSet(s_alloc_size));
+                    emit_alloc_from_top(function, &hs, s_alloc_size, s_tail_ptr);
+                    // Write length = s_list_len - n_items
+                    function.instruction(&Instruction::LocalGet(s_tail_ptr));
+                    function.instruction(&Instruction::LocalGet(s_list_len));
+                    function.instruction(&Instruction::I32Const(n_items));
+                    function.instruction(&Instruction::I32Sub);
+                    function.instruction(&Instruction::I32Store(MemArg {
+                        offset: 0,
+                        align: 2,
+                        memory_index: 0,
+                    }));
+                    // Copy elements [n_items..s_list_len] into tail sub-list
+                    // s_iter = 0
+                    function.instruction(&Instruction::I32Const(0));
+                    function.instruction(&Instruction::LocalSet(s_iter));
+                    function.instruction(&Instruction::Block(wasm_encoder::BlockType::Empty));
+                    function.instruction(&Instruction::Loop(wasm_encoder::BlockType::Empty));
+                    // if iter >= (s_list_len - n_items) → break
+                    function.instruction(&Instruction::LocalGet(s_iter));
+                    function.instruction(&Instruction::LocalGet(s_list_len));
+                    function.instruction(&Instruction::I32Const(n_items));
+                    function.instruction(&Instruction::I32Sub);
+                    function.instruction(&Instruction::I32GeU);
+                    function.instruction(&Instruction::BrIf(1));
+                    // dst addr = s_tail_ptr + 4 + iter*8
+                    function.instruction(&Instruction::LocalGet(s_tail_ptr));
+                    function.instruction(&Instruction::I32Const(4));
+                    function.instruction(&Instruction::I32Add);
+                    function.instruction(&Instruction::LocalGet(s_iter));
+                    function.instruction(&Instruction::I32Const(8));
+                    function.instruction(&Instruction::I32Mul);
+                    function.instruction(&Instruction::I32Add);
+                    // src value = s_list_ptr + 4 + (iter + n_items)*8
+                    function.instruction(&Instruction::LocalGet(s_list_ptr));
+                    function.instruction(&Instruction::I32Const(4));
+                    function.instruction(&Instruction::I32Add);
+                    function.instruction(&Instruction::LocalGet(s_iter));
+                    function.instruction(&Instruction::I32Const(n_items));
+                    function.instruction(&Instruction::I32Add);
+                    function.instruction(&Instruction::I32Const(8));
+                    function.instruction(&Instruction::I32Mul);
+                    function.instruction(&Instruction::I32Add);
+                    function.instruction(&Instruction::I64Load(MemArg {
+                        offset: 0,
+                        align: 3,
+                        memory_index: 0,
+                    }));
+                    function.instruction(&Instruction::I64Store(MemArg {
+                        offset: 0,
+                        align: 3,
+                        memory_index: 0,
+                    }));
+                    // iter++
+                    function.instruction(&Instruction::LocalGet(s_iter));
+                    function.instruction(&Instruction::I32Const(1));
+                    function.instruction(&Instruction::I32Add);
+                    function.instruction(&Instruction::LocalSet(s_iter));
+                    function.instruction(&Instruction::Br(0));
+                    function.instruction(&Instruction::End); // end loop
+                    function.instruction(&Instruction::End); // end block
+                    // Bind tail local to tagged list ptr
+                    emit_push_tagged_ptr(function, s_tail_ptr, TAG_LIST);
+                    function.instruction(&Instruction::LocalSet(tail_local));
+                }
+
+                // Emit body + br out of: if_len (0) + if_list (1) + outer block (2)
+                emit_instrs(
+                    function,
+                    ctx,
+                    &arm.body_instrs,
+                    layout,
+                    named_i64_count,
+                    helper_i64_scratch_count,
+                    i32_base,
+                    static_strings,
+                )?;
+                function.instruction(&Instruction::Br(2));
+                function.instruction(&Instruction::End); // end if_len
+                function.instruction(&Instruction::End); // end if_list
             }
         }
     }

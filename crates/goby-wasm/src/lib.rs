@@ -910,4 +910,74 @@ main =
             "WB-2B-M3: [] case → empty"
         );
     }
+
+    // ------------------------------------------------------------------
+    // WB-2B-M2: ListPattern emission tests
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn wb2b_list_pattern_head_tail_executes() {
+        // WB-2B-M2: case xs { [] -> "none" | [h, ..t] -> h } extracts first element.
+        use goby_core::parse_module;
+        let module = parse_module(
+            r#"
+head_or_none : List String -> String can {}
+head_or_none xs =
+  case xs
+    [] -> "none"
+    [h, ..t] -> h
+
+main : Unit -> Unit can Print, Read
+main =
+  _ = read()
+  xs = ["alpha", "beta", "gamma"]
+  println (head_or_none xs)
+"#,
+        )
+        .expect("parse should work");
+
+        assert_eq!(
+            runtime_io_execution_kind(&module).expect("classification should succeed"),
+            RuntimeIoExecutionKind::GeneralLowered,
+            "WB-2B-M2: list pattern program must classify as GeneralLowered"
+        );
+
+        let output = execute_runtime_module_with_stdin(&module, Some(String::new()))
+            .expect("WB-2B-M2: list pattern must execute");
+        assert_eq!(
+            output.as_deref(),
+            Some("alpha\n"),
+            "WB-2B-M2: head_or_none [alpha,beta,gamma] → alpha"
+        );
+    }
+
+    #[test]
+    fn wb2b_list_pattern_empty_branch_executes() {
+        // WB-2B-M2: EmptyList branch taken when list has 0 elements.
+        use goby_core::parse_module;
+        let module = parse_module(
+            r#"
+head_or_none : List String -> String can {}
+head_or_none xs =
+  case xs
+    [] -> "none"
+    [h, ..t] -> h
+
+main : Unit -> Unit can Print, Read
+main =
+  _ = read()
+  xs = []
+  println (head_or_none xs)
+"#,
+        )
+        .expect("parse should work");
+
+        let output = execute_runtime_module_with_stdin(&module, Some(String::new()))
+            .expect("WB-2B-M2: empty list pattern must execute");
+        assert_eq!(
+            output.as_deref(),
+            Some("none\n"),
+            "WB-2B-M2: head_or_none [] → none"
+        );
+    }
 }
