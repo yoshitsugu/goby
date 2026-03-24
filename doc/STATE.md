@@ -21,7 +21,8 @@ Last updated: 2026-03-24
 - WB-3B prep slice in progress (2026-03-24): `gen_lower/emit.rs` now has an
   `EffectEmitStrategy` boundary and `wasmfx-experimental` feature flag so future WasmFX work can
   replace the emit path without redesigning IR/lowering; current strategies are parity-tested to
-  emit identical bytes for supported effect ops.
+  emit identical bytes for supported effect ops and representative general-lowered modules
+  (safe handler-only main, helper decl + read path).
 - **WB-3 is complete.** All 13 `CompExpr` variants and all 12 `ValueExpr` variants are handled in the `GeneralLowered` path (within supported subsets).
 
 ## Track Priority

@@ -592,6 +592,36 @@ mod tests {
 
     use super::*;
     use crate::gen_lower::backend_ir::WasmBackendInstr;
+    use crate::gen_lower::emit::{EffectEmitStrategy, EmitOptions};
+
+    fn assert_strategy_parity(module: &goby_core::Module) {
+        let (instrs, aux) = lower_module_to_instrs(module)
+            .expect("lowering should not error")
+            .expect("general lowering should apply");
+        let layout = MemoryLayout::default();
+        let direct = emit::emit_general_module_with_aux_and_options(
+            &instrs,
+            &aux,
+            &layout,
+            EmitOptions {
+                effect_emit_strategy: EffectEmitStrategy::Wb3DirectCall,
+            },
+        )
+        .expect("WB-3A direct emission should succeed");
+        let wasmfx = emit::emit_general_module_with_aux_and_options(
+            &instrs,
+            &aux,
+            &layout,
+            EmitOptions {
+                effect_emit_strategy: EffectEmitStrategy::Wb3BWasmFxExperimental,
+            },
+        )
+        .expect("WB-3B experimental emission should succeed");
+        assert_eq!(
+            wasmfx, direct,
+            "emit strategies should stay byte-identical until WasmFX opcode support lands"
+        );
+    }
 
     #[test]
     fn general_lowered_main_discards_final_goby_value() {
@@ -637,5 +667,46 @@ main =
                 .is_some(),
             "safe handler-only main should enter general lowering"
         );
+    }
+
+    #[test]
+    fn safe_handler_only_module_has_emit_strategy_parity() {
+        let module = parse_module(
+            r#"
+effect Tick
+  tick: String -> Unit
+
+main : Unit -> Unit can Tick, Print
+main =
+  with
+    tick value ->
+      print value
+      resume ()
+  in
+    tick "a"
+"#,
+        )
+        .expect("source should parse");
+
+        assert_strategy_parity(&module);
+    }
+
+    #[test]
+    fn helper_decl_read_module_has_emit_strategy_parity() {
+        let module = parse_module(
+            r#"
+greet : String -> Unit can Print
+greet name =
+  println "hello ${name}"
+
+main : Unit -> Unit can Print, Read
+main =
+  input = read()
+  greet input
+"#,
+        )
+        .expect("source should parse");
+
+        assert_strategy_parity(&module);
     }
 }
