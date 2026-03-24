@@ -1,6 +1,6 @@
 # Goby IR Lowering Plan
 
-Last updated: 2026-03-23
+Last updated: 2026-03-24
 
 This document is the active architecture reference for Goby's compilation pipeline
 and the long-term plan for Wasm backend lowering.
@@ -53,17 +53,17 @@ top-level declarations (including recursive stdlib functions like `map`/`each`) 
 | Variant | Status | Target phase |
 |---------|--------|-------------|
 | `Value` | ✅ handled | — |
-| `Let` | ✅ handled (fused patterns inside) | — |
+| `Let` | ✅ handled | — |
 | `Seq` | ✅ handled | — |
-| `PerformEffect` | ✅ handled (Print/Read effects only) | — |
-| `Call` | ✅ partial — effect/intrinsic only | WB-2A: extend to decl calls |
-| `If` | ❌ | WB-1 |
-| `LetMut` | ❌ | WB-1 |
-| `Assign` | ❌ | WB-1 |
-| `Case` | ❌ | WB-2B |
-| `Handle` | ❌ | WB-3 |
-| `WithHandler` | ❌ | WB-3 |
-| `Resume` | ❌ | WB-3 |
+| `PerformEffect` | ✅ handled (Print/Read effects) | — |
+| `Call` | ✅ handled (effect, intrinsic, decl calls, indirect) | WB-2A ✓ |
+| `If` | ✅ handled | WB-1 ✓ |
+| `LetMut` | ✅ handled | WB-1 ✓ |
+| `Assign` | ✅ handled | WB-1 ✓ |
+| `Case` | ✅ handled (literal/list patterns) | WB-2B ✓ |
+| `Handle` | ✅ handled (one-shot tail-resumptive subset) | WB-3 ✓ |
+| `WithHandler` | ✅ handled (one-shot tail-resumptive subset) | WB-3 ✓ |
+| `Resume` | ✅ handled (tail position only → `return_call`) | WB-3 ✓ |
 
 ### ValueExpr (12 variants)
 
@@ -75,12 +75,12 @@ top-level declarations (including recursive stdlib functions like `map`/`each`) 
 | `StrLit` | ✅ handled | — |
 | `Var` | ✅ handled | — |
 | `GlobalRef` | ✅ handled | — |
-| `BinOp` | ❌ | WB-1 |
-| `Interp` | ❌ | WB-1 |
-| `ListLit` | ❌ | WB-2B |
-| `TupleLit` | ❌ | WB-2B |
-| `RecordLit` | ❌ | WB-2B |
-| `Lambda` | ❌ | WB-3 |
+| `BinOp` | ✅ handled | WB-1 ✓ |
+| `Interp` | ✅ handled | WB-1 ✓ |
+| `ListLit` | ✅ handled | WB-2B ✓ |
+| `TupleLit` | ✅ handled | WB-2B ✓ |
+| `RecordLit` | ✅ handled | WB-2B ✓ |
+| `Lambda` | ✅ handled (no-capture + wrapper AuxDecl for funcref values) | WB-3 ✓ |
 
 ---
 

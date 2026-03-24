@@ -334,9 +334,11 @@ Priority rule:
 
 - IR-lowering completion and IR-boundary redesign work is tracked as completed in
   `doc/PLAN_IR.md`; use it as the architectural reference for follow-up work.
-- current active backend focus is Phase `WB-3-M3` from `doc/PLAN_IR.md`:
-  lower `ValueExpr::Lambda` into the general Wasm path after completing
-  `WB-3-M2` safe-handler lowering.
+- Wasm backend phases WB-1 through WB-3 are complete (2026-03-24).
+  All `CompExpr` and `ValueExpr` variants are handled in the `GeneralLowered` path
+  within their supported subsets. See `doc/STATE.md` for current status.
+- current active focus is stdlib track C4-S1 from `doc/PLAN_STANDARD_LIBRARY.md`:
+  unblock `List String` as a record field type in the type checker.
 - active backend/runtime work should prefer unblocking itself by improving shared IR and
   AST-to-IR lowering rather than by adding more source-shape-specific recognizers.
 - when there is tension between a local unblock and the long-term IR architecture,

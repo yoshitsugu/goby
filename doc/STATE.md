@@ -8,78 +8,60 @@ Last updated: 2026-03-24
 - Track E E1–E7 complete.
 - Phase WB-1 complete (2026-03-24): `If`, `BinOp`, `Interp`, `LetMut`, `Assign` all lowered and emitted.
 - Phase WB-2A complete (2026-03-24): top-level `DeclCall`, recursion, funcref-table indirect calls, typed backend effect identities.
-  - `lower_comp_with_decls` passes `known_decls` set so `Var(name)` callee resolves as `DeclCall`.
-  - `emit_general_module_with_aux` places main first, aux after; builds `decl_name → func_idx` table.
-  - Higher-order helper-call and recursive-call execution tests pass.
-  - `gen_lower` backend IR now uses typed `BackendEffectOp` / `BackendPrintOp` instead of raw effect/op strings for general-lowering dispatch.
-- Phase WB-2B M1–M5 complete (2026-03-24): `Case` literal/wildcard patterns, list patterns, `ListLit`, `TupleLit`, and `RecordLit` lowered/emitted.
-- Phase WB-2B M6 complete (2026-03-24): `stdlib/goby/list.gb` `each` / `map` execute via `GeneralLowered`.
-  - `each` uses `ListEach` / `IndirectCall` for named callbacks.
-  - `map` uses backend `ListMap`; generic list-spread lowering remains separate future work.
-- Phase WB-2B M7 complete (2026-03-24): obsolete fused split recognizers removed from `gen_lower/lower.rs`.
-  - `string.split` + `list.each` / `list.get` now lower through the normal general path.
-  - retained for later: `graphemes-get-print` in `lower.rs`, and backend-IR
-    `SplitEachPrint` / `SplitGetPrint` as optional `RuntimeIoPlan` optimisations.
-- Phase WB-2B M8 complete (2026-03-24): WB-2 quality gates passed.
-  - `cargo fmt --check`
-  - `cargo check`
-  - `cargo test`
-  - `cargo clippy -- -D warnings`
-- WB-2 is now complete.
-- Phase WB-3 M1 complete (2026-03-24): IR-level legality analysis now classifies each `WithHandler`
-  as one-shot tail-resumptive or outside the supported subset.
-  - Non-tail `resume` now reports `BackendLimitation` instead of falling through as generic unsupported codegen.
-- Phase WB-3 M2 complete (2026-03-24): safe `Handle` / `WithHandler` / tail `Resume` now normalize
-  to handler-free IR before general lowering.
-  - `examples/iterator.gb` now classifies as `GeneralLowered` and executes correctly through the Wasm-owned path.
-- Next active work: Phase WB-3 M3 (`ValueExpr::Lambda` lowering for general Wasm emission).
+- Phase WB-2B complete (2026-03-24): `Case` literal/wildcard/list patterns, `ListLit`, `TupleLit`, `RecordLit`, stdlib `list.each` / `list.map`.
+- Phase WB-3 complete (2026-03-24): `Handle` / `WithHandler` / tail `Resume` lowered for one-shot tail-resumptive subset; `ValueExpr::Lambda` lowered; `graphemes` end-to-end via `StringGraphemesList` host intrinsic; `InterpreterBridge` graphemes classification removed; full WB-1–WB-3 stack integration test passes.
+  - M1: legality analysis implemented.
+  - M2: safe handler lowering complete; `examples/iterator.gb` executes via `GeneralLowered`.
+  - M3: `ValueExpr::Lambda` lowered; `map [1,2,3] (fn x -> x+1)` executes correctly.
+  - M4: `StringGraphemesList` host intrinsic; graphemes classifies as `GeneralLowered` end-to-end.
+  - M5: `graphemes-get-print` fused pattern deleted; `SplitEachPrint`/`SplitGetPrint` retained in `DynamicWasiIo` path only.
+  - M6: `InterpreterBridge` graphemes classification removed; 4 dead helper functions deleted.
+  - M7: `graphemes`-as-funcref wrapper AuxDecl; full WB-1–WB-3 integration test (`split + map + graphemes + each`).
+  - M8: quality gates pass (`cargo fmt`, `cargo check`, `cargo test`, `cargo clippy -- -D warnings`).
+- **WB-3 is complete.** All 13 `CompExpr` variants and all 12 `ValueExpr` variants are handled in the `GeneralLowered` path (within supported subsets).
 
 ## Track Priority
 
-**Wasm backend (WB) is the primary track.** Complete WB phases in order before starting stdlib work.
-Rationale: the IR/backend pipeline must stabilise before the stdlib can depend on it.
-stdlib track (C4-S1 onwards) is deferred until WB is in a stable state.
+**Next active work: stdlib track (C4-S1) is now unblocked.** The Wasm backend pipeline (WB-1–WB-3) is stable. stdlib work can depend on it.
+
+See `doc/PLAN_STANDARD_LIBRARY.md` for the C4-S1 milestone plan.
 
 ## Immediate Next Steps
 
-**Track Wasm backend (Phase WB-3 M3) — primary:**
-Implement `ValueExpr::Lambda` lowering using the existing funcref-table function-value representation.
-See `doc/PLAN_IR.md` §5 Phase WB-3.
-
-**Track stdlib (C4-S1) — deferred:**
+**Track stdlib (C4-S1) — primary (now unblocked):**
 Unblock `List String` as a record field type in the type checker.
 Exit criterion: `cargo run -p goby-cli -- check stdlib/goby/string.gb` no longer fails on the state record field type.
 See `doc/PLAN_STANDARD_LIBRARY.md` §5.
+
+**Track WB-3B (future, deferred):**
+WasmFX typed continuations — prerequisite: WebAssembly stack-switching proposal reaches Phase 4.
+See `doc/PLAN_IR.md` Phase WB-3B.
 
 ## Architecture State
 
 - Resolved-form → shared IR boundary is stable (IR0–IR11 done).
 - Wasm backend lowering design is locked in `doc/PLAN_IR.md`:
-  - Phase WB-1: pure control flow and operators
-  - Phase WB-2: pattern matching and structured data
-  - Phase WB-3: function values and effect handlers (direct-call lowering, one-shot tail-resumptive)
+  - Phase WB-1: pure control flow and operators ✓
+  - Phase WB-2: pattern matching and structured data ✓
+  - Phase WB-3: function values and effect handlers (direct-call lowering, one-shot tail-resumptive) ✓
   - Phase WB-3B (future): WasmFX stack switching when proposal reaches Phase 4
-- General-lowered coverage already includes:
-  - `Case` with literal/list patterns
-  - `ListLit`
-  - `TupleLit`
-  - `RecordLit`
+- All `CompExpr` and `ValueExpr` variants are handled in `GeneralLowered` path (within supported subsets).
+- `GeneralLowered` coverage includes:
+  - Pure control flow: `If`, `BinOp`, `Interp`, `LetMut`, `Assign`
+  - Pattern matching: `Case` with literal/list patterns
+  - Structured data: `ListLit`, `TupleLit`, `RecordLit`
+  - Decl calls / recursion / higher-order funcref calls
+  - Backend effect dispatch (typed `BackendEffectOp` / `BackendPrintOp`)
   - stdlib `list.each` / `list.map`
-- Removed as WB-2-obsolete:
-  - `gen_lower/lower.rs` fused split recognition for `string.split` + `list.each` / `list.get`
-- WB-2 exit state:
-  - pure control flow/operators complete
-  - decl calls / recursion / higher-order funcref calls complete
-  - backend effect dispatch identity is locked for general lowering
-  - pattern matching and structured data complete for current IR surface
-- WB-3 current state:
-  - `WithHandler` legality analysis is implemented at the IR level
-  - unsupported handler shapes now fail as `BackendLimitation`
-  - safe handler shapes now lower via handler-free normalization into the general Wasm path
-- Effect handler strategy: selective CPS degenerating to direct-call lowering for one-shot
-  tail-resumptive handlers; captured vars as explicit Wasm function parameters.
-- Fused patterns (`SplitEachPrint`, `SplitGetPrint`, `graphemes-get-print`) are deletion targets,
-  not extension points. They become obsolete after Phase WB-2/WB-3.
+  - Effect handlers: `Handle` / `WithHandler` / tail `Resume` (one-shot tail-resumptive subset)
+  - Function values: `Lambda` (no-capture only); stdlib `graphemes` via wrapper AuxDecl
+  - Host intrinsics: `StringGraphemesList` (`__goby_string_graphemes_list`)
+- Fused patterns deleted or retained as optimization only:
+  - `graphemes-get-print` deleted (WB-3-M5)
+  - `SplitEachPrint` / `SplitGetPrint` retained in `DynamicWasiIo` path as optimization (correctness not required)
+- WB-3 exit state:
+  - non-tail / multi-resume handlers produce `BackendLimitation` error (not silent miscompilation)
+  - lambda with free variables (closure capture) produces `UnsupportedForm` (WB-3B deferred)
 
 ## Key Entry Points
 
