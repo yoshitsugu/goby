@@ -24,6 +24,11 @@ pub(crate) const TAG_BOOL: u8 = 0x2;
 pub(crate) const TAG_STRING: u8 = 0x3;
 /// Type tag for `List` values (pointer-bearing).
 pub(crate) const TAG_LIST: u8 = 0x4;
+/// Type tag for function-handle values (funcref table slot index).
+///
+/// A `Func` value encodes a Wasm funcref table *slot index* (not a raw Wasm function index)
+/// in the lower 32 bits.  The funcref table maps slots → aux-decl function indices.
+pub(crate) const TAG_FUNC: u8 = 0x5;
 
 /// Bit mask for the lower 60 bits (payload region).
 const PAYLOAD_MASK: i64 = (1i64 << 60) - 1;
@@ -96,6 +101,24 @@ pub(crate) fn encode_string_ptr(ptr: u32) -> i64 {
 #[inline]
 pub(crate) fn encode_list_ptr(ptr: u32) -> i64 {
     (TAG_LIST as i64) << 60 | (ptr as i64)
+}
+
+/// Encode a function-handle value.
+///
+/// `table_slot` is the zero-based index into the Wasm funcref table.
+/// The funcref table contains aux-decl function indices in declaration order;
+/// slot 0 = first aux decl, slot 1 = second aux decl, etc.
+#[inline]
+pub(crate) fn encode_func_handle(table_slot: u32) -> i64 {
+    (TAG_FUNC as i64) << 60 | (table_slot as i64)
+}
+
+/// Extract the funcref table slot index from an encoded `Func` value.
+///
+/// Only valid when `decode_tag(v) == TAG_FUNC`.
+#[inline]
+pub(crate) fn decode_func_slot(v: i64) -> u32 {
+    (v & 0xFFFF_FFFF) as u32
 }
 
 // ---------------------------------------------------------------------------
@@ -235,14 +258,36 @@ mod tests {
     }
 
     #[test]
+    fn func_handle_zero_round_trip() {
+        let v = encode_func_handle(0);
+        assert_eq!(decode_tag(v), TAG_FUNC);
+        assert_eq!(decode_func_slot(v), 0);
+    }
+
+    #[test]
+    fn func_handle_nonzero_round_trip() {
+        let v = encode_func_handle(7);
+        assert_eq!(decode_tag(v), TAG_FUNC);
+        assert_eq!(decode_func_slot(v), 7);
+    }
+
+    #[test]
+    fn func_handle_max_u32_round_trip() {
+        let v = encode_func_handle(u32::MAX);
+        assert_eq!(decode_tag(v), TAG_FUNC);
+        assert_eq!(decode_func_slot(v), u32::MAX);
+    }
+
+    #[test]
     fn tag_orthogonality() {
         let unit_tag = decode_tag(encode_unit());
         let int_tag = decode_tag(encode_int(0).unwrap());
         let bool_tag = decode_tag(encode_bool(false));
         let str_tag = decode_tag(encode_string_ptr(0));
         let list_tag = decode_tag(encode_list_ptr(0));
-        // All five tags must be distinct.
-        let tags = [unit_tag, int_tag, bool_tag, str_tag, list_tag];
+        let func_tag = decode_tag(encode_func_handle(0));
+        // All six tags must be distinct.
+        let tags = [unit_tag, int_tag, bool_tag, str_tag, list_tag, func_tag];
         for i in 0..tags.len() {
             for j in (i + 1)..tags.len() {
                 assert_ne!(tags[i], tags[j], "tags[{i}] == tags[{j}]: not orthogonal");

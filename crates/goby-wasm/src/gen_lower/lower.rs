@@ -149,33 +149,101 @@ fn lower_comp_inner(
                 }
                 instrs.push(WasmBackendInstr::Intrinsic { intrinsic });
                 Ok(instrs)
+            } else if let goby_core::ir::ValueExpr::GlobalRef { module, name } = callee.as_ref()
+                && module == "list"
+                && name == "each"
+                && args.len() == 2
+            {
+                // stdlib list.each: check if callback is a Print effect op (fused path)
+                // or a user funcref (indirect call path).
+                let list_instrs = lower_comp_inner(&CompExpr::Value(args[0].clone()), aliases, known_decls)?;
+                if let Some((eff, op)) = resolve_print_callback(&args[1], aliases) {
+                    Ok(vec![WasmBackendInstr::ListEachEffect {
+                        list_instrs,
+                        effect: eff,
+                        op,
+                    }])
+                } else {
+                    let func_instrs = lower_value_as_arg(&args[1], known_decls)?;
+                    Ok(vec![WasmBackendInstr::ListEach {
+                        list_instrs,
+                        func_instrs,
+                    }])
+                }
+            } else if let goby_core::ir::ValueExpr::GlobalRef { module, name } = callee.as_ref()
+                && module == "list"
+                && name == "map"
+                && args.len() == 2
+            {
+                // stdlib list.map: iterate list with funcref callback, return new list.
+                let list_instrs = lower_value_as_arg(&args[0], known_decls)?;
+                let func_instrs = lower_value_as_arg(&args[1], known_decls)?;
+                Ok(vec![WasmBackendInstr::ListMap {
+                    list_instrs,
+                    func_instrs,
+                }])
             } else if let goby_core::ir::ValueExpr::GlobalRef { name, .. } = callee.as_ref() {
                 // Top-level user declaration call via GlobalRef (WB-2A).
                 let mut instrs = Vec::new();
                 for arg in args {
-                    instrs.extend(lower_value(arg)?);
+                    instrs.extend(lower_value_as_arg(arg, known_decls)?);
                 }
                 instrs.push(WasmBackendInstr::DeclCall {
                     decl_name: name.clone(),
                 });
                 Ok(instrs)
             } else if let goby_core::ir::ValueExpr::Var(name) = callee.as_ref() {
-                // Top-level user declaration call via Var (WB-2A).
-                // Goby IR lowers `ResolvedRef::Decl` as `Var(name)`, so we recognise
-                // known top-level decl names here.
                 if known_decls.contains(name.as_str()) {
+                    // Direct call to a known top-level declaration (WB-2A).
                     let mut instrs = Vec::new();
                     for arg in args {
-                        instrs.extend(lower_value(arg)?);
+                        instrs.extend(lower_value_as_arg(arg, known_decls)?);
                     }
                     instrs.push(WasmBackendInstr::DeclCall {
                         decl_name: name.clone(),
                     });
                     Ok(instrs)
+                } else if (name == "each"
+                    || resolve_global_ref(name, aliases) == Some(("list", "each")))
+                    && args.len() == 2
+                {
+                    // Var resolves to list.each (bare name or alias via `import goby/list (each)`).
+                    let list_instrs = lower_comp_inner(&CompExpr::Value(args[0].clone()), aliases, known_decls)?;
+                    if let Some((eff, op)) = resolve_print_callback(&args[1], aliases) {
+                        Ok(vec![WasmBackendInstr::ListEachEffect {
+                            list_instrs,
+                            effect: eff,
+                            op,
+                        }])
+                    } else {
+                        let func_instrs = lower_value_as_arg(&args[1], known_decls)?;
+                        Ok(vec![WasmBackendInstr::ListEach {
+                            list_instrs,
+                            func_instrs,
+                        }])
+                    }
+                } else if (name == "map"
+                    || resolve_global_ref(name, aliases) == Some(("list", "map")))
+                    && args.len() == 2
+                {
+                    // Var resolves to list.map (bare name or alias via `import goby/list (map)`).
+                    let list_instrs = lower_value_as_arg(&args[0], known_decls)?;
+                    let func_instrs = lower_value_as_arg(&args[1], known_decls)?;
+                    Ok(vec![WasmBackendInstr::ListMap {
+                        list_instrs,
+                        func_instrs,
+                    }])
                 } else {
-                    Err(LowerError::UnsupportedForm {
-                        node: format!("Call with unsupported callee: {:?}", callee),
-                    })
+                    // Runtime function-value call via `call_indirect` (WB-2A-M3).
+                    // `name` is a local variable holding a TAG_FUNC tagged i64 handle.
+                    // Stack order: push args left-to-right, then push callee, then IndirectCall.
+                    let mut instrs = Vec::new();
+                    for arg in args {
+                        instrs.extend(lower_value_as_arg(arg, known_decls)?);
+                    }
+                    instrs.push(WasmBackendInstr::LoadLocal { name: name.clone() });
+                    instrs.push(WasmBackendInstr::IndirectCall);
+                    Ok(instrs)
                 }
             } else {
                 Err(LowerError::UnsupportedForm {
@@ -387,6 +455,29 @@ pub(crate) fn lower_value(v: &ValueExpr) -> Result<Vec<WasmBackendInstr>, LowerE
         other => Err(LowerError::UnsupportedForm {
             node: format!("{:?}", other),
         }),
+    }
+}
+
+/// Lower a `ValueExpr` that appears as a call *argument* (not a callee).
+///
+/// This is identical to `lower_value` except when the expression is a reference to a
+/// known top-level declaration being passed as a function value:
+///
+/// - `Var(name)` where `name ∈ known_decls` → `PushFuncHandle { decl_name: name }`
+///   (encodes the funcref table slot as a TAG_FUNC i64)
+///
+/// All other cases delegate to `lower_value`.
+fn lower_value_as_arg(
+    v: &ValueExpr,
+    known_decls: &HashSet<String>,
+) -> Result<Vec<WasmBackendInstr>, LowerError> {
+    match v {
+        ValueExpr::Var(name) if known_decls.contains(name.as_str()) => {
+            Ok(vec![WasmBackendInstr::PushFuncHandle {
+                decl_name: name.clone(),
+            }])
+        }
+        other => lower_value(other),
     }
 }
 
@@ -1602,17 +1693,75 @@ mod tests {
     }
 
     #[test]
-    fn lower_var_callee_is_still_unsupported() {
-        // Var(name) callee (function-value call) is not yet supported in WB-2A Step 1.
+    fn lower_var_callee_not_in_known_decls_emits_indirect_call() {
+        // WB-2A-M3: Var(name) callee not in known_decls → IndirectCall (runtime funcref call).
+        // lower_comp uses empty known_decls, so "f" is treated as a runtime function value.
         let comp = CompExpr::Call {
             callee: Box::new(ValueExpr::Var("f".to_string())),
             args: vec![ValueExpr::IntLit(1)],
         };
-        let result = lower_comp(&comp);
+        let instrs = lower_comp(&comp).expect("Var callee IndirectCall should lower OK");
+        // Expected: [I64Const(encode_int(1)), LoadLocal("f"), IndirectCall]
+        assert_eq!(instrs.len(), 3, "arg push + LoadLocal callee + IndirectCall");
         assert!(
-            matches!(result, Err(LowerError::UnsupportedForm { .. })),
-            "Var callee should remain UnsupportedForm: {:?}",
-            result
+            matches!(instrs[1], I::LoadLocal { ref name } if name == "f"),
+            "second instr must be LoadLocal(f), got: {:?}",
+            instrs
+        );
+        assert!(
+            matches!(instrs[2], I::IndirectCall),
+            "last instr must be IndirectCall, got: {:?}",
+            instrs
+        );
+    }
+
+    #[test]
+    fn lower_var_callee_in_known_decls_emits_decl_call() {
+        // WB-2A: Var(name) where name ∈ known_decls → DeclCall (direct call).
+        use std::collections::HashSet;
+        let comp = CompExpr::Call {
+            callee: Box::new(ValueExpr::Var("helper".to_string())),
+            args: vec![ValueExpr::IntLit(2)],
+        };
+        let known_decls: HashSet<String> = ["helper".to_string()].into();
+        let instrs = lower_comp_inner(&comp, &HashMap::new(), &known_decls)
+            .expect("known_decl Var callee should lower to DeclCall");
+        assert!(
+            matches!(instrs.last(), Some(I::DeclCall { decl_name }) if decl_name == "helper"),
+            "last instr must be DeclCall(helper), got: {:?}",
+            instrs
+        );
+    }
+
+    #[test]
+    fn lower_var_arg_in_known_decls_emits_push_func_handle() {
+        // WB-2A-M3: When a Var(name) appears as an argument and name ∈ known_decls,
+        // it should be lowered as PushFuncHandle (not LoadLocal).
+        use std::collections::HashSet;
+        // f is NOT in known_decls (it's a runtime funcref); add_one IS in known_decls.
+        // Call: f add_one  →  [PushFuncHandle("add_one"), LoadLocal("f"), IndirectCall]
+        let comp = CompExpr::Call {
+            callee: Box::new(ValueExpr::Var("f".to_string())),
+            args: vec![ValueExpr::Var("add_one".to_string())],
+        };
+        let known_decls: HashSet<String> = ["add_one".to_string()].into();
+        let instrs = lower_comp_inner(&comp, &HashMap::new(), &known_decls)
+            .expect("funcref arg should lower OK");
+        assert_eq!(instrs.len(), 3, "PushFuncHandle + LoadLocal callee + IndirectCall");
+        assert!(
+            matches!(&instrs[0], I::PushFuncHandle { decl_name } if decl_name == "add_one"),
+            "first instr must be PushFuncHandle(add_one), got: {:?}",
+            instrs
+        );
+        assert!(
+            matches!(&instrs[1], I::LoadLocal { name } if name == "f"),
+            "second instr must be LoadLocal(f), got: {:?}",
+            instrs
+        );
+        assert!(
+            matches!(&instrs[2], I::IndirectCall),
+            "last instr must be IndirectCall, got: {:?}",
+            instrs
         );
     }
 

@@ -187,11 +187,29 @@ pub(crate) enum WasmBackendInstr {
     /// `decl_name` is the unqualified function name as it appears in the IR.
     /// The emitter resolves it to a Wasm function index using the module-level
     /// `decl_name → func_idx` table built during `emit_general_module`.
-    ///
-    /// Design note (WB-2A): function values passed as arguments (`Var(name)` callee)
-    /// are not yet supported here; they will use `call_indirect` via a funcref table
-    /// in WB-2B/WB-3. See `backend_ir.rs` design comments for the ABI decision.
     DeclCall { decl_name: String },
+    /// Push a tagged function-handle (TAG_FUNC i64) for a named top-level declaration.
+    ///
+    /// The emitter encodes the funcref table slot index for `decl_name` as a tagged i64
+    /// (`encode_func_handle(table_slot)`), then emits `i64.const <tagged>`.
+    ///
+    /// Use this when a top-level declaration is passed as a *value* (not directly called).
+    /// For direct calls, use `DeclCall` instead.
+    PushFuncHandle { decl_name: String },
+    /// Call a runtime function value via `call_indirect`.
+    ///
+    /// # Stack discipline
+    /// Before this instruction:
+    ///   `[..., arg0: i64, callee_tagged: i64]`  (callee is top of stack)
+    ///
+    /// The emitter decodes the TAG_FUNC i64 to a funcref table slot index (i32),
+    /// then emits `call_indirect (type $single_arg_func_type)`.
+    ///
+    /// # Type restriction (WB-2A)
+    /// Only `(i64) -> i64` call sites are supported (one argument).
+    /// In Goby's current IR, all first-class function calls are single-argument
+    /// (`f x` in the desugared form), so this restriction covers all current cases.
+    IndirectCall,
     /// Pattern-match the scrutinee against a sequence of arms.
     ///
     /// # Stack discipline
@@ -219,6 +237,47 @@ pub(crate) enum WasmBackendInstr {
     /// An empty list (`element_instrs` is empty) allocates 4 bytes and writes len=0.
     ListLit {
         element_instrs: Vec<Vec<WasmBackendInstr>>,
+    },
+    /// Fused: iterate a list and call an effect operation on each element (e.g. `Print.println`).
+    ///
+    /// Equivalent to `for item in list: effect.op(item)`.
+    ///
+    /// Lowered from: `Call(GlobalRef("list","each"), [list_expr, GlobalRef(effect, op)])`.
+    /// The result is a tagged Unit.
+    ListEachEffect {
+        list_instrs: Vec<WasmBackendInstr>,
+        effect: String,
+        op: String,
+    },
+    /// Iterate a list and call a function for each element (stdlib `list.each`).
+    ///
+    /// # Stack discipline
+    /// Before this instruction:
+    ///   - `list_instrs` evaluates to a tagged List i64 (the source list)
+    ///   - `func_instrs` evaluates to a tagged Func i64 (the callback funcref)
+    ///
+    /// The emitter decodes the list pointer, loops over elements, and calls the
+    /// callback via `call_indirect` for each element.  The callback must have type
+    /// `(i64) -> i64`.  The return value of each call is discarded.
+    /// This instruction pushes a tagged Unit value as its result.
+    ListEach {
+        list_instrs: Vec<WasmBackendInstr>,
+        func_instrs: Vec<WasmBackendInstr>,
+    },
+    /// Map a function over a list and return a new list (stdlib `list.map`).
+    ///
+    /// # Stack discipline
+    /// Before this instruction:
+    ///   - `list_instrs` evaluates to a tagged List i64 (the source list)
+    ///   - `func_instrs` evaluates to a tagged Func i64 (the callback funcref)
+    ///
+    /// The emitter decodes the list pointer, loops over elements, calls the callback
+    /// via `call_indirect` for each element, collects results into a new heap-allocated
+    /// list, and pushes the tagged List pointer of the result.
+    /// The callback must have type `(i64) -> i64`.
+    ListMap {
+        list_instrs: Vec<WasmBackendInstr>,
+        func_instrs: Vec<WasmBackendInstr>,
     },
     /// Fused: split `text_local` (a tagged-i64 string) on `sep_bytes`, then call
     /// `effect.op` on each resulting segment.

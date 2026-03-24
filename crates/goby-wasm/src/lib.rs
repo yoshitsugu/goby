@@ -952,6 +952,66 @@ main =
     }
 
     #[test]
+    fn wb2b_m6_each_with_stdlib_executes() {
+        // WB-2B-M6: stdlib `each` classifies as GeneralLowered and executes correctly.
+        // `each xs f` calls `f x` via IndirectCall for each element.
+        use goby_core::parse_module;
+        let module = parse_module(
+            r#"
+import goby/list ( each )
+
+print_item : String -> Unit can Print
+print_item s = println s
+
+main : Unit -> Unit can Print, Read
+main =
+  _ = read()
+  xs = ["alpha", "beta", "gamma"]
+  each xs print_item
+"#,
+        )
+        .expect("parse should work");
+
+        let output = execute_runtime_module_with_stdin(&module, Some(String::new()))
+            .expect("WB-2B-M6: each with stdlib must execute");
+        assert_eq!(
+            output.as_deref(),
+            Some("alpha\nbeta\ngamma\n"),
+            "WB-2B-M6: each xs print_item → alpha, beta, gamma"
+        );
+    }
+
+    #[test]
+    fn wb2b_m6_map_with_stdlib_classifies_as_general_lowered() {
+        // WB-2B-M6: stdlib `map` classifies as GeneralLowered.
+        use goby_core::parse_module;
+        let module = parse_module(
+            r#"
+import goby/list ( map, each )
+
+wrap : String -> String can {}
+wrap s = "[${s}]"
+
+main : Unit -> Unit can Print, Read
+main =
+  _ = read()
+  xs = ["a", "b"]
+  wrapped = map xs wrap
+  each wrapped println
+"#,
+        )
+        .expect("parse should work");
+
+        let output = execute_runtime_module_with_stdin(&module, Some(String::new()))
+            .expect("WB-2B-M6: map with stdlib must execute");
+        assert_eq!(
+            output.as_deref(),
+            Some("[a]\n[b]\n"),
+            "WB-2B-M6: map xs wrap → [a], [b]"
+        );
+    }
+
+    #[test]
     fn wb2b_empty_list_pattern_without_list_pattern_arm() {
         // WB-2B: EmptyList-only case (no ListPattern arm) must not fail with "helper state" error.
         // Regression test: before the fix, `needs_helper_state` did not cover EmptyList,
@@ -979,6 +1039,40 @@ main =
             output.as_deref(),
             Some("yes\n"),
             "WB-2B: is_empty [] → yes"
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // WB-2A-M3 / WB-2B-M6: higher-order calls and stdlib each/map
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn wb2a_m3_simple_higher_order_call_executes() {
+        // WB-2A-M3: apply f arg where f is a function parameter (runtime funcref call).
+        // `greet` returns an interpolated string; `apply_greet` passes it as a funcref.
+        use goby_core::parse_module;
+        let module = parse_module(
+            r#"
+greet : String -> String can {}
+greet name = "hello ${name}"
+
+apply_greet : (String -> String) -> String can {}
+apply_greet f = f "world"
+
+main : Unit -> Unit can Print, Read
+main =
+  _ = read()
+  println (apply_greet greet)
+"#,
+        )
+        .expect("parse should work");
+
+        let output = execute_runtime_module_with_stdin(&module, Some(String::new()))
+            .expect("WB-2A-M3: higher-order call must execute");
+        assert_eq!(
+            output.as_deref(),
+            Some("hello world\n"),
+            "WB-2A-M3: apply_greet greet → hello world"
         );
     }
 
