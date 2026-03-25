@@ -29,7 +29,7 @@ use crate::layout::MemoryLayout;
 const WASM_PAGE_BYTES: u32 = 65_536;
 
 // Import function indices begin with the WASI pair and may be extended with
-// `goby-wasm` owned Track E host intrinsics.
+// `goby-wasm` owned grapheme host intrinsics.
 const FD_READ_IDX: u32 = 0;
 const FD_WRITE_IDX: u32 = 1;
 const HOST_IMPORT_BASE_IDX: u32 = 2;
@@ -3965,7 +3965,7 @@ mod tests {
     }
 
     #[test]
-    fn emit_track_e_host_imports_for_grapheme_intrinsics() {
+    fn emit_grapheme_host_imports_for_intrinsics() {
         let instrs = vec![
             I::PushStaticString {
                 text: "a👨‍👩‍👧‍👦b".to_string(),
@@ -3981,7 +3981,7 @@ mod tests {
         assert!(
             wasm.windows(b"goby:runtime/track-e".len())
                 .any(|w| w == b"goby:runtime/track-e"),
-            "expected Track E host import module name in Wasm import section"
+            "expected grapheme host import module name in Wasm import section"
         );
         assert!(
             wasm.windows(b"__goby_string_each_grapheme_count".len())

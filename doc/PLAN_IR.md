@@ -316,8 +316,8 @@ language-expansion item, not a backend-convergence item. Do not add them here.
 | Construct | Wasm mapping | Notes |
 |-----------|-------------|-------|
 | `CompExpr::Case` — `IntLit` / `BoolLit` / `StringLit` / `Wildcard` patterns | `if/else` chain comparing tagged i64 | No `br_table` needed for small arities |
-| `CompExpr::Case` — `EmptyList` / `ListPattern` patterns | extract tag bits from tagged i64; nil sentinel check; head/tail pointer extraction | Reuse existing list ABI from Track E |
-| `ValueExpr::ListLit` | bump-alloc one cell per element + tagged pointer | Extend existing bump allocator from Track E |
+| `CompExpr::Case` — `EmptyList` / `ListPattern` patterns | extract tag bits from tagged i64; nil sentinel check; head/tail pointer extraction | Reuse existing list ABI from completed grapheme backend support |
+| `ValueExpr::ListLit` | bump-alloc one cell per element + tagged pointer | Extend existing bump allocator from completed grapheme backend support |
 | `ValueExpr::TupleLit` | bump-alloc + store fields; tagged i64 pointer | Uniform tagged i64 ABI — no multi-value optimisation. ABI uniformity takes precedence over local performance; optimisation is deferred until the ABI is proved stable. |
 | `ValueExpr::RecordLit` | bump-alloc + store fields in IR field order; constructor tag at offset 0; tagged i64 pointer | Constructor identity = index into module-level constructor table |
 
@@ -443,7 +443,7 @@ Captured variables: same convention as handler functions (explicit extra paramet
   - done when: a lambda expression passed to `map` classifies as `GeneralLowered`
   - regression: `map [1,2,3] (fn x -> x + 1)` executes correctly
 - [x] WB-3-M4. `stdlib/goby/string.gb` `graphemes` classifies as `GeneralLowered` end-to-end
-  - without relying on Track E host-intrinsic bridge
+  - without relying on the legacy grapheme host-intrinsic bridge
   - regression: emoji-family grapheme output matches current bridge output
   - implemented via `StringGraphemesList` host intrinsic (`__goby_string_graphemes_list`)
 - [x] WB-3-M5. Fused patterns made obsolete by WB-3 identified and deleted

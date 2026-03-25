@@ -119,7 +119,7 @@ pub fn compile_module(module: &Module) -> Result<Vec<u8>, CodegenError> {
 ///   It is `pub` only because the CLI lives in a separate crate.
 ///
 /// **Current status**: `InterpreterBridge` is currently reserved for the narrow
-/// Track E grapheme-backed stdlib subset in runtime-`Read` programs.  This is
+/// grapheme-backed stdlib subset in runtime-`Read` programs. This is
 /// intentionally not a generic fallback for arbitrary unsupported runtime shapes.
 ///
 /// # Errors
@@ -137,14 +137,15 @@ pub fn execute_module_with_stdin(
 
 /// Execute a runtime-stdin Goby module through the `goby-wasm` owned execution boundary.
 ///
-/// This API owns Track E runtime branching for `goby-cli`: callers should not
+/// This API owns runtime-stdin branching for `goby-cli`: callers should not
 /// inspect `RuntimeIoExecutionKind` and special-case `InterpreterBridge`
 /// themselves.
 ///
 /// Current behavior:
 /// - `GeneralLowered`: compiles the module and executes it via the Goby-owned
 ///   Wasm runtime, which wires `goby:runtime/track-e` host intrinsics. This
-///   path replaces the raw `wasmtime run` process launch for Track E modules.
+///   path replaces the raw `wasmtime run` process launch for modules that need
+///   grapheme host intrinsics.
 /// - `InterpreterBridge`: delegates to the narrow seeded-stdin runtime path.
 /// - All other execution kinds return `Ok(None)` so the caller can continue with
 ///   its normal Wasm file execution flow.
@@ -245,7 +246,7 @@ main =
         .expect("parse should work");
 
         let output = execute_runtime_module_with_stdin(&module, Some("a👨‍👩‍👧‍👦b".to_string()))
-            .expect("Track E bridge execution should be owned by goby-wasm");
+            .expect("grapheme bridge execution should be owned by goby-wasm");
         assert_eq!(output.as_deref(), Some("👨‍👩‍👧‍👦\n"));
     }
 
@@ -278,13 +279,13 @@ main =
         let import_name = b"__goby_string_each_grapheme_count";
         assert!(
             wasm.windows(import_name.len()).any(|w| w == import_name),
-            "E4: compiled Wasm must contain the track-e host import '__goby_string_each_grapheme_count'"
+            "E4: compiled Wasm must contain the grapheme host import '__goby_string_each_grapheme_count'"
         );
     }
 
     #[test]
     fn execute_runtime_module_with_stdin_routes_general_lowered_through_goby_owned_runtime() {
-        // `print(read())` is a GeneralLowered program (no Track E host intrinsics needed).
+        // `print(read())` is a GeneralLowered program (no grapheme host intrinsics needed).
         // This test verifies that the GeneralLowered arm in execute_runtime_module_with_stdin
         // compiles the module and executes it via the Goby-owned Wasm runtime, returning
         // Ok(Some(output)) rather than Ok(None) (which would fall through to external wasmtime).

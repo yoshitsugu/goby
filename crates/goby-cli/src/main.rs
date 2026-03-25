@@ -237,7 +237,7 @@ fn run_fmt(file: &str, source: &str, check: bool) -> Result<(), CliError> {
 }
 
 fn run_command(module: &goby_core::Module, file: &str) -> Result<(), CliError> {
-    // Track E runtime-stdin execution ownership lives in `goby-wasm`.
+    // Runtime-stdin execution ownership lives in `goby-wasm`.
     // Check the execution kind first: GeneralLowered and InterpreterBridge programs
     // are executed via the Goby-owned Wasm runtime (which wires host intrinsics and
     // reads stdin internally).  All other kinds fall through to compile + file-based

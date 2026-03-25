@@ -266,7 +266,7 @@ impl RuntimeIoClassification {
 /// |---------|-----------|
 /// | `DynamicWasiIo(plan)` | Body matches a remaining handwritten optimization plan. These plans are retained only as an optimization layer on top of the same runtime semantics; they are not the semantic source of truth. |
 /// | `StaticOutput(text)` | Body contains **no** runtime-read calls **and** every statement is a direct `print`/`println` with a string-literal argument.  The output is statically known at compile time. |
-/// | `InterpreterBridge` | Body contains runtime-read calls and imported `goby/string.graphemes` usage that currently depends on the Track E intrinsic-aware stdlib-decl execution bridge. This is a narrow, explicit execution boundary for grapheme-backed stdlib decls; it is not a generic fallback for arbitrary runtime programs. |
+/// | `InterpreterBridge` | Body contains runtime-read calls and imported `goby/string.graphemes` usage that currently depends on the narrow intrinsic-aware stdlib-decl execution bridge. This is a narrow, explicit execution boundary for grapheme-backed stdlib decls; it is not a generic fallback for arbitrary runtime programs. |
 /// | `Unsupported` | Body contains runtime-read calls but matches neither a recognized [`RuntimeIoPlan`] nor the narrow temporary interpreter-bridge subset. |
 /// | `NotRuntimeIo` | Body contains **no** runtime-read calls and is not a `StaticOutput` program (e.g. complex static evaluation via local bindings, arithmetic, etc.).  Falls through to `resolve_main_runtime_output_for_compile`. |
 ///
@@ -689,7 +689,7 @@ fn classify_runtime_io_from_ir_decl(main_decl: &goby_core::ir::IrDecl) -> Runtim
 ///      occurs when IR detects Read but cannot match a known plan (e.g., echo with
 ///      suffix prints, or alias-chain forms the IR classifier doesn't cover).  The fallback
 ///      classifier may succeed for these cases.
-///    - `InterpreterBridge` is definitive for the narrow Track E grapheme-backed
+///    - `InterpreterBridge` is definitive for the narrow grapheme-backed
 ///      stdlib-decl bridge subset.
 pub(crate) fn classify_runtime_io_with_ir_fallback(module: &Module) -> RuntimeIoClassification {
     let Some(main_plan) = main_exec_plan(module) else {

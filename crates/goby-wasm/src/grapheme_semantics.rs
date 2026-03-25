@@ -9,7 +9,7 @@ pub(crate) struct GraphemeSpan {
 /// Single semantic authority for Unicode Extended Grapheme Cluster iteration in
 /// the Wasm backend/runtime layer.
 ///
-/// Track E requires backend and runtime paths to share one segmentation
+/// The backend and runtime paths share one segmentation
 /// definition instead of open-coding separate interpretations.
 #[allow(dead_code)]
 pub(crate) fn collect_extended_graphemes(value: &str) -> Vec<String> {

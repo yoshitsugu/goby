@@ -1,6 +1,6 @@
 use crate::gen_lower::backend_ir::BackendIntrinsic;
 
-/// Backend ownership split for Track E intrinsics.
+/// Backend ownership split for grapheme-related host intrinsics.
 ///
 /// Host-backed intrinsics cross an explicit Wasm import boundary owned by
 /// `goby-wasm`; in-Wasm intrinsics remain emitter-owned on the tagged runtime ABI.
@@ -10,7 +10,7 @@ pub(crate) enum IntrinsicExecutionBoundary {
     InWasm,
 }
 
-/// Fixed Track E host import ABI owned by `goby-wasm`.
+/// Fixed grapheme host import ABI owned by `goby-wasm`.
 ///
 /// The value-level contract is intentionally narrow:
 /// - arguments and returns use Goby's tagged `i64` runtime value ABI,

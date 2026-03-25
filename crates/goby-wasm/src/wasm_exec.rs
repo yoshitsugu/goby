@@ -1,4 +1,4 @@
-//! Goby-owned Wasm execution boundary for Track E backend-intrinsic modules.
+//! Goby-owned Wasm execution boundary for grapheme host-intrinsic modules.
 //!
 //! This module owns the Wasm instantiation and host import wiring for
 //! `goby:runtime/track-e`. It is the sole place where Wasm bytes produced by
@@ -56,7 +56,7 @@ use crate::host_runtime::HostIntrinsicImport;
 
 /// Execute Wasm bytes produced by `compile_module` with optional stdin input.
 ///
-/// WASI Preview 1 is provided via `wasmtime-wasi`. Track E host intrinsics
+/// WASI Preview 1 is provided via `wasmtime-wasi`. Grapheme host intrinsics
 /// (`goby:runtime/track-e`) are wired as Rust closures backed by the shared
 /// grapheme semantics authority.
 ///
@@ -83,7 +83,7 @@ pub(crate) fn run_wasm_bytes_with_stdin(
     let mut linker: Linker<WasiP1Ctx> = Linker::new(&engine);
     p1::add_to_linker_sync(&mut linker, |t| t).map_err(|e| format!("wasi linker: {e}"))?;
 
-    // Register Track E host intrinsics on the `goby:runtime/track-e` module.
+    // Register grapheme host intrinsics on the `goby:runtime/track-e` module.
     let module_name = HostIntrinsicImport::MODULE;
 
     // Upward bump allocator for grapheme string headers written by the host.

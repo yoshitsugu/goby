@@ -5,7 +5,8 @@ Last updated: 2026-03-25
 ## Current Focus
 
 - IR0–IR11 complete. `doc/PLAN_IR.md` now contains the Wasm backend lowering design (§4–§5).
-- Track E E1–E7 complete.
+- Unicode grapheme backend support is complete: backend intrinsics, host runtime
+  execution, and stdlib handoff work landed end-to-end.
 - Phase WB-1 complete (2026-03-24): `If`, `BinOp`, `Interp`, `LetMut`, `Assign` all lowered and emitted.
 - Phase WB-2A complete (2026-03-24): top-level `DeclCall`, recursion, funcref-table indirect calls, typed backend effect identities.
 - Phase WB-2B complete (2026-03-24): `Case` literal/wildcard/list patterns, `ListLit`, `TupleLit`, `RecordLit`, stdlib `list.each` / `list.map`.
