@@ -622,6 +622,28 @@ main =
 }
 
 #[test]
+fn resolves_runtime_output_for_local_string_map_then_each_println_chain() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    let source = r#"
+import goby/list ( map, each )
+
+plus_one : Int -> String
+plus_one i =
+  j = i + 1
+  "${j}"
+
+main : Unit -> Unit can Print
+main =
+  a = [1, 2, 3]
+  b = map a plus_one
+  each b println
+"#;
+    let module = parse_module(source).expect("parse should work");
+    let output = resolve_module_runtime_output(&module).expect("runtime output should resolve");
+    assert_eq!(output, "2\n3\n4\n");
+}
+
+#[test]
 fn resolves_runtime_output_for_local_decl_wrapping_imported_list_map_named_lambda() {
     let _guard = ENV_MUTEX.lock().unwrap();
     let source = r#"

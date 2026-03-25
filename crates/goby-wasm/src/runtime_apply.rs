@@ -127,6 +127,38 @@ impl<'m> RuntimeOutputResolver<'m> {
         self.complete_value_out(out, evaluators)
     }
 
+    pub(crate) fn apply_scoped_decl_value_call_out(
+        &mut self,
+        owner_module: Option<&str>,
+        fn_name: &str,
+        arg_value: RuntimeValue,
+        evaluators: &RuntimeEvaluators<'_, '_>,
+        depth: usize,
+    ) -> Out<RuntimeValue> {
+        if depth >= MAX_EVAL_DEPTH {
+            return Out::Err(RuntimeError::Unsupported);
+        }
+        let Some(decl) = self.resolve_scoped_local_runtime_decl(owner_module, fn_name) else {
+            return Out::Err(RuntimeError::Unsupported);
+        };
+        let accepts_unit_arg_as_zero_arity =
+            decl.params.is_empty() && matches!(arg_value, RuntimeValue::Unit);
+        if decl
+            .callable_param_mask
+            .iter()
+            .any(|is_callable| *is_callable)
+            || (decl.params.len() != 1 && !accepts_unit_arg_as_zero_arity)
+        {
+            return Out::Err(RuntimeError::Unsupported);
+        }
+        let mut fn_locals = RuntimeLocals::default();
+        if !accepts_unit_arg_as_zero_arity {
+            fn_locals.store(&decl.params[0], arg_value);
+        }
+        let fn_callables = HashMap::new();
+        self.eval_runtime_decl_body_out(&decl, fn_locals, fn_callables, evaluators, depth + 1)
+    }
+
     pub(crate) fn eval_decl_as_value_with_args_out(
         &mut self,
         fn_name: &str,

@@ -416,6 +416,67 @@ impl<'m> RuntimeOutputResolver<'m> {
         }
     }
 
+    pub(super) fn execute_scoped_decl_as_side_effect(
+        &mut self,
+        owner_module: Option<&str>,
+        fn_name: &str,
+        arg_val: RuntimeValue,
+        evaluators: &RuntimeEvaluators<'_, '_>,
+        depth: usize,
+    ) -> Option<()> {
+        if depth >= MAX_EVAL_DEPTH {
+            return None;
+        }
+        let decl = self.resolve_scoped_local_runtime_decl(owner_module, fn_name)?;
+        let accepts_unit_arg_as_zero_arity =
+            decl.params.is_empty() && matches!(arg_val, RuntimeValue::Unit);
+        if decl.params.len() != 1 && !accepts_unit_arg_as_zero_arity {
+            return None;
+        }
+        let mut fn_locals = RuntimeLocals::default();
+        if !accepts_unit_arg_as_zero_arity {
+            fn_locals.store(&decl.params[0], arg_val);
+        }
+        let fn_callables = HashMap::new();
+        let filtered_stmts: Vec<Stmt> = decl
+            .stmts
+            .iter()
+            .filter(|stmt| {
+                !matches!(
+                    stmt,
+                    Stmt::Expr(
+                        Expr::Var { name: _, .. }
+                            | Expr::IntLit(_)
+                            | Expr::StringLit(_)
+                            | Expr::BoolLit(_),
+                        _
+                    )
+                )
+            })
+            .cloned()
+            .collect();
+        if let Some(owner_module) = &decl.owner_module {
+            self.current_module_stack.push(owner_module.clone());
+        }
+        self.push_runtime_decl_context(&decl);
+        let result = self.eval_stmts(
+            &filtered_stmts,
+            fn_locals,
+            fn_callables,
+            evaluators,
+            depth + 1,
+            FinishKind::Block,
+        );
+        self.pop_runtime_decl_context();
+        if decl.owner_module.is_some() {
+            self.current_module_stack.pop();
+        }
+        match result {
+            Out::Done(_) => Some(()),
+            Out::Suspend(_) | Out::Escape(_) | Out::Err(_) => None,
+        }
+    }
+
     pub(super) fn execute_imported_decl_as_side_effect_from_module(
         &mut self,
         module_path: &str,
@@ -546,6 +607,14 @@ impl<'m> RuntimeOutputResolver<'m> {
             IntCallable::Named(name) => {
                 self.execute_decl_as_side_effect(name, arg_val, evaluators, depth + 1)
             }
+            IntCallable::LocalDecl { owner_module, name } => self
+                .execute_scoped_decl_as_side_effect(
+                    owner_module.as_deref(),
+                    name,
+                    arg_val,
+                    evaluators,
+                    depth + 1,
+                ),
             IntCallable::Imported {
                 module_path,
                 member,
@@ -620,6 +689,13 @@ impl<'m> RuntimeOutputResolver<'m> {
                 evaluators,
                 depth + 1,
             ),
+            IntCallable::LocalDecl { owner_module, name } => self.apply_scoped_decl_value_call_out(
+                owner_module.as_deref(),
+                name,
+                arg_val,
+                evaluators,
+                depth + 1,
+            ),
             IntCallable::Imported {
                 module_path,
                 member,
@@ -669,10 +745,20 @@ impl<'m> RuntimeOutputResolver<'m> {
         arg_name: &str,
         callables: &HashMap<String, IntCallable>,
     ) -> IntCallable {
-        callables
-            .get(arg_name)
-            .cloned()
-            .unwrap_or_else(|| IntCallable::Named(arg_name.to_string()))
+        if let Some(callable) = callables.get(arg_name) {
+            return callable.clone();
+        }
+        let owner_module = self.current_module_stack.last().cloned();
+        if self
+            .resolve_scoped_local_runtime_decl(owner_module.as_deref(), arg_name)
+            .is_some()
+        {
+            return IntCallable::LocalDecl {
+                owner_module,
+                name: arg_name.to_string(),
+            };
+        }
+        IntCallable::Named(arg_name.to_string())
     }
 
     pub(super) fn declaration_expects_callable_param(&self, fn_name: &str) -> bool {
@@ -719,6 +805,24 @@ impl<'m> RuntimeOutputResolver<'m> {
             .iter()
             .find(|d| d.name == fn_name)?;
         Self::runtime_decl_info_from_decl(decl, self.current_module_stack.last().cloned())
+    }
+
+    pub(super) fn resolve_scoped_local_runtime_decl(
+        &self,
+        owner_module: Option<&str>,
+        fn_name: &str,
+    ) -> Option<RuntimeDeclInfo> {
+        match owner_module {
+            Some(module_path) => self.resolve_runtime_decl_from_module_path(module_path, fn_name),
+            None => {
+                let decl = self
+                    .module
+                    .declarations
+                    .iter()
+                    .find(|d| d.name == fn_name)?;
+                Self::runtime_decl_info_from_decl(decl, None)
+            }
+        }
     }
 
     pub(super) fn resolve_runtime_decl_from_module_path(

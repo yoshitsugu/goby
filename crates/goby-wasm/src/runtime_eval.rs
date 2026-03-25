@@ -66,8 +66,18 @@ fn collect_functions<'a>(
 pub(crate) enum IntCallable {
     Lambda(IntLambda),
     Named(String),
-    Imported { module_path: String, member: String },
-    Qualified { receiver: String, member: String },
+    LocalDecl {
+        owner_module: Option<String>,
+        name: String,
+    },
+    Imported {
+        module_path: String,
+        member: String,
+    },
+    Qualified {
+        receiver: String,
+        member: String,
+    },
     AstLambda(Box<AstLambdaCallable>),
 }
 
@@ -217,6 +227,10 @@ impl<'a> IntEvaluator<'a> {
         match callable {
             IntCallable::Lambda(lambda) => self.eval_lambda(lambda, arg, callables),
             IntCallable::Named(name) => {
+                let expr = format!("{} {}", name, arg);
+                self.eval_expr(&expr, &HashMap::new(), callables)
+            }
+            IntCallable::LocalDecl { name, .. } => {
                 let expr = format!("{} {}", name, arg);
                 self.eval_expr(&expr, &HashMap::new(), callables)
             }
