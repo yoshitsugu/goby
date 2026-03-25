@@ -1716,6 +1716,46 @@ f = length(\"abc\")
     }
 
     #[test]
+    fn typechecks_selective_imported_record_constructor_from_stdlib_module() {
+        let sandbox = TempDirGuard::new("selective_imported_record_constructor");
+        let root = sandbox.path.join("stdlib");
+        fs::create_dir_all(root.join("goby")).expect("stdlib/goby should be creatable");
+        fs::write(
+            root.join("goby/iterator.gb"),
+            "\
+type GraphemeState = GraphemeState(parts: List String, seen: Bool)
+effect Iterator a b
+  yield : a -> b -> (Bool, b)
+",
+        )
+        .expect("iterator stdlib file should be writable");
+        let source = "\
+import goby/iterator ( GraphemeState )
+main : Unit -> Unit
+main =\n  state = GraphemeState(parts: [], seen: False)\n  ()\n";
+        let module = parse_module(source).expect("should parse");
+        let validation = validate_module_phase(&module, None, Some(&root), &root)
+            .expect("validation should succeed");
+        let checking =
+            build_checking_phase(&module, &root, &validation).expect("checking phase should build");
+        match checking.env.globals.get("GraphemeState") {
+            Some(crate::typecheck_env::GlobalBinding::Resolved { ty, .. }) => assert_eq!(
+                ty,
+                &Ty::Fun {
+                    params: vec![Ty::List(Box::new(Ty::Str)), Ty::Bool],
+                    result: Box::new(Ty::Con {
+                        name: "GraphemeState".to_string(),
+                        args: Vec::new(),
+                    }),
+                }
+            ),
+            other => panic!("expected resolved imported constructor, got {:?}", other),
+        }
+        typecheck_module_with_context(&module, None, Some(&root))
+            .expect("selective imported record constructor should typecheck");
+    }
+
+    #[test]
     fn typechecks_import_from_goby_stdio_module() {
         let source = "\
 import goby/stdio

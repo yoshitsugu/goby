@@ -1,6 +1,4 @@
-import goby/iterator
-
-type GraphemeState = GraphemeState(grapheme: String, parts: List String, current: String, delimiter: String, seen: Bool)
+import goby/iterator ( Iterator, GraphemeState )
 
 grapheme_count : String -> Int
 grapheme_count value =

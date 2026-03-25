@@ -450,7 +450,10 @@ pub(crate) fn module_exports_for_import_with_resolver(
     }
 }
 
-fn effective_imports(module: &Module, resolver: &StdlibResolver) -> Vec<crate::ast::ImportDecl> {
+pub(crate) fn effective_imports(
+    module: &Module,
+    resolver: &StdlibResolver,
+) -> Vec<crate::ast::ImportDecl> {
     let mut imports = module.imports.clone();
     let has_prelude = imports
         .iter()

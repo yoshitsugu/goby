@@ -1,2 +1,4 @@
+type GraphemeState = GraphemeState(grapheme: String, parts: List String, current: String, delimiter: String, seen: Bool)
+
 effect Iterator a b
   yield : a -> b -> (Bool, b)

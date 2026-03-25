@@ -38,9 +38,9 @@ Last updated: 2026-03-25
 
 ## Track Priority
 
-**Next active work: stdlib track resumes at C4-S2.**
-The representative WB-3-M7 composed runtime-`Read` path is now fixed by regression coverage,
-so the active work returns to the remaining stdlib split-ownership milestones.
+**Next active work: stdlib track moves to C4-S3.**
+The representative WB-3-M7 composed runtime-`Read` path is fixed by regression coverage, and
+C4-S2 is now complete. The active work returns to the remaining split-ownership milestones.
 
 See `doc/PLAN_STANDARD_LIBRARY.md` for the remaining C4 milestones.
 
@@ -51,12 +51,17 @@ See `doc/PLAN_STANDARD_LIBRARY.md` for the remaining C4 milestones.
 The typechecker accepts the required `List String` state initialization shape and preserves
 outer `mut` locals through stdlib-style `with ... in` bodies.
 
-**Track stdlib (C4-S2) — next:**
+**Track stdlib (C4-S2) — complete (2026-03-25):**
 Stabilize the shared iterator state contract by keeping `GraphemeState` in
 `stdlib/goby/iterator.gb` as the canonical declaration and removing duplicated local copies
 from `stdlib/goby/string.gb`.
 Exit criterion: no duplicated `Iterator` / `GraphemeState` declarations remain across stdlib modules.
 See `doc/PLAN_STANDARD_LIBRARY.md` §5.
+
+**Track stdlib (C4-S3) — next:**
+Implement the iterator-driven multi-grapheme delimiter path in `stdlib/goby/string.gb`
+so `split` no longer depends on the runtime builtin fallback for that case.
+Exit criterion: `split` no longer calls `string.split(value, sep)` for any delimiter case.
 
 **Track WB-3B (future, deferred):**
 WasmFX typed continuations — currently on hold.

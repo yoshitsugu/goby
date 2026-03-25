@@ -110,11 +110,17 @@ These semantics remain locked while finishing the work:
     - focused regression coverage added for both shapes,
     - `cargo run -p goby-cli -- check stdlib/goby/string.gb` now succeeds.
 
-- [ ] C4-S2. Stabilize iterator state contract in stdlib
+- [x] C4-S2. Stabilize iterator state contract in stdlib
   - keep `GraphemeState` in `stdlib/goby/iterator.gb` as the canonical shared
   state shape,
   - make `stdlib/goby/string.gb` import and use that shared shape only,
   - remove duplicated local declarations once C4-S1 is done.
+  - completed 2026-03-25:
+    - `type GraphemeState = ...` now lives in `stdlib/goby/iterator.gb`,
+    - `stdlib/goby/string.gb` imports `Iterator` and `GraphemeState` selectively from
+      `goby/iterator`,
+    - imported shared record constructors now flow through the normal type-environment path,
+    - `cargo run -p goby-cli -- check stdlib/goby/string.gb` succeeds after the move.
   - exit criteria:
     - no duplicated `Iterator` / `GraphemeState` declarations across stdlib modules.
 

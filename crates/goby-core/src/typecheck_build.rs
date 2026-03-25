@@ -4,11 +4,14 @@ use std::path::Path;
 use crate::{
     Module,
     ast::TypeDeclaration,
+    stdlib::StdlibResolver,
     typecheck::{PRELUDE_MODULE_PATH, TypecheckError},
     typecheck_annotation::strip_effect_clause,
     typecheck_env::{GlobalBinding, ImportedEffectDecl, RecordTypeInfo, Ty, TypeEnv},
     typecheck_types::{ty_from_annotation, ty_from_type_expr},
-    typecheck_validate::{collect_imported_effect_declarations, inject_imported_symbols},
+    typecheck_validate::{
+        collect_imported_effect_declarations, effective_imports, inject_imported_symbols,
+    },
     types::parse_type_expr,
 };
 
@@ -97,6 +100,7 @@ pub(crate) fn build_type_env(module: &Module, stdlib_root: &Path) -> TypeEnv {
         &collect_imported_effect_declarations(module, stdlib_root),
         &mut globals,
     );
+    inject_imported_type_constructors(module, &mut globals, &mut record_types, stdlib_root);
     inject_type_constructors(module, &mut globals, &mut type_aliases, &mut record_types);
     inject_effect_symbols(module, &mut globals);
 
@@ -203,6 +207,68 @@ fn inject_imported_effect_symbols(
             };
             insert_global_symbol(globals, qualified_key, ty.clone(), source.clone());
             insert_global_symbol(globals, member.name.clone(), ty, source);
+        }
+    }
+}
+
+fn inject_imported_type_constructors(
+    module: &Module,
+    globals: &mut HashMap<String, GlobalBinding>,
+    record_types: &mut HashMap<String, RecordTypeInfo>,
+    stdlib_root: &Path,
+) {
+    let resolver = StdlibResolver::new(stdlib_root.to_path_buf());
+    for import in effective_imports(module, &resolver) {
+        let Ok(resolved) = resolver.resolve_module(&import.module_path) else {
+            continue;
+        };
+        for ty_decl in &resolved.module.type_declarations {
+            match (&import.kind, ty_decl) {
+                (
+                    crate::ImportKind::Selective(names),
+                    TypeDeclaration::Record {
+                        name,
+                        constructor,
+                        fields,
+                    },
+                ) if names.iter().any(|selected| selected == name) => {
+                    let mut field_map = HashMap::new();
+                    let params: Vec<Ty> = fields
+                        .iter()
+                        .map(|f| ty_from_annotation(&f.type_annotation))
+                        .collect();
+                    for (field_name, field_ty) in fields
+                        .iter()
+                        .map(|f| (&f.name, ty_from_annotation(&f.type_annotation)))
+                    {
+                        field_map.insert(field_name.clone(), field_ty);
+                    }
+                    let result = Ty::Con {
+                        name: name.clone(),
+                        args: Vec::new(),
+                    };
+                    insert_global_symbol(
+                        globals,
+                        constructor.clone(),
+                        Ty::Fun {
+                            params,
+                            result: Box::new(result),
+                        },
+                        format!(
+                            "import type `{}` ({}) from `{}`",
+                            name, constructor, import.module_path
+                        ),
+                    );
+                    record_types.insert(
+                        constructor.clone(),
+                        RecordTypeInfo {
+                            type_name: name.clone(),
+                            fields: field_map,
+                        },
+                    );
+                }
+                _ => {}
+            }
         }
     }
 }
