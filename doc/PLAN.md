@@ -67,6 +67,20 @@ Based on `examples/*.gb`:
         30 minutes, roll back and retry with a narrower change unit.
     - if breakage becomes hard to reason about or cannot be handled, roll back to the
       last stable point and retry with a narrower change unit.
+  - Personal-project architecture policy (locked 2026-03-25):
+    - Goby is currently for personal use; temporary instability during development is acceptable.
+    - prefer the long-term coherent design from the start, even when it requires a change that
+      keeps the tree broken for a while during implementation.
+    - do not justify ad hoc architecture by saying the work must be split into very small
+      incremental slices.
+    - incremental execution is still useful for verification and rollback, but it must serve the
+      intended end-state design rather than accumulating temporary local fixes as permanent structure.
+  - Plan-label hygiene policy (locked 2026-03-25):
+    - plan milestone labels and numbering such as `Track E`, `WB-3`, `E4`, or similar roadmap IDs
+      are planning-only metadata.
+    - do not leave those labels in code comments, test names, diagnostics, or user-visible strings.
+    - when implementation comments need historical context, describe the technical purpose directly
+      instead of referencing transient plan numbering.
 
 - Function calls support both `f x` and `f(x)`.
   - spaced application supports multiple args (`f a b c`) and is parsed left-associatively
