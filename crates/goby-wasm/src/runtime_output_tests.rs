@@ -421,6 +421,47 @@ main =
 }
 
 #[test]
+fn resolves_runtime_output_for_imported_string_split_with_empty_delimiter_helper() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    let stdlib_source = std::fs::read_to_string(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..")
+            .join("stdlib")
+            .join("goby/string.gb"),
+    )
+    .expect("stdlib string should exist");
+    let stdlib = parse_module(&stdlib_source).expect("stdlib string should parse");
+    let helper_decl = stdlib
+        .declarations
+        .iter()
+        .find(|decl| decl.name == "split_with_empty_delimiter")
+        .expect("helper decl should exist");
+    let helper_plan = crate::wasm_exec_plan::decl_exec_plan(helper_decl);
+    assert_ne!(
+        helper_plan
+            .runtime
+            .as_ref()
+            .and_then(|runtime| runtime.body.as_deref()),
+        Some("()"),
+        "runtime plan should not collapse helper body to Unit"
+    );
+    let source = r#"
+import goby/string ( split_with_empty_delimiter )
+
+main : Unit -> Unit
+main =
+  print (split_with_empty_delimiter "a👨‍👩‍👧‍👦b")
+"#;
+    let module = parse_module(source).expect("parse should work");
+    let output = resolve_module_runtime_output(&module).expect("runtime output should resolve");
+    assert_eq!(
+        output,
+        "[\"a\", \"👨\u{200d}👩\u{200d}👧\u{200d}👦\", \"b\"]"
+    );
+}
+
+#[test]
 fn resolves_runtime_output_for_local_decl_with_following_statement_after_with() {
     let _guard = ENV_MUTEX.lock().unwrap();
     let source = r#"
@@ -550,6 +591,24 @@ main =
 }
 
 #[test]
+fn resolves_runtime_output_for_local_decl_wrapping_imported_list_map_named_lambda() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    let source = r#"
+import goby/list ( map )
+
+mul_tens : List Int -> List Int
+mul_tens ns = map ns (|n| -> n * 10)
+
+main : Unit -> Unit
+main =
+  print (mul_tens [3, 4, 5])
+"#;
+    let module = parse_module(source).expect("parse should work");
+    let output = resolve_module_runtime_output(&module).expect("runtime output should resolve");
+    assert_eq!(output, "[30, 40, 50]");
+}
+
+#[test]
 fn reports_callable_dispatch_error_for_list_each_non_callable_callback() {
     let _guard = ENV_MUTEX.lock().unwrap();
     let source = r#"
@@ -618,6 +677,27 @@ main =
     let output = resolve_module_runtime_output(&module).expect("runtime output should resolve");
     unsafe { std::env::remove_var("GOBY_INTRINSIC_TEST_PATH") };
     assert_eq!(output, "intrinsic-ok");
+}
+
+#[test]
+fn resolves_runtime_output_for_import_example_shape() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    unsafe { std::env::set_var("GOBY_PATH", "alpha,beta") };
+    let source = read_example("import.gb");
+    let module = parse_module(&source).expect("import example should parse");
+    let output = resolve_module_runtime_output(&module).expect("runtime output should resolve");
+    unsafe { std::env::remove_var("GOBY_PATH") };
+    assert_eq!(output, "alpha\nbeta\n");
+}
+
+#[test]
+fn resolves_runtime_output_for_import_example_shape_with_missing_env() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    unsafe { std::env::remove_var("GOBY_PATH") };
+    let source = read_example("import.gb");
+    let module = parse_module(&source).expect("import example should parse");
+    let output = resolve_module_runtime_output(&module).expect("runtime output should resolve");
+    assert_eq!(output, "\n");
 }
 
 #[test]
@@ -694,6 +774,36 @@ main =
     let module = parse_module(source).expect("parse should work");
     let output = resolve_module_runtime_output(&module).expect("runtime output should resolve");
     assert_eq!(output, "go\nby\n");
+}
+
+#[test]
+fn resolves_runtime_output_for_imported_string_split_with_plain_import_and_canonical_qualifier() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    let source = r#"
+import goby/string
+
+main : Unit -> Unit
+main =
+  print (string.split("go\nby", "\n"))
+"#;
+    let module = parse_module(source).expect("parse should work");
+    let output = resolve_module_runtime_output(&module).expect("runtime output should resolve");
+    assert_eq!(output, "[\"go\", \"by\"]");
+}
+
+#[test]
+fn resolves_runtime_output_for_imported_list_join_with_alias_import_on_empty_list() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    let source = r#"
+import goby/list as l
+
+main : Unit -> Unit
+main =
+  println l.join([], "\n")
+"#;
+    let module = parse_module(source).expect("parse should work");
+    let output = resolve_module_runtime_output(&module).expect("runtime output should resolve");
+    assert_eq!(output, "\n");
 }
 
 #[test]
@@ -926,6 +1036,22 @@ main =
     let module = parse_module(source).expect("parse should work");
     let output = resolve_module_runtime_output(&module).expect("runtime output should resolve");
     assert_eq!(output, "[\"a\", \"b\"]");
+}
+
+#[test]
+fn resolves_runtime_output_for_record_field_list_push_string_call() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    let source = r#"
+type GraphemeState = GraphemeState(grapheme: String, parts: List String, current: String, delimiter: String, seen: Bool)
+
+main : Unit -> Unit
+main =
+  state = GraphemeState(grapheme: "", parts: [], current: "", delimiter: "", seen: False)
+  print (__goby_list_push_string state.parts "a")
+"#;
+    let module = parse_module(source).expect("parse should work");
+    let output = resolve_module_runtime_output(&module).expect("runtime output should resolve");
+    assert_eq!(output, "[\"a\"]");
 }
 
 #[test]

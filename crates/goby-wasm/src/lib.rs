@@ -64,7 +64,7 @@ use goby_core::{
 use std::collections::{HashMap, HashSet};
 pub(crate) const BUILTIN_PRINT: &str = "print";
 const PRELUDE_MODULE_PATH: &str = "goby/prelude";
-pub(crate) const MAX_EVAL_DEPTH: usize = 32;
+pub(crate) const MAX_EVAL_DEPTH: usize = 128;
 const ERR_RESUME_MISSING: &str = "resume used without an active continuation [E-RESUME-MISSING]: `resume` can only be called while executing a handler operation body";
 const ERR_RESUME_CONSUMED: &str = "resume continuation already consumed [E-RESUME-CONSUMED]: continuations are one-shot; call `resume` at most once per handled operation";
 const ERR_RESUME_STACK_MISMATCH: &str = "internal resume token stack mismatch [E-RESUME-STACK-MISMATCH]: continuation token stack became unbalanced";

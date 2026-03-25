@@ -81,13 +81,13 @@ enough that they are unnecessary.
 
 ## 5. Remaining Milestones
 
-- [ ] S1. Evaluator ownership convergence
+- [x] S1. Evaluator ownership convergence
   - close the generic fallback-evaluator gaps that are currently hidden by the
     legacy `string.split` runtime branch,
   - make imported/local stdlib declaration execution coherent enough that
     `split` no longer needs function-specific rescue logic.
 
-- [ ] S2. Legacy split branch retirement
+- [x] S2. Legacy split branch retirement
   - remove the direct runtime handling path for source-level `string.split`,
   - preserve the existing backend intrinsic boundary for Wasm lowering.
 
@@ -150,7 +150,7 @@ isolated opportunities for more split-specific special casing.
 
 ### 6.4 Step-by-step Plan
 
-- [ ] S1-1. Lock the evaluator ownership contract with targeted regressions
+- [x] S1-1. Lock the evaluator ownership contract with targeted regressions
   - add focused tests for:
     - selective-import `split(...)` through runtime-output fallback,
     - canonical qualified `string.split(...)` through runtime-output fallback,
@@ -163,7 +163,7 @@ isolated opportunities for more split-specific special casing.
     - the failures identify generic evaluator gaps rather than ambiguous
       end-to-end breakage.
 
-- [ ] S1-2. Unify declaration value execution before deleting the branch
+- [x] S1-2. Unify declaration value execution before deleting the branch
   - make imported/local declaration value execution use one coherent
     responsibility model for:
     - argument binding,
@@ -176,7 +176,7 @@ isolated opportunities for more split-specific special casing.
       declaration path without relying on `split` shortcuts,
     - no new `split`-specific branches are introduced.
 
-- [ ] S1-3. Normalize fallback evaluator state propagation where `split` depends on it
+- [x] S1-3. Normalize fallback evaluator state propagation where `split` depends on it
   - close generic gaps in:
     - statement/block result extraction,
     - `with ... in` local update propagation,
@@ -188,7 +188,7 @@ isolated opportunities for more split-specific special casing.
     - the remaining failures, if any, are about branch deletion itself rather
       than evaluator incompleteness.
 
-- [ ] S2-1. Delete the legacy `string.split` runtime branch
+- [x] S2-1. Delete the legacy `string.split` runtime branch
   - remove the direct runtime handling in the fallback/runtime-output path once
     `S1` is green.
   - deletion targets include:
@@ -204,7 +204,7 @@ isolated opportunities for more split-specific special casing.
       `string.split` handling in the fallback evaluator path,
     - split behavior remains correct through the generic path.
 
-- [ ] S2-2. Re-run ownership regressions across affected execution boundaries
+- [x] S2-2. Re-run ownership regressions across affected execution boundaries
   - prove imported/qualified `split` still works after branch deletion,
   - prove empty-delimiter and Unicode multi-grapheme behavior still hold across
     fallback and Wasm-owned execution boundaries.

@@ -6,11 +6,8 @@ use crate::runtime_eval::IntCallable;
 use crate::runtime_flow::{
     ApplyStep, Cont, DirectCallHead, Escape, FinishKind, Out, RuntimeError, RuntimeEvaluators,
 };
-use crate::runtime_support::flatten_direct_call;
 use crate::runtime_value::{RuntimeLocals, RuntimeValue};
-use crate::{
-    MAX_EVAL_DEPTH, RuntimeOutputResolver, effective_runtime_imports, runtime_import_selects_name,
-};
+use crate::{MAX_EVAL_DEPTH, RuntimeOutputResolver};
 
 impl<'m> RuntimeOutputResolver<'m> {
     pub(crate) fn apply_receiver_method_value_call_out(
@@ -155,43 +152,6 @@ impl<'m> RuntimeOutputResolver<'m> {
             depth + 1,
         ) {
             return Out::Done(value);
-        }
-
-        if let Some((DirectCallHead::Bare(name), args)) = flatten_direct_call(expr)
-            && name == "split"
-            && args.len() == 2
-            && effective_runtime_imports(self.current_runtime_module())
-                .into_iter()
-                .any(|import| {
-                    import.module_path == "goby/string"
-                        && runtime_import_selects_name(&import.kind, "split")
-                })
-        {
-            let value = match self.eval_expr(args[0], locals, callables, evaluators, depth + 1) {
-                Out::Done(value) => value,
-                Out::Suspend(cont) => return Out::Suspend(cont),
-                Out::Escape(escape) => return Out::Escape(escape),
-                Out::Err(e) => return Out::Err(e),
-            };
-            let delim = match self.eval_expr(args[1], locals, callables, evaluators, depth + 1) {
-                Out::Done(value) => value,
-                Out::Suspend(cont) => return Out::Suspend(cont),
-                Out::Escape(escape) => return Out::Escape(escape),
-                Out::Err(e) => return Out::Err(e),
-            };
-            return match (value, delim) {
-                (RuntimeValue::String(s), RuntimeValue::String(delim)) => {
-                    let parts = if s.is_empty() {
-                        Vec::new()
-                    } else {
-                        s.split(delim.as_str())
-                            .map(|part| part.to_string())
-                            .collect()
-                    };
-                    Out::Done(RuntimeValue::ListString(parts))
-                }
-                _ => Out::Err(RuntimeError::Unsupported),
-            };
         }
 
         match expr {
@@ -700,6 +660,33 @@ impl<'m> RuntimeOutputResolver<'m> {
                 match value {
                     Some(v) => Out::Done(v),
                     None => Out::Err(RuntimeError::Unsupported),
+                }
+            }
+            Expr::MethodCall { method, args, .. } if method == "join" && args.len() == 2 => {
+                let list_value =
+                    match self.eval_expr(&args[0], locals, callables, evaluators, depth + 1) {
+                        Out::Done(v) => v,
+                        Out::Suspend(_) => return Out::Err(RuntimeError::Unsupported),
+                        Out::Escape(escape) => return Out::Escape(escape),
+                        Out::Err(e) => return Out::Err(e),
+                    };
+                let sep_value =
+                    match self.eval_expr(&args[1], locals, callables, evaluators, depth + 1) {
+                        Out::Done(v) => v,
+                        Out::Suspend(_) => return Out::Err(RuntimeError::Unsupported),
+                        Out::Escape(escape) => return Out::Escape(escape),
+                        Out::Err(e) => return Out::Err(e),
+                    };
+                match (list_value, sep_value) {
+                    (RuntimeValue::ListString(parts), RuntimeValue::String(sep)) => {
+                        Out::Done(RuntimeValue::String(parts.join(&sep)))
+                    }
+                    (RuntimeValue::ListInt(parts), RuntimeValue::String(_sep))
+                        if parts.is_empty() =>
+                    {
+                        Out::Done(RuntimeValue::String(String::new()))
+                    }
+                    _ => Out::Err(RuntimeError::Unsupported),
                 }
             }
             Expr::MethodCall {

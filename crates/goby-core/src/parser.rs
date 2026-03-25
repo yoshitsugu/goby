@@ -123,6 +123,7 @@ mod tests {
     use super::*;
     use crate::ast::{Expr, Stmt};
     use crate::parser_test_support::read_example;
+    use std::path::PathBuf;
 
     #[test]
     fn parses_hello_example() {
@@ -264,6 +265,29 @@ main =
                 .iter()
                 .any(|stmt| matches!(stmt, Stmt::Expr(Expr::With { .. }, _))),
             "handler clause body should contain nested with expression"
+        );
+    }
+
+    #[test]
+    fn parses_stdlib_split_helper_body_into_statements() {
+        let source = std::fs::read_to_string(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("..")
+                .join("..")
+                .join("stdlib")
+                .join("goby")
+                .join("string.gb"),
+        )
+        .expect("stdlib string should exist");
+        let module = parse_module(&source).expect("stdlib string should parse");
+        let helper = module
+            .declarations
+            .iter()
+            .find(|decl| decl.name == "split_with_empty_delimiter")
+            .expect("helper decl should exist");
+        assert!(
+            helper.parsed_body.is_some(),
+            "split_with_empty_delimiter body should parse into statements"
         );
     }
 

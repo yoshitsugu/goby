@@ -8,7 +8,7 @@ use goby_core::ir::{
     CompExpr, IrBinOp, IrCaseArm, IrCasePattern, IrDecl, IrHandlerClause, IrListPatternItem,
     IrListPatternTail, ValueExpr,
 };
-use goby_core::{Declaration, Expr, Module, Stmt};
+use goby_core::{Declaration, Expr, Module, Stmt, parse_body_stmts};
 
 pub(crate) struct WasmRuntimeArtifacts<'a> {
     pub(crate) body: Option<Cow<'a, str>>,
@@ -53,6 +53,13 @@ fn runtime_artifacts_from_decl_and_ir<'a>(
         return Some(WasmRuntimeArtifacts {
             body: Some(Cow::Borrowed(decl.body.as_str())),
             stmts: Cow::Borrowed(stmts),
+        });
+    }
+
+    if let Some(stmts) = parse_body_stmts(&decl.body) {
+        return Some(WasmRuntimeArtifacts {
+            body: Some(Cow::Borrowed(decl.body.as_str())),
+            stmts: Cow::Owned(stmts),
         });
     }
 
@@ -520,5 +527,34 @@ capture _ =
             runtime_artifacts_from_ir_decl(&ir_decl).expect("runtime artifacts should exist");
         let body = runtime.body.expect("body should render");
         assert_eq!(body, "base = 40\n|n| -> n + base");
+    }
+
+    #[test]
+    fn local_decl_runtime_plan_preserves_named_lambda_map_body() {
+        let source = std::fs::read_to_string(
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("..")
+                .join("..")
+                .join("examples")
+                .join("function.gb"),
+        )
+        .expect("function example should exist");
+        let module = parse_module(&source).expect("function example should parse");
+        let decl = module
+            .declarations
+            .iter()
+            .find(|decl| decl.name == "mul_tens")
+            .expect("mul_tens should exist");
+        assert!(
+            decl.parsed_body.is_some(),
+            "mul_tens should keep parsed body"
+        );
+        let runtime = decl_exec_plan(decl)
+            .runtime
+            .expect("mul_tens runtime plan should exist");
+        assert_eq!(
+            runtime.body.as_deref().map(str::trim_end),
+            Some("map ns (|n| -> n * 10)")
+        );
     }
 }

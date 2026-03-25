@@ -155,10 +155,7 @@ impl<'m> RuntimeOutputResolver<'m> {
         }
         let fn_callables = HashMap::new();
         self.eval_runtime_decl_body_out(
-            &crate::runtime_flow::RuntimeDeclInfo {
-                stmts,
-                ..decl
-            },
+            &crate::runtime_flow::RuntimeDeclInfo { stmts, ..decl },
             fn_locals,
             fn_callables,
             evaluators,

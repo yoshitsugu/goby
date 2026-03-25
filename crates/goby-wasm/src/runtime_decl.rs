@@ -16,35 +16,6 @@ impl<'m> RuntimeOutputResolver<'m> {
             return None;
         }
         let (head, args) = flatten_direct_call(expr)?;
-        if self.imported_head_matches_string_split(&head) && args.len() == 2 {
-            let value = self.eval_expr_to_option(
-                args[0],
-                caller_locals,
-                caller_callables,
-                evaluators,
-                depth + 1,
-            )?;
-            let delim = self.eval_expr_to_option(
-                args[1],
-                caller_locals,
-                caller_callables,
-                evaluators,
-                depth + 1,
-            )?;
-            return match (value, delim) {
-                (RuntimeValue::String(s), RuntimeValue::String(delim)) => {
-                    let parts = if s.is_empty() {
-                        Vec::new()
-                    } else {
-                        s.split(delim.as_str())
-                            .map(|part| part.to_string())
-                            .collect()
-                    };
-                    Some(RuntimeValue::ListString(parts))
-                }
-                _ => None,
-            };
-        }
         if self.imported_head_matches_string_graphemes(&head) && args.len() == 1 {
             let value = self.eval_expr_to_option(
                 args[0],
@@ -105,45 +76,6 @@ impl<'m> RuntimeOutputResolver<'m> {
         let out =
             self.eval_runtime_decl_body_out(&decl, fn_locals, fn_callables, evaluators, depth + 1);
         self.complete_value_out(out, evaluators)
-    }
-
-    fn imported_head_matches_string_split(&self, head: &DirectCallHead) -> bool {
-        match head {
-            DirectCallHead::Bare(name) if name == "split" => {
-                effective_runtime_imports(self.current_runtime_module())
-                    .into_iter()
-                    .any(|import| {
-                        import.module_path == "goby/string"
-                            && runtime_import_selects_name(&import.kind, "split")
-                    })
-            }
-            DirectCallHead::Qualified { receiver, member } if member == "split" => {
-                if receiver == "string"
-                    && effective_runtime_imports(self.current_runtime_module())
-                        .into_iter()
-                        .any(|import| import.module_path == "goby/string")
-                {
-                    return true;
-                }
-                effective_runtime_imports(self.current_runtime_module())
-                    .into_iter()
-                    .any(|import| {
-                        if import.module_path != "goby/string" {
-                            return false;
-                        }
-                        match import.kind {
-                            goby_core::ImportKind::Plain => import
-                                .module_path
-                                .rsplit('/')
-                                .next()
-                                .is_some_and(|qualifier| qualifier == receiver),
-                            goby_core::ImportKind::Alias(alias) => alias == *receiver,
-                            goby_core::ImportKind::Selective(_) => false,
-                        }
-                    })
-            }
-            _ => false,
-        }
     }
 
     fn imported_head_matches_string_graphemes(&self, head: &DirectCallHead) -> bool {

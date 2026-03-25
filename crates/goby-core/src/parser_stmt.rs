@@ -87,7 +87,6 @@ where
             let next_trimmed = next_stripped.trim();
             let next_indent = indent_len(next_stripped);
             if next_indent > this_indent
-                && (next_trimmed == "with" || next_trimmed.starts_with("with "))
                 && let Some((value, after)) =
                     parse_multiline_rhs_expr(lines, next_i, next_indent, next_trimmed, parse_expr)
             {
@@ -203,7 +202,6 @@ where
             let next_trimmed = next_stripped.trim();
             let next_indent = indent_len(next_stripped);
             if next_indent > this_indent
-                && (next_trimmed == "with" || next_trimmed.starts_with("with "))
                 && let Some((value, after)) =
                     parse_multiline_rhs_expr(lines, next_i, next_indent, next_trimmed, parse_expr)
             {
@@ -255,7 +253,6 @@ where
             let next_trimmed = next_stripped.trim();
             let next_indent = indent_len(next_stripped);
             if next_indent > this_indent
-                && (next_trimmed == "with" || next_trimmed.starts_with("with "))
                 && let Some((value, after)) =
                     parse_multiline_rhs_expr(lines, next_i, next_indent, next_trimmed, parse_expr)
             {
@@ -278,6 +275,14 @@ where
                 value,
                 span: Some(stmt_span),
             });
+            i = next_i;
+            continue;
+        }
+
+        if let Some((expr, next_i)) =
+            parse_delimited_multiline_expr(lines, i, this_indent, trimmed, parse_expr)
+        {
+            stmts.push(Stmt::Expr(expr, Some(stmt_span)));
             i = next_i;
             continue;
         }
@@ -382,6 +387,16 @@ where
         ));
     }
 
+    if let Some(expr) = parse_expr(rhs_trimmed) {
+        return Some((expr, line_idx + 1));
+    }
+
+    if let Some(parsed) =
+        parse_delimited_multiline_expr(lines, line_idx, line_indent, rhs_trimmed, parse_expr)
+    {
+        return Some(parsed);
+    }
+
     if !(rhs_trimmed.starts_with("case ") || rhs_trimmed.starts_with("if ")) {
         return None;
     }
@@ -394,6 +409,52 @@ where
     let refs: Vec<&str> = virtual_lines.iter().map(String::as_str).collect();
     let (expr, consumed) = parse_multiline_expr(&refs, 0, parse_expr)?;
     Some((expr, line_idx + consumed))
+}
+
+fn parse_delimited_multiline_expr<F>(
+    lines: &[&str],
+    line_idx: usize,
+    line_indent: usize,
+    head: &str,
+    parse_expr: F,
+) -> Option<(Expr, usize)>
+where
+    F: Copy + Fn(&str) -> Option<Expr>,
+{
+    let mut balance = DelimiterBalance::default();
+    balance.scan(head);
+    if !balance.needs_continuation() {
+        return None;
+    }
+
+    let mut source = head.trim().to_string();
+    let mut i = line_idx + 1;
+    while i < lines.len() {
+        let stripped = strip_line_comment(lines[i]).trim_end();
+        let trimmed = stripped.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            i += 1;
+            continue;
+        }
+
+        let indent = indent_len(stripped);
+        if indent < line_indent {
+            return None;
+        }
+
+        if !source.is_empty() {
+            source.push(' ');
+        }
+        source.push_str(trimmed);
+        balance.scan(trimmed);
+        i += 1;
+
+        if !balance.needs_continuation() {
+            return parse_expr(&source).map(|expr| (expr, i));
+        }
+    }
+
+    None
 }
 
 fn parse_with_in_body<F>(
@@ -789,6 +850,51 @@ fn find_top_level_case_arm_separator(src: &str) -> Option<usize> {
         i += 1;
     }
     None
+}
+
+#[derive(Default)]
+struct DelimiterBalance {
+    paren_depth: usize,
+    bracket_depth: usize,
+    brace_depth: usize,
+    in_string: bool,
+    escaped: bool,
+}
+
+impl DelimiterBalance {
+    fn scan(&mut self, src: &str) {
+        for ch in src.chars() {
+            if self.in_string {
+                if self.escaped {
+                    self.escaped = false;
+                    continue;
+                }
+                if ch == '\\' {
+                    self.escaped = true;
+                    continue;
+                }
+                if ch == '"' {
+                    self.in_string = false;
+                }
+                continue;
+            }
+
+            match ch {
+                '"' => self.in_string = true,
+                '(' => self.paren_depth += 1,
+                ')' => self.paren_depth = self.paren_depth.saturating_sub(1),
+                '[' => self.bracket_depth += 1,
+                ']' => self.bracket_depth = self.bracket_depth.saturating_sub(1),
+                '{' => self.brace_depth += 1,
+                '}' => self.brace_depth = self.brace_depth.saturating_sub(1),
+                _ => {}
+            }
+        }
+    }
+
+    fn needs_continuation(&self) -> bool {
+        self.in_string || self.paren_depth > 0 || self.bracket_depth > 0 || self.brace_depth > 0
+    }
 }
 
 fn indent_len(line: &str) -> usize {
@@ -1227,6 +1333,30 @@ else
         assert!(
             parse_body_stmts(body).is_some(),
             "with-handler body with block if branches should parse"
+        );
+    }
+
+    #[test]
+    fn parse_body_stmts_supports_multiline_resume_record_constructor() {
+        let body = r#"with
+  yield grapheme step ->
+    next_parts = __goby_list_push_string step.parts grapheme
+    resume (True, GraphemeState(
+      grapheme: "",
+      parts: next_parts,
+      current: "",
+      delimiter: "",
+      seen: True
+    ))
+in
+  final := __goby_string_each_grapheme value initial
+if final.seen
+  final.parts
+else
+  []"#;
+        assert!(
+            parse_body_stmts(body).is_some(),
+            "with-handler body with multiline tuple/record continuation should parse"
         );
     }
 

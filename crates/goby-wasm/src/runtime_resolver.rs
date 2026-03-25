@@ -659,25 +659,6 @@ impl<'m> RuntimeOutputResolver<'m> {
             Expr::Resume { .. } => {
                 self.eval_expr_to_option(expr, locals, callables, evaluators, depth)
             }
-            Expr::MethodCall {
-                receiver,
-                method,
-                args,
-            } if method == "split" && receiver == "string" && args.len() == 2 => {
-                let sv = self.eval_expr_ast(&args[0], locals, callables, evaluators, depth + 1)?;
-                let dv = self.eval_expr_ast(&args[1], locals, callables, evaluators, depth + 1)?;
-                match (sv, dv) {
-                    (RuntimeValue::String(s), RuntimeValue::String(delim)) => {
-                        let parts: Vec<String> = if s.is_empty() {
-                            Vec::new()
-                        } else {
-                            s.split(delim.as_str()).map(|p| p.to_string()).collect()
-                        };
-                        Some(RuntimeValue::ListString(parts))
-                    }
-                    _ => None,
-                }
-            }
             Expr::MethodCall { method, args, .. } if method == "join" && args.len() == 2 => {
                 let list_v =
                     self.eval_expr_ast(&args[0], locals, callables, evaluators, depth + 1)?;
@@ -686,6 +667,11 @@ impl<'m> RuntimeOutputResolver<'m> {
                 match (list_v, sep_v) {
                     (RuntimeValue::ListString(parts), RuntimeValue::String(sep)) => {
                         Some(RuntimeValue::String(parts.join(&sep)))
+                    }
+                    (RuntimeValue::ListInt(parts), RuntimeValue::String(_sep))
+                        if parts.is_empty() =>
+                    {
+                        Some(RuntimeValue::String(String::new()))
                     }
                     _ => None,
                 }

@@ -38,9 +38,10 @@ Last updated: 2026-03-25
 
 ## Track Priority
 
-**Next active work: stdlib split retirement track S1 evaluator ownership convergence.**
-C4 is now complete: compile/runtime parity coverage includes `examples/import.gb` compile-path
-coverage, `split "" "" -> []`, and a Unicode multi-grapheme delimiter regression.
+**Next active work: stdlib split retirement track S3 boundary lock and closure.**
+C4 is complete, and S1/S2 are now complete: the generic evaluator owns stdlib `split` helper
+execution, and the fallback/runtime-output path no longer carries a source-level legacy
+`string.split` branch.
 
 See `doc/PLAN_STANDARD_LIBRARY.md` for the remaining stdlib milestones.
 
@@ -73,10 +74,14 @@ Added tests: empty-delimiter ASCII/emoji, single-char delimiter, leading/trailin
 `split "" "" -> []`, Unicode multi-grapheme delimiter execution, and `examples/import.gb`
 compile-path parity.
 
-**Track stdlib (C4-S5) — complete (2026-03-25):**
-Active docs/state now mark C4 complete and narrow the next stdlib work to the renumbered
-split-retirement track. The remaining direct runtime `string.split` branch is legacy-only
-pending deletion, and the next required work is generic evaluator ownership convergence.
+**Track stdlib (S1/S2) — complete (2026-03-25):**
+The remaining generic evaluator gaps behind stdlib `split` helper execution are closed.
+Declaration/body execution now uses the shared fallback path for imported/local stdlib helpers,
+parser statement recovery now preserves multiline indented RHS/`resume` continuations needed by
+`stdlib/goby/string.gb`, and the runtime-output fallback no longer relies on source-level
+`string.split` special cases in `runtime_decl.rs`, `runtime_expr.rs`, or `runtime_resolver.rs`.
+Focused split regressions pass for selective import, canonical qualified call, empty delimiter,
+and Unicode multi-grapheme delimiter behavior after branch removal.
 
 **Track WB-3B (future, deferred):**
 WasmFX typed continuations — currently on hold.
