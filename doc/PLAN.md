@@ -143,6 +143,15 @@ Based on `examples/*.gb`:
 - Stdlib integer parse entrypoint is `int.parse`.
   - contract: parse optional leading `-` + one or more ASCII digits as base-10 `Int`.
   - failure path is effect-based: `StringParseError.invalid_integer : String -> Int`.
+- Stdlib integer formatting entrypoint is planned as `int.to_string`.
+  - contract: render an `Int` to canonical base-10 decimal `String`.
+  - examples:
+    - `int.to_string 0 -> "0"`
+    - `int.to_string 123 -> "123"`
+    - `int.to_string -7 -> "-7"`
+  - scope note:
+    - this is an explicit conversion helper under `goby/int`; it does not change `Print.println`.
+    - users should compose it directly where needed (for example `println (int.to_string n)`).
 - `examples/basic_types.gb` is a parse/typecheck target, not a runnable entrypoint target.
   - no `main` addition and no `--entry` option in MVP.
 - `examples/function.gb` is a canonical MVP run target and must be preserved as-is.
@@ -394,6 +403,45 @@ Based on `examples/*.gb`:
 - Core modules to ship first (`Int`, `String`, `List`, `Env`) — minimal built-ins implemented.
 - Naming conventions for stdlib functions — established.
 - Minimal collection API for immutable workflows — deferred.
+- **`int.to_string` stdlib addition** (planned).
+  - Goal:
+    - add `to_string : Int -> String` to `stdlib/goby/int.gb` as the explicit integer-formatting helper.
+    - support compositions such as `println (int.to_string n)` and `map xs int.to_string`
+      without widening the type of `Print.println`.
+  - Semantics:
+    - output is canonical decimal ASCII with optional leading `-`.
+    - no leading `+`, no surrounding whitespace, no separators, no locale-specific formatting.
+    - `0` renders as `"0"`.
+    - negative values render as `"-"` plus the magnitude digits.
+  - Design constraints:
+    - keep this as a normal stdlib surface under `goby/int`, not as a `println` convenience path.
+    - if runtime/backend support is required, prefer one shared implementation path rather than
+      scattering `int.to_string` special-cases across fallback and Wasm code paths.
+    - preserve round-trip intent with `int.parse` for decimal strings in range:
+      `int.parse (int.to_string n)` should yield `n` absent handler interception.
+  - Planned implementation slices:
+    - `INTSTR-S1` surface + docs:
+      - declare `to_string : Int -> String` in `stdlib/goby/int.gb`.
+      - update `doc/LANGUAGE_SPEC.md` stdlib inventory to include `int.to_string`.
+      - add or update one focused example/reference entry if useful.
+    - `INTSTR-S2` execution path:
+      - implement one honest execution path that works across typecheck, runtime fallback,
+        and general-lowered Wasm execution.
+      - if an intrinsic/helper is introduced, keep it generic enough to serve integer stringification
+        broadly rather than only this single surface function.
+    - `INTSTR-S3` regression coverage:
+      - add focused tests for `0`, positive multi-digit values, negative values, and composition with `println`.
+      - add a named-callback regression such as `map [1, 20, -3] int.to_string` once callback type checking is in place.
+    - `INTSTR-S4` parity checks:
+      - verify the helper is pure and requires no effect annotation.
+      - verify behavior matches across runtime fallback and general-lowered execution.
+  - Validation checklist:
+    - `cargo check`
+    - `cargo test`
+    - representative execution samples proving:
+      - `println (int.to_string 123)` prints `123`
+      - `println (int.to_string -7)` prints `-7`
+      - `map [1, 20, -3] int.to_string` yields `["1", "20", "-3"]`
 - `List.map` migration plan (planned):
   - keep canonical map behavior in `stdlib/goby/list.gb` (`list.map` export path).
   - replace internal/builtin-path map callsites with stdlib module usage where possible.
@@ -521,6 +569,34 @@ Done criteria:
 - the rejection is reported as a higher-order function-type mismatch (`Int -> Unit` required,
   `String -> Unit` found), not as an unknown-name error.
 - no regression in existing higher-order named-function callback examples.
+
+### 4.5 Active Track F: Stdlib `int.to_string`
+
+Goal: provide an explicit pure conversion from `Int` to `String` in `goby/int`.
+
+Why this is active:
+
+- once higher-order callback type checking is fixed, users need an explicit conversion helper
+  instead of expecting `println` to accept `Int`.
+- `int.parse` already exists as the input-side stdlib entrypoint; `int.to_string` is the
+  natural output-side counterpart.
+- this helper is useful for callback composition, formatted output, and list-to-string workflows.
+
+Execution plan:
+
+1. Add `to_string : Int -> String` to `stdlib/goby/int.gb` and document it in the stdlib surface.
+2. Implement one shared execution path that works for runtime fallback and Wasm execution.
+3. Add focused regressions for zero, positive, and negative integer rendering.
+4. Add one composition regression using `println (int.to_string n)`.
+5. After Track E lands, add callback-position coverage such as `map xs int.to_string`.
+
+Done criteria:
+
+- `int.to_string 0` yields `"0"`.
+- `int.to_string 123` yields `"123"`.
+- `int.to_string -7` yields `"-7"`.
+- `println (int.to_string 123)` prints `123`.
+- `map [1, 20, -3] int.to_string` yields `["1", "20", "-3"]`.
 
 Lint rules are ordered by ascending analysis cost. The cheapest infrastructure
 comes first to unblock the framework early; user-value ranking is noted in

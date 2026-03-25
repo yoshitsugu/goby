@@ -102,6 +102,12 @@ First target is to make callback positions such as `each xs println` fail with a
 resolved-name-but-wrong-function-type diagnostic (`Int -> Unit` required,
 `String -> Unit` found) rather than relying on ad hoc `println` checks.
 
+**Track F (planned next stdlib helper):**
+`int.to_string : Int -> String`.
+Target shape is a pure canonical decimal formatter under `goby/int`, intended for
+explicit composition such as `println (int.to_string n)` and `map xs int.to_string`
+rather than changing `Print.println` semantics.
+
 ## Architecture State
 
 - Resolved-form → shared IR boundary is stable (IR0–IR11 done).
