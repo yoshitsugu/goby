@@ -261,6 +261,70 @@ Based on `examples/*.gb`:
   - type mismatch diagnostics must include both expected and actual type names.
   - composite types should be rendered with full shape (for example: `List Int`, `(String, Int)`), not collapsed labels.
   - line/column reporting is not required in MVP.
+- **Higher-order function-type checking** (planned, high priority).
+  - Goal:
+    - higher-order call sites must verify that a function value matches the function type
+      required by the callee parameter.
+    - the immediate user-facing target is callback position diagnostics such as
+      `each xs println`, where the name resolves successfully but its function type does not fit.
+    - direct call argument mismatches should continue to be rejected, but the priority gap to close
+      now is the unresolved higher-order function-type mismatch.
+  - Current known gaps:
+    - implicit-prelude `print`/`println` now preserve `String -> Unit`, but higher-order ordinary-call
+      checking still allows some callback mismatches to slip through.
+    - `ensure_known_call_targets_in_expr` currently answers only "is the callee known?", not
+      "does this function-valued argument match the parameter's required function type?".
+    - effect operation calls already have argument unification logic in `typecheck_effect_usage.rs`,
+      but ordinary declaration/value calls do not yet enforce the same quality bar for function-valued arguments.
+  - Design constraints:
+    - do not special-case `println` / `print`; fix higher-order function-type checking generically.
+    - preserve current named-function higher-order ergonomics (`map xs add_ten`) and generic function instantiation behavior.
+    - keep partial-application semantics intact where the parser/AST currently represent curried calls as nested single-arg calls.
+    - diagnostics for higher-order mismatches should read as "resolved name, wrong function type",
+      not as "unknown function" and not as a direct-call scalar argument mismatch when the actual bug
+      is callback incompatibility.
+  - Planned implementation slices:
+    - `CALL-T1` higher-order signature matcher:
+      - extract a reusable helper that compares a function-valued argument type against the
+        function type required by a parameter position.
+      - the helper should reuse the existing unification machinery (`TypeSubst`) so generic
+        callback positions instantiate correctly per call site.
+      - the helper must surface "required function type" vs "actual function type" so diagnostics
+        can say, for example, that `Int -> Unit` is required but `println` has type `String -> Unit`.
+    - `CALL-T2` ordinary-call integration:
+      - run the higher-order signature matcher wherever ordinary calls feed a function-valued argument
+        into a function-typed parameter.
+      - cover direct / qualified / pipeline call shapes as they appear in the AST.
+      - keep "unknown function or constructor" diagnostics higher priority when name resolution fails entirely.
+    - `CALL-T3` callback regression coverage:
+      - lock the representative regressions:
+        - `each [1, 2, 3] println` must fail because callback type `String -> Unit` does not satisfy required type `Int -> Unit`
+        - the diagnostic should describe a higher-order function-type mismatch, not an unknown-name error
+        - `each ["a", "b"] println` must pass
+        - `map [1, 2, 3] println` must fail because callback type does not satisfy the required mapper function type
+        - named-function callback variants continue to pass when signatures align.
+    - `CALL-T4` generic and partial-application parity:
+      - verify that generic functions still instantiate independently per call site.
+      - verify that partial application does not over-eagerly reject intermediate function values.
+      - add regressions for:
+        - generic declaration call with concrete argument,
+        - generic declaration passed as callback,
+        - nested curried calls where only the second application mismatches.
+    - `CALL-T5` diagnostics + docs:
+      - add wording specific to higher-order mismatches:
+        - required callback type
+        - actual resolved function type
+        - resolved function name when available
+      - keep direct-call diagnostics distinct from callback diagnostics.
+      - update `doc/LANGUAGE_SPEC.md` only if the documented callable/typecheck rules need clarification;
+        no syntax change is intended.
+      - add a short example under `examples/` only if an existing sample currently demonstrates the buggy acceptance path.
+  - Validation checklist:
+    - focused tests for higher-order callback mismatch cases plus adjacent direct/qualified/pipeline cases.
+    - `cargo check`
+    - `cargo test`
+    - verify `import goby/list ( map, each )` plus `each xs println` now fails during `goby-cli check`
+      with a higher-order function-type mismatch once `xs : List Int`.
 
 ### 2.3 Effect System
 
@@ -424,6 +488,39 @@ Most of Track D is complete. Only still-relevant follow-up items are kept here.
 #### Phase D5: `goby lint` — high-signal static checks
 
 Goal: machine-readable linter output for common mistakes not caught by the typechecker.
+
+### 4.4 Active Track E: Higher-Order Function-Type Checking
+
+Goal: close the remaining typechecker hole where a resolved function name can still be
+accepted in a higher-order position even though its function type does not match the
+callee's required callback type.
+
+Why this is active now:
+
+- user-visible buggy shape exists today: `println` can still be accepted as a callback
+  for `List Int` iteration after explicit import of `each`, even though the required
+  callback type is `Int -> Unit` and `println` resolves to `String -> Unit`.
+- the runtime assumes `Print.print` / `Print.println` receive `String`, so leaving this
+  to runtime causes corrupt execution instead of a normal compile-time error.
+- the required architecture is already mostly present: effect-op call checking has the
+  unification pieces; higher-order ordinary calls need to reuse the same style of checking.
+
+Execution plan:
+
+1. Implement one shared higher-order signature matcher for function-valued arguments.
+2. Wire that matcher into ordinary-call validation wherever a function-typed parameter is consumed.
+3. Add focused regressions for the `println` callback case and neighboring higher-order shapes.
+4. Verify generic and partial-application behavior did not regress.
+5. After parity is proven, consider whether effect-op and higher-order ordinary-call validation should
+   share even more of their internal implementation.
+
+Done criteria:
+
+- `import goby/list ( each )` plus `each [1, 2] println` is rejected.
+- `import goby/list ( each )` plus `each [\"a\", \"b\"] println` is accepted.
+- the rejection is reported as a higher-order function-type mismatch (`Int -> Unit` required,
+  `String -> Unit` found), not as an unknown-name error.
+- no regression in existing higher-order named-function callback examples.
 
 Lint rules are ordered by ascending analysis cost. The cheapest infrastructure
 comes first to unblock the framework early; user-value ranking is noted in
