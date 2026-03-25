@@ -354,46 +354,6 @@ Priority rule:
 - if future work reopens an architectural lowering gap, extend `doc/PLAN_IR.md`
   before adding new boundary-specific workarounds.
 
-Immediate backend follow-up to queue next:
-
-- General call-argument ANF normalization for non-value arguments.
-  - Motivation:
-    - the surface syntax already accepts nested subexpressions such as
-      `each (rolls[2]) println`.
-    - `Expr::ListIndex` is already parsed and resolves canonically to
-      `list.get rolls 2`; the remaining limitation is at the resolved-form ->
-      shared-IR lowering boundary, where ordinary call arguments still require
-      `ValueExpr`.
-    - today this forces users to write explicit staging binds such as
-      `row2 = rolls[2]; each row2 println` for programs that should be
-      mechanically normalizable.
-  - Scope:
-    - extend ordinary `Call` lowering in `crates/goby-core/src/ir_lower.rs`
-      so each callee/argument position accepts either:
-      - an already-pure `ValueExpr`, or
-      - a non-value expression that is hoisted into a fresh `let` binding
-        before the call (ANF normalization).
-    - preserve left-to-right evaluation order exactly.
-    - keep effect calls and ordinary calls aligned so there is one consistent
-      ANF rule for nested call arguments.
-    - do not treat this as a parser feature or add source-shape-specific
-      special cases in `goby-wasm`.
-  - Representative acceptance examples:
-    - `each (rolls[2]) println`
-    - `f (g x)`
-    - `print (if cond "a" else "b")`
-  - Non-goals for this slice:
-    - closure/capture support expansion,
-    - multi-argument callable ABI redesign,
-    - new fused runtime/backend recognizers.
-  - Done when:
-    - the representative `read -> split -> map(graphemes) -> list.get -> each(println)`
-      program runs both in explicit ANF form and inline-argument form with the
-      same output,
-    - shared-IR lowering tests lock the inserted `let` shape for ordinary call
-      arguments,
-    - `cargo check`, `cargo test`, and focused Wasm execution regressions pass.
-
 ### 4.1 Completed Work (Summary)
 
 - Effect call dispatch in `main` body (`bare` / `qualified` / `pipeline`) is implemented.
