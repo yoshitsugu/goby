@@ -1206,6 +1206,57 @@ main =
 }
 
 #[test]
+fn c4_s4_split_empty_input_and_empty_delimiter_yields_empty_output() {
+    let source = r#"
+import goby/string ( split )
+import goby/list ( each )
+
+main : Unit -> Unit can Print, Read
+main =
+  text = read()
+  parts = split text ""
+  each parts println
+"#;
+    let module = parse_module(source).expect("parse should succeed");
+    assert_eq!(
+        runtime_io_execution_kind(&module).expect("classification should succeed"),
+        RuntimeIoExecutionKind::GeneralLowered,
+        "split empty input with empty delimiter must classify as GeneralLowered"
+    );
+    let output = execute_runtime_module_with_stdin(&module, Some(String::new()))
+        .expect("execution should succeed")
+        .expect("output should be Some");
+    assert_eq!(output, "", "split '' '' should yield [] and print nothing");
+}
+
+#[test]
+fn c4_s4_split_multi_grapheme_unicode_delimiter_executes_correctly() {
+    let source = r#"
+import goby/string ( split )
+import goby/list ( each )
+
+main : Unit -> Unit can Print, Read
+main =
+  text = read()
+  parts = split text "👨‍👩‍👧‍👦"
+  each parts println
+"#;
+    let module = parse_module(source).expect("parse should succeed");
+    assert_eq!(
+        runtime_io_execution_kind(&module).expect("classification should succeed"),
+        RuntimeIoExecutionKind::GeneralLowered,
+        "multi-grapheme Unicode delimiter split must classify as GeneralLowered"
+    );
+    let output = execute_runtime_module_with_stdin(&module, Some("a👨‍👩‍👧‍👦b👨‍👩‍👧‍👦👨‍👩‍👧‍👦c".to_string()))
+        .expect("execution should succeed")
+        .expect("output should be Some");
+    assert_eq!(
+        output, "a\nb\n\nc\n",
+        "split must treat the emoji family delimiter as one Unicode grapheme and preserve empty parts"
+    );
+}
+
+#[test]
 fn execute_module_with_stdin_rejects_not_runtime_io_program() {
     // NotRuntimeIo programs (complex static evaluation via variable bindings etc.)
     // are also not valid interpreter-bridge inputs.

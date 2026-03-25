@@ -131,7 +131,7 @@ These semantics remain locked while finishing the work:
   - exit criteria:
     - `split` no longer calls runtime `string.split(...)` for any delimiter case.
 
-- [~] C4-S4. Remove stdlib fallback dependency and harden behavior tests (partial, 2026-03-25)
+- [x] C4-S4. Remove stdlib fallback dependency and harden behavior tests (complete, 2026-03-25)
   - completed (commit a9f85fa3):
     - `split text ""` Wasm trap fixed: `lower_comp_inner` redirects `split text ""` to
       `StringGraphemesList` (same as `graphemes text`) in both GlobalRef and Var call paths.
@@ -143,14 +143,14 @@ These semantics remain locked while finishing the work:
       that call stdlib functions).
     - tests added: empty-delimiter ASCII (`split "abc" ""`), empty-delimiter emoji ZWJ,
       single-char delimiter comma, leading/trailing empty segments.
-  - remaining:
-    - `examples/import.gb` コンパイルパステスト,
-    - `split "" ""` → `[]` エッジケーステスト,
-    - multi-grapheme delimiter Unicode EGC テスト.
+  - completed in this slice:
+    - `examples/import.gb` compile-path parity test (classified as `NotRuntimeIo`, compiles to valid Wasm),
+    - `split "" ""` → `[]` edge-case execution test,
+    - multi-grapheme delimiter Unicode EGC execution test.
   - exit criteria:
     - tests prove stdlib `split` behavior matches the locked semantics.
 
-- [ ] C4-S5. Mark C4 done and prepare C5 handoff
+- [x] C4-S5. Mark C4 done and prepare C5 handoff
   - update active docs/state:
     - C4 complete,
     - runtime `string.split` branch is now legacy-only pending deletion.

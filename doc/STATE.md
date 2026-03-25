@@ -38,11 +38,11 @@ Last updated: 2026-03-25
 
 ## Track Priority
 
-**Next active work: stdlib track C4-S4 partially complete, remaining items pending.**
-C4-S4 core fix is done (commit a9f85fa3). Remaining: `examples/import.gb` parity test,
-`split "" ""` edge case, multi-grapheme delimiter Unicode EGC test.
+**Next active work: stdlib track C5 runtime builtin retirement.**
+C4 is now complete: compile/runtime parity coverage includes `examples/import.gb` compile-path
+coverage, `split "" "" -> []`, and a Unicode multi-grapheme delimiter regression.
 
-See `doc/PLAN_STANDARD_LIBRARY.md` for the remaining C4 milestones.
+See `doc/PLAN_STANDARD_LIBRARY.md` for the remaining stdlib milestones.
 
 ## Immediate Next Steps
 
@@ -64,13 +64,18 @@ See `doc/PLAN_STANDARD_LIBRARY.md` §5.
 Focused Wasm execution coverage now locks a representative multi-delimiter case with
 leading/consecutive/trailing empty segments preserved.
 
-**Track stdlib (C4-S4) — partially complete (2026-03-25):**
+**Track stdlib (C4-S4) — complete (2026-03-25):**
 Fixed `split text ""` Wasm trap via `StringGraphemesList` redirect (commit a9f85fa3).
 `StringSplit` intrinsic retained for non-empty delimiter (stdlib `split_with_*` functions use
 record field access unsupported by emit). Refactored stdlib `split`/`split_multi_parts`/
 `split_with_multi_delimiter` to use `let` bindings (required by `ir_lower.rs` constraints).
-Added tests: empty-delimiter ASCII/emoji, single-char delimiter, leading/trailing empty segments.
-Remaining: `examples/import.gb` parity test, `split "" ""` edge case, multi-grapheme Unicode test.
+Added tests: empty-delimiter ASCII/emoji, single-char delimiter, leading/trailing empty segments,
+`split "" "" -> []`, Unicode multi-grapheme delimiter execution, and `examples/import.gb`
+compile-path parity.
+
+**Track stdlib (C4-S5) — complete (2026-03-25):**
+Active docs/state now mark C4 complete and narrow the next stdlib work to C5 runtime builtin
+retirement. The remaining direct runtime `string.split` branch is legacy-only pending deletion.
 
 **Track WB-3B (future, deferred):**
 WasmFX typed continuations — currently on hold.

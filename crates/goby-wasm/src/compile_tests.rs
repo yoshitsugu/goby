@@ -781,6 +781,19 @@ main =
 }
 
 #[test]
+fn compile_module_general_lowers_import_example() {
+    let source = read_example("import.gb");
+    let module = parse_module(&source).expect("import.gb should parse");
+    assert_eq!(
+        runtime_io_execution_kind(&module).expect("classification should succeed"),
+        crate::RuntimeIoExecutionKind::NotRuntimeIo,
+        "import.gb is a compile-path parity target, not a runtime-stdin program"
+    );
+    let wasm = compile_module(&module).expect("import.gb should compile to Wasm");
+    assert_valid_wasm_module(&wasm);
+}
+
+#[test]
 fn compile_module_compiles_transformed_split_callback_as_general_lowered() {
     // Previously classified as DynamicWasiIo (pre WB-3-M3).
     // Now classified as GeneralLowered after Lambda lowering support was added (WB-3-M3).
