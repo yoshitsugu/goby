@@ -337,10 +337,10 @@ Priority rule:
 - Wasm backend phases WB-1 through WB-3 are complete (2026-03-24).
   All `CompExpr` and `ValueExpr` variants are handled in the `GeneralLowered` path
   within their supported subsets. See `doc/STATE.md` for current status.
-- current active focus is stdlib track C4-S2 from `doc/PLAN_STANDARD_LIBRARY.md`:
-  consolidate the shared iterator state contract so `stdlib/goby/iterator.gb`
-  owns the canonical `GraphemeState` shape and `stdlib/goby/string.gb` stops
-  carrying duplicated local declarations.
+- stdlib `goby/string.split` ownership convergence is complete:
+  source-level split semantics now live in stdlib declarations, and the
+  fallback/runtime-output path no longer depends on a source-level legacy
+  `string.split` branch.
 - WB-3B is explicitly on hold:
   - in-repo preparation work is complete enough for now; see `doc/PLAN_IR.md`.
   - restart only when both of the following are true:
@@ -353,6 +353,46 @@ Priority rule:
   choose the option that improves or preserves the long-term IR architecture.
 - if future work reopens an architectural lowering gap, extend `doc/PLAN_IR.md`
   before adding new boundary-specific workarounds.
+
+Immediate backend follow-up to queue next:
+
+- General call-argument ANF normalization for non-value arguments.
+  - Motivation:
+    - the surface syntax already accepts nested subexpressions such as
+      `each (rolls[2]) println`.
+    - `Expr::ListIndex` is already parsed and resolves canonically to
+      `list.get rolls 2`; the remaining limitation is at the resolved-form ->
+      shared-IR lowering boundary, where ordinary call arguments still require
+      `ValueExpr`.
+    - today this forces users to write explicit staging binds such as
+      `row2 = rolls[2]; each row2 println` for programs that should be
+      mechanically normalizable.
+  - Scope:
+    - extend ordinary `Call` lowering in `crates/goby-core/src/ir_lower.rs`
+      so each callee/argument position accepts either:
+      - an already-pure `ValueExpr`, or
+      - a non-value expression that is hoisted into a fresh `let` binding
+        before the call (ANF normalization).
+    - preserve left-to-right evaluation order exactly.
+    - keep effect calls and ordinary calls aligned so there is one consistent
+      ANF rule for nested call arguments.
+    - do not treat this as a parser feature or add source-shape-specific
+      special cases in `goby-wasm`.
+  - Representative acceptance examples:
+    - `each (rolls[2]) println`
+    - `f (g x)`
+    - `print (if cond "a" else "b")`
+  - Non-goals for this slice:
+    - closure/capture support expansion,
+    - multi-argument callable ABI redesign,
+    - new fused runtime/backend recognizers.
+  - Done when:
+    - the representative `read -> split -> map(graphemes) -> list.get -> each(println)`
+      program runs both in explicit ANF form and inline-argument form with the
+      same output,
+    - shared-IR lowering tests lock the inserted `let` shape for ordinary call
+      arguments,
+    - `cargo check`, `cargo test`, and focused Wasm execution regressions pass.
 
 ### 4.1 Completed Work (Summary)
 
@@ -655,15 +695,12 @@ Milestones:
   - after grapheme iteration primitives land, continue moving
     `goby/string.split` onto the stdlib path for empty-delimiter and
     single-grapheme-delimiter cases without backend-only direct helpers.
-  - keep this aligned with `doc/PLAN_STANDARD_LIBRARY.md`.
   - progress:
     - `stdlib/goby/string.gb` already implements `split_with_empty_delimiter`
       and `split_with_single_delimiter` as stdlib-only paths using
       `__goby_string_each_grapheme` and `__goby_list_push_string`.
     - multi-grapheme delimiter handling and runtime builtin retirement are now
       complete through the stdlib-owned path.
-    - `doc/PLAN_STANDARD_LIBRARY.md` is now the closure record for that
-      completed retirement track rather than an active milestone queue.
     - the backend intrinsic `StringSplit` and fused `SplitEachPrint`/
       `SplitGetPrint` instructions remain for the byte-level split path used
       by the general Wasm lowering backend; these are independent of the

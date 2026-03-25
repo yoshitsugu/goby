@@ -42,8 +42,6 @@ Last updated: 2026-03-25
 C4 plus S1/S2/S3 are complete: source-level `split` ownership is fully stdlib-driven, and the
 fallback/runtime-output path no longer carries a source-level legacy `string.split` branch.
 
-See `doc/PLAN_STANDARD_LIBRARY.md` for the closed ownership record.
-
 ## Immediate Next Steps
 
 **Track stdlib (C4-S1) — complete (2026-03-24):**
@@ -56,7 +54,6 @@ Stabilize the shared iterator state contract by keeping `GraphemeState` in
 `stdlib/goby/iterator.gb` as the canonical declaration and removing duplicated local copies
 from `stdlib/goby/string.gb`.
 Exit criterion: no duplicated `Iterator` / `GraphemeState` declarations remain across stdlib modules.
-See `doc/PLAN_STANDARD_LIBRARY.md` §5.
 
 **Track stdlib (C4-S3) — complete (2026-03-25):**
 `stdlib/goby/string.gb` now handles multi-grapheme delimiters through the stdlib-owned path, and
@@ -118,7 +115,6 @@ Restart only when the external prerequisites in `doc/PLAN_IR.md` Phase WB-3B are
 ## Key Entry Points
 
 - `doc/PLAN_IR.md` — Wasm backend lowering design and phase plan
-- `doc/PLAN_STANDARD_LIBRARY.md` — closed stdlib split-retirement record
 - `crates/goby-wasm/src/gen_lower/lower.rs` — `lower_comp` / `lower_value`
 - `crates/goby-wasm/src/gen_lower/emit.rs` — Wasm instruction emission
 - `crates/goby-wasm/src/gen_lower/backend_ir.rs` — backend IR instruction set

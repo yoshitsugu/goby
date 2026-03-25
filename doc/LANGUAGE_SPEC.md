@@ -7,8 +7,6 @@ This file is the current language-spec source of truth for user-visible Goby
 syntax/semantics.
 
 `doc/PLAN.md` tracks top-level implementation plans, migrations, and future work.
-Some focused areas may also have companion plan documents such as
-`doc/PLAN_STANDARD_LIBRARY.md`.
 
 ## 1. Source and Module Basics
 
