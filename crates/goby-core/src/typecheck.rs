@@ -1036,6 +1036,39 @@ main =
     }
 
     #[test]
+    fn rejects_non_string_println_call_with_implicit_prelude_print_effect() {
+        let source = "main : Unit -> Unit can Print\nmain = println 1\n";
+        let module = parse_module(source).expect("should parse");
+        let err = typecheck_module(&module)
+            .expect_err("implicit prelude println should keep its String parameter type");
+        assert!(
+            err.message
+                .contains("expects argument of type `String` but got `Int`"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn rejects_unknown_bare_each_when_only_map_is_imported() {
+        let source = r#"
+import goby/list ( map )
+
+main : Unit -> Unit can Print
+main =
+  xs = map [1, 2, 3] (|n| -> n + 1)
+  each xs println
+"#;
+        let module = parse_module(source).expect("should parse");
+        let err = typecheck_module(&module)
+            .expect_err("bare each should require import or qualification");
+        assert!(
+            err.message
+                .contains("unknown function or constructor `each`"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
     fn accepts_can_clause_with_implicit_prelude_read_effect() {
         // `can Read` is accepted via implicit `goby/prelude` embed defaults.
         let source = "main : Unit -> Unit can Read\nmain = ()\n";

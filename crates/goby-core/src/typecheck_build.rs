@@ -181,30 +181,16 @@ fn inject_imported_effect_symbols(
         }
         for member in &imported.decl.members {
             let qualified_key = format!("{}.{}", imported.decl.name, member.name);
-            let (ty, source) = if imported.decl.name == "Print"
-                && matches!(member.name.as_str(), "print" | "println")
+            let ty = match parse_type_expr(&member.type_annotation)
+                .map(|expr| ty_from_type_expr(&expr))
             {
-                (
-                    Ty::Fun {
-                        params: vec![Ty::Unknown],
-                        result: Box::new(Ty::Unit),
-                    },
-                    format!("implicit prelude `{}` convenience", member.name),
-                )
-            } else {
-                (
-                    match parse_type_expr(&member.type_annotation)
-                        .map(|expr| ty_from_type_expr(&expr))
-                    {
-                        Some(fun_ty @ Ty::Fun { .. }) => fun_ty,
-                        _ => Ty::Unknown,
-                    },
-                    format!(
-                        "effect `{}` member from import `{}`",
-                        imported.decl.name, imported.source_module
-                    ),
-                )
+                Some(fun_ty @ Ty::Fun { .. }) => fun_ty,
+                _ => Ty::Unknown,
             };
+            let source = format!(
+                "effect `{}` member from import `{}`",
+                imported.decl.name, imported.source_module
+            );
             insert_global_symbol(globals, qualified_key, ty.clone(), source.clone());
             insert_global_symbol(globals, member.name.clone(), ty, source);
         }

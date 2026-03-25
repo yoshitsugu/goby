@@ -228,15 +228,15 @@ fn ensure_known_call_targets_in_expr(
 ) -> Result<(), TypecheckError> {
     match expr {
         Expr::Call { callee, arg, .. } => {
-            if let Expr::Var { name, .. } = callee.as_ref()
-                && matches!(name.as_str(), "print" | "println")
-                && env.lookup(name) == Ty::Unknown
-            {
-                return Err(TypecheckError {
-                    declaration: Some(decl_name.to_string()),
-                    span: None, // expr span not yet available
-                    message: format!("unknown function or constructor `{}`", name),
-                });
+            if let Expr::Var { name, .. } = callee.as_ref() {
+                let callee_ty = env.lookup(name);
+                if callee_ty == Ty::Unknown {
+                    return Err(TypecheckError {
+                        declaration: Some(decl_name.to_string()),
+                        span: None, // expr span not yet available
+                        message: format!("unknown function or constructor `{}`", name),
+                    });
+                }
             }
             ensure_known_call_targets_in_expr(callee, env, decl_name)?;
             ensure_known_call_targets_in_expr(arg, env, decl_name)
@@ -248,7 +248,7 @@ fn ensure_known_call_targets_in_expr(
             Ok(())
         }
         Expr::Pipeline { value, callee } => {
-            if matches!(callee.as_str(), "print" | "println") && env.lookup(callee) == Ty::Unknown {
+            if env.lookup(callee) == Ty::Unknown {
                 return Err(TypecheckError {
                     declaration: Some(decl_name.to_string()),
                     span: None, // expr span not yet available
