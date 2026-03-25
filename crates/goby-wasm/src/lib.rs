@@ -557,6 +557,90 @@ main =
     }
 
     #[test]
+    fn wb1_single_expression_int_interp_executes_via_general_lowered() {
+        use goby_core::parse_module;
+        let module = parse_module(
+            r#"
+main : Unit -> Unit can Print, Read
+main =
+  _ = read()
+  println "${41 + 1}"
+"#,
+        )
+        .expect("parse should work");
+
+        assert_eq!(
+            runtime_io_execution_kind(&module).expect("classification should succeed"),
+            RuntimeIoExecutionKind::GeneralLowered,
+            "single-expression int interpolation must classify as GeneralLowered"
+        );
+
+        let output = execute_runtime_module_with_stdin(&module, Some(String::new()))
+            .expect("single-expression int interpolation must execute");
+        assert_eq!(
+            output.as_deref(),
+            Some("42\n"),
+            "single-expression int interpolation should coerce the value to String"
+        );
+    }
+
+    #[test]
+    fn wb1_single_expression_tuple_interp_executes_via_general_lowered() {
+        use goby_core::parse_module;
+        let module = parse_module(
+            r#"
+main : Unit -> Unit can Print, Read
+main =
+  _ = read()
+  println "${(1, "two")}"
+"#,
+        )
+        .expect("parse should work");
+
+        assert_eq!(
+            runtime_io_execution_kind(&module).expect("classification should succeed"),
+            RuntimeIoExecutionKind::GeneralLowered,
+            "single-expression tuple interpolation must classify as GeneralLowered"
+        );
+
+        let output = execute_runtime_module_with_stdin(&module, Some(String::new()))
+            .expect("single-expression tuple interpolation must execute");
+        assert_eq!(
+            output.as_deref(),
+            Some("(1, two)\n"),
+            "single-expression tuple interpolation should recursively stringify tuple members"
+        );
+    }
+
+    #[test]
+    fn wb1_single_expression_list_string_interp_executes_via_general_lowered() {
+        use goby_core::parse_module;
+        let module = parse_module(
+            r#"
+main : Unit -> Unit can Print, Read
+main =
+  _ = read()
+  println "${["a", "b"]}"
+"#,
+        )
+        .expect("parse should work");
+
+        assert_eq!(
+            runtime_io_execution_kind(&module).expect("classification should succeed"),
+            RuntimeIoExecutionKind::GeneralLowered,
+            "single-expression list-string interpolation must classify as GeneralLowered"
+        );
+
+        let output = execute_runtime_module_with_stdin(&module, Some(String::new()))
+            .expect("single-expression list-string interpolation must execute");
+        assert_eq!(
+            output.as_deref(),
+            Some("[\"a\", \"b\"]\n"),
+            "single-expression list-string interpolation should preserve quoted string elements"
+        );
+    }
+
+    #[test]
     fn wb2a_helper_decl_call_executes_via_general_lowered() {
         // WB-2A: A top-level helper function called from main is compiled via DeclCall.
         use goby_core::parse_module;
@@ -992,6 +1076,38 @@ main =
             output.as_deref(),
             Some("2\n3\n4\n"),
             "map xs (|i| -> \"${{i + 1}}\") |> each println should print incremented strings"
+        );
+    }
+
+    #[test]
+    fn map_with_inline_bool_interp_lambda_then_each_println_executes_via_general_lowered() {
+        use goby_core::parse_module;
+        let module = parse_module(
+            r#"
+import goby/list ( map, each )
+
+main : Unit -> Unit can Print, Read
+main =
+  _ = read()
+  xs = [True, False]
+  mapped = map xs (|flag| -> "${flag}")
+  each mapped println
+"#,
+        )
+        .expect("parse should work");
+
+        assert_eq!(
+            runtime_io_execution_kind(&module).expect("classification should succeed"),
+            RuntimeIoExecutionKind::GeneralLowered,
+            "inline bool interpolation lambda map + each println must stay on GeneralLowered path"
+        );
+
+        let output = execute_runtime_module_with_stdin(&module, Some(String::new()))
+            .expect("inline bool interpolation lambda map + each println must execute");
+        assert_eq!(
+            output.as_deref(),
+            Some("True\nFalse\n"),
+            "map xs (|flag| -> \"${{flag}}\") |> each println should print boolean strings"
         );
     }
 
