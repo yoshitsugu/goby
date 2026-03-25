@@ -186,6 +186,32 @@ Based on `examples/*.gb`:
     - parser rejects malformed forms (`[..xs]`, multiple spread segments, non-trailing spread).
     - `case` list-pattern syntax remains separate from expression syntax.
     - AST stores prefix elements and optional spread tail distinctly.
+- **List index precedence realignment (`f xs[0]` / `function list[1][0]`)** (planned).
+  - Goal:
+    - raise postfix list-index access `expr[expr]` above spaced function application so
+      `f xs[0]` parses as `f (xs[0])`.
+    - ensure chained forms follow the same rule, so `function list[1][0]` parses as
+      `function ((list[1])[0])`, not `(function list[1])[0]`.
+  - Current mismatch to resolve:
+    - the parser currently runs `parse_list_index_suffix` before `parse_call_expr`,
+      which makes `f xs[0]` parse as `(f xs)[0]`.
+    - parser regression tests currently lock in that old behavior and must be inverted
+      in the implementation slice.
+  - Planned implementation steps:
+    - refactor expression parsing so postfix forms (`[]`, and any future postfix accessors)
+      are parsed from an already-formed atom/call-argument term instead of scanning the whole
+      source string before spaced application.
+    - keep explicit postfix chaining intact (`xs[0][1]`, `f()[0]`, `[1, 2, 3][0]`) while
+      making spaced call arguments parse each argument term before outer application folding.
+    - preserve existing operator precedence outside this boundary (`+`, `*`, pipeline, etc.)
+      and re-check ambiguous combinations like `f xs[0] + 1` and `print ([1, 2][0])`.
+  - Validation/update checklist:
+    - update parser tests to assert the new AST shape for `f xs[0]` and add a regression for
+      `function list[1][0]`.
+    - run parse/typecheck/runtime regression coverage for list indexing, especially nested-list
+      cases that currently depend on postfix chaining.
+    - update `doc/LANGUAGE_SPEC.md`, examples, and syntax-highlighting rules in the same
+      implementation change after the parser behavior is switched.
 
 ### 2.2 Types and Checking
 
