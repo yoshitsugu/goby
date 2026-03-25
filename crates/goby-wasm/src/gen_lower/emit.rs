@@ -1416,7 +1416,8 @@ fn emit_helper_call(
         BackendIntrinsic::StringSplit => emit_string_split_helper(function, helper_state),
         BackendIntrinsic::ListGet => emit_list_get_helper(function, helper_state),
         BackendIntrinsic::StringLength => emit_string_length_helper(function, helper_state),
-        BackendIntrinsic::StringEachGraphemeCount
+        BackendIntrinsic::ValueToString
+        | BackendIntrinsic::StringEachGraphemeCount
         | BackendIntrinsic::StringEachGraphemeState
         | BackendIntrinsic::StringConcat
         | BackendIntrinsic::StringGraphemesList => {

@@ -964,6 +964,38 @@ main =
     }
 
     #[test]
+    fn map_with_inline_string_lambda_then_each_println_executes_via_general_lowered() {
+        use goby_core::parse_module;
+        let module = parse_module(
+            r#"
+import goby/list ( map, each )
+
+main : Unit -> Unit can Print, Read
+main =
+  _ = read()
+  xs = [1, 2, 3]
+  mapped = map xs (|i| -> "${i + 1}")
+  each mapped println
+"#,
+        )
+        .expect("parse should work");
+
+        assert_eq!(
+            runtime_io_execution_kind(&module).expect("classification should succeed"),
+            RuntimeIoExecutionKind::GeneralLowered,
+            "inline string lambda map + each println must stay on GeneralLowered path"
+        );
+
+        let output = execute_runtime_module_with_stdin(&module, Some(String::new()))
+            .expect("inline string lambda map + each println must execute");
+        assert_eq!(
+            output.as_deref(),
+            Some("2\n3\n4\n"),
+            "map xs (|i| -> \"${{i + 1}}\") |> each println should print incremented strings"
+        );
+    }
+
+    #[test]
     fn stdlib_int_to_string_executes_via_compiled_wasm() {
         let module = parse_module(
             r#"

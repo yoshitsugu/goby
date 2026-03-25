@@ -20,6 +20,7 @@ pub(crate) enum IntrinsicExecutionBoundary {
 #[allow(clippy::enum_variant_names)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum HostIntrinsicImport {
+    ValueToString,
     StringEachGraphemeCount,
     StringEachGraphemeState,
     StringConcat,
@@ -36,6 +37,7 @@ impl HostIntrinsicImport {
 
     pub(crate) const fn name(self) -> &'static str {
         match self {
+            Self::ValueToString => "__goby_value_to_string",
             Self::StringEachGraphemeCount => "__goby_string_each_grapheme_count",
             Self::StringEachGraphemeState => "__goby_string_each_grapheme_state",
             Self::StringConcat => "__goby_string_concat",
@@ -46,6 +48,7 @@ impl HostIntrinsicImport {
     pub(crate) const fn params(self) -> &'static [wasm_encoder::ValType] {
         use wasm_encoder::ValType;
         match self {
+            Self::ValueToString => &[ValType::I64],
             Self::StringEachGraphemeCount => &[ValType::I64],
             Self::StringEachGraphemeState => &[ValType::I64, ValType::I64],
             Self::StringConcat => &[ValType::I64, ValType::I64],
@@ -59,7 +62,8 @@ impl HostIntrinsicImport {
     }
 }
 
-pub(crate) const HOST_INTRINSIC_IMPORTS: [HostIntrinsicImport; 4] = [
+pub(crate) const HOST_INTRINSIC_IMPORTS: [HostIntrinsicImport; 5] = [
+    HostIntrinsicImport::ValueToString,
     HostIntrinsicImport::StringEachGraphemeCount,
     HostIntrinsicImport::StringEachGraphemeState,
     HostIntrinsicImport::StringConcat,
@@ -70,6 +74,7 @@ pub(crate) const fn host_import_for_intrinsic(
     intrinsic: BackendIntrinsic,
 ) -> Option<HostIntrinsicImport> {
     match intrinsic {
+        BackendIntrinsic::ValueToString => Some(HostIntrinsicImport::ValueToString),
         BackendIntrinsic::StringEachGraphemeCount => {
             Some(HostIntrinsicImport::StringEachGraphemeCount)
         }

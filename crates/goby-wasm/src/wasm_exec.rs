@@ -48,8 +48,8 @@ const WASM_PAGE_BYTES: u32 = 65_536;
 const HOST_BUMP_SIZE: u32 = 4_096;
 
 use crate::gen_lower::value::{
-    TAG_STRING, decode_payload_int, decode_payload_ptr, decode_tag, encode_int, encode_list_ptr,
-    encode_string_ptr,
+    TAG_BOOL, TAG_INT, TAG_LIST, TAG_RECORD, TAG_STRING, TAG_TUPLE, TAG_UNIT, decode_payload_int,
+    decode_payload_ptr, decode_tag, encode_int, encode_list_ptr, encode_string_ptr,
 };
 use crate::grapheme_semantics::collect_extended_grapheme_spans;
 use crate::host_runtime::HostIntrinsicImport;
@@ -90,6 +90,17 @@ pub(crate) fn run_wasm_bytes_with_stdin(
     // Initial value: start of the host-reserved region at the top of the page.
     // Ceiling: WASM_PAGE_BYTES (exclusive).
     let bump = Arc::new(AtomicU32::new(WASM_PAGE_BYTES - HOST_BUMP_SIZE));
+
+    let bump_for_value_to_string = Arc::clone(&bump);
+    linker
+        .func_wrap(
+            module_name,
+            HostIntrinsicImport::ValueToString.name(),
+            move |caller: Caller<'_, WasiP1Ctx>, tagged_value: i64| -> i64 {
+                value_to_string_host(caller, tagged_value, &bump_for_value_to_string)
+            },
+        )
+        .map_err(|e| format!("linker register value_to_string: {e}"))?;
 
     linker
         .func_wrap(
@@ -152,6 +163,18 @@ pub(crate) fn run_wasm_bytes_with_stdin(
 
     let bytes = stdout_capture.contents();
     String::from_utf8(bytes.to_vec()).map_err(|e| format!("stdout utf8: {e}"))
+}
+
+fn value_to_string_host(
+    mut caller: Caller<'_, WasiP1Ctx>,
+    tagged_value: i64,
+    bump: &AtomicU32,
+) -> i64 {
+    let Ok(rendered) = format_tagged_value(&mut caller, tagged_value) else {
+        return encode_string_in_host_bump(&mut caller, "<unsupported>", bump)
+            .unwrap_or(tagged_value);
+    };
+    encode_string_in_host_bump(&mut caller, &rendered, bump).unwrap_or(tagged_value)
 }
 
 /// Host implementation: count grapheme clusters in a tagged string.
@@ -338,6 +361,101 @@ fn string_concat_host(
         return tagged_a;
     }
     encode_string_ptr(alloc_ptr)
+}
+
+fn format_tagged_value(caller: &mut Caller<'_, WasiP1Ctx>, tagged: i64) -> Result<String, ()> {
+    match decode_tag(tagged) {
+        TAG_STRING => read_wasm_string(caller, tagged),
+        TAG_INT => Ok(decode_payload_int(tagged).to_string()),
+        TAG_BOOL => Ok(if (tagged & 1) == 1 { "True" } else { "False" }.to_string()),
+        TAG_UNIT => Ok("Unit".to_string()),
+        TAG_LIST => format_tagged_sequence(caller, tagged, "[", "]", true),
+        TAG_TUPLE => format_tagged_sequence(caller, tagged, "(", ")", false),
+        TAG_RECORD => Ok("Record".to_string()),
+        _ => Err(()),
+    }
+}
+
+fn format_tagged_sequence(
+    caller: &mut Caller<'_, WasiP1Ctx>,
+    tagged: i64,
+    prefix: &str,
+    suffix: &str,
+    quote_strings: bool,
+) -> Result<String, ()> {
+    let ptr = decode_payload_ptr(tagged) as usize;
+    let len = read_i32_le(caller, ptr)? as usize;
+    let mut parts = Vec::with_capacity(len);
+    let all_strings = (0..len)
+        .map(|idx| read_i64_le(caller, ptr + 4 + idx * 8))
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .collect::<Vec<_>>();
+
+    for elem in &all_strings {
+        if quote_strings && decode_tag(*elem) == TAG_STRING {
+            let text = read_wasm_string(caller, *elem)?;
+            parts.push(format!("\"{}\"", text));
+        } else {
+            parts.push(format_tagged_value(caller, *elem)?);
+        }
+    }
+
+    Ok(format!("{prefix}{}{suffix}", parts.join(", ")))
+}
+
+fn encode_string_in_host_bump(
+    caller: &mut Caller<'_, WasiP1Ctx>,
+    text: &str,
+    bump: &AtomicU32,
+) -> Option<i64> {
+    let bytes = text.as_bytes();
+    let total_len = 4u32 + bytes.len() as u32;
+    let alloc_ptr = alloc_from_host_bump(bump, total_len)?;
+    let mem = match caller.get_export("memory") {
+        Some(wasmtime::Extern::Memory(m)) => m,
+        _ => return None,
+    };
+    let len_bytes = (bytes.len() as i32).to_le_bytes();
+    mem.write(&mut *caller, alloc_ptr as usize, &len_bytes)
+        .ok()?;
+    mem.write(&mut *caller, alloc_ptr as usize + 4, bytes)
+        .ok()?;
+    Some(encode_string_ptr(alloc_ptr))
+}
+
+fn alloc_from_host_bump(bump: &AtomicU32, bytes: u32) -> Option<u32> {
+    let mut cur = bump.load(Ordering::Relaxed);
+    loop {
+        let next = cur.saturating_add(bytes);
+        if next > WASM_PAGE_BYTES {
+            return None;
+        }
+        match bump.compare_exchange_weak(cur, next, Ordering::Relaxed, Ordering::Relaxed) {
+            Ok(_) => return Some(cur),
+            Err(actual) => cur = actual,
+        }
+    }
+}
+
+fn read_i32_le(caller: &mut Caller<'_, WasiP1Ctx>, ptr: usize) -> Result<i32, ()> {
+    let mem = match caller.get_export("memory") {
+        Some(wasmtime::Extern::Memory(m)) => m,
+        _ => return Err(()),
+    };
+    let mut buf = [0u8; 4];
+    mem.read(&mut *caller, ptr, &mut buf).map_err(|_| ())?;
+    Ok(i32::from_le_bytes(buf))
+}
+
+fn read_i64_le(caller: &mut Caller<'_, WasiP1Ctx>, ptr: usize) -> Result<i64, ()> {
+    let mem = match caller.get_export("memory") {
+        Some(wasmtime::Extern::Memory(m)) => m,
+        _ => return Err(()),
+    };
+    let mut buf = [0u8; 8];
+    mem.read(&mut *caller, ptr, &mut buf).map_err(|_| ())?;
+    Ok(i64::from_le_bytes(buf))
 }
 
 /// Host implementation: collect all grapheme clusters from a tagged string into a tagged list.

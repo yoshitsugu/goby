@@ -683,6 +683,9 @@ pub(crate) fn lower_value(v: &ValueExpr) -> Result<Vec<WasmBackendInstr>, LowerE
                     }
                     IrInterpPart::Expr(e) => {
                         instrs.extend(lower_value(e)?);
+                        instrs.push(WasmBackendInstr::Intrinsic {
+                            intrinsic: BackendIntrinsic::ValueToString,
+                        });
                     }
                 }
             }
