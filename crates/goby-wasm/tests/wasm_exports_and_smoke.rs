@@ -1065,6 +1065,146 @@ main =
     assert_eq!(output, "l\ni\nn\ne\n2\n");
 }
 
+// C4-S4: stdlib split behavior hardening tests.
+// Each test asserts GeneralLowered classification first, then verifies runtime output.
+// Output format: `each parts println` prints one element per line with trailing `\n`.
+
+// ── Diagnostic: verify split_with_single_delimiter works directly ────────────
+
+#[test]
+fn c4_s4_split_single_delimiter_comma_executes() {
+    // split "a,b,c" "," → ["a","b","c"] via single-grapheme delimiter path
+    let source = r#"
+import goby/string ( split )
+import goby/list ( each )
+
+main : Unit -> Unit can Print, Read
+main =
+  text = read()
+  parts = split text ","
+  each parts println
+"#;
+    let module = parse_module(source).expect("parse should succeed");
+    assert_eq!(
+        runtime_io_execution_kind(&module).expect("classification should succeed"),
+        RuntimeIoExecutionKind::GeneralLowered,
+        "split with single-char delimiter must classify as GeneralLowered"
+    );
+    let output = execute_runtime_module_with_stdin(&module, Some("a,b,c".to_string()))
+        .expect("single-delimiter execution should succeed")
+        .expect("output should be Some");
+    assert_eq!(output, "a\nb\nc\n");
+}
+
+#[test]
+fn c4_s4_split_single_delimiter_leading_trailing_preserves_empty_segments() {
+    // leading/trailing delimiters should preserve empty segments
+    // split ",a,b," "," → ["","a","b",""]  → println each → "\na\nb\n\n"
+    let source = r#"
+import goby/string ( split )
+import goby/list ( each )
+
+main : Unit -> Unit can Print, Read
+main =
+  text = read()
+  parts = split text ","
+  each parts println
+"#;
+    let module = parse_module(source).expect("parse should succeed");
+    assert_eq!(
+        runtime_io_execution_kind(&module).expect("classification should succeed"),
+        RuntimeIoExecutionKind::GeneralLowered,
+        "split with leading/trailing empty segments must classify as GeneralLowered"
+    );
+    let output = execute_runtime_module_with_stdin(&module, Some(",a,b,".to_string()))
+        .expect("leading/trailing empty segments execution should succeed")
+        .expect("output should be Some");
+    assert_eq!(
+        output, "\na\nb\n\n",
+        "split ',a,b,' ',' must preserve leading/trailing empty segments"
+    );
+}
+
+#[test]
+fn c4_s4_graphemes_directly_executes() {
+    // graphemes text works as expected (baseline for split "" equivalence)
+    let source = r#"
+import goby/string ( graphemes )
+import goby/list ( each )
+
+main : Unit -> Unit can Print, Read
+main =
+  text = read()
+  parts = graphemes text
+  each parts println
+"#;
+    let module = parse_module(source).expect("parse should succeed");
+    let output = execute_runtime_module_with_stdin(&module, Some("abc".to_string()))
+        .expect("graphemes execution should succeed")
+        .expect("output should be Some");
+    assert_eq!(output, "a\nb\nc\n");
+}
+
+// ── Step 1: empty-delimiter ──────────────────────────────────────────────────
+
+#[test]
+fn c4_s4_split_empty_delimiter_ascii_executes_correctly() {
+    // split "abc" "" → grapheme-wise split → ["a","b","c"]
+    let source = r#"
+import goby/string ( split )
+import goby/list ( each )
+
+main : Unit -> Unit can Print, Read
+main =
+  text = read()
+  parts = split text ""
+  each parts println
+"#;
+    let module = parse_module(source).expect("parse should succeed");
+    assert_eq!(
+        runtime_io_execution_kind(&module).expect("classification should succeed"),
+        RuntimeIoExecutionKind::GeneralLowered,
+        "c4_s4 empty-delimiter program must be GeneralLowered"
+    );
+    let output = execute_runtime_module_with_stdin(&module, Some("abc".to_string()))
+        .expect("execution should succeed")
+        .expect("output should be Some");
+    assert_eq!(
+        output, "a\nb\nc\n",
+        "split 'abc' '' should yield each grapheme on its own line"
+    );
+}
+
+#[test]
+fn c4_s4_split_empty_delimiter_emoji_executes_correctly() {
+    // split with empty delimiter on input containing a multi-codepoint emoji ZWJ sequence
+    // must yield grapheme clusters, not individual bytes/codepoints
+    let source = r#"
+import goby/string ( split )
+import goby/list ( each )
+
+main : Unit -> Unit can Print, Read
+main =
+  text = read()
+  parts = split text ""
+  each parts println
+"#;
+    let module = parse_module(source).expect("parse should succeed");
+    assert_eq!(
+        runtime_io_execution_kind(&module).expect("classification should succeed"),
+        RuntimeIoExecutionKind::GeneralLowered,
+        "c4_s4 emoji empty-delimiter program must be GeneralLowered"
+    );
+    // "a👨‍👩‍👧‍👦b" contains one emoji family ZWJ sequence (a single grapheme cluster)
+    let output = execute_runtime_module_with_stdin(&module, Some("a👨‍👩‍👧‍👦b".to_string()))
+        .expect("execution should succeed")
+        .expect("output should be Some");
+    assert_eq!(
+        output, "a\n👨‍👩‍👧‍👦\nb\n",
+        "split 'a👨‍👩‍👧‍👦b' '' should yield 3 grapheme clusters (not byte-split)"
+    );
+}
+
 #[test]
 fn execute_module_with_stdin_rejects_not_runtime_io_program() {
     // NotRuntimeIo programs (complex static evaluation via variable bindings etc.)

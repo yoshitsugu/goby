@@ -29,10 +29,11 @@ pub(crate) mod emit;
 pub(crate) mod lower;
 pub(crate) mod value;
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use goby_core::Module;
 use goby_core::ir::CompExpr;
+use goby_core::stdlib::StdlibResolver;
 
 use crate::CodegenError;
 use crate::effect_handler_legality::analyze_module_handler_legality;
@@ -43,6 +44,23 @@ use crate::gen_lower::lower::LambdaAuxDecl;
 use crate::layout::MemoryLayout;
 use crate::wasm_exec_plan::decl_exec_plan;
 use crate::wasm_exec_plan::main_exec_plan;
+
+/// Names from stdlib that have dedicated special lowering in `lower_comp_inner` or
+/// `backend_intrinsic_for` and must NOT be routed as generic `DeclCall` targets.
+/// - `each`, `map`, `graphemes`: handled by special `lower_comp_inner` branches.
+/// - `split`: handled by `StringSplit` intrinsic (non-empty sep) or redirected to
+///   `StringGraphemesList` (empty string literal sep) before reaching the intrinsic path.
+const SPECIALLY_LOWERED_STDLIB_NAMES: &[&str] = &["each", "map", "graphemes", "split"];
+
+fn resolve_stdlib_root() -> std::path::PathBuf {
+    std::env::var_os("GOBY_STDLIB_ROOT")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| {
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../..")
+                .join("stdlib")
+        })
+}
 
 fn has_runtime_read_effect(comp: &CompExpr) -> bool {
     match comp {
@@ -448,6 +466,95 @@ fn lower_aux_decl(
     }))
 }
 
+/// Recursively collect all `DeclCall` and `PushFuncHandle` target names from a flat
+/// backend-IR instruction list, traversing nested instruction vecs.
+fn collect_decl_call_names(instrs: &[backend_ir::WasmBackendInstr], out: &mut HashSet<String>) {
+    for instr in instrs {
+        match instr {
+            backend_ir::WasmBackendInstr::DeclCall { decl_name }
+            | backend_ir::WasmBackendInstr::PushFuncHandle { decl_name } => {
+                out.insert(decl_name.clone());
+            }
+            backend_ir::WasmBackendInstr::If {
+                then_instrs,
+                else_instrs,
+            } => {
+                collect_decl_call_names(then_instrs, out);
+                collect_decl_call_names(else_instrs, out);
+            }
+            backend_ir::WasmBackendInstr::CaseMatch { arms, .. } => {
+                for arm in arms {
+                    collect_decl_call_names(&arm.body_instrs, out);
+                }
+            }
+            backend_ir::WasmBackendInstr::ListLit { element_instrs }
+            | backend_ir::WasmBackendInstr::TupleLit { element_instrs } => {
+                for elem in element_instrs {
+                    collect_decl_call_names(elem, out);
+                }
+            }
+            backend_ir::WasmBackendInstr::RecordLit { field_instrs, .. } => {
+                for field in field_instrs {
+                    collect_decl_call_names(field, out);
+                }
+            }
+            backend_ir::WasmBackendInstr::ListEach {
+                list_instrs,
+                func_instrs,
+            }
+            | backend_ir::WasmBackendInstr::ListMap {
+                list_instrs,
+                func_instrs,
+            } => {
+                collect_decl_call_names(list_instrs, out);
+                collect_decl_call_names(func_instrs, out);
+            }
+            backend_ir::WasmBackendInstr::ListEachEffect { list_instrs, .. } => {
+                collect_decl_call_names(list_instrs, out);
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Build a map from exported name → (module_path, `Declaration`) for all stdlib modules
+/// imported by `module`. This covers transitive imports of stdlib modules that
+/// transitively import other stdlib modules.
+fn build_stdlib_export_map(
+    module: &Module,
+    resolver: &StdlibResolver,
+) -> HashMap<String, (String, goby_core::ast::Declaration)> {
+    let mut export_map: HashMap<String, (String, goby_core::ast::Declaration)> = HashMap::new();
+    let mut visited: HashSet<String> = HashSet::new();
+    let mut pending: Vec<String> = module
+        .imports
+        .iter()
+        .map(|imp| imp.module_path.clone())
+        .collect();
+    while let Some(path) = pending.pop() {
+        if visited.contains(&path) {
+            continue;
+        }
+        visited.insert(path.clone());
+        let Ok(resolved) = resolver.resolve_module(&path) else {
+            continue;
+        };
+        // Enqueue transitive imports from this stdlib module.
+        for imp in &resolved.module.imports {
+            if !visited.contains(&imp.module_path) {
+                pending.push(imp.module_path.clone());
+            }
+        }
+        // Register all declarations as potential exports.
+        for decl in resolved.module.declarations {
+            export_map
+                .entry(decl.name.clone())
+                .or_insert_with(|| (path.clone(), decl));
+        }
+    }
+    export_map
+}
+
 /// Attempt to lower a module's `main` body through the general lowering path.
 ///
 /// Returns `Ok(Some((main_instrs, aux_decls)))` when the general path succeeds,
@@ -496,15 +603,32 @@ fn lower_module_to_instrs(
         return Ok(None);
     }
 
+    // Resolve stdlib exports once; reused for both known_decls population and the
+    // transitive-closure loop below.
+    let stdlib_export_map = if !module.imports.is_empty() {
+        let stdlib_resolver = StdlibResolver::new(resolve_stdlib_root());
+        build_stdlib_export_map(module, &stdlib_resolver)
+    } else {
+        HashMap::new()
+    };
+
     // Collect names of all non-main top-level declarations so callee `Var(name)` can be
     // recognised as a DeclCall during lowering.
-    let known_decls: std::collections::HashSet<String> = module
+    let mut known_decls: std::collections::HashSet<String> = module
         .declarations
         .iter()
         .filter(|d| d.name != "main")
         .map(|d| d.name.clone())
         .collect();
-
+    // Add stdlib-exported names to known_decls so user-written helpers that call stdlib
+    // functions via bare names are lowered correctly.
+    // Exclude names that have dedicated special lowering in lower_comp_inner or backend_intrinsic_for
+    // (each, map, graphemes, split) — those must NOT be routed through the generic DeclCall path.
+    for name in stdlib_export_map.keys() {
+        if !SPECIALLY_LOWERED_STDLIB_NAMES.contains(&name.as_str()) {
+            known_decls.insert(name.clone());
+        }
+    }
     // Lambda auxiliary declarations collected during main and aux-decl lowering.
     // They are appended AFTER user aux_decls so existing table slot indices remain stable.
     let mut lambda_decls: Vec<LambdaAuxDecl> = Vec::new();
@@ -548,6 +672,78 @@ fn lower_module_to_instrs(
             None => {
                 // If any aux decl cannot be lowered, fall back to the interpreter path.
                 return Ok(None);
+            }
+        }
+    }
+
+    // Resolve stdlib functions referenced by DeclCall/PushFuncHandle in main and user aux_decls.
+    // Imported stdlib functions are not in module.declarations, so we must load them here.
+    // We iterate to fixpoint: each new stdlib decl may itself call other stdlib decls.
+    if !stdlib_export_map.is_empty() {
+        let export_map = &stdlib_export_map;
+
+        // Track names whose AuxDecl has been added (not just "known as a potential callee").
+        // User-declared non-main functions are already represented in aux_decls.
+        let mut aux_added: HashSet<String> = module
+            .declarations
+            .iter()
+            .filter(|d| d.name != "main")
+            .map(|d| d.name.clone())
+            .collect();
+
+        loop {
+            // Collect all DeclCall/PushFuncHandle names across main + current aux_decls.
+            let mut referenced: HashSet<String> = HashSet::new();
+            collect_decl_call_names(&main_instrs, &mut referenced);
+            for aux in &aux_decls {
+                collect_decl_call_names(&aux.instrs, &mut referenced);
+            }
+            // Find stdlib-exported names referenced but not yet added to aux_decls.
+            let unresolved: Vec<String> = referenced
+                .into_iter()
+                .filter(|name| !aux_added.contains(name) && export_map.contains_key(name))
+                .collect();
+            if unresolved.is_empty() {
+                break;
+            }
+
+            let mut added_any = false;
+            for name in &unresolved {
+                let Some((_, goby_decl)) = export_map.get(name) else {
+                    aux_added.insert(name.clone());
+                    continue;
+                };
+                let aux_ir_decl = match goby_core::ir_lower::lower_declaration(goby_decl) {
+                    Ok(d) => d,
+                    Err(_) => return Ok(None),
+                };
+                let param_names: Vec<String> =
+                    aux_ir_decl.params.iter().map(|(n, _)| n.clone()).collect();
+                // Stdlib functions use safe (one-shot tail-resumptive) handlers; always
+                // allow handler lowering for stdlib aux decls regardless of whether the
+                // user's main body has handlers.
+                match lower_aux_decl(
+                    &aux_ir_decl.name,
+                    param_names,
+                    &aux_ir_decl.body,
+                    &known_decls,
+                    true, // stdlib handlers are one-shot tail-resumptive by construction
+                    &mut lambda_decls,
+                )? {
+                    Some(aux) => {
+                        aux_decls.push(aux);
+                        aux_added.insert(name.clone());
+                        added_any = true;
+                    }
+                    None => {
+                        // This stdlib decl uses unsupported IR forms; fall back.
+                        return Ok(None);
+                    }
+                }
+            }
+            if !added_any {
+                // All unresolved names were non-stdlib or couldn't be lowered.
+                break;
             }
         }
     }

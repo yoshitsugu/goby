@@ -91,7 +91,8 @@ split_multi_parts xs sep_parts current parts =
   case xs
     [] -> __goby_list_push_string parts current
     _ ->
-      if prefix_matches xs sep_parts
+      pm = prefix_matches xs sep_parts
+      if pm
         next_parts = __goby_list_push_string parts current
         rest = drop_matched_prefix xs sep_parts
         split_multi_parts rest sep_parts "" next_parts
@@ -104,7 +105,9 @@ split_multi_parts xs sep_parts current parts =
 
 split_with_multi_delimiter : String -> String -> List String
 split_with_multi_delimiter value sep =
-  split_multi_parts (graphemes value) (graphemes sep) "" []
+  gs_value = graphemes value
+  gs_sep = graphemes sep
+  split_multi_parts gs_value gs_sep "" []
 
 split : String -> String -> List String
 split value sep =
@@ -114,7 +117,8 @@ split value sep =
     if sep == ""
       split_with_empty_delimiter value
     else
-      if grapheme_count sep == 1
+      gc = grapheme_count sep
+      if gc == 1
         split_with_single_delimiter value sep
       else
         split_with_multi_delimiter value sep

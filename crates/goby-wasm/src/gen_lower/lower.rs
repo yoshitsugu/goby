@@ -273,6 +273,24 @@ fn lower_comp_inner(
                 }
                 instrs.push(WasmBackendInstr::EffectOp { op });
                 Ok(instrs)
+            } else if let goby_core::ir::ValueExpr::GlobalRef { module, name } = callee.as_ref()
+                && module == "string"
+                && name == "split"
+                && args.len() == 2
+                && matches!(&args[1], goby_core::ir::ValueExpr::StrLit(s) if s.is_empty())
+            {
+                // split text "" — empty delimiter means split by grapheme clusters.
+                // Redirect to StringGraphemesList host intrinsic (same as `graphemes text`).
+                let mut instrs = lower_comp_inner(
+                    &CompExpr::Value(args[0].clone()),
+                    aliases,
+                    known_decls,
+                    lambda_decls,
+                )?;
+                instrs.push(WasmBackendInstr::Intrinsic {
+                    intrinsic: BackendIntrinsic::StringGraphemesList,
+                });
+                Ok(instrs)
             } else if let Some(intrinsic) =
                 resolve_intrinsic_call_target(callee, aliases, args.len())
             {
@@ -405,6 +423,23 @@ fn lower_comp_inner(
                 {
                     // Var resolves to string.graphemes (bare name or alias via `import goby/string (graphemes)`).
                     // Lower as StringGraphemesList host intrinsic (WB-3-M4).
+                    let mut instrs = lower_comp_inner(
+                        &CompExpr::Value(args[0].clone()),
+                        aliases,
+                        known_decls,
+                        lambda_decls,
+                    )?;
+                    instrs.push(WasmBackendInstr::Intrinsic {
+                        intrinsic: BackendIntrinsic::StringGraphemesList,
+                    });
+                    Ok(instrs)
+                } else if (name == "split"
+                    || resolve_global_ref(name, aliases) == Some(("string", "split")))
+                    && args.len() == 2
+                    && matches!(&args[1], goby_core::ir::ValueExpr::StrLit(s) if s.is_empty())
+                {
+                    // Var resolves to string.split with empty string literal delimiter:
+                    // redirect to StringGraphemesList (same as `graphemes text`).
                     let mut instrs = lower_comp_inner(
                         &CompExpr::Value(args[0].clone()),
                         aliases,
@@ -910,9 +945,9 @@ fn resolve_intrinsic_call_target(
 
 fn backend_intrinsic_for(module: &str, name: &str) -> Option<BackendIntrinsic> {
     match (module, name) {
-        ("string", "split") => Some(BackendIntrinsic::StringSplit),
         ("list", "get") => Some(BackendIntrinsic::ListGet),
         ("string", "length") => Some(BackendIntrinsic::StringLength),
+        ("string", "split") => Some(BackendIntrinsic::StringSplit),
         _ => None,
     }
 }
@@ -1289,7 +1324,7 @@ mod tests {
                     intrinsic: BackendIntrinsic::StringSplit
                 }
             )),
-            "split+list.get should include intrinsic-based lowering: {instrs:?}"
+            "split+list.get should include general-path lowering: {instrs:?}"
         );
     }
 
