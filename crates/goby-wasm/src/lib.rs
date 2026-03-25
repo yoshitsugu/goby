@@ -170,6 +170,7 @@ pub(crate) struct RuntimeOutputResolver<'m> {
     /// execute_ast_stmt_sequence invocation. Top entry is consumed by
     /// begin_handler_continuation_bridge during handler dispatch.
     pub(crate) pending_caller_cont_stack: Vec<Option<Cont>>,
+    pub(crate) completed_stmt_seq_locals: Option<RuntimeLocals>,
     pub(crate) runtime_error: Option<String>,
     pub(crate) next_with_id: u64,
     pub(crate) execution_mode: lower::EffectExecutionMode,

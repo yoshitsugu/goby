@@ -29,6 +29,7 @@ impl<'m> RuntimeOutputResolver<'m> {
             resume_tokens: Vec::new(),
             optimized_resume_tokens: Vec::new(),
             pending_caller_cont_stack: Vec::new(),
+            completed_stmt_seq_locals: None,
             runtime_error: None,
             next_with_id: 1,
             execution_mode,

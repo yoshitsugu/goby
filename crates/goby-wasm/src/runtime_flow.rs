@@ -91,6 +91,7 @@ pub(crate) enum FinishKind {
 #[allow(clippy::large_enum_variant)]
 pub(crate) enum Cont {
     StmtSeq {
+        pending: Option<Box<Cont>>,
         store: Option<StoreOp>,
         remaining: Vec<Stmt>,
         locals: RuntimeLocals,

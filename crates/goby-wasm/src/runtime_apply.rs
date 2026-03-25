@@ -8,6 +8,35 @@ use crate::runtime_value::{RuntimeLocals, RuntimeValue, runtime_value_eq};
 use crate::{MAX_EVAL_DEPTH, RuntimeOutputResolver};
 
 impl<'m> RuntimeOutputResolver<'m> {
+    pub(crate) fn eval_runtime_decl_body_out(
+        &mut self,
+        decl: &crate::runtime_flow::RuntimeDeclInfo,
+        fn_locals: RuntimeLocals,
+        fn_callables: HashMap<String, IntCallable>,
+        evaluators: &RuntimeEvaluators<'_, '_>,
+        depth: usize,
+    ) -> Out<RuntimeValue> {
+        if depth >= MAX_EVAL_DEPTH {
+            return Out::Err(RuntimeError::Unsupported);
+        }
+        if let Some(owner_module) = &decl.owner_module {
+            self.current_module_stack.push(owner_module.clone());
+        }
+        self.push_runtime_decl_context(decl);
+        let result = self.eval_expr(
+            &goby_core::Expr::Block(decl.stmts.clone()),
+            &fn_locals,
+            &fn_callables,
+            evaluators,
+            depth + 1,
+        );
+        self.pop_runtime_decl_context();
+        if decl.owner_module.is_some() {
+            self.current_module_stack.pop();
+        }
+        result
+    }
+
     pub(crate) fn find_handler_method_for_effect(
         &self,
         effect_name: &str,
@@ -62,26 +91,9 @@ impl<'m> RuntimeOutputResolver<'m> {
         }
         let fn_locals = RuntimeLocals::default();
         let fn_callables = HashMap::new();
-        if let Some(owner_module) = &decl.owner_module {
-            self.current_module_stack.push(owner_module.clone());
-        }
-        self.push_runtime_decl_context(&decl);
-        let result = self.eval_stmts(
-            &decl.stmts,
-            fn_locals,
-            fn_callables,
-            evaluators,
-            depth + 1,
-            crate::runtime_flow::FinishKind::Block,
-        );
-        self.pop_runtime_decl_context();
-        if decl.owner_module.is_some() {
-            self.current_module_stack.pop();
-        }
-        match result {
-            Out::Done((value, _)) => Some(value.unwrap_or(RuntimeValue::Unit)),
-            Out::Suspend(_) | Out::Escape(_) | Out::Err(_) => None,
-        }
+        let out =
+            self.eval_runtime_decl_body_out(&decl, fn_locals, fn_callables, evaluators, depth + 1);
+        self.complete_value_out(out, evaluators)
     }
 
     pub(crate) fn eval_decl_as_value_with_args_ast(
@@ -109,22 +121,10 @@ impl<'m> RuntimeOutputResolver<'m> {
             }
         }
         let fn_callables = HashMap::new();
-        if let Some(owner_module) = &decl.owner_module {
-            self.current_module_stack.push(owner_module.clone());
-        }
-        self.push_runtime_decl_context(&decl);
-        let result = self.eval_expr_to_option(
-            &goby_core::Expr::Block(stmts),
-            &fn_locals,
-            &fn_callables,
-            evaluators,
-            depth + 1,
-        );
-        self.pop_runtime_decl_context();
-        if decl.owner_module.is_some() {
-            self.current_module_stack.pop();
-        }
-        result
+        let decl = crate::runtime_flow::RuntimeDeclInfo { stmts, ..decl };
+        let out =
+            self.eval_runtime_decl_body_out(&decl, fn_locals, fn_callables, evaluators, depth + 1);
+        self.complete_value_out(out, evaluators)
     }
 
     pub(crate) fn eval_decl_as_value_with_args_out(
@@ -154,28 +154,16 @@ impl<'m> RuntimeOutputResolver<'m> {
             }
         }
         let fn_callables = HashMap::new();
-        if let Some(owner_module) = &decl.owner_module {
-            self.current_module_stack.push(owner_module.clone());
-        }
-        self.push_runtime_decl_context(&decl);
-        let result = self.eval_stmts(
-            &stmts,
+        self.eval_runtime_decl_body_out(
+            &crate::runtime_flow::RuntimeDeclInfo {
+                stmts,
+                ..decl
+            },
             fn_locals,
             fn_callables,
             evaluators,
             depth + 1,
-            crate::runtime_flow::FinishKind::Block,
-        );
-        self.pop_runtime_decl_context();
-        if decl.owner_module.is_some() {
-            self.current_module_stack.pop();
-        }
-        match result {
-            Out::Done((value, _locals)) => Out::Done(value.unwrap_or(RuntimeValue::Unit)),
-            Out::Suspend(cont) => Out::Suspend(cont),
-            Out::Escape(escape) => Out::Escape(escape),
-            Out::Err(e) => Out::Err(e),
-        }
+        )
     }
 
     pub(crate) fn apply_named_value_call_ast(

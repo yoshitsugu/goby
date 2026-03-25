@@ -421,6 +421,57 @@ main =
 }
 
 #[test]
+fn resolves_runtime_output_for_local_decl_with_following_statement_after_with() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    let source = r#"
+effect Iterator a b
+  yield : a -> b -> (Bool, b)
+
+after_with : String -> Int can Print
+after_with value =
+  with
+    yield _ _ ->
+      resume (True, ())
+  in
+    __goby_string_each_grapheme value
+  42
+
+main : Unit -> Unit
+main =
+  print (after_with "abc")
+"#;
+    let module = parse_module(source).expect("parse should work");
+    let output = resolve_module_runtime_output(&module).expect("runtime output should resolve");
+    assert_eq!(output, "42");
+}
+
+#[test]
+fn resolves_runtime_output_for_local_decl_with_with_body_assignment_to_outer_local() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    let source = r#"
+effect Iterator a b
+  yield : a -> b -> (Bool, b)
+
+count_graphemes : String -> Int can Print
+count_graphemes value =
+  mut n = 0
+  with
+    yield _ _ ->
+      resume (True, ())
+  in
+    n := __goby_string_each_grapheme value
+  n
+
+main : Unit -> Unit
+main =
+  print (count_graphemes "a👨‍👩‍👧‍👦b")
+"#;
+    let module = parse_module(source).expect("parse should work");
+    let output = resolve_module_runtime_output(&module).expect("runtime output should resolve");
+    assert_eq!(output, "3");
+}
+
+#[test]
 fn resolves_runtime_output_for_read_line_then_read_remaining() {
     let _guard = ENV_MUTEX.lock().unwrap();
     let source = r#"

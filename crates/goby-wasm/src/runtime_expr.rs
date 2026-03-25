@@ -1,11 +1,10 @@
 use std::collections::HashMap;
 
-use goby_core::{Expr, Stmt, ast::InterpolatedPart};
+use goby_core::{Expr, ast::InterpolatedPart};
 
 use crate::runtime_eval::IntCallable;
 use crate::runtime_flow::{
     ApplyStep, Cont, DirectCallHead, Escape, FinishKind, Out, RuntimeError, RuntimeEvaluators,
-    StoreOp,
 };
 use crate::runtime_support::flatten_direct_call;
 use crate::runtime_value::{RuntimeLocals, RuntimeValue};
@@ -78,28 +77,7 @@ impl<'m> RuntimeOutputResolver<'m> {
             }
         }
         let fn_callables = HashMap::new();
-        if let Some(owner_module) = &decl.owner_module {
-            self.current_module_stack.push(owner_module.clone());
-        }
-        self.push_runtime_decl_context(&decl);
-        let result = self.eval_stmts(
-            &decl.stmts,
-            fn_locals,
-            fn_callables,
-            evaluators,
-            depth + 1,
-            FinishKind::Block,
-        );
-        self.pop_runtime_decl_context();
-        if decl.owner_module.is_some() {
-            self.current_module_stack.pop();
-        }
-        match result {
-            Out::Done((value, _locals)) => Out::Done(value.unwrap_or(RuntimeValue::Unit)),
-            Out::Suspend(cont) => Out::Suspend(cont),
-            Out::Escape(escape) => Out::Escape(escape),
-            Out::Err(e) => Out::Err(e),
-        }
+        self.eval_runtime_decl_body_out(&decl, fn_locals, fn_callables, evaluators, depth + 1)
     }
 
     pub(crate) fn operation_has_conflicting_effect(
@@ -468,112 +446,21 @@ impl<'m> RuntimeOutputResolver<'m> {
                 }
                 Out::Done(RuntimeValue::Tuple(values))
             }
-            Expr::Block(stmts) => {
-                let mut block_locals = locals.clone();
-                let block_callables = callables.clone();
-                let mut last_value: Option<RuntimeValue> = None;
-                let stmts_slice = stmts.as_slice();
-                let mut i = 0;
-                while i < stmts_slice.len() {
-                    let stmt = &stmts_slice[i];
-                    match stmt {
-                        Stmt::Binding { name, value, .. }
-                        | Stmt::MutBinding { name, value, .. } => {
-                            match self.eval_expr(
-                                value,
-                                &block_locals,
-                                &block_callables,
-                                evaluators,
-                                depth + 1,
-                            ) {
-                                Out::Done(v) => {
-                                    block_locals.store(name, v);
-                                    last_value = None;
-                                    i += 1;
-                                }
-                                Out::Suspend(_) => {
-                                    let remaining = stmts_slice[i + 1..].to_vec();
-                                    return Out::Suspend(Cont::StmtSeq {
-                                        store: Some(StoreOp::Bind { name: name.clone() }),
-                                        remaining,
-                                        locals: block_locals,
-                                        callables: block_callables,
-                                        depth,
-                                        handler_stack: self.active_inline_handler_stack.clone(),
-                                        finish: FinishKind::Block,
-                                    });
-                                }
-                                Out::Escape(escape) => return Out::Escape(escape),
-                                Out::Err(e) => return Out::Err(e),
-                            }
-                        }
-                        Stmt::Assign { name, value, .. } => {
-                            if block_locals.get(name).is_none() {
-                                return Out::Err(RuntimeError::Unsupported);
-                            }
-                            match self.eval_expr(
-                                value,
-                                &block_locals,
-                                &block_callables,
-                                evaluators,
-                                depth + 1,
-                            ) {
-                                Out::Done(v) => {
-                                    block_locals.store(name, v);
-                                    last_value = None;
-                                    i += 1;
-                                }
-                                Out::Suspend(_) => {
-                                    let remaining = stmts_slice[i + 1..].to_vec();
-                                    return Out::Suspend(Cont::StmtSeq {
-                                        store: Some(StoreOp::Assign { name: name.clone() }),
-                                        remaining,
-                                        locals: block_locals,
-                                        callables: block_callables,
-                                        depth,
-                                        handler_stack: self.active_inline_handler_stack.clone(),
-                                        finish: FinishKind::Block,
-                                    });
-                                }
-                                Out::Escape(escape) => return Out::Escape(escape),
-                                Out::Err(e) => return Out::Err(e),
-                            }
-                        }
-                        Stmt::Expr(inner_expr, _) => {
-                            match self.eval_expr(
-                                inner_expr,
-                                &block_locals,
-                                &block_callables,
-                                evaluators,
-                                depth + 1,
-                            ) {
-                                Out::Done(v) => {
-                                    last_value = Some(v);
-                                    i += 1;
-                                }
-                                Out::Suspend(_) => {
-                                    let remaining = stmts_slice[i + 1..].to_vec();
-                                    return Out::Suspend(Cont::StmtSeq {
-                                        store: None,
-                                        remaining,
-                                        locals: block_locals,
-                                        callables: block_callables,
-                                        depth,
-                                        handler_stack: self.active_inline_handler_stack.clone(),
-                                        finish: FinishKind::Block,
-                                    });
-                                }
-                                Out::Escape(escape) => return Out::Escape(escape),
-                                Out::Err(e) => return Out::Err(e),
-                            }
-                        }
-                    }
+            Expr::Block(stmts) => match self.eval_stmts(
+                stmts,
+                locals.clone(),
+                callables.clone(),
+                evaluators,
+                depth + 1,
+                FinishKind::Block,
+            ) {
+                Out::Done((value, _updated_locals)) => {
+                    Out::Done(value.unwrap_or(RuntimeValue::Unit))
                 }
-                match last_value {
-                    Some(v) => Out::Done(v),
-                    None => Out::Done(RuntimeValue::Unit),
-                }
-            }
+                Out::Suspend(cont) => Out::Suspend(cont),
+                Out::Escape(escape) => Out::Escape(escape),
+                Out::Err(e) => Out::Err(e),
+            },
             Expr::Case { scrutinee, arms } => {
                 let scrutinee_val =
                     match self.eval_expr(scrutinee, locals, callables, evaluators, depth + 1) {

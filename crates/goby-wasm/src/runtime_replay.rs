@@ -53,6 +53,7 @@ impl<'m> RuntimeOutputResolver<'m> {
             let did_set_slot = !remaining.is_empty() && matches!(&stmts[i], Stmt::Expr(_, _));
             if did_set_slot && let Some(slot) = self.pending_caller_cont_stack.last_mut() {
                 *slot = Some(Cont::StmtSeq {
+                    pending: None,
                     store: None,
                     remaining: remaining.to_vec(),
                     locals: RuntimeLocals::default(),
@@ -101,6 +102,7 @@ impl<'m> RuntimeOutputResolver<'m> {
             let did_set_slot = !remaining.is_empty() && matches!(&stmts[i], Stmt::Expr(_, _));
             if did_set_slot && let Some(slot) = self.pending_caller_cont_stack.last_mut() {
                 *slot = Some(Cont::StmtSeq {
+                    pending: None,
                     store: None,
                     remaining: remaining.clone(),
                     locals: locals.clone(),
@@ -164,8 +166,9 @@ impl<'m> RuntimeOutputResolver<'m> {
                             locals.store(name, v);
                         }
                         Out::Escape(escape) => return Out::Escape(escape),
-                        Out::Suspend(_cont) => {
+                        Out::Suspend(cont) => {
                             return Out::Suspend(Cont::StmtSeq {
+                                pending: Some(Box::new(cont)),
                                 store: Some(StoreOp::Bind { name: name.clone() }),
                                 remaining,
                                 locals,
@@ -189,8 +192,9 @@ impl<'m> RuntimeOutputResolver<'m> {
                             locals.store(name, v);
                         }
                         Out::Escape(escape) => return Out::Escape(escape),
-                        Out::Suspend(_cont) => {
+                        Out::Suspend(cont) => {
                             return Out::Suspend(Cont::StmtSeq {
+                                pending: Some(Box::new(cont)),
                                 store: Some(StoreOp::Assign { name: name.clone() }),
                                 remaining,
                                 locals,
@@ -219,8 +223,9 @@ impl<'m> RuntimeOutputResolver<'m> {
                                 continue;
                             }
                             Out::Escape(escape) => return Out::Escape(escape),
-                            Out::Suspend(_cont) => {
+                            Out::Suspend(cont) => {
                                 return Out::Suspend(Cont::StmtSeq {
+                                    pending: Some(Box::new(cont)),
                                     store: None,
                                     remaining,
                                     locals,
@@ -255,8 +260,9 @@ impl<'m> RuntimeOutputResolver<'m> {
                                 locals = fallback_locals;
                                 continue;
                             }
-                            Out::Suspend(_) => {
+                            Out::Suspend(cont) => {
                                 return Out::Suspend(Cont::StmtSeq {
+                                    pending: Some(Box::new(cont)),
                                     store: None,
                                     remaining,
                                     locals,
@@ -300,8 +306,9 @@ impl<'m> RuntimeOutputResolver<'m> {
                                         last_value = Some(RuntimeValue::Unit);
                                     }
                                 }
-                                Out::Suspend(_) => {
+                                Out::Suspend(cont) => {
                                     return Out::Suspend(Cont::StmtSeq {
+                                        pending: Some(Box::new(cont)),
                                         store: None,
                                         remaining,
                                         locals,
@@ -322,8 +329,9 @@ impl<'m> RuntimeOutputResolver<'m> {
                                 }
                             }
                         }
-                        Out::Suspend(_cont) => {
+                        Out::Suspend(cont) => {
                             return Out::Suspend(Cont::StmtSeq {
+                                pending: Some(Box::new(cont)),
                                 store: None,
                                 remaining,
                                 locals,
@@ -417,19 +425,31 @@ impl<'m> RuntimeOutputResolver<'m> {
                     depth + 1,
                     FinishKind::WithBody { with_id },
                 );
-                if let Some(updated_handler) = self.active_inline_handler_stack.pop() {
-                    locals.apply_selected_from(
-                        &updated_handler.captured_locals,
-                        &updated_handler.changed_outer_names,
-                    );
-                }
+                let updated_handler = self.active_inline_handler_stack.pop();
                 match result {
-                    Out::Done((value, _locals)) => Out::Done(value.unwrap_or(RuntimeValue::Unit)),
+                    Out::Done((value, updated_locals)) => {
+                        *locals = updated_locals;
+                        if let Some(updated_handler) = updated_handler {
+                            locals.apply_selected_from(
+                                &updated_handler.captured_locals,
+                                &updated_handler.changed_outer_names,
+                            );
+                        }
+                        Out::Done(value.unwrap_or(RuntimeValue::Unit))
+                    }
                     Out::Escape(escape) => match escape {
                         Escape::WithScope {
                             with_id: target_id,
                             value,
-                        } if target_id == with_id => Out::Done(value),
+                        } if target_id == with_id => {
+                            if let Some(updated_handler) = updated_handler {
+                                locals.apply_selected_from(
+                                    &updated_handler.captured_locals,
+                                    &updated_handler.changed_outer_names,
+                                );
+                            }
+                            Out::Done(value)
+                        }
                         other => Out::Escape(other),
                     },
                     Out::Suspend(cont) => Out::Suspend(cont),
@@ -448,6 +468,7 @@ impl<'m> RuntimeOutputResolver<'m> {
     ) -> Out<RuntimeValue> {
         match cont {
             Cont::StmtSeq {
+                pending,
                 store,
                 remaining,
                 mut locals,
@@ -457,6 +478,32 @@ impl<'m> RuntimeOutputResolver<'m> {
                 finish,
             } => {
                 self.active_inline_handler_stack = handler_stack;
+                let value = if let Some(pending) = pending {
+                    match self.apply_cont(*pending, value, evaluators) {
+                        Out::Done(value) => {
+                            if let Some(updated_locals) = self.completed_stmt_seq_locals.take() {
+                                locals = updated_locals;
+                            }
+                            value
+                        }
+                        Out::Suspend(next_pending) => {
+                            return Out::Suspend(Cont::StmtSeq {
+                                pending: Some(Box::new(next_pending)),
+                                store,
+                                remaining,
+                                locals,
+                                callables,
+                                depth,
+                                handler_stack: self.active_inline_handler_stack.clone(),
+                                finish,
+                            });
+                        }
+                        Out::Escape(escape) => return Out::Escape(escape),
+                        Out::Err(e) => return Out::Err(e),
+                    }
+                } else {
+                    value
+                };
                 if let Some(store_op) = store {
                     match store_op {
                         StoreOp::Bind { name } => locals.store(&name, value),
@@ -486,8 +533,9 @@ impl<'m> RuntimeOutputResolver<'m> {
                     depth,
                     finish.clone(),
                 ) {
-                    Out::Done((last_val, _final_locals)) => match finish {
+                    Out::Done((last_val, final_locals)) => match finish {
                         FinishKind::Block | FinishKind::Ingest | FinishKind::WithBody { .. } => {
+                            self.completed_stmt_seq_locals = Some(final_locals);
                             Out::Done(last_val.unwrap_or(RuntimeValue::Unit))
                         }
                         FinishKind::HandlerBody {

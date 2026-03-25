@@ -102,26 +102,9 @@ impl<'m> RuntimeOutputResolver<'m> {
             fn_locals.store(param, arg_val);
         }
 
-        if let Some(owner_module) = &decl.owner_module {
-            self.current_module_stack.push(owner_module.clone());
-        }
-        self.push_runtime_decl_context(&decl);
-        let result = self.eval_stmts(
-            &decl.stmts,
-            fn_locals,
-            fn_callables,
-            evaluators,
-            depth + 1,
-            FinishKind::Block,
-        );
-        self.pop_runtime_decl_context();
-        if decl.owner_module.is_some() {
-            self.current_module_stack.pop();
-        }
-        match result {
-            Out::Done((value, _)) => Some(value.unwrap_or(RuntimeValue::Unit)),
-            Out::Suspend(_) | Out::Escape(_) | Out::Err(_) => None,
-        }
+        let out =
+            self.eval_runtime_decl_body_out(&decl, fn_locals, fn_callables, evaluators, depth + 1);
+        self.complete_value_out(out, evaluators)
     }
 
     fn imported_head_matches_string_split(&self, head: &DirectCallHead) -> bool {
@@ -437,26 +420,9 @@ impl<'m> RuntimeOutputResolver<'m> {
             fn_locals.store(param, arg_val);
         }
 
-        if let Some(owner_module) = &decl.owner_module {
-            self.current_module_stack.push(owner_module.clone());
-        }
-        self.push_runtime_decl_context(&decl);
-        let result = self.eval_stmts(
-            &decl.stmts,
-            fn_locals,
-            fn_callables,
-            evaluators,
-            depth + 1,
-            FinishKind::Block,
-        );
-        self.pop_runtime_decl_context();
-        if decl.owner_module.is_some() {
-            self.current_module_stack.pop();
-        }
-        match result {
-            Out::Done((value, _)) => Some(value.unwrap_or(RuntimeValue::Unit)),
-            Out::Suspend(_) | Out::Escape(_) | Out::Err(_) => None,
-        }
+        let out =
+            self.eval_runtime_decl_body_out(&decl, fn_locals, fn_callables, evaluators, depth + 1);
+        self.complete_value_out(out, evaluators)
     }
 
     pub(super) fn execute_decl_as_side_effect(
