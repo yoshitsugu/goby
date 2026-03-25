@@ -2,7 +2,7 @@
 
 Status: active follow-up only
 Owner: Goby core/runtime track
-Last updated: 2026-03-25
+Last updated: 2026-03-25 (C4-S4 partial)
 
 ## 1. Scope
 
@@ -131,14 +131,22 @@ These semantics remain locked while finishing the work:
   - exit criteria:
     - `split` no longer calls runtime `string.split(...)` for any delimiter case.
 
-- [ ] C4-S4. Remove stdlib fallback dependency and harden behavior tests
-  - add stdlib-level split cases in `goby-wasm` runtime-output tests:
-    - empty delimiter,
-    - single-grapheme delimiter,
-    - multi-grapheme delimiter,
-    - consecutive / leading / trailing delimiter cases,
-    - Unicode grapheme cases including emoji-family clusters.
-  - add parity coverage for `examples/import.gb` behavior with the stdlib split path.
+- [~] C4-S4. Remove stdlib fallback dependency and harden behavior tests (partial, 2026-03-25)
+  - completed (commit a9f85fa3):
+    - `split text ""` Wasm trap fixed: `lower_comp_inner` redirects `split text ""` to
+      `StringGraphemesList` (same as `graphemes text`) in both GlobalRef and Var call paths.
+    - `StringSplit` intrinsic retained for non-empty delimiter (stdlib `split_with_*` functions
+      use record field access which `emit.rs` does not support — full stdlib routing deferred).
+    - `stdlib/goby/string.gb`: `split`/`split_multi_parts`/`split_with_multi_delimiter`
+      refactored to use `let` bindings before `if` conditions (required by `ir_lower.rs`).
+    - stdlib transitive closure mechanism added to `lower_module_to_instrs` (for user aux decls
+      that call stdlib functions).
+    - tests added: empty-delimiter ASCII (`split "abc" ""`), empty-delimiter emoji ZWJ,
+      single-char delimiter comma, leading/trailing empty segments.
+  - remaining:
+    - `examples/import.gb` コンパイルパステスト,
+    - `split "" ""` → `[]` エッジケーステスト,
+    - multi-grapheme delimiter Unicode EGC テスト.
   - exit criteria:
     - tests prove stdlib `split` behavior matches the locked semantics.
 

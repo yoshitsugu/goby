@@ -38,10 +38,9 @@ Last updated: 2026-03-25
 
 ## Track Priority
 
-**Next active work: stdlib track moves to C4-S4.**
-The representative WB-3-M7 composed runtime-`Read` path is fixed by regression coverage, and
-C4-S3 is now complete. The active work returns to behavior-hardening for the final stdlib-owned
-`split` implementation.
+**Next active work: stdlib track C4-S4 partially complete, remaining items pending.**
+C4-S4 core fix is done (commit a9f85fa3). Remaining: `examples/import.gb` parity test,
+`split "" ""` edge case, multi-grapheme delimiter Unicode EGC test.
 
 See `doc/PLAN_STANDARD_LIBRARY.md` for the remaining C4 milestones.
 
@@ -65,10 +64,13 @@ See `doc/PLAN_STANDARD_LIBRARY.md` §5.
 Focused Wasm execution coverage now locks a representative multi-delimiter case with
 leading/consecutive/trailing empty segments preserved.
 
-**Track stdlib (C4-S4) — next:**
-Harden behavior coverage for the final stdlib-owned `split` path.
-Exit criterion: runtime tests cover empty delimiter, single-grapheme delimiter, multi-grapheme
-delimiter, consecutive/leading/trailing empties, and Unicode grapheme cases.
+**Track stdlib (C4-S4) — partially complete (2026-03-25):**
+Fixed `split text ""` Wasm trap via `StringGraphemesList` redirect (commit a9f85fa3).
+`StringSplit` intrinsic retained for non-empty delimiter (stdlib `split_with_*` functions use
+record field access unsupported by emit). Refactored stdlib `split`/`split_multi_parts`/
+`split_with_multi_delimiter` to use `let` bindings (required by `ir_lower.rs` constraints).
+Added tests: empty-delimiter ASCII/emoji, single-char delimiter, leading/trailing empty segments.
+Remaining: `examples/import.gb` parity test, `split "" ""` edge case, multi-grapheme Unicode test.
 
 **Track WB-3B (future, deferred):**
 WasmFX typed continuations — currently on hold.
