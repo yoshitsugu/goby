@@ -151,6 +151,13 @@ up maintaining two parallel UX contracts.
    Fix the infrastructure once; do not special-case `map`, `print`, etc.
 6. **Milestones must be shippable.**
    Each phase should leave the repository in a coherent, releasable state.
+7. **Design-affecting uncertainty is paid down early.**
+   If a question changes AST shape, span ownership, or diagnostic architecture,
+   prefer resolving it in this track rather than postponing it behind local UX
+   tweaks.
+8. **Purely local presentation choices can be deferred.**
+   If a choice does not materially affect the long-term data model or ownership
+   split, it may be handled later once the structural path is locked.
 
 ---
 
@@ -253,6 +260,9 @@ Constraints:
 
 - no behavior change yet beyond helper introduction,
 - no import parser changes yet.
+- if pipeline callee span support is found to require AST-shape changes that
+  affect the long-term span model, decide that in ER1 rather than deferring it
+  behind later presentation work.
 
 Done when:
 
@@ -545,21 +555,32 @@ Mitigation:
 
 ---
 
-## 12. Open Questions
+## 12. Current Decisions
 
-1. For qualified unresolved names, should the first shipped behavior underline:
-   - the full `receiver.member`,
-   - or just the unresolved member?
-   Initial preference: full token.
-2. For unknown module diagnostics, what is the minimum actionable span:
-   - full import clause,
-   - module path only,
-   - or path segment?
-   Initial preference: module path only when practical.
-3. Should pipeline callee spans become first-class syntax metadata in this track
-   or the next one?
-   Initial preference: include if needed for covered unresolved-name cases,
-   otherwise defer after ER8.
+1. Qualified unresolved names should initially underline the full
+   `receiver.member` token.
+   Rationale:
+   - this keeps the first shipped rule simple and consistent,
+   - it avoids prematurely splitting receiver/member responsibility in the
+     diagnostic model,
+   - it is compatible with later refinement if member-only highlighting proves
+     clearly better.
+2. Unknown module diagnostics should initially target the module path, not the
+   full import clause.
+   Rationale:
+   - the module path is the smallest clearly actionable region in the common
+     case,
+   - this keeps import diagnostics precise without forcing path-segment-level
+     metadata in the first slice.
+3. Pipeline callee spans should be handled in this track if, during ER1, they
+   are found to affect AST shape or span ownership in a way that changes the
+   long-term design. If they turn out to be a purely local extension with no
+   architectural consequence, they can be deferred until after the core
+   unresolved-name path is stable.
+   Rationale:
+   - design-affecting uncertainty should be reduced early,
+   - purely local rendering/value improvements do not need to block the main
+     span-propagation path.
 
 ---
 
