@@ -20,6 +20,10 @@ Last updated: 2026-03-25
     runtime-`Read` composed path (`read -> split -> map(graphemes) -> list.get -> each(println)`)
     and required alias/import variants.
   - M8: quality gates pass (`cargo fmt`, `cargo check`, `cargo test`, `cargo clippy -- -D warnings`).
+- General call-argument ANF normalization complete (2026-03-25): ordinary shared-IR
+  `Call` lowering now hoists non-value callees/arguments into left-to-right `let`
+  bindings, so inline forms such as `each (rolls[2]) println` lower and execute
+  through the same path as explicit staging binds.
 - WB-3B prep slice in progress (2026-03-24): `gen_lower/emit.rs` now has an
   `EffectEmitStrategy` boundary and `wasmfx-experimental` feature flag so future WasmFX work can
   replace the emit path without redesigning IR/lowering; current strategies are parity-tested to

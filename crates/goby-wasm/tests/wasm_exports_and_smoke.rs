@@ -1032,7 +1032,7 @@ main =
 
 /// WB-3-M7: Full WB-1 through WB-3 stack integration test.
 /// `map lines graphemes` requires passing `graphemes` as a function value to `map`.
-/// ANF form: `row2 = rolls[2]` is required because list.get is a call, not a pure value.
+/// The list index in `each (rolls[2]) println` is now normalized through shared-IR ANF.
 #[test]
 fn wb3_m7_split_map_graphemes_executes_correctly() {
     let module = parse_module(
@@ -1045,8 +1045,7 @@ main =
   text = read ()
   lines = split text "\n"
   rolls = map lines graphemes
-  row2 = rolls[2]
-  each row2 println
+  each (rolls[2]) println
 "#,
     )
     .expect("parse should work");

@@ -1306,8 +1306,7 @@ main =
   text = read ()
   lines = split text "\n"
   rolls = map lines graphemes
-  row2 = rolls[2]
-  each row2 println
+  each (rolls[2]) println
 "#;
     let module = parse_module(source).expect("source should parse");
     assert_eq!(
@@ -1332,8 +1331,7 @@ main =
   raw_lines = split input "\n"
   forwarded_lines = raw_lines
   rows = map forwarded_lines graphemes
-  selected = rows[2]
-  chars = selected
+  chars = rows[2]
   each chars println
 "#;
     let module = parse_module(source).expect("source should parse");

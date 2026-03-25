@@ -249,15 +249,7 @@ fn lower_expr_as_comp_non_value(
                 return lower_effect_call(ctx, effect, op, &args_exprs);
             }
 
-            let callee = lower_value_required(ctx, callee_expr, "call callee")?;
-            let mut args = Vec::new();
-            for a in args_exprs {
-                args.push(lower_value_required(ctx, a, "call argument")?);
-            }
-            Ok(CompExpr::Call {
-                callee: Box::new(callee),
-                args,
-            })
+            lower_ordinary_call(ctx, callee_expr, &args_exprs)
         }
         ResolvedExpr::Lambda { param, body } => Ok(CompExpr::Value(ValueExpr::Lambda {
             param: param.clone(),
@@ -686,6 +678,69 @@ fn lower_effect_call(
                 op: op.to_string(),
                 args,
             })
+        }
+    }
+}
+
+fn lower_ordinary_call(
+    ctx: &mut LowerCtx,
+    callee_expr: &ResolvedExpr,
+    args_exprs: &[&ResolvedExpr],
+) -> Result<CompExpr, LowerError> {
+    let callee = lower_call_operand_to_value(ctx, callee_expr, "call_callee")?;
+    let mut args = Vec::with_capacity(args_exprs.len());
+    let mut pending = Vec::new();
+
+    let callee = match callee {
+        CallOperandLowering::Value(value) => value,
+        CallOperandLowering::Pending { name, value } => {
+            pending.push((name.clone(), value));
+            ValueExpr::Var(name)
+        }
+    };
+
+    for arg in args_exprs {
+        let ir_arg = match lower_call_operand_to_value(ctx, arg, "call_arg")? {
+            CallOperandLowering::Value(value) => value,
+            CallOperandLowering::Pending { name, value } => {
+                pending.push((name.clone(), value));
+                ValueExpr::Var(name)
+            }
+        };
+        args.push(ir_arg);
+    }
+
+    let mut body = CompExpr::Call {
+        callee: Box::new(callee),
+        args,
+    };
+    for (name, value) in pending.into_iter().rev() {
+        body = CompExpr::Let {
+            name,
+            ty: IrType::Unknown,
+            value: Box::new(value),
+            body: Box::new(body),
+        };
+    }
+    Ok(body)
+}
+
+enum CallOperandLowering {
+    Value(ValueExpr),
+    Pending { name: String, value: CompExpr },
+}
+
+fn lower_call_operand_to_value(
+    ctx: &mut LowerCtx,
+    expr: &ResolvedExpr,
+    stem: &str,
+) -> Result<CallOperandLowering, LowerError> {
+    match try_lower_value(ctx, expr)? {
+        Some(value) => Ok(CallOperandLowering::Value(value)),
+        None => {
+            let name = ctx.fresh_tmp(stem);
+            let value = lower_expr_as_comp(ctx, expr)?;
+            Ok(CallOperandLowering::Pending { name, value })
         }
     }
 }
@@ -1920,6 +1975,52 @@ mod tests {
     }
 
     #[test]
+    fn lower_ordinary_call_with_list_index_argument_introduces_temp_binding() {
+        let module = crate::parse_module(
+            r#"
+import goby/list
+
+main lines =
+  list.each (lines[1]) println
+"#,
+        )
+        .expect("module should parse");
+        let ir_module = lower_module(&module).expect("ordinary call arg ANF lowering should work");
+        let main_decl = ir_module
+            .decls
+            .iter()
+            .find(|decl| decl.name == "main")
+            .expect("main decl should be present");
+        assert!(
+            matches!(main_decl.body, CompExpr::Let { .. }),
+            "expected ANF let binding around list-index call arg, got {:?}",
+            main_decl.body
+        );
+    }
+
+    #[test]
+    fn lower_ordinary_call_with_non_value_callee_introduces_temp_binding() {
+        let choose_callee = Expr::If {
+            condition: Box::new(Expr::BoolLit(true)),
+            then_expr: Box::new(Expr::var("f")),
+            else_expr: Box::new(Expr::var("g")),
+        };
+        let call = Expr::Call {
+            callee: Box::new(choose_callee),
+            arg: Box::new(Expr::IntLit(1)),
+            span: None,
+        };
+        let decl = decl_with_params("main", vec!["f", "g"], vec![expr_stmt(call)]);
+        let ir_decl =
+            lower_declaration(&decl).expect("ordinary call callee ANF lowering should work");
+        assert!(
+            matches!(ir_decl.body, CompExpr::Let { .. }),
+            "expected ANF let binding around non-value call callee, got {:?}",
+            ir_decl.body
+        );
+    }
+
+    #[test]
     fn lower_list_index_to_list_get_call() {
         let expr = Expr::ListIndex {
             list: Box::new(Expr::var("lines")),
@@ -2062,6 +2163,137 @@ mod tests {
         let indexed_ir = lower_declaration(&indexed_decl).unwrap();
         let helper_ir = lower_declaration(&helper_decl).unwrap();
         assert_eq!(indexed_ir.body, helper_ir.body);
+    }
+
+    #[test]
+    fn lower_inline_list_index_call_argument_matches_explicit_anf_form() {
+        let inline_module = crate::parse_module(
+            r#"
+import goby/list ( each, map )
+import goby/string ( split, graphemes )
+
+main : Unit -> Unit can Print, Read
+main =
+  text = read ()
+  lines = split text "\n"
+  rolls = map lines graphemes
+  each (rolls[2]) println
+"#,
+        )
+        .expect("inline module should parse");
+        let explicit_anf_module = crate::parse_module(
+            r#"
+import goby/list ( each, map )
+import goby/string ( split, graphemes )
+
+main : Unit -> Unit can Print, Read
+main =
+  text = read ()
+  lines = split text "\n"
+  rolls = map lines graphemes
+  row2 = rolls[2]
+  each row2 println
+"#,
+        )
+        .expect("ANF module should parse");
+
+        let inline_ir = lower_module(&inline_module).expect("inline module should lower");
+        let explicit_anf_ir =
+            lower_module(&explicit_anf_module).expect("explicit ANF module should lower");
+        let inline_main = inline_ir
+            .decls
+            .iter()
+            .find(|decl| decl.name == "main")
+            .expect("inline main should exist");
+        let explicit_main = explicit_anf_ir
+            .decls
+            .iter()
+            .find(|decl| decl.name == "main")
+            .expect("explicit main should exist");
+
+        assert_eq!(inline_main.residual_effects, explicit_main.residual_effects);
+        match (&inline_main.body, &explicit_main.body) {
+            (
+                CompExpr::Let {
+                    body: inline_text_body,
+                    ..
+                },
+                CompExpr::Let {
+                    body: explicit_text_body,
+                    ..
+                },
+            ) => match (inline_text_body.as_ref(), explicit_text_body.as_ref()) {
+                (
+                    CompExpr::Let {
+                        body: inline_lines_body,
+                        ..
+                    },
+                    CompExpr::Let {
+                        body: explicit_lines_body,
+                        ..
+                    },
+                ) => match (inline_lines_body.as_ref(), explicit_lines_body.as_ref()) {
+                    (
+                        CompExpr::Let {
+                            body: inline_rolls_body,
+                            ..
+                        },
+                        CompExpr::Let {
+                            body: explicit_rolls_body,
+                            ..
+                        },
+                    ) => match (inline_rolls_body.as_ref(), explicit_rolls_body.as_ref()) {
+                        (
+                            CompExpr::Let {
+                                value: inline_value,
+                                body: inline_each_body,
+                                ..
+                            },
+                            CompExpr::Let {
+                                value: explicit_value,
+                                body: explicit_each_body,
+                                ..
+                            },
+                        ) => {
+                            assert_eq!(inline_value, explicit_value);
+                            assert!(
+                                matches!(
+                                    inline_each_body.as_ref(),
+                                    CompExpr::Call { callee, args }
+                                        if matches!(
+                                            callee.as_ref(),
+                                            ValueExpr::GlobalRef { module, name }
+                                                if module == "list" && name == "each"
+                                        ) && args.len() == 2
+                                ),
+                                "inline body should end in list.each call, got {:?}",
+                                inline_each_body
+                            );
+                            assert!(
+                                matches!(
+                                    explicit_each_body.as_ref(),
+                                    CompExpr::Call { callee, args }
+                                        if matches!(
+                                            callee.as_ref(),
+                                            ValueExpr::GlobalRef { module, name }
+                                                if module == "list" && name == "each"
+                                        ) && args.len() == 2
+                                ),
+                                "explicit body should end in list.each call, got {:?}",
+                                explicit_each_body
+                            );
+                        }
+                        other => panic!(
+                            "expected matching ANF let before list.each, got {:?}",
+                            other
+                        ),
+                    },
+                    other => panic!("expected matching rolls let, got {:?}", other),
+                },
+                other => panic!("expected matching lines let, got {:?}", other),
+            },
+            other => panic!("expected matching text let, got {:?}", other),
+        }
     }
 
     #[test]
