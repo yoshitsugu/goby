@@ -1,14 +1,16 @@
+import goby/int as int
+
 first : List Int -> Int
 first xs = xs[0]
 
 last3 : List String -> String
 last3 words = words[2]
 
-main : Unit -> Unit
+main : Unit -> Unit can Print
 main =
   nums = [10, 20, 30]
-  print (nums[0])
-  print (nums[2])
-  print (first nums)
+  print (int.to_string (nums[0]))
+  print (int.to_string (nums[2]))
+  print (int.to_string (first nums))
   words = ["alpha", "beta", "gamma"]
   print (last3 words)

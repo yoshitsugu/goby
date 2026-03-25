@@ -660,14 +660,15 @@ main =
     #[test]
     fn accepts_numeric_qualified_access_on_global_tuple_receiver() {
         let source = "\
+import goby/int as int
 pair : (Bool, Int)
 pair = (True, 42)
-main : Unit -> Unit
+main : Unit -> Unit can Print
 main =
   if pair.0
-    print pair.1
+    print (int.to_string pair.1)
   else
-    print 0
+    print (int.to_string 0)
 ";
         let module = parse_module(source).expect("should parse");
         typecheck_module(&module)

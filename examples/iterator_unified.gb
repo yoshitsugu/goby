@@ -1,7 +1,7 @@
-import goby/iterator
+import goby/iterator as iterator
 
 yield_int_state : String -> Int -> (Bool, Int) can Iterator
-yield_int_state value state = yield value state
+yield_int_state value state = iterator.yield value state
 
 count_values : Unit -> Int can Iterator
 count_values =
@@ -20,17 +20,17 @@ main : Unit -> Unit
 main =
   # state-less mode: Unit state
   with
-    yield value _ ->
+    iterator.yield value _ ->
       print "tick:${value}"
       resume (True, ())
   in
-    yield "a" ()
-    yield "b" ()
-    yield "c" ()
+    iterator.yield "a" ()
+    iterator.yield "b" ()
+    iterator.yield "c" ()
 
   # state-threaded mode: Int state
   count_all = with
-    yield _ step ->
+    iterator.yield _ step ->
       resume (True, step + 1)
   in
     count_values ()
@@ -38,7 +38,7 @@ main =
 
   # early-stop mode: return (False, state)
   count_early_stop = with
-    yield value step ->
+    iterator.yield value step ->
       if value == "b"
         resume (False, step)
       else

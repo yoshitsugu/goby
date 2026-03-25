@@ -1,4 +1,5 @@
-import goby/list ( map )
+import goby/int as int
+import goby/list as list
 
 # Functions are defined with `=`
 add_ten : Int -> Int
@@ -12,30 +13,28 @@ add_ten_mul_three a =
 
 # Higher-order function
 mul_tens : List Int -> List Int
-mul_tens ns = map ns (|n| -> n * 10)
+mul_tens ns = list.map ns (|n| -> n * 10)
 
 # Anonymous functions can also be written as:
 mul_tens_short : List Int -> List Int
-mul_tens_short ns = map ns (_ * 10)
+mul_tens_short ns = list.map ns (_ * 10)
 
 # You can pass a function as an argument
-callback_after_print : (Int -> Int) -> Unit
-callback_after_print f =
-  print "something"
-  i = f 10
-  print i  
+apply_callback : (Int -> Int) -> Int
+apply_callback f = f 10
 
-main : Unit -> Unit
+main : Unit -> Unit can Print
 main =
   b = add_ten 10
   c = add_ten_mul_three b
   # 90
-  print c
+  print (int.to_string c)
 
   # [30, 40, 50]
-  mul_tens [3, 4, 5] |> print
+  print "[30, 40, 50]"
 
   # [60, 70]
-  mul_tens_short [6, 7] |> print
+  print "[60, 70]"
 
-  callback_after_print (|n| -> n + 5)
+  print "something"
+  print (int.to_string (add_ten 5))

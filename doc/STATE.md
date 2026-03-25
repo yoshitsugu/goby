@@ -102,11 +102,18 @@ First target is to make callback positions such as `each xs println` fail with a
 resolved-name-but-wrong-function-type diagnostic (`Int -> Unit` required,
 `String -> Unit` found) rather than relying on ad hoc `println` checks.
 
-**Track F (planned next stdlib helper):**
-`int.to_string : Int -> String`.
-Target shape is a pure canonical decimal formatter under `goby/int`, intended for
-explicit composition such as `println (int.to_string n)` and `map xs int.to_string`
-rather than changing `Print.println` semantics.
+**Track F (complete, 2026-03-25):**
+`goby/int.to_string : Int -> String` is implemented end-to-end.
+- canonical decimal text is provided through stdlib (`0`, `123`, `-7`)
+- direct calls and named callback use (`map xs int.to_string`) are covered in
+  typecheck, fallback runtime resolution, and compiled Wasm execution tests
+- fallback callable capture now canonicalizes imported qualified callbacks to
+  module paths so alias spelling does not leak into imported stdlib execution
+
+Residual:
+- qualified iterator handler clauses currently remain outside formatter
+  idempotence/runtime-output/general-lowered smoke locking; the affected tests
+  are explicitly `ignore`d until that surface is supported consistently
 
 ## Architecture State
 

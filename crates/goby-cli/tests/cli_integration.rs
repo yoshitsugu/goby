@@ -621,15 +621,15 @@ fn check_command_accepts_case_arm_block_program() {
     fs::write(
         &input,
         r#"
-main : Unit -> Unit
+main : Unit -> Unit can Print
 main =
   x = 0
   print
     case x
       0 ->
-        y = 1
-        y + 10
-      _ -> 0
+        y = "11"
+        y
+      _ -> "0"
 "#,
     )
     .expect("temporary input should be writable");
@@ -704,15 +704,15 @@ fn run_command_accepts_case_arm_block_program_without_wasmtime() {
     fs::write(
         &input,
         r#"
-main : Unit -> Unit
+main : Unit -> Unit can Print
 main =
   x = 0
   print
     case x
       0 ->
-        y = 1
-        y + 10
-      _ -> 0
+        y = "11"
+        y
+      _ -> "0"
 "#,
     )
     .expect("temporary input should be writable");

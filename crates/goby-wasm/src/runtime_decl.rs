@@ -4,6 +4,73 @@ use crate::runtime_support::flatten_direct_call;
 use crate::wasm_exec_plan::decl_exec_plan;
 
 impl<'m> RuntimeOutputResolver<'m> {
+    fn runtime_value_to_expr(value: &RuntimeValue) -> Option<Expr> {
+        match value {
+            RuntimeValue::String(text) => Some(Expr::StringLit(text.clone())),
+            RuntimeValue::Int(number) => Some(Expr::IntLit(*number)),
+            RuntimeValue::Unit => Some(Expr::unit_value()),
+            RuntimeValue::Bool(value) => Some(Expr::BoolLit(*value)),
+            RuntimeValue::Tuple(items) => Some(Expr::TupleLit(
+                items
+                    .iter()
+                    .map(Self::runtime_value_to_expr)
+                    .collect::<Option<Vec<_>>>()?,
+            )),
+            RuntimeValue::ListInt(values) => Some(Expr::ListLit {
+                elements: values.iter().copied().map(Expr::IntLit).collect(),
+                spread: None,
+            }),
+            RuntimeValue::ListString(values) => Some(Expr::ListLit {
+                elements: values.iter().cloned().map(Expr::StringLit).collect(),
+                spread: None,
+            }),
+            RuntimeValue::Handler(_) | RuntimeValue::Record { .. } => None,
+        }
+    }
+
+    fn resolve_callable_expr(
+        &mut self,
+        arg: &Expr,
+        caller_locals: &RuntimeLocals,
+        caller_callables: &HashMap<String, IntCallable>,
+    ) -> Option<IntCallable> {
+        match arg {
+            Expr::Lambda { param, body } => {
+                Some(IntCallable::AstLambda(Box::new(AstLambdaCallable {
+                    parameter: param.clone(),
+                    body: (*body.clone()),
+                    captured_locals: caller_locals.clone(),
+                    captured_callables: caller_callables.clone(),
+                })))
+            }
+            Expr::Var { name, .. } => Some(self.resolve_callable_argument(name, caller_callables)),
+            Expr::Qualified {
+                receiver, member, ..
+            } => {
+                let head = DirectCallHead::Qualified {
+                    receiver: receiver.clone(),
+                    member: member.clone(),
+                };
+                if let Some(decl) = self.resolve_imported_runtime_decl(&head)
+                    && let Some(module_path) = decl.owner_module
+                {
+                    return Some(IntCallable::Imported {
+                        module_path,
+                        member: member.clone(),
+                    });
+                }
+                Some(IntCallable::Qualified {
+                    receiver: receiver.clone(),
+                    member: member.clone(),
+                })
+            }
+            _ => {
+                self.set_runtime_error_once(ERR_CALLABLE_DISPATCH_DECL_PARAM);
+                None
+            }
+        }
+    }
+
     pub(super) fn try_eval_imported_decl_call_as_value(
         &mut self,
         expr: &Expr,
@@ -43,23 +110,7 @@ impl<'m> RuntimeOutputResolver<'m> {
         let mut fn_callables = HashMap::new();
         for (idx, (param, arg)) in decl.params.iter().zip(args.iter()).enumerate() {
             if decl.callable_param_mask.get(idx).copied().unwrap_or(false) {
-                let callable = match arg {
-                    Expr::Lambda { param, body } => {
-                        IntCallable::AstLambda(Box::new(AstLambdaCallable {
-                            parameter: param.clone(),
-                            body: (*body.clone()),
-                            captured_locals: caller_locals.clone(),
-                            captured_callables: caller_callables.clone(),
-                        }))
-                    }
-                    Expr::Var { name, .. } => {
-                        self.resolve_callable_argument(name, caller_callables)
-                    }
-                    _ => {
-                        self.set_runtime_error_once(ERR_CALLABLE_DISPATCH_DECL_PARAM);
-                        return None;
-                    }
-                };
+                let callable = self.resolve_callable_expr(arg, caller_locals, caller_callables)?;
                 fn_callables.insert(param.clone(), callable);
                 continue;
             }
@@ -138,23 +189,7 @@ impl<'m> RuntimeOutputResolver<'m> {
         let mut fn_callables = HashMap::new();
         for (idx, (param, arg)) in decl.params.iter().zip(args.iter()).enumerate() {
             if decl.callable_param_mask.get(idx).copied().unwrap_or(false) {
-                let callable = match arg {
-                    Expr::Lambda { param, body } => {
-                        IntCallable::AstLambda(Box::new(AstLambdaCallable {
-                            parameter: param.clone(),
-                            body: (*body.clone()),
-                            captured_locals: caller_locals.clone(),
-                            captured_callables: caller_callables.clone(),
-                        }))
-                    }
-                    Expr::Var { name, .. } => {
-                        self.resolve_callable_argument(name, caller_callables)
-                    }
-                    _ => {
-                        self.set_runtime_error_once(ERR_CALLABLE_DISPATCH_DECL_PARAM);
-                        return None;
-                    }
-                };
+                let callable = self.resolve_callable_expr(arg, caller_locals, caller_callables)?;
                 fn_callables.insert(param.clone(), callable);
                 continue;
             }
@@ -231,23 +266,7 @@ impl<'m> RuntimeOutputResolver<'m> {
 
         for (idx, (param, arg)) in params.iter().zip(args.iter()).enumerate() {
             if callable_param_mask.get(idx).copied().unwrap_or(false) {
-                let callable = match arg {
-                    Expr::Lambda { param, body } => {
-                        IntCallable::AstLambda(Box::new(AstLambdaCallable {
-                            parameter: param.clone(),
-                            body: (*body.clone()),
-                            captured_locals: caller_locals.clone(),
-                            captured_callables: caller_callables.clone(),
-                        }))
-                    }
-                    Expr::Var { name, .. } => {
-                        self.resolve_callable_argument(name, caller_callables)
-                    }
-                    _ => {
-                        self.set_runtime_error_once(ERR_CALLABLE_DISPATCH_DECL_PARAM);
-                        return None;
-                    }
-                };
+                let callable = self.resolve_callable_expr(arg, caller_locals, caller_callables)?;
                 fn_callables.insert(param.clone(), callable);
                 continue;
             }
@@ -322,23 +341,7 @@ impl<'m> RuntimeOutputResolver<'m> {
 
         for (idx, (param, arg)) in params.iter().zip(args.iter()).enumerate() {
             if callable_param_mask.get(idx).copied().unwrap_or(false) {
-                let callable = match arg {
-                    Expr::Lambda { param, body } => {
-                        IntCallable::AstLambda(Box::new(AstLambdaCallable {
-                            parameter: param.clone(),
-                            body: (*body.clone()),
-                            captured_locals: caller_locals.clone(),
-                            captured_callables: caller_callables.clone(),
-                        }))
-                    }
-                    Expr::Var { name, .. } => {
-                        self.resolve_callable_argument(name, caller_callables)
-                    }
-                    _ => {
-                        self.set_runtime_error_once(ERR_CALLABLE_DISPATCH_DECL_PARAM);
-                        return None;
-                    }
-                };
+                let callable = self.resolve_callable_expr(arg, caller_locals, caller_callables)?;
                 fn_callables.insert(param.clone(), callable);
                 continue;
             }
@@ -376,6 +379,68 @@ impl<'m> RuntimeOutputResolver<'m> {
         }
         let fn_callables = HashMap::new();
         let filtered_stmts: Vec<Stmt> = stmts
+            .iter()
+            .filter(|stmt| {
+                !matches!(
+                    stmt,
+                    Stmt::Expr(
+                        Expr::Var { name: _, .. }
+                            | Expr::IntLit(_)
+                            | Expr::StringLit(_)
+                            | Expr::BoolLit(_),
+                        _
+                    )
+                )
+            })
+            .cloned()
+            .collect();
+        if let Some(owner_module) = &decl.owner_module {
+            self.current_module_stack.push(owner_module.clone());
+        }
+        self.push_runtime_decl_context(&decl);
+        let result = self.eval_stmts(
+            &filtered_stmts,
+            fn_locals,
+            fn_callables,
+            evaluators,
+            depth + 1,
+            FinishKind::Block,
+        );
+        self.pop_runtime_decl_context();
+        if decl.owner_module.is_some() {
+            self.current_module_stack.pop();
+        }
+        match result {
+            Out::Done(_) => Some(()),
+            Out::Suspend(_) | Out::Escape(_) | Out::Err(_) => None,
+        }
+    }
+
+    pub(super) fn execute_imported_decl_as_side_effect_from_module(
+        &mut self,
+        module_path: &str,
+        member: &str,
+        arg_val: RuntimeValue,
+        callables: &HashMap<String, IntCallable>,
+        evaluators: &RuntimeEvaluators<'_, '_>,
+        depth: usize,
+    ) -> Option<()> {
+        if depth >= MAX_EVAL_DEPTH {
+            return None;
+        }
+        let decl = self.resolve_runtime_decl_from_module_path(module_path, member)?;
+        let accepts_unit_arg_as_zero_arity =
+            decl.params.is_empty() && matches!(arg_val, RuntimeValue::Unit);
+        if decl.params.len() != 1 && !accepts_unit_arg_as_zero_arity {
+            return None;
+        }
+        let mut fn_locals = RuntimeLocals::default();
+        if !accepts_unit_arg_as_zero_arity {
+            fn_locals.store(&decl.params[0], arg_val);
+        }
+        let fn_callables = callables.clone();
+        let filtered_stmts: Vec<Stmt> = decl
+            .stmts
             .iter()
             .filter(|stmt| {
                 !matches!(
@@ -481,6 +546,28 @@ impl<'m> RuntimeOutputResolver<'m> {
             IntCallable::Named(name) => {
                 self.execute_decl_as_side_effect(name, arg_val, evaluators, depth + 1)
             }
+            IntCallable::Imported {
+                module_path,
+                member,
+            } => self.execute_imported_decl_as_side_effect_from_module(
+                module_path,
+                member,
+                arg_val,
+                callables,
+                evaluators,
+                depth + 1,
+            ),
+            IntCallable::Qualified { receiver, member } => self
+                .try_execute_imported_decl_call_as_side_effect(
+                    &Expr::call(
+                        Expr::qualified(receiver.clone(), member.clone()),
+                        Self::runtime_value_to_expr(&arg_val)?,
+                    ),
+                    &RuntimeLocals::default(),
+                    callables,
+                    evaluators,
+                    depth + 1,
+                ),
             IntCallable::Lambda(lambda) => {
                 if let RuntimeValue::Int(n) = arg_val
                     && evaluators.int.eval_lambda(lambda, n, callables).is_some()
@@ -533,6 +620,24 @@ impl<'m> RuntimeOutputResolver<'m> {
                 evaluators,
                 depth + 1,
             ),
+            IntCallable::Imported {
+                module_path,
+                member,
+            } => self.apply_imported_callable_value_call_out(
+                module_path,
+                member,
+                arg_val,
+                evaluators,
+                depth + 1,
+            ),
+            IntCallable::Qualified { receiver, member } => self
+                .apply_receiver_method_value_call_out(
+                    receiver,
+                    member,
+                    arg_val,
+                    evaluators,
+                    depth + 1,
+                ),
             IntCallable::Lambda(lambda) => {
                 let RuntimeValue::Int(arg_int) = arg_val else {
                     return Out::Err(RuntimeError::Unsupported);
@@ -614,6 +719,16 @@ impl<'m> RuntimeOutputResolver<'m> {
             .iter()
             .find(|d| d.name == fn_name)?;
         Self::runtime_decl_info_from_decl(decl, self.current_module_stack.last().cloned())
+    }
+
+    pub(super) fn resolve_runtime_decl_from_module_path(
+        &self,
+        module_path: &str,
+        member: &str,
+    ) -> Option<RuntimeDeclInfo> {
+        let module = self.runtime_imports.modules.get(module_path)?;
+        let decl = module.declarations.iter().find(|d| d.name == member)?;
+        Self::runtime_decl_info_from_decl(decl, Some(module_path.to_string()))
     }
 
     pub(super) fn resolve_imported_runtime_decl(

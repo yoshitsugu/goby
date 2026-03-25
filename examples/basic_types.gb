@@ -1,4 +1,5 @@
 import goby/prelude
+import goby/int as int
 
 # Int
 add : Int -> Int -> Int
@@ -24,6 +25,7 @@ print_string =
 a : (String, Int)
 a = ("Hello", 3)
 
+main : Unit -> Unit can Print
 main =
   t = add(1, 2)
   hello = concatenate("Hello ", "Goby")
@@ -31,4 +33,4 @@ main =
 
   # Tuple members are accessed by index: .0, .1, ...
   println a.0
-  println a.1
+  println (int.to_string a.1)

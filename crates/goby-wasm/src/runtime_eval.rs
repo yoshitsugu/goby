@@ -3,6 +3,7 @@ use std::collections::HashMap;
 
 use goby_core::{Expr, Module, Stmt, types::parse_function_type};
 
+use crate::runtime_flow::DirectCallHead;
 use crate::wasm_exec_plan::decl_exec_plan;
 use crate::{MAX_EVAL_DEPTH, RuntimeLocals};
 
@@ -65,6 +66,8 @@ fn collect_functions<'a>(
 pub(crate) enum IntCallable {
     Lambda(IntLambda),
     Named(String),
+    Imported { module_path: String, member: String },
+    Qualified { receiver: String, member: String },
     AstLambda(Box<AstLambdaCallable>),
 }
 
@@ -215,6 +218,18 @@ impl<'a> IntEvaluator<'a> {
             IntCallable::Lambda(lambda) => self.eval_lambda(lambda, arg, callables),
             IntCallable::Named(name) => {
                 let expr = format!("{} {}", name, arg);
+                self.eval_expr(&expr, &HashMap::new(), callables)
+            }
+            IntCallable::Imported {
+                module_path,
+                member,
+            } => {
+                let receiver = module_path.rsplit('/').next()?;
+                let expr = format!("{}.{} {}", receiver, member, arg);
+                self.eval_expr(&expr, &HashMap::new(), callables)
+            }
+            IntCallable::Qualified { receiver, member } => {
+                let expr = format!("{}.{} {}", receiver, member, arg);
                 self.eval_expr(&expr, &HashMap::new(), callables)
             }
             IntCallable::AstLambda(_) => None,
@@ -418,12 +433,26 @@ pub(crate) fn parse_int_callable(expr: &str) -> Option<IntCallable> {
         return Some(IntCallable::Lambda(lambda));
     }
 
-    let name = expr.trim();
-    if is_identifier(name) {
-        return Some(IntCallable::Named(name.to_string()));
+    match parse_callable_head(expr.trim())? {
+        DirectCallHead::Bare(name) => Some(IntCallable::Named(name)),
+        DirectCallHead::Qualified { receiver, member } => {
+            Some(IntCallable::Qualified { receiver, member })
+        }
     }
+}
 
-    None
+fn parse_callable_head(expr: &str) -> Option<DirectCallHead> {
+    if is_identifier(expr) {
+        return Some(DirectCallHead::Bare(expr.to_string()));
+    }
+    let (receiver, member) = expr.split_once('.')?;
+    if !is_identifier(receiver) || !is_identifier(member) {
+        return None;
+    }
+    Some(DirectCallHead::Qualified {
+        receiver: receiver.to_string(),
+        member: member.to_string(),
+    })
 }
 
 fn parse_list_int_literal(expr: &str) -> Option<Vec<i64>> {

@@ -435,18 +435,18 @@ fn native_codegen_capability_checker_accepts_function_example_with_hof_lambda() 
     let source = read_example("function.gb");
     let module = parse_module(&source).expect("function.gb should parse");
     assert!(
-        fallback::supports_native_codegen(&module),
-        "function.gb should be accepted by native lowering after lambda/HOF support"
+        !fallback::supports_native_codegen(&module),
+        "function.gb now carries `main : Unit -> Unit can Print`, so it should take the fallback path"
     );
     assert_eq!(
         fallback::native_unsupported_reason_kind(&module),
-        None,
-        "function.gb should no longer report a native fallback reason"
+        Some(fallback::UnsupportedReason::CallCalleeNotDirectName),
+        "function.gb should report the higher-order call fallback reason"
     );
     assert_eq!(
         fallback::native_unsupported_reason(&module),
-        None,
-        "function.gb should no longer report a native fallback reason"
+        Some("call_callee_not_direct_name"),
+        "function.gb should report the higher-order call fallback reason"
     );
 }
 
@@ -598,7 +598,12 @@ fn native_fallback_path_matrix_for_examples() {
             Some(fallback::UnsupportedReason::MainAnnotationNotUnitToUnit),
             Some("main_annotation_not_unit_to_unit"),
         ),
-        ("function.gb", true, None, None),
+        (
+            "function.gb",
+            false,
+            Some(fallback::UnsupportedReason::CallCalleeNotDirectName),
+            Some("call_callee_not_direct_name"),
+        ),
     ];
 
     for (name, expect_native, expected_reason_kind, expected_reason) in cases {

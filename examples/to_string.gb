@@ -1,0 +1,7 @@
+import goby/int as int
+
+main : Unit -> Unit can Print
+main =
+  println (int.to_string 0)
+  println (int.to_string 123)
+  println (int.to_string -7)

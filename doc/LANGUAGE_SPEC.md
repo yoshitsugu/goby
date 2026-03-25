@@ -215,6 +215,8 @@ syntax/semantics.
 - Stdlib `goby/int` provides `parse : String -> Int can StringParseError`.
   - accepted form: optional leading `-` followed by one or more ASCII digits.
   - invalid input delegates to `StringParseError.invalid_integer : String -> Int`.
+- Stdlib `goby/int` also provides `to_string : Int -> String`.
+  - result is canonical base-10 decimal text (`0`, `123`, `-7`).
 - `Print` / `Read` effect resolution is provided via stdlib prelude (`goby/prelude`) embed defaults.
 - These prelude defaults are intentionally a minimal convenience layer, not a
   general host-effect abstraction.

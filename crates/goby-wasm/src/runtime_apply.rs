@@ -359,6 +359,38 @@ impl<'m> RuntimeOutputResolver<'m> {
         self.apply_named_value_call_ast(fn_name, &[arg_value], locals, callables, evaluators, depth)
     }
 
+    pub(crate) fn apply_imported_callable_value_call_out(
+        &mut self,
+        module_path: &str,
+        member: &str,
+        arg_value: RuntimeValue,
+        evaluators: &RuntimeEvaluators<'_, '_>,
+        depth: usize,
+    ) -> Out<RuntimeValue> {
+        if depth >= MAX_EVAL_DEPTH {
+            return Out::Err(RuntimeError::Unsupported);
+        }
+        let Some(decl) = self.resolve_runtime_decl_from_module_path(module_path, member) else {
+            return Out::Err(RuntimeError::Unsupported);
+        };
+        let accepts_unit_arg_as_zero_arity =
+            decl.params.is_empty() && matches!(arg_value, RuntimeValue::Unit);
+        if decl
+            .callable_param_mask
+            .iter()
+            .any(|is_callable| *is_callable)
+            || (decl.params.len() != 1 && !accepts_unit_arg_as_zero_arity)
+        {
+            return Out::Err(RuntimeError::Unsupported);
+        }
+        let mut fn_locals = RuntimeLocals::default();
+        if !accepts_unit_arg_as_zero_arity {
+            fn_locals.store(&decl.params[0], arg_value);
+        }
+        let fn_callables = HashMap::new();
+        self.eval_runtime_decl_body_out(&decl, fn_locals, fn_callables, evaluators, depth + 1)
+    }
+
     pub(crate) fn apply_named_value_call_args_out(
         &mut self,
         fn_name: &str,

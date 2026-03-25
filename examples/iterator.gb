@@ -1,13 +1,13 @@
-import goby/iterator
+import goby/iterator as iterator
 
 main : Unit -> Unit
 main =
   prefix = "tick:"
   with
-    yield value _ ->
+    iterator.yield value _ ->
       print "${prefix}${value}"
       resume (True, ())
   in
-    yield "a" ()
-    yield "b" ()
-    yield "c" ()
+    iterator.yield "a" ()
+    iterator.yield "b" ()
+    iterator.yield "c" ()

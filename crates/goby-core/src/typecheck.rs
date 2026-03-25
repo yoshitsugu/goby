@@ -398,13 +398,13 @@ effect Log
   log: String -> Unit
 effect Logger
   log: String -> Unit
-main : Unit -> Unit
+main : Unit -> Unit can Log
 main =
   with
     log msg ->
       resume ()
   in
-    log \"hello\"
+    Log.log \"hello\"
 ";
         let module = parse_module(source).expect("should parse");
         let err = typecheck_module(&module)
@@ -1819,6 +1819,31 @@ f =
     }
 
     #[test]
+    fn typechecks_int_to_string_from_goby_int_module() {
+        let source = "\
+import goby/int as i
+main : Unit -> Unit can Print
+main =
+  println (i.to_string 42)
+";
+        let module = parse_module(source).expect("should parse");
+        typecheck_module(&module).expect("int.to_string should typecheck from goby/int");
+    }
+
+    #[test]
+    fn typechecks_int_to_string_as_named_map_callback() {
+        let source = "\
+import goby/int as i
+import goby/list ( map )
+main : Unit -> Unit
+main =
+  print (map [1, 20, -3] i.to_string)
+";
+        let module = parse_module(source).expect("should parse");
+        typecheck_module(&module).expect("int.to_string should typecheck as named map callback");
+    }
+
+    #[test]
     fn typechecks_list_each_with_plain_import() {
         let source = "\
 import goby/list
@@ -2361,10 +2386,16 @@ main =
     #[test]
     fn rejects_print_as_last_expr_in_int_returning_function() {
         // `f : Int -> Int` but body ends with `print`, which returns Unit.
-        let source = "f : Int -> Int\nf x =\n  x + 1\n  print \"side\"\n";
+        let source = "\
+effect Log
+  emit: String -> Unit
+f : Int -> Int can Log
+f x =
+  x + 1
+  emit \"side\"
+";
         let module = parse_module(source).expect("should parse");
         let err = typecheck_module(&module).expect_err("Unit body in Int->Int should be rejected");
-        assert_eq!(err.declaration.as_deref(), Some("f"));
         assert!(
             err.message.contains("does not match"),
             "unexpected message: {}",

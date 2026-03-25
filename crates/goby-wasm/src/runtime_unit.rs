@@ -141,10 +141,28 @@ impl<'m> RuntimeOutputResolver<'m> {
             {
                 return Out::Done(());
             }
+            if let Expr::Qualified {
+                receiver, member, ..
+            } = arg.as_ref()
+                && self.declaration_expects_callable_param(fn_name)
+                && self
+                    .execute_decl_with_callable_as_side_effect(
+                        fn_name,
+                        IntCallable::Qualified {
+                            receiver: receiver.clone(),
+                            member: member.clone(),
+                        },
+                        evaluators,
+                        depth + 1,
+                    )
+                    .is_some()
+            {
+                return Out::Done(());
+            }
             if self.declaration_expects_callable_param(fn_name)
                 && !matches!(
                     arg.as_ref(),
-                    Expr::Lambda { .. } | Expr::Var { name: _, .. }
+                    Expr::Lambda { .. } | Expr::Var { name: _, .. } | Expr::Qualified { .. }
                 )
             {
                 self.set_runtime_error_once(ERR_CALLABLE_DISPATCH_DECL_PARAM);

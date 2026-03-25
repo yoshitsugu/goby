@@ -964,6 +964,45 @@ main =
     }
 
     #[test]
+    fn stdlib_int_to_string_executes_via_compiled_wasm() {
+        let module = parse_module(
+            r#"
+import goby/int as int
+
+main : Unit -> Unit can Print
+main =
+  println (int.to_string 123)
+"#,
+        )
+        .expect("parse should work");
+
+        let wasm = compile_module(&module).expect("int.to_string program should compile");
+        let output = crate::wasm_exec::run_wasm_bytes_with_stdin(&wasm, None)
+            .expect("compiled int.to_string program should execute");
+        assert_eq!(output, "123\n");
+    }
+
+    #[test]
+    fn stdlib_int_to_string_named_map_callback_executes_via_compiled_wasm() {
+        let module = parse_module(
+            r#"
+import goby/int as int
+import goby/list ( map )
+
+main : Unit -> Unit can Print
+main =
+  print (map [1, 20, -3] int.to_string)
+"#,
+        )
+        .expect("parse should work");
+
+        let wasm = compile_module(&module).expect("int.to_string map program should compile");
+        let output = crate::wasm_exec::run_wasm_bytes_with_stdin(&wasm, None)
+            .expect("compiled int.to_string map program should execute");
+        assert_eq!(output, "[\"1\", \"20\", \"-3\"]");
+    }
+
+    #[test]
     fn wb3_m7_read_split_map_graphemes_get_each_executes() {
         use goby_core::parse_module;
         let module = parse_module(

@@ -554,7 +554,7 @@ capture _ =
             .expect("mul_tens runtime plan should exist");
         assert_eq!(
             runtime.body.as_deref().map(str::trim_end),
-            Some("map ns (|n| -> n * 10)")
+            Some("list.map ns (|n| -> n * 10)")
         );
     }
 }

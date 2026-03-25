@@ -24,6 +24,9 @@ minimum_int_div_10 = -922337203685477580
 minimum_int : Int
 minimum_int = -9223372036854775808
 
+to_string : Int -> String
+to_string value = "${value}"
+
 parse : String -> Int can StringParseError
 parse value =
   mut acc = 0
