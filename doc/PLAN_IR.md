@@ -9,7 +9,7 @@ Related documents:
 
 - `doc/LANGUAGE_SPEC.md` — source of truth for language syntax and semantics.
 - `doc/PLAN.md` — top-level roadmap.
-- `doc/PLAN_STANDARD_LIBRARY.md` — stdlib split/grapheme work (C4–C8).
+- `doc/PLAN_STANDARD_LIBRARY.md` — closed record for the completed stdlib split-retirement track.
 - `doc/STATE.md` — current focus and restart notes.
 
 ---

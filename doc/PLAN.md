@@ -660,19 +660,17 @@ Milestones:
     - `stdlib/goby/string.gb` already implements `split_with_empty_delimiter`
       and `split_with_single_delimiter` as stdlib-only paths using
       `__goby_string_each_grapheme` and `__goby_list_push_string`.
-    - the multi-grapheme delimiter case still falls back to the runtime builtin
-      `string.split(value, sep)` call; this is the only remaining direct
-      runtime dependency.
-    - the remaining work (multi-grapheme delimiter stdlib implementation,
-      runtime builtin retirement, regression coverage) is fully documented in
-      `doc/PLAN_STANDARD_LIBRARY.md` as milestones C4-S1 through C8.
+    - multi-grapheme delimiter handling and runtime builtin retirement are now
+      complete through the stdlib-owned path.
+    - `doc/PLAN_STANDARD_LIBRARY.md` is now the closure record for that
+      completed retirement track rather than an active milestone queue.
     - the backend intrinsic `StringSplit` and fused `SplitEachPrint`/
       `SplitGetPrint` instructions remain for the byte-level split path used
       by the general Wasm lowering backend; these are independent of the
       stdlib `string.split` call and do not need to be retired in this track.
   - done when:
-    - the remaining `split` builtin work is clearly reduced to the documented
-      stdlib track.
+    - the split builtin handoff is recorded as complete and its remaining
+      backend-only details are documented unambiguously.
 
 Execution order:
 

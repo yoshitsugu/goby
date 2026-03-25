@@ -4,7 +4,7 @@ Use this directory as follows:
 
 - `LANGUAGE_SPEC.md`: active language specification (latest user-visible syntax/semantics).
 - `PLAN.md`: active top-level planning/roadmap reference.
-- `PLAN_STANDARD_LIBRARY.md`: remaining stdlib follow-up plan (`string.split` stdlib migration and runtime builtin retirement).
+- `PLAN_STANDARD_LIBRARY.md`: closed record for the completed stdlib `string.split` ownership and runtime-builtin retirement track.
 - `STATE.md`: restart-safe execution snapshot (latest milestones, open items, next actions).
 - `BUGS.md`: known issues and their status.
 

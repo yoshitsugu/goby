@@ -38,12 +38,11 @@ Last updated: 2026-03-25
 
 ## Track Priority
 
-**Next active work: stdlib split retirement track S3 boundary lock and closure.**
-C4 is complete, and S1/S2 are now complete: the generic evaluator owns stdlib `split` helper
-execution, and the fallback/runtime-output path no longer carries a source-level legacy
-`string.split` branch.
+**No active stdlib split-retirement work remains.**
+C4 plus S1/S2/S3 are complete: source-level `split` ownership is fully stdlib-driven, and the
+fallback/runtime-output path no longer carries a source-level legacy `string.split` branch.
 
-See `doc/PLAN_STANDARD_LIBRARY.md` for the remaining stdlib milestones.
+See `doc/PLAN_STANDARD_LIBRARY.md` for the closed ownership record.
 
 ## Immediate Next Steps
 
@@ -74,14 +73,16 @@ Added tests: empty-delimiter ASCII/emoji, single-char delimiter, leading/trailin
 `split "" "" -> []`, Unicode multi-grapheme delimiter execution, and `examples/import.gb`
 compile-path parity.
 
-**Track stdlib (S1/S2) — complete (2026-03-25):**
+**Track stdlib (S1/S2/S3) — complete (2026-03-25):**
 The remaining generic evaluator gaps behind stdlib `split` helper execution are closed.
 Declaration/body execution now uses the shared fallback path for imported/local stdlib helpers,
 parser statement recovery now preserves multiline indented RHS/`resume` continuations needed by
 `stdlib/goby/string.gb`, and the runtime-output fallback no longer relies on source-level
 `string.split` special cases in `runtime_decl.rs`, `runtime_expr.rs`, or `runtime_resolver.rs`.
 Focused split regressions pass for selective import, canonical qualified call, empty delimiter,
-and Unicode multi-grapheme delimiter behavior after branch removal.
+and Unicode multi-grapheme delimiter behavior after branch removal. Backend `StringSplit`
+remains only as a Wasm lowering/runtime detail; it is no longer part of source-level fallback
+semantics.
 
 **Track WB-3B (future, deferred):**
 WasmFX typed continuations — currently on hold.
@@ -117,7 +118,7 @@ Restart only when the external prerequisites in `doc/PLAN_IR.md` Phase WB-3B are
 ## Key Entry Points
 
 - `doc/PLAN_IR.md` — Wasm backend lowering design and phase plan
-- `doc/PLAN_STANDARD_LIBRARY.md` — remaining stdlib split-retirement plan
+- `doc/PLAN_STANDARD_LIBRARY.md` — closed stdlib split-retirement record
 - `crates/goby-wasm/src/gen_lower/lower.rs` — `lower_comp` / `lower_value`
 - `crates/goby-wasm/src/gen_lower/emit.rs` — Wasm instruction emission
 - `crates/goby-wasm/src/gen_lower/backend_ir.rs` — backend IR instruction set

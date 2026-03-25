@@ -1,15 +1,15 @@
 # Goby Standard Library Remaining Work Plan
 
-Status: active follow-up only
+Status: complete closure record
 Owner: Goby core/runtime track
-Last updated: 2026-03-25 (post-C4 renumbered retirement plan)
+Last updated: 2026-03-25 (S3 closure)
 
 ## 1. Scope
 
-This document tracks only the stdlib work that is still active after C4
-completion.
+This document records the now-complete stdlib split-retirement track that
+remained after C4 completion.
 
-Current remaining stdlib track:
+Completed stdlib retirement track:
 
 - retire the last direct runtime builtin branch for `goby/string.split`,
 - make the ownership boundary explicit between:
@@ -91,7 +91,7 @@ enough that they are unnecessary.
   - remove the direct runtime handling path for source-level `string.split`,
   - preserve the existing backend intrinsic boundary for Wasm lowering.
 
-- [ ] S3. Boundary lock and closure
+- [x] S3. Boundary lock and closure
   - lock regressions around the final ownership boundary,
   - sync docs/state,
   - run final quality gates.
@@ -216,7 +216,7 @@ isolated opportunities for more split-specific special casing.
     - the remaining uses of `StringSplit` are clearly Wasm-lowering details
       rather than source-level fallback semantics.
 
-- [ ] S3-1. Ownership cleanup and documentation sync
+- [x] S3-1. Ownership cleanup and documentation sync
   - update `doc/STATE.md` and this document to say:
     - source-level `split` ownership is fully stdlib-driven,
     - backend `StringSplit` remains only a Wasm execution detail,
@@ -227,7 +227,7 @@ isolated opportunities for more split-specific special casing.
       confusing it with the retired runtime builtin branch,
     - the docs match the reviewed post-deletion file boundary from `S2-1`.
 
-- [ ] S3-2. Final quality gates
+- [x] S3-2. Final quality gates
   - run:
     - `cargo fmt`
     - `cargo check`
@@ -257,7 +257,7 @@ Minimum regression set for closing this track:
 
 ## 8. Definition Of Done
 
-This remaining stdlib track is complete when all of the following are true:
+This stdlib retirement track is complete when all of the following are true:
 
 - no direct runtime builtin branch remains for source-level `string.split`,
 - stdlib declaration execution owns source-level split semantics across the
