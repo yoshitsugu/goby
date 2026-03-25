@@ -38,7 +38,7 @@ Last updated: 2026-03-25
 
 ## Track Priority
 
-**Next active work: stdlib track C5 runtime builtin retirement.**
+**Next active work: stdlib split retirement track S1 evaluator ownership convergence.**
 C4 is now complete: compile/runtime parity coverage includes `examples/import.gb` compile-path
 coverage, `split "" "" -> []`, and a Unicode multi-grapheme delimiter regression.
 
@@ -74,8 +74,9 @@ Added tests: empty-delimiter ASCII/emoji, single-char delimiter, leading/trailin
 compile-path parity.
 
 **Track stdlib (C4-S5) — complete (2026-03-25):**
-Active docs/state now mark C4 complete and narrow the next stdlib work to C5 runtime builtin
-retirement. The remaining direct runtime `string.split` branch is legacy-only pending deletion.
+Active docs/state now mark C4 complete and narrow the next stdlib work to the renumbered
+split-retirement track. The remaining direct runtime `string.split` branch is legacy-only
+pending deletion, and the next required work is generic evaluator ownership convergence.
 
 **Track WB-3B (future, deferred):**
 WasmFX typed continuations — currently on hold.
@@ -111,7 +112,7 @@ Restart only when the external prerequisites in `doc/PLAN_IR.md` Phase WB-3B are
 ## Key Entry Points
 
 - `doc/PLAN_IR.md` — Wasm backend lowering design and phase plan
-- `doc/PLAN_STANDARD_LIBRARY.md` — stdlib split/grapheme C4–C8
+- `doc/PLAN_STANDARD_LIBRARY.md` — remaining stdlib split-retirement plan
 - `crates/goby-wasm/src/gen_lower/lower.rs` — `lower_comp` / `lower_value`
 - `crates/goby-wasm/src/gen_lower/emit.rs` — Wasm instruction emission
 - `crates/goby-wasm/src/gen_lower/backend_ir.rs` — backend IR instruction set

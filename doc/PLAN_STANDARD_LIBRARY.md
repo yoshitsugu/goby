@@ -2,61 +2,55 @@
 
 Status: active follow-up only
 Owner: Goby core/runtime track
-Last updated: 2026-03-25 (C4-S4 partial)
+Last updated: 2026-03-25 (post-C4 renumbered retirement plan)
 
 ## 1. Scope
 
-Most of the original stdlib-foundation plan is already implemented. This
-document now keeps only the remaining work that is still relevant for active
-development.
-
-This is a focused companion plan to `doc/PLAN.md`, not a separate roadmap.
+This document tracks only the stdlib work that is still active after C4
+completion.
 
 Current remaining stdlib track:
 
-- finish moving `goby/string.split` to stdlib-driven behavior,
-- remove the remaining direct runtime builtin path for `string.split`,
-- lock tests/docs around the final ownership boundary.
+- retire the last direct runtime builtin branch for `goby/string.split`,
+- make the ownership boundary explicit between:
+  - stdlib declaration execution,
+  - backend intrinsics used by Wasm lowering,
+  - compile-time/runtime-output fallback evaluation,
+- lock regression coverage and docs around that final boundary.
 
-This track is intentionally narrower than `doc/PLAN_IR.md`:
+This plan is intentionally narrower than `doc/PLAN_IR.md`:
 
-- `PLAN_IR` owns making composed runtime-`Read` shapes reach `GeneralLowered`
-  end-to-end through the existing backend IR and Wasm emitter.
-- this document owns only the final semantics/ownership handoff for `goby/string.split`.
-- in particular, `list.map`, `list.each`, and `goby/string.graphemes` lowering convergence
-  are not split-track milestones here except where they are needed as parity coverage for
-  stdlib `split`.
+- `PLAN_IR` owns Wasm lowering, backend intrinsics, and `GeneralLowered` runtime
+  execution.
+- this document owns only the final ownership cleanup for stdlib `split`.
+- backend `StringSplit` / `SplitEachPrint` / `SplitGetPrint` instructions are
+  not deletion targets here unless their ownership changes explicitly in a later
+  plan.
 
-Everything else from the earlier stdlib bootstrap plan should be treated as
-completed historical work and recovered from git history if needed.
+Everything from the earlier stdlib bootstrap and C4 implementation work should
+be treated as completed historical work and recovered from git history if
+needed.
 
 ## 2. Current State
 
 Already true today (updated 2026-03-25):
 
-- file-based stdlib import resolution exists,
-- stdlib-only `@embed` is implemented,
-- intrinsic bridge names for current stdlib support exist,
-- `__goby_string_each_grapheme` and `__goby_list_push_string` are implemented
-  and fully wired: `graphemes(text)[N]` executes through the Goby-owned Wasm
-  runtime (GeneralLowered path) with correct Unicode EGC output,
-- `String == String` works through the normal `==` operator,
-- `stdlib/goby/string.gb` already contains iterator-driven `split` paths for:
-  - empty delimiter (`split_with_empty_delimiter`),
-  - single-grapheme delimiter (`split_with_single_delimiter`).
-- at least one composed-path regression using stdlib `split` in a higher-order pipeline
-  (`split -> map(graphemes) -> list.get -> each`) now exists through the `PLAN_IR` WB-3-M7
-  acceptance shape and its variants.
-- the backend intrinsic `StringSplit` and fused `SplitEachPrint`/`SplitGetPrint`
-  instructions exist for the byte-level split path used by general Wasm lowering;
-  these are independent of the stdlib `string.split` call.
+- `stdlib/goby/string.gb` fully owns source-level `split` semantics for all
+  delimiter cases.
+- the stdlib `split` definition no longer calls runtime `string.split(...)` for
+  any delimiter case.
+- empty-delimiter, single-delimiter, multi-grapheme-delimiter, `split "" ""`,
+  and import/compile-path coverage are locked by tests.
+- `StringGraphemesList` handles the empty-delimiter Wasm path.
+- backend `StringSplit` and fused split-print helpers still exist for Wasm
+  lowering and are currently independent of stdlib declaration ownership.
 
 Still not finished:
 
-- runtime builtin retirement is still pending:
-  - the legacy direct runtime handling path for `string.split` still exists,
-  - behavior-hardening coverage for the final stdlib-owned split path is not complete,
-- docs/state still need the final ownership sync once the remaining split tests land.
+- compile-time/runtime-output fallback evaluation still contains a legacy direct
+  runtime handling path for `string.split`,
+- that legacy path currently masks broader evaluator ownership gaps,
+- docs still describe the branch as pending deletion rather than fully retired.
 
 ## 3. Locked Behavior
 
@@ -68,101 +62,208 @@ These semantics remain locked while finishing the work:
 - grapheme definition is Unicode Extended Grapheme Cluster,
 - empty input returns `[]` for current compatibility.
 
-## 4. Remaining Milestones
+## 4. Architecture Goal
 
-- [ ] C4. Stdlib iterator/string implementation
-  - finish `split` in `stdlib/goby/string.gb` using Iterator-driven processing,
-  - remove dependency on runtime builtin `string.split(...)`.
+The target architecture after this remaining split-retirement track is:
 
-- [ ] C5. Runtime builtin retirement
-  - remove direct runtime handling path for `string.split` method call.
+- source-level `goby/string.split` behavior is owned by stdlib declarations,
+- backend intrinsics remain an execution-detail boundary for Wasm lowering only,
+  not a semantic fallback for stdlib source resolution,
+- compile-time/runtime-output fallback evaluation executes imported/local stdlib
+  declarations through one coherent declaration-evaluation path rather than
+  through ad-hoc per-function shortcuts,
+- deleting one stdlib builtin branch should not require new
+  function-specific special cases elsewhere.
 
-- [ ] C6. Regression coverage
-  - add split edge-case tests and Unicode grapheme behavior tests,
-  - add parity coverage for import/example paths that depend on `split`.
+This means the remaining goal is not merely "delete a few `split` if-statements".
+The real goal is to remove them **after** the generic evaluator path is strong
+enough that they are unnecessary.
 
-- [ ] C7. Docs sync
-  - update active docs with final split ownership and intrinsic set.
+## 5. Remaining Milestones
 
-- [ ] C8. Final quality gates
-  - `cargo fmt`
-  - `cargo check`
-  - `cargo test`
-  - `cargo clippy -- -D warnings`
+- [ ] S1. Evaluator ownership convergence
+  - close the generic fallback-evaluator gaps that are currently hidden by the
+    legacy `string.split` runtime branch,
+  - make imported/local stdlib declaration execution coherent enough that
+    `split` no longer needs function-specific rescue logic.
 
-## 5. Step-By-Step Execution
+- [ ] S2. Legacy split branch retirement
+  - remove the direct runtime handling path for source-level `string.split`,
+  - preserve the existing backend intrinsic boundary for Wasm lowering.
 
-- [x] C4-S1. Unblock stdlib state type declaration
-  - update the typechecker/local-binding path so `stdlib/goby/string.gb` passes under the
-    current language/runtime architecture.
-  - completed 2026-03-24:
-    - `GraphemeState(... parts: [] ...)` now typechecks as `List String` in the relevant
-      constructor/state-update flows,
-    - `grapheme_count` local mutable binding (`mut n = 0`) no longer fails through nested
-      stdlib-style `with ... in` bodies,
-    - focused regression coverage added for both shapes,
-    - `cargo run -p goby-cli -- check stdlib/goby/string.gb` now succeeds.
+- [ ] S3. Boundary lock and closure
+  - lock regressions around the final ownership boundary,
+  - sync docs/state,
+  - run final quality gates.
 
-- [x] C4-S2. Stabilize iterator state contract in stdlib
-  - keep `GraphemeState` in `stdlib/goby/iterator.gb` as the canonical shared
-  state shape,
-  - make `stdlib/goby/string.gb` import and use that shared shape only,
-  - remove duplicated local declarations once C4-S1 is done.
-  - completed 2026-03-25:
-    - `type GraphemeState = ...` now lives in `stdlib/goby/iterator.gb`,
-    - `stdlib/goby/string.gb` imports `Iterator` and `GraphemeState` selectively from
-      `goby/iterator`,
-    - imported shared record constructors now flow through the normal type-environment path,
-    - `cargo run -p goby-cli -- check stdlib/goby/string.gb` succeeds after the move.
-  - exit criteria:
-    - no duplicated `Iterator` / `GraphemeState` declarations across stdlib modules.
+The previous `C6` / `C7` / `C8` breakdown has been intentionally collapsed into
+`S3`. Those items are still required, but they are completion conditions for the
+retirement work, not independent roadmap themes.
 
-- [x] C4-S3. Implement multi-grapheme delimiter path in stdlib
-  - add stdlib-owned grapheme-aware matcher state for:
-    - current token buffer,
-    - delimiter-match progress,
-    - output parts list.
-  - preserve the locked split semantics from section 3.
-  - completed 2026-03-25:
-    - `stdlib/goby/string.gb` now handles multi-grapheme delimiters through stdlib-owned grapheme-list matching,
-    - the stdlib `split` definition no longer calls runtime `string.split(...)` for any delimiter case,
-    - focused Wasm execution coverage proves leading / consecutive / trailing empty-segment preservation for a representative multi-grapheme delimiter case,
-    - `cargo run -p goby-cli -- check stdlib/goby/string.gb` still succeeds after the rewrite.
-  - exit criteria:
-    - `split` no longer calls runtime `string.split(...)` for any delimiter case.
+## 6. Detailed Execution Plan
 
-- [x] C4-S4. Remove stdlib fallback dependency and harden behavior tests (complete, 2026-03-25)
-  - completed (commit a9f85fa3):
-    - `split text ""` Wasm trap fixed: `lower_comp_inner` redirects `split text ""` to
-      `StringGraphemesList` (same as `graphemes text`) in both GlobalRef and Var call paths.
-    - `StringSplit` intrinsic retained for non-empty delimiter (stdlib `split_with_*` functions
-      use record field access which `emit.rs` does not support — full stdlib routing deferred).
-    - `stdlib/goby/string.gb`: `split`/`split_multi_parts`/`split_with_multi_delimiter`
-      refactored to use `let` bindings before `if` conditions (required by `ir_lower.rs`).
-    - stdlib transitive closure mechanism added to `lower_module_to_instrs` (for user aux decls
-      that call stdlib functions).
-    - tests added: empty-delimiter ASCII (`split "abc" ""`), empty-delimiter emoji ZWJ,
-      single-char delimiter comma, leading/trailing empty segments.
-  - completed in this slice:
-    - `examples/import.gb` compile-path parity test (classified as `NotRuntimeIo`, compiles to valid Wasm),
-    - `split "" ""` → `[]` edge-case execution test,
-    - multi-grapheme delimiter Unicode EGC execution test.
-  - exit criteria:
-    - tests prove stdlib `split` behavior matches the locked semantics.
+### 6.1 Non-goals
 
-- [x] C4-S5. Mark C4 done and prepare C5 handoff
-  - update active docs/state:
-    - C4 complete,
-    - runtime `string.split` branch is now legacy-only pending deletion.
-  - exit criteria:
-    - only C5 remains between current state and builtin retirement.
+Do not do the following in this track:
 
-## 6. Definition Of Done
+- do not rewrite `stdlib/goby/string.gb` again unless a generic evaluator gap
+  proves that the stdlib surface itself is inconsistent,
+- do not add a replacement `split`-specific branch in another runtime file,
+- do not delete backend `StringSplit` merely because source-level stdlib
+  ownership is complete,
+- do not paper over generic evaluator limitations with another targeted
+  `goby/string` special case.
+
+### 6.2 Design Principle
+
+If removal exposes a failure, fix the **generic ownership layer** that should have
+been responsible all along.
+
+Preferred ownership order:
+
+1. local/imported declaration value execution,
+2. statement/block local-state propagation in the fallback evaluator,
+3. method/bare-call dispatch normalization,
+4. only then, deletion of the legacy `split` fast-path.
+
+This ordering is important because deleting the branch first without the generic
+path ready leads directly to ad-hoc compensating hacks.
+
+### 6.3 Known Risk Surface
+
+Based on current code structure, the risky areas are:
+
+- `crates/goby-wasm/src/runtime_decl.rs`
+  - imported declaration execution and imported-call shortcut logic,
+- `crates/goby-wasm/src/runtime_apply.rs`
+  - local declaration value execution for helper chains used by stdlib `split`,
+- `crates/goby-wasm/src/runtime_expr.rs`
+  - block/value evaluation and statement-versus-expression handling,
+- `crates/goby-wasm/src/runtime_replay.rs`
+  - propagation of updated locals through `with`, nested block, and resumptive
+    statement flows,
+- `crates/goby-wasm/src/runtime_resolver.rs`
+  - AST/option-based fallback path parity with the `Out`-based evaluator.
+
+These should be treated as one cohesive evaluator ownership surface, not as
+isolated opportunities for more split-specific special casing.
+
+### 6.4 Step-by-step Plan
+
+- [ ] S1-1. Lock the evaluator ownership contract with targeted regressions
+  - add focused tests for:
+    - selective-import `split(...)` through runtime-output fallback,
+    - canonical qualified `string.split(...)` through runtime-output fallback,
+    - empty-delimiter runtime-output behavior,
+    - Unicode multi-grapheme delimiter runtime-output behavior.
+  - keep these tests beside the existing `runtime_output_tests` split coverage.
+  - done-when:
+    - the tests fail for understandable reasons when the legacy branch is
+      removed,
+    - the failures identify generic evaluator gaps rather than ambiguous
+      end-to-end breakage.
+
+- [ ] S1-2. Unify declaration value execution before deleting the branch
+  - make imported/local declaration value execution use one coherent
+    responsibility model for:
+    - argument binding,
+    - declaration-body result extraction,
+    - call-shape normalization between bare/qualified/imported declaration calls.
+  - the bar is not "make split pass"; the bar is "imported/local decl execution
+    is no longer split-specific".
+  - done-when:
+    - helper chains inside `stdlib/goby/string.gb` evaluate through the generic
+      declaration path without relying on `split` shortcuts,
+    - no new `split`-specific branches are introduced.
+
+- [ ] S1-3. Normalize fallback evaluator state propagation where `split` depends on it
+  - close generic gaps in:
+    - statement/block result extraction,
+    - `with ... in` local update propagation,
+    - statement-versus-expression parity,
+    - AST/option path versus `Out` path behavior.
+  - done-when:
+    - the regressions from `S1-1` pass through the generic evaluator path with
+      no dedicated `split` handling,
+    - the remaining failures, if any, are about branch deletion itself rather
+      than evaluator incompleteness.
+
+- [ ] S2-1. Delete the legacy `string.split` runtime branch
+  - remove the direct runtime handling in the fallback/runtime-output path once
+    `S1` is green.
+  - deletion targets include:
+    - bare imported `split` special cases,
+    - qualified `string.split` special cases,
+    - any now-dead helper predicates that exist only for those branches.
+  - expected review surface after deletion:
+    - `crates/goby-wasm/src/runtime_decl.rs`,
+    - `crates/goby-wasm/src/runtime_expr.rs`,
+    - `crates/goby-wasm/src/runtime_resolver.rs`.
+  - done-when:
+    - a search for the retired branch shape no longer finds runtime-only
+      `string.split` handling in the fallback evaluator path,
+    - split behavior remains correct through the generic path.
+
+- [ ] S2-2. Re-run ownership regressions across affected execution boundaries
+  - prove imported/qualified `split` still works after branch deletion,
+  - prove empty-delimiter and Unicode multi-grapheme behavior still hold across
+    fallback and Wasm-owned execution boundaries.
+  - explicitly review the `S2-1` target files to confirm no source-level
+    `string.split` semantic escape hatch remains in the fallback evaluator.
+  - done-when:
+    - the legacy branch is gone and the regression set still passes without
+      reintroducing a new special case,
+    - the remaining uses of `StringSplit` are clearly Wasm-lowering details
+      rather than source-level fallback semantics.
+
+- [ ] S3-1. Ownership cleanup and documentation sync
+  - update `doc/STATE.md` and this document to say:
+    - source-level `split` ownership is fully stdlib-driven,
+    - backend `StringSplit` remains only a Wasm execution detail,
+    - any remaining split-specific code is optimization or lowering support,
+      not semantic fallback.
+  - done-when:
+    - a future reader can tell exactly why `StringSplit` still exists without
+      confusing it with the retired runtime builtin branch,
+    - the docs match the reviewed post-deletion file boundary from `S2-1`.
+
+- [ ] S3-2. Final quality gates
+  - run:
+    - `cargo fmt`
+    - `cargo check`
+    - `cargo test`
+    - `cargo clippy -- -D warnings`
+  - done-when:
+    - the retirement slice closes with no pending breakage and no unverified
+      boundary assumptions.
+
+## 7. Regression Strategy
+
+Minimum regression set for closing this track:
+
+- compile/runtime-output fallback:
+  - selective-import `split`,
+  - canonical qualified `string.split`,
+  - empty delimiter,
+  - Unicode multi-grapheme delimiter,
+  - representative helper-chain shape (`split -> list.get` or `split -> each`)
+    where relevant to the fallback evaluator.
+- Wasm/general-lowered path:
+  - preserve the existing C4 regressions,
+  - prove no accidental regression in `GeneralLowered` split execution.
+- documentation/state:
+  - docs must stop implying C4 is still an active milestone in this document,
+  - docs must distinguish semantic ownership from backend intrinsic existence.
+
+## 8. Definition Of Done
 
 This remaining stdlib track is complete when all of the following are true:
 
-- `goby/string.split` is fully implemented in stdlib for all delimiter cases,
-- no direct runtime builtin branch remains for `string.split`,
-- regression tests cover the locked split semantics and Unicode grapheme cases,
-- active planning/state docs reflect the final ownership boundary,
+- no direct runtime builtin branch remains for source-level `string.split`,
+- stdlib declaration execution owns source-level split semantics across the
+  remaining fallback paths,
+- backend `StringSplit` exists only as an explicitly documented Wasm execution
+  detail,
+- regression tests cover the locked split semantics and the ownership boundary,
+- active planning/state docs reflect the final boundary,
 - quality gates pass.
