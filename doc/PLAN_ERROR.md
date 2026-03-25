@@ -255,27 +255,42 @@ Done when:
   - extracting the narrowest available expression span,
   - extracting identifier/qualified-name spans where available.
 - [ ] ER1.3 Add unit tests for those helpers before migrating error sites.
+- [ ] ER1.4 Lock the pipeline-callee span ownership decision:
+  - if pipeline callee spans require AST/data-model changes that affect the
+    long-term span architecture, include that structural work in this track,
+  - otherwise record pipeline callee spans as an explicitly deferred local
+    follow-up after the core unresolved-name path is stable.
 
 Constraints:
 
 - no behavior change yet beyond helper introduction,
 - no import parser changes yet.
-- if pipeline callee span support is found to require AST-shape changes that
-  affect the long-term span model, decide that in ER1 rather than deferring it
-  behind later presentation work.
+- design-affecting uncertainty around pipeline span ownership must not remain
+  implicit after ER1.
 
 Done when:
 
 - there is one shared helper path for expression-span lookup,
-- new checker code can depend on helpers instead of custom span logic.
+- new checker code can depend on helpers instead of custom span logic,
+- the pipeline-callee span decision is explicitly recorded as either
+  in-track work or deferred work.
 
 ### Milestone ER2: Unresolved bare-name diagnostics at use sites
 
 - [ ] ER2.1 Migrate unresolved bare-name checks in
   `crates/goby-core/src/typecheck_stmt.rs` to use expression spans.
-- [ ] ER2.2 Migrate unresolved bare-name checks in the highest-value remaining
-  checker paths that currently return `span: None`.
-- [ ] ER2.3 Add focused tests proving that:
+- [ ] ER2.2 Migrate unresolved bare-name diagnostics in the checker modules
+  covered by this track:
+  - `typecheck_stmt.rs`
+  - `typecheck_check.rs`
+  - `typecheck_effect_usage.rs`
+  - `typecheck_resume.rs`
+  - `typecheck_branch.rs`
+- [ ] ER2.3 For each covered module above, classify every remaining
+  unresolved-name-related `span: None` site as one of:
+  - completed in ER2,
+  - intentionally deferred outside this track with a recorded reason.
+- [ ] ER2.4 Add focused tests proving that:
   - `map`-not-imported points at `map`,
   - a missing local/decl reference points at the unresolved token.
 
@@ -283,11 +298,15 @@ Constraints:
 
 - no ad-hoc `map` special case,
 - use the shared helper added in ER1.
+- ER2 must not close with vague “high-value remaining” wording; the covered
+  modules and deferred items must be explicit.
 
 Done when:
 
 - CLI can underline `map` exactly in the representative example,
-- LSP range for that error is non-zero-width and token-aligned.
+- LSP range for that error is non-zero-width and token-aligned,
+- the covered unresolved bare-name producers are explicitly partitioned into
+  done vs deferred rather than left implicit.
 
 ### Milestone ER3: Qualified-name and ambiguity diagnostics
 
@@ -581,6 +600,9 @@ Mitigation:
    - design-affecting uncertainty should be reduced early,
    - purely local rendering/value improvements do not need to block the main
      span-propagation path.
+   Status hook:
+   - this decision must be recorded by ER1.4 and must not remain an informal
+     note by the time implementation leaves ER1.
 
 ---
 
@@ -595,5 +617,8 @@ This plan is complete when all of the following are true:
 - CLI renders whole-token underline snippets for covered range-span cases,
 - LSP publishes matching token-aligned ranges for the same cases,
 - the covered families no longer rely on ad-hoc `span: None` construction,
+- the ER2 covered-module set is explicitly marked done or deferred on a
+  per-module basis,
+- the pipeline-callee span decision is explicitly recorded rather than implied,
 - remaining unaddressed span gaps are explicitly cataloged rather than hidden in
   comments.
