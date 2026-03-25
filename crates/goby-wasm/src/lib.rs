@@ -373,6 +373,32 @@ main =
     }
 
     #[test]
+    fn c4_s3_stdlib_split_multi_grapheme_delimiter_executes() {
+        use goby_core::parse_module;
+        let module = parse_module(
+            r#"
+import goby/list
+import goby/string
+
+main : Unit -> Unit can Print, Read
+main =
+  _ignored = read ()
+  parts = string.split "--a----b--" "--"
+  list.each parts (|part| -> println "${part}!")
+"#,
+        )
+        .expect("parse should work");
+
+        let output = execute_runtime_module_with_stdin(&module, Some(String::new()))
+            .expect("C4-S3 multi-grapheme split program should execute");
+        assert_eq!(
+            output.as_deref(),
+            Some("!\na!\n!\nb!\n!\n"),
+            "C4-S3 multi-grapheme split must preserve leading, consecutive, and trailing empty segments"
+        );
+    }
+
+    #[test]
     fn wb1_binop_eq_executes_via_general_lowered() {
         // WB-1: BinOp Eq lowers to tagged i64 comparison and executes correctly.
         // Tests that `2 + 3 == 5` evaluates to True and routes through If correctly.

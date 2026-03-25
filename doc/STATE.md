@@ -38,9 +38,10 @@ Last updated: 2026-03-25
 
 ## Track Priority
 
-**Next active work: stdlib track moves to C4-S3.**
+**Next active work: stdlib track moves to C4-S4.**
 The representative WB-3-M7 composed runtime-`Read` path is fixed by regression coverage, and
-C4-S2 is now complete. The active work returns to the remaining split-ownership milestones.
+C4-S3 is now complete. The active work returns to behavior-hardening for the final stdlib-owned
+`split` implementation.
 
 See `doc/PLAN_STANDARD_LIBRARY.md` for the remaining C4 milestones.
 
@@ -58,10 +59,16 @@ from `stdlib/goby/string.gb`.
 Exit criterion: no duplicated `Iterator` / `GraphemeState` declarations remain across stdlib modules.
 See `doc/PLAN_STANDARD_LIBRARY.md` §5.
 
-**Track stdlib (C4-S3) — next:**
-Implement the iterator-driven multi-grapheme delimiter path in `stdlib/goby/string.gb`
-so `split` no longer depends on the runtime builtin fallback for that case.
-Exit criterion: `split` no longer calls `string.split(value, sep)` for any delimiter case.
+**Track stdlib (C4-S3) — complete (2026-03-25):**
+`stdlib/goby/string.gb` now handles multi-grapheme delimiters through the stdlib-owned path, and
+`split` no longer calls `string.split(value, sep)` for any delimiter case.
+Focused Wasm execution coverage now locks a representative multi-delimiter case with
+leading/consecutive/trailing empty segments preserved.
+
+**Track stdlib (C4-S4) — next:**
+Harden behavior coverage for the final stdlib-owned `split` path.
+Exit criterion: runtime tests cover empty delimiter, single-grapheme delimiter, multi-grapheme
+delimiter, consecutive/leading/trailing empties, and Unicode grapheme cases.
 
 **Track WB-3B (future, deferred):**
 WasmFX typed continuations — currently on hold.

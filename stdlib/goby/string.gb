@@ -63,6 +63,49 @@ split_with_single_delimiter value sep =
   else
     []
 
+prefix_matches : List String -> List String -> Bool
+prefix_matches xs prefix =
+  case prefix
+    [] -> True
+    [part, ..rest_prefix] ->
+      case xs
+        [] -> False
+        [x, ..rest_xs] ->
+          if x == part
+            prefix_matches rest_xs rest_prefix
+          else
+            False
+
+drop_matched_prefix : List String -> List String -> List String
+drop_matched_prefix xs prefix =
+  case prefix
+    [] -> xs
+    [_, ..rest_prefix] ->
+      case xs
+        [] -> []
+        [_, ..rest_xs] ->
+          drop_matched_prefix rest_xs rest_prefix
+
+split_multi_parts : List String -> List String -> String -> List String -> List String
+split_multi_parts xs sep_parts current parts =
+  case xs
+    [] -> __goby_list_push_string parts current
+    _ ->
+      if prefix_matches xs sep_parts
+        next_parts = __goby_list_push_string parts current
+        rest = drop_matched_prefix xs sep_parts
+        split_multi_parts rest sep_parts "" next_parts
+      else
+        case xs
+          [] -> __goby_list_push_string parts current
+          [x, ..rest_xs] ->
+            next_current = "${current}${x}"
+            split_multi_parts rest_xs sep_parts next_current parts
+
+split_with_multi_delimiter : String -> String -> List String
+split_with_multi_delimiter value sep =
+  split_multi_parts (graphemes value) (graphemes sep) "" []
+
 split : String -> String -> List String
 split value sep =
   if value == ""
@@ -74,7 +117,7 @@ split value sep =
       if grapheme_count sep == 1
         split_with_single_delimiter value sep
       else
-        string.split(value, sep)
+        split_with_multi_delimiter value sep
 
 graphemes : String -> List String
 graphemes value =

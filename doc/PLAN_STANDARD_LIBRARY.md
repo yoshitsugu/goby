@@ -53,17 +53,10 @@ Already true today (updated 2026-03-25):
 
 Still not finished:
 
-- multi-grapheme delimiters still depend on the runtime `string.split(...)`
-  builtin path (the `else` branch of `split` in `stdlib/goby/string.gb`),
-- stdlib state/type plumbing still needs cleanup before the final `split`
-  implementation is fully consolidated:
-  - `stdlib/goby/string.gb` now typechecks successfully,
-  - `parts: []` style state initialization now converges in `List String`
-    constructor/state-update flows,
-  - outer `mut` locals now remain visible inside stdlib-style `with ... in`
-    bodies,
-  - duplicated iterator state declarations are still present across stdlib modules,
-- the runtime builtin branch cannot yet be deleted.
+- runtime builtin retirement is still pending:
+  - the legacy direct runtime handling path for `string.split` still exists,
+  - behavior-hardening coverage for the final stdlib-owned split path is not complete,
+- docs/state still need the final ownership sync once the remaining split tests land.
 
 ## 3. Locked Behavior
 
@@ -124,12 +117,17 @@ These semantics remain locked while finishing the work:
   - exit criteria:
     - no duplicated `Iterator` / `GraphemeState` declarations across stdlib modules.
 
-- [ ] C4-S3. Implement multi-grapheme delimiter path in stdlib
-  - add iterator-driven matcher state for:
+- [x] C4-S3. Implement multi-grapheme delimiter path in stdlib
+  - add stdlib-owned grapheme-aware matcher state for:
     - current token buffer,
     - delimiter-match progress,
     - output parts list.
   - preserve the locked split semantics from section 3.
+  - completed 2026-03-25:
+    - `stdlib/goby/string.gb` now handles multi-grapheme delimiters through stdlib-owned grapheme-list matching,
+    - the stdlib `split` definition no longer calls runtime `string.split(...)` for any delimiter case,
+    - focused Wasm execution coverage proves leading / consecutive / trailing empty-segment preservation for a representative multi-grapheme delimiter case,
+    - `cargo run -p goby-cli -- check stdlib/goby/string.gb` still succeeds after the rewrite.
   - exit criteria:
     - `split` no longer calls runtime `string.split(...)` for any delimiter case.
 
