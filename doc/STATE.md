@@ -33,6 +33,14 @@ Last updated: 2026-03-26
 - Boolean operator surface extended (2026-03-26): `||` and unary `!` are now supported.
   Parser precedence is locked so comparisons bind tighter than `&&` / `||`, and the
   active examples/spec now reflect the implemented operator set.
+- Runtime-lowering bug triage documented (2026-03-26):
+  - minimal repros and analysis now live in `doc/BUGS.md` and `examples/bugs/`.
+  - two independent issues are confirmed:
+    - runtime-`Read` programs currently mask capture-ful helper lambdas behind a generic
+      runtime-I/O unsupported-shape error,
+    - tuple member access can leak into `gen_lower/emit` as pseudo-local names such as `pair.0`.
+  - `doc/PLAN.md` now carries `Track H`, which explicitly forbids ad hoc fixes in
+    `runtime_io_plan.rs` and instead targets shared IR / general-lowering ownership cleanup.
 - Typechecker follow-up identified (2026-03-25): ordinary calls still need shared
   higher-order function-type validation.
   - direct unknown bare calls are now rejected during typecheck.
@@ -104,9 +112,25 @@ semantics.
 WasmFX typed continuations — currently on hold.
 Restart only when the external prerequisites in `doc/PLAN_IR.md` Phase WB-3B are satisfied.
 
-**Track E (new, immediate):**
+**Track H (new, immediate):**
+Runtime-lowering correctness for tuple member access and capture-ful lambdas in runtime-`Read`
+programs.
+First slice is `H1`: tuple-projection canonicalization after tuple meaning is known.
+Immediate exit target:
+- `examples/bugs/runtime_read_tuple_member.gb` must stop failing as `unknown local 'pair.0'`
+- no syntax change
+- no new `runtime_io_plan.rs` shape recognizers
+
+**Track H follow-up immediately after H1/H2:**
+`H3`/`H4` unsupported-reason plumbing + precise closure-capture diagnostics.
+Exit target:
+- `examples/bugs/runtime_read_captured_lambda.gb` no longer reports the generic
+  runtime-I/O unsupported-shape error
+- if closure lowering is still deferred, the compiler must say that closure capture is the blocker
+
+**Track E (next after Track H front slices):**
 Higher-order function-type checking.
-First target is to make callback positions such as `each xs println` fail with a
+First target remains to make callback positions such as `each xs println` fail with a
 resolved-name-but-wrong-function-type diagnostic (`Int -> Unit` required,
 `String -> Unit` found) rather than relying on ad hoc `println` checks.
 
@@ -160,6 +184,8 @@ Residual:
 - WB-3 exit state:
   - non-tail / multi-resume handlers produce `BackendLimitation` error (not silent miscompilation)
   - lambda with free variables (closure capture) produces `UnsupportedForm` (WB-3B deferred)
+  - this remains an execution limitation, not a runtime-I/O-shape limitation; next work is to
+    surface that distinction explicitly in diagnostics and internal lowering results
 
 ## Key Entry Points
 
