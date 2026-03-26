@@ -271,6 +271,9 @@ fn lower_expr_as_comp_non_value(
                 value: Box::new(ir_value),
             })
         }
+        ResolvedExpr::BinOp { op, left, right } => {
+            lower_binop_anf(ctx, lower_binop(op), left, right)
+        }
         ResolvedExpr::MethodCall {
             receiver, method, ..
         } => Err(err(format!(
@@ -368,11 +371,17 @@ fn try_lower_value(
             }
         },
         ResolvedExpr::BinOp { op, left, right } => {
-            let ir_op = lower_binop(op);
-            let l = lower_value_required(ctx, left, "binary operator left operand")?;
-            let r = lower_value_required(ctx, right, "binary operator right operand")?;
+            // Only produce a pure ValueExpr when both operands are already values.
+            // If either operand is non-value, return None so lower_expr_as_comp_non_value
+            // can ANF-hoist them into Let bindings via lower_binop_anf.
+            let Some(l) = try_lower_value(ctx, left)? else {
+                return Ok(None);
+            };
+            let Some(r) = try_lower_value(ctx, right)? else {
+                return Ok(None);
+            };
             Ok(Some(ValueExpr::BinOp {
-                op: ir_op,
+                op: lower_binop(op),
                 left: Box::new(l),
                 right: Box::new(r),
             }))
@@ -596,6 +605,64 @@ where
         value: Box::new(value_comp),
         body: Box::new(body),
     })
+}
+
+/// ANF-hoist both operands of a binary operator.
+/// If an operand is already a pure value it is used directly; otherwise a Let
+/// binding is inserted for the temporary so the resulting expression remains
+/// a valid ValueExpr::BinOp.
+fn lower_binop_anf(
+    ctx: &mut LowerCtx,
+    op: IrBinOp,
+    left: &ResolvedExpr,
+    right: &ResolvedExpr,
+) -> Result<CompExpr, LowerError> {
+    // Resolve left operand (ANF if non-value).
+    let (l_val, l_let): (ValueExpr, Option<(String, CompExpr)>) =
+        if let Some(v) = try_lower_value(ctx, left)? {
+            (v, None)
+        } else {
+            let tmp = ctx.fresh_tmp("binop_left");
+            let comp = lower_expr_as_comp(ctx, left)?;
+            (ValueExpr::Var(tmp.clone()), Some((tmp, comp)))
+        };
+
+    // Resolve right operand (ANF if non-value).
+    let (r_val, r_let): (ValueExpr, Option<(String, CompExpr)>) =
+        if let Some(v) = try_lower_value(ctx, right)? {
+            (v, None)
+        } else {
+            let tmp = ctx.fresh_tmp("binop_right");
+            let comp = lower_expr_as_comp(ctx, right)?;
+            (ValueExpr::Var(tmp.clone()), Some((tmp, comp)))
+        };
+
+    let binop = CompExpr::Value(ValueExpr::BinOp {
+        op,
+        left: Box::new(l_val),
+        right: Box::new(r_val),
+    });
+
+    // Wrap in Let bindings from innermost outward (right first, then left).
+    let with_r = match r_let {
+        None => binop,
+        Some((name, value)) => CompExpr::Let {
+            name,
+            ty: IrType::Unknown,
+            value: Box::new(value),
+            body: Box::new(binop),
+        },
+    };
+    let with_l = match l_let {
+        None => with_r,
+        Some((name, value)) => CompExpr::Let {
+            name,
+            ty: IrType::Unknown,
+            value: Box::new(value),
+            body: Box::new(with_r),
+        },
+    };
+    Ok(with_l)
 }
 
 fn lower_value_required(
@@ -2437,6 +2504,51 @@ main =
             matches!(ir_decl.body, CompExpr::Call { .. }),
             "non-effect qualified call must lower to Call, not PerformEffect; got {:?}",
             ir_decl.body
+        );
+    }
+
+    #[test]
+    fn lower_binop_with_call_right_operand_introduces_anf_let() {
+        // `1 + count (n - 1)` — right operand is a Call, not a pure value.
+        // ir_lower must ANF-hoist it into a Let binding.
+        let module = crate::parse_module(
+            r#"
+count n =
+  if n <= 0
+    0
+  else
+    1 + count (n - 1)
+"#,
+        )
+        .expect("module should parse");
+        let ir_module = lower_module(&module).expect("BinOp with call right operand should lower");
+        let count_decl = ir_module
+            .decls
+            .iter()
+            .find(|d| d.name == "count")
+            .expect("count decl should be present");
+        // The else branch should be: Let { name: __goby_ir_binop_right_*, value: Call(...), body: Value(BinOp) }
+        fn find_binop_let(expr: &CompExpr) -> bool {
+            match expr {
+                CompExpr::Let { name, value, body, .. } => {
+                    // Found the ANF let for the binop right operand.
+                    if name.starts_with("__goby_ir_binop_right_")
+                        && matches!(value.as_ref(), CompExpr::Call { .. })
+                        && matches!(body.as_ref(), CompExpr::Value(ValueExpr::BinOp { .. }))
+                    {
+                        return true;
+                    }
+                    // Otherwise recurse into the body (e.g. ANF-wrapped if-condition).
+                    find_binop_let(body)
+                }
+                CompExpr::If { else_, .. } => find_binop_let(else_),
+                _ => false,
+            }
+        }
+        assert!(
+            find_binop_let(&count_decl.body),
+            "expected ANF Let for binop right operand; got {:?}",
+            count_decl.body
         );
     }
 
