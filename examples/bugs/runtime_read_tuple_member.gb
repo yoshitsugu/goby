@@ -1,0 +1,5 @@
+main : Unit -> Unit can Print, Read
+main =
+  _ = read()
+  pair = (1, 2)
+  println "${pair.0}"

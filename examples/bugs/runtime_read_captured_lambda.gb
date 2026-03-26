@@ -1,0 +1,12 @@
+import goby/list ( each )
+
+helper : Unit -> Int
+helper =
+  mut total = 0
+  each [1, 2] (|x| -> total := total + x)
+  total
+
+main : Unit -> Unit can Print, Read
+main =
+  _ = read()
+  println "${helper()}"
