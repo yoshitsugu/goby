@@ -667,50 +667,104 @@ Done criteria:
 
 ### 4.7 Track H: Runtime-Lowering Correctness Follow-up
 
-Goal: close the remaining shared-IR lowering gap for runtime-`Read` programs after the completed
-tuple-projection, closure-diagnostic, and conditional-call fixes.
+Goal: close the remaining runtime-`Read` lowering gaps after the completed tuple-projection,
+closure-diagnostic, and conditional-call fixes.
 
 Current status:
 
 - completed Track H work already made tuple projection explicit in IR/backend lowering,
   preserved precise closure-capture diagnostics through `goby run`, and ANF-lowered non-value
   `if` conditions.
-- `doc/BUGS.md` has no active Track H bugs, but one confirmed follow-up remains from the same
-  ownership boundary:
-  - helper declarations that use a non-value expression as a binary-operator operand, such as
-    `checked + count_valid_roll ...`, still fail shared-IR lowering with
-    `binary operator right operand must be a pure value expression in shared IR today`.
+- `doc/BUGS.md` now records three active Track H follow-ups:
+  - `goby/list.length` can still fail code generation in simple runtime-`Read` programs with the
+    generic error `stdlib declaration could not be lowered to backend IR`,
+  - `goby/list.length` can compile and then trap at runtime when consuming the nested list produced
+    by `map ... graphemes`,
+  - helper declarations that use a non-value expression as a binary-operator operand still fail
+    shared-IR lowering with `binary operator right operand must be a pure value expression in
+    shared IR today`.
 
 Design principles:
 
 - keep runtime-I/O classification policy-only; do not add source-shape-specific fallback rules.
 - preserve the shared-IR invariant that `ValueExpr::BinOp` consumes value operands.
-- fix the ownership boundary in `goby-core::ir_lower`, not in backend-specific lowering or CLI
-  error handling.
+- make stdlib/lowering failures visible at their true ownership boundary instead of collapsing them
+  into generic `stdlib declaration could not be lowered to backend IR` or runtime trap symptoms.
+- fix representation and lowering boundaries in `goby-core::ir_lower` and `goby-wasm` rather than
+  adding bug-specific CLI or runtime-I/O special cases.
 
 Remaining execution plan:
 
-1. `H8` ANF lowering for non-value binary operands — **PLANNED**
+1. `H1` precise `list.length` general-lowering support — **PLANNED**
+   - audit why the minimal repro in
+     `/home/yoshitsugu/src/github.com/yoshitsugu/goby/examples/bugs/runtime_read_list_length_codegen.gb`
+     is rejected as `stdlib declaration could not be lowered to backend IR`.
+   - treat `goby/list.length` as an ordinary language-visible stdlib declaration for this track;
+     do not introduce a one-off `list.length`-only lowering path as a bug fix.
+   - make the general-lowering path lower `goby/list.length` successfully in runtime-`Read`
+     programs, with any diagnostic cleanup treated only as supporting work toward that capability.
+   - add regressions covering:
+     - `length [1, 2]` through a helper in a runtime-`Read` program,
+     - the equivalent direct and alias-import variants if they currently take different paths.
+   - target outcome:
+     - the minimal `list.length` repro executes successfully rather than failing during codegen.
+   - step completion gate:
+     - `examples/bugs/runtime_read_list_length_codegen.gb` executes successfully via `goby run`.
+
+2. `H2` list-pattern tail correctness for nested-list consumers — **PLANNED**
+   - investigate the runtime trap in
+     `/home/yoshitsugu/src/github.com/yoshitsugu/goby/examples/bugs/runtime_read_map_graphemes_length_trap.gb`.
+   - validate the Wasm lowering and emitter path for stdlib `length`, especially the `ListPattern`
+     tail reconstruction used by `[x, ..xxs]` recursion.
+   - keep the fix in generic list-pattern/lowering ownership rather than introducing a
+     `list.length`-specific fast path that would bypass the stdlib definition.
+   - check whether the fix belongs in:
+     - list-pattern lowering ownership,
+     - list tail allocation/copy logic in `crates/goby-wasm/src/gen_lower/emit.rs`,
+     - or another shared lowering/emission layer that affects list-pattern recursion generally.
+   - add regressions covering:
+     - `rows = map ["ab", "cd"] graphemes` followed by `length rows` in runtime-`Read`,
+     - nested-list indexing and `each` controls that currently succeed, to keep behavior split
+       visible,
+     - the AoC repro under `/home/yoshitsugu/src/github.com/yoshitsugu/aoc2025/04/solve.gb`.
+   - target outcome:
+     - nested-list consumers such as `length rows` no longer trap at runtime after successful Wasm
+       compilation.
+   - step completion gate:
+     - `examples/bugs/runtime_read_map_graphemes_length_trap.gb` executes successfully via
+       `goby run` without a Wasm trap.
+
+3. `H3` ANF lowering for non-value binary operands — **PLANNED**
    - extend shared-IR lowering so binary operators can accept ordinary expressions on either side
      by hoisting non-value operands into ANF temporaries before constructing `ValueExpr::BinOp`.
    - add regressions covering:
      - helper declarations whose binary operator right operand is a recursive call, such as
        `checked + count_valid_roll ...`,
      - mixed pure/non-pure operand combinations on both left and right,
+     - the minimal repro in
+       `/home/yoshitsugu/src/github.com/yoshitsugu/goby/examples/bugs/runtime_read_non_value_binop_operand.gb`,
      - the current AoC repro under `/home/yoshitsugu/src/github.com/yoshitsugu/aoc2025/04/solve.gb`.
    - target outcome:
      - programs like the AoC solver no longer fail with
        `binary operator right operand must be a pure value expression in shared IR today`,
        and any remaining unsupported feature is reported directly from its true lowering boundary.
+   - step completion gate:
+     - `examples/bugs/runtime_read_non_value_binop_operand.gb` executes successfully via
+       `goby run`.
 
 Done criteria:
 
+- the minimal `list.length` runtime-`Read` repro no longer fails with the generic
+  `stdlib declaration could not be lowered to backend IR` message.
+- nested-list `length` consumers such as
+  `/home/yoshitsugu/src/github.com/yoshitsugu/goby/examples/bugs/runtime_read_map_graphemes_length_trap.gb`
+  no longer trap in Wasm after successful compilation.
 - helper declarations whose binary operator operands contain ordinary expressions no longer fail at
   the shared-IR boundary with
   `binary operator right operand must be a pure value expression in shared IR today`.
 - the AoC repro under `/home/yoshitsugu/src/github.com/yoshitsugu/aoc2025/04/solve.gb` compiles
-  past shared-IR lowering, or any remaining unsupported feature is reported from its true lowering
-  boundary.
+  and executes without the current Track H failures, or any remaining unsupported feature is
+  reported from its true lowering boundary.
 - runtime-I/O classification remains policy-only and does not accumulate new bug-specific shape
   recognizers for these cases.
 
