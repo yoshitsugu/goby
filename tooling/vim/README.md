@@ -47,7 +47,7 @@ Plug '/path/to/goby/tooling/vim'
 | `Boolean` | Boolean constants | `True`, `False` |
 | `Keyword` | Control + declaration keywords | `if` `else` `case` `with` `@embed` `type` … |
 | `Type` | Built-in types + user-defined types | `Int`, `MyType` |
-| `Operator` | Operators | `->` `\|>` `==` `=` `+` `*` `\|` `:` |
+| `Operator` | Operators | `->` `\|>` `\|\|` `&&` `==` `<=` `>=` `=` `<` `>` `+` `-` `*` `/` `%` `!` `\|` `:` |
 
 ## Manual Test
 

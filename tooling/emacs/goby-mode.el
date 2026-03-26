@@ -56,8 +56,9 @@
         ;; Integer literals.
         (number-re     "\\b[0-9]+\\b")
         ;; Operators — longer alternatives first to avoid partial matches.
-        ;; `|>' and `->' must precede `|' and `-' respectively.
-        (operator-re   (rx (or "->" "|>" "==" "=" "+" "*" "|" ":"))))
+        ;; Multi-character operators must precede their single-character forms.
+        (operator-re   (rx (or "->" "|>" "||" "&&" "==" "<=" ">="
+                               "=" "<" ">" "+" "-" "*" "/" "%" "!" "|" ":"))))
     `(
       ;; Strings and comments are handled automatically via the syntax table.
 

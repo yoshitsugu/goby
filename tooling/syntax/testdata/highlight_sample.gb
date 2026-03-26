@@ -28,7 +28,7 @@ import goby/string as str
 mut count = 0
 @embed MyEffect __goby_embeded_effect_stdout_handler
 
-# with / with / resume / can (keyword.control)
+# with / in / resume / can (keyword.control)
 foo : String -> Unit can MyEffect
 foo s =
   with
@@ -54,7 +54,10 @@ baz n s b u xs = print "ok"
 
 # keyword.operator
 result = 1 + 2 * 3
+compare_check = 1 <= 2 && 3 >= 1
 eq_check = result == 9
+bool_check = !False || True
+math_check = 5 - 1 / 2 % 2
 pipe_result = [1, 2, 3] |> print
 lambda_fn = |x| -> x + 1
 
