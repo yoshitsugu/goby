@@ -477,6 +477,10 @@ fn eval_value(
             }
             Some(NativeValue::String(out))
         }
+        // Tuple projection is not supported in the native fallback evaluator.
+        // Programs using it are routed to the GeneralLowered (Wasm) path via the
+        // has_tuple_project_in_comp gate in gen_lower/mod.rs.
+        ValueExpr::TupleProject { .. } => None,
     }
 }
 

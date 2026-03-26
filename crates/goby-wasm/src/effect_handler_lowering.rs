@@ -384,6 +384,10 @@ fn rewrite_value(value: &ValueExpr, names: &mut NameSupply) -> Result<ValueExpr,
                 "WB-3 handler lowering does not yet support lambdas inside handler-lowered code"
                     .to_string(),
         }),
+        ValueExpr::TupleProject { tuple, index } => Ok(ValueExpr::TupleProject {
+            tuple: Box::new(rewrite_value(tuple, names)?),
+            index: *index,
+        }),
         ValueExpr::IntLit(_)
         | ValueExpr::BoolLit(_)
         | ValueExpr::StrLit(_)

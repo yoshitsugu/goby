@@ -362,6 +362,23 @@ pub(crate) enum WasmBackendInstr {
         index: SplitIndexOperand,
         op: BackendPrintOp,
     },
+    /// Load the `index`-th element of a tuple stored in the named local variable.
+    ///
+    /// # Memory layout
+    /// Tuple layout: `(arity: i32, items: [i64]...)`.
+    /// The `index`-th field is at byte offset `4 + 8 * index` from the tuple base pointer.
+    ///
+    /// # Stack discipline
+    /// Before this instruction: nothing extra.
+    /// After: one tagged `i64` field value on the stack.
+    ///
+    /// No heap allocation or bump-allocator scratch is needed; this is a pure load.
+    TupleGet {
+        /// Name of the local variable holding the tagged tuple pointer.
+        tuple_local: String,
+        /// Zero-based index of the tuple field to load.
+        index: usize,
+    },
 }
 
 #[cfg(test)]

@@ -136,6 +136,8 @@ pub enum ResolvedExpr {
         then_expr: Box<ResolvedExpr>,
         else_expr: Box<ResolvedExpr>,
     },
+    /// Tuple member projection: `receiver.index` where receiver is a local variable.
+    TupleProject { receiver: String, index: usize },
 }
 
 pub fn resolve_module(module: &Module) -> ResolvedModule {
@@ -337,7 +339,20 @@ impl Resolver {
             Expr::Var { name, .. } => ResolvedExpr::Ref(self.resolve_name(name)),
             Expr::Qualified {
                 receiver, member, ..
-            } => ResolvedExpr::Ref(self.resolve_qualified(receiver, member)),
+            } => {
+                if self.is_local(receiver)
+                    && !member.is_empty()
+                    && member.chars().all(|c| c.is_ascii_digit())
+                    && let Ok(index) = member.parse::<usize>()
+                {
+                    ResolvedExpr::TupleProject {
+                        receiver: receiver.clone(),
+                        index,
+                    }
+                } else {
+                    ResolvedExpr::Ref(self.resolve_qualified(receiver, member))
+                }
+            }
             Expr::RecordConstruct {
                 constructor,
                 fields,

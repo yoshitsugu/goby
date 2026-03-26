@@ -86,6 +86,11 @@ pub enum ValueExpr {
     },
     /// Unit value `()`.
     Unit,
+    /// Tuple member projection: load the `index`-th field from a tuple value.
+    TupleProject {
+        tuple: Box<ValueExpr>,
+        index: usize,
+    },
 }
 
 /// A part of a pure interpolated string.
@@ -417,6 +422,13 @@ fn fmt_value(out: &mut String, v: &ValueExpr) {
             out.push(')');
         }
         ValueExpr::Unit => out.push_str("()"),
+        ValueExpr::TupleProject { tuple, index } => {
+            out.push('(');
+            fmt_value(out, tuple);
+            out.push(')');
+            out.push('.');
+            out.push_str(&index.to_string());
+        }
     }
 }
 
@@ -752,6 +764,7 @@ fn validate_value(value: &ValueExpr, decl_name: &str) -> Result<(), IrValidateEr
             validate_value(left, decl_name)?;
             validate_value(right, decl_name)
         }
+        ValueExpr::TupleProject { tuple, .. } => validate_value(tuple, decl_name),
         ValueExpr::IntLit(_)
         | ValueExpr::BoolLit(_)
         | ValueExpr::StrLit(_)

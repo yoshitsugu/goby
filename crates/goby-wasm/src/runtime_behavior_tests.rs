@@ -2,7 +2,10 @@ use std::sync::Mutex;
 
 use goby_core::parse_module;
 
-use crate::{assert_mode_parity, fallback, resolve_module_runtime_output};
+use crate::{
+    RuntimeIoExecutionKind, assert_mode_parity, fallback, resolve_module_runtime_output,
+    runtime_io_execution_kind,
+};
 
 static ENV_MUTEX: Mutex<()> = Mutex::new(());
 
@@ -980,4 +983,70 @@ main =
     let output = resolve_module_runtime_output(&module);
     // OOB on string list triggers abort: no output produced
     assert_eq!(output, None);
+}
+
+#[test]
+fn tuple_member_access_general_lowered_int_fields() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    // Pure tuple member access (no effects) must route through GeneralLowered (Wasm) path,
+    // because the native fallback evaluator does not support TupleProject.
+    let source = r#"
+main : Unit -> Unit
+main =
+  pair = (10, 20)
+  print pair.0
+"#;
+    let module = parse_module(source).expect("parse should work");
+    assert_eq!(
+        runtime_io_execution_kind(&module).expect("classification should succeed"),
+        RuntimeIoExecutionKind::GeneralLowered,
+        "tuple member access should route to GeneralLowered"
+    );
+    let result = assert_mode_parity(&module, "tuple member access int field");
+    assert_eq!(result.stdout.as_deref(), Some("10"));
+    assert_eq!(result.runtime_error_kind, None);
+}
+
+#[test]
+fn tuple_member_access_general_lowered_second_field() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    let source = r#"
+main : Unit -> Unit
+main =
+  t = (1, 2, 3)
+  print t.2
+"#;
+    let module = parse_module(source).expect("parse should work");
+    assert_eq!(
+        runtime_io_execution_kind(&module).expect("classification should succeed"),
+        RuntimeIoExecutionKind::GeneralLowered,
+        "tuple member access should route to GeneralLowered"
+    );
+    let result = assert_mode_parity(&module, "tuple member access third field");
+    assert_eq!(result.stdout.as_deref(), Some("3"));
+    assert_eq!(result.runtime_error_kind, None);
+}
+
+#[test]
+fn tuple_member_access_general_lowered_bool_branch() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    // Tuple member access in an if condition.
+    let source = r#"
+main : Unit -> Unit
+main =
+  pair = (True, 42)
+  if pair.0
+    print pair.1
+  else
+    print 0
+"#;
+    let module = parse_module(source).expect("parse should work");
+    assert_eq!(
+        runtime_io_execution_kind(&module).expect("classification should succeed"),
+        RuntimeIoExecutionKind::GeneralLowered,
+        "tuple member access in if branch should route to GeneralLowered"
+    );
+    let result = assert_mode_parity(&module, "tuple member access in if condition");
+    assert_eq!(result.stdout.as_deref(), Some("42"));
+    assert_eq!(result.runtime_error_kind, None);
 }

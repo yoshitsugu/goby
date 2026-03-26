@@ -500,6 +500,9 @@ fn inspect_ir_value(
                 }
             }
         }
+        ValueExpr::TupleProject { tuple, .. } => {
+            inspect_ir_value(tuple, out, declaration_names, qualified_operation_index);
+        }
         ValueExpr::IntLit(_)
         | ValueExpr::BoolLit(_)
         | ValueExpr::StrLit(_)

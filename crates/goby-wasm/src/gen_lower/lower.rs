@@ -112,6 +112,7 @@ fn value_has_free_var(value: &ValueExpr, allowed_vars: &HashSet<String>) -> bool
             goby_core::ir::IrInterpPart::Expr(e) => value_has_free_var(e, allowed_vars),
             goby_core::ir::IrInterpPart::Text(_) => false,
         }),
+        ValueExpr::TupleProject { tuple, .. } => value_has_free_var(tuple, allowed_vars),
         // Literals and global refs have no free variables.
         ValueExpr::StrLit(_)
         | ValueExpr::IntLit(_)
@@ -695,6 +696,18 @@ pub(crate) fn lower_value(v: &ValueExpr) -> Result<Vec<WasmBackendInstr>, LowerE
                 });
             }
             Ok(instrs)
+        }
+        ValueExpr::TupleProject { tuple, index } => {
+            // receiver must be a local variable (guaranteed by resolved.rs is_local check).
+            let ValueExpr::Var(tuple_local) = tuple.as_ref() else {
+                return Err(LowerError::UnsupportedForm {
+                    node: format!("TupleProject with non-Var tuple: {:?}", tuple),
+                });
+            };
+            Ok(vec![WasmBackendInstr::TupleGet {
+                tuple_local: tuple_local.clone(),
+                index: *index,
+            }])
         }
         // NOTE: Lambda must be lowered via lower_value_as_arg (call-argument context only).
         // A Lambda appearing here (e.g. bound by a Let) returns UnsupportedForm and the

@@ -145,6 +145,9 @@ fn value_has_handler_constructs(value: &goby_core::ir::ValueExpr) -> bool {
         goby_core::ir::ValueExpr::BinOp { left, right, .. } => {
             value_has_handler_constructs(left) || value_has_handler_constructs(right)
         }
+        goby_core::ir::ValueExpr::TupleProject { tuple, .. } => {
+            value_has_handler_constructs(tuple)
+        }
         goby_core::ir::ValueExpr::IntLit(_)
         | goby_core::ir::ValueExpr::BoolLit(_)
         | goby_core::ir::ValueExpr::StrLit(_)
@@ -178,6 +181,9 @@ fn value_has_handler_rewrite_entrypoints(value: &goby_core::ir::ValueExpr) -> bo
         goby_core::ir::ValueExpr::BinOp { left, right, .. } => {
             value_has_handler_rewrite_entrypoints(left)
                 || value_has_handler_rewrite_entrypoints(right)
+        }
+        goby_core::ir::ValueExpr::TupleProject { tuple, .. } => {
+            value_has_handler_rewrite_entrypoints(tuple)
         }
         goby_core::ir::ValueExpr::IntLit(_)
         | goby_core::ir::ValueExpr::BoolLit(_)
@@ -243,6 +249,9 @@ fn value_contains_future_handler_intrinsics(value: &goby_core::ir::ValueExpr) ->
             value_contains_future_handler_intrinsics(left)
                 || value_contains_future_handler_intrinsics(right)
         }
+        goby_core::ir::ValueExpr::TupleProject { tuple, .. } => {
+            value_contains_future_handler_intrinsics(tuple)
+        }
         goby_core::ir::ValueExpr::IntLit(_)
         | goby_core::ir::ValueExpr::BoolLit(_)
         | goby_core::ir::ValueExpr::StrLit(_)
@@ -299,6 +308,9 @@ fn value_has_effect_boundary_activity(value: &goby_core::ir::ValueExpr) -> bool 
         goby_core::ir::ValueExpr::BinOp { left, right, .. } => {
             value_has_effect_boundary_activity(left) || value_has_effect_boundary_activity(right)
         }
+        goby_core::ir::ValueExpr::TupleProject { tuple, .. } => {
+            value_has_effect_boundary_activity(tuple)
+        }
         goby_core::ir::ValueExpr::IntLit(_)
         | goby_core::ir::ValueExpr::BoolLit(_)
         | goby_core::ir::ValueExpr::StrLit(_)
@@ -352,6 +364,59 @@ fn has_lambda_in_value(v: &goby_core::ir::ValueExpr) -> bool {
         }
         goby_core::ir::ValueExpr::Interp(parts) => parts.iter().any(|p| match p {
             goby_core::ir::IrInterpPart::Expr(e) => has_lambda_in_value(e),
+            goby_core::ir::IrInterpPart::Text(_) => false,
+        }),
+        _ => false,
+    }
+}
+
+/// Returns true if the computation contains a `ValueExpr::TupleProject` anywhere in its tree.
+///
+/// Used to extend the GeneralLower routing gate: programs that use tuple member access
+/// but have no Read effect, handler constructs, or Lambda must still enter the GeneralLowered
+/// path, because the native fallback evaluator does not support tuple projection.
+fn has_tuple_project_in_comp(comp: &CompExpr) -> bool {
+    match comp {
+        CompExpr::Value(v) => has_tuple_project_in_value(v),
+        CompExpr::Let { value, body, .. } | CompExpr::LetMut { value, body, .. } => {
+            has_tuple_project_in_comp(value) || has_tuple_project_in_comp(body)
+        }
+        CompExpr::Seq { stmts, tail } => {
+            stmts.iter().any(has_tuple_project_in_comp) || has_tuple_project_in_comp(tail)
+        }
+        CompExpr::PerformEffect { args, .. } => args.iter().any(has_tuple_project_in_value),
+        CompExpr::Call { callee, args } => {
+            has_tuple_project_in_value(callee) || args.iter().any(has_tuple_project_in_value)
+        }
+        CompExpr::If { cond, then_, else_ } => {
+            has_tuple_project_in_value(cond)
+                || has_tuple_project_in_comp(then_)
+                || has_tuple_project_in_comp(else_)
+        }
+        CompExpr::Assign { value, .. } => has_tuple_project_in_comp(value),
+        CompExpr::Case { scrutinee, arms } => {
+            has_tuple_project_in_value(scrutinee)
+                || arms.iter().any(|arm| has_tuple_project_in_comp(&arm.body))
+        }
+        CompExpr::Handle { .. } | CompExpr::WithHandler { .. } | CompExpr::Resume { .. } => false,
+    }
+}
+
+fn has_tuple_project_in_value(v: &goby_core::ir::ValueExpr) -> bool {
+    match v {
+        goby_core::ir::ValueExpr::TupleProject { .. } => true,
+        goby_core::ir::ValueExpr::BinOp { left, right, .. } => {
+            has_tuple_project_in_value(left) || has_tuple_project_in_value(right)
+        }
+        goby_core::ir::ValueExpr::ListLit { elements, .. } => {
+            elements.iter().any(has_tuple_project_in_value)
+        }
+        goby_core::ir::ValueExpr::TupleLit(items) => items.iter().any(has_tuple_project_in_value),
+        goby_core::ir::ValueExpr::RecordLit { fields, .. } => {
+            fields.iter().any(|(_, v)| has_tuple_project_in_value(v))
+        }
+        goby_core::ir::ValueExpr::Interp(parts) => parts.iter().any(|p| match p {
+            goby_core::ir::IrInterpPart::Expr(e) => has_tuple_project_in_value(e),
             goby_core::ir::IrInterpPart::Text(_) => false,
         }),
         _ => false,
@@ -594,11 +659,13 @@ fn lower_module_to_instrs(
     // A program qualifies when it has:
     //   - a runtime Read effect, OR
     //   - safe handler constructs (WB-3 handler lowering), OR
-    //   - a Lambda expression (WB-3-M3 Lambda lowering).
+    //   - a Lambda expression (WB-3-M3 Lambda lowering), OR
+    //   - a tuple member projection (TupleProject; native evaluator does not support it).
     // Pure-Print programs without any of the above can stay on the simpler paths.
     if !has_runtime_read_effect(&ir_decl.body)
         && !has_handler_rewrite_entrypoints(&ir_decl.body)
         && !has_lambda_in_comp(&ir_decl.body)
+        && !has_tuple_project_in_comp(&ir_decl.body)
     {
         return Ok(None);
     }

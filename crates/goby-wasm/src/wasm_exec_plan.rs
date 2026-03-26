@@ -229,6 +229,8 @@ fn value_to_expr(value: &ValueExpr) -> Option<Expr> {
             right: Box::new(value_to_expr(right)?),
         }),
         ValueExpr::Unit => Some(Expr::unit_value()),
+        // Tuple projection has no direct AST equivalent; cannot round-trip.
+        ValueExpr::TupleProject { .. } => None,
     }
 }
 

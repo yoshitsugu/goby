@@ -1360,6 +1360,40 @@ fn emit_instrs(
                 )?;
                 emit_list_map(function, &hs, type_idx)?;
             }
+
+            WasmBackendInstr::TupleGet { tuple_local, index } => {
+                // Load the tagged tuple pointer from the local.
+                let tuple_slot = ctx.get(tuple_local)?;
+                function.instruction(&Instruction::LocalGet(tuple_slot));
+                // Unwrap the tagged i64 to an i32 pointer.
+                // Tag occupies the high 4 bits; the payload in the low 32 bits is the pointer.
+                function.instruction(&Instruction::I32WrapI64);
+                // Compute byte offset: 4 (arity header) + 8 * index.
+                let field_offset = 8i32.checked_mul(*index as i32).ok_or_else(|| {
+                    CodegenError {
+                        message: format!(
+                            "gen_lower/emit: TupleGet index {} overflows i32 byte offset",
+                            index
+                        ),
+                    }
+                })?;
+                let byte_offset = 4i32.checked_add(field_offset).ok_or_else(|| {
+                    CodegenError {
+                        message: format!(
+                            "gen_lower/emit: TupleGet index {} overflows i32 byte offset",
+                            index
+                        ),
+                    }
+                })?;
+                function.instruction(&Instruction::I32Const(byte_offset));
+                function.instruction(&Instruction::I32Add);
+                // Load the i64 field value.
+                function.instruction(&Instruction::I64Load(MemArg {
+                    offset: 0,
+                    align: 3,
+                    memory_index: 0,
+                }));
+            }
         }
     }
     Ok(())
@@ -4243,6 +4277,33 @@ mod tests {
         ];
         let wasm =
             emit_general_module(&instrs, &default_layout()).expect("emit RecordLit should succeed");
+        assert_valid_wasm(&wasm);
+    }
+
+    #[test]
+    fn emit_tuple_get_produces_valid_wasm() {
+        // Build a (1, 2) tuple, store it in a local, then load field 0.
+        let instrs = vec![
+            I::DeclareLocal {
+                name: "t".to_string(),
+            },
+            I::TupleLit {
+                element_instrs: vec![
+                    vec![I::I64Const(crate::gen_lower::value::encode_int(1).unwrap())],
+                    vec![I::I64Const(crate::gen_lower::value::encode_int(2).unwrap())],
+                ],
+            },
+            I::StoreLocal {
+                name: "t".to_string(),
+            },
+            I::TupleGet {
+                tuple_local: "t".to_string(),
+                index: 0,
+            },
+            I::Drop,
+        ];
+        let wasm =
+            emit_general_module(&instrs, &default_layout()).expect("emit TupleGet should succeed");
         assert_valid_wasm(&wasm);
     }
 }
