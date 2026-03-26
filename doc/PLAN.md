@@ -665,7 +665,7 @@ Done criteria:
 - `trace` does not require explicit `to_string` conversion.
 - `print` / `println` types remain unchanged.
 
-### 4.7 Active Track H: Runtime-Lowering Correctness for Capturing Lambdas and Tuple Member Access
+### 4.7 Active Track H: Runtime-Lowering Correctness for Capturing Lambdas, Tuple Member Access, and Conditional Calls
 
 Goal: eliminate the remaining backend gap where currently accepted source programs become
 misleading runtime-I/O failures or emitter-internal errors once `main` contains `Read`.
@@ -677,6 +677,13 @@ Why this is active:
     `runtime I/O program shape is currently unsupported` error,
   - tuple member access such as `pair.0` can survive into the general-lowering path as a fake local
     name and fail later as `gen_lower/emit: unknown local 'pair.0'`.
+- an additional confirmed failure sits at the same ownership boundary even though it is not yet
+  recorded in `doc/BUGS.md`:
+  - helper declarations that use a non-value expression as an `if` condition (for example
+    `if check_around_rolls ...`) fail shared-IR lowering with
+    `if condition must be a pure value expression in shared IR today`, and runtime-`Read`
+    entrypoints then collapse that failure back into the same misleading generic runtime-I/O
+    unsupported-shape diagnostic.
 - both failures indicate architecture gaps at the shared IR / general-lowering boundary, not a need
   for more ad hoc runtime-I/O shape recognizers.
 - the long-term direction is already locked elsewhere in this plan:
@@ -687,11 +694,15 @@ Design principles for this track:
 
 - do not add new AST-shape-specific fallback recognition to paper over these bugs.
 - do not special-case `pair.0` or closure-capturing helper forms only inside `runtime_io_plan.rs`.
+- do not paper over non-value `if` conditions by adding ad hoc source-shape rewrites only in the
+  runtime-I/O classifier.
 - fix the representation boundary so the unsupported feature, if any, is visible explicitly in
   shared IR or in the typed lowering boundary and receives a precise diagnostic before backend emission.
 - if closure support is not implemented in the first slice, the compiler must still fail honestly
   with a direct "closure capture not yet supported" error rather than misclassifying the program as
   an unsupported runtime-I/O shape.
+- conditional expressions should admit ordinary call results through ANF/value-binding lowering,
+  rather than requiring front-end users to manually name every helper call before `if`.
 
 Planned architecture:
 
@@ -777,12 +788,31 @@ Execution plan:
      ((i64)->i64 for non-closure, (i64,i64)->i64 for closure wrappers);
      parity target: `typed_mode_matches_fallback_for_lambda_closure_capture`.
 
+6. `H6` ANF lowering for non-value `if` conditions
+   - extend shared-IR lowering so `if` conditions can accept ordinary expressions that are not
+     already pure values by introducing an ANF temporary before the conditional.
+   - preserve the existing shared-IR invariant that `CompExpr::If` consumes a `ValueExpr` condition,
+     but make `lower_expr_as_comp` use `lower_expr_to_value_anf` rather than rejecting helper calls
+     in condition position.
+   - add regressions covering:
+     - `if helper_call ...` inside a non-`main` helper referenced by a runtime-`Read` program,
+     - nested `if` conditions that contain direct calls,
+     - a runtime-`Read` module whose previous top-level error was the misleading generic
+       runtime-I/O unsupported-shape message.
+   - target outcome:
+     - either the program compiles and runs end-to-end, or any remaining unsupported feature is
+       reported directly from the real lowering boundary rather than being masked as a runtime-I/O
+       shape issue.
+
 Done criteria:
 
 - `examples/bugs/runtime_read_tuple_member.gb` no longer fails with `unknown local 'pair.0'`.
 - `examples/bugs/runtime_read_captured_lambda.gb` no longer reports a generic runtime-I/O-shape
   error; it either runs correctly (if closure support lands) or fails with a precise closure-capture
   diagnostic.
+- helper declarations that contain `if helper_call ...` no longer fail at the shared-IR boundary
+  with `if condition must be a pure value expression in shared IR today`; the compiler either ANF-
+  lowers the condition and continues, or reports a more direct unsupported-feature diagnostic.
 - tuple member access ownership is explicit in the compiler pipeline and no longer depends on
   backend-specific interpretation of qualified syntax.
 - no language-syntax change is required for tuple member access; the fix is representation/lowering
