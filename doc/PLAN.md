@@ -817,6 +817,21 @@ Execution plan:
      `general lowering unsupported: unsupported IR form ... Lambda with free variables ...`,
      while `runtime_read_tuple_member.gb` executes successfully and `doc/BUGS.md` is cleared.
 
+8. `H8` ANF lowering for non-value binary operands — **PLANNED**
+   - extend shared-IR lowering so binary operators can accept ordinary expressions on either side
+     by hoisting non-value operands into ANF temporaries before constructing `ValueExpr::BinOp`.
+   - preserve the existing shared-IR invariant that `ValueExpr::BinOp` consumes value operands;
+     the fix belongs in `goby-core::ir_lower`, not in backend-specific fallback logic.
+   - add regressions covering:
+     - helper declarations whose binary operator right operand is a recursive call, such as
+       `checked + count_valid_roll ...`,
+     - mixed pure/non-pure operand combinations on both left and right,
+     - the current AoC repro under `/home/yoshitsugu/src/github.com/yoshitsugu/aoc2025/04/solve.gb`.
+   - target outcome:
+     - programs like the AoC solver no longer fail with
+       `binary operator right operand must be a pure value expression in shared IR today`,
+       and any remaining unsupported feature is reported directly from its true lowering boundary.
+
 Done criteria:
 
 - `examples/bugs/runtime_read_tuple_member.gb` no longer fails with `unknown local 'pair.0'`.
