@@ -754,7 +754,7 @@ Execution plan:
      `Result<LowerModuleResult, CodegenError>`; `supports_general_lower_module` returns
      `Result<Option<GeneralLowerUnsupportedReason>, CodegenError>` (None = supported).
 
-4. `H4` closure-capture diagnostics — **DONE** (commit TBD)
+4. `H4` closure-capture diagnostics — **DONE** (commit 782655d5)
    - surface a user-facing diagnostic for capturing lambdas that explains:
      - the lambda captures outer locals,
      - closure environments are not yet supported in the Wasm lowering path,
