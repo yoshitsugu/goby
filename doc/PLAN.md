@@ -744,7 +744,7 @@ Execution plan:
    - Result: `TupleGet` Wasm emit (I32WrapI64 + offset + I64Load) verified end-to-end;
      Read+tuple+interpolated-string parity test added in `lib.rs` tests.
 
-3. `H3` unsupported-reason plumbing for general lowering — **DONE** (commit TBD)
+3. `H3` unsupported-reason plumbing for general lowering — **DONE** (commit 252c9237)
    - replace the current boolean/`Option` collapse inside the internal general-lowering pipeline with
      a result that preserves important unsupported reasons.
    - keep the public execution-path policy centralized, but allow diagnostics to say whether the
