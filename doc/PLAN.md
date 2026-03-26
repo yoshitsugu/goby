@@ -754,13 +754,17 @@ Execution plan:
      `Result<LowerModuleResult, CodegenError>`; `supports_general_lower_module` returns
      `Result<Option<GeneralLowerUnsupportedReason>, CodegenError>` (None = supported).
 
-4. `H4` closure-capture diagnostics
+4. `H4` closure-capture diagnostics — **DONE** (commit TBD)
    - surface a user-facing diagnostic for capturing lambdas that explains:
      - the lambda captures outer locals,
      - closure environments are not yet supported in the Wasm lowering path,
      - the failure is not specifically about `Read`.
    - make this diagnostic fire before runtime-I/O classification falls back to a generic
      unsupported-shape message.
+   - Result: `RuntimeStdinExecutionPlan::UnsupportedWithReason(GeneralLowerUnsupportedReason)`
+     variant added; `Unsupported` IO kind now produces `Err(CodegenError)` with the specific
+     general-lowering reason (e.g. "unsupported IR form in general lowering path: Lambda with
+     free variables...") instead of silently returning `Ok(None)`.
 
 5. `H5` closure representation design checkpoint
    - if capturing lambdas remain important after `H4`, write and lock a dedicated closure design:

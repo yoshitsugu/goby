@@ -1439,4 +1439,36 @@ main =
             "pair.0 of (1, 2) must be 1"
         );
     }
+
+    #[test]
+    fn capturing_lambda_returns_precise_diagnostic_error() {
+        // Track H4: a capturing lambda (free variable) must produce a CodegenError with
+        // a precise "unsupported IR form" message rather than silently returning Ok(None).
+        // Mirrors examples/bugs/runtime_read_captured_lambda.gb.
+        use goby_core::parse_module;
+        // Use a program where main itself has a capturing lambda.
+        // (The runtime_read_captured_lambda.gb example uses a helper, which hits NoIrDecl
+        // for main because the helper cannot be lowered. Use a simpler direct capture instead.)
+        let module = parse_module(
+            r#"
+import goby/list ( map )
+
+main : Unit -> Unit can Print, Read
+main =
+  _ = read()
+  prefix = "hello"
+  result = map ["world"] (|s| -> "${prefix} ${s}")
+  println result[0]
+"#,
+        )
+        .expect("source should parse");
+
+        let result = execute_runtime_module_with_stdin(&module, Some(String::new()));
+        let err = result.expect_err("capturing lambda must produce a CodegenError, not Ok(None)");
+        assert!(
+            err.message.contains("unsupported IR form in general lowering path"),
+            "error message must contain 'unsupported IR form in general lowering path', got: {:?}",
+            err.message
+        );
+    }
 }

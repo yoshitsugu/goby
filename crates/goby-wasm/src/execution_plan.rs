@@ -3,6 +3,7 @@ use goby_core::Module;
 use crate::CodegenError;
 use crate::fallback;
 use crate::gen_lower;
+use crate::gen_lower::GeneralLowerUnsupportedReason;
 use crate::lower;
 use crate::print_codegen;
 use crate::runtime_entry::{
@@ -51,6 +52,10 @@ impl FallbackExecutionContext {
 enum RuntimeStdinExecutionPlan {
     GeneralLowered,
     InterpreterBridge(Box<FallbackExecutionContext>),
+    /// Program was classified as `Unsupported` (not GeneralLowered, not InterpreterBridge) and
+    /// `supports_general_lower_module` returned a specific rejection reason.
+    /// Callers should surface this as a `CodegenError` with the reason's message.
+    UnsupportedWithReason(GeneralLowerUnsupportedReason),
     Fallthrough,
 }
 
@@ -114,6 +119,9 @@ pub(crate) fn execute_runtime_module_with_stdin_entrypoint(
         RuntimeStdinExecutionPlan::InterpreterBridge(context) => {
             execute_interpreter_bridge_with_context(module, context.as_ref(), stdin_seed)
         }
+        RuntimeStdinExecutionPlan::UnsupportedWithReason(reason) => Err(CodegenError {
+            message: format!("general lowering unsupported: {reason}"),
+        }),
         RuntimeStdinExecutionPlan::Fallthrough => Ok(None),
     }
 }
@@ -233,9 +241,30 @@ fn runtime_stdin_execution_plan(
                 FallbackExecutionContext::for_module(module)?,
             )))
         }
+        RuntimeIoExecutionKind::Unsupported => {
+            // The program needs runtime capabilities but general lowering rejected it.
+            // Retrieve the specific reason so the caller can surface a precise diagnostic.
+            // Note: this calls supports_general_lower_module again (also called inside
+            // runtime_io_execution_kind). Known double-call trade-off; caching is out of scope.
+            let reason = gen_lower::supports_general_lower_module(module)?;
+            match reason {
+                Some(r) => Ok(RuntimeStdinExecutionPlan::UnsupportedWithReason(r)),
+                None => {
+                    // Invariant violation: `Unsupported` execution kind is produced only when
+                    // `supports_general_lower_module` returned `Some` in `runtime_io_execution_kind`.
+                    // A `None` here means the two calls diverged, which should never happen for
+                    // an immutable module. Surface as an internal error rather than silently
+                    // falling through.
+                    Err(CodegenError {
+                        message: "internal error: Unsupported IO kind but \
+                                  supports_general_lower_module returned None on second call"
+                            .to_string(),
+                    })
+                }
+            }
+        }
         RuntimeIoExecutionKind::DynamicWasiIo
         | RuntimeIoExecutionKind::StaticOutput
-        | RuntimeIoExecutionKind::Unsupported
         | RuntimeIoExecutionKind::NotRuntimeIo => Ok(RuntimeStdinExecutionPlan::Fallthrough),
     }
 }
