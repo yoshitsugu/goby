@@ -1,0 +1,13 @@
+import goby/list (length)
+
+len2 : List Int -> Int
+len2 xs = length xs
+
+main : Unit -> Unit can Print, Read
+main =
+  _ = read()
+  n = len2 [1, 2]
+  if n == 2
+    println "ok"
+  else
+    println "bad"

@@ -1,0 +1,15 @@
+count : Int -> Int
+count n =
+  if n <= 0
+    0
+  else
+    1 + count (n - 1)
+
+main : Unit -> Unit can Print, Read
+main =
+  _ = read()
+  result = count 3
+  if result == 3
+    println "ok"
+  else
+    println "bad"

@@ -1,0 +1,16 @@
+import goby/list (map, length)
+import goby/string (graphemes)
+
+count_rows : List String -> Int
+count_rows lines =
+  rows = map lines graphemes
+  length rows
+
+main : Unit -> Unit can Print, Read
+main =
+  _ = read()
+  n = count_rows ["ab", "cd"]
+  if n == 2
+    println "ok"
+  else
+    println "bad"
