@@ -728,17 +728,21 @@ Planned architecture:
 
 Execution plan:
 
-1. `H1` tuple-projection canonicalization
+1. `H1` tuple-projection canonicalization — **DONE** (commit fbd0ebb9)
    - audit the parser/typecheck/resolution/lowering pipeline for tuple member access ownership.
    - introduce one canonical representation only after tuple meaning is known, so record/module
      member syntax keeps its current ownership while tuple projection gains a dedicated lowering path.
    - add focused regressions showing that tuple projection no longer leaks as pseudo-local names in
      backend diagnostics.
+   - Result: `ResolvedExpr::TupleProject` → `ValueExpr::TupleProject` → `WasmBackendInstr::TupleGet`
+     pipeline introduced; routing gate `has_tuple_project_in_comp` ensures correct Wasm path selection.
 
-2. `H2` backend support for canonical tuple projection
+2. `H2` backend support for canonical tuple projection — **DONE** (commit 5c4bed65)
    - add backend-IR and emitter support for tuple projection, or lower it through an existing
      intrinsic path if that path is genuinely general and reusable.
    - verify parity across fallback runtime and general-lowered Wasm execution.
+   - Result: `TupleGet` Wasm emit (I32WrapI64 + offset + I64Load) verified end-to-end;
+     Read+tuple+interpolated-string parity test added in `lib.rs` tests.
 
 3. `H3` unsupported-reason plumbing for general lowering
    - replace the current boolean/`Option` collapse inside the internal general-lowering pipeline with

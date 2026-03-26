@@ -1407,4 +1407,36 @@ main =
             "WB-2B-M2: head_or_none [] → none"
         );
     }
+
+    #[test]
+    fn read_tuple_member_interpolated_string_general_lowered() {
+        // Track H H2: Read + tuple literal + `"${pair.0}"` interpolated string.
+        // Verifies that (a) the program routes to GeneralLowered, and (b) TupleGet
+        // emits correct Wasm so pair.0 == 1 is printed.  The read() call forces
+        // GeneralLowered routing (not a bare Print-only path).
+        let module = parse_module(
+            r#"
+main : Unit -> Unit can Print, Read
+main =
+  _ = read()
+  pair = (1, 2)
+  println "${pair.0}"
+"#,
+        )
+        .expect("parse should work");
+
+        assert_eq!(
+            runtime_io_execution_kind(&module).expect("classification should succeed"),
+            RuntimeIoExecutionKind::GeneralLowered,
+            "Read+tuple program must route to GeneralLowered"
+        );
+
+        let output = execute_runtime_module_with_stdin(&module, Some(String::new()))
+            .expect("Read+tuple+interpolated string must execute via GeneralLowered");
+        assert_eq!(
+            output.as_deref(),
+            Some("1\n"),
+            "pair.0 of (1, 2) must be 1"
+        );
+    }
 }
