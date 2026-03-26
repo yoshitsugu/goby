@@ -14,3 +14,9 @@ map xs f =
   case xs
     [] -> []
     [x, ..xxs] -> [f x, ..map xxs f]
+
+length : List a -> Int
+length xs =
+  case xs
+    [] -> 0
+    [x, ..xxs] -> 1 + length xxs
