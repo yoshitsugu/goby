@@ -665,163 +665,34 @@ Done criteria:
 - `trace` does not require explicit `to_string` conversion.
 - `print` / `println` types remain unchanged.
 
-### 4.7 Track H: Runtime-Lowering Correctness for Capturing Lambdas, Tuple Member Access, and Conditional Calls
+### 4.7 Track H: Runtime-Lowering Correctness Follow-up
 
-Goal: eliminate the remaining backend gap where currently accepted source programs become
-misleading runtime-I/O failures or emitter-internal errors once `main` contains `Read`.
+Goal: close the remaining shared-IR lowering gap for runtime-`Read` programs after the completed
+tuple-projection, closure-diagnostic, and conditional-call fixes.
 
-Why this was active:
+Current status:
 
-- `doc/BUGS.md` currently records two concrete failures in this area:
-  - runtime-`Read` programs with helper lambdas that capture outer locals fall through to a generic
-    `runtime I/O program shape is currently unsupported` error,
-  - tuple member access such as `pair.0` can survive into the general-lowering path as a fake local
-    name and fail later as `gen_lower/emit: unknown local 'pair.0'`.
-- an additional confirmed failure sits at the same ownership boundary even though it is not yet
-  recorded in `doc/BUGS.md`:
-  - helper declarations that use a non-value expression as an `if` condition (for example
-    `if check_around_rolls ...`) fail shared-IR lowering with
-    `if condition must be a pure value expression in shared IR today`, and runtime-`Read`
-    entrypoints then collapse that failure back into the same misleading generic runtime-I/O
-    unsupported-shape diagnostic.
-- both failures indicate architecture gaps at the shared IR / general-lowering boundary, not a need
-  for more ad hoc runtime-I/O shape recognizers.
-- the long-term direction is already locked elsewhere in this plan:
-  runtime capability should converge on shared IR plus the `GeneralLowered` path, while
-  `runtime_io_plan.rs` should shrink rather than become a grab-bag of source-shape exceptions.
+- completed Track H work already made tuple projection explicit in IR/backend lowering,
+  preserved precise closure-capture diagnostics through `goby run`, and ANF-lowered non-value
+  `if` conditions.
+- `doc/BUGS.md` has no active Track H bugs, but one confirmed follow-up remains from the same
+  ownership boundary:
+  - helper declarations that use a non-value expression as a binary-operator operand, such as
+    `checked + count_valid_roll ...`, still fail shared-IR lowering with
+    `binary operator right operand must be a pure value expression in shared IR today`.
 
-Design principles for this track:
+Design principles:
 
-- do not add new AST-shape-specific fallback recognition to paper over these bugs.
-- do not special-case `pair.0` or closure-capturing helper forms only inside `runtime_io_plan.rs`.
-- do not paper over non-value `if` conditions by adding ad hoc source-shape rewrites only in the
-  runtime-I/O classifier.
-- fix the representation boundary so the unsupported feature, if any, is visible explicitly in
-  shared IR or in the typed lowering boundary and receives a precise diagnostic before backend emission.
-- if closure support is not implemented in the first slice, the compiler must still fail honestly
-  with a direct "closure capture not yet supported" error rather than misclassifying the program as
-  an unsupported runtime-I/O shape.
-- conditional expressions should admit ordinary call results through ANF/value-binding lowering,
-  rather than requiring front-end users to manually name every helper call before `if`.
+- keep runtime-I/O classification policy-only; do not add source-shape-specific fallback rules.
+- preserve the shared-IR invariant that `ValueExpr::BinOp` consumes value operands.
+- fix the ownership boundary in `goby-core::ir_lower`, not in backend-specific lowering or CLI
+  error handling.
 
-Planned architecture:
+Remaining execution plan:
 
-1. Make tuple projection an explicit IR/backend concept.
-   - Numeric member access on tuples should stop piggybacking on generic qualified/member syntax
-     once typechecking has established tuple meaning.
-   - Introduce a dedicated shared-IR representation for tuple projection, or an equivalent canonical
-     lowering form with the same ownership boundary properties.
-   - Keep parsing and surface syntax unchanged; this track is about post-typecheck ownership, not a
-     language-syntax change.
-   - General lowering must consume that canonical form directly and lower it to an actual tuple
-     projection operation instead of fabricating pseudo-local names like `pair.0`.
-   - Runtime fallback/interpreter code should then consume the same canonical meaning rather than
-     keeping tuple-member behavior as a backend-only implicit convention.
-
-2. Separate "unsupported closure capture" from "unsupported runtime-I/O shape".
-   - Closure capture is a higher-order/lambda capability issue, not a runtime-I/O classification issue.
-   - Extend the lowering/error boundary so capture rejection survives as structured compiler intent.
-   - Runtime-I/O classification should only answer which execution path owns a program, not erase the
-     underlying lowering failure into a generic shape mismatch.
-   - The preferred implementation is an internal unsupported-reason enum at the general-lowering
-     boundary (`lower_module_to_instrs` and its callers), not a broad rewrite of all public
-     execution-path APIs.
-
-3. Decide and lock the closure roadmap before broad implementation.
-   - Short-term acceptable state:
-     - capture-free lambdas remain supported,
-     - capturing lambdas are rejected early with a precise diagnostic.
-   - Long-term target:
-     - add an explicit closure representation to shared IR/backend lowering only when the calling
-       convention, environment layout, and Wasm runtime ownership are designed coherently.
-   - Do not approximate closure capture by silently rewriting only a few known patterns
-     (`each` + mutable accumulator, etc.); that would create long-term semantic debt.
-
-Execution plan:
-
-1. `H1` tuple-projection canonicalization — **DONE** (commit fbd0ebb9)
-   - audit the parser/typecheck/resolution/lowering pipeline for tuple member access ownership.
-   - introduce one canonical representation only after tuple meaning is known, so record/module
-     member syntax keeps its current ownership while tuple projection gains a dedicated lowering path.
-   - add focused regressions showing that tuple projection no longer leaks as pseudo-local names in
-     backend diagnostics.
-   - Result: `ResolvedExpr::TupleProject` → `ValueExpr::TupleProject` → `WasmBackendInstr::TupleGet`
-     pipeline introduced; routing gate `has_tuple_project_in_comp` ensures correct Wasm path selection.
-
-2. `H2` backend support for canonical tuple projection — **DONE** (commit 5c4bed65)
-   - add backend-IR and emitter support for tuple projection, or lower it through an existing
-     intrinsic path if that path is genuinely general and reusable.
-   - verify parity across fallback runtime and general-lowered Wasm execution.
-   - Result: `TupleGet` Wasm emit (I32WrapI64 + offset + I64Load) verified end-to-end;
-     Read+tuple+interpolated-string parity test added in `lib.rs` tests.
-
-3. `H3` unsupported-reason plumbing for general lowering — **DONE** (commit 252c9237)
-   - replace the current boolean/`Option` collapse inside the internal general-lowering pipeline with
-     a result that preserves important unsupported reasons.
-   - keep the public execution-path policy centralized, but allow diagnostics to say whether the
-     actual blocker is closure capture, tuple projection support, handler support, or another
-     backend limitation.
-   - Result: `GeneralLowerUnsupportedReason` enum introduced; `lower_module_to_instrs` returns
-     `Result<LowerModuleResult, CodegenError>`; `supports_general_lower_module` returns
-     `Result<Option<GeneralLowerUnsupportedReason>, CodegenError>` (None = supported).
-
-4. `H4` closure-capture diagnostics — **DONE** (commit 782655d5)
-   - surface a user-facing diagnostic for capturing lambdas that explains:
-     - the lambda captures outer locals,
-     - closure environments are not yet supported in the Wasm lowering path,
-     - the failure is not specifically about `Read`.
-   - make this diagnostic fire before runtime-I/O classification falls back to a generic
-     unsupported-shape message.
-   - Result: `RuntimeStdinExecutionPlan::UnsupportedWithReason(GeneralLowerUnsupportedReason)`
-     variant added; `Unsupported` IO kind now produces `Err(CodegenError)` with the specific
-     general-lowering reason (e.g. "unsupported IR form in general lowering path: Lambda with
-     free variables...") instead of silently returning `Ok(None)`.
-
-5. `H5` closure representation design checkpoint — **DONE**
-   - if capturing lambdas remain important after `H4`, write and lock a dedicated closure design:
-     environment representation, call convention, interaction with mutable locals, funcref table
-     strategy, and fallback/runtime parity expectations.
-   - only after that design is locked should actual closure lowering be implemented.
-   - Result: `doc/closure-design.md` created and locked (revision 1.0). Key decisions:
-     TAG_CLOSURE=0x8; closure record `[func_table_slot, env_size, captured...]` in heap;
-     value capture (snapshot) for mutable locals; two-type-idx call convention
-     ((i64)->i64 for non-closure, (i64,i64)->i64 for closure wrappers);
-     parity target: `typed_mode_matches_fallback_for_lambda_closure_capture`.
-
-6. `H6` ANF lowering for non-value `if` conditions — **DONE**
-   - extend shared-IR lowering so `if` conditions can accept ordinary expressions that are not
-     already pure values by introducing an ANF temporary before the conditional.
-   - preserve the existing shared-IR invariant that `CompExpr::If` consumes a `ValueExpr` condition,
-     but make `lower_expr_as_comp` use `lower_expr_to_value_anf` rather than rejecting helper calls
-     in condition position.
-   - add regressions covering:
-     - `if helper_call ...` inside a non-`main` helper referenced by a runtime-`Read` program,
-     - nested `if` conditions that contain direct calls,
-     - a runtime-`Read` module whose previous top-level error was the misleading generic
-       runtime-I/O unsupported-shape message.
-   - target outcome:
-     - either the program compiles and runs end-to-end, or any remaining unsupported feature is
-       reported directly from the real lowering boundary rather than being masked as a runtime-I/O
-       shape issue.
-
-7. `H7` compile/CLI-path unsupported-reason parity — **DONE**
-   - preserve `GeneralLowerUnsupportedReason` through the file-based compile path used by
-     `goby run`, not only through `execute_runtime_module_with_stdin`.
-   - ensure helper-declaration closure capture is reported as the real unsupported feature instead
-     of collapsing into `no IR decl available for main` or a generic runtime-I/O unsupported-shape
-     message.
-   - keep the representative closure-capture fixture in `examples/bugs/` focused on closure
-     capture itself rather than unrelated shared-IR lowering limitations.
-   - Result: compile/CLI runtime-`Read` failures now surface precise general-lowering reasons;
-     `examples/bugs/runtime_read_captured_lambda.gb` now reports
-     `general lowering unsupported: unsupported IR form ... Lambda with free variables ...`,
-     while `runtime_read_tuple_member.gb` executes successfully and `doc/BUGS.md` is cleared.
-
-8. `H8` ANF lowering for non-value binary operands — **PLANNED**
+1. `H8` ANF lowering for non-value binary operands — **PLANNED**
    - extend shared-IR lowering so binary operators can accept ordinary expressions on either side
      by hoisting non-value operands into ANF temporaries before constructing `ValueExpr::BinOp`.
-   - preserve the existing shared-IR invariant that `ValueExpr::BinOp` consumes value operands;
-     the fix belongs in `goby-core::ir_lower`, not in backend-specific fallback logic.
    - add regressions covering:
      - helper declarations whose binary operator right operand is a recursive call, such as
        `checked + count_valid_roll ...`,
@@ -834,21 +705,14 @@ Execution plan:
 
 Done criteria:
 
-- `examples/bugs/runtime_read_tuple_member.gb` no longer fails with `unknown local 'pair.0'`.
-- `examples/bugs/runtime_read_captured_lambda.gb` no longer reports a generic runtime-I/O-shape
-  error; it either runs correctly (if closure support lands) or fails with a precise closure-capture
-  diagnostic.
-- helper declarations that contain `if helper_call ...` no longer fail at the shared-IR boundary
-  with `if condition must be a pure value expression in shared IR today`; the compiler either ANF-
-  lowers the condition and continues, or reports a more direct unsupported-feature diagnostic.
-- tuple member access ownership is explicit in the compiler pipeline and no longer depends on
-  backend-specific interpretation of qualified syntax.
-- no language-syntax change is required for tuple member access; the fix is representation/lowering
-  ownership only.
+- helper declarations whose binary operator operands contain ordinary expressions no longer fail at
+  the shared-IR boundary with
+  `binary operator right operand must be a pure value expression in shared IR today`.
+- the AoC repro under `/home/yoshitsugu/src/github.com/yoshitsugu/aoc2025/04/solve.gb` compiles
+  past shared-IR lowering, or any remaining unsupported feature is reported from its true lowering
+  boundary.
 - runtime-I/O classification remains policy-only and does not accumulate new bug-specific shape
   recognizers for these cases.
-- `doc/BUGS.md` no longer carries active Track H entries; the former bug fixtures remain as
-  regression examples.
 
 Lint rules are ordered by ascending analysis cost. The cheapest infrastructure
 comes first to unblock the framework early; user-value ranking is noted in
