@@ -397,12 +397,10 @@ fn try_lower_value(
             }
             Ok(Some(ValueExpr::Interp(ir_parts)))
         }
-        ResolvedExpr::TupleProject { receiver, index } => {
-            Ok(Some(ValueExpr::TupleProject {
-                tuple: Box::new(ValueExpr::Var(receiver.clone())),
-                index: *index,
-            }))
-        }
+        ResolvedExpr::TupleProject { receiver, index } => Ok(Some(ValueExpr::TupleProject {
+            tuple: Box::new(ValueExpr::Var(receiver.clone())),
+            index: *index,
+        })),
         ResolvedExpr::If { .. }
         | ResolvedExpr::Block(_)
         | ResolvedExpr::Call { .. }

@@ -33,14 +33,14 @@ Last updated: 2026-03-26
 - Boolean operator surface extended (2026-03-26): `||` and unary `!` are now supported.
   Parser precedence is locked so comparisons bind tighter than `&&` / `||`, and the
   active examples/spec now reflect the implemented operator set.
-- Runtime-lowering bug triage documented (2026-03-26):
-  - minimal repros and analysis now live in `doc/BUGS.md` and `examples/bugs/`.
-  - two independent issues are confirmed:
-    - runtime-`Read` programs currently mask capture-ful helper lambdas behind a generic
-      runtime-I/O unsupported-shape error,
-    - tuple member access can leak into `gen_lower/emit` as pseudo-local names such as `pair.0`.
-  - `doc/PLAN.md` now carries `Track H`, which explicitly forbids ad hoc fixes in
-    `runtime_io_plan.rs` and instead targets shared IR / general-lowering ownership cleanup.
+- Track H complete (2026-03-26):
+  - tuple member access no longer leaks into `gen_lower/emit` as pseudo-local names such as
+    `pair.0`; `examples/bugs/runtime_read_tuple_member.gb` now runs and prints `1`.
+  - runtime-`Read` helper closure-capture fixtures no longer collapse into the generic runtime-I/O
+    unsupported-shape error; `goby run examples/bugs/runtime_read_captured_lambda.gb` now reports a
+    precise closure-capture limitation from the general-lowering boundary.
+  - `doc/BUGS.md` is now empty of active entries; the `examples/bugs/` fixtures remain as
+    regressions for the resolved Track H cases.
 - Track H H6 complete (2026-03-26): shared-IR lowering now ANF-normalizes non-value `if`
   conditions before constructing `CompExpr::If`.
   - helper-call conditions such as `if is_two n` no longer fail with
@@ -119,7 +119,7 @@ semantics.
 WasmFX typed continuations — currently on hold.
 Restart only when the external prerequisites in `doc/PLAN_IR.md` Phase WB-3B are satisfied.
 
-**Track H (active):**
+**Track H (complete, 2026-03-26):**
 Runtime-lowering correctness at the shared IR / general-lowering boundary for runtime-`Read`
 programs.
 Completed slices:
@@ -127,10 +127,7 @@ Completed slices:
 - `H3`/`H4`: unsupported-reason plumbing + precise closure-capture diagnostics in the
   `execute_runtime_module_with_stdin` path
 - `H6`: ANF lowering for non-value `if` conditions
-Remaining immediate target:
-- `examples/bugs/runtime_read_captured_lambda.gb` still fails from the CLI with the generic
-  runtime-I/O unsupported-shape error and should instead surface the direct closure-capture blocker
-  (or run once closure support exists)
+- `H7`: compile/CLI-path parity for precise unsupported reasons
 Constraints remain:
 - no syntax change
 - no new `runtime_io_plan.rs` shape recognizers

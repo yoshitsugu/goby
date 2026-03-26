@@ -43,7 +43,6 @@ use crate::gen_lower::emit::AuxDecl;
 use crate::gen_lower::lower::LambdaAuxDecl;
 use crate::layout::MemoryLayout;
 use crate::wasm_exec_plan::decl_exec_plan;
-use crate::wasm_exec_plan::main_exec_plan;
 
 /// Reason why a program cannot be lowered via the general-lowering path.
 ///
@@ -90,22 +89,34 @@ impl std::fmt::Display for GeneralLowerUnsupportedReason {
             Self::NoIrDecl => write!(f, "no IR decl available for main"),
             Self::HandlerRewriteFailed => write!(f, "safe-handler rewrite returned None"),
             Self::HandlerOnlyConflict => {
-                write!(f, "handler-only candidate conflicts with non-main decls or future intrinsics")
+                write!(
+                    f,
+                    "handler-only candidate conflicts with non-main decls or future intrinsics"
+                )
             }
             Self::NotRequiringRuntimeCapability => {
-                write!(f, "program does not require general-lowering runtime capabilities")
+                write!(
+                    f,
+                    "program does not require general-lowering runtime capabilities"
+                )
             }
             Self::UnsupportedIrForm { node } => {
                 write!(f, "unsupported IR form in general lowering path: {node}")
             }
             Self::ReadLineInstructionsNotSupported => {
-                write!(f, "read-line instructions not supported for this module shape")
+                write!(
+                    f,
+                    "read-line instructions not supported for this module shape"
+                )
             }
             Self::AuxDeclNotSupported => {
                 write!(f, "auxiliary declaration produced unsupported instructions")
             }
             Self::UserDeclIrLoweringFailed => {
-                write!(f, "user-defined declaration could not be lowered to backend IR")
+                write!(
+                    f,
+                    "user-defined declaration could not be lowered to backend IR"
+                )
             }
             Self::StdlibDeclIrLoweringFailed => {
                 write!(f, "stdlib declaration could not be lowered to backend IR")
@@ -214,9 +225,7 @@ fn value_has_handler_constructs(value: &goby_core::ir::ValueExpr) -> bool {
         goby_core::ir::ValueExpr::BinOp { left, right, .. } => {
             value_has_handler_constructs(left) || value_has_handler_constructs(right)
         }
-        goby_core::ir::ValueExpr::TupleProject { tuple, .. } => {
-            value_has_handler_constructs(tuple)
-        }
+        goby_core::ir::ValueExpr::TupleProject { tuple, .. } => value_has_handler_constructs(tuple),
         goby_core::ir::ValueExpr::IntLit(_)
         | goby_core::ir::ValueExpr::BoolLit(_)
         | goby_core::ir::ValueExpr::StrLit(_)
@@ -571,7 +580,8 @@ fn read_line_instrs_are_supported(instrs: &[backend_ir::WasmBackendInstr]) -> bo
 /// Lower a single auxiliary (non-main) declaration body.
 ///
 /// Unlike `main`, aux decls do not require a Read effect — they are helper functions
-/// called by `main`. Returns `None` if the body contains unsupported forms.
+/// called by `main`. Unsupported forms are returned as precise
+/// `GeneralLowerUnsupportedReason`s so callers can preserve the real blocker.
 /// Lambda expressions encountered during lowering are appended to `lambda_decls`.
 fn lower_aux_decl(
     name: &str,
@@ -580,24 +590,75 @@ fn lower_aux_decl(
     known_decls: &HashSet<String>,
     allow_safe_handler_lowering: bool,
     lambda_decls: &mut Vec<LambdaAuxDecl>,
-) -> Result<Option<AuxDecl>, CodegenError> {
+) -> Result<Result<AuxDecl, GeneralLowerUnsupportedReason>, CodegenError> {
     let Some(body) = rewrite_safe_handlers_if_present(body, allow_safe_handler_lowering)? else {
-        return Ok(None);
+        return Ok(Err(GeneralLowerUnsupportedReason::HandlerRewriteFailed));
     };
     let instrs = match lower::lower_comp_collecting_lambdas(&body, known_decls, lambda_decls) {
         Ok(i) => i,
-        Err(lower::LowerError::UnsupportedForm { .. }) => return Ok(None),
+        Err(lower::LowerError::UnsupportedForm { node }) => {
+            return Ok(Err(GeneralLowerUnsupportedReason::UnsupportedIrForm {
+                node,
+            }));
+        }
         Err(lower::LowerError::IntOutOfRange(n)) => {
             return Err(CodegenError {
                 message: format!("integer {n} is outside the 60-bit representable range"),
             });
         }
     };
-    Ok(Some(AuxDecl {
+    Ok(Ok(AuxDecl {
         decl_name: name.to_string(),
         param_names,
         instrs,
     }))
+}
+
+fn first_non_main_lowering_issue(
+    module: &Module,
+    allow_safe_handler_lowering: bool,
+) -> Result<Option<GeneralLowerUnsupportedReason>, CodegenError> {
+    let stdlib_export_map = if !module.imports.is_empty() {
+        let stdlib_resolver = StdlibResolver::new(resolve_stdlib_root());
+        build_stdlib_export_map(module, &stdlib_resolver)
+    } else {
+        HashMap::new()
+    };
+
+    let mut known_decls: HashSet<String> = module
+        .declarations
+        .iter()
+        .filter(|d| d.name != "main")
+        .map(|d| d.name.clone())
+        .collect();
+    for name in stdlib_export_map.keys() {
+        if !SPECIALLY_LOWERED_STDLIB_NAMES.contains(&name.as_str()) {
+            known_decls.insert(name.clone());
+        }
+    }
+
+    let mut lambda_decls: Vec<LambdaAuxDecl> = Vec::new();
+    for goby_decl in module.declarations.iter().filter(|d| d.name != "main") {
+        let Ok(aux_ir_decl) = goby_core::ir_lower::lower_declaration(goby_decl) else {
+            return Ok(Some(
+                GeneralLowerUnsupportedReason::UserDeclIrLoweringFailed,
+            ));
+        };
+        let param_names: Vec<String> = aux_ir_decl.params.iter().map(|(n, _)| n.clone()).collect();
+        match lower_aux_decl(
+            &aux_ir_decl.name,
+            param_names,
+            &aux_ir_decl.body,
+            &known_decls,
+            allow_safe_handler_lowering,
+            &mut lambda_decls,
+        )? {
+            Ok(_) => {}
+            Err(reason) => return Ok(Some(reason)),
+        }
+    }
+
+    Ok(None)
 }
 
 /// Recursively collect all `DeclCall` and `PushFuncHandle` target names from a flat
@@ -693,7 +754,8 @@ fn build_stdlib_export_map(
 ///
 /// `Ok((instrs, aux))` = lowering succeeded.
 /// `Err(reason)` = lowering is not applicable or encountered an unsupported form.
-type LowerModuleResult = Result<(Vec<backend_ir::WasmBackendInstr>, Vec<AuxDecl>), GeneralLowerUnsupportedReason>;
+type LowerModuleResult =
+    Result<(Vec<backend_ir::WasmBackendInstr>, Vec<AuxDecl>), GeneralLowerUnsupportedReason>;
 
 /// Attempt to lower a module's `main` body through the general lowering path.
 ///
@@ -701,16 +763,22 @@ type LowerModuleResult = Result<(Vec<backend_ir::WasmBackendInstr>, Vec<AuxDecl>
 /// `Ok(Err(reason))` when the IR contains unsupported forms (fall through to next path),
 /// or `Err(CodegenError)` on hard codegen failures.
 fn lower_module_to_instrs(module: &Module) -> Result<LowerModuleResult, CodegenError> {
-    let plan = match main_exec_plan(module) {
-        Some(p) => p,
-        None => return Ok(Err(GeneralLowerUnsupportedReason::NoMainExecPlan)),
-    };
-    let ir_decl = match plan.ir_decl {
-        Some(d) => d,
-        None => return Ok(Err(GeneralLowerUnsupportedReason::NoIrDecl)),
-    };
     let handler_legality = analyze_module_handler_legality(module)?;
     let allow_safe_handler_lowering = handler_legality.all_one_shot_tail_resumptive();
+    let ir_module = match goby_core::ir_lower::lower_module(module) {
+        Ok(ir_module) => ir_module,
+        Err(_) => {
+            if let Some(reason) =
+                first_non_main_lowering_issue(module, allow_safe_handler_lowering)?
+            {
+                return Ok(Err(reason));
+            }
+            return Ok(Err(GeneralLowerUnsupportedReason::NoIrDecl));
+        }
+    };
+    let Some(ir_decl) = ir_module.decls.iter().find(|decl| decl.name == "main") else {
+        return Ok(Err(GeneralLowerUnsupportedReason::NoMainExecPlan));
+    };
     let Some(main_body) =
         rewrite_safe_handlers_if_present(&ir_decl.body, allow_safe_handler_lowering)?
     else {
@@ -739,7 +807,9 @@ fn lower_module_to_instrs(module: &Module) -> Result<LowerModuleResult, CodegenE
         && !has_lambda_in_comp(&ir_decl.body)
         && !has_tuple_project_in_comp(&ir_decl.body)
     {
-        return Ok(Err(GeneralLowerUnsupportedReason::NotRequiringRuntimeCapability));
+        return Ok(Err(
+            GeneralLowerUnsupportedReason::NotRequiringRuntimeCapability,
+        ));
     }
 
     // Resolve stdlib exports once; reused for both known_decls population and the
@@ -776,7 +846,9 @@ fn lower_module_to_instrs(module: &Module) -> Result<LowerModuleResult, CodegenE
         match lower::lower_comp_collecting_lambdas(&main_body, &known_decls, &mut lambda_decls) {
             Ok(i) => i,
             Err(lower::LowerError::UnsupportedForm { node }) => {
-                return Ok(Err(GeneralLowerUnsupportedReason::UnsupportedIrForm { node }));
+                return Ok(Err(GeneralLowerUnsupportedReason::UnsupportedIrForm {
+                    node,
+                }));
             }
             Err(lower::LowerError::IntOutOfRange(n)) => {
                 return Err(CodegenError {
@@ -789,17 +861,15 @@ fn lower_module_to_instrs(module: &Module) -> Result<LowerModuleResult, CodegenE
     // path must explicitly discard it before emission.
     main_instrs.push(backend_ir::WasmBackendInstr::Drop);
     if !read_line_instrs_are_supported(&main_instrs) {
-        return Ok(Err(GeneralLowerUnsupportedReason::ReadLineInstructionsNotSupported));
+        return Ok(Err(
+            GeneralLowerUnsupportedReason::ReadLineInstructionsNotSupported,
+        ));
     }
 
     // Lower auxiliary declarations (non-main top-level functions).
     // These do not need a Read effect; they are helpers called by main.
     let mut aux_decls = Vec::new();
-    for goby_decl in module.declarations.iter().filter(|d| d.name != "main") {
-        let Ok(aux_ir_decl) = goby_core::ir_lower::lower_declaration(goby_decl) else {
-            // IR lowering failed for this user-defined decl — fall back to interpreter path.
-            return Ok(Err(GeneralLowerUnsupportedReason::UserDeclIrLoweringFailed));
-        };
+    for aux_ir_decl in ir_module.decls.iter().filter(|decl| decl.name != "main") {
         let param_names: Vec<String> = aux_ir_decl.params.iter().map(|(n, _)| n.clone()).collect();
         match lower_aux_decl(
             &aux_ir_decl.name,
@@ -809,11 +879,8 @@ fn lower_module_to_instrs(module: &Module) -> Result<LowerModuleResult, CodegenE
             allow_safe_handler_lowering,
             &mut lambda_decls,
         )? {
-            Some(aux) => aux_decls.push(aux),
-            None => {
-                // User-defined aux decl: backend-IR lowering (lower_aux_decl) returned None.
-                return Ok(Err(GeneralLowerUnsupportedReason::AuxDeclNotSupported));
-            }
+            Ok(aux) => aux_decls.push(aux),
+            Err(reason) => return Ok(Err(reason)),
         }
     }
 
@@ -856,7 +923,11 @@ fn lower_module_to_instrs(module: &Module) -> Result<LowerModuleResult, CodegenE
                 };
                 let aux_ir_decl = match goby_core::ir_lower::lower_declaration(goby_decl) {
                     Ok(d) => d,
-                    Err(_) => return Ok(Err(GeneralLowerUnsupportedReason::StdlibDeclIrLoweringFailed)),
+                    Err(_) => {
+                        return Ok(Err(
+                            GeneralLowerUnsupportedReason::StdlibDeclIrLoweringFailed,
+                        ));
+                    }
                 };
                 let param_names: Vec<String> =
                     aux_ir_decl.params.iter().map(|(n, _)| n.clone()).collect();
@@ -871,17 +942,12 @@ fn lower_module_to_instrs(module: &Module) -> Result<LowerModuleResult, CodegenE
                     true, // stdlib handlers are one-shot tail-resumptive by construction
                     &mut lambda_decls,
                 )? {
-                    Some(aux) => {
+                    Ok(aux) => {
                         aux_decls.push(aux);
                         aux_added.insert(name.clone());
                         added_any = true;
                     }
-                    None => {
-                        // This stdlib decl's backend-IR lowering failed (lower_aux_decl → None).
-                        // Note: ir_lower::lower_declaration already succeeded above; this is a
-                        // backend-lowering failure, not an IR-lowering failure.
-                        return Ok(Err(GeneralLowerUnsupportedReason::StdlibDeclIrLoweringFailed));
-                    }
+                    Err(reason) => return Ok(Err(reason)),
                 }
             }
             if !added_any {
@@ -1141,8 +1207,8 @@ main =
 "#,
         )
         .expect("source should parse");
-        let reason = supports_general_lower_module(&module)
-            .expect("classification should not error");
+        let reason =
+            supports_general_lower_module(&module).expect("classification should not error");
         assert!(
             reason.is_none(),
             "Read+tuple program must be fully supported (got: {:?})",
@@ -1161,8 +1227,8 @@ main =
 "#,
         )
         .expect("source should parse");
-        let reason = supports_general_lower_module(&module)
-            .expect("classification should not error");
+        let reason =
+            supports_general_lower_module(&module).expect("classification should not error");
         assert_eq!(
             reason,
             Some(GeneralLowerUnsupportedReason::NotRequiringRuntimeCapability),
@@ -1187,10 +1253,13 @@ main =
 "#,
         )
         .expect("source should parse");
-        let reason = supports_general_lower_module(&module)
-            .expect("classification should not error");
+        let reason =
+            supports_general_lower_module(&module).expect("classification should not error");
         assert!(
-            matches!(reason, Some(GeneralLowerUnsupportedReason::UnsupportedIrForm { .. })),
+            matches!(
+                reason,
+                Some(GeneralLowerUnsupportedReason::UnsupportedIrForm { .. })
+            ),
             "capturing lambda must return UnsupportedIrForm, got: {:?}",
             reason
         );

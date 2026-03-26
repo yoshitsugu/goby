@@ -137,7 +137,10 @@ pub enum ResolvedExpr {
         else_expr: Box<ResolvedExpr>,
     },
     /// Tuple member projection: `receiver.index` where receiver is a local variable.
-    TupleProject { receiver: String, index: usize },
+    TupleProject {
+        receiver: String,
+        index: usize,
+    },
 }
 
 pub fn resolve_module(module: &Module) -> ResolvedModule {

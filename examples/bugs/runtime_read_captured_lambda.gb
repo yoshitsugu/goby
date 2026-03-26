@@ -1,12 +1,13 @@
-import goby/list ( each )
+import goby/list ( map )
 
-helper : Unit -> Int
+helper : Unit -> String
 helper =
-  mut total = 0
-  each [1, 2] (|x| -> total := total + x)
-  total
+  prefix = "hello"
+  result = map ["world"] (|s| -> "${prefix} ${s}")
+  result[0]
 
 main : Unit -> Unit can Print, Read
 main =
   _ = read()
-  println "${helper()}"
+  msg = helper()
+  println msg

@@ -434,8 +434,34 @@ main =
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("unsupported"),
+        stderr.contains("general lowering unsupported: read-line instructions not supported"),
         "expected explicit unsupported-boundary error, stderr: {}",
+        stderr
+    );
+}
+
+#[test]
+#[cfg(unix)]
+fn run_command_reports_precise_helper_closure_capture_error() {
+    let root = repo_root();
+    let input = root.join("examples/bugs/runtime_read_captured_lambda.gb");
+
+    let output = run_goby_with_stdin(&root, &input, b"");
+
+    assert!(
+        !output.status.success(),
+        "expected closure-capture failure, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("general lowering unsupported: unsupported IR form"),
+        "expected precise general-lowering boundary error, stderr: {}",
+        stderr
+    );
+    assert!(
+        stderr.contains("Lambda with free variables"),
+        "expected closure-capture detail in stderr, got: {}",
         stderr
     );
 }

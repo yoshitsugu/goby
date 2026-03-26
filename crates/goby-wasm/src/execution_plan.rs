@@ -70,6 +70,11 @@ pub(crate) fn compile_module_entrypoint(module: &Module) -> Result<Vec<u8>, Code
     }
 
     let context = FallbackExecutionContext::for_module(module)?;
+    if let Some(reason) = unsupported_runtime_io_reason(module, &context.io_classification)? {
+        return Err(CodegenError {
+            message: format!("general lowering unsupported: {reason}"),
+        });
+    }
     if let Some(wasm) = context.compile_runtime_artifact()? {
         return Ok(wasm);
     }
@@ -242,29 +247,31 @@ fn runtime_stdin_execution_plan(
             )))
         }
         RuntimeIoExecutionKind::Unsupported => {
-            // The program needs runtime capabilities but general lowering rejected it.
-            // Retrieve the specific reason so the caller can surface a precise diagnostic.
-            // Note: this calls supports_general_lower_module again (also called inside
-            // runtime_io_execution_kind). Known double-call trade-off; caching is out of scope.
-            let reason = gen_lower::supports_general_lower_module(module)?;
-            match reason {
-                Some(r) => Ok(RuntimeStdinExecutionPlan::UnsupportedWithReason(r)),
-                None => {
-                    // Invariant violation: `Unsupported` execution kind is produced only when
-                    // `supports_general_lower_module` returned `Some` in `runtime_io_execution_kind`.
-                    // A `None` here means the two calls diverged, which should never happen for
-                    // an immutable module. Surface as an internal error rather than silently
-                    // falling through.
-                    Err(CodegenError {
-                        message: "internal error: Unsupported IO kind but \
-                                  supports_general_lower_module returned None on second call"
-                            .to_string(),
-                    })
-                }
-            }
+            unsupported_runtime_io_reason(module, &RuntimeIoClassification::Unsupported)?
+                .map(RuntimeStdinExecutionPlan::UnsupportedWithReason)
+                .ok_or_else(|| CodegenError {
+                    message: "internal error: Unsupported IO kind but \
+                              supports_general_lower_module returned None on second call"
+                        .to_string(),
+                })
         }
         RuntimeIoExecutionKind::DynamicWasiIo
         | RuntimeIoExecutionKind::StaticOutput
         | RuntimeIoExecutionKind::NotRuntimeIo => Ok(RuntimeStdinExecutionPlan::Fallthrough),
     }
+}
+
+fn unsupported_runtime_io_reason(
+    module: &Module,
+    classification: &RuntimeIoClassification,
+) -> Result<Option<GeneralLowerUnsupportedReason>, CodegenError> {
+    if !matches!(classification, RuntimeIoClassification::Unsupported) {
+        return Ok(None);
+    }
+
+    // The program needs runtime capabilities but general lowering rejected it.
+    // Retrieve the specific reason so callers can surface a precise diagnostic.
+    // Note: this calls supports_general_lower_module again (also called inside
+    // runtime_io_execution_kind). Known double-call trade-off; caching is out of scope.
+    gen_lower::supports_general_lower_module(module)
 }

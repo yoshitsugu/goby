@@ -1472,11 +1472,7 @@ main =
 
         let output = execute_runtime_module_with_stdin(&module, Some(String::new()))
             .expect("Read+tuple+interpolated string must execute via GeneralLowered");
-        assert_eq!(
-            output.as_deref(),
-            Some("1\n"),
-            "pair.0 of (1, 2) must be 1"
-        );
+        assert_eq!(output.as_deref(), Some("1\n"), "pair.0 of (1, 2) must be 1");
     }
 
     #[test]
@@ -1505,8 +1501,46 @@ main =
         let result = execute_runtime_module_with_stdin(&module, Some(String::new()));
         let err = result.expect_err("capturing lambda must produce a CodegenError, not Ok(None)");
         assert!(
-            err.message.contains("unsupported IR form in general lowering path"),
+            err.message
+                .contains("unsupported IR form in general lowering path"),
             "error message must contain 'unsupported IR form in general lowering path', got: {:?}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn compile_module_reports_precise_helper_closure_capture_reason() {
+        use goby_core::parse_module;
+        let module = parse_module(
+            r#"
+import goby/list ( map )
+
+helper : Unit -> String
+helper =
+  prefix = "hello"
+  result = map ["world"] (|s| -> "${prefix} ${s}")
+  result[0]
+
+main : Unit -> Unit can Print, Read
+main =
+  _ = read()
+  msg = helper()
+  println msg
+"#,
+        )
+        .expect("source should parse");
+
+        let err =
+            compile_module(&module).expect_err("helper closure capture should fail precisely");
+        assert!(
+            err.message
+                .contains("general lowering unsupported: unsupported IR form"),
+            "compile path should preserve the general-lowering reason, got: {:?}",
+            err.message
+        );
+        assert!(
+            err.message.contains("Lambda with free variables"),
+            "compile path should mention closure capture directly, got: {:?}",
             err.message
         );
     }

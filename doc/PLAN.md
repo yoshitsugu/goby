@@ -665,12 +665,12 @@ Done criteria:
 - `trace` does not require explicit `to_string` conversion.
 - `print` / `println` types remain unchanged.
 
-### 4.7 Active Track H: Runtime-Lowering Correctness for Capturing Lambdas, Tuple Member Access, and Conditional Calls
+### 4.7 Track H: Runtime-Lowering Correctness for Capturing Lambdas, Tuple Member Access, and Conditional Calls
 
 Goal: eliminate the remaining backend gap where currently accepted source programs become
 misleading runtime-I/O failures or emitter-internal errors once `main` contains `Read`.
 
-Why this is active:
+Why this was active:
 
 - `doc/BUGS.md` currently records two concrete failures in this area:
   - runtime-`Read` programs with helper lambdas that capture outer locals fall through to a generic
@@ -788,7 +788,7 @@ Execution plan:
      ((i64)->i64 for non-closure, (i64,i64)->i64 for closure wrappers);
      parity target: `typed_mode_matches_fallback_for_lambda_closure_capture`.
 
-6. `H6` ANF lowering for non-value `if` conditions
+6. `H6` ANF lowering for non-value `if` conditions — **DONE**
    - extend shared-IR lowering so `if` conditions can accept ordinary expressions that are not
      already pure values by introducing an ANF temporary before the conditional.
    - preserve the existing shared-IR invariant that `CompExpr::If` consumes a `ValueExpr` condition,
@@ -803,6 +803,19 @@ Execution plan:
      - either the program compiles and runs end-to-end, or any remaining unsupported feature is
        reported directly from the real lowering boundary rather than being masked as a runtime-I/O
        shape issue.
+
+7. `H7` compile/CLI-path unsupported-reason parity — **DONE**
+   - preserve `GeneralLowerUnsupportedReason` through the file-based compile path used by
+     `goby run`, not only through `execute_runtime_module_with_stdin`.
+   - ensure helper-declaration closure capture is reported as the real unsupported feature instead
+     of collapsing into `no IR decl available for main` or a generic runtime-I/O unsupported-shape
+     message.
+   - keep the representative closure-capture fixture in `examples/bugs/` focused on closure
+     capture itself rather than unrelated shared-IR lowering limitations.
+   - Result: compile/CLI runtime-`Read` failures now surface precise general-lowering reasons;
+     `examples/bugs/runtime_read_captured_lambda.gb` now reports
+     `general lowering unsupported: unsupported IR form ... Lambda with free variables ...`,
+     while `runtime_read_tuple_member.gb` executes successfully and `doc/BUGS.md` is cleared.
 
 Done criteria:
 
@@ -819,6 +832,8 @@ Done criteria:
   ownership only.
 - runtime-I/O classification remains policy-only and does not accumulate new bug-specific shape
   recognizers for these cases.
+- `doc/BUGS.md` no longer carries active Track H entries; the former bug fixtures remain as
+  regression examples.
 
 Lint rules are ordered by ascending analysis cost. The cheapest infrastructure
 comes first to unblock the framework early; user-value ranking is noted in

@@ -1369,21 +1369,19 @@ fn emit_instrs(
                 // Tag occupies the high 4 bits; the payload in the low 32 bits is the pointer.
                 function.instruction(&Instruction::I32WrapI64);
                 // Compute byte offset: 4 (arity header) + 8 * index.
-                let field_offset = 8i32.checked_mul(*index as i32).ok_or_else(|| {
-                    CodegenError {
+                let field_offset = 8i32
+                    .checked_mul(*index as i32)
+                    .ok_or_else(|| CodegenError {
                         message: format!(
                             "gen_lower/emit: TupleGet index {} overflows i32 byte offset",
                             index
                         ),
-                    }
-                })?;
-                let byte_offset = 4i32.checked_add(field_offset).ok_or_else(|| {
-                    CodegenError {
-                        message: format!(
-                            "gen_lower/emit: TupleGet index {} overflows i32 byte offset",
-                            index
-                        ),
-                    }
+                    })?;
+                let byte_offset = 4i32.checked_add(field_offset).ok_or_else(|| CodegenError {
+                    message: format!(
+                        "gen_lower/emit: TupleGet index {} overflows i32 byte offset",
+                        index
+                    ),
                 })?;
                 function.instruction(&Instruction::I32Const(byte_offset));
                 function.instruction(&Instruction::I32Add);
