@@ -4,7 +4,8 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::thread;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 struct TempDirGuard {
     path: PathBuf,
@@ -862,6 +863,72 @@ main =
     assert!(
         !stdout.contains("generated wasm"),
         "runtime-owned execution should not claim Wasm generation, stdout: {}",
+        stdout
+    );
+}
+
+#[test]
+fn run_command_does_not_wait_for_eof_on_general_lowered_program_without_read() {
+    let root = repo_root();
+    let sandbox = TempDirGuard::new("run_general_lowered_without_read");
+    let input = sandbox.join("lambda_no_read.gb");
+    fs::write(
+        &input,
+        r#"
+import goby/list ( map, each )
+
+main : Unit -> Unit can Print
+main =
+  nums = [1, 2, 3]
+  rendered = map nums (|n| -> "${n + 1}")
+  each rendered println
+"#,
+    )
+    .expect("temporary input should be writable");
+
+    let mut child = command_for_goby_cli()
+        .arg("run")
+        .arg(&input)
+        .current_dir(&root)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("cli should execute");
+
+    let mut exited = false;
+    for _ in 0..30 {
+        if child.try_wait().expect("try_wait should succeed").is_some() {
+            exited = true;
+            break;
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+
+    if !exited {
+        let _ = child.kill();
+        let _ = child.wait();
+        panic!("cli stayed blocked waiting for stdin on a program that does not read it");
+    }
+
+    let output = child
+        .wait_with_output()
+        .expect("cli output should be readable");
+
+    assert!(
+        output.status.success(),
+        "expected runtime execution to succeed, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("parsed and typechecked"),
+        "unexpected stdout: {}",
+        stdout
+    );
+    assert!(
+        stdout.contains("2\n3\n4"),
+        "expected map/each output without stdin EOF, stdout: {}",
         stdout
     );
 }

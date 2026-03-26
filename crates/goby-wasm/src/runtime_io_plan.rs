@@ -388,6 +388,29 @@ pub fn runtime_io_execution_kind(module: &Module) -> Result<RuntimeIoExecutionKi
     })
 }
 
+/// Return whether CLI-owned runtime execution must seed stdin before handing control
+/// to `goby-wasm`.
+///
+/// This is intentionally narrower than "program performs runtime I/O":
+/// - `GeneralLowered` only needs seeded stdin when the lowered IR actually contains `Read`.
+/// - `InterpreterBridge` always needs seeded stdin because that execution path is stdin-backed.
+/// - `DynamicWasiIo` and file-based Wasm execution do not need the CLI to pre-consume stdin.
+pub fn runtime_execution_needs_stdin(module: &Module) -> Result<bool, CodegenError> {
+    if crate::gen_lower::supports_general_lower_module(module)? {
+        if let Some(plan) = main_exec_plan(module)
+            && let Some(ir_decl) = plan.ir_decl
+        {
+            return Ok(ir_has_read_op(&ir_decl.body));
+        }
+        return Ok(false);
+    }
+
+    Ok(matches!(
+        classify_runtime_io_with_ir_fallback(module),
+        RuntimeIoClassification::InterpreterBridge
+    ))
+}
+
 // ---------------------------------------------------------------------------
 // IR-based classification (G6)
 // ---------------------------------------------------------------------------

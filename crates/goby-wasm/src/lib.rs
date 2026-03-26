@@ -54,7 +54,9 @@ use crate::runtime_flow::{
     ResolvedEffectHandler, ResolvedHandlerMethod, ResumeToken, RuntimeDeclInfo, RuntimeError,
     RuntimeEvaluators, RuntimeHandlerMethod, StoreOp, WithId,
 };
-pub use crate::runtime_io_plan::{RuntimeIoExecutionKind, runtime_io_execution_kind};
+pub use crate::runtime_io_plan::{
+    RuntimeIoExecutionKind, runtime_execution_needs_stdin, runtime_io_execution_kind,
+};
 use crate::runtime_support::{eval_string_expr, parse_pipeline};
 use crate::runtime_value::{RuntimeLocals, RuntimeValue, runtime_value_option_eq};
 use goby_core::{
@@ -215,6 +217,53 @@ main =
         let module = parse_module(source).expect("parse should work");
         let wasm = compile_module(&module).expect("codegen should succeed");
         assert_valid_wasm_module(&wasm);
+    }
+
+    #[test]
+    fn runtime_execution_needs_stdin_is_false_for_general_lowered_lambda_without_read() {
+        let source = r#"
+import goby/list ( map, each )
+
+main : Unit -> Unit can Print
+main =
+  nums = [1, 2, 3]
+  rendered = map nums (|n| -> "${n + 1}")
+  each rendered println
+"#;
+        let module = parse_module(source).expect("source should parse");
+
+        assert_eq!(
+            runtime_io_execution_kind(&module).expect("classification should succeed"),
+            RuntimeIoExecutionKind::GeneralLowered
+        );
+        assert!(
+            !runtime_execution_needs_stdin(&module).expect("stdin requirement should compute"),
+            "lambda-only GeneralLowered program should not require seeded stdin"
+        );
+    }
+
+    #[test]
+    fn runtime_execution_needs_stdin_is_true_for_general_lowered_read_program() {
+        let source = r#"
+import goby/list ( each )
+import goby/string ( split )
+
+main : Unit -> Unit can Print, Read
+main =
+  text = read()
+  lines = split(text, "\n")
+  each lines println
+"#;
+        let module = parse_module(source).expect("source should parse");
+
+        assert_eq!(
+            runtime_io_execution_kind(&module).expect("classification should succeed"),
+            RuntimeIoExecutionKind::GeneralLowered
+        );
+        assert!(
+            runtime_execution_needs_stdin(&module).expect("stdin requirement should compute"),
+            "GeneralLowered read program should require seeded stdin"
+        );
     }
 
     #[test]

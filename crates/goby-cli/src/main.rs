@@ -237,21 +237,26 @@ fn run_fmt(file: &str, source: &str, check: bool) -> Result<(), CliError> {
 }
 
 fn run_command(module: &goby_core::Module, file: &str) -> Result<(), CliError> {
-    // Runtime-stdin execution ownership lives in `goby-wasm`.
-    // Check the execution kind first: GeneralLowered and InterpreterBridge programs
-    // are executed via the Goby-owned Wasm runtime (which wires host intrinsics and
-    // reads stdin internally).  All other kinds fall through to compile + file-based
-    // execution so that stdin is not consumed before wasmtime runs.
+    // Runtime execution ownership lives in `goby-wasm`.
+    // Some modules must execute through the Goby-owned runtime even when they do not
+    // consume stdin (for example lambda-driven GeneralLowered programs).  Ask the
+    // runtime boundary separately whether stdin must be pre-seeded.
     let needs_stdin_execution = matches!(
         goby_wasm::runtime_io_execution_kind(module)
             .map_err(|err| CliError::Runtime(format!("classification error: {}", err.message)))?,
         goby_wasm::RuntimeIoExecutionKind::GeneralLowered
             | goby_wasm::RuntimeIoExecutionKind::InterpreterBridge
     );
+    let needs_seeded_stdin = goby_wasm::runtime_execution_needs_stdin(module)
+        .map_err(|err| CliError::Runtime(format!("stdin classification error: {}", err.message)))?;
 
     if needs_stdin_execution {
-        let stdin_text = read_stdin_to_string()?;
-        match goby_wasm::execute_runtime_module_with_stdin(module, Some(stdin_text))
+        let stdin_text = if needs_seeded_stdin {
+            Some(read_stdin_to_string()?)
+        } else {
+            None
+        };
+        match goby_wasm::execute_runtime_module_with_stdin(module, stdin_text)
             .map_err(|err| CliError::Runtime(format!("runtime error: {}", err.message)))?
         {
             Some(output) => {

@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-25
+Last updated: 2026-03-26
 
 ## Current Focus
 
@@ -25,6 +25,11 @@ Last updated: 2026-03-25
   `Call` lowering now hoists non-value callees/arguments into left-to-right `let`
   bindings, so inline forms such as `each (rolls[2]) println` lower and execute
   through the same path as explicit staging binds.
+- CLI/runtime stdin ownership corrected (2026-03-26): `goby run` no longer pre-consumes
+  interactive stdin for `GeneralLowered` programs that do not perform `Read`.
+  `goby-wasm` now exposes a narrow stdin-requirement predicate so CLI execution keeps
+  seeded stdin for true `Read` / `InterpreterBridge` cases while allowing lambda-only
+  `GeneralLowered` programs to run immediately in interactive shells.
 - Typechecker follow-up identified (2026-03-25): ordinary calls still need shared
   higher-order function-type validation.
   - direct unknown bare calls are now rejected during typecheck.
@@ -101,6 +106,12 @@ Higher-order function-type checking.
 First target is to make callback positions such as `each xs println` fail with a
 resolved-name-but-wrong-function-type diagnostic (`Int -> Unit` required,
 `String -> Unit` found) rather than relying on ad hoc `println` checks.
+
+**Track runtime execution (2026-03-26):**
+The interactive-shell stdin hang is fixed for lambda-only `GeneralLowered` programs.
+Representative CLI regression coverage now keeps stdin open while asserting that
+`map`/`each` output still completes without EOF, and existing `Read` / grapheme stdin
+execution regressions remain green.
 
 **Track F (complete, 2026-03-25):**
 `goby/int.to_string : Int -> String` is implemented end-to-end.
