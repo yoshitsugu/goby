@@ -1,6 +1,7 @@
 use super::*;
 use crate::call::flatten_named_call;
 use crate::grapheme_semantics::{ControlFlow, GraphemeSpan, for_each_extended_grapheme_span};
+use goby_core::ast::UnaryOpKind;
 
 pub(super) struct ResolvedRuntimeOutput {
     pub(super) output: Option<String>,
@@ -582,6 +583,15 @@ impl<'m> RuntimeOutputResolver<'m> {
             Expr::Handler { clauses } => Some(RuntimeValue::Handler(
                 self.inline_handler_from_clauses(clauses, locals, callables),
             )),
+            Expr::UnaryOp { op, expr } => {
+                let inner = self.eval_expr_ast(expr, locals, callables, evaluators, depth + 1)?;
+                match (op, inner) {
+                    (UnaryOpKind::Not, RuntimeValue::Bool(value)) => {
+                        Some(RuntimeValue::Bool(!value))
+                    }
+                    _ => None,
+                }
+            }
             Expr::BinOp { op, left, right } => {
                 let lv = self.eval_expr_ast(left, locals, callables, evaluators, depth + 1);
                 let lv = lv?;

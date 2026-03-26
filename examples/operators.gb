@@ -1,19 +1,22 @@
-# Example: arithmetic, comparison, and equality operators
+# Example: arithmetic, comparison, equality, and boolean operators
 #
 # Note: binary-operator arguments to spaced calls currently need parentheses,
 # so write `println (1 + 1)` rather than `println 1 + 1`.
 main : Unit -> Unit
 main =
-  println (1 + 1)
-  println (5 - 1)
-  println (5 / 2)
-  println (3 * 3)
-  println (5 % 2)
+  println "${1 + 1}"
+  println "${5 - 1}"
+  println "${5 / 2}"
+  println "${3 * 3}"
+  println "${5 % 2}"
 
-  println (3 > 1 + 1)
-  println (2 < 1 - 1)
-  println (8 >= 1 + 3)
-  println (8 <= 5 - 3)
+  println "${3 > 1 + 1}"
+  println "${2 < 1 - 1}"
+  println "${8 >= 1 + 3}"
+  println "${8 <= 5 - 3}"
 
-  println (2 == 1 + 1)
-  println (2 == 1 - 1)
+  println "${2 == 1 + 1}"
+  println "${2 == 1 - 1}"
+  println "${True || False}"
+  println "${!False}"
+  println "${1 < 2 && 3 > 1}"

@@ -2180,6 +2180,12 @@ fn emit_bin_op(
             bool_from_i32!(function);
             Ok(())
         }
+        IrBinOp::Or => {
+            // Bool: TAG_BOOL<<60 | 0 (false) or TAG_BOOL<<60 | 1 (true).
+            // (TAG<<60 | a) | (TAG<<60 | b) = TAG<<60 | (a | b).
+            function.instruction(&Instruction::I64Or);
+            Ok(())
+        }
         IrBinOp::And => {
             // Bool: TAG_BOOL<<60 | 0 (false) or TAG_BOOL<<60 | 1 (true).
             // (TAG<<60 | a) & (TAG<<60 | b) = TAG<<60 | (a & b).

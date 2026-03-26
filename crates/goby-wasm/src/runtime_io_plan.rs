@@ -863,6 +863,7 @@ fn expr_contains_runtime_read(expr: &Expr) -> bool {
         Expr::RecordConstruct { fields, .. } => fields
             .iter()
             .any(|(_, value)| expr_contains_runtime_read(value)),
+        Expr::UnaryOp { expr, .. } => expr_contains_runtime_read(expr),
         Expr::BinOp { left, right, .. } => {
             expr_contains_runtime_read(left) || expr_contains_runtime_read(right)
         }

@@ -84,10 +84,19 @@ fn infer_expr_ty(expr: &Expr, env: &TypeEnv) -> Ty {
                 args: Vec::new(),
             }
         }
+        Expr::UnaryOp { op, expr } => {
+            let inner = check_expr(expr, env);
+            match (op, &inner) {
+                (crate::ast::UnaryOpKind::Not, Ty::Bool) => Ty::Bool,
+                (_, Ty::Unknown) => Ty::Unknown,
+                _ => Ty::Unknown,
+            }
+        }
         Expr::BinOp { op, left, right } => {
             let lt = check_expr(left, env);
             let rt = check_expr(right, env);
             match (op, &lt, &rt) {
+                (BinOpKind::Or, Ty::Bool, Ty::Bool) => Ty::Bool,
                 (BinOpKind::And, Ty::Bool, Ty::Bool) => Ty::Bool,
                 (BinOpKind::Add, Ty::Int, Ty::Int) => Ty::Int,
                 (BinOpKind::Sub, Ty::Int, Ty::Int) => Ty::Int,

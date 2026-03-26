@@ -33,6 +33,7 @@ pub enum IrType {
 /// Binary operation kinds, mirroring `ast::BinOpKind` exactly.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IrBinOp {
+    Or,
     And,
     Add,
     Sub,
@@ -398,6 +399,7 @@ fn fmt_value(out: &mut String, v: &ValueExpr) {
             fmt_value(out, left);
             out.push(' ');
             out.push_str(match op {
+                IrBinOp::Or => "||",
                 IrBinOp::And => "&&",
                 IrBinOp::Add => "+",
                 IrBinOp::Sub => "-",

@@ -445,6 +445,9 @@ fn eval_value(
                 (IrBinOp::Eq, NativeValue::Unit, NativeValue::Unit) => {
                     Some(NativeValue::Bool(true))
                 }
+                (IrBinOp::Or, NativeValue::Bool(a), NativeValue::Bool(b)) => {
+                    Some(NativeValue::Bool(a || b))
+                }
                 (IrBinOp::Lt, NativeValue::Int(a), NativeValue::Int(b)) => {
                     Some(NativeValue::Bool(a < b))
                 }

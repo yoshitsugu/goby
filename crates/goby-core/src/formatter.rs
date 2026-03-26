@@ -25,7 +25,7 @@
 use crate::ast::{
     BinOpKind, CaseArm, CasePattern, Declaration, EffectDecl, EmbedDecl, Expr, HandlerClause,
     ImportDecl, ImportKind, InterpolatedPart, ListPatternItem, ListPatternTail, Module,
-    RecordField, Stmt, TypeDeclaration,
+    RecordField, Stmt, TypeDeclaration, UnaryOpKind,
 };
 
 const INDENT: &str = "  ";
@@ -125,8 +125,21 @@ pub(crate) fn format_expr(expr: &Expr, indent: usize) -> String {
                 .collect();
             format!("{}({})", constructor, field_strs.join(", "))
         }
+        Expr::UnaryOp { op, expr } => {
+            let op_str = match op {
+                UnaryOpKind::Not => "!",
+            };
+            let inner_raw = format_expr(expr, indent);
+            let inner = if expr.needs_parens_as_subexpr() {
+                format!("({})", inner_raw)
+            } else {
+                inner_raw
+            };
+            format!("{}{}", op_str, inner)
+        }
         Expr::BinOp { op, left, right } => {
             let op_str = match op {
+                BinOpKind::Or => "||",
                 BinOpKind::And => "&&",
                 BinOpKind::Add => "+",
                 BinOpKind::Sub => "-",

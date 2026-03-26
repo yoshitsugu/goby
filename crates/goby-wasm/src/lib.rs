@@ -545,6 +545,31 @@ main =
     }
 
     #[test]
+    fn wb1_boolean_or_not_and_comparison_precedence_execute_via_general_lowered() {
+        use goby_core::parse_module;
+        let module = parse_module(
+            r#"
+main : Unit -> Unit can Print, Read
+main =
+  _ = read ()
+  ok = !False || 3 < 2 && 9 > 4
+  println "${ok}"
+"#,
+        )
+        .expect("parse should work");
+
+        assert_eq!(
+            runtime_io_execution_kind(&module).expect("classification should succeed"),
+            RuntimeIoExecutionKind::GeneralLowered,
+            "boolean operator program must classify as GeneralLowered"
+        );
+
+        let output = execute_runtime_module_with_stdin(&module, Some(String::new()))
+            .expect("boolean operator program must execute via Goby-owned Wasm runtime");
+        assert_eq!(output.as_deref(), Some("True\n"));
+    }
+
+    #[test]
     fn wb1_let_mut_and_assign_executes_via_general_lowered() {
         // WB-1: LetMut + Assign lowers correctly and the final value reflects the assignment.
         // Uses string value (not int) since printing ints requires int-to-string not in WB-1.

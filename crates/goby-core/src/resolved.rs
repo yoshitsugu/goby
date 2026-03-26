@@ -7,7 +7,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::ast::{
     BinOpKind, CaseArm, CasePattern, Declaration, Expr, HandlerClause, ImportKind,
-    InterpolatedPart, Module, Span, Stmt,
+    InterpolatedPart, Module, Span, Stmt, UnaryOpKind,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -88,6 +88,10 @@ pub enum ResolvedExpr {
     RecordConstruct {
         constructor: String,
         fields: Vec<(String, ResolvedExpr)>,
+    },
+    UnaryOp {
+        op: UnaryOpKind,
+        expr: Box<ResolvedExpr>,
     },
     BinOp {
         op: BinOpKind,
@@ -343,6 +347,10 @@ impl Resolver {
                     .iter()
                     .map(|(name, value)| (name.clone(), self.resolve_expr(value)))
                     .collect(),
+            },
+            Expr::UnaryOp { op, expr } => ResolvedExpr::UnaryOp {
+                op: op.clone(),
+                expr: Box::new(self.resolve_expr(expr)),
             },
             Expr::BinOp { op, left, right } => ResolvedExpr::BinOp {
                 op: op.clone(),

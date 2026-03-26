@@ -636,6 +636,15 @@ fn inspect_expr(
                 );
             }
         }
+        Expr::UnaryOp { expr, .. } => {
+            inspect_expr(
+                expr,
+                out,
+                declaration_names,
+                qualified_operation_index,
+                op_name_index,
+            );
+        }
         Expr::BinOp { left, right, .. } => {
             inspect_expr(
                 left,
@@ -853,6 +862,7 @@ fn expr_contains_handler_resume(expr: &Expr) -> bool {
         Expr::RecordConstruct { fields, .. } => fields
             .iter()
             .any(|(_, value)| expr_contains_handler_resume(value)),
+        Expr::UnaryOp { expr, .. } => expr_contains_handler_resume(expr),
         Expr::BinOp { left, right, .. } => {
             expr_contains_handler_resume(left) || expr_contains_handler_resume(right)
         }

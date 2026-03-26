@@ -356,6 +356,16 @@ fn try_lower_value(
             }))
         }
         ResolvedExpr::Ref(reference) => Ok(Some(lower_ref_value(reference))),
+        ResolvedExpr::UnaryOp { op, expr } => match op {
+            crate::ast::UnaryOpKind::Not => {
+                let value = lower_value_required(ctx, expr, "unary `!` operand")?;
+                Ok(Some(ValueExpr::BinOp {
+                    op: IrBinOp::Eq,
+                    left: Box::new(value),
+                    right: Box::new(ValueExpr::BoolLit(false)),
+                }))
+            }
+        },
         ResolvedExpr::BinOp { op, left, right } => {
             let ir_op = lower_binop(op);
             let l = lower_value_required(ctx, left, "binary operator left operand")?;
@@ -747,6 +757,7 @@ fn lower_call_operand_to_value(
 
 fn lower_binop(op: &BinOpKind) -> IrBinOp {
     match op {
+        BinOpKind::Or => IrBinOp::Or,
         BinOpKind::And => IrBinOp::And,
         BinOpKind::Add => IrBinOp::Add,
         BinOpKind::Sub => IrBinOp::Sub,

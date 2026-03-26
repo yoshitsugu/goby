@@ -176,6 +176,7 @@ Based on `examples/*.gb`:
   - `else if` chaining is not supported in MVP.
 - `if ... else ...` expression: indentation-based two-branch form.
 - `==` equality operator: produces `Bool` at runtime.
+- Boolean operators: `&&`, `||`, and unary `!` are implemented.
 - Handler dispatch: lexical nearest-handler stack walk (no alphabetical fallback).
 - Runtime execution model: prefer native lowering for the supported subset; fallback to
   compile-time interpreter (`resolve_main_runtime_output`) for unsupported forms.
@@ -813,7 +814,7 @@ These items are intentionally kept as short placeholders until they become activ
 - Tuple/record roadmap: record update syntax, pattern matching on record fields.
 - Import system: filesystem-backed/local package resolution, dependency graph rules.
 - Equality/comparison:
-  - implemented operator set now includes `==`, `<`, `>`, `<=`, `>=`, `+`, `-`, `*`, `/`, `%`.
+  - implemented operator set now includes `||`, `&&`, `!`, `==`, `<`, `>`, `<=`, `>=`, `+`, `-`, `*`, `/`, `%`.
   - still open:
     - exact long-term policy for equality over all language-level value categories,
     - `!=`,

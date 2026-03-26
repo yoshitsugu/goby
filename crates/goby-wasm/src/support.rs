@@ -17,7 +17,8 @@ pub(crate) fn is_supported_list_item_expr(expr: &Expr) -> bool {
 pub(crate) fn is_supported_binop_kind(op: &BinOpKind) -> bool {
     matches!(
         op,
-        BinOpKind::Add
+        BinOpKind::Or
+            | BinOpKind::Add
             | BinOpKind::Sub
             | BinOpKind::Mul
             | BinOpKind::Div
@@ -59,6 +60,7 @@ mod tests {
     #[test]
     fn supports_current_native_binop_kinds() {
         assert!(is_supported_binop_kind(&BinOpKind::Add));
+        assert!(is_supported_binop_kind(&BinOpKind::Or));
         assert!(is_supported_binop_kind(&BinOpKind::Sub));
         assert!(is_supported_binop_kind(&BinOpKind::Mul));
         assert!(is_supported_binop_kind(&BinOpKind::Div));

@@ -54,6 +54,7 @@ fn lint_expr(expr: &Expr, decl: &Declaration, diagnostics: &mut Vec<Diagnostic>)
                 lint_expr(value, decl, diagnostics);
             }
         }
+        Expr::UnaryOp { expr, .. } => lint_expr(expr, decl, diagnostics),
         Expr::BinOp { left, right, .. } => {
             lint_expr(left, decl, diagnostics);
             lint_expr(right, decl, diagnostics);

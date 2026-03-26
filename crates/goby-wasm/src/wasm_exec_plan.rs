@@ -281,6 +281,7 @@ fn ir_list_pattern_tail_to_ast(tail: &IrListPatternTail) -> ListPatternTail {
 
 fn ir_binop_to_ast(op: &IrBinOp) -> BinOpKind {
     match op {
+        IrBinOp::Or => BinOpKind::Or,
         IrBinOp::And => BinOpKind::And,
         IrBinOp::Add => BinOpKind::Add,
         IrBinOp::Sub => BinOpKind::Sub,

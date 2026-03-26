@@ -1,4 +1,4 @@
-use crate::ast::{BinOpKind, Expr, InterpolatedPart};
+use crate::ast::{BinOpKind, Expr, InterpolatedPart, UnaryOpKind};
 use crate::parser_util::{
     is_camel_case_identifier, is_identifier, is_non_reserved_identifier, is_qualified_name,
 };
@@ -25,6 +25,14 @@ pub(crate) fn parse_expr(src: &str) -> Option<Expr> {
 
     if let Some(expr) = parse_resume_expr(src) {
         return Some(expr);
+    }
+
+    if let Some((left, right)) = split_top_level_double_token(src, "||") {
+        return Some(Expr::BinOp {
+            op: BinOpKind::Or,
+            left: Box::new(parse_expr(left)?),
+            right: Box::new(parse_expr(right)?),
+        });
     }
 
     if let Some((left, right)) = split_top_level_double_token(src, "&&") {
@@ -113,6 +121,10 @@ pub(crate) fn parse_expr(src: &str) -> Option<Expr> {
             left: Box::new(parse_expr(left)?),
             right: Box::new(parse_expr(right)?),
         });
+    }
+
+    if let Some(expr) = parse_not_expr(src) {
+        return Some(expr);
     }
 
     // List index access: `expr[index]` — placed after binary-op splits so that
@@ -476,6 +488,17 @@ fn split_top_level_double_token<'a>(src: &'a str, token: &str) -> Option<(&'a st
         }
     }
     None
+}
+
+fn parse_not_expr(src: &str) -> Option<Expr> {
+    let inner = src.strip_prefix('!')?.trim();
+    if inner.is_empty() {
+        return None;
+    }
+    Some(Expr::UnaryOp {
+        op: UnaryOpKind::Not,
+        expr: Box::new(parse_expr(inner)?),
+    })
 }
 
 fn parse_lambda(src: &str) -> Option<Expr> {
@@ -924,7 +947,7 @@ fn parse_list_index_suffix(src: &str) -> Option<Expr> {
 #[cfg(test)]
 mod tests {
     use super::parse_expr;
-    use crate::ast::{BinOpKind, Expr, InterpolatedPart};
+    use crate::ast::{BinOpKind, Expr, InterpolatedPart, UnaryOpKind};
 
     #[test]
     fn parses_int_literal() {
@@ -1089,6 +1112,45 @@ mod tests {
                 op: BinOpKind::Ge,
                 left: Box::new(Expr::var("a")),
                 right: Box::new(Expr::var("b")),
+            })
+        );
+    }
+
+    #[test]
+    fn parses_boolean_operator_family() {
+        assert_eq!(
+            parse_expr("a || b"),
+            Some(Expr::BinOp {
+                op: BinOpKind::Or,
+                left: Box::new(Expr::var("a")),
+                right: Box::new(Expr::var("b")),
+            })
+        );
+        assert_eq!(
+            parse_expr("!flag"),
+            Some(Expr::UnaryOp {
+                op: UnaryOpKind::Not,
+                expr: Box::new(Expr::var("flag")),
+            })
+        );
+    }
+
+    #[test]
+    fn parses_comparison_as_higher_precedence_than_logical_ops() {
+        assert_eq!(
+            parse_expr("a < 1 && b > 3"),
+            Some(Expr::BinOp {
+                op: BinOpKind::And,
+                left: Box::new(Expr::BinOp {
+                    op: BinOpKind::Lt,
+                    left: Box::new(Expr::var("a")),
+                    right: Box::new(Expr::IntLit(1)),
+                }),
+                right: Box::new(Expr::BinOp {
+                    op: BinOpKind::Gt,
+                    left: Box::new(Expr::var("b")),
+                    right: Box::new(Expr::IntLit(3)),
+                }),
             })
         );
     }

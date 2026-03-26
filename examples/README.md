@@ -14,7 +14,7 @@ This directory contains small Goby programs grouped by purpose.
 - `string_graphemes.gb`: `string.graphemes` sample returning Unicode grapheme clusters
 - `list_case.gb`: list `case` pattern sample (`[]`, `[1]`, `[4, ..]`, `[a, ..b]`, `[_, _]`, `_`)
 - `list_spread.gb`: expression-side list spread sample (`[1, ..xs]`, `[1, ..map xs f]`)
-- `operators.gb`: arithmetic / comparison / equality operator sample
+- `operators.gb`: arithmetic / comparison / equality / boolean operator sample
 - `case_arm_block.gb`: `case` arm block sample (`pattern ->` + indented block body)
 - `effect_generic.gb`: generic effect header sample (`effect Stream a b`)
 

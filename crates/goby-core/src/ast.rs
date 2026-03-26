@@ -147,6 +147,7 @@ pub struct Declaration {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BinOpKind {
+    Or,
     And,
     Add,
     Sub,
@@ -158,6 +159,11 @@ pub enum BinOpKind {
     Gt,
     Le,
     Ge,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UnaryOpKind {
+    Not,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -227,6 +233,10 @@ pub enum Expr {
     RecordConstruct {
         constructor: String,
         fields: Vec<(String, Expr)>,
+    },
+    UnaryOp {
+        op: UnaryOpKind,
+        expr: Box<Expr>,
     },
     BinOp {
         op: BinOpKind,
@@ -338,7 +348,8 @@ impl Expr {
     pub fn needs_parens_as_subexpr(&self) -> bool {
         matches!(
             self,
-            Expr::BinOp { .. }
+            Expr::UnaryOp { .. }
+                | Expr::BinOp { .. }
                 | Expr::Call { .. }
                 | Expr::RecordConstruct { .. }
                 | Expr::MethodCall { .. }
@@ -377,6 +388,18 @@ impl Expr {
                     .collect();
                 Some(format!("{}({})", constructor, parts?.join(", ")))
             }
+            Expr::UnaryOp { op, expr } => {
+                let op_str = match op {
+                    UnaryOpKind::Not => "!",
+                };
+                let inner_raw = expr.to_str_repr()?;
+                let inner = if expr.needs_parens_as_subexpr() {
+                    format!("({})", inner_raw)
+                } else {
+                    inner_raw
+                };
+                Some(format!("{}{}", op_str, inner))
+            }
             Expr::ListLit { elements, spread } => {
                 let parts: Option<Vec<String>> = elements.iter().map(|i| i.to_str_repr()).collect();
                 let mut repr = parts?.join(", ");
@@ -394,6 +417,7 @@ impl Expr {
             }
             Expr::BinOp { op, left, right } => {
                 let op_str = match op {
+                    BinOpKind::Or => "||",
                     BinOpKind::And => "&&",
                     BinOpKind::Add => "+",
                     BinOpKind::Sub => "-",

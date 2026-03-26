@@ -30,6 +30,9 @@ Last updated: 2026-03-26
   `goby-wasm` now exposes a narrow stdin-requirement predicate so CLI execution keeps
   seeded stdin for true `Read` / `InterpreterBridge` cases while allowing lambda-only
   `GeneralLowered` programs to run immediately in interactive shells.
+- Boolean operator surface extended (2026-03-26): `||` and unary `!` are now supported.
+  Parser precedence is locked so comparisons bind tighter than `&&` / `||`, and the
+  active examples/spec now reflect the implemented operator set.
 - Typechecker follow-up identified (2026-03-25): ordinary calls still need shared
   higher-order function-type validation.
   - direct unknown bare calls are now rejected during typecheck.
@@ -112,6 +115,11 @@ The interactive-shell stdin hang is fixed for lambda-only `GeneralLowered` progr
 Representative CLI regression coverage now keeps stdin open while asserting that
 `map`/`each` output still completes without EOF, and existing `Read` / grapheme stdin
 execution regressions remain green.
+
+**Track operators (complete, 2026-03-26):**
+`||` and unary `!` now parse, typecheck, format, and execute.
+Comparison precedence is regression-locked above logical conjunction/disjunction, and
+`examples/operators.gb` now runs cleanly through the CLI using string interpolation.
 
 **Track F (complete, 2026-03-25):**
 `goby/int.to_string : Int -> String` is implemented end-to-end.

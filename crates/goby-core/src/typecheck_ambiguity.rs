@@ -165,6 +165,7 @@ pub(crate) fn ensure_no_ambiguous_refs_in_expr(
             }
             Ok(())
         }
+        Expr::UnaryOp { expr, .. } => ensure_no_ambiguous_refs_in_expr(expr, env, decl_name),
         Expr::BinOp { left, right, .. } => {
             ensure_no_ambiguous_refs_in_expr(left, env, decl_name)?;
             ensure_no_ambiguous_refs_in_expr(right, env, decl_name)

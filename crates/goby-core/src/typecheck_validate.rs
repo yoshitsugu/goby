@@ -601,6 +601,7 @@ fn first_disallowed_intrinsic_in_expr(
         Expr::RecordConstruct { fields, .. } => fields
             .iter()
             .find_map(|(_, value)| first_disallowed_intrinsic_in_expr(value, is_stdlib_source)),
+        Expr::UnaryOp { expr, .. } => first_disallowed_intrinsic_in_expr(expr, is_stdlib_source),
         Expr::BinOp { left, right, .. } => {
             first_disallowed_intrinsic_in_expr(left, is_stdlib_source)
                 .or_else(|| first_disallowed_intrinsic_in_expr(right, is_stdlib_source))

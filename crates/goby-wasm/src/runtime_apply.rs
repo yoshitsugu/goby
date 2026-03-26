@@ -468,6 +468,7 @@ impl<'m> RuntimeOutputResolver<'m> {
         }
         match (lv, rv) {
             (RuntimeValue::Bool(l), RuntimeValue::Bool(r)) => match op {
+                goby_core::BinOpKind::Or => Some(RuntimeValue::Bool(l || r)),
                 goby_core::BinOpKind::And => Some(RuntimeValue::Bool(l && r)),
                 _ => None,
             },

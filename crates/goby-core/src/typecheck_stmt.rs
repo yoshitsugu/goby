@@ -278,6 +278,7 @@ fn ensure_known_call_targets_in_expr(
             }
             Ok(())
         }
+        Expr::UnaryOp { expr, .. } => ensure_known_call_targets_in_expr(expr, env, decl_name),
         Expr::BinOp { left, right, .. } => {
             ensure_known_call_targets_in_expr(left, env, decl_name)?;
             ensure_known_call_targets_in_expr(right, env, decl_name)

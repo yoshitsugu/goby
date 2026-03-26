@@ -135,6 +135,8 @@ main =
   println (8 <= 5 - 3)
   println (2 == 1 + 1)
   println (2 == 1 - 1)
+  println (True || False)
+  println (!False)
 "#;
     let module = parse_module(source).expect("source should parse");
     let wasm = compile_module(&module).expect("codegen should succeed");
@@ -142,7 +144,7 @@ main =
         resolve_module_runtime_output(&module).expect("runtime output should resolve");
     assert_eq!(
         expected_text,
-        "2\n4\n2\n9\n1\nTrue\nFalse\nTrue\nFalse\nTrue\nFalse\n"
+        "2\n4\n2\n9\n1\nTrue\nFalse\nTrue\nFalse\nTrue\nFalse\nTrue\nTrue\n"
     );
     assert_valid_wasm_module(&wasm);
 }

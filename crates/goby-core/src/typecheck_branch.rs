@@ -76,6 +76,7 @@ pub(crate) fn check_branch_type_consistency_in_expr(
             }
             Ok(())
         }
+        Expr::UnaryOp { expr, .. } => recurse!(expr),
         Expr::BinOp { left, right, .. } => {
             recurse!(left)?;
             recurse!(right)
