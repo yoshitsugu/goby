@@ -766,11 +766,16 @@ Execution plan:
      general-lowering reason (e.g. "unsupported IR form in general lowering path: Lambda with
      free variables...") instead of silently returning `Ok(None)`.
 
-5. `H5` closure representation design checkpoint
+5. `H5` closure representation design checkpoint — **DONE**
    - if capturing lambdas remain important after `H4`, write and lock a dedicated closure design:
      environment representation, call convention, interaction with mutable locals, funcref table
      strategy, and fallback/runtime parity expectations.
    - only after that design is locked should actual closure lowering be implemented.
+   - Result: `doc/closure-design.md` created and locked (revision 1.0). Key decisions:
+     TAG_CLOSURE=0x8; closure record `[func_table_slot, env_size, captured...]` in heap;
+     value capture (snapshot) for mutable locals; two-type-idx call convention
+     ((i64)->i64 for non-closure, (i64,i64)->i64 for closure wrappers);
+     parity target: `typed_mode_matches_fallback_for_lambda_closure_capture`.
 
 Done criteria:
 
