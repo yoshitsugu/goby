@@ -374,7 +374,7 @@ fn plan_static_output(stmts: &[Stmt]) -> Option<String> {
 }
 
 pub fn runtime_io_execution_kind(module: &Module) -> Result<RuntimeIoExecutionKind, CodegenError> {
-    if crate::gen_lower::supports_general_lower_module(module)? {
+    if crate::gen_lower::supports_general_lower_module(module)?.is_none() {
         return Ok(RuntimeIoExecutionKind::GeneralLowered);
     }
     // G6: IR-based classification with AST fallback.
@@ -396,7 +396,7 @@ pub fn runtime_io_execution_kind(module: &Module) -> Result<RuntimeIoExecutionKi
 /// - `InterpreterBridge` always needs seeded stdin because that execution path is stdin-backed.
 /// - `DynamicWasiIo` and file-based Wasm execution do not need the CLI to pre-consume stdin.
 pub fn runtime_execution_needs_stdin(module: &Module) -> Result<bool, CodegenError> {
-    if crate::gen_lower::supports_general_lower_module(module)? {
+    if crate::gen_lower::supports_general_lower_module(module)?.is_none() {
         if let Some(plan) = main_exec_plan(module)
             && let Some(ir_decl) = plan.ir_decl
         {

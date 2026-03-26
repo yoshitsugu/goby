@@ -744,12 +744,15 @@ Execution plan:
    - Result: `TupleGet` Wasm emit (I32WrapI64 + offset + I64Load) verified end-to-end;
      Read+tuple+interpolated-string parity test added in `lib.rs` tests.
 
-3. `H3` unsupported-reason plumbing for general lowering
+3. `H3` unsupported-reason plumbing for general lowering — **DONE** (commit TBD)
    - replace the current boolean/`Option` collapse inside the internal general-lowering pipeline with
      a result that preserves important unsupported reasons.
    - keep the public execution-path policy centralized, but allow diagnostics to say whether the
      actual blocker is closure capture, tuple projection support, handler support, or another
      backend limitation.
+   - Result: `GeneralLowerUnsupportedReason` enum introduced; `lower_module_to_instrs` returns
+     `Result<LowerModuleResult, CodegenError>`; `supports_general_lower_module` returns
+     `Result<Option<GeneralLowerUnsupportedReason>, CodegenError>` (None = supported).
 
 4. `H4` closure-capture diagnostics
    - surface a user-facing diagnostic for capturing lambdas that explains:
