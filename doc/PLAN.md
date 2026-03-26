@@ -665,6 +665,110 @@ Done criteria:
 - `trace` does not require explicit `to_string` conversion.
 - `print` / `println` types remain unchanged.
 
+### 4.7 Active Track H: Runtime-Lowering Correctness for Capturing Lambdas and Tuple Member Access
+
+Goal: eliminate the remaining backend gap where valid source programs become misleading
+runtime-I/O failures or emitter-internal errors once `main` contains `Read`.
+
+Why this is active:
+
+- `doc/BUGS.md` currently records two concrete failures in this area:
+  - runtime-`Read` programs with helper lambdas that capture outer locals fall through to a generic
+    `runtime I/O program shape is currently unsupported` error,
+  - tuple member access such as `pair.0` can survive into the general-lowering path as a fake local
+    name and fail later as `gen_lower/emit: unknown local 'pair.0'`.
+- both failures indicate architecture gaps at the shared IR / general-lowering boundary, not a need
+  for more ad hoc runtime-I/O shape recognizers.
+- the long-term direction is already locked elsewhere in this plan:
+  runtime capability should converge on shared IR plus the `GeneralLowered` path, while
+  `runtime_io_plan.rs` should shrink rather than become a grab-bag of source-shape exceptions.
+
+Design principles for this track:
+
+- do not add new AST-shape-specific fallback recognition to paper over these bugs.
+- do not special-case `pair.0` or closure-capturing helper forms only inside `runtime_io_plan.rs`.
+- fix the representation boundary so the unsupported feature, if any, is visible explicitly in
+  shared IR and receives a precise diagnostic before backend emission.
+- if closure support is not implemented in the first slice, the compiler must still fail honestly
+  with a direct "closure capture not yet supported" error rather than misclassifying the program as
+  an unsupported runtime-I/O shape.
+
+Planned architecture:
+
+1. Make tuple projection an explicit IR/backend concept.
+   - Numeric member access on tuples should stop piggybacking on generic qualified/member syntax
+     once typechecking has established tuple meaning.
+   - Introduce a dedicated shared-IR representation for tuple projection, or an equivalent canonical
+     lowering form with the same ownership boundary properties.
+   - General lowering must consume that canonical form directly and lower it to an actual tuple
+     projection operation instead of fabricating pseudo-local names like `pair.0`.
+   - Runtime fallback/interpreter code should then consume the same canonical meaning rather than
+     keeping tuple-member behavior as a backend-only implicit convention.
+
+2. Separate "unsupported closure capture" from "unsupported runtime-I/O shape".
+   - Closure capture is a higher-order/lambda capability issue, not a runtime-I/O classification issue.
+   - Extend the lowering/error boundary so capture rejection survives as structured compiler intent.
+   - Runtime-I/O classification should only answer which execution path owns a program, not erase the
+     underlying lowering failure into a generic shape mismatch.
+   - This likely means threading a more specific unsupported-reason result through the
+     `supports_general_lower_module` / `lower_module_to_instrs` boundary instead of collapsing every
+     unsupported auxiliary decl into `Ok(None)`.
+
+3. Decide and lock the closure roadmap before broad implementation.
+   - Short-term acceptable state:
+     - capture-free lambdas remain supported,
+     - capturing lambdas are rejected early with a precise diagnostic.
+   - Long-term target:
+     - add an explicit closure representation to shared IR/backend lowering only when the calling
+       convention, environment layout, and Wasm runtime ownership are designed coherently.
+   - Do not approximate closure capture by silently rewriting only a few known patterns
+     (`each` + mutable accumulator, etc.); that would create long-term semantic debt.
+
+Execution plan:
+
+1. `H1` tuple-projection canonicalization
+   - audit the parser/typecheck/resolution/lowering pipeline for tuple member access ownership.
+   - introduce one canonical representation after type meaning is known.
+   - add focused regressions showing that tuple projection no longer leaks as pseudo-local names in
+     backend diagnostics.
+
+2. `H2` backend support for canonical tuple projection
+   - add backend-IR and emitter support for tuple projection, or lower it through an existing
+     intrinsic path if that path is genuinely general and reusable.
+   - verify parity across fallback runtime and general-lowered Wasm execution.
+
+3. `H3` unsupported-reason plumbing for general lowering
+   - replace the current boolean/`Option` collapse for general-lowering support with a result that
+     preserves important unsupported reasons.
+   - keep the public execution-path policy centralized, but allow diagnostics to say whether the
+     actual blocker is closure capture, tuple projection support, handler support, or another
+     backend limitation.
+
+4. `H4` closure-capture diagnostics
+   - surface a user-facing diagnostic for capturing lambdas that explains:
+     - the lambda captures outer locals,
+     - closure environments are not yet supported in the Wasm lowering path,
+     - the failure is not specifically about `Read`.
+   - make this diagnostic fire before runtime-I/O classification falls back to a generic
+     unsupported-shape message.
+
+5. `H5` closure representation design checkpoint
+   - if capturing lambdas remain important after `H4`, write and lock a dedicated closure design:
+     environment representation, call convention, interaction with mutable locals, funcref table
+     strategy, and fallback/runtime parity expectations.
+   - only after that design is locked should actual closure lowering be implemented.
+
+Done criteria:
+
+- `examples/bugs/runtime_read_tuple_member.gb` no longer fails with `unknown local 'pair.0'`.
+- `examples/bugs/runtime_read_captured_lambda.gb` no longer reports a generic runtime-I/O-shape
+  error; it either runs correctly (if closure support lands) or fails with a precise closure-capture
+  diagnostic.
+- tuple member access ownership is explicit in the compiler pipeline and no longer depends on
+  backend-specific interpretation of qualified syntax.
+- runtime-I/O classification remains policy-only and does not accumulate new bug-specific shape
+  recognizers for these cases.
+
 Lint rules are ordered by ascending analysis cost. The cheapest infrastructure
 comes first to unblock the framework early; user-value ranking is noted in
 parentheses for prioritization.
