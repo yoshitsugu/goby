@@ -41,6 +41,13 @@ Last updated: 2026-03-26
     - tuple member access can leak into `gen_lower/emit` as pseudo-local names such as `pair.0`.
   - `doc/PLAN.md` now carries `Track H`, which explicitly forbids ad hoc fixes in
     `runtime_io_plan.rs` and instead targets shared IR / general-lowering ownership cleanup.
+- Track H H6 complete (2026-03-26): shared-IR lowering now ANF-normalizes non-value `if`
+  conditions before constructing `CompExpr::If`.
+  - helper-call conditions such as `if is_two n` no longer fail with
+    `if condition must be a pure value expression in shared IR today`.
+  - runtime-`Read` modules that previously collapsed this failure into the generic
+    runtime-I/O unsupported-shape error now classify and execute via `GeneralLowered`.
+  - focused regressions landed in `goby-core::ir_lower` and `goby-wasm::lib` tests.
 - Typechecker follow-up identified (2026-03-25): ordinary calls still need shared
   higher-order function-type validation.
   - direct unknown bare calls are now rejected during typecheck.
@@ -112,21 +119,21 @@ semantics.
 WasmFX typed continuations — currently on hold.
 Restart only when the external prerequisites in `doc/PLAN_IR.md` Phase WB-3B are satisfied.
 
-**Track H (new, immediate):**
-Runtime-lowering correctness for tuple member access and capture-ful lambdas in runtime-`Read`
+**Track H (active):**
+Runtime-lowering correctness at the shared IR / general-lowering boundary for runtime-`Read`
 programs.
-First slice is `H1`: tuple-projection canonicalization after tuple meaning is known.
-Immediate exit target:
-- `examples/bugs/runtime_read_tuple_member.gb` must stop failing as `unknown local 'pair.0'`
+Completed slices:
+- `H1`/`H2`: tuple projection canonicalization + backend lowering
+- `H3`/`H4`: unsupported-reason plumbing + precise closure-capture diagnostics in the
+  `execute_runtime_module_with_stdin` path
+- `H6`: ANF lowering for non-value `if` conditions
+Remaining immediate target:
+- `examples/bugs/runtime_read_captured_lambda.gb` still fails from the CLI with the generic
+  runtime-I/O unsupported-shape error and should instead surface the direct closure-capture blocker
+  (or run once closure support exists)
+Constraints remain:
 - no syntax change
 - no new `runtime_io_plan.rs` shape recognizers
-
-**Track H follow-up immediately after H1/H2:**
-`H3`/`H4` unsupported-reason plumbing + precise closure-capture diagnostics.
-Exit target:
-- `examples/bugs/runtime_read_captured_lambda.gb` no longer reports the generic
-  runtime-I/O unsupported-shape error
-- if closure lowering is still deferred, the compiler must say that closure capture is the blocker
 
 **Track E (next after Track H front slices):**
 Higher-order function-type checking.

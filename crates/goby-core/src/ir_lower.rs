@@ -232,13 +232,14 @@ fn lower_expr_as_comp_non_value(
             then_expr,
             else_expr,
         } => {
-            let cond = lower_value_required(ctx, condition, "if condition")?;
             let then_ = lower_expr_as_comp(ctx, then_expr)?;
             let else_ = lower_expr_as_comp(ctx, else_expr)?;
-            Ok(CompExpr::If {
-                cond: Box::new(cond),
-                then_: Box::new(then_),
-                else_: Box::new(else_),
+            lower_expr_to_value_anf(ctx, condition, "if_condition", move |cond| {
+                Ok(CompExpr::If {
+                    cond: Box::new(cond),
+                    then_: Box::new(then_),
+                    else_: Box::new(else_),
+                })
             })
         }
         ResolvedExpr::Block(stmts) => lower_stmts(ctx, stmts),
@@ -993,6 +994,81 @@ mod tests {
         };
         assert!(validate_ir(&m).is_ok());
         insta::assert_snapshot!(fmt_ir(&m));
+    }
+
+    #[test]
+    fn lower_if_with_helper_call_condition_introduces_temp_binding() {
+        let module = crate::parse_module(
+            r#"
+is_two n =
+  n == 2
+
+choose n =
+  if is_two n
+    1
+  else
+    0
+"#,
+        )
+        .expect("module should parse");
+        let ir_module =
+            lower_module(&module).expect("helper-call if condition should lower through ANF");
+        let choose_decl = ir_module
+            .decls
+            .iter()
+            .find(|decl| decl.name == "choose")
+            .expect("choose decl should be present");
+        match &choose_decl.body {
+            CompExpr::Let {
+                name, value, body, ..
+            } => {
+                assert!(name.starts_with("__goby_ir_if_condition_"));
+                assert!(matches!(value.as_ref(), CompExpr::Call { .. }));
+                assert!(matches!(
+                    body.as_ref(),
+                    CompExpr::If { cond, .. }
+                        if matches!(cond.as_ref(), ValueExpr::Var(var) if var == name)
+                ));
+            }
+            other => panic!(
+                "expected helper-call if condition to ANF-normalize through let, got {other:?}"
+            ),
+        }
+    }
+
+    #[test]
+    fn lower_nested_if_with_non_value_condition_introduces_temp_binding() {
+        let decl = decl_with_params(
+            "choose",
+            vec!["flag"],
+            vec![expr_stmt(Expr::If {
+                condition: Box::new(Expr::If {
+                    condition: Box::new(Expr::var("flag")),
+                    then_expr: Box::new(Expr::BoolLit(true)),
+                    else_expr: Box::new(Expr::BoolLit(false)),
+                }),
+                then_expr: Box::new(Expr::IntLit(1)),
+                else_expr: Box::new(Expr::IntLit(0)),
+            })],
+        );
+        let ir_decl = lower_declaration(&decl)
+            .expect("nested non-value if condition should lower through ANF");
+        match &ir_decl.body {
+            CompExpr::Let {
+                name, value, body, ..
+            } => {
+                assert!(name.starts_with("__goby_ir_if_condition_"));
+                assert!(matches!(value.as_ref(), CompExpr::If { .. }));
+                assert!(matches!(
+                    body.as_ref(),
+                    CompExpr::If { cond, .. }
+                        if matches!(cond.as_ref(), ValueExpr::Var(var) if var == name)
+                ));
+            }
+            other => {
+                panic!("expected nested if condition to ANF-normalize through let, got {other:?}")
+            }
+        }
     }
 
     #[test]

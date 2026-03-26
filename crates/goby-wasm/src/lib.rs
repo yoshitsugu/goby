@@ -545,6 +545,45 @@ main =
     }
 
     #[test]
+    fn h6_runtime_read_helper_if_condition_executes_via_general_lowered() {
+        use goby_core::parse_module;
+        let module = parse_module(
+            r#"
+is_two : Int -> Bool
+is_two n =
+  n == 2
+
+choose : Int -> String
+choose n =
+  if is_two n
+    "yes"
+  else
+    "no"
+
+main : Unit -> Unit can Print, Read
+main =
+  _ignored = read ()
+  println (choose 2)
+"#,
+        )
+        .expect("parse should work");
+
+        assert_eq!(
+            runtime_io_execution_kind(&module).expect("classification should succeed"),
+            RuntimeIoExecutionKind::GeneralLowered,
+            "H6: runtime-Read module with helper-call if condition should classify as GeneralLowered"
+        );
+
+        let output = execute_runtime_module_with_stdin(&module, Some(String::new()))
+            .expect("H6 helper-call if condition must execute via Goby-owned Wasm runtime");
+        assert_eq!(
+            output.as_deref(),
+            Some("yes\n"),
+            "H6: helper-call if condition should no longer fall through to generic runtime-I/O unsupported"
+        );
+    }
+
+    #[test]
     fn wb1_boolean_or_not_and_comparison_precedence_execute_via_general_lowered() {
         use goby_core::parse_module;
         let module = parse_module(
