@@ -2069,4 +2069,79 @@ mod tests {
             instrs
         );
     }
+
+    // --- FOLD-M2: 2-argument callback lower baseline ---
+    //
+    // These tests document the *current* lower output for `f acc x`
+    // (a 2-argument call through a local function-value variable).
+    //
+    // After FOLD-M3a adds `IndirectCall { arity: u8 }`, these tests will be updated
+    // to assert `IndirectCall { arity: 2 }` instead.  Until then they serve as a
+    // concrete regression anchor: the lowering succeeds (no LowerError), two args are
+    // pushed before the callee, and `IndirectCall` (arity=1 implicit) is emitted —
+    // which causes a Wasm type mismatch at runtime for a real 2-arg callback.
+
+    /// `f acc x` where `f` is a local variable — the prototypical fold callback call.
+    /// Currently lowers to the same `IndirectCall` as a 1-arg call: no arity info.
+    #[test]
+    fn fold_m2_two_arg_local_callback_call_lower_baseline() {
+        let comp = CompExpr::Call {
+            callee: Box::new(ValueExpr::Var("f".to_string())),
+            args: vec![
+                ValueExpr::Var("acc".to_string()),
+                ValueExpr::Var("x".to_string()),
+            ],
+        };
+        let instrs = lower_comp(&comp).expect("2-arg local callback call must lower without error");
+        // Expected: push acc, push x, load f, IndirectCall — in that order.
+        // The `IndirectCall` carries no arity; this is the FOLD-M2 baseline.
+        assert_eq!(
+            instrs,
+            vec![
+                I::LoadLocal {
+                    name: "acc".to_string()
+                },
+                I::LoadLocal {
+                    name: "x".to_string()
+                },
+                I::LoadLocal {
+                    name: "f".to_string()
+                },
+                I::IndirectCall,
+            ]
+        );
+    }
+
+    /// Named top-level function used as a fold callback: `add acc x`
+    /// where `add` is in `known_decls`.  This path uses `DeclCall`, so it
+    /// already works correctly for any arity — confirmed here as a reference.
+    #[test]
+    fn fold_m2_two_arg_named_decl_callback_call_uses_decl_call() {
+        let comp = CompExpr::Call {
+            callee: Box::new(ValueExpr::Var("add".to_string())),
+            args: vec![
+                ValueExpr::Var("acc".to_string()),
+                ValueExpr::Var("x".to_string()),
+            ],
+        };
+        let known: HashSet<String> = ["add".to_string()].into();
+        let instrs = lower_comp_with_decls(&comp, &known)
+            .expect("named-decl 2-arg call must lower without error");
+        // DeclCall is emitted as-is; the backend emits a direct Wasm `call` with
+        // however many args the Wasm function expects — no arity restriction.
+        assert_eq!(
+            instrs,
+            vec![
+                I::LoadLocal {
+                    name: "acc".to_string()
+                },
+                I::LoadLocal {
+                    name: "x".to_string()
+                },
+                I::DeclCall {
+                    decl_name: "add".to_string()
+                },
+            ]
+        );
+    }
 }
