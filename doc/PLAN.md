@@ -608,11 +608,23 @@ Target architecture:
   callback positions in ordinary calls.
 - ordinary-call validation is responsible for deciding when a parameter position expects a
   function value and delegating compatibility checking to that matcher.
+- the ownership split should stay explicit across current phases:
+  - `ensure_known_call_targets_in_expr` remains the prevalidation pass for unresolved-call
+    rejection,
+  - `check_expr` remains the inference pass that computes result types,
+  - Track E hooks callback compatibility into the ordinary call-validation path without
+    collapsing those phases together.
 - the matcher operates on already-resolved types and uses the same substitution/unification
   model as the rest of the typechecker, so generic callback positions instantiate per call site
   rather than through callback-specific rules.
 - diagnostics are built from matcher output (`required type`, `actual type`, optional resolved name)
   instead of from special string checks.
+- the matcher API should be explicit enough that both callers and tests can use it without
+  reconstructing one particular stdlib example; the expected shape is roughly:
+  - `match_function_argument(required: &Ty, actual: &Ty, env: &TypeEnv, next_id: &mut usize)
+    -> Result<FunctionArgMatch, FunctionArgMismatch>`
+  - exact names may change, but Track E should preserve this boundary:
+    matcher owns compatibility and instantiation, caller owns where to invoke it.
 
 Implementation sequencing:
 
@@ -636,8 +648,15 @@ Milestones:
   - lock the diagnostic boundary:
     - unresolved names remain unresolved-name errors,
     - resolved but incompatible callback values become higher-order function-type mismatches.
+  - lock generic instantiation timing:
+    - callback declarations with type variables are instantiated with fresh vars at the moment the
+      callback argument is matched against the required parameter type,
+    - Track E should reuse the existing `instantiate_ty_with_fresh_type_vars(...)` machinery or a
+      direct successor, not invent a second generic-instantiation rule for callbacks.
   - deliverable:
-    - `doc/PLAN.md` and code comments agree on one matcher ownership boundary before implementation starts.
+    - `doc/PLAN.md` and code comments agree on one matcher ownership boundary before implementation starts,
+    - the planned matcher signature and result/mismatch shape are written down clearly enough that
+      E2 does not begin with another design round.
 
 - [ ] **E2: Shared Matcher Extraction**
   - extract a reusable helper that compares an actual function-valued argument type against the
@@ -649,6 +668,12 @@ Milestones:
   - non-goals:
     - no stdlib symbol special-casing,
     - no diagnostic string construction inside low-level matching logic.
+  - implementation note:
+    - `typecheck_unify.rs` is the natural home unless refactoring reveals a better shared
+      type-compatibility module; do not hide matcher logic inside one call-site validator.
+  - test placement:
+    - matcher-level focused tests live beside the matcher implementation,
+    - end-to-end ordinary-call regressions stay with the higher-level typecheck tests.
   - exit criteria:
     - the matcher can be unit-tested or otherwise exercised independently of one specific stdlib
       call shape,
@@ -658,10 +683,19 @@ Milestones:
 - [ ] **E3: Ordinary-Call Integration**
   - integrate the matcher into ordinary declaration/value call validation wherever a function-typed
     parameter consumes a function-valued argument.
+  - confirm actual call-path coverage before wiring:
+    - verify whether qualified calls and pipeline forms reach the same ordinary-call validation
+      branch today,
+    - if they do not, record the real branch ownership explicitly before integrating matcher calls.
   - cover call shapes that reach ordinary validation today:
     - direct calls,
     - qualified calls lowered through the same path,
     - pipeline-adjacent ordinary call forms if they feed function-valued arguments.
+  - curried-call note:
+    - `each [1, 2] println` is represented as nested unary `Expr::Call`,
+    - the integration must reason over the outer call against the function result of the inner call,
+    - `effect_op_call_target_and_args()` is a useful structural reference for flattening nested
+      call shapes, but Track E should reuse only the shape insight, not effect-specific policy.
   - preserve priority rules:
     - unknown-name diagnostics win when resolution fails,
     - callback mismatch diagnostics appear only after name resolution succeeds.
@@ -675,7 +709,8 @@ Milestones:
 - [ ] **E4: Regression and Parity Coverage**
   - add focused regressions for the representative buggy and non-buggy shapes:
     - `each [1, 2] println` must fail,
-    - `each [\"a\", \"b\"] println` must pass,
+    - `each [\"a\", \"b\"] println` must pass because `a = String` instantiates cleanly and the
+      callback unifies as `String -> Unit`,
     - `map [1, 2] println` must fail,
     - named callback variants continue to pass when signatures align.
   - add generic and partial-application parity coverage:
@@ -696,6 +731,8 @@ Milestones:
     - required callback type,
     - actual resolved function type,
     - resolved function name when available.
+  - lock a provisional regression-friendly wording before broad message churn, for example:
+    - `higher-order argument type mismatch: required Int -> Unit, found println : String -> Unit`
   - keep direct-call diagnostics distinct from callback diagnostics.
   - update `doc/LANGUAGE_SPEC.md` only if callable/typecheck rules need clarification; avoid
     wording churn without a real semantics change.
@@ -723,6 +760,27 @@ Done criteria:
 - the rejection is reported as a higher-order function-type mismatch (`Int -> Unit` required,
   `String -> Unit` found), not as an unknown-name error.
 - no regression in existing higher-order named-function callback examples.
+- at least one more complex generic higher-order example is covered and behaves correctly:
+  - a generic callback path still instantiates per call site and is accepted when the instantiated
+    function type matches, for example:
+    ```goby
+    import goby/list ( map )
+
+    id : a -> a
+    id x = x
+
+    main =
+      map [1, 2] id
+    ```
+- at least one nested curried-call example is covered and behaves correctly:
+  - a later callback application mismatch is rejected at the higher-order boundary rather than being
+    deferred or misreported as a scalar-argument error, for example:
+    ```goby
+    import goby/list ( each )
+
+    main =
+      each [1, 2] println
+    ```
 
 ### 4.3 Active Track F: Stdlib `int.to_string`
 
