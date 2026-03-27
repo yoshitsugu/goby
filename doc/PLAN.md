@@ -187,6 +187,11 @@ Based on `examples/*.gb`:
   - Parser supports `${ expr }` inside string literals and lowers it to `Expr::InterpolatedString`.
   - Typechecker treats interpolated literals as `String`.
   - Runtime/codegen evaluates each segment and stringifies embedded expression values.
+  - Near-term direction:
+    - keep string interpolation as the default "show a value for debugging/output" path
+      instead of introducing a separate `trace` helper for now.
+    - when additional runtime value categories need human-readable output, prefer extending
+      interpolation stringification coverage consistently before adding a new debug-print surface.
 - **List `case` patterns** (implemented).
   - Parser/AST support includes prefix, head-literal, wildcard, and tail-binding forms.
   - List item literals in MVP are `Int` / `String` only (no `Bool` list-pattern items).
@@ -420,6 +425,8 @@ Based on `examples/*.gb`:
       scattering `int.to_string` special-cases across fallback and Wasm code paths.
     - preserve round-trip intent with `int.parse` for decimal strings in range:
       `int.parse (int.to_string n)` should yield `n` absent handler interception.
+    - while `print` / `println` remain `String -> Unit`, broad "show" behavior should continue
+      to flow through string interpolation (`"${value}"`) rather than a dedicated debug helper.
   - Planned implementation slices:
     - `INTSTR-S1` surface + docs:
       - declare `to_string : Int -> String` in `stdlib/goby/int.gb`.
@@ -443,44 +450,6 @@ Based on `examples/*.gb`:
       - `println (int.to_string 123)` prints `123`
       - `println (int.to_string -7)` prints `-7`
       - `map [1, 20, -3] int.to_string` yields `["1", "20", "-3"]`
-- **`trace` debug output helper** (planned requirements memo).
-  - Goal:
-    - provide a debugging-oriented function that can output values of any representable runtime type
-      without requiring the user to convert them to `String` first.
-    - keep this separate from `print` / `println`; `trace` is for deterministic debug rendering,
-      not for user-facing text formatting.
-  - Intended surface:
-    - provisional shape: `trace : a -> Unit` with output handled by the existing debug/stdio path.
-    - exact effect annotation / module placement remains to be locked, but the user-facing intent is
-      "pass any value directly and get a stable textual rendering for debugging".
-  - Output requirements:
-    - output must use one predetermined representation per type, not ad hoc per-call formatting.
-    - initial target coverage:
-      - `Int` -> decimal digits
-      - `String` -> quoted string literal form
-      - `Bool` -> `True` / `False`
-      - `Unit` -> `()`
-      - tuples -> tuple literal style
-      - lists -> list literal style
-      - records / constructors -> stable constructor-based rendering
-    - the representation should be stable enough for debugging and tests, but does not need to be
-      a general-purpose serialization format.
-  - Design constraints:
-    - do not weaken `print` / `println` from `String -> Unit`.
-    - do not require users to call `int.to_string` / future `*_to_string` helpers before tracing.
-    - prefer one shared renderer for fallback runtime and Wasm execution so `trace` output does not diverge by backend.
-    - if some runtime values are not yet representable in one backend path, fail honestly or leave them out of initial scope
-      rather than silently producing inconsistent partial formats.
-  - Open decisions to lock before implementation:
-    - whether `trace` lives in `goby/prelude`, `goby/debug`, or another stdlib module.
-    - whether `trace` appends a newline by default.
-    - how records, handlers, and future values such as `Float` should render.
-    - whether output should be specified to match existing fallback `RuntimeValue::to_expression_text`
-      where available, or whether `trace` gets its own debug-specific renderer contract.
-  - Validation checklist:
-    - representative samples for `Int`, `String`, `Bool`, `Unit`, tuple, list, and record values.
-    - parity between fallback/runtime-output and general-lowered Wasm execution.
-    - no type-system pressure to widen `print` / `println`.
 - `List.map` migration plan (planned):
   - keep canonical map behavior in `stdlib/goby/list.gb` (`list.map` export path).
   - replace internal/builtin-path map callsites with stdlib module usage where possible.
@@ -647,34 +616,6 @@ Done criteria:
 - `println (int.to_string 123)` prints `123`.
 - `map [1, 20, -3] int.to_string` yields `["1", "20", "-3"]`.
 
-### 4.4 Active Track G: Debug `trace`
-
-Goal: add a debugging helper that can print any representable value in a stable predefined form
-without requiring explicit `String` conversion by the user.
-
-Why this is active:
-
-- once `print` / `println` stay strictly `String -> Unit`, users still need a direct debugging tool.
-- `int.to_string` solves one conversion path, but debugging often needs mixed values without manual formatting.
-- the runtime already has partial value-rendering logic; `trace` should turn that into an intentional user-facing contract.
-
-Execution plan:
-
-1. Lock the surface API (`trace` location, newline behavior, effect shape).
-2. Lock the debug rendering contract for the initial set of runtime values.
-3. Route both fallback runtime and Wasm execution through one shared rendering policy.
-4. Add focused regressions for scalars, tuples, lists, and records.
-5. Document clearly that `trace` is for debugging, while `print` / `println` remain string-only.
-
-Done criteria:
-
-- `trace 123` prints a stable canonical `Int` rendering.
-- `trace "abc"` prints a stable canonical `String` rendering.
-- `trace [1, 2]` prints a stable canonical list rendering.
-- `trace (1, "x")` prints a stable canonical tuple rendering.
-- `trace` does not require explicit `to_string` conversion.
-- `print` / `println` types remain unchanged.
-
 Lint rules are ordered by ascending analysis cost. The cheapest infrastructure
 comes first to unblock the framework early; user-value ranking is noted in
 parentheses for prioritization.
@@ -714,7 +655,7 @@ Done when:
   - Defer until after D6c.
   - Keep as optional editor tooling follow-up rather than active architecture work.
 
-### 4.5 Review Follow-ups (Backlog)
+### 4.4 Review Follow-ups (Backlog)
 
 The following items were identified in a focused code review and are tracked as
 near/mid-term engineering debt after current active tracks.
@@ -747,7 +688,7 @@ Note:
 - Critical correctness items from the same review batch were already fixed:
   parser explicit early-return clarity and planning `u16` overflow fail-fast behavior.
 
-### 4.6 `Float` / Wasm `f64` Support
+### 4.5 `Float` / Wasm `f64` Support
 
 Goal: add a first-class `Float` type with predictable parser/typechecker/runtime/Wasm behavior.
 
@@ -803,7 +744,7 @@ Acceptance criteria:
 - diagnostics clearly distinguish `Int` from `Float`.
 - docs/examples/spec are updated in the same slice that lands behavior.
 
-### 4.7 Parking Lot (Needs Revalidation Before Implementation)
+### 4.6 Parking Lot (Needs Revalidation Before Implementation)
 
 - CLI `build` expansion details (`--target`, `--engine-compat`, verify modes).
 - CLI binary naming migration (`goby-cli` -> `goby`) final policy.
