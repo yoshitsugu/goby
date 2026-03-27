@@ -461,49 +461,148 @@ Based on `examples/*.gb`:
   - keep canonical map behavior in `stdlib/goby/list.gb` (`list.map` export path).
   - replace internal/builtin-path map callsites with stdlib module usage where possible.
   - after migration, trim builtin-only `map` special handling so runtime/compiler has a single semantics source.
-- `List.fold_left` addition (planned):
+- `List.fold` addition (planned):
   - Goal:
-    - add a left fold to `stdlib/goby/list.gb` so users can express accumulator-style traversals
+    - add a left fold as `fold` to `stdlib/goby/list.gb` so users can express accumulator-style traversals
       without relying on mutable closure capture.
     - support representative workflows such as counting, summation, and state-threading over lists.
+  - Locked semantic intent for this feature:
+    - the public name is `fold`, but the semantics are specifically left-fold semantics.
+    - for `fold xs init f`, evaluation order must be left-to-right over the list elements.
+    - the callback contract must be accumulator-first and element-second.
+    - the observable meaning to preserve is:
+      - `fold [] init f == init`
+      - `fold [x1, x2, x3] init f == f (f (f init x1) x2) x3`
+    - the callback must be invoked exactly once per list element in source order.
   - Motivation:
     - current Goby/Wasm lowering supports non-capturing unary function values well enough for
       `list.each` / `list.map`, but that is not yet sufficient to express a practical fold API end-to-end.
-    - closure capture remains a separate future track; `fold_left` should land first as the idiomatic
+    - closure capture remains a separate future track; `fold` should land first as the idiomatic
       immutable accumulation tool.
   - Current blocker to resolve first:
     - this is not blocked on a new intrinsic.
     - it is blocked on general higher-order call support in the Wasm lowering/runtime path:
       callback invocation currently assumes a narrower function-value calling shape than a useful
-      `fold_left` callback requires.
+      `fold` callback requires.
     - experiments showed that a stdlib-only implementation is not enough today:
       - curried callback shape `b -> a -> b` traps/fails in the current indirect-call path,
       - tuple-packed callback shape `((b, a) -> b)` typechecks but does not yet execute correctly
         through the current higher-order Wasm path.
-  - Planned implementation slices:
-    - `FOLD-S1` higher-order call-shape audit:
-      - document the exact current constraints of function-value calls in the general-lowered Wasm path
-        (arity assumptions, argument packing shape, tuple argument behavior, named function vs lambda parity).
-      - add focused regressions that expose the current failure mode for fold-style callbacks directly.
-    - `FOLD-S2` higher-order backend extension:
-      - extend the indirect-call lowering/execution path so the chosen callback shape for `fold_left`
-        executes correctly without introducing a new user-visible intrinsic.
-      - keep the implementation general: the target is "function-valued callback calls work for this
-        class of stdlib higher-order APIs", not a `fold_left`-specific special case.
-    - `FOLD-S3` stdlib surface:
-      - add `fold_left` to `stdlib/goby/list.gb` once the callback path is proven.
-      - choose the callback shape that best matches the supported higher-order calling model after `FOLD-S2`
-        is complete; do not lock the public signature before the backend shape is validated.
-    - `FOLD-S4` regression coverage:
-      - typecheck coverage for named callback usage,
-      - runtime/Wasm execution coverage for representative folds such as integer sum and boolean accumulation,
-      - one user-facing example demonstrating replacement of mutable accumulator patterns with `fold_left`.
   - Design constraints:
-    - do not add a dedicated `fold_left` intrinsic unless the generalized higher-order call path proves
+    - do not add a dedicated `fold` intrinsic unless the generalized higher-order call path proves
       impossible or disproportionately complex.
-    - prefer a stdlib-defined `fold_left` over a compiler-owned special case.
+    - prefer a stdlib-defined `fold` over a compiler-owned special case.
     - keep this work separate from full closure-capture support; immutable fold-style accumulation is the
       immediate user need.
+    - do not patch only the `goby/list.fold` call path.
+    - any backend/runtime change introduced here must be phrased as a reusable function-value call rule
+      that also makes sense for future stdlib higher-order APIs.
+    - do not lock in a public callback signature until the callable representation and lowering boundary
+      are understood end-to-end; otherwise the surface API risks encoding a temporary implementation quirk.
+    - do not choose an API shape that is only justified by one temporary backend limitation if that shape
+      would be awkward for future collection APIs or closure-capable code.
+    - stdlib surface decisions here must be explainable as part of a coherent future collection/HOF design,
+      not merely as "the one shape that happens to work right now".
+  - Architectural intent:
+    - `fold` is a downstream consumer of a more general capability: "a stdlib higher-order function
+      can call a user-provided function value through one principled lowering/runtime path".
+    - the design should converge on one stable story across:
+      - typechecker callable-shape expectations,
+      - resolved/lowered function-value representation,
+      - Wasm indirect-call emission,
+      - runtime execution parity for stdlib-defined higher-order helpers.
+    - avoid an implementation that works only because one phase knows the name `fold`.
+    - avoid a plan that requires revisiting the public `fold` API once closure capture or future list APIs land;
+      the chosen surface should already be plausible as the long-term standard library shape.
+  - Temporary effect-policy decision:
+    - higher-order effect propagation remains deferred at the language-design level.
+    - for this feature, `fold` should follow the same callback-effect treatment that current stdlib
+      higher-order functions use at the time of implementation; it must not invent a `fold`-specific rule.
+    - if effectful callbacks are not yet supportable under the shared higher-order model, the first shipped
+      version of `fold` may be limited to the currently supportable callback/effect envelope, but that limit
+      must be documented explicitly in `doc/PLAN.md` and `doc/LANGUAGE_SPEC.md` rather than hidden in implementation.
+  - Detailed milestones:
+    - [ ] `FOLD-M1` callback-shape decision record
+      - define the candidate public signatures and reject the ones that do not fit the current/future callable model.
+      - explicitly compare at least:
+        - curried shape `fold : List a -> b -> (b -> a -> b) -> b`
+        - tuple-packed shape `fold : List a -> b -> ((b, a) -> b) -> b`
+      - record the selection criteria in terms of general architecture:
+        - typechecker compatibility,
+        - named-function and lambda ergonomics,
+        - Wasm lowering simplicity,
+        - future closure-capture compatibility,
+        - parity with other planned higher-order stdlib APIs.
+      - completion criteria:
+        - one callback shape is explicitly chosen in `doc/PLAN.md`,
+        - rejected alternatives are named with concrete reasons,
+        - the left-fold semantics and callback argument order are explicitly locked in writing,
+        - the temporary callback/effect policy is explicitly recorded,
+        - the chosen API is justified in long-term library-design terms, not only by immediate backend convenience,
+        - no implementation begins before this choice is written down.
+    - [ ] `FOLD-M2` executable failure baseline
+      - add focused tests that capture the current failure mode for the chosen callback shape.
+      - keep these tests below the `fold` surface first: prove the underlying function-value call
+        shape is the real blocker.
+      - include at least:
+        - named function callback,
+        - inline lambda callback,
+        - representative accumulator type such as `Int`,
+        - one non-`Int` accumulator case if the chosen shape can expose a second failure mode.
+      - completion criteria:
+        - the failing path is reproducible in tests,
+        - the failure is localized to the shared higher-order execution path rather than the stdlib wrapper,
+        - the baseline suite demonstrates why a stdlib-only `fold` addition would still fail today.
+    - [ ] `FOLD-M3` shared higher-order call-path extension
+      - extend the lowering/runtime boundary so the chosen callback shape executes through one reusable path.
+      - keep ownership narrow:
+        - callable-shape analysis belongs in the lowering planning layer,
+        - argument marshalling belongs in the indirect-call emission/runtime boundary,
+        - stdlib `fold` should only consume that capability.
+      - explicitly avoid:
+        - `fold`-named branches,
+        - `goby/list`-specific emit logic,
+        - duplicate code paths for named callbacks versus lambdas unless there is a principled representation split.
+      - completion criteria:
+        - the direct lower-level regression tests from `FOLD-M2` pass,
+        - the new path is described as general higher-order support, not as a `fold` exception,
+        - no backend/compiler component requires symbol-name knowledge of `fold`,
+        - the implementation boundary is documented clearly enough that a future HOF can reuse it without copying logic.
+    - [ ] `FOLD-M4` stdlib API addition
+      - add `fold` to `stdlib/goby/list.gb` only after `FOLD-M3` is stable.
+      - define the implementation in ordinary Goby stdlib code, not as a compiler-owned intrinsic.
+      - document the selected public signature and accumulator/callback argument order.
+      - update `doc/LANGUAGE_SPEC.md` stdlib inventory and semantics once the API shape is locked.
+      - completion criteria:
+        - `fold` exists as normal stdlib surface,
+        - no compiler/runtime layer needs to know the `fold` symbol name to execute it,
+        - the language/spec docs state the left-fold semantics and any temporary callback/effect limitations explicitly.
+    - [ ] `FOLD-M5` semantic and regression coverage
+      - add typecheck and execution coverage for representative user-facing uses:
+        - integer sum,
+        - boolean accumulation,
+        - state-threading via tuple accumulator,
+        - named callback import/use from another declaration.
+      - add one example showing how `fold` replaces a mutable accumulator pattern.
+      - confirm parity across the available execution paths that can reach stdlib higher-order code.
+      - completion criteria:
+        - `cargo check` passes,
+        - `cargo test` passes,
+        - `fold [] init f == init` is covered,
+        - left-to-right accumulation order is covered with a non-commutative or otherwise order-sensitive example,
+        - callback invocation count/order is covered strongly enough to catch accidental right-fold or duplicated-call behavior,
+        - at least one example and one integration-style test prove the final user-facing API.
+  - Progress checklist:
+    - [ ] left-fold semantics and callback argument order documented
+    - [ ] callback shape chosen and documented
+    - [ ] temporary callback/effect policy documented
+    - [ ] lower-level failing regressions added before backend work
+    - [ ] shared higher-order lowering/runtime path generalized
+    - [ ] `stdlib/goby/list.gb` exports `fold`
+    - [ ] language spec updated after API lock
+    - [ ] user-visible semantics and limitations documented
+    - [ ] examples and integration coverage added
+    - [ ] full validation (`cargo check`, `cargo test`) completed
 
 ### 2.5 Runtime / Compiler Scope (MVP)
 
@@ -577,7 +676,7 @@ Why this is active now:
   to runtime causes corrupt execution instead of a normal compile-time error.
 - the required architecture is already mostly present: effect-op call checking has the
   unification pieces; higher-order ordinary calls need to reuse the same style of checking.
-- follow-up stdlib work such as `list.fold_left` depends on a principled answer to
+- follow-up stdlib work such as `list.fold` depends on a principled answer to
   "what does it mean for a function value to satisfy a function-typed parameter?".
 
 Long-term design constraints:
@@ -640,7 +739,7 @@ Implementation sequencing:
 - only after the matcher exists should ordinary-call validation start delegating callback positions.
 - add parity/regression tests before broad diagnostic polishing so message changes do not hide
   behavioral regressions.
-- treat `fold_left` and other new HOF stdlib work as downstream consumers; Track E should finish
+- treat `fold` and other new HOF stdlib work as downstream consumers; Track E should finish
   without needing to land new library APIs.
 
 Milestones:
