@@ -555,7 +555,7 @@ Most of Track D is complete. Only still-relevant follow-up items are kept here.
 
 Goal: machine-readable linter output for common mistakes not caught by the typechecker.
 
-### 4.2 Active Track E: Higher-Order Function-Type Checking
+### 4.2 Track E: Higher-Order Function-Type Checking (complete, 2026-03-27)
 
 Goal: close the remaining typechecker hole where a resolved function name can still be
 accepted in a higher-order position even though its function type does not match the
@@ -638,7 +638,7 @@ Implementation sequencing:
 
 Milestones:
 
-- [ ] **E1: Compatibility Model Lock**
+- [x] **E1: Compatibility Model Lock**
   - define one precise internal contract for callback compatibility in ordinary calls.
   - lock how the matcher should treat:
     - named functions,
@@ -658,7 +658,7 @@ Milestones:
     - the planned matcher signature and result/mismatch shape are written down clearly enough that
       E2 does not begin with another design round.
 
-- [ ] **E2: Shared Matcher Extraction**
+- [x] **E2: Shared Matcher Extraction**
   - extract a reusable helper that compares an actual function-valued argument type against the
     required function type for a parameter position.
   - make the helper reuse the existing unification/substitution machinery instead of introducing a
@@ -680,7 +680,7 @@ Milestones:
     - mismatch data is structured enough that later diagnostic improvements do not require matcher
       redesign.
 
-- [ ] **E3: Ordinary-Call Integration**
+- [x] **E3: Ordinary-Call Integration**
   - integrate the matcher into ordinary declaration/value call validation wherever a function-typed
     parameter consumes a function-valued argument.
   - confirm actual call-path coverage before wiring:
@@ -706,7 +706,7 @@ Milestones:
     - if multiple call-validation branches need the same callback check, refactor the dispatch
       shape first instead of cloning the check.
 
-- [ ] **E4: Regression and Parity Coverage**
+- [x] **E4: Regression and Parity Coverage**
   - add focused regressions for the representative buggy and non-buggy shapes:
     - `each [1, 2] println` must fail,
     - `each [\"a\", \"b\"] println` must pass because `a = String` instantiates cleanly and the
@@ -725,7 +725,7 @@ Milestones:
   - exit criteria:
     - the test matrix demonstrates that Track E changed type acceptance, not callable lowering.
 
-- [ ] **E5: Diagnostics and Follow-through**
+- [x] **E5: Diagnostics and Follow-through**
   - render callback mismatch diagnostics in the "resolved name, wrong function type" style.
   - include:
     - required callback type,
@@ -744,14 +744,14 @@ Milestones:
 
 Progress checklist:
 
-- [ ] matcher ownership boundary is documented before implementation branches spread
-- [ ] representative bug is rejected during `goby-cli check`, not deferred to runtime
-- [ ] matcher logic is shared and type-driven, not symbol-driven
-- [ ] generic callback positions still instantiate independently per call site
-- [ ] partial application behavior remains unchanged for currently supported forms
-- [ ] diagnostics report higher-order mismatch instead of unknown-name or scalar-argument mismatch
-- [ ] qualified and unqualified callback names follow the same compatibility rules
-- [ ] focused tests cover direct / qualified / named / generic / partial-application callback cases
+- [x] matcher ownership boundary is documented before implementation branches spread
+- [x] representative bug is rejected during `goby-cli check`, not deferred to runtime
+- [x] matcher logic is shared and type-driven, not symbol-driven
+- [x] generic callback positions still instantiate independently per call site
+- [x] partial application behavior remains unchanged for currently supported forms
+- [x] diagnostics report higher-order mismatch instead of unknown-name or scalar-argument mismatch
+- [x] qualified and unqualified callback names follow the same compatibility rules
+- [x] focused tests cover direct / qualified / named / generic / partial-application callback cases
 
 Done criteria:
 

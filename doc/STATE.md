@@ -48,7 +48,7 @@ Last updated: 2026-03-27
   - runtime-`Read` modules that previously collapsed this failure into the generic
     runtime-I/O unsupported-shape error now classify and execute via `GeneralLowered`.
   - focused regressions landed in `goby-core::ir_lower` and `goby-wasm::lib` tests.
-- Track E first slice complete (2026-03-27): ordinary call validation now rejects resolved
+- Track E complete (2026-03-27): ordinary call validation now rejects resolved
   higher-order callback mismatches during typecheck instead of deferring them to runtime.
   - shared matcher extraction landed in `typecheck_unify.rs`; callback compatibility now reuses
     fresh type-variable instantiation plus the existing substitution/unification machinery.
@@ -154,12 +154,13 @@ Completed slices:
 - focused `goby-wasm` regression coverage now locks the `split -> map(graphemes) -> recursive
   interpolated println` shape.
 
-**Track E (active follow-up after first slice, 2026-03-27):**
+**Track E (complete, 2026-03-27):**
 Higher-order function-type checking.
-The primary user-visible hole is closed for ordinary call chains: callback positions such as
-`each xs println` now fail with a resolved-name-but-wrong-function-type diagnostic instead of
-relying on runtime behavior. Remaining follow-up, if needed, is to extend the same shared matcher
-boundary to any future non-`Expr::Call` caller paths that can feed function-valued arguments.
+All E1–E5 milestones complete. Callback positions such as `each xs println` are rejected during
+`goby-cli check` with a resolved-name-but-wrong-function-type diagnostic. The shared matcher in
+`typecheck_unify.rs` handles named, qualified, generic, and partially applied callbacks uniformly.
+Regressions cover direct/qualified/named/generic/partial-application callback cases. Future
+non-`Expr::Call` caller paths can extend the same shared matcher boundary if needed.
 
 **Track runtime execution (2026-03-26):**
 The interactive-shell stdin hang is fixed for lambda-only `GeneralLowered` programs.
