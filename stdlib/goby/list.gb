@@ -20,3 +20,9 @@ length xs =
   case xs
     [] -> 0
     [x, ..xxs] -> 1 + length xxs
+
+fold : List a -> b -> (b -> a -> b) -> b
+fold xs acc f =
+  case xs
+    [] -> acc
+    [x, ..xxs] -> fold xxs (f acc x) f
