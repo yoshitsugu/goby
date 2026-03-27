@@ -522,7 +522,7 @@ Based on `examples/*.gb`:
       version of `fold` may be limited to the currently supportable callback/effect envelope, but that limit
       must be documented explicitly in `doc/PLAN.md` and `doc/LANGUAGE_SPEC.md` rather than hidden in implementation.
   - Detailed milestones:
-    - [ ] `FOLD-M1` callback-shape decision record
+    - [x] `FOLD-M1` callback-shape decision record
       - define the candidate public signatures and reject the ones that do not fit the current/future callable model.
       - explicitly compare at least:
         - curried shape `fold : List a -> b -> (b -> a -> b) -> b`
@@ -533,6 +533,41 @@ Based on `examples/*.gb`:
         - Wasm lowering simplicity,
         - future closure-capture compatibility,
         - parity with other planned higher-order stdlib APIs.
+      - **Decision (2026-03-28): curried shape chosen.**
+        - `fold : List a -> b -> (b -> a -> b) -> b`
+        - Left-fold semantics: `fold [x1, x2, x3] init f == f (f (f init x1) x2) x3`
+        - Callback argument order: accumulator first, then element (`f acc elem`)
+        - Rejected: tuple-packed `(b, a) -> b`
+          - Reason: requires tuple construction at every call site; tuple-packed callbacks are
+            awkward with named functions (e.g. `add : Int -> Int -> Int` cannot directly serve
+            as a tuple-packed callback); tuple unpacking adds overhead in the Wasm lowering path
+            and conflicts with the existing `(i64) -> i64` single-arg IndirectCall model; a
+            future collection API is more naturally expressed with curried callbacks consistent
+            with `each` and `map`.
+        - Rationale for curried shape:
+          - Consistent with `each : List a -> (a -> Unit) -> Unit` and
+            `map : List a -> (a -> b) -> List b` — all three stdlib HOFs take the callback last.
+          - Named function values (e.g. `add`, `int.to_string`) already satisfy `a -> b` with
+            no adaptation; curried `b -> a -> b` admits the same ergonomic pattern for binary
+            operators expressed as named decls.
+          - Lowering path: `f acc elem` in the stdlib body compiles to a flat 2-argument
+            `Call { callee: Var("f"), args: [acc, elem] }` in the IR, handled by a generalized
+            `IndirectCall { arity: 2 }` — no fold-specific compiler branch needed.
+          - Future closure-capture: when closures land (WB-3B), curried callbacks fit naturally
+            as partially-applied functions; tuple-packed would require a wrapper closure.
+          - Long-term: `b -> a -> b` is the conventional Haskell/OCaml `fold_left` callback
+            shape; adopting it now avoids a breaking API change later.
+        - Temporary callback/effect policy (2026-03-28):
+          - Effect propagation through HOF callbacks is deferred at the language-design level.
+          - `fold` follows the same callback-effect treatment as `each` and `map`: the callback
+            can carry effects that the caller handles, but the `fold` declaration itself does
+            not introduce a fold-specific effect rule.
+          - Pure callbacks (no effects) are the primary supported case. Effectful callbacks
+            (e.g. `Unit can Print`) are permitted if the caller's `can` clause covers them,
+            following the same model as `each`; this is not guaranteed to work in all execution
+            paths until effect propagation through HOFs is formally designed.
+          - This limitation is documented here and will be noted in `doc/LANGUAGE_SPEC.md`
+            when the stdlib inventory is updated (FOLD-M4).
       - completion criteria:
         - one callback shape is explicitly chosen in `doc/PLAN.md`,
         - rejected alternatives are named with concrete reasons,
@@ -593,9 +628,9 @@ Based on `examples/*.gb`:
         - callback invocation count/order is covered strongly enough to catch accidental right-fold or duplicated-call behavior,
         - at least one example and one integration-style test prove the final user-facing API.
   - Progress checklist:
-    - [ ] left-fold semantics and callback argument order documented
-    - [ ] callback shape chosen and documented
-    - [ ] temporary callback/effect policy documented
+    - [x] left-fold semantics and callback argument order documented
+    - [x] callback shape chosen and documented
+    - [x] temporary callback/effect policy documented
     - [ ] lower-level failing regressions added before backend work
     - [ ] shared higher-order lowering/runtime path generalized
     - [ ] `stdlib/goby/list.gb` exports `fold`

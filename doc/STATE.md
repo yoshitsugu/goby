@@ -169,11 +169,17 @@ All E1–E5 milestones complete. Callback positions such as `each xs println` ar
 Regressions cover direct/qualified/named/generic/partial-application callback cases. Future
 non-`Expr::Call` caller paths can extend the same shared matcher boundary if needed.
 
-**Track fold (next planned work, 2026-03-28):**
-Advance `goby/list.fold` from plan to implementation, starting with `FOLD-M1`.
-Immediate objective:
-- lock the public callback shape and left-fold semantics in `doc/PLAN.md`
-- record the temporary callback/effect policy explicitly
+**Track fold (in progress, 2026-03-28):**
+`FOLD-M1` complete: callback shape and semantics locked in `doc/PLAN.md`.
+- Chosen shape: `fold : List a -> b -> (b -> a -> b) -> b` (curried, accumulator first)
+- Left-fold semantics: `fold [x1,x2,x3] init f == f (f (f init x1) x2) x3`
+- Tuple-packed shape rejected: awkward with named binary-operator functions,
+  conflicts with `(i64) -> i64` IndirectCall model, inconsistent with `each`/`map`.
+- Temporary effect policy: follows `each`/`map` treatment; pure callbacks are primary
+  supported case; effectful callbacks follow same caller-`can`-clause model as `each`.
+- Backend approach: generalize `IndirectCall` to carry `arity: u8`; arity=2 adds
+  `(i64, i64) -> i64` Wasm type; no fold-specific compiler branch.
+Next: `FOLD-M2` — add lower-level failing regression tests for 2-arg callback lowering.
 - only then add lower-level regressions for the underlying higher-order call-path gap
 Constraints:
 - no `fold`-specific intrinsic
