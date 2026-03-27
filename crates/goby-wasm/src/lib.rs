@@ -1590,4 +1590,69 @@ main =
             err.message
         );
     }
+
+    // --- FOLD-M3b: 2-argument IndirectCall integration tests ---
+    //
+    // These tests confirm that `IndirectCall { arity: 2 }` actually works end-to-end:
+    // a local function-value variable is called with two i64 arguments via call_indirect
+    // using the `(i64, i64) -> i64` Wasm type added in FOLD-M3a.
+
+    /// Call a local function-value variable `f` with two arguments: `f acc x`.
+    /// `add` is a named top-level decl (passed as PushFuncHandle), so `f` is a funcref.
+    /// Inside `apply_twice`, `f` is a local var → IndirectCall { arity: 2 }.
+    #[test]
+    fn fold_m3b_two_arg_indirect_call_via_local_funcref_executes() {
+        use goby_core::parse_module;
+        let module = parse_module(
+            r#"
+add : Int -> Int -> Int
+add a b = a + b
+
+apply_binary : Int -> Int -> (Int -> Int -> Int) -> Int
+apply_binary a b f = f a b
+
+main : Unit -> Unit can Print, Read
+main =
+  _ = read()
+  result = apply_binary 3 4 add
+  println "${result}"
+"#,
+        )
+        .expect("parse should succeed");
+
+        let output = execute_runtime_module_with_stdin(&module, Some(String::new()))
+            .expect("2-arg IndirectCall must execute");
+        assert_eq!(
+            output.as_deref(),
+            Some("7\n"),
+            "apply_binary 3 4 add → 7"
+        );
+    }
+
+    /// A named 2-arg callback via DeclCall path still works (regression guard).
+    #[test]
+    fn fold_m3b_two_arg_decl_call_named_callback_still_works() {
+        use goby_core::parse_module;
+        let module = parse_module(
+            r#"
+add : Int -> Int -> Int
+add a b = a + b
+
+main : Unit -> Unit can Print, Read
+main =
+  _ = read()
+  result = add 10 5
+  println "${result}"
+"#,
+        )
+        .expect("parse should succeed");
+
+        let output = execute_runtime_module_with_stdin(&module, Some(String::new()))
+            .expect("DeclCall 2-arg must execute");
+        assert_eq!(
+            output.as_deref(),
+            Some("15\n"),
+            "add 10 5 → 15"
+        );
+    }
 }
