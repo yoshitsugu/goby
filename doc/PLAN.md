@@ -97,6 +97,10 @@ Based on `examples/*.gb`:
   - bindings are visible to subsequent statements in the same declaration body.
   - re-binding the same name in the same body is allowed; the newer binding shadows the older one from that point onward.
   - bindings are declaration-local and do not escape to other declarations.
+  - expression-value policy:
+    - local binding forms such as `name = expr` and `mut name = expr` should evaluate to `()`.
+    - mutation assignment `name := expr` should also evaluate to `()`.
+    - this is the intended direction so these forms can occupy expression positions without requiring an extra trailing `()`.
 - Operator precedence/associativity is fixed for MVP:
   - precedence (low -> high): pipeline `|>` < addition `+` < multiplication `*` < call/application (`f x`, `f(x)`, `receiver.method(...)`).
   - `|>`, `+`, `*` are left-associative.
@@ -202,6 +206,9 @@ Based on `examples/*.gb`:
   - `case` is value-returning in all positions; branch type unification enforced for both `if` and `case`.
   - Effectful expressions inside `case` arm blocks work with parity between `check` and `run`.
   - Follow-up: generalize expression-level block parsing beyond `case` arms.
+  - Planned semantic relaxation:
+    - once binding and assignment forms are expression-valued as `()`, block tails ending in
+      `name = expr`, `mut name = expr`, or `name := expr` should be accepted as valid `Unit`-valued endings.
 - **Tuple index access `expr.N`** (implemented).
   - `a.0`, `a.1` parse as qualified numeric member access and are typechecked/runtime-evaluated as tuple index access.
   - Numeric member access is valid only for tuple receivers.
