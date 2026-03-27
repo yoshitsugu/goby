@@ -2530,7 +2530,9 @@ count n =
         // The else branch should be: Let { name: __goby_ir_binop_right_*, value: Call(...), body: Value(BinOp) }
         fn find_binop_let(expr: &CompExpr) -> bool {
             match expr {
-                CompExpr::Let { name, value, body, .. } => {
+                CompExpr::Let {
+                    name, value, body, ..
+                } => {
                     // Found the ANF let for the binop right operand.
                     if name.starts_with("__goby_ir_binop_right_")
                         && matches!(value.as_ref(), CompExpr::Call { .. })
