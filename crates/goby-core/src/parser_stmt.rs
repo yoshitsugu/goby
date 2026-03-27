@@ -185,6 +185,14 @@ where
             continue;
         }
 
+        if let Some((call_expr, next_i)) =
+            parse_multiline_lambda_call(lines, i, this_indent, trimmed, parse_expr)
+        {
+            stmts.push(call_expr);
+            i = next_i;
+            continue;
+        }
+
         if (trimmed.starts_with("case ") || trimmed.starts_with("if "))
             && let Some((multi_expr, consumed)) = parse_multiline_expr(lines, i, parse_expr)
         {
@@ -349,6 +357,77 @@ where
         ),
         close_idx + 1,
     ))
+}
+
+fn parse_multiline_lambda_call<F>(
+    lines: &[&str],
+    line_idx: usize,
+    line_indent: usize,
+    head: &str,
+    parse_expr: F,
+) -> Option<(Stmt, usize)>
+where
+    F: Copy + Fn(&str) -> Option<Expr>,
+{
+    let open_idx = head.rfind('(')?;
+    let callee_src = head[..open_idx].trim();
+    let lambda_head = head[open_idx + 1..].trim();
+    let second_bar = lambda_head.get(1..)?.find('|')? + 1;
+    if !lambda_head.starts_with('|') {
+        return None;
+    }
+    let param = lambda_head[1..second_bar].trim();
+    if !is_identifier(param) {
+        return None;
+    }
+    let rest = lambda_head[second_bar + 1..].trim();
+    if rest != "->" || callee_src.is_empty() {
+        return None;
+    }
+
+    let mut close_idx = line_idx + 1;
+    while close_idx < lines.len() {
+        let stripped = strip_line_comment(lines[close_idx]).trim_end();
+        let trimmed = stripped.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            close_idx += 1;
+            continue;
+        }
+        let indent = indent_len(stripped);
+        if indent == line_indent && trimmed == ")" {
+            break;
+        }
+        if indent <= line_indent {
+            return None;
+        }
+        close_idx += 1;
+    }
+    if close_idx >= lines.len() {
+        return None;
+    }
+
+    let inner_lines = &lines[line_idx + 1..close_idx];
+    let first_idx = find_next_nonblank(inner_lines, 0)?;
+    let first_stripped = strip_line_comment(inner_lines[first_idx]).trim_end();
+    if indent_len(first_stripped) <= line_indent {
+        return None;
+    }
+    let (body_stmts, consumed) = parse_stmts_from_lines(inner_lines, first_idx, parse_expr)?;
+    if first_idx + consumed != inner_lines.len() {
+        return None;
+    }
+
+    let lambda = Expr::Lambda {
+        param: param.to_string(),
+        body: Box::new(expr_from_branch_stmts(body_stmts)),
+    };
+    let call = Expr::Call {
+        callee: Box::new(parse_expr(callee_src)?),
+        arg: Box::new(lambda),
+        span: None,
+    };
+
+    Some((Stmt::Expr(call, None), close_idx + 1))
 }
 
 fn parse_multiline_rhs_expr<F>(
@@ -1264,6 +1343,36 @@ mod tests {
             }
             other => panic!("unexpected statement: {other:?}"),
         }
+    }
+
+    #[test]
+    fn parses_multiline_lambda_call_body_as_block() {
+        let body = "each around_diffs (|d| ->\n  diff_y = y + d.1\n  diff_x = x + d.0\n  if diff_y < max_y\n    result := result + 1\n  else\n    ()\n)\nresult < threshold";
+        let stmts = parse_body_stmts(body).expect("should parse");
+        assert_eq!(stmts.len(), 2);
+        match &stmts[0] {
+            Stmt::Expr(Expr::Call { callee, arg, .. }, _) => {
+                assert!(matches!(callee.as_ref(), Expr::Call { .. }));
+                match arg.as_ref() {
+                    Expr::Lambda { param, body } => {
+                        assert_eq!(param, "d");
+                        assert!(matches!(body.as_ref(), Expr::Block(stmts) if stmts.len() == 3));
+                    }
+                    other => panic!("expected lambda arg, got {other:?}"),
+                }
+            }
+            other => panic!("unexpected first statement: {other:?}"),
+        }
+        assert!(matches!(
+            &stmts[1],
+            Stmt::Expr(
+                Expr::BinOp {
+                    op: crate::ast::BinOpKind::Lt,
+                    ..
+                },
+                _
+            )
+        ));
     }
 
     #[test]
