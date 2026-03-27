@@ -570,15 +570,151 @@ Why this is active now:
   to runtime causes corrupt execution instead of a normal compile-time error.
 - the required architecture is already mostly present: effect-op call checking has the
   unification pieces; higher-order ordinary calls need to reuse the same style of checking.
+- follow-up stdlib work such as `list.fold_left` depends on a principled answer to
+  "what does it mean for a function value to satisfy a function-typed parameter?".
 
-Execution plan:
+Long-term design constraints:
 
-1. Implement one shared higher-order signature matcher for function-valued arguments.
-2. Wire that matcher into ordinary-call validation wherever a function-typed parameter is consumed.
-3. Add focused regressions for the `println` callback case and neighboring higher-order shapes.
-4. Verify generic and partial-application behavior did not regress.
-5. After parity is proven, consider whether effect-op and higher-order ordinary-call validation should
-   share even more of their internal implementation.
+- do not special-case `println`, `print`, `each`, or any other single stdlib symbol.
+- do not patch individual call sites with ad hoc callback checks.
+- keep one type-driven notion of function-argument compatibility and reuse it everywhere
+  ordinary calls consume function-valued arguments.
+- preserve current named-function higher-order ergonomics (`map xs add_ten`) and generic
+  instantiation behavior.
+- keep partial-application semantics intact where the parser/AST currently represent curried
+  calls as nested single-argument calls.
+- prefer factoring shared matcher logic that can later be reused by effect-op validation,
+  rather than duplicating "ordinary-call" and "effect-call" compatibility code forever.
+- keep the implementation ownership narrow:
+  - call-shape discovery belongs in the ordinary-call validation layer,
+  - function-type compatibility belongs in one shared matcher,
+  - human-readable diagnostic rendering belongs at the error construction boundary.
+- diagnostics must distinguish:
+  - unknown callee / unresolved name,
+  - direct scalar argument mismatch,
+  - resolved callback name with wrong function type.
+
+Out of scope for Track E:
+
+- do not change closure-capture semantics.
+- do not expand Wasm lowering or runtime callable representation.
+- do not introduce new stdlib intrinsics just to compensate for missing typechecking.
+- do not redesign currying or callable syntax.
+- do not broaden the language spec unless implementation work proves a genuine semantic gap.
+
+Target architecture:
+
+- one shared higher-order signature matcher owns function-type compatibility checking for
+  callback positions in ordinary calls.
+- ordinary-call validation is responsible for deciding when a parameter position expects a
+  function value and delegating compatibility checking to that matcher.
+- the matcher operates on already-resolved types and uses the same substitution/unification
+  model as the rest of the typechecker, so generic callback positions instantiate per call site
+  rather than through callback-specific rules.
+- diagnostics are built from matcher output (`required type`, `actual type`, optional resolved name)
+  instead of from special string checks.
+
+Implementation sequencing:
+
+- first lock the compatibility contract and the ownership boundary before touching validation flow.
+- then extract matcher logic without changing user-visible diagnostics more than necessary.
+- only after the matcher exists should ordinary-call validation start delegating callback positions.
+- add parity/regression tests before broad diagnostic polishing so message changes do not hide
+  behavioral regressions.
+- treat `fold_left` and other new HOF stdlib work as downstream consumers; Track E should finish
+  without needing to land new library APIs.
+
+Milestones:
+
+- [ ] **E1: Compatibility Model Lock**
+  - define one precise internal contract for callback compatibility in ordinary calls.
+  - lock how the matcher should treat:
+    - named functions,
+    - imported qualified names,
+    - generic declarations instantiated per call site,
+    - partially applied functions represented as nested single-arg calls.
+  - lock the diagnostic boundary:
+    - unresolved names remain unresolved-name errors,
+    - resolved but incompatible callback values become higher-order function-type mismatches.
+  - deliverable:
+    - `doc/PLAN.md` and code comments agree on one matcher ownership boundary before implementation starts.
+
+- [ ] **E2: Shared Matcher Extraction**
+  - extract a reusable helper that compares an actual function-valued argument type against the
+    required function type for a parameter position.
+  - make the helper reuse the existing unification/substitution machinery instead of introducing a
+    callback-only compatibility algorithm.
+  - ensure the helper returns structured mismatch information suitable for diagnostics rather than
+    boolean pass/fail only.
+  - non-goals:
+    - no stdlib symbol special-casing,
+    - no diagnostic string construction inside low-level matching logic.
+  - exit criteria:
+    - the matcher can be unit-tested or otherwise exercised independently of one specific stdlib
+      call shape,
+    - mismatch data is structured enough that later diagnostic improvements do not require matcher
+      redesign.
+
+- [ ] **E3: Ordinary-Call Integration**
+  - integrate the matcher into ordinary declaration/value call validation wherever a function-typed
+    parameter consumes a function-valued argument.
+  - cover call shapes that reach ordinary validation today:
+    - direct calls,
+    - qualified calls lowered through the same path,
+    - pipeline-adjacent ordinary call forms if they feed function-valued arguments.
+  - preserve priority rules:
+    - unknown-name diagnostics win when resolution fails,
+    - callback mismatch diagnostics appear only after name resolution succeeds.
+  - deliverable:
+    - the ordinary-call validation layer becomes the single ownership point for higher-order
+      callback type checking in non-effect calls.
+  - guardrail:
+    - if multiple call-validation branches need the same callback check, refactor the dispatch
+      shape first instead of cloning the check.
+
+- [ ] **E4: Regression and Parity Coverage**
+  - add focused regressions for the representative buggy and non-buggy shapes:
+    - `each [1, 2] println` must fail,
+    - `each [\"a\", \"b\"] println` must pass,
+    - `map [1, 2] println` must fail,
+    - named callback variants continue to pass when signatures align.
+  - add generic and partial-application parity coverage:
+    - generic declaration call with concrete argument,
+    - generic declaration used as callback,
+    - nested curried calls where only a later application mismatches.
+  - add namespace/import coverage:
+    - imported unqualified callback name,
+    - qualified callback name from a module import.
+  - verify no regression in existing higher-order Wasm/classification tests caused by tighter
+    typechecking.
+  - exit criteria:
+    - the test matrix demonstrates that Track E changed type acceptance, not callable lowering.
+
+- [ ] **E5: Diagnostics and Follow-through**
+  - render callback mismatch diagnostics in the "resolved name, wrong function type" style.
+  - include:
+    - required callback type,
+    - actual resolved function type,
+    - resolved function name when available.
+  - keep direct-call diagnostics distinct from callback diagnostics.
+  - update `doc/LANGUAGE_SPEC.md` only if callable/typecheck rules need clarification; avoid
+    wording churn without a real semantics change.
+  - after E1-E5 are green, evaluate whether effect-op validation should share more of the same
+    matcher internals.
+  - exit criteria:
+    - callback mismatch messages are stable enough to use as regression expectations,
+    - no remaining caller path can accept the known buggy shape and defer failure to runtime.
+
+Progress checklist:
+
+- [ ] matcher ownership boundary is documented before implementation branches spread
+- [ ] representative bug is rejected during `goby-cli check`, not deferred to runtime
+- [ ] matcher logic is shared and type-driven, not symbol-driven
+- [ ] generic callback positions still instantiate independently per call site
+- [ ] partial application behavior remains unchanged for currently supported forms
+- [ ] diagnostics report higher-order mismatch instead of unknown-name or scalar-argument mismatch
+- [ ] qualified and unqualified callback names follow the same compatibility rules
+- [ ] focused tests cover direct / qualified / named / generic / partial-application callback cases
 
 Done criteria:
 
