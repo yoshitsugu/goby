@@ -22,11 +22,13 @@ use crate::gen_lower::value::{
     TAG_BOOL, TAG_INT, TAG_LIST, TAG_RECORD, TAG_STRING, TAG_TUPLE, encode_string_ptr, encode_unit,
 };
 use crate::host_runtime::{
-    HOST_INTRINSIC_IMPORTS, IntrinsicExecutionBoundary, host_import_for_intrinsic,
+    HOST_BUMP_RESERVED_BYTES, HOST_INTRINSIC_IMPORTS, IntrinsicExecutionBoundary,
+    host_import_for_intrinsic,
 };
 use crate::layout::MemoryLayout;
 
 const WASM_PAGE_BYTES: u32 = 65_536;
+const STATIC_STRING_LIMIT: u32 = WASM_PAGE_BYTES - HOST_BUMP_RESERVED_BYTES;
 
 // Import function indices begin with the WASI pair and may be extended with
 // `goby-wasm` owned grapheme host intrinsics.
@@ -97,7 +99,7 @@ impl StaticStringPool {
     ) -> Result<Self, CodegenError> {
         let mut ptrs = HashMap::new();
         let mut segments = Vec::new();
-        let mut cursor = WASM_PAGE_BYTES;
+        let mut cursor = STATIC_STRING_LIMIT;
 
         let mut all_instrs = Vec::new();
         for slice in all_slices {
@@ -143,7 +145,7 @@ impl StaticStringPool {
         Ok(Self {
             ptrs,
             segments,
-            bytes_used: WASM_PAGE_BYTES - cursor,
+            bytes_used: STATIC_STRING_LIMIT - cursor,
         })
     }
 
@@ -561,7 +563,7 @@ pub(crate) fn emit_general_module_with_aux_and_options(
     let static_strings = StaticStringPool::build_from_all(
         std::iter::once(instrs).chain(aux_decls.iter().map(|d| d.instrs.as_slice())),
     )?;
-    if layout.heap_base + static_strings.bytes_used + 4 > WASM_PAGE_BYTES {
+    if layout.heap_base + static_strings.bytes_used + 4 > STATIC_STRING_LIMIT {
         return Err(CodegenError {
             message: "gen_lower/emit: static string pool leaves no room for runtime stdin buffer"
                 .to_string(),
@@ -894,7 +896,8 @@ fn emit_instrs(
     let iovec_offset = layout.iovec_offset as i32;
     let nread_offset = layout.nwritten_offset as i32;
     let buffer_ptr = layout.heap_base as i32;
-    let buffer_len = (WASM_PAGE_BYTES - layout.heap_base - static_strings.bytes_used) as i32 - 4; // reserve 4 bytes for len prefix
+    let buffer_len =
+        (STATIC_STRING_LIMIT - layout.heap_base - static_strings.bytes_used) as i32 - 4; // reserve 4 bytes for len prefix
     let newline_ptr = (layout.heap_base - 1) as i32;
     let helper_i64_base = ctx.next_local + named_i64_count;
     // `helper_state` is constructed when bump allocator / i32 scratch is needed.
@@ -905,7 +908,7 @@ fn emit_instrs(
         let alloc_cursor_local = i32_base + HELPER_ALLOC_CURSOR_OFFSET;
         let heap_floor_local = i32_base + HELPER_HEAP_FLOOR_OFFSET;
         let initial_cursor = align_down_i32(
-            i32::try_from(WASM_PAGE_BYTES - static_strings.bytes_used).map_err(|_| {
+            i32::try_from(STATIC_STRING_LIMIT - static_strings.bytes_used).map_err(|_| {
                 CodegenError {
                     message: "gen_lower/emit: helper allocation cursor does not fit in i32"
                         .to_string(),

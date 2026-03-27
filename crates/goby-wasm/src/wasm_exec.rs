@@ -27,8 +27,8 @@
 //! # Host bump allocator
 //!
 //! `grapheme_state_host_inner` uses an upward bump allocator backed by the
-//! top `HOST_BUMP_SIZE` bytes of the single Wasm page
-//! (`[WASM_PAGE_BYTES - HOST_BUMP_SIZE, WASM_PAGE_BYTES)`).  This region is
+//! top `HOST_BUMP_RESERVED_BYTES` bytes of the single Wasm page
+//! (`[WASM_PAGE_BYTES - HOST_BUMP_RESERVED_BYTES, WASM_PAGE_BYTES)`).  This region is
 //! reserved for host use and does not overlap with the Wasm-side allocator,
 //! which grows upward from `heap_base = 16`.  The bump pointer is shared
 //! across host intrinsic calls within one `_start` execution via
@@ -44,15 +44,13 @@ use wasmtime_wasi::p2::pipe::{MemoryInputPipe, MemoryOutputPipe};
 
 /// Total Wasm linear memory in bytes (1 page).
 const WASM_PAGE_BYTES: u32 = 65_536;
-/// Number of bytes at the top of the Wasm page reserved for the host bump allocator.
-const HOST_BUMP_SIZE: u32 = 4_096;
 
 use crate::gen_lower::value::{
     TAG_BOOL, TAG_INT, TAG_LIST, TAG_RECORD, TAG_STRING, TAG_TUPLE, TAG_UNIT, decode_payload_int,
     decode_payload_ptr, decode_tag, encode_int, encode_list_ptr, encode_string_ptr,
 };
 use crate::grapheme_semantics::collect_extended_grapheme_spans;
-use crate::host_runtime::HostIntrinsicImport;
+use crate::host_runtime::{HOST_BUMP_RESERVED_BYTES, HostIntrinsicImport};
 
 /// Execute Wasm bytes produced by `compile_module` with optional stdin input.
 ///
@@ -89,7 +87,7 @@ pub(crate) fn run_wasm_bytes_with_stdin(
     // Upward bump allocator for grapheme string headers written by the host.
     // Initial value: start of the host-reserved region at the top of the page.
     // Ceiling: WASM_PAGE_BYTES (exclusive).
-    let bump = Arc::new(AtomicU32::new(WASM_PAGE_BYTES - HOST_BUMP_SIZE));
+    let bump = Arc::new(AtomicU32::new(WASM_PAGE_BYTES - HOST_BUMP_RESERVED_BYTES));
 
     let bump_for_value_to_string = Arc::clone(&bump);
     linker

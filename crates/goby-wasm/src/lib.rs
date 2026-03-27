@@ -823,6 +823,52 @@ main =
         );
     }
 
+    #[test]
+    fn recursive_multi_part_interpolated_print_after_graphemes_executes() {
+        use goby_core::parse_module;
+        let module = parse_module(
+            r#"
+import goby/list ( map )
+import goby/string ( split, graphemes )
+
+repeat_debug : Int -> Unit can Print
+repeat_debug n =
+  if n == 0
+    ()
+  else
+    println "debug ${n} ${n} ${n}"
+    repeat_debug (n - 1)
+
+main : Unit -> Unit can Print, Read
+main =
+  text = read()
+  lines = split(text, "\n")
+  _rows = list.map lines graphemes
+  repeat_debug 120
+"#,
+        )
+        .expect("parse should work");
+
+        assert_eq!(
+            runtime_io_execution_kind(&module).expect("classification should succeed"),
+            RuntimeIoExecutionKind::GeneralLowered,
+            "graphemes + recursive interpolated println should classify as GeneralLowered"
+        );
+
+        let input = "0123456789\n0123456789\n0123456789\n0123456789\n0123456789\n0123456789\n0123456789\n0123456789\n0123456789\n0123456789\n".to_string();
+        let output = execute_runtime_module_with_stdin(&module, Some(input))
+            .expect("graphemes + recursive interpolated println must execute");
+
+        assert!(
+            output.as_deref().is_some_and(|text| {
+                text.starts_with("debug 120 120 120\ndebug 119 119 119\n")
+                    && text.contains("debug 1 1 1\n")
+            }),
+            "expected interpolated debug output to survive host temp allocations, got: {:?}",
+            output
+        );
+    }
+
     // ------------------------------------------------------------------
     // WB-2B: Case emission tests
     // ------------------------------------------------------------------

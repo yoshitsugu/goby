@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-26
+Last updated: 2026-03-27
 
 ## Current Focus
 
@@ -129,8 +129,19 @@ Completed slices:
 - `H6`: ANF lowering for non-value `if` conditions
 - `H7`: compile/CLI-path parity for precise unsupported reasons
 Constraints remain:
-- no syntax change
-- no new `runtime_io_plan.rs` shape recognizers
+  - no syntax change
+  - no new `runtime_io_plan.rs` shape recognizers
+
+**Track runtime memory (complete, 2026-03-27):**
+Host-owned temporary string/list allocations no longer collide with compiled static-string data
+in general-lowered Wasm modules.
+Completed slices:
+- `gen_lower/emit.rs` now reserves the host bump region at the top of linear memory instead of
+  placing static strings there.
+- host bump capacity increased to handle representative `graphemes` + recursive multi-part
+  interpolated `println` workloads without truncating or corrupting output.
+- focused `goby-wasm` regression coverage now locks the `split -> map(graphemes) -> recursive
+  interpolated println` shape.
 
 **Track E (next after Track H front slices):**
 Higher-order function-type checking.
