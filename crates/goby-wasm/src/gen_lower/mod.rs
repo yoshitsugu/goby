@@ -721,12 +721,40 @@ fn build_stdlib_export_map(
 ) -> HashMap<String, (String, goby_core::ast::Declaration)> {
     let mut export_map: HashMap<String, (String, goby_core::ast::Declaration)> = HashMap::new();
     let mut visited: HashSet<String> = HashSet::new();
-    let mut pending: Vec<String> = module
+
+    // Process the user's directly-imported stdlib modules first (in declaration order) so that
+    // name conflicts between multiple stdlib modules resolve in favour of the module the user
+    // explicitly imported.  Transitive imports are collected in a separate pending list and
+    // processed afterwards; `or_insert_with` ensures they do not override direct imports.
+    let direct_paths: Vec<String> = module
         .imports
         .iter()
         .map(|imp| imp.module_path.clone())
         .collect();
-    while let Some(path) = pending.pop() {
+    let mut transitive_pending: Vec<String> = Vec::new();
+
+    for path in &direct_paths {
+        if visited.contains(path) {
+            continue;
+        }
+        visited.insert(path.clone());
+        let Ok(resolved) = resolver.resolve_module(path) else {
+            continue;
+        };
+        for imp in &resolved.module.imports {
+            if !visited.contains(&imp.module_path) {
+                transitive_pending.push(imp.module_path.clone());
+            }
+        }
+        for decl in resolved.module.declarations {
+            export_map
+                .entry(decl.name.clone())
+                .or_insert_with(|| (path.clone(), decl));
+        }
+    }
+
+    // Now process transitive imports (BFS).
+    while let Some(path) = transitive_pending.pop() {
         if visited.contains(&path) {
             continue;
         }
@@ -734,19 +762,19 @@ fn build_stdlib_export_map(
         let Ok(resolved) = resolver.resolve_module(&path) else {
             continue;
         };
-        // Enqueue transitive imports from this stdlib module.
         for imp in &resolved.module.imports {
             if !visited.contains(&imp.module_path) {
-                pending.push(imp.module_path.clone());
+                transitive_pending.push(imp.module_path.clone());
             }
         }
-        // Register all declarations as potential exports.
         for decl in resolved.module.declarations {
+            // Transitive imports must not override names already registered from direct imports.
             export_map
                 .entry(decl.name.clone())
                 .or_insert_with(|| (path.clone(), decl));
         }
     }
+
     export_map
 }
 
@@ -1265,3 +1293,4 @@ main =
         );
     }
 }
+
