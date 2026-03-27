@@ -172,9 +172,12 @@ struct EmitContext {
     /// Map from declaration name to funcref table slot index (for `PushFuncHandle`).
     /// Slot 0 = first aux decl, slot 1 = second aux decl, etc.
     decl_table_slots: HashMap<String, u32>,
-    /// Type index for `(i64) -> i64` in the Wasm type section, used by `IndirectCall`.
-    /// `None` when the module has no `IndirectCall` instructions.
-    indirect_call_type_idx: Option<u32>,
+    /// Type index for `(i64) -> i64` in the Wasm type section, used by `IndirectCall { arity: 1 }`.
+    /// `None` when the module has no arity-1 `IndirectCall` instructions.
+    indirect_call_type_idx_1: Option<u32>,
+    /// Type index for `(i64, i64) -> i64` in the Wasm type section, used by `IndirectCall { arity: 2 }`.
+    /// `None` when the module has no arity-2 `IndirectCall` instructions.
+    indirect_call_type_idx_2: Option<u32>,
     /// Map from record constructor name to module-local numeric tag used in `RecordLit`.
     record_ctor_tags: HashMap<String, u32>,
 }
@@ -186,7 +189,8 @@ impl EmitContext {
             next_local: 0,
             decl_func_indices: HashMap::new(),
             decl_table_slots: HashMap::new(),
-            indirect_call_type_idx: None,
+            indirect_call_type_idx_1: None,
+            indirect_call_type_idx_2: None,
             record_ctor_tags: HashMap::new(),
         }
     }
@@ -197,7 +201,8 @@ impl EmitContext {
             next_local: 0,
             decl_func_indices,
             decl_table_slots: HashMap::new(),
-            indirect_call_type_idx: None,
+            indirect_call_type_idx_1: None,
+            indirect_call_type_idx_2: None,
             record_ctor_tags: HashMap::new(),
         }
     }
@@ -648,22 +653,35 @@ pub(crate) fn emit_general_module_with_aux_and_options(
         })
         .collect();
 
-    // Detect whether any instruction uses IndirectCall.  If so, add the `(i64) -> i64`
-    // type and build a funcref table.  This is the type for all first-class function calls
-    // in Goby's current IR (always single-argument `f x` form).
-    let uses_indirect_call = all_slices_iter().any(|slice| {
+    // Detect which IndirectCall arities are used, and also whether ListEach/ListMap
+    // (which use arity-1 indirect call internally) are present.
+    let uses_indirect_call_1 = all_slices_iter().any(|slice| {
         collect_all_instrs(slice).iter().any(|i| {
             matches!(
                 i,
-                WasmBackendInstr::IndirectCall
+                WasmBackendInstr::IndirectCall { arity: 1 }
                     | WasmBackendInstr::ListEach { .. }
                     | WasmBackendInstr::ListMap { .. }
             )
         })
     });
-    let indirect_call_type_idx: Option<u32> = if uses_indirect_call {
+    let uses_indirect_call_2 = all_slices_iter().any(|slice| {
+        collect_all_instrs(slice)
+            .iter()
+            .any(|i| matches!(i, WasmBackendInstr::IndirectCall { arity: 2 }))
+    });
+    // `uses_indirect_call` is true when any kind of indirect call requires a funcref table.
+    let uses_indirect_call = uses_indirect_call_1 || uses_indirect_call_2;
+    let indirect_call_type_idx_1: Option<u32> = if uses_indirect_call_1 {
         let idx = types.len();
         types.ty().function([ValType::I64], [ValType::I64]);
+        Some(idx)
+    } else {
+        None
+    };
+    let indirect_call_type_idx_2: Option<u32> = if uses_indirect_call_2 {
+        let idx = types.len();
+        types.ty().function([ValType::I64, ValType::I64], [ValType::I64]);
         Some(idx)
     } else {
         None
@@ -787,7 +805,8 @@ pub(crate) fn emit_general_module_with_aux_and_options(
             next_local: 0,
             decl_func_indices: decl_func_indices.clone(),
             decl_table_slots: decl_table_slots.clone(),
-            indirect_call_type_idx,
+            indirect_call_type_idx_1,
+            indirect_call_type_idx_2,
             record_ctor_tags: record_ctor_tags.clone(),
         };
         emit_instrs(
@@ -836,7 +855,8 @@ pub(crate) fn emit_general_module_with_aux_and_options(
             next_local: 0,
             decl_func_indices: decl_func_indices.clone(),
             decl_table_slots: decl_table_slots.clone(),
-            indirect_call_type_idx,
+            indirect_call_type_idx_1,
+            indirect_call_type_idx_2,
             record_ctor_tags: record_ctor_tags.clone(),
         };
         for param_name in &decl.param_names {
@@ -1249,19 +1269,30 @@ fn emit_instrs(
                 ));
             }
 
-            WasmBackendInstr::IndirectCall => {
-                // Stack: [..., arg0: i64, callee_tagged: i64]
+            WasmBackendInstr::IndirectCall { arity } => {
+                // Stack: [..., arg0: i64, ..., argN-1: i64, callee_tagged: i64]
                 // Decode TAG_FUNC i64 → funcref table slot index (i32).
                 function.instruction(&Instruction::I64Const(0xFFFF_FFFFi64));
                 function.instruction(&Instruction::I64And);
                 function.instruction(&Instruction::I32WrapI64);
-                // call_indirect (i64) -> i64 via funcref table 0.
-                // `indirect_call_type_idx` is threaded from emit context.
-                let type_idx = ctx.indirect_call_type_idx.ok_or_else(|| CodegenError {
-                    message:
-                        "gen_lower/emit: IndirectCall without indirect_call_type_idx in EmitContext"
-                            .to_string(),
-                })?;
+                // call_indirect (i64^arity) -> i64 via funcref table 0.
+                let type_idx = match arity {
+                    1 => ctx.indirect_call_type_idx_1.ok_or_else(|| CodegenError {
+                        message:
+                            "gen_lower/emit: IndirectCall { arity: 1 } without indirect_call_type_idx_1 in EmitContext"
+                                .to_string(),
+                    })?,
+                    2 => ctx.indirect_call_type_idx_2.ok_or_else(|| CodegenError {
+                        message:
+                            "gen_lower/emit: IndirectCall { arity: 2 } without indirect_call_type_idx_2 in EmitContext"
+                                .to_string(),
+                    })?,
+                    _ => return Err(CodegenError {
+                        message: format!(
+                            "gen_lower/emit: IndirectCall with unsupported arity {arity}"
+                        ),
+                    }),
+                };
                 function.instruction(&Instruction::CallIndirect {
                     type_index: type_idx,
                     table_index: 0,
@@ -1301,8 +1332,9 @@ fn emit_instrs(
                 let hs = helper_state.ok_or_else(|| CodegenError {
                     message: "gen_lower/emit: ListEach requires helper scratch state".to_string(),
                 })?;
-                let type_idx = ctx.indirect_call_type_idx.ok_or_else(|| CodegenError {
-                    message: "gen_lower/emit: ListEach without indirect_call_type_idx".to_string(),
+                let type_idx = ctx.indirect_call_type_idx_1.ok_or_else(|| CodegenError {
+                    message: "gen_lower/emit: ListEach without indirect_call_type_idx_1"
+                        .to_string(),
                 })?;
                 emit_instrs(
                     function,
@@ -1336,8 +1368,8 @@ fn emit_instrs(
                 let hs = helper_state.ok_or_else(|| CodegenError {
                     message: "gen_lower/emit: ListMap requires helper scratch state".to_string(),
                 })?;
-                let type_idx = ctx.indirect_call_type_idx.ok_or_else(|| CodegenError {
-                    message: "gen_lower/emit: ListMap without indirect_call_type_idx".to_string(),
+                let type_idx = ctx.indirect_call_type_idx_1.ok_or_else(|| CodegenError {
+                    message: "gen_lower/emit: ListMap without indirect_call_type_idx_1".to_string(),
                 })?;
                 emit_instrs(
                     function,

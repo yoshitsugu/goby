@@ -234,17 +234,16 @@ pub(crate) enum WasmBackendInstr {
     /// Call a runtime function value via `call_indirect`.
     ///
     /// # Stack discipline
-    /// Before this instruction:
-    ///   `[..., arg0: i64, callee_tagged: i64]`  (callee is top of stack)
+    /// Before this instruction (for arity N):
+    ///   `[..., arg0: i64, ..., argN-1: i64, callee_tagged: i64]`  (callee is top of stack)
     ///
     /// The emitter decodes the TAG_FUNC i64 to a funcref table slot index (i32),
-    /// then emits `call_indirect (type $single_arg_func_type)`.
+    /// then emits `call_indirect (type $func_type_arity_N)`.
     ///
-    /// # Type restriction (WB-2A)
-    /// Only `(i64) -> i64` call sites are supported (one argument).
-    /// In Goby's current IR, all first-class function calls are single-argument
-    /// (`f x` in the desugared form), so this restriction covers all current cases.
-    IndirectCall,
+    /// # Supported arities (FOLD-M3)
+    /// - `arity = 1`: `(i64) -> i64`  (original WB-2A case; `each`/`map` callbacks)
+    /// - `arity = 2`: `(i64, i64) -> i64`  (fold callback `f acc elem`)
+    IndirectCall { arity: u8 },
     /// Pattern-match the scrutinee against a sequence of arms.
     ///
     /// # Stack discipline

@@ -452,15 +452,17 @@ fn lower_comp_inner(
                     });
                     Ok(instrs)
                 } else {
-                    // Runtime function-value call via `call_indirect` (WB-2A-M3).
+                    // Runtime function-value call via `call_indirect` (WB-2A-M3 / FOLD-M3a).
                     // `name` is a local variable holding a TAG_FUNC tagged i64 handle.
                     // Stack order: push args left-to-right, then push callee, then IndirectCall.
+                    // The arity is derived from the number of args in the flat IR call.
+                    let arity = args.len() as u8;
                     let mut instrs = Vec::new();
                     for arg in args {
                         instrs.extend(lower_value_as_arg(arg, aliases, known_decls, lambda_decls)?);
                     }
                     instrs.push(WasmBackendInstr::LoadLocal { name: name.clone() });
-                    instrs.push(WasmBackendInstr::IndirectCall);
+                    instrs.push(WasmBackendInstr::IndirectCall { arity });
                     Ok(instrs)
                 }
             } else {
@@ -1533,8 +1535,8 @@ mod tests {
             instrs
         );
         assert!(
-            matches!(instrs[2], I::IndirectCall),
-            "last instr must be IndirectCall, got: {:?}",
+            matches!(instrs[2], I::IndirectCall { arity: 1 }),
+            "last instr must be IndirectCall {{ arity: 1 }}, got: {:?}",
             instrs
         );
     }
@@ -1587,8 +1589,8 @@ mod tests {
             instrs
         );
         assert!(
-            matches!(&instrs[2], I::IndirectCall),
-            "last instr must be IndirectCall, got: {:?}",
+            matches!(&instrs[2], I::IndirectCall { arity: 1 }),
+            "last instr must be IndirectCall {{ arity: 1 }}, got: {:?}",
             instrs
         );
     }
@@ -2070,19 +2072,13 @@ mod tests {
         );
     }
 
-    // --- FOLD-M2: 2-argument callback lower baseline ---
+    // --- FOLD-M2 / FOLD-M3a: 2-argument callback lower ---
     //
-    // These tests document the *current* lower output for `f acc x`
-    // (a 2-argument call through a local function-value variable).
-    //
-    // After FOLD-M3a adds `IndirectCall { arity: u8 }`, these tests will be updated
-    // to assert `IndirectCall { arity: 2 }` instead.  Until then they serve as a
-    // concrete regression anchor: the lowering succeeds (no LowerError), two args are
-    // pushed before the callee, and `IndirectCall` (arity=1 implicit) is emitted —
-    // which causes a Wasm type mismatch at runtime for a real 2-arg callback.
+    // After FOLD-M3a `IndirectCall { arity: u8 }` was added, these tests assert
+    // `IndirectCall { arity: 2 }` for a 2-arg local callback call.
 
     /// `f acc x` where `f` is a local variable — the prototypical fold callback call.
-    /// Currently lowers to the same `IndirectCall` as a 1-arg call: no arity info.
+    /// FOLD-M3a: now lowers to `IndirectCall { arity: 2 }`.
     #[test]
     fn fold_m2_two_arg_local_callback_call_lower_baseline() {
         let comp = CompExpr::Call {
@@ -2093,8 +2089,7 @@ mod tests {
             ],
         };
         let instrs = lower_comp(&comp).expect("2-arg local callback call must lower without error");
-        // Expected: push acc, push x, load f, IndirectCall — in that order.
-        // The `IndirectCall` carries no arity; this is the FOLD-M2 baseline.
+        // Expected: push acc, push x, load f, IndirectCall { arity: 2 } — in that order.
         assert_eq!(
             instrs,
             vec![
@@ -2107,7 +2102,7 @@ mod tests {
                 I::LoadLocal {
                     name: "f".to_string()
                 },
-                I::IndirectCall,
+                I::IndirectCall { arity: 2 },
             ]
         );
     }
