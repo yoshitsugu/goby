@@ -35,7 +35,7 @@ use lsp_types::request::{GotoDefinition, HoverRequest, Shutdown};
 use lsp_types::{
     DiagnosticSeverity, GotoDefinitionResponse, Hover, HoverContents, HoverProviderCapability,
     Location, MarkupContent, MarkupKind, OneOf, Position, PublishDiagnosticsParams, Range,
-    ServerCapabilities, TextDocumentSyncCapability, TextDocumentSyncKind, Url,
+    ServerCapabilities, TextDocumentSyncCapability, TextDocumentSyncKind, Uri,
 };
 
 fn main() {
@@ -225,7 +225,7 @@ fn hover_at(source: &str, stdlib_root: Option<&Path>, pos: Position) -> Option<H
 /// Return the definition location for the given cursor position, or `None` for no-definition.
 fn definition_at(
     source: &str,
-    uri: &Url,
+    uri: &Uri,
     stdlib_root: Option<&Path>,
     pos: Position,
 ) -> Option<GotoDefinitionResponse> {
@@ -357,14 +357,14 @@ fn handle_notification(
 
 fn publish_diagnostics(
     connection: &Connection,
-    uri: Url,
+    uri: Uri,
     source: &str,
     stdlib_root: Option<&Path>,
 ) {
     send_diagnostics(connection, uri, analyze(source, stdlib_root));
 }
 
-fn send_diagnostics(connection: &Connection, uri: Url, diagnostics: Vec<lsp_types::Diagnostic>) {
+fn send_diagnostics(connection: &Connection, uri: Uri, diagnostics: Vec<lsp_types::Diagnostic>) {
     let params = PublishDiagnosticsParams {
         uri,
         diagnostics,
@@ -506,21 +506,21 @@ fn span_point_to_lsp_position(source: &str, line: usize, col: usize) -> Position
 /// payload itself, so `get` is only used by tests to verify store state.
 #[derive(Default)]
 struct DocumentStore {
-    docs: HashMap<Url, String>,
+    docs: HashMap<Uri, String>,
 }
 
 impl DocumentStore {
     /// Insert or fully replace the text for `uri` (used for both open and change in FULL sync).
-    fn upsert(&mut self, uri: Url, text: String) {
+    fn upsert(&mut self, uri: Uri, text: String) {
         self.docs.insert(uri, text);
     }
 
-    fn close(&mut self, uri: &Url) {
+    fn close(&mut self, uri: &Uri) {
         self.docs.remove(uri);
     }
 
     #[cfg(test)]
-    fn get(&self, uri: &Url) -> Option<&str> {
+    fn get(&self, uri: &Uri) -> Option<&str> {
         self.docs.get(uri).map(|s| s.as_str())
     }
 }
@@ -548,7 +548,7 @@ mod tests {
     use lsp_types::{
         ClientCapabilities, DidChangeTextDocumentParams, DidCloseTextDocumentParams,
         DidOpenTextDocumentParams, InitializeParams, TextDocumentContentChangeEvent,
-        TextDocumentIdentifier, TextDocumentItem, Url, VersionedTextDocumentIdentifier,
+        TextDocumentIdentifier, TextDocumentItem, Uri, VersionedTextDocumentIdentifier,
         notification::{DidChangeTextDocument, DidCloseTextDocument, DidOpenTextDocument},
         request::Request as _,
     };
@@ -715,7 +715,7 @@ mod tests {
     #[test]
     fn doc_store_upsert_close() {
         let mut store = DocumentStore::default();
-        let uri = Url::parse("file:///test.gb").unwrap();
+        let uri = "file:///test.gb".parse::<Uri>().unwrap();
 
         store.upsert(uri.clone(), "hello".to_string());
         assert_eq!(store.get(&uri), Some("hello"));
@@ -935,7 +935,7 @@ mod tests {
                 .to_string(),
             params: serde_json::to_value(DidOpenTextDocumentParams {
                 text_document: TextDocumentItem {
-                    uri: Url::parse("file:///test.gb").unwrap(),
+                    uri: "file:///test.gb".parse::<Uri>().unwrap(),
                     language_id: "goby".to_string(),
                     version: 1,
                     text: source.to_string(),
@@ -960,7 +960,7 @@ mod tests {
                 .to_string(),
             params: serde_json::to_value(DidOpenTextDocumentParams {
                 text_document: TextDocumentItem {
-                    uri: Url::parse("file:///bad.gb").unwrap(),
+                    uri: "file:///bad.gb".parse::<Uri>().unwrap(),
                     language_id: "goby".to_string(),
                     version: 1,
                     text: "= broken\n".to_string(),
@@ -985,7 +985,7 @@ mod tests {
     fn did_change_publishes_updated_diagnostics() {
         let (client_conn, server_thread) = start_server();
 
-        let uri = Url::parse("file:///change_test.gb").unwrap();
+        let uri = "file:///change_test.gb".parse::<Uri>().unwrap();
 
         // Open with valid source — expect empty diagnostics
         let open_notif = LspNotification {
@@ -1044,7 +1044,7 @@ mod tests {
     fn did_close_publishes_empty_diagnostics() {
         let (client_conn, server_thread) = start_server();
 
-        let uri = Url::parse("file:///close_test.gb").unwrap();
+        let uri = "file:///close_test.gb".parse::<Uri>().unwrap();
 
         // Open a broken document first
         let open_notif = LspNotification {
@@ -1205,7 +1205,7 @@ mod tests {
     #[test]
     fn definition_at_top_level_function() {
         let source = "add : Int -> Int -> Int\nadd x y = x + y\n";
-        let uri = Url::parse("file:///test.gb").unwrap();
+        let uri = "file:///test.gb".parse::<Uri>().unwrap();
         // cursor on "add" definition line (LSP line 1, char 0)
         let result = definition_at(
             source,
@@ -1229,7 +1229,7 @@ mod tests {
     #[test]
     fn definition_at_unknown_name_returns_none() {
         let source = "add x = x + 1\n";
-        let uri = Url::parse("file:///test.gb").unwrap();
+        let uri = "file:///test.gb".parse::<Uri>().unwrap();
         // "x" is not in SymbolIndex
         let result = definition_at(
             source,
@@ -1254,7 +1254,7 @@ mod tests {
         }
     }
 
-    fn open_document(client_conn: &Connection, uri: &Url, source: &str) {
+    fn open_document(client_conn: &Connection, uri: &Uri, source: &str) {
         let notif = LspNotification {
             method: <DidOpenTextDocument as lsp_types::notification::Notification>::METHOD
                 .to_string(),
@@ -1275,7 +1275,7 @@ mod tests {
     #[test]
     fn e2e_hover_returns_annotation() {
         let (client_conn, server_thread) = start_server();
-        let uri = Url::parse("file:///hover_test.gb").unwrap();
+        let uri = "file:///hover_test.gb".parse::<Uri>().unwrap();
         let source = "double : Int -> Int\ndouble x = x + x\n";
         open_document(&client_conn, &uri, source);
 
@@ -1314,7 +1314,7 @@ mod tests {
     #[test]
     fn e2e_definition_returns_location() {
         let (client_conn, server_thread) = start_server();
-        let uri = Url::parse("file:///def_test.gb").unwrap();
+        let uri = "file:///def_test.gb".parse::<Uri>().unwrap();
         let source = "double : Int -> Int\ndouble x = x + x\n";
         open_document(&client_conn, &uri, source);
 

@@ -13,10 +13,10 @@ wasmfx-experimental = []
 
 [dependencies]
 goby-core = { path = "../goby-core" }
-wasm-encoder = "0.240"
+wasm-encoder = "0.245"
 unicode-segmentation = "1.12"
 wasmtime = { version = "43", default-features = false, features = ["cranelift", "runtime"] }
 wasmtime-wasi = "43"
 
 [dev-dependencies]
-wasmparser = "0.240"
+wasmparser = "0.245"
