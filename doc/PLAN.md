@@ -485,6 +485,49 @@ Based on `examples/*.gb`:
   - keep canonical map behavior in `stdlib/goby/list.gb` (`list.map` export path).
   - replace internal/builtin-path map callsites with stdlib module usage where possible.
   - after migration, trim builtin-only `map` special handling so runtime/compiler has a single semantics source.
+- `List.fold_left` addition (planned):
+  - Goal:
+    - add a left fold to `stdlib/goby/list.gb` so users can express accumulator-style traversals
+      without relying on mutable closure capture.
+    - support representative workflows such as counting, summation, and state-threading over lists.
+  - Motivation:
+    - current Goby/Wasm lowering supports non-capturing unary function values well enough for
+      `list.each` / `list.map`, but that is not yet sufficient to express a practical fold API end-to-end.
+    - closure capture remains a separate future track; `fold_left` should land first as the idiomatic
+      immutable accumulation tool.
+  - Current blocker to resolve first:
+    - this is not blocked on a new intrinsic.
+    - it is blocked on general higher-order call support in the Wasm lowering/runtime path:
+      callback invocation currently assumes a narrower function-value calling shape than a useful
+      `fold_left` callback requires.
+    - experiments showed that a stdlib-only implementation is not enough today:
+      - curried callback shape `b -> a -> b` traps/fails in the current indirect-call path,
+      - tuple-packed callback shape `((b, a) -> b)` typechecks but does not yet execute correctly
+        through the current higher-order Wasm path.
+  - Planned implementation slices:
+    - `FOLD-S1` higher-order call-shape audit:
+      - document the exact current constraints of function-value calls in the general-lowered Wasm path
+        (arity assumptions, argument packing shape, tuple argument behavior, named function vs lambda parity).
+      - add focused regressions that expose the current failure mode for fold-style callbacks directly.
+    - `FOLD-S2` higher-order backend extension:
+      - extend the indirect-call lowering/execution path so the chosen callback shape for `fold_left`
+        executes correctly without introducing a new user-visible intrinsic.
+      - keep the implementation general: the target is "function-valued callback calls work for this
+        class of stdlib higher-order APIs", not a `fold_left`-specific special case.
+    - `FOLD-S3` stdlib surface:
+      - add `fold_left` to `stdlib/goby/list.gb` once the callback path is proven.
+      - choose the callback shape that best matches the supported higher-order calling model after `FOLD-S2`
+        is complete; do not lock the public signature before the backend shape is validated.
+    - `FOLD-S4` regression coverage:
+      - typecheck coverage for named callback usage,
+      - runtime/Wasm execution coverage for representative folds such as integer sum and boolean accumulation,
+      - one user-facing example demonstrating replacement of mutable accumulator patterns with `fold_left`.
+  - Design constraints:
+    - do not add a dedicated `fold_left` intrinsic unless the generalized higher-order call path proves
+      impossible or disproportionately complex.
+    - prefer a stdlib-defined `fold_left` over a compiler-owned special case.
+    - keep this work separate from full closure-capture support; immutable fold-style accumulation is the
+      immediate user need.
 
 ### 2.5 Runtime / Compiler Scope (MVP)
 
