@@ -533,13 +533,10 @@ Based on `examples/*.gb`:
 
 - Current model: native Wasm code generation for the supported subset, with deterministic
   fallback behavior for unsupported forms.
-- Real Wasm migration plan (Phase 0-8) is completed; implementation record is archived.
 - Error location strategy (line/column reporting) — deferred.
 
 ### 2.6 Tooling Scope (MVP)
 
-- Minimum CLI commands (`goby-cli run`, `goby-cli check`) — complete.
-- Project layout and package metadata format (Cargo workspace with `goby-core`, `goby-cli`, `goby-wasm`) — complete.
 - Tooling direction is now explicit:
   - prioritize early developer-environment support (syntax highlight, formatter, linter, LSP),
   - keep diagnostics/messages stable enough to be consumed by editor tooling.
@@ -568,13 +565,6 @@ Priority rule:
 
 - IR-lowering completion and IR-boundary redesign work is tracked as completed in
   `doc/PLAN_IR.md`; use it as the architectural reference for follow-up work.
-- Wasm backend phases WB-1 through WB-3 are complete (2026-03-24).
-  All `CompExpr` and `ValueExpr` variants are handled in the `GeneralLowered` path
-  within their supported subsets. See `doc/STATE.md` for current status.
-- stdlib `goby/string.split` ownership convergence is complete:
-  source-level split semantics now live in stdlib declarations, and the
-  fallback/runtime-output path no longer depends on a source-level legacy
-  `string.split` branch.
 - WB-3B is explicitly on hold:
   - in-repo preparation work is complete enough for now; see `doc/PLAN_IR.md`.
   - restart only when both of the following are true:
@@ -588,30 +578,7 @@ Priority rule:
 - if future work reopens an architectural lowering gap, extend `doc/PLAN_IR.md`
   before adding new boundary-specific workarounds.
 
-### 4.1 Completed Work (Summary)
-
-- Effect call dispatch in `main` body (`bare` / `qualified` / `pipeline`) is implemented.
-- Mutable local syntax (`mut` / `:=`) is implemented with parser/typecheck/runtime coverage.
-- Wasm track refactor split (`call.rs`, `support.rs`) and `function.gb` native HOF subset support are implemented.
-- Stdlib foundation milestones already merged:
-  - stdlib source loading from `stdlib/goby/*`,
-  - stdlib-only `@embed` model,
-  - implicit `goby/prelude`,
-  - Unit value `()` path,
-  - `Print` split (`print` / `println`),
-  - `Read` default handler (`read`, `read_line`),
-  - `goby/string.graphemes` iterator-backed Unicode grapheme segmentation helper.
-- Editor syntax packs (VSCode/Emacs/Vim/TextMate) are implemented.
-
-Note: detailed execution history for these items is retained in git history and
-specialized active plans; this section keeps only decision-level summaries.
-
-### 4.2 Closed Tracks Archive
-
-Tracks A/B/C are closed. Detailed records were removed from this plan file and
-are retained in git history.
-
-### 4.3 Active Track D: Developer Tooling Foundation
+### 4.1 Active Track D: Developer Tooling Foundation
 
 Most of Track D is complete. Only still-relevant follow-up items are kept here.
 
@@ -619,7 +586,7 @@ Most of Track D is complete. Only still-relevant follow-up items are kept here.
 
 Goal: machine-readable linter output for common mistakes not caught by the typechecker.
 
-### 4.4 Active Track E: Higher-Order Function-Type Checking
+### 4.2 Active Track E: Higher-Order Function-Type Checking
 
 Goal: close the remaining typechecker hole where a resolved function name can still be
 accepted in a higher-order position even though its function type does not match the
@@ -652,7 +619,7 @@ Done criteria:
   `String -> Unit` found), not as an unknown-name error.
 - no regression in existing higher-order named-function callback examples.
 
-### 4.5 Active Track F: Stdlib `int.to_string`
+### 4.3 Active Track F: Stdlib `int.to_string`
 
 Goal: provide an explicit pure conversion from `Int` to `String` in `goby/int`.
 
@@ -680,7 +647,7 @@ Done criteria:
 - `println (int.to_string 123)` prints `123`.
 - `map [1, 20, -3] int.to_string` yields `["1", "20", "-3"]`.
 
-### 4.6 Active Track G: Debug `trace`
+### 4.4 Active Track G: Debug `trace`
 
 Goal: add a debugging helper that can print any representable value in a stable predefined form
 without requiring explicit `String` conversion by the user.
@@ -707,109 +674,6 @@ Done criteria:
 - `trace (1, "x")` prints a stable canonical tuple rendering.
 - `trace` does not require explicit `to_string` conversion.
 - `print` / `println` types remain unchanged.
-
-### 4.7 Track H: Runtime-Lowering Correctness Follow-up
-
-Goal: close the remaining runtime-`Read` lowering gaps after the completed tuple-projection,
-closure-diagnostic, and conditional-call fixes.
-
-Current status:
-
-- completed Track H work already made tuple projection explicit in IR/backend lowering,
-  preserved precise closure-capture diagnostics through `goby run`, and ANF-lowered non-value
-  `if` conditions.
-- `doc/BUGS.md` now records three active Track H follow-ups:
-  - `goby/list.length` can still fail code generation in simple runtime-`Read` programs with the
-    generic error `stdlib declaration could not be lowered to backend IR`,
-  - `goby/list.length` can compile and then trap at runtime when consuming the nested list produced
-    by `map ... graphemes`,
-  - helper declarations that use a non-value expression as a binary-operator operand still fail
-    shared-IR lowering with `binary operator right operand must be a pure value expression in
-    shared IR today`.
-
-Design principles:
-
-- keep runtime-I/O classification policy-only; do not add source-shape-specific fallback rules.
-- preserve the shared-IR invariant that `ValueExpr::BinOp` consumes value operands.
-- make stdlib/lowering failures visible at their true ownership boundary instead of collapsing them
-  into generic `stdlib declaration could not be lowered to backend IR` or runtime trap symptoms.
-- fix representation and lowering boundaries in `goby-core::ir_lower` and `goby-wasm` rather than
-  adding bug-specific CLI or runtime-I/O special cases.
-
-Remaining execution plan:
-
-1. `H1` precise `list.length` general-lowering support — **DONE** (resolved by H3)
-   - audit why the minimal repro in
-     `/home/yoshitsugu/src/github.com/yoshitsugu/goby/examples/bugs/runtime_read_list_length_codegen.gb`
-     is rejected as `stdlib declaration could not be lowered to backend IR`.
-   - treat `goby/list.length` as an ordinary language-visible stdlib declaration for this track;
-     do not introduce a one-off `list.length`-only lowering path as a bug fix.
-   - make the general-lowering path lower `goby/list.length` successfully in runtime-`Read`
-     programs, with any diagnostic cleanup treated only as supporting work toward that capability.
-   - add regressions covering:
-     - `length [1, 2]` through a helper in a runtime-`Read` program,
-     - the equivalent direct and alias-import variants if they currently take different paths.
-   - target outcome:
-     - the minimal `list.length` repro executes successfully rather than failing during codegen.
-   - step completion gate:
-     - `examples/bugs/runtime_read_list_length_codegen.gb` executes successfully via `goby run`.
-
-2. `H2` list-pattern tail correctness for nested-list consumers — **DONE** (stdlib name collision fix)
-   - investigate the runtime trap in
-     `/home/yoshitsugu/src/github.com/yoshitsugu/goby/examples/bugs/runtime_read_map_graphemes_length_trap.gb`.
-   - validate the Wasm lowering and emitter path for stdlib `length`, especially the `ListPattern`
-     tail reconstruction used by `[x, ..xxs]` recursion.
-   - keep the fix in generic list-pattern/lowering ownership rather than introducing a
-     `list.length`-specific fast path that would bypass the stdlib definition.
-   - check whether the fix belongs in:
-     - list-pattern lowering ownership,
-     - list tail allocation/copy logic in `crates/goby-wasm/src/gen_lower/emit.rs`,
-     - or another shared lowering/emission layer that affects list-pattern recursion generally.
-   - add regressions covering:
-     - `rows = map ["ab", "cd"] graphemes` followed by `length rows` in runtime-`Read`,
-     - nested-list indexing and `each` controls that currently succeed, to keep behavior split
-       visible,
-     - the AoC repro under `/home/yoshitsugu/src/github.com/yoshitsugu/aoc2025/04/solve.gb`.
-   - target outcome:
-     - nested-list consumers such as `length rows` no longer trap at runtime after successful Wasm
-       compilation.
-   - step completion gate:
-     - `examples/bugs/runtime_read_map_graphemes_length_trap.gb` executes successfully via
-       `goby run` without a Wasm trap.
-
-3. `H3` ANF lowering for non-value binary operands — **DONE**
-   - extend shared-IR lowering so binary operators can accept ordinary expressions on either side
-     by hoisting non-value operands into ANF temporaries before constructing `ValueExpr::BinOp`.
-   - add regressions covering:
-     - helper declarations whose binary operator right operand is a recursive call, such as
-       `checked + count_valid_roll ...`,
-     - mixed pure/non-pure operand combinations on both left and right,
-     - the minimal repro in
-       `/home/yoshitsugu/src/github.com/yoshitsugu/goby/examples/bugs/runtime_read_non_value_binop_operand.gb`,
-     - the current AoC repro under `/home/yoshitsugu/src/github.com/yoshitsugu/aoc2025/04/solve.gb`.
-   - target outcome:
-     - programs like the AoC solver no longer fail with
-       `binary operator right operand must be a pure value expression in shared IR today`,
-       and any remaining unsupported feature is reported directly from its true lowering boundary.
-   - step completion gate:
-     - `examples/bugs/runtime_read_non_value_binop_operand.gb` executes successfully via
-       `goby run`.
-
-Done criteria:
-
-- the minimal `list.length` runtime-`Read` repro no longer fails with the generic
-  `stdlib declaration could not be lowered to backend IR` message.
-- nested-list `length` consumers such as
-  `/home/yoshitsugu/src/github.com/yoshitsugu/goby/examples/bugs/runtime_read_map_graphemes_length_trap.gb`
-  no longer trap in Wasm after successful compilation.
-- helper declarations whose binary operator operands contain ordinary expressions no longer fail at
-  the shared-IR boundary with
-  `binary operator right operand must be a pure value expression in shared IR today`.
-- the AoC repro under `/home/yoshitsugu/src/github.com/yoshitsugu/aoc2025/04/solve.gb` compiles
-  and executes without the current Track H failures, or any remaining unsupported feature is
-  reported from its true lowering boundary.
-- runtime-I/O classification remains policy-only and does not accumulate new bug-specific shape
-  recognizers for these cases.
 
 Lint rules are ordered by ascending analysis cost. The cheapest infrastructure
 comes first to unblock the framework early; user-value ranking is noted in
@@ -850,7 +714,7 @@ Done when:
   - Defer until after D6c.
   - Keep as optional editor tooling follow-up rather than active architecture work.
 
-### 4.4 Review Follow-ups (Backlog)
+### 4.5 Review Follow-ups (Backlog)
 
 The following items were identified in a focused code review and are tracked as
 near/mid-term engineering debt after current active tracks.
@@ -883,7 +747,7 @@ Note:
 - Critical correctness items from the same review batch were already fixed:
   parser explicit early-return clarity and planning `u16` overflow fail-fast behavior.
 
-### 4.5 `Float` / Wasm `f64` Support
+### 4.6 `Float` / Wasm `f64` Support
 
 Goal: add a first-class `Float` type with predictable parser/typechecker/runtime/Wasm behavior.
 
@@ -939,7 +803,7 @@ Acceptance criteria:
 - diagnostics clearly distinguish `Int` from `Float`.
 - docs/examples/spec are updated in the same slice that lands behavior.
 
-### 4.6 Parking Lot (Needs Revalidation Before Implementation)
+### 4.7 Parking Lot (Needs Revalidation Before Implementation)
 
 - CLI `build` expansion details (`--target`, `--engine-compat`, verify modes).
 - CLI binary naming migration (`goby-cli` -> `goby`) final policy.
