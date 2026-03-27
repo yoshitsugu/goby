@@ -695,7 +695,7 @@ Design principles:
 
 Remaining execution plan:
 
-1. `H1` precise `list.length` general-lowering support — **PLANNED**
+1. `H1` precise `list.length` general-lowering support — **DONE** (resolved by H3)
    - audit why the minimal repro in
      `/home/yoshitsugu/src/github.com/yoshitsugu/goby/examples/bugs/runtime_read_list_length_codegen.gb`
      is rejected as `stdlib declaration could not be lowered to backend IR`.
@@ -711,7 +711,7 @@ Remaining execution plan:
    - step completion gate:
      - `examples/bugs/runtime_read_list_length_codegen.gb` executes successfully via `goby run`.
 
-2. `H2` list-pattern tail correctness for nested-list consumers — **PLANNED**
+2. `H2` list-pattern tail correctness for nested-list consumers — **DONE** (stdlib name collision fix)
    - investigate the runtime trap in
      `/home/yoshitsugu/src/github.com/yoshitsugu/goby/examples/bugs/runtime_read_map_graphemes_length_trap.gb`.
    - validate the Wasm lowering and emitter path for stdlib `length`, especially the `ListPattern`
@@ -734,7 +734,7 @@ Remaining execution plan:
      - `examples/bugs/runtime_read_map_graphemes_length_trap.gb` executes successfully via
        `goby run` without a Wasm trap.
 
-3. `H3` ANF lowering for non-value binary operands — **PLANNED**
+3. `H3` ANF lowering for non-value binary operands — **DONE**
    - extend shared-IR lowering so binary operators can accept ordinary expressions on either side
      by hoisting non-value operands into ANF temporaries before constructing `ValueExpr::BinOp`.
    - add regressions covering:
