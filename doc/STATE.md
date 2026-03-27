@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-27
+Last updated: 2026-03-28
 
 ## Current Focus
 
@@ -65,6 +65,13 @@ Last updated: 2026-03-27
   - current implementation targets ordinary nested `Expr::Call` chains; if future pipeline surface
     feeds function-valued arguments through a distinct validation path, extend Track E from there
     rather than special-casing symbols.
+- `List.fold` planning refined (2026-03-28):
+  - `doc/PLAN.md` now treats `goby/list.fold` as the next planned stdlib feature built on a
+    shared higher-order call path rather than a symbol-specific compiler/runtime exception.
+  - the plan now locks the intended observable semantics as left fold under the public name `fold`,
+    adds milestone checklists (`FOLD-M1`..`FOLD-M5`), and makes the completion criteria explicit.
+  - the next implementation work should start from `FOLD-M1`: lock callback shape, long-term API
+    rationale, and temporary callback/effect policy before changing lowering/runtime code.
 - WB-3B prep slice in progress (2026-03-24): `gen_lower/emit.rs` now has an
   `EffectEmitStrategy` boundary and `wasmfx-experimental` feature flag so future WasmFX work can
   replace the emit path without redesigning IR/lowering; current strategies are parity-tested to
@@ -161,6 +168,17 @@ All E1–E5 milestones complete. Callback positions such as `each xs println` ar
 `typecheck_unify.rs` handles named, qualified, generic, and partially applied callbacks uniformly.
 Regressions cover direct/qualified/named/generic/partial-application callback cases. Future
 non-`Expr::Call` caller paths can extend the same shared matcher boundary if needed.
+
+**Track fold (next planned work, 2026-03-28):**
+Advance `goby/list.fold` from plan to implementation, starting with `FOLD-M1`.
+Immediate objective:
+- lock the public callback shape and left-fold semantics in `doc/PLAN.md`
+- record the temporary callback/effect policy explicitly
+- only then add lower-level regressions for the underlying higher-order call-path gap
+Constraints:
+- no `fold`-specific intrinsic
+- no symbol-name special casing in lowering/runtime
+- no API choice justified only by a temporary backend quirk
 
 **Track runtime execution (2026-03-26):**
 The interactive-shell stdin hang is fixed for lambda-only `GeneralLowered` programs.
