@@ -28,6 +28,7 @@ mod typecheck_ambiguity;
 mod typecheck_annotation;
 mod typecheck_branch;
 mod typecheck_build;
+mod typecheck_call;
 mod typecheck_check;
 mod typecheck_effect;
 mod typecheck_effect_usage;

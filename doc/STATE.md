@@ -48,12 +48,23 @@ Last updated: 2026-03-27
   - runtime-`Read` modules that previously collapsed this failure into the generic
     runtime-I/O unsupported-shape error now classify and execute via `GeneralLowered`.
   - focused regressions landed in `goby-core::ir_lower` and `goby-wasm::lib` tests.
-- Typechecker follow-up identified (2026-03-25): ordinary calls still need shared
-  higher-order function-type validation.
-  - direct unknown bare calls are now rejected during typecheck.
-  - implicit-prelude `print` / `println` retain `String -> Unit`.
-  - remaining hole: ordinary higher-order calls can still accept mismatched callback
-    signatures (for example `each xs println` when `xs : List Int` once `each` is imported).
+- Track E first slice complete (2026-03-27): ordinary call validation now rejects resolved
+  higher-order callback mismatches during typecheck instead of deferring them to runtime.
+  - shared matcher extraction landed in `typecheck_unify.rs`; callback compatibility now reuses
+    fresh type-variable instantiation plus the existing substitution/unification machinery.
+  - ordinary `Expr::Call` chains now validate function-typed arguments in a dedicated
+    `typecheck_call` module, preserving the existing phase split (`ensure_known_call_targets_in_expr`
+    for unresolved calls, `check_expr` for inference).
+  - focused regressions now cover:
+    - `each [1, 2] println` rejection with a higher-order mismatch diagnostic,
+    - `each ["a", "b"] println` acceptance,
+    - `map [1, 2] println` rejection,
+    - qualified callback mismatch,
+    - generic callback acceptance,
+    - partially applied callback mismatch.
+  - current implementation targets ordinary nested `Expr::Call` chains; if future pipeline surface
+    feeds function-valued arguments through a distinct validation path, extend Track E from there
+    rather than special-casing symbols.
 - WB-3B prep slice in progress (2026-03-24): `gen_lower/emit.rs` now has an
   `EffectEmitStrategy` boundary and `wasmfx-experimental` feature flag so future WasmFX work can
   replace the emit path without redesigning IR/lowering; current strategies are parity-tested to
@@ -143,11 +154,12 @@ Completed slices:
 - focused `goby-wasm` regression coverage now locks the `split -> map(graphemes) -> recursive
   interpolated println` shape.
 
-**Track E (next after Track H front slices):**
+**Track E (active follow-up after first slice, 2026-03-27):**
 Higher-order function-type checking.
-First target remains to make callback positions such as `each xs println` fail with a
-resolved-name-but-wrong-function-type diagnostic (`Int -> Unit` required,
-`String -> Unit` found) rather than relying on ad hoc `println` checks.
+The primary user-visible hole is closed for ordinary call chains: callback positions such as
+`each xs println` now fail with a resolved-name-but-wrong-function-type diagnostic instead of
+relying on runtime behavior. Remaining follow-up, if needed, is to extend the same shared matcher
+boundary to any future non-`Expr::Call` caller paths that can feed function-valued arguments.
 
 **Track runtime execution (2026-03-26):**
 The interactive-shell stdin hang is fixed for lambda-only `GeneralLowered` programs.

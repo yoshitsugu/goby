@@ -1844,6 +1844,127 @@ main =
     }
 
     #[test]
+    fn rejects_incompatible_named_callback_for_each() {
+        let source = "\
+import goby/list ( each )
+main : Unit -> Unit can Print
+main =
+  each [1, 2] println
+";
+        let module = parse_module(source).expect("should parse");
+        let err =
+            typecheck_module(&module).expect_err("println should be rejected as an Int callback");
+        assert!(
+            err.message.contains("higher-order argument type mismatch"),
+            "unexpected error: {err}"
+        );
+        assert!(
+            err.message.contains("Int -> Unit"),
+            "unexpected error: {err}"
+        );
+        assert!(
+            err.message.contains("println : String -> Unit"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn accepts_compatible_named_callback_for_each() {
+        let source = "\
+import goby/list ( each )
+main : Unit -> Unit can Print
+main =
+  each [\"a\", \"b\"] println
+";
+        let module = parse_module(source).expect("should parse");
+        typecheck_module(&module).expect("println should typecheck as a String callback");
+    }
+
+    #[test]
+    fn rejects_incompatible_named_callback_for_map() {
+        let source = "\
+import goby/list ( map )
+render : Unit -> List Unit
+render =
+  map [1, 2] println
+";
+        let module = parse_module(source).expect("should parse");
+        let err = typecheck_module(&module)
+            .expect_err("println should be rejected as an Int map callback");
+        assert!(
+            err.message.contains("higher-order argument type mismatch"),
+            "unexpected error: {err}"
+        );
+        assert!(
+            err.message.contains("println : String -> Unit"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn rejects_incompatible_qualified_callback_for_map() {
+        let source = "\
+import goby/list ( map )
+import goby/string as s
+render : Unit -> List Int
+render =
+  map [1, 2] s.length
+";
+        let module = parse_module(source).expect("should parse");
+        let err = typecheck_module(&module)
+            .expect_err("qualified callback should be rejected when its function type mismatches");
+        assert!(
+            err.message.contains("higher-order argument type mismatch"),
+            "unexpected error: {err}"
+        );
+        assert!(
+            err.message.contains("s.length : String -> Int"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn accepts_generic_named_callback_per_call_site() {
+        let source = "\
+import goby/list ( map )
+id : a -> a
+id x = x
+render : Unit -> List Int
+render =
+  map [1, 2] id
+";
+        let module = parse_module(source).expect("should parse");
+        typecheck_module(&module).expect("generic callback should instantiate per call site");
+    }
+
+    #[test]
+    fn rejects_partially_applied_named_callback_when_remaining_function_type_mismatches() {
+        let source = "\
+import goby/list ( map )
+prefix : String -> String -> String
+prefix p value = \"${p}${value}\"
+render : Unit -> List String
+render =
+  map [1, 2] (prefix \"n=\")
+";
+        let module = parse_module(source).expect("should parse");
+        let err = typecheck_module(&module)
+            .expect_err("remaining partially-applied callback type should mismatch");
+        assert!(
+            err.message.contains("higher-order argument type mismatch"),
+            "unexpected error: {err}"
+        );
+        assert!(
+            err.message.contains("required `Int ->"),
+            "unexpected error: {err}"
+        );
+        assert!(
+            err.message.contains("String -> String"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
     fn typechecks_list_each_with_plain_import() {
         let source = "\
 import goby/list

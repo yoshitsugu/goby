@@ -3,6 +3,12 @@ use std::collections::HashMap;
 use crate::typecheck_check::effect_candidates_for_operation;
 use crate::typecheck_env::{Ty, TypeEnv, TypeSubst};
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct FunctionArgMismatch {
+    pub(crate) required: Ty,
+    pub(crate) actual: Ty,
+}
+
 pub(crate) fn apply_type_substitution(ty: &Ty, subst: &TypeSubst, env: &TypeEnv) -> Ty {
     let resolved = env.resolve_alias(ty, 0);
     match resolved {
@@ -108,7 +114,7 @@ pub(crate) fn unify_types_with_subst(
     }
 }
 
-fn instantiate_ty_with_fresh_type_vars(
+pub(crate) fn instantiate_ty_with_fresh_type_vars(
     ty: &Ty,
     mapping: &mut HashMap<String, String>,
     next_id: &mut usize,
@@ -152,6 +158,32 @@ fn instantiate_ty_with_fresh_type_vars(
         },
         Ty::Int | Ty::Bool | Ty::Str | Ty::Unit | Ty::Unknown => ty.clone(),
     }
+}
+
+pub(crate) fn instantiate_ty_with_fresh_type_vars_for_call_site(
+    ty: &Ty,
+    next_id: &mut usize,
+) -> Ty {
+    let mut mapping = HashMap::new();
+    instantiate_ty_with_fresh_type_vars(ty, &mut mapping, next_id)
+}
+
+pub(crate) fn match_function_argument_type(
+    required: &Ty,
+    actual: &Ty,
+    subst: &mut TypeSubst,
+    env: &TypeEnv,
+    next_id: &mut usize,
+) -> Result<(), FunctionArgMismatch> {
+    let required = apply_type_substitution(required, subst, env);
+    let actual = instantiate_ty_with_fresh_type_vars_for_call_site(actual, next_id);
+    if unify_types_with_subst(&required, &actual, subst, env) {
+        return Ok(());
+    }
+    Err(FunctionArgMismatch {
+        required,
+        actual: apply_type_substitution(&actual, subst, env),
+    })
 }
 
 pub(crate) fn instantiate_handler_clause_signature(
@@ -212,5 +244,66 @@ pub(crate) fn type_hole_conflict_note(expected: &Ty) -> &'static str {
         " (anonymous type-hole `_` constraints conflict)"
     } else {
         ""
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use super::*;
+
+    fn empty_env() -> TypeEnv {
+        TypeEnv {
+            globals: HashMap::new(),
+            locals: HashMap::new(),
+            type_aliases: HashMap::new(),
+            record_types: HashMap::new(),
+        }
+    }
+
+    #[test]
+    fn matches_generic_callback_by_instantiating_actual_type() {
+        let env = empty_env();
+        let required = Ty::Fun {
+            params: vec![Ty::Int],
+            result: Box::new(Ty::Int),
+        };
+        let actual = Ty::Fun {
+            params: vec![Ty::Var("a".to_string())],
+            result: Box::new(Ty::Var("a".to_string())),
+        };
+        let mut subst = TypeSubst::new();
+        let mut next_id = 0;
+
+        let result =
+            match_function_argument_type(&required, &actual, &mut subst, &env, &mut next_id);
+
+        assert!(
+            result.is_ok(),
+            "generic callback should instantiate successfully"
+        );
+    }
+
+    #[test]
+    fn reports_required_and_actual_function_types_on_mismatch() {
+        let env = empty_env();
+        let required = Ty::Fun {
+            params: vec![Ty::Int],
+            result: Box::new(Ty::Unit),
+        };
+        let actual = Ty::Fun {
+            params: vec![Ty::Str],
+            result: Box::new(Ty::Unit),
+        };
+        let mut subst = TypeSubst::new();
+        let mut next_id = 0;
+
+        let mismatch =
+            match_function_argument_type(&required, &actual, &mut subst, &env, &mut next_id)
+                .expect_err("incompatible callback types should mismatch");
+
+        assert_eq!(mismatch.required, required);
+        assert_eq!(mismatch.actual, actual);
     }
 }
