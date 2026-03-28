@@ -3,6 +3,7 @@ use crate::typecheck::TypecheckError;
 use crate::typecheck_check::check_expr;
 use crate::typecheck_env::{Ty, TypeEnv, TypeSubst};
 use crate::typecheck_render::ty_name;
+use crate::typecheck_span::{best_available_expr_span, best_available_name_use_span};
 use crate::typecheck_unify::{
     apply_type_substitution, instantiate_ty_with_fresh_type_vars_for_call_site,
     match_function_argument_type, unify_types_with_subst,
@@ -152,7 +153,7 @@ fn validate_call_chain(expr: &Expr, env: &TypeEnv, decl_name: &str) -> Result<()
                 if let Some(name) = unresolved_callable_name(arg, env) {
                     return Err(TypecheckError {
                         declaration: Some(decl_name.to_string()),
-                        span: None,
+                        span: best_available_name_use_span(arg),
                         message: format!("unknown function or constructor `{}`", name),
                     });
                 }
@@ -172,7 +173,7 @@ fn validate_call_chain(expr: &Expr, env: &TypeEnv, decl_name: &str) -> Result<()
                 };
                 return Err(TypecheckError {
                     declaration: Some(decl_name.to_string()),
-                    span: None,
+                    span: best_available_expr_span(arg),
                     message: format!(
                         "higher-order argument type mismatch: required `{}` but found `{}`",
                         ty_name(&mismatch.required),

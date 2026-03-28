@@ -9,6 +9,7 @@ use crate::typecheck_check::check_expr;
 use crate::typecheck_effect_usage::check_unhandled_effects_in_expr;
 use crate::typecheck_env::{EffectMap, Ty, TypeEnv};
 use crate::typecheck_render::ty_name;
+use crate::typecheck_span::best_available_name_use_span;
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn check_body_stmts(
@@ -235,7 +236,7 @@ fn ensure_known_call_targets_in_expr(
                 if callee_ty == Ty::Unknown {
                     return Err(TypecheckError {
                         declaration: Some(decl_name.to_string()),
-                        span: None, // expr span not yet available
+                        span: best_available_name_use_span(callee),
                         message: format!("unknown function or constructor `{}`", name),
                     });
                 }
@@ -253,7 +254,7 @@ fn ensure_known_call_targets_in_expr(
             if env.lookup(callee) == Ty::Unknown {
                 return Err(TypecheckError {
                     declaration: Some(decl_name.to_string()),
-                    span: None, // expr span not yet available
+                    span: best_available_name_use_span(expr),
                     message: format!("unknown function or constructor `{}`", callee),
                 });
             }

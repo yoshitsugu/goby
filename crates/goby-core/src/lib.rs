@@ -36,6 +36,7 @@ mod typecheck_env;
 mod typecheck_phase;
 mod typecheck_render;
 mod typecheck_resume;
+mod typecheck_span;
 mod typecheck_stmt;
 mod typecheck_types;
 mod typecheck_unify;

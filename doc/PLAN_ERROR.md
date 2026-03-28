@@ -321,17 +321,43 @@ Done when:
 
 ### Milestone ER1: Expression-span extraction foundation
 
-- [ ] ER1.1 Audit parser construction of `Expr::Var`, `Expr::Qualified`,
+- [x] ER1.1 Audit parser construction of `Expr::Var`, `Expr::Qualified`,
   `Expr::Call`, and pipeline-related forms for usable spans.
-- [ ] ER1.2 Add shared helpers in `goby-core` for:
+- [x] ER1.2 Add shared helpers in `goby-core` for:
   - extracting the narrowest available expression span,
   - extracting identifier/qualified-name spans where available.
-- [ ] ER1.3 Add unit tests for those helpers before migrating error sites.
-- [ ] ER1.4 Lock the pipeline-callee span ownership decision:
+- [x] ER1.3 Add unit tests for those helpers before migrating error sites.
+- [x] ER1.4 Lock the pipeline-callee span ownership decision:
   - if pipeline callee spans require AST/data-model changes that affect the
     long-term span architecture, include that structural work in this track,
   - otherwise record pipeline callee spans as an explicitly deferred local
     follow-up after the core unresolved-name path is stable.
+
+ER1 status locked on 2026-03-28:
+
+- Shared helper layer added in `crates/goby-core/src/typecheck_span.rs`:
+  - `direct_expr_span(...)`
+  - `best_available_name_use_span(...)`
+  - `best_available_expr_span(...)`
+- Focused tests now lock the current parser/span reality:
+  - manually-constructed `Expr::Var` / `Expr::Qualified` / `Expr::Call` spans are
+    consumed by the helper layer when present,
+  - `parse_body_stmts("map xs")` and `parse_body_stmts("list.map xs")` keep the
+    outer statement span but still leave nested callee spans as `None`.
+- Current parser audit result:
+  - `parser_expr.rs` can construct `Expr::Var`, `Expr::Qualified`, and
+    `Expr::Call` with span fields, but ordinary string-level parsing currently
+    populates them as `None`,
+  - `parser_stmt.rs` records statement spans and some outer multiline-call spans,
+    but does not yet attach token-precise spans to nested identifier/qualified
+    callee nodes produced inside statement parsing,
+  - `Expr::Pipeline` stores `callee: String` with no span field.
+- Pipeline-callee decision:
+  - precise pipeline-callee underlining requires an AST/data-model change,
+  - that structural work is explicitly deferred until after the non-pipeline
+    unresolved-name path is stable,
+  - ER2 may use the shared helper for pipeline diagnostics, but `span: None` is
+    an expected temporary outcome there until pipeline callee span ownership is added.
 
 Constraints:
 
