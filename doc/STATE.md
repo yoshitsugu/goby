@@ -96,6 +96,12 @@ fallback/runtime-output path no longer carries a source-level legacy `string.spl
 
 ## Immediate Next Steps
 
+**Track ER: Compiler Error Reporting (next active track):**
+Precise unresolved-name / import diagnostics. See `doc/PLAN_ERROR.md` for the full plan.
+Start from ER0: lock the diagnostic ownership model and enumerate the first unresolved-name
+call sites to migrate before touching any implementation code.
+Architecture constraint: `goby-core` owns diagnosis; CLI and LSP are pure renderers.
+
 **Track stdlib (C4-S1) — complete (2026-03-24):**
 `cargo run -p goby-cli -- check stdlib/goby/string.gb` now succeeds.
 The typechecker accepts the required `List String` state initialization shape and preserves

@@ -589,7 +589,28 @@ Note:
 - Critical correctness items from the same review batch were already fixed:
   parser explicit early-return clarity and planning `u16` overflow fail-fast behavior.
 
-### 4.5 `Float` / Wasm `f64` Support
+### 4.5 Track ER: Compiler Error Reporting
+
+See `doc/PLAN_ERROR.md` for the full plan, design principles, and milestone details.
+
+**Goal:** Precise unresolved-name / import diagnostics in both CLI and LSP.
+Architecture-first: `goby-core` owns span production and diagnosis; CLI/LSP are pure renderers.
+
+Milestones (all `[ ]` not started):
+
+- [ ] ER0: Plan and boundary lock — confirm diagnostic ownership model, enumerate first migration sites
+- [ ] ER1: Expression-span extraction foundation — shared helpers for narrowest expression/identifier span
+- [ ] ER2: Unresolved bare-name diagnostics at use sites — `map` not imported → precise token underline
+- [ ] ER3: Qualified-name and ambiguity diagnostics — `module.name` unresolved, use-site ambiguity
+- [ ] ER4: Import declaration spans — `ImportDecl` span metadata; underline `maap` in `import goby/list ( maap )`
+- [ ] ER5: Shared diagnostic-construction cleanup — common constructors; eliminate `span: None` in covered families
+- [ ] ER6: CLI rendering quality lock — fixture tests for multi-character underline on unresolved-name spans
+- [ ] ER7: LSP range parity lock — LSP range tests for unresolved name, qualified name, import typo
+- [ ] ER8: Track closure — partition remaining `expr span not yet available` sites into done vs deferred
+
+Entry point: start from ER0 (lock the plan and enumerate call sites) before any implementation.
+
+### 4.6 `Float` / Wasm `f64` Support
 
 Goal: add a first-class `Float` type with predictable parser/typechecker/runtime/Wasm behavior.
 
