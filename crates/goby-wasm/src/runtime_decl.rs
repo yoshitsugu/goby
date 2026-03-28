@@ -505,6 +505,8 @@ impl<'m> RuntimeOutputResolver<'m> {
         if !accepts_unit_arg_as_zero_arity {
             fn_locals.store(&decl.params[0], arg_val);
         }
+        // Pass caller's callables so imported side-effect decls can resolve
+        // the same named functions that the caller can see.
         let fn_callables = Rc::clone(callables);
         let filtered_stmts: Vec<Stmt> = decl
             .stmts
