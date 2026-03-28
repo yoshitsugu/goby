@@ -575,7 +575,7 @@ Based on `examples/*.gb`:
         - the temporary callback/effect policy is explicitly recorded,
         - the chosen API is justified in long-term library-design terms, not only by immediate backend convenience,
         - no implementation begins before this choice is written down.
-    - [ ] `FOLD-M2` executable failure baseline
+    - [x] `FOLD-M2` executable failure baseline
       - add focused tests that capture the current failure mode for the chosen callback shape.
       - keep these tests below the `fold` surface first: prove the underlying function-value call
         shape is the real blocker.
@@ -588,7 +588,7 @@ Based on `examples/*.gb`:
         - the failing path is reproducible in tests,
         - the failure is localized to the shared higher-order execution path rather than the stdlib wrapper,
         - the baseline suite demonstrates why a stdlib-only `fold` addition would still fail today.
-    - [ ] `FOLD-M3` shared higher-order call-path extension
+    - [x] `FOLD-M3` shared higher-order call-path extension
       - extend the lowering/runtime boundary so the chosen callback shape executes through one reusable path.
       - keep ownership narrow:
         - callable-shape analysis belongs in the lowering planning layer,
@@ -603,7 +603,7 @@ Based on `examples/*.gb`:
         - the new path is described as general higher-order support, not as a `fold` exception,
         - no backend/compiler component requires symbol-name knowledge of `fold`,
         - the implementation boundary is documented clearly enough that a future HOF can reuse it without copying logic.
-    - [ ] `FOLD-M4` stdlib API addition
+    - [x] `FOLD-M4` stdlib API addition
       - add `fold` to `stdlib/goby/list.gb` only after `FOLD-M3` is stable.
       - define the implementation in ordinary Goby stdlib code, not as a compiler-owned intrinsic.
       - document the selected public signature and accumulator/callback argument order.
@@ -612,7 +612,7 @@ Based on `examples/*.gb`:
         - `fold` exists as normal stdlib surface,
         - no compiler/runtime layer needs to know the `fold` symbol name to execute it,
         - the language/spec docs state the left-fold semantics and any temporary callback/effect limitations explicitly.
-    - [ ] `FOLD-M5` semantic and regression coverage
+    - [x] `FOLD-M5` semantic and regression coverage
       - add typecheck and execution coverage for representative user-facing uses:
         - integer sum,
         - boolean accumulation,
@@ -631,13 +631,13 @@ Based on `examples/*.gb`:
     - [x] left-fold semantics and callback argument order documented
     - [x] callback shape chosen and documented
     - [x] temporary callback/effect policy documented
-    - [ ] lower-level failing regressions added before backend work
-    - [ ] shared higher-order lowering/runtime path generalized
-    - [ ] `stdlib/goby/list.gb` exports `fold`
-    - [ ] language spec updated after API lock
-    - [ ] user-visible semantics and limitations documented
-    - [ ] examples and integration coverage added
-    - [ ] full validation (`cargo check`, `cargo test`) completed
+    - [x] lower-level failing regressions added before backend work
+    - [x] shared higher-order lowering/runtime path generalized
+    - [x] `stdlib/goby/list.gb` exports `fold`
+    - [x] language spec updated after API lock
+    - [x] user-visible semantics and limitations documented
+    - [x] examples and integration coverage added
+    - [x] full validation (`cargo check`, `cargo test`) completed
 
 ### 2.5 Runtime / Compiler Scope (MVP)
 

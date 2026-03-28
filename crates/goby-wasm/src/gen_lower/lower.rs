@@ -456,6 +456,13 @@ fn lower_comp_inner(
                     // `name` is a local variable holding a TAG_FUNC tagged i64 handle.
                     // Stack order: push args left-to-right, then push callee, then IndirectCall.
                     // The arity is derived from the number of args in the flat IR call.
+                    if args.is_empty() {
+                        return Err(LowerError::UnsupportedForm {
+                            node: format!(
+                                "IndirectCall via local var '{name}' with zero arguments is not supported"
+                            ),
+                        });
+                    }
                     let arity = args.len() as u8;
                     let mut instrs = Vec::new();
                     for arg in args {

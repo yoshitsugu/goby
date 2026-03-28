@@ -1,0 +1,18 @@
+import goby/list ( fold )
+
+add : Int -> Int -> Int
+add a b = a + b
+
+sub : Int -> Int -> Int
+sub a b = a - b
+
+main : Unit -> Unit can Print
+main =
+  sum = fold [1, 2, 3, 4, 5] 0 add
+  println "sum = ${sum}"
+
+  diff = fold [1, 2, 3] 0 sub
+  println "left-fold sub [1,2,3] from 0 = ${diff}"
+
+  empty_result = fold [] 99 add
+  println "fold [] 99 add = ${empty_result}"

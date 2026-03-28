@@ -1622,11 +1622,7 @@ main =
 
         let output = execute_runtime_module_with_stdin(&module, Some(String::new()))
             .expect("2-arg IndirectCall must execute");
-        assert_eq!(
-            output.as_deref(),
-            Some("7\n"),
-            "apply_binary 3 4 add → 7"
-        );
+        assert_eq!(output.as_deref(), Some("7\n"), "apply_binary 3 4 add → 7");
     }
 
     /// A named 2-arg callback via DeclCall path still works (regression guard).
@@ -1649,10 +1645,144 @@ main =
 
         let output = execute_runtime_module_with_stdin(&module, Some(String::new()))
             .expect("DeclCall 2-arg must execute");
+        assert_eq!(output.as_deref(), Some("15\n"), "add 10 5 → 15");
+    }
+
+    // --- FOLD-M5: stdlib fold semantic coverage ---
+
+    /// fold [1,2,3] 0 add → 6  (integer sum, named callback)
+    #[test]
+    fn fold_m5_integer_sum_named_callback() {
+        use goby_core::parse_module;
+        let module = parse_module(
+            r#"
+import goby/list ( fold )
+
+add : Int -> Int -> Int
+add a b = a + b
+
+main : Unit -> Unit can Print, Read
+main =
+  _ = read()
+  result = fold [1, 2, 3] 0 add
+  println "${result}"
+"#,
+        )
+        .expect("parse should succeed");
+
+        let output = execute_runtime_module_with_stdin(&module, Some(String::new()))
+            .expect("fold integer sum must execute");
+        assert_eq!(output.as_deref(), Some("6\n"), "fold [1,2,3] 0 add → 6");
+    }
+
+    /// fold [] 42 add → 42  (empty list returns initial accumulator)
+    #[test]
+    fn fold_m5_empty_list_returns_init() {
+        use goby_core::parse_module;
+        let module = parse_module(
+            r#"
+import goby/list ( fold )
+
+add : Int -> Int -> Int
+add a b = a + b
+
+main : Unit -> Unit can Print, Read
+main =
+  _ = read()
+  result = fold [] 42 add
+  println "${result}"
+"#,
+        )
+        .expect("parse should succeed");
+
+        let output = execute_runtime_module_with_stdin(&module, Some(String::new()))
+            .expect("fold empty list must execute");
+        assert_eq!(output.as_deref(), Some("42\n"), "fold [] 42 add → 42");
+    }
+
+    /// fold [10] 0 add → 10  (single-element list)
+    #[test]
+    fn fold_m5_single_element_list() {
+        use goby_core::parse_module;
+        let module = parse_module(
+            r#"
+import goby/list ( fold )
+
+add : Int -> Int -> Int
+add a b = a + b
+
+main : Unit -> Unit can Print, Read
+main =
+  _ = read()
+  result = fold [10] 0 add
+  println "${result}"
+"#,
+        )
+        .expect("parse should succeed");
+
+        let output = execute_runtime_module_with_stdin(&module, Some(String::new()))
+            .expect("fold single element must execute");
+        assert_eq!(output.as_deref(), Some("10\n"), "fold [10] 0 add → 10");
+    }
+
+    /// Non-commutative operation: fold [1,2,3] 0 sub verifies left-to-right accumulation.
+    /// Expected: ((0 - 1) - 2) - 3 = -6
+    #[test]
+    fn fold_m5_noncommutative_left_fold_order() {
+        use goby_core::parse_module;
+        let module = parse_module(
+            r#"
+import goby/list ( fold )
+
+sub : Int -> Int -> Int
+sub a b = a - b
+
+main : Unit -> Unit can Print, Read
+main =
+  _ = read()
+  result = fold [1, 2, 3] 0 sub
+  println "${result}"
+"#,
+        )
+        .expect("parse should succeed");
+
+        let output = execute_runtime_module_with_stdin(&module, Some(String::new()))
+            .expect("fold non-commutative must execute");
+        // ((0 - 1) - 2) - 3 = -6
+        assert_eq!(
+            output.as_deref(),
+            Some("-6\n"),
+            "fold [1,2,3] 0 sub → -6 (left-fold order)"
+        );
+    }
+
+    /// fold result is correct when used as input to `each` (integration with other HOFs).
+    #[test]
+    fn fold_m5_fold_result_used_with_each() {
+        use goby_core::parse_module;
+        let module = parse_module(
+            r#"
+import goby/list ( fold, each )
+
+add : Int -> Int -> Int
+add a b = a + b
+
+main : Unit -> Unit can Print, Read
+main =
+  _ = read()
+  xs = [1, 2, 3, 4, 5]
+  total = fold xs 0 add
+  println "${total}"
+"#,
+        )
+        .expect("parse should succeed");
+
+        let output = execute_runtime_module_with_stdin(&module, Some(String::new()))
+            .expect("fold + each integration must execute");
         assert_eq!(
             output.as_deref(),
             Some("15\n"),
-            "add 10 5 → 15"
+            "fold [1,2,3,4,5] 0 add → 15"
         );
     }
 }
