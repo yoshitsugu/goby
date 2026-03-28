@@ -183,27 +183,24 @@ struct EmitContext {
 }
 
 impl EmitContext {
-    fn new() -> Self {
-        Self {
-            locals: HashMap::new(),
-            next_local: 0,
-            decl_func_indices: HashMap::new(),
-            decl_table_slots: HashMap::new(),
-            indirect_call_type_idx_1: None,
-            indirect_call_type_idx_2: None,
-            record_ctor_tags: HashMap::new(),
-        }
-    }
-
-    fn with_decl_indices(decl_func_indices: HashMap<String, u32>) -> Self {
+    /// Build an `EmitContext` seeded with the module-level lookup tables shared across
+    /// all function bodies (main and every aux decl).  `locals` starts empty; callers
+    /// that need to pre-register Wasm function parameters insert them afterwards.
+    fn with_module_tables(
+        decl_func_indices: HashMap<String, u32>,
+        decl_table_slots: HashMap<String, u32>,
+        indirect_call_type_idx_1: Option<u32>,
+        indirect_call_type_idx_2: Option<u32>,
+        record_ctor_tags: HashMap<String, u32>,
+    ) -> Self {
         Self {
             locals: HashMap::new(),
             next_local: 0,
             decl_func_indices,
-            decl_table_slots: HashMap::new(),
-            indirect_call_type_idx_1: None,
-            indirect_call_type_idx_2: None,
-            record_ctor_tags: HashMap::new(),
+            decl_table_slots,
+            indirect_call_type_idx_1,
+            indirect_call_type_idx_2,
+            record_ctor_tags,
         }
     }
 
@@ -238,12 +235,6 @@ impl EmitContext {
                     "gen_lower/emit: unknown declaration '{decl_name}' in PushFuncHandle"
                 ),
             })
-    }
-
-    /// Reset local state between functions (keep shared module-level state).
-    fn reset_locals(&mut self) {
-        self.locals.clear();
-        self.next_local = 0;
     }
 
     fn record_ctor_tag(&self, constructor: &str) -> Result<u32, CodegenError> {
@@ -681,7 +672,9 @@ pub(crate) fn emit_general_module_with_aux_and_options(
     };
     let indirect_call_type_idx_2: Option<u32> = if uses_indirect_call_2 {
         let idx = types.len();
-        types.ty().function([ValType::I64, ValType::I64], [ValType::I64]);
+        types
+            .ty()
+            .function([ValType::I64, ValType::I64], [ValType::I64]);
         Some(idx)
     } else {
         None
@@ -800,15 +793,13 @@ pub(crate) fn emit_general_module_with_aux_and_options(
             locals_vec.push((main_i32_scratch_count, ValType::I32));
         }
         let mut function = Function::new(locals_vec);
-        let mut ctx = EmitContext {
-            locals: HashMap::new(),
-            next_local: 0,
-            decl_func_indices: decl_func_indices.clone(),
-            decl_table_slots: decl_table_slots.clone(),
+        let mut ctx = EmitContext::with_module_tables(
+            decl_func_indices.clone(),
+            decl_table_slots.clone(),
             indirect_call_type_idx_1,
             indirect_call_type_idx_2,
-            record_ctor_tags: record_ctor_tags.clone(),
-        };
+            record_ctor_tags.clone(),
+        );
         emit_instrs(
             &mut function,
             &mut ctx,
@@ -850,15 +841,13 @@ pub(crate) fn emit_general_module_with_aux_and_options(
 
         // Params occupy local indices 0..param_names.len()-1 in Wasm; body locals follow.
         // Pre-register param names in EmitContext so LoadLocal/StoreLocal resolve correctly.
-        let mut ctx = EmitContext {
-            locals: HashMap::new(),
-            next_local: 0,
-            decl_func_indices: decl_func_indices.clone(),
-            decl_table_slots: decl_table_slots.clone(),
+        let mut ctx = EmitContext::with_module_tables(
+            decl_func_indices.clone(),
+            decl_table_slots.clone(),
             indirect_call_type_idx_1,
             indirect_call_type_idx_2,
-            record_ctor_tags: record_ctor_tags.clone(),
-        };
+            record_ctor_tags.clone(),
+        );
         for param_name in &decl.param_names {
             // Wasm assigns local indices for params in declaration order before any body locals.
             // We mirror that: declare each param name with an explicit local index.

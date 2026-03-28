@@ -1785,4 +1785,41 @@ main =
             "fold [1,2,3,4,5] 0 add → 15"
         );
     }
+
+    /// Both arity-1 and arity-2 IndirectCall in the same module.
+    /// Ensures `with_module_tables` seeds both indirect_call_type_idx_1 and _2 correctly
+    /// and that swapping the two Option<u32> arguments would be caught.
+    #[test]
+    fn refactor_both_indirect_call_arities_in_same_module() {
+        use goby_core::parse_module;
+        let module = parse_module(
+            r#"
+import goby/list ( map, fold )
+
+double : Int -> Int
+double x = x + x
+
+add : Int -> Int -> Int
+add a b = a + b
+
+main : Unit -> Unit can Print, Read
+main =
+  _ = read()
+  doubled = map [1, 2, 3] double
+  total = fold doubled 0 add
+  println "${total}"
+"#,
+        )
+        .expect("parse should succeed");
+
+        // map uses arity-1 IndirectCall; fold uses arity-2 IndirectCall.
+        // double [1,2,3] = [2,4,6]; fold sum = 12.
+        let output = execute_runtime_module_with_stdin(&module, Some(String::new()))
+            .expect("mixed arity IndirectCall must execute");
+        assert_eq!(
+            output.as_deref(),
+            Some("12\n"),
+            "map double then fold add: [1,2,3] → [2,4,6] → 12"
+        );
+    }
 }
