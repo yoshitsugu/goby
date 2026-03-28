@@ -6,3 +6,6 @@ members = [
   "crates/goby-wasm",
   "crates/goby-lsp",
 ]
+
+[patch.crates-io]
+crypto-common = { path = "vendor/crypto-common-0.1.7" }

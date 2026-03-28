@@ -72,6 +72,14 @@ Last updated: 2026-03-28
     adds milestone checklists (`FOLD-M1`..`FOLD-M5`), and makes the completion criteria explicit.
   - the next implementation work should start from `FOLD-M1`: lock callback shape, long-term API
     rationale, and temporary callback/effect policy before changing lowering/runtime code.
+- Dependency lock stabilized (2026-03-28):
+  - workspace now patches `crypto-common 0.1.7` from `vendor/crypto-common-0.1.7` so its
+    `generic-array` pin can move from `0.14.7` to `0.14.9`.
+  - `Cargo.lock` now resolves `generic-array v0.14.9`, removing the repeated
+    `Adding generic-array v0.14.7 (available: v0.14.9)` notice during lockfile refresh.
+  - current tradeoff: the vendored patch emits upstream deprecation warnings about
+    `generic-array 1.x`, but `cargo check` / `cargo test` remain green and no Goby code depends on
+    this crate directly.
 - WB-3B prep slice in progress (2026-03-24): `gen_lower/emit.rs` now has an
   `EffectEmitStrategy` boundary and `wasmfx-experimental` feature flag so future WasmFX work can
   replace the emit path without redesigning IR/lowering; current strategies are parity-tested to
