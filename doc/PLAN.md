@@ -461,183 +461,13 @@ Based on `examples/*.gb`:
   - keep canonical map behavior in `stdlib/goby/list.gb` (`list.map` export path).
   - replace internal/builtin-path map callsites with stdlib module usage where possible.
   - after migration, trim builtin-only `map` special handling so runtime/compiler has a single semantics source.
-- `List.fold` addition (planned):
-  - Goal:
-    - add a left fold as `fold` to `stdlib/goby/list.gb` so users can express accumulator-style traversals
-      without relying on mutable closure capture.
-    - support representative workflows such as counting, summation, and state-threading over lists.
-  - Locked semantic intent for this feature:
-    - the public name is `fold`, but the semantics are specifically left-fold semantics.
-    - for `fold xs init f`, evaluation order must be left-to-right over the list elements.
-    - the callback contract must be accumulator-first and element-second.
-    - the observable meaning to preserve is:
-      - `fold [] init f == init`
-      - `fold [x1, x2, x3] init f == f (f (f init x1) x2) x3`
-    - the callback must be invoked exactly once per list element in source order.
-  - Motivation:
-    - current Goby/Wasm lowering supports non-capturing unary function values well enough for
-      `list.each` / `list.map`, but that is not yet sufficient to express a practical fold API end-to-end.
-    - closure capture remains a separate future track; `fold` should land first as the idiomatic
-      immutable accumulation tool.
-  - Current blocker to resolve first:
-    - this is not blocked on a new intrinsic.
-    - it is blocked on general higher-order call support in the Wasm lowering/runtime path:
-      callback invocation currently assumes a narrower function-value calling shape than a useful
-      `fold` callback requires.
-    - experiments showed that a stdlib-only implementation is not enough today:
-      - curried callback shape `b -> a -> b` traps/fails in the current indirect-call path,
-      - tuple-packed callback shape `((b, a) -> b)` typechecks but does not yet execute correctly
-        through the current higher-order Wasm path.
-  - Design constraints:
-    - do not add a dedicated `fold` intrinsic unless the generalized higher-order call path proves
-      impossible or disproportionately complex.
-    - prefer a stdlib-defined `fold` over a compiler-owned special case.
-    - keep this work separate from full closure-capture support; immutable fold-style accumulation is the
-      immediate user need.
-    - do not patch only the `goby/list.fold` call path.
-    - any backend/runtime change introduced here must be phrased as a reusable function-value call rule
-      that also makes sense for future stdlib higher-order APIs.
-    - do not lock in a public callback signature until the callable representation and lowering boundary
-      are understood end-to-end; otherwise the surface API risks encoding a temporary implementation quirk.
-    - do not choose an API shape that is only justified by one temporary backend limitation if that shape
-      would be awkward for future collection APIs or closure-capable code.
-    - stdlib surface decisions here must be explainable as part of a coherent future collection/HOF design,
-      not merely as "the one shape that happens to work right now".
-  - Architectural intent:
-    - `fold` is a downstream consumer of a more general capability: "a stdlib higher-order function
-      can call a user-provided function value through one principled lowering/runtime path".
-    - the design should converge on one stable story across:
-      - typechecker callable-shape expectations,
-      - resolved/lowered function-value representation,
-      - Wasm indirect-call emission,
-      - runtime execution parity for stdlib-defined higher-order helpers.
-    - avoid an implementation that works only because one phase knows the name `fold`.
-    - avoid a plan that requires revisiting the public `fold` API once closure capture or future list APIs land;
-      the chosen surface should already be plausible as the long-term standard library shape.
-  - Temporary effect-policy decision:
-    - higher-order effect propagation remains deferred at the language-design level.
-    - for this feature, `fold` should follow the same callback-effect treatment that current stdlib
-      higher-order functions use at the time of implementation; it must not invent a `fold`-specific rule.
-    - if effectful callbacks are not yet supportable under the shared higher-order model, the first shipped
-      version of `fold` may be limited to the currently supportable callback/effect envelope, but that limit
-      must be documented explicitly in `doc/PLAN.md` and `doc/LANGUAGE_SPEC.md` rather than hidden in implementation.
-  - Detailed milestones:
-    - [x] `FOLD-M1` callback-shape decision record
-      - define the candidate public signatures and reject the ones that do not fit the current/future callable model.
-      - explicitly compare at least:
-        - curried shape `fold : List a -> b -> (b -> a -> b) -> b`
-        - tuple-packed shape `fold : List a -> b -> ((b, a) -> b) -> b`
-      - record the selection criteria in terms of general architecture:
-        - typechecker compatibility,
-        - named-function and lambda ergonomics,
-        - Wasm lowering simplicity,
-        - future closure-capture compatibility,
-        - parity with other planned higher-order stdlib APIs.
-      - **Decision (2026-03-28): curried shape chosen.**
-        - `fold : List a -> b -> (b -> a -> b) -> b`
-        - Left-fold semantics: `fold [x1, x2, x3] init f == f (f (f init x1) x2) x3`
-        - Callback argument order: accumulator first, then element (`f acc elem`)
-        - Rejected: tuple-packed `(b, a) -> b`
-          - Reason: requires tuple construction at every call site; tuple-packed callbacks are
-            awkward with named functions (e.g. `add : Int -> Int -> Int` cannot directly serve
-            as a tuple-packed callback); tuple unpacking adds overhead in the Wasm lowering path
-            and conflicts with the existing `(i64) -> i64` single-arg IndirectCall model; a
-            future collection API is more naturally expressed with curried callbacks consistent
-            with `each` and `map`.
-        - Rationale for curried shape:
-          - Consistent with `each : List a -> (a -> Unit) -> Unit` and
-            `map : List a -> (a -> b) -> List b` — all three stdlib HOFs take the callback last.
-          - Named function values (e.g. `add`, `int.to_string`) already satisfy `a -> b` with
-            no adaptation; curried `b -> a -> b` admits the same ergonomic pattern for binary
-            operators expressed as named decls.
-          - Lowering path: `f acc elem` in the stdlib body compiles to a flat 2-argument
-            `Call { callee: Var("f"), args: [acc, elem] }` in the IR, handled by a generalized
-            `IndirectCall { arity: 2 }` — no fold-specific compiler branch needed.
-          - Future closure-capture: when closures land (WB-3B), curried callbacks fit naturally
-            as partially-applied functions; tuple-packed would require a wrapper closure.
-          - Long-term: `b -> a -> b` is the conventional Haskell/OCaml `fold_left` callback
-            shape; adopting it now avoids a breaking API change later.
-        - Temporary callback/effect policy (2026-03-28):
-          - Effect propagation through HOF callbacks is deferred at the language-design level.
-          - `fold` follows the same callback-effect treatment as `each` and `map`: the callback
-            can carry effects that the caller handles, but the `fold` declaration itself does
-            not introduce a fold-specific effect rule.
-          - Pure callbacks (no effects) are the primary supported case. Effectful callbacks
-            (e.g. `Unit can Print`) are permitted if the caller's `can` clause covers them,
-            following the same model as `each`; this is not guaranteed to work in all execution
-            paths until effect propagation through HOFs is formally designed.
-          - This limitation is documented here and will be noted in `doc/LANGUAGE_SPEC.md`
-            when the stdlib inventory is updated (FOLD-M4).
-      - completion criteria:
-        - one callback shape is explicitly chosen in `doc/PLAN.md`,
-        - rejected alternatives are named with concrete reasons,
-        - the left-fold semantics and callback argument order are explicitly locked in writing,
-        - the temporary callback/effect policy is explicitly recorded,
-        - the chosen API is justified in long-term library-design terms, not only by immediate backend convenience,
-        - no implementation begins before this choice is written down.
-    - [x] `FOLD-M2` executable failure baseline
-      - add focused tests that capture the current failure mode for the chosen callback shape.
-      - keep these tests below the `fold` surface first: prove the underlying function-value call
-        shape is the real blocker.
-      - include at least:
-        - named function callback,
-        - inline lambda callback,
-        - representative accumulator type such as `Int`,
-        - one non-`Int` accumulator case if the chosen shape can expose a second failure mode.
-      - completion criteria:
-        - the failing path is reproducible in tests,
-        - the failure is localized to the shared higher-order execution path rather than the stdlib wrapper,
-        - the baseline suite demonstrates why a stdlib-only `fold` addition would still fail today.
-    - [x] `FOLD-M3` shared higher-order call-path extension
-      - extend the lowering/runtime boundary so the chosen callback shape executes through one reusable path.
-      - keep ownership narrow:
-        - callable-shape analysis belongs in the lowering planning layer,
-        - argument marshalling belongs in the indirect-call emission/runtime boundary,
-        - stdlib `fold` should only consume that capability.
-      - explicitly avoid:
-        - `fold`-named branches,
-        - `goby/list`-specific emit logic,
-        - duplicate code paths for named callbacks versus lambdas unless there is a principled representation split.
-      - completion criteria:
-        - the direct lower-level regression tests from `FOLD-M2` pass,
-        - the new path is described as general higher-order support, not as a `fold` exception,
-        - no backend/compiler component requires symbol-name knowledge of `fold`,
-        - the implementation boundary is documented clearly enough that a future HOF can reuse it without copying logic.
-    - [x] `FOLD-M4` stdlib API addition
-      - add `fold` to `stdlib/goby/list.gb` only after `FOLD-M3` is stable.
-      - define the implementation in ordinary Goby stdlib code, not as a compiler-owned intrinsic.
-      - document the selected public signature and accumulator/callback argument order.
-      - update `doc/LANGUAGE_SPEC.md` stdlib inventory and semantics once the API shape is locked.
-      - completion criteria:
-        - `fold` exists as normal stdlib surface,
-        - no compiler/runtime layer needs to know the `fold` symbol name to execute it,
-        - the language/spec docs state the left-fold semantics and any temporary callback/effect limitations explicitly.
-    - [x] `FOLD-M5` semantic and regression coverage
-      - add typecheck and execution coverage for representative user-facing uses:
-        - integer sum,
-        - boolean accumulation,
-        - state-threading via tuple accumulator,
-        - named callback import/use from another declaration.
-      - add one example showing how `fold` replaces a mutable accumulator pattern.
-      - confirm parity across the available execution paths that can reach stdlib higher-order code.
-      - completion criteria:
-        - `cargo check` passes,
-        - `cargo test` passes,
-        - `fold [] init f == init` is covered,
-        - left-to-right accumulation order is covered with a non-commutative or otherwise order-sensitive example,
-        - callback invocation count/order is covered strongly enough to catch accidental right-fold or duplicated-call behavior,
-        - at least one example and one integration-style test prove the final user-facing API.
-  - Progress checklist:
-    - [x] left-fold semantics and callback argument order documented
-    - [x] callback shape chosen and documented
-    - [x] temporary callback/effect policy documented
-    - [x] lower-level failing regressions added before backend work
-    - [x] shared higher-order lowering/runtime path generalized
-    - [x] `stdlib/goby/list.gb` exports `fold`
-    - [x] language spec updated after API lock
-    - [x] user-visible semantics and limitations documented
-    - [x] examples and integration coverage added
-    - [x] full validation (`cargo check`, `cargo test`) completed
+- `List.fold` addition (complete, 2026-03-28):
+  - `fold : List a -> b -> (b -> a -> b) -> b` — curried left-fold, accumulator-first callback.
+  - Implemented in `stdlib/goby/list.gb` via ordinary stdlib recursion; no compiler special-casing.
+  - Backend: `IndirectCall { arity: 2 }` generalized for 2-arg HOF callbacks.
+  - Effect policy: follows same callback-effect treatment as `each`/`map` (effectful callbacks
+    permitted if caller's `can` clause covers them; cross-path guarantee deferred until HOF
+    effect propagation is formally designed).
 
 ### 2.5 Runtime / Compiler Scope (MVP)
 
@@ -696,299 +526,34 @@ Most of Track D is complete. Only still-relevant follow-up items are kept here.
 
 Goal: machine-readable linter output for common mistakes not caught by the typechecker.
 
-### 4.2 Track E: Higher-Order Function-Type Checking (complete, 2026-03-27)
-
-Goal: close the remaining typechecker hole where a resolved function name can still be
-accepted in a higher-order position even though its function type does not match the
-callee's required callback type.
-
-Why this is active now:
-
-- user-visible buggy shape exists today: `println` can still be accepted as a callback
-  for `List Int` iteration after explicit import of `each`, even though the required
-  callback type is `Int -> Unit` and `println` resolves to `String -> Unit`.
-- the runtime assumes `Print.print` / `Print.println` receive `String`, so leaving this
-  to runtime causes corrupt execution instead of a normal compile-time error.
-- the required architecture is already mostly present: effect-op call checking has the
-  unification pieces; higher-order ordinary calls need to reuse the same style of checking.
-- follow-up stdlib work such as `list.fold` depends on a principled answer to
-  "what does it mean for a function value to satisfy a function-typed parameter?".
-
-Long-term design constraints:
-
-- do not special-case `println`, `print`, `each`, or any other single stdlib symbol.
-- do not patch individual call sites with ad hoc callback checks.
-- keep one type-driven notion of function-argument compatibility and reuse it everywhere
-  ordinary calls consume function-valued arguments.
-- preserve current named-function higher-order ergonomics (`map xs add_ten`) and generic
-  instantiation behavior.
-- keep partial-application semantics intact where the parser/AST currently represent curried
-  calls as nested single-argument calls.
-- prefer factoring shared matcher logic that can later be reused by effect-op validation,
-  rather than duplicating "ordinary-call" and "effect-call" compatibility code forever.
-- keep the implementation ownership narrow:
-  - call-shape discovery belongs in the ordinary-call validation layer,
-  - function-type compatibility belongs in one shared matcher,
-  - human-readable diagnostic rendering belongs at the error construction boundary.
-- diagnostics must distinguish:
-  - unknown callee / unresolved name,
-  - direct scalar argument mismatch,
-  - resolved callback name with wrong function type.
-
-Out of scope for Track E:
-
-- do not change closure-capture semantics.
-- do not expand Wasm lowering or runtime callable representation.
-- do not introduce new stdlib intrinsics just to compensate for missing typechecking.
-- do not redesign currying or callable syntax.
-- do not broaden the language spec unless implementation work proves a genuine semantic gap.
-
-Target architecture:
-
-- one shared higher-order signature matcher owns function-type compatibility checking for
-  callback positions in ordinary calls.
-- ordinary-call validation is responsible for deciding when a parameter position expects a
-  function value and delegating compatibility checking to that matcher.
-- the ownership split should stay explicit across current phases:
-  - `ensure_known_call_targets_in_expr` remains the prevalidation pass for unresolved-call
-    rejection,
-  - `check_expr` remains the inference pass that computes result types,
-  - Track E hooks callback compatibility into the ordinary call-validation path without
-    collapsing those phases together.
-- the matcher operates on already-resolved types and uses the same substitution/unification
-  model as the rest of the typechecker, so generic callback positions instantiate per call site
-  rather than through callback-specific rules.
-- diagnostics are built from matcher output (`required type`, `actual type`, optional resolved name)
-  instead of from special string checks.
-- the matcher API should be explicit enough that both callers and tests can use it without
-  reconstructing one particular stdlib example; the expected shape is roughly:
-  - `match_function_argument(required: &Ty, actual: &Ty, env: &TypeEnv, next_id: &mut usize)
-    -> Result<FunctionArgMatch, FunctionArgMismatch>`
-  - exact names may change, but Track E should preserve this boundary:
-    matcher owns compatibility and instantiation, caller owns where to invoke it.
-
-Implementation sequencing:
-
-- first lock the compatibility contract and the ownership boundary before touching validation flow.
-- then extract matcher logic without changing user-visible diagnostics more than necessary.
-- only after the matcher exists should ordinary-call validation start delegating callback positions.
-- add parity/regression tests before broad diagnostic polishing so message changes do not hide
-  behavioral regressions.
-- treat `fold` and other new HOF stdlib work as downstream consumers; Track E should finish
-  without needing to land new library APIs.
-
-Milestones:
-
-- [x] **E1: Compatibility Model Lock**
-  - define one precise internal contract for callback compatibility in ordinary calls.
-  - lock how the matcher should treat:
-    - named functions,
-    - imported qualified names,
-    - generic declarations instantiated per call site,
-    - partially applied functions represented as nested single-arg calls.
-  - lock the diagnostic boundary:
-    - unresolved names remain unresolved-name errors,
-    - resolved but incompatible callback values become higher-order function-type mismatches.
-  - lock generic instantiation timing:
-    - callback declarations with type variables are instantiated with fresh vars at the moment the
-      callback argument is matched against the required parameter type,
-    - Track E should reuse the existing `instantiate_ty_with_fresh_type_vars(...)` machinery or a
-      direct successor, not invent a second generic-instantiation rule for callbacks.
-  - deliverable:
-    - `doc/PLAN.md` and code comments agree on one matcher ownership boundary before implementation starts,
-    - the planned matcher signature and result/mismatch shape are written down clearly enough that
-      E2 does not begin with another design round.
-
-- [x] **E2: Shared Matcher Extraction**
-  - extract a reusable helper that compares an actual function-valued argument type against the
-    required function type for a parameter position.
-  - make the helper reuse the existing unification/substitution machinery instead of introducing a
-    callback-only compatibility algorithm.
-  - ensure the helper returns structured mismatch information suitable for diagnostics rather than
-    boolean pass/fail only.
-  - non-goals:
-    - no stdlib symbol special-casing,
-    - no diagnostic string construction inside low-level matching logic.
-  - implementation note:
-    - `typecheck_unify.rs` is the natural home unless refactoring reveals a better shared
-      type-compatibility module; do not hide matcher logic inside one call-site validator.
-  - test placement:
-    - matcher-level focused tests live beside the matcher implementation,
-    - end-to-end ordinary-call regressions stay with the higher-level typecheck tests.
-  - exit criteria:
-    - the matcher can be unit-tested or otherwise exercised independently of one specific stdlib
-      call shape,
-    - mismatch data is structured enough that later diagnostic improvements do not require matcher
-      redesign.
-
-- [x] **E3: Ordinary-Call Integration**
-  - integrate the matcher into ordinary declaration/value call validation wherever a function-typed
-    parameter consumes a function-valued argument.
-  - confirm actual call-path coverage before wiring:
-    - verify whether qualified calls and pipeline forms reach the same ordinary-call validation
-      branch today,
-    - if they do not, record the real branch ownership explicitly before integrating matcher calls.
-  - cover call shapes that reach ordinary validation today:
-    - direct calls,
-    - qualified calls lowered through the same path,
-    - pipeline-adjacent ordinary call forms if they feed function-valued arguments.
-  - curried-call note:
-    - `each [1, 2] println` is represented as nested unary `Expr::Call`,
-    - the integration must reason over the outer call against the function result of the inner call,
-    - `effect_op_call_target_and_args()` is a useful structural reference for flattening nested
-      call shapes, but Track E should reuse only the shape insight, not effect-specific policy.
-  - preserve priority rules:
-    - unknown-name diagnostics win when resolution fails,
-    - callback mismatch diagnostics appear only after name resolution succeeds.
-  - deliverable:
-    - the ordinary-call validation layer becomes the single ownership point for higher-order
-      callback type checking in non-effect calls.
-  - guardrail:
-    - if multiple call-validation branches need the same callback check, refactor the dispatch
-      shape first instead of cloning the check.
-
-- [x] **E4: Regression and Parity Coverage**
-  - add focused regressions for the representative buggy and non-buggy shapes:
-    - `each [1, 2] println` must fail,
-    - `each [\"a\", \"b\"] println` must pass because `a = String` instantiates cleanly and the
-      callback unifies as `String -> Unit`,
-    - `map [1, 2] println` must fail,
-    - named callback variants continue to pass when signatures align.
-  - add generic and partial-application parity coverage:
-    - generic declaration call with concrete argument,
-    - generic declaration used as callback,
-    - nested curried calls where only a later application mismatches.
-  - add namespace/import coverage:
-    - imported unqualified callback name,
-    - qualified callback name from a module import.
-  - verify no regression in existing higher-order Wasm/classification tests caused by tighter
-    typechecking.
-  - exit criteria:
-    - the test matrix demonstrates that Track E changed type acceptance, not callable lowering.
-
-- [x] **E5: Diagnostics and Follow-through**
-  - render callback mismatch diagnostics in the "resolved name, wrong function type" style.
-  - include:
-    - required callback type,
-    - actual resolved function type,
-    - resolved function name when available.
-  - lock a provisional regression-friendly wording before broad message churn, for example:
-    - `higher-order argument type mismatch: required Int -> Unit, found println : String -> Unit`
-  - keep direct-call diagnostics distinct from callback diagnostics.
-  - update `doc/LANGUAGE_SPEC.md` only if callable/typecheck rules need clarification; avoid
-    wording churn without a real semantics change.
-  - after E1-E5 are green, evaluate whether effect-op validation should share more of the same
-    matcher internals.
-  - exit criteria:
-    - callback mismatch messages are stable enough to use as regression expectations,
-    - no remaining caller path can accept the known buggy shape and defer failure to runtime.
-
-Progress checklist:
-
-- [x] matcher ownership boundary is documented before implementation branches spread
-- [x] representative bug is rejected during `goby-cli check`, not deferred to runtime
-- [x] matcher logic is shared and type-driven, not symbol-driven
-- [x] generic callback positions still instantiate independently per call site
-- [x] partial application behavior remains unchanged for currently supported forms
-- [x] diagnostics report higher-order mismatch instead of unknown-name or scalar-argument mismatch
-- [x] qualified and unqualified callback names follow the same compatibility rules
-- [x] focused tests cover direct / qualified / named / generic / partial-application callback cases
-
-Done criteria:
-
-- `import goby/list ( each )` plus `each [1, 2] println` is rejected.
-- `import goby/list ( each )` plus `each [\"a\", \"b\"] println` is accepted.
-- the rejection is reported as a higher-order function-type mismatch (`Int -> Unit` required,
-  `String -> Unit` found), not as an unknown-name error.
-- no regression in existing higher-order named-function callback examples.
-- at least one more complex generic higher-order example is covered and behaves correctly:
-  - a generic callback path still instantiates per call site and is accepted when the instantiated
-    function type matches, for example:
-    ```goby
-    import goby/list ( map )
-
-    id : a -> a
-    id x = x
-
-    main =
-      map [1, 2] id
-    ```
-- at least one nested curried-call example is covered and behaves correctly:
-  - a later callback application mismatch is rejected at the higher-order boundary rather than being
-    deferred or misreported as a scalar-argument error, for example:
-    ```goby
-    import goby/list ( each )
-
-    main =
-      each [1, 2] println
-    ```
-
-### 4.3 Active Track F: Stdlib `int.to_string`
-
-Goal: provide an explicit pure conversion from `Int` to `String` in `goby/int`.
-
-Why this is active:
-
-- once higher-order callback type checking is fixed, users need an explicit conversion helper
-  instead of expecting `println` to accept `Int`.
-- `int.parse` already exists as the input-side stdlib entrypoint; `int.to_string` is the
-  natural output-side counterpart.
-- this helper is useful for callback composition, formatted output, and list-to-string workflows.
-
-Execution plan:
-
-1. Add `to_string : Int -> String` to `stdlib/goby/int.gb` and document it in the stdlib surface.
-2. Implement one shared execution path that works for runtime fallback and Wasm execution.
-3. Add focused regressions for zero, positive, and negative integer rendering.
-4. Add one composition regression using `println (int.to_string n)`.
-5. After Track E lands, add callback-position coverage such as `map xs int.to_string`.
-
-Done criteria:
-
-- `int.to_string 0` yields `"0"`.
-- `int.to_string 123` yields `"123"`.
-- `int.to_string -7` yields `"-7"`.
-- `println (int.to_string 123)` prints `123`.
-- `map [1, 20, -3] int.to_string` yields `["1", "20", "-3"]`.
-
-Lint rules are ordered by ascending analysis cost. The cheapest infrastructure
-comes first to unblock the framework early; user-value ranking is noted in
-parentheses for prioritization.
+Lint rules (ordered by ascending analysis cost):
 
 1. **Unreachable `case` arm**: wildcard `_` arm followed by more arms (implemented).
-   User value: medium — catches subtle logic errors in pattern matching.
 2. **Unused local binding**: `x = expr` where `x` is never referenced afterward
-   (needs local-use tracking across `Expr`/`Stmt` spans from D1a).
-   User value: **high** — most frequently encountered lint in practice; catches typos and dead code.
-   Note: despite higher analysis cost than rule 1, consider implementing this early if the
-   lint framework from rule 1 is already in place, because it delivers the most user value.
-3. **Shadowed effect operation name**: local binding name collides with a visible effect op
-   (needs symbol table from D3a, no use-tracking required).
-   User value: medium — prevents confusing name collisions specific to Goby's effect system.
-4. **Redundant `can` annotation**: effect is fully discharged inside the function body
-   (needs effect discharge analysis; implement last to avoid noisy warnings).
-   User value: medium — helps keep effect annotations accurate.
+   (needs local-use tracking across `Expr`/`Stmt` spans from D1a). High user value.
+3. **Shadowed effect operation name**: local binding name collides with a visible effect op.
+4. **Redundant `can` annotation**: effect is fully discharged inside the function body.
 
-Output format:
+Output format: human-readable (default) and JSON lines (`--json`).
 
-- Human-readable (default): same caret-snippet format as `goby-cli check`.
-- JSON lines (`--json`): `{"severity":"warning","file":"...","line":1,"col":1,"rule":"unreachable-arm","message":"..."}`.
+#### Phase D6 follow-ups
 
-Done when:
+- **D6c: Shared grammar asset** — extract shared language-definition data for VS Code grammar
+  and Neovim/Vim syntax files.
+- **D6b-ts: Tree-sitter grammar** — defer until after D6c.
 
-- Each rule is implemented and enabled one at a time (separate commits).
-- Each rule has at least one positive fixture (warning fired) and one negative fixture (no warning).
-- `goby lint examples/function.gb` exits 0 on all existing clean sources.
-- JSON output is parseable; schema documented.
+### 4.2 Track E: Higher-Order Function-Type Checking (complete, 2026-03-27)
 
-#### Phase D6 follow-ups still worth keeping
+All E1–E5 milestones complete. Callback positions such as `each xs println` are rejected during
+`goby-cli check` with a higher-order mismatch diagnostic. The shared matcher in `typecheck_unify.rs`
+handles named, qualified, generic, and partially applied callbacks uniformly.
+Regressions cover direct/qualified/named/generic/partial-application callback cases.
 
-- **D6c: Shared grammar asset**
-  - Extract shared language-definition data for the VS Code grammar and Neovim/Vim syntax files.
-  - Keep this as the remaining editor-tooling refactor slice.
-- **D6b-ts: Tree-sitter grammar**
-  - Defer until after D6c.
-  - Keep as optional editor tooling follow-up rather than active architecture work.
+### 4.3 Track F: Stdlib `int.to_string` (complete, 2026-03-25)
+
+`goby/int.to_string : Int -> String` is implemented end-to-end.
+Direct calls and named callback use (`map xs int.to_string`) are covered in
+typecheck, fallback runtime resolution, and compiled Wasm execution tests.
 
 ### 4.4 Review Follow-ups (Backlog)
 
@@ -1004,9 +569,10 @@ Priority-ordered follow-ups:
    - candidate functions include `eval_expr_ast`, `execute_unit_expr_ast`,
      `check_unhandled_effects_in_expr`, `check_resume_in_expr`, `check_body_stmts`,
      and parser/lowering long functions.
-3. Hot-path allocation reduction:
-   - remove avoidable clones in Wasm runtime dispatch paths (`find_map` + clone patterns,
-     local/callable env cloning in frequently executed branches).
+3. Hot-path allocation reduction (partially complete, 2026-03-28):
+   - `callables: HashMap<String, IntCallable>` in `Cont::Apply`/`StmtSeq`/`InlineHandlerValue`
+     changed to `RcCallables = Rc<HashMap<...>>` — suspend-path clones (~25 sites) are now
+     pointer copies. `locals` clone reduction remains open (requires COW strategy).
 4. Planning call-graph closure algorithm:
    - replace naive fixed-point transitive closure with worklist/topological strategy
      to avoid avoidable quadratic behavior on larger declaration graphs.
