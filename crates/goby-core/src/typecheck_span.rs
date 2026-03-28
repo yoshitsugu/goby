@@ -50,17 +50,17 @@ mod tests {
     fn direct_expr_span_returns_direct_var_span() {
         let expr = Expr::Var {
             name: "map".to_string(),
-            span: Some(Span::new(3, 7, 3, 9)),
+            span: Some(Span::new(3, 7, 3, 10)),
         };
 
-        assert_eq!(direct_expr_span(&expr), Some(Span::new(3, 7, 3, 9)));
+        assert_eq!(direct_expr_span(&expr), Some(Span::new(3, 7, 3, 10)));
         assert_eq!(
             best_available_name_use_span(&expr),
-            Some(Span::new(3, 7, 3, 9))
+            Some(Span::new(3, 7, 3, 10))
         );
         assert_eq!(
             best_available_expr_span(&expr),
-            Some(Span::new(3, 7, 3, 9))
+            Some(Span::new(3, 7, 3, 10))
         );
     }
 
@@ -69,18 +69,18 @@ mod tests {
         let expr = Expr::Call {
             callee: Box::new(Expr::Var {
                 name: "map".to_string(),
-                span: Some(Span::new(4, 11, 4, 13)),
+                span: Some(Span::new(4, 11, 4, 14)),
             }),
             arg: Box::new(Expr::Var {
                 name: "xs".to_string(),
-                span: Some(Span::new(4, 15, 4, 16)),
+                span: Some(Span::new(4, 15, 4, 17)),
             }),
-            span: Some(Span::new(4, 11, 4, 16)),
+            span: Some(Span::new(4, 11, 4, 17)),
         };
 
         assert_eq!(
             best_available_name_use_span(&expr),
-            Some(Span::new(4, 11, 4, 13))
+            Some(Span::new(4, 11, 4, 14))
         );
     }
 
@@ -95,16 +95,16 @@ mod tests {
                 name: "xs".to_string(),
                 span: None,
             }),
-            span: Some(Span::new(5, 3, 5, 8)),
+            span: Some(Span::new(5, 3, 5, 9)),
         };
 
         assert_eq!(
             best_available_name_use_span(&expr),
-            Some(Span::new(5, 3, 5, 8))
+            Some(Span::new(5, 3, 5, 9))
         );
         assert_eq!(
             best_available_expr_span(&expr),
-            Some(Span::new(5, 3, 5, 8))
+            Some(Span::new(5, 3, 5, 9))
         );
     }
 
@@ -123,20 +123,26 @@ mod tests {
     }
 
     #[test]
-    fn parse_body_stmts_keeps_stmt_span_but_not_nested_var_span() {
+    fn parse_body_stmts_populates_nested_var_span_for_expr_stmt_call_head() {
         let stmts = parse_body_stmts("map xs").expect("should parse");
 
         match &stmts[0] {
             Stmt::Expr(
                 Expr::Call {
-                    callee, span: None, ..
+                    callee,
+                    span: Some(call_span),
+                    ..
                 },
                 Some(stmt_span),
             ) => {
                 assert_eq!(*stmt_span, Span::point(1, 1));
+                assert_eq!(*call_span, Span::new(1, 1, 1, 7));
                 assert!(matches!(
                     callee.as_ref(),
-                    Expr::Var { name, span: None } if name == "map"
+                    Expr::Var {
+                        name,
+                        span: Some(span)
+                    } if name == "map" && *span == Span::new(1, 1, 1, 4)
                 ));
             }
             other => panic!("expected expr stmt with call and stmt span, got {:?}", other),
@@ -144,24 +150,29 @@ mod tests {
     }
 
     #[test]
-    fn parse_body_stmts_keeps_stmt_span_but_not_nested_qualified_span() {
+    fn parse_body_stmts_populates_nested_qualified_span_for_expr_stmt_call_head() {
         let stmts = parse_body_stmts("list.map xs").expect("should parse");
 
         match &stmts[0] {
             Stmt::Expr(
                 Expr::Call {
-                    callee, span: None, ..
+                    callee,
+                    span: Some(call_span),
+                    ..
                 },
                 Some(stmt_span),
             ) => {
                 assert_eq!(*stmt_span, Span::point(1, 1));
+                assert_eq!(*call_span, Span::new(1, 1, 1, 12));
                 assert!(matches!(
                     callee.as_ref(),
                     Expr::Qualified {
                         receiver,
                         member,
-                        span: None
-                    } if receiver == "list" && member == "map"
+                        span: Some(span)
+                    } if receiver == "list"
+                        && member == "map"
+                        && *span == Span::new(1, 1, 1, 9)
                 ));
             }
             other => panic!("expected expr stmt with qualified call and stmt span, got {:?}", other),

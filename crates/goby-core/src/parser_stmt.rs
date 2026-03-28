@@ -1,4 +1,5 @@
 use crate::ast::{CaseArm, Expr, HandlerClause, Span, Stmt};
+use crate::parser_expr::enrich_expr_spans;
 use crate::parser_pattern::parse_case_pattern;
 use crate::parser_util::{
     is_camel_case_identifier, is_identifier, is_non_reserved_identifier, is_qualified_name,
@@ -225,9 +226,11 @@ where
 
         if let Some((name, rhs)) = try_split_binding(trimmed)
             && !rhs.is_empty()
-            && let Some((value, next_i)) =
+            && let Some((mut value, next_i)) =
                 parse_multiline_rhs_expr(lines, i, this_indent, rhs, parse_expr)
         {
+            let rhs_col = stmt_col + subslice_offset(trimmed, rhs);
+            enrich_expr_spans(&mut value, rhs, stmt_line, rhs_col);
             stmts.push(Stmt::Binding {
                 name: name.to_string(),
                 value,
@@ -240,9 +243,11 @@ where
         if let Some(rest) = trimmed.strip_prefix("mut ")
             && let Some((name, rhs)) = try_split_binding(rest)
             && !rhs.is_empty()
-            && let Some((value, next_i)) =
+            && let Some((mut value, next_i)) =
                 parse_multiline_rhs_expr(lines, i, this_indent, rhs, parse_expr)
         {
+            let rhs_col = stmt_col + subslice_offset(trimmed, rhs);
+            enrich_expr_spans(&mut value, rhs, stmt_line, rhs_col);
             stmts.push(Stmt::MutBinding {
                 name: name.to_string(),
                 value,
@@ -275,9 +280,11 @@ where
         }
 
         if let Some((name, rhs)) = try_split_assignment(trimmed)
-            && let Some((value, next_i)) =
+            && let Some((mut value, next_i)) =
                 parse_multiline_rhs_expr(lines, i, this_indent, rhs, parse_expr)
         {
+            let rhs_col = stmt_col + subslice_offset(trimmed, rhs);
+            enrich_expr_spans(&mut value, rhs, stmt_line, rhs_col);
             stmts.push(Stmt::Assign {
                 name: name.to_string(),
                 value,
@@ -778,7 +785,9 @@ where
 {
     if let Some(rest) = line.strip_prefix("mut ") {
         let (name, rhs) = try_split_binding(rest)?;
-        let value = parse_expr(rhs)?;
+        let mut value = parse_expr(rhs)?;
+        let rhs_col = span.col + subslice_offset(line, rhs);
+        enrich_expr_spans(&mut value, rhs, span.line, rhs_col);
         return Some(Stmt::MutBinding {
             name: name.to_string(),
             value,
@@ -786,7 +795,9 @@ where
         });
     }
     if let Some((name, rhs)) = try_split_assignment(line) {
-        let value = parse_expr(rhs)?;
+        let mut value = parse_expr(rhs)?;
+        let rhs_col = span.col + subslice_offset(line, rhs);
+        enrich_expr_spans(&mut value, rhs, span.line, rhs_col);
         return Some(Stmt::Assign {
             name: name.to_string(),
             value,
@@ -794,15 +805,22 @@ where
         });
     }
     if let Some((name, rhs)) = try_split_binding(line) {
-        let value = parse_expr(rhs)?;
+        let mut value = parse_expr(rhs)?;
+        let rhs_col = span.col + subslice_offset(line, rhs);
+        enrich_expr_spans(&mut value, rhs, span.line, rhs_col);
         return Some(Stmt::Binding {
             name: name.to_string(),
             value,
             span: Some(span),
         });
     }
-    let expr = parse_expr(line)?;
+    let mut expr = parse_expr(line)?;
+    enrich_expr_spans(&mut expr, line, span.line, span.col);
     Some(Stmt::Expr(expr, Some(span)))
+}
+
+fn subslice_offset(parent: &str, child: &str) -> usize {
+    child.as_ptr() as usize - parent.as_ptr() as usize
 }
 
 fn expr_from_branch_stmts(stmts: Vec<Stmt>) -> Expr {
@@ -1023,7 +1041,7 @@ fn is_malformed_resume_expr_line(src: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{parse_body_stmts_with, parse_stmt_with};
-    use crate::ast::{BinOpKind, Expr, Stmt};
+    use crate::ast::{BinOpKind, Expr, Span, Stmt};
     use crate::parser_expr::parse_expr;
 
     fn parse_body_stmts(body: &str) -> Option<Vec<Stmt>> {
@@ -1089,10 +1107,54 @@ mod tests {
         assert_eq!(stmts.len(), 1);
         match &stmts[0] {
             Stmt::Expr(Expr::Call { callee, arg, .. }, _) => {
-                assert_eq!(**callee, Expr::var("print"));
+                assert!(matches!(
+                    callee.as_ref(),
+                    Expr::Var {
+                        name,
+                        span: Some(span)
+                    } if name == "print" && *span == Span::new(1, 1, 1, 6)
+                ));
                 assert_eq!(**arg, Expr::StringLit("hello".to_string()));
             }
             other => panic!("unexpected: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn binding_value_call_head_carries_token_span() {
+        let stmts = parse_body_stmts("rolls = map lines graphemes").expect("should parse");
+        match &stmts[0] {
+            Stmt::Binding {
+                value:
+                    Expr::Call {
+                        callee,
+                        span: Some(call_span),
+                        ..
+                    },
+                span: Some(stmt_span),
+                ..
+            } => {
+                assert_eq!(*stmt_span, Span::point(1, 1));
+                assert_eq!(*call_span, Span::new(1, 9, 1, 28));
+                match callee.as_ref() {
+                    Expr::Call {
+                        callee: inner_callee,
+                        span: Some(inner_call_span),
+                        ..
+                    } => {
+                        assert_eq!(*inner_call_span, Span::new(1, 9, 1, 28));
+                        assert!(matches!(
+                            inner_callee.as_ref(),
+                            Expr::Var {
+                                name,
+                                span: Some(span)
+                            } if name == "map" && *span == Span::new(1, 9, 1, 12)
+                        ));
+                    }
+                    other => panic!("expected nested call callee, got {:?}", other),
+                }
+            }
+            other => panic!("expected binding with spanned call value, got {:?}", other),
         }
     }
 

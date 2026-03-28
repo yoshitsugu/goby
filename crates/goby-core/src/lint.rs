@@ -137,9 +137,9 @@ fn lint_unreachable_case_arms(
 fn body_span_to_source_span(decl: &Declaration, span: Span) -> Span {
     let definition_line = decl.line + usize::from(decl.type_annotation.is_some());
     Span::new(
-        definition_line + span.line,
+        definition_line + span.line - 1,
         span.col,
-        definition_line + span.end_line,
+        definition_line + span.end_line - 1,
         span.end_col,
     )
 }
@@ -172,7 +172,7 @@ f n =
             "unexpected lint message: {}",
             diagnostics[0].message
         );
-        assert_eq!(diagnostics[0].span, Some(Span::new(7, 5, 7, 5)));
+        assert_eq!(diagnostics[0].span, Some(Span::new(6, 5, 6, 5)));
     }
 
     #[test]

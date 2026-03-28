@@ -1,4 +1,4 @@
-use crate::ast::{BinOpKind, Expr, InterpolatedPart, UnaryOpKind};
+use crate::ast::{BinOpKind, Expr, InterpolatedPart, Span, UnaryOpKind};
 use crate::parser_util::{
     is_camel_case_identifier, is_identifier, is_non_reserved_identifier, is_qualified_name,
 };
@@ -184,6 +184,133 @@ pub(crate) fn parse_expr(src: &str) -> Option<Expr> {
     }
 
     None
+}
+
+pub(crate) fn enrich_expr_spans(expr: &mut Expr, src: &str, line: usize, col: usize) {
+    let Some(spanned) = parse_expr_with_spans(src, line, col) else {
+        return;
+    };
+    copy_expr_spans(expr, &spanned);
+}
+
+fn parse_expr_with_spans(src: &str, line: usize, col: usize) -> Option<Expr> {
+    let trimmed = src.trim();
+    let leading_ws = src.len().checked_sub(src.trim_start().len())?;
+    let col = col + leading_ws;
+
+    if let Some(expr) = parse_call_expr_with_spans(trimmed, line, col) {
+        return Some(expr);
+    }
+
+    if let Some((receiver, member)) = trimmed.split_once('.')
+        && is_identifier(receiver.trim())
+        && (is_identifier(member.trim()) || is_tuple_member_index(member.trim()))
+    {
+        let len = trimmed.len();
+        return Some(Expr::Qualified {
+            receiver: receiver.trim().to_string(),
+            member: member.trim().to_string(),
+            span: Some(Span::new(line, col, line, col + len)),
+        });
+    }
+
+    if is_non_reserved_identifier(trimmed) {
+        let len = trimmed.len();
+        return Some(Expr::Var {
+            name: trimmed.to_string(),
+            span: Some(Span::new(line, col, line, col + len)),
+        });
+    }
+
+    parse_expr(trimmed)
+}
+
+fn parse_call_expr_with_spans(src: &str, line: usize, col: usize) -> Option<Expr> {
+    if let Some(open) = src.find('(').filter(|_| src.ends_with(')')) {
+        let callee_src = src[..open].trim();
+        let inner = src[open + 1..src.len() - 1].trim();
+        if is_identifier(callee_src) || is_qualified_name(callee_src) {
+            let callee_col = col + subslice_offset(src, callee_src);
+            let mut expr = parse_expr_with_spans(callee_src, line, callee_col)?;
+            if inner.is_empty() {
+                return Some(Expr::Call {
+                    callee: Box::new(expr),
+                    arg: Box::new(Expr::unit_value()),
+                    span: Some(Span::new(line, col, line, col + src.len())),
+                });
+            }
+            let parts = split_top_level_commas(inner);
+            if parts.is_empty() || parts.iter().any(|part| part.trim().is_empty()) {
+                return None;
+            }
+            for part in parts {
+                let arg_src = part.trim();
+                let arg_col = col + open + 1 + subslice_offset(inner, arg_src);
+                expr = Expr::Call {
+                    callee: Box::new(expr),
+                    arg: Box::new(parse_expr_with_spans(arg_src, line, arg_col)?),
+                    span: Some(Span::new(line, col, line, col + src.len())),
+                };
+            }
+            return Some(expr);
+        }
+    }
+
+    if src.starts_with('|') || src.starts_with('"') || src.starts_with('[') {
+        return None;
+    }
+
+    let parts = split_top_level_whitespace_terms(src);
+    if parts.len() < 2 {
+        return None;
+    }
+    let callee_src = parts[0];
+    if !(is_identifier(callee_src) || is_qualified_name(callee_src)) {
+        return None;
+    }
+    let callee_col = col + subslice_offset(src, callee_src);
+    let mut expr = parse_expr_with_spans(callee_src, line, callee_col)?;
+    for part in parts.iter().skip(1) {
+        let arg_src = part.trim();
+        let arg_col = col + subslice_offset(src, arg_src);
+        expr = Expr::Call {
+            callee: Box::new(expr),
+            arg: Box::new(parse_expr_with_spans(arg_src, line, arg_col)?),
+            span: Some(Span::new(line, col, line, col + src.len())),
+        };
+    }
+    Some(expr)
+}
+
+fn copy_expr_spans(dst: &mut Expr, src: &Expr) {
+    match (dst, src) {
+        (Expr::Var { span: dst_span, .. }, Expr::Var { span: src_span, .. }) => *dst_span = *src_span,
+        (
+            Expr::Qualified { span: dst_span, .. },
+            Expr::Qualified { span: src_span, .. },
+        ) => *dst_span = *src_span,
+        (
+            Expr::Call {
+                callee: dst_callee,
+                arg: dst_arg,
+                span: dst_span,
+            },
+            Expr::Call {
+                callee: src_callee,
+                arg: src_arg,
+                span: src_span,
+            },
+        ) => {
+            *dst_span = *src_span;
+            copy_expr_spans(dst_callee, src_callee);
+            copy_expr_spans(dst_arg, src_arg);
+        }
+        _ => {}
+    }
+}
+
+fn subslice_offset(parent: &str, child: &str) -> usize {
+    child.as_ptr() as usize - parent.as_ptr() as usize
 }
 
 fn unescape_string(s: &str) -> String {

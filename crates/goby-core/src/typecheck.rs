@@ -1069,6 +1069,27 @@ main =
     }
 
     #[test]
+    fn unknown_bare_each_points_to_use_site_token() {
+        let source = "\
+import goby/list ( map )
+
+main : Unit -> Unit can Print
+main =
+  xs = map [1, 2, 3] (|n| -> n + 1)
+  each xs println
+";
+        let module = parse_module(source).expect("should parse");
+        let err = typecheck_module(&module)
+            .expect_err("bare each should require import or qualification");
+        assert_eq!(err.span, Some(Span::new(6, 3, 6, 7)));
+        assert!(
+            err.message
+                .contains("unknown function or constructor `each`"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
     fn accepts_can_clause_with_implicit_prelude_read_effect() {
         // `can Read` is accepted via implicit `goby/prelude` embed defaults.
         let source = "main : Unit -> Unit can Read\nmain = ()\n";

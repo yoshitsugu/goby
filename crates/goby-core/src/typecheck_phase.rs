@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use crate::{
-    Module,
+    Module, Span,
     typecheck::TypecheckError,
     typecheck_annotation::{
         annotation_return_ty, declaration_param_types, validate_declaration_annotations,
@@ -24,6 +24,7 @@ use crate::{
         validate_imports, validate_intrinsic_namespace_policy, validate_no_ambiguous_effect_names,
     },
 };
+use crate::ast::Declaration;
 
 pub(crate) struct ValidationPhase {
     pub(crate) imported_effect_declarations: Vec<ImportedEffectDecl>,
@@ -111,7 +112,8 @@ pub(crate) fn check_declaration_bodies(
                 }
             }
         }
-        check_resume_in_stmts(stmts, &checking.env, &decl.name, &param_ty_refs, None)?;
+        check_resume_in_stmts(stmts, &checking.env, &decl.name, &param_ty_refs, None)
+            .map_err(|err| body_error_to_source_span(decl, err))?;
         check_body_stmts(
             stmts,
             &checking.env,
@@ -122,7 +124,8 @@ pub(crate) fn check_declaration_bodies(
             declared_return_ty,
             &param_ty_refs,
             &decl_covered_ops,
-        )?;
+        )
+        .map_err(|err| body_error_to_source_span(decl, err))?;
     }
     Ok(())
 }
@@ -171,7 +174,7 @@ pub(crate) fn check_declaration_bodies_collect(
         if let Err(e) =
             check_resume_in_stmts(stmts, &checking.env, &decl.name, &param_ty_refs, None)
         {
-            errors.push(e);
+            errors.push(body_error_to_source_span(decl, e));
             continue; // skip body check to avoid spurious follow-on errors
         }
         if let Err(e) = check_body_stmts(
@@ -185,10 +188,25 @@ pub(crate) fn check_declaration_bodies_collect(
             &param_ty_refs,
             &decl_covered_ops,
         ) {
-            errors.push(e);
+            errors.push(body_error_to_source_span(decl, e));
         }
     }
     errors
+}
+
+fn body_error_to_source_span(decl: &Declaration, mut err: TypecheckError) -> TypecheckError {
+    err.span = err.span.map(|span| body_span_to_source_span(decl, span));
+    err
+}
+
+fn body_span_to_source_span(decl: &Declaration, span: Span) -> Span {
+    let definition_line = decl.line + usize::from(decl.type_annotation.is_some());
+    Span::new(
+        definition_line + span.line - 1,
+        span.col,
+        definition_line + span.end_line - 1,
+        span.end_col,
+    )
 }
 
 fn known_effects(module: &Module, stdlib_root_path: &Path) -> HashSet<String> {

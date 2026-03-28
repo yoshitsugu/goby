@@ -805,6 +805,34 @@ mod tests {
     }
 
     #[test]
+    fn analyze_unknown_bare_name_returns_token_aligned_range() {
+        let Some(root) = stdlib_root() else {
+            return;
+        };
+        let source = "\
+import goby/list ( map )
+
+main : Unit -> Unit can Print
+main =
+  xs = map [1, 2, 3] (|n| -> n + 1)
+  each xs println
+";
+        let diags = analyze(source, Some(&root));
+        assert_eq!(diags.len(), 1, "expected one diagnostic, got: {:?}", diags);
+        assert!(
+            diags[0]
+                .message
+                .contains("unknown function or constructor `each`"),
+            "unexpected diagnostic: {:?}",
+            diags[0]
+        );
+        assert_eq!(diags[0].range.start.line, 5);
+        assert_eq!(diags[0].range.start.character, 2);
+        assert_eq!(diags[0].range.end.line, 5);
+        assert_eq!(diags[0].range.end.character, 6);
+    }
+
+    #[test]
     fn analyze_no_stdlib_returns_synthetic_diagnostic() {
         let source = "main : Unit -> Unit can Print\nmain = print \"hello\"\n";
         let diags = analyze(source, None);
