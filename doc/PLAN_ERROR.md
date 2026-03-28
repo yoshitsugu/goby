@@ -1,6 +1,6 @@
 # Goby Error Reporting Plan
 
-Last updated: 2026-03-25
+Last updated: 2026-03-28
 
 This document is the active development plan for richer compiler diagnostics.
 Its first concrete target is precise unresolved-name / name-resolution error
@@ -237,9 +237,81 @@ enough to complete and verify independently.
 
 ### Milestone ER0: Plan and boundary lock
 
-- [ ] ER0.1 Lock the diagnostic boundary and ownership model in this document.
-- [ ] ER0.2 Confirm that CLI and LSP remain pure renderers of `goby_core::Diagnostic`.
-- [ ] ER0.3 Enumerate the first unresolved-name call sites to migrate.
+- [x] ER0.1 Lock the diagnostic boundary and ownership model in this document.
+- [x] ER0.2 Confirm that CLI and LSP remain pure renderers of `goby_core::Diagnostic`.
+- [x] ER0.3 Enumerate the first unresolved-name call sites to migrate.
+
+ER0 decisions locked on 2026-03-28:
+
+- `goby-core` remains the only layer allowed to decide compiler-diagnostic
+  meaning, message text, declaration context, and source span in this track.
+- `goby-cli` remains a renderer only:
+  - it calls `goby_core::parse_module` and
+    `goby_core::typecheck_module_collect_with_context`,
+  - converts returned errors via `goby_core::Diagnostic::from(...)`,
+  - renders the resulting payload without re-running name analysis.
+- `goby-lsp` remains a renderer/transport layer only:
+  - it calls `goby_core::parse_module` and
+    `goby_core::typecheck_module_collect_with_context`,
+  - converts returned diagnostics through `to_lsp_diagnostic(...)`,
+  - it does not run a second name-resolution or span-guessing pass.
+- The current synthetic LSP-only `"stdlib root not found"` environment error is
+  outside the unresolved-name/import compiler-diagnostic family and is not a
+  precedent for duplicating compiler diagnosis in frontends.
+
+Current code evidence for the ownership split:
+
+- `crates/goby-cli/src/main.rs`
+  - `run()` converts parse/typecheck errors to `goby_core::Diagnostic` and
+    passes them to `render_diag(...)`.
+- `crates/goby-lsp/src/main.rs`
+  - `analyze()` converts parse/typecheck errors to `goby_core::Diagnostic` and
+    then to LSP diagnostics with `to_lsp_diagnostic(...)`.
+- `crates/goby-core/src/diagnostic.rs`
+  - already defines the shared `Diagnostic { span, message, declaration,
+    severity }` boundary consumed by both frontends.
+
+First migration inventory locked for ER1/ER2/ER3:
+
+- ER2 unresolved bare-name sites
+  - `crates/goby-core/src/typecheck_stmt.rs`
+    - `ensure_known_call_targets_in_expr`: bare call callee
+    - `ensure_known_call_targets_in_expr`: pipeline callee
+  - `crates/goby-core/src/typecheck_call.rs`
+    - higher-order callback validation path when
+      `unresolved_callable_name(...)` succeeds
+  - `crates/goby-core/src/typecheck_check.rs`
+    - ordinary use-site errors still marked `expr span not yet available`
+  - `crates/goby-core/src/typecheck_effect_usage.rs`
+    - unresolved handler/effect-operation use sites currently returning
+      `span: None`
+  - `crates/goby-core/src/typecheck_resume.rs`
+    - unresolved / mismatched `resume` operand sites currently returning
+      `span: None`
+  - `crates/goby-core/src/typecheck_branch.rs`
+    - branch consistency errors still marked `expr span not yet available`
+- ER3 ambiguity / qualified-name sites
+  - `crates/goby-core/src/typecheck_ambiguity.rs`
+    - `ensure_name_not_ambiguous(...)`
+    - expression walkers currently returning `span: None` for ambiguous vars,
+      constructors, qualified names, and pipeline callees
+- ER4 import-resolution sites
+  - `crates/goby-core/src/typecheck_validate.rs`
+    - unknown module
+    - unknown selective import symbol
+    - import conflict/error paths blocked on `ImportDecl` lacking span metadata
+
+Explicit ER0 boundaries:
+
+- `typecheck_validate.rs` import diagnostics stay out of ER1/ER2 because they
+  require `ImportDecl` span ownership work first.
+- `ir_lower.rs`, runtime/backend limitation diagnostics, and unrelated
+  type-mismatch cleanup are not part of the first unresolved-name migration
+  slice.
+- Pipeline-callee span ownership remains an ER1 design decision:
+  - if existing AST spans already identify the callee token precisely, use that
+    path,
+  - otherwise record the required AST/data-model change before ER2.
 
 Done when:
 

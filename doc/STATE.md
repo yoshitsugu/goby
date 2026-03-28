@@ -104,11 +104,15 @@ fallback/runtime-output path no longer carries a source-level legacy `string.spl
 
 ## Immediate Next Steps
 
-**Track ER: Compiler Error Reporting (next active track):**
-Precise unresolved-name / import diagnostics. See `doc/PLAN_ERROR.md` for the full plan.
-Start from ER0: lock the diagnostic ownership model and enumerate the first unresolved-name
-call sites to migrate before touching any implementation code.
-Architecture constraint: `goby-core` owns diagnosis; CLI and LSP are pure renderers.
+**Track ER: Compiler Error Reporting (active track):**
+Precise unresolved-name / import diagnostics. `ER0` is complete in `doc/PLAN_ERROR.md`:
+the diagnostic ownership split is locked (`goby-core` diagnoses; CLI/LSP render), and the
+first migration inventory is explicit.
+Start implementation from `ER1`: add shared expression-span helpers, audit `Expr::Var` /
+`Expr::Qualified` / `Expr::Call` / pipeline callee span availability, and record whether any
+pipeline-callee AST/data-model change is required before `ER2`.
+Immediate follow-on target after ER1: migrate `typecheck_stmt.rs` unresolved bare-name sites so
+`map`-not-imported underlines the `map` token in both CLI and LSP.
 
 **Track stdlib (C4-S1) — complete (2026-03-24):**
 `cargo run -p goby-cli -- check stdlib/goby/string.gb` now succeeds.

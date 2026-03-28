@@ -596,9 +596,15 @@ See `doc/PLAN_ERROR.md` for the full plan, design principles, and milestone deta
 **Goal:** Precise unresolved-name / import diagnostics in both CLI and LSP.
 Architecture-first: `goby-core` owns span production and diagnosis; CLI/LSP are pure renderers.
 
-Milestones (all `[ ]` not started):
+Current status:
 
-- [ ] ER0: Plan and boundary lock — confirm diagnostic ownership model, enumerate first migration sites
+- [x] ER0 complete (2026-03-28): ownership split locked, renderer-only frontend rule confirmed,
+  first migration inventory recorded in `doc/PLAN_ERROR.md`
+- next implementation entry point: ER1 (shared expression-span helpers and pipeline-callee span decision)
+
+Milestones:
+
+- [x] ER0: Plan and boundary lock — confirm diagnostic ownership model, enumerate first migration sites
 - [ ] ER1: Expression-span extraction foundation — shared helpers for narrowest expression/identifier span
 - [ ] ER2: Unresolved bare-name diagnostics at use sites — `map` not imported → precise token underline
 - [ ] ER3: Qualified-name and ambiguity diagnostics — `module.name` unresolved, use-site ambiguity
@@ -608,7 +614,7 @@ Milestones (all `[ ]` not started):
 - [ ] ER7: LSP range parity lock — LSP range tests for unresolved name, qualified name, import typo
 - [ ] ER8: Track closure — partition remaining `expr span not yet available` sites into done vs deferred
 
-Entry point: start from ER0 (lock the plan and enumerate call sites) before any implementation.
+Entry point: start implementation from ER1 now that ER0 is locked.
 
 ### 4.6 `Float` / Wasm `f64` Support
 
