@@ -279,6 +279,22 @@ struct HelperEmitState {
     heap_floor_local: u32,
 }
 
+/// Extract `helper_state`, returning a `CodegenError` if it is absent.
+///
+/// `context` names the instruction or operation that requires scratch state,
+/// and appears verbatim in the error message so callers do not need to repeat
+/// the error-construction boilerplate.
+///
+/// `HelperEmitState` is `Copy`, so callers pass the `Option<HelperEmitState>` value directly.
+fn require_helper_state(
+    helper_state: Option<HelperEmitState>,
+    context: &str,
+) -> Result<HelperEmitState, CodegenError> {
+    helper_state.ok_or_else(|| CodegenError {
+        message: format!("gen_lower/emit: {context} requires helper scratch state"),
+    })
+}
+
 fn align_up_i32(value: i32, align: i32) -> i32 {
     debug_assert!((align as u32).is_power_of_two());
     (value + (align - 1)) & !(align - 1)
@@ -1138,17 +1154,14 @@ fn emit_instrs(
             }
 
             WasmBackendInstr::ListLit { element_instrs } => {
-                let hs = helper_state.as_ref().ok_or_else(|| CodegenError {
-                    message: "gen_lower/emit: ListLit requires helper state (bump allocator)"
-                        .to_string(),
-                })?;
+                let hs = require_helper_state(helper_state, "ListLit")?;
                 let s_list_ptr = hs.i32_base + HS_AUX_PTR;
                 let s_alloc_size = hs.i32_base + HS_ALLOC_SIZE;
                 let n = element_instrs.len() as i32;
                 // alloc_size = 4 + 8 * n
                 function.instruction(&Instruction::I32Const(4 + 8 * n));
                 function.instruction(&Instruction::LocalSet(s_alloc_size));
-                emit_alloc_from_top(function, hs, s_alloc_size, s_list_ptr);
+                emit_alloc_from_top(function, &hs, s_alloc_size, s_list_ptr);
                 // Write length header: i32 at [s_list_ptr + 0]
                 function.instruction(&Instruction::LocalGet(s_list_ptr));
                 function.instruction(&Instruction::I32Const(n));
@@ -1186,16 +1199,13 @@ fn emit_instrs(
             }
 
             WasmBackendInstr::TupleLit { element_instrs } => {
-                let hs = helper_state.as_ref().ok_or_else(|| CodegenError {
-                    message: "gen_lower/emit: TupleLit requires helper state (bump allocator)"
-                        .to_string(),
-                })?;
+                let hs = require_helper_state(helper_state, "TupleLit")?;
                 let s_tuple_ptr = hs.i32_base + HS_AUX_PTR;
                 let s_alloc_size = hs.i32_base + HS_ALLOC_SIZE;
                 let n = element_instrs.len() as i32;
                 function.instruction(&Instruction::I32Const(4 + 8 * n));
                 function.instruction(&Instruction::LocalSet(s_alloc_size));
-                emit_alloc_from_top(function, hs, s_alloc_size, s_tuple_ptr);
+                emit_alloc_from_top(function, &hs, s_alloc_size, s_tuple_ptr);
                 function.instruction(&Instruction::LocalGet(s_tuple_ptr));
                 function.instruction(&Instruction::I32Const(n));
                 function.instruction(&Instruction::I32Store(MemArg {
@@ -1231,17 +1241,14 @@ fn emit_instrs(
                 constructor,
                 field_instrs,
             } => {
-                let hs = helper_state.as_ref().ok_or_else(|| CodegenError {
-                    message: "gen_lower/emit: RecordLit requires helper state (bump allocator)"
-                        .to_string(),
-                })?;
+                let hs = require_helper_state(helper_state, "RecordLit")?;
                 let ctor_tag = ctx.record_ctor_tag(constructor)? as i64;
                 let s_record_ptr = hs.i32_base + HS_AUX_PTR;
                 let s_alloc_size = hs.i32_base + HS_ALLOC_SIZE;
                 let n = field_instrs.len() as i32;
                 function.instruction(&Instruction::I32Const(8 + 8 * n));
                 function.instruction(&Instruction::LocalSet(s_alloc_size));
-                emit_alloc_from_top(function, hs, s_alloc_size, s_record_ptr);
+                emit_alloc_from_top(function, &hs, s_alloc_size, s_record_ptr);
                 function.instruction(&Instruction::LocalGet(s_record_ptr));
                 function.instruction(&Instruction::I64Const(ctor_tag));
                 function.instruction(&Instruction::I64Store(MemArg {
@@ -1295,10 +1302,7 @@ fn emit_instrs(
             }
 
             WasmBackendInstr::ListEachEffect { list_instrs, op } => {
-                let _hs = helper_state.ok_or_else(|| CodegenError {
-                    message: "gen_lower/emit: ListEachEffect requires helper scratch state"
-                        .to_string(),
-                })?;
+                let _hs = require_helper_state(helper_state, "ListEachEffect")?;
                 emit_instrs(
                     function,
                     ctx,
@@ -1324,9 +1328,7 @@ fn emit_instrs(
                 list_instrs,
                 func_instrs,
             } => {
-                let hs = helper_state.ok_or_else(|| CodegenError {
-                    message: "gen_lower/emit: ListEach requires helper scratch state".to_string(),
-                })?;
+                let hs = require_helper_state(helper_state, "ListEach")?;
                 let type_idx = ctx.indirect_call_type_idx(1)?;
                 emit_instrs(
                     function,
@@ -1357,9 +1359,7 @@ fn emit_instrs(
                 list_instrs,
                 func_instrs,
             } => {
-                let hs = helper_state.ok_or_else(|| CodegenError {
-                    message: "gen_lower/emit: ListMap requires helper scratch state".to_string(),
-                })?;
+                let hs = require_helper_state(helper_state, "ListMap")?;
                 let type_idx = ctx.indirect_call_type_idx(1)?;
                 emit_instrs(
                     function,
@@ -3173,9 +3173,7 @@ fn emit_case_match(
                 //   pat_ptr, pat_len = decode_string(static pattern)
                 //   scr_ptr, scr_len = decode_string(scrutinee)
                 //   match = (pat_len == scr_len) && byte_loop_eq(pat, scr, pat_len)
-                let hs = helper_state.ok_or_else(|| CodegenError {
-                    message: "gen_lower/emit: StrLit case pattern needs helper scratch (no ListLit/Intrinsic in scope?)".to_string(),
-                })?;
+                let hs = require_helper_state(*helper_state, "StrLit case pattern")?;
                 // i32 scratch locals (borrowing from helper pool):
                 // We need 4 i32 locals: pat_ptr, pat_len, scr_ptr, scr_len, + loop_iter
                 // Use the generic helper i32 slots starting at hs.i32_base.
@@ -3335,10 +3333,7 @@ fn emit_case_match(
 
             BackendCasePattern::ListPattern { items, tail } => {
                 use crate::gen_lower::backend_ir::BackendListPatternItem;
-                let hs = helper_state.ok_or_else(|| CodegenError {
-                    message: "gen_lower/emit: ListPattern requires helper state (bump allocator)"
-                        .to_string(),
-                })?;
+                let hs = require_helper_state(*helper_state, "ListPattern")?;
                 let s_list_ptr = hs.i32_base + HS_TEXT_PTR;
                 let s_list_len = hs.i32_base + HS_TEXT_LEN;
                 let s_alloc_size = hs.i32_base + HS_ALLOC_SIZE;
