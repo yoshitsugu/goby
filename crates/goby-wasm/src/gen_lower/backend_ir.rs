@@ -243,6 +243,13 @@ pub(crate) enum WasmBackendInstr {
     /// # Supported arities (FOLD-M3)
     /// - `arity = 1`: `(i64) -> i64`  (original WB-2A case; `each`/`map` callbacks)
     /// - `arity = 2`: `(i64, i64) -> i64`  (fold callback `f acc elem`)
+    ///
+    /// # Design note: no dedicated ListFold variant
+    /// `list.fold` is implemented as ordinary recursive stdlib code in `stdlib/goby/list.gb`
+    /// and calls its callback through a generic `IndirectCall { arity: 2 }`.  A separate
+    /// `ListFold` backend instruction was deliberately avoided so that the compiler requires
+    /// no symbol-name special casing and any future 2-argument higher-order function can
+    /// reuse the same path.
     IndirectCall { arity: u8 },
     /// Pattern-match the scrutinee against a sequence of arms.
     ///

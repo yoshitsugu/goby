@@ -21,6 +21,7 @@ length xs =
     [] -> 0
     [x, ..xxs] -> 1 + length xxs
 
+# Left fold. The callback receives the accumulator first: f acc elem.
 fold : List a -> b -> (b -> a -> b) -> b
 fold xs acc f =
   case xs
