@@ -6,6 +6,7 @@ use crate::typecheck_ambiguity::ensure_no_ambiguous_refs_in_expr;
 use crate::typecheck_check::{check_expr, env_with_case_pattern_bindings};
 use crate::typecheck_env::{EffectMap, Ty, TypeEnv, TypeSubst};
 use crate::typecheck_render::ty_name;
+use crate::typecheck_span::{best_available_expr_span, best_available_name_use_span};
 use crate::typecheck_stmt::check_body_stmts;
 use crate::typecheck_unify::{
     apply_type_substitution, instantiate_handler_clause_signature, ty_contains_type_var,
@@ -107,7 +108,7 @@ fn infer_handler_covered_ops_strict(
             Ty::Handler { covered_ops } => Ok(covered_ops),
             _ => Err(TypecheckError {
                 declaration: Some(decl_name.to_string()),
-                span: None, // expr span not yet available
+                span: best_available_name_use_span(handler_expr),
                 message: format!(
                     "`with` expects a handler value, but `{}` is not a Handler",
                     name
@@ -116,7 +117,7 @@ fn infer_handler_covered_ops_strict(
         },
         _ => Err(TypecheckError {
             declaration: Some(decl_name.to_string()),
-            span: None, // expr span not yet available
+            span: best_available_expr_span(handler_expr),
             message: "`with` expects a handler value".to_string(),
         }),
     }
@@ -163,6 +164,7 @@ pub(crate) fn check_unhandled_effects_in_expr(
     fn check_effect_op_call_arg_types_in_handler_scope(
         op_name: &str,
         args: &[&Expr],
+        call_site: &Expr,
         env: &TypeEnv,
         covered_ops: &HashSet<String>,
         decl_name: &str,
@@ -174,7 +176,7 @@ pub(crate) fn check_unhandled_effects_in_expr(
             if args.len() > params.len() {
                 return Err(TypecheckError {
                     declaration: Some(decl_name.to_string()),
-                    span: None, // expr span not yet available
+                    span: best_available_name_use_span(call_site),
                     message: format!(
                         "effect operation `{}` expects {} argument(s) but got at least {}",
                         op_name,
@@ -194,7 +196,7 @@ pub(crate) fn check_unhandled_effects_in_expr(
                 if actual == Ty::Unknown && ty_contains_type_var(&expected_after_subst) {
                     return Err(TypecheckError {
                         declaration: Some(decl_name.to_string()),
-                        span: None, // expr span not yet available
+                        span: best_available_expr_span(arg),
                         message: format!(
                             "effect operation `{}` argument #{} has unresolved type (expected `{}`; provide a concrete argument or annotate the type)",
                             op_name,
@@ -209,7 +211,7 @@ pub(crate) fn check_unhandled_effects_in_expr(
                     let expected_rendered = apply_type_substitution(expected, &subst, env);
                     return Err(TypecheckError {
                         declaration: Some(decl_name.to_string()),
-                        span: None, // expr span not yet available
+                        span: best_available_expr_span(arg),
                         message: format!(
                             "effect operation `{}` expects argument of type `{}` but got `{}`{}",
                             op_name,
@@ -293,7 +295,7 @@ pub(crate) fn check_unhandled_effects_in_expr(
             if env.is_effect_op(name) && !covered_ops.contains(name.as_str()) {
                 return Err(TypecheckError {
                     declaration: Some(decl_name.to_string()),
-                    span: None, // expr span not yet available
+                    span: best_available_name_use_span(expr),
                     message: format!(
                         "effect operation `{}` is not handled by any enclosing `with` scope",
                         name
@@ -315,7 +317,7 @@ pub(crate) fn check_unhandled_effects_in_expr(
             if env.is_effect_op(&qualified) && !covered_ops.contains(qualified.as_str()) {
                 return Err(TypecheckError {
                     declaration: Some(decl_name.to_string()),
-                    span: None, // expr span not yet available
+                    span: best_available_expr_span(expr),
                     message: format!(
                         "effect operation `{}` is not handled by any enclosing `with` scope",
                         qualified
@@ -349,6 +351,7 @@ pub(crate) fn check_unhandled_effects_in_expr(
                 check_effect_op_call_arg_types_in_handler_scope(
                     &op_name,
                     &args,
+                    expr,
                     env,
                     covered_ops,
                     decl_name,
@@ -366,7 +369,7 @@ pub(crate) fn check_unhandled_effects_in_expr(
             if env.is_effect_op(&qualified) && !covered_ops.contains(qualified.as_str()) {
                 return Err(TypecheckError {
                     declaration: Some(decl_name.to_string()),
-                    span: None, // expr span not yet available
+                    span: best_available_name_use_span(expr),
                     message: format!(
                         "effect operation `{}` is not handled by any enclosing `with` scope",
                         qualified
@@ -377,6 +380,7 @@ pub(crate) fn check_unhandled_effects_in_expr(
             check_effect_op_call_arg_types_in_handler_scope(
                 &qualified,
                 &provided,
+                expr,
                 env,
                 covered_ops,
                 decl_name,
@@ -400,6 +404,7 @@ pub(crate) fn check_unhandled_effects_in_expr(
             check_effect_op_call_arg_types_in_handler_scope(
                 callee,
                 &[value.as_ref()],
+                expr,
                 env,
                 covered_ops,
                 decl_name,
@@ -489,7 +494,7 @@ pub(crate) fn check_unhandled_effects_in_expr(
             if !matches!(stmts.last(), Some(Stmt::Expr(_, _))) {
                 return Err(TypecheckError {
                     declaration: Some(decl_name.to_string()),
-                    span: None, // expr span not yet available
+                    span: best_available_expr_span(expr),
                     message: "block expression must end with an expression".to_string(),
                 });
             }

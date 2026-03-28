@@ -5,6 +5,7 @@ use crate::typecheck_check::{
 };
 use crate::typecheck_env::{Ty, TypeEnv};
 use crate::typecheck_render::ty_name;
+use crate::typecheck_span::best_available_expr_span;
 
 pub(crate) fn check_branch_type_consistency_in_stmts(
     stmts: &[Stmt],
@@ -140,7 +141,7 @@ pub(crate) fn check_branch_type_consistency_in_expr(
                 {
                     return Err(TypecheckError {
                         declaration: Some(decl_name.to_string()),
-                        span: None, // expr span not yet available
+                        span: best_available_expr_span(&arm.body),
                         message: format!(
                             "case branch type mismatch: `{}` vs `{}`",
                             ty_name(prev),
@@ -171,7 +172,7 @@ pub(crate) fn check_branch_type_consistency_in_expr(
             {
                 return Err(TypecheckError {
                     declaration: Some(decl_name.to_string()),
-                    span: None, // expr span not yet available
+                    span: best_available_expr_span(else_expr),
                     message: format!(
                         "if branch type mismatch: then is `{}`, else is `{}`",
                         ty_name(&then_ty),

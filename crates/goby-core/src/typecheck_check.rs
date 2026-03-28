@@ -4,6 +4,7 @@ use crate::ast::{BinOpKind, CasePattern, Expr, ListPatternItem, ListPatternTail,
 use crate::typecheck::TypecheckError;
 use crate::typecheck_env::{GlobalBinding, Ty, TypeEnv};
 use crate::typecheck_render::ty_name;
+use crate::typecheck_span::best_available_expr_span;
 use crate::typecheck_unify::ty_contains_type_var;
 
 pub(crate) fn check_expr(expr: &Expr, env: &TypeEnv) -> Ty {
@@ -239,7 +240,7 @@ pub(crate) fn check_list_spread_constraints(
         {
             return Err(TypecheckError {
                 declaration: Some(decl_name.to_string()),
-                span: None, // expr span not yet available
+                span: best_available_expr_span(element),
                 message: format!(
                     "list spread prefix element type mismatch: element #{} is `{}` but earlier prefix elements require `{}`",
                     idx + 1,
@@ -269,7 +270,7 @@ pub(crate) fn check_list_spread_constraints(
             {
                 return Err(TypecheckError {
                     declaration: Some(decl_name.to_string()),
-                    span: None, // expr span not yet available
+                    span: best_available_expr_span(tail_expr),
                     message: format!(
                         "list spread tail element type mismatch: expected `List {}` but got `List {}`",
                         ty_name(&expected_prefix_ty),
@@ -284,7 +285,7 @@ pub(crate) fn check_list_spread_constraints(
             let expected = merged_prefix_ty.unwrap_or(Ty::Unknown);
             Err(TypecheckError {
                 declaration: Some(decl_name.to_string()),
-                span: None, // expr span not yet available
+                span: best_available_expr_span(tail_expr),
                 message: format!(
                     "list spread tail must be `List {}` but got `{}`",
                     ty_name(&expected),
@@ -307,7 +308,7 @@ pub(crate) fn check_list_index_constraints(
         other => {
             return Err(TypecheckError {
                 declaration: Some(decl_name.to_string()),
-                span: None, // expr span not yet available
+                span: best_available_expr_span(list),
                 message: format!(
                     "list index requires a `List` receiver, but got `{}`",
                     ty_name(other)
@@ -322,7 +323,7 @@ pub(crate) fn check_list_index_constraints(
         other => {
             return Err(TypecheckError {
                 declaration: Some(decl_name.to_string()),
-                span: None, // expr span not yet available
+                span: best_available_expr_span(index),
                 message: format!("list index must be `Int`, but got `{}`", ty_name(other)),
             });
         }

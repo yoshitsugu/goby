@@ -602,13 +602,16 @@ Current status:
   first migration inventory recorded in `doc/PLAN_ERROR.md`
 - [x] ER1 complete (2026-03-28): shared expression-span helpers added, current parser span
   behavior audited, pipeline callee span requirement explicitly deferred
-- next implementation entry point: ER2 (migrate unresolved bare-name diagnostics at use sites)
+- [x] ER2 complete (2026-03-28): unresolved bare-name use sites now route through shared
+  span helpers, `map`/named-callback regressions are locked, remaining `span: None` sites
+  are partitioned into done vs deferred in `doc/PLAN_ERROR.md`
+- next implementation entry point: ER3 (qualified-name and ambiguity diagnostics)
 
 Milestones:
 
 - [x] ER0: Plan and boundary lock — confirm diagnostic ownership model, enumerate first migration sites
 - [x] ER1: Expression-span extraction foundation — shared helpers for narrowest expression/identifier span
-- [ ] ER2: Unresolved bare-name diagnostics at use sites — `map` not imported → precise token underline
+- [x] ER2: Unresolved bare-name diagnostics at use sites — `map` not imported → precise token underline
 - [ ] ER3: Qualified-name and ambiguity diagnostics — `module.name` unresolved, use-site ambiguity
 - [ ] ER4: Import declaration spans — `ImportDecl` span metadata; underline `maap` in `import goby/list ( maap )`
 - [ ] ER5: Shared diagnostic-construction cleanup — common constructors; eliminate `span: None` in covered families
@@ -616,7 +619,7 @@ Milestones:
 - [ ] ER7: LSP range parity lock — LSP range tests for unresolved name, qualified name, import typo
 - [ ] ER8: Track closure — partition remaining `expr span not yet available` sites into done vs deferred
 
-Entry point: start implementation from ER2 now that ER0/ER1 are locked.
+Entry point: start implementation from ER3 now that ER2 is locked.
 
 ### 4.6 `Float` / Wasm `f64` Support
 

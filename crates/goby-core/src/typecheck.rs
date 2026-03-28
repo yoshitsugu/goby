@@ -1090,6 +1090,25 @@ main =
     }
 
     #[test]
+    fn unknown_named_map_callback_points_to_use_site_token() {
+        let source = "\
+import goby/list ( map )
+render : Unit -> List Int
+render =
+  map [1, 2] missing
+";
+        let module = parse_module(source).expect("should parse");
+        let err = typecheck_module(&module)
+            .expect_err("unknown named callback should fail at the use site");
+        assert_eq!(err.span, Some(Span::new(4, 14, 4, 21)));
+        assert!(
+            err.message
+                .contains("unknown function or constructor `missing`"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
     fn accepts_can_clause_with_implicit_prelude_read_effect() {
         // `can Read` is accepted via implicit `goby/prelude` embed defaults.
         let source = "main : Unit -> Unit can Read\nmain = ()\n";

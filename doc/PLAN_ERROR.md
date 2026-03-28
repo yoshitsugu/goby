@@ -375,20 +375,20 @@ Done when:
 
 ### Milestone ER2: Unresolved bare-name diagnostics at use sites
 
-- [ ] ER2.1 Migrate unresolved bare-name checks in
+- [x] ER2.1 Migrate unresolved bare-name checks in
   `crates/goby-core/src/typecheck_stmt.rs` to use expression spans.
-- [ ] ER2.2 Migrate unresolved bare-name diagnostics in the checker modules
+- [x] ER2.2 Migrate unresolved bare-name diagnostics in the checker modules
   covered by this track:
   - `typecheck_stmt.rs`
   - `typecheck_check.rs`
   - `typecheck_effect_usage.rs`
   - `typecheck_resume.rs`
   - `typecheck_branch.rs`
-- [ ] ER2.3 For each covered module above, classify every remaining
+- [x] ER2.3 For each covered module above, classify every remaining
   unresolved-name-related `span: None` site as one of:
   - completed in ER2,
   - intentionally deferred outside this track with a recorded reason.
-- [ ] ER2.4 Add focused tests proving that:
+- [x] ER2.4 Add focused tests proving that:
   - `map`-not-imported points at `map`,
   - a missing local/decl reference points at the unresolved token.
 
@@ -405,6 +405,44 @@ Done when:
 - LSP range for that error is non-zero-width and token-aligned,
 - the covered unresolved bare-name producers are explicitly partitioned into
   done vs deferred rather than left implicit.
+
+ER2 completion partition:
+
+- done in ER2
+  - `typecheck_stmt.rs`
+    - bare call callee uses `best_available_name_use_span(...)`
+    - pipeline callee uses the shared helper and returns a token span only when
+      the AST already owns one
+  - `typecheck_call.rs`
+    - unresolved higher-order callback names use
+      `best_available_name_use_span(...)`
+  - `typecheck_check.rs`
+    - expression-owned mismatch sites now use `best_available_expr_span(...)`
+  - `typecheck_effect_usage.rs`
+    - `with` non-handler values, ordinary effect-op calls, qualified effect-op
+      calls, method-style effect-op calls, and effect-op argument mismatches now
+      use shared expression/name-span helpers
+  - `typecheck_resume.rs`
+    - `resume` operand mismatch / unresolved-generic sites now use
+      `best_available_expr_span(...)`
+  - `typecheck_branch.rs`
+    - branch body mismatch sites now use `best_available_expr_span(...)`
+- deferred outside ER2 with explicit reason
+  - `typecheck_effect_usage.rs`
+    - `resolve_handler_clause_name(...)` unknown/ambiguous handler clause names
+      still return `span: None` because handler clause names are stored as raw
+      strings and the AST does not yet own a clause-name token span
+    - duplicate handler-clause diagnostics still return `span: None` for the
+      same reason: no owned source span for the repeated clause name token
+    - pipeline unhandled-effect diagnostics still return `span: None` because
+      ER1 explicitly deferred pipeline-callee token ownership on the AST
+  - `typecheck_stmt.rs`
+    - declared-return/body mismatch still returns `span: None`; it is not an
+      unresolved-name diagnostic and remains outside ER2
+  - `typecheck_effect_usage.rs`
+    - required-effect coverage failures in `check_callee_required_effects(...)`
+      still return `span: None`; this is an effect-coverage diagnostic, not an
+      unresolved bare-name use-site failure
 
 ### Milestone ER3: Qualified-name and ambiguity diagnostics
 

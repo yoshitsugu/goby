@@ -6,6 +6,7 @@ use crate::typecheck_check::{
 };
 use crate::typecheck_env::{ResumeContext, Ty, TypeEnv, TypeSubst};
 use crate::typecheck_render::ty_name;
+use crate::typecheck_span::best_available_expr_span;
 use crate::typecheck_unify::{
     apply_type_substitution, instantiate_handler_clause_signature, ty_contains_type_var,
     type_hole_conflict_note, unify_types_with_subst,
@@ -80,7 +81,7 @@ fn check_resume_in_expr(
     {
         return Err(TypecheckError {
             declaration: Some(decl_name.to_string()),
-            span: None, // expr span not yet available
+            span: best_available_expr_span(expr),
             message: "legacy_unit_value_syntax: `Unit` is no longer a value expression; use `()`"
                 .to_string(),
         });
@@ -201,14 +202,14 @@ fn check_resume_in_expr(
             let Some(ctx) = resume_ctx else {
                 return Err(TypecheckError {
                     declaration: Some(decl_name.to_string()),
-                    span: None, // expr span not yet available
+                    span: best_available_expr_span(expr),
                     message: "resume_outside_handler: `resume` can only be used inside handler method bodies".to_string(),
                 });
             };
             let Some(expected) = ctx.expected_arg_ty.as_ref() else {
                 return Err(TypecheckError {
                     declaration: Some(decl_name.to_string()),
-                    span: None, // expr span not yet available
+                    span: best_available_expr_span(expr),
                     message: "resume_in_unknown_operation_context: cannot resolve handler operation signature for this `resume`".to_string(),
                 });
             };
@@ -218,7 +219,7 @@ fn check_resume_in_expr(
             if actual == Ty::Unknown && ty_contains_type_var(&expected_after_subst) {
                 return Err(TypecheckError {
                     declaration: Some(decl_name.to_string()),
-                    span: None, // expr span not yet available
+                    span: best_available_expr_span(value),
                     message: format!(
                         "resume_unresolved_generic_constraints: cannot resolve generic constraints for `resume` argument (expected `{}` but got unresolved argument type)",
                         ty_name(&expected_after_subst)
@@ -230,7 +231,7 @@ fn check_resume_in_expr(
                 let expected_rendered = apply_type_substitution(expected, &subst, env);
                 return Err(TypecheckError {
                     declaration: Some(decl_name.to_string()),
-                    span: None, // expr span not yet available
+                    span: best_available_expr_span(value),
                     message: format!(
                         "resume_arg_type_mismatch: `resume` expects argument of type `{}` but got `{}`{}",
                         ty_name(&expected_rendered),
@@ -260,7 +261,7 @@ fn check_resume_in_expr(
                 {
                     return Err(TypecheckError {
                         declaration: Some(decl_name.to_string()),
-                        span: None, // expr span not yet available
+                        span: Some(arm.span),
                         message: format!(
                             "list case pattern requires `List` scrutinee, but got `{}`",
                             ty_name(&resolved_scrutinee_ty)

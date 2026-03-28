@@ -105,19 +105,24 @@ fallback/runtime-output path no longer carries a source-level legacy `string.spl
 ## Immediate Next Steps
 
 **Track ER: Compiler Error Reporting (active track):**
-Precise unresolved-name / import diagnostics. `ER0` and `ER1` are complete in
+Precise unresolved-name / import diagnostics. `ER0`, `ER1`, and `ER2` are complete in
 `doc/PLAN_ERROR.md`:
 - ownership split is locked (`goby-core` diagnoses; CLI/LSP render),
 - shared expression-span helpers now live in `crates/goby-core/src/typecheck_span.rs`,
 - current parser behavior is audited and regression-locked: statement spans exist, nested
   callee token spans generally do not,
+- unresolved bare-name use sites in `typecheck_stmt.rs`, `typecheck_call.rs`,
+  `typecheck_check.rs`, `typecheck_effect_usage.rs`, `typecheck_resume.rs`, and
+  `typecheck_branch.rs` now route through the shared helper path where AST ownership exists,
+- ER2 regression coverage now locks both `map`-not-imported and missing named-callback
+  cases to token spans,
+- remaining `span: None` sites inside the ER2 covered modules are now explicitly partitioned
+  into deferred categories in `doc/PLAN_ERROR.md`,
 - pipeline callee token spans are explicitly deferred until an AST/data-model change adds
   ownership for that location.
-Start implementation from `ER2`: migrate unresolved bare-name diagnostics in
-`typecheck_stmt.rs` and adjacent checker paths to use the shared helper layer, then classify
-any remaining `span: None` outcomes explicitly instead of leaving them implicit.
-Immediate acceptance target: the representative `map`-not-imported case underlines the `map`
-token in both CLI and LSP.
+Start implementation from `ER3`: move qualified-name and ambiguity diagnostics onto the same
+precise span path, and decide whether the initial qualified underline policy is full-token or
+member-only before widening tests.
 
 **Track stdlib (C4-S1) — complete (2026-03-24):**
 `cargo run -p goby-cli -- check stdlib/goby/string.gb` now succeeds.
