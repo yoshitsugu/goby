@@ -247,6 +247,28 @@ impl EmitContext {
                 ),
             })
     }
+
+    /// Return the Wasm type-section index for a `call_indirect` with `arity` i64 arguments.
+    ///
+    /// Returns `Err` when the required type index was not registered (meaning no instruction
+    /// of that arity was detected during module scanning) or when `arity` is unsupported.
+    fn indirect_call_type_idx(&self, arity: u8) -> Result<u32, CodegenError> {
+        match arity {
+            1 => self.indirect_call_type_idx_1.ok_or_else(|| CodegenError {
+                message:
+                    "gen_lower/emit: arity-1 IndirectCall used but indirect_call_type_idx_1 not registered"
+                        .to_string(),
+            }),
+            2 => self.indirect_call_type_idx_2.ok_or_else(|| CodegenError {
+                message:
+                    "gen_lower/emit: arity-2 IndirectCall used but indirect_call_type_idx_2 not registered"
+                        .to_string(),
+            }),
+            _ => Err(CodegenError {
+                message: format!("gen_lower/emit: IndirectCall with unsupported arity {arity}"),
+            }),
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -1265,23 +1287,7 @@ fn emit_instrs(
                 function.instruction(&Instruction::I64And);
                 function.instruction(&Instruction::I32WrapI64);
                 // call_indirect (i64^arity) -> i64 via funcref table 0.
-                let type_idx = match arity {
-                    1 => ctx.indirect_call_type_idx_1.ok_or_else(|| CodegenError {
-                        message:
-                            "gen_lower/emit: IndirectCall { arity: 1 } without indirect_call_type_idx_1 in EmitContext"
-                                .to_string(),
-                    })?,
-                    2 => ctx.indirect_call_type_idx_2.ok_or_else(|| CodegenError {
-                        message:
-                            "gen_lower/emit: IndirectCall { arity: 2 } without indirect_call_type_idx_2 in EmitContext"
-                                .to_string(),
-                    })?,
-                    _ => return Err(CodegenError {
-                        message: format!(
-                            "gen_lower/emit: IndirectCall with unsupported arity {arity}"
-                        ),
-                    }),
-                };
+                let type_idx = ctx.indirect_call_type_idx(*arity)?;
                 function.instruction(&Instruction::CallIndirect {
                     type_index: type_idx,
                     table_index: 0,
@@ -1321,10 +1327,7 @@ fn emit_instrs(
                 let hs = helper_state.ok_or_else(|| CodegenError {
                     message: "gen_lower/emit: ListEach requires helper scratch state".to_string(),
                 })?;
-                let type_idx = ctx.indirect_call_type_idx_1.ok_or_else(|| CodegenError {
-                    message: "gen_lower/emit: ListEach without indirect_call_type_idx_1"
-                        .to_string(),
-                })?;
+                let type_idx = ctx.indirect_call_type_idx(1)?;
                 emit_instrs(
                     function,
                     ctx,
@@ -1357,9 +1360,7 @@ fn emit_instrs(
                 let hs = helper_state.ok_or_else(|| CodegenError {
                     message: "gen_lower/emit: ListMap requires helper scratch state".to_string(),
                 })?;
-                let type_idx = ctx.indirect_call_type_idx_1.ok_or_else(|| CodegenError {
-                    message: "gen_lower/emit: ListMap without indirect_call_type_idx_1".to_string(),
-                })?;
+                let type_idx = ctx.indirect_call_type_idx(1)?;
                 emit_instrs(
                     function,
                     ctx,
