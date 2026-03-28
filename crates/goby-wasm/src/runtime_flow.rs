@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
 
 use goby_core::{Expr, Stmt, ast::InterpolatedPart, stdlib::EmbeddedRuntimeHandlerKind};
 
@@ -8,6 +9,7 @@ use crate::{
 };
 
 pub(crate) type WithId = u64;
+pub(crate) type RcCallables = Rc<HashMap<String, IntCallable>>;
 
 #[derive(Clone)]
 pub(crate) struct Continuation {
@@ -95,7 +97,7 @@ pub(crate) enum Cont {
         store: Option<StoreOp>,
         remaining: Vec<Stmt>,
         locals: RuntimeLocals,
-        callables: HashMap<String, IntCallable>,
+        callables: RcCallables,
         depth: usize,
         handler_stack: Vec<InlineHandlerValue>,
         finish: FinishKind,
@@ -103,7 +105,7 @@ pub(crate) enum Cont {
     Apply {
         step: ApplyStep,
         locals: RuntimeLocals,
-        callables: HashMap<String, IntCallable>,
+        callables: RcCallables,
         depth: usize,
         handler_stack: Vec<InlineHandlerValue>,
     },
@@ -211,7 +213,7 @@ pub(crate) struct InlineHandlerValue {
     pub(crate) methods: Vec<InlineHandlerMethod>,
     pub(crate) captured_locals: RuntimeLocals,
     pub(crate) changed_outer_names: HashSet<String>,
-    pub(crate) captured_callables: HashMap<String, IntCallable>,
+    pub(crate) captured_callables: RcCallables,
     pub(crate) with_id: Option<WithId>,
 }
 

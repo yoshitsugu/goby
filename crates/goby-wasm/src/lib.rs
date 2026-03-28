@@ -51,8 +51,8 @@ use crate::runtime_eval::{
 use crate::runtime_flow::{
     ApplyStep, Cont, Continuation, DirectCallHead, Escape, FinishKind, HandlerCompletion,
     HandlerContinuationState, InlineHandlerMethod, InlineHandlerValue, OptimizedResumeToken, Out,
-    ResolvedEffectHandler, ResolvedHandlerMethod, ResumeToken, RuntimeDeclInfo, RuntimeError,
-    RuntimeEvaluators, RuntimeHandlerMethod, StoreOp, WithId,
+    ResolvedEffectHandler, ResolvedHandlerMethod, ResumeToken, RuntimeDeclInfo,
+    RuntimeError, RuntimeEvaluators, RuntimeHandlerMethod, StoreOp, WithId,
 };
 pub use crate::runtime_io_plan::{
     RuntimeIoExecutionKind, runtime_execution_needs_stdin, runtime_io_execution_kind,

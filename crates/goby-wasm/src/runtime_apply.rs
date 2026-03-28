@@ -1,8 +1,9 @@
 use std::collections::HashMap;
+use std::rc::Rc;
 
 use crate::runtime_eval::{AstLambdaCallable, IntCallable};
 use crate::runtime_flow::{
-    DirectCallHead, Out, ResolvedHandlerMethod, RuntimeError, RuntimeEvaluators,
+    DirectCallHead, Out, RcCallables, ResolvedHandlerMethod, RuntimeError, RuntimeEvaluators,
 };
 use crate::runtime_value::{RuntimeLocals, RuntimeValue, runtime_value_eq};
 use crate::{MAX_EVAL_DEPTH, RuntimeOutputResolver};
@@ -12,7 +13,7 @@ impl<'m> RuntimeOutputResolver<'m> {
         &mut self,
         decl: &crate::runtime_flow::RuntimeDeclInfo,
         fn_locals: RuntimeLocals,
-        fn_callables: HashMap<String, IntCallable>,
+        fn_callables: RcCallables,
         evaluators: &RuntimeEvaluators<'_, '_>,
         depth: usize,
     ) -> Out<RuntimeValue> {
@@ -90,7 +91,7 @@ impl<'m> RuntimeOutputResolver<'m> {
             return None;
         }
         let fn_locals = RuntimeLocals::default();
-        let fn_callables = HashMap::new();
+        let fn_callables = Rc::new(HashMap::new());
         let out =
             self.eval_runtime_decl_body_out(&decl, fn_locals, fn_callables, evaluators, depth + 1);
         self.complete_value_out(out, evaluators)
@@ -120,7 +121,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                 fn_locals.store(param, arg.clone());
             }
         }
-        let fn_callables = HashMap::new();
+        let fn_callables = Rc::new(HashMap::new());
         let decl = crate::runtime_flow::RuntimeDeclInfo { stmts, ..decl };
         let out =
             self.eval_runtime_decl_body_out(&decl, fn_locals, fn_callables, evaluators, depth + 1);
@@ -155,7 +156,7 @@ impl<'m> RuntimeOutputResolver<'m> {
         if !accepts_unit_arg_as_zero_arity {
             fn_locals.store(&decl.params[0], arg_value);
         }
-        let fn_callables = HashMap::new();
+        let fn_callables = Rc::new(HashMap::new());
         self.eval_runtime_decl_body_out(&decl, fn_locals, fn_callables, evaluators, depth + 1)
     }
 
@@ -185,7 +186,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                 fn_locals.store(param, arg.clone());
             }
         }
-        let fn_callables = HashMap::new();
+        let fn_callables = Rc::new(HashMap::new());
         self.eval_runtime_decl_body_out(
             &crate::runtime_flow::RuntimeDeclInfo { stmts, ..decl },
             fn_locals,
@@ -200,7 +201,7 @@ impl<'m> RuntimeOutputResolver<'m> {
         fn_name: &str,
         arg_values: &[RuntimeValue],
         _locals: &RuntimeLocals,
-        callables: &HashMap<String, IntCallable>,
+        callables: &RcCallables,
         evaluators: &RuntimeEvaluators<'_, '_>,
         depth: usize,
     ) -> Out<RuntimeValue> {
@@ -338,7 +339,7 @@ impl<'m> RuntimeOutputResolver<'m> {
         fn_name: &str,
         arg_value: RuntimeValue,
         locals: &RuntimeLocals,
-        callables: &HashMap<String, IntCallable>,
+        callables: &RcCallables,
         evaluators: &RuntimeEvaluators<'_, '_>,
         depth: usize,
     ) -> Out<RuntimeValue> {
@@ -419,7 +420,7 @@ impl<'m> RuntimeOutputResolver<'m> {
         if !accepts_unit_arg_as_zero_arity {
             fn_locals.store(&decl.params[0], arg_value);
         }
-        let fn_callables = HashMap::new();
+        let fn_callables = Rc::new(HashMap::new());
         self.eval_runtime_decl_body_out(&decl, fn_locals, fn_callables, evaluators, depth + 1)
     }
 
@@ -428,7 +429,7 @@ impl<'m> RuntimeOutputResolver<'m> {
         fn_name: &str,
         arg_values: &[RuntimeValue],
         locals: &RuntimeLocals,
-        callables: &HashMap<String, IntCallable>,
+        callables: &RcCallables,
         evaluators: &RuntimeEvaluators<'_, '_>,
         depth: usize,
     ) -> Out<RuntimeValue> {

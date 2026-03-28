@@ -1,4 +1,6 @@
 use super::*;
+use std::rc::Rc;
+use crate::runtime_flow::RcCallables;
 use crate::call::flatten_named_call;
 use crate::grapheme_semantics::{ControlFlow, GraphemeSpan, for_each_extended_grapheme_span};
 use goby_core::ast::UnaryOpKind;
@@ -101,7 +103,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                     .eval_expr_to_option(
                         value,
                         &self.locals.clone(),
-                        &HashMap::new(),
+                        &Rc::new(HashMap::new()),
                         evaluators,
                         1,
                     )
@@ -110,7 +112,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                         self.eval_value_with_context(
                             &repr,
                             &self.locals.clone(),
-                            &HashMap::new(),
+                            &Rc::new(HashMap::new()),
                             evaluators,
                         )
                     })?;
@@ -123,7 +125,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                     .eval_expr_to_option(
                         value,
                         &self.locals.clone(),
-                        &HashMap::new(),
+                        &Rc::new(HashMap::new()),
                         evaluators,
                         1,
                     )
@@ -132,7 +134,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                         self.eval_value_with_context(
                             &repr,
                             &self.locals.clone(),
-                            &HashMap::new(),
+                            &Rc::new(HashMap::new()),
                             evaluators,
                         )
                     })?;
@@ -141,9 +143,9 @@ impl<'m> RuntimeOutputResolver<'m> {
             }
             Stmt::Expr(expr, _) => {
                 let mut locals = self.locals.clone();
-                let mut callables = HashMap::new();
+                let callables = Rc::new(HashMap::new());
                 let outputs_before = self.embedded_effect_runtime.output_len();
-                match self.execute_unit_expr_ast(expr, &mut locals, &mut callables, evaluators, 0) {
+                match self.execute_unit_expr_ast(expr, &mut locals, &callables, evaluators, 0) {
                     Out::Done(()) => {
                         self.locals = locals;
                         Some(())
@@ -216,7 +218,7 @@ impl<'m> RuntimeOutputResolver<'m> {
             return self.capture_output_from_expr(value_expr, evaluators);
         }
 
-        self.execute_unit_call(expr, &RuntimeLocals::default(), &HashMap::new(), evaluators)
+        self.execute_unit_call(expr, &RuntimeLocals::default(), &Rc::new(HashMap::new()), evaluators)
     }
 
     pub(super) fn capture_output_from_expr(
@@ -235,7 +237,7 @@ impl<'m> RuntimeOutputResolver<'m> {
         expr: &str,
         evaluators: &RuntimeEvaluators<'_, '_>,
     ) -> Option<RuntimeValue> {
-        let callables = HashMap::new();
+        let callables = Rc::new(HashMap::new());
         let locals = self.locals.clone();
         self.eval_value_with_context(expr, &locals, &callables, evaluators)
     }
@@ -244,7 +246,7 @@ impl<'m> RuntimeOutputResolver<'m> {
         &mut self,
         expr: &str,
         locals: &RuntimeLocals,
-        callables: &HashMap<String, IntCallable>,
+        callables: &RcCallables,
         evaluators: &RuntimeEvaluators<'_, '_>,
     ) -> Option<RuntimeValue> {
         if let Some((left, callee)) = parse_pipeline(expr) {
@@ -289,7 +291,7 @@ impl<'m> RuntimeOutputResolver<'m> {
         callee: &str,
         value: RuntimeValue,
         locals: &RuntimeLocals,
-        callables: &HashMap<String, IntCallable>,
+        callables: &RcCallables,
         evaluators: &RuntimeEvaluators<'_, '_>,
         _depth: usize,
     ) -> Option<RuntimeValue> {
@@ -308,7 +310,7 @@ impl<'m> RuntimeOutputResolver<'m> {
         callee: &str,
         value: RuntimeValue,
         locals: &RuntimeLocals,
-        callables: &HashMap<String, IntCallable>,
+        callables: &RcCallables,
         evaluators: &RuntimeEvaluators<'_, '_>,
         depth: usize,
     ) -> Out<RuntimeValue> {
@@ -562,7 +564,7 @@ impl<'m> RuntimeOutputResolver<'m> {
         &mut self,
         expr: &Expr,
         locals: &RuntimeLocals,
-        callables: &HashMap<String, IntCallable>,
+        callables: &RcCallables,
         evaluators: &RuntimeEvaluators<'_, '_>,
         depth: usize,
     ) -> Option<RuntimeValue> {

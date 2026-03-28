@@ -3,7 +3,7 @@ use std::collections::HashMap;
 
 use goby_core::{Expr, Module, Stmt, types::parse_function_type};
 
-use crate::runtime_flow::DirectCallHead;
+use crate::runtime_flow::{DirectCallHead, RcCallables};
 use crate::wasm_exec_plan::decl_exec_plan;
 use crate::{MAX_EVAL_DEPTH, RuntimeLocals};
 
@@ -86,7 +86,7 @@ pub(crate) struct AstLambdaCallable {
     pub(crate) parameter: String,
     pub(crate) body: Expr,
     pub(crate) captured_locals: RuntimeLocals,
-    pub(crate) captured_callables: HashMap<String, IntCallable>,
+    pub(crate) captured_callables: RcCallables,
 }
 
 #[derive(Clone, Debug)]

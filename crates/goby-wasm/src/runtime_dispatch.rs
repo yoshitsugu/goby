@@ -1,4 +1,6 @@
 use super::*;
+use std::rc::Rc;
+use crate::runtime_flow::RcCallables;
 
 impl<'m> RuntimeOutputResolver<'m> {
     pub(super) fn current_handler_resume_value(&self, token_idx: usize) -> Option<RuntimeValue> {
@@ -170,7 +172,7 @@ impl<'m> RuntimeOutputResolver<'m> {
         &self,
         clauses: &[HandlerClause],
         locals: &RuntimeLocals,
-        callables: &HashMap<String, IntCallable>,
+        callables: &RcCallables,
     ) -> InlineHandlerValue {
         let methods = clauses
             .iter()
@@ -189,7 +191,7 @@ impl<'m> RuntimeOutputResolver<'m> {
             methods,
             captured_locals: locals.clone(),
             changed_outer_names: HashSet::new(),
-            captured_callables: callables.clone(),
+            captured_callables: Rc::clone(callables),
             with_id: None,
         }
     }
@@ -543,7 +545,7 @@ impl<'m> RuntimeOutputResolver<'m> {
         &mut self,
         stmts: &[Stmt],
         locals: RuntimeLocals,
-        callables: HashMap<String, IntCallable>,
+        callables: RcCallables,
         evaluators: &RuntimeEvaluators<'_, '_>,
         depth: usize,
         token_idx: usize,
@@ -611,9 +613,9 @@ impl<'m> RuntimeOutputResolver<'m> {
                         inline.with_id == method.with_id
                             && m.method.clause_index == method.method.clause_index
                     })
-                    .map(|_| inline.captured_callables.clone())
+                    .map(|_| Rc::clone(&inline.captured_callables))
             })
-            .unwrap_or_default();
+            .unwrap_or_else(|| Rc::new(HashMap::new()));
         match self.eval_handler_body(
             &stmts,
             handler_locals,

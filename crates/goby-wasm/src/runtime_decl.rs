@@ -1,4 +1,6 @@
 use super::*;
+use std::rc::Rc;
+use crate::runtime_flow::RcCallables;
 use crate::grapheme_semantics::collect_extended_grapheme_spans;
 use crate::runtime_support::flatten_direct_call;
 use crate::wasm_exec_plan::decl_exec_plan;
@@ -32,7 +34,7 @@ impl<'m> RuntimeOutputResolver<'m> {
         &mut self,
         arg: &Expr,
         caller_locals: &RuntimeLocals,
-        caller_callables: &HashMap<String, IntCallable>,
+        caller_callables: &RcCallables,
     ) -> Option<IntCallable> {
         match arg {
             Expr::Lambda { param, body } => {
@@ -40,7 +42,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                     parameter: param.clone(),
                     body: (*body.clone()),
                     captured_locals: caller_locals.clone(),
-                    captured_callables: caller_callables.clone(),
+                    captured_callables: Rc::clone(caller_callables),
                 })))
             }
             Expr::Var { name, .. } => Some(self.resolve_callable_argument(name, caller_callables)),
@@ -75,7 +77,7 @@ impl<'m> RuntimeOutputResolver<'m> {
         &mut self,
         expr: &Expr,
         caller_locals: &RuntimeLocals,
-        caller_callables: &HashMap<String, IntCallable>,
+        caller_callables: &RcCallables,
         evaluators: &RuntimeEvaluators<'_, '_>,
         depth: usize,
     ) -> Option<RuntimeValue> {
@@ -123,6 +125,7 @@ impl<'m> RuntimeOutputResolver<'m> {
             )?;
             fn_locals.store(param, arg_val);
         }
+        let fn_callables = Rc::new(fn_callables);
 
         let out =
             self.eval_runtime_decl_body_out(&decl, fn_locals, fn_callables, evaluators, depth + 1);
@@ -172,7 +175,7 @@ impl<'m> RuntimeOutputResolver<'m> {
         &mut self,
         expr: &Expr,
         caller_locals: &RuntimeLocals,
-        caller_callables: &HashMap<String, IntCallable>,
+        caller_callables: &RcCallables,
         evaluators: &RuntimeEvaluators<'_, '_>,
         depth: usize,
     ) -> Option<()> {
@@ -202,6 +205,7 @@ impl<'m> RuntimeOutputResolver<'m> {
             )?;
             fn_locals.store(param, arg_val);
         }
+        let fn_callables = Rc::new(fn_callables);
 
         let filtered_stmts: Vec<Stmt> = decl
             .stmts
@@ -247,7 +251,7 @@ impl<'m> RuntimeOutputResolver<'m> {
         fn_name: &str,
         args: &[&Expr],
         caller_locals: &RuntimeLocals,
-        caller_callables: &HashMap<String, IntCallable>,
+        caller_callables: &RcCallables,
         evaluators: &RuntimeEvaluators<'_, '_>,
         depth: usize,
     ) -> Option<()> {
@@ -279,6 +283,7 @@ impl<'m> RuntimeOutputResolver<'m> {
             )?;
             fn_locals.store(param, arg_val);
         }
+        let fn_callables = Rc::new(fn_callables);
 
         let filtered_stmts: Vec<Stmt> = stmts
             .iter()
@@ -323,7 +328,7 @@ impl<'m> RuntimeOutputResolver<'m> {
         fn_name: &str,
         args: &[&Expr],
         caller_locals: &RuntimeLocals,
-        caller_callables: &HashMap<String, IntCallable>,
+        caller_callables: &RcCallables,
         evaluators: &RuntimeEvaluators<'_, '_>,
         depth: usize,
     ) -> Option<RuntimeValue> {
@@ -354,6 +359,7 @@ impl<'m> RuntimeOutputResolver<'m> {
             )?;
             fn_locals.store(param, arg_val);
         }
+        let fn_callables = Rc::new(fn_callables);
 
         let out =
             self.eval_runtime_decl_body_out(&decl, fn_locals, fn_callables, evaluators, depth + 1);
@@ -377,7 +383,7 @@ impl<'m> RuntimeOutputResolver<'m> {
         if let Some(param) = param_name {
             fn_locals.store(&param, arg_val);
         }
-        let fn_callables = HashMap::new();
+        let fn_callables = Rc::new(HashMap::new());
         let filtered_stmts: Vec<Stmt> = stmts
             .iter()
             .filter(|stmt| {
@@ -437,7 +443,7 @@ impl<'m> RuntimeOutputResolver<'m> {
         if !accepts_unit_arg_as_zero_arity {
             fn_locals.store(&decl.params[0], arg_val);
         }
-        let fn_callables = HashMap::new();
+        let fn_callables = Rc::new(HashMap::new());
         let filtered_stmts: Vec<Stmt> = decl
             .stmts
             .iter()
@@ -482,7 +488,7 @@ impl<'m> RuntimeOutputResolver<'m> {
         module_path: &str,
         member: &str,
         arg_val: RuntimeValue,
-        callables: &HashMap<String, IntCallable>,
+        callables: &RcCallables,
         evaluators: &RuntimeEvaluators<'_, '_>,
         depth: usize,
     ) -> Option<()> {
@@ -499,7 +505,7 @@ impl<'m> RuntimeOutputResolver<'m> {
         if !accepts_unit_arg_as_zero_arity {
             fn_locals.store(&decl.params[0], arg_val);
         }
-        let fn_callables = callables.clone();
+        let fn_callables = Rc::clone(callables);
         let filtered_stmts: Vec<Stmt> = decl
             .stmts
             .iter()
@@ -553,9 +559,10 @@ impl<'m> RuntimeOutputResolver<'m> {
         let param_name = decl.params.first().cloned();
         let stmts = decl.stmts.clone();
         let fn_locals = RuntimeLocals::default();
-        let mut fn_callables = HashMap::new();
+        let mut fn_callables_map = HashMap::new();
         let param = param_name?;
-        fn_callables.insert(param, callable);
+        fn_callables_map.insert(param, callable);
+        let fn_callables = Rc::new(fn_callables_map);
         let filtered_stmts: Vec<Stmt> = stmts
             .iter()
             .filter(|stmt| {
@@ -599,7 +606,7 @@ impl<'m> RuntimeOutputResolver<'m> {
         callable: &IntCallable,
         arg_val: RuntimeValue,
         _locals: &RuntimeLocals,
-        callables: &HashMap<String, IntCallable>,
+        callables: &RcCallables,
         evaluators: &RuntimeEvaluators<'_, '_>,
         depth: usize,
     ) -> Option<()> {
@@ -648,11 +655,11 @@ impl<'m> RuntimeOutputResolver<'m> {
             IntCallable::AstLambda(callable) => {
                 let mut lambda_locals = callable.captured_locals.clone();
                 lambda_locals.store(&callable.parameter, arg_val);
-                let mut lambda_callables = callable.captured_callables.clone();
+                let lambda_callables = Rc::clone(&callable.captured_callables);
                 match self.execute_unit_expr_ast(
                     &callable.body,
                     &mut lambda_locals,
-                    &mut lambda_callables,
+                    &lambda_callables,
                     evaluators,
                     depth + 1,
                 ) {
@@ -676,7 +683,7 @@ impl<'m> RuntimeOutputResolver<'m> {
         callable: &IntCallable,
         arg_val: RuntimeValue,
         locals: &RuntimeLocals,
-        callables: &HashMap<String, IntCallable>,
+        callables: &RcCallables,
         evaluators: &RuntimeEvaluators<'_, '_>,
         depth: usize,
     ) -> Out<RuntimeValue> {
@@ -728,7 +735,7 @@ impl<'m> RuntimeOutputResolver<'m> {
             IntCallable::AstLambda(callable) => {
                 let mut lambda_locals = callable.captured_locals.clone();
                 lambda_locals.store(&callable.parameter, arg_val);
-                let lambda_callables = callable.captured_callables.clone();
+                let lambda_callables = Rc::clone(&callable.captured_callables);
                 self.eval_expr(
                     &callable.body,
                     &lambda_locals,
@@ -743,7 +750,7 @@ impl<'m> RuntimeOutputResolver<'m> {
     pub(super) fn resolve_callable_argument(
         &self,
         arg_name: &str,
-        callables: &HashMap<String, IntCallable>,
+        callables: &RcCallables,
     ) -> IntCallable {
         if let Some(callable) = callables.get(arg_name) {
             return callable.clone();

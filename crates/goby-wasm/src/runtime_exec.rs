@@ -1,4 +1,6 @@
 use super::*;
+use std::rc::Rc;
+use crate::runtime_flow::RcCallables;
 
 impl<'m> RuntimeOutputResolver<'m> {
     pub(super) fn build_runtime_list(&self, values: Vec<RuntimeValue>) -> Out<RuntimeValue> {
@@ -34,7 +36,7 @@ impl<'m> RuntimeOutputResolver<'m> {
         &mut self,
         expr: &str,
         caller_locals: &RuntimeLocals,
-        caller_callables: &HashMap<String, IntCallable>,
+        caller_callables: &RcCallables,
         evaluators: &RuntimeEvaluators<'_, '_>,
     ) -> Option<()> {
         let (callee, arg_expr) = match parse_call(expr) {
@@ -45,12 +47,12 @@ impl<'m> RuntimeOutputResolver<'m> {
 
         let function = evaluators.unit.get(callee)?;
         let mut function_locals = RuntimeLocals::default();
-        let mut function_callables = HashMap::new();
+        let mut function_callables_map = HashMap::new();
 
         if let Some(parameter) = function.parameter.as_deref() {
             let arg_expr = arg_expr?;
             if let Some(callable) = parse_int_callable(arg_expr) {
-                function_callables.insert(parameter.to_string(), callable);
+                function_callables_map.insert(parameter.to_string(), callable);
             } else if let Some(RuntimeValue::Int(value)) =
                 self.eval_value_with_context(arg_expr, caller_locals, caller_callables, evaluators)
             {
@@ -59,13 +61,14 @@ impl<'m> RuntimeOutputResolver<'m> {
                 return None;
             }
         }
+        let function_callables = Rc::new(function_callables_map);
 
         if let Some(stmts) = function.parsed_stmts.as_deref() {
             for (i, stmt) in stmts.iter().enumerate() {
                 match self.execute_unit_ast_stmt(
                     stmt,
                     &mut function_locals,
-                    &mut function_callables,
+                    &function_callables,
                     evaluators,
                     i + 1,
                 ) {
@@ -124,7 +127,7 @@ impl<'m> RuntimeOutputResolver<'m> {
         &mut self,
         expr: &str,
         caller_locals: &RuntimeLocals,
-        caller_callables: &HashMap<String, IntCallable>,
+        caller_callables: &RcCallables,
         evaluators: &RuntimeEvaluators<'_, '_>,
     ) -> Out<()> {
         match self.execute_unit_call(expr, caller_locals, caller_callables, evaluators) {
@@ -141,13 +144,13 @@ impl<'m> RuntimeOutputResolver<'m> {
         fn_name: &str,
         arg_val: RuntimeValue,
         caller_locals: &RuntimeLocals,
-        caller_callables: &HashMap<String, IntCallable>,
+        caller_callables: &RcCallables,
         evaluators: &RuntimeEvaluators<'_, '_>,
         depth: usize,
     ) -> Option<()> {
         let function = evaluators.unit.get(fn_name)?;
         let mut function_locals = RuntimeLocals::default();
-        let function_callables = HashMap::new();
+        let function_callables = Rc::new(HashMap::new());
 
         if let Some(stmts) = function.parsed_stmts.as_deref() {
             if let Some(parameter) = function.parameter.as_deref() {

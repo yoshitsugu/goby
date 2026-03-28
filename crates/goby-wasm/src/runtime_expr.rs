@@ -1,10 +1,11 @@
 use std::collections::HashMap;
+use std::rc::Rc;
 
 use goby_core::{Expr, ast::InterpolatedPart};
 
-use crate::runtime_eval::IntCallable;
 use crate::runtime_flow::{
-    ApplyStep, Cont, DirectCallHead, Escape, FinishKind, Out, RuntimeError, RuntimeEvaluators,
+    ApplyStep, Cont, DirectCallHead, Escape, FinishKind, Out, RcCallables, RuntimeError,
+    RuntimeEvaluators,
 };
 use crate::runtime_value::{RuntimeLocals, RuntimeValue};
 use crate::{MAX_EVAL_DEPTH, RuntimeOutputResolver};
@@ -73,7 +74,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                 fn_locals.store(param, arg.clone());
             }
         }
-        let fn_callables = HashMap::new();
+        let fn_callables = Rc::new(HashMap::new());
         self.eval_runtime_decl_body_out(&decl, fn_locals, fn_callables, evaluators, depth + 1)
     }
 
@@ -94,7 +95,7 @@ impl<'m> RuntimeOutputResolver<'m> {
         &mut self,
         expr: &Expr,
         locals: &RuntimeLocals,
-        callables: &HashMap<String, IntCallable>,
+        callables: &RcCallables,
         evaluators: &RuntimeEvaluators<'_, '_>,
         depth: usize,
     ) -> Option<RuntimeValue> {
@@ -136,7 +137,7 @@ impl<'m> RuntimeOutputResolver<'m> {
         &mut self,
         expr: &Expr,
         locals: &RuntimeLocals,
-        callables: &HashMap<String, IntCallable>,
+        callables: &RcCallables,
         evaluators: &RuntimeEvaluators<'_, '_>,
         depth: usize,
     ) -> Out<RuntimeValue> {
@@ -202,7 +203,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                                             remaining,
                                         },
                                         locals: locals.clone(),
-                                        callables: callables.clone(),
+                                        callables: Rc::clone(callables),
                                         depth,
                                         handler_stack: self.active_inline_handler_stack.clone(),
                                     });
@@ -225,7 +226,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                                 right: (**right).clone(),
                             },
                             locals: locals.clone(),
-                            callables: callables.clone(),
+                            callables: Rc::clone(callables),
                             depth,
                             handler_stack: self.active_inline_handler_stack.clone(),
                         });
@@ -242,7 +243,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                                 left: lv,
                             },
                             locals: locals.clone(),
-                            callables: callables.clone(),
+                            callables: Rc::clone(callables),
                             depth,
                             handler_stack: self.active_inline_handler_stack.clone(),
                         });
@@ -302,7 +303,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                                     resuming_spread: false,
                                 },
                                 locals: locals.clone(),
-                                callables: callables.clone(),
+                                callables: Rc::clone(callables),
                                 depth,
                                 handler_stack: self.active_inline_handler_stack.clone(),
                             });
@@ -359,7 +360,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                                     resuming_spread: true,
                                 },
                                 locals: locals.clone(),
-                                callables: callables.clone(),
+                                callables: Rc::clone(callables),
                                 depth,
                                 handler_stack: self.active_inline_handler_stack.clone(),
                             });
@@ -395,7 +396,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                                     remaining,
                                 },
                                 locals: locals.clone(),
-                                callables: callables.clone(),
+                                callables: Rc::clone(callables),
                                 depth,
                                 handler_stack: self.active_inline_handler_stack.clone(),
                             });
@@ -409,7 +410,7 @@ impl<'m> RuntimeOutputResolver<'m> {
             Expr::Block(stmts) => match self.eval_stmts(
                 stmts,
                 locals.clone(),
-                callables.clone(),
+                Rc::clone(callables),
                 evaluators,
                 depth + 1,
                 FinishKind::Block,
@@ -429,7 +430,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                             return Out::Suspend(Cont::Apply {
                                 step: ApplyStep::CaseSelect { arms: arms.clone() },
                                 locals: locals.clone(),
-                                callables: callables.clone(),
+                                callables: Rc::clone(callables),
                                 depth,
                                 handler_stack: self.active_inline_handler_stack.clone(),
                             });
@@ -448,11 +449,11 @@ impl<'m> RuntimeOutputResolver<'m> {
                     Out::Escape(escape) => Out::Escape(escape),
                     Out::Err(RuntimeError::Unsupported) => {
                         let mut arm_locals_for_unit = arm_locals;
-                        let mut arm_callables = callables.clone();
+                        let arm_callables = Rc::clone(callables);
                         match self.execute_unit_expr_ast(
                             &arm_body,
                             &mut arm_locals_for_unit,
-                            &mut arm_callables,
+                            &arm_callables,
                             evaluators,
                             depth + 1,
                         ) {
@@ -480,7 +481,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                                     else_expr: (**else_expr).clone(),
                                 },
                                 locals: locals.clone(),
-                                callables: callables.clone(),
+                                callables: Rc::clone(callables),
                                 depth,
                                 handler_stack: self.active_inline_handler_stack.clone(),
                             });
@@ -499,11 +500,11 @@ impl<'m> RuntimeOutputResolver<'m> {
                     Out::Escape(escape) => Out::Escape(escape),
                     Out::Err(RuntimeError::Unsupported) => {
                         let mut branch_locals = locals.clone();
-                        let mut branch_callables = callables.clone();
+                        let branch_callables = Rc::clone(callables);
                         match self.execute_unit_expr_ast(
                             branch,
                             &mut branch_locals,
-                            &mut branch_callables,
+                            &branch_callables,
                             evaluators,
                             depth + 1,
                         ) {
@@ -558,7 +559,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                                         remaining,
                                     },
                                     locals: locals.clone(),
-                                    callables: callables.clone(),
+                                    callables: Rc::clone(callables),
                                     depth,
                                     handler_stack: self.active_inline_handler_stack.clone(),
                                 });
@@ -591,7 +592,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                                         member: member.clone(),
                                     },
                                     locals: locals.clone(),
-                                    callables: callables.clone(),
+                                    callables: Rc::clone(callables),
                                     depth,
                                     handler_stack: self.active_inline_handler_stack.clone(),
                                 });
@@ -638,7 +639,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                                         fn_name: fn_name.clone(),
                                     },
                                     locals: locals.clone(),
-                                    callables: callables.clone(),
+                                    callables: Rc::clone(callables),
                                     depth,
                                     handler_stack: self.active_inline_handler_stack.clone(),
                                 });
@@ -704,7 +705,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                                     member: method.clone(),
                                 },
                                 locals: locals.clone(),
-                                callables: callables.clone(),
+                                callables: Rc::clone(callables),
                                 depth,
                                 handler_stack: self.active_inline_handler_stack.clone(),
                             });
@@ -730,7 +731,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                                     callee: callee.clone(),
                                 },
                                 locals: locals.clone(),
-                                callables: callables.clone(),
+                                callables: Rc::clone(callables),
                                 depth,
                                 handler_stack: self.active_inline_handler_stack.clone(),
                             });
@@ -787,7 +788,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                                     remaining,
                                 },
                                 locals: locals.clone(),
-                                callables: callables.clone(),
+                                callables: Rc::clone(callables),
                                 depth,
                                 handler_stack: self.active_inline_handler_stack.clone(),
                             });
@@ -826,7 +827,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                 let result = self.eval_stmts(
                     body,
                     locals.clone(),
-                    callables.clone(),
+                    Rc::clone(callables),
                     evaluators,
                     depth + 1,
                     FinishKind::WithBody { with_id },

@@ -1,10 +1,10 @@
-use std::collections::HashMap;
+use std::rc::Rc;
 
 use goby_core::Expr;
 
 use crate::call::flatten_named_call;
 use crate::runtime_eval::{AstLambdaCallable, IntCallable};
-use crate::runtime_flow::{Escape, FinishKind, Out, RuntimeError, RuntimeEvaluators};
+use crate::runtime_flow::{Escape, FinishKind, Out, RcCallables, RuntimeError, RuntimeEvaluators};
 use crate::runtime_value::{RuntimeLocals, RuntimeValue};
 use crate::{ERR_CALLABLE_DISPATCH_DECL_PARAM, RuntimeOutputResolver};
 
@@ -13,7 +13,7 @@ impl<'m> RuntimeOutputResolver<'m> {
         &mut self,
         expr: &Expr,
         locals: &mut RuntimeLocals,
-        callables: &mut HashMap<String, IntCallable>,
+        callables: &RcCallables,
         evaluators: &RuntimeEvaluators<'_, '_>,
         depth: usize,
     ) -> Out<()> {
@@ -114,7 +114,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                     parameter: param.clone(),
                     body: *body.clone(),
                     captured_locals: locals.clone(),
-                    captured_callables: callables.clone(),
+                    captured_callables: Rc::clone(callables),
                 }));
                 if self
                     .execute_decl_with_callable_as_side_effect(
@@ -304,11 +304,11 @@ impl<'m> RuntimeOutputResolver<'m> {
             else {
                 return Out::Err(RuntimeError::Unsupported);
             };
-            let mut arm_callables = callables.clone();
+            let arm_callables = Rc::clone(callables);
             return self.execute_unit_expr_ast(
                 &arm_body,
                 &mut arm_locals,
-                &mut arm_callables,
+                &arm_callables,
                 evaluators,
                 depth + 1,
             );

@@ -1,4 +1,6 @@
 use super::*;
+use std::rc::Rc;
+use crate::runtime_flow::RcCallables;
 
 impl<'m> RuntimeOutputResolver<'m> {
     /// Execute a single AST statement inside a unit-returning function body.
@@ -6,7 +8,7 @@ impl<'m> RuntimeOutputResolver<'m> {
         &mut self,
         stmt: &Stmt,
         locals: &mut RuntimeLocals,
-        callables: &mut HashMap<String, IntCallable>,
+        callables: &RcCallables,
         evaluators: &RuntimeEvaluators<'_, '_>,
         depth: usize,
     ) -> Out<()> {
@@ -57,7 +59,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                     store: None,
                     remaining: remaining.to_vec(),
                     locals: RuntimeLocals::default(),
-                    callables: HashMap::new(),
+                    callables: Rc::new(HashMap::new()),
                     depth: 0,
                     handler_stack: self.active_inline_handler_stack.clone(),
                     finish: FinishKind::Ingest,
@@ -90,7 +92,7 @@ impl<'m> RuntimeOutputResolver<'m> {
         &mut self,
         stmts: &[Stmt],
         locals: &mut RuntimeLocals,
-        callables: &mut HashMap<String, IntCallable>,
+        callables: &RcCallables,
         evaluators: &RuntimeEvaluators<'_, '_>,
         depth: usize,
         finish: FinishKind,
@@ -106,7 +108,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                     store: None,
                     remaining: remaining.clone(),
                     locals: locals.clone(),
-                    callables: callables.clone(),
+                    callables: Rc::clone(callables),
                     depth,
                     handler_stack: self.active_inline_handler_stack.clone(),
                     finish: finish.clone(),
@@ -151,7 +153,7 @@ impl<'m> RuntimeOutputResolver<'m> {
         &mut self,
         stmts: &[Stmt],
         mut locals: RuntimeLocals,
-        callables: HashMap<String, IntCallable>,
+        callables: RcCallables,
         evaluators: &RuntimeEvaluators<'_, '_>,
         depth: usize,
         finish: FinishKind,
@@ -248,11 +250,11 @@ impl<'m> RuntimeOutputResolver<'m> {
                         )
                     {
                         let mut fallback_locals = locals.clone();
-                        let mut fallback_callables = callables.clone();
+                        let fallback_callables = Rc::clone(&callables);
                         match self.execute_unit_ast_stmt(
                             stmt,
                             &mut fallback_locals,
-                            &mut fallback_callables,
+                            &fallback_callables,
                             evaluators,
                             depth + 1,
                         ) {
@@ -292,11 +294,11 @@ impl<'m> RuntimeOutputResolver<'m> {
                         Out::Escape(escape) => return Out::Escape(escape),
                         Out::Err(RuntimeError::Unsupported) if self.runtime_error.is_none() => {
                             let mut fallback_locals = locals.clone();
-                            let mut fallback_callables = callables.clone();
+                            let fallback_callables = Rc::clone(&callables);
                             match self.execute_unit_ast_stmt(
                                 stmt,
                                 &mut fallback_locals,
-                                &mut fallback_callables,
+                                &fallback_callables,
                                 evaluators,
                                 depth + 1,
                             ) {
@@ -353,7 +355,7 @@ impl<'m> RuntimeOutputResolver<'m> {
         &mut self,
         expr: &Expr,
         locals: &mut RuntimeLocals,
-        callables: &HashMap<String, IntCallable>,
+        callables: &RcCallables,
         evaluators: &RuntimeEvaluators<'_, '_>,
         depth: usize,
     ) -> Out<RuntimeValue> {
@@ -362,7 +364,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                 match self.eval_stmts(
                     stmts,
                     locals.clone(),
-                    callables.clone(),
+                    Rc::clone(callables),
                     evaluators,
                     depth + 1,
                     FinishKind::Block,
@@ -420,7 +422,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                 let result = self.eval_stmts(
                     body,
                     locals.clone(),
-                    callables.clone(),
+                    Rc::clone(callables),
                     evaluators,
                     depth + 1,
                     FinishKind::WithBody { with_id },
