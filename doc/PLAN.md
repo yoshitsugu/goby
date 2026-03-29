@@ -157,7 +157,7 @@ Based on `examples/*.gb`:
 - Stdlib integer parse entrypoint is `int.parse`.
   - contract: parse optional leading `-` + one or more ASCII digits as base-10 `Int`.
   - failure path is effect-based: `StringParseError.invalid_integer : String -> Int`.
-- Stdlib integer formatting entrypoint is planned as `int.to_string`.
+- Stdlib integer formatting entrypoint is `int.to_string`.
   - contract: render an `Int` to canonical base-10 decimal `String`.
   - examples:
     - `int.to_string 0 -> "0"`
@@ -303,70 +303,8 @@ Based on `examples/*.gb`:
   - type mismatch diagnostics must include both expected and actual type names.
   - composite types should be rendered with full shape (for example: `List Int`, `(String, Int)`), not collapsed labels.
   - line/column reporting is not required in MVP.
-- **Higher-order function-type checking** (planned, high priority).
-  - Goal:
-    - higher-order call sites must verify that a function value matches the function type
-      required by the callee parameter.
-    - the immediate user-facing target is callback position diagnostics such as
-      `each xs println`, where the name resolves successfully but its function type does not fit.
-    - direct call argument mismatches should continue to be rejected, but the priority gap to close
-      now is the unresolved higher-order function-type mismatch.
-  - Current known gaps:
-    - implicit-prelude `print`/`println` now preserve `String -> Unit`, but higher-order ordinary-call
-      checking still allows some callback mismatches to slip through.
-    - `ensure_known_call_targets_in_expr` currently answers only "is the callee known?", not
-      "does this function-valued argument match the parameter's required function type?".
-    - effect operation calls already have argument unification logic in `typecheck_effect_usage.rs`,
-      but ordinary declaration/value calls do not yet enforce the same quality bar for function-valued arguments.
-  - Design constraints:
-    - do not special-case `println` / `print`; fix higher-order function-type checking generically.
-    - preserve current named-function higher-order ergonomics (`map xs add_ten`) and generic function instantiation behavior.
-    - keep partial-application semantics intact where the parser/AST currently represent curried calls as nested single-arg calls.
-    - diagnostics for higher-order mismatches should read as "resolved name, wrong function type",
-      not as "unknown function" and not as a direct-call scalar argument mismatch when the actual bug
-      is callback incompatibility.
-  - Planned implementation slices:
-    - `CALL-T1` higher-order signature matcher:
-      - extract a reusable helper that compares a function-valued argument type against the
-        function type required by a parameter position.
-      - the helper should reuse the existing unification machinery (`TypeSubst`) so generic
-        callback positions instantiate correctly per call site.
-      - the helper must surface "required function type" vs "actual function type" so diagnostics
-        can say, for example, that `Int -> Unit` is required but `println` has type `String -> Unit`.
-    - `CALL-T2` ordinary-call integration:
-      - run the higher-order signature matcher wherever ordinary calls feed a function-valued argument
-        into a function-typed parameter.
-      - cover direct / qualified / pipeline call shapes as they appear in the AST.
-      - keep "unknown function or constructor" diagnostics higher priority when name resolution fails entirely.
-    - `CALL-T3` callback regression coverage:
-      - lock the representative regressions:
-        - `each [1, 2, 3] println` must fail because callback type `String -> Unit` does not satisfy required type `Int -> Unit`
-        - the diagnostic should describe a higher-order function-type mismatch, not an unknown-name error
-        - `each ["a", "b"] println` must pass
-        - `map [1, 2, 3] println` must fail because callback type does not satisfy the required mapper function type
-        - named-function callback variants continue to pass when signatures align.
-    - `CALL-T4` generic and partial-application parity:
-      - verify that generic functions still instantiate independently per call site.
-      - verify that partial application does not over-eagerly reject intermediate function values.
-      - add regressions for:
-        - generic declaration call with concrete argument,
-        - generic declaration passed as callback,
-        - nested curried calls where only the second application mismatches.
-    - `CALL-T5` diagnostics + docs:
-      - add wording specific to higher-order mismatches:
-        - required callback type
-        - actual resolved function type
-        - resolved function name when available
-      - keep direct-call diagnostics distinct from callback diagnostics.
-      - update `doc/LANGUAGE_SPEC.md` only if the documented callable/typecheck rules need clarification;
-        no syntax change is intended.
-      - add a short example under `examples/` only if an existing sample currently demonstrates the buggy acceptance path.
-  - Validation checklist:
-    - focused tests for higher-order callback mismatch cases plus adjacent direct/qualified/pipeline cases.
-    - `cargo check`
-    - `cargo test`
-    - verify `import goby/list ( map, each )` plus `each xs println` now fails during `goby-cli check`
-      with a higher-order function-type mismatch once `xs : List Int`.
+- Higher-order function-type checking is complete; see Track E in §4 for the
+  shipped callback mismatch behavior and remaining follow-up boundary.
 
 ### 2.3 Effect System
 
@@ -436,47 +374,8 @@ Based on `examples/*.gb`:
 - Core modules to ship first (`Int`, `String`, `List`, `Env`) — minimal built-ins implemented.
 - Naming conventions for stdlib functions — established.
 - Minimal collection API for immutable workflows — deferred.
-- **`int.to_string` stdlib addition** (planned).
-  - Goal:
-    - add `to_string : Int -> String` to `stdlib/goby/int.gb` as the explicit integer-formatting helper.
-    - support compositions such as `println (int.to_string n)` and `map xs int.to_string`
-      without widening the type of `Print.println`.
-  - Semantics:
-    - output is canonical decimal ASCII with optional leading `-`.
-    - no leading `+`, no surrounding whitespace, no separators, no locale-specific formatting.
-    - `0` renders as `"0"`.
-    - negative values render as `"-"` plus the magnitude digits.
-  - Design constraints:
-    - keep this as a normal stdlib surface under `goby/int`, not as a `println` convenience path.
-    - if runtime/backend support is required, prefer one shared implementation path rather than
-      scattering `int.to_string` special-cases across fallback and Wasm code paths.
-    - preserve round-trip intent with `int.parse` for decimal strings in range:
-      `int.parse (int.to_string n)` should yield `n` absent handler interception.
-    - while `print` / `println` remain `String -> Unit`, broad "show" behavior should continue
-      to flow through string interpolation (`"${value}"`) rather than a dedicated debug helper.
-  - Planned implementation slices:
-    - `INTSTR-S1` surface + docs:
-      - declare `to_string : Int -> String` in `stdlib/goby/int.gb`.
-      - update `doc/LANGUAGE_SPEC.md` stdlib inventory to include `int.to_string`.
-      - add or update one focused example/reference entry if useful.
-    - `INTSTR-S2` execution path:
-      - implement one honest execution path that works across typecheck, runtime fallback,
-        and general-lowered Wasm execution.
-      - if an intrinsic/helper is introduced, keep it generic enough to serve integer stringification
-        broadly rather than only this single surface function.
-    - `INTSTR-S3` regression coverage:
-      - add focused tests for `0`, positive multi-digit values, negative values, and composition with `println`.
-      - add a named-callback regression such as `map [1, 20, -3] int.to_string` once callback type checking is in place.
-    - `INTSTR-S4` parity checks:
-      - verify the helper is pure and requires no effect annotation.
-      - verify behavior matches across runtime fallback and general-lowered execution.
-  - Validation checklist:
-    - `cargo check`
-    - `cargo test`
-    - representative execution samples proving:
-      - `println (int.to_string 123)` prints `123`
-      - `println (int.to_string -7)` prints `-7`
-      - `map [1, 20, -3] int.to_string` yields `["1", "20", "-3"]`
+- `int.to_string` is complete; see Track F in §4 for the shipped behavior and
+  parity coverage summary.
 - `List.map` migration plan (planned):
   - keep canonical map behavior in `stdlib/goby/list.gb` (`list.map` export path).
   - replace internal/builtin-path map callsites with stdlib module usage where possible.
@@ -753,39 +652,22 @@ Note:
 - Critical correctness items from the same review batch were already fixed:
   parser explicit early-return clarity and planning `u16` overflow fail-fast behavior.
 
-### 4.6 Track ER: Compiler Error Reporting
+### 4.6 Track ER: Compiler Error Reporting (complete, 2026-03-29)
 
-See `doc/PLAN_ERROR.md` for the full plan, design principles, and milestone details.
+See `doc/PLAN_ERROR.md` for the active follow-on plan.
 
-**Goal:** Precise unresolved-name / import diagnostics in both CLI and LSP.
-Architecture-first: `goby-core` owns span production and diagnosis; CLI/LSP are pure renderers.
+Completed scope:
 
-Current status:
+- unresolved bare-name diagnostics,
+- unresolved qualified-name diagnostics,
+- ambiguity-at-use-site diagnostics,
+- import module / selective-symbol diagnostics,
+- CLI and LSP parity locks for those families.
 
-- [x] ER0 complete (2026-03-28): ownership split locked, renderer-only frontend rule confirmed,
-  first migration inventory recorded in `doc/PLAN_ERROR.md`
-- [x] ER1 complete (2026-03-28): shared expression-span helpers added, current parser span
-  behavior audited, pipeline callee span requirement explicitly deferred
-- [x] ER2 complete (2026-03-28): unresolved bare-name use sites now route through shared
-  span helpers, `map`/named-callback regressions are locked, remaining `span: None` sites
-  are partitioned into done vs deferred in `doc/PLAN_ERROR.md`
-- next implementation entry point: ER3 (qualified-name and ambiguity diagnostics)
+Remaining diagnostic-rendering work now continues under the active TD follow-on
+track in `doc/PLAN_ERROR.md`.
 
-Milestones:
-
-- [x] ER0: Plan and boundary lock — confirm diagnostic ownership model, enumerate first migration sites
-- [x] ER1: Expression-span extraction foundation — shared helpers for narrowest expression/identifier span
-- [x] ER2: Unresolved bare-name diagnostics at use sites — `map` not imported → precise token underline
-- [ ] ER3: Qualified-name and ambiguity diagnostics — `module.name` unresolved, use-site ambiguity
-- [ ] ER4: Import declaration spans — `ImportDecl` span metadata; underline `maap` in `import goby/list ( maap )`
-- [ ] ER5: Shared diagnostic-construction cleanup — common constructors; eliminate `span: None` in covered families
-- [ ] ER6: CLI rendering quality lock — fixture tests for multi-character underline on unresolved-name spans
-- [ ] ER7: LSP range parity lock — LSP range tests for unresolved name, qualified name, import typo
-- [ ] ER8: Track closure — partition remaining `expr span not yet available` sites into done vs deferred
-
-Entry point: start implementation from ER3 now that ER2 is locked.
-
-### 4.6 `Float` / Wasm `f64` Support
+### 4.7 `Float` / Wasm `f64` Support
 
 Goal: add a first-class `Float` type with predictable parser/typechecker/runtime/Wasm behavior.
 
