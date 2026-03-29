@@ -212,6 +212,8 @@ pub(crate) fn effective_runtime_imports(module: &Module) -> Vec<ImportDecl> {
         imports.push(ImportDecl {
             module_path: PRELUDE_MODULE_PATH.to_string(),
             kind: ImportKind::Plain,
+            module_path_span: None,
+            kind_span: None,
         });
     }
     imports

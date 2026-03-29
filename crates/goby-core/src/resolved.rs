@@ -633,6 +633,8 @@ mod tests {
             vec![ImportDecl {
                 module_path: "goby/string".to_string(),
                 kind: ImportKind::Selective(vec!["split".to_string()]),
+                module_path_span: None,
+                kind_span: None,
             }],
             vec![Stmt::Expr(Expr::var("split"), None)],
         );
@@ -656,6 +658,8 @@ mod tests {
             vec![ImportDecl {
                 module_path: "goby/prelude".to_string(),
                 kind: ImportKind::Selective(vec!["read".to_string(), "print".to_string()]),
+                module_path_span: None,
+                kind_span: None,
             }],
             vec![
                 Stmt::Expr(Expr::var("read"), None),
@@ -720,6 +724,8 @@ mod tests {
             vec![ImportDecl {
                 module_path: "goby/list".to_string(),
                 kind: ImportKind::Alias("l".to_string()),
+                module_path_span: None,
+                kind_span: None,
             }],
             vec![Stmt::Expr(Expr::qualified("l", "get"), None)],
         );

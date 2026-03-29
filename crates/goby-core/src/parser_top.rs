@@ -745,6 +745,8 @@ fn parse_import_line(line: &str) -> Option<ImportDecl> {
         return Some(ImportDecl {
             module_path: module_path.to_string(),
             kind: ImportKind::Selective(symbols),
+            module_path_span: None,
+            kind_span: None,
         });
     }
 
@@ -757,6 +759,8 @@ fn parse_import_line(line: &str) -> Option<ImportDecl> {
         return Some(ImportDecl {
             module_path: module_path.to_string(),
             kind: ImportKind::Alias(alias.to_string()),
+            module_path_span: None,
+            kind_span: None,
         });
     }
 
@@ -766,6 +770,8 @@ fn parse_import_line(line: &str) -> Option<ImportDecl> {
     Some(ImportDecl {
         module_path: rest.to_string(),
         kind: ImportKind::Plain,
+        module_path_span: None,
+        kind_span: None,
     })
 }
 

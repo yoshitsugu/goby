@@ -1058,6 +1058,8 @@ mod tests {
         let imp = ImportDecl {
             module_path: "goby/string".to_string(),
             kind: ImportKind::Plain,
+            module_path_span: None,
+            kind_span: None,
         };
         assert_eq!(format_import_decl(&imp), "import goby/string");
     }
@@ -1067,6 +1069,8 @@ mod tests {
         let imp = ImportDecl {
             module_path: "goby/list".to_string(),
             kind: ImportKind::Alias("l".to_string()),
+            module_path_span: None,
+            kind_span: None,
         };
         assert_eq!(format_import_decl(&imp), "import goby/list as l");
     }
@@ -1076,6 +1080,8 @@ mod tests {
         let imp = ImportDecl {
             module_path: "goby/env".to_string(),
             kind: ImportKind::Selective(vec!["fetch_env_var".to_string()]),
+            module_path_span: None,
+            kind_span: None,
         };
         assert_eq!(
             format_import_decl(&imp),

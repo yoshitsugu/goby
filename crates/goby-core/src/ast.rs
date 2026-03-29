@@ -95,6 +95,12 @@ pub struct HandlerClause {
 pub struct ImportDecl {
     pub module_path: String,
     pub kind: ImportKind,
+    /// Span covering the module path token (e.g. `goby/list`).
+    /// `None` for synthetically-constructed imports.
+    pub module_path_span: Option<Span>,
+    /// Span(s) for the import kind tokens.
+    /// `None` for synthetically-constructed imports.
+    pub kind_span: Option<ImportKindSpan>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -102,6 +108,14 @@ pub enum ImportKind {
     Plain,
     Alias(String),
     Selective(Vec<String>),
+}
+
+/// Spans for the tokens of each `ImportKind` variant.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ImportKindSpan {
+    Plain,
+    Alias(Span),
+    Selective(Vec<Span>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -466,6 +466,8 @@ pub(crate) fn effective_imports(
         imports.push(crate::ast::ImportDecl {
             module_path: PRELUDE_MODULE_PATH.to_string(),
             kind: crate::ast::ImportKind::Plain,
+            module_path_span: None,
+            kind_span: None,
         });
     }
     imports

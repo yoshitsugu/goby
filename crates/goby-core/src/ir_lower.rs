@@ -2247,6 +2247,8 @@ main lines =
                     "read".to_string(),
                     "print".to_string(),
                 ]),
+                module_path_span: None,
+                kind_span: None,
             }],
             embed_declarations: vec![],
             type_declarations: vec![],
@@ -2562,6 +2564,8 @@ count n =
             imports: vec![crate::ast::ImportDecl {
                 module_path: "goby/list".to_string(),
                 kind: crate::ast::ImportKind::Selective(vec!["get".to_string()]),
+                module_path_span: None,
+                kind_span: None,
             }],
             embed_declarations: vec![],
             type_declarations: vec![],
