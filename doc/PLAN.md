@@ -538,7 +538,151 @@ Priority rule:
 - if future work reopens an architectural lowering gap, extend `doc/PLAN_IR.md`
   before adding new boundary-specific workarounds.
 
-### 4.1 Active Track D: Developer Tooling Foundation
+### 4.1 Active Track H: Higher-Order Callback Reliability and Multi-Arg Lambda Surface
+
+Goal: make higher-order callback mistakes fail during `goby check` with precise,
+immediately actionable diagnostics, while also replacing the overly long curried
+lambda spelling (`|acc| -> |x| -> ...`) with an intentional multi-parameter
+surface form (`fn acc x -> ...`).
+
+Motivating bug / final acceptance gate:
+
+- The locked acceptance fixture lives in-repo under `examples/`:
+  - program: `examples/hof_fold_print.gb`
+  - input: `examples/hof_fold_print.in`
+  - expected stdout fixture: `examples/hof_fold_print.out`
+- The fixture must isolate:
+  - a `fold` callback,
+  - debug `println` inside the callback,
+  - a final observable result line.
+- The canonical end-to-end gate command is:
+  - `cat examples/hof_fold_print.in | cargo run -p goby-cli -- run examples/hof_fold_print.gb`
+- The stdout from that command must match `examples/hof_fold_print.out` exactly.
+- Done means:
+  - callback-shape errors are rejected during `goby check`,
+  - the new lambda syntax is available for multi-parameter callbacks,
+  - the minimal `fold` + `println` gate executes honestly and prints the
+    expected debug output plus final result.
+- Non-goal for the final acceptance gate:
+  - `goby check` failure fixtures for bad callback shapes are not part of the
+    final runtime acceptance command; they belong to focused regression tests.
+
+Design constraints:
+
+- no fold-specific or println-specific compiler/runtime branch,
+- no parser-only syntax addition without typechecker/lowering/tooling parity,
+- no "accept it in check, hope run works" gap for the covered HOF callback cases,
+- avoid ad hoc one-off special casing in `fold`, `map`, `each`, or individual
+  stdlib symbols,
+- preserve one coherent higher-order call model that can extend to future
+  stdlib/user HOFs,
+- treat this as a language-facing change set: `doc/LANGUAGE_SPEC.md`,
+  `doc/PLAN.md`, relevant `examples/`, and syntax tooling under `tooling/`
+  must move together.
+
+Planned scope:
+
+- strengthen callback typechecking for named functions, qualified refs, and
+  lambdas under an expected function type,
+- add dedicated diagnostics for callback arity mismatch, callback result mismatch,
+  and effectful-callback contract violations,
+- introduce `fn a b -> expr` as the canonical multi-parameter anonymous-function
+  syntax while preserving single-parameter `|x| -> expr` and placeholder lambdas
+  where they remain useful,
+- remove the old nested-curried lambda spelling for multi-parameter callbacks as
+  a supported surface:
+  - `|x| -> |y| -> ...` is not retained for compatibility,
+  - no staged migration period is planned,
+  - temporary work-in-progress tests that prove the old syntax is rejected are
+    allowed during implementation but must be deleted before the track closes,
+- wire the syntax change through formatter, LSP, syntax highlighting, and editor
+  tooling under `tooling/`.
+
+Semantic model lock:
+
+- `fn a b -> expr` is surface sugar for nested unary lambdas in source order.
+  - `fn a b -> expr` is semantically equivalent to `|a| -> |b| -> expr`.
+  - lowering/runtime must continue to operate on one callable model rather than
+    introducing a distinct multi-arg closure representation.
+  - diagnostics and formatting may prefer the `fn` spelling, but implementation
+    ownership remains unified with existing lambda handling.
+
+Milestones:
+
+- [ ] HOF-M1: Reproduce and lock the failing user scenario.
+  - add a minimal regression fixture/program that captures the current failure
+    under the locked fixture paths above and without depending on external repos
+    or problem-specific surrounding logic.
+  - keep the fixture focused on one higher-order callback plus one visible debug
+    print path so failures are easy to reason about.
+  - lock the current bad behavior explicitly before changing implementation.
+  - define `examples/hof_fold_print.out` as the exact final stdout contract.
+- [ ] HOF-M2: Higher-order callback typechecking becomes expected-type-driven.
+  - extend callback checking so lambda arguments are validated against the
+    expected function type at the call site instead of relying on weak inference.
+  - reject `fold xs init (|d| -> ...)` with a dedicated callback-arity diagnostic.
+  - reject callback result-shape mismatches with expected/provided function-type
+    wording that points at the callback site.
+  - add focused `goby check` regressions for bad callback shapes; these are part
+    of milestone validation but not part of the final runtime acceptance gate.
+- [ ] HOF-M3: Effectful callback policy is made explicit and enforced.
+  - lock the near-term rule now:
+    - the covered effectful callback path for ordinary HOF calls must be
+      supported, not rejected, for this track to complete.
+  - make `fold` callback + `println` execute correctly through the shared
+    callback/effect machinery; do not leave silent runtime misbehavior.
+  - add focused regressions that prove supported effectful callback execution and
+    still reject genuinely unsupported callback/effect shapes, if any remain.
+- [ ] HOF-M4: Add multi-parameter lambda syntax.
+  - parser/AST surface: `fn a b -> expr` and `fn a b ->` block body where block
+    expressions are already valid.
+  - formatting and pretty-printing rules are locked.
+  - diagnostics/rendering refer to the new syntax consistently.
+  - initial examples use `fn acc x -> ...` for `fold` callbacks to avoid the
+    verbose `|acc| -> |x| -> ...` spelling.
+  - the old multi-parameter curried spelling is removed as supported syntax by
+    the end of this milestone.
+- [ ] HOF-M5: Lowering/runtime path is unified for the new callback surface.
+  - ensure `fn a b -> ...` lowers through the same long-term callable model as
+    existing lambdas/named callbacks rather than introducing a parallel branch.
+  - verify named, qualified, single-arg lambda, and multi-arg lambda callbacks
+    share one ownership boundary for ordinary higher-order calls.
+  - add parity tests that cover `fold`, `map`, and `each` with the new syntax.
+- [ ] HOF-M6: Tooling parity under `tooling/`.
+  - update syntax highlighting definitions:
+    - `tooling/syntax/textmate`
+    - `tooling/vscode-goby/syntaxes`
+    - `tooling/emacs`
+    - `tooling/vim`
+  - update formatter and LSP-facing expectations if tokenization/rendering
+    changes for the new lambda syntax.
+  - add or update editor/tooling regressions where the repo currently keeps them.
+  - update `doc/LANGUAGE_SPEC.md` and the relevant checked-in examples in the
+    same slice; do not leave syntax/docs/tooling partially migrated.
+- [ ] HOF-M7: End-to-end acceptance gate.
+  - `examples/hof_fold_print.gb`, `examples/hof_fold_print.in`, and
+    `examples/hof_fold_print.out` exist and form the locked runtime acceptance
+    triplet for this track.
+  - the canonical command above succeeds with the final target callback syntax.
+  - the debug `println` calls inside the `fold` callback are visibly printed,
+    proving the callback path executes honestly.
+  - any temporary implementation-only tests that exist solely to prove the old
+    multi-parameter curried spelling fails have been deleted before closing the track.
+  - `cargo fmt`, `cargo check`, `cargo test`, and `cargo clippy -- -D warnings`
+    all pass.
+
+Architecture notes:
+
+- prefer a bidirectional-style checking boundary for lambdas under expected
+  function types rather than layering more ad hoc callback matchers on top of
+  inference-only logic,
+- treat multi-parameter lambda syntax as surface sugar over one coherent
+  callable representation; do not fork lowering/runtime semantics by syntax form,
+- if effectful HOF callbacks require runtime work, implement that capability at
+  the shared callable/effect boundary rather than by adding symbol-name-specific
+  exceptions for `fold`.
+
+### 4.2 Active Track D: Developer Tooling Foundation
 
 Most of Track D is complete. Only still-relevant follow-up items are kept here.
 
@@ -562,14 +706,14 @@ Output format: human-readable (default) and JSON lines (`--json`).
   and Neovim/Vim syntax files.
 - **D6b-ts: Tree-sitter grammar** — defer until after D6c.
 
-### 4.2 Track E: Higher-Order Function-Type Checking (complete, 2026-03-27)
+### 4.3 Track E: Higher-Order Function-Type Checking (complete, 2026-03-27)
 
 All E1–E5 milestones complete. Callback positions such as `each xs println` are rejected during
 `goby-cli check` with a higher-order mismatch diagnostic. The shared matcher in `typecheck_unify.rs`
 handles named, qualified, generic, and partially applied callbacks uniformly.
 Regressions cover direct/qualified/named/generic/partial-application callback cases.
 
-### 4.3 Track F: Stdlib `int.to_string` (complete, 2026-03-25)
+### 4.4 Track F: Stdlib `int.to_string` (complete, 2026-03-25)
 
 `goby/int.to_string : Int -> String` is implemented end-to-end.
 Direct calls and named callback use (`map xs int.to_string`) are covered in
@@ -609,7 +753,7 @@ Note:
 - Critical correctness items from the same review batch were already fixed:
   parser explicit early-return clarity and planning `u16` overflow fail-fast behavior.
 
-### 4.5 Track ER: Compiler Error Reporting
+### 4.6 Track ER: Compiler Error Reporting
 
 See `doc/PLAN_ERROR.md` for the full plan, design principles, and milestone details.
 
