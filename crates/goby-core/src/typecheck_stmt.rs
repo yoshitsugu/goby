@@ -4,7 +4,7 @@ use crate::ast::{Expr, Stmt};
 use crate::typecheck::TypecheckError;
 use crate::typecheck_ambiguity::ensure_no_ambiguous_refs_in_expr;
 use crate::typecheck_branch::check_branch_type_consistency_in_expr;
-use crate::typecheck_call::check_ordinary_call_arg_types_in_expr;
+use crate::typecheck_call::{check_ordinary_call_arg_types_in_expr, infer_expr_binding_ty};
 use crate::typecheck_check::check_expr;
 use crate::typecheck_diag::err_unknown_callable;
 use crate::typecheck_effect_usage::check_unhandled_effects_in_expr;
@@ -110,7 +110,7 @@ fn check_stmt(
                 covered_ops,
                 decl_name,
             )?;
-            let ty = check_expr(value, local_env);
+            let ty = infer_expr_binding_ty(value, local_env);
             local_env.locals.insert(name.clone(), ty);
             local_mutability.insert(name.clone(), false);
             Ok(())
@@ -135,7 +135,7 @@ fn check_stmt(
                 covered_ops,
                 decl_name,
             )?;
-            let ty = check_expr(value, local_env);
+            let ty = infer_expr_binding_ty(value, local_env);
             local_env.locals.insert(name.clone(), ty);
             local_mutability.insert(name.clone(), true);
             Ok(())
@@ -185,7 +185,9 @@ fn check_stmt(
                 });
             }
             if current_ty == Ty::Unknown {
-                local_env.locals.insert(name.clone(), assigned_ty);
+                local_env
+                    .locals
+                    .insert(name.clone(), infer_expr_binding_ty(value, local_env));
             }
             Ok(())
         }

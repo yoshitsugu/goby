@@ -2684,6 +2684,95 @@ main =
     }
 
     #[test]
+    fn rejects_qualified_ordinary_call_argument_type_mismatch() {
+        let source = "\
+import goby/string as s
+
+render : Unit -> Int
+render =
+  s.length 1
+";
+        let module = parse_module(source).expect("should parse");
+        let err = typecheck_module(&module)
+            .expect_err("qualified ordinary call arg mismatch should fail");
+        assert_eq!(err.declaration.as_deref(), Some("render"));
+        assert!(
+            err.message
+                .contains("`s.length` expects argument of type `String` but got `Int`"),
+            "unexpected message: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn rejects_later_argument_type_mismatch_in_curried_ordinary_call() {
+        let source = "\
+add_tag : Int -> String -> Int
+add_tag n tag = n
+
+render : Unit -> Int
+render =
+  add_tag 1 2
+";
+        let module = parse_module(source).expect("should parse");
+        let err =
+            typecheck_module(&module).expect_err("later ordinary call arg mismatch should fail");
+        assert_eq!(err.declaration.as_deref(), Some("render"));
+        assert!(
+            err.message
+                .contains("`add_tag` expects argument of type `String` but got `Int`"),
+            "unexpected message: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn rejects_local_bound_argument_type_mismatch_in_ordinary_call() {
+        let source = "\
+f : Int -> Int
+f a = a + 10
+
+render : Unit -> Int
+render =
+  value = \"a\"
+  f value
+";
+        let module = parse_module(source).expect("should parse");
+        let err =
+            typecheck_module(&module).expect_err("local-bound ordinary arg mismatch should fail");
+        assert_eq!(err.declaration.as_deref(), Some("render"));
+        assert!(
+            err.message
+                .contains("`f` expects argument of type `Int` but got `String`"),
+            "unexpected message: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn rejects_partially_applied_ordinary_call_remainder_argument_mismatch() {
+        let source = "\
+prefix : String -> String -> String
+prefix p value = \"${p}${value}\"
+
+render : Unit -> String
+render =
+  with_prefix = prefix \"n=\"
+  with_prefix 1
+";
+        let module = parse_module(source).expect("should parse");
+        let err = typecheck_module(&module)
+            .expect_err("partially applied ordinary call remainder mismatch should fail");
+        assert_eq!(err.declaration.as_deref(), Some("render"));
+        assert!(
+            err.message
+                .contains("`with_prefix` expects argument of type `String` but got `Int`"),
+            "unexpected message: {}",
+            err.message
+        );
+    }
+
+    #[test]
     fn accepts_function_body_with_param_matching_return_type() {
         // `id : Int -> Int; id x = x` — param x is Int, return is Int — should pass.
         let module = parse_module("id : Int -> Int\nid x = x\n").expect("should parse");

@@ -117,6 +117,14 @@ pub(crate) fn check_ordinary_call_arg_types_in_expr(
     }
 }
 
+pub(crate) fn infer_expr_binding_ty(expr: &Expr, env: &TypeEnv) -> Ty {
+    let Some(_) = ordinary_call_target_and_args(expr) else {
+        return check_expr(expr, env);
+    };
+    let mut next_id = 0;
+    resolve_function_value_ty(expr, env, &mut next_id)
+}
+
 fn check_ordinary_call_arg_types_in_stmt(
     stmt: &Stmt,
     env: &TypeEnv,
