@@ -92,6 +92,16 @@ Last updated: 2026-03-29
     - effect-coverage diagnostics in `typecheck_effect_usage.rs`,
     - aggregate conflicting-effect import/declaration diagnostics in `typecheck_validate.rs`,
     - type-declaration validation spans in `typecheck_types.rs`.
+- Track HOF M1 complete (2026-03-29):
+  - `examples/hof_fold_print.gb`, `examples/hof_fold_print.in`, and
+    `examples/hof_fold_print.out` now lock the end-to-end acceptance shape for the active HOF track.
+  - the fixture currently uses the existing named two-argument callback surface to isolate the
+    runtime contract before `fn acc x -> ...` lands.
+  - focused regressions now also lock the current inline-curried callback failure:
+    `fold [1, 2, 3] 0 (|acc| -> |x| -> acc + x)` still reports
+    `higher-order argument type mismatch ... Unknown -> Unknown -> Unknown`.
+  - the next ownership target is therefore confirmed as expected-type propagation for lambdas in
+    ordinary higher-order call checking (`HOF-M2`), not the runtime fold path.
 - WB-3B prep slice in progress (2026-03-24): `gen_lower/emit.rs` now has an
   `EffectEmitStrategy` boundary and `wasmfx-experimental` feature flag so future WasmFX work can
   replace the emit path without redesigning IR/lowering; current strategies are parity-tested to
@@ -120,7 +130,6 @@ fallback/runtime-output path no longer carries a source-level legacy `string.spl
 The next active implementation track is the higher-order callback / lambda-syntax work in
 `doc/PLAN.md` §4.1.
 Immediate starting point:
-- lock the minimal checked-in `fold` + callback `println` fixture,
 - make callback typechecking expected-type-driven for lambdas,
 - introduce `fn acc x -> ...` as the canonical multi-parameter lambda surface,
 - keep docs/examples/tooling changes in sync with the runtime/typechecker path.

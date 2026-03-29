@@ -2007,6 +2007,33 @@ render =
     }
 
     #[test]
+    fn rejects_fold_inline_curried_lambda_without_expected_type_propagation_yet() {
+        let source = "\
+import goby/prelude
+import goby/list ( fold )
+main : Unit -> Unit can Print
+main =
+  total = fold [1, 2, 3] 0 (|acc| -> |x| -> acc + x)
+  println \"${total}\"
+";
+        let module = parse_module(source).expect("should parse");
+        let err = typecheck_module(&module)
+            .expect_err("inline curried fold callback should still expose the current HOF gap");
+        assert!(
+            err.message.contains("higher-order argument type mismatch"),
+            "unexpected error: {err}"
+        );
+        assert!(
+            err.message.contains("Int -> Int -> Int"),
+            "unexpected error: {err}"
+        );
+        assert!(
+            err.message.contains("Unknown -> Unknown -> Unknown"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
     fn typechecks_list_each_with_plain_import() {
         let source = "\
 import goby/list

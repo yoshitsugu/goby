@@ -1,0 +1,13 @@
+import goby/prelude
+import goby/list ( fold )
+
+step : Int -> Int -> Int can Print
+step acc x =
+  println "acc=${acc} x=${x}"
+  acc + x
+
+main : Unit -> Unit can Print, Read
+main =
+  _ = read()
+  total = fold [1, 2, 3] 0 step
+  println "total=${total}"

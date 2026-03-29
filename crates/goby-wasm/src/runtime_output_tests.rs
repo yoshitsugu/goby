@@ -4,7 +4,7 @@ use std::sync::Mutex;
 use goby_core::{Module, parse_module};
 
 use crate::{
-    assert_mode_parity, lower, resolve_module_runtime_output,
+    assert_mode_parity, execute_runtime_module_with_stdin, lower, resolve_module_runtime_output,
     resolve_module_runtime_output_with_mode_and_stdin,
 };
 
@@ -17,6 +17,15 @@ fn read_example(name: &str) -> String {
     path.push("examples");
     path.push(name);
     std::fs::read_to_string(path).expect("example file should exist")
+}
+
+fn read_example_io(name: &str) -> String {
+    let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    path.push("..");
+    path.push("..");
+    path.push("examples");
+    path.push(name);
+    std::fs::read_to_string(path).expect("example fixture should exist")
 }
 
 fn resolve_with_seeded_stdin(module: &Module, stdin: &str) -> Option<String> {
@@ -34,6 +43,22 @@ fn locks_runtime_output_for_function_example() {
     let module = parse_module(&source).expect("parse should work");
     let output = resolve_module_runtime_output(&module).expect("runtime output should resolve");
     assert_eq!(output, "90[30, 40, 50][60, 70]something15");
+}
+
+#[test]
+fn executes_hof_fold_print_example_with_locked_stdin_and_stdout() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    let source = read_example("hof_fold_print.gb");
+    let stdin = read_example_io("hof_fold_print.in");
+    let expected = read_example_io("hof_fold_print.out");
+    let module = parse_module(&source).expect("hof_fold_print example should parse");
+    let output = execute_runtime_module_with_stdin(&module, Some(stdin))
+        .expect("hof_fold_print example should execute");
+    assert_eq!(
+        output.as_deref(),
+        Some(expected.as_str()),
+        "hof_fold_print example must keep the locked acceptance stdout"
+    );
 }
 
 #[test]

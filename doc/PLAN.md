@@ -508,7 +508,7 @@ Semantic model lock:
 
 Milestones:
 
-- [ ] HOF-M1: Reproduce and lock the failing user scenario.
+- [x] HOF-M1: Reproduce and lock the failing user scenario.
   - add a minimal regression fixture/program that captures the current failure
     under the locked fixture paths above and without depending on external repos
     or problem-specific surrounding logic.
