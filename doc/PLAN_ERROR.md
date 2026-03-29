@@ -1,6 +1,6 @@
 # Goby Error Reporting Plan
 
-Last updated: 2026-03-28
+Last updated: 2026-03-29
 
 This document is the active development plan for richer compiler diagnostics.
 Its first concrete target is precise unresolved-name / name-resolution error
@@ -475,6 +475,87 @@ Done when:
   use-site cases,
 - qualified unresolved names are underlined consistently in CLI and LSP.
 
+### Milestone ER3.5: AST span fields for RecordConstruct, MethodCall, Pipeline
+
+These three expression variants lack span fields in the AST, which blocks
+precise diagnostics in `typecheck_ambiguity.rs` (5 RecordConstruct sites,
+1 MethodCall site, 1 Pipeline-callee site).
+
+- [ ] ER3.5.1 Add `span: Option<Span>` to `Expr::RecordConstruct` in `ast.rs`.
+- [ ] ER3.5.2 Add `span: Option<Span>` to `Expr::MethodCall` in `ast.rs`.
+- [ ] ER3.5.3 Add `callee_span: Option<Span>` to `Expr::Pipeline` in `ast.rs`.
+  Rationale: keeps callee as `String` (no semantics change) and is minimally
+  invasive; full callee-as-Expr refactor is deferred.
+- [ ] ER3.5.4 Populate the new fields in the parser:
+  - `parse_record_constructor_call` → set `span` for the constructor token.
+  - `parse_method_call` → set `span` for the `receiver.method` token.
+  - Pipeline parsing in `parse_expr` → set `callee_span` for the callee token.
+- [ ] ER3.5.5 Extend `copy_expr_spans` / `enrich_expr_spans` in `parser_expr.rs`
+  to propagate the new spans.
+- [ ] ER3.5.6 Update `typecheck_ambiguity.rs`:
+  - RecordConstruct 5 error sites: use `span` from the node.
+  - MethodCall ambiguity site: use `span` from the node.
+  - Pipeline callee ambiguity site: use `callee_span` from the node.
+- [ ] ER3.5.7 Update `typecheck_span.rs` helpers to cover the new span fields
+  where relevant.
+- [ ] ER3.5.8 Update the two pinning tests (`ambiguous_method_call_span_is_none`,
+  `ambiguous_pipeline_callee_span_is_none`) to assert `Some(...)` once spans
+  are wired.
+- [ ] ER3.5.9 Add regression tests confirming span-carrying errors for each new
+  variant.
+
+Constraints:
+
+- no semantics change,
+- `Expr::Pipeline.callee` stays `String`; only `callee_span` is added,
+- all existing 616 tests must continue to pass after each sub-step.
+
+Done when:
+
+- the 7 previously-deferred sites in `typecheck_ambiguity.rs` each carry a
+  non-None span when the parser has position information available,
+- `cargo test` passes clean.
+
+### Milestone ER3.6: HandlerClause span — body-relative to file-relative
+
+`HandlerClause` already carries a body-relative `span: Span` (set in
+`parser_stmt.rs`).  The four `span: None` sites in `typecheck_effect_usage.rs`
+(`resolve_handler_clause_name`) are blocked not by missing AST data but by
+the missing body-offset → file-offset conversion step.
+
+Background: `HandlerClause.span` is relative to the declaration body
+sub-string.  To obtain a source-file line number, the line number of the
+declaration definition line must be added.  This offset is available at the
+call sites in `typecheck_effect_usage.rs` via the `Declaration` context that
+the checker already receives.
+
+- [ ] ER3.6.1 Audit how `Declaration.line` and body-relative span relate;
+  confirm the exact offset formula (body-start line = definition-line + 1).
+- [ ] ER3.6.2 Thread the necessary declaration line information into
+  `resolve_handler_clause_name` so it can compute the file-relative span.
+- [ ] ER3.6.3 Migrate the 4 `span: None` sites in `resolve_handler_clause_name`
+  to use the computed file-relative span.
+- [ ] ER3.6.4 Add regression tests confirming non-None span for:
+  - unknown handler clause name,
+  - ambiguous handler clause name.
+
+Constraints:
+
+- no semantics change,
+- span conversion formula must be confirmed by a test before wiring,
+- do not redesign the body-relative span scheme; use a targeted offset conversion.
+
+Done when:
+
+- the 4 `resolve_handler_clause_name` error sites carry file-relative spans,
+- `cargo test` passes clean.
+
+Note: The remaining two deferred `span: None` sites (Block structural error
+in `typecheck_ambiguity.rs` and return-type mismatch in `typecheck_stmt.rs`)
+are not name-resolution errors; they are explicitly catalogued as out-of-scope
+for the unresolved-name / ambiguity diagnostic track and will be recorded in
+the ER8 closure report.
+
 ### Milestone ER4: Import declaration spans
 
 - [ ] ER4.1 Extend `ImportDecl` with span metadata sufficient for precise
@@ -583,14 +664,17 @@ Strict order:
 1. ER0 before implementation
 2. ER1 before any checker migration
 3. ER2 before ER3
-4. ER3 before ER4
-5. ER4 before ER5
-6. ER5 before ER6/ER7
-7. ER6 and ER7 before ER8
+4. ER3 before ER3.5
+5. ER3.5 before ER3.6
+6. ER3.6 before ER4
+7. ER4 before ER5
+8. ER5 before ER6/ER7
+9. ER6 and ER7 before ER8
 
 Reason:
 
 - expression use-site spans are the highest-value first win,
+- ER3.5 and ER3.6 close the deferred ER3 gaps before moving to import spans,
 - import spans are structurally separate and should not block early progress,
 - cleanup should happen only after the first precision path is proven,
 - presentation locks come after `goby-core` output is stable.
