@@ -43,7 +43,9 @@ pub(crate) fn best_available_expr_span(expr: &Expr) -> Option<Span> {
 mod tests {
     use crate::{
         Expr, Span, Stmt, parse_body_stmts,
-        typecheck_span::{best_available_expr_span, best_available_name_use_span, direct_expr_span},
+        typecheck_span::{
+            best_available_expr_span, best_available_name_use_span, direct_expr_span,
+        },
     };
 
     #[test]
@@ -102,10 +104,7 @@ mod tests {
             best_available_name_use_span(&expr),
             Some(Span::new(5, 3, 5, 9))
         );
-        assert_eq!(
-            best_available_expr_span(&expr),
-            Some(Span::new(5, 3, 5, 9))
-        );
+        assert_eq!(best_available_expr_span(&expr), Some(Span::new(5, 3, 5, 9)));
     }
 
     #[test]
@@ -145,7 +144,10 @@ mod tests {
                     } if name == "map" && *span == Span::new(1, 1, 1, 4)
                 ));
             }
-            other => panic!("expected expr stmt with call and stmt span, got {:?}", other),
+            other => panic!(
+                "expected expr stmt with call and stmt span, got {:?}",
+                other
+            ),
         }
     }
 
@@ -175,7 +177,10 @@ mod tests {
                         && *span == Span::new(1, 1, 1, 9)
                 ));
             }
-            other => panic!("expected expr stmt with qualified call and stmt span, got {:?}", other),
+            other => panic!(
+                "expected expr stmt with qualified call and stmt span, got {:?}",
+                other
+            ),
         }
     }
 }

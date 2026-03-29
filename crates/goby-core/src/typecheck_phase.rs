@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
+use crate::ast::Declaration;
 use crate::{
     Module, Span,
     typecheck::TypecheckError,
@@ -24,7 +25,6 @@ use crate::{
         validate_imports, validate_intrinsic_namespace_policy, validate_no_ambiguous_effect_names,
     },
 };
-use crate::ast::Declaration;
 
 pub(crate) struct ValidationPhase {
     pub(crate) imported_effect_declarations: Vec<ImportedEffectDecl>,

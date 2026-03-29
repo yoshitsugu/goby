@@ -284,11 +284,12 @@ fn parse_call_expr_with_spans(src: &str, line: usize, col: usize) -> Option<Expr
 
 fn copy_expr_spans(dst: &mut Expr, src: &Expr) {
     match (dst, src) {
-        (Expr::Var { span: dst_span, .. }, Expr::Var { span: src_span, .. }) => *dst_span = *src_span,
-        (
-            Expr::Qualified { span: dst_span, .. },
-            Expr::Qualified { span: src_span, .. },
-        ) => *dst_span = *src_span,
+        (Expr::Var { span: dst_span, .. }, Expr::Var { span: src_span, .. }) => {
+            *dst_span = *src_span
+        }
+        (Expr::Qualified { span: dst_span, .. }, Expr::Qualified { span: src_span, .. }) => {
+            *dst_span = *src_span
+        }
         (
             Expr::Call {
                 callee: dst_callee,

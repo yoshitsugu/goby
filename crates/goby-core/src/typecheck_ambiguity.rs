@@ -1,12 +1,13 @@
 use std::collections::HashSet;
 
-use crate::ast::{Expr, InterpolatedPart, Stmt};
+use crate::ast::{Expr, InterpolatedPart, Span, Stmt};
 use crate::typecheck::TypecheckError;
 use crate::typecheck_check::{
     check_expr, env_with_case_pattern_bindings, parse_tuple_member_index,
 };
 use crate::typecheck_env::{Ty, TypeEnv};
 use crate::typecheck_render::ty_name;
+use crate::typecheck_span::best_available_name_use_span;
 
 pub(crate) fn ensure_no_ambiguous_refs_in_expr(
     expr: &Expr,
@@ -38,7 +39,9 @@ pub(crate) fn ensure_no_ambiguous_refs_in_expr(
             }
             Ok(())
         }
-        Expr::Var { name, .. } => ensure_name_not_ambiguous(name, env, decl_name),
+        Expr::Var { name, .. } => {
+            ensure_name_not_ambiguous(name, env, decl_name, best_available_name_use_span(expr))
+        }
         Expr::Qualified {
             receiver, member, ..
         } => {
@@ -52,7 +55,7 @@ pub(crate) fn ensure_no_ambiguous_refs_in_expr(
                         } else {
                             Err(TypecheckError {
                                 declaration: Some(decl_name.to_string()),
-                                span: None, // expr span not yet available
+                                span: best_available_name_use_span(expr),
                                 message: format!(
                                     "tuple member access index `{}` is out of range for receiver `{}` of type `{}`",
                                     index,
@@ -68,7 +71,7 @@ pub(crate) fn ensure_no_ambiguous_refs_in_expr(
                         } else {
                             Err(TypecheckError {
                                 declaration: Some(decl_name.to_string()),
-                                span: None, // expr span not yet available
+                                span: best_available_name_use_span(expr),
                                 message: format!(
                                     "tuple member access `{}` requires tuple receiver, but `{}` type is unresolved",
                                     member, receiver
@@ -78,7 +81,7 @@ pub(crate) fn ensure_no_ambiguous_refs_in_expr(
                     }
                     other => Err(TypecheckError {
                         declaration: Some(decl_name.to_string()),
-                        span: None, // expr span not yet available
+                        span: best_available_name_use_span(expr),
                         message: format!(
                             "tuple member access `{}` requires tuple receiver, but `{}` has type `{}`",
                             member,
@@ -91,13 +94,19 @@ pub(crate) fn ensure_no_ambiguous_refs_in_expr(
             if env.locals.contains_key(receiver) {
                 return Ok(());
             }
-            ensure_name_not_ambiguous(&format!("{}.{}", receiver, member), env, decl_name)
+            ensure_name_not_ambiguous(
+                &format!("{}.{}", receiver, member),
+                env,
+                decl_name,
+                best_available_name_use_span(expr),
+            )
         }
         Expr::RecordConstruct {
             constructor,
             fields,
         } => {
-            ensure_name_not_ambiguous(constructor, env, decl_name)?;
+            // RecordConstruct has no span field in the AST; deferred
+            ensure_name_not_ambiguous(constructor, env, decl_name, None)?;
             let Some(record) = env.lookup_record_by_constructor(constructor) else {
                 return Err(TypecheckError {
                     declaration: Some(decl_name.to_string()),
@@ -180,7 +189,8 @@ pub(crate) fn ensure_no_ambiguous_refs_in_expr(
             args,
         } => {
             let qualified = format!("{}.{}", receiver, method);
-            ensure_name_not_ambiguous(&qualified, env, decl_name)?;
+            // MethodCall has no span field in the AST; deferred
+            ensure_name_not_ambiguous(&qualified, env, decl_name, None)?;
             for arg in args {
                 ensure_no_ambiguous_refs_in_expr(arg, env, decl_name)?;
             }
@@ -188,7 +198,8 @@ pub(crate) fn ensure_no_ambiguous_refs_in_expr(
         }
         Expr::Pipeline { value, callee } => {
             ensure_no_ambiguous_refs_in_expr(value, env, decl_name)?;
-            ensure_name_not_ambiguous(callee, env, decl_name)
+            // Pipeline callee is a String with no span; deferred (consistent with ER2 policy)
+            ensure_name_not_ambiguous(callee, env, decl_name, None)
         }
         Expr::Lambda { param, body } => {
             let child_env = env.with_local(param, Ty::Unknown);
@@ -280,6 +291,7 @@ fn ensure_name_not_ambiguous(
     name: &str,
     env: &TypeEnv,
     decl_name: &str,
+    span: Option<Span>,
 ) -> Result<(), TypecheckError> {
     if env.locals.contains_key(name) {
         return Ok(());
@@ -287,7 +299,7 @@ fn ensure_name_not_ambiguous(
     if let Some(sources) = env.ambiguous_sources(name) {
         return Err(TypecheckError {
             declaration: Some(decl_name.to_string()),
-            span: None, // expr span not yet available
+            span,
             message: format!(
                 "name `{}` is ambiguous due to name resolution collision: {}",
                 name,
@@ -296,4 +308,125 @@ fn ensure_name_not_ambiguous(
         });
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use super::*;
+    use crate::ast::Span;
+    use crate::typecheck_env::{GlobalBinding, Ty, TypeEnv};
+
+    fn env_with_ambiguous(name: &str, sources: &[&str]) -> TypeEnv {
+        let mut globals = HashMap::new();
+        globals.insert(
+            name.to_string(),
+            GlobalBinding::Ambiguous {
+                sources: sources.iter().map(|s| s.to_string()).collect(),
+            },
+        );
+        TypeEnv {
+            globals,
+            locals: HashMap::new(),
+            type_aliases: HashMap::new(),
+            record_types: HashMap::new(),
+        }
+    }
+
+    fn env_with_tuple_local(name: &str, items: Vec<Ty>) -> TypeEnv {
+        let mut locals = HashMap::new();
+        locals.insert(name.to_string(), Ty::Tuple(items));
+        TypeEnv {
+            globals: HashMap::new(),
+            locals,
+            type_aliases: HashMap::new(),
+            record_types: HashMap::new(),
+        }
+    }
+
+    #[test]
+    fn ambiguous_bare_name_error_carries_span() {
+        let span = Span::new(3, 5, 3, 8);
+        let expr = Expr::Var {
+            name: "foo".to_string(),
+            span: Some(span),
+        };
+        let env = env_with_ambiguous("foo", &["mod_a", "mod_b"]);
+
+        let err =
+            ensure_no_ambiguous_refs_in_expr(&expr, &env, "decl").expect_err("should be ambiguous");
+
+        assert_eq!(err.span, Some(span));
+        assert!(err.message.contains("foo"));
+    }
+
+    #[test]
+    fn ambiguous_qualified_name_error_carries_span() {
+        let span = Span::new(5, 1, 5, 9);
+        let expr = Expr::Qualified {
+            receiver: "list".to_string(),
+            member: "map".to_string(),
+            span: Some(span),
+        };
+        let env = env_with_ambiguous("list.map", &["mod_a", "mod_b"]);
+
+        let err =
+            ensure_no_ambiguous_refs_in_expr(&expr, &env, "decl").expect_err("should be ambiguous");
+
+        assert_eq!(err.span, Some(span));
+        assert!(err.message.contains("list.map"));
+    }
+
+    #[test]
+    fn tuple_member_out_of_range_error_carries_span() {
+        let span = Span::new(7, 3, 7, 9);
+        let expr = Expr::Qualified {
+            receiver: "pair".to_string(),
+            member: "2".to_string(), // tuple member index: digits only, no dot prefix
+            span: Some(span),
+        };
+        // pair: (Int, Int) — index 2 is out of range
+        let env = env_with_tuple_local("pair", vec![Ty::Int, Ty::Int]);
+
+        let err = ensure_no_ambiguous_refs_in_expr(&expr, &env, "decl")
+            .expect_err("should be out of range");
+
+        assert_eq!(err.span, Some(span));
+        assert!(err.message.contains("out of range"));
+    }
+
+    /// MethodCall has no span field in the AST today; pin the None contract.
+    #[test]
+    fn ambiguous_method_call_span_is_none() {
+        let expr = Expr::MethodCall {
+            receiver: "list".to_string(),
+            method: "map".to_string(),
+            args: vec![],
+        };
+        let env = env_with_ambiguous("list.map", &["mod_a", "mod_b"]);
+
+        let err =
+            ensure_no_ambiguous_refs_in_expr(&expr, &env, "decl").expect_err("should be ambiguous");
+
+        assert_eq!(err.span, None);
+    }
+
+    /// Pipeline callee is a String with no span today; pin the None contract.
+    #[test]
+    fn ambiguous_pipeline_callee_span_is_none() {
+        let expr = Expr::Pipeline {
+            value: Box::new(Expr::Var {
+                name: "xs".to_string(),
+                span: None,
+            }),
+            callee: "foo".to_string(),
+        };
+        let env = env_with_ambiguous("foo", &["mod_a", "mod_b"]);
+
+        let err =
+            ensure_no_ambiguous_refs_in_expr(&expr, &env, "decl").expect_err("should be ambiguous");
+
+        assert_eq!(err.span, None);
+    }
 }
