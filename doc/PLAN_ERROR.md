@@ -446,15 +446,23 @@ ER2 completion partition:
 
 ### Milestone ER3: Qualified-name and ambiguity diagnostics
 
-- [ ] ER3.1 Migrate qualified unresolved-name errors to use precise spans.
-- [ ] ER3.2 Migrate use-site ambiguity diagnostics in
+- [x] ER3.1 Migrate qualified unresolved-name errors to use precise spans.
+- [x] ER3.2 Migrate use-site ambiguity diagnostics in
   `crates/goby-core/src/typecheck_ambiguity.rs` to use precise spans.
-- [ ] ER3.3 Decide and lock the initial underline policy for qualified names:
+- [x] ER3.3 Decide and lock the initial underline policy for qualified names:
   full token (`receiver.member`) vs member-only.
-- [ ] ER3.4 Add regression tests for:
+- [x] ER3.4 Add regression tests for:
   - unresolved qualified name,
   - ambiguous imported name collision at use site,
   - tuple-member-related ambiguity/error paths that overlap this machinery.
+
+ER3 partition (done vs deferred):
+- Done: `Expr::Var` ambiguity span, `Expr::Qualified` ambiguity span,
+  `Expr::Qualified` tuple-member-access 3 error sites.
+- Deferred (no AST span field): `Expr::RecordConstruct` 5 error sites,
+  `Expr::MethodCall` (no span field on node).
+- Deferred by policy: `Expr::Pipeline` callee (callee is `String`,
+  consistent with ER2); `Expr::Block` structural error (not a name-use error).
 
 Constraints:
 
@@ -720,6 +728,8 @@ Mitigation:
      diagnostic model,
    - it is compatible with later refinement if member-only highlighting proves
      clearly better.
+   Status: locked in ER3. Implemented via `best_available_name_use_span(expr)`
+   at `Expr::Qualified` call sites in `typecheck_ambiguity.rs`.
 2. Unknown module diagnostics should initially target the module path, not the
    full import clause.
    Rationale:
