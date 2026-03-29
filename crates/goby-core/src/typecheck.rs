@@ -1602,7 +1602,7 @@ f = fetch_env_var(\"HOME\")
         let resolver = StdlibResolver::new(root);
 
         let exports = crate::typecheck_validate::module_exports_for_import_with_resolver(
-            "goby/env", &resolver,
+            "goby/env", &resolver, None,
         )
         .expect("resolver export lookup should succeed");
         let ty = exports
@@ -1707,7 +1707,7 @@ main = ()
         let sandbox = TempDirGuard::new("resolver_fallback");
         let resolver = StdlibResolver::new(sandbox.path.join("stdlib"));
         let err = crate::typecheck_validate::module_exports_for_import_with_resolver(
-            "goby/env", &resolver,
+            "goby/env", &resolver, None,
         )
         .expect_err("missing stdlib file should fail");
         assert!(err.message.contains("unknown module `goby/env`"));
@@ -1725,7 +1725,7 @@ main = ()
         let resolver = StdlibResolver::new(root);
 
         let err = crate::typecheck_validate::module_exports_for_import_with_resolver(
-            "goby/env", &resolver,
+            "goby/env", &resolver, None,
         )
         .expect_err("parse failure should return a typecheck error");
         assert!(
@@ -1743,6 +1743,7 @@ main = ()
         let err = crate::typecheck_validate::module_exports_for_import_with_resolver(
             "goby/unknown_mod",
             &resolver,
+            None,
         )
         .expect_err("unknown module should fail");
         assert!(err.message.contains("unknown module `goby/unknown_mod`"));
@@ -1765,6 +1766,7 @@ main = ()
         let exports = crate::typecheck_validate::module_exports_for_import_with_resolver(
             "goby/string",
             &resolver,
+            None,
         )
         .expect("resolver export lookup should succeed");
         let ty = exports.get("split").expect("split should be exported");

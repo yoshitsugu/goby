@@ -46,7 +46,8 @@ pub mod types;
 pub use analysis::resolve_print_text;
 pub use ast::{
     BinOpKind, CaseArm, CasePattern, Declaration, EmbedDecl, Expr, HandlerClause, ImportDecl,
-    ImportKind, ListPatternItem, ListPatternTail, Module, RecordField, Span, Stmt, TypeDeclaration,
+    ImportKind, ImportKindSpan, ListPatternItem, ListPatternTail, Module, RecordField, Span, Stmt,
+    TypeDeclaration,
 };
 pub use diagnostic::{Diagnostic, Severity};
 pub use formatter::format_module;

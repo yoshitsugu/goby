@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use crate::{
-    Expr, ImportKind, Module, Span, Stmt,
+    Expr, ImportKind, ImportKindSpan, Module, Span, Stmt,
     ast::InterpolatedPart,
     stdlib::{StdlibResolveError, StdlibResolver},
     typecheck::{PRELUDE_MODULE_PATH, TypecheckError},
@@ -32,19 +32,26 @@ pub(crate) fn validate_imports(module: &Module, stdlib_root: &Path) -> Result<()
                 };
                 TypecheckError {
                     declaration: None,
-                    span: None, // no span available: ImportDecl has no span field
+                    span: import.module_path_span,
                     message,
                 }
             })?;
         if let ImportKind::Selective(names) = &import.kind {
-            for name in names {
+            for (i, name) in names.iter().enumerate() {
                 let exists = resolved.exports.contains_key(name)
                     || resolved.types.iter().any(|ty| ty == name)
                     || resolved.effects.iter().any(|effect| effect == name);
                 if !exists {
+                    let symbol_span = import.kind_span.as_ref().and_then(|ks| {
+                        if let ImportKindSpan::Selective(spans) = ks {
+                            spans.get(i).copied()
+                        } else {
+                            None
+                        }
+                    });
                     return Err(TypecheckError {
                         declaration: None,
-                        span: None, // no span available: ImportDecl has no span field
+                        span: symbol_span,
                         message: format!(
                             "unknown symbol `{}` in import from `{}`",
                             name, import.module_path
@@ -186,7 +193,7 @@ pub(crate) fn collect_imported_embedded_defaults(
             {
                 return Err(TypecheckError {
                     declaration: None,
-                    span: None, // no span available: ImportDecl has no span field
+                    span: import.module_path_span,
                     message: format!(
                         "conflicting embedded default handler for effect `{}` across stdlib imports (`{}` vs `{}`)",
                         embed.effect_name, existing, embed.handler_name
@@ -335,7 +342,8 @@ pub(crate) fn inject_imported_symbols(
 ) {
     let resolver = StdlibResolver::new(stdlib_root.to_path_buf());
     for import in effective_imports(module, &resolver) {
-        let Ok(exports) = module_exports_for_import_with_resolver(&import.module_path, &resolver)
+        let Ok(exports) =
+            module_exports_for_import_with_resolver(&import.module_path, &resolver, import.module_path_span)
         else {
             continue;
         };
@@ -422,6 +430,7 @@ fn canonical_or_absolute(path: &Path) -> PathBuf {
 pub(crate) fn module_exports_for_import_with_resolver(
     module_path: &str,
     resolver: &StdlibResolver,
+    module_path_span: Option<Span>,
 ) -> Result<HashMap<String, Ty>, TypecheckError> {
     match resolver.resolve_module(module_path) {
         Ok(resolved) => Ok(resolved
@@ -431,7 +440,7 @@ pub(crate) fn module_exports_for_import_with_resolver(
             .collect()),
         Err(StdlibResolveError::ModuleNotFound { attempted_path, .. }) => Err(TypecheckError {
             declaration: None,
-            span: None, // no span available: ImportDecl has no span field
+            span: module_path_span,
             message: format!(
                 "unknown module `{}` (attempted stdlib path: {})",
                 module_path,
@@ -440,7 +449,7 @@ pub(crate) fn module_exports_for_import_with_resolver(
         }),
         Err(err) => Err(TypecheckError {
             declaration: None,
-            span: None, // no span available: ImportDecl has no span field
+            span: module_path_span,
             message: format!(
                 "failed to resolve stdlib module `{}`: {}",
                 module_path,
