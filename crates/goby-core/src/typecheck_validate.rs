@@ -274,7 +274,7 @@ pub(crate) fn validate_no_ambiguous_effect_names(
     };
     Err(TypecheckError {
         declaration: None,
-        span: None, // no span available: ImportDecl has no span field
+        span: None, // no single source span available: aggregate conflict across imports/declarations
         message: format!(
             "effect `{}` has conflicting declarations across imports/declarations: {}",
             effect_name,

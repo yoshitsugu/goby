@@ -80,13 +80,13 @@ diagnostics.
 - Existing comments marking known span gaps:
   `expr span not yet available`
 
-### 2.2 Current bottleneck
+### 2.2 Original bottleneck
 
 The missing piece is not rendering. The missing piece is precise span
 production at the point where name resolution / typechecking decides an error
 occurred.
 
-Right now many relevant errors still use:
+At track start, many relevant errors still used:
 
 - `TypecheckError { span: None, ... }`
 
@@ -116,7 +116,7 @@ Many sites explicitly say `expr span not yet available`.
 
 ### 3.2 Import declaration span absence
 
-`ImportDecl` currently does not carry span metadata. That blocks precise
+At track start, `ImportDecl` did not carry span metadata. That blocked precise
 diagnostics for:
 
 - unknown module path,
@@ -688,6 +688,10 @@ ER8 closure report (locked on 2026-03-29):
     - reason: `ImportDecl` span plumbing is present, but this diagnostic is
       aggregate-by-design and currently has no single narrow source site that can
       represent the entire conflict honestly
+    - `@embed` source-path validation still returns `span: None`
+    - reason: this check is based on the source file path being outside the
+      stdlib root rather than on one AST token span, so there is no syntax-owned
+      location to highlight today
   - `crates/goby-core/src/typecheck_types.rs`
     - duplicate type declaration, invalid alias target type, duplicate constructor,
       duplicate field, invalid field type, and unknown type in type declaration
