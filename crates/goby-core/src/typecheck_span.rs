@@ -184,4 +184,50 @@ mod tests {
             ),
         }
     }
+
+    #[test]
+    fn parse_body_stmts_populates_method_call_span() {
+        let stmts = parse_body_stmts("string.split(a, b)").expect("should parse");
+
+        match &stmts[0] {
+            Stmt::Expr(
+                Expr::MethodCall { span: Some(span), .. },
+                _,
+            ) => {
+                assert_eq!(*span, Span::new(1, 1, 1, 19));
+            }
+            other => panic!("expected MethodCall with span, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_body_stmts_populates_record_construct_span() {
+        let stmts = parse_body_stmts("Foo(x: 1)").expect("should parse");
+
+        match &stmts[0] {
+            Stmt::Expr(
+                Expr::RecordConstruct { span: Some(span), .. },
+                _,
+            ) => {
+                assert_eq!(*span, Span::new(1, 1, 1, 10));
+            }
+            other => panic!("expected RecordConstruct with span, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_body_stmts_populates_pipeline_callee_span() {
+        let stmts = parse_body_stmts("xs |> f").expect("should parse");
+
+        match &stmts[0] {
+            Stmt::Expr(
+                Expr::Pipeline { callee_span: Some(span), callee, .. },
+                _,
+            ) => {
+                assert_eq!(callee, "f");
+                assert_eq!(*span, Span::new(1, 7, 1, 8));
+            }
+            other => panic!("expected Pipeline with callee_span, got {:?}", other),
+        }
+    }
 }

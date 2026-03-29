@@ -199,6 +199,43 @@ fn parse_expr_with_spans(src: &str, line: usize, col: usize) -> Option<Expr> {
     let leading_ws = src.len().checked_sub(src.trim_start().len())?;
     let col = col + leading_ws;
 
+    // MethodCall: receiver.method(...) — must come before parse_call_expr_with_spans
+    if let Some(Expr::MethodCall { receiver, method, args, .. }) = parse_method_call(trimmed) {
+        let len = trimmed.len();
+        return Some(Expr::MethodCall {
+            receiver,
+            method,
+            args,
+            span: Some(Span::new(line, col, line, col + len)),
+        });
+    }
+
+    // RecordConstruct: CamelCase(...) — must come before parse_call_expr_with_spans
+    if let Some(Expr::RecordConstruct { constructor, fields, .. }) =
+        parse_record_constructor_call(trimmed)
+    {
+        let len = trimmed.len();
+        return Some(Expr::RecordConstruct {
+            constructor,
+            fields,
+            span: Some(Span::new(line, col, line, col + len)),
+        });
+    }
+
+    // Pipeline: value |> callee — callee_span uses subslice_offset (safe: callee is a subslice of trimmed)
+    if let Some((left, right)) = split_top_level_pipeline(trimmed) {
+        let callee = right.trim();
+        if is_identifier(callee) {
+            let callee_col = col + subslice_offset(trimmed, callee);
+            let value = parse_expr(left)?;
+            return Some(Expr::Pipeline {
+                value: Box::new(value),
+                callee: callee.to_string(),
+                callee_span: Some(Span::new(line, callee_col, line, callee_col + callee.len())),
+            });
+        }
+    }
+
     if let Some(expr) = parse_call_expr_with_spans(trimmed, line, col) {
         return Some(expr);
     }
@@ -306,6 +343,30 @@ fn copy_expr_spans(dst: &mut Expr, src: &Expr) {
             *dst_span = *src_span;
             copy_expr_spans(dst_callee, src_callee);
             copy_expr_spans(dst_arg, src_arg);
+        }
+        (
+            Expr::MethodCall { span: dst_span, .. },
+            Expr::MethodCall { span: src_span, .. },
+        ) => {
+            *dst_span = *src_span;
+        }
+        (
+            Expr::RecordConstruct { span: dst_span, .. },
+            Expr::RecordConstruct { span: src_span, .. },
+        ) => {
+            *dst_span = *src_span;
+        }
+        (
+            Expr::Pipeline {
+                callee_span: dst_cs,
+                ..
+            },
+            Expr::Pipeline {
+                callee_span: src_cs,
+                ..
+            },
+        ) => {
+            *dst_cs = *src_cs;
         }
         _ => {}
     }
