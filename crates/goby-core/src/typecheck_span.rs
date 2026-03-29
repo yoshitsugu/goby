@@ -1,16 +1,13 @@
 use crate::ast::{Expr, Span};
 
 /// Return the span stored directly on this expression node, if any.
-///
-/// Current ER1 audit:
-/// - `Expr::Var`, `Expr::Qualified`, and `Expr::Call` can carry direct spans.
-/// - parser string-level expression parsing currently leaves those direct spans as `None`.
-/// - body statement parsing currently attaches statement spans, not nested identifier spans.
-/// - `Expr::Pipeline` stores its callee as a `String`, so its callee token span is not
-///   recoverable without an AST/data-model change.
 pub(crate) fn direct_expr_span(expr: &Expr) -> Option<Span> {
     match expr {
-        Expr::Var { span, .. } | Expr::Qualified { span, .. } | Expr::Call { span, .. } => *span,
+        Expr::Var { span, .. }
+        | Expr::Qualified { span, .. }
+        | Expr::Call { span, .. }
+        | Expr::MethodCall { span, .. }
+        | Expr::RecordConstruct { span, .. } => *span,
         _ => None,
     }
 }
@@ -20,12 +17,12 @@ pub(crate) fn direct_expr_span(expr: &Expr) -> Option<Span> {
 /// This helper is intentionally conservative:
 /// - variables and qualified names use their direct node spans,
 /// - curried calls recurse into the callee and fall back to the outer call span,
-/// - pipeline callees return `None` today because the AST does not store a callee span.
+/// - pipeline callees use callee_span when available.
 pub(crate) fn best_available_name_use_span(expr: &Expr) -> Option<Span> {
     match expr {
         Expr::Var { span, .. } | Expr::Qualified { span, .. } => *span,
         Expr::Call { callee, span, .. } => best_available_name_use_span(callee).or(*span),
-        Expr::Pipeline { .. } => None,
+        Expr::Pipeline { callee_span, .. } => *callee_span,
         _ => direct_expr_span(expr),
     }
 }

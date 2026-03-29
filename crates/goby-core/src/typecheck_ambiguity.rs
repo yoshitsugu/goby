@@ -7,7 +7,7 @@ use crate::typecheck_check::{
 };
 use crate::typecheck_env::{Ty, TypeEnv};
 use crate::typecheck_render::ty_name;
-use crate::typecheck_span::best_available_name_use_span;
+use crate::typecheck_span::{best_available_expr_span, best_available_name_use_span};
 
 pub(crate) fn ensure_no_ambiguous_refs_in_expr(
     expr: &Expr,
@@ -106,12 +106,16 @@ pub(crate) fn ensure_no_ambiguous_refs_in_expr(
             fields,
             ..
         } => {
-            // RecordConstruct has no span field in the AST; deferred
-            ensure_name_not_ambiguous(constructor, env, decl_name, None)?;
+            ensure_name_not_ambiguous(
+                constructor,
+                env,
+                decl_name,
+                best_available_expr_span(expr),
+            )?;
             let Some(record) = env.lookup_record_by_constructor(constructor) else {
                 return Err(TypecheckError {
                     declaration: Some(decl_name.to_string()),
-                    span: None, // expr span not yet available
+                    span: best_available_expr_span(expr),
                     message: format!("unknown record constructor `{}`", constructor),
                 });
             };
@@ -123,7 +127,7 @@ pub(crate) fn ensure_no_ambiguous_refs_in_expr(
                 if !seen.insert(name.clone()) {
                     return Err(TypecheckError {
                         declaration: Some(decl_name.to_string()),
-                        span: None, // expr span not yet available
+                        span: best_available_expr_span(expr),
                         message: format!(
                             "duplicate field `{}` in constructor call `{}`",
                             name, constructor
@@ -133,7 +137,7 @@ pub(crate) fn ensure_no_ambiguous_refs_in_expr(
                 let Some(expected_ty) = record.fields.get(name) else {
                     return Err(TypecheckError {
                         declaration: Some(decl_name.to_string()),
-                        span: None, // expr span not yet available
+                        span: best_available_expr_span(expr),
                         message: format!(
                             "unknown field `{}` in constructor call `{}`",
                             name, constructor
@@ -144,7 +148,7 @@ pub(crate) fn ensure_no_ambiguous_refs_in_expr(
                 if actual_ty != Ty::Unknown && !env.are_compatible(expected_ty, &actual_ty) {
                     return Err(TypecheckError {
                         declaration: Some(decl_name.to_string()),
-                        span: None, // expr span not yet available
+                        span: best_available_expr_span(expr),
                         message: format!(
                             "field `{}` in constructor `{}` has type `{}` but expected `{}`",
                             name,
@@ -165,7 +169,7 @@ pub(crate) fn ensure_no_ambiguous_refs_in_expr(
                 missing.sort();
                 return Err(TypecheckError {
                     declaration: Some(decl_name.to_string()),
-                    span: None, // expr span not yet available
+                    span: best_available_expr_span(expr),
                     message: format!(
                         "missing field(s) in constructor call `{}`: {}",
                         constructor,
@@ -191,8 +195,12 @@ pub(crate) fn ensure_no_ambiguous_refs_in_expr(
             ..
         } => {
             let qualified = format!("{}.{}", receiver, method);
-            // MethodCall has no span field in the AST; deferred
-            ensure_name_not_ambiguous(&qualified, env, decl_name, None)?;
+            ensure_name_not_ambiguous(
+                &qualified,
+                env,
+                decl_name,
+                best_available_name_use_span(expr),
+            )?;
             for arg in args {
                 ensure_no_ambiguous_refs_in_expr(arg, env, decl_name)?;
             }
@@ -200,8 +208,12 @@ pub(crate) fn ensure_no_ambiguous_refs_in_expr(
         }
         Expr::Pipeline { value, callee, .. } => {
             ensure_no_ambiguous_refs_in_expr(value, env, decl_name)?;
-            // Pipeline callee is a String with no span; deferred (consistent with ER2 policy)
-            ensure_name_not_ambiguous(callee, env, decl_name, None)
+            ensure_name_not_ambiguous(
+                callee,
+                env,
+                decl_name,
+                best_available_name_use_span(expr),
+            )
         }
         Expr::Lambda { param, body } => {
             let child_env = env.with_local(param, Ty::Unknown);
@@ -398,39 +410,39 @@ mod tests {
         assert!(err.message.contains("out of range"));
     }
 
-    /// MethodCall has no span field in the AST today; pin the None contract.
     #[test]
-    fn ambiguous_method_call_span_is_none() {
+    fn ambiguous_method_call_error_carries_span() {
+        let span = Span::new(2, 5, 2, 21);
         let expr = Expr::MethodCall {
             receiver: "list".to_string(),
             method: "map".to_string(),
             args: vec![],
-            span: None,
+            span: Some(span),
         };
         let env = env_with_ambiguous("list.map", &["mod_a", "mod_b"]);
 
         let err =
             ensure_no_ambiguous_refs_in_expr(&expr, &env, "decl").expect_err("should be ambiguous");
 
-        assert_eq!(err.span, None);
+        assert_eq!(err.span, Some(span));
     }
 
-    /// Pipeline callee is a String with no span today; pin the None contract.
     #[test]
-    fn ambiguous_pipeline_callee_span_is_none() {
+    fn ambiguous_pipeline_callee_error_carries_span() {
+        let callee_span = Span::new(1, 7, 1, 10);
         let expr = Expr::Pipeline {
             value: Box::new(Expr::Var {
                 name: "xs".to_string(),
                 span: None,
             }),
             callee: "foo".to_string(),
-            callee_span: None,
+            callee_span: Some(callee_span),
         };
         let env = env_with_ambiguous("foo", &["mod_a", "mod_b"]);
 
         let err =
             ensure_no_ambiguous_refs_in_expr(&expr, &env, "decl").expect_err("should be ambiguous");
 
-        assert_eq!(err.span, None);
+        assert_eq!(err.span, Some(callee_span));
     }
 }
