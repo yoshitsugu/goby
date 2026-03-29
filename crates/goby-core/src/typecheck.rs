@@ -2501,6 +2501,34 @@ f =
     }
 
     #[test]
+    fn unknown_module_diagnostic_carries_module_path_span() {
+        // "import goby/unknown" — "goby/unknown" starts at col 8, length 12 → end col 19
+        let module = parse_module("import goby/unknown\nmain : Unit -> Unit\nmain = 1\n")
+            .expect("should parse");
+        let err = typecheck_module(&module).expect_err("unknown module should fail");
+        let span = err.span.expect("error should have a span");
+        assert_eq!(span.line, 1);
+        assert_eq!(span.col, 8);
+        assert_eq!(span.end_col, 19); // "goby/unknown" is 12 chars
+    }
+
+    #[test]
+    fn unknown_selective_symbol_diagnostic_underlines_symbol() {
+        // ER4 spec: import goby/list ( each, maap ) should underline `maap`
+        // "import goby/list ( each, maap )"
+        //  1234567890123456789012345678901
+        // "goby/list" → col 8, "each" → col 20..23, "maap" → col 26..29
+        let source = "import goby/list ( each, maap )\nmain : Unit -> Unit\nmain = 1\n";
+        let module = parse_module(source).expect("should parse");
+        let err = typecheck_module(&module).expect_err("unknown symbol should fail");
+        let span = err.span.expect("error should have a span");
+        assert_eq!(span.line, 1);
+        assert_eq!(span.col, 26);   // "maap" start col
+        assert_eq!(span.end_col, 29); // "maap" end col (4 chars)
+        assert!(err.message.contains("maap"));
+    }
+
+    #[test]
     fn rejects_used_name_when_import_collides_with_declaration() {
         let source = "\
 import goby/env ( fetch_env_var )
