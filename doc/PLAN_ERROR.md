@@ -2,821 +2,299 @@
 
 Last updated: 2026-03-29
 
-This document is the active development plan for richer compiler diagnostics.
-Its first concrete target is precise unresolved-name / name-resolution error
-reporting in both:
+This document is the active planning note for compiler-diagnostic quality.
+It is intentionally kept compact:
 
-- CLI output (`goby check`, `goby run`, `goby lint`)
-- LSP diagnostics (editor wave underline)
+- active and follow-on tracks stay here,
+- completed tracks are summarized only at closure level,
+- implementation-by-implementation history belongs in git and `doc/STATE.md`,
+  not in this plan.
 
-The plan is intentionally architecture-first:
+The shared architectural rule remains:
 
-- no `map`-specific or symbol-specific shortcuts,
-- no duplicate error-generation logic in CLI vs LSP,
-- no string-based reconstruction of source positions during typechecking,
-- no one-off fixes that make future diagnostic work harder.
-
-The end state should be modular, restart-safe, and incrementally shippable.
+- `goby-core` owns diagnostic meaning, message text, and source span,
+- `goby-cli` and `goby-lsp` render the shared `Diagnostic` payload,
+- frontends must not guess spans by reinterpreting Goby semantics.
 
 ---
 
-## 1. Representative User-Facing Goal
+## 1. Shared Design Rules
+
+1. **`goby-core` owns diagnosis; frontends own rendering.**
+2. **Syntax-bearing nodes own source locations.**
+3. **One shared diagnostic contract.**
+   `Diagnostic { span, message, declaration, severity }` remains the boundary.
+4. **Narrowest actionable span wins.**
+   Prefer the blamed token or argument expression over enclosing lines when the
+   AST owns that location.
+5. **Generic rules over symbol-specific branches.**
+   Do not special-case `map`, `print`, `println`, or any one fixture.
+6. **Closure requires explicit deferred-gap reporting.**
+   If a diagnostic family still lacks precise spans, record it explicitly rather
+   than leaving open `span: None` comments to imply future work.
+
+---
+
+## 2. Completed Track ER: Name-Resolution Rendering Parity
+
+Track ER is complete.
+
+What ER closed:
+
+- unresolved bare-name diagnostics at ordinary use sites,
+- unresolved qualified-name diagnostics,
+- ambiguity-at-use-site diagnostics,
+- import module / selective-symbol diagnostics,
+- CLI snippet rendering parity for those families,
+- LSP range parity for those families.
+
+Representative result:
+
+```text
+hoge.gb:7:3: error: unknown function or constructor `prntln` in 'main'
+7 |   prntln "test"
+  |   ^^^^^^
+```
+
+ER closure summary:
+
+- `goby-core` now produces token-precise spans for the covered unresolved-name /
+  ambiguity / import-resolution families.
+- CLI and LSP parity is regression-locked for the covered cases.
+- ER did not attempt to solve every remaining `span: None` in the compiler.
+
+Deferred outside ER:
+
+- `crates/goby-core/src/typecheck_ambiguity.rs`
+  - block-structure validation (`block expression must end with an expression`)
+- `crates/goby-core/src/typecheck_stmt.rs`
+  - declaration body vs declared return-type mismatch
+- `crates/goby-core/src/typecheck_effect_usage.rs`
+  - required-effect coverage failures
+  - pipeline unhandled-effect diagnostics
+- `crates/goby-core/src/typecheck_validate.rs`
+  - conflicting effect declarations across imports/local declarations
+  - `@embed` source-path validation
+- `crates/goby-core/src/typecheck_types.rs`
+  - type-declaration validation spans
+
+These remain follow-up work because they need a separate blame-site policy,
+body-relative-to-file-relative wiring, or additional syntax/span ownership.
+
+---
+
+## 3. Active Follow-on Track TD: Typed Diagnostic Rendering Parity
+
+Track ER solved unresolved-name-style diagnostics. The next slice is to give
+type errors the same CLI/LSP rendering quality.
+
+Representative goal:
 
 Given:
 
 ```goby
-import goby/list ( each )
-import goby/string ( split, graphemes )
+f : Int -> Int
+f a = a + 10
 
-main : Unit -> Unit can Print, Read
+main : Unit -> Unit can Print
 main =
-  text = read ()
-  lines = split text "\n"
-  rolls = map lines graphemes
-  each (rolls[2]) println
+  b = f "a"
+  println "test"
 ```
 
-When `map` is not in scope, the desired result is:
+The desired CLI result is:
 
-- CLI:
+```text
+hoge.gb:6:9: error: `f` expects argument of type `Int` but got `String` in 'main'
+6 |   b = f "a"
+  |         ^^^
+```
 
-  ```text
-  sample.gb:8:11: error: unknown function or constructor `map` in 'main'
-   8 |   rolls = map lines graphemes
-     |           ^^^
-  ```
+And the corresponding LSP diagnostic should:
 
-- LSP:
-  - diagnostic range covers the `map` token only,
-  - editor renders the underline directly under `map`.
+- highlight only the mismatched argument token where the AST owns a precise span,
+- reuse the same `Diagnostic` contract already used by CLI,
+- avoid frontend-side guessing.
 
-This same mechanism must generalize to:
+### 3.1 Scope
 
-- unresolved bare names,
-- unresolved qualified names,
-- ambiguity-at-use-site diagnostics,
-- import symbol resolution errors.
+- ordinary first-order argument type mismatches,
+- qualified ordinary-call argument mismatches,
+- later-argument mismatches in curried ordinary calls,
+- local-bound / partially-applied ordinary-call remainder mismatches,
+- effect-op argument mismatches where the wrong argument expression is already
+  known,
+- `resume` argument mismatches where the wrong argument expression is already
+  known.
+
+### 3.2 Non-goals
+
+- suggestion text (`did you mean`),
+- secondary labels / notes,
+- wide wording refresh for every typecheck diagnostic family,
+- diagnostics whose blamed syntax is still not owned precisely enough to choose
+  an honest span.
+
+### 3.3 Constraints
+
+- keep `goby-core` as the sole owner of typed diagnostic meaning and span,
+- reuse the existing ER helper/renderer contract rather than inventing a second
+  type-error presentation path,
+- do not special-case one function such as `f`, `print`, or `println`,
+- if a typed diagnostic still lacks a precise span, record that explicitly
+  instead of letting the invalid program drift into lowering/runtime/codegen.
+
+### 3.4 Milestones
+
+#### Milestone TD0: Boundary Lock and Inventory
+
+- [ ] TD0.1 Enumerate typed diagnostic families that already know the blamed
+  expression but still return `span: None` or an overly wide span.
+- [ ] TD0.2 Partition those families into:
+  - can become token-precise with existing AST ownership,
+  - require new span ownership or a separate follow-up track.
+- [ ] TD0.3 Lock the initial family set for TD so the slice stays bounded.
+
+Done when:
+
+- the first typed-diagnostic migration set is explicit rather than open-ended.
+
+#### Milestone TD1: Ordinary Call Argument Mismatch Spans
+
+- [ ] TD1.1 Ensure ordinary first-order argument mismatch diagnostics point at
+  the mismatched argument expression, not only declaration context.
+- [ ] TD1.2 Add focused regressions for:
+  - bare ordinary call mismatch,
+  - qualified ordinary call mismatch,
+  - later-argument mismatch,
+  - partially-applied remainder mismatch.
+- [ ] TD1.3 Record any remaining ordinary-call mismatch sites that still cannot
+  become precise and why.
+
+Done when:
+
+- the covered ordinary-call mismatch family renders with source snippets in CLI
+  and token-aligned ranges in LSP.
+
+#### Milestone TD2: Existing Typed-Argument Families Parity
+
+- [ ] TD2.1 Audit and tighten effect-op argument mismatch spans where the wrong
+  argument expression is already known.
+- [ ] TD2.2 Audit and tighten `resume` argument mismatch spans for the same
+  reason.
+- [ ] TD2.3 Add focused regressions proving these families keep their current
+  ownership/messages while gaining precise spans.
+
+Done when:
+
+- typed argument-mismatch families that already know the blamed argument gain
+  snippet/range parity without moving diagnosis out of `goby-core`.
+
+#### Milestone TD3: CLI Rendering Lock for Typed Diagnostics
+
+- [ ] TD3.1 Add a representative `goby check` fixture for the ordinary mismatch
+  example above.
+- [ ] TD3.2 Add a `goby run` regression proving the same invalid program fails
+  during typecheck with the same rendered diagnostic rather than drifting into
+  lowering/codegen.
+- [ ] TD3.3 Lock at least one later-argument or qualified-call typed mismatch
+  rendering case.
+
+Done when:
+
+- typed diagnostics render with the same snippet/header quality now locked for
+  unresolved-name diagnostics.
+
+#### Milestone TD4: LSP Range Parity for Typed Diagnostics
+
+- [ ] TD4.1 Add LSP tests for ordinary argument mismatch range selection.
+- [ ] TD4.2 Add at least one parity test for a qualified or later-argument
+  typed mismatch.
+- [ ] TD4.3 Confirm UTF-16 conversion remains correct for typed diagnostic
+  ranges on multibyte-adjacent lines.
+
+Done when:
+
+- editor underline behavior for the covered typed families is predictable from
+  `goby-core` spans alone.
+
+#### Milestone TD5: Closure and Deferred-Gap Report
+
+- [ ] TD5.1 Record which typed diagnostic families now have snippet/range parity.
+- [ ] TD5.2 Explicitly catalog the remaining typed diagnostics that still lack
+  precise spans and the ownership reason for each.
+- [ ] TD5.3 Update `doc/STATE.md` with closure or next-slice notes.
+
+Done when:
+
+- typed-diagnostic rendering coverage is explicitly partitioned into done vs
+  deferred, matching the closure standard used in Track ER.
 
 ---
 
-## 2. Existing Base To Reuse
+## 4. Module Ownership
 
-The repository already has the outer presentation layers needed for rich
-diagnostics.
-
-### 2.1 Present today
-
-- Unified diagnostics:
-  `crates/goby-core/src/diagnostic.rs`
-- CLI diagnostic header + snippet rendering:
-  `crates/goby-cli/src/main.rs`
-- LSP diagnostic publication and `Span -> Range` conversion:
-  `crates/goby-lsp/src/main.rs`
-- Parser/body-relative span work for:
-  - declarations,
-  - statements,
-  - handler clauses,
-  - case arms
-- Existing comments marking known span gaps:
-  `expr span not yet available`
-
-### 2.2 Original bottleneck
-
-The missing piece is not rendering. The missing piece is precise span
-production at the point where name resolution / typechecking decides an error
-occurred.
-
-At track start, many relevant errors still used:
-
-- `TypecheckError { span: None, ... }`
-
-That prevents:
-
-- CLI from showing a useful underline,
-- LSP from publishing a useful range.
-
----
-
-## 3. Problem Breakdown
-
-There are four distinct but related problems.
-
-### 3.1 Expression use-site span loss
-
-Errors in these areas often know *what* failed but not *where*:
-
-- `typecheck_stmt.rs`
-- `typecheck_ambiguity.rs`
-- `typecheck_check.rs`
-- `typecheck_effect_usage.rs`
-- `typecheck_resume.rs`
-- `typecheck_branch.rs`
-
-Many sites explicitly say `expr span not yet available`.
-
-### 3.2 Import declaration span absence
-
-At track start, `ImportDecl` did not carry span metadata. That blocked precise
-diagnostics for:
-
-- unknown module path,
-- unknown selective-imported symbol,
-- some import-related conflict diagnostics.
-
-### 3.3 Data-model fragmentation risk
-
-If each checker starts inventing custom span extraction rules, the codebase will
-drift toward ad-hoc behavior. That would make future diagnostics inconsistent
-and hard to maintain.
-
-### 3.4 Presentation split risk
-
-If CLI and LSP diverge in how they interpret diagnostics, the project will end
-up maintaining two parallel UX contracts.
-
----
-
-## 4. Design Principles
-
-1. **`goby-core` owns diagnosis; frontends own rendering.**
-   CLI and LSP must not perform extra name analysis to guess highlight ranges.
-2. **Syntax-bearing nodes own source locations.**
-   Spans should come from AST nodes, not reconstructed strings.
-3. **One shared diagnostic contract.**
-   `Diagnostic { span, message, declaration, severity }` remains the only
-   presentation boundary in this slice.
-4. **Narrowest actionable span wins.**
-   Prefer the exact unresolved token over an enclosing line or declaration span.
-5. **Generic span propagation over per-symbol hacks.**
-   Fix the infrastructure once; do not special-case `map`, `print`, etc.
-6. **Milestones must be shippable.**
-   Each phase should leave the repository in a coherent, releasable state.
-7. **Design-affecting uncertainty is paid down early.**
-   If a question changes AST shape, span ownership, or diagnostic architecture,
-   prefer resolving it in this track rather than postponing it behind local UX
-   tweaks.
-8. **Purely local presentation choices can be deferred.**
-   If a choice does not materially affect the long-term data model or ownership
-   split, it may be handled later once the structural path is locked.
-
----
-
-## 5. Target Architecture
-
-### 5.1 Responsibility split
-
-`goby-core`
-
-- owns AST span capture,
-- owns span propagation through validation/typechecking,
-- owns the final `Diagnostic` span/message/declaration payload.
-
-`goby-cli`
-
-- renders `Diagnostic` as:
-  - header,
-  - source snippet,
-  - multi-character underline when `Span.end_col > Span.col`.
-
-`goby-lsp`
-
-- converts `Diagnostic.span` into LSP `Range`,
-- publishes diagnostics,
-- does not reinterpret Goby semantics to guess spans.
-
-### 5.2 Data model direction
-
-Short-to-medium term:
-
-- keep using existing `Span`,
-- enrich AST/import nodes with missing span fields,
-- add small shared helpers for extracting "best available error span".
-
-Longer-term compatible direction:
-
-- a dedicated diagnostic helper layer in `goby-core` may centralize common
-  span-selection policies,
-- but this plan does not require redesigning the whole typechecker around a new
-  error type.
-
-### 5.3 Explicitly avoided directions
-
-- backend-/frontend-specific diagnostic generation,
-- string search over source text to locate missing identifiers,
-- per-checker bespoke span rules with no shared helper layer,
-- speculative suggestion engines in the same slice.
-
----
-
-## 6. Scope and Non-goals
-
-### 6.1 In scope
-
-- unresolved bare names,
-- unresolved qualified names,
-- name ambiguity at use sites,
-- import module / selective symbol resolution errors,
-- precise CLI underline rendering for those errors,
-- precise LSP ranges for those errors.
-
-### 6.2 Out of scope for this plan
-
-- typo suggestions / "did you mean",
-- notes / related spans / secondary labels,
-- general wording refresh for all diagnostics,
-- full parser-span coverage for every syntax form not needed by this plan,
-- new compiler phases that split resolution from typechecking unless clearly
-  required later.
-
----
-
-## 7. Milestones
-
-The milestones below are intended to be implemented in order. Each one is small
-enough to complete and verify independently.
-
-### Milestone ER0: Plan and boundary lock
-
-- [x] ER0.1 Lock the diagnostic boundary and ownership model in this document.
-- [x] ER0.2 Confirm that CLI and LSP remain pure renderers of `goby_core::Diagnostic`.
-- [x] ER0.3 Enumerate the first unresolved-name call sites to migrate.
-
-ER0 decisions locked on 2026-03-28:
-
-- `goby-core` remains the only layer allowed to decide compiler-diagnostic
-  meaning, message text, declaration context, and source span in this track.
-- `goby-cli` remains a renderer only:
-  - it calls `goby_core::parse_module` and
-    `goby_core::typecheck_module_collect_with_context`,
-  - converts returned errors via `goby_core::Diagnostic::from(...)`,
-  - renders the resulting payload without re-running name analysis.
-- `goby-lsp` remains a renderer/transport layer only:
-  - it calls `goby_core::parse_module` and
-    `goby_core::typecheck_module_collect_with_context`,
-  - converts returned diagnostics through `to_lsp_diagnostic(...)`,
-  - it does not run a second name-resolution or span-guessing pass.
-- The current synthetic LSP-only `"stdlib root not found"` environment error is
-  outside the unresolved-name/import compiler-diagnostic family and is not a
-  precedent for duplicating compiler diagnosis in frontends.
-
-Current code evidence for the ownership split:
-
-- `crates/goby-cli/src/main.rs`
-  - `run()` converts parse/typecheck errors to `goby_core::Diagnostic` and
-    passes them to `render_diag(...)`.
-- `crates/goby-lsp/src/main.rs`
-  - `analyze()` converts parse/typecheck errors to `goby_core::Diagnostic` and
-    then to LSP diagnostics with `to_lsp_diagnostic(...)`.
-- `crates/goby-core/src/diagnostic.rs`
-  - already defines the shared `Diagnostic { span, message, declaration,
-    severity }` boundary consumed by both frontends.
-
-First migration inventory locked for ER1/ER2/ER3:
-
-- ER2 unresolved bare-name sites
-  - `crates/goby-core/src/typecheck_stmt.rs`
-    - `ensure_known_call_targets_in_expr`: bare call callee
-    - `ensure_known_call_targets_in_expr`: pipeline callee
-  - `crates/goby-core/src/typecheck_call.rs`
-    - higher-order callback validation path when
-      `unresolved_callable_name(...)` succeeds
-  - `crates/goby-core/src/typecheck_check.rs`
-    - ordinary use-site errors still marked `expr span not yet available`
-  - `crates/goby-core/src/typecheck_effect_usage.rs`
-    - unresolved handler/effect-operation use sites currently returning
-      `span: None`
-  - `crates/goby-core/src/typecheck_resume.rs`
-    - unresolved / mismatched `resume` operand sites currently returning
-      `span: None`
-  - `crates/goby-core/src/typecheck_branch.rs`
-    - branch consistency errors still marked `expr span not yet available`
-- ER3 ambiguity / qualified-name sites
-  - `crates/goby-core/src/typecheck_ambiguity.rs`
-    - `ensure_name_not_ambiguous(...)`
-    - expression walkers currently returning `span: None` for ambiguous vars,
-      constructors, qualified names, and pipeline callees
-- ER4 import-resolution sites
-  - `crates/goby-core/src/typecheck_validate.rs`
-    - unknown module
-    - unknown selective import symbol
-    - import conflict/error paths blocked on `ImportDecl` lacking span metadata
-
-Explicit ER0 boundaries:
-
-- `typecheck_validate.rs` import diagnostics stay out of ER1/ER2 because they
-  require `ImportDecl` span ownership work first.
-- `ir_lower.rs`, runtime/backend limitation diagnostics, and unrelated
-  type-mismatch cleanup are not part of the first unresolved-name migration
-  slice.
-- Pipeline-callee span ownership remains an ER1 design decision:
-  - if existing AST spans already identify the callee token precisely, use that
-    path,
-  - otherwise record the required AST/data-model change before ER2.
-
-Done when:
-
-- this plan is accepted as the working roadmap,
-- the first implementation slice can proceed without open architectural
-  uncertainty.
-
-### Milestone ER1: Expression-span extraction foundation
-
-- [x] ER1.1 Audit parser construction of `Expr::Var`, `Expr::Qualified`,
-  `Expr::Call`, and pipeline-related forms for usable spans.
-- [x] ER1.2 Add shared helpers in `goby-core` for:
-  - extracting the narrowest available expression span,
-  - extracting identifier/qualified-name spans where available.
-- [x] ER1.3 Add unit tests for those helpers before migrating error sites.
-- [x] ER1.4 Lock the pipeline-callee span ownership decision:
-  - if pipeline callee spans require AST/data-model changes that affect the
-    long-term span architecture, include that structural work in this track,
-  - otherwise record pipeline callee spans as an explicitly deferred local
-    follow-up after the core unresolved-name path is stable.
-
-ER1 status locked on 2026-03-28:
-
-- Shared helper layer added in `crates/goby-core/src/typecheck_span.rs`:
-  - `direct_expr_span(...)`
-  - `best_available_name_use_span(...)`
-  - `best_available_expr_span(...)`
-- Focused tests now lock the current parser/span reality:
-  - manually-constructed `Expr::Var` / `Expr::Qualified` / `Expr::Call` spans are
-    consumed by the helper layer when present,
-  - `parse_body_stmts("map xs")` and `parse_body_stmts("list.map xs")` keep the
-    outer statement span but still leave nested callee spans as `None`.
-- Current parser audit result:
-  - `parser_expr.rs` can construct `Expr::Var`, `Expr::Qualified`, and
-    `Expr::Call` with span fields, but ordinary string-level parsing currently
-    populates them as `None`,
-  - `parser_stmt.rs` records statement spans and some outer multiline-call spans,
-    but does not yet attach token-precise spans to nested identifier/qualified
-    callee nodes produced inside statement parsing,
-  - `Expr::Pipeline` stores `callee: String` with no span field.
-- Pipeline-callee decision:
-  - precise pipeline-callee underlining requires an AST/data-model change,
-  - that structural work is explicitly deferred until after the non-pipeline
-    unresolved-name path is stable,
-  - ER2 may use the shared helper for pipeline diagnostics, but `span: None` is
-    an expected temporary outcome there until pipeline callee span ownership is added.
-
-Constraints:
-
-- no behavior change yet beyond helper introduction,
-- no import parser changes yet.
-- design-affecting uncertainty around pipeline span ownership must not remain
-  implicit after ER1.
-
-Done when:
-
-- there is one shared helper path for expression-span lookup,
-- new checker code can depend on helpers instead of custom span logic,
-- the pipeline-callee span decision is explicitly recorded as either
-  in-track work or deferred work.
-
-### Milestone ER2: Unresolved bare-name diagnostics at use sites
-
-- [x] ER2.1 Migrate unresolved bare-name checks in
-  `crates/goby-core/src/typecheck_stmt.rs` to use expression spans.
-- [x] ER2.2 Migrate unresolved bare-name diagnostics in the checker modules
-  covered by this track:
-  - `typecheck_stmt.rs`
-  - `typecheck_check.rs`
-  - `typecheck_effect_usage.rs`
-  - `typecheck_resume.rs`
-  - `typecheck_branch.rs`
-- [x] ER2.3 For each covered module above, classify every remaining
-  unresolved-name-related `span: None` site as one of:
-  - completed in ER2,
-  - intentionally deferred outside this track with a recorded reason.
-- [x] ER2.4 Add focused tests proving that:
-  - `map`-not-imported points at `map`,
-  - a missing local/decl reference points at the unresolved token.
-
-Constraints:
-
-- no ad-hoc `map` special case,
-- use the shared helper added in ER1.
-- ER2 must not close with vague “high-value remaining” wording; the covered
-  modules and deferred items must be explicit.
-
-Done when:
-
-- CLI can underline `map` exactly in the representative example,
-- LSP range for that error is non-zero-width and token-aligned,
-- the covered unresolved bare-name producers are explicitly partitioned into
-  done vs deferred rather than left implicit.
-
-ER2 completion partition:
-
-- done in ER2
-  - `typecheck_stmt.rs`
-    - bare call callee uses `best_available_name_use_span(...)`
-    - pipeline callee uses the shared helper and returns a token span only when
-      the AST already owns one
-  - `typecheck_call.rs`
-    - unresolved higher-order callback names use
-      `best_available_name_use_span(...)`
-  - `typecheck_check.rs`
-    - expression-owned mismatch sites now use `best_available_expr_span(...)`
-  - `typecheck_effect_usage.rs`
-    - `with` non-handler values, ordinary effect-op calls, qualified effect-op
-      calls, method-style effect-op calls, and effect-op argument mismatches now
-      use shared expression/name-span helpers
-  - `typecheck_resume.rs`
-    - `resume` operand mismatch / unresolved-generic sites now use
-      `best_available_expr_span(...)`
-  - `typecheck_branch.rs`
-    - branch body mismatch sites now use `best_available_expr_span(...)`
-- deferred outside ER2 with explicit reason
-  - `typecheck_effect_usage.rs`
-    - `resolve_handler_clause_name(...)` unknown/ambiguous handler clause names
-      still return `span: None` because handler clause names are stored as raw
-      strings and the AST does not yet own a clause-name token span
-    - duplicate handler-clause diagnostics still return `span: None` for the
-      same reason: no owned source span for the repeated clause name token
-    - pipeline unhandled-effect diagnostics still return `span: None` because
-      ER1 explicitly deferred pipeline-callee token ownership on the AST
-  - `typecheck_stmt.rs`
-    - declared-return/body mismatch still returns `span: None`; it is not an
-      unresolved-name diagnostic and remains outside ER2
-  - `typecheck_effect_usage.rs`
-    - required-effect coverage failures in `check_callee_required_effects(...)`
-      still return `span: None`; this is an effect-coverage diagnostic, not an
-      unresolved bare-name use-site failure
-
-### Milestone ER3: Qualified-name and ambiguity diagnostics
-
-- [x] ER3.1 Migrate qualified unresolved-name errors to use precise spans.
-- [x] ER3.2 Migrate use-site ambiguity diagnostics in
-  `crates/goby-core/src/typecheck_ambiguity.rs` to use precise spans.
-- [x] ER3.3 Decide and lock the initial underline policy for qualified names:
-  full token (`receiver.member`) vs member-only.
-- [x] ER3.4 Add regression tests for:
-  - unresolved qualified name,
-  - ambiguous imported name collision at use site,
-  - tuple-member-related ambiguity/error paths that overlap this machinery.
-
-ER3 partition (done vs deferred):
-- Done: `Expr::Var` ambiguity span, `Expr::Qualified` ambiguity span,
-  `Expr::Qualified` tuple-member-access 3 error sites.
-- Deferred (no AST span field): `Expr::RecordConstruct` 5 error sites,
-  `Expr::MethodCall` (no span field on node).
-- Deferred by policy: `Expr::Pipeline` callee (callee is `String`,
-  consistent with ER2); `Expr::Block` structural error (not a name-use error).
-
-Constraints:
-
-- keep semantics unchanged,
-- do not mix in import span work yet.
-
-Done when:
-
-- ambiguity errors no longer fall back to declaration-only context in common
-  use-site cases,
-- qualified unresolved names are underlined consistently in CLI and LSP.
-
-### Milestone ER3.5: AST span fields for RecordConstruct, MethodCall, Pipeline
-
-These three expression variants lack span fields in the AST, which blocks
-precise diagnostics in `typecheck_ambiguity.rs` (5 RecordConstruct sites,
-1 MethodCall site, 1 Pipeline-callee site).
-
-- [x] ER3.5.1 Add `span: Option<Span>` to `Expr::RecordConstruct` in `ast.rs`.
-- [x] ER3.5.2 Add `span: Option<Span>` to `Expr::MethodCall` in `ast.rs`.
-- [x] ER3.5.3 Add `callee_span: Option<Span>` to `Expr::Pipeline` in `ast.rs`.
-  Rationale: keeps callee as `String` (no semantics change) and is minimally
-  invasive; full callee-as-Expr refactor is deferred.
-- [x] ER3.5.4 Populate the new fields in the parser:
-  - `parse_record_constructor_call` → set `span` for the constructor token.
-  - `parse_method_call` → set `span` for the `receiver.method` token.
-  - Pipeline parsing in `parse_expr` → set `callee_span` for the callee token.
-- [x] ER3.5.5 Extend `copy_expr_spans` / `enrich_expr_spans` in `parser_expr.rs`
-  to propagate the new spans.
-- [x] ER3.5.6 Update `typecheck_ambiguity.rs`:
-  - RecordConstruct 5 error sites: use `span` from the node.
-  - MethodCall ambiguity site: use `span` from the node.
-  - Pipeline callee ambiguity site: use `callee_span` from the node.
-- [x] ER3.5.7 Update `typecheck_span.rs` helpers to cover the new span fields
-  where relevant.
-- [x] ER3.5.8 Update the two pinning tests (`ambiguous_method_call_span_is_none`,
-  `ambiguous_pipeline_callee_span_is_none`) to assert `Some(...)` once spans
-  are wired.
-- [x] ER3.5.9 Add regression tests confirming span-carrying errors for each new
-  variant.
-
-Constraints:
-
-- no semantics change,
-- `Expr::Pipeline.callee` stays `String`; only `callee_span` is added,
-- all existing 616 tests must continue to pass after each sub-step.
-
-Done when:
-
-- the 7 previously-deferred sites in `typecheck_ambiguity.rs` each carry a
-  non-None span when the parser has position information available,
-- `cargo test` passes clean.
-
-### Milestone ER3.6: HandlerClause span — body-relative to file-relative
-
-`HandlerClause` already carries a body-relative `span: Span` (set in
-`parser_stmt.rs`).  The four `span: None` sites in `typecheck_effect_usage.rs`
-(`resolve_handler_clause_name`) are blocked not by missing AST data but by
-the missing body-offset → file-offset conversion step.
-
-Background: `HandlerClause.span` is relative to the declaration body
-sub-string.  To obtain a source-file line number, the line number of the
-declaration definition line must be added.  This offset is available at the
-call sites in `typecheck_effect_usage.rs` via the `Declaration` context that
-the checker already receives.
-
-- [x] ER3.6.1 Audit how `Declaration.line` and body-relative span relate;
-  confirm the exact offset formula (body-start line = definition-line + 1).
-- [x] ER3.6.2 Thread the necessary declaration line information into
-  `resolve_handler_clause_name` so it can compute the file-relative span.
-- [x] ER3.6.3 Migrate the 4 `span: None` sites in `resolve_handler_clause_name`
-  to use the computed file-relative span.
-- [x] ER3.6.4 Add regression tests confirming non-None span for:
-  - unknown handler clause name,
-  - ambiguous handler clause name.
-
-Constraints:
-
-- no semantics change,
-- span conversion formula must be confirmed by a test before wiring,
-- do not redesign the body-relative span scheme; use a targeted offset conversion.
-
-Done when:
-
-- the 4 `resolve_handler_clause_name` error sites carry file-relative spans,
-- `cargo test` passes clean.
-
-Note: The remaining two deferred `span: None` sites (Block structural error
-in `typecheck_ambiguity.rs` and return-type mismatch in `typecheck_stmt.rs`)
-are not name-resolution errors; they are explicitly catalogued as out-of-scope
-for the unresolved-name / ambiguity diagnostic track and will be recorded in
-the ER8 closure report.
-
-### Milestone ER4: Import declaration spans
-
-- [x] ER4.1 Extend `ImportDecl` with span metadata sufficient for precise
-  import diagnostics.
-- [x] ER4.2 Populate import spans in parser/top-level parsing code.
-- [x] ER4.3 Update import validation paths in
-  `crates/goby-core/src/typecheck_validate.rs` to use import spans.
-- [x] ER4.4 Add regression tests for:
-  - unknown module path,
-  - unknown selective-import symbol,
-  - conflicting import-related diagnostics where a single import site should be
-    highlighted.
-
-Constraints:
-
-- choose the narrowest actionable import span practical for each error kind,
-- avoid reworking unrelated parser structures.
-
-Done when:
-
-- `import goby/list ( each, maap )` can underline `maap`,
-- import-resolution diagnostics have useful spans in both CLI and LSP.
-
-### Milestone ER5: Shared diagnostic-construction cleanup
-
-- [x] ER5.1 Add common constructors/helpers for frequent diagnostic families:
-  - unresolved bare name,
-  - unresolved qualified name,
-  - ambiguity at use site,
-  - import symbol resolution error.
-- [x] ER5.2 Replace duplicated `TypecheckError { span: None, ... }` sites in
-  the covered diagnostic families with helper-backed construction.
-- [x] ER5.3 Document the preferred span-selection policy near the helper layer.
-
-Constraints:
-
-- do not refactor unrelated error families in the same slice,
-- keep helpers small and domain-specific rather than introducing a giant
-  diagnostic framework prematurely.
-
-Done when:
-
-- the covered error families no longer rely on open-coded ad-hoc span logic,
-- adding a new unresolved-name diagnostic follows one established pattern.
-
-### Milestone ER6: CLI rendering quality lock
-
-- [x] ER6.1 Lock snippet rendering tests for multi-character underline width on
-  unresolved-name spans.
-- [x] ER6.2 Lock at least one `goby check` rendered output fixture or focused
-  assertion for the representative `map` case.
-- [x] ER6.3 Lock equivalent CLI rendering for an import typo case.
-
-Constraints:
-
-- CLI remains a renderer only,
-- no CLI-only error heuristics.
-
-Done when:
-
-- `goby check` and `goby run` both show useful underline-rich errors for the
-  covered families,
-- range spans render as whole-token underlines, not single-caret fallbacks.
-
-### Milestone ER7: LSP range parity lock
-
-- [x] ER7.1 Add or extend `goby-lsp` tests to verify expected range for the
-  unresolved `map` example.
-- [x] ER7.2 Add LSP tests for:
-  - unresolved qualified name,
-  - import typo,
-  - ambiguity use site.
-- [x] ER7.3 Verify UTF-8 / UTF-16 conversion behavior remains correct when
-  diagnostics appear on lines containing multi-byte text nearby.
-
-Constraints:
-
-- LSP still consumes `Diagnostic` only,
-- no separate name-resolution layer inside the LSP server.
-
-Done when:
-
-- covered CLI and LSP diagnostics are span-parity-locked,
-- editor underline behavior is predictable from `goby-core` output.
-
-### Milestone ER8: Track closure and follow-up boundary
-
-- [x] ER8.1 Review remaining `expr span not yet available` sites and separate:
-  - done by this track,
-  - intentionally deferred.
-- [x] ER8.2 Record which remaining diagnostics still lack precise spans and why.
-- [x] ER8.3 Update `doc/STATE.md` and, if needed, `doc/PLAN.md` with closure or
-  next-slice notes.
-
-ER8 closure report (locked on 2026-03-29):
-
-- completed by Track ER
-  - unresolved bare-name diagnostics at ordinary use sites now carry token spans
-    wherever the AST owns the relevant token (`typecheck_stmt.rs`,
-    `typecheck_call.rs`, `typecheck_check.rs`, `typecheck_effect_usage.rs`,
-    `typecheck_resume.rs`, `typecheck_branch.rs`)
-  - qualified-name and ambiguity use-site diagnostics now carry precise spans,
-    including the earlier deferred `RecordConstruct`, `MethodCall`, `Pipeline`,
-    and file-relative handler-clause cases
-  - import module / selective-symbol diagnostics now use `ImportDecl` span
-    metadata
-  - CLI and LSP rendering are parity-locked by regression tests for the covered
-    unresolved-name / ambiguity / import-resolution families
-- intentionally deferred outside Track ER
-  - `crates/goby-core/src/typecheck_ambiguity.rs`
-    - `Expr::Block` structural error (`block expression must end with an expression`)
-      still returns `span: None`
-    - reason: this is a block-structure validation error, not a name-resolution or
-      ambiguity use-site error; it needs a better "which token should own the blame"
-      policy rather than reuse of the ER helpers
-  - `crates/goby-core/src/typecheck_stmt.rs`
-    - declaration body / declared return-type mismatch still returns `span: None`
-    - reason: the relevant body-expression span is currently body-relative and this
-      path still lacks the file-relative offset conversion step
-  - `crates/goby-core/src/typecheck_effect_usage.rs`
-    - `check_callee_required_effects(...)` still returns `span: None` for
-      unhandled required-effect coverage failures
-    - `Expr::Pipeline` unhandled-effect diagnostic still returns `span: None`
-    - reason: both are effect-coverage diagnostics rather than unresolved-name
-      failures; they need a dedicated ownership policy for which call/effect site
-      should be highlighted
-  - `crates/goby-core/src/typecheck_validate.rs`
-    - conflicting effect declarations across imports/local declarations still
-      return `span: None`
-    - reason: `ImportDecl` span plumbing is present, but this diagnostic is
-      aggregate-by-design and currently has no single narrow source site that can
-      represent the entire conflict honestly
-    - `@embed` source-path validation still returns `span: None`
-    - reason: this check is based on the source file path being outside the
-      stdlib root rather than on one AST token span, so there is no syntax-owned
-      location to highlight today
-  - `crates/goby-core/src/typecheck_types.rs`
-    - duplicate type declaration, invalid alias target type, duplicate constructor,
-      duplicate field, invalid field type, and unknown type in type declaration
-      still return `span: None`
-    - reason: type-declaration validation still operates on string-parsed type
-      annotations and declaration metadata that do not yet own token-precise spans;
-      this should be handled as a dedicated future type-declaration span slice
-
-Track ER final boundary:
-
-- Track ER is complete once the remaining `span: None` sites above are treated as
-  explicit follow-up work rather than hidden unfinished scope.
-- Future work on the deferred items should extend the same `goby-core owns spans,
-  CLI/LSP render only` boundary instead of reintroducing frontend-side heuristics.
-
-Done when:
-
-- the track has a clear closure report,
-- remaining work is explicitly partitioned rather than hidden in comments.
-
----
-
-## 8. Execution Order
-
-Strict order:
-
-1. ER0 before implementation
-2. ER1 before any checker migration
-3. ER2 before ER3
-4. ER3 before ER3.5
-5. ER3.5 before ER3.6
-6. ER3.6 before ER4
-7. ER4 before ER5
-8. ER5 before ER6/ER7
-9. ER6 and ER7 before ER8
-
-Reason:
-
-- expression use-site spans are the highest-value first win,
-- ER3.5 and ER3.6 close the deferred ER3 gaps before moving to import spans,
-- import spans are structurally separate and should not block early progress,
-- cleanup should happen only after the first precision path is proven,
-- presentation locks come after `goby-core` output is stable.
-
----
-
-## 9. Module Ownership
-
-To keep the work modular, ownership should be split like this.
-
-### 9.1 `crates/goby-core`
+### 4.1 `crates/goby-core`
 
 Primary owner of:
 
-- AST/import span capture,
-- span helpers,
-- unresolved-name diagnostic construction,
-- ambiguity diagnostic construction,
-- import-resolution diagnostic construction.
+- span capture and span propagation,
+- typed and unresolved-name diagnostic construction,
+- helper policies for span selection.
 
-Likely touch points:
-
-- `ast.rs`
-- `parser_top.rs`
-- `parser_expr.rs`
-- `typecheck_stmt.rs`
-- `typecheck_ambiguity.rs`
-- `typecheck_validate.rs`
-- `diagnostic.rs`
-
-### 9.2 `crates/goby-cli`
+### 4.2 `crates/goby-cli`
 
 Primary owner of:
 
 - snippet rendering behavior tests,
-- header/snippet formatting quality lock.
+- header/snippet rendering quality locks.
 
 Not owner of:
 
-- deciding where an unresolved name is.
+- deciding where diagnostics should point.
 
-### 9.3 `crates/goby-lsp`
+### 4.3 `crates/goby-lsp`
 
 Primary owner of:
 
-- `Diagnostic.span` -> LSP `Range` tests,
+- `Diagnostic.span -> LSP Range` conversion tests,
 - publication/parity checks.
 
 Not owner of:
 
-- name-resolution heuristics.
+- compiler-semantic reinterpretation for range guessing.
 
 ---
 
-## 10. Testing Strategy
+## 5. Testing Strategy
 
-Each milestone should add focused tests closest to the owned behavior.
-
-### 10.1 `goby-core`
+### 5.1 `goby-core`
 
 Must cover:
 
-- unresolved bare names,
-- unresolved qualified names,
-- ambiguity at use site,
-- import typo/module errors,
-- helper span selection behavior.
+- the active typed diagnostic families in TD,
+- any helper span-selection behavior introduced for those families,
+- explicit done-vs-deferred partitioning when a family cannot yet become
+  precise.
 
-### 10.2 `goby-cli`
-
-Must cover:
-
-- whole-token underline width,
-- single-line snippet alignment,
-- representative unresolved-name rendering.
-
-### 10.3 `goby-lsp`
+### 5.2 `goby-cli`
 
 Must cover:
 
-- precise range for `map` unresolved case,
+- whole-token / whole-argument underline width,
+- representative rendered output fixtures for active TD families,
+- `goby check` / `goby run` parity for invalid programs that should fail during
+  typecheck.
+
+### 5.3 `goby-lsp`
+
+Must cover:
+
+- token-aligned typed diagnostic ranges for active TD families,
 - parity with CLI token selection,
-- UTF-16 conversion stability around multibyte text.
+- UTF-16 conversion stability near multibyte text.
 
-### 10.4 Quality gates
+### 5.4 Quality Gates
 
 At minimum for each non-trivial slice:
 
@@ -827,85 +305,11 @@ At minimum for each non-trivial slice:
 
 ---
 
-## 11. Risks and Mitigations
+## 6. Exit Criteria for This Plan
 
-### Risk A: Span plumbing spreads ad-hoc through many checkers
+This plan is in good shape when all of the following are true:
 
-Mitigation:
-
-- require ER1 helper layer first,
-- require ER5 helper-backed cleanup before closing the track.
-
-### Risk B: Import span work balloons parser churn
-
-Mitigation:
-
-- isolate import-span work in ER4,
-- do not mix it into early unresolved-name slices.
-
-### Risk C: CLI and LSP drift apart
-
-Mitigation:
-
-- keep one `Diagnostic` contract,
-- lock both renderers with parity-oriented tests.
-
-### Risk D: Wide-scope diagnostic cleanup stalls progress
-
-Mitigation:
-
-- only migrate the covered families,
-- explicitly defer unrelated `span: None` sites in ER8.
-
----
-
-## 12. Current Decisions
-
-1. Qualified unresolved names should initially underline the full
-   `receiver.member` token.
-   Rationale:
-   - this keeps the first shipped rule simple and consistent,
-   - it avoids prematurely splitting receiver/member responsibility in the
-     diagnostic model,
-   - it is compatible with later refinement if member-only highlighting proves
-     clearly better.
-   Status: locked in ER3. Implemented via `best_available_name_use_span(expr)`
-   at `Expr::Qualified` call sites in `typecheck_ambiguity.rs`.
-2. Unknown module diagnostics should initially target the module path, not the
-   full import clause.
-   Rationale:
-   - the module path is the smallest clearly actionable region in the common
-     case,
-   - this keeps import diagnostics precise without forcing path-segment-level
-     metadata in the first slice.
-3. Pipeline callee spans should be handled in this track if, during ER1, they
-   are found to affect AST shape or span ownership in a way that changes the
-   long-term design. If they turn out to be a purely local extension with no
-   architectural consequence, they can be deferred until after the core
-   unresolved-name path is stable.
-   Rationale:
-   - design-affecting uncertainty should be reduced early,
-   - purely local rendering/value improvements do not need to block the main
-     span-propagation path.
-   Status hook:
-   - this decision must be recorded by ER1.4 and must not remain an informal
-     note by the time implementation leaves ER1.
-
----
-
-## 13. Exit Criteria
-
-This plan is complete when all of the following are true:
-
-- unresolved-name diagnostics in covered ordinary-expression cases carry precise
-  spans,
-- ambiguity diagnostics at use sites carry precise spans,
-- import-resolution diagnostics carry precise spans,
-- CLI renders whole-token underline snippets for covered range-span cases,
-- LSP publishes matching token-aligned ranges for the same cases,
-- the covered families no longer rely on ad-hoc `span: None` construction,
-- the ER2 covered-module set is explicitly marked done or deferred on a
-  per-module basis,
-- the pipeline-callee span decision is explicitly recorded rather than implied,
-- remaining unaddressed span gaps are explicitly cataloged rather than hidden in
-  comments.
+- completed tracks are summarized only at closure level,
+- the active typed-diagnostic rendering track is explicit and bounded,
+- ownership between `goby-core`, CLI, and LSP remains unambiguous,
+- remaining deferred span gaps are cataloged rather than implied.
