@@ -692,6 +692,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                 receiver,
                 method,
                 args,
+                ..
             } if args.len() == 1 => {
                 let arg_val =
                     self.eval_expr_ast(&args[0], locals, callables, evaluators, depth + 1)?;

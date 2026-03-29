@@ -118,6 +118,7 @@ pub(crate) fn format_expr(expr: &Expr, indent: usize) -> String {
         Expr::RecordConstruct {
             constructor,
             fields,
+            ..
         } => {
             let field_strs: Vec<String> = fields
                 .iter()
@@ -180,11 +181,12 @@ pub(crate) fn format_expr(expr: &Expr, indent: usize) -> String {
             receiver,
             method,
             args,
+            ..
         } => {
             let arg_strs: Vec<String> = args.iter().map(|a| format_expr(a, indent)).collect();
             format!("{}.{}({})", receiver, method, arg_strs.join(", "))
         }
-        Expr::Pipeline { value, callee } => {
+        Expr::Pipeline { value, callee, .. } => {
             let v = format_expr(value, indent);
             format!("{} |> {}", v, callee)
         }

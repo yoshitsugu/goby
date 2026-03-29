@@ -115,6 +115,7 @@ mod tests {
                 span: Some(Span::new(6, 3, 6, 4)),
             }),
             callee: "map".to_string(),
+            callee_span: None,
         };
 
         assert_eq!(best_available_name_use_span(&expr), None);

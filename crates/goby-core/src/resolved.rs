@@ -359,6 +359,7 @@ impl Resolver {
             Expr::RecordConstruct {
                 constructor,
                 fields,
+                ..
             } => ResolvedExpr::RecordConstruct {
                 constructor: constructor.clone(),
                 fields: fields
@@ -384,12 +385,13 @@ impl Resolver {
                 receiver,
                 method,
                 args,
+                ..
             } => ResolvedExpr::MethodCall {
                 receiver: receiver.clone(),
                 method: method.clone(),
                 args: args.iter().map(|arg| self.resolve_expr(arg)).collect(),
             },
-            Expr::Pipeline { value, callee } => ResolvedExpr::Pipeline {
+            Expr::Pipeline { value, callee, .. } => ResolvedExpr::Pipeline {
                 value: Box::new(self.resolve_expr(value)),
                 callee: callee.clone(),
             },

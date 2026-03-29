@@ -364,6 +364,7 @@ pub(crate) fn check_unhandled_effects_in_expr(
             receiver,
             method,
             args,
+            ..
         } => {
             let qualified = format!("{}.{}", receiver, method);
             if env.is_effect_op(&qualified) && !covered_ops.contains(qualified.as_str()) {
@@ -390,7 +391,7 @@ pub(crate) fn check_unhandled_effects_in_expr(
             }
             Ok(())
         }
-        Expr::Pipeline { value, callee } => {
+        Expr::Pipeline { value, callee, .. } => {
             if env.is_effect_op(callee) && !covered_ops.contains(callee.as_str()) {
                 return Err(TypecheckError {
                     declaration: Some(decl_name.to_string()),

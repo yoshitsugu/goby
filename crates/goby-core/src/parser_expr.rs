@@ -15,6 +15,7 @@ pub(crate) fn parse_expr(src: &str) -> Option<Expr> {
             return Some(Expr::Pipeline {
                 value: Box::new(value),
                 callee: right.to_string(),
+                callee_span: None,
             });
         }
     }
@@ -781,6 +782,7 @@ fn parse_method_call(src: &str) -> Option<Expr> {
         receiver: receiver.to_string(),
         method: method.to_string(),
         args: args?,
+        span: None,
     })
 }
 
@@ -798,6 +800,7 @@ fn parse_record_constructor_call(src: &str) -> Option<Expr> {
         return Some(Expr::RecordConstruct {
             constructor: constructor.to_string(),
             fields: Vec::new(),
+            span: None,
         });
     }
 
@@ -809,6 +812,7 @@ fn parse_record_constructor_call(src: &str) -> Option<Expr> {
     Some(Expr::RecordConstruct {
         constructor: constructor.to_string(),
         fields: parsed_fields?,
+        span: None,
     })
 }
 
@@ -1342,6 +1346,7 @@ mod tests {
                     right: Box::new(Expr::IntLit(2)),
                 }),
                 callee: "print".to_string(),
+                callee_span: None,
             })
         );
     }
@@ -1354,8 +1359,10 @@ mod tests {
                 value: Box::new(Expr::Pipeline {
                     value: Box::new(Expr::var("x")),
                     callee: "f".to_string(),
+                    callee_span: None,
                 }),
                 callee: "g".to_string(),
+                callee_span: None,
             })
         );
     }
@@ -1506,6 +1513,7 @@ mod tests {
             Some(Expr::RecordConstruct {
                 constructor: "User".to_string(),
                 fields: vec![],
+                span: None,
             })
         );
     }
@@ -1554,6 +1562,7 @@ mod tests {
                 receiver: "string".to_string(),
                 method: "split".to_string(),
                 args: vec![Expr::var("a"), Expr::var("b")],
+                span: None,
             })
         );
     }
@@ -1566,6 +1575,7 @@ mod tests {
                 receiver: "l".to_string(),
                 method: "join".to_string(),
                 args: vec![Expr::var("paths"), Expr::StringLit("\n".to_string()),],
+                span: None,
             })
         );
     }
@@ -1580,6 +1590,7 @@ mod tests {
                     ("id".to_string(), Expr::StringLit("1234".to_string())),
                     ("name".to_string(), Expr::StringLit("John".to_string())),
                 ],
+                span: None,
             })
         );
     }
@@ -1600,6 +1611,7 @@ mod tests {
                 receiver: "string".to_string(),
                 method: "join".to_string(),
                 args: vec![Expr::var("a"), Expr::var("b"), Expr::var("c")],
+                span: None,
             })
         );
     }

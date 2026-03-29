@@ -250,7 +250,7 @@ fn ensure_known_call_targets_in_expr(
             }
             Ok(())
         }
-        Expr::Pipeline { value, callee } => {
+        Expr::Pipeline { value, callee, .. } => {
             if env.lookup(callee) == Ty::Unknown {
                 return Err(TypecheckError {
                     declaration: Some(decl_name.to_string()),

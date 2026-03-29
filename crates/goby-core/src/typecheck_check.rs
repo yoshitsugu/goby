@@ -64,6 +64,7 @@ fn infer_expr_ty(expr: &Expr, env: &TypeEnv) -> Ty {
         Expr::RecordConstruct {
             constructor,
             fields,
+            ..
         } => {
             let Some(record) = env.lookup_record_by_constructor(constructor) else {
                 return Ty::Unknown;
@@ -122,6 +123,7 @@ fn infer_expr_ty(expr: &Expr, env: &TypeEnv) -> Ty {
                 let rewritten = Expr::RecordConstruct {
                     constructor: name.clone(),
                     fields: vec![(field_name, *arg.clone())],
+                    span: None,
                 };
                 return check_expr(&rewritten, env);
             }
@@ -140,7 +142,7 @@ fn infer_expr_ty(expr: &Expr, env: &TypeEnv) -> Ty {
                 _ => Ty::Unknown,
             }
         }
-        Expr::Pipeline { value: _, callee } => {
+        Expr::Pipeline { value: _, callee, .. } => {
             let callee_ty = env.lookup(callee);
             match callee_ty {
                 Ty::Fun { result, .. } => *result,

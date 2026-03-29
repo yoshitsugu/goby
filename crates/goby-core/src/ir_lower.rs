@@ -1572,6 +1572,7 @@ choose n =
                     ("left".to_string(), Expr::IntLit(1)),
                     ("right".to_string(), Expr::StringLit("x".to_string())),
                 ],
+                span: None,
             })],
         );
         let ir_decl = lower_declaration(&decl).unwrap();
@@ -1602,6 +1603,7 @@ choose n =
                     ),
                     ("right".to_string(), Expr::IntLit(2)),
                 ],
+                span: None,
             })],
         );
         let ir_decl = lower_declaration(&decl).unwrap();

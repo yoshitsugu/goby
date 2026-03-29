@@ -916,6 +916,7 @@ fn is_read_all_expr(expr: &Expr) -> bool {
                 receiver,
                 method,
                 args,
+                ..
             } => receiver == "Read" && method == "read" && args.is_empty(),
             _ => false,
         },
@@ -923,6 +924,7 @@ fn is_read_all_expr(expr: &Expr) -> bool {
             receiver,
             method,
             args,
+            ..
         } => receiver == "Read" && method == "read" && args.iter().all(Expr::is_unit_value),
         _ => false,
     }
@@ -939,6 +941,7 @@ fn is_read_line_expr(expr: &Expr) -> bool {
                 receiver,
                 method,
                 args,
+                ..
             } => receiver == "Read" && method == "read_line" && args.is_empty(),
             _ => false,
         },
@@ -946,6 +949,7 @@ fn is_read_line_expr(expr: &Expr) -> bool {
             receiver,
             method,
             args,
+            ..
         } => receiver == "Read" && method == "read_line" && args.iter().all(Expr::is_unit_value),
         _ => false,
     }
@@ -957,6 +961,7 @@ fn output_read_mode(expr: &Expr) -> Option<(InputReadMode, OutputReadMode)> {
             receiver,
             method,
             args,
+            ..
         } if receiver == "Print" && args.len() == 1 => {
             let output_mode = callback_output_mode_name(method)?;
             (output_mode, &args[0])
@@ -1119,6 +1124,7 @@ fn split_lines_binding_name<'a>(
             receiver,
             method,
             args,
+            ..
         } => {
             let split_head = DirectCallHead::Qualified {
                 receiver: receiver.clone(),

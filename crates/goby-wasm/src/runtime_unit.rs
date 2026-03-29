@@ -240,7 +240,7 @@ impl<'m> RuntimeOutputResolver<'m> {
             return self.execute_unit_call_out(&repr, locals, callables, evaluators);
         }
 
-        if let Expr::Pipeline { value, callee } = expr {
+        if let Expr::Pipeline { value, callee, .. } = expr {
             match self.eval_expr(value, locals, callables, evaluators, depth) {
                 Out::Done(v) => {
                     let bare_method = self.find_handler_method_by_name(callee);

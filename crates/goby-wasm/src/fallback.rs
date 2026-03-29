@@ -177,7 +177,7 @@ fn unsupported_stmt_expr_reason(
                 Some(UnsupportedReason::CallCalleeNotDirectName)
             }
         },
-        Expr::Pipeline { value, callee } => {
+        Expr::Pipeline { value, callee, .. } => {
             if callee != BUILTIN_PRINT {
                 return Some(UnsupportedReason::UnsupportedPipelineCallee);
             }

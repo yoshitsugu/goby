@@ -233,6 +233,7 @@ pub enum Expr {
     RecordConstruct {
         constructor: String,
         fields: Vec<(String, Expr)>,
+        span: Option<Span>,
     },
     UnaryOp {
         op: UnaryOpKind,
@@ -252,10 +253,12 @@ pub enum Expr {
         receiver: String,
         method: String,
         args: Vec<Expr>,
+        span: Option<Span>,
     },
     Pipeline {
         value: Box<Expr>,
         callee: String,
+        callee_span: Option<Span>,
     },
     Lambda {
         param: String,
@@ -381,6 +384,7 @@ impl Expr {
             Expr::RecordConstruct {
                 constructor,
                 fields,
+                ..
             } => {
                 let parts: Option<Vec<String>> = fields
                     .iter()
@@ -458,11 +462,12 @@ impl Expr {
                 receiver,
                 method,
                 args,
+                ..
             } => {
                 let arg_strs: Option<Vec<String>> = args.iter().map(|a| a.to_str_repr()).collect();
                 Some(format!("{}.{}({})", receiver, method, arg_strs?.join(", ")))
             }
-            Expr::Pipeline { value, callee } => {
+            Expr::Pipeline { value, callee, .. } => {
                 let v = value.to_str_repr()?;
                 Some(format!("{} |> {}", v, callee))
             }
@@ -571,6 +576,7 @@ mod tests {
                     Expr::StringLit("a".to_string()),
                     Expr::StringLit(",".to_string()),
                 ],
+                span: None,
             },
         );
         assert_eq!(

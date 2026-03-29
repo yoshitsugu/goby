@@ -208,6 +208,7 @@ fn value_to_expr(value: &ValueExpr) -> Option<Expr> {
                 .iter()
                 .map(|(name, value)| Some((name.clone(), value_to_expr(value)?)))
                 .collect::<Option<Vec<_>>>()?,
+            span: None,
         }),
         ValueExpr::Lambda { param, body } => Some(Expr::Lambda {
             param: param.clone(),

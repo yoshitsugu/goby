@@ -613,7 +613,7 @@ fn first_disallowed_intrinsic_in_expr(
         Expr::MethodCall { args, .. } => args
             .iter()
             .find_map(|arg| first_disallowed_intrinsic_in_expr(arg, is_stdlib_source)),
-        Expr::Pipeline { value, callee } => {
+        Expr::Pipeline { value, callee, .. } => {
             first_disallowed_intrinsic_in_expr(value, is_stdlib_source).or_else(|| classify(callee))
         }
         Expr::Lambda { body, .. } => first_disallowed_intrinsic_in_expr(body, is_stdlib_source),

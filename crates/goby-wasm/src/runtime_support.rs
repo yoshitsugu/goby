@@ -18,6 +18,7 @@ pub(crate) fn flatten_direct_call(expr: &Expr) -> Option<(DirectCallHead, Vec<&E
                 receiver,
                 method,
                 args: method_args,
+                ..
             } => {
                 args.extend(method_args.iter().rev());
                 args.reverse();

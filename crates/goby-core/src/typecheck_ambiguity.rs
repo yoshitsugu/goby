@@ -104,6 +104,7 @@ pub(crate) fn ensure_no_ambiguous_refs_in_expr(
         Expr::RecordConstruct {
             constructor,
             fields,
+            ..
         } => {
             // RecordConstruct has no span field in the AST; deferred
             ensure_name_not_ambiguous(constructor, env, decl_name, None)?;
@@ -187,6 +188,7 @@ pub(crate) fn ensure_no_ambiguous_refs_in_expr(
             receiver,
             method,
             args,
+            ..
         } => {
             let qualified = format!("{}.{}", receiver, method);
             // MethodCall has no span field in the AST; deferred
@@ -196,7 +198,7 @@ pub(crate) fn ensure_no_ambiguous_refs_in_expr(
             }
             Ok(())
         }
-        Expr::Pipeline { value, callee } => {
+        Expr::Pipeline { value, callee, .. } => {
             ensure_no_ambiguous_refs_in_expr(value, env, decl_name)?;
             // Pipeline callee is a String with no span; deferred (consistent with ER2 policy)
             ensure_name_not_ambiguous(callee, env, decl_name, None)
@@ -403,6 +405,7 @@ mod tests {
             receiver: "list".to_string(),
             method: "map".to_string(),
             args: vec![],
+            span: None,
         };
         let env = env_with_ambiguous("list.map", &["mod_a", "mod_b"]);
 
@@ -421,6 +424,7 @@ mod tests {
                 span: None,
             }),
             callee: "foo".to_string(),
+            callee_span: None,
         };
         let env = env_with_ambiguous("foo", &["mod_a", "mod_b"]);
 

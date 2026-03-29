@@ -694,6 +694,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                 receiver,
                 method,
                 args,
+                ..
             } if args.len() == 1 => {
                 let arg_value =
                     match self.eval_expr(&args[0], locals, callables, evaluators, depth + 1) {
@@ -721,7 +722,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                     depth + 1,
                 )
             }
-            Expr::Pipeline { value, callee } => {
+            Expr::Pipeline { value, callee, .. } => {
                 let pipeline_value =
                     match self.eval_expr(value, locals, callables, evaluators, depth + 1) {
                         Out::Done(v) => v,
@@ -751,6 +752,7 @@ impl<'m> RuntimeOutputResolver<'m> {
             Expr::RecordConstruct {
                 constructor,
                 fields,
+                ..
             } => {
                 if fields.is_empty() {
                     match self.apply_named_value_call_out(
