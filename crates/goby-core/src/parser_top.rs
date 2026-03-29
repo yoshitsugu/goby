@@ -1,7 +1,8 @@
 use std::collections::HashSet;
 
 use crate::ast::{
-    EffectDecl, EffectMember, EmbedDecl, ImportDecl, ImportKind, Span, TypeDeclaration,
+    EffectDecl, EffectMember, EmbedDecl, ImportDecl, ImportKind, ImportKindSpan, Span,
+    TypeDeclaration,
 };
 use crate::parser::ParseError;
 use crate::parser_util::{
@@ -40,7 +41,7 @@ pub(crate) fn parse_top_level_item(
     let line_no = index + 1;
 
     if trimmed.starts_with("import ") {
-        let import = parse_import_line(trimmed).ok_or_else(|| ParseError {
+        let import = parse_import_line(trimmed, line_no).ok_or_else(|| ParseError {
             line: line_no,
             col: 1,
             message: "invalid import declaration".to_string(),
@@ -713,13 +714,79 @@ main = 1
         let effect = &module.effect_declarations[0];
         assert_eq!(effect.span.line, 3);
     }
+
+    // --- ER4 import span population tests ---
+
+    #[test]
+    fn plain_import_module_path_span_covers_path_token() {
+        // "import goby/string" — "goby/string" starts at col 8, length 11 → end col 18
+        let source = "import goby/string\nmain = 1\n";
+        let module = parse_module(source).expect("should parse");
+        let import = &module.imports[0];
+        assert_eq!(
+            import.module_path_span,
+            Some(Span::new(1, 8, 1, 18))
+        );
+        assert_eq!(import.kind_span, Some(ImportKindSpan::Plain));
+    }
+
+    #[test]
+    fn selective_import_symbol_spans_point_to_each_symbol() {
+        // "import goby/list ( each, map )"
+        //  123456789012345678901234567890
+        //         8       18   23   28
+        // "goby/list" → col 8..16
+        // "each" → col 20..23, "map" → col 26..28
+        let source = "import goby/list ( each, map )\nmain = 1\n";
+        let module = parse_module(source).expect("should parse");
+        let import = &module.imports[0];
+        assert_eq!(import.module_path_span, Some(Span::new(1, 8, 1, 16)));
+        let Some(ImportKindSpan::Selective(spans)) = &import.kind_span else {
+            panic!("expected Selective kind span");
+        };
+        assert_eq!(spans.len(), 2);
+        assert_eq!(spans[0], Span::new(1, 20, 1, 23)); // "each"
+        assert_eq!(spans[1], Span::new(1, 26, 1, 28)); // "map"
+    }
+
+    #[test]
+    fn alias_import_kind_span_covers_alias_token() {
+        // "import goby/list as l"
+        //  12345678901234567890123
+        // "goby/list" → col 8..16, "l" → col 21..21
+        let source = "import goby/list as l\nmain = 1\n";
+        let module = parse_module(source).expect("should parse");
+        let import = &module.imports[0];
+        assert_eq!(import.module_path_span, Some(Span::new(1, 8, 1, 16)));
+        assert_eq!(
+            import.kind_span,
+            Some(ImportKindSpan::Alias(Span::new(1, 21, 1, 21)))
+        );
+    }
+
+    #[test]
+    fn import_span_line_number_reflects_source_line() {
+        // Import on line 3
+        let source = "main = 1\n\nimport goby/list ( get )\n";
+        let module = parse_module(source).expect("should parse");
+        let import = &module.imports[0];
+        assert_eq!(import.module_path_span.unwrap().line, 3);
+        let Some(ImportKindSpan::Selective(spans)) = &import.kind_span else {
+            panic!("expected Selective kind span");
+        };
+        assert_eq!(spans[0].line, 3);
+    }
 }
 
-fn parse_import_line(line: &str) -> Option<ImportDecl> {
+fn parse_import_line(line: &str, line_no: usize) -> Option<ImportDecl> {
     let rest = line.strip_prefix("import ")?.trim();
     if rest.is_empty() {
         return None;
     }
+
+    // "import " prefix is 7 bytes; top-level lines start at col 1 → module path starts at col 8.
+    const PREFIX_LEN: usize = "import ".len(); // = 7
+    let mp_col_start = PREFIX_LEN + 1; // = 8
 
     if let Some(open_idx) = rest.find('(') {
         if !rest.ends_with(')') {
@@ -729,49 +796,90 @@ fn parse_import_line(line: &str) -> Option<ImportDecl> {
         if !is_module_path(module_path) {
             return None;
         }
-        let inner = rest[open_idx + 1..rest.len() - 1].trim();
+        let module_path_span = Some(Span::new(
+            line_no,
+            mp_col_start,
+            line_no,
+            mp_col_start + module_path.len() - 1,
+        ));
+        let inner_raw = &rest[open_idx + 1..rest.len() - 1];
+        let inner = inner_raw.trim();
         if inner.is_empty() {
             return None;
         }
+        // Byte offset of `inner` start within `rest`: open_idx + 1 + leading whitespace.
+        let inner_offset_in_rest = open_idx + 1 + (inner_raw.len() - inner_raw.trim_start().len());
         let names = split_top_level_commas(inner);
         let mut symbols = Vec::new();
-        for name in names {
+        let mut symbol_spans = Vec::new();
+        // Walk inner to find byte positions of each symbol.
+        let mut search_offset = 0usize;
+        for name in &names {
             let name = name.trim();
             if !is_non_reserved_identifier(name) {
                 return None;
             }
+            // Find name's start within inner starting from search_offset.
+            let rel = inner[search_offset..].find(name)?;
+            let sym_offset_in_inner = search_offset + rel;
+            // col is 1-indexed; rest starts at col PREFIX_LEN+1, inner at col PREFIX_LEN+1+inner_offset_in_rest
+            let sym_col = PREFIX_LEN + 1 + inner_offset_in_rest + sym_offset_in_inner;
+            symbol_spans.push(Span::new(line_no, sym_col, line_no, sym_col + name.len() - 1));
+            search_offset = sym_offset_in_inner + name.len();
             symbols.push(name.to_string());
         }
         return Some(ImportDecl {
             module_path: module_path.to_string(),
             kind: ImportKind::Selective(symbols),
-            module_path_span: None,
-            kind_span: None,
+            module_path_span,
+            kind_span: Some(ImportKindSpan::Selective(symbol_spans)),
         });
     }
 
-    if let Some((module_path, alias)) = rest.split_once(" as ") {
-        let module_path = module_path.trim();
-        let alias = alias.trim();
+    if let Some((module_path_raw, alias_raw)) = rest.split_once(" as ") {
+        let module_path = module_path_raw.trim();
+        let alias = alias_raw.trim();
         if !is_module_path(module_path) || !is_non_reserved_identifier(alias) {
             return None;
         }
+        let module_path_span = Some(Span::new(
+            line_no,
+            mp_col_start,
+            line_no,
+            mp_col_start + module_path.len() - 1,
+        ));
+        // alias_raw is a subslice of rest (from split_once), so pointer arithmetic is safe.
+        let alias_raw_offset = alias_raw.as_ptr() as usize - rest.as_ptr() as usize;
+        let alias_leading_ws = alias_raw.len() - alias_raw.trim_start().len();
+        let alias_col = PREFIX_LEN + 1 + alias_raw_offset + alias_leading_ws;
+        let kind_span = Some(ImportKindSpan::Alias(Span::new(
+            line_no,
+            alias_col,
+            line_no,
+            alias_col + alias.len() - 1,
+        )));
         return Some(ImportDecl {
             module_path: module_path.to_string(),
             kind: ImportKind::Alias(alias.to_string()),
-            module_path_span: None,
-            kind_span: None,
+            module_path_span,
+            kind_span,
         });
     }
 
     if !is_module_path(rest) {
         return None;
     }
+    let module_path_span = Some(Span::new(
+        line_no,
+        mp_col_start,
+        line_no,
+        mp_col_start + rest.len() - 1,
+    ));
     Some(ImportDecl {
         module_path: rest.to_string(),
         kind: ImportKind::Plain,
-        module_path_span: None,
-        kind_span: None,
+        module_path_span,
+        kind_span: Some(ImportKindSpan::Plain),
     })
 }
 
