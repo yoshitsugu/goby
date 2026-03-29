@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use crate::ast::{Expr, InterpolatedPart, Stmt};
+use crate::ast::{Expr, InterpolatedPart, Span, Stmt};
 use crate::typecheck::TypecheckError;
 use crate::typecheck_ambiguity::ensure_no_ambiguous_refs_in_expr;
 use crate::typecheck_check::{check_expr, env_with_case_pattern_bindings};
@@ -17,6 +17,7 @@ fn resolve_handler_clause_name(
     clause_name: &str,
     effect_map: &EffectMap,
     decl_name: &str,
+    clause_span: Option<Span>,
 ) -> Result<(String, String), TypecheckError> {
     // Returns (bare_op_name, effect_name).
     if let Some((effect, op)) = clause_name.split_once('.') {
@@ -24,7 +25,7 @@ fn resolve_handler_clause_name(
         let Some(ops) = effect_map.effect_to_ops.get(effect) else {
             return Err(TypecheckError {
                 declaration: Some(decl_name.to_string()),
-                span: None, // expr span not yet available
+                span: clause_span,
                 message: format!(
                     "unknown effect operation `{}` in handler expression",
                     clause_name
@@ -37,7 +38,7 @@ fn resolve_handler_clause_name(
         if !ops.contains(&bare) && !ops.contains(&qualified) {
             return Err(TypecheckError {
                 declaration: Some(decl_name.to_string()),
-                span: None, // expr span not yet available
+                span: clause_span,
                 message: format!(
                     "unknown effect operation `{}` in handler expression",
                     clause_name
@@ -51,7 +52,7 @@ fn resolve_handler_clause_name(
     let Some(effects) = effect_map.op_to_effects.get(clause_name) else {
         return Err(TypecheckError {
             declaration: Some(decl_name.to_string()),
-            span: None, // expr span not yet available
+            span: clause_span,
             message: format!(
                 "unknown effect operation `{}` in handler expression",
                 clause_name
@@ -64,7 +65,7 @@ fn resolve_handler_clause_name(
         let first_effect = names[0].clone();
         return Err(TypecheckError {
             declaration: Some(decl_name.to_string()),
-            span: None, // expr span not yet available
+            span: clause_span,
             message: format!(
                 "handler clause '{}' is ambiguous (defined in effects: {}); use qualified form e.g. '{}.{}'",
                 clause_name,
@@ -89,13 +90,17 @@ fn infer_handler_covered_ops_strict(
             let mut covered = HashSet::new();
             let mut seen_ops = HashSet::new();
             for clause in clauses {
-                let (bare_name, effect) =
-                    resolve_handler_clause_name(&clause.name, effect_map, decl_name)?;
+                let (bare_name, effect) = resolve_handler_clause_name(
+                    &clause.name,
+                    effect_map,
+                    decl_name,
+                    Some(clause.span),
+                )?;
                 // Duplicate check uses bare name so "log" and "Log.log" conflict.
                 if !seen_ops.insert(bare_name.clone()) {
                     return Err(TypecheckError {
                         declaration: Some(decl_name.to_string()),
-                        span: None, // expr span not yet available
+                        span: Some(clause.span),
                         message: format!("duplicate handler clause for operation `{}`", bare_name),
                     });
                 }
@@ -426,8 +431,12 @@ pub(crate) fn check_unhandled_effects_in_expr(
         Expr::Handler { clauses } => {
             let mut fresh_type_counter = 0usize;
             for clause in clauses {
-                let (bare_name, _effect) =
-                    resolve_handler_clause_name(&clause.name, effect_map, decl_name)?;
+                let (bare_name, _effect) = resolve_handler_clause_name(
+                    &clause.name,
+                    effect_map,
+                    decl_name,
+                    Some(clause.span),
+                )?;
                 if let Some(stmts) = &clause.parsed_body {
                     let instantiated = instantiate_handler_clause_signature(
                         env,
