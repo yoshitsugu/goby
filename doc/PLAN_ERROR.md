@@ -643,12 +643,65 @@ Done when:
 
 ### Milestone ER8: Track closure and follow-up boundary
 
-- [ ] ER8.1 Review remaining `expr span not yet available` sites and separate:
+- [x] ER8.1 Review remaining `expr span not yet available` sites and separate:
   - done by this track,
   - intentionally deferred.
-- [ ] ER8.2 Record which remaining diagnostics still lack precise spans and why.
-- [ ] ER8.3 Update `doc/STATE.md` and, if needed, `doc/PLAN.md` with closure or
+- [x] ER8.2 Record which remaining diagnostics still lack precise spans and why.
+- [x] ER8.3 Update `doc/STATE.md` and, if needed, `doc/PLAN.md` with closure or
   next-slice notes.
+
+ER8 closure report (locked on 2026-03-29):
+
+- completed by Track ER
+  - unresolved bare-name diagnostics at ordinary use sites now carry token spans
+    wherever the AST owns the relevant token (`typecheck_stmt.rs`,
+    `typecheck_call.rs`, `typecheck_check.rs`, `typecheck_effect_usage.rs`,
+    `typecheck_resume.rs`, `typecheck_branch.rs`)
+  - qualified-name and ambiguity use-site diagnostics now carry precise spans,
+    including the earlier deferred `RecordConstruct`, `MethodCall`, `Pipeline`,
+    and file-relative handler-clause cases
+  - import module / selective-symbol diagnostics now use `ImportDecl` span
+    metadata
+  - CLI and LSP rendering are parity-locked by regression tests for the covered
+    unresolved-name / ambiguity / import-resolution families
+- intentionally deferred outside Track ER
+  - `crates/goby-core/src/typecheck_ambiguity.rs`
+    - `Expr::Block` structural error (`block expression must end with an expression`)
+      still returns `span: None`
+    - reason: this is a block-structure validation error, not a name-resolution or
+      ambiguity use-site error; it needs a better "which token should own the blame"
+      policy rather than reuse of the ER helpers
+  - `crates/goby-core/src/typecheck_stmt.rs`
+    - declaration body / declared return-type mismatch still returns `span: None`
+    - reason: the relevant body-expression span is currently body-relative and this
+      path still lacks the file-relative offset conversion step
+  - `crates/goby-core/src/typecheck_effect_usage.rs`
+    - `check_callee_required_effects(...)` still returns `span: None` for
+      unhandled required-effect coverage failures
+    - `Expr::Pipeline` unhandled-effect diagnostic still returns `span: None`
+    - reason: both are effect-coverage diagnostics rather than unresolved-name
+      failures; they need a dedicated ownership policy for which call/effect site
+      should be highlighted
+  - `crates/goby-core/src/typecheck_validate.rs`
+    - conflicting effect declarations across imports/local declarations still
+      return `span: None`
+    - reason: `ImportDecl` span plumbing is present, but this diagnostic is
+      aggregate-by-design and currently has no single narrow source site that can
+      represent the entire conflict honestly
+  - `crates/goby-core/src/typecheck_types.rs`
+    - duplicate type declaration, invalid alias target type, duplicate constructor,
+      duplicate field, invalid field type, and unknown type in type declaration
+      still return `span: None`
+    - reason: type-declaration validation still operates on string-parsed type
+      annotations and declaration metadata that do not yet own token-precise spans;
+      this should be handled as a dedicated future type-declaration span slice
+
+Track ER final boundary:
+
+- Track ER is complete once the remaining `span: None` sites above are treated as
+  explicit follow-up work rather than hidden unfinished scope.
+- Future work on the deferred items should extend the same `goby-core owns spans,
+  CLI/LSP render only` boundary instead of reintroducing frontend-side heuristics.
 
 Done when:
 

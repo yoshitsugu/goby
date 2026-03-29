@@ -80,6 +80,18 @@ Last updated: 2026-03-29
   - crate-local `#![allow(deprecated)]` now suppresses the vendored crate's upstream
     `generic-array 0.14` deprecation warnings during workspace builds; Goby code still does not
     depend on this crate directly.
+- Track ER complete (2026-03-29):
+  - `doc/PLAN_ERROR.md` now closes ER0–ER8 with the renderer/diagnostic ownership split intact:
+    `goby-core` owns spans/messages, CLI/LSP render only.
+  - unresolved bare names, qualified names, ambiguity-at-use-site diagnostics, and import module /
+    selective-symbol diagnostics now have CLI/LSP parity locks for token spans and ranges.
+  - the remaining `span: None` sites are now explicitly partitioned as follow-up work rather than
+    hidden incomplete scope:
+    - block-structure validation in `typecheck_ambiguity.rs`,
+    - declaration body vs declared return-type mismatch in `typecheck_stmt.rs`,
+    - effect-coverage diagnostics in `typecheck_effect_usage.rs`,
+    - aggregate conflicting-effect import/declaration diagnostics in `typecheck_validate.rs`,
+    - type-declaration validation spans in `typecheck_types.rs`.
 - WB-3B prep slice in progress (2026-03-24): `gen_lower/emit.rs` now has an
   `EffectEmitStrategy` boundary and `wasmfx-experimental` feature flag so future WasmFX work can
   replace the emit path without redesigning IR/lowering; current strategies are parity-tested to
@@ -104,34 +116,14 @@ fallback/runtime-output path no longer carries a source-level legacy `string.spl
 
 ## Immediate Next Steps
 
-**Track ER: Compiler Error Reporting (active track):**
-Precise unresolved-name / import diagnostics. `ER0` through `ER5` are complete in
-`doc/PLAN_ERROR.md`:
-- ownership split is locked (`goby-core` diagnoses; CLI/LSP render),
-- shared expression-span helpers now live in `crates/goby-core/src/typecheck_span.rs`,
-- current parser behavior is audited and regression-locked: statement spans exist, nested
-  callee token spans generally do not,
-- unresolved bare-name use sites in `typecheck_stmt.rs`, `typecheck_call.rs`,
-  `typecheck_check.rs`, `typecheck_effect_usage.rs`, `typecheck_resume.rs`, and
-  `typecheck_branch.rs` now route through the shared helper path where AST ownership exists,
-- ER2 regression coverage now locks both `map`-not-imported and missing named-callback
-  cases to token spans,
-- remaining `span: None` sites inside the ER2 covered modules are now explicitly partitioned
-  into deferred categories in `doc/PLAN_ERROR.md`,
-- pipeline callee token spans were originally deferred until an AST/data-model change added
-  ownership for that location, and the later ER3.5 work closed that gap,
-- ER3 completed the qualified-name / ambiguity span path, including the later AST span
-  follow-up for `RecordConstruct`, `MethodCall`, `Pipeline`, and file-relative handler-clause spans,
-- ER4 completed import declaration span plumbing and regression coverage for unknown module /
-  selective-import symbol diagnostics,
-- ER5 added shared diagnostic constructors in `crates/goby-core/src/typecheck_diag.rs` and moved
-  the covered unresolved-name / ambiguity / import-resolution families onto the common helper path,
-- ER6 now locks CLI snippet rendering for token-width unresolved-name underlines and adds
-  integration fixtures for the representative unresolved `map` case and import-typo (`maap`) case,
-- ER7 now locks LSP ranges for unresolved bare/qualified names, import typos, and ambiguity use
-  sites, including a UTF-16-sensitive ambiguity case with emoji earlier on the same line.
-Start implementation from `ER8`: close the track by partitioning the remaining non-precise-span
-sites and recording which are intentionally deferred.
+**Track H: Higher-Order Callback Reliability and Multi-Arg Lambda Surface (active track):**
+The next active implementation track is the higher-order callback / lambda-syntax work in
+`doc/PLAN.md` §4.1.
+Immediate starting point:
+- lock the minimal checked-in `fold` + callback `println` fixture,
+- make callback typechecking expected-type-driven for lambdas,
+- introduce `fn acc x -> ...` as the canonical multi-parameter lambda surface,
+- keep docs/examples/tooling changes in sync with the runtime/typechecker path.
 
 **Track stdlib (C4-S1) — complete (2026-03-24):**
 `cargo run -p goby-cli -- check stdlib/goby/string.gb` now succeeds.
