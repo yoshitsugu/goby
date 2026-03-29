@@ -112,9 +112,21 @@ hoge.gb:6:9: error: `f` expects argument of type `Int` but got `String` in 'main
 
 And the corresponding LSP diagnostic should:
 
-- highlight only the mismatched argument token where the AST owns a precise span,
+- highlight only the blamed argument expression according to the span policy
+  below,
 - reuse the same `Diagnostic` contract already used by CLI,
 - avoid frontend-side guessing.
+
+Locked acceptance fixture for TD:
+
+- program: `crates/goby-cli/tests/fixtures/type_mismatch_arg_input.gb`
+- expected CLI stderr: `crates/goby-cli/tests/fixtures/type_mismatch_arg_expected.txt`
+- canonical `check` command:
+  - `cargo run -p goby-cli -- check crates/goby-cli/tests/fixtures/type_mismatch_arg_input.gb`
+- canonical `run` parity command:
+  - `cargo run -p goby-cli -- run crates/goby-cli/tests/fixtures/type_mismatch_arg_input.gb`
+- `check` and `run` must agree on the typecheck diagnostic family and rendered
+  message/snippet for this fixture; `run` must fail before lowering/codegen.
 
 ### 3.1 Scope
 
@@ -144,7 +156,25 @@ And the corresponding LSP diagnostic should:
 - if a typed diagnostic still lacks a precise span, record that explicitly
   instead of letting the invalid program drift into lowering/runtime/codegen.
 
-### 3.4 Milestones
+### 3.4 Typed Span Policy
+
+- The default TD policy is: highlight the whole blamed argument expression.
+- If the AST already owns a narrower token that is also the honest semantic
+  blame site, that narrower token may be used instead.
+- Do not let checker-specific convenience choose different span widths for
+  equivalent mismatch families.
+- If a typed diagnostic cannot yet identify an honest blamed expression under
+  this policy, defer it explicitly instead of inventing a pseudo-precise span.
+
+Track TD is complete when all of the following are true:
+
+- the locked fixture and commands above are implemented and parity-locked,
+- the covered typed mismatch families use the typed span policy consistently,
+- CLI and LSP parity is regression-locked for the covered families,
+- remaining typed diagnostics without precise spans are explicitly cataloged as
+  deferred.
+
+### 3.5 Milestones
 
 #### Milestone TD0: Boundary Lock and Inventory
 
