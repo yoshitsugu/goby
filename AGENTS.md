@@ -105,6 +105,14 @@ When making non-trivial changes, run at least `cargo check` and `cargo test`.
 - Place subsystem-specific regression tests beside the module that owns the behavior when full-stack integration coverage is not required.
 - Stop splitting when the remaining helpers form one cohesive layer and further extraction would mostly add cross-module coupling.
 
+### Root-Cause Discipline
+
+- Do not default to the narrowest patch that makes one failing example pass.
+- First identify which phase or ownership boundary should have handled the case, then prefer fixing that shared boundary over adding a one-off exception.
+- If a new regression test exposes a failure, keep the test, explain the failure in terms of the current ownership split, and only then choose the implementation point.
+- Treat symbol-specific branches, fixture-specific checks, and syntax-shape-specific exceptions as a last resort; they require a clear justification that a shared rule would be wrong, not merely harder.
+- If an attempted fix breaks unrelated valid behavior, revert to the last correct boundary and narrow the change instead of layering compensating exceptions on top.
+
 ## Change Workflow Expectations
 
 For language-facing changes:
@@ -132,5 +140,12 @@ For maintainability refactors:
 2. Prefer one ownership move per commit where practical.
 3. Move module-specific regression tests with the owned implementation in the same refactor when possible.
 4. Run at least `cargo check`, the focused subsystem tests, and `cargo test --workspace` before closing the refactor slice.
+
+For bug fixes and regressions:
+
+1. Reproduce the failure with the smallest representative case.
+2. Identify the earliest compiler/tooling phase that can honestly reject or handle it.
+3. Prefer fixing that phase over allowing the issue to drift into later phases such as lowering, runtime, CLI rendering, or editor integration.
+4. If a broader fix changes unrelated accepted behavior, narrow the implementation to a smaller shared layer before proceeding.
 
 If there is tension between approaches, choose the option that keeps the language easy to read and reason about while still enabling practical, high-value expressiveness.
