@@ -481,27 +481,27 @@ These three expression variants lack span fields in the AST, which blocks
 precise diagnostics in `typecheck_ambiguity.rs` (5 RecordConstruct sites,
 1 MethodCall site, 1 Pipeline-callee site).
 
-- [ ] ER3.5.1 Add `span: Option<Span>` to `Expr::RecordConstruct` in `ast.rs`.
-- [ ] ER3.5.2 Add `span: Option<Span>` to `Expr::MethodCall` in `ast.rs`.
-- [ ] ER3.5.3 Add `callee_span: Option<Span>` to `Expr::Pipeline` in `ast.rs`.
+- [x] ER3.5.1 Add `span: Option<Span>` to `Expr::RecordConstruct` in `ast.rs`.
+- [x] ER3.5.2 Add `span: Option<Span>` to `Expr::MethodCall` in `ast.rs`.
+- [x] ER3.5.3 Add `callee_span: Option<Span>` to `Expr::Pipeline` in `ast.rs`.
   Rationale: keeps callee as `String` (no semantics change) and is minimally
   invasive; full callee-as-Expr refactor is deferred.
-- [ ] ER3.5.4 Populate the new fields in the parser:
+- [x] ER3.5.4 Populate the new fields in the parser:
   - `parse_record_constructor_call` → set `span` for the constructor token.
   - `parse_method_call` → set `span` for the `receiver.method` token.
   - Pipeline parsing in `parse_expr` → set `callee_span` for the callee token.
-- [ ] ER3.5.5 Extend `copy_expr_spans` / `enrich_expr_spans` in `parser_expr.rs`
+- [x] ER3.5.5 Extend `copy_expr_spans` / `enrich_expr_spans` in `parser_expr.rs`
   to propagate the new spans.
-- [ ] ER3.5.6 Update `typecheck_ambiguity.rs`:
+- [x] ER3.5.6 Update `typecheck_ambiguity.rs`:
   - RecordConstruct 5 error sites: use `span` from the node.
   - MethodCall ambiguity site: use `span` from the node.
   - Pipeline callee ambiguity site: use `callee_span` from the node.
-- [ ] ER3.5.7 Update `typecheck_span.rs` helpers to cover the new span fields
+- [x] ER3.5.7 Update `typecheck_span.rs` helpers to cover the new span fields
   where relevant.
-- [ ] ER3.5.8 Update the two pinning tests (`ambiguous_method_call_span_is_none`,
+- [x] ER3.5.8 Update the two pinning tests (`ambiguous_method_call_span_is_none`,
   `ambiguous_pipeline_callee_span_is_none`) to assert `Some(...)` once spans
   are wired.
-- [ ] ER3.5.9 Add regression tests confirming span-carrying errors for each new
+- [x] ER3.5.9 Add regression tests confirming span-carrying errors for each new
   variant.
 
 Constraints:
@@ -529,13 +529,13 @@ declaration definition line must be added.  This offset is available at the
 call sites in `typecheck_effect_usage.rs` via the `Declaration` context that
 the checker already receives.
 
-- [ ] ER3.6.1 Audit how `Declaration.line` and body-relative span relate;
+- [x] ER3.6.1 Audit how `Declaration.line` and body-relative span relate;
   confirm the exact offset formula (body-start line = definition-line + 1).
-- [ ] ER3.6.2 Thread the necessary declaration line information into
+- [x] ER3.6.2 Thread the necessary declaration line information into
   `resolve_handler_clause_name` so it can compute the file-relative span.
-- [ ] ER3.6.3 Migrate the 4 `span: None` sites in `resolve_handler_clause_name`
+- [x] ER3.6.3 Migrate the 4 `span: None` sites in `resolve_handler_clause_name`
   to use the computed file-relative span.
-- [ ] ER3.6.4 Add regression tests confirming non-None span for:
+- [x] ER3.6.4 Add regression tests confirming non-None span for:
   - unknown handler clause name,
   - ambiguous handler clause name.
 
