@@ -622,13 +622,13 @@ Done when:
 
 ### Milestone ER7: LSP range parity lock
 
-- [ ] ER7.1 Add or extend `goby-lsp` tests to verify expected range for the
+- [x] ER7.1 Add or extend `goby-lsp` tests to verify expected range for the
   unresolved `map` example.
-- [ ] ER7.2 Add LSP tests for:
+- [x] ER7.2 Add LSP tests for:
   - unresolved qualified name,
   - import typo,
   - ambiguity use site.
-- [ ] ER7.3 Verify UTF-8 / UTF-16 conversion behavior remains correct when
+- [x] ER7.3 Verify UTF-8 / UTF-16 conversion behavior remains correct when
   diagnostics appear on lines containing multi-byte text nearby.
 
 Constraints:

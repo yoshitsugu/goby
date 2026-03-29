@@ -833,6 +833,120 @@ main =
     }
 
     #[test]
+    fn analyze_unknown_qualified_name_returns_token_aligned_range() {
+        let Some(root) = stdlib_root() else {
+            return;
+        };
+        let source = "\
+effect Log
+  log: String -> Unit
+main : Unit -> Unit
+main =
+  with
+    Log.nonexistent msg ->
+      resume ()
+  in
+    log \"hello\"
+";
+        let diags = analyze(source, Some(&root));
+        assert_eq!(diags.len(), 1, "expected one diagnostic, got: {:?}", diags);
+        assert!(
+            diags[0].message.contains("unknown effect operation"),
+            "unexpected diagnostic: {:?}",
+            diags[0]
+        );
+        assert!(diags[0].message.contains("Log.nonexistent"));
+        assert_eq!(diags[0].range.start.line, 5);
+        assert_eq!(diags[0].range.start.character, 4);
+        assert_eq!(diags[0].range.end.line, 5);
+        assert_eq!(diags[0].range.end.character, 4);
+    }
+
+    #[test]
+    fn analyze_unknown_import_symbol_returns_token_aligned_range() {
+        let Some(root) = stdlib_root() else {
+            return;
+        };
+        let source = "\
+import goby/list ( each, maap )
+
+main : Unit -> Unit
+main = ()
+";
+        let diags = analyze(source, Some(&root));
+        assert_eq!(diags.len(), 1, "expected one diagnostic, got: {:?}", diags);
+        assert!(
+            diags[0]
+                .message
+                .contains("unknown symbol `maap` in import from `goby/list`"),
+            "unexpected diagnostic: {:?}",
+            diags[0]
+        );
+        assert_eq!(diags[0].range.start.line, 0);
+        assert_eq!(diags[0].range.start.character, 25);
+        assert_eq!(diags[0].range.end.line, 0);
+        assert_eq!(diags[0].range.end.character, 28);
+    }
+
+    #[test]
+    fn analyze_ambiguous_handler_clause_returns_range() {
+        let Some(root) = stdlib_root() else {
+            return;
+        };
+        let source = "\
+effect Log
+  log: String -> Unit
+effect Logger
+  log: String -> Unit
+main : Unit -> Unit can Log
+main =
+  with
+    log msg ->
+      resume ()
+  in
+    Log.log \"hello\"
+";
+        let diags = analyze(source, Some(&root));
+        assert_eq!(diags.len(), 1, "expected one diagnostic, got: {:?}", diags);
+        assert!(
+            diags[0].message.contains("ambiguous"),
+            "unexpected diagnostic: {:?}",
+            diags[0]
+        );
+        assert!(diags[0].message.contains("log"));
+        assert_eq!(diags[0].range.start.line, 7);
+        assert_eq!(diags[0].range.start.character, 4);
+        assert_eq!(diags[0].range.end.line, 7);
+        assert_eq!(diags[0].range.end.character, 4);
+    }
+
+    #[test]
+    fn analyze_unknown_import_symbol_with_emoji_comment_keeps_utf16_range() {
+        let Some(root) = stdlib_root() else {
+            return;
+        };
+        let source = "\
+import goby/list ( each, maap ) # 😀
+
+main : Unit -> Unit
+main = ()
+";
+        let diags = analyze(source, Some(&root));
+        assert_eq!(diags.len(), 1, "expected one diagnostic, got: {:?}", diags);
+        assert!(
+            diags[0]
+                .message
+                .contains("unknown symbol `maap` in import from `goby/list`"),
+            "unexpected diagnostic: {:?}",
+            diags[0]
+        );
+        assert_eq!(diags[0].range.start.line, 0);
+        assert_eq!(diags[0].range.start.character, 25);
+        assert_eq!(diags[0].range.end.line, 0);
+        assert_eq!(diags[0].range.end.character, 28);
+    }
+
+    #[test]
     fn analyze_no_stdlib_returns_synthetic_diagnostic() {
         let source = "main : Unit -> Unit can Print\nmain = print \"hello\"\n";
         let diags = analyze(source, None);
