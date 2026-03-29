@@ -577,3 +577,109 @@ pub(crate) fn check_unhandled_effects_in_expr(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::{HashMap, HashSet};
+
+    use super::*;
+    use crate::ast::Span;
+    use crate::typecheck_env::EffectMap;
+
+    fn effect_map_with_op(effect: &str, op: &str) -> EffectMap {
+        let mut effect_to_ops = HashMap::new();
+        let mut ops = HashSet::new();
+        ops.insert(op.to_string());
+        ops.insert(format!("{}.{}", effect, op));
+        effect_to_ops.insert(effect.to_string(), ops);
+
+        let mut op_to_effects = HashMap::new();
+        let mut effects = HashSet::new();
+        effects.insert(effect.to_string());
+        op_to_effects.insert(op.to_string(), effects.clone());
+        op_to_effects.insert(format!("{}.{}", effect, op), effects);
+
+        EffectMap {
+            effect_to_ops,
+            op_to_effects,
+        }
+    }
+
+    fn effect_map_with_ambiguous_op(op: &str, effects: &[&str]) -> EffectMap {
+        let mut effect_to_ops = HashMap::new();
+        for effect in effects {
+            let mut ops = HashSet::new();
+            ops.insert(op.to_string());
+            effect_to_ops.insert(effect.to_string(), ops);
+        }
+
+        let mut op_to_effects = HashMap::new();
+        let effect_set: HashSet<String> = effects.iter().map(|s| s.to_string()).collect();
+        op_to_effects.insert(op.to_string(), effect_set);
+
+        EffectMap {
+            effect_to_ops,
+            op_to_effects,
+        }
+    }
+
+    #[test]
+    fn unknown_handler_clause_name_error_carries_span() {
+        let clause_span = Span::new(2, 1, 2, 12);
+        let effect_map = effect_map_with_op("Log", "log");
+
+        let err = resolve_handler_clause_name("no_such_op", &effect_map, "my_decl", Some(clause_span))
+            .expect_err("should be unknown op");
+
+        assert_eq!(err.span, Some(clause_span));
+        assert!(err.message.contains("unknown effect operation"));
+    }
+
+    #[test]
+    fn ambiguous_handler_clause_name_error_carries_span() {
+        let clause_span = Span::new(3, 1, 3, 8);
+        let effect_map = effect_map_with_ambiguous_op("send", &["Http", "Smtp"]);
+
+        let err = resolve_handler_clause_name("send", &effect_map, "my_decl", Some(clause_span))
+            .expect_err("should be ambiguous");
+
+        assert_eq!(err.span, Some(clause_span));
+        assert!(err.message.contains("ambiguous"));
+    }
+
+    #[test]
+    fn duplicate_handler_clause_error_carries_span() {
+        let clause_span = Span::new(4, 1, 4, 8);
+        let effect_map = effect_map_with_op("Log", "log");
+        let handler_expr = Expr::Handler {
+            clauses: vec![
+                crate::ast::HandlerClause {
+                    name: "log".to_string(),
+                    params: vec![],
+                    body: "()".to_string(),
+                    parsed_body: None,
+                    span: Span::new(2, 1, 2, 8),
+                },
+                crate::ast::HandlerClause {
+                    name: "log".to_string(),
+                    params: vec![],
+                    body: "()".to_string(),
+                    parsed_body: None,
+                    span: clause_span,
+                },
+            ],
+        };
+        let env = TypeEnv {
+            globals: HashMap::new(),
+            locals: HashMap::new(),
+            type_aliases: HashMap::new(),
+            record_types: HashMap::new(),
+        };
+
+        let err = infer_handler_covered_ops_strict(&handler_expr, &env, &effect_map, "my_decl")
+            .expect_err("should be duplicate");
+
+        assert_eq!(err.span, Some(clause_span));
+        assert!(err.message.contains("duplicate"));
+    }
+}
