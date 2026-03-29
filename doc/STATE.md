@@ -102,6 +102,17 @@ Last updated: 2026-03-29
     `higher-order argument type mismatch ... Unknown -> Unknown -> Unknown`.
   - the next ownership target is therefore confirmed as expected-type propagation for lambdas in
     ordinary higher-order call checking (`HOF-M2`), not the runtime fold path.
+- Track HOF M2 complete (2026-03-29):
+  - ordinary higher-order callback checking now validates inline lambdas against the expected
+    callback function type instead of inferring them as `Unknown -> ...`.
+  - `fold [1, 2, 3] 0 (|acc| -> |x| -> acc + x)` now passes `goby check`.
+  - focused regressions now lock:
+    - valid inline curried `fold` callback typing,
+    - callback arity mismatch diagnostics for too-few / too-many lambda parameters,
+    - callback result-shape mismatch diagnostics with expected/provided function-type wording.
+  - the remaining gap is runtime/lowering only: `goby run` for the old curried lambda callback still
+    fails in general lowering, so the next slice must move to the shared callback runtime boundary
+    rather than revisiting the typechecker.
 - WB-3B prep slice in progress (2026-03-24): `gen_lower/emit.rs` now has an
   `EffectEmitStrategy` boundary and `wasmfx-experimental` feature flag so future WasmFX work can
   replace the emit path without redesigning IR/lowering; current strategies are parity-tested to
@@ -130,8 +141,8 @@ fallback/runtime-output path no longer carries a source-level legacy `string.spl
 The next active implementation track is the higher-order callback / lambda-syntax work in
 `doc/PLAN.md` §4.1.
 Immediate starting point:
-- make callback typechecking expected-type-driven for lambdas,
 - introduce `fn acc x -> ...` as the canonical multi-parameter lambda surface,
+- close the runtime/lowering gap for inline higher-order callbacks while keeping one shared callable model,
 - keep docs/examples/tooling changes in sync with the runtime/typechecker path.
 
 **Track stdlib (C4-S1) — complete (2026-03-24):**

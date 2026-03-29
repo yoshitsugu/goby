@@ -2007,7 +2007,7 @@ render =
     }
 
     #[test]
-    fn rejects_fold_inline_curried_lambda_without_expected_type_propagation_yet() {
+    fn typechecks_fold_inline_curried_lambda_with_expected_type_propagation() {
         let source = "\
 import goby/prelude
 import goby/list ( fold )
@@ -2017,10 +2017,22 @@ main =
   println \"${total}\"
 ";
         let module = parse_module(source).expect("should parse");
-        let err = typecheck_module(&module)
-            .expect_err("inline curried fold callback should still expose the current HOF gap");
+        typecheck_module(&module)
+            .expect("inline curried fold callback should typecheck with expected callback types");
+    }
+
+    #[test]
+    fn rejects_fold_lambda_with_too_few_parameters() {
+        let source = "\
+import goby/list ( fold )
+sum : Unit -> Int
+sum =
+  fold [1, 2, 3] 0 (|acc| -> acc + 1)
+";
+        let module = parse_module(source).expect("should parse");
+        let err = typecheck_module(&module).expect_err("too-few callback parameters should fail");
         assert!(
-            err.message.contains("higher-order argument type mismatch"),
+            err.message.contains("higher-order callback arity mismatch"),
             "unexpected error: {err}"
         );
         assert!(
@@ -2028,7 +2040,57 @@ main =
             "unexpected error: {err}"
         );
         assert!(
-            err.message.contains("Unknown -> Unknown -> Unknown"),
+            err.message.contains("1 parameter"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn rejects_fold_lambda_with_wrong_result_type() {
+        let source = "\
+import goby/list ( fold )
+render : Unit -> Int
+render =
+  fold [1, 2, 3] 0 (|acc| -> |x| -> \"${acc + x}\")
+";
+        let module = parse_module(source).expect("should parse");
+        let err =
+            typecheck_module(&module).expect_err("callback result-shape mismatch should fail");
+        assert!(
+            err.message
+                .contains("higher-order callback result type mismatch"),
+            "unexpected error: {err}"
+        );
+        assert!(
+            err.message.contains("Int -> Int -> Int"),
+            "unexpected error: {err}"
+        );
+        assert!(
+            err.message.contains("Int -> Int -> String"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn rejects_fold_lambda_with_too_many_parameters() {
+        let source = "\
+import goby/list ( fold )
+sum : Unit -> Int
+sum =
+  fold [1, 2, 3] 0 (|acc| -> |x| -> |y| -> acc + x + y)
+";
+        let module = parse_module(source).expect("should parse");
+        let err = typecheck_module(&module).expect_err("too-many callback parameters should fail");
+        assert!(
+            err.message.contains("higher-order callback arity mismatch"),
+            "unexpected error: {err}"
+        );
+        assert!(
+            err.message.contains("Int -> Int -> Int"),
+            "unexpected error: {err}"
+        );
+        assert!(
+            err.message.contains("3 parameters"),
             "unexpected error: {err}"
         );
     }

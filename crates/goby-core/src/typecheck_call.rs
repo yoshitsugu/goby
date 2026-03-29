@@ -10,6 +10,18 @@ use crate::typecheck_unify::{
     match_function_argument_type, unify_types_with_subst,
 };
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum CallbackLambdaMismatch {
+    Arity {
+        required: Ty,
+        provided_param_count: usize,
+    },
+    Result {
+        required: Ty,
+        provided: Ty,
+    },
+}
+
 pub(crate) fn check_ordinary_call_arg_types_in_expr(
     expr: &Expr,
     env: &TypeEnv,
@@ -162,8 +174,43 @@ fn validate_call_chain(expr: &Expr, env: &TypeEnv, decl_name: &str) -> Result<()
             return Ok(());
         };
         let expected_after_subst = apply_type_substitution(expected, &subst, env);
-        let actual_ty = resolve_function_value_ty(arg, env, &mut next_id);
         if matches!(env.resolve_alias(&expected_after_subst, 0), Ty::Fun { .. }) {
+            let actual_ty = match infer_callback_arg_ty(
+                arg,
+                &expected_after_subst,
+                env,
+                &mut subst,
+                &mut next_id,
+            ) {
+                Ok(actual_ty) => actual_ty,
+                Err(CallbackLambdaMismatch::Arity {
+                    required,
+                    provided_param_count,
+                }) => {
+                    let plural = if provided_param_count == 1 { "" } else { "s" };
+                    return Err(TypecheckError {
+                        declaration: Some(decl_name.to_string()),
+                        span: best_available_expr_span(arg),
+                        message: format!(
+                            "higher-order callback arity mismatch: required `{}` but lambda provides {} parameter{}",
+                            ty_name(&required),
+                            provided_param_count,
+                            plural,
+                        ),
+                    });
+                }
+                Err(CallbackLambdaMismatch::Result { required, provided }) => {
+                    return Err(TypecheckError {
+                        declaration: Some(decl_name.to_string()),
+                        span: best_available_expr_span(arg),
+                        message: format!(
+                            "higher-order callback result type mismatch: required `{}` but lambda provides `{}`",
+                            ty_name(&required),
+                            ty_name(&provided)
+                        ),
+                    });
+                }
+            };
             if actual_ty == Ty::Unknown {
                 if let Some(name) = unresolved_callable_name(arg, env) {
                     return Err(err_unknown_callable(
@@ -173,6 +220,9 @@ fn validate_call_chain(expr: &Expr, env: &TypeEnv, decl_name: &str) -> Result<()
                     ));
                 }
                 return Ok(());
+            }
+            if matches!(arg, Expr::Lambda { .. }) {
+                continue;
             }
             if let Err(mismatch) = match_function_argument_type(
                 &expected_after_subst,
@@ -199,6 +249,7 @@ fn validate_call_chain(expr: &Expr, env: &TypeEnv, decl_name: &str) -> Result<()
             continue;
         }
 
+        let actual_ty = resolve_function_value_ty(arg, env, &mut next_id);
         if actual_ty == Ty::Unknown {
             continue;
         }
@@ -218,6 +269,128 @@ fn validate_call_chain(expr: &Expr, env: &TypeEnv, decl_name: &str) -> Result<()
         }
     }
     Ok(())
+}
+
+fn infer_callback_arg_ty(
+    expr: &Expr,
+    expected: &Ty,
+    env: &TypeEnv,
+    subst: &mut TypeSubst,
+    next_id: &mut usize,
+) -> Result<Ty, CallbackLambdaMismatch> {
+    match expr {
+        Expr::Lambda { .. } => {
+            infer_lambda_ty_against_expected(expr, expected, env, subst, next_id)
+        }
+        _ => Ok(resolve_function_value_ty(expr, env, next_id)),
+    }
+}
+
+fn infer_lambda_ty_against_expected(
+    expr: &Expr,
+    expected: &Ty,
+    env: &TypeEnv,
+    subst: &mut TypeSubst,
+    next_id: &mut usize,
+) -> Result<Ty, CallbackLambdaMismatch> {
+    let Expr::Lambda { param, body } = expr else {
+        return Ok(resolve_function_value_ty(expr, env, next_id));
+    };
+
+    let required = apply_type_substitution(expected, subst, env);
+    let Ty::Fun { params, result } = env.resolve_alias(&required, 0) else {
+        return Err(CallbackLambdaMismatch::Arity {
+            required,
+            provided_param_count: lambda_param_count(expr),
+        });
+    };
+
+    let Some(expected_param_ty) = params.first() else {
+        return Err(CallbackLambdaMismatch::Arity {
+            required,
+            provided_param_count: lambda_param_count(expr),
+        });
+    };
+    let expected_param_ty = apply_type_substitution(expected_param_ty, subst, env);
+    let expected_rest_ty = if params.len() == 1 {
+        apply_type_substitution(&result, subst, env)
+    } else {
+        Ty::Fun {
+            params: params[1..]
+                .iter()
+                .map(|param| apply_type_substitution(param, subst, env))
+                .collect(),
+            result: Box::new(apply_type_substitution(&result, subst, env)),
+        }
+    };
+
+    let child_env = env.with_local(param, expected_param_ty.clone());
+    let body_ty = match body.as_ref() {
+        Expr::Lambda { .. } => {
+            let nested_ty = match infer_lambda_ty_against_expected(
+                body,
+                &expected_rest_ty,
+                &child_env,
+                subst,
+                next_id,
+            ) {
+                Ok(nested_ty) => nested_ty,
+                Err(CallbackLambdaMismatch::Arity { .. }) => {
+                    return Err(CallbackLambdaMismatch::Arity {
+                        required,
+                        provided_param_count: lambda_param_count(expr),
+                    });
+                }
+                Err(CallbackLambdaMismatch::Result { provided, .. }) => {
+                    return Err(CallbackLambdaMismatch::Result {
+                        required,
+                        provided: Ty::Fun {
+                            params: vec![expected_param_ty.clone()],
+                            result: Box::new(provided),
+                        },
+                    });
+                }
+            };
+            if !matches!(env.resolve_alias(&expected_rest_ty, 0), Ty::Fun { .. }) {
+                return Err(CallbackLambdaMismatch::Arity {
+                    required,
+                    provided_param_count: lambda_param_count(expr),
+                });
+            }
+            nested_ty
+        }
+        _ => {
+            let inferred = check_expr(body, &child_env);
+            if matches!(
+                child_env.resolve_alias(&expected_rest_ty, 0),
+                Ty::Fun { .. }
+            ) {
+                return Err(CallbackLambdaMismatch::Arity {
+                    required,
+                    provided_param_count: lambda_param_count(expr),
+                });
+            }
+            inferred
+        }
+    };
+
+    let provided = Ty::Fun {
+        params: vec![expected_param_ty],
+        result: Box::new(body_ty.clone()),
+    };
+
+    if !unify_types_with_subst(&expected_rest_ty, &body_ty, subst, &child_env) {
+        return Err(CallbackLambdaMismatch::Result { required, provided });
+    }
+
+    Ok(apply_type_substitution(&provided, subst, &child_env))
+}
+
+fn lambda_param_count(expr: &Expr) -> usize {
+    match expr {
+        Expr::Lambda { body, .. } => 1 + lambda_param_count(body),
+        _ => 0,
+    }
 }
 
 fn ordinary_call_target_and_args(expr: &Expr) -> Option<(&Expr, Vec<&Expr>)> {

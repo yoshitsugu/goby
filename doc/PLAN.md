@@ -516,7 +516,7 @@ Milestones:
     print path so failures are easy to reason about.
   - lock the current bad behavior explicitly before changing implementation.
   - define `examples/hof_fold_print.out` as the exact final stdout contract.
-- [ ] HOF-M2: Higher-order callback typechecking becomes expected-type-driven.
+- [x] HOF-M2: Higher-order callback typechecking becomes expected-type-driven.
   - extend callback checking so lambda arguments are validated against the
     expected function type at the call site instead of relying on weak inference.
   - reject `fold xs init (|d| -> ...)` with a dedicated callback-arity diagnostic.
