@@ -6,6 +6,7 @@
     html_logo_url = "https://raw.githubusercontent.com/RustCrypto/media/6ee8e381/logo.svg",
     html_favicon_url = "https://raw.githubusercontent.com/RustCrypto/media/6ee8e381/logo.svg"
 )]
+#![allow(deprecated)] // Goby vendors 0.1.7 to keep the 0.14.9 pin; upstream still uses deprecated generic-array 0.14 APIs.
 #![forbid(unsafe_code)]
 #![warn(missing_docs, rust_2018_idioms)]
 

@@ -77,9 +77,9 @@ Last updated: 2026-03-29
     `generic-array` pin can move from `0.14.7` to `0.14.9`.
   - `Cargo.lock` now resolves `generic-array v0.14.9`, removing the repeated
     `Adding generic-array v0.14.7 (available: v0.14.9)` notice during lockfile refresh.
-  - current tradeoff: the vendored patch emits upstream deprecation warnings about
-    `generic-array 1.x`, but `cargo check` / `cargo test` remain green and no Goby code depends on
-    this crate directly.
+  - crate-local `#![allow(deprecated)]` now suppresses the vendored crate's upstream
+    `generic-array 0.14` deprecation warnings during workspace builds; Goby code still does not
+    depend on this crate directly.
 - WB-3B prep slice in progress (2026-03-24): `gen_lower/emit.rs` now has an
   `EffectEmitStrategy` boundary and `wasmfx-experimental` feature flag so future WasmFX work can
   replace the emit path without redesigning IR/lowering; current strategies are parity-tested to

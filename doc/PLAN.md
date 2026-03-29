@@ -123,9 +123,19 @@ Based on `examples/*.gb`:
   - for MVP, any line with at least one leading space or tab is treated as an indented block line.
   - mixing tabs and spaces in the same block is allowed in MVP (no normalization/error rule yet).
 - CLI commands:
-  - `goby-cli run <file.gb>` uses `main` entrypoint only and executes generated Wasm via external `wasmtime`.
-    - if `wasmtime` is not installed, execution is skipped with an informational message.
-    - current invocation: `wasmtime run <file.wasm>` with WASI-standard `_start` export.
+  - `goby-cli run <file.gb>` uses `main` entrypoint only.
+    - current implementation is hybrid:
+      - ordinary file-based Wasm execution writes `<file.wasm>` and launches external `wasmtime`,
+      - runtime-stdin / `GeneralLowered` / `InterpreterBridge` cases execute through the
+        Goby-owned runtime boundary in `goby-wasm`.
+    - if external `wasmtime` is not installed, only the file-based execution path is skipped with
+      an informational message.
+    - current external invocation: `wasmtime run <file.wasm>` with WASI-standard `_start` export.
+    - open design questions:
+      - should Goby eventually return to an all-external execution model,
+      - or is a Goby-owned host/runtime layer a first-class product boundary,
+      - if external-only execution is desired, which current host intrinsics / runtime services
+        must be removed, standardized, or moved into a separate launcher.
   - `goby-cli check <file.gb>` performs parse/typecheck without runtime entrypoint.
 - `main` type is restricted to `Unit -> Unit` for MVP.
   - `main` type annotation is required for `run`; optional for `check`.
@@ -184,6 +194,16 @@ Based on `examples/*.gb`:
 - Handler dispatch: lexical nearest-handler stack walk (no alphabetical fallback).
 - Runtime execution model: prefer native lowering for the supported subset; fallback to
   compile-time interpreter (`resolve_main_runtime_output`) for unsupported forms.
+  - Current implementation note:
+    - this statement is incomplete for runtime-stdin programs.
+    - the active runtime boundary also includes a Goby-owned Wasm execution path for
+      `GeneralLowered` and `InterpreterBridge` classifications when stdin/host-runtime wiring is
+      required.
+  - Discussion points to settle later:
+    - whether `goby-wasm` should remain responsible for host-runtime-backed execution,
+    - whether CLI `run` should always emit a `.wasm` artifact even for Goby-owned execution paths,
+    - whether the long-term contract should expose a separate Goby runner instead of overloading
+      raw external `wasmtime` execution.
 
 ### 2.1 Syntax and Parsing
 
