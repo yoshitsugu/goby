@@ -558,12 +558,12 @@ the ER8 closure report.
 
 ### Milestone ER4: Import declaration spans
 
-- [ ] ER4.1 Extend `ImportDecl` with span metadata sufficient for precise
+- [x] ER4.1 Extend `ImportDecl` with span metadata sufficient for precise
   import diagnostics.
-- [ ] ER4.2 Populate import spans in parser/top-level parsing code.
-- [ ] ER4.3 Update import validation paths in
+- [x] ER4.2 Populate import spans in parser/top-level parsing code.
+- [x] ER4.3 Update import validation paths in
   `crates/goby-core/src/typecheck_validate.rs` to use import spans.
-- [ ] ER4.4 Add regression tests for:
+- [x] ER4.4 Add regression tests for:
   - unknown module path,
   - unknown selective-import symbol,
   - conflicting import-related diagnostics where a single import site should be
@@ -581,14 +581,14 @@ Done when:
 
 ### Milestone ER5: Shared diagnostic-construction cleanup
 
-- [ ] ER5.1 Add common constructors/helpers for frequent diagnostic families:
+- [x] ER5.1 Add common constructors/helpers for frequent diagnostic families:
   - unresolved bare name,
   - unresolved qualified name,
   - ambiguity at use site,
   - import symbol resolution error.
-- [ ] ER5.2 Replace duplicated `TypecheckError { span: None, ... }` sites in
+- [x] ER5.2 Replace duplicated `TypecheckError { span: None, ... }` sites in
   the covered diagnostic families with helper-backed construction.
-- [ ] ER5.3 Document the preferred span-selection policy near the helper layer.
+- [x] ER5.3 Document the preferred span-selection policy near the helper layer.
 
 Constraints:
 

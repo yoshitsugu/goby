@@ -628,8 +628,9 @@ mod tests {
         let clause_span = Span::new(2, 1, 2, 12);
         let effect_map = effect_map_with_op("Log", "log");
 
-        let err = resolve_handler_clause_name("no_such_op", &effect_map, "my_decl", Some(clause_span))
-            .expect_err("should be unknown op");
+        let err =
+            resolve_handler_clause_name("no_such_op", &effect_map, "my_decl", Some(clause_span))
+                .expect_err("should be unknown op");
 
         assert_eq!(err.span, Some(clause_span));
         assert!(err.message.contains("unknown effect operation"));

@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-28
+Last updated: 2026-03-29
 
 ## Current Focus
 
@@ -105,7 +105,7 @@ fallback/runtime-output path no longer carries a source-level legacy `string.spl
 ## Immediate Next Steps
 
 **Track ER: Compiler Error Reporting (active track):**
-Precise unresolved-name / import diagnostics. `ER0`, `ER1`, and `ER2` are complete in
+Precise unresolved-name / import diagnostics. `ER0` through `ER5` are complete in
 `doc/PLAN_ERROR.md`:
 - ownership split is locked (`goby-core` diagnoses; CLI/LSP render),
 - shared expression-span helpers now live in `crates/goby-core/src/typecheck_span.rs`,
@@ -118,11 +118,16 @@ Precise unresolved-name / import diagnostics. `ER0`, `ER1`, and `ER2` are comple
   cases to token spans,
 - remaining `span: None` sites inside the ER2 covered modules are now explicitly partitioned
   into deferred categories in `doc/PLAN_ERROR.md`,
-- pipeline callee token spans are explicitly deferred until an AST/data-model change adds
-  ownership for that location.
-Start implementation from `ER3`: move qualified-name and ambiguity diagnostics onto the same
-precise span path, and decide whether the initial qualified underline policy is full-token or
-member-only before widening tests.
+- pipeline callee token spans were originally deferred until an AST/data-model change added
+  ownership for that location, and the later ER3.5 work closed that gap,
+- ER3 completed the qualified-name / ambiguity span path, including the later AST span
+  follow-up for `RecordConstruct`, `MethodCall`, `Pipeline`, and file-relative handler-clause spans,
+- ER4 completed import declaration span plumbing and regression coverage for unknown module /
+  selective-import symbol diagnostics,
+- ER5 added shared diagnostic constructors in `crates/goby-core/src/typecheck_diag.rs` and moved
+  the covered unresolved-name / ambiguity / import-resolution families onto the common helper path.
+Start implementation from `ER6`: lock CLI rendering quality for representative unresolved-name and
+import-typo diagnostics without adding renderer-side heuristics.
 
 **Track stdlib (C4-S1) — complete (2026-03-24):**
 `cargo run -p goby-cli -- check stdlib/goby/string.gb` now succeeds.

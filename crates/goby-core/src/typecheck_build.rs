@@ -7,6 +7,7 @@ use crate::{
     stdlib::StdlibResolver,
     typecheck::{PRELUDE_MODULE_PATH, TypecheckError},
     typecheck_annotation::strip_effect_clause,
+    typecheck_diag::err_name_ambiguous,
     typecheck_env::{GlobalBinding, ImportedEffectDecl, RecordTypeInfo, Ty, TypeEnv},
     typecheck_types::{ty_from_annotation, ty_from_type_expr},
     typecheck_validate::{
@@ -134,15 +135,12 @@ pub(crate) fn ensure_no_ambiguous_globals(env: &TypeEnv) -> Result<(), Typecheck
     };
     let mut sorted_sources = (*sources).clone();
     sorted_sources.sort();
-    Err(TypecheckError {
-        declaration: None,
-        span: None, // no span available: global symbol has no declaration span
-        message: format!(
-            "name `{}` is ambiguous due to name resolution collision: {}",
-            name,
-            sorted_sources.join(", ")
-        ),
-    })
+    Err(err_name_ambiguous(
+        None,
+        name,
+        &sorted_sources,
+        None, // no span available: global symbol has no declaration span
+    ))
 }
 
 pub(crate) fn inject_effect_symbols(module: &Module, globals: &mut HashMap<String, GlobalBinding>) {

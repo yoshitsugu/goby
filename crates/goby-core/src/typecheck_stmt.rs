@@ -6,6 +6,7 @@ use crate::typecheck_ambiguity::ensure_no_ambiguous_refs_in_expr;
 use crate::typecheck_branch::check_branch_type_consistency_in_expr;
 use crate::typecheck_call::check_ordinary_call_arg_types_in_expr;
 use crate::typecheck_check::check_expr;
+use crate::typecheck_diag::err_unknown_callable;
 use crate::typecheck_effect_usage::check_unhandled_effects_in_expr;
 use crate::typecheck_env::{EffectMap, Ty, TypeEnv};
 use crate::typecheck_render::ty_name;
@@ -234,11 +235,11 @@ fn ensure_known_call_targets_in_expr(
             if let Expr::Var { name, .. } = callee.as_ref() {
                 let callee_ty = env.lookup(name);
                 if callee_ty == Ty::Unknown {
-                    return Err(TypecheckError {
-                        declaration: Some(decl_name.to_string()),
-                        span: best_available_name_use_span(callee),
-                        message: format!("unknown function or constructor `{}`", name),
-                    });
+                    return Err(err_unknown_callable(
+                        decl_name,
+                        name,
+                        best_available_name_use_span(callee),
+                    ));
                 }
             }
             ensure_known_call_targets_in_expr(callee, env, decl_name)?;
@@ -252,11 +253,11 @@ fn ensure_known_call_targets_in_expr(
         }
         Expr::Pipeline { value, callee, .. } => {
             if env.lookup(callee) == Ty::Unknown {
-                return Err(TypecheckError {
-                    declaration: Some(decl_name.to_string()),
-                    span: best_available_name_use_span(expr),
-                    message: format!("unknown function or constructor `{}`", callee),
-                });
+                return Err(err_unknown_callable(
+                    decl_name,
+                    callee,
+                    best_available_name_use_span(expr),
+                ));
             }
             ensure_known_call_targets_in_expr(value, env, decl_name)
         }

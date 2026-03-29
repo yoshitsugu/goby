@@ -200,7 +200,13 @@ fn parse_expr_with_spans(src: &str, line: usize, col: usize) -> Option<Expr> {
     let col = col + leading_ws;
 
     // MethodCall: receiver.method(...) — must come before parse_call_expr_with_spans
-    if let Some(Expr::MethodCall { receiver, method, args, .. }) = parse_method_call(trimmed) {
+    if let Some(Expr::MethodCall {
+        receiver,
+        method,
+        args,
+        ..
+    }) = parse_method_call(trimmed)
+    {
         let len = trimmed.len();
         return Some(Expr::MethodCall {
             receiver,
@@ -211,8 +217,11 @@ fn parse_expr_with_spans(src: &str, line: usize, col: usize) -> Option<Expr> {
     }
 
     // RecordConstruct: CamelCase(...) — must come before parse_call_expr_with_spans
-    if let Some(Expr::RecordConstruct { constructor, fields, .. }) =
-        parse_record_constructor_call(trimmed)
+    if let Some(Expr::RecordConstruct {
+        constructor,
+        fields,
+        ..
+    }) = parse_record_constructor_call(trimmed)
     {
         let len = trimmed.len();
         return Some(Expr::RecordConstruct {
@@ -344,10 +353,7 @@ fn copy_expr_spans(dst: &mut Expr, src: &Expr) {
             copy_expr_spans(dst_callee, src_callee);
             copy_expr_spans(dst_arg, src_arg);
         }
-        (
-            Expr::MethodCall { span: dst_span, .. },
-            Expr::MethodCall { span: src_span, .. },
-        ) => {
+        (Expr::MethodCall { span: dst_span, .. }, Expr::MethodCall { span: src_span, .. }) => {
             *dst_span = *src_span;
         }
         (

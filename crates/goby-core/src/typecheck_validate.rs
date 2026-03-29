@@ -7,6 +7,9 @@ use crate::{
     stdlib::{StdlibResolveError, StdlibResolver},
     typecheck::{PRELUDE_MODULE_PATH, TypecheckError},
     typecheck_build::insert_global_symbol,
+    typecheck_diag::{
+        err_failed_stdlib_module_resolve, err_unknown_import_symbol, err_unknown_module,
+    },
     typecheck_env::{GlobalBinding, ImportedEffectDecl, Ty},
     typecheck_types::ty_from_annotation,
     types::parse_function_type,
@@ -17,24 +20,17 @@ pub(crate) fn validate_imports(module: &Module, stdlib_root: &Path) -> Result<()
     for import in effective_imports(module, &resolver) {
         let resolved = resolver
             .resolve_module(&import.module_path)
-            .map_err(|err| {
-                let message = match err {
-                    StdlibResolveError::ModuleNotFound { attempted_path, .. } => format!(
-                        "unknown module `{}` (attempted stdlib path: {})",
-                        import.module_path,
-                        attempted_path.display()
-                    ),
-                    _ => format!(
-                        "failed to resolve stdlib module `{}`: {}",
-                        import.module_path,
-                        stdlib_error_message(&err)
-                    ),
-                };
-                TypecheckError {
-                    declaration: None,
-                    span: import.module_path_span,
-                    message,
-                }
+            .map_err(|err| match err {
+                StdlibResolveError::ModuleNotFound { attempted_path, .. } => err_unknown_module(
+                    &import.module_path,
+                    &attempted_path,
+                    import.module_path_span,
+                ),
+                _ => err_failed_stdlib_module_resolve(
+                    &import.module_path,
+                    &stdlib_error_message(&err),
+                    import.module_path_span,
+                ),
             })?;
         if let ImportKind::Selective(names) = &import.kind {
             for (i, name) in names.iter().enumerate() {
@@ -49,14 +45,11 @@ pub(crate) fn validate_imports(module: &Module, stdlib_root: &Path) -> Result<()
                             None
                         }
                     });
-                    return Err(TypecheckError {
-                        declaration: None,
-                        span: symbol_span,
-                        message: format!(
-                            "unknown symbol `{}` in import from `{}`",
-                            name, import.module_path
-                        ),
-                    });
+                    return Err(err_unknown_import_symbol(
+                        name,
+                        &import.module_path,
+                        symbol_span,
+                    ));
                 }
             }
         }
@@ -342,9 +335,11 @@ pub(crate) fn inject_imported_symbols(
 ) {
     let resolver = StdlibResolver::new(stdlib_root.to_path_buf());
     for import in effective_imports(module, &resolver) {
-        let Ok(exports) =
-            module_exports_for_import_with_resolver(&import.module_path, &resolver, import.module_path_span)
-        else {
+        let Ok(exports) = module_exports_for_import_with_resolver(
+            &import.module_path,
+            &resolver,
+            import.module_path_span,
+        ) else {
             continue;
         };
         match &import.kind {
@@ -438,24 +433,16 @@ pub(crate) fn module_exports_for_import_with_resolver(
             .into_iter()
             .map(|(name, annotation)| (name, ty_from_import_annotation(&annotation)))
             .collect()),
-        Err(StdlibResolveError::ModuleNotFound { attempted_path, .. }) => Err(TypecheckError {
-            declaration: None,
-            span: module_path_span,
-            message: format!(
-                "unknown module `{}` (attempted stdlib path: {})",
-                module_path,
-                attempted_path.display()
-            ),
-        }),
-        Err(err) => Err(TypecheckError {
-            declaration: None,
-            span: module_path_span,
-            message: format!(
-                "failed to resolve stdlib module `{}`: {}",
-                module_path,
-                stdlib_error_message(&err)
-            ),
-        }),
+        Err(StdlibResolveError::ModuleNotFound { attempted_path, .. }) => Err(err_unknown_module(
+            module_path,
+            &attempted_path,
+            module_path_span,
+        )),
+        Err(err) => Err(err_failed_stdlib_module_resolve(
+            module_path,
+            &stdlib_error_message(&err),
+            module_path_span,
+        )),
     }
 }
 

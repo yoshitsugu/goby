@@ -1,9 +1,9 @@
 use super::*;
-use std::rc::Rc;
-use crate::runtime_flow::RcCallables;
 use crate::call::flatten_named_call;
 use crate::grapheme_semantics::{ControlFlow, GraphemeSpan, for_each_extended_grapheme_span};
+use crate::runtime_flow::RcCallables;
 use goby_core::ast::UnaryOpKind;
+use std::rc::Rc;
 
 pub(super) struct ResolvedRuntimeOutput {
     pub(super) output: Option<String>,
@@ -218,7 +218,12 @@ impl<'m> RuntimeOutputResolver<'m> {
             return self.capture_output_from_expr(value_expr, evaluators);
         }
 
-        self.execute_unit_call(expr, &RuntimeLocals::default(), &Rc::new(HashMap::new()), evaluators)
+        self.execute_unit_call(
+            expr,
+            &RuntimeLocals::default(),
+            &Rc::new(HashMap::new()),
+            evaluators,
+        )
     }
 
     pub(super) fn capture_output_from_expr(

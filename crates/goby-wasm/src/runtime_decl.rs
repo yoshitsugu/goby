@@ -1,9 +1,9 @@
 use super::*;
-use std::rc::Rc;
-use crate::runtime_flow::RcCallables;
 use crate::grapheme_semantics::collect_extended_grapheme_spans;
+use crate::runtime_flow::RcCallables;
 use crate::runtime_support::flatten_direct_call;
 use crate::wasm_exec_plan::decl_exec_plan;
+use std::rc::Rc;
 
 impl<'m> RuntimeOutputResolver<'m> {
     fn runtime_value_to_expr(value: &RuntimeValue) -> Option<Expr> {

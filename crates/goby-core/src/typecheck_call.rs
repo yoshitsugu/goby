@@ -1,6 +1,7 @@
 use crate::ast::{Expr, InterpolatedPart, Stmt};
 use crate::typecheck::TypecheckError;
 use crate::typecheck_check::check_expr;
+use crate::typecheck_diag::err_unknown_callable;
 use crate::typecheck_env::{Ty, TypeEnv, TypeSubst};
 use crate::typecheck_render::ty_name;
 use crate::typecheck_span::{best_available_expr_span, best_available_name_use_span};
@@ -151,11 +152,11 @@ fn validate_call_chain(expr: &Expr, env: &TypeEnv, decl_name: &str) -> Result<()
         if matches!(env.resolve_alias(&expected_after_subst, 0), Ty::Fun { .. }) {
             if actual_ty == Ty::Unknown {
                 if let Some(name) = unresolved_callable_name(arg, env) {
-                    return Err(TypecheckError {
-                        declaration: Some(decl_name.to_string()),
-                        span: best_available_name_use_span(arg),
-                        message: format!("unknown function or constructor `{}`", name),
-                    });
+                    return Err(err_unknown_callable(
+                        decl_name,
+                        &name,
+                        best_available_name_use_span(arg),
+                    ));
                 }
                 return Ok(());
             }

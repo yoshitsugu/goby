@@ -142,7 +142,9 @@ fn infer_expr_ty(expr: &Expr, env: &TypeEnv) -> Ty {
                 _ => Ty::Unknown,
             }
         }
-        Expr::Pipeline { value: _, callee, .. } => {
+        Expr::Pipeline {
+            value: _, callee, ..
+        } => {
             let callee_ty = env.lookup(callee);
             match callee_ty {
                 Ty::Fun { result, .. } => *result,

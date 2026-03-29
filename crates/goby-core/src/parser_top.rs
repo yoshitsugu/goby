@@ -723,10 +723,7 @@ main = 1
         let source = "import goby/string\nmain = 1\n";
         let module = parse_module(source).expect("should parse");
         let import = &module.imports[0];
-        assert_eq!(
-            import.module_path_span,
-            Some(Span::new(1, 8, 1, 18))
-        );
+        assert_eq!(import.module_path_span, Some(Span::new(1, 8, 1, 18)));
         assert_eq!(import.kind_span, Some(ImportKindSpan::Plain));
     }
 
@@ -824,7 +821,12 @@ fn parse_import_line(line: &str, line_no: usize) -> Option<ImportDecl> {
             let sym_offset_in_inner = search_offset + rel;
             // col is 1-indexed; rest starts at col PREFIX_LEN+1, inner at col PREFIX_LEN+1+inner_offset_in_rest
             let sym_col = PREFIX_LEN + 1 + inner_offset_in_rest + sym_offset_in_inner;
-            symbol_spans.push(Span::new(line_no, sym_col, line_no, sym_col + name.len() - 1));
+            symbol_spans.push(Span::new(
+                line_no,
+                sym_col,
+                line_no,
+                sym_col + name.len() - 1,
+            ));
             search_offset = sym_offset_in_inner + name.len();
             symbols.push(name.to_string());
         }

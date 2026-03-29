@@ -1,6 +1,6 @@
 use super::*;
-use std::rc::Rc;
 use crate::runtime_flow::RcCallables;
+use std::rc::Rc;
 
 impl<'m> RuntimeOutputResolver<'m> {
     pub(super) fn current_handler_resume_value(&self, token_idx: usize) -> Option<RuntimeValue> {

@@ -1,6 +1,6 @@
 use super::*;
-use std::rc::Rc;
 use crate::runtime_flow::RcCallables;
+use std::rc::Rc;
 
 impl<'m> RuntimeOutputResolver<'m> {
     /// Execute a single AST statement inside a unit-returning function body.

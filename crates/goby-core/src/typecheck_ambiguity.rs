@@ -5,6 +5,7 @@ use crate::typecheck::TypecheckError;
 use crate::typecheck_check::{
     check_expr, env_with_case_pattern_bindings, parse_tuple_member_index,
 };
+use crate::typecheck_diag::err_name_ambiguous;
 use crate::typecheck_env::{Ty, TypeEnv};
 use crate::typecheck_render::ty_name;
 use crate::typecheck_span::{best_available_expr_span, best_available_name_use_span};
@@ -106,12 +107,7 @@ pub(crate) fn ensure_no_ambiguous_refs_in_expr(
             fields,
             ..
         } => {
-            ensure_name_not_ambiguous(
-                constructor,
-                env,
-                decl_name,
-                best_available_expr_span(expr),
-            )?;
+            ensure_name_not_ambiguous(constructor, env, decl_name, best_available_expr_span(expr))?;
             let Some(record) = env.lookup_record_by_constructor(constructor) else {
                 return Err(TypecheckError {
                     declaration: Some(decl_name.to_string()),
@@ -208,12 +204,7 @@ pub(crate) fn ensure_no_ambiguous_refs_in_expr(
         }
         Expr::Pipeline { value, callee, .. } => {
             ensure_no_ambiguous_refs_in_expr(value, env, decl_name)?;
-            ensure_name_not_ambiguous(
-                callee,
-                env,
-                decl_name,
-                best_available_name_use_span(expr),
-            )
+            ensure_name_not_ambiguous(callee, env, decl_name, best_available_name_use_span(expr))
         }
         Expr::Lambda { param, body } => {
             let child_env = env.with_local(param, Ty::Unknown);
@@ -311,15 +302,7 @@ fn ensure_name_not_ambiguous(
         return Ok(());
     }
     if let Some(sources) = env.ambiguous_sources(name) {
-        return Err(TypecheckError {
-            declaration: Some(decl_name.to_string()),
-            span,
-            message: format!(
-                "name `{}` is ambiguous due to name resolution collision: {}",
-                name,
-                sources.join(", ")
-            ),
-        });
+        return Err(err_name_ambiguous(Some(decl_name), name, sources, span));
     }
     Ok(())
 }

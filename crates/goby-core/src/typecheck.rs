@@ -2523,7 +2523,7 @@ f =
         let err = typecheck_module(&module).expect_err("unknown symbol should fail");
         let span = err.span.expect("error should have a span");
         assert_eq!(span.line, 1);
-        assert_eq!(span.col, 26);   // "maap" start col
+        assert_eq!(span.col, 26); // "maap" start col
         assert_eq!(span.end_col, 29); // "maap" end col (4 chars)
         assert!(err.message.contains("maap"));
     }

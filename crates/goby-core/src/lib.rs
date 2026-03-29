@@ -30,6 +30,7 @@ mod typecheck_branch;
 mod typecheck_build;
 mod typecheck_call;
 mod typecheck_check;
+mod typecheck_diag;
 mod typecheck_effect;
 mod typecheck_effect_usage;
 mod typecheck_env;

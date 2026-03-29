@@ -188,7 +188,9 @@ mod tests {
 
         match &stmts[0] {
             Stmt::Expr(
-                Expr::MethodCall { span: Some(span), .. },
+                Expr::MethodCall {
+                    span: Some(span), ..
+                },
                 _,
             ) => {
                 assert_eq!(*span, Span::new(1, 1, 1, 19));
@@ -203,7 +205,9 @@ mod tests {
 
         match &stmts[0] {
             Stmt::Expr(
-                Expr::RecordConstruct { span: Some(span), .. },
+                Expr::RecordConstruct {
+                    span: Some(span), ..
+                },
                 _,
             ) => {
                 assert_eq!(*span, Span::new(1, 1, 1, 10));
@@ -218,7 +222,11 @@ mod tests {
 
         match &stmts[0] {
             Stmt::Expr(
-                Expr::Pipeline { callee_span: Some(span), callee, .. },
+                Expr::Pipeline {
+                    callee_span: Some(span),
+                    callee,
+                    ..
+                },
                 _,
             ) => {
                 assert_eq!(callee, "f");
