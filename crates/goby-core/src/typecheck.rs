@@ -2662,6 +2662,28 @@ f x =
     }
 
     #[test]
+    fn rejects_ordinary_call_argument_type_mismatch_before_lowering() {
+        let source = "\
+f : Int -> Int
+f a = a + 10
+
+main : Unit -> Unit can Print
+main =
+  b = f \"a\"
+  println \"test\"
+";
+        let module = parse_module(source).expect("should parse");
+        let err = typecheck_module(&module).expect_err("ordinary call arg mismatch should fail");
+        assert_eq!(err.declaration.as_deref(), Some("main"));
+        assert!(
+            err.message
+                .contains("`f` expects argument of type `Int` but got `String`"),
+            "unexpected message: {}",
+            err.message
+        );
+    }
+
+    #[test]
     fn accepts_function_body_with_param_matching_return_type() {
         // `id : Int -> Int; id x = x` — param x is Int, return is Int — should pass.
         let module = parse_module("id : Int -> Int\nid x = x\n").expect("should parse");

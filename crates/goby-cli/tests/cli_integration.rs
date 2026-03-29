@@ -682,6 +682,69 @@ main =
 }
 
 #[test]
+fn ordinary_call_arg_type_mismatch_is_reported_before_codegen_for_check_and_run() {
+    let root = repo_root();
+    let sandbox = TempDirGuard::new("ordinary_call_arg_type_mismatch");
+    let input = sandbox.join("ordinary_call_arg_type_mismatch.gb");
+    fs::write(
+        &input,
+        r#"
+f : Int -> Int
+f a = a + 10
+
+main : Unit -> Unit can Print
+main =
+  b = f "a"
+  println "test"
+"#,
+    )
+    .expect("temporary input should be writable");
+
+    let check_output = command_for_goby_cli()
+        .arg("check")
+        .arg(&input)
+        .current_dir(&root)
+        .output()
+        .expect("cli should execute");
+    assert!(
+        !check_output.status.success(),
+        "expected typecheck failure, stdout: {}, stderr: {}",
+        String::from_utf8_lossy(&check_output.stdout),
+        String::from_utf8_lossy(&check_output.stderr)
+    );
+    let check_stderr = String::from_utf8_lossy(&check_output.stderr);
+    assert!(
+        check_stderr.contains("`f` expects argument of type `Int` but got `String`"),
+        "unexpected stderr: {}",
+        check_stderr
+    );
+
+    let run_output = command_for_goby_cli()
+        .arg("run")
+        .arg(&input)
+        .current_dir(&root)
+        .output()
+        .expect("cli should execute");
+    assert!(
+        !run_output.status.success(),
+        "expected run to fail during typecheck, stdout: {}, stderr: {}",
+        String::from_utf8_lossy(&run_output.stdout),
+        String::from_utf8_lossy(&run_output.stderr)
+    );
+    let run_stderr = String::from_utf8_lossy(&run_output.stderr);
+    assert!(
+        run_stderr.contains("`f` expects argument of type `Int` but got `String`"),
+        "unexpected stderr: {}",
+        run_stderr
+    );
+    assert!(
+        !run_stderr.contains("codegen error"),
+        "run should fail before lowering/codegen, stderr: {}",
+        run_stderr
+    );
+}
+
+#[test]
 fn run_command_accepts_named_function_reference_higher_order_program() {
     let root = repo_root();
     let sandbox = TempDirGuard::new("run_named_function_reference");

@@ -134,6 +134,12 @@ fn validate_call_chain(expr: &Expr, env: &TypeEnv, decl_name: &str) -> Result<()
     let Some((target, args)) = ordinary_call_target_and_args(expr) else {
         return Ok(());
     };
+    if resolved_callable_name(target)
+        .as_deref()
+        .is_some_and(|name| env.is_effect_op(name))
+    {
+        return Ok(());
+    }
     let mut next_id = 0;
     let root_ty = resolve_function_value_ty(target, env, &mut next_id);
     let Ty::Fun { params, .. } =
@@ -189,7 +195,18 @@ fn validate_call_chain(expr: &Expr, env: &TypeEnv, decl_name: &str) -> Result<()
             continue;
         }
         if !unify_types_with_subst(&expected_after_subst, &actual_ty, &mut subst, env) {
-            return Ok(());
+            let target_name = resolved_callable_name(target);
+            let call_target = target_name.as_deref().unwrap_or("function");
+            return Err(TypecheckError {
+                declaration: Some(decl_name.to_string()),
+                span: best_available_expr_span(arg),
+                message: format!(
+                    "`{}` expects argument of type `{}` but got `{}`",
+                    call_target,
+                    ty_name(&expected_after_subst),
+                    ty_name(&actual_ty)
+                ),
+            });
         }
     }
     Ok(())
