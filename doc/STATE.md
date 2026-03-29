@@ -125,9 +125,11 @@ Precise unresolved-name / import diagnostics. `ER0` through `ER5` are complete i
 - ER4 completed import declaration span plumbing and regression coverage for unknown module /
   selective-import symbol diagnostics,
 - ER5 added shared diagnostic constructors in `crates/goby-core/src/typecheck_diag.rs` and moved
-  the covered unresolved-name / ambiguity / import-resolution families onto the common helper path.
-Start implementation from `ER6`: lock CLI rendering quality for representative unresolved-name and
-import-typo diagnostics without adding renderer-side heuristics.
+  the covered unresolved-name / ambiguity / import-resolution families onto the common helper path,
+- ER6 now locks CLI snippet rendering for token-width unresolved-name underlines and adds
+  integration fixtures for the representative unresolved `map` case and import-typo (`maap`) case.
+Start implementation from `ER7`: add LSP range-parity tests for the same covered diagnostic
+families without introducing a separate name-resolution layer in the server.
 
 **Track stdlib (C4-S1) — complete (2026-03-24):**
 `cargo run -p goby-cli -- check stdlib/goby/string.gb` now succeeds.

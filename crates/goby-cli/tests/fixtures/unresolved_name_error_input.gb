@@ -1,0 +1,5 @@
+import goby/list ( each )
+
+main : Unit -> Unit can Print
+main =
+  map [1, 2] print

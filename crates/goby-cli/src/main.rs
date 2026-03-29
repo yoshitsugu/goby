@@ -469,6 +469,14 @@ mod tests {
     }
 
     #[test]
+    fn render_snippet_unresolved_name_span_underlines_entire_token() {
+        let source = "  map [1, 2] print";
+        let span = Span::new(1, 3, 1, 6);
+        let snippet = render_snippet(source, &span);
+        assert_eq!(snippet, "1 |   map [1, 2] print\n  |   ^^^");
+    }
+
+    #[test]
     fn render_snippet_multiline_span_falls_back_to_single_caret() {
         // Multiline span: end_line != line → single ^ at start col
         let source = "abc\ndef";

@@ -603,11 +603,11 @@ Done when:
 
 ### Milestone ER6: CLI rendering quality lock
 
-- [ ] ER6.1 Lock snippet rendering tests for multi-character underline width on
+- [x] ER6.1 Lock snippet rendering tests for multi-character underline width on
   unresolved-name spans.
-- [ ] ER6.2 Lock at least one `goby check` rendered output fixture or focused
+- [x] ER6.2 Lock at least one `goby check` rendered output fixture or focused
   assertion for the representative `map` case.
-- [ ] ER6.3 Lock equivalent CLI rendering for an import typo case.
+- [x] ER6.3 Lock equivalent CLI rendering for an import typo case.
 
 Constraints:
 

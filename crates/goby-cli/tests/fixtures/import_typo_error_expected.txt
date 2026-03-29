@@ -1,0 +1,3 @@
+crates/goby-cli/tests/fixtures/import_typo_error_input.gb:1:26: error: unknown symbol `maap` in import from `goby/list`
+1 | import goby/list ( each, maap )
+  |                          ^^^

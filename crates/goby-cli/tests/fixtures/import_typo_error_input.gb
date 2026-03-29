@@ -1,0 +1,4 @@
+import goby/list ( each, maap )
+
+main : Unit -> Unit
+main = ()
