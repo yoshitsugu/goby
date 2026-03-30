@@ -34,7 +34,8 @@ Based on `examples/*.gb`:
   (spaces and tabs are both allowed)
 - Last expression is the return value
 - Effect annotation syntax: `can Print`
-- Anonymous functions: `|x| -> ...` and placeholder shorthand (`_ * 10`)
+- Anonymous functions: single-parameter `|x| -> ...`, multi-parameter `fn a b -> expr`,
+  and placeholder shorthand (`_ * 10`); `fn` is a reserved keyword
 - Named function references are valid in higher-order call positions
   (for example: `map xs add_ten` when the parameter expects a function value).
 - Basic shown types: `Int`, `String`, tuple `(A, B)`, `List T`

@@ -1,126 +1,26 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-29
+Last updated: 2026-03-30
 
 ## Current Focus
 
-- IR0–IR11 complete. `doc/PLAN_IR.md` now contains the Wasm backend lowering design (§4–§5).
-- Unicode grapheme backend support is complete: backend intrinsics, host runtime
-  execution, and stdlib handoff work landed end-to-end.
-- Phase WB-1 complete (2026-03-24): `If`, `BinOp`, `Interp`, `LetMut`, `Assign` all lowered and emitted.
-- Phase WB-2A complete (2026-03-24): top-level `DeclCall`, recursion, funcref-table indirect calls, typed backend effect identities.
-- Phase WB-2B complete (2026-03-24): `Case` literal/wildcard/list patterns, `ListLit`, `TupleLit`, `RecordLit`, stdlib `list.each` / `list.map`.
-- Phase WB-3 complete (2026-03-25): `Handle` / `WithHandler` / tail `Resume` lowered for one-shot tail-resumptive subset; `ValueExpr::Lambda` lowered; `graphemes` end-to-end via `StringGraphemesList` host intrinsic; `InterpreterBridge` graphemes classification removed; the representative runtime-`Read` composed stdlib path is now covered by classification and execution regressions.
-  - M1: legality analysis implemented.
-  - M2: safe handler lowering complete; `examples/iterator.gb` executes via `GeneralLowered`.
-  - M3: `ValueExpr::Lambda` lowered; `map [1,2,3] (fn x -> x+1)` executes correctly.
-  - M4: `StringGraphemesList` host intrinsic; graphemes classifies as `GeneralLowered` end-to-end.
-  - M5: `graphemes-get-print` fused pattern deleted; `SplitEachPrint`/`SplitGetPrint` retained in `DynamicWasiIo` path only.
-  - M6: `InterpreterBridge` graphemes classification removed; 4 dead helper functions deleted.
-  - M7: `graphemes`-as-funcref wrapper AuxDecl plus regression coverage for the representative
-    runtime-`Read` composed path (`read -> split -> map(graphemes) -> list.get -> each(println)`)
-    and required alias/import variants.
-  - M8: quality gates pass (`cargo fmt`, `cargo check`, `cargo test`, `cargo clippy -- -D warnings`).
-- General call-argument ANF normalization complete (2026-03-25): ordinary shared-IR
-  `Call` lowering now hoists non-value callees/arguments into left-to-right `let`
-  bindings, so inline forms such as `each (rolls[2]) println` lower and execute
-  through the same path as explicit staging binds.
-- CLI/runtime stdin ownership corrected (2026-03-26): `goby run` no longer pre-consumes
-  interactive stdin for `GeneralLowered` programs that do not perform `Read`.
-  `goby-wasm` now exposes a narrow stdin-requirement predicate so CLI execution keeps
-  seeded stdin for true `Read` / `InterpreterBridge` cases while allowing lambda-only
-  `GeneralLowered` programs to run immediately in interactive shells.
-- Boolean operator surface extended (2026-03-26): `||` and unary `!` are now supported.
-  Parser precedence is locked so comparisons bind tighter than `&&` / `||`, and the
-  active examples/spec now reflect the implemented operator set.
-- Track H complete (2026-03-26):
-  - tuple member access no longer leaks into `gen_lower/emit` as pseudo-local names such as
-    `pair.0`; `examples/bugs/runtime_read_tuple_member.gb` now runs and prints `1`.
-  - runtime-`Read` helper closure-capture fixtures no longer collapse into the generic runtime-I/O
-    unsupported-shape error; `goby run examples/bugs/runtime_read_captured_lambda.gb` now reports a
-    precise closure-capture limitation from the general-lowering boundary.
-  - `doc/BUGS.md` is now empty of active entries; the `examples/bugs/` fixtures remain as
-    regressions for the resolved Track H cases.
-- Track H H6 complete (2026-03-26): shared-IR lowering now ANF-normalizes non-value `if`
-  conditions before constructing `CompExpr::If`.
-  - helper-call conditions such as `if is_two n` no longer fail with
-    `if condition must be a pure value expression in shared IR today`.
-  - runtime-`Read` modules that previously collapsed this failure into the generic
-    runtime-I/O unsupported-shape error now classify and execute via `GeneralLowered`.
-  - focused regressions landed in `goby-core::ir_lower` and `goby-wasm::lib` tests.
-- Track E complete (2026-03-27): ordinary call validation now rejects resolved
-  higher-order callback mismatches during typecheck instead of deferring them to runtime.
-  - shared matcher extraction landed in `typecheck_unify.rs`; callback compatibility now reuses
-    fresh type-variable instantiation plus the existing substitution/unification machinery.
-  - ordinary `Expr::Call` chains now validate function-typed arguments in a dedicated
-    `typecheck_call` module, preserving the existing phase split (`ensure_known_call_targets_in_expr`
-    for unresolved calls, `check_expr` for inference).
-  - focused regressions now cover:
-    - `each [1, 2] println` rejection with a higher-order mismatch diagnostic,
-    - `each ["a", "b"] println` acceptance,
-    - `map [1, 2] println` rejection,
-    - qualified callback mismatch,
-    - generic callback acceptance,
-    - partially applied callback mismatch.
-  - current implementation targets ordinary nested `Expr::Call` chains; if future pipeline surface
-    feeds function-valued arguments through a distinct validation path, extend Track E from there
-    rather than special-casing symbols.
-- `List.fold` planning refined (2026-03-28):
-  - `doc/PLAN.md` now treats `goby/list.fold` as the next planned stdlib feature built on a
-    shared higher-order call path rather than a symbol-specific compiler/runtime exception.
-  - the plan now locks the intended observable semantics as left fold under the public name `fold`,
-    adds milestone checklists (`FOLD-M1`..`FOLD-M5`), and makes the completion criteria explicit.
-  - the next implementation work should start from `FOLD-M1`: lock callback shape, long-term API
-    rationale, and temporary callback/effect policy before changing lowering/runtime code.
-- Dependency lock stabilized (2026-03-28):
-  - workspace now patches `crypto-common 0.1.7` from `vendor/crypto-common-0.1.7` so its
-    `generic-array` pin can move from `0.14.7` to `0.14.9`.
-  - `Cargo.lock` now resolves `generic-array v0.14.9`, removing the repeated
-    `Adding generic-array v0.14.7 (available: v0.14.9)` notice during lockfile refresh.
-  - crate-local `#![allow(deprecated)]` now suppresses the vendored crate's upstream
-    `generic-array 0.14` deprecation warnings during workspace builds; Goby code still does not
-    depend on this crate directly.
-- Track ER complete (2026-03-29):
-  - `doc/PLAN_ERROR.md` now closes ER0–ER8 with the renderer/diagnostic ownership split intact:
-    `goby-core` owns spans/messages, CLI/LSP render only.
-  - unresolved bare names, qualified names, ambiguity-at-use-site diagnostics, and import module /
-    selective-symbol diagnostics now have CLI/LSP parity locks for token spans and ranges.
-  - the remaining `span: None` sites are now explicitly partitioned as follow-up work rather than
-    hidden incomplete scope:
-    - block-structure validation in `typecheck_ambiguity.rs`,
-    - declaration body vs declared return-type mismatch in `typecheck_stmt.rs`,
-    - effect-coverage diagnostics in `typecheck_effect_usage.rs`,
-    - aggregate conflicting-effect import/declaration diagnostics in `typecheck_validate.rs`,
-    - type-declaration validation spans in `typecheck_types.rs`.
+Track H: Higher-Order Callback Reliability and Multi-Arg Lambda Surface (HOF-M1 through M5 complete).
+
 - Track HOF M1 complete (2026-03-29):
   - `examples/hof_fold_print.gb`, `examples/hof_fold_print.in`, and
     `examples/hof_fold_print.out` now lock the end-to-end acceptance shape for the active HOF track.
-  - the fixture currently uses the existing named two-argument callback surface to isolate the
+  - the fixture uses the existing named two-argument callback surface to isolate the
     runtime contract before `fn acc x -> ...` lands.
-  - focused regressions now also lock the current inline-curried callback failure:
-    `fold [1, 2, 3] 0 (|acc| -> |x| -> acc + x)` still reports
-    `higher-order argument type mismatch ... Unknown -> Unknown -> Unknown`.
-  - the next ownership target is therefore confirmed as expected-type propagation for lambdas in
-    ordinary higher-order call checking (`HOF-M2`), not the runtime fold path.
+  - focused regressions also lock the inline-curried callback failure.
 - Track HOF M2 complete (2026-03-29):
   - ordinary higher-order callback checking now validates inline lambdas against the expected
     callback function type instead of inferring them as `Unknown -> ...`.
-  - `fold [1, 2, 3] 0 (|acc| -> |x| -> acc + x)` now passes `goby check`.
-  - focused regressions now lock:
-    - valid inline curried `fold` callback typing,
-    - callback arity mismatch diagnostics for too-few / too-many lambda parameters,
-    - callback result-shape mismatch diagnostics with expected/provided function-type wording.
-  - the remaining gap is runtime/lowering only: `goby run` for the old curried lambda callback still
-    fails in general lowering, so the next slice must move to the shared callback runtime boundary
-    rather than revisiting the typechecker.
+  - focused regressions lock arity mismatch and result-shape mismatch diagnostics.
 - Track HOF M3 complete (2026-03-30):
-  - effectful callback policy is confirmed: the covered effectful callback path for ordinary HOF
-    calls is supported and not rejected by `goby check` or at runtime.
-  - `goby check examples/hof_fold_print.gb` passes; runtime acceptance gate
-    `executes_hof_fold_print_example_with_locked_stdin_and_stdout` passes.
-  - HOF effect propagation rules (caller acquiring callback's `can` effects) remain intentionally
-    deferred per §2.3; no genuinely unsupported callback/effect shapes exist in the current scope,
-    so rejection coverage is deferred to a later milestone.
+  - effectful callback policy confirmed: covered effectful callback path is supported,
+    not rejected by `goby check` or at runtime.
+  - `goby check examples/hof_fold_print.gb` passes; runtime acceptance gate passes.
+  - HOF effect propagation rules remain intentionally deferred per §2.3.
 - Track HOF M4 complete (2026-03-30):
   - `fn a b -> expr` is now the canonical multi-parameter anonymous function syntax.
   - desugaring at parse time: `fn a b -> expr` → nested `|a| -> |b| -> expr` AST; no IR change.
@@ -138,21 +38,17 @@ Last updated: 2026-03-29
     same limitation applies to named callbacks, not specific to fn form).
     Named callback runtime gate remains `executes_hof_fold_print_example_with_locked_stdin_and_stdout`.
   - block-body `fn a b ->` with indented body deferred to HOF-M6.
-- WB-3B prep slice in progress (2026-03-24): `gen_lower/emit.rs` now has an
-  `EffectEmitStrategy` boundary and `wasmfx-experimental` feature flag so future WasmFX work can
-  replace the emit path without redesigning IR/lowering; current strategies are parity-tested to
-  emit identical bytes for supported effect ops and representative general-lowered modules
-  (safe handler-only main, helper decl + read path).
-- WB-3B compile-path prep extended (2026-03-24): general lowering now exposes an internal
-  option-aware Wasm emission helper so strategy parity tests run through the same
-  `try_general_lower_module` entrypoint used by `compile_module`.
-- WB-3B remains externally blocked as of 2026-03-24:
-  - WebAssembly official proposals tracker does not yet satisfy the Phase 4 restart condition.
-  - Local `wasm-encoder` source exposes no stack-switching/WasmFX instruction support.
-- WB-3B is on hold until all restart conditions in `doc/PLAN_IR.md` Phase WB-3B are met.
-- **WB-3 is complete.** All 13 `CompExpr` variants and all 12 `ValueExpr` variants are handled
-  in the `GeneralLowered` path within the currently supported subsets, including the representative
-  runtime-`Read` composed stdlib path.
+
+Earlier completed work (for reference):
+
+- IR0–IR11, WB-1/WB-2/WB-3 complete; `doc/PLAN_IR.md` contains the Wasm backend lowering design.
+- WB-3B on hold: externally blocked; WebAssembly stack switching proposal has not reached Phase 4.
+- Track E complete (2026-03-27): HOF callback typechecking; shared matcher in `typecheck_unify.rs`.
+- Track ER complete (2026-03-29): error reporting with CLI/LSP parity; see `doc/PLAN_ERROR.md`.
+- Track fold complete (2026-03-28): `fold : List a -> b -> (b -> a -> b) -> b` in `stdlib/goby/list.gb`.
+- Track F complete (2026-03-25): `goby/int.to_string`.
+- Track operators complete (2026-03-26): `||`, unary `!`, comparison precedence locked.
+- Track C4/S1–S4 complete (2026-03-25): stdlib `split` ownership fully stdlib-driven.
 
 ## Track Priority
 
@@ -163,12 +59,12 @@ fallback/runtime-output path no longer carries a source-level legacy `string.spl
 ## Immediate Next Steps
 
 **Track H: Higher-Order Callback Reliability and Multi-Arg Lambda Surface (active track):**
-The next active implementation track is the higher-order callback / lambda-syntax work in
-`doc/PLAN.md` §4.1.
-Immediate starting point:
-- introduce `fn acc x -> ...` as the canonical multi-parameter lambda surface,
-- close the runtime/lowering gap for inline higher-order callbacks while keeping one shared callable model,
-- keep docs/examples/tooling changes in sync with the runtime/typechecker path.
+HOF-M1 through M5 are complete. Remaining milestones:
+- HOF-M6: Tooling parity — update syntax highlighting in `tooling/syntax/textmate`,
+  `tooling/vscode-goby/syntaxes`, `tooling/emacs`, `tooling/vim` for `fn` keyword and `fn ... ->` form.
+- HOF-M7: End-to-end acceptance gate — run
+  `cat examples/hof_fold_print.in | cargo run -p goby-cli -- run examples/hof_fold_print.gb`
+  and verify stdout matches `examples/hof_fold_print.out` using the final `fn` callback syntax.
 
 **Track stdlib (C4-S1) — complete (2026-03-24):**
 `cargo run -p goby-cli -- check stdlib/goby/string.gb` now succeeds.
