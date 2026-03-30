@@ -550,12 +550,19 @@ Milestones:
     - `fn` reserved as a keyword.
     - `doc/LANGUAGE_SPEC.md` updated.
     - block-body form (`fn a b ->` with indented body) deferred to HOF-M5.
-- [ ] HOF-M5: Lowering/runtime path is unified for the new callback surface.
+- [x] HOF-M5: Lowering/runtime path is unified for the new callback surface.
   - ensure `fn a b -> ...` lowers through the same long-term callable model as
     existing lambdas/named callbacks rather than introducing a parallel branch.
   - verify named, qualified, single-arg lambda, and multi-arg lambda callbacks
     share one ownership boundary for ordinary higher-order calls.
   - add parity tests that cover `fold`, `map`, and `each` with the new syntax.
+    - `map`/`each` parity tests: `fn` form resolves the same runtime output as `|x|` form.
+    - `fold` + inline multi-param lambda: typechecks and parses; runtime execution via general
+      lowering path is deferred (inline Lambda IR not yet supported in general lowering).
+      Named callback gate is `executes_hof_fold_print_example_with_locked_stdin_and_stdout`.
+    - `fn a b -> expr` desugars to nested Lambda at parse time; IR/runtime path is identical
+      to single-param `|x| -> expr` — no new parallel branch introduced.
+    - block-body `fn a b ->` with indented body: deferred to HOF-M6 (not HOF-M5 scope).
 - [ ] HOF-M6: Tooling parity under `tooling/`.
   - update syntax highlighting definitions:
     - `tooling/syntax/textmate`

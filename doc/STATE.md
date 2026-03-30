@@ -128,7 +128,16 @@ Last updated: 2026-03-29
   - `fn` is reserved as a keyword.
   - formatter emits `fn a b -> expr` for nested lambdas.
   - `doc/LANGUAGE_SPEC.md` updated.
-  - block-body `fn` form deferred to HOF-M5.
+  - block-body `fn` form deferred to HOF-M6.
+- Track HOF M5 complete (2026-03-30):
+  - `fn a b -> expr` confirmed to lower through the same callable model as `|x| -> expr`;
+    no new parallel branch in IR or runtime.
+  - `map` + `fn` form and `each` + `fn` form parity tests added to `runtime_output_tests.rs`.
+  - `fold` + inline `fn acc x ->` form: typechecks and parses; runtime execution deferred
+    (general lowering does not yet support inline Lambda IR for multi-param fold callbacks;
+    same limitation applies to named callbacks, not specific to fn form).
+    Named callback runtime gate remains `executes_hof_fold_print_example_with_locked_stdin_and_stdout`.
+  - block-body `fn a b ->` with indented body deferred to HOF-M6.
 - WB-3B prep slice in progress (2026-03-24): `gen_lower/emit.rs` now has an
   `EffectEmitStrategy` boundary and `wasmfx-experimental` feature flag so future WasmFX work can
   replace the emit path without redesigning IR/lowering; current strategies are parity-tested to

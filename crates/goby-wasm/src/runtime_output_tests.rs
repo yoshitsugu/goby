@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::sync::Mutex;
 
-use goby_core::{Module, parse_module};
+use goby_core::{Module, parse_module, typecheck_module_collect};
 
 use crate::{
     assert_mode_parity, execute_runtime_module_with_stdin, lower, resolve_module_runtime_output,
@@ -1151,6 +1151,63 @@ fn locks_runtime_output_for_iterator_gb() {
     let module = parse_module(&source).expect("iterator.gb should parse");
     let output = resolve_module_runtime_output(&module).expect("runtime output should resolve");
     assert_eq!(output, "tick:atick:btick:c");
+}
+
+// ── HOF-M5 parity tests: fn-form callbacks ───────────────────────────────────
+// These tests confirm that `fn a -> expr` and `fn a b -> expr` callbacks lower
+// through the same callable model as `|x| -> expr` (single-param) lambdas.
+// The desugaring happens at parse time (HOF-M4); no new runtime branch is added.
+
+#[test]
+fn resolves_runtime_output_for_map_with_fn_lambda_callback() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    // `fn x -> x * 2` ≡ `|x| -> x * 2` after desugaring; map parity check.
+    let source = r#"
+import goby/list ( map )
+
+main : Unit -> Unit
+main =
+  print (map [1, 2, 3] (fn x -> x * 2))
+"#;
+    let module = parse_module(source).expect("parse should work");
+    let output = resolve_module_runtime_output(&module).expect("runtime output should resolve");
+    assert_eq!(output, "[2, 4, 6]");
+}
+
+#[test]
+fn resolves_runtime_output_for_each_with_fn_lambda_callback() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    // `fn n -> print "${n}"` ≡ `|n| -> print "${n}"` after desugaring; each parity check.
+    let source = r#"
+import goby/list ( each )
+
+main : Unit -> Unit
+main =
+  each [10, 20] (fn n -> print "${n}")
+"#;
+    let module = parse_module(source).expect("parse should work");
+    let output = resolve_module_runtime_output(&module).expect("runtime output should resolve");
+    assert_eq!(output, "1020");
+}
+
+#[test]
+fn fold_with_inline_fn_lambda_callback_typechecks_and_parses() {
+    // `fold` with an inline `fn acc x -> acc + x` callback typechecks and parses correctly.
+    // Runtime execution of inline multi-param lambdas via fold is not yet supported by the
+    // general lowering path (unsupported IR: Lambda node in general lowering).
+    // The parity runtime gate is provided by `executes_hof_fold_print_example_with_locked_stdin_and_stdout`
+    // which uses a named callback (`step acc x = ...`) instead.
+    let source = r#"
+import goby/list ( fold )
+
+main : Unit -> Unit
+main =
+  total = fold [1, 2, 3] 0 (fn acc x -> acc + x)
+  ()
+"#;
+    let module = parse_module(source).expect("parse should succeed");
+    let errors = typecheck_module_collect(&module);
+    assert!(errors.is_empty(), "fold + fn lambda callback should typecheck: {:?}", errors);
 }
 
 #[test]

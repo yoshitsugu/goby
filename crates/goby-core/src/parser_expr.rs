@@ -700,8 +700,12 @@ fn parse_not_expr(src: &str) -> Option<Expr> {
 fn parse_lambda(src: &str) -> Option<Expr> {
     let src = src.trim();
 
-    // `fn a b -> expr` — multi-parameter lambda desugared to nested single-param lambdas.
-    // `fn a -> expr` is also accepted (single-param fn form).
+    // `fn a b -> expr` — multi-parameter anonymous function syntax.
+    // Desugars to nested single-param lambdas at parse time:
+    //   `fn a b -> expr`  ≡  `|a| -> |b| -> expr`  (same AST/IR/runtime path)
+    // This means the lowering and runtime callable model is identical to single-param
+    // `|x| -> expr` lambdas — no new parallel branch is introduced downstream.
+    // `fn a -> expr` (single-param) is also accepted and normalises to `|a| -> expr`.
     if src.starts_with("fn ") {
         let rest = src["fn ".len()..].trim();
         // Collect parameter identifiers up to `->`
