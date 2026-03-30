@@ -1,10 +1,10 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-30
+Last updated: 2026-03-31
 
 ## Current Focus
 
-Track H: Higher-Order Callback Reliability and Multi-Arg Lambda Surface (HOF-M1 through M6 complete).
+Track H: Higher-Order Callback Reliability and Multi-Arg Lambda Surface (HOF-M1 through M7 complete).
 
 - Track HOF M1 complete (2026-03-29):
   - `examples/hof_fold_print.gb`, `examples/hof_fold_print.in`, and
@@ -48,6 +48,12 @@ Track H: Higher-Order Callback Reliability and Multi-Arg Lambda Surface (HOF-M1 
   - `tooling/syntax/testdata/highlight_sample.gb` updated with `fn x y -> x + y` example.
   - README tables updated in `tooling/syntax/README.md`, `tooling/vscode-goby/README.md`,
     `tooling/emacs/README.md`.
+- Track HOF M7 complete (2026-03-31):
+  - end-to-end acceptance gate passes: `cat examples/hof_fold_print.in | cargo run -p goby-cli -- run examples/hof_fold_print.gb` stdout matches `examples/hof_fold_print.out` exactly.
+  - CLI diagnostic messages (`parsed and typechecked`, `generated wasm:`, `wasmtime not found`) moved from stdout to stderr; all CLI integration tests updated accordingly.
+  - `run_command_hof_fold_print_acceptance_gate` integration test added to `cli_integration.rs`.
+  - `parser_expr.rs` clippy `manual-strip` lint fixed (`strip_prefix`).
+  - Track H is fully complete.
 
 Earlier completed work (for reference):
 
@@ -68,11 +74,10 @@ fallback/runtime-output path no longer carries a source-level legacy `string.spl
 
 ## Immediate Next Steps
 
-**Track H: Higher-Order Callback Reliability and Multi-Arg Lambda Surface (active track):**
-HOF-M1 through M6 are complete. Remaining milestone:
-- HOF-M7: End-to-end acceptance gate — run
-  `cat examples/hof_fold_print.in | cargo run -p goby-cli -- run examples/hof_fold_print.gb`
-  and verify stdout matches `examples/hof_fold_print.out` using the final `fn` callback syntax.
+**Track H: Higher-Order Callback Reliability and Multi-Arg Lambda Surface — complete (2026-03-31):**
+All HOF-M1 through HOF-M7 milestones are complete. The acceptance gate
+`cat examples/hof_fold_print.in | cargo run -p goby-cli -- run examples/hof_fold_print.gb`
+produces stdout matching `examples/hof_fold_print.out` exactly.
 
 **Track stdlib (C4-S1) — complete (2026-03-24):**
 `cargo run -p goby-cli -- check stdlib/goby/string.gb` now succeeds.

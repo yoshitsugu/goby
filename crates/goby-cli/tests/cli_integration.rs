@@ -87,9 +87,10 @@ fn check_command_succeeds_for_function_example() {
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        stdout.contains("parsed and typechecked"),
-        "unexpected stdout: {}",
-        stdout
+        String::from_utf8_lossy(&output.stderr).contains("parsed and typechecked"),
+        "expected 'parsed and typechecked' in stderr; stdout: {}, stderr: {}",
+        stdout,
+        String::from_utf8_lossy(&output.stderr)
     );
 }
 
@@ -110,9 +111,10 @@ fn lint_command_succeeds_for_clean_source() {
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        stdout.contains("parsed and typechecked"),
-        "unexpected stdout: {}",
-        stdout
+        String::from_utf8_lossy(&output.stderr).contains("parsed and typechecked"),
+        "expected 'parsed and typechecked' in stderr; stdout: {}, stderr: {}",
+        stdout,
+        String::from_utf8_lossy(&output.stderr)
     );
 }
 
@@ -181,9 +183,10 @@ fn check_command_uses_default_stdlib_root_for_file_based_symbol() {
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        stdout.contains("parsed and typechecked"),
-        "unexpected stdout: {}",
-        stdout
+        String::from_utf8_lossy(&output.stderr).contains("parsed and typechecked"),
+        "expected 'parsed and typechecked' in stderr; stdout: {}, stderr: {}",
+        stdout,
+        String::from_utf8_lossy(&output.stderr)
     );
 }
 
@@ -282,13 +285,25 @@ fn run_command_emits_locked_function_output_via_wasmtime() {
     );
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let expected = vec![
-        format!(
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains(&format!(
             "parsed and typechecked {} declarations from {}",
             declaration_count,
             input.display()
-        ),
-        format!("generated wasm: {}", input.with_extension("wasm").display()),
+        )),
+        "expected parse summary in stderr: {}",
+        stderr
+    );
+    assert!(
+        stderr.contains(&format!(
+            "generated wasm: {}",
+            input.with_extension("wasm").display()
+        )),
+        "expected generated wasm message in stderr: {}",
+        stderr
+    );
+    let expected_stdout = vec![
         "90".to_string(),
         "[30, 40, 50]".to_string(),
         "[60, 70]".to_string(),
@@ -296,7 +311,7 @@ fn run_command_emits_locked_function_output_via_wasmtime() {
         "15".to_string(),
     ];
     let actual: Vec<String> = stdout.lines().map(|line| line.to_string()).collect();
-    assert_eq!(actual, expected);
+    assert_eq!(actual, expected_stdout);
 
     let wasm_out = input.with_extension("wasm");
     assert!(
@@ -369,9 +384,10 @@ main =
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        stdout.contains("parsed and typechecked"),
-        "unexpected stdout: {}",
-        stdout
+        String::from_utf8_lossy(&output.stderr).contains("parsed and typechecked"),
+        "expected 'parsed and typechecked' in stderr; stdout: {}, stderr: {}",
+        stdout,
+        String::from_utf8_lossy(&output.stderr)
     );
     // GeneralLowered programs now execute via the Goby-owned Wasm runtime
     // (run_wasm_bytes_with_stdin), so they do not generate a wasm file or
@@ -495,9 +511,10 @@ main =
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        stdout.contains("parsed and typechecked"),
-        "unexpected stdout: {}",
-        stdout
+        String::from_utf8_lossy(&output.stderr).contains("parsed and typechecked"),
+        "expected 'parsed and typechecked' in stderr; stdout: {}, stderr: {}",
+        stdout,
+        String::from_utf8_lossy(&output.stderr)
     );
     // split + index programs are now GeneralLowered and execute via the Goby-owned
     // Wasm runtime (run_wasm_bytes_with_stdin), so "generated wasm" is not printed.
@@ -636,8 +653,8 @@ fn run_command_skips_when_wasmtime_is_missing() {
         "expected success, stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("wasmtime not found; skipped wasm execution"));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("wasmtime not found; skipped wasm execution"));
 }
 
 #[test]
@@ -675,9 +692,10 @@ main =
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        stdout.contains("parsed and typechecked"),
-        "unexpected stdout: {}",
-        stdout
+        String::from_utf8_lossy(&output.stderr).contains("parsed and typechecked"),
+        "expected 'parsed and typechecked' in stderr; stdout: {}, stderr: {}",
+        stdout,
+        String::from_utf8_lossy(&output.stderr)
     );
 }
 
@@ -820,9 +838,10 @@ main =
         "expected success, stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("parsed and typechecked"));
-    assert!(stdout.contains("wasmtime not found; skipped wasm execution"));
+    let _stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("parsed and typechecked"));
+    assert!(stderr.contains("wasmtime not found; skipped wasm execution"));
 }
 
 #[test]
@@ -857,9 +876,10 @@ main =
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        stdout.contains("parsed and typechecked"),
-        "unexpected stdout: {}",
-        stdout
+        String::from_utf8_lossy(&output.stderr).contains("parsed and typechecked"),
+        "expected 'parsed and typechecked' in stderr; stdout: {}, stderr: {}",
+        stdout,
+        String::from_utf8_lossy(&output.stderr)
     );
     assert!(
         stdout.contains("hogehoge!\nfugafuga!"),
@@ -901,9 +921,10 @@ main =
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        stdout.contains("parsed and typechecked"),
-        "unexpected stdout: {}",
-        stdout
+        String::from_utf8_lossy(&output.stderr).contains("parsed and typechecked"),
+        "expected 'parsed and typechecked' in stderr; stdout: {}, stderr: {}",
+        stdout,
+        String::from_utf8_lossy(&output.stderr)
     );
     assert!(
         stdout.contains("!\n"),
@@ -940,19 +961,23 @@ main =
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        stdout.contains("parsed and typechecked"),
-        "unexpected stdout: {}",
-        stdout
+        String::from_utf8_lossy(&output.stderr).contains("parsed and typechecked"),
+        "expected 'parsed and typechecked' in stderr; stdout: {}, stderr: {}",
+        stdout,
+        String::from_utf8_lossy(&output.stderr)
     );
     assert!(
         stdout.contains("👨‍👩‍👧‍👦"),
         "expected grapheme-aware output, stdout: {}",
         stdout
     );
+    // runtime-owned execution does not compile to a Wasm file; verify
+    // that neither stdout nor stderr claims Wasm generation.
+    let stderr_str = String::from_utf8_lossy(&output.stderr);
     assert!(
-        !stdout.contains("generated wasm"),
-        "runtime-owned execution should not claim Wasm generation, stdout: {}",
-        stdout
+        !stderr_str.contains("generated wasm"),
+        "runtime-owned execution should not claim Wasm generation, stderr: {}",
+        stderr_str
     );
 }
 
@@ -1011,9 +1036,10 @@ main =
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        stdout.contains("parsed and typechecked"),
-        "unexpected stdout: {}",
-        stdout
+        String::from_utf8_lossy(&output.stderr).contains("parsed and typechecked"),
+        "expected 'parsed and typechecked' in stderr; stdout: {}, stderr: {}",
+        stdout,
+        String::from_utf8_lossy(&output.stderr)
     );
     assert!(
         stdout.contains("2\n3\n4"),
@@ -1376,5 +1402,61 @@ fn fmt_rewrites_file_in_place() {
     assert_eq!(
         actual, expected_src,
         "file should be rewritten to formatted form"
+    );
+}
+
+#[test]
+fn run_command_hof_fold_print_acceptance_gate() {
+    // End-to-end acceptance gate for the higher-order callback track.
+    // Verifies:
+    //   - stdout matches examples/hof_fold_print.out exactly
+    //   - stdout does not contain diagnostic messages (those go to stderr)
+    let root = repo_root();
+    let expected = fs::read_to_string(root.join("examples/hof_fold_print.out"))
+        .expect("hof_fold_print.out should be readable");
+    let stdin_bytes = fs::read(root.join("examples/hof_fold_print.in"))
+        .expect("hof_fold_print.in should be readable");
+
+    let mut child = command_for_goby_cli()
+        .arg("run")
+        .arg("examples/hof_fold_print.gb")
+        .current_dir(&root)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("cli should spawn");
+
+    child
+        .stdin
+        .take()
+        .expect("stdin should be piped")
+        .write_all(&stdin_bytes)
+        .expect("should write stdin");
+
+    let output = child.wait_with_output().expect("cli should complete");
+
+    assert!(
+        output.status.success(),
+        "expected success, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(
+        stdout.as_ref(),
+        expected.as_str(),
+        "stdout must match examples/hof_fold_print.out exactly"
+    );
+    assert!(
+        !stdout.contains("parsed and typechecked"),
+        "diagnostic messages must not appear in stdout; stdout: {}",
+        stdout
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("parsed and typechecked"),
+        "diagnostic messages must arrive on stderr; stderr: {}",
+        stderr
     );
 }

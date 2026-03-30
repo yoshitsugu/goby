@@ -278,11 +278,11 @@ fn run_command(module: &goby_core::Module, file: &str) -> Result<(), CliError> {
                     CliError::Runtime(format!("failed to write {}: {}", output, err))
                 })?;
                 print_parse_summary(module.declarations.len(), file);
-                println!("generated wasm: {}", output);
+                eprintln!("generated wasm: {}", output);
                 match execute_wasm(&output)? {
                     ExecutionOutcome::Executed => {}
                     ExecutionOutcome::SkippedNoWasmtime => {
-                        println!("wasmtime not found; skipped wasm execution")
+                        eprintln!("wasmtime not found; skipped wasm execution")
                     }
                 }
             }
@@ -396,7 +396,7 @@ fn resolve_stdlib_root() -> Result<PathBuf, CliError> {
 }
 
 fn print_parse_summary(declaration_count: usize, file: &str) {
-    println!(
+    eprintln!(
         "parsed and typechecked {} declarations from {}",
         declaration_count, file
     );

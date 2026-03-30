@@ -569,7 +569,7 @@ Milestones:
     `tooling/syntax/textmate`, `tooling/vscode-goby/syntaxes`,
     `tooling/emacs`, `tooling/vim`, `tooling/nvim`.
   - highlight sample and README tables updated in all three tooling READMEs.
-- [ ] HOF-M7: End-to-end acceptance gate.
+- [x] HOF-M7: End-to-end acceptance gate.
   - `examples/hof_fold_print.gb`, `examples/hof_fold_print.in`, and
     `examples/hof_fold_print.out` exist and form the locked runtime acceptance
     triplet for this track.

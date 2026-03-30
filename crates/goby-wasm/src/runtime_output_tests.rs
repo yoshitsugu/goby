@@ -1207,7 +1207,11 @@ main =
 "#;
     let module = parse_module(source).expect("parse should succeed");
     let errors = typecheck_module_collect(&module);
-    assert!(errors.is_empty(), "fold + fn lambda callback should typecheck: {:?}", errors);
+    assert!(
+        errors.is_empty(),
+        "fold + fn lambda callback should typecheck: {:?}",
+        errors
+    );
 }
 
 #[test]

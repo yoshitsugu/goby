@@ -1443,10 +1443,10 @@ fn runtime_io_general_lowering_f6_runtime_io_wasm_size_guardrails_hold() {
         read_runtime_io_general_lowering_fixture("split_lines_index.gb"),
     ];
     for source in general_sources {
-        let module = parse_module(&source)
-            .expect("runtime-io general-lowering source should parse");
-        let wasm = compile_module(&module)
-            .expect("runtime-io general-lowering source should compile");
+        let module =
+            parse_module(&source).expect("runtime-io general-lowering source should parse");
+        let wasm =
+            compile_module(&module).expect("runtime-io general-lowering source should compile");
         assert!(
             wasm.len() < 65_536,
             "general-lowered runtime I/O wasm unexpectedly large: {} bytes",

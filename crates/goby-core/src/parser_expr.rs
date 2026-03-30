@@ -706,10 +706,12 @@ fn parse_lambda(src: &str) -> Option<Expr> {
     // This means the lowering and runtime callable model is identical to single-param
     // `|x| -> expr` lambdas — no new parallel branch is introduced downstream.
     // `fn a -> expr` (single-param) is also accepted and normalises to `|a| -> expr`.
-    if src.starts_with("fn ") {
-        let rest = src["fn ".len()..].trim();
+    if let Some(stripped) = src.strip_prefix("fn ") {
+        let rest = stripped.trim();
         // Collect parameter identifiers up to `->`
-        let arrow = rest.find("->").filter(|&i| rest.get(i.saturating_sub(1)..i) != Some("-"))?;
+        let arrow = rest
+            .find("->")
+            .filter(|&i| rest.get(i.saturating_sub(1)..i) != Some("-"))?;
         let params_src = rest[..arrow].trim();
         let body_src = rest[arrow + 2..].trim();
         if body_src.is_empty() {
@@ -1910,7 +1912,10 @@ mod tests {
             Expr::Lambda { param, body } => {
                 assert_eq!(param, "a");
                 match body.as_ref() {
-                    Expr::Lambda { param: p2, body: b2 } => {
+                    Expr::Lambda {
+                        param: p2,
+                        body: b2,
+                    } => {
                         assert_eq!(p2, "b");
                         assert!(matches!(b2.as_ref(), Expr::Lambda { param: p3, .. } if p3 == "c"));
                     }
