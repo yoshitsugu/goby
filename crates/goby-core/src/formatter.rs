@@ -194,6 +194,19 @@ pub(crate) fn format_expr(expr: &Expr, indent: usize) -> String {
             if param == "_" {
                 // Placeholder form: `_ * 10` — the body already encodes the op + rhs.
                 format_expr(body, indent)
+            } else if matches!(body.as_ref(), Expr::Lambda { param: p, .. } if p != "_") {
+                // Multi-parameter lambda: collect all params and emit `fn a b -> expr`.
+                let mut params = vec![param.as_str()];
+                let mut cur: &Expr = body;
+                while let Expr::Lambda { param: p, body: b } = cur {
+                    if p == "_" {
+                        break;
+                    }
+                    params.push(p.as_str());
+                    cur = b;
+                }
+                let final_body = format_expr(cur, indent);
+                format!("fn {} -> {}", params.join(" "), final_body)
             } else {
                 let b = format_expr(body, indent);
                 format!("|{}| -> {}", param, b)
@@ -938,6 +951,25 @@ mod tests {
             }),
         };
         assert_eq!(format_expr(&expr, 0), "_ * 10");
+    }
+
+    #[test]
+    fn format_fn_lambda_two_params() {
+        // nested lambda desugared from `fn acc x -> acc + x` should format as `fn acc x -> acc + x`
+        use crate::parser_expr::parse_expr;
+        let expr = parse_expr("fn acc x -> acc + x").expect("should parse");
+        assert_eq!(format_expr(&expr, 0), "fn acc x -> acc + x");
+    }
+
+    #[test]
+    fn format_fn_lambda_round_trip() {
+        // parse → format → parse should be stable
+        use crate::parser_expr::parse_expr;
+        let src = "fn acc x -> acc + x";
+        let ast1 = parse_expr(src).expect("should parse");
+        let formatted = format_expr(&ast1, 0);
+        let ast2 = parse_expr(&formatted).expect("formatted form should re-parse");
+        assert_eq!(ast1, ast2, "round-trip should be stable");
     }
 
     #[test]

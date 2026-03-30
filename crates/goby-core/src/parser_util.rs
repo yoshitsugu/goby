@@ -25,6 +25,7 @@ pub(crate) fn is_reserved_keyword(s: &str) -> bool {
             | "as"
             | "can"
             | "using"
+            | "fn"
             | "True"
             | "False"
     )

@@ -121,6 +121,14 @@ Last updated: 2026-03-29
   - HOF effect propagation rules (caller acquiring callback's `can` effects) remain intentionally
     deferred per §2.3; no genuinely unsupported callback/effect shapes exist in the current scope,
     so rejection coverage is deferred to a later milestone.
+- Track HOF M4 complete (2026-03-30):
+  - `fn a b -> expr` is now the canonical multi-parameter anonymous function syntax.
+  - desugaring at parse time: `fn a b -> expr` → nested `|a| -> |b| -> expr` AST; no IR change.
+  - `|a| -> |b| -> ...` curried spelling is now rejected by the parser.
+  - `fn` is reserved as a keyword.
+  - formatter emits `fn a b -> expr` for nested lambdas.
+  - `doc/LANGUAGE_SPEC.md` updated.
+  - block-body `fn` form deferred to HOF-M5.
 - WB-3B prep slice in progress (2026-03-24): `gen_lower/emit.rs` now has an
   `EffectEmitStrategy` boundary and `wasmfx-experimental` feature flag so future WasmFX work can
   replace the emit path without redesigning IR/lowering; current strategies are parity-tested to

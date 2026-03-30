@@ -700,6 +700,30 @@ fn parse_not_expr(src: &str) -> Option<Expr> {
 fn parse_lambda(src: &str) -> Option<Expr> {
     let src = src.trim();
 
+    // `fn a b -> expr` — multi-parameter lambda desugared to nested single-param lambdas.
+    // `fn a -> expr` is also accepted (single-param fn form).
+    if src.starts_with("fn ") {
+        let rest = src["fn ".len()..].trim();
+        // Collect parameter identifiers up to `->`
+        let arrow = rest.find("->").filter(|&i| rest.get(i.saturating_sub(1)..i) != Some("-"))?;
+        let params_src = rest[..arrow].trim();
+        let body_src = rest[arrow + 2..].trim();
+        if body_src.is_empty() {
+            return None;
+        }
+        let params: Vec<&str> = params_src.split_whitespace().collect();
+        if params.is_empty() || !params.iter().all(|p| is_non_reserved_identifier(p)) {
+            return None;
+        }
+        let body = parse_expr(body_src)?;
+        // Desugar right-to-left: fn a b -> e  ≡  |a| -> |b| -> e
+        let lambda = params.iter().rev().fold(body, |acc, &param| Expr::Lambda {
+            param: param.to_string(),
+            body: Box::new(acc),
+        });
+        return Some(lambda);
+    }
+
     if src.starts_with('|') {
         let second_bar = src.get(1..)?.find('|')? + 1;
         let param = src[1..second_bar].trim();
@@ -710,6 +734,11 @@ fn parse_lambda(src: &str) -> Option<Expr> {
         let body_src = rest.strip_prefix("->")?;
         let body_src = body_src.trim();
         if body_src.is_empty() {
+            return None;
+        }
+        // Reject the old multi-parameter curried spelling `|a| -> |b| -> ...`.
+        // Use `fn a b -> ...` instead.
+        if body_src.starts_with('|') {
             return None;
         }
         let body = parse_expr(body_src)?;
@@ -1842,5 +1871,69 @@ mod tests {
                 spread: None,
             })
         );
+    }
+
+    // ── fn lambda syntax ──────────────────────────────────────────────────────
+
+    #[test]
+    fn fn_lambda_two_params_desugars_to_nested_lambda() {
+        // `fn acc x -> acc + x` must parse to Lambda { "acc", Lambda { "x", acc + x } }
+        let ast = parse_expr("fn acc x -> acc + x").expect("should parse");
+        match &ast {
+            Expr::Lambda { param, body } => {
+                assert_eq!(param, "acc");
+                match body.as_ref() {
+                    Expr::Lambda { param: p2, .. } => assert_eq!(p2, "x"),
+                    other => panic!("expected inner lambda, got {:?}", other),
+                }
+            }
+            other => panic!("expected outer lambda, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn fn_lambda_one_param_desugars_to_single_lambda() {
+        // `fn n -> n + 1`  ≡  `|n| -> n + 1`
+        let expected = parse_expr("|n| -> n + 1");
+        assert_eq!(parse_expr("fn n -> n + 1"), expected);
+    }
+
+    #[test]
+    fn fn_lambda_three_params_desugars_to_nested_lambda() {
+        // `fn a b c -> a + b + c` → Lambda { "a", Lambda { "b", Lambda { "c", a+b+c } } }
+        let ast = parse_expr("fn a b c -> a + b + c").expect("should parse");
+        match &ast {
+            Expr::Lambda { param, body } => {
+                assert_eq!(param, "a");
+                match body.as_ref() {
+                    Expr::Lambda { param: p2, body: b2 } => {
+                        assert_eq!(p2, "b");
+                        assert!(matches!(b2.as_ref(), Expr::Lambda { param: p3, .. } if p3 == "c"));
+                    }
+                    other => panic!("expected second lambda, got {:?}", other),
+                }
+            }
+            other => panic!("expected outer lambda, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn fn_lambda_zero_params_fails_to_parse() {
+        // `fn -> expr` has no parameters — must not parse
+        assert_eq!(parse_expr("fn -> x"), None);
+    }
+
+    #[test]
+    fn curried_lambda_spelling_rejected() {
+        // `|a| -> |b| -> ...` is the old multi-param spelling; must not parse
+        assert_eq!(parse_expr("|a| -> |b| -> a + b"), None);
+    }
+
+    #[test]
+    fn fn_lambda_reserved_keyword_param_rejected() {
+        // reserved keywords must not be accepted as fn lambda parameters
+        assert_eq!(parse_expr("fn if -> 1"), None);
+        assert_eq!(parse_expr("fn fn -> 1"), None);
+        assert_eq!(parse_expr("fn case x -> x"), None);
     }
 }

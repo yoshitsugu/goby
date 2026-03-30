@@ -535,7 +535,7 @@ Milestones:
     - acceptance gate: `goby check` + runtime both pass for `hof_fold_print.gb`.
     - HOF effect propagation rules remain deferred (PLAN.md §2.3); no genuinely
       unsupported shapes exist in the current scope, so rejection coverage deferred.
-- [ ] HOF-M4: Add multi-parameter lambda syntax.
+- [x] HOF-M4: Add multi-parameter lambda syntax.
   - parser/AST surface: `fn a b -> expr` and `fn a b ->` block body where block
     expressions are already valid.
   - formatting and pretty-printing rules are locked.
@@ -544,6 +544,12 @@ Milestones:
     verbose `|acc| -> |x| -> ...` spelling.
   - the old multi-parameter curried spelling is removed as supported syntax by
     the end of this milestone.
+    - `fn a b -> expr` desugars to nested single-param lambdas at parse time; AST/IR unchanged.
+    - formatter emits `fn a b -> expr` for nested lambdas.
+    - `|a| -> |b| -> ...` is now rejected by the parser.
+    - `fn` reserved as a keyword.
+    - `doc/LANGUAGE_SPEC.md` updated.
+    - block-body form (`fn a b ->` with indented body) deferred to HOF-M5.
 - [ ] HOF-M5: Lowering/runtime path is unified for the new callback surface.
   - ensure `fn a b -> ...` lowers through the same long-term callable model as
     existing lambdas/named callbacks rather than introducing a parallel branch.

@@ -2013,7 +2013,7 @@ import goby/prelude
 import goby/list ( fold )
 main : Unit -> Unit can Print
 main =
-  total = fold [1, 2, 3] 0 (|acc| -> |x| -> acc + x)
+  total = fold [1, 2, 3] 0 (fn acc x -> acc + x)
   println \"${total}\"
 ";
         let module = parse_module(source).expect("should parse");
@@ -2051,7 +2051,7 @@ sum =
 import goby/list ( fold )
 render : Unit -> Int
 render =
-  fold [1, 2, 3] 0 (|acc| -> |x| -> \"${acc + x}\")
+  fold [1, 2, 3] 0 (fn acc x -> \"${acc + x}\")
 ";
         let module = parse_module(source).expect("should parse");
         let err =
@@ -2077,7 +2077,7 @@ render =
 import goby/list ( fold )
 sum : Unit -> Int
 sum =
-  fold [1, 2, 3] 0 (|acc| -> |x| -> |y| -> acc + x + y)
+  fold [1, 2, 3] 0 (fn acc x y -> acc + x + y)
 ";
         let module = parse_module(source).expect("should parse");
         let err = typecheck_module(&module).expect_err("too-many callback parameters should fail");

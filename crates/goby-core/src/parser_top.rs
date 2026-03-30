@@ -324,7 +324,7 @@ mod tests {
     fn rejects_all_reserved_syntax_tokens_as_top_level_declaration_names() {
         let reserved = [
             "import", "type", "effect", "handler", "with", "in", "resume", "mut", "if", "else",
-            "case", "as", "can", "using", "True", "False",
+            "case", "as", "can", "using", "fn", "True", "False",
         ];
         for name in reserved {
             let source = format!("{name} : Int -> Int\n{name} x = x\n");

@@ -1,7 +1,7 @@
 # Goby Language Specification (Current)
 
 Status: active
-Last updated: 2026-03-15
+Last updated: 2026-03-30
 
 This file is the current language-spec source of truth for user-visible Goby
 syntax/semantics.
@@ -72,7 +72,12 @@ syntax/semantics.
   - parenthesized: `f(x)`
   - parenthesized empty-arg form `f()` is accepted and is equivalent to `f ()`
 - Anonymous functions:
-  - `|x| -> expr`
+  - single-parameter: `|x| -> expr`
+  - multi-parameter: `fn a b -> expr` (desugars to nested single-parameter lambdas)
+    - `fn a b -> expr` is semantically equivalent to `|a| -> |b| -> expr`
+    - single-parameter form `fn n -> expr` is also accepted and equivalent to `|n| -> expr`
+    - the old `|a| -> |b| -> ...` multi-parameter curried spelling is not supported; use `fn` instead
+    - `fn` is a reserved keyword; it cannot be used as a variable name or parameter name
   - placeholder shorthand: `_ * 10` (current supported subset)
   - when a function-typed argument is expected, a named function may be passed directly
     (for example: `map xs add_ten`)

@@ -489,6 +489,20 @@ impl Expr {
                 if param == "_" {
                     // Placeholder form: reconstruct as `_ op rhs`
                     body.to_str_repr()
+                } else if matches!(body.as_ref(), Expr::Lambda { param: p, .. } if p != "_") {
+                    // Multi-parameter lambda: emit `fn a b -> expr` so the output is re-parseable.
+                    // (The old `|a| -> |b| -> ...` curried spelling is rejected by the parser.)
+                    let mut params = vec![param.as_str()];
+                    let mut cur: &Expr = body;
+                    while let Expr::Lambda { param: p, body: b } = cur {
+                        if p == "_" {
+                            break;
+                        }
+                        params.push(p.as_str());
+                        cur = b;
+                    }
+                    let b = cur.to_str_repr()?;
+                    Some(format!("fn {} -> {}", params.join(" "), b))
                 } else {
                     let b = body.to_str_repr()?;
                     Some(format!("|{}| -> {}", param, b))
