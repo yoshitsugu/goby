@@ -4,7 +4,7 @@ Last updated: 2026-03-30
 
 ## Current Focus
 
-Track H: Higher-Order Callback Reliability and Multi-Arg Lambda Surface (HOF-M1 through M5 complete).
+Track H: Higher-Order Callback Reliability and Multi-Arg Lambda Surface (HOF-M1 through M6 complete).
 
 - Track HOF M1 complete (2026-03-29):
   - `examples/hof_fold_print.gb`, `examples/hof_fold_print.in`, and
@@ -38,6 +38,16 @@ Track H: Higher-Order Callback Reliability and Multi-Arg Lambda Surface (HOF-M1 
     same limitation applies to named callbacks, not specific to fn form).
     Named callback runtime gate remains `executes_hof_fold_print_example_with_locked_stdin_and_stdout`.
   - block-body `fn a b ->` with indented body deferred to HOF-M6.
+- Track HOF M6 complete (2026-03-30):
+  - `fn` keyword added to all syntax-highlighting tooling:
+    `tooling/syntax/textmate/goby.tmLanguage.json`,
+    `tooling/vscode-goby/syntaxes/goby.tmLanguage.json`,
+    `tooling/emacs/goby-mode.el`,
+    `tooling/vim/syntax/goby.vim`,
+    `tooling/nvim/syntax/goby.vim`.
+  - `tooling/syntax/testdata/highlight_sample.gb` updated with `fn x y -> x + y` example.
+  - README tables updated in `tooling/syntax/README.md`, `tooling/vscode-goby/README.md`,
+    `tooling/emacs/README.md`.
 
 Earlier completed work (for reference):
 
@@ -59,9 +69,7 @@ fallback/runtime-output path no longer carries a source-level legacy `string.spl
 ## Immediate Next Steps
 
 **Track H: Higher-Order Callback Reliability and Multi-Arg Lambda Surface (active track):**
-HOF-M1 through M5 are complete. Remaining milestones:
-- HOF-M6: Tooling parity — update syntax highlighting in `tooling/syntax/textmate`,
-  `tooling/vscode-goby/syntaxes`, `tooling/emacs`, `tooling/vim` for `fn` keyword and `fn ... ->` form.
+HOF-M1 through M6 are complete. Remaining milestone:
 - HOF-M7: End-to-end acceptance gate — run
   `cat examples/hof_fold_print.in | cargo run -p goby-cli -- run examples/hof_fold_print.gb`
   and verify stdout matches `examples/hof_fold_print.out` using the final `fn` callback syntax.

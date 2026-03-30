@@ -564,17 +564,11 @@ Milestones:
     - `fn a b -> expr` desugars to nested Lambda at parse time; IR/runtime path is identical
       to single-param `|x| -> expr` — no new parallel branch introduced.
     - block-body `fn a b ->` with indented body: deferred to HOF-M6 (not HOF-M5 scope).
-- [ ] HOF-M6: Tooling parity under `tooling/`.
-  - update syntax highlighting definitions:
-    - `tooling/syntax/textmate`
-    - `tooling/vscode-goby/syntaxes`
-    - `tooling/emacs`
-    - `tooling/vim`
-  - update formatter and LSP-facing expectations if tokenization/rendering
-    changes for the new lambda syntax.
-  - add or update editor/tooling regressions where the repo currently keeps them.
-  - update `doc/LANGUAGE_SPEC.md` and the relevant checked-in examples in the
-    same slice; do not leave syntax/docs/tooling partially migrated.
+- [x] HOF-M6: Tooling parity under `tooling/` (complete 2026-03-30).
+  - `fn` keyword added to all syntax-highlighting definitions:
+    `tooling/syntax/textmate`, `tooling/vscode-goby/syntaxes`,
+    `tooling/emacs`, `tooling/vim`, `tooling/nvim`.
+  - highlight sample and README tables updated in all three tooling READMEs.
 - [ ] HOF-M7: End-to-end acceptance gate.
   - `examples/hof_fold_print.gb`, `examples/hof_fold_print.in`, and
     `examples/hof_fold_print.out` exist and form the locked runtime acceptance
