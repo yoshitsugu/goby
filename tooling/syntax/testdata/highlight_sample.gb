@@ -27,6 +27,7 @@ effect MyEffect
 import goby/string as str
 mut count = 0
 @embed MyEffect __goby_embeded_effect_stdout_handler
+fn_lambda = fn x y -> x + y
 
 # with / in / resume / can (keyword.control)
 foo : String -> Unit can MyEffect

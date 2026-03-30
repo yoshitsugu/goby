@@ -31,7 +31,7 @@
   "Goby control-flow and effect-application keywords.")
 
 (defconst goby-mode-keywords-other
-  '("type" "effect" "handler" "import" "as" "mut")
+  '("type" "effect" "handler" "import" "as" "mut" "fn")
   "Goby declaration and module keywords.")
 
 (defconst goby-mode-builtin-types

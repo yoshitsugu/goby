@@ -48,7 +48,7 @@
     },
     "keywords-other": {
       "name": "keyword.other.goby",
-      "match": "(?<!\\w)@embed\\b|\\b(type|effect|handler|import|as|mut)\\b"
+      "match": "(?<!\\w)@embed\\b|\\b(type|effect|handler|import|as|mut|fn)\\b"
     },
     "storage-types": {
       "name": "storage.type.goby",

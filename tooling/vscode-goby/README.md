@@ -81,7 +81,7 @@ using **Developer: Inspect Editor Tokens and Scopes**.
 | `constant.numeric.integer.goby` | `42` |
 | `constant.language.goby` | `True`, `False` |
 | `keyword.control.goby` | `if` `else` `case` `with` `in` `resume` `can` |
-| `keyword.other.goby` | `@embed` `type` `effect` `handler` `import` `as` `mut` |
+| `keyword.other.goby` | `@embed` `type` `effect` `handler` `import` `as` `mut` `fn` |
 | `storage.type.goby` | `Int` `String` `Bool` `Unit` `List` |
 | `entity.name.type.goby` | `MyType`, `Error`, `LogHandler` |
 | `keyword.operator.goby` | `->` `\|>` `==` `=` `+` `*` `\|` `:` |

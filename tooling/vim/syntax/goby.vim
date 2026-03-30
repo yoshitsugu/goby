@@ -26,7 +26,7 @@ syntax keyword gobyBoolean True False
 syntax keyword gobyKeyword if else case with in resume can
 
 " Declaration and module keywords
-syntax keyword gobyKeyword type effect handler import as mut
+syntax keyword gobyKeyword type effect handler import as mut fn
 syntax match gobyKeyword /@embed\>/
 
 " Built-in type names (before gobyType to take precedence)

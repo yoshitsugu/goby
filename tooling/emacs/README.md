@@ -37,7 +37,7 @@ After loading, `goby-mode` is automatically activated for `*.gb` files via `auto
 | `font-lock-string-face` | String literals | `"hello\n"` |
 | `font-lock-constant-face` | Integer literals + booleans | `42`, `True`, `False` |
 | `font-lock-keyword-face` | Control keywords | `if` `else` `case` `with` `in` `resume` `can` |
-| `font-lock-keyword-face` | Declaration keywords | `@embed` `type` `effect` `handler` `import` `as` `mut` |
+| `font-lock-keyword-face` | Declaration keywords | `@embed` `type` `effect` `handler` `import` `as` `mut` `fn` |
 | `font-lock-type-face` | Built-in types | `Int` `String` `Bool` `Unit` `List` |
 | `font-lock-type-face` | User-defined types / constructors | `MyType`, `Error`, `LogHandler` |
 | `font-lock-builtin-face` | Operators | `->` `\|>` `\|\|` `&&` `==` `<=` `>=` `=` `<` `>` `+` `-` `*` `/` `%` `!` `\|` `:` |

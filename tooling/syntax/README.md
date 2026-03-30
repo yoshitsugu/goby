@@ -11,7 +11,7 @@ This directory contains the canonical syntax highlighting grammar for the Goby l
 | `constant.numeric.integer.goby` | Integer literals | `42` |
 | `constant.language.goby` | Boolean constants | `True`, `False` |
 | `keyword.control.goby` | Control flow + effect application | `if` `else` `case` `with` `in` `resume` `can` |
-| `keyword.other.goby` | Declarations and module keywords | `@embed` `type` `effect` `handler` `import` `as` `mut` |
+| `keyword.other.goby` | Declarations, module, and lambda keywords | `@embed` `type` `effect` `handler` `import` `as` `mut` `fn` |
 | `storage.type.goby` | Built-in type names | `Int` `String` `Bool` `Unit` `List` |
 | `entity.name.type.goby` | User-defined type / constructor names | `MyType`, `Error`, `LogHandler` |
 | `keyword.operator.goby` | Operators | `->` `\|>` `\|\|` `&&` `==` `<=` `>=` `=` `<` `>` `+` `-` `*` `/` `%` `!` `\|` `:` |
@@ -56,7 +56,7 @@ tooling/vscode-goby/
 | `42` | `constant.numeric.integer.goby` |
 | `True` / `False` | `constant.language.goby` |
 | `if` / `else` / `case` / `with` / `in` / `resume` / `can` | `keyword.control.goby` |
-| `@embed` / `type` / `effect` / `handler` / `import` / `as` / `mut` | `keyword.other.goby` |
+| `@embed` / `type` / `effect` / `handler` / `import` / `as` / `mut` / `fn` | `keyword.other.goby` |
 | `Int` / `String` / `Bool` / `Unit` / `List` | `storage.type.goby` |
 | `MyType` / `MyHandler` (UpperCamelCase) | `entity.name.type.goby` |
 | `->` / `\|>` / `\|\|` / `&&` / `==` / `<=` / `>=` / `<` / `>` / `+` / `-` / `*` / `/` / `%` / `!` / `=` / `\|` / `:` | `keyword.operator.goby` |
