@@ -262,7 +262,7 @@ main =
 }
 
 #[test]
-fn resolves_runtime_output_for_track_f_f5_split_get_with_seeded_stdin() {
+fn resolves_runtime_output_for_runtime_io_general_lowering_split_lines_index_with_seeded_stdin() {
     let _guard = ENV_MUTEX.lock().unwrap();
     let source = r#"
 import goby/string ( split )
@@ -279,7 +279,7 @@ main =
 }
 
 #[test]
-fn track_f_f5_split_get_out_of_range_aborts_with_seeded_stdin() {
+fn runtime_io_general_lowering_split_lines_index_out_of_range_aborts_with_seeded_stdin() {
     let _guard = ENV_MUTEX.lock().unwrap();
     let source = r#"
 import goby/string ( split )

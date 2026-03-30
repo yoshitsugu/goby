@@ -23,15 +23,19 @@ fn read_example(name: &str) -> String {
     std::fs::read_to_string(path).expect("example file should exist")
 }
 
-fn read_track_f_fixture(name: &str) -> String {
+fn read_runtime_io_general_lowering_fixture(name: &str) -> String {
     let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     path.push("..");
     path.push("..");
     path.push("tests");
-    path.push("track-f");
+    path.push("runtime-io-general-lowering");
     path.push(name);
-    std::fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("track-f fixture '{}' should exist: {}", name, e))
+    std::fs::read_to_string(&path).unwrap_or_else(|e| {
+        panic!(
+            "runtime-io general-lowering fixture '{}' should exist: {}",
+            name, e
+        )
+    })
 }
 
 #[test]
@@ -1065,9 +1069,9 @@ main =
 
 /// Plain read+print fixture current status: GeneralLowered.
 #[test]
-fn track_f_f3_print_read_current_classification() {
-    let source = read_track_f_fixture("f3_print_read.gb");
-    let module = parse_module(&source).expect("f3_print_read.gb should parse");
+fn runtime_io_general_lowering_print_read_all_current_classification() {
+    let source = read_runtime_io_general_lowering_fixture("print_read_all.gb");
+    let module = parse_module(&source).expect("print_read_all.gb should parse");
     assert_eq!(
         runtime_io_execution_kind(&module).expect("classification should succeed"),
         crate::RuntimeIoExecutionKind::GeneralLowered,
@@ -1077,18 +1081,18 @@ fn track_f_f3_print_read_current_classification() {
 
 /// Plain read+print fixture: `print (read())`.
 #[test]
-fn track_f_f3_print_read_is_general_lowered() {
-    let source = read_track_f_fixture("f3_print_read.gb");
-    let module = parse_module(&source).expect("f3_print_read.gb should parse");
+fn runtime_io_general_lowering_print_read_all_is_general_lowered() {
+    let source = read_runtime_io_general_lowering_fixture("print_read_all.gb");
+    let module = parse_module(&source).expect("print_read_all.gb should parse");
     let wasm = compile_module(&module).expect("plain read+print codegen should succeed");
     assert_valid_wasm_module(&wasm);
 }
 
 /// Split+each fixture current status: GeneralLowered.
 #[test]
-fn track_f_f4_split_each_is_currently_unsupported() {
-    let source = read_track_f_fixture("f4_split_each.gb");
-    let module = parse_module(&source).expect("f4_split_each.gb should parse");
+fn runtime_io_general_lowering_split_lines_each_is_currently_unsupported() {
+    let source = read_runtime_io_general_lowering_fixture("split_lines_each.gb");
+    let module = parse_module(&source).expect("split_lines_each.gb should parse");
     assert_eq!(
         runtime_io_execution_kind(&module).expect("classification should succeed"),
         crate::RuntimeIoExecutionKind::GeneralLowered,
@@ -1098,9 +1102,9 @@ fn track_f_f4_split_each_is_currently_unsupported() {
 
 /// Split+each fixture.
 #[test]
-fn track_f_f4_split_each_is_general_lowered() {
-    let source = read_track_f_fixture("f4_split_each.gb");
-    let module = parse_module(&source).expect("f4_split_each.gb should parse");
+fn runtime_io_general_lowering_split_lines_each_is_general_lowered() {
+    let source = read_runtime_io_general_lowering_fixture("split_lines_each.gb");
+    let module = parse_module(&source).expect("split_lines_each.gb should parse");
     let wasm = compile_module(&module).expect("split+each codegen should succeed");
     assert_valid_wasm_module(&wasm);
 }
@@ -1111,9 +1115,9 @@ fn track_f_f4_split_each_is_general_lowered() {
 
 /// Parity test: f4 fixture compiles via general path and has fd_read + fd_write imports.
 #[test]
-fn track_f_f4_parity_split_each_has_fd_read_and_fd_write() {
-    let source = read_track_f_fixture("f4_split_each.gb");
-    let module = parse_module(&source).expect("f4_split_each.gb should parse");
+fn runtime_io_general_lowering_split_lines_each_has_fd_read_and_fd_write() {
+    let source = read_runtime_io_general_lowering_fixture("split_lines_each.gb");
+    let module = parse_module(&source).expect("split_lines_each.gb should parse");
     let wasm = compile_module(&module).expect("split+each codegen should succeed");
     assert_valid_wasm_module(&wasm);
     let fd_read = b"fd_read";
@@ -1130,7 +1134,7 @@ fn track_f_f4_parity_split_each_has_fd_read_and_fd_write() {
 
 /// Parity test: inline split+each form also compiles via general path.
 #[test]
-fn track_f_f4_parity_inline_split_each_compiles() {
+fn runtime_io_general_lowering_inline_split_lines_each_compiles() {
     let source = r#"
 main : Unit -> Unit can Print, Read
 main =
@@ -1145,9 +1149,9 @@ main =
 
 /// Split+index fixture current status: GeneralLowered.
 #[test]
-fn track_f_f5_index_is_currently_unsupported() {
-    let source = read_track_f_fixture("f5_index.gb");
-    let module = parse_module(&source).expect("f5_index.gb should parse");
+fn runtime_io_general_lowering_split_lines_index_is_currently_unsupported() {
+    let source = read_runtime_io_general_lowering_fixture("split_lines_index.gb");
+    let module = parse_module(&source).expect("split_lines_index.gb should parse");
     assert_eq!(
         runtime_io_execution_kind(&module).expect("classification should succeed"),
         crate::RuntimeIoExecutionKind::GeneralLowered,
@@ -1157,17 +1161,17 @@ fn track_f_f5_index_is_currently_unsupported() {
 
 /// Split+index fixture.
 #[test]
-fn track_f_f5_index_is_general_lowered() {
-    let source = read_track_f_fixture("f5_index.gb");
-    let module = parse_module(&source).expect("f5_index.gb should parse");
+fn runtime_io_general_lowering_split_lines_index_is_general_lowered() {
+    let source = read_runtime_io_general_lowering_fixture("split_lines_index.gb");
+    let module = parse_module(&source).expect("split_lines_index.gb should parse");
     let wasm = compile_module(&module).expect("split+index codegen should succeed");
     assert_valid_wasm_module(&wasm);
 }
 
 #[test]
-fn track_f_f5_parity_split_index_has_fd_read_and_fd_write() {
-    let source = read_track_f_fixture("f5_index.gb");
-    let module = parse_module(&source).expect("f5_index.gb should parse");
+fn runtime_io_general_lowering_split_lines_index_has_fd_read_and_fd_write() {
+    let source = read_runtime_io_general_lowering_fixture("split_lines_index.gb");
+    let module = parse_module(&source).expect("split_lines_index.gb should parse");
     let wasm = compile_module(&module).expect("split+index codegen should succeed");
     assert_valid_wasm_module(&wasm);
     let fd_read = b"fd_read";
@@ -1183,7 +1187,7 @@ fn track_f_f5_parity_split_index_has_fd_read_and_fd_write() {
 }
 
 #[test]
-fn track_f_f5_parity_inline_split_index_compiles() {
+fn runtime_io_general_lowering_inline_split_lines_index_compiles() {
     let source = r#"
 main : Unit -> Unit can Print, Read
 main =
@@ -1383,9 +1387,9 @@ main =
 /// Parity test: `print (read())` compiles via general path and produces valid Wasm
 /// with both fd_read and fd_write imports (same WASI interface as the old Echo path).
 #[test]
-fn track_f_f3_parity_print_read_has_fd_read_and_fd_write() {
-    let source = read_track_f_fixture("f3_print_read.gb");
-    let module = parse_module(&source).expect("f3_print_read.gb should parse");
+fn runtime_io_general_lowering_print_read_all_has_fd_read_and_fd_write() {
+    let source = read_runtime_io_general_lowering_fixture("print_read_all.gb");
+    let module = parse_module(&source).expect("print_read_all.gb should parse");
     let wasm = compile_module(&module).expect("plain read+print codegen should succeed");
     assert_valid_wasm_module(&wasm);
     // Verify Wasm binary contains both "fd_read" and "fd_write" import name strings.
@@ -1403,7 +1407,7 @@ fn track_f_f3_parity_print_read_has_fd_read_and_fd_write() {
 
 /// Parity test: inline `print (read())` program also compiles via general path.
 #[test]
-fn track_f_f3_parity_inline_print_read_compiles() {
+fn runtime_io_general_lowering_inline_print_read_all_compiles() {
     let source = r#"
 main : Unit -> Unit can Print, Read
 main =
@@ -1432,15 +1436,17 @@ main =
 }
 
 #[test]
-fn track_f_f6_runtime_io_wasm_size_guardrails_hold() {
+fn runtime_io_general_lowering_f6_runtime_io_wasm_size_guardrails_hold() {
     let general_sources = [
-        read_track_f_fixture("f3_print_read.gb"),
-        read_track_f_fixture("f4_split_each.gb"),
-        read_track_f_fixture("f5_index.gb"),
+        read_runtime_io_general_lowering_fixture("print_read_all.gb"),
+        read_runtime_io_general_lowering_fixture("split_lines_each.gb"),
+        read_runtime_io_general_lowering_fixture("split_lines_index.gb"),
     ];
     for source in general_sources {
-        let module = parse_module(&source).expect("track-f source should parse");
-        let wasm = compile_module(&module).expect("track-f source should compile");
+        let module = parse_module(&source)
+            .expect("runtime-io general-lowering source should parse");
+        let wasm = compile_module(&module)
+            .expect("runtime-io general-lowering source should compile");
         assert!(
             wasm.len() < 65_536,
             "general-lowered runtime I/O wasm unexpectedly large: {} bytes",
