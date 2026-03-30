@@ -524,7 +524,7 @@ Milestones:
     wording that points at the callback site.
   - add focused `goby check` regressions for bad callback shapes; these are part
     of milestone validation but not part of the final runtime acceptance gate.
-- [ ] HOF-M3: Effectful callback policy is made explicit and enforced.
+- [x] HOF-M3: Effectful callback policy is made explicit and enforced.
   - lock the near-term rule now:
     - the covered effectful callback path for ordinary HOF calls must be
       supported, not rejected, for this track to complete.
@@ -532,6 +532,9 @@ Milestones:
     callback/effect machinery; do not leave silent runtime misbehavior.
   - add focused regressions that prove supported effectful callback execution and
     still reject genuinely unsupported callback/effect shapes, if any remain.
+    - acceptance gate: `goby check` + runtime both pass for `hof_fold_print.gb`.
+    - HOF effect propagation rules remain deferred (PLAN.md §2.3); no genuinely
+      unsupported shapes exist in the current scope, so rejection coverage deferred.
 - [ ] HOF-M4: Add multi-parameter lambda syntax.
   - parser/AST surface: `fn a b -> expr` and `fn a b ->` block body where block
     expressions are already valid.

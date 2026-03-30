@@ -113,6 +113,14 @@ Last updated: 2026-03-29
   - the remaining gap is runtime/lowering only: `goby run` for the old curried lambda callback still
     fails in general lowering, so the next slice must move to the shared callback runtime boundary
     rather than revisiting the typechecker.
+- Track HOF M3 complete (2026-03-30):
+  - effectful callback policy is confirmed: the covered effectful callback path for ordinary HOF
+    calls is supported and not rejected by `goby check` or at runtime.
+  - `goby check examples/hof_fold_print.gb` passes; runtime acceptance gate
+    `executes_hof_fold_print_example_with_locked_stdin_and_stdout` passes.
+  - HOF effect propagation rules (caller acquiring callback's `can` effects) remain intentionally
+    deferred per §2.3; no genuinely unsupported callback/effect shapes exist in the current scope,
+    so rejection coverage is deferred to a later milestone.
 - WB-3B prep slice in progress (2026-03-24): `gen_lower/emit.rs` now has an
   `EffectEmitStrategy` boundary and `wasmfx-experimental` feature flag so future WasmFX work can
   replace the emit path without redesigning IR/lowering; current strategies are parity-tested to
