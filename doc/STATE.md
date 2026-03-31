@@ -16,6 +16,9 @@ CC3 (lowering and call dispatch) is complete:
 
 ## Recently Completed
 
+- **Track CC / prep** (2026-04-01): Verified the compile-time slice for helper-local capturing map callbacks.
+  - `compile_module_with_helper_closure_capture_succeeds` is now active coverage instead of ignored
+  - Runtime dispatch for capturing HOF callbacks is still incomplete; execution tests remain deferred to CC4
 - **Track CC / CC3** (2026-04-01): All CC3 milestones complete.
   - `lower_lambda()` handles zero-capture (PushFuncHandle) and ByValue-capture (CreateClosure) paths
   - Preamble locals pattern: `DeclareLocal + LoadClosureSlot + StoreLocal` per captured slot

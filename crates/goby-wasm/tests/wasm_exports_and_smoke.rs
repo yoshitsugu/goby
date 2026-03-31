@@ -1319,8 +1319,9 @@ main =
     let module = parse_module(source).expect("source should parse");
     // The program currently fails at IR lowering (no IR decl) or Wasm lowering.
     // Either error is acceptable until CC3-Step4 (IndirectCallClosure) is complete.
-    let err = compile_module(&module)
-        .expect_err("capturing lambda program should not compile correctly on the current Wasm path");
+    let err = compile_module(&module).expect_err(
+        "capturing lambda program should not compile correctly on the current Wasm path",
+    );
     assert!(
         err.message.contains("unsupported IR form")
             || err.message.contains("Lambda")
@@ -1409,8 +1410,9 @@ main =
 "#;
     let module = parse_module(source).expect("source should parse");
     // Acceptable failures: IR lowering error, unsupported form, or no IR decl.
-    let err = compile_module(&module)
-        .expect_err("capturing lambda to fold should not compile correctly on the current Wasm path");
+    let err = compile_module(&module).expect_err(
+        "capturing lambda to fold should not compile correctly on the current Wasm path",
+    );
     assert!(
         err.message.contains("unsupported IR form")
             || err.message.contains("Lambda")

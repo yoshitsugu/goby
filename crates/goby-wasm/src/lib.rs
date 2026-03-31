@@ -1521,11 +1521,9 @@ main =
         assert_eq!(output.as_deref(), Some("1\n"), "pair.0 of (1, 2) must be 1");
     }
 
-    /// CC3-Step4 pending: capturing lambda passed to list.map needs IndirectCallClosure
-    /// dispatch to call the arity-2 Wasm function correctly. Until then, execution will
-    /// fail at runtime (Wasm type mismatch). This test is re-enabled in CC3-Step5.
+    /// Runtime dispatch for capturing callbacks in list.map is still incomplete.
     #[test]
-    #[ignore = "CC3-Step4: IndirectCallClosure dispatch not yet implemented for list.map closures"]
+    #[ignore = "CC4: runtime dispatch for capturing list.map callbacks is not implemented yet"]
     fn capturing_lambda_via_map_executes_correctly() {
         use goby_core::parse_module;
         let module = parse_module(
@@ -1547,9 +1545,7 @@ main =
         assert_eq!(output.as_deref(), Some("hello world\n"));
     }
 
-    /// CC3-Step4 pending: same as above, via a helper function.
     #[test]
-    #[ignore = "CC3-Step4: IndirectCallClosure dispatch not yet implemented for list.map closures"]
     fn compile_module_with_helper_closure_capture_succeeds() {
         use goby_core::parse_module;
         let module = parse_module(
