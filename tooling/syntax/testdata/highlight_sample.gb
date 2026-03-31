@@ -60,7 +60,7 @@ eq_check = result == 9
 bool_check = !False || True
 math_check = 5 - 1 / 2 % 2
 pipe_result = [1, 2, 3] |> print
-lambda_fn = |x| -> x + 1
+lambda_fn = fn x -> x + 1
 
 # punctuation
 pair = (1, "two")

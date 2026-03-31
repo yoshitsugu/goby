@@ -267,7 +267,7 @@ The language has two distinct cases (LANGUAGE_SPEC.md §anonymous functions):
 - `map xs add_ten` — passing a named top-level declaration as a function value. No free
   variables; no environment needed. Representation: tagged i64 handle encoding the Wasm
   function index (lightweight, no closure allocation).
-- `map xs (|x| -> x + offset)` — passing a lambda that captures `offset` from the enclosing
+- `map xs (fn x -> x + offset)` — passing a lambda that captures `offset` from the enclosing
   scope. Requires an environment. Representation: tagged i64 pointer to a heap-allocated
   closure object `{ code_idx: i32, env_ptr: i32, env_fields... }`.
 

@@ -1276,7 +1276,7 @@ main : Unit -> Unit can Print, Read
 main =
   _ = read()
   prefix = "hello "
-  result = map ["world"] (|s| -> "${prefix}${s}")
+  result = map ["world"] (fn s -> "${prefix}${s}")
   println result[0]
 "#,
         )

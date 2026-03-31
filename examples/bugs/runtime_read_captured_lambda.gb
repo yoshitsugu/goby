@@ -3,7 +3,7 @@ import goby/list ( map )
 helper : Unit -> String
 helper =
   prefix = "hello"
-  result = map ["world"] (|s| -> "${prefix} ${s}")
+  result = map ["world"] (fn s -> "${prefix} ${s}")
   result[0]
 
 main : Unit -> Unit can Print, Read

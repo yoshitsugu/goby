@@ -34,7 +34,7 @@ Based on `examples/*.gb`:
   (spaces and tabs are both allowed)
 - Last expression is the return value
 - Effect annotation syntax: `can Print`
-- Anonymous functions: single-parameter `|x| -> ...`, multi-parameter `fn a b -> expr`,
+- Anonymous functions: single-parameter `fn x -> expr`, multi-parameter `fn a b -> expr`,
   and placeholder shorthand (`_ * 10`); `fn` is a reserved keyword
 - Named function references are valid in higher-order call positions
   (for example: `map xs add_ten` when the parameter expects a function value).
@@ -141,25 +141,16 @@ Based on `examples/*.gb`:
 
 ### 2.1 Planned Syntax Simplification: `fn`-only Anonymous Functions
 
-- Direction:
-  - converge anonymous-function syntax to `fn` only.
-  - remove the pipe form `|x| -> expr` after a staged migration.
-  - keep placeholder shorthand such as `_ * 10` as a separate ergonomic feature unless it causes
-    parsing or readability conflicts.
+- Direction: `fn` is the only anonymous function syntax. Pipe form `|x| ->` has been removed.
 - Rationale:
   - one lambda surface form is easier to teach, parse, format, and highlight consistently.
   - `fn` scales from one parameter to multiple parameters without changing visual grammar.
-  - removing the pipe form avoids having two equivalent spellings for single-parameter lambdas.
-- Migration plan:
-  - Phase A: treat `fn x -> expr` as the preferred spelling in examples, docs, and new tests.
-  - Phase B: add parser diagnostics that detect `|x| -> expr` and suggest `fn x -> expr`.
-  - Phase C: update formatter and syntax tooling to normalize and highlight only the `fn` form.
-  - Phase D: remove pipe-lambda parsing support and update the language spec in the same change.
-- Completion criteria:
+- Status: **Complete** (Phase A–D all done).
   - `doc/LANGUAGE_SPEC.md` documents only `fn`-form anonymous functions.
-  - `examples/` and user-facing docs no longer use `|x| ->`.
-  - parser/typechecker/formatter/tooling tests cover accepted `fn` syntax and rejected pipe syntax.
-  - editor syntax definitions reserve and highlight `fn` correctly after the pipe form is removed.
+  - `examples/` and user-facing docs use `fn x ->` exclusively.
+  - parser rejects `|x| -> expr`; negative test `pipe_lambda_syntax_rejected` enforces this.
+  - formatter emits `fn n ->` for single-param lambdas.
+  - editor syntax definitions highlight `fn` correctly.
 - `main` type is restricted to `Unit -> Unit` for MVP.
   - `main` type annotation is required for `run`; optional for `check`.
 - Legacy `void` type spelling is rejected in type annotations.

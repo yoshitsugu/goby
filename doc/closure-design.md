@@ -25,7 +25,7 @@ import goby/list ( each )
 helper : Unit -> Int
 helper =
   mut total = 0
-  each [1, 2] (|x| -> total := total + x)
+  each [1, 2] (fn x -> total := total + x)
   total
 
 main : Unit -> Unit can Print, Read
@@ -202,7 +202,7 @@ The closure captures the value of the local at the moment the closure value is p
 Example:
 ```goby
 mut x = 1
-f = |y| -> x + y   ← captures x = 1
+f = fn y -> x + y   ← captures x = 1
 x := 42
 f(0)               ← returns 1 (not 43)
 ```
@@ -247,7 +247,7 @@ type 1: (i64, i64) -> i64   — closure wrappers (new)
 
 ## 7. Closure Creation Sequence (Wasm Instructions)
 
-When `|x| -> body` is lowered as a **closure** (has free variables `v0, v1, ...`):
+When `fn x -> body` is lowered as a **closure** (has free variables `v0, v1, ...`):
 
 1. **Allocate** `8 + 8*N` bytes from the heap bump allocator → `closure_ptr: i32`.
 2. **Store func_table_slot**: `i32.store(closure_ptr + 0, wrapper_table_slot)`.

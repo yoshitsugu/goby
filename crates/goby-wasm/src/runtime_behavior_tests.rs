@@ -572,7 +572,7 @@ main =
       print "${n}"
       resume ()
   in
-    list.each [2, 4, 6] (|n| -> log n)
+    list.each [2, 4, 6] (fn n -> log n)
 "#;
     let module = parse_module(source).expect("parse should work");
     let typed = assert_mode_parity(&module, "list each with effect callback");
@@ -782,7 +782,7 @@ each_two f =
 main : Unit -> Unit
 main =
   base = 40
-  each_two (|n| -> print "${n + base}")
+  each_two (fn n -> print "${n + base}")
 "#;
     let module = parse_module(source).expect("parse should work");
     let typed = assert_mode_parity(&module, "lambda closure capture");
@@ -819,7 +819,7 @@ each xs f =
 
 main : Unit -> Unit
 main =
-  each [3, 5] (|n| -> print "${n}")
+  each [3, 5] (fn n -> print "${n}")
 "#;
     let module = parse_module(source).expect("parse should work");
     let typed = assert_mode_parity(&module, "list each style callback dispatch");

@@ -814,7 +814,7 @@ import goby/list ( map )
 
 main : Unit -> Unit can Print
 main =
-  xs = map [1, 2, 3] (|n| -> n + 1)
+  xs = map [1, 2, 3] (fn n -> n + 1)
   each xs println
 ";
         let diags = analyze(source, Some(&root));

@@ -13,9 +13,9 @@ add_ten_mul_three a =
 
 # Higher-order function
 mul_tens : List Int -> List Int
-mul_tens ns = list.map ns (|n| -> n * 10)
+mul_tens ns = list.map ns (fn n -> n * 10)
 
-# Anonymous functions can also be written as:
+# Anonymous functions can also be written as shorthand:
 mul_tens_short : List Int -> List Int
 mul_tens_short ns = list.map ns (_ * 10)
 

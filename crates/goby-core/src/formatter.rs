@@ -209,7 +209,7 @@ pub(crate) fn format_expr(expr: &Expr, indent: usize) -> String {
                 format!("fn {} -> {}", params.join(" "), final_body)
             } else {
                 let b = format_expr(body, indent);
-                format!("|{}| -> {}", param, b)
+                format!("fn {} -> {}", param, b)
             }
         }
         Expr::Handler { clauses } => format_handler_expr(clauses, indent),
@@ -936,7 +936,7 @@ mod tests {
                 right: Box::new(Expr::IntLit(10)),
             }),
         };
-        assert_eq!(format_expr(&expr, 0), "|n| -> n * 10");
+        assert_eq!(format_expr(&expr, 0), "fn n -> n * 10");
     }
 
     #[test]

@@ -1460,7 +1460,7 @@ main =
   text = read()
   delim = "\n"
   lines = split(text, delim)
-  each lines (|line| -> println(line))
+  each lines (fn line -> println(line))
 "#,
         );
         assert_eq!(
@@ -1484,7 +1484,7 @@ main : Unit -> Unit can Print, Read
 main =
   text = read()
   lines = split(text, "\n")
-  each lines (|line| -> println(line))
+  each lines (fn line -> println(line))
   println "test"
   print "done"
 "#,
@@ -1547,7 +1547,7 @@ main =
   delim = "\n"
   lines = split(text, delim)
   copied = lines
-  each copied (|line| -> println(line))
+  each copied (fn line -> println(line))
 "#,
         );
         assert_eq!(
@@ -1622,7 +1622,7 @@ main =
   text = read()
   delim = "\n"
   lines = split(text, delim)
-  each lines (|line| -> println "${line}")
+  each lines (fn line -> println "${line}")
 "#,
         );
         assert_eq!(
@@ -1724,7 +1724,7 @@ main =
   text = read()
   delim = "\n"
   lines = string.split(text, delim)
-  list.each lines (|line| -> Print.println line)
+  list.each lines (fn line -> Print.println line)
 "#,
         );
         assert_eq!(
@@ -1777,7 +1777,7 @@ main =
   delim = "\n"
   lines = split(text, delim)
   printer = println
-  each lines (|line| -> printer line)
+  each lines (fn line -> printer line)
 "#,
         );
         assert_eq!(
@@ -1804,7 +1804,7 @@ main =
   lines = split(text, delim)
   printer = print
   writer = printer
-  each lines (|line| -> writer line)
+  each lines (fn line -> writer line)
 "#,
         );
         assert_eq!(
@@ -2030,7 +2030,7 @@ main =
   lines = split(text, delim)
   copied = lines
   forwarded = copied
-  each forwarded (|line| -> println "${line}!")
+  each forwarded (fn line -> println "${line}!")
 "#,
         );
         let classification = classify_runtime_io(&module, body.as_deref());

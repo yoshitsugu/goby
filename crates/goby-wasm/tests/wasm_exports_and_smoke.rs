@@ -133,7 +133,7 @@ main : Unit -> Unit can Print, Read
 main =
   text = read()
   lines = split(text, "\n")
-  each lines (|line| -> println(line))
+  each lines (fn line -> println(line))
 "#,
     )
     .expect("parse should work");
@@ -217,7 +217,7 @@ main =
   text = read()
   delim = "\n"
   lines = split(text, delim)
-  each lines (|line| -> println(line))
+  each lines (fn line -> println(line))
 "#,
     )
     .expect("parse should work");
@@ -262,7 +262,7 @@ main =
   delim = "\n"
   lines = split(text, delim)
   copied = lines
-  each copied (|line| -> println(line))
+  each copied (fn line -> println(line))
 "#,
     )
     .expect("parse should work");
@@ -329,7 +329,7 @@ main =
   text = read()
   delim = "\n"
   lines = split(text, delim)
-  each lines (|line| -> println "${line}")
+  each lines (fn line -> println "${line}")
 "#,
     )
     .expect("parse should work");
@@ -401,7 +401,7 @@ main =
   delim = "\n"
   lines = split(text, delim)
   printer = println
-  each lines (|line| -> printer line)
+  each lines (fn line -> printer line)
 "#,
     )
     .expect("parse should work");
@@ -426,7 +426,7 @@ main =
   lines = split(text, delim)
   printer = print
   writer = printer
-  each lines (|line| -> writer line)
+  each lines (fn line -> writer line)
 "#,
     )
     .expect("parse should work");
@@ -471,7 +471,7 @@ main : Unit -> Unit can Print, Read
 main =
   text = read()
   lines = split(text, "\n")
-  each lines (|line| -> println(line))
+  each lines (fn line -> println(line))
   println "test"
   print "done"
 "#,
@@ -570,7 +570,7 @@ main =
 #[test]
 fn compile_module_produces_wasm_for_transformed_split_callback() {
     // Previously DynamicWasiIo (pre WB-3-M3).
-    // Now GeneralLowered: Lambda lowering handles `|line| -> println "${line}!"` (WB-3-M3).
+    // Now GeneralLowered: Lambda lowering handles `fn line -> println "${line}!"` (WB-3-M3).
     let module = parse_module(
         r#"
 import goby/list ( each )
@@ -583,7 +583,7 @@ main =
   lines = split(text, delim)
   copied = lines
   forwarded = copied
-  each forwarded (|line| -> println "${line}!")
+  each forwarded (fn line -> println "${line}!")
 "#,
     )
     .expect("parse should work");
@@ -611,7 +611,7 @@ main =
   lines = split(text, delim)
   copied = lines
   forwarded = copied
-  each forwarded (|line| -> println "${line}!")
+  each forwarded (fn line -> println "${line}!")
 "#,
     )
     .expect("parse should work");
@@ -890,7 +890,7 @@ main : Unit -> Unit can Print, Read
 main =
   text = read()
   nums = [1, 2, 3]
-  doubled = map nums (|x| -> x + 1)
+  doubled = map nums (fn x -> x + 1)
   println text
 "#;
     let module = parse_module(source).expect("source should parse");
@@ -913,8 +913,8 @@ main : Unit -> Unit can Print, Read
 main =
   text = read()
   nums = [1, 2, 3]
-  doubled = map nums (|x| -> x + 1)
-  tripled = map nums (|x| -> x + 2)
+  doubled = map nums (fn x -> x + 1)
+  tripled = map nums (fn x -> x + 2)
   println text
 "#;
     let module = parse_module(source).expect("source should parse");
@@ -927,7 +927,7 @@ main =
     assert_valid_wasm_module(&wasm);
 }
 
-/// WB-3-M3: lambda with Print effect in body (`each lines (|line| -> println line)`).
+/// WB-3-M3: lambda with Print effect in body (`each lines (fn line -> println line)`).
 #[test]
 fn wb3_m3_each_with_lambda_body_having_effect_executes_correctly() {
     let source = r#"
@@ -937,7 +937,7 @@ main : Unit -> Unit can Print, Read
 main =
   text = read()
   lines = [text]
-  each lines (|line| -> println line)
+  each lines (fn line -> println line)
 "#;
     let module = parse_module(source).expect("source should parse");
     assert_eq!(
@@ -966,7 +966,7 @@ main =
   text = read()
   base = 10
   nums = [1, 2, 3]
-  result = map nums (|x| -> x + base)
+  result = map nums (fn x -> x + base)
   println text
 "#;
     let module = parse_module(source).expect("source should parse");

@@ -687,7 +687,7 @@ effect Log
   log: String -> Unit
 main : Unit -> Unit
 main =
-  f = |log| -> log \"hi\"
+  f = fn log -> log \"hi\"
   f \"ignored\"
 ";
         let module = parse_module(source).expect("should parse");
@@ -1055,7 +1055,7 @@ import goby/list ( map )
 
 main : Unit -> Unit can Print
 main =
-  xs = map [1, 2, 3] (|n| -> n + 1)
+  xs = map [1, 2, 3] (fn n -> n + 1)
   each xs println
 "#;
         let module = parse_module(source).expect("should parse");
@@ -1075,7 +1075,7 @@ import goby/list ( map )
 
 main : Unit -> Unit can Print
 main =
-  xs = map [1, 2, 3] (|n| -> n + 1)
+  xs = map [1, 2, 3] (fn n -> n + 1)
   each xs println
 ";
         let module = parse_module(source).expect("should parse");
@@ -2027,7 +2027,7 @@ main =
 import goby/list ( fold )
 sum : Unit -> Int
 sum =
-  fold [1, 2, 3] 0 (|acc| -> acc + 1)
+  fold [1, 2, 3] 0 (fn acc -> acc + 1)
 ";
         let module = parse_module(source).expect("should parse");
         let err = typecheck_module(&module).expect_err("too-few callback parameters should fail");
@@ -2101,7 +2101,7 @@ sum =
 import goby/list
 main : Unit -> Unit can Print
 main =
-  list.each [1, 2] (|n| -> print \"${n}\")
+  list.each [1, 2] (fn n -> print \"${n}\")
 ";
         let module = parse_module(source).expect("should parse");
         typecheck_module(&module).expect("list.each should typecheck via plain import");
@@ -2113,7 +2113,7 @@ main =
 import goby/list as l
 main : Unit -> Unit can Print
 main =
-  l.each [1, 2] (|n| -> print \"${n}\")
+  l.each [1, 2] (fn n -> print \"${n}\")
 ";
         let module = parse_module(source).expect("should parse");
         typecheck_module(&module).expect("list.each should typecheck via alias import");
@@ -2125,7 +2125,7 @@ main =
 import goby/list ( each )
 main : Unit -> Unit can Print
 main =
-  each [1, 2] (|n| -> print \"${n}\")
+  each [1, 2] (fn n -> print \"${n}\")
 ";
         let module = parse_module(source).expect("should parse");
         typecheck_module(&module).expect("list.each should typecheck via selective import");

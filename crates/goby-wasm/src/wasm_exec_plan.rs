@@ -516,7 +516,7 @@ pair _ =
 capture : Unit -> (Int -> Int)
 capture _ =
   base = 40
-  |n| -> n + base
+  fn n -> n + base
 "#,
         )
         .expect("parse should work");
@@ -530,7 +530,7 @@ capture _ =
         let runtime =
             runtime_artifacts_from_ir_decl(&ir_decl).expect("runtime artifacts should exist");
         let body = runtime.body.expect("body should render");
-        assert_eq!(body, "base = 40\n|n| -> n + base");
+        assert_eq!(body, "base = 40\nfn n -> n + base");
     }
 
     #[test]
@@ -558,7 +558,7 @@ capture _ =
             .expect("mul_tens runtime plan should exist");
         assert_eq!(
             runtime.body.as_deref().map(str::trim_end),
-            Some("list.map ns (|n| -> n * 10)")
+            Some("list.map ns (fn n -> n * 10)")
         );
     }
 }

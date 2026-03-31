@@ -702,10 +702,8 @@ fn parse_lambda(src: &str) -> Option<Expr> {
 
     // `fn a b -> expr` — multi-parameter anonymous function syntax.
     // Desugars to nested single-param lambdas at parse time:
-    //   `fn a b -> expr`  ≡  `|a| -> |b| -> expr`  (same AST/IR/runtime path)
-    // This means the lowering and runtime callable model is identical to single-param
-    // `|x| -> expr` lambdas — no new parallel branch is introduced downstream.
-    // `fn a -> expr` (single-param) is also accepted and normalises to `|a| -> expr`.
+    //   `fn a b -> expr`  ≡  Lambda { "a", Lambda { "b", expr } }
+    // `fn a -> expr` (single-param) is also accepted.
     if let Some(stripped) = src.strip_prefix("fn ") {
         let rest = stripped.trim();
         // Collect parameter identifiers up to `->`
@@ -722,36 +720,12 @@ fn parse_lambda(src: &str) -> Option<Expr> {
             return None;
         }
         let body = parse_expr(body_src)?;
-        // Desugar right-to-left: fn a b -> e  ≡  |a| -> |b| -> e
+        // Desugar right-to-left: fn a b -> e  ≡  Lambda { "a", Lambda { "b", e } }
         let lambda = params.iter().rev().fold(body, |acc, &param| Expr::Lambda {
             param: param.to_string(),
             body: Box::new(acc),
         });
         return Some(lambda);
-    }
-
-    if src.starts_with('|') {
-        let second_bar = src.get(1..)?.find('|')? + 1;
-        let param = src[1..second_bar].trim();
-        if !is_identifier(param) {
-            return None;
-        }
-        let rest = src[second_bar + 1..].trim();
-        let body_src = rest.strip_prefix("->")?;
-        let body_src = body_src.trim();
-        if body_src.is_empty() {
-            return None;
-        }
-        // Reject the old multi-parameter curried spelling `|a| -> |b| -> ...`.
-        // Use `fn a b -> ...` instead.
-        if body_src.starts_with('|') {
-            return None;
-        }
-        let body = parse_expr(body_src)?;
-        return Some(Expr::Lambda {
-            param: param.to_string(),
-            body: Box::new(body),
-        });
     }
 
     if src.starts_with("_ ")
@@ -1623,7 +1597,7 @@ mod tests {
     #[test]
     fn parses_named_lambda() {
         assert_eq!(
-            parse_expr("|n| -> n * 10"),
+            parse_expr("fn n -> n * 10"),
             Some(Expr::Lambda {
                 param: "n".to_string(),
                 body: Box::new(Expr::BinOp {
@@ -1899,9 +1873,15 @@ mod tests {
 
     #[test]
     fn fn_lambda_one_param_desugars_to_single_lambda() {
-        // `fn n -> n + 1`  ≡  `|n| -> n + 1`
-        let expected = parse_expr("|n| -> n + 1");
-        assert_eq!(parse_expr("fn n -> n + 1"), expected);
+        // `fn n -> n + 1` parses to Lambda { "n", n + 1 }
+        let ast = parse_expr("fn n -> n + 1").expect("should parse");
+        match &ast {
+            Expr::Lambda { param, body } => {
+                assert_eq!(param, "n");
+                assert!(matches!(body.as_ref(), Expr::BinOp { op: BinOpKind::Add, .. }));
+            }
+            other => panic!("expected lambda, got {:?}", other),
+        }
     }
 
     #[test]
@@ -1933,8 +1913,9 @@ mod tests {
     }
 
     #[test]
-    fn curried_lambda_spelling_rejected() {
-        // `|a| -> |b| -> ...` is the old multi-param spelling; must not parse
+    fn pipe_lambda_syntax_rejected() {
+        // `|x| -> expr` is the removed pipe-lambda syntax; must not parse
+        assert_eq!(parse_expr("|n| -> n + 1"), None);
         assert_eq!(parse_expr("|a| -> |b| -> a + b"), None);
     }
 

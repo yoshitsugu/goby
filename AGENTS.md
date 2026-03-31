@@ -37,7 +37,7 @@ The current draft is based on files in `examples/` and `doc/LANGUAGE_SPEC.md`.
 - Function-local scopes and blocks are indentation-based (spaces or tabs).
 - Block expressions return the last expression value.
 - Effects are declared with `can <Effect>` (example: `can Print`).
-- Anonymous functions support `|x| -> expr` and shorthand forms like `_ * 10`.
+- Anonymous functions: `fn x -> expr` (single-param), `fn a b -> expr` (multi-param), and shorthand `_ * 10`.
 
 ## Full Reference Policy
 

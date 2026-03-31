@@ -73,7 +73,7 @@ callback_after_print f =
 
 main : Unit -> Unit
 main =
-  callback_after_print (|n| -> n + 5)
+  callback_after_print (fn n -> n + 5)
 "#;
     let module = parse_module(source).expect("parse should work");
     let output = resolve_module_runtime_output(&module).expect("runtime output should resolve");
@@ -91,7 +91,7 @@ each_two f =
 
 main : Unit -> Unit
 main =
-  each_two (|n| -> print "${n}")
+  each_two (fn n -> print "${n}")
 "#;
     let module = parse_module(source).expect("parse should work");
     let output = resolve_module_runtime_output(&module).expect("runtime output should resolve");
@@ -158,7 +158,7 @@ each_two f =
 main : Unit -> Unit
 main =
   base = 40
-  each_two (|n| -> print "${n + base}")
+  each_two (fn n -> print "${n + base}")
 "#;
     let module = parse_module(source).expect("parse should work");
     let output = resolve_module_runtime_output(&module).expect("runtime output should resolve");
@@ -194,7 +194,7 @@ each xs f =
 
 main : Unit -> Unit
 main =
-  each [3, 5] (|n| -> print "${n}")
+  each [3, 5] (fn n -> print "${n}")
 "#;
     let module = parse_module(source).expect("parse should work");
     let output = resolve_module_runtime_output(&module).expect("runtime output should resolve");
@@ -209,7 +209,7 @@ import goby/list
 
 main : Unit -> Unit
 main =
-  list.each [2, 4] (|n| -> print "${n}")
+  list.each [2, 4] (fn n -> print "${n}")
 "#;
     let module = parse_module(source).expect("parse should work");
     let output = resolve_module_runtime_output(&module).expect("runtime output should resolve");
@@ -224,7 +224,7 @@ import goby/list as l
 
 main : Unit -> Unit
 main =
-  l.each [6, 8] (|n| -> print "${n}")
+  l.each [6, 8] (fn n -> print "${n}")
 "#;
     let module = parse_module(source).expect("parse should work");
     let output = resolve_module_runtime_output(&module).expect("runtime output should resolve");
@@ -239,7 +239,7 @@ import goby/list ( each )
 
 main : Unit -> Unit
 main =
-  each [10, 12] (|n| -> print "${n}")
+  each [10, 12] (fn n -> print "${n}")
 "#;
     let module = parse_module(source).expect("parse should work");
     let output = resolve_module_runtime_output(&module).expect("runtime output should resolve");
@@ -254,7 +254,7 @@ import goby/list ( each )
 
 main : Unit -> Unit
 main =
-  list.each [14, 16] (|n| -> print "${n}")
+  list.each [14, 16] (fn n -> print "${n}")
 "#;
     let module = parse_module(source).expect("parse should work");
     let output = resolve_module_runtime_output(&module).expect("runtime output should resolve");
@@ -311,7 +311,7 @@ main =
       print "${n}"
       resume ()
   in
-    list.each [1, 3] (|n| -> log n)
+    list.each [1, 3] (fn n -> log n)
 "#;
     let module = parse_module(source).expect("parse should work");
     let output = resolve_module_runtime_output(&module).expect("runtime output should resolve");
@@ -334,7 +334,7 @@ main =
       print "${n}"
       resume ()
   in
-    l.each [5, 7] (|n| -> log n)
+    l.each [5, 7] (fn n -> log n)
 "#;
     let module = parse_module(source).expect("parse should work");
     let output = resolve_module_runtime_output(&module).expect("runtime output should resolve");
@@ -357,7 +357,7 @@ main =
       print "${n}"
       resume ()
   in
-    each [9, 11] (|n| -> log n)
+    each [9, 11] (fn n -> log n)
 "#;
     let module = parse_module(source).expect("parse should work");
     let output = resolve_module_runtime_output(&module).expect("runtime output should resolve");
@@ -373,7 +373,7 @@ import goby/list
 main : Unit -> Unit can Print
 main =
   ns = [1, 2, 3]
-  list.each ns (|i| -> println(i * 10))
+  list.each ns (fn i -> println(i * 10))
 "#;
     let module = parse_module(source).expect("parse should work");
     let output = resolve_module_runtime_output(&module).expect("runtime output should resolve");
@@ -388,7 +388,7 @@ import goby/list
 
 main : Unit -> Unit can Print
 main =
-  list.each ["go", "by"] (|s| -> println s)
+  list.each ["go", "by"] (fn s -> println s)
 "#;
     let module = parse_module(source).expect("parse should work");
     let output = resolve_module_runtime_output(&module).expect("runtime output should resolve");
@@ -403,7 +403,7 @@ import goby/list ( each )
 
 main : Unit -> Unit can Print
 main =
-  each ["go", "by"] (|s| -> println(s))
+  each ["go", "by"] (fn s -> println(s))
 "#;
     let module = parse_module(source).expect("parse should work");
     let output = resolve_module_runtime_output(&module).expect("runtime output should resolve");
@@ -420,7 +420,7 @@ import goby/string ( split )
 main : Unit -> Unit can Print
 main =
   lines = split("hogehoge\nfugafuga", "\n")
-  each lines (|line| -> println(line))
+  each lines (fn line -> println(line))
 "#;
     let module = parse_module(source).expect("parse should work");
     let output = resolve_module_runtime_output(&module).expect("runtime output should resolve");
@@ -593,7 +593,7 @@ import goby/list ( map )
 
 main : Unit -> Unit
 main =
-  print (map [1, 2, 3] (|n| -> n * 10))
+  print (map [1, 2, 3] (fn n -> n * 10))
 "#;
     let module = parse_module(source).expect("parse should work");
     let output = resolve_module_runtime_output(&module).expect("runtime output should resolve");
@@ -608,7 +608,7 @@ import goby/list
 
 main : Unit -> Unit
 main =
-  print (list.map ["go", "by"] (|s| -> "${s}!"))
+  print (list.map ["go", "by"] (fn s -> "${s}!"))
 "#;
     let module = parse_module(source).expect("parse should work");
     let output = resolve_module_runtime_output(&module).expect("runtime output should resolve");
@@ -675,7 +675,7 @@ fn resolves_runtime_output_for_local_decl_wrapping_imported_list_map_named_lambd
 import goby/list ( map )
 
 mul_tens : List Int -> List Int
-mul_tens ns = map ns (|n| -> n * 10)
+mul_tens ns = map ns (fn n -> n * 10)
 
 main : Unit -> Unit
 main =
@@ -847,7 +847,7 @@ import goby/list ( each )
 main : Unit -> Unit
 main =
   lines = string.split("go\nby", "\n")
-  each lines (|line| -> Print.println line)
+  each lines (fn line -> Print.println line)
 "#;
     let module = parse_module(source).expect("parse should work");
     let output = resolve_module_runtime_output(&module).expect("runtime output should resolve");
@@ -1155,13 +1155,13 @@ fn locks_runtime_output_for_iterator_gb() {
 
 // ── HOF-M5 parity tests: fn-form callbacks ───────────────────────────────────
 // These tests confirm that `fn a -> expr` and `fn a b -> expr` callbacks lower
-// through the same callable model as `|x| -> expr` (single-param) lambdas.
+// through the same callable model as `fn x -> expr` (single-param) lambdas.
 // The desugaring happens at parse time (HOF-M4); no new runtime branch is added.
 
 #[test]
 fn resolves_runtime_output_for_map_with_fn_lambda_callback() {
     let _guard = ENV_MUTEX.lock().unwrap();
-    // `fn x -> x * 2` ≡ `|x| -> x * 2` after desugaring; map parity check.
+    // `fn x -> x * 2` ≡ `fn x -> x * 2` after desugaring; map parity check.
     let source = r#"
 import goby/list ( map )
 
@@ -1177,7 +1177,7 @@ main =
 #[test]
 fn resolves_runtime_output_for_each_with_fn_lambda_callback() {
     let _guard = ENV_MUTEX.lock().unwrap();
-    // `fn n -> print "${n}"` ≡ `|n| -> print "${n}"` after desugaring; each parity check.
+    // `fn n -> print "${n}"` ≡ `fn n -> print "${n}"` after desugaring; each parity check.
     let source = r#"
 import goby/list ( each )
 

@@ -227,7 +227,7 @@ import goby/list ( map, each )
 main : Unit -> Unit can Print
 main =
   nums = [1, 2, 3]
-  rendered = map nums (|n| -> "${n + 1}")
+  rendered = map nums (fn n -> "${n + 1}")
   each rendered println
 "#;
         let module = parse_module(source).expect("source should parse");
@@ -435,7 +435,7 @@ main : Unit -> Unit can Print, Read
 main =
   _ignored = read ()
   parts = string.split "--a----b--" "--"
-  list.each parts (|part| -> println "${part}!")
+  list.each parts (fn part -> println "${part}!")
 "#,
         )
         .expect("parse should work");
@@ -1217,7 +1217,7 @@ main : Unit -> Unit can Print, Read
 main =
   _ = read()
   xs = [1, 2, 3]
-  mapped = map xs (|i| -> "${i + 1}")
+  mapped = map xs (fn i -> "${i + 1}")
   each mapped println
 "#,
         )
@@ -1234,7 +1234,7 @@ main =
         assert_eq!(
             output.as_deref(),
             Some("2\n3\n4\n"),
-            "map xs (|i| -> \"${{i + 1}}\") |> each println should print incremented strings"
+            "map xs (fn i -> \"${{i + 1}}\") |> each println should print incremented strings"
         );
     }
 
@@ -1249,7 +1249,7 @@ main : Unit -> Unit can Print, Read
 main =
   _ = read()
   xs = [True, False]
-  mapped = map xs (|flag| -> "${flag}")
+  mapped = map xs (fn flag -> "${flag}")
   each mapped println
 "#,
         )
@@ -1266,7 +1266,7 @@ main =
         assert_eq!(
             output.as_deref(),
             Some("True\nFalse\n"),
-            "map xs (|flag| -> \"${{flag}}\") |> each println should print boolean strings"
+            "map xs (fn flag -> \"${{flag}}\") |> each println should print boolean strings"
         );
     }
 
@@ -1538,7 +1538,7 @@ main : Unit -> Unit can Print, Read
 main =
   _ = read()
   prefix = "hello"
-  result = map ["world"] (|s| -> "${prefix} ${s}")
+  result = map ["world"] (fn s -> "${prefix} ${s}")
   println result[0]
 "#,
         )
@@ -1564,7 +1564,7 @@ import goby/list ( map )
 helper : Unit -> String
 helper =
   prefix = "hello"
-  result = map ["world"] (|s| -> "${prefix} ${s}")
+  result = map ["world"] (fn s -> "${prefix} ${s}")
   result[0]
 
 main : Unit -> Unit can Print, Read

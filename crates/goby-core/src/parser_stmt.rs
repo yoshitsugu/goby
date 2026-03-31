@@ -379,16 +379,15 @@ where
     let open_idx = head.rfind('(')?;
     let callee_src = head[..open_idx].trim();
     let lambda_head = head[open_idx + 1..].trim();
-    let second_bar = lambda_head.get(1..)?.find('|')? + 1;
-    if !lambda_head.starts_with('|') {
+    // Accept `fn <param> ->` multiline lambda syntax.
+    let fn_stripped = lambda_head.strip_prefix("fn ")?;
+    let arrow = fn_stripped.find("->")?;
+    let param = fn_stripped[..arrow].trim();
+    if !is_non_reserved_identifier(param) {
         return None;
     }
-    let param = lambda_head[1..second_bar].trim();
-    if !is_identifier(param) {
-        return None;
-    }
-    let rest = lambda_head[second_bar + 1..].trim();
-    if rest != "->" || callee_src.is_empty() {
+    let rest = fn_stripped[arrow + 2..].trim();
+    if !rest.is_empty() || callee_src.is_empty() {
         return None;
     }
 
@@ -1409,7 +1408,7 @@ mod tests {
 
     #[test]
     fn parses_multiline_lambda_call_body_as_block() {
-        let body = "each around_diffs (|d| ->\n  diff_y = y + d.1\n  diff_x = x + d.0\n  if diff_y < max_y\n    result := result + 1\n  else\n    ()\n)\nresult < threshold";
+        let body = "each around_diffs (fn d ->\n  diff_y = y + d.1\n  diff_x = x + d.0\n  if diff_y < max_y\n    result := result + 1\n  else\n    ()\n)\nresult < threshold";
         let stmts = parse_body_stmts(body).expect("should parse");
         assert_eq!(stmts.len(), 2);
         match &stmts[0] {

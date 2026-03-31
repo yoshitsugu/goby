@@ -285,7 +285,7 @@ fn native_codegen_ignores_unused_hof_declaration() {
 import goby/list ( map )
 
 mul_tens : List Int -> List Int
-mul_tens ns = map ns (|n| -> n * 10)
+mul_tens ns = map ns (fn n -> n * 10)
 
 main : Unit -> Unit
 main =
@@ -310,7 +310,7 @@ fn native_codegen_accepts_transitively_required_hof_declaration() {
 import goby/list ( map )
 
 mul_tens : List Int -> List Int
-mul_tens ns = map ns (|n| -> n * 10)
+mul_tens ns = map ns (fn n -> n * 10)
 
 wrapped_mul_tens : List Int -> List Int
 wrapped_mul_tens ns = mul_tens ns
@@ -519,7 +519,7 @@ uses_with_callback f =
 
 main : Unit -> Unit
 main =
-  print (uses_with_callback (|x| -> x + 1))
+  print (uses_with_callback (fn x -> x + 1))
 "#,
             Some(fallback::UnsupportedReason::CallTargetBodyNotNativeSupported),
         ),
@@ -817,7 +817,7 @@ main =
   text = read()
   delim = "\n"
   lines = split(text, delim)
-  each lines (|line| -> println "${line}!")
+  each lines (fn line -> println "${line}!")
 "#;
     let module = parse_module(source).expect("source should parse");
     assert_eq!(
@@ -857,7 +857,7 @@ main =
             crate::RuntimeIoExecutionKind::GeneralLowered,
         ),
         (
-            // WB-3-M3: Lambda lowering now handles `|line| -> println "${line}"`,
+            // WB-3-M3: Lambda lowering now handles `fn line -> println "${line}"`,
             // so this program is promoted from DynamicWasiIo to GeneralLowered.
             "dynamic_split_passthrough",
             r#"
@@ -868,7 +868,7 @@ main : Unit -> Unit can Print, Read
 main =
   text = read()
   lines = split(text, "\n")
-  each lines (|line| -> println "${line}")
+  each lines (fn line -> println "${line}")
 "#,
             crate::RuntimeIoExecutionKind::GeneralLowered,
         ),
@@ -883,7 +883,7 @@ main : Unit -> Unit can Print, Read
 main =
   text = read()
   lines = split(text, "\n")
-  each lines (|line| -> println "${line}!")
+  each lines (fn line -> println "${line}!")
 "#,
             crate::RuntimeIoExecutionKind::GeneralLowered,
         ),
@@ -1463,7 +1463,7 @@ main =
   text = read()
   delim = "\n"
   lines = split(text, delim)
-  each lines (|line| -> println "${line}!")
+  each lines (fn line -> println "${line}!")
 "#;
     let optimized_module = parse_module(optimized_source).expect("optimized source should parse");
     let optimized_wasm =

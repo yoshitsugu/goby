@@ -862,7 +862,7 @@ main =
   lines = split(text, delim)
   copied = lines
   forwarded = copied
-  each forwarded (|line| -> println "${line}!")
+  each forwarded (fn line -> println "${line}!")
 "#,
     )
     .expect("temporary input should be writable");
@@ -907,7 +907,7 @@ main =
   text = read()
   delim = "\n"
   lines = split(text, delim)
-  each lines (|line| -> println "${line}!")
+  each lines (fn line -> println "${line}!")
 "#,
     )
     .expect("temporary input should be writable");
@@ -994,7 +994,7 @@ import goby/list ( map, each )
 main : Unit -> Unit can Print
 main =
   nums = [1, 2, 3]
-  rendered = map nums (|n| -> "${n + 1}")
+  rendered = map nums (fn n -> "${n + 1}")
   each rendered println
 "#,
     )
