@@ -1892,7 +1892,7 @@ choose n =
         insta::assert_snapshot!(fmt_ir(&m));
     }
 
-    // --- PerformEffect lowering snapshot tests (G5) ---
+    // --- PerformEffect lowering snapshot tests ---
 
     #[test]
     fn lower_print_print_literal() {
@@ -1988,10 +1988,10 @@ choose n =
         insta::assert_snapshot!(fmt_ir(&m));
     }
 
-    // --- Equivalence tests for the three canonical Read/Print programs (G5) ---
+    // --- Equivalence tests for the three canonical Read/Print programs ---
     //
     // These three programs are semantically equivalent but differ in surface form.
-    // After G5 lowering, all three must contain explicit PerformEffect nodes for
+    // After explicit effect lowering lands, all three must contain explicit `PerformEffect` nodes for
     // Read.read and Print.print — i.e., the IR expresses "what happens", not "how
     // it was written".
 

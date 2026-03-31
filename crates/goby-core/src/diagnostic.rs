@@ -23,7 +23,7 @@ pub enum Severity {
 ///
 /// `From<TypecheckError>` passes `span` through unchanged. A `Some(Span)` with
 /// `col = 1` may still appear for typecheck errors — it is an approximate location
-/// (convention, not enforced by the type) that will be refined in D1c.
+/// (convention, not enforced by the type) that may be refined later.
 /// For typecheck-error diagnostics, `span.is_some()` means *a location is recorded*
 /// but does not guarantee column precision.
 ///
@@ -61,7 +61,7 @@ impl From<TypecheckError> for Diagnostic {
         // TypecheckError already uses span: None for "unknown location".
         // Pass it through unchanged. By convention, col=1 inside a Some(Span) may
         // indicate an approximate/unknown column — this is not enforced by the type.
-        // D1c will replace these with precise spans.
+        // A later span pass may replace these with precise spans.
         Diagnostic {
             severity: Severity::Error,
             span: err.span,
@@ -143,7 +143,7 @@ mod tests {
     #[test]
     fn typecheck_error_with_col1_span_passes_through_as_is() {
         // TypecheckError with col=1 inside Some(Span) is passed through unchanged.
-        // Callers should treat these as approximate locations until D1c.
+        // Callers should treat these as approximate locations for now.
         let err = TypecheckError {
             declaration: Some("f".to_string()),
             span: Some(Span::point(5, 1)),

@@ -4,7 +4,7 @@
 //! General Wasm lowering for Wasm-owned runtime programs.
 //!
 //! This module implements the shared lowering pipeline for the Wasm-owned execution
-//! subset, including runtime-`Read` programs and the WB-3 safe handler subset:
+//! subset, including runtime-`Read` programs and the current safe handler subset:
 //!
 //! ```text
 //! Goby IR (CompExpr / ValueExpr)
@@ -50,7 +50,7 @@ use crate::wasm_exec_plan::decl_exec_plan;
 /// Returned by [`supports_general_lower_module`] when it returns `Some(reason)`.
 /// `None` means the module is fully supported by general lowering.
 ///
-/// This type enables callers (e.g. `runtime_io_plan.rs`, future H4 diagnostics) to
+/// This type enables callers (e.g. `runtime_io_plan.rs`, future finer-grained diagnostics) to
 /// surface a precise message rather than a generic "unsupported" fallback.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum GeneralLowerUnsupportedReason {
@@ -62,7 +62,7 @@ pub(crate) enum GeneralLowerUnsupportedReason {
     HandlerRewriteFailed,
     /// Main is a handler-only candidate but has conflicting non-main decls, future handler
     /// intrinsics, or effectful non-main declarations.
-    /// TODO(H4): split into sub-reasons for more precise diagnostics.
+    /// TODO: split into sub-reasons for more precise diagnostics.
     HandlerOnlyConflict,
     /// Program does not require runtime capabilities (no Read, handler, lambda, or tuple
     /// projection). Pure-Print programs stay on simpler paths.
@@ -403,7 +403,7 @@ fn value_has_effect_boundary_activity(value: &goby_core::ir::ValueExpr) -> bool 
 ///
 /// Used to extend the GeneralLower routing gate: programs that use Lambda expressions
 /// (but have no Read effect or handler constructs) should still enter the GeneralLowered path
-/// once WB-3-M3 Lambda lowering is in place.
+/// once lambda lowering is in place.
 fn has_lambda_in_comp(comp: &CompExpr) -> bool {
     match comp {
         CompExpr::Value(v) => has_lambda_in_value(v),
@@ -525,7 +525,7 @@ fn rewrite_safe_handlers_if_present(
 }
 
 fn read_line_instrs_are_supported(instrs: &[backend_ir::WasmBackendInstr]) -> bool {
-    // Collect all instructions recursively (WB-1: If branches may contain EffectOp).
+    // Collect all instructions recursively (If branches may contain EffectOp).
     fn collect_all<'a>(
         instrs: &'a [backend_ir::WasmBackendInstr],
         out: &mut Vec<&'a backend_ir::WasmBackendInstr>,
@@ -827,8 +827,8 @@ fn lower_module_to_instrs(module: &Module) -> Result<LowerModuleResult, CodegenE
     // Gate: only enter GeneralLowered for programs that require runtime capabilities.
     // A program qualifies when it has:
     //   - a runtime Read effect, OR
-    //   - safe handler constructs (WB-3 handler lowering), OR
-    //   - a Lambda expression (WB-3-M3 Lambda lowering), OR
+    //   - safe handler constructs, OR
+    //   - a Lambda expression, OR
     //   - a tuple member projection (TupleProject; native evaluator does not support it).
     // Pure-Print programs without any of the above can stay on the simpler paths.
     if !has_runtime_read_effect(&ir_decl.body)
@@ -1054,16 +1054,16 @@ mod tests {
                 effect_emit_strategy: EffectEmitStrategy::Wb3DirectCall,
             },
         )
-        .expect("WB-3A lowering should not error")
-        .expect("WB-3A general lowering should apply");
+        .expect("direct-call lowering should not error")
+        .expect("direct-call general lowering should apply");
         let wasmfx = try_general_lower_module_with_options(
             module,
             EmitOptions {
                 effect_emit_strategy: EffectEmitStrategy::Wb3BWasmFxExperimental,
             },
         )
-        .expect("WB-3B lowering should not error")
-        .expect("WB-3B general lowering should apply");
+        .expect("future handler-path lowering should not error")
+        .expect("future handler-path general lowering should apply");
         assert_eq!(
             wasmfx, direct,
             "general lowering should stay byte-identical across emit strategies until WasmFX opcode support lands"
@@ -1221,7 +1221,7 @@ main =
         assert_default_strategy_matches_selected_strategy(&module);
     }
 
-    // H3: supports_general_lower_module reason plumbing tests
+    // supports_general_lower_module reason plumbing tests
 
     #[test]
     fn supports_general_lower_module_returns_none_for_supported_read_tuple_program() {
@@ -1267,8 +1267,8 @@ main =
 
     #[test]
     fn supports_general_lower_module_accepts_by_value_capturing_lambda() {
-        // CC3-Step2: A lambda that captures an outer variable ByValue is now supported at
-        // the IR lowering level. The module should be classified as supported (None).
+        // A lambda that captures an outer variable ByValue is supported at the
+        // IR lowering level. The module should be classified as supported (None).
         let module = parse_module(
             r#"
 import goby/list ( map )
@@ -1286,7 +1286,7 @@ main =
             supports_general_lower_module(&module).expect("classification should not error");
         assert!(
             reason.is_none(),
-            "ByValue-capturing lambda should be supported after CC3-Step2, got: {:?}",
+            "ByValue-capturing lambda should be supported, got: {:?}",
             reason
         );
     }

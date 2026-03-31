@@ -11,6 +11,12 @@ Related documents:
 - `doc/PLAN.md` — top-level roadmap.
 - `doc/STATE.md` — current focus and restart notes.
 
+Plan-label hygiene:
+
+- labels in this document such as phase names, milestone IDs, or roadmap shorthand are planning-only metadata
+- do not copy those labels into code comments, test names, diagnostics, or user-visible strings
+- when implementation notes need context, describe the technical purpose directly
+
 ---
 
 ## 1. Compilation Pipeline (Stable)

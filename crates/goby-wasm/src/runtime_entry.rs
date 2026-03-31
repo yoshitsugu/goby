@@ -80,7 +80,7 @@ fn resolve_main_runtime_output_with_mode_and_stdin_internal(
 
 /// Attempt to resolve `main`'s output purely at compile time.
 ///
-/// # Host-environment access policy (Sweep F5)
+/// # Host-environment access policy
 ///
 /// This function passes `stdin_seed = None` and `allow_live_stdin = false` to the
 /// interpreter.  As a result, `EmbeddedEffectRuntime::ensure_stdin_loaded` will

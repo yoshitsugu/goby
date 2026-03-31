@@ -247,13 +247,13 @@ fn rewrite_comp(
             }
         }
         CompExpr::Handle { .. } => Err(CodegenError {
-            message: "WB-3 handler lowering expected `Handle` to be consumed by `WithHandler`"
+            message: "handler lowering expected `Handle` to be consumed by `WithHandler`"
                 .to_string(),
         }),
         CompExpr::WithHandler { handler, body } => {
             let clauses =
                 resolve_handler_clauses(handler, handler_aliases).ok_or_else(|| CodegenError {
-                    message: "WB-3 handler lowering requires statically resolvable `WithHandler`"
+                    message: "handler lowering requires statically resolvable `WithHandler`"
                         .to_string(),
                 })?;
             let mut scopes = handler_scopes.to_vec();
@@ -266,7 +266,7 @@ fn rewrite_comp(
         CompExpr::Resume { value } => {
             let Some(resume_k) = resume_k else {
                 return Err(CodegenError {
-                    message: "WB-3 handler lowering encountered `resume` without continuation"
+                    message: "handler lowering encountered `resume` without continuation"
                         .to_string(),
                 });
             };
@@ -380,9 +380,8 @@ fn rewrite_value(value: &ValueExpr, names: &mut NameSupply) -> Result<ValueExpr,
             right: Box::new(rewrite_value(right, names)?),
         }),
         ValueExpr::Lambda { .. } => Err(CodegenError {
-            message:
-                "WB-3 handler lowering does not yet support lambdas inside handler-lowered code"
-                    .to_string(),
+            message: "handler lowering does not yet support lambdas inside handler-lowered code"
+                .to_string(),
         }),
         ValueExpr::TupleProject { tuple, index } => Ok(ValueExpr::TupleProject {
             tuple: Box::new(rewrite_value(tuple, names)?),
@@ -429,7 +428,7 @@ fn rewrite_handled_op_invocation(
         };
         return Err(CodegenError {
             message: format!(
-                "WB-3 handler lowering arity mismatch for '{}': expected {}, got {}",
+                "handler lowering arity mismatch for '{}': expected {}, got {}",
                 call_head,
                 clause.params.len(),
                 args.len()

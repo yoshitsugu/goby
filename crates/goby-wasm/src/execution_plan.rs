@@ -148,7 +148,7 @@ fn unresolved_runtime_output_error(
         }
         if handoff.handler_legality.all_one_shot_tail_resumptive() {
             return CodegenError {
-                message: "main body uses one-shot tail-resumptive effect handlers, but WB-3A direct-call lowering is not implemented yet".to_string(),
+                message: "main body uses one-shot tail-resumptive effect handlers, but the current direct-call lowering path is not implemented yet".to_string(),
             };
         }
         return CodegenError {

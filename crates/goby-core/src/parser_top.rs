@@ -666,7 +666,7 @@ main = 1
         assert!(matches!(stmts[0], Stmt::Binding { .. }));
     }
 
-    // --- D1a-ii span population tests ---
+    // --- Span population tests ---
 
     #[test]
     fn declaration_col_is_1_for_top_level_definition() {
@@ -715,7 +715,7 @@ main = 1
         assert_eq!(effect.span.line, 3);
     }
 
-    // --- ER4 import span population tests ---
+    // --- Import span population tests ---
 
     #[test]
     fn plain_import_module_path_span_covers_path_token() {

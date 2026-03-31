@@ -12,6 +12,12 @@ Related documents:
 - `doc/STATE.md` — current deferred limitations and restart notes
 - `doc/closure-design.md` — existing closure-value design note that must be revised before implementation
 
+Plan-label hygiene:
+
+- labels in this document such as milestone IDs are planning-only metadata
+- do not copy those labels into code comments, test names, diagnostics, or user-visible strings
+- when implementation notes need context, describe the technical purpose directly
+
 ---
 
 ## 1. Goal

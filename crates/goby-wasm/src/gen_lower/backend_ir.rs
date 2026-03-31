@@ -12,7 +12,7 @@ use goby_core::ir::IrBinOp;
 use crate::host_runtime::IntrinsicExecutionBoundary;
 
 // ---------------------------------------------------------------------------
-// Case pattern types (WB-2B)
+// Case pattern types
 // ---------------------------------------------------------------------------
 
 /// A single item in a `BackendCasePattern::ListPattern`.
@@ -211,7 +211,7 @@ pub(crate) enum WasmBackendInstr {
     /// Operands must be tagged Bool. The emitter extracts payload bits, applies `i64.and`,
     /// and retags the result as Bool.
     ///
-    /// String equality is not supported in WB-1; `Eq` with string operands returns
+    /// String equality is not supported in the current backend path; `Eq` with string operands returns
     /// `UnsupportedForm` at lowering time.
     BinOp { op: IrBinOp },
     /// Call a user-defined top-level declaration by name.
@@ -241,7 +241,7 @@ pub(crate) enum WasmBackendInstr {
     /// then emits `call_indirect (type $func_type_arity_N)`.
     ///
     /// # Supported arities (FOLD-M3)
-    /// - `arity = 1`: `(i64) -> i64`  (original WB-2A case; `each`/`map` callbacks)
+    /// - `arity = 1`: `(i64) -> i64`  (used for `each`/`map` callbacks)
     /// - `arity = 2`: `(i64, i64) -> i64`  (fold callback `f acc elem`)
     ///
     /// # Design note: no dedicated ListFold variant
@@ -403,9 +403,8 @@ pub(crate) enum WasmBackendInstr {
     },
 
     // -----------------------------------------------------------------------
-    // CC2: Closure record and mutable cell instructions
+    // Closure record and mutable cell instructions
     // -----------------------------------------------------------------------
-
     /// Allocate a closure record and push a TAG_CLOSURE-tagged pointer.
     ///
     /// # Memory layout
@@ -446,9 +445,7 @@ pub(crate) enum WasmBackendInstr {
     /// # Stack discipline
     /// `init_instrs` produces the initial i64 value.
     /// After: one TAG_CELL-tagged i64 pointer on the stack.
-    AllocMutableCell {
-        init_instrs: Vec<WasmBackendInstr>,
-    },
+    AllocMutableCell { init_instrs: Vec<WasmBackendInstr> },
 
     /// Load the current value from a mutable cell.
     ///

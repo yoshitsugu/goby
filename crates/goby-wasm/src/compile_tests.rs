@@ -772,7 +772,7 @@ main =
 
 #[test]
 fn compile_module_interpolated_read_transform_is_general_lowered() {
-    // WB-1: Interp lowering is now supported. "${text}!" with a dynamic Var
+    // Interp lowering is now supported. "${text}!" with a dynamic Var
     // lowers via StringConcat and classifies as GeneralLowered.
     let source = r#"
 main : Unit -> Unit can Print, Read
@@ -806,8 +806,8 @@ fn compile_module_general_lowers_import_example() {
 
 #[test]
 fn compile_module_compiles_transformed_split_callback_as_general_lowered() {
-    // Previously classified as DynamicWasiIo (pre WB-3-M3).
-    // Now classified as GeneralLowered after Lambda lowering support was added (WB-3-M3).
+    // This shape used to miss the general-lowered path.
+    // It now classifies as GeneralLowered because lambda lowering is supported.
     let source = r#"
 import goby/list ( each )
 import goby/string ( split )
@@ -823,7 +823,7 @@ main =
     assert_eq!(
         runtime_io_execution_kind(&module).expect("classification should succeed"),
         crate::RuntimeIoExecutionKind::GeneralLowered,
-        "transformed split callback should now classify as GeneralLowered (WB-3-M3)"
+        "transformed split callback should now classify as GeneralLowered"
     );
     let wasm = compile_module(&module).expect("transformed split callback should compile to Wasm");
     assert_valid_wasm_module(&wasm);
@@ -857,7 +857,7 @@ main =
             crate::RuntimeIoExecutionKind::GeneralLowered,
         ),
         (
-            // WB-3-M3: Lambda lowering now handles `fn line -> println "${line}"`,
+            // Lambda lowering now handles `fn line -> println "${line}"`,
             // so this program is promoted from DynamicWasiIo to GeneralLowered.
             "dynamic_split_passthrough",
             r#"
@@ -873,7 +873,7 @@ main =
             crate::RuntimeIoExecutionKind::GeneralLowered,
         ),
         (
-            // WB-3-M3: Same as above with a suffix — now GeneralLowered.
+            // Same as above with a suffix — now GeneralLowered.
             "dynamic_transformed_split_callback",
             r#"
 import goby/list ( each )
@@ -896,7 +896,7 @@ main =
   decorated = "${text}!"
   print decorated
 "#,
-            // WB-1: Interp lowering is now supported via StringConcat.
+            // Interp lowering is now supported via StringConcat.
             crate::RuntimeIoExecutionKind::GeneralLowered,
         ),
         (

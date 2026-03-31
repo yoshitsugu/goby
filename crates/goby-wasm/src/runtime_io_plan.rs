@@ -377,7 +377,7 @@ pub fn runtime_io_execution_kind(module: &Module) -> Result<RuntimeIoExecutionKi
     if crate::gen_lower::supports_general_lower_module(module)?.is_none() {
         return Ok(RuntimeIoExecutionKind::GeneralLowered);
     }
-    // G6: IR-based classification with AST fallback.
+    // IR-based classification with AST fallback.
     let classification = classify_runtime_io_with_ir_fallback(module);
     Ok(match classification {
         RuntimeIoClassification::DynamicWasiIo(_) => RuntimeIoExecutionKind::DynamicWasiIo,
@@ -412,7 +412,7 @@ pub fn runtime_execution_needs_stdin(module: &Module) -> Result<bool, CodegenErr
 }
 
 // ---------------------------------------------------------------------------
-// IR-based classification (G6)
+// IR-based classification
 // ---------------------------------------------------------------------------
 
 /// Walk a `CompExpr` tree and return `true` if any `PerformEffect` node has
@@ -442,7 +442,7 @@ fn ir_has_read_op(comp: &CompExpr) -> bool {
 
 /// Attempt to detect an Echo plan from the IR body of `main`.
 ///
-/// Recognizes the binding form (G5-lowerable), including alias chains of pure
+/// Recognizes the binding form, including alias chains of pure
 /// variable bindings between the Read and Print:
 /// ```text
 /// let text: ? = perform Read.read()|Read.read_line()
@@ -665,7 +665,7 @@ fn ir_static_print_mode(callee: &ValueExpr) -> Option<bool> {
 ///    - Try to detect `StaticOutput` (all-static Print-family calls).
 ///    - Otherwise → `NotRuntimeIo`.
 ///
-/// # Limitations (G6 scope)
+/// # Limitations
 ///
 /// - Bare `read()` / `print x` calls are NOT lowered to `PerformEffect`; they produce
 ///   `Call { callee: Var("read") }` IR nodes. Programs using bare effect names therefore
@@ -701,7 +701,7 @@ fn classify_runtime_io_from_ir_decl(main_decl: &goby_core::ir::IrDecl) -> Runtim
 /// Classify runtime I/O with IR-based analysis preferred, falling back to runtime statement
 /// forms derived from `wasm_exec_plan` when needed.
 ///
-/// Strategy (G6):
+/// Strategy:
 /// 1. Build `main`'s `WasmDeclExecPlan`.
 /// 2. If IR lowering for `main` fails → statement-form classification (covers inline echo,
 ///    SplitLinesEach, etc.).
@@ -2255,7 +2255,7 @@ main =
         );
     }
 
-    // --- IR-based classification tests (G6) ---
+    // --- IR-based classification tests ---
 
     mod ir_classify {
         use goby_core::ir::{CompExpr, IrDecl, IrModule, IrType, ValueExpr};

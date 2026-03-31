@@ -441,19 +441,19 @@ main =
         .expect("parse should work");
 
         let output = execute_runtime_module_with_stdin(&module, Some(String::new()))
-            .expect("C4-S3 multi-grapheme split program should execute");
+            .expect("multi-grapheme split program should execute");
         assert_eq!(
             output.as_deref(),
             Some("!\na!\n!\nb!\n!\n"),
-            "C4-S3 multi-grapheme split must preserve leading, consecutive, and trailing empty segments"
+            "multi-grapheme split must preserve leading, consecutive, and trailing empty segments"
         );
     }
 
     #[test]
     fn wb1_binop_eq_executes_via_general_lowered() {
-        // WB-1: BinOp Eq lowers to tagged i64 comparison and executes correctly.
+        // Eq lowers to tagged i64 comparison and executes correctly.
         // Tests that `2 + 3 == 5` evaluates to True and routes through If correctly.
-        // (Printing ints directly requires int-to-string conversion not yet in WB-1.)
+        // (Printing ints directly requires int-to-string conversion, so this uses strings.)
         use goby_core::parse_module;
         let module = parse_module(
             r#"
@@ -472,21 +472,21 @@ main =
         assert_eq!(
             runtime_io_execution_kind(&module).expect("classification should succeed"),
             RuntimeIoExecutionKind::GeneralLowered,
-            "WB-1: BinOp Eq + If program must classify as GeneralLowered"
+            "BinOp Eq + If program must classify as GeneralLowered"
         );
 
         let output = execute_runtime_module_with_stdin(&module, Some("ignored".to_string()))
-            .expect("WB-1: BinOp Eq + If must execute via Goby-owned Wasm runtime");
+            .expect("BinOp Eq + If must execute via Goby-owned Wasm runtime");
         assert_eq!(
             output.as_deref(),
             Some("correct\n"),
-            "WB-1: 2 + 3 == 5 must be True"
+            "2 + 3 == 5 must be True"
         );
     }
 
     #[test]
     fn wb1_if_true_branch_executes_via_general_lowered() {
-        // WB-1: If true branch executes correctly.
+        // If true branch executes correctly.
         // Goby `if` uses multiline block syntax.
         use goby_core::parse_module;
         let module = parse_module(
@@ -506,17 +506,17 @@ main =
         assert_eq!(
             runtime_io_execution_kind(&module).expect("classification should succeed"),
             RuntimeIoExecutionKind::GeneralLowered,
-            "WB-1: If program must classify as GeneralLowered"
+            "If program must classify as GeneralLowered"
         );
 
         let output = execute_runtime_module_with_stdin(&module, Some("ignored".to_string()))
-            .expect("WB-1: If true must execute via Goby-owned Wasm runtime");
-        assert_eq!(output.as_deref(), Some("yes\n"), "WB-1: if True → yes");
+            .expect("If true must execute via Goby-owned Wasm runtime");
+        assert_eq!(output.as_deref(), Some("yes\n"), "if True should print yes");
     }
 
     #[test]
     fn wb1_if_false_branch_executes_via_general_lowered() {
-        // WB-1: If false branch executes correctly.
+        // If false branch executes correctly.
         // Goby `if` uses multiline block syntax with `True`/`False` booleans.
         use goby_core::parse_module;
         let module = parse_module(
@@ -536,12 +536,12 @@ main =
         assert_eq!(
             runtime_io_execution_kind(&module).expect("classification should succeed"),
             RuntimeIoExecutionKind::GeneralLowered,
-            "WB-1: If false program must classify as GeneralLowered"
+            "If false program must classify as GeneralLowered"
         );
 
         let output = execute_runtime_module_with_stdin(&module, Some("ignored".to_string()))
-            .expect("WB-1: If false must execute via Goby-owned Wasm runtime");
-        assert_eq!(output.as_deref(), Some("no\n"), "WB-1: if false → no");
+            .expect("If false must execute via Goby-owned Wasm runtime");
+        assert_eq!(output.as_deref(), Some("no\n"), "if False should print no");
     }
 
     #[test]
@@ -571,15 +571,15 @@ main =
         assert_eq!(
             runtime_io_execution_kind(&module).expect("classification should succeed"),
             RuntimeIoExecutionKind::GeneralLowered,
-            "H6: runtime-Read module with helper-call if condition should classify as GeneralLowered"
+            "runtime-Read module with helper-call if condition should classify as GeneralLowered"
         );
 
         let output = execute_runtime_module_with_stdin(&module, Some(String::new()))
-            .expect("H6 helper-call if condition must execute via Goby-owned Wasm runtime");
+            .expect("helper-call if condition must execute via Goby-owned Wasm runtime");
         assert_eq!(
             output.as_deref(),
             Some("yes\n"),
-            "H6: helper-call if condition should no longer fall through to generic runtime-I/O unsupported"
+            "helper-call if condition should no longer fall through to generic runtime-I/O unsupported"
         );
     }
 
@@ -610,8 +610,8 @@ main =
 
     #[test]
     fn wb1_let_mut_and_assign_executes_via_general_lowered() {
-        // WB-1: LetMut + Assign lowers correctly and the final value reflects the assignment.
-        // Uses string value (not int) since printing ints requires int-to-string not in WB-1.
+        // LetMut + Assign lower correctly and the final value reflects the assignment.
+        // Uses string value (not int) since printing ints requires int-to-string conversion.
         use goby_core::parse_module;
         let module = parse_module(
             r#"
@@ -628,21 +628,21 @@ main =
         assert_eq!(
             runtime_io_execution_kind(&module).expect("classification should succeed"),
             RuntimeIoExecutionKind::GeneralLowered,
-            "WB-1: LetMut+Assign program must classify as GeneralLowered"
+            "LetMut+Assign program must classify as GeneralLowered"
         );
 
         let output = execute_runtime_module_with_stdin(&module, Some("ignored".to_string()))
-            .expect("WB-1: LetMut+Assign must execute via Goby-owned Wasm runtime");
+            .expect("LetMut+Assign must execute via Goby-owned Wasm runtime");
         assert_eq!(
             output.as_deref(),
             Some("second\n"),
-            "WB-1: x := second then println x → second"
+            "x := second then println x should print second"
         );
     }
 
     #[test]
     fn wb1_string_interp_executes_via_general_lowered() {
-        // WB-1: String interpolation lowers via StringConcat and executes correctly.
+        // String interpolation lowers via StringConcat and executes correctly.
         use goby_core::parse_module;
         let module = parse_module(
             r#"
@@ -657,15 +657,15 @@ main =
         assert_eq!(
             runtime_io_execution_kind(&module).expect("classification should succeed"),
             RuntimeIoExecutionKind::GeneralLowered,
-            "WB-1: Interp program must classify as GeneralLowered"
+            "Interp program must classify as GeneralLowered"
         );
 
         let output = execute_runtime_module_with_stdin(&module, Some("world".to_string()))
-            .expect("WB-1: Interp must execute via Goby-owned Wasm runtime");
+            .expect("Interp must execute via Goby-owned Wasm runtime");
         assert_eq!(
             output.as_deref(),
             Some("hello world\n"),
-            "WB-1: hello ${{name}} with name=world → hello world"
+            "hello ${{name}} with name=world should print hello world"
         );
     }
 
@@ -755,7 +755,7 @@ main =
 
     #[test]
     fn wb2a_helper_decl_call_executes_via_general_lowered() {
-        // WB-2A: A top-level helper function called from main is compiled via DeclCall.
+        // A top-level helper function called from main is compiled via DeclCall.
         use goby_core::parse_module;
         let module = parse_module(
             r#"
@@ -774,21 +774,21 @@ main =
         assert_eq!(
             runtime_io_execution_kind(&module).expect("classification should succeed"),
             RuntimeIoExecutionKind::GeneralLowered,
-            "WB-2A: helper decl call program must classify as GeneralLowered"
+            "helper decl call program must classify as GeneralLowered"
         );
 
         let output = execute_runtime_module_with_stdin(&module, Some("world".to_string()))
-            .expect("WB-2A: helper decl call must execute via Goby-owned Wasm runtime");
+            .expect("helper decl call must execute via Goby-owned Wasm runtime");
         assert_eq!(
             output.as_deref(),
             Some("hello world\n"),
-            "WB-2A: greet(world) → hello world"
+            "greet(world) should produce hello world"
         );
     }
 
     #[test]
     fn wb2a_recursive_decl_call_executes_via_general_lowered() {
-        // WB-2A: A recursive helper function is compiled and executes correctly.
+        // A recursive helper function is compiled and executes correctly.
         use goby_core::parse_module;
         let module = parse_module(
             r#"
@@ -811,15 +811,15 @@ main =
         assert_eq!(
             runtime_io_execution_kind(&module).expect("classification should succeed"),
             RuntimeIoExecutionKind::GeneralLowered,
-            "WB-2A: recursive decl call program must classify as GeneralLowered"
+            "recursive decl call program must classify as GeneralLowered"
         );
 
         let output = execute_runtime_module_with_stdin(&module, Some("hi".to_string()))
-            .expect("WB-2A: recursive decl call must execute via Goby-owned Wasm runtime");
+            .expect("recursive decl call must execute via Goby-owned Wasm runtime");
         assert_eq!(
             output.as_deref(),
             Some("hi\nhi\nhi\n"),
-            "WB-2A: repeat 3 hi → hi x3"
+            "repeat 3 hi should produce hi three times"
         );
     }
 
@@ -870,12 +870,12 @@ main =
     }
 
     // ------------------------------------------------------------------
-    // WB-2B: Case emission tests
+    // Case emission tests
     // ------------------------------------------------------------------
 
     #[test]
     fn wb2b_case_int_lit_matches_and_executes_via_general_lowered() {
-        // WB-2B-M1: case with integer literal patterns.
+        // case with integer literal patterns.
         // classify_int x = case x { 1 -> "one" | 2 -> "two" | _ -> "other" }
         use goby_core::parse_module;
         let module = parse_module(
@@ -898,21 +898,21 @@ main =
         assert_eq!(
             runtime_io_execution_kind(&module).expect("classification should succeed"),
             RuntimeIoExecutionKind::GeneralLowered,
-            "WB-2B: case int lit program must classify as GeneralLowered"
+            "case int lit program must classify as GeneralLowered"
         );
 
         let output = execute_runtime_module_with_stdin(&module, Some("ignored".to_string()))
-            .expect("WB-2B: case int lit must execute via Goby-owned Wasm runtime");
+            .expect("case int lit must execute via Goby-owned Wasm runtime");
         assert_eq!(
             output.as_deref(),
             Some("two\n"),
-            "WB-2B: classify_int 2 → two"
+            "classify_int 2 should produce two"
         );
     }
 
     #[test]
     fn wb2b_case_int_lit_wildcard_branch_executes() {
-        // WB-2B-M1: wildcard arm is taken when no literal matches.
+        // wildcard arm is taken when no literal matches.
         use goby_core::parse_module;
         let module = parse_module(
             r#"
@@ -931,17 +931,17 @@ main =
         .expect("parse should work");
 
         let output = execute_runtime_module_with_stdin(&module, Some("ignored".to_string()))
-            .expect("WB-2B: case wildcard must execute");
+            .expect("case wildcard must execute");
         assert_eq!(
             output.as_deref(),
             Some("other\n"),
-            "WB-2B: classify_int 99 → other"
+            "classify_int 99 should produce other"
         );
     }
 
     #[test]
     fn wb2b_case_bool_lit_matches_via_general_lowered() {
-        // WB-2B-M1: case with boolean literal pattern.
+        // case with boolean literal pattern.
         use goby_core::parse_module;
         let module = parse_module(
             r#"
@@ -962,25 +962,25 @@ main =
         assert_eq!(
             runtime_io_execution_kind(&module).expect("classification should succeed"),
             RuntimeIoExecutionKind::GeneralLowered,
-            "WB-2B: case bool lit program must classify as GeneralLowered"
+            "case bool lit program must classify as GeneralLowered"
         );
 
         let output = execute_runtime_module_with_stdin(&module, Some("ignored".to_string()))
-            .expect("WB-2B: case bool lit must execute");
+            .expect("case bool lit must execute");
         assert_eq!(
             output.as_deref(),
             Some("yes\n"),
-            "WB-2B: bool_to_str True → yes"
+            "bool_to_str True should produce yes"
         );
     }
 
     // ------------------------------------------------------------------
-    // WB-2B-M3: ListLit emission tests
+    // ListLit emission tests
     // ------------------------------------------------------------------
 
     #[test]
     fn wb2b_list_lit_classifies_as_general_lowered() {
-        // WB-2B-M3: a function containing a list literal classifies as GeneralLowered.
+        // a function containing a list literal classifies as GeneralLowered.
         // Uses read() to satisfy the runtime-read-effect gate.
         // Uses a string list because println expects a String value.
         use goby_core::parse_module;
@@ -998,21 +998,21 @@ main =
         assert_eq!(
             runtime_io_execution_kind(&module).expect("classification should succeed"),
             RuntimeIoExecutionKind::GeneralLowered,
-            "WB-2B-M3: list lit program must classify as GeneralLowered"
+            "list lit program must classify as GeneralLowered"
         );
 
         let output = execute_runtime_module_with_stdin(&module, Some(String::new()))
-            .expect("WB-2B-M3: list lit must execute via Goby-owned Wasm runtime");
+            .expect("list lit must execute via Goby-owned Wasm runtime");
         assert_eq!(
             output.as_deref(),
             Some("beta\n"),
-            "WB-2B-M3: list [alpha,beta,gamma], get(1) → beta"
+            "list [alpha,beta,gamma], get(1) should produce beta"
         );
     }
 
     #[test]
     fn wb2b_list_lit_empty_classifies_as_general_lowered() {
-        // WB-2B-M3: empty list literal ([]) + case emits correctly as GeneralLowered.
+        // empty list literal ([]) + case emits correctly as GeneralLowered.
         use goby_core::parse_module;
         let module = parse_module(
             r#"
@@ -1030,20 +1030,20 @@ main =
         assert_eq!(
             runtime_io_execution_kind(&module).expect("classification should succeed"),
             RuntimeIoExecutionKind::GeneralLowered,
-            "WB-2B-M3: empty list lit program must classify as GeneralLowered"
+            "empty list lit program must classify as GeneralLowered"
         );
 
         let output = execute_runtime_module_with_stdin(&module, Some(String::new()))
-            .expect("WB-2B-M3: empty list lit must execute");
+            .expect("empty list lit must execute");
         assert_eq!(
             output.as_deref(),
             Some("empty\n"),
-            "WB-2B-M3: [] case → empty"
+            "[] case should produce empty"
         );
     }
 
     // ------------------------------------------------------------------
-    // WB-2B-M4: TupleLit emission tests
+    // TupleLit emission tests
     // ------------------------------------------------------------------
 
     #[test]
@@ -1063,16 +1063,12 @@ main =
         assert_eq!(
             runtime_io_execution_kind(&module).expect("classification should succeed"),
             RuntimeIoExecutionKind::GeneralLowered,
-            "WB-2B-M4: tuple lit program must classify as GeneralLowered"
+            "tuple lit program must classify as GeneralLowered"
         );
 
         let output = execute_runtime_module_with_stdin(&module, Some(String::new()))
-            .expect("WB-2B-M4: tuple lit must execute");
-        assert_eq!(
-            output.as_deref(),
-            Some("ok\n"),
-            "WB-2B-M4: tuple path should execute"
-        );
+            .expect("tuple lit must execute");
+        assert_eq!(output.as_deref(), Some("ok\n"), "tuple path should execute");
     }
 
     #[test]
@@ -1094,25 +1090,25 @@ main =
         assert_eq!(
             runtime_io_execution_kind(&module).expect("classification should succeed"),
             RuntimeIoExecutionKind::GeneralLowered,
-            "WB-2B-M5: record lit program must classify as GeneralLowered"
+            "record lit program must classify as GeneralLowered"
         );
 
         let output = execute_runtime_module_with_stdin(&module, Some(String::new()))
-            .expect("WB-2B-M5: record lit must execute");
+            .expect("record lit must execute");
         assert_eq!(
             output.as_deref(),
             Some("ok\n"),
-            "WB-2B-M5: record path should execute"
+            "record path should execute"
         );
     }
 
     // ------------------------------------------------------------------
-    // WB-2B-M2: ListPattern emission tests
+    // ListPattern emission tests
     // ------------------------------------------------------------------
 
     #[test]
     fn wb2b_list_pattern_head_tail_executes() {
-        // WB-2B-M2: case xs { [] -> "none" | [h, ..t] -> h } extracts first element.
+        // case xs { [] -> "none" | [h, ..t] -> h } extracts first element.
         use goby_core::parse_module;
         let module = parse_module(
             r#"
@@ -1134,21 +1130,21 @@ main =
         assert_eq!(
             runtime_io_execution_kind(&module).expect("classification should succeed"),
             RuntimeIoExecutionKind::GeneralLowered,
-            "WB-2B-M2: list pattern program must classify as GeneralLowered"
+            "list pattern program must classify as GeneralLowered"
         );
 
         let output = execute_runtime_module_with_stdin(&module, Some(String::new()))
-            .expect("WB-2B-M2: list pattern must execute");
+            .expect("list pattern must execute");
         assert_eq!(
             output.as_deref(),
             Some("alpha\n"),
-            "WB-2B-M2: head_or_none [alpha,beta,gamma] → alpha"
+            "head_or_none [alpha,beta,gamma] should produce alpha"
         );
     }
 
     #[test]
     fn wb2b_m6_each_with_stdlib_executes() {
-        // WB-2B-M6: stdlib `each` classifies as GeneralLowered and executes correctly.
+        // stdlib `each` classifies as GeneralLowered and executes correctly.
         // `each xs f` calls `f x` via IndirectCall for each element.
         use goby_core::parse_module;
         let module = parse_module(
@@ -1168,17 +1164,17 @@ main =
         .expect("parse should work");
 
         let output = execute_runtime_module_with_stdin(&module, Some(String::new()))
-            .expect("WB-2B-M6: each with stdlib must execute");
+            .expect("each with stdlib must execute");
         assert_eq!(
             output.as_deref(),
             Some("alpha\nbeta\ngamma\n"),
-            "WB-2B-M6: each xs print_item → alpha, beta, gamma"
+            "each xs print_item should produce alpha, beta, gamma"
         );
     }
 
     #[test]
     fn wb2b_m6_map_with_stdlib_classifies_as_general_lowered() {
-        // WB-2B-M6: stdlib `map` classifies as GeneralLowered.
+        // stdlib `map` classifies as GeneralLowered.
         use goby_core::parse_module;
         let module = parse_module(
             r#"
@@ -1198,11 +1194,11 @@ main =
         .expect("parse should work");
 
         let output = execute_runtime_module_with_stdin(&module, Some(String::new()))
-            .expect("WB-2B-M6: map with stdlib must execute");
+            .expect("map with stdlib must execute");
         assert_eq!(
             output.as_deref(),
             Some("[a]\n[b]\n"),
-            "WB-2B-M6: map xs wrap → [a], [b]"
+            "map xs wrap should produce [a], [b]"
         );
     }
 
@@ -1331,11 +1327,11 @@ main =
             &module,
             Some("line0\nline1\nline2\nline3".to_string()),
         )
-        .expect("WB-3-M7 exact shape must execute");
+        .expect("split-map-graphemes exact shape must execute");
         assert_eq!(
             output.as_deref(),
             Some("l\ni\nn\ne\n2\n"),
-            "WB-3-M7 exact shape should print each grapheme of line2"
+            "split-map-graphemes exact shape should print each grapheme of line2"
         );
     }
 
@@ -1363,11 +1359,11 @@ main =
             &module,
             Some("line0\nline1\nline2\nline3".to_string()),
         )
-        .expect("WB-3-M7 alias-chain variant must execute");
+        .expect("split-map-graphemes alias-chain variant must execute");
         assert_eq!(
             output.as_deref(),
             Some("l\ni\nn\ne\n2\n"),
-            "WB-3-M7 alias-chain variant should print each grapheme of line2"
+            "split-map-graphemes alias-chain variant should print each grapheme of line2"
         );
     }
 
@@ -1394,17 +1390,17 @@ main =
             &module,
             Some("line0\nline1\nline2\nline3".to_string()),
         )
-        .expect("WB-3-M7 canonical-qualified variant must execute");
+        .expect("split-map-graphemes canonical-qualified variant must execute");
         assert_eq!(
             output.as_deref(),
             Some("l\ni\nn\ne\n2\n"),
-            "WB-3-M7 canonical-qualified variant should print each grapheme of line2"
+            "split-map-graphemes canonical-qualified variant should print each grapheme of line2"
         );
     }
 
     #[test]
     fn wb2b_empty_list_pattern_without_list_pattern_arm() {
-        // WB-2B: EmptyList-only case (no ListPattern arm) must not fail with "helper state" error.
+        // EmptyList-only case (no ListPattern arm) must not fail with "helper state" error.
         // Regression test: before the fix, `needs_helper_state` did not cover EmptyList,
         // so a function with only an EmptyList arm and no Intrinsic/ListLit would fail at emit time.
         use goby_core::parse_module;
@@ -1425,17 +1421,21 @@ main =
         .expect("parse should work");
 
         let output = execute_runtime_module_with_stdin(&module, Some(String::new()))
-            .expect("WB-2B: empty-list-only case must execute");
-        assert_eq!(output.as_deref(), Some("yes\n"), "WB-2B: is_empty [] → yes");
+            .expect("empty-list-only case must execute");
+        assert_eq!(
+            output.as_deref(),
+            Some("yes\n"),
+            "is_empty [] should produce yes"
+        );
     }
 
     // ------------------------------------------------------------------
-    // WB-2A-M3 / WB-2B-M6: higher-order calls and stdlib each/map
+    // higher-order calls and stdlib each/map
     // ------------------------------------------------------------------
 
     #[test]
     fn wb2a_m3_simple_higher_order_call_executes() {
-        // WB-2A-M3: apply f arg where f is a function parameter (runtime funcref call).
+        // apply f arg where f is a function parameter (runtime funcref call).
         // `greet` returns an interpolated string; `apply_greet` passes it as a funcref.
         use goby_core::parse_module;
         let module = parse_module(
@@ -1455,17 +1455,17 @@ main =
         .expect("parse should work");
 
         let output = execute_runtime_module_with_stdin(&module, Some(String::new()))
-            .expect("WB-2A-M3: higher-order call must execute");
+            .expect("higher-order call must execute");
         assert_eq!(
             output.as_deref(),
             Some("hello world\n"),
-            "WB-2A-M3: apply_greet greet → hello world"
+            "apply_greet greet should produce hello world"
         );
     }
 
     #[test]
     fn wb2b_list_pattern_empty_branch_executes() {
-        // WB-2B-M2: EmptyList branch taken when list has 0 elements.
+        // EmptyList branch taken when list has 0 elements.
         use goby_core::parse_module;
         let module = parse_module(
             r#"
@@ -1485,17 +1485,17 @@ main =
         .expect("parse should work");
 
         let output = execute_runtime_module_with_stdin(&module, Some(String::new()))
-            .expect("WB-2B-M2: empty list pattern must execute");
+            .expect("empty list pattern must execute");
         assert_eq!(
             output.as_deref(),
             Some("none\n"),
-            "WB-2B-M2: head_or_none [] → none"
+            "head_or_none [] should produce none"
         );
     }
 
     #[test]
     fn read_tuple_member_interpolated_string_general_lowered() {
-        // Track H H2: Read + tuple literal + `"${pair.0}"` interpolated string.
+        // Read + tuple literal + `"${pair.0}"` interpolated string.
         // Verifies that (a) the program routes to GeneralLowered, and (b) TupleGet
         // emits correct Wasm so pair.0 == 1 is printed.  The read() call forces
         // GeneralLowered routing (not a bare Print-only path).
@@ -1523,7 +1523,7 @@ main =
 
     /// Runtime dispatch for capturing callbacks in list.map is still incomplete.
     #[test]
-    #[ignore = "CC4: runtime dispatch for capturing list.map callbacks is not implemented yet"]
+    #[ignore = "runtime dispatch for capturing list.map callbacks is not implemented yet"]
     fn capturing_lambda_via_map_executes_correctly() {
         use goby_core::parse_module;
         let module = parse_module(

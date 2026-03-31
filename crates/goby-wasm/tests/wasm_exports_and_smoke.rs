@@ -569,8 +569,8 @@ main =
 
 #[test]
 fn compile_module_produces_wasm_for_transformed_split_callback() {
-    // Previously DynamicWasiIo (pre WB-3-M3).
-    // Now GeneralLowered: Lambda lowering handles `fn line -> println "${line}!"` (WB-3-M3).
+    // This shape used to miss the general-lowered path.
+    // It now classifies as GeneralLowered because lambda lowering handles `fn line -> println "${line}!"`.
     let module = parse_module(
         r#"
 import goby/list ( each )
@@ -590,7 +590,7 @@ main =
     assert_eq!(
         runtime_io_execution_kind(&module).expect("classification should work"),
         RuntimeIoExecutionKind::GeneralLowered,
-        "transformed split callback should now classify as GeneralLowered (WB-3-M3)"
+        "transformed split callback should now classify as GeneralLowered"
     );
     let wasm = compile_module(&module).expect("should compile to Wasm");
     assert_valid_wasm_module(&wasm);
@@ -640,7 +640,7 @@ main =
 
 #[test]
 fn runtime_io_execution_kind_reports_general_lowered_for_interp_read_transform() {
-    // WB-1: Interp lowering is now supported via StringConcat.
+    // Interp lowering is now supported via StringConcat.
     let module = parse_module(
         r#"
 main : Unit -> Unit can Print, Read
@@ -875,12 +875,9 @@ main =
     );
 }
 
-// ─── WB-3-M3: Lambda lowering tests ───────────────────────────────────────────
+// ─── Lambda Lowering Tests ────────────────────────────────────────────────────
 
-/// WB-3-M3: `map [1,2,3] (fn x -> x + 1)` classifies as GeneralLowered and compiles.
-///
-/// Done-when criterion from PLAN_IR.md WB-3-M3:
-/// "a lambda expression passed to map classifies as GeneralLowered"
+/// `map [1,2,3] (fn x -> x + 1)` classifies as GeneralLowered and compiles.
 #[test]
 fn wb3_m3_map_with_lambda_classifies_as_general_lowered() {
     let source = r#"
@@ -897,13 +894,13 @@ main =
     assert_eq!(
         runtime_io_execution_kind(&module).expect("classification should succeed"),
         RuntimeIoExecutionKind::GeneralLowered,
-        "map with lambda should classify as GeneralLowered (WB-3-M3)"
+        "map with lambda should classify as GeneralLowered"
     );
     let wasm = compile_module(&module).expect("map with lambda should compile to Wasm");
     assert_valid_wasm_module(&wasm);
 }
 
-/// WB-3-M3: two lambdas in the same program both get unique AuxDecl entries.
+/// Two lambdas in the same program both get unique AuxDecl entries.
 #[test]
 fn wb3_m3_two_lambdas_in_same_program_compile() {
     let source = r#"
@@ -921,13 +918,13 @@ main =
     assert_eq!(
         runtime_io_execution_kind(&module).expect("classification should succeed"),
         RuntimeIoExecutionKind::GeneralLowered,
-        "program with two lambdas should classify as GeneralLowered (WB-3-M3)"
+        "program with two lambdas should classify as GeneralLowered"
     );
     let wasm = compile_module(&module).expect("two-lambda program should compile to Wasm");
     assert_valid_wasm_module(&wasm);
 }
 
-/// WB-3-M3: lambda with Print effect in body (`each lines (fn line -> println line)`).
+/// Lambda with Print effect in body (`each lines (fn line -> println line)`).
 #[test]
 fn wb3_m3_each_with_lambda_body_having_effect_executes_correctly() {
     let source = r#"
@@ -943,7 +940,7 @@ main =
     assert_eq!(
         runtime_io_execution_kind(&module).expect("classification should succeed"),
         RuntimeIoExecutionKind::GeneralLowered,
-        "each with lambda effect body should classify as GeneralLowered (WB-3-M3)"
+        "each with lambda effect body should classify as GeneralLowered"
     );
     let output = execute_runtime_module_with_stdin(&module, Some("hello".to_string()))
         .expect("execution should not error")
@@ -951,13 +948,11 @@ main =
     assert_eq!(output, "hello\n");
 }
 
-/// WB-3-M3: lambda body referencing a free variable falls back to InterpreterBridge.
+/// A lambda body referencing a free variable now stays on the general-lowered path.
 ///
 /// `base` is defined in the enclosing scope but is not the lambda param (`x`),
-/// CC3-Step2: ByValue-captured lambda now lowers successfully, so this program
-/// classifies as GeneralLowered. The ListMap call dispatch is still arity-1
-/// (IndirectCallClosure not yet done), so execution would give wrong results,
-/// but classification now succeeds.
+/// so this program exercises ByValue capture classification. Runtime dispatch for
+/// capturing list callbacks is still incomplete, but classification now succeeds.
 #[test]
 fn wb3_m3_lambda_with_by_value_capture_classifies_as_general_lowered() {
     let source = r#"
@@ -976,19 +971,19 @@ main =
     assert_eq!(
         kind,
         RuntimeIoExecutionKind::GeneralLowered,
-        "ByValue-capturing lambda should now classify as GeneralLowered after CC3-Step2"
+        "ByValue-capturing lambda should classify as GeneralLowered"
     );
 }
 
 // ---------------------------------------------------------------------------
-// WB-3-M4: graphemes GeneralLowered end-to-end
+// Graphemes GeneralLowered End-to-End
 // ---------------------------------------------------------------------------
 
 #[test]
 fn wb3_m4_graphemes_each_classifies_as_general_lowered() {
     // Uses `parts = graphemes text; each parts println` to get a List String and iterate it.
     // Avoids the fused graphemes-get-print (index-access) pattern.
-    // Requires StringGraphemesList intrinsic to lower the graphemes call (WB-3-M4).
+    // Requires StringGraphemesList intrinsic to lower the graphemes call.
     let source = r#"
 import goby/string ( graphemes )
 import goby/list ( each )
@@ -1003,7 +998,7 @@ main =
     assert_eq!(
         runtime_io_execution_kind(&module).expect("classification should succeed"),
         RuntimeIoExecutionKind::GeneralLowered,
-        "graphemes + each should classify as GeneralLowered end-to-end (WB-3-M4)"
+        "graphemes + each should classify as GeneralLowered end-to-end"
     );
 }
 
@@ -1034,7 +1029,7 @@ main =
     assert_eq!(output, "a\n👨\u{200d}👩\u{200d}👧\u{200d}👦\nb\n");
 }
 
-/// WB-3-M7: Full WB-1 through WB-3 stack integration test.
+/// Full split-map-graphemes integration test.
 /// `map lines graphemes` requires passing `graphemes` as a function value to `map`.
 /// The list index in `each (rolls[2]) println` is now normalized through shared-IR ANF.
 #[test]
@@ -1068,7 +1063,7 @@ main =
     assert_eq!(output, "l\ni\nn\ne\n2\n");
 }
 
-// C4-S4: stdlib split behavior hardening tests.
+// stdlib split behavior hardening tests.
 // Each test asserts GeneralLowered classification first, then verifies runtime output.
 // Output format: `each parts println` prints one element per line with trailing `\n`.
 
@@ -1287,7 +1282,7 @@ main =
 }
 
 // ---------------------------------------------------------------------------
-// Closure capture acceptance programs (failing until CC4 lands)
+// Closure capture acceptance programs (failing until higher-order closure support lands)
 //
 // These tests correspond to the five acceptance programs in
 // doc/PLAN_CLOSURE_CAPTURE.md §3.  Each one exercises a distinct closure
@@ -1295,13 +1290,13 @@ main =
 // assert that compilation fails with a recognisable "closure capture" error
 // rather than silently producing wrong code.
 //
-// When Track CC reaches CC4, these tests should be updated to assert that
+// When higher-order closure support is implemented, these tests should be updated to assert that
 // compilation *succeeds* and execution produces the expected output.
 // ---------------------------------------------------------------------------
 
 /// Closure that reads an immutable outer binding (`base`) must not fully execute
-/// on the current Wasm path. CC3-Step2 lowers the lambda; indirect closure call
-/// dispatch (CC3-Step4 IndirectCallClosure) is needed for correct execution.
+/// on the current Wasm path. The lambda itself lowers; indirect closure call
+/// dispatch is still needed for correct execution.
 /// The program fails at IR lowering level (no IR decl), at lowering, or at call dispatch.
 #[test]
 fn read_only_immutable_capture_does_not_compile_on_wasm_path() {
@@ -1318,7 +1313,7 @@ main =
 "#;
     let module = parse_module(source).expect("source should parse");
     // The program currently fails at IR lowering (no IR decl) or Wasm lowering.
-    // Either error is acceptable until CC3-Step4 (IndirectCallClosure) is complete.
+    // Either error is acceptable until indirect closure call dispatch is complete.
     let err = compile_module(&module).expect_err(
         "capturing lambda program should not compile correctly on the current Wasm path",
     );
@@ -1392,8 +1387,8 @@ main =
 }
 
 /// Inline capturing lambda passed to `fold` must not fully compile/execute on the
-/// current Wasm path. CC3-Step2 lowers ByValue captures; mutable-write captures
-/// and indirect closure call dispatch remain unsupported until CC3-Step4 / CC4.
+/// current Wasm path. ByValue captures lower; mutable-write captures
+/// and indirect closure call dispatch remain unsupported.
 #[test]
 fn inline_capturing_lambda_to_fold_does_not_compile_on_wasm_path() {
     let source = r#"
@@ -1459,10 +1454,10 @@ main =
 }
 
 // ---------------------------------------------------------------------------
-// CC3 acceptance tests: ByValue closure capture + direct call dispatch
+// ByValue closure capture + direct call dispatch
 // ---------------------------------------------------------------------------
 
-/// CC3-Step5: Inline capturing lambda with ByValue capture executes correctly.
+/// Inline capturing lambda with ByValue capture executes correctly.
 /// `base = 10; add = fn x -> base + x; result = add 5; println "${result}"`
 /// should print "15\n".
 #[test]
@@ -1489,7 +1484,7 @@ main =
     );
 }
 
-/// CC3-Step5: Capturing lambda with string interpolation executes correctly.
+/// Capturing lambda with string interpolation executes correctly.
 /// The lambda captures `prefix` (a string) ByValue.
 #[test]
 fn cc3_string_capture_executes_correctly() {

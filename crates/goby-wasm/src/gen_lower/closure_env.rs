@@ -1,8 +1,9 @@
-//! Closure-environment helper layer for the general Wasm lowering path (CC2).
+//! Closure-environment helper layer for the general Wasm lowering path.
 //!
 //! `ClosureEnvHelper` bridges `CallableEnv` (the capture-analysis result from `goby-core`)
-//! and the backend IR instructions introduced in CC2.  It produces `Vec<WasmBackendInstr>`
-//! sequences for loading and storing closure slots, so the lowering pass (CC3) does not
+//! and the backend IR instructions introduced for closure environments. It produces
+//! `Vec<WasmBackendInstr>` sequences for loading and storing closure slots, so the
+//! lowering pass does not
 //! need to open-code slot interpretation repeatedly.
 //!
 //! # Design
@@ -43,7 +44,10 @@ impl ClosureEnvHelper {
             closure_local: closure_local.to_string(),
             slot_index,
         }];
-        if matches!(slot.slot_kind, CallableEnvSlotKind::SharedMutableCell { .. }) {
+        if matches!(
+            slot.slot_kind,
+            CallableEnvSlotKind::SharedMutableCell { .. }
+        ) {
             instrs.push(WasmBackendInstr::LoadCellValue);
         }
         Some(instrs)
@@ -62,7 +66,10 @@ impl ClosureEnvHelper {
     ) -> Option<Vec<WasmBackendInstr>> {
         let slot_index = self.env.slot_index_of(slot_name)?;
         let slot = &self.env.slots[slot_index];
-        if !matches!(slot.slot_kind, CallableEnvSlotKind::SharedMutableCell { .. }) {
+        if !matches!(
+            slot.slot_kind,
+            CallableEnvSlotKind::SharedMutableCell { .. }
+        ) {
             return None;
         }
         Some(vec![WasmBackendInstr::StoreCellValue {

@@ -29,7 +29,7 @@ pub(crate) fn best_available_name_use_span(expr: &Expr) -> Option<Span> {
 
 /// Return the best currently-available expression span without inventing locations.
 ///
-/// For ER1 this remains a thin wrapper over the direct-node span plus call-head fallback.
+/// This remains a thin wrapper over the direct-node span plus call-head fallback.
 /// Broader statement-level fallbacks should stay with the caller so future work can decide
 /// explicitly when a whole-statement highlight is preferable to `span: None`.
 pub(crate) fn best_available_expr_span(expr: &Expr) -> Option<Span> {

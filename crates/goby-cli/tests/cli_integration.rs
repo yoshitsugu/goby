@@ -1151,7 +1151,7 @@ fn check_command_rejects_legacy_syntax_even_with_legacy_env_var() {
     );
 }
 
-// --- Golden fixture tests (D1d-3) ---
+// --- Golden fixture tests ---
 //
 // These tests run `goby check` on a fixed repo-relative source file and compare
 // stderr byte-for-byte against the expected fixture. The file paths in the fixture

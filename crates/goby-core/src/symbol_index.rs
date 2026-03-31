@@ -2,7 +2,7 @@
 //!
 //! Built from a typechecked (or parsed) `Module`, this index maps identifier names to their
 //! source spans and type information.  It covers only top-level declarations and effect
-//! operation members; local bindings are deferred to D3b.
+//! operation members; local bindings are deferred.
 
 use std::collections::HashMap;
 

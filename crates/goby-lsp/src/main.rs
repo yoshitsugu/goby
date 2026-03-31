@@ -18,7 +18,7 @@
 //!   - source_path is not passed to the typechecker; stdlib-relative imports from
 //!     user source are not resolved.
 //!   - No re-analysis debounce; analysis runs synchronously on every didChange.
-//!     TODO(D2a-debounce): add 200ms idle debounce.
+//!     TODO: add 200ms idle debounce.
 //!   - When GOBY_STDLIB_ROOT is not set and the bundled stdlib path is unavailable,
 //!     all diagnostics are replaced by a single "stdlib root not found" error; parse
 //!     errors are not reported in that state. Set GOBY_STDLIB_ROOT to restore
@@ -379,7 +379,7 @@ fn send_diagnostics(connection: &Connection, uri: Uri, diagnostics: Vec<lsp_type
 
 /// Analyze `source` and return LSP diagnostics.
 ///
-/// All per-declaration typecheck errors are collected and returned (D2b).
+/// All per-declaration typecheck errors are collected and returned.
 /// `source_path` is passed as `None` to the typechecker.
 ///
 /// If `stdlib_root` is `None` (stdlib not found), a synthetic diagnostic is
@@ -422,7 +422,7 @@ fn analyze(source: &str, stdlib_root: Option<&Path>) -> Vec<lsp_types::Diagnosti
 
 /// Convert a `goby_core::Diagnostic` to an `lsp_types::Diagnostic`.
 ///
-/// Note: TypecheckError diagnostics with `col = 1` (the "unknown position" sentinel from D1c)
+/// Note: TypecheckError diagnostics with `col = 1` (the "unknown position" sentinel)
 /// produce `character: 0` in the LSP range — the column is approximate, not exact.
 /// This is a known limitation documented in `goby-core/src/diagnostic.rs`.
 fn to_lsp_diagnostic(source: &str, diag: &goby_core::Diagnostic) -> lsp_types::Diagnostic {
@@ -439,7 +439,7 @@ fn to_lsp_diagnostic(source: &str, diag: &goby_core::Diagnostic) -> lsp_types::D
 /// (0-indexed, UTF-16 code-unit columns).
 ///
 /// When `span` is `None`, returns `Range { start: 0:0, end: 0:0 }`.
-// TODO(D2b): move to a shared goby-lsp-util module if the LSP server grows.
+// TODO: move to a shared goby-lsp-util module if the LSP server grows.
 fn span_to_lsp_range(source: &str, span: Option<&goby_core::Span>) -> Range {
     let Some(span) = span else {
         return Range {

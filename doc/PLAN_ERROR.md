@@ -16,6 +16,12 @@ The shared architectural rule remains:
 - `goby-cli` and `goby-lsp` render the shared `Diagnostic` payload,
 - frontends must not guess spans by reinterpreting Goby semantics.
 
+Plan-label hygiene:
+
+- labels in this document such as track names or roadmap shorthand are planning-only metadata
+- do not copy those labels into code comments, test names, diagnostics, or user-visible strings
+- when implementation notes need context, describe the technical purpose directly
+
 ---
 
 ## 1. Shared Design Rules

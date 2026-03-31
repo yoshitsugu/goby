@@ -1521,9 +1521,8 @@ fn emit_instrs(
             }
 
             // -------------------------------------------------------------------
-            // CC2: Closure record and mutable cell instructions
+            // Closure record and mutable cell instructions
             // -------------------------------------------------------------------
-
             WasmBackendInstr::CreateClosure {
                 func_handle_instrs,
                 slot_instrs,
@@ -1600,16 +1599,14 @@ fn emit_instrs(
                 function.instruction(&Instruction::LocalGet(slot));
                 function.instruction(&Instruction::I32WrapI64);
                 let byte_offset = 8i32
-                    .checked_add(
-                        8i32.checked_mul(*slot_index as i32).ok_or_else(|| {
-                            CodegenError {
-                                message: format!(
-                                    "gen_lower/emit: LoadClosureSlot index {} overflows",
-                                    slot_index
-                                ),
-                            }
-                        })?,
-                    )
+                    .checked_add(8i32.checked_mul(*slot_index as i32).ok_or_else(|| {
+                        CodegenError {
+                            message: format!(
+                                "gen_lower/emit: LoadClosureSlot index {} overflows",
+                                slot_index
+                            ),
+                        }
+                    })?)
                     .ok_or_else(|| CodegenError {
                         message: format!(
                             "gen_lower/emit: LoadClosureSlot index {} overflows byte offset",
@@ -1628,8 +1625,8 @@ fn emit_instrs(
             WasmBackendInstr::AllocMutableCell { init_instrs } => {
                 // Allocate 8 bytes, store init value at offset 0, push TAG_CELL-tagged ptr.
                 //
-                // CC2 Safety note: same HS_AUX_PTR clobber risk as CreateClosure if
-                // init_instrs contains a nested heap allocation.  CC3 must ensure
+                // Safety note: same HS_AUX_PTR clobber risk as CreateClosure if
+                // init_instrs contains a nested heap allocation. The lowering pass must ensure
                 // init_instrs does not allocate; typically init_instrs is a single
                 // I64Const or LoadLocal, never a heap-allocating sequence.
                 let hs = require_helper_state(helper_state, "AllocMutableCell")?;
@@ -2566,9 +2563,9 @@ fn emit_effect_op(
     strategy: EffectEmitStrategy,
 ) -> Result<(), CodegenError> {
     match strategy {
-        // WB-3B is specified as an emit-layer swap only. Until the toolchain can
+        // The future stack-switching path is specified as an emit-layer swap only. Until the toolchain can
         // encode WasmFX suspend/resume instructions, the experimental path keeps
-        // byte-for-byte parity with the shipped WB-3A direct-call emitter.
+        // byte-for-byte parity with the shipped direct-call emitter.
         EffectEmitStrategy::Wb3DirectCall | EffectEmitStrategy::Wb3BWasmFxExperimental => {
             emit_effect_op_wb3_direct(
                 function,
@@ -4373,7 +4370,7 @@ mod tests {
         assert_valid_wasm(&wasm);
     }
 
-    // --- WB-1 Step 2: BinOp emission ---
+    // --- BinOp emission ---
 
     #[test]
     fn emit_binop_add_produces_valid_wasm() {

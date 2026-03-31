@@ -10,8 +10,8 @@
 //!
 //! # Effect nodes
 //! `PerformEffect`, `Handle`, `WithHandler`, and `Resume` represent the effect
-//! boundary. As of G4, `With`/`Handler`/`Resume` from the AST lower into these
-//! nodes. Full `PerformEffect` lowering from qualified calls is deferred to G5.
+//! boundary. `With`/`Handler`/`Resume` from the AST lower into these
+//! nodes. Full `PerformEffect` lowering from qualified calls is still deferred.
 
 /// A type annotation carried by IR nodes.
 ///
@@ -144,9 +144,9 @@ pub enum CompExpr {
     },
     /// Effect operation invocation.
     ///
-    /// As of G4, this node is constructable and printable. Lowering from
+    /// This node is constructable and printable. Lowering from
     /// qualified AST calls (e.g. `Read.read()`) into `PerformEffect` requires
-    /// an effect-table lookup and is deferred to G5.
+    /// an effect-table lookup is still deferred.
     PerformEffect {
         effect: String,
         op: String,
@@ -641,7 +641,7 @@ impl std::error::Error for IrValidateError {}
 /// - Each `IrHandlerClause` body is recursively validated.
 /// - `WithHandler` handler and body are recursively validated.
 ///
-/// Undefined-variable-reference checking is deferred to G5+.
+/// Undefined-variable-reference checking is deferred.
 pub fn validate_ir(module: &IrModule) -> Result<(), IrValidateError> {
     for decl in &module.decls {
         validate_comp(&decl.body, &decl.name)?;

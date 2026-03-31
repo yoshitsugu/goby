@@ -1569,7 +1569,7 @@ else
         }
     }
 
-    // --- D1a-ii span population tests ---
+    // --- Span population tests ---
 
     #[test]
     fn handler_clause_span_points_to_clause_line() {

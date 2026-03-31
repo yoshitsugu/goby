@@ -2603,7 +2603,7 @@ f =
 
     #[test]
     fn unknown_selective_symbol_diagnostic_underlines_symbol() {
-        // ER4 spec: import goby/list ( each, maap ) should underline `maap`
+        // import goby/list ( each, maap ) should underline `maap`
         // "import goby/list ( each, maap )"
         //  1234567890123456789012345678901
         // "goby/list" → col 8, "each" → col 20..23, "maap" → col 26..29

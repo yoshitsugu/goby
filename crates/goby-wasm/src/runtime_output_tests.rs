@@ -1153,10 +1153,10 @@ fn locks_runtime_output_for_iterator_gb() {
     assert_eq!(output, "tick:atick:btick:c");
 }
 
-// ── HOF-M5 parity tests: fn-form callbacks ───────────────────────────────────
+// ── Fn-form callback parity tests ────────────────────────────────────────────
 // These tests confirm that `fn a -> expr` and `fn a b -> expr` callbacks lower
 // through the same callable model as `fn x -> expr` (single-param) lambdas.
-// The desugaring happens at parse time (HOF-M4); no new runtime branch is added.
+// The desugaring happens at parse time; no new runtime branch is added.
 
 #[test]
 fn resolves_runtime_output_for_map_with_fn_lambda_callback() {

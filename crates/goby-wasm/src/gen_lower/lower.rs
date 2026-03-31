@@ -322,7 +322,7 @@ fn lower_comp_inner(
                 && name == "graphemes"
                 && args.len() == 1
             {
-                // stdlib string.graphemes: lower as StringGraphemesList host intrinsic (WB-3-M4).
+                // stdlib string.graphemes: lower as StringGraphemesList host intrinsic.
                 // Returns a tagged List String containing all Unicode Extended Grapheme Clusters.
                 let mut instrs = lower_comp_inner(
                     &CompExpr::Value(args[0].clone()),
@@ -336,7 +336,7 @@ fn lower_comp_inner(
                 });
                 Ok(instrs)
             } else if let goby_core::ir::ValueExpr::GlobalRef { name, .. } = callee.as_ref() {
-                // Top-level user declaration call via GlobalRef (WB-2A).
+                // Top-level user declaration call via GlobalRef.
                 let mut instrs = Vec::new();
                 for arg in args {
                     instrs.extend(lower_value_as_arg(
@@ -353,7 +353,7 @@ fn lower_comp_inner(
                 Ok(instrs)
             } else if let goby_core::ir::ValueExpr::Var(name) = callee.as_ref() {
                 if known_decls.contains(name.as_str()) {
-                    // Direct call to a known top-level declaration (WB-2A).
+                    // Direct call to a known top-level declaration.
                     let mut instrs = Vec::new();
                     for arg in args {
                         instrs.extend(lower_value_as_arg(
@@ -413,7 +413,7 @@ fn lower_comp_inner(
                     && args.len() == 1
                 {
                     // Var resolves to string.graphemes (bare name or alias via `import goby/string (graphemes)`).
-                    // Lower as StringGraphemesList host intrinsic (WB-3-M4).
+                    // Lower as StringGraphemesList host intrinsic.
                     let mut instrs = lower_comp_inner(
                         &CompExpr::Value(args[0].clone()),
                         aliases,
@@ -444,7 +444,7 @@ fn lower_comp_inner(
                     });
                     Ok(instrs)
                 } else {
-                    // Runtime function-value call via `call_indirect` (WB-2A-M3 / FOLD-M3a).
+                    // Runtime function-value call via `call_indirect`.
                     // `name` is a local variable holding a TAG_FUNC tagged i64 handle.
                     // Stack order: push args left-to-right, then push callee, then IndirectCall.
                     // The arity is derived from the number of args in the flat IR call.
@@ -735,7 +735,9 @@ pub(crate) fn lower_value(v: &ValueExpr) -> Result<Vec<WasmBackendInstr>, LowerE
             // they are only valid as direct callees. Reject when used as a value.
             if backend_effect_op(module, name).is_some() {
                 return Err(LowerError::UnsupportedForm {
-                    node: format!("GlobalRef '{module}.{name}' used as a value (effect ops are not first-class Wasm values)"),
+                    node: format!(
+                        "GlobalRef '{module}.{name}' used as a value (effect ops are not first-class Wasm values)"
+                    ),
                 });
             }
             Ok(vec![WasmBackendInstr::LoadLocal {
@@ -808,7 +810,7 @@ pub(crate) fn lower_value(v: &ValueExpr) -> Result<Vec<WasmBackendInstr>, LowerE
 /// - `Lambda { param, body }` where body has no free variables beyond `param` →
 ///   the body is lifted as a `LambdaAuxDecl` and a `PushFuncHandle` is returned.
 ///   If the body references free variables (captures from enclosing scope), returns
-///   `UnsupportedForm` (closure lifting is not supported in WB-3A).
+///   `UnsupportedForm` on paths that do not support closure lifting.
 ///
 /// All other cases delegate to `lower_value`.
 fn lower_value_as_arg(
@@ -880,7 +882,7 @@ fn lower_value_as_arg(
 /// Lifts the body as a `LambdaAuxDecl` with `param_names: [param]` and emits
 /// `PushFuncHandle { decl_name }`.
 ///
-/// # Capturing case (ByValue-only, CC3)
+/// # Capturing case (ByValue-only)
 /// Lifts the body as a `LambdaAuxDecl` with `param_names: ["__clo", param]`.
 /// The body preamble declares a local for each captured name, loads it from the
 /// closure record (`LoadClosureSlot`), and stores it so the rest of the body can
@@ -900,8 +902,13 @@ fn lower_lambda(
         // Zero-capture: lift as-is with the single lambda param.
         let mut body_bindings = bindings.clone();
         body_bindings.bind_outer_immutable(param.to_string());
-        let body_instrs =
-            lower_comp_inner(body, &HashMap::new(), &body_bindings, known_decls, lambda_decls)?;
+        let body_instrs = lower_comp_inner(
+            body,
+            &HashMap::new(),
+            &body_bindings,
+            known_decls,
+            lambda_decls,
+        )?;
         let n = LAMBDA_COUNTER.fetch_add(1, AtomicOrdering::Relaxed);
         let decl_name = format!("__lambda_{n}");
         lambda_decls.push(LambdaAuxDecl {
@@ -913,12 +920,15 @@ fn lower_lambda(
         return Ok(vec![WasmBackendInstr::PushFuncHandle { decl_name }]);
     }
 
-    // Reject any mutable-write captures (CC4 will handle these).
+    // Reject mutable-write captures until shared-cell lowering is implemented.
     for slot in &callable_env.slots {
-        if matches!(slot.slot_kind, CallableEnvSlotKind::SharedMutableCell { .. }) {
+        if matches!(
+            slot.slot_kind,
+            CallableEnvSlotKind::SharedMutableCell { .. }
+        ) {
             return Err(LowerError::UnsupportedForm {
                 node: format!(
-                    "Lambda with mutable-write capture is not yet supported (CC4): \
+                    "Lambda with mutable-write capture is not yet supported: \
                      param={param}, captures={}",
                     format_callable_env(&callable_env)
                 ),
@@ -950,8 +960,13 @@ fn lower_lambda(
         body_bindings.bind_outer_immutable(slot.name.clone());
     }
     body_bindings.bind_outer_immutable(param.to_string());
-    let body_instrs =
-        lower_comp_inner(body, &HashMap::new(), &body_bindings, known_decls, lambda_decls)?;
+    let body_instrs = lower_comp_inner(
+        body,
+        &HashMap::new(),
+        &body_bindings,
+        known_decls,
+        lambda_decls,
+    )?;
 
     let n = LAMBDA_COUNTER.fetch_add(1, AtomicOrdering::Relaxed);
     let decl_name = format!("__lambda_{n}");
@@ -1008,7 +1023,10 @@ fn format_callable_env(callable_env: &CallableEnv) -> String {
 enum AliasValue {
     Var(String),
     Str(String),
-    GlobalRef { module: String, name: String },
+    GlobalRef {
+        module: String,
+        name: String,
+    },
     /// The local holds a TAG_CLOSURE value (capturing lambda).
     /// Used by the Var-callee branch to emit IndirectCallClosure instead of IndirectCall.
     CapturingClosure,
@@ -1545,7 +1563,7 @@ mod tests {
         );
     }
 
-    // --- WB-1 Step 2: BinOp lowering ---
+    // --- BinOp lowering ---
 
     #[test]
     fn lower_binop_add_emits_left_right_binop() {
@@ -1589,7 +1607,7 @@ mod tests {
         );
     }
 
-    // --- WB-1 Step 1: LetMut / Assign ---
+    // --- LetMut / Assign ---
 
     #[test]
     fn lower_let_mut_emits_declare_store_body() {
@@ -1694,7 +1712,7 @@ mod tests {
 
     #[test]
     fn lower_globalref_decl_call_emits_decl_call() {
-        // WB-2A Step 1: Call with a GlobalRef callee that is not an effect or intrinsic
+        // Call with a GlobalRef callee that is not an effect or intrinsic
         // must emit DeclCall, not UnsupportedForm.
         let comp = CompExpr::Call {
             callee: Box::new(ValueExpr::GlobalRef {
@@ -1715,7 +1733,7 @@ mod tests {
 
     #[test]
     fn lower_var_callee_not_in_known_decls_emits_indirect_call() {
-        // WB-2A-M3: Var(name) callee not in known_decls → IndirectCall (runtime funcref call).
+        // Var(name) callee not in known_decls → IndirectCall (runtime funcref call).
         // lower_comp uses empty known_decls, so "f" is treated as a runtime function value.
         let comp = CompExpr::Call {
             callee: Box::new(ValueExpr::Var("f".to_string())),
@@ -1742,7 +1760,7 @@ mod tests {
 
     #[test]
     fn lower_var_callee_in_known_decls_emits_decl_call() {
-        // WB-2A: Var(name) where name ∈ known_decls → DeclCall (direct call).
+        // Var(name) where name ∈ known_decls → DeclCall (direct call).
         use std::collections::HashSet;
         let comp = CompExpr::Call {
             callee: Box::new(ValueExpr::Var("helper".to_string())),
@@ -1767,7 +1785,7 @@ mod tests {
 
     #[test]
     fn lower_var_arg_in_known_decls_emits_push_func_handle() {
-        // WB-2A-M3: When a Var(name) appears as an argument and name ∈ known_decls,
+        // When a Var(name) appears as an argument and name ∈ known_decls,
         // it should be lowered as PushFuncHandle (not LoadLocal).
         use std::collections::HashSet;
         // f is NOT in known_decls (it's a runtime funcref); add_one IS in known_decls.
@@ -1809,7 +1827,7 @@ mod tests {
     }
 
     // ------------------------------------------------------------------
-    // WB-2B: Case lowering tests
+    // Case lowering tests
     // ------------------------------------------------------------------
 
     #[test]
@@ -2136,7 +2154,7 @@ mod tests {
         );
     }
 
-    // WB-3-M3: Lambda lowering tests
+    // Lambda lowering tests
 
     /// Lambda with param-only body passed to list.map should lower to
     /// PushFuncHandle + ListMap (not UnsupportedForm).
@@ -2198,7 +2216,7 @@ mod tests {
         }
     }
 
-    /// Lambda with a ByValue-captured free variable should now lower successfully (CC3-Step2).
+    /// Lambda with a ByValue-captured free variable should now lower successfully.
     /// The lowering produces a CreateClosure instruction; MutableWrite captures remain
     /// UnsupportedForm.
     #[test]
@@ -2230,7 +2248,7 @@ mod tests {
         let result = lower_comp_collecting_lambdas(&comp, &known_decls, &mut lambda_decls);
         assert!(
             result.is_ok(),
-            "Lambda with ByValue-captured free variable should lower successfully (CC3), got: {:?}",
+            "Lambda with ByValue-captured free variable should lower successfully, got: {:?}",
             result
         );
         // The lambda should be collected and its first param should be __clo.
@@ -2242,7 +2260,7 @@ mod tests {
         );
     }
 
-    /// CC3-Step4: let-bound capturing closure called directly emits IndirectCallClosure.
+    /// Let-bound capturing closure called directly emits `IndirectCallClosure`.
     /// `base = 10; add10 = (fn x -> base + x); add10 5` — add10 is a closure.
     #[test]
     fn lower_let_bound_capturing_lambda_call_emits_indirect_call_closure() {
@@ -2300,7 +2318,7 @@ mod tests {
         );
     }
 
-    /// `Call(GlobalRef { "string", "graphemes" }, [Var("text")])` → `Intrinsic { StringGraphemesList }` (WB-3-M4).
+    /// `Call(GlobalRef { "string", "graphemes" }, [Var("text")])` → `Intrinsic { StringGraphemesList }`.
     #[test]
     fn lower_string_graphemes_globalref_lowers_as_intrinsic() {
         let comp = CompExpr::Call {
@@ -2327,7 +2345,7 @@ mod tests {
         );
     }
 
-    /// `Var("graphemes")` resolving to `string.graphemes` via alias also lowers as intrinsic (WB-3-M4).
+    /// `Var("graphemes")` resolving to `string.graphemes` via alias also lowers as intrinsic.
     #[test]
     fn lower_string_graphemes_alias_var_lowers_as_intrinsic() {
         // Simulates: `import goby/string (graphemes)` → `graphemes` becomes a Var with GlobalRef alias.
