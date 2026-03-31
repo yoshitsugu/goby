@@ -1,17 +1,29 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-03-31
+Last updated: 2026-04-01
 
 ## Current Focus
 
-**Track CC / CC3** (next): Lowering and call dispatch.
-CC2 (runtime representation) is complete — closure-record layout, mutable-cell heap
-representation, `ClosureEnvHelper` load/store layer, and new backend IR instructions
-(`CreateClosure`, `LoadClosureSlot`, `AllocMutableCell`, `LoadCellValue`, `StoreCellValue`)
-with full emit support are all in.
+**Track CC / CC4** (next): Higher-order stdlib parity — make `each`, `map`, `fold`
+accept capturing closures.
+
+CC3 (lowering and call dispatch) is complete:
+- ByValue-capturing lambdas lower via `CreateClosure` + preamble locals
+- `IndirectCallClosure` dispatches direct closure calls with correct arity-2 signature
+- `instrs_load_local` recurses into `CreateClosure.slot_instrs` for alias detection
+- Effect-op GlobalRefs rejected as values in `lower_value`
+- Acceptance tests pass: `base=10; add=fn x→base+x; add 5` → 15
 
 ## Recently Completed
 
+- **Track CC / CC3** (2026-04-01): All CC3 milestones complete.
+  - `lower_lambda()` handles zero-capture (PushFuncHandle) and ByValue-capture (CreateClosure) paths
+  - Preamble locals pattern: `DeclareLocal + LoadClosureSlot + StoreLocal` per captured slot
+  - `LambdaAuxDecl.param_names` extended to `["__clo", param]` for capturing lambdas
+  - `HS_CLOSURE_BASE_PTR=13` protects closure ptr from HS_AUX_PTR clobber during slot emit
+  - `AliasValue::CapturingClosure` tracks let-bound closures for dispatch routing
+  - `IndirectCallClosure` backend IR + emit (Wasm call_indirect arity-2 with correct stack order)
+  - CC3 acceptance tests: inline ByValue capture and string interpolation capture both execute correctly
 - **Track CC / CC2** (2026-03-31): All CC2 milestones complete.
   - `TAG_CLOSURE = 0x8`, `TAG_CELL = 0x9` in `value.rs`; encode/decode helpers and orthogonality tests.
   - `CallableEnv::slot_index_of` and `MutableStorageId::new` in `goby-core`.
@@ -34,7 +46,7 @@ with full emit support are all in.
 
 Next track candidates are in `doc/PLAN.md` §4:
 
-- **Track CC: Closure Capture** (§4.6): CC2 complete. Next: CC3 — relax rejection gate, lower lambdas through one callable-environment model, rewrite captured mut reads/writes to cell ops.
+- **Track CC: Closure Capture** (§4.6): CC3 complete. Next: CC4 — make `each`, `map`, `fold` accept capturing closures; mutable-write captures (SharedMutableCell) lowering.
 - **Track D follow-ups** (§4.1): D5 (`goby lint` unused-binding rule), D6c shared grammar asset.
 - **Track WB-3B** (deferred): WasmFX typed continuations — on hold until WebAssembly stack switching reaches Phase 4.
 - **Float support** (§4.7): `Float` type backed by Wasm `f64`; semantics to be locked before coding.
@@ -55,12 +67,12 @@ Next track candidates are in `doc/PLAN.md` §4:
   - Backend effect dispatch (typed `BackendEffectOp` / `BackendPrintOp`)
   - stdlib `list.each` / `list.map` / `list.fold`
   - Effect handlers: `Handle` / `WithHandler` / tail `Resume` (one-shot tail-resumptive subset)
-  - Function values: `Lambda` (no-capture only); stdlib `graphemes` via wrapper AuxDecl
+  - Function values: `Lambda` (zero-capture via `PushFuncHandle`; ByValue-capture via `CreateClosure` + `IndirectCallClosure`); stdlib `graphemes` via wrapper AuxDecl
   - Host intrinsics: `StringGraphemesList` (`__goby_string_graphemes_list`)
 - Known limitations:
   - non-tail / multi-resume handlers → `BackendLimitation` error
-  - lambda with free variables (closure capture) still returns `UnsupportedForm` on the Wasm path, but the rejection now comes from shared callable-environment metadata rather than backend-local free-variable traversal
-  - inline capturing lambda passed to HOF callbacks (e.g. `fold (fn acc x -> acc + x + bias)`) → `UnsupportedForm` on Wasm path — Track CC (CC4) will implement
+  - capturing lambda passed to HOF callbacks via `list.each/map/fold` — Track CC4 will implement
+  - mutable-write captures (SharedMutableCell) remain `UnsupportedForm` — Track CC4
   - interpreter path: capturing lambdas work but use snapshot semantics for `mut` captures (not the spec's shared-cell model); will be corrected as part of Track CC
 
 ## Key Entry Points

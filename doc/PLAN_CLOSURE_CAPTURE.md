@@ -1,8 +1,8 @@
 # Goby Closure Capture Plan
 
-Last updated: 2026-03-31
+Last updated: 2026-04-01
 
-Status: CC0–CC2 complete; CC3 next
+Status: CC0–CC3 complete; CC4 next
 
 Related documents:
 
@@ -308,16 +308,16 @@ Done when:
 - zero-capture lambdas are represented as the empty-environment case of the same callable model, whether or not they use a runtime optimization
 - closure wrapper code and outer-function promoted-mut code both use the same environment/cell helper model
 
-### CC3. Lowering and call dispatch
+### CC3. Lowering and call dispatch (complete)
 
-- [ ] Relax the `comp_has_free_var` blanket rejection gate in `gen_lower/lower.rs` so that
+- [x] Relax the `comp_has_free_var` blanket rejection gate in `gen_lower/lower.rs` so that
   read-only immutable captures proceed to `CreateClosure` lowering, while mutable write
   captures remain rejected until shared-cell lowering is also in place.
-- [ ] Lower all lambdas through one callable-environment model, with zero-capture lambdas as the empty-environment case.
-- [ ] Rewrite captured mutable reads/writes to shared-cell loads/stores.
-- [ ] Add call dispatch that preserves one callable semantic model even if multiple runtime encodings are temporarily used during migration.
-- [ ] Ensure top-level helper calls and nested call sites preserve effect sequencing.
-- [ ] Add regression tests for:
+- [x] Lower all lambdas through one callable-environment model, with zero-capture lambdas as the empty-environment case.
+- [ ] Rewrite captured mutable reads/writes to shared-cell loads/stores. (CC4)
+- [x] Add call dispatch that preserves one callable semantic model even if multiple runtime encodings are temporarily used during migration.
+- [x] Ensure top-level helper calls and nested call sites preserve effect sequencing.
+- [x] Add regression tests for:
   - effectful helper call execution
   - effectful closure body execution
   - direct closure call outside stdlib combinators
