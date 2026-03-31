@@ -382,6 +382,9 @@ fn collect_all_instrs(instrs: &[WasmBackendInstr]) -> Vec<&WasmBackendInstr> {
                 result.extend(collect_all_instrs(cell_ptr_instrs));
                 result.extend(collect_all_instrs(value_instrs));
             }
+            WasmBackendInstr::IndirectCallClosure { arg_instrs, .. } => {
+                result.extend(collect_all_instrs(arg_instrs));
+            }
             _ => {}
         }
     }
@@ -747,9 +750,13 @@ pub(crate) fn emit_general_module_with_aux_and_options(
         })
     });
     let uses_indirect_call_2 = all_slices_iter().any(|slice| {
-        collect_all_instrs(slice)
-            .iter()
-            .any(|i| matches!(i, WasmBackendInstr::IndirectCall { arity: 2 }))
+        collect_all_instrs(slice).iter().any(|i| {
+            matches!(
+                i,
+                WasmBackendInstr::IndirectCall { arity: 2 }
+                    | WasmBackendInstr::IndirectCallClosure { .. }
+            )
+        })
     });
     // `uses_indirect_call` is true when any kind of indirect call requires a funcref table.
     let uses_indirect_call = uses_indirect_call_1 || uses_indirect_call_2;
@@ -1347,6 +1354,48 @@ fn emit_instrs(
                 function.instruction(&Instruction::I32WrapI64);
                 // call_indirect (i64^arity) -> i64 via funcref table 0.
                 let type_idx = ctx.indirect_call_type_idx(*arity)?;
+                function.instruction(&Instruction::CallIndirect {
+                    type_index: type_idx,
+                    table_index: 0,
+                });
+            }
+
+            WasmBackendInstr::IndirectCallClosure {
+                closure_local,
+                arg_instrs,
+            } => {
+                // Call a capturing closure: call_indirect arity (1 env + N args).
+                // The closure record at offset 0 holds the func_handle (TAG_FUNC i64).
+                //
+                // 1. Load closure ptr, unwrap to i32, load func_handle from slot 0.
+                let slot = ctx.get(closure_local)?;
+                function.instruction(&Instruction::LocalGet(slot));
+                function.instruction(&Instruction::I32WrapI64);
+                function.instruction(&Instruction::I64Load(MemArg {
+                    offset: 0,
+                    align: 3,
+                    memory_index: 0,
+                }));
+                // 2. Decode TAG_FUNC → table slot index (i32) for call_indirect.
+                function.instruction(&Instruction::I64Const(0xFFFF_FFFFi64));
+                function.instruction(&Instruction::I64And);
+                function.instruction(&Instruction::I32WrapI64);
+                // 3. Push closure ptr as the first argument (__clo env parameter).
+                function.instruction(&Instruction::LocalGet(slot));
+                // 4. Emit N argument instructions.
+                emit_instrs(
+                    function,
+                    ctx,
+                    arg_instrs,
+                    layout,
+                    named_i64_count,
+                    helper_i64_scratch_count,
+                    i32_base,
+                    static_strings,
+                    options,
+                )?;
+                // 5. call_indirect with arity 2 (1 __clo + 1 arg).
+                let type_idx = ctx.indirect_call_type_idx(2)?;
                 function.instruction(&Instruction::CallIndirect {
                     type_index: type_idx,
                     table_index: 0,
