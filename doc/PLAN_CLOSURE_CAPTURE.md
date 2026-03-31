@@ -54,7 +54,7 @@ Locked semantic target for this plan:
 3. Reading a captured `mut` inside a lambda observes the latest value in that shared cell.
 4. Assigning to a captured `mut` inside a lambda updates the same binding visible outside the lambda.
 5. Multiple closures capturing the same `mut` binding observe the same shared state.
-6. Non-capturing lambdas keep the current lightweight function-handle path.
+6. All lambdas are conceptually closures; non-capturing lambdas are the zero-capture case.
 
 These rules are the minimum needed to make closure capture useful for real local state, not only read-only callbacks.
 
@@ -180,38 +180,40 @@ Expected output:
 
 ### 4.1 Ownership boundary
 
-Closure capture must be solved at the shared IR → backend lowering boundary, not by stdlib-specific rewrites and not by parser-level exceptions.
+Closure capture must be solved at a shared ownership boundary that is visible before backend-specific Wasm emission, not by stdlib-specific rewrites and not by parser-level exceptions.
 
 This means:
 
 - do not special-case `fold`, `each`, or `map` by symbol name to fake closure support
 - do not add syntax-specific exceptions for one callback shape
-- lower all captured lambdas through one shared closure representation
+- represent lambdas and captured mutable storage through shared compiler-owned abstractions before backend-specific emission
 
 ### 4.2 Closure value representation
 
-Keep the overall direction from `doc/closure-design.md`:
+Long-term design target:
 
-- closure values are distinct runtime values
-- closure records live in linear memory
-- closure calls use an explicit closure-aware call path
+- all lambda values share one conceptual callable model: code plus environment
+- a non-capturing lambda is the same model with an empty environment
+- optimising empty-environment lambdas into a lighter runtime representation is allowed, but only as an implementation optimization
 
-However, mutable capture semantics must change:
+This plan should therefore avoid treating "plain function handle" and "closure" as two permanent semantic kinds.
+
+Mutable capture semantics require:
 
 - immutable captures may still be stored directly in the closure environment by value
-- mutable captures must refer to a shared mutable cell
-- the closure wrapper must know, per capture slot, whether it is loading a direct value or dereferencing a mutable cell
+- mutable captures refer to shared mutable storage identity, not copied values
+- the callable representation must be able to reference both direct captured values and captured mutable-storage cells
 
 ### 4.3 Mutable-cell strategy
 
-Preferred implementation direction:
+Preferred long-term direction:
 
-1. Keep ordinary non-escaping `mut` locals in the current local-slot form.
-2. Detect `mut` bindings that escape into one or more closures.
-3. Promote escaping mutable bindings to heap-backed mutable cells.
-4. Rewrite reads and writes of those bindings in both the outer function and the closure body to use the shared cell.
+1. Introduce an explicit mutable-storage / cell-identity concept at a shared ownership boundary, not only inside Wasm lowering.
+2. Make closure capture of `mut` bind to that storage identity.
+3. Let backend lowering decide only the concrete runtime representation of the cell, not whether the mutable binding semantically is a cell.
+4. Treat selective lowering-time promotion from local slots to heap cells as a migration technique only if needed, not as the desired permanent semantic model.
 
-This avoids forcing every mutable local into heap storage while still giving correct shared-state semantics for closure capture.
+This keeps the language semantics honest: mutable capture shares storage because the binding denotes mutable storage, not because one backend discovered an escaping special case late in the pipeline.
 
 ### 4.4 Closure-environment ownership
 
@@ -221,6 +223,7 @@ The implementation should introduce one focused closure-environment abstraction 
 
 - capture classification result shape
 - closure environment layout
+- callable environment shape for both zero-capture and capturing lambdas
 - mutable-cell versus direct-value slot kind
 - closure wrapper load/store helpers
 - lowering-time metadata needed by emit/runtime
@@ -277,34 +280,36 @@ Done when:
   - immutable capture
   - mutable read capture
   - mutable write capture
-- [ ] Detect escaping mutable bindings at the function/lambda ownership boundary.
-- [ ] Define where promoted mutable-cell metadata lives so both outer code and closure wrappers can use it.
+- [ ] Add an explicit mutable-storage / cell-identity notion at a shared ownership boundary.
+- [ ] Define where callable-environment metadata lives for both zero-capture and capturing lambdas.
 - [ ] Introduce one owned closure-environment metadata abstraction rather than duplicating capture-shape logic across lowering and emit.
 
 Done when:
 
 - the compiler can classify every lambda with a stable capture summary
-- escaping `mut` bindings are identified before backend-specific instruction emission
+- mutable bindings that participate in closure sharing are represented through one shared storage-identity model before backend-specific instruction emission
+- zero-capture and capturing lambdas both map through the same callable-environment ownership model
 - one owned metadata abstraction is the only required source for closure slot kinds and promoted mutable-cell information
 
 ### CC2. Runtime representation
 
 - [ ] Finalize the closure-record layout for captured values and mutable-cell references.
 - [ ] Add heap representation and helpers for promoted mutable cells.
-- [ ] Keep non-capturing lambdas on the existing lightweight funcref path.
+- [ ] Define how the runtime represents the zero-capture callable case without making it a separate semantic callable kind.
 - [ ] Define one helper layer for closure-environment load/store logic so wrapper emission does not open-code slot interpretation repeatedly.
 
 Done when:
 
 - runtime values can represent both closures and shared mutable cells without ambiguity
 - closure environment loading rules are documented and testable
+- zero-capture lambdas are represented as the empty-environment case of the same callable model, whether or not they use a runtime optimization
 - closure wrapper code and outer-function promoted-mut code both use the same environment/cell helper model
 
 ### CC3. Lowering and call dispatch
 
-- [ ] Lower capturing lambdas into closure records plus wrapper declarations.
+- [ ] Lower all lambdas through one callable-environment model, with zero-capture lambdas as the empty-environment case.
 - [ ] Rewrite captured mutable reads/writes to shared-cell loads/stores.
-- [ ] Add tagged call dispatch that works for both function handles and closure values.
+- [ ] Add call dispatch that preserves one callable semantic model even if multiple runtime encodings are temporarily used during migration.
 - [ ] Ensure top-level helper calls and nested call sites preserve effect sequencing.
 - [ ] Add regression tests for:
   - effectful helper call execution
@@ -313,7 +318,7 @@ Done when:
 
 Done when:
 
-- a capturing lambda can be created, stored, passed, and called on the Wasm path
+- lambdas with and without captures can be created, stored, passed, and called through the same lowering model on the Wasm path
 - the dedicated regression tests above pass
 - no supported closure path silently drops effects or returns `Unit` in place of the expected value
 
@@ -366,14 +371,15 @@ This track should follow the same engineering discipline used elsewhere in Goby'
 
 - Do not land a narrow patch that only makes one callback shape work.
 - Start from the earliest honest boundary:
-  capture analysis, mutable-cell promotion, shared IR ownership, backend lowering, then emit/runtime.
+  capture analysis, mutable-storage identity, callable-environment ownership, backend lowering, then emit/runtime.
 - If one attempted fix only helps `fold` or only helps one syntax form, it is probably at the wrong layer.
 
 ### 6.2 Preserve clear ownership
 
 - Keep orchestration entrypoints thin.
-- Put capture analysis, mutable-cell promotion, closure lowering, and emission logic in focused modules.
+- Put capture analysis, mutable-storage identity, callable-environment modeling, closure lowering, and emission logic in focused modules.
 - Move subsystem-specific regression tests next to the implementation that owns the behavior.
+- Do not let "zero-capture fast path" checks spread across unrelated modules; if that optimization exists, it must stay behind the callable abstraction boundary.
 
 ### 6.3 Prefer precise temporary rejection over wrong execution
 
@@ -400,9 +406,9 @@ This track should follow the same engineering discipline used elsewhere in Goby'
 1. Add the intended closure semantics to `doc/LANGUAGE_SPEC.md` with an implementation-status note.
 2. Update the conflicting closure design note so the document set has one semantic direction.
 3. Add failing tests for the acceptance programs in Section 3.
-4. Implement capture classification plus escaping-`mut` analysis.
-5. Implement shared mutable-cell promotion plus the owned closure-environment abstraction.
-6. Implement closure creation and tagged closure calls.
+4. Introduce the shared mutable-storage / cell-identity model and callable-environment ownership model.
+5. Implement capture classification against that shared model.
+6. Implement runtime closure/cell representation and closure creation/call support.
 7. Integrate closure-aware callback dispatch into `each`, `map`, and `fold`.
 8. Remove the temporary spec status note only after parity is proven and docs/examples are aligned.
 
