@@ -542,7 +542,7 @@ Locked semantic target:
 - multiple closures capturing the same `mut` binding observe the same shared state.
 - all lambdas are conceptually closures; non-capturing lambdas are the zero-capture case.
 
-Status: **CC0 complete; CC1 next** — semantics locked in `doc/LANGUAGE_SPEC.md`; `doc/closure-design.md` superseded; interpreter snapshot gap recorded.
+Status: **CC1 complete; CC2 next** — capture analysis, `MutableStorageId` shared-cell model, `CallableEnv` ownership, and Section 3 rejection tests all landed.
 
 Next step: CC1 (analysis and IR ownership).
 

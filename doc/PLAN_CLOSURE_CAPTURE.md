@@ -276,16 +276,16 @@ Done when:
 
 ### CC1. Analysis and IR ownership
 
-- [ ] Add failing tests for the acceptance programs in Section 3 (these tests should fail
+- [x] Add failing tests for the acceptance programs in Section 3 (these tests should fail
   until the Wasm path supports closure capture).
-- [ ] Add an analysis that distinguishes:
+- [x] Add an analysis that distinguishes:
   - no capture
   - immutable capture
   - mutable read capture
   - mutable write capture
-- [ ] Add an explicit mutable-storage / cell-identity notion at a shared ownership boundary.
-- [ ] Define where callable-environment metadata lives for both zero-capture and capturing lambdas.
-- [ ] Introduce one owned closure-environment metadata abstraction rather than duplicating capture-shape logic across lowering and emit.
+- [x] Add an explicit mutable-storage / cell-identity notion at a shared ownership boundary.
+- [x] Define where callable-environment metadata lives for both zero-capture and capturing lambdas.
+- [x] Introduce one owned closure-environment metadata abstraction rather than duplicating capture-shape logic across lowering and emit.
 
 Done when:
 

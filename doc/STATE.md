@@ -4,22 +4,19 @@ Last updated: 2026-03-31
 
 ## Current Focus
 
-**Track CC / CC1** (next): Analysis and IR ownership.
-CC0 (semantics lock) is complete — `doc/LANGUAGE_SPEC.md` is the sole semantic authority
-for closure capture. CC1 will introduce capture classification and the shared mutable-cell
-model at the IR ownership boundary.
-
-Landed in this slice:
-
-- shared closure-capture analysis now lives in `crates/goby-core/src/closure_capture.rs`
-- callable-environment metadata is explicit for both zero-capture and capturing lambdas
-- captured `mut` bindings are assigned stable shared `MutableStorageId`s before Wasm lowering
-- `goby-wasm` now consumes the shared callable-environment metadata instead of its old
-  backend-local free-variable traversal when rejecting unsupported capturing lambdas
+**Track CC / CC2** (next): Runtime representation.
+CC1 (analysis and IR ownership) is complete — capture classification, `MutableStorageId`
+shared-cell model, `CallableEnv` metadata, and acceptance-program rejection tests are all in.
+CC2 will define the closure-record layout, heap mutable-cell representation, and the helper
+layer for closure-environment load/store.
 
 ## Recently Completed
 
-- **Track CC / CC1 slice 1** (2026-03-31): Added shared closure-capture analysis and callable-environment ownership metadata in `goby-core`; Wasm lowering now rejects capture through that shared metadata path instead of backend-local free-variable analysis.
+- **Track CC / CC1** (2026-03-31): All CC1 milestones complete.
+  - Shared closure-capture analysis in `crates/goby-core/src/closure_capture.rs`
+  - `CallableEnv` / `CallableEnvSlot` / `MutableStorageId` ownership model
+  - Wasm backend rejects capturing lambdas via shared metadata (not backend-local traversal)
+  - Acceptance-program rejection tests for all five Section 3 shapes
 - **`fn`-only anonymous functions** (2026-03-31): Pipe-lambda `|x| ->` removed. `fn x -> expr` is the only form. Parser rejects old syntax; formatter, tooling, docs, and all tests updated.
 - **Track H / HOF milestone series** (complete through HOF-M7): `fn` keyword, multi-param lambdas, effectful callbacks, `fold`, end-to-end acceptance gate.
 - **Track E** (HOF type checking, 2026-03-27): Callback arity mismatches rejected at `goby-cli check`.
@@ -30,7 +27,7 @@ Landed in this slice:
 
 Next track candidates are in `doc/PLAN.md` §4:
 
-- **Track CC: Closure Capture** (§4.6): CC1 slice 1 is in. Next step is runtime representation and lowering follow-up: closure record/env layout, mutable-cell runtime helpers, and using callable-env metadata for non-empty environments.
+- **Track CC: Closure Capture** (§4.6): CC1 complete. Next: CC2 — closure-record layout, mutable-cell heap representation, and environment load/store helpers.
 - **Track D follow-ups** (§4.1): D5 (`goby lint` unused-binding rule), D6c shared grammar asset.
 - **Track WB-3B** (deferred): WasmFX typed continuations — on hold until WebAssembly stack switching reaches Phase 4.
 - **Float support** (§4.7): `Float` type backed by Wasm `f64`; semantics to be locked before coding.
