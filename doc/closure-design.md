@@ -1,9 +1,12 @@
 # Closure Representation Design — WB-3B
 
-**Status:** LOCKED (2026-03-26)
-**Revision:** 1.1 (review fixes applied)
-**Scope:** Design only. Implementation is deferred to WB-3B. This document must be
-re-evaluated before implementing closure lowering.
+**Status:** SUPERSEDED by `doc/PLAN_CLOSURE_CAPTURE.md` (2026-03-31)
+**Original revision:** 1.1 (locked 2026-03-26)
+**Scope:** Design only. This document has been superseded by `doc/PLAN_CLOSURE_CAPTURE.md`,
+which changes the mutable-capture direction (see § 5 note below). Refer to
+`doc/PLAN_CLOSURE_CAPTURE.md` and `doc/LANGUAGE_SPEC.md` for the current intended semantics.
+The low-level Wasm layout details in §§ 3–4 and 6–9 remain as a useful implementation
+reference, but the closure-capture semantic decisions in §§ 5 and 10 have been superseded.
 
 ---
 
@@ -192,36 +195,30 @@ Until WB-3B, capturing lambdas passed to `each`/`map` remain `UnsupportedIrForm`
 
 ---
 
-## 5. Mutable Local Capture: Value Semantics (Snapshot)
+## 5. Mutable Local Capture — SUPERSEDED
 
-**Decision:** Captured variables are captured **by value at closure creation time**.
+> **Note (2026-03-31):** The snapshot semantics described here have been superseded by
+> `doc/PLAN_CLOSURE_CAPTURE.md`. The locked semantic target is now **shared-cell semantics**
+> for `mut` captures, not value-copy at closure creation time.
+> See `doc/LANGUAGE_SPEC.md` § 3 "Closure semantics" for the current specification.
+> The original snapshot decision and the write-capture restriction below are no longer the
+> intended direction.
 
-Mutations to a mutable local after closure creation do **not** affect the closure.
-The closure captures the value of the local at the moment the closure value is produced.
+~~**Decision:** Captured variables are captured **by value at closure creation time**.~~
 
-Example:
+~~Mutations to a mutable local after closure creation do **not** affect the closure.~~
+~~The closure captures the value of the local at the moment the closure value is produced.~~
+
+Original snapshot example (no longer the spec — shown for historical context only):
 ```goby
 mut x = 1
-f = fn y -> x + y   ← captures x = 1
+f = fn y -> x + y   ← OLD: would capture x = 1 as snapshot
 x := 42
-f(0)               ← returns 1 (not 43)
+f(0)               ← OLD: would return 1 (snapshot); SPEC: should return 43 (shared cell)
 ```
 
-**Rationale:**
-- Simplest to implement: no heap-allocated mutable cell needed.
-- Consistent with the interpreter's current behavior for non-effectful captures.
-- Reference semantics (shared mutable cell) is deferred to a later design revision.
-
-**Restriction:** Lambdas that **assign to** a captured mutable local are not supported
-in WB-3B. The lowering gate must reject `Assign { name }` where `name` is a free variable
-in the lambda body.
-
-**Important:** The existing `comp_has_free_var` check in `lower.rs` detects *any* reference
-to a free variable (read or write) and currently rejects all capturing lambdas with
-`UnsupportedIrForm`. WB-3B must introduce a **new, more selective check** (e.g.,
-`comp_has_free_assign`) that detects only assignment to captured variables, so that:
-- Read-only captures → allowed (lowered via `CreateClosure`)
-- Write captures (`Assign` to a free variable) → still `UnsupportedIrForm`
+~~**Restriction:** Lambdas that **assign to** a captured mutable local are not supported
+in WB-3B.~~ (This restriction is superseded — write capture is an explicit goal of Track CC.)
 
 ---
 
@@ -276,9 +273,17 @@ This test currently runs the program through the interpreter fallback and assert
 the output is `"4142\n"`. When WB-3B lands, a parallel test must verify the Wasm
 general-lowered path produces the same output.
 
-**New tests to add in WB-3B:**
+**New tests to add in Track CC (revised from WB-3B scope):**
 - `closure_capture_general_lowered_matches_interpreter` — same program, Wasm path
-- `closure_capture_mutable_snapshot_semantics` — verify snapshot (not reference) capture
+- ~~`closure_capture_mutable_snapshot_semantics`~~ — **obsolete**: snapshot semantics are
+  superseded; Track CC tests will instead verify shared-cell `mut` capture behavior
+
+**Existing test disposition:**
+The existing `typed_mode_matches_fallback_for_lambda_closure_capture` test asserts output
+`"4142"` using a `let` binding (`base = 40`). For immutable captures, snapshot semantics and
+shared-cell semantics produce identical results, so this test is not expected to change when
+`mut`-capture semantics are fixed in CC1+. It exercises real closure-capture parity logic
+and should be kept; it does not need to be updated as part of the `mut`-capture fix.
 
 ---
 
@@ -305,10 +310,11 @@ The following changes are **deferred to WB-3B** and are **not part of H5**:
    - Add `ClosureCall` emission (tag dispatch + `call_indirect` with type 1).
    - Register type 1 `(i64, i64) -> i64` in the type section when closures are present.
    - Update `ListEach`/`ListMap` or add closure variants (see Section 4).
-6. `gen_lower/mod.rs`: Update `UnsupportedIrForm` gate for capturing lambdas:
-   - Allow read-only captures → `CreateClosure`.
-   - Reject write captures (`comp_has_free_assign`) → keep `UnsupportedIrForm`.
-7. Tests: Add parity and snapshot-semantics tests.
+6. `gen_lower/mod.rs`: Update `UnsupportedIrForm` gate for capturing lambdas
+   (see `doc/PLAN_CLOSURE_CAPTURE.md` for the superseded direction — write captures
+   are now an explicit goal, not a permanent restriction).
+7. Tests: Add parity and shared-cell `mut`-capture tests. (The "snapshot-semantics" test name
+   referenced in earlier drafts is superseded — see § 8 for the updated disposition.)
 
 ---
 
@@ -320,6 +326,6 @@ The following changes are **deferred to WB-3B** and are **not part of H5**:
 | env_ptr 32-bit limit | closure_ptr is a u32 heap offset. Heap must stay within 4 GiB (safe in practice). |
 | Single-param lambda | `LambdaAuxDecl.param_name` is a single `String`. Multi-param lambdas use currying. Closure + currying interaction is WB-3B scope. |
 | No GC | Closures are bump-allocated with arena lifetime (no freed until module execution ends). Long-lived programs creating many closures will leak. Acceptable for now. |
-| Mutable reference capture | Reference semantics (shared mutable cell) is not supported. Only value capture (snapshot) is designed here. |
+| Mutable reference capture | ~~Reference semantics (shared mutable cell) is not supported. Only value capture (snapshot) is designed here.~~ **SUPERSEDED**: shared-cell semantics are now the locked target (see `doc/PLAN_CLOSURE_CAPTURE.md`). |
 | Nested closures | A closure returning a closure is possible in principle (closure wrapper emits `CreateClosure`). Correct scope chain is WB-3B scope. |
 | `call_indirect` type dispatch | Whether dispatch is static (known at lower time) or dynamic (runtime tag check) is deferred to WB-3B. Both options preserve the `call_indirect` type safety guarantee. |

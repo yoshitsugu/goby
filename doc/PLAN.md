@@ -542,9 +542,9 @@ Locked semantic target:
 - multiple closures capturing the same `mut` binding observe the same shared state.
 - all lambdas are conceptually closures; non-capturing lambdas are the zero-capture case.
 
-Status: **Planned** — design document complete; no implementation milestones started.
+Status: **CC0 complete; CC1 next** — semantics locked in `doc/LANGUAGE_SPEC.md`; `doc/closure-design.md` superseded; interpreter snapshot gap recorded.
 
-Next step: CC0 (semantics lock and document alignment).
+Next step: CC1 (analysis and IR ownership).
 
 ### 4.7 `Float` / Wasm `f64` Support
 

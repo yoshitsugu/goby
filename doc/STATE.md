@@ -4,7 +4,10 @@ Last updated: 2026-03-31
 
 ## Current Focus
 
-No active track. Next candidates below.
+**Track CC / CC1** (next): Analysis and IR ownership.
+CC0 (semantics lock) is complete — `doc/LANGUAGE_SPEC.md` is the sole semantic authority
+for closure capture. CC1 will introduce capture classification and the shared mutable-cell
+model at the IR ownership boundary.
 
 ## Recently Completed
 
@@ -43,8 +46,9 @@ Next track candidates are in `doc/PLAN.md` §4:
   - Host intrinsics: `StringGraphemesList` (`__goby_string_graphemes_list`)
 - Known limitations:
   - non-tail / multi-resume handlers → `BackendLimitation` error
-  - lambda with free variables (closure capture) → `UnsupportedForm` — planned as Track CC
-  - inline capturing lambda passed to HOF callbacks (e.g. `fold (fn acc x -> acc + x + bias)`) → `UnsupportedForm` — planned as Track CC
+  - lambda with free variables (closure capture) → `UnsupportedForm` on Wasm path — Track CC (CC1+) will implement
+  - inline capturing lambda passed to HOF callbacks (e.g. `fold (fn acc x -> acc + x + bias)`) → `UnsupportedForm` on Wasm path — Track CC (CC4) will implement
+  - interpreter path: capturing lambdas work but use snapshot semantics for `mut` captures (not the spec's shared-cell model); will be corrected as part of Track CC
 
 ## Key Entry Points
 

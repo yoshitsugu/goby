@@ -1,7 +1,7 @@
 # Goby Language Specification (Current)
 
 Status: active
-Last updated: 2026-03-30
+Last updated: 2026-03-31
 
 This file is the current language-spec source of truth for user-visible Goby
 syntax/semantics.
@@ -107,6 +107,24 @@ syntax/semantics.
 - Mutable locals:
   - declaration: `mut x = expr`
   - assignment: `x := expr`
+- Closure semantics:
+  - All lambdas (`fn x -> expr`) are conceptually closures. A non-capturing lambda is the
+    zero-capture case of the same model.
+  - Capturing an immutable binding copies its value into the closure environment at the
+    time the lambda value is created.
+  - Capturing a mutable binding (`mut`) captures a **shared mutable cell**, not a snapshot
+    of the value at creation time.
+    - Reading a captured `mut` inside a lambda observes the latest value in the shared cell.
+    - Assigning to a captured `mut` inside a lambda updates the same binding visible outside
+      the lambda.
+    - Multiple closures capturing the same `mut` binding share the same mutable cell and
+      observe each other's writes.
+  - **Implementation status (2026-03-31):** The shared-cell semantics for `mut` capture are
+    the intended language specification. The current interpreter runtime implements snapshot
+    semantics for lambda closures (`fn x -> expr`) — value copy at closure creation time —
+    which does not yet match the spec for `mut` captures. The Wasm backend rejects capturing
+    lambdas entirely (Track CC pending). Both runtimes will be updated to match this spec as
+    Track CC progresses.
 
 ## 4. Type/Entry Rules
 

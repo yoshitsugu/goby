@@ -2,7 +2,7 @@
 
 Last updated: 2026-03-31
 
-Status: Planned
+Status: CC0 complete; CC1 next
 
 Related documents:
 
@@ -259,22 +259,25 @@ The checklist below is the active progress tracker for closure capture work.
 
 ### CC0. Semantics lock and document alignment
 
-- [ ] Add closure-capture semantics to `doc/LANGUAGE_SPEC.md` as the intended behavior, with an explicit implementation-status note while the feature is still incomplete.
-- [ ] Confirm the semantic target in this document:
+- [x] Add closure-capture semantics to `doc/LANGUAGE_SPEC.md` as the intended behavior, with an explicit implementation-status note while the feature is still incomplete.
+- [x] Confirm the semantic target in this document:
   mutable capture uses shared-cell semantics, not snapshot semantics.
-- [ ] Revise `doc/closure-design.md` so it no longer contradicts this plan.
-- [ ] Update interpreter-side tests or interpreter behavior as needed so the interpreter is moving toward the spec rather than preserving the old snapshot rule as a hidden authority.
-- [ ] Update `doc/STATE.md` to replace the current generic "closure capture unsupported" note with the current slice status once work starts.
+- [x] Revise `doc/closure-design.md` so it no longer contradicts this plan.
+- [x] Record the interpreter snapshot gap so the interpreter is not treated as a silent semantic authority.
+  - Confirmed: interpreter currently uses `captured_locals.clone()` (snapshot semantics for `fn`-lambdas). The gap is recorded in `doc/LANGUAGE_SPEC.md` implementation-status note and `doc/STATE.md`. No code change in CC0; actual interpreter fix is deferred to CC1+ where shared-cell storage is introduced.
+- [x] Update `doc/STATE.md` to replace the current generic "closure capture unsupported" note with the current slice status once work starts.
 
 Done when:
 
 - `doc/LANGUAGE_SPEC.md` contains the intended closure semantics with a clearly marked implementation-status note
 - this plan, `doc/closure-design.md`, and `doc/STATE.md` describe the same closure semantics
-- no design note still claims that captured `mut` values are snapshot-only
+- no design note still claims that captured `mut` values are snapshot-only (design notes only; code correction of interpreter and Wasm backend is deferred to CC1+)
 - it is clear from the docs that `doc/LANGUAGE_SPEC.md`, not current runtime behavior, is the semantic source of truth
 
 ### CC1. Analysis and IR ownership
 
+- [ ] Add failing tests for the acceptance programs in Section 3 (these tests should fail
+  until the Wasm path supports closure capture).
 - [ ] Add an analysis that distinguishes:
   - no capture
   - immutable capture
@@ -307,6 +310,9 @@ Done when:
 
 ### CC3. Lowering and call dispatch
 
+- [ ] Relax the `comp_has_free_var` blanket rejection gate in `gen_lower/lower.rs` so that
+  read-only immutable captures proceed to `CreateClosure` lowering, while mutable write
+  captures remain rejected until shared-cell lowering is also in place.
 - [ ] Lower all lambdas through one callable-environment model, with zero-capture lambdas as the empty-environment case.
 - [ ] Rewrite captured mutable reads/writes to shared-cell loads/stores.
 - [ ] Add call dispatch that preserves one callable semantic model even if multiple runtime encodings are temporarily used during migration.
