@@ -1367,22 +1367,12 @@ fn emit_instrs(
                 // Call a capturing closure: call_indirect arity (1 env + N args).
                 // The closure record at offset 0 holds the func_handle (TAG_FUNC i64).
                 //
-                // 1. Load closure ptr, unwrap to i32, load func_handle from slot 0.
+                // Wasm call_indirect stack layout: [arg0, arg1, ..., table_slot_i32]
+                // where arg0 = __clo (closure ptr) and table_slot is on TOP.
                 let slot = ctx.get(closure_local)?;
+                // 1. Push closure ptr as the first argument (__clo env parameter).
                 function.instruction(&Instruction::LocalGet(slot));
-                function.instruction(&Instruction::I32WrapI64);
-                function.instruction(&Instruction::I64Load(MemArg {
-                    offset: 0,
-                    align: 3,
-                    memory_index: 0,
-                }));
-                // 2. Decode TAG_FUNC → table slot index (i32) for call_indirect.
-                function.instruction(&Instruction::I64Const(0xFFFF_FFFFi64));
-                function.instruction(&Instruction::I64And);
-                function.instruction(&Instruction::I32WrapI64);
-                // 3. Push closure ptr as the first argument (__clo env parameter).
-                function.instruction(&Instruction::LocalGet(slot));
-                // 4. Emit N argument instructions.
+                // 2. Emit N argument instructions.
                 emit_instrs(
                     function,
                     ctx,
@@ -1394,7 +1384,18 @@ fn emit_instrs(
                     static_strings,
                     options,
                 )?;
-                // 5. call_indirect with arity 2 (1 __clo + 1 arg).
+                // 3. Load func_handle from closure slot 0, decode TAG_FUNC → table slot (i32).
+                function.instruction(&Instruction::LocalGet(slot));
+                function.instruction(&Instruction::I32WrapI64);
+                function.instruction(&Instruction::I64Load(MemArg {
+                    offset: 0,
+                    align: 3,
+                    memory_index: 0,
+                }));
+                function.instruction(&Instruction::I64Const(0xFFFF_FFFFi64));
+                function.instruction(&Instruction::I64And);
+                function.instruction(&Instruction::I32WrapI64);
+                // 4. call_indirect with arity 2 (1 __clo + 1 arg), table slot on top.
                 let type_idx = ctx.indirect_call_type_idx(2)?;
                 function.instruction(&Instruction::CallIndirect {
                     type_index: type_idx,

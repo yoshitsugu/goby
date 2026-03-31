@@ -1455,3 +1455,60 @@ main =
         err.message
     );
 }
+
+// ---------------------------------------------------------------------------
+// CC3 acceptance tests: ByValue closure capture + direct call dispatch
+// ---------------------------------------------------------------------------
+
+/// CC3-Step5: Inline capturing lambda with ByValue capture executes correctly.
+/// `base = 10; add = fn x -> base + x; result = add 5; println "${result}"`
+/// should print "15\n".
+#[test]
+fn cc3_inline_by_value_capture_executes_correctly() {
+    let module = parse_module(
+        r#"
+main : Unit -> Unit can Print, Read
+main =
+  _ = read()
+  base = 10
+  add = fn x -> base + x
+  result = add 5
+  println "${result}"
+"#,
+    )
+    .expect("source should parse");
+
+    let output = execute_runtime_module_with_stdin(&module, Some(String::new()))
+        .expect("inline ByValue capture should execute without error");
+    assert_eq!(
+        output.as_deref(),
+        Some("15\n"),
+        "add 5 with base=10 should produce 15"
+    );
+}
+
+/// CC3-Step5: Capturing lambda with string interpolation executes correctly.
+/// The lambda captures `prefix` (a string) ByValue.
+#[test]
+fn cc3_string_capture_executes_correctly() {
+    let module = parse_module(
+        r#"
+main : Unit -> Unit can Print, Read
+main =
+  _ = read()
+  prefix = "Hello"
+  greet = fn name -> "${prefix}, ${name}!"
+  msg = greet "world"
+  println msg
+"#,
+    )
+    .expect("source should parse");
+
+    let output = execute_runtime_module_with_stdin(&module, Some(String::new()))
+        .expect("string-capturing lambda should execute without error");
+    assert_eq!(
+        output.as_deref(),
+        Some("Hello, world!\n"),
+        "greet 'world' with prefix='Hello' should produce 'Hello, world!'"
+    );
+}
