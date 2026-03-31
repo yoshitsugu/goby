@@ -138,6 +138,28 @@ Based on `examples/*.gb`:
       - if external-only execution is desired, which current host intrinsics / runtime services
         must be removed, standardized, or moved into a separate launcher.
   - `goby-cli check <file.gb>` performs parse/typecheck without runtime entrypoint.
+
+### 2.1 Planned Syntax Simplification: `fn`-only Anonymous Functions
+
+- Direction:
+  - converge anonymous-function syntax to `fn` only.
+  - remove the pipe form `|x| -> expr` after a staged migration.
+  - keep placeholder shorthand such as `_ * 10` as a separate ergonomic feature unless it causes
+    parsing or readability conflicts.
+- Rationale:
+  - one lambda surface form is easier to teach, parse, format, and highlight consistently.
+  - `fn` scales from one parameter to multiple parameters without changing visual grammar.
+  - removing the pipe form avoids having two equivalent spellings for single-parameter lambdas.
+- Migration plan:
+  - Phase A: treat `fn x -> expr` as the preferred spelling in examples, docs, and new tests.
+  - Phase B: add parser diagnostics that detect `|x| -> expr` and suggest `fn x -> expr`.
+  - Phase C: update formatter and syntax tooling to normalize and highlight only the `fn` form.
+  - Phase D: remove pipe-lambda parsing support and update the language spec in the same change.
+- Completion criteria:
+  - `doc/LANGUAGE_SPEC.md` documents only `fn`-form anonymous functions.
+  - `examples/` and user-facing docs no longer use `|x| ->`.
+  - parser/typechecker/formatter/tooling tests cover accepted `fn` syntax and rejected pipe syntax.
+  - editor syntax definitions reserve and highlight `fn` correctly after the pipe form is removed.
 - `main` type is restricted to `Unit -> Unit` for MVP.
   - `main` type annotation is required for `run`; optional for `check`.
 - Legacy `void` type spelling is rejected in type annotations.
