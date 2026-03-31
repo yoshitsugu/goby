@@ -385,11 +385,122 @@ pub(crate) enum WasmBackendInstr {
         /// Zero-based index of the tuple field to load.
         index: usize,
     },
+
+    // -----------------------------------------------------------------------
+    // CC2: Closure record and mutable cell instructions
+    // -----------------------------------------------------------------------
+
+    /// Allocate a closure record and push a TAG_CLOSURE-tagged pointer.
+    ///
+    /// # Memory layout
+    /// `(func_handle: i64, slots: [i64; N])` = `8 + 8*N` bytes (8-byte aligned).
+    /// - `func_handle` at offset 0: a TAG_FUNC-encoded i64 (funcref table slot index).
+    /// - Slot `i` at offset `8 + 8*i`.
+    ///
+    /// # Stack discipline
+    /// `func_handle_instrs` produces the TAG_FUNC i64.
+    /// Each inner `Vec<WasmBackendInstr>` in `slot_instrs` produces one tagged i64 slot value.
+    /// The zero-slot case (`slot_instrs = []`) is valid: allocates 8 bytes (func_handle only).
+    /// After: one TAG_CLOSURE-tagged i64 on the stack.
+    CreateClosure {
+        func_handle_instrs: Vec<WasmBackendInstr>,
+        slot_instrs: Vec<Vec<WasmBackendInstr>>,
+    },
+
+    /// Load a single slot from a closure record in the named local.
+    ///
+    /// # Stack discipline
+    /// Before: nothing extra.
+    /// After: one tagged i64 (the slot value) on the stack.
+    ///
+    /// For a ByValue slot this is the captured value directly.
+    /// For a SharedMutableCell slot this is the TAG_CELL-tagged cell pointer.
+    LoadClosureSlot {
+        /// Name of the local variable holding the TAG_CLOSURE-tagged pointer.
+        closure_local: String,
+        /// Zero-based slot index within the closure record.
+        slot_index: usize,
+    },
+
+    /// Allocate an 8-byte mutable cell, store the initial value, push TAG_CELL-tagged pointer.
+    ///
+    /// # Memory layout
+    /// `(value: i64)` = 8 bytes at offset 0.
+    ///
+    /// # Stack discipline
+    /// `init_instrs` produces the initial i64 value.
+    /// After: one TAG_CELL-tagged i64 pointer on the stack.
+    AllocMutableCell {
+        init_instrs: Vec<WasmBackendInstr>,
+    },
+
+    /// Load the current value from a mutable cell.
+    ///
+    /// # Stack discipline
+    /// Before: one TAG_CELL-tagged i64 pointer on the top of the stack.
+    /// After: the i64 value stored in the cell (replacing the cell ptr).
+    LoadCellValue,
+
+    /// Store a new value into a mutable cell.
+    ///
+    /// # Stack discipline
+    /// - `value_instrs` produces the new i64 value.
+    /// - `cell_ptr_instrs` produces the TAG_CELL-tagged pointer to the cell.
+    /// After: the store is performed; a tagged Unit i64 is pushed as the result.
+    StoreCellValue {
+        cell_ptr_instrs: Vec<WasmBackendInstr>,
+        value_instrs: Vec<WasmBackendInstr>,
+    },
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn closure_and_cell_instrs_round_trip() {
+        let instrs = vec![
+            // Zero-slot closure (empty env).
+            WasmBackendInstr::CreateClosure {
+                func_handle_instrs: vec![WasmBackendInstr::PushFuncHandle {
+                    decl_name: "my_fn".to_string(),
+                }],
+                slot_instrs: vec![],
+            },
+            // Closure with ByValue and cell slots.
+            WasmBackendInstr::CreateClosure {
+                func_handle_instrs: vec![WasmBackendInstr::PushFuncHandle {
+                    decl_name: "my_fn".to_string(),
+                }],
+                slot_instrs: vec![
+                    vec![WasmBackendInstr::I64Const(42)],
+                    vec![WasmBackendInstr::LoadLocal {
+                        name: "cell_ptr".to_string(),
+                    }],
+                ],
+            },
+            WasmBackendInstr::LoadClosureSlot {
+                closure_local: "clo".to_string(),
+                slot_index: 0,
+            },
+            WasmBackendInstr::LoadClosureSlot {
+                closure_local: "clo".to_string(),
+                slot_index: 1,
+            },
+            WasmBackendInstr::AllocMutableCell {
+                init_instrs: vec![WasmBackendInstr::I64Const(0)],
+            },
+            WasmBackendInstr::LoadCellValue,
+            WasmBackendInstr::StoreCellValue {
+                cell_ptr_instrs: vec![WasmBackendInstr::LoadLocal {
+                    name: "cell".to_string(),
+                }],
+                value_instrs: vec![WasmBackendInstr::I64Const(7)],
+            },
+        ];
+        let cloned = instrs.clone();
+        assert_eq!(instrs, cloned);
+    }
 
     #[test]
     fn backend_instr_variants_are_debug_cloneable() {

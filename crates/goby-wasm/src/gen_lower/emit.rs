@@ -19,7 +19,8 @@ use crate::gen_lower::backend_ir::{
 use goby_core::ir::IrBinOp;
 
 use crate::gen_lower::value::{
-    TAG_BOOL, TAG_INT, TAG_LIST, TAG_RECORD, TAG_STRING, TAG_TUPLE, encode_string_ptr, encode_unit,
+    TAG_BOOL, TAG_CELL, TAG_CLOSURE, TAG_INT, TAG_LIST, TAG_RECORD, TAG_STRING, TAG_TUPLE,
+    encode_string_ptr, encode_unit,
 };
 use crate::host_runtime::{
     HOST_BUMP_RESERVED_BYTES, HOST_INTRINSIC_IMPORTS, IntrinsicExecutionBoundary,
@@ -356,6 +357,25 @@ fn collect_all_instrs(instrs: &[WasmBackendInstr]) -> Vec<&WasmBackendInstr> {
                 result.extend(collect_all_instrs(list_instrs));
                 result.extend(collect_all_instrs(func_instrs));
             }
+            WasmBackendInstr::CreateClosure {
+                func_handle_instrs,
+                slot_instrs,
+            } => {
+                result.extend(collect_all_instrs(func_handle_instrs));
+                for slot in slot_instrs {
+                    result.extend(collect_all_instrs(slot));
+                }
+            }
+            WasmBackendInstr::AllocMutableCell { init_instrs } => {
+                result.extend(collect_all_instrs(init_instrs));
+            }
+            WasmBackendInstr::StoreCellValue {
+                cell_ptr_instrs,
+                value_instrs,
+            } => {
+                result.extend(collect_all_instrs(cell_ptr_instrs));
+                result.extend(collect_all_instrs(value_instrs));
+            }
             _ => {}
         }
     }
@@ -385,6 +405,8 @@ fn needs_helper_state(instrs: &[WasmBackendInstr]) -> bool {
                 | WasmBackendInstr::ListEachEffect { .. }
                 | WasmBackendInstr::ListEach { .. }
                 | WasmBackendInstr::ListMap { .. }
+                | WasmBackendInstr::CreateClosure { .. }
+                | WasmBackendInstr::AllocMutableCell { .. }
         )
     }) || {
         // Check for ListPattern or EmptyList patterns in CaseMatch arms.
@@ -425,6 +447,30 @@ fn needs_helper_state(instrs: &[WasmBackendInstr]) -> bool {
                     }
                     WasmBackendInstr::RecordLit { field_instrs, .. } => {
                         if field_instrs.iter().any(|e| has_heap_pattern(e)) {
+                            return true;
+                        }
+                    }
+                    WasmBackendInstr::CreateClosure {
+                        func_handle_instrs,
+                        slot_instrs,
+                    } => {
+                        if has_heap_pattern(func_handle_instrs) {
+                            return true;
+                        }
+                        if slot_instrs.iter().any(|e| has_heap_pattern(e)) {
+                            return true;
+                        }
+                    }
+                    WasmBackendInstr::AllocMutableCell { init_instrs } => {
+                        if has_heap_pattern(init_instrs) {
+                            return true;
+                        }
+                    }
+                    WasmBackendInstr::StoreCellValue {
+                        cell_ptr_instrs,
+                        value_instrs,
+                    } => {
+                        if has_heap_pattern(cell_ptr_instrs) || has_heap_pattern(value_instrs) {
                             return true;
                         }
                     }
@@ -1416,6 +1462,196 @@ fn emit_instrs(
                     align: 3,
                     memory_index: 0,
                 }));
+            }
+
+            // -------------------------------------------------------------------
+            // CC2: Closure record and mutable cell instructions
+            // -------------------------------------------------------------------
+
+            WasmBackendInstr::CreateClosure {
+                func_handle_instrs,
+                slot_instrs,
+            } => {
+                // Layout: (func_handle: i64, slots: [i64; N]) = 8 + 8*N bytes.
+                //
+                // CC2 Safety note: `s_closure_ptr` (= HS_AUX_PTR) is re-read by
+                // `emit_push_tagged_ptr` after all slot instructions have been emitted.
+                // If any slot instruction itself allocates on the heap (e.g. AllocMutableCell),
+                // it will overwrite HS_AUX_PTR and corrupt the closure pointer.
+                //
+                // In CC2 this is not yet a problem because CreateClosure is not wired into
+                // the lowering pass (lower.rs) and therefore never emitted with heap-allocating
+                // slot_instrs.  CC3 (Lowering and call dispatch) must save the closure base
+                // address to a dedicated named local before emitting slot instructions.
+                let hs = require_helper_state(helper_state, "CreateClosure")?;
+                let s_closure_ptr = hs.i32_base + HS_AUX_PTR;
+                let s_alloc_size = hs.i32_base + HS_ALLOC_SIZE;
+                let n = slot_instrs.len() as i32;
+                // alloc_size = 8 + 8 * n  (8 bytes for func_handle, 8 bytes per slot)
+                function.instruction(&Instruction::I32Const(8 + 8 * n));
+                function.instruction(&Instruction::LocalSet(s_alloc_size));
+                emit_alloc_from_top(function, &hs, s_alloc_size, s_closure_ptr);
+                // Store func_handle (TAG_FUNC i64) at offset 0.
+                function.instruction(&Instruction::LocalGet(s_closure_ptr));
+                emit_instrs(
+                    function,
+                    ctx,
+                    func_handle_instrs,
+                    layout,
+                    named_i64_count,
+                    helper_i64_scratch_count,
+                    i32_base,
+                    static_strings,
+                    options,
+                )?;
+                function.instruction(&Instruction::I64Store(MemArg {
+                    offset: 0,
+                    align: 3,
+                    memory_index: 0,
+                }));
+                // Store each slot at offset 8 + 8*i.
+                for (i, slot_instrs_i) in slot_instrs.iter().enumerate() {
+                    function.instruction(&Instruction::LocalGet(s_closure_ptr));
+                    function.instruction(&Instruction::I32Const(8 + 8 * i as i32));
+                    function.instruction(&Instruction::I32Add);
+                    emit_instrs(
+                        function,
+                        ctx,
+                        slot_instrs_i,
+                        layout,
+                        named_i64_count,
+                        helper_i64_scratch_count,
+                        i32_base,
+                        static_strings,
+                        options,
+                    )?;
+                    function.instruction(&Instruction::I64Store(MemArg {
+                        offset: 0,
+                        align: 3,
+                        memory_index: 0,
+                    }));
+                }
+                // Push TAG_CLOSURE-tagged pointer as result.
+                emit_push_tagged_ptr(function, s_closure_ptr, TAG_CLOSURE);
+            }
+
+            WasmBackendInstr::LoadClosureSlot {
+                closure_local,
+                slot_index,
+            } => {
+                // Load the TAG_CLOSURE pointer from the local, decode it to i32, add slot offset.
+                let slot = ctx.get(closure_local)?;
+                function.instruction(&Instruction::LocalGet(slot));
+                function.instruction(&Instruction::I32WrapI64);
+                let byte_offset = 8i32
+                    .checked_add(
+                        8i32.checked_mul(*slot_index as i32).ok_or_else(|| {
+                            CodegenError {
+                                message: format!(
+                                    "gen_lower/emit: LoadClosureSlot index {} overflows",
+                                    slot_index
+                                ),
+                            }
+                        })?,
+                    )
+                    .ok_or_else(|| CodegenError {
+                        message: format!(
+                            "gen_lower/emit: LoadClosureSlot index {} overflows byte offset",
+                            slot_index
+                        ),
+                    })?;
+                function.instruction(&Instruction::I32Const(byte_offset));
+                function.instruction(&Instruction::I32Add);
+                function.instruction(&Instruction::I64Load(MemArg {
+                    offset: 0,
+                    align: 3,
+                    memory_index: 0,
+                }));
+            }
+
+            WasmBackendInstr::AllocMutableCell { init_instrs } => {
+                // Allocate 8 bytes, store init value at offset 0, push TAG_CELL-tagged ptr.
+                //
+                // CC2 Safety note: same HS_AUX_PTR clobber risk as CreateClosure if
+                // init_instrs contains a nested heap allocation.  CC3 must ensure
+                // init_instrs does not allocate; typically init_instrs is a single
+                // I64Const or LoadLocal, never a heap-allocating sequence.
+                let hs = require_helper_state(helper_state, "AllocMutableCell")?;
+                let s_cell_ptr = hs.i32_base + HS_AUX_PTR;
+                let s_alloc_size = hs.i32_base + HS_ALLOC_SIZE;
+                function.instruction(&Instruction::I32Const(8));
+                function.instruction(&Instruction::LocalSet(s_alloc_size));
+                emit_alloc_from_top(function, &hs, s_alloc_size, s_cell_ptr);
+                // Store init value at offset 0.
+                function.instruction(&Instruction::LocalGet(s_cell_ptr));
+                emit_instrs(
+                    function,
+                    ctx,
+                    init_instrs,
+                    layout,
+                    named_i64_count,
+                    helper_i64_scratch_count,
+                    i32_base,
+                    static_strings,
+                    options,
+                )?;
+                function.instruction(&Instruction::I64Store(MemArg {
+                    offset: 0,
+                    align: 3,
+                    memory_index: 0,
+                }));
+                // Push TAG_CELL-tagged pointer as result.
+                emit_push_tagged_ptr(function, s_cell_ptr, TAG_CELL);
+            }
+
+            WasmBackendInstr::LoadCellValue => {
+                // Stack top: TAG_CELL-tagged i64 pointer.
+                // Decode to i32 pointer, load i64 at offset 0.
+                function.instruction(&Instruction::I32WrapI64);
+                function.instruction(&Instruction::I64Load(MemArg {
+                    offset: 0,
+                    align: 3,
+                    memory_index: 0,
+                }));
+            }
+
+            WasmBackendInstr::StoreCellValue {
+                cell_ptr_instrs,
+                value_instrs,
+            } => {
+                // Emit cell pointer (TAG_CELL i64), decode to i32 pointer.
+                emit_instrs(
+                    function,
+                    ctx,
+                    cell_ptr_instrs,
+                    layout,
+                    named_i64_count,
+                    helper_i64_scratch_count,
+                    i32_base,
+                    static_strings,
+                    options,
+                )?;
+                function.instruction(&Instruction::I32WrapI64);
+                // Emit the new value (i64) to store.
+                emit_instrs(
+                    function,
+                    ctx,
+                    value_instrs,
+                    layout,
+                    named_i64_count,
+                    helper_i64_scratch_count,
+                    i32_base,
+                    static_strings,
+                    options,
+                )?;
+                // Store value into cell at offset 0.
+                function.instruction(&Instruction::I64Store(MemArg {
+                    offset: 0,
+                    align: 3,
+                    memory_index: 0,
+                }));
+                // Result is Unit.
+                function.instruction(&Instruction::I64Const(encode_unit()));
             }
         }
     }

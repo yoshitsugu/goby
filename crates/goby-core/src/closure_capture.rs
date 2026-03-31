@@ -10,6 +10,10 @@ use crate::ir::{
 pub struct MutableStorageId(u32);
 
 impl MutableStorageId {
+    pub fn new(id: u32) -> Self {
+        Self(id)
+    }
+
     pub fn index(self) -> u32 {
         self.0
     }
@@ -43,6 +47,11 @@ pub struct CallableEnv {
 impl CallableEnv {
     pub fn is_empty(&self) -> bool {
         self.slots.is_empty()
+    }
+
+    /// Return the zero-based slot index for `name`, or `None` if not captured.
+    pub fn slot_index_of(&self, name: &str) -> Option<usize> {
+        self.slots.iter().position(|s| s.name == name)
     }
 }
 
@@ -544,6 +553,10 @@ fn upsert_capture(
         Some(existing) => {
             if capture_priority(capture_kind) > capture_priority(existing.capture_kind) {
                 existing.capture_kind = capture_kind;
+                // Also update slot_kind so it stays consistent with the capture_kind.
+                // A name that is first read as Immutable/ByValue may later be upgraded
+                // to MutableWrite/SharedMutableCell; the slot_kind must follow.
+                existing.slot_kind = slot_kind;
             }
         }
         None => {
@@ -605,6 +618,48 @@ mod tests {
             CompExpr::Value(lambda @ ValueExpr::Lambda { .. }) => lambda,
             other => panic!("expected lambda at top level, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn slot_index_of_empty_env_returns_none() {
+        let env = CallableEnv::default();
+        assert_eq!(env.slot_index_of("x"), None);
+    }
+
+    #[test]
+    fn slot_index_of_by_value_slot() {
+        let env = CallableEnv {
+            slots: vec![CallableEnvSlot {
+                name: "base".to_string(),
+                capture_kind: CaptureKind::Immutable,
+                slot_kind: CallableEnvSlotKind::ByValue,
+            }],
+        };
+        assert_eq!(env.slot_index_of("base"), Some(0));
+        assert_eq!(env.slot_index_of("other"), None);
+    }
+
+    #[test]
+    fn slot_index_of_shared_mutable_cell_slot() {
+        let env = CallableEnv {
+            slots: vec![
+                CallableEnvSlot {
+                    name: "x".to_string(),
+                    capture_kind: CaptureKind::Immutable,
+                    slot_kind: CallableEnvSlotKind::ByValue,
+                },
+                CallableEnvSlot {
+                    name: "count".to_string(),
+                    capture_kind: CaptureKind::MutableWrite,
+                    slot_kind: CallableEnvSlotKind::SharedMutableCell {
+                        storage_id: MutableStorageId(0),
+                    },
+                },
+            ],
+        };
+        assert_eq!(env.slot_index_of("x"), Some(0));
+        assert_eq!(env.slot_index_of("count"), Some(1));
+        assert_eq!(env.slot_index_of("missing"), None);
     }
 
     #[test]

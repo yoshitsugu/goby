@@ -4,14 +4,21 @@ Last updated: 2026-03-31
 
 ## Current Focus
 
-**Track CC / CC2** (next): Runtime representation.
-CC1 (analysis and IR ownership) is complete — capture classification, `MutableStorageId`
-shared-cell model, `CallableEnv` metadata, and acceptance-program rejection tests are all in.
-CC2 will define the closure-record layout, heap mutable-cell representation, and the helper
-layer for closure-environment load/store.
+**Track CC / CC3** (next): Lowering and call dispatch.
+CC2 (runtime representation) is complete — closure-record layout, mutable-cell heap
+representation, `ClosureEnvHelper` load/store layer, and new backend IR instructions
+(`CreateClosure`, `LoadClosureSlot`, `AllocMutableCell`, `LoadCellValue`, `StoreCellValue`)
+with full emit support are all in.
 
 ## Recently Completed
 
+- **Track CC / CC2** (2026-03-31): All CC2 milestones complete.
+  - `TAG_CLOSURE = 0x8`, `TAG_CELL = 0x9` in `value.rs`; encode/decode helpers and orthogonality tests.
+  - `CallableEnv::slot_index_of` and `MutableStorageId::new` in `goby-core`.
+  - 5 new `WasmBackendInstr` variants with emit support in `backend_ir.rs` and `emit.rs`.
+  - `ClosureEnvHelper` in `gen_lower/closure_env.rs` with `slot_load_instrs` and `cell_store_instrs`.
+  - Fixed `upsert_capture` to keep `slot_kind` consistent when `capture_kind` is upgraded.
+  - Fixed `has_heap_pattern` to recurse into CC2 instruction sub-vecs.
 - **Track CC / CC1** (2026-03-31): All CC1 milestones complete.
   - Shared closure-capture analysis in `crates/goby-core/src/closure_capture.rs`
   - `CallableEnv` / `CallableEnvSlot` / `MutableStorageId` ownership model
@@ -27,7 +34,7 @@ layer for closure-environment load/store.
 
 Next track candidates are in `doc/PLAN.md` §4:
 
-- **Track CC: Closure Capture** (§4.6): CC1 complete. Next: CC2 — closure-record layout, mutable-cell heap representation, and environment load/store helpers.
+- **Track CC: Closure Capture** (§4.6): CC2 complete. Next: CC3 — relax rejection gate, lower lambdas through one callable-environment model, rewrite captured mut reads/writes to cell ops.
 - **Track D follow-ups** (§4.1): D5 (`goby lint` unused-binding rule), D6c shared grammar asset.
 - **Track WB-3B** (deferred): WasmFX typed continuations — on hold until WebAssembly stack switching reaches Phase 4.
 - **Float support** (§4.7): `Float` type backed by Wasm `f64`; semantics to be locked before coding.
@@ -61,6 +68,7 @@ Next track candidates are in `doc/PLAN.md` §4:
 - `doc/PLAN_IR.md` — Wasm backend lowering design and phase plan
 - `doc/PLAN_CLOSURE_CAPTURE.md` — closure capture design and milestones
 - `crates/goby-core/src/closure_capture.rs` — shared closure-capture analysis and callable-environment metadata
+- `crates/goby-wasm/src/gen_lower/closure_env.rs` — `ClosureEnvHelper`: closure-environment load/store helper layer (CC2)
 - `crates/goby-wasm/src/gen_lower/lower.rs` — `lower_comp` / `lower_value`
 - `crates/goby-wasm/src/gen_lower/emit.rs` — Wasm instruction emission
 - `crates/goby-wasm/src/gen_lower/backend_ir.rs` — backend IR instruction set

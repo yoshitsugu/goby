@@ -2,7 +2,7 @@
 
 Last updated: 2026-03-31
 
-Status: CC0 complete; CC1 next
+Status: CC0–CC2 complete; CC3 next
 
 Related documents:
 
@@ -296,10 +296,10 @@ Done when:
 
 ### CC2. Runtime representation
 
-- [ ] Finalize the closure-record layout for captured values and mutable-cell references.
-- [ ] Add heap representation and helpers for promoted mutable cells.
-- [ ] Define how the runtime represents the zero-capture callable case without making it a separate semantic callable kind.
-- [ ] Define one helper layer for closure-environment load/store logic so wrapper emission does not open-code slot interpretation repeatedly.
+- [x] Finalize the closure-record layout for captured values and mutable-cell references.
+- [x] Add heap representation and helpers for promoted mutable cells.
+- [x] Define how the runtime represents the zero-capture callable case without making it a separate semantic callable kind.
+- [x] Define one helper layer for closure-environment load/store logic so wrapper emission does not open-code slot interpretation repeatedly.
 
 Done when:
 

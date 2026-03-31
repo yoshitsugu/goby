@@ -25,6 +25,7 @@
 //! They may import from `backend.rs`, `layout.rs`, `planning.rs`, and `goby-core/ir.rs`.
 
 pub(crate) mod backend_ir;
+pub(crate) mod closure_env;
 pub(crate) mod emit;
 pub(crate) mod lower;
 pub(crate) mod value;

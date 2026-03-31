@@ -35,6 +35,17 @@ pub(crate) const TAG_FUNC: u8 = 0x5;
 pub(crate) const TAG_TUPLE: u8 = 0x6;
 /// Type tag for `Record` values (pointer-bearing).
 pub(crate) const TAG_RECORD: u8 = 0x7;
+/// Type tag for closure record values (pointer-bearing).
+///
+/// A closure record is laid out as `(func_handle: i64, slots: [i64; N])` in linear memory.
+/// The `func_handle` at offset 0 is a TAG_FUNC-encoded i64 (funcref table slot index).
+/// Slots follow at offsets `8 + 8*i`.
+pub(crate) const TAG_CLOSURE: u8 = 0x8;
+/// Type tag for mutable cell values (pointer-bearing).
+///
+/// A mutable cell is an 8-byte heap allocation: `(value: i64)` at offset 0.
+/// The cell holds the current value of a shared mutable binding.
+pub(crate) const TAG_CELL: u8 = 0x9;
 
 /// Bit mask for the lower 60 bits (payload region).
 const PAYLOAD_MASK: i64 = (1i64 << 60) - 1;
@@ -137,12 +148,46 @@ pub(crate) fn encode_record_ptr(ptr: u32) -> i64 {
     (TAG_RECORD as i64) << 60 | (ptr as i64)
 }
 
+/// Encode a closure record pointer value.
+///
+/// `ptr` is a u32 address into Wasm linear memory pointing to a
+/// `(func_handle: i64, slots: [i64; N])` layout.
+#[inline]
+pub(crate) fn encode_closure_ptr(ptr: u32) -> i64 {
+    (TAG_CLOSURE as i64) << 60 | (ptr as i64)
+}
+
+/// Encode a mutable cell pointer value.
+///
+/// `ptr` is a u32 address into Wasm linear memory pointing to a
+/// `(value: i64)` layout (8 bytes).
+#[inline]
+pub(crate) fn encode_cell_ptr(ptr: u32) -> i64 {
+    (TAG_CELL as i64) << 60 | (ptr as i64)
+}
+
 /// Extract the funcref table slot index from an encoded `Func` value.
 ///
 /// Only valid when `decode_tag(v) == TAG_FUNC`.
 #[inline]
 pub(crate) fn decode_func_slot(v: i64) -> u32 {
     (v & 0xFFFF_FFFF) as u32
+}
+
+/// Extract the u32 pointer from an encoded closure record value.
+///
+/// Only valid when `decode_tag(v) == TAG_CLOSURE`.
+#[inline]
+pub(crate) fn decode_closure_ptr(v: i64) -> u32 {
+    decode_payload_ptr(v)
+}
+
+/// Extract the u32 pointer from an encoded mutable cell value.
+///
+/// Only valid when `decode_tag(v) == TAG_CELL`.
+#[inline]
+pub(crate) fn decode_cell_ptr(v: i64) -> u32 {
+    decode_payload_ptr(v)
 }
 
 // ---------------------------------------------------------------------------
@@ -340,14 +385,45 @@ mod tests {
         let func_tag = decode_tag(encode_func_handle(0));
         let tuple_tag = decode_tag(encode_tuple_ptr(0));
         let record_tag = decode_tag(encode_record_ptr(0));
+        let closure_tag = decode_tag(encode_closure_ptr(0));
+        let cell_tag = decode_tag(encode_cell_ptr(0));
         // All runtime tags must be distinct.
         let tags = [
             unit_tag, int_tag, bool_tag, str_tag, list_tag, func_tag, tuple_tag, record_tag,
+            closure_tag, cell_tag,
         ];
         for i in 0..tags.len() {
             for j in (i + 1)..tags.len() {
                 assert_ne!(tags[i], tags[j], "tags[{i}] == tags[{j}]: not orthogonal");
             }
         }
+    }
+
+    #[test]
+    fn closure_ptr_round_trip() {
+        let v = encode_closure_ptr(16);
+        assert_eq!(decode_tag(v), TAG_CLOSURE);
+        assert_eq!(decode_closure_ptr(v), 16);
+    }
+
+    #[test]
+    fn closure_ptr_max_round_trip() {
+        let v = encode_closure_ptr(u32::MAX);
+        assert_eq!(decode_tag(v), TAG_CLOSURE);
+        assert_eq!(decode_closure_ptr(v), u32::MAX);
+    }
+
+    #[test]
+    fn cell_ptr_round_trip() {
+        let v = encode_cell_ptr(24);
+        assert_eq!(decode_tag(v), TAG_CELL);
+        assert_eq!(decode_cell_ptr(v), 24);
+    }
+
+    #[test]
+    fn cell_ptr_max_round_trip() {
+        let v = encode_cell_ptr(u32::MAX);
+        assert_eq!(decode_tag(v), TAG_CELL);
+        assert_eq!(decode_cell_ptr(v), u32::MAX);
     }
 }
