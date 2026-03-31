@@ -1283,3 +1283,163 @@ main =
         err.message
     );
 }
+
+// ---------------------------------------------------------------------------
+// Closure capture acceptance programs (failing until CC4 lands)
+//
+// These tests correspond to the five acceptance programs in
+// doc/PLAN_CLOSURE_CAPTURE.md §3.  Each one exercises a distinct closure
+// capture shape that the current Wasm backend does not support.  The tests
+// assert that compilation fails with a recognisable "closure capture" error
+// rather than silently producing wrong code.
+//
+// When Track CC reaches CC4, these tests should be updated to assert that
+// compilation *succeeds* and execution produces the expected output.
+// ---------------------------------------------------------------------------
+
+/// Closure that reads an immutable outer binding (`base`) must not compile
+/// on the current Wasm path, which rejects all lambdas with free variables.
+#[test]
+fn read_only_immutable_capture_does_not_compile_on_wasm_path() {
+    let source = r#"
+make_adder : Int -> (Int -> Int)
+make_adder base =
+  fn x -> base + x
+
+main : Unit -> Unit can Print, Read
+main =
+  _ = read()
+  add10 = make_adder 10
+  println "${add10 5}"
+"#;
+    let module = parse_module(source).expect("source should parse");
+    let err = compile_module(&module)
+        .expect_err("capturing lambda (immutable read) should not compile on the current Wasm path");
+    assert!(
+        err.message.contains("unsupported IR form") || err.message.contains("Lambda"),
+        "error should indicate unsupported lambda form, got: {}",
+        err.message
+    );
+}
+
+/// Closure that writes to an outer mutable binding (`total`) must not compile
+/// on the current Wasm path.
+#[test]
+fn mutable_write_capture_via_each_does_not_compile_on_wasm_path() {
+    let source = r#"
+import goby/list ( each )
+
+sum : List Int -> Int
+sum xs =
+  mut total = 0
+  each xs (fn x ->
+    total := total + x
+  )
+  total
+
+main : Unit -> Unit can Print, Read
+main =
+  _ = read()
+  println "${sum [1, 2, 3]}"
+"#;
+    let module = parse_module(source).expect("source should parse");
+    let err = compile_module(&module)
+        .expect_err("capturing lambda (mutable write) should not compile on the current Wasm path");
+    assert!(
+        err.message.to_lowercase().contains("closure")
+            || err.message.contains("free variable")
+            || err.message.contains("capture"),
+        "error should mention closure capture, got: {}",
+        err.message
+    );
+}
+
+/// Outer mutation that occurs after a closure is created must be visible
+/// through the closure.  This shape does not compile on the current Wasm path.
+#[test]
+fn outer_mutation_after_closure_creation_does_not_compile_on_wasm_path() {
+    let source = r#"
+main : Unit -> Unit can Print, Read
+main =
+  _ = read()
+  mut value = 1
+  read_value = fn _ -> value
+  value := 7
+  println "${read_value ()}"
+"#;
+    let module = parse_module(source).expect("source should parse");
+    let err = compile_module(&module)
+        .expect_err("closure reading outer mutable should not compile on the current Wasm path");
+    // The capturing lambda (`fn _ -> value`) prevents GeneralLowered classification;
+    // the program falls through to effect-boundary / fallback path which cannot resolve
+    // the static output, producing a "no IR decl" or "fallback" error.
+    assert!(
+        err.message.contains("no IR decl")
+            || err.message.contains("unsupported IR form")
+            || err.message.contains("fallback"),
+        "error should indicate unsupported form or unresolvable output, got: {}",
+        err.message
+    );
+}
+
+/// Inline capturing lambda passed to `fold` must not compile on the current
+/// Wasm path (`bias` is a free variable inside the inner lambda).
+#[test]
+fn inline_capturing_lambda_to_fold_does_not_compile_on_wasm_path() {
+    let source = r#"
+import goby/list ( fold )
+
+sum_with_bias : Int -> List Int -> Int
+sum_with_bias bias xs =
+  fold xs 0 (fn acc x -> acc + x + bias)
+
+main : Unit -> Unit can Print, Read
+main =
+  _ = read()
+  println "${sum_with_bias 10 [1, 2, 3]}"
+"#;
+    let module = parse_module(source).expect("source should parse");
+    let err = compile_module(&module)
+        .expect_err("inline capturing lambda to fold should not compile on the current Wasm path");
+    assert!(
+        err.message.contains("unsupported IR form") || err.message.contains("Lambda"),
+        "error should indicate unsupported lambda form, got: {}",
+        err.message
+    );
+}
+
+/// Two closures sharing one mutable cell must not compile on the current Wasm
+/// path: both `inc` and `get` capture `count` from the enclosing scope.
+#[test]
+fn two_closures_sharing_mutable_cell_do_not_compile_on_wasm_path() {
+    let source = r#"
+pair : Unit -> ((Unit -> Unit), (Unit -> Int))
+pair _ =
+  mut count = 0
+  inc = fn _ ->
+    count := count + 1
+  get = fn _ -> count
+  (inc, get)
+
+main : Unit -> Unit can Print, Read
+main =
+  _ = read()
+  p = pair()
+  p.0()
+  p.0()
+  println "${p.1()}"
+"#;
+    let module = parse_module(source).expect("source should parse");
+    let err = compile_module(&module)
+        .expect_err("closures sharing a mutable cell should not compile on the current Wasm path");
+    // The closures prevent GeneralLowered; the program falls through to effect-boundary /
+    // fallback path which cannot resolve static output.
+    assert!(
+        err.message.contains("unsupported IR form")
+            || err.message.contains("Lambda")
+            || err.message.contains("fallback")
+            || err.message.contains("effect boundary"),
+        "error should indicate unsupported form or unresolvable output, got: {}",
+        err.message
+    );
+}
