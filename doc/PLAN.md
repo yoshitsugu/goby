@@ -139,18 +139,7 @@ Based on `examples/*.gb`:
         must be removed, standardized, or moved into a separate launcher.
   - `goby-cli check <file.gb>` performs parse/typecheck without runtime entrypoint.
 
-### 2.1 Planned Syntax Simplification: `fn`-only Anonymous Functions
-
-- Direction: `fn` is the only anonymous function syntax. Pipe form `|x| ->` has been removed.
-- Rationale:
-  - one lambda surface form is easier to teach, parse, format, and highlight consistently.
-  - `fn` scales from one parameter to multiple parameters without changing visual grammar.
-- Status: **Complete** (Phase A–D all done).
-  - `doc/LANGUAGE_SPEC.md` documents only `fn`-form anonymous functions.
-  - `examples/` and user-facing docs use `fn x ->` exclusively.
-  - parser rejects `|x| -> expr`; negative test `pipe_lambda_syntax_rejected` enforces this.
-  - formatter emits `fn n ->` for single-param lambdas.
-  - editor syntax definitions highlight `fn` correctly.
+### 2.1 Syntax and Parsing
 - `main` type is restricted to `Unit -> Unit` for MVP.
   - `main` type annotation is required for `run`; optional for `check`.
 - Legacy `void` type spelling is rejected in type annotations.
@@ -219,7 +208,11 @@ Based on `examples/*.gb`:
     - whether the long-term contract should expose a separate Goby runner instead of overloading
       raw external `wasmtime` execution.
 
-### 2.1 Syntax and Parsing
+- **`fn`-only anonymous functions** (complete, 2026-03-31).
+  - `fn x -> expr` is the only anonymous function syntax.
+  - Pipe form `|x| -> expr` is removed from the parser; `pipe_lambda_syntax_rejected` test enforces this.
+  - Formatter emits `fn n ->` for single-param lambdas.
+  - `fn` is reserved keyword; editor syntax definitions highlight it correctly.
 
 - **String interpolation `${}`** (implemented).
   - Parser supports `${ expr }` inside string literals and lowers it to `Expr::InterpolatedString`.
@@ -537,7 +530,23 @@ Completed scope:
 Remaining diagnostic-rendering work now continues under the active TD follow-on
 track in `doc/PLAN_ERROR.md`.
 
-### 4.6 `Float` / Wasm `f64` Support
+### 4.6 Track CC: Closure Capture (planned)
+
+Goal: enable lambda closure capture on the `GeneralLowered` Wasm path with correct lexical semantics.
+See `doc/PLAN_CLOSURE_CAPTURE.md` for the full design and milestone plan.
+
+Locked semantic target:
+
+- immutable bindings (`let`) are captured by value.
+- mutable bindings (`mut`) are captured via shared mutable cell (not snapshot).
+- multiple closures capturing the same `mut` binding observe the same shared state.
+- all lambdas are conceptually closures; non-capturing lambdas are the zero-capture case.
+
+Status: **Planned** — design document complete; no implementation milestones started.
+
+Next step: CC0 (semantics lock and document alignment).
+
+### 4.7 `Float` / Wasm `f64` Support
 
 Goal: add a first-class `Float` type with predictable parser/typechecker/runtime/Wasm behavior.
 
@@ -593,7 +602,7 @@ Acceptance criteria:
 - diagnostics clearly distinguish `Int` from `Float`.
 - docs/examples/spec are updated in the same slice that lands behavior.
 
-### 4.6 Parking Lot (Needs Revalidation Before Implementation)
+### 4.8 Parking Lot (Needs Revalidation Before Implementation)
 
 - CLI `build` expansion details (`--target`, `--engine-compat`, verify modes).
 - CLI binary naming migration (`goby-cli` -> `goby`) final policy.

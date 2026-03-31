@@ -4,15 +4,24 @@ Last updated: 2026-03-31
 
 ## Current Focus
 
-No active track. See Immediate Next Steps for candidates.
+No active track. Next candidates below.
+
+## Recently Completed
+
+- **`fn`-only anonymous functions** (2026-03-31): Pipe-lambda `|x| ->` removed. `fn x -> expr` is the only form. Parser rejects old syntax; formatter, tooling, docs, and all tests updated.
+- **Track H / HOF milestone series** (complete through HOF-M7): `fn` keyword, multi-param lambdas, effectful callbacks, `fold`, end-to-end acceptance gate.
+- **Track E** (HOF type checking, 2026-03-27): Callback arity mismatches rejected at `goby-cli check`.
+- **Track F** (stdlib `int.to_string`, 2026-03-25): End-to-end; direct calls and named callback use covered.
+- **Track ER** (compiler error reporting, 2026-03-29): Unresolved/ambiguous names, import diagnostics, CLI/LSP parity.
 
 ## Immediate Next Steps
 
-Next track candidates are in `doc/PLAN.md` §4. Deferred items:
+Next track candidates are in `doc/PLAN.md` §4:
 
+- **Track CC: Closure Capture** (§4.6): Design complete in `doc/PLAN_CLOSURE_CAPTURE.md`. First step is CC0 (semantics lock and doc alignment). Highest-value unblocked backend work.
 - **Track D follow-ups** (§4.1): D5 (`goby lint` unused-binding rule), D6c shared grammar asset.
 - **Track WB-3B** (deferred): WasmFX typed continuations — on hold until WebAssembly stack switching reaches Phase 4.
-- **Float support** (§4.6): `Float` type backed by Wasm `f64`; semantics to be locked before coding.
+- **Float support** (§4.7): `Float` type backed by Wasm `f64`; semantics to be locked before coding.
 
 ## Architecture State
 
@@ -34,12 +43,13 @@ Next track candidates are in `doc/PLAN.md` §4. Deferred items:
   - Host intrinsics: `StringGraphemesList` (`__goby_string_graphemes_list`)
 - Known limitations:
   - non-tail / multi-resume handlers → `BackendLimitation` error
-  - lambda with free variables (closure capture) → `UnsupportedForm` (WB-3B deferred)
-  - inline Lambda IR in general lowering (e.g. `fold` with inline `fn` callback) → `UnsupportedForm`
+  - lambda with free variables (closure capture) → `UnsupportedForm` — planned as Track CC
+  - inline capturing lambda passed to HOF callbacks (e.g. `fold (fn acc x -> acc + x + bias)`) → `UnsupportedForm` — planned as Track CC
 
 ## Key Entry Points
 
 - `doc/PLAN_IR.md` — Wasm backend lowering design and phase plan
+- `doc/PLAN_CLOSURE_CAPTURE.md` — closure capture design and milestones
 - `crates/goby-wasm/src/gen_lower/lower.rs` — `lower_comp` / `lower_value`
 - `crates/goby-wasm/src/gen_lower/emit.rs` — Wasm instruction emission
 - `crates/goby-wasm/src/gen_lower/backend_ir.rs` — backend IR instruction set
