@@ -1878,7 +1878,13 @@ mod tests {
         match &ast {
             Expr::Lambda { param, body } => {
                 assert_eq!(param, "n");
-                assert!(matches!(body.as_ref(), Expr::BinOp { op: BinOpKind::Add, .. }));
+                assert!(matches!(
+                    body.as_ref(),
+                    Expr::BinOp {
+                        op: BinOpKind::Add,
+                        ..
+                    }
+                ));
             }
             other => panic!("expected lambda, got {:?}", other),
         }

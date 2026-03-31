@@ -4,6 +4,7 @@
 
 pub mod analysis;
 pub mod ast;
+pub mod closure_capture;
 pub mod diagnostic;
 pub mod formatter;
 pub mod ir;
