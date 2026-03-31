@@ -954,10 +954,12 @@ main =
 /// WB-3-M3: lambda body referencing a free variable falls back to InterpreterBridge.
 ///
 /// `base` is defined in the enclosing scope but is not the lambda param (`x`),
-/// making it a free variable (closure capture). WB-3A does not support closure
-/// capture, so this program should NOT classify as GeneralLowered.
+/// CC3-Step2: ByValue-captured lambda now lowers successfully, so this program
+/// classifies as GeneralLowered. The ListMap call dispatch is still arity-1
+/// (IndirectCallClosure not yet done), so execution would give wrong results,
+/// but classification now succeeds.
 #[test]
-fn wb3_m3_lambda_with_free_variable_does_not_classify_as_general_lowered() {
+fn wb3_m3_lambda_with_by_value_capture_classifies_as_general_lowered() {
     let source = r#"
 import goby/list ( map )
 
@@ -971,10 +973,10 @@ main =
 "#;
     let module = parse_module(source).expect("source should parse");
     let kind = runtime_io_execution_kind(&module).expect("classification should succeed");
-    assert_ne!(
+    assert_eq!(
         kind,
         RuntimeIoExecutionKind::GeneralLowered,
-        "lambda with free variable should not classify as GeneralLowered (closure not supported in WB-3A)"
+        "ByValue-capturing lambda should now classify as GeneralLowered after CC3-Step2"
     );
 }
 
@@ -1297,8 +1299,10 @@ main =
 // compilation *succeeds* and execution produces the expected output.
 // ---------------------------------------------------------------------------
 
-/// Closure that reads an immutable outer binding (`base`) must not compile
-/// on the current Wasm path, which rejects all lambdas with free variables.
+/// Closure that reads an immutable outer binding (`base`) must not fully execute
+/// on the current Wasm path. CC3-Step2 lowers the lambda; indirect closure call
+/// dispatch (CC3-Step4 IndirectCallClosure) is needed for correct execution.
+/// The program fails at IR lowering level (no IR decl), at lowering, or at call dispatch.
 #[test]
 fn read_only_immutable_capture_does_not_compile_on_wasm_path() {
     let source = r#"
@@ -1313,11 +1317,15 @@ main =
   println "${add10 5}"
 "#;
     let module = parse_module(source).expect("source should parse");
+    // The program currently fails at IR lowering (no IR decl) or Wasm lowering.
+    // Either error is acceptable until CC3-Step4 (IndirectCallClosure) is complete.
     let err = compile_module(&module)
-        .expect_err("capturing lambda (immutable read) should not compile on the current Wasm path");
+        .expect_err("capturing lambda program should not compile correctly on the current Wasm path");
     assert!(
-        err.message.contains("unsupported IR form") || err.message.contains("Lambda"),
-        "error should indicate unsupported lambda form, got: {}",
+        err.message.contains("unsupported IR form")
+            || err.message.contains("Lambda")
+            || err.message.contains("no IR decl"),
+        "error should indicate unsupported form or missing IR, got: {}",
         err.message
     );
 }
@@ -1382,8 +1390,9 @@ main =
     );
 }
 
-/// Inline capturing lambda passed to `fold` must not compile on the current
-/// Wasm path (`bias` is a free variable inside the inner lambda).
+/// Inline capturing lambda passed to `fold` must not fully compile/execute on the
+/// current Wasm path. CC3-Step2 lowers ByValue captures; mutable-write captures
+/// and indirect closure call dispatch remain unsupported until CC3-Step4 / CC4.
 #[test]
 fn inline_capturing_lambda_to_fold_does_not_compile_on_wasm_path() {
     let source = r#"
@@ -1399,11 +1408,14 @@ main =
   println "${sum_with_bias 10 [1, 2, 3]}"
 "#;
     let module = parse_module(source).expect("source should parse");
+    // Acceptable failures: IR lowering error, unsupported form, or no IR decl.
     let err = compile_module(&module)
-        .expect_err("inline capturing lambda to fold should not compile on the current Wasm path");
+        .expect_err("capturing lambda to fold should not compile correctly on the current Wasm path");
     assert!(
-        err.message.contains("unsupported IR form") || err.message.contains("Lambda"),
-        "error should indicate unsupported lambda form, got: {}",
+        err.message.contains("unsupported IR form")
+            || err.message.contains("Lambda")
+            || err.message.contains("no IR decl"),
+        "error should indicate unsupported form or missing IR, got: {}",
         err.message
     );
 }

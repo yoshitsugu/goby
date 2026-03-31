@@ -61,7 +61,7 @@ const HELPER_SCRATCH_I64: u32 = 2;
 // scratch[10] = copy or match index
 // scratch[11] = alloc cursor (persistent)
 // scratch[12] = heap floor (persistent)
-const HELPER_SCRATCH_I32: u32 = 13;
+const HELPER_SCRATCH_I32: u32 = 14;
 const HELPER_ALLOC_CURSOR_OFFSET: u32 = 11;
 const HELPER_HEAP_FLOOR_OFFSET: u32 = 12;
 
@@ -80,6 +80,12 @@ const HS_AUX_PTR: u32 = 7; // auxiliary pointer (tail ptr in ListPattern, list p
 const HS_LIST_PTR: u32 = 8; // secondary list ptr
 const HS_ALLOC_SIZE: u32 = 9; // allocation size temp
 const HS_ITER: u32 = 10; // copy or match index
+/// Dedicated scratch slot for the closure base pointer in `CreateClosure`.
+///
+/// `CreateClosure` saves its allocation result here immediately after `emit_alloc_from_top`,
+/// so that slot_instrs (which may themselves call `AllocMutableCell` and overwrite `HS_AUX_PTR`)
+/// cannot corrupt the outer closure pointer.
+const HS_CLOSURE_BASE_PTR: u32 = 13;
 
 #[derive(Debug, Clone)]
 struct StaticStringPool {
@@ -1474,23 +1480,22 @@ fn emit_instrs(
             } => {
                 // Layout: (func_handle: i64, slots: [i64; N]) = 8 + 8*N bytes.
                 //
-                // CC2 Safety note: `s_closure_ptr` (= HS_AUX_PTR) is re-read by
-                // `emit_push_tagged_ptr` after all slot instructions have been emitted.
-                // If any slot instruction itself allocates on the heap (e.g. AllocMutableCell),
-                // it will overwrite HS_AUX_PTR and corrupt the closure pointer.
-                //
-                // In CC2 this is not yet a problem because CreateClosure is not wired into
-                // the lowering pass (lower.rs) and therefore never emitted with heap-allocating
-                // slot_instrs.  CC3 (Lowering and call dispatch) must save the closure base
-                // address to a dedicated named local before emitting slot instructions.
+                // The closure base pointer is saved to HS_CLOSURE_BASE_PTR (slot 13) immediately
+                // after allocation.  This protects it from being overwritten when slot_instrs
+                // contain heap-allocating instructions (e.g. AllocMutableCell) that reuse
+                // HS_AUX_PTR (slot 7) for their own allocation results.
                 let hs = require_helper_state(helper_state, "CreateClosure")?;
-                let s_closure_ptr = hs.i32_base + HS_AUX_PTR;
+                let s_closure_ptr = hs.i32_base + HS_CLOSURE_BASE_PTR;
+                let s_aux = hs.i32_base + HS_AUX_PTR; // temp for alloc, then discarded
                 let s_alloc_size = hs.i32_base + HS_ALLOC_SIZE;
                 let n = slot_instrs.len() as i32;
                 // alloc_size = 8 + 8 * n  (8 bytes for func_handle, 8 bytes per slot)
                 function.instruction(&Instruction::I32Const(8 + 8 * n));
                 function.instruction(&Instruction::LocalSet(s_alloc_size));
-                emit_alloc_from_top(function, &hs, s_alloc_size, s_closure_ptr);
+                // Allocate into HS_AUX_PTR, then copy to the dedicated HS_CLOSURE_BASE_PTR.
+                emit_alloc_from_top(function, &hs, s_alloc_size, s_aux);
+                function.instruction(&Instruction::LocalGet(s_aux));
+                function.instruction(&Instruction::LocalSet(s_closure_ptr));
                 // Store func_handle (TAG_FUNC i64) at offset 0.
                 function.instruction(&Instruction::LocalGet(s_closure_ptr));
                 emit_instrs(
@@ -1510,6 +1515,7 @@ fn emit_instrs(
                     memory_index: 0,
                 }));
                 // Store each slot at offset 8 + 8*i.
+                // slot_instrs may allocate (overwriting HS_AUX_PTR), but s_closure_ptr is safe.
                 for (i, slot_instrs_i) in slot_instrs.iter().enumerate() {
                     function.instruction(&Instruction::LocalGet(s_closure_ptr));
                     function.instruction(&Instruction::I32Const(8 + 8 * i as i32));
@@ -1531,7 +1537,7 @@ fn emit_instrs(
                         memory_index: 0,
                     }));
                 }
-                // Push TAG_CLOSURE-tagged pointer as result.
+                // Push TAG_CLOSURE-tagged pointer using the dedicated closure base slot.
                 emit_push_tagged_ptr(function, s_closure_ptr, TAG_CLOSURE);
             }
 

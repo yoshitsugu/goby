@@ -991,7 +991,7 @@ fn lower_module_to_instrs(module: &Module) -> Result<LowerModuleResult, CodegenE
     for lam in lambda_decls {
         aux_decls.push(AuxDecl {
             decl_name: lam.decl_name,
-            param_names: vec![lam.param_name],
+            param_names: lam.param_names,
             instrs: lam.instrs,
         });
     }
@@ -1266,9 +1266,9 @@ main =
     }
 
     #[test]
-    fn supports_general_lower_module_returns_unsupported_ir_form_for_capturing_lambda() {
-        // A lambda that captures an outer variable is not supported in WB-3A.
-        // The gate passes (has_lambda_in_comp = true) but lower_comp_collecting_lambdas fails.
+    fn supports_general_lower_module_accepts_by_value_capturing_lambda() {
+        // CC3-Step2: A lambda that captures an outer variable ByValue is now supported at
+        // the IR lowering level. The module should be classified as supported (None).
         let module = parse_module(
             r#"
 import goby/list ( map )
@@ -1285,11 +1285,8 @@ main =
         let reason =
             supports_general_lower_module(&module).expect("classification should not error");
         assert!(
-            matches!(
-                reason,
-                Some(GeneralLowerUnsupportedReason::UnsupportedIrForm { .. })
-            ),
-            "capturing lambda must return UnsupportedIrForm, got: {:?}",
+            reason.is_none(),
+            "ByValue-capturing lambda should be supported after CC3-Step2, got: {:?}",
             reason
         );
     }

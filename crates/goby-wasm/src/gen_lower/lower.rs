@@ -21,13 +21,20 @@ static LAMBDA_COUNTER: AtomicU32 = AtomicU32::new(0);
 /// An auxiliary Wasm function produced by lifting a `ValueExpr::Lambda` out of an expression.
 ///
 /// Lambda bodies are emitted as named top-level Wasm functions and referenced via
-/// `PushFuncHandle { decl_name }` at the use site.
+/// `PushFuncHandle { decl_name }` or `CreateClosure` at the use site.
+///
+/// # Parameter conventions
+/// - Zero-capture lambda: `param_names = [original_param]` → Wasm sig `(i64) -> i64`.
+/// - Capturing lambda:    `param_names = ["__clo", original_param]` → Wasm sig `(i64, i64) -> i64`.
+///   `"__clo"` is Wasm local 0 and carries the TAG_CLOSURE-tagged closure record pointer.
 #[derive(Debug, Clone)]
 pub(crate) struct LambdaAuxDecl {
     /// Unique name for this lambda function (e.g. `__lambda_0`).
     pub(crate) decl_name: String,
-    /// The single parameter name of the lambda.
-    pub(crate) param_name: String,
+    /// Ordered parameter names.  Zero-capture: `[param]`.  Capturing: `["__clo", param]`.
+    pub(crate) param_names: Vec<String>,
+    /// Closure capture environment.  Empty for zero-capture lambdas.
+    pub(crate) env: CallableEnv,
     /// Lowered body instructions.
     pub(crate) instrs: Vec<WasmBackendInstr>,
 }
@@ -138,6 +145,11 @@ fn lower_comp_inner(
     lambda_decls: &mut Vec<LambdaAuxDecl>,
 ) -> Result<Vec<WasmBackendInstr>, LowerError> {
     match comp {
+        // Lambda in value position (e.g. returned from a decl or bound by Let) is lowered
+        // through lower_lambda which has access to bindings/known_decls/lambda_decls.
+        CompExpr::Value(ValueExpr::Lambda { param, body }) => {
+            lower_lambda(param, body, bindings, known_decls, lambda_decls)
+        }
         CompExpr::Value(v) => lower_value(v),
 
         CompExpr::Let {
@@ -694,9 +706,18 @@ pub(crate) fn lower_value(v: &ValueExpr) -> Result<Vec<WasmBackendInstr>, LowerE
             }])
         }
         ValueExpr::Var(name) => Ok(vec![WasmBackendInstr::LoadLocal { name: name.clone() }]),
-        ValueExpr::GlobalRef { module, name } => Ok(vec![WasmBackendInstr::LoadLocal {
-            name: format!("{}.{}", module, name),
-        }]),
+        ValueExpr::GlobalRef { module, name } => {
+            // Effect ops (Print.println, Read.read, etc.) cannot be stored as Wasm i64 values;
+            // they are only valid as direct callees. Reject when used as a value.
+            if backend_effect_op(module, name).is_some() {
+                return Err(LowerError::UnsupportedForm {
+                    node: format!("GlobalRef '{module}.{name}' used as a value (effect ops are not first-class Wasm values)"),
+                });
+            }
+            Ok(vec![WasmBackendInstr::LoadLocal {
+                name: format!("{}.{}", module, name),
+            }])
+        }
         ValueExpr::BinOp { op, left, right } => {
             let mut instrs = lower_value(left)?;
             instrs.extend(lower_value(right)?);
@@ -743,9 +764,10 @@ pub(crate) fn lower_value(v: &ValueExpr) -> Result<Vec<WasmBackendInstr>, LowerE
                 index: *index,
             }])
         }
-        // NOTE: Lambda must be lowered via lower_value_as_arg (call-argument context only).
-        // A Lambda appearing here (e.g. bound by a Let) returns UnsupportedForm and the
-        // program falls back to the interpreter path. This is the expected WB-3A limitation.
+        // NOTE: Lambda is intercepted at the CompExpr::Value(Lambda) level in lower_comp_inner,
+        // which has access to bindings/known_decls/lambda_decls.  lower_value is never called
+        // with a Lambda directly from lower_comp_inner, but may be called from other contexts
+        // (e.g. scrutinee of Case, condition of If) where Lambda is not expected.
         other => Err(LowerError::UnsupportedForm {
             node: format!("{:?}", other),
         }),
@@ -789,7 +811,8 @@ fn lower_value_as_arg(
             let param_name = "__s".to_string();
             lambda_decls.push(LambdaAuxDecl {
                 decl_name: decl_name.clone(),
-                param_name: param_name.clone(),
+                param_names: vec![param_name.clone()],
+                env: CallableEnv::default(),
                 instrs: vec![
                     WasmBackendInstr::LoadLocal {
                         name: param_name.clone(),
@@ -807,7 +830,8 @@ fn lower_value_as_arg(
             let param_name = "__s".to_string();
             lambda_decls.push(LambdaAuxDecl {
                 decl_name: decl_name.clone(),
-                param_name: param_name.clone(),
+                param_names: vec![param_name.clone()],
+                env: CallableEnv::default(),
                 instrs: vec![
                     WasmBackendInstr::LoadLocal {
                         name: param_name.clone(),
@@ -820,36 +844,119 @@ fn lower_value_as_arg(
             Ok(vec![WasmBackendInstr::PushFuncHandle { decl_name }])
         }
         ValueExpr::Lambda { param, body } => {
-            let callable_env = analyze_lambda_callable_env(param, body, bindings, known_decls);
-            if !callable_env.is_empty() {
-                return Err(LowerError::UnsupportedForm {
-                    node: format!(
-                        "Lambda with free variables (closure capture) is not supported in WB-3A: \
-                         param={param}, captures={}",
-                        format_callable_env(&callable_env)
-                    ),
-                });
-            }
-            let mut body_bindings = bindings.clone();
-            body_bindings.bind_outer_immutable(param.clone());
-            let body_instrs = lower_comp_inner(
-                body,
-                &HashMap::new(),
-                &body_bindings,
-                known_decls,
-                lambda_decls,
-            )?;
-            let n = LAMBDA_COUNTER.fetch_add(1, AtomicOrdering::Relaxed);
-            let decl_name = format!("__lambda_{n}");
-            lambda_decls.push(LambdaAuxDecl {
-                decl_name: decl_name.clone(),
-                param_name: param.clone(),
-                instrs: body_instrs,
-            });
-            Ok(vec![WasmBackendInstr::PushFuncHandle { decl_name }])
+            lower_lambda(param, body, bindings, known_decls, lambda_decls)
         }
         other => lower_value(other),
     }
+}
+
+/// Lower a `ValueExpr::Lambda` to backend IR instructions.
+///
+/// # Zero-capture case
+/// Lifts the body as a `LambdaAuxDecl` with `param_names: [param]` and emits
+/// `PushFuncHandle { decl_name }`.
+///
+/// # Capturing case (ByValue-only, CC3)
+/// Lifts the body as a `LambdaAuxDecl` with `param_names: ["__clo", param]`.
+/// The body preamble declares a local for each captured name, loads it from the
+/// closure record (`LoadClosureSlot`), and stores it so the rest of the body can
+/// use `LoadLocal` as normal.  Returns `CreateClosure { ... }` at the call site.
+///
+/// Lambdas with `SharedMutableCell` (mutable write capture) still return `UnsupportedForm`.
+fn lower_lambda(
+    param: &str,
+    body: &goby_core::ir::CompExpr,
+    bindings: &ClosureBindingEnv,
+    known_decls: &HashSet<String>,
+    lambda_decls: &mut Vec<LambdaAuxDecl>,
+) -> Result<Vec<WasmBackendInstr>, LowerError> {
+    let callable_env = analyze_lambda_callable_env(param, body, bindings, known_decls);
+
+    if callable_env.is_empty() {
+        // Zero-capture: lift as-is with the single lambda param.
+        let mut body_bindings = bindings.clone();
+        body_bindings.bind_outer_immutable(param.to_string());
+        let body_instrs =
+            lower_comp_inner(body, &HashMap::new(), &body_bindings, known_decls, lambda_decls)?;
+        let n = LAMBDA_COUNTER.fetch_add(1, AtomicOrdering::Relaxed);
+        let decl_name = format!("__lambda_{n}");
+        lambda_decls.push(LambdaAuxDecl {
+            decl_name: decl_name.clone(),
+            param_names: vec![param.to_string()],
+            env: CallableEnv::default(),
+            instrs: body_instrs,
+        });
+        return Ok(vec![WasmBackendInstr::PushFuncHandle { decl_name }]);
+    }
+
+    // Reject any mutable-write captures (CC4 will handle these).
+    for slot in &callable_env.slots {
+        if matches!(slot.slot_kind, CallableEnvSlotKind::SharedMutableCell { .. }) {
+            return Err(LowerError::UnsupportedForm {
+                node: format!(
+                    "Lambda with mutable-write capture is not yet supported (CC4): \
+                     param={param}, captures={}",
+                    format_callable_env(&callable_env)
+                ),
+            });
+        }
+    }
+
+    // Capturing lambda (ByValue only): param_names = ["__clo", param].
+    // Body preamble: for each captured slot, declare a local, load from closure, store.
+    const CLO_LOCAL: &str = "__clo";
+    let mut preamble: Vec<WasmBackendInstr> = Vec::new();
+    for (slot_index, slot) in callable_env.slots.iter().enumerate() {
+        preamble.push(WasmBackendInstr::DeclareLocal {
+            name: slot.name.clone(),
+        });
+        preamble.push(WasmBackendInstr::LoadClosureSlot {
+            closure_local: CLO_LOCAL.to_string(),
+            slot_index,
+        });
+        // ByValue: the slot holds the value directly; store into the local.
+        preamble.push(WasmBackendInstr::StoreLocal {
+            name: slot.name.clone(),
+        });
+    }
+
+    // Lower the body with param and captured names all bound as immutable.
+    let mut body_bindings = bindings.clone();
+    for slot in &callable_env.slots {
+        body_bindings.bind_outer_immutable(slot.name.clone());
+    }
+    body_bindings.bind_outer_immutable(param.to_string());
+    let body_instrs =
+        lower_comp_inner(body, &HashMap::new(), &body_bindings, known_decls, lambda_decls)?;
+
+    let n = LAMBDA_COUNTER.fetch_add(1, AtomicOrdering::Relaxed);
+    let decl_name = format!("__lambda_{n}");
+    let mut full_body = preamble;
+    full_body.extend(body_instrs);
+    lambda_decls.push(LambdaAuxDecl {
+        decl_name: decl_name.clone(),
+        param_names: vec![CLO_LOCAL.to_string(), param.to_string()],
+        env: callable_env.clone(),
+        instrs: full_body,
+    });
+
+    // Create the closure record: [PushFuncHandle, slot_instrs per captured name].
+    let func_handle_instrs = vec![WasmBackendInstr::PushFuncHandle {
+        decl_name: decl_name.clone(),
+    }];
+    let slot_instrs: Vec<Vec<WasmBackendInstr>> = callable_env
+        .slots
+        .iter()
+        .map(|slot| {
+            vec![WasmBackendInstr::LoadLocal {
+                name: slot.name.clone(),
+            }]
+        })
+        .collect();
+    Ok(vec![WasmBackendInstr::CreateClosure {
+        func_handle_instrs,
+        slot_instrs,
+    }])
 }
 
 fn format_callable_env(callable_env: &CallableEnv) -> String {
@@ -1092,6 +1199,13 @@ fn instrs_load_local(instrs: &[WasmBackendInstr], name: &str) -> bool {
         }
         WasmBackendInstr::RecordLit { field_instrs, .. } => {
             field_instrs.iter().any(|f| instrs_load_local(f, name))
+        }
+        WasmBackendInstr::CreateClosure {
+            func_handle_instrs,
+            slot_instrs,
+        } => {
+            instrs_load_local(func_handle_instrs, name)
+                || slot_instrs.iter().any(|s| instrs_load_local(s, name))
         }
         _ => false,
     })
@@ -2043,7 +2157,7 @@ mod tests {
         );
         // Lambda should have been lifted as a LambdaAuxDecl.
         assert_eq!(lambda_decls.len(), 1, "expected exactly one lambda AuxDecl");
-        assert_eq!(lambda_decls[0].param_name, "x");
+        assert_eq!(lambda_decls[0].param_names, vec!["x"]);
         // The ListMap func_instrs should reference the lifted lambda by PushFuncHandle.
         if let WasmBackendInstr::ListMap { func_instrs, .. } = &instrs[0] {
             assert!(
@@ -2055,12 +2169,13 @@ mod tests {
         }
     }
 
-    /// Lambda whose body references a variable from enclosing scope (a free variable)
-    /// should be rejected with UnsupportedForm (capture not supported in WB-3A).
+    /// Lambda with a ByValue-captured free variable should now lower successfully (CC3-Step2).
+    /// The lowering produces a CreateClosure instruction; MutableWrite captures remain
+    /// UnsupportedForm.
     #[test]
-    fn lower_lambda_with_free_variable_is_unsupported() {
+    fn lower_lambda_with_by_value_capture_succeeds() {
         use std::collections::HashSet;
-        // fn x -> x + base   (where `base` is a free variable, not the lambda param)
+        // fn x -> x + base   (where `base` is a free variable captured ByValue)
         let known_decls: HashSet<String> = HashSet::new();
         let comp = CompExpr::Call {
             callee: Box::new(ValueExpr::GlobalRef {
@@ -2077,16 +2192,24 @@ mod tests {
                     body: Box::new(CompExpr::Value(ValueExpr::BinOp {
                         op: goby_core::ir::IrBinOp::Add,
                         left: Box::new(ValueExpr::Var("x".to_string())),
-                        right: Box::new(ValueExpr::Var("base".to_string())), // free variable
+                        right: Box::new(ValueExpr::Var("base".to_string())), // free variable → ByValue capture
                     })),
                 },
             ],
         };
-        let result = lower_comp_with_decls(&comp, &known_decls);
+        let mut lambda_decls = Vec::new();
+        let result = lower_comp_collecting_lambdas(&comp, &known_decls, &mut lambda_decls);
         assert!(
-            matches!(result, Err(LowerError::UnsupportedForm { .. })),
-            "Lambda with free variable should be UnsupportedForm, got: {:?}",
+            result.is_ok(),
+            "Lambda with ByValue-captured free variable should lower successfully (CC3), got: {:?}",
             result
+        );
+        // The lambda should be collected and its first param should be __clo.
+        assert_eq!(lambda_decls.len(), 1, "expected exactly one lambda AuxDecl");
+        assert_eq!(
+            lambda_decls[0].param_names,
+            vec!["__clo", "x"],
+            "capturing lambda param_names should be [__clo, param]"
         );
     }
 
