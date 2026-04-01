@@ -545,7 +545,8 @@ Locked semantic target:
 Status: **CC1-CC4 (main immutable/by-value slice) mostly complete** — capture analysis,
 `MutableStorageId` shared-cell model, `CallableEnv` ownership, direct closure calls, capturing
 callback parity for `each` / `map` / inline `fold`, and multi-parameter lambda flattening landed on
-the Wasm path. One remaining by-value runtime gap remains for some helper-local execution shapes.
+the Wasm path. One remaining by-value runtime gap remains for some helper-local execution shapes,
+and mutable capture lowering is still pending in the follow-up shared-cell slice.
 
 Next step: close the remaining helper-local runtime gap, then finish the mutable-capture slice by
 lowering `SharedMutableCell` reads/writes and finally close the CC5/CC6 diagnostics/docs work.

@@ -23,7 +23,7 @@ CC4 (main immutable/by-value callback parity) is landed:
   - `lower_lambda()` flattens curried multi-param lambdas into one aux decl, enabling inline `fold` callbacks
   - focused tests cover capturing `each`, capturing `map`, inline capturing `fold`, and compile-time smoke coverage
   - remaining follow-up: helper-local `runtime_read_captured_lambda.gb` still fails during runtime Wasm load
-- **Track CC / CC3** (2026-04-01): All CC3 milestones complete.
+- **Track CC / CC3** (2026-04-01): Immutable/by-value lowering and call-dispatch slice complete.
   - `lower_lambda()` handles zero-capture (PushFuncHandle) and ByValue-capture (CreateClosure) paths
   - Preamble locals pattern: `DeclareLocal + LoadClosureSlot + StoreLocal` per captured slot
   - `LambdaAuxDecl.param_names` extended to `["__clo", param]` for capturing lambdas
@@ -31,6 +31,7 @@ CC4 (main immutable/by-value callback parity) is landed:
   - `AliasValue::CapturingClosure` tracks let-bound closures for dispatch routing
   - `IndirectCallClosure` backend IR + emit (Wasm call_indirect arity-2 with correct stack order)
   - CC3 acceptance tests: inline ByValue capture and string interpolation capture both execute correctly
+  - mutable-write captures remain part of the follow-up shared-cell lowering work
 - **Track CC / CC2** (2026-03-31): All CC2 milestones complete.
   - `TAG_CLOSURE = 0x8`, `TAG_CELL = 0x9` in `value.rs`; encode/decode helpers and orthogonality tests.
   - `CallableEnv::slot_index_of` and `MutableStorageId::new` in `goby-core`.

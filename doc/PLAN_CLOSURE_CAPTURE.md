@@ -314,13 +314,12 @@ Done when:
 - zero-capture lambdas are represented as the empty-environment case of the same callable model, whether or not they use a runtime optimization
 - closure wrapper code and outer-function promoted-mut code both use the same environment/cell helper model
 
-### CC3. Lowering and call dispatch (complete)
+### CC3. Lowering and call dispatch (immutable/by-value slice complete)
 
 - [x] Relax the `comp_has_free_var` blanket rejection gate in `gen_lower/lower.rs` so that
   read-only immutable captures proceed to `CreateClosure` lowering, while mutable write
   captures remain rejected until shared-cell lowering is also in place.
 - [x] Lower all lambdas through one callable-environment model, with zero-capture lambdas as the empty-environment case.
-- [ ] Rewrite captured mutable reads/writes to shared-cell loads/stores. (CC4)
 - [x] Add call dispatch that preserves one callable semantic model even if multiple runtime encodings are temporarily used during migration.
 - [x] Ensure top-level helper calls and nested call sites preserve effect sequencing.
 - [x] Add regression tests for:
@@ -340,11 +339,13 @@ Done when:
 - [ ] Make `map` accept capturing closures.
 - [ ] Make `fold` accept capturing closures, including inline callbacks.
 - [ ] Remove any remaining backend limitation that exists only because a callback is capturing.
+- [ ] Rewrite captured mutable reads/writes to shared-cell loads/stores.
 
 Done when:
 
 - all acceptance programs in Section 3 run through the Wasm path
 - list combinators do not need callback-shape exceptions
+- captured `mut` bindings lower through the locked shared-cell model instead of snapshot-style capture
 - there is at least one focused execution test each for capturing `each`, capturing `map`, and inline capturing `fold`
 
 ### CC5. Diagnostics and regression safety
