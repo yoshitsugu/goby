@@ -458,22 +458,22 @@ main =
 
 #[test]
 #[cfg(unix)]
-fn run_command_reports_current_helper_closure_capture_runtime_gap() {
+fn run_command_executes_helper_closure_capture_program() {
     let root = repo_root();
     let input = root.join("examples/bugs/runtime_read_captured_lambda.gb");
 
     let output = run_goby_with_stdin(&root, &input, b"");
 
     assert!(
-        !output.status.success(),
-        "expected helper closure-capture runtime gap, stderr: {}",
+        output.status.success(),
+        "expected successful execution, stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        stderr.contains("wasm load: failed to compile"),
-        "expected current runtime-load failure, stderr: {}",
-        stderr
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(
+        stdout.as_ref(),
+        "hello world\n",
+        "expected 'hello world' output"
     );
 }
 

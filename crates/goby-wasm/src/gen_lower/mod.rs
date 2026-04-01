@@ -904,7 +904,14 @@ fn lower_module_to_instrs(module: &Module) -> Result<LowerModuleResult, CodegenE
     // These do not need a Read effect; they are helpers called by main.
     let mut aux_decls = Vec::new();
     for aux_ir_decl in ir_module.decls.iter().filter(|decl| decl.name != "main") {
-        let param_names: Vec<String> = aux_ir_decl.params.iter().map(|(n, _)| n.clone()).collect();
+        let mut param_names: Vec<String> =
+            aux_ir_decl.params.iter().map(|(n, _)| n.clone()).collect();
+        // A declaration with no explicit params is still called with a synthetic Unit arg in the IR
+        // (e.g. `helper()` lowers to `Call { args: [Unit] }`).  The Wasm function must accept that
+        // i64 so the caller-pushed Unit does not leak on the operand stack.
+        if param_names.is_empty() {
+            param_names.push("_unit".to_string());
+        }
         match lower_aux_decl(
             &aux_ir_decl.name,
             param_names,

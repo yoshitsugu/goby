@@ -1358,9 +1358,7 @@ main =
 }
 
 /// Outer mutation after closure creation: closure sees updated value via shared cell.
-/// CC4 complete: enabled; previously rejected on the Wasm path.
 #[test]
-#[ignore = "CC4-pending: read-only mutable capture by inline lambda not yet lowered on Wasm path"]
 fn outer_mutation_after_closure_creation_executes_correctly_on_wasm_path() {
     let source = r#"
 main : Unit -> Unit can Print, Read
@@ -1369,7 +1367,8 @@ main =
   mut value = 1
   read_value = fn _ -> value
   value := 7
-  println "${read_value ()}"
+  result = read_value ()
+  println "${result}"
 "#;
     let module = parse_module(source).expect("source should parse");
     let output = execute_runtime_module_with_stdin(&module, Some(String::new()))
