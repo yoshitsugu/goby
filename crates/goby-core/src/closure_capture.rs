@@ -186,6 +186,29 @@ pub fn collect_lambda_callable_envs(
     envs
 }
 
+/// Returns `true` if any lambda nested in `body` captures `name` as a mutable write.
+///
+/// This is used by the lowering pass to decide whether a `LetMut` binding should be
+/// promoted to a heap cell.  The caller must supply the `outer_bindings` that are in
+/// scope at the `LetMut` site (excluding `name` itself, which is added here as mutable).
+pub fn has_mutable_write_capture_of(
+    name: &str,
+    body: &CompExpr,
+    outer_bindings: &ClosureBindingEnv,
+    known_decls: &HashSet<String>,
+) -> bool {
+    let mut bindings = outer_bindings.clone();
+    bindings.bind_outer_mutable(name.to_string());
+    let mut envs = Vec::new();
+    collect_comp_lambda_envs(body, &mut bindings, known_decls, &mut envs);
+    envs.iter().any(|env| {
+        env.slots.iter().any(|slot| {
+            slot.name == name
+                && matches!(slot.slot_kind, CallableEnvSlotKind::SharedMutableCell { .. })
+        })
+    })
+}
+
 fn collect_comp_lambda_envs(
     comp: &CompExpr,
     bindings: &mut ClosureBindingEnv,

@@ -1,28 +1,23 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-04-01
+Last updated: 2026-04-02
 
 ## Current Focus
 
-**Track CC / by-value follow-up** (next): close the remaining helper-local runtime gap for
-by-value capture, then finish `SharedMutableCell` lowering so captured `mut` reads/writes match
-the locked shared-cell semantics.
-
-CC4 (main immutable/by-value callback parity) is landed:
-- `list.each`, `list.map`, and inline `list.fold` now accept capturing closures on the Wasm path
-- generic `IndirectCall` emission branches on TAG_FUNC vs TAG_CLOSURE at runtime
-- multi-parameter lambdas flatten into one lifted aux decl (`fn acc x -> ...` → one Wasm callable)
-- helper-state scratch/allocator initialization is stable across recursive emit calls
-- focused execution tests pass for capturing `each`, capturing `map`, and inline capturing `fold`
+**Track CC / CC4 mutable-write (SharedMutableCell) — partially complete**: `sum [1,2,3]` via `each` with mutable cell now executes correctly (`"6\n"`). Two advanced shapes remain as `#[ignore]` pending follow-up: read-only capture by inline lambda after mutation, and two closures sharing one cell from a helper decl.
 
 ## Recently Completed
 
+- **Track CC / CC4 SharedMutableCell** (2026-04-02): Mutable-write capture via `each` executes correctly on Wasm path.
+  - Root cause: bump allocator was independently re-initialized to `STATIC_STRING_LIMIT` in each Wasm function, causing callee allocations to overwrite caller heap data.
+  - Fix: persistent global heap cursor at `GLOBAL_HEAP_CURSOR_OFFSET = 12` in linear memory; main writes initial value, aux decls load it; every `DeclCall`, `IndirectCall`, `IndirectCallClosure`, `list.each`, and `list.map` syncs cursor to/from global around `call_indirect`; aux decl epilogue writes final cursor back to global on return.
+  - `needs_helper_state` now includes `DeclCall` and `IndirectCall` as triggers.
+  - Acceptance test `mutable_write_capture_via_each_executes_correctly_on_wasm_path` passes; two advanced CC4 shapes (`#[ignore]`) deferred.
 - **Track CC / CC4** (2026-04-01): Main immutable/by-value callback parity landed on the Wasm path.
   - `emit.rs` now handles TAG_FUNC vs TAG_CLOSURE dispatch for generic indirect calls and `list.each` / `list.map`
   - nested/helper alloc-cursor resets no longer clobber earlier heap allocations during recursive emission
   - `lower_lambda()` flattens curried multi-param lambdas into one aux decl, enabling inline `fold` callbacks
   - focused tests cover capturing `each`, capturing `map`, inline capturing `fold`, and compile-time smoke coverage
-  - remaining follow-up: helper-local `runtime_read_captured_lambda.gb` still fails during runtime Wasm load
 - **Track CC / CC3** (2026-04-01): Immutable/by-value lowering and call-dispatch slice complete.
   - `lower_lambda()` handles zero-capture (PushFuncHandle) and ByValue-capture (CreateClosure) paths
   - Preamble locals pattern: `DeclareLocal + LoadClosureSlot + StoreLocal` per captured slot

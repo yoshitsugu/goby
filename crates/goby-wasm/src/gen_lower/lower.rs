@@ -7,6 +7,7 @@ use std::sync::atomic::{AtomicU32, Ordering as AtomicOrdering};
 
 use goby_core::closure_capture::{
     CallableEnv, CallableEnvSlotKind, ClosureBindingEnv, analyze_lambda_callable_env_for_params,
+    has_mutable_write_capture_of,
 };
 use goby_core::ir::{CompExpr, IrInterpPart, ValueExpr};
 
@@ -168,9 +169,9 @@ fn lower_comp_inner(
         // Lambda in value position (e.g. returned from a decl or bound by Let) is lowered
         // through lower_lambda which has access to bindings/known_decls/lambda_decls.
         CompExpr::Value(ValueExpr::Lambda { param, body }) => {
-            lower_lambda(param, body, bindings, known_decls, lambda_decls)
+            lower_lambda(param, body, aliases, bindings, known_decls, lambda_decls)
         }
-        CompExpr::Value(v) => lower_value(v),
+        CompExpr::Value(v) => lower_value_ctx(v, aliases),
 
         CompExpr::Let {
             name, value, body, ..
@@ -551,39 +552,113 @@ fn lower_comp_inner(
         CompExpr::LetMut {
             name, value, body, ..
         } => {
-            // LetMut uses the same model as Let: DeclareLocal, lower value, StoreLocal, lower body.
-            // Fused pattern checks are intentionally skipped for LetMut.
-            let mut instrs = vec![WasmBackendInstr::DeclareLocal { name: name.clone() }];
-            instrs.extend(lower_comp_inner(
-                value,
-                aliases,
-                bindings,
-                known_decls,
-                lambda_decls,
-            )?);
-            instrs.push(WasmBackendInstr::StoreLocal { name: name.clone() });
-            let mut body_bindings = bindings.clone();
-            body_bindings.bind_outer_mutable(name.clone());
-            instrs.extend(lower_comp_inner(
-                body,
-                aliases,
-                &body_bindings,
-                known_decls,
-                lambda_decls,
-            )?);
-            Ok(instrs)
+            // Check whether any nested lambda captures `name` as a mutable write.
+            // If so, the binding is promoted to a heap cell so writes inside the lambda
+            // update the same cell visible outside.
+            if has_mutable_write_capture_of(name, body, bindings, known_decls) {
+                // Cell-promotion path.
+                //
+                // 1. Lower the init expression into a temporary local (`__cell_init_<name>`)
+                //    so that AllocMutableCell.init_instrs is a single LoadLocal (never
+                //    heap-allocating, which would clobber the HS_AUX_PTR scratch slot).
+                // 2. Allocate the cell: AllocMutableCell { init_instrs: [LoadLocal { init_tmp }] }.
+                // 3. Store the TAG_CELL pointer in `__cell_<name>`.
+                // 4. Lower the body with `name` aliased as CellPromoted.
+                let init_tmp = format!("__cell_init_{name}");
+                let cell_local = cell_local_name(name);
+                let mut instrs = vec![
+                    WasmBackendInstr::DeclareLocal {
+                        name: init_tmp.clone(),
+                    },
+                    WasmBackendInstr::DeclareLocal {
+                        name: cell_local.clone(),
+                    },
+                ];
+                instrs.extend(lower_comp_inner(
+                    value,
+                    aliases,
+                    bindings,
+                    known_decls,
+                    lambda_decls,
+                )?);
+                instrs.push(WasmBackendInstr::StoreLocal {
+                    name: init_tmp.clone(),
+                });
+                instrs.push(WasmBackendInstr::AllocMutableCell {
+                    init_instrs: vec![WasmBackendInstr::LoadLocal {
+                        name: init_tmp.clone(),
+                    }],
+                });
+                instrs.push(WasmBackendInstr::StoreLocal {
+                    name: cell_local.clone(),
+                });
+                // Lower body with `name` marked as CellPromoted in aliases.
+                let mut body_aliases = aliases.clone();
+                body_aliases.insert(name.clone(), AliasValue::CellPromoted);
+                let mut body_bindings = bindings.clone();
+                body_bindings.bind_outer_mutable(name.clone());
+                instrs.extend(lower_comp_inner(
+                    body,
+                    &body_aliases,
+                    &body_bindings,
+                    known_decls,
+                    lambda_decls,
+                )?);
+                Ok(instrs)
+            } else {
+                // Plain path: DeclareLocal, lower value, StoreLocal, lower body.
+                // Fused pattern checks are intentionally skipped for LetMut.
+                let mut instrs = vec![WasmBackendInstr::DeclareLocal { name: name.clone() }];
+                instrs.extend(lower_comp_inner(
+                    value,
+                    aliases,
+                    bindings,
+                    known_decls,
+                    lambda_decls,
+                )?);
+                instrs.push(WasmBackendInstr::StoreLocal { name: name.clone() });
+                let mut body_bindings = bindings.clone();
+                body_bindings.bind_outer_mutable(name.clone());
+                instrs.extend(lower_comp_inner(
+                    body,
+                    aliases,
+                    &body_bindings,
+                    known_decls,
+                    lambda_decls,
+                )?);
+                Ok(instrs)
+            }
         }
 
         CompExpr::Assign { name, value } => {
-            // Assign lowers the value and stores it in the existing named local.
-            // No DeclareLocal is emitted because the local was already declared by the enclosing LetMut.
-            let mut instrs = lower_comp_inner(value, aliases, bindings, known_decls, lambda_decls)?;
-            instrs.push(WasmBackendInstr::StoreLocal { name: name.clone() });
-            // Assign produces Unit.
-            instrs.push(WasmBackendInstr::I64Const(
-                crate::gen_lower::value::encode_unit(),
-            ));
-            Ok(instrs)
+            // If the binding is cell-promoted, write through the cell.
+            if aliases.get(name.as_str()) == Some(&AliasValue::CellPromoted) {
+                let cell_local = cell_local_name(name);
+                let value_instrs =
+                    lower_comp_inner(value, aliases, bindings, known_decls, lambda_decls)?;
+                let mut instrs = vec![WasmBackendInstr::StoreCellValue {
+                    cell_ptr_instrs: vec![WasmBackendInstr::LoadLocal {
+                        name: cell_local,
+                    }],
+                    value_instrs,
+                }];
+                // Assign produces Unit.
+                instrs.push(WasmBackendInstr::I64Const(
+                    crate::gen_lower::value::encode_unit(),
+                ));
+                Ok(instrs)
+            } else {
+                // Plain path: lower value and store in the existing named local.
+                // No DeclareLocal is emitted because the local was already declared by the enclosing LetMut.
+                let mut instrs =
+                    lower_comp_inner(value, aliases, bindings, known_decls, lambda_decls)?;
+                instrs.push(WasmBackendInstr::StoreLocal { name: name.clone() });
+                // Assign produces Unit.
+                instrs.push(WasmBackendInstr::I64Const(
+                    crate::gen_lower::value::encode_unit(),
+                ));
+                Ok(instrs)
+            }
         }
 
         CompExpr::Case { scrutinee, arms } => lower_case(
@@ -715,7 +790,21 @@ fn lower_case(
 
 /// Lower a `ValueExpr` to a flat sequence of `WasmBackendInstr`.
 ///
+/// Cell-promoted names (bindings that have been promoted to heap cells because they are
+/// captured mutably by nested lambdas) must be handled at the caller level by passing
+/// `aliases` to `lower_value_ctx` instead.
 pub(crate) fn lower_value(v: &ValueExpr) -> Result<Vec<WasmBackendInstr>, LowerError> {
+    lower_value_ctx(v, &HashMap::new())
+}
+
+/// Like `lower_value` but aware of cell-promoted bindings in `aliases`.
+///
+/// If `aliases` contains `AliasValue::CellPromoted` for a name, reading that name emits
+/// `[LoadLocal { __cell_<name> }, LoadCellValue]` instead of `[LoadLocal { name }]`.
+fn lower_value_ctx(
+    v: &ValueExpr,
+    aliases: &HashMap<String, AliasValue>,
+) -> Result<Vec<WasmBackendInstr>, LowerError> {
     match v {
         ValueExpr::Unit => Ok(vec![WasmBackendInstr::I64Const(encode_unit())]),
         ValueExpr::IntLit(n) => Ok(vec![WasmBackendInstr::I64Const(encode_int(*n)?)]),
@@ -731,7 +820,7 @@ pub(crate) fn lower_value(v: &ValueExpr) -> Result<Vec<WasmBackendInstr>, LowerE
             }
             let mut element_instrs = Vec::with_capacity(elements.len());
             for elem in elements {
-                element_instrs.push(lower_value(elem)?);
+                element_instrs.push(lower_value_ctx(elem, aliases)?);
             }
             Ok(vec![WasmBackendInstr::ListLit { element_instrs }])
         }
@@ -741,7 +830,7 @@ pub(crate) fn lower_value(v: &ValueExpr) -> Result<Vec<WasmBackendInstr>, LowerE
             }
             let mut element_instrs = Vec::with_capacity(items.len());
             for item in items {
-                element_instrs.push(lower_value(item)?);
+                element_instrs.push(lower_value_ctx(item, aliases)?);
             }
             Ok(vec![WasmBackendInstr::TupleLit { element_instrs }])
         }
@@ -751,14 +840,26 @@ pub(crate) fn lower_value(v: &ValueExpr) -> Result<Vec<WasmBackendInstr>, LowerE
         } => {
             let mut field_instrs = Vec::with_capacity(fields.len());
             for (_, value) in fields {
-                field_instrs.push(lower_value(value)?);
+                field_instrs.push(lower_value_ctx(value, aliases)?);
             }
             Ok(vec![WasmBackendInstr::RecordLit {
                 constructor: constructor.clone(),
                 field_instrs,
             }])
         }
-        ValueExpr::Var(name) => Ok(vec![WasmBackendInstr::LoadLocal { name: name.clone() }]),
+        ValueExpr::Var(name) => {
+            if aliases.get(name.as_str()) == Some(&AliasValue::CellPromoted) {
+                // Cell-promoted binding: load the cell ptr local, then dereference the cell.
+                Ok(vec![
+                    WasmBackendInstr::LoadLocal {
+                        name: cell_local_name(name),
+                    },
+                    WasmBackendInstr::LoadCellValue,
+                ])
+            } else {
+                Ok(vec![WasmBackendInstr::LoadLocal { name: name.clone() }])
+            }
+        }
         ValueExpr::GlobalRef { module, name } => {
             // Effect ops (Print.println, Read.read, etc.) cannot be stored as Wasm i64 values;
             // they are only valid as direct callees. Reject when used as a value.
@@ -774,8 +875,8 @@ pub(crate) fn lower_value(v: &ValueExpr) -> Result<Vec<WasmBackendInstr>, LowerE
             }])
         }
         ValueExpr::BinOp { op, left, right } => {
-            let mut instrs = lower_value(left)?;
-            instrs.extend(lower_value(right)?);
+            let mut instrs = lower_value_ctx(left, aliases)?;
+            instrs.extend(lower_value_ctx(right, aliases)?);
             instrs.push(WasmBackendInstr::BinOp { op: op.clone() });
             Ok(instrs)
         }
@@ -793,7 +894,7 @@ pub(crate) fn lower_value(v: &ValueExpr) -> Result<Vec<WasmBackendInstr>, LowerE
                         instrs.push(WasmBackendInstr::PushStaticString { text: t.clone() });
                     }
                     IrInterpPart::Expr(e) => {
-                        instrs.extend(lower_value(e)?);
+                        instrs.extend(lower_value_ctx(e, aliases)?);
                         instrs.push(WasmBackendInstr::Intrinsic {
                             intrinsic: BackendIntrinsic::ValueToString,
                         });
@@ -827,6 +928,12 @@ pub(crate) fn lower_value(v: &ValueExpr) -> Result<Vec<WasmBackendInstr>, LowerE
             node: format!("{:?}", other),
         }),
     }
+}
+
+/// Returns the name of the cell-ptr local for a cell-promoted mutable binding.
+/// Convention: `__cell_<name>`.
+fn cell_local_name(name: &str) -> String {
+    format!("__cell_{name}")
 }
 
 /// Lower a `ValueExpr` that appears as a call *argument* (not a callee).
@@ -899,7 +1006,7 @@ fn lower_value_as_arg(
             Ok(vec![WasmBackendInstr::PushFuncHandle { decl_name }])
         }
         ValueExpr::Lambda { param, body } => {
-            lower_lambda(param, body, bindings, known_decls, lambda_decls)
+            lower_lambda(param, body, aliases, bindings, known_decls, lambda_decls)
         }
         other => lower_value(other),
     }
@@ -911,16 +1018,19 @@ fn lower_value_as_arg(
 /// Lifts the body as a `LambdaAuxDecl` with `param_names: [param]` and emits
 /// `PushFuncHandle { decl_name }`.
 ///
-/// # Capturing case (ByValue-only)
-/// Lifts the body as a `LambdaAuxDecl` with `param_names: ["__clo", param]`.
-/// The body preamble declares a local for each captured name, loads it from the
-/// closure record (`LoadClosureSlot`), and stores it so the rest of the body can
-/// use `LoadLocal` as normal.  Returns `CreateClosure { ... }` at the call site.
+/// # Capturing case (ByValue)
+/// Lifts the body as a `LambdaAuxDecl` with `param_names: ["__clo", params...]`.
+/// The body preamble declares a local for each captured slot, loads it from the closure record,
+/// and stores it so the rest of the body can use `LoadLocal` as normal.
 ///
-/// Lambdas with `SharedMutableCell` (mutable write capture) still return `UnsupportedForm`.
+/// # Capturing case (SharedMutableCell)
+/// Slot in the closure record holds the cell ptr (TAG_CELL i64).
+/// Body preamble stores the cell ptr in `__cell_<name>`.  Reads/writes inside the body
+/// go through the cell via `lower_value_ctx` (CellPromoted alias) and `StoreCellValue`.
 fn lower_lambda(
     param: &str,
     body: &goby_core::ir::CompExpr,
+    outer_aliases: &HashMap<String, AliasValue>,
     bindings: &ClosureBindingEnv,
     known_decls: &HashSet<String>,
     lambda_decls: &mut Vec<LambdaAuxDecl>,
@@ -953,51 +1063,69 @@ fn lower_lambda(
         return Ok(vec![WasmBackendInstr::PushFuncHandle { decl_name }]);
     }
 
-    // Reject mutable-write captures until shared-cell lowering is implemented.
-    for slot in &callable_env.slots {
-        if matches!(
-            slot.slot_kind,
-            CallableEnvSlotKind::SharedMutableCell { .. }
-        ) {
-            return Err(LowerError::UnsupportedForm {
-                node: format!(
-                    "Lambda with mutable-write capture is not yet supported: \
-                     param={param}, captures={}",
-                    format_callable_env(&callable_env)
-                ),
-            });
-        }
-    }
-
-    // Capturing lambda (ByValue only): param_names = ["__clo", params...].
+    // Capturing lambda (ByValue and/or SharedMutableCell).
+    // param_names = ["__clo", params...].
     // Body preamble: for each captured slot, declare a local, load from closure, store.
     const CLO_LOCAL: &str = "__clo";
     let mut preamble: Vec<WasmBackendInstr> = Vec::new();
+    // Aliases for the body: CellPromoted names get cell-load semantics.
+    let mut body_aliases: HashMap<String, AliasValue> = HashMap::new();
+
     for (slot_index, slot) in callable_env.slots.iter().enumerate() {
-        preamble.push(WasmBackendInstr::DeclareLocal {
-            name: slot.name.clone(),
-        });
-        preamble.push(WasmBackendInstr::LoadClosureSlot {
-            closure_local: CLO_LOCAL.to_string(),
-            slot_index,
-        });
-        // ByValue: the slot holds the value directly; store into the local.
-        preamble.push(WasmBackendInstr::StoreLocal {
-            name: slot.name.clone(),
-        });
+        match slot.slot_kind {
+            CallableEnvSlotKind::ByValue => {
+                // Slot holds the value directly; store into a local with the captured name.
+                preamble.push(WasmBackendInstr::DeclareLocal {
+                    name: slot.name.clone(),
+                });
+                preamble.push(WasmBackendInstr::LoadClosureSlot {
+                    closure_local: CLO_LOCAL.to_string(),
+                    slot_index,
+                });
+                preamble.push(WasmBackendInstr::StoreLocal {
+                    name: slot.name.clone(),
+                });
+            }
+            CallableEnvSlotKind::SharedMutableCell { .. } => {
+                // Slot holds the cell ptr (TAG_CELL i64).
+                // Store into `__cell_<name>`; reads/writes in the body go via the cell.
+                let cell_local = cell_local_name(&slot.name);
+                preamble.push(WasmBackendInstr::DeclareLocal {
+                    name: cell_local.clone(),
+                });
+                preamble.push(WasmBackendInstr::LoadClosureSlot {
+                    closure_local: CLO_LOCAL.to_string(),
+                    slot_index,
+                });
+                preamble.push(WasmBackendInstr::StoreLocal {
+                    name: cell_local,
+                });
+                body_aliases.insert(slot.name.clone(), AliasValue::CellPromoted);
+            }
+        }
     }
 
-    // Lower the body with param and captured names all bound as immutable.
+    // Lower the body:
+    // - ByValue captured names are bound as immutable locals (accessible via LoadLocal).
+    // - SharedMutableCell captured names are cell-promoted (reads/writes go via the cell).
     let mut body_bindings = bindings.clone();
     for slot in &callable_env.slots {
-        body_bindings.bind_outer_immutable(slot.name.clone());
+        match slot.slot_kind {
+            CallableEnvSlotKind::ByValue => {
+                body_bindings.bind_outer_immutable(slot.name.clone());
+            }
+            CallableEnvSlotKind::SharedMutableCell { .. } => {
+                // Bind as mutable so that Assign nodes inside the body are recognised.
+                body_bindings.bind_outer_mutable(slot.name.clone());
+            }
+        }
     }
     for param in &params {
         body_bindings.bind_outer_immutable(param.clone());
     }
     let body_instrs = lower_comp_inner(
         flattened_body,
-        &HashMap::new(),
+        &body_aliases,
         &body_bindings,
         known_decls,
         lambda_decls,
@@ -1016,17 +1144,35 @@ fn lower_lambda(
         instrs: full_body,
     });
 
-    // Create the closure record: [PushFuncHandle, slot_instrs per captured name].
+    // Create the closure record: [PushFuncHandle, slot_instrs per captured slot].
+    // - ByValue: LoadLocal { name } (the current value)
+    // - SharedMutableCell: LoadLocal { __cell_<name> } (the cell ptr from outer scope)
     let func_handle_instrs = vec![WasmBackendInstr::PushFuncHandle {
         decl_name: decl_name.clone(),
     }];
     let slot_instrs: Vec<Vec<WasmBackendInstr>> = callable_env
         .slots
         .iter()
-        .map(|slot| {
-            vec![WasmBackendInstr::LoadLocal {
+        .map(|slot| match slot.slot_kind {
+            CallableEnvSlotKind::ByValue => vec![WasmBackendInstr::LoadLocal {
                 name: slot.name.clone(),
-            }]
+            }],
+            CallableEnvSlotKind::SharedMutableCell { .. } => {
+                // The outer scope holds the cell ptr in `__cell_<name>`.
+                // If this lambda is in a context where the outer name is itself cell-promoted
+                // (outer `LetMut` already promoted), use that cell ptr.
+                // Otherwise fall back to the plain local (shouldn't happen in valid CC4 code).
+                if outer_aliases.get(slot.name.as_str()) == Some(&AliasValue::CellPromoted) {
+                    vec![WasmBackendInstr::LoadLocal {
+                        name: cell_local_name(&slot.name),
+                    }]
+                } else {
+                    // Outer scope has the cell in `__cell_<name>` (set by LetMut cell-promotion).
+                    vec![WasmBackendInstr::LoadLocal {
+                        name: cell_local_name(&slot.name),
+                    }]
+                }
+            }
         })
         .collect();
     Ok(vec![WasmBackendInstr::CreateClosure {
@@ -1067,6 +1213,11 @@ enum AliasValue {
     /// The local holds a TAG_CLOSURE value (capturing lambda).
     /// Used by the Var-callee branch to emit IndirectCallClosure instead of IndirectCall.
     CapturingClosure,
+    /// The binding has been cell-promoted: it is a mutable binding captured by a nested lambda.
+    /// The actual value lives in a heap cell; `__cell_<name>` local holds the cell ptr.
+    /// Reads become `LoadLocal { __cell_<name> } + LoadCellValue`.
+    /// Writes (`Assign`) become `StoreCellValue { cell_ptr_instrs, value_instrs }`.
+    CellPromoted,
 }
 
 fn alias_value_from_comp(comp: &CompExpr) -> Option<AliasValue> {
@@ -1140,7 +1291,8 @@ fn resolve_var_alias<'a>(
         Some(AliasValue::Var(next)) => resolve_var_alias(next.as_str(), aliases),
         Some(AliasValue::Str(_))
         | Some(AliasValue::GlobalRef { .. })
-        | Some(AliasValue::CapturingClosure) => None,
+        | Some(AliasValue::CapturingClosure)
+        | Some(AliasValue::CellPromoted) => None,
         None => Some(name),
     }
 }
@@ -1152,7 +1304,10 @@ fn resolve_global_ref<'a>(
     match aliases.get(name) {
         Some(AliasValue::GlobalRef { module, name }) => Some((module.as_str(), name.as_str())),
         Some(AliasValue::Var(next)) => resolve_global_ref(next.as_str(), aliases),
-        Some(AliasValue::Str(_)) | Some(AliasValue::CapturingClosure) | None => None,
+        Some(AliasValue::Str(_))
+        | Some(AliasValue::CapturingClosure)
+        | Some(AliasValue::CellPromoted)
+        | None => None,
     }
 }
 

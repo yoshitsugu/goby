@@ -1843,4 +1843,34 @@ main =
             "map double then fold add: [1,2,3] → [2,4,6] → 12"
         );
     }
+
+    #[test]
+    fn cc4_mutable_write_capture_via_each_executes_correctly() {
+        use goby_core::parse_module;
+        let module = parse_module(
+            r#"
+import goby/list ( each )
+
+sum : List Int -> Int
+sum xs =
+  mut total = 0
+  each xs (fn x ->
+    total := total + x
+  )
+  total
+
+main : Unit -> Unit can Print, Read
+main =
+  _ = read()
+  result = sum [1, 2, 3]
+  println "${result}"
+"#,
+        )
+        .expect("source should parse");
+
+        let output = execute_runtime_module_with_stdin(&module, Some(String::new()))
+            .expect("mutable write capture via each should execute successfully");
+        assert_eq!(output.as_deref(), Some("6\n"));
+    }
+
 }

@@ -26,7 +26,7 @@ use crate::host_runtime::{
     HOST_BUMP_RESERVED_BYTES, HOST_INTRINSIC_IMPORTS, IntrinsicExecutionBoundary,
     host_import_for_intrinsic,
 };
-use crate::layout::MemoryLayout;
+use crate::layout::{MemoryLayout, GLOBAL_HEAP_CURSOR_OFFSET};
 
 const WASM_PAGE_BYTES: u32 = 65_536;
 const STATIC_STRING_LIMIT: u32 = WASM_PAGE_BYTES - HOST_BUMP_RESERVED_BYTES;
@@ -426,6 +426,10 @@ fn needs_helper_state(instrs: &[WasmBackendInstr]) -> bool {
                 | WasmBackendInstr::ListMap { .. }
                 | WasmBackendInstr::CreateClosure { .. }
                 | WasmBackendInstr::AllocMutableCell { .. }
+                // DeclCall / IndirectCall may trigger callee heap allocations; the global cursor
+                // must be synchronized before and after the call, which requires alloc_cursor_local.
+                | WasmBackendInstr::DeclCall { .. }
+                | WasmBackendInstr::IndirectCall { .. }
         )
     }) || {
         // Check for ListPattern or EmptyList patterns in CaseMatch arms.
@@ -627,6 +631,7 @@ fn initialize_helper_state_locals(
     layout: &MemoryLayout,
     i32_base: u32,
     static_strings: &StaticStringPool,
+    is_main: bool,
 ) -> Result<(), CodegenError> {
     let buffer_ptr = layout.heap_base as i32;
     let alloc_cursor_local = i32_base + HELPER_ALLOC_CURSOR_OFFSET;
@@ -640,7 +645,30 @@ fn initialize_helper_state_locals(
         8,
     );
     let initial_floor = align_up_i32(buffer_ptr + 4, 8);
-    function.instruction(&Instruction::I32Const(initial_cursor));
+    if is_main {
+        // main initializes the global heap cursor in linear memory, then loads it locally.
+        function.instruction(&Instruction::I32Const(GLOBAL_HEAP_CURSOR_OFFSET as i32));
+        function.instruction(&Instruction::I32Const(initial_cursor));
+        function.instruction(&Instruction::I32Store(MemArg {
+            offset: 0,
+            align: 2,
+            memory_index: 0,
+        }));
+        function.instruction(&Instruction::I32Const(GLOBAL_HEAP_CURSOR_OFFSET as i32));
+        function.instruction(&Instruction::I32Load(MemArg {
+            offset: 0,
+            align: 2,
+            memory_index: 0,
+        }));
+    } else {
+        // aux decls load the current global cursor (may have been advanced by caller).
+        function.instruction(&Instruction::I32Const(GLOBAL_HEAP_CURSOR_OFFSET as i32));
+        function.instruction(&Instruction::I32Load(MemArg {
+            offset: 0,
+            align: 2,
+            memory_index: 0,
+        }));
+    }
     function.instruction(&Instruction::LocalSet(alloc_cursor_local));
     function.instruction(&Instruction::I32Const(initial_floor));
     function.instruction(&Instruction::LocalSet(heap_floor_local));
@@ -953,7 +981,7 @@ pub(crate) fn emit_general_module_with_aux_and_options(
             record_ctor_tags.clone(),
         );
         if needs_helper_state(instrs) {
-            initialize_helper_state_locals(&mut function, layout, main_i32_base, &static_strings)?;
+            initialize_helper_state_locals(&mut function, layout, main_i32_base, &static_strings, true)?;
         }
         emit_instrs(
             &mut function,
@@ -1011,7 +1039,7 @@ pub(crate) fn emit_general_module_with_aux_and_options(
             ctx.next_local += 1;
         }
         if needs_helper_state(&decl.instrs) {
-            initialize_helper_state_locals(&mut function, layout, aux_i32_base, &static_strings)?;
+            initialize_helper_state_locals(&mut function, layout, aux_i32_base, &static_strings, false)?;
         }
         // After params, body locals start from aux_param_count.
         // named_i64_count passed to emit_instrs counts only DeclareLocal in body.
@@ -1026,6 +1054,12 @@ pub(crate) fn emit_general_module_with_aux_and_options(
             &static_strings,
             options,
         )?;
+        // Epilogue: write the final alloc cursor back to the global slot before returning,
+        // so callers that use call_indirect (not DeclCall) can reload the updated cursor.
+        if needs_helper_state(&decl.instrs) {
+            let alloc_cursor_local = aux_i32_base + HELPER_ALLOC_CURSOR_OFFSET;
+            emit_sync_cursor_to_global(&mut function, alloc_cursor_local);
+        }
         function.instruction(&Instruction::End);
         code.function(&function);
     }
@@ -1242,7 +1276,17 @@ fn emit_instrs(
 
             WasmBackendInstr::DeclCall { decl_name } => {
                 let func_idx = ctx.decl_func_idx(decl_name)?;
+                // Before calling an aux decl, write the current local alloc cursor to the
+                // global slot so the callee starts from the correct (post-caller-alloc) position.
+                // After the call, reload from the global slot to pick up any allocations
+                // the callee (or its recursive calls) performed.
+                if let Some(ref hs) = helper_state {
+                    emit_sync_cursor_to_global(function, hs.alloc_cursor_local);
+                }
                 function.instruction(&Instruction::Call(func_idx));
+                if let Some(ref hs) = helper_state {
+                    emit_sync_cursor_from_global(function, hs.alloc_cursor_local);
+                }
             }
 
             WasmBackendInstr::CaseMatch {
@@ -1411,6 +1455,9 @@ fn emit_instrs(
                         function.instruction(&Instruction::I64ShrU);
                         function.instruction(&Instruction::I64Const(i64::from(TAG_CLOSURE)));
                         function.instruction(&Instruction::I64Eq);
+                        if let Some(ref hs) = helper_state {
+                            emit_sync_cursor_to_global(function, hs.alloc_cursor_local);
+                        }
                         function.instruction(&Instruction::If(wasm_encoder::BlockType::Result(
                             wasm_encoder::ValType::I64,
                         )));
@@ -1441,6 +1488,9 @@ fn emit_instrs(
                             table_index: 0,
                         });
                         function.instruction(&Instruction::End);
+                        if let Some(ref hs) = helper_state {
+                            emit_sync_cursor_from_global(function, hs.alloc_cursor_local);
+                        }
                     }
                     2 => {
                         function.instruction(&Instruction::LocalSet(s_callee));
@@ -1451,6 +1501,9 @@ fn emit_instrs(
                         function.instruction(&Instruction::I64ShrU);
                         function.instruction(&Instruction::I64Const(i64::from(TAG_CLOSURE)));
                         function.instruction(&Instruction::I64Eq);
+                        if let Some(ref hs) = helper_state {
+                            emit_sync_cursor_to_global(function, hs.alloc_cursor_local);
+                        }
                         function.instruction(&Instruction::If(wasm_encoder::BlockType::Result(
                             wasm_encoder::ValType::I64,
                         )));
@@ -1483,6 +1536,9 @@ fn emit_instrs(
                             table_index: 0,
                         });
                         function.instruction(&Instruction::End);
+                        if let Some(ref hs) = helper_state {
+                            emit_sync_cursor_from_global(function, hs.alloc_cursor_local);
+                        }
                     }
                     _ => {
                         return Err(CodegenError {
@@ -1529,12 +1585,20 @@ fn emit_instrs(
                 function.instruction(&Instruction::I64Const(0xFFFF_FFFFi64));
                 function.instruction(&Instruction::I64And);
                 function.instruction(&Instruction::I32WrapI64);
-                // 4. call_indirect with arity 2 (1 __clo + 1 arg), table slot on top.
+                // 4. Sync cursor to global before call_indirect so callee starts at correct position.
+                if let Some(ref hs) = helper_state {
+                    emit_sync_cursor_to_global(function, hs.alloc_cursor_local);
+                }
+                // 5. call_indirect with arity 2 (1 __clo + 1 arg), table slot on top.
                 let type_idx = ctx.indirect_call_type_idx(2)?;
                 function.instruction(&Instruction::CallIndirect {
                     type_index: type_idx,
                     table_index: 0,
                 });
+                // 6. Reload cursor from global after call_indirect to pick up callee allocations.
+                if let Some(ref hs) = helper_state {
+                    emit_sync_cursor_from_global(function, hs.alloc_cursor_local);
+                }
             }
 
             WasmBackendInstr::ListEachEffect { list_instrs, op } => {
@@ -1839,8 +1903,7 @@ fn emit_instrs(
                     align: 3,
                     memory_index: 0,
                 }));
-                // Result is Unit.
-                function.instruction(&Instruction::I64Const(encode_unit()));
+                // No stack result: the caller (Assign lowering) emits the Unit value.
             }
         }
     }
@@ -1956,6 +2019,30 @@ fn emit_decode_string_ptr(
     function.instruction(&Instruction::LocalSet(len_local));
 
     let _ = helper_state;
+}
+
+/// Emit `i32.const GLOBAL_HEAP_CURSOR_OFFSET; local.get alloc_cursor_local; i32.store`
+/// to flush the local alloc cursor to the global persistent slot before a `call_indirect`.
+fn emit_sync_cursor_to_global(function: &mut Function, alloc_cursor_local: u32) {
+    function.instruction(&Instruction::I32Const(GLOBAL_HEAP_CURSOR_OFFSET as i32));
+    function.instruction(&Instruction::LocalGet(alloc_cursor_local));
+    function.instruction(&Instruction::I32Store(MemArg {
+        offset: 0,
+        align: 2,
+        memory_index: 0,
+    }));
+}
+
+/// Emit `i32.const GLOBAL_HEAP_CURSOR_OFFSET; i32.load; local.set alloc_cursor_local`
+/// to reload the alloc cursor from the global slot after a `call_indirect`.
+fn emit_sync_cursor_from_global(function: &mut Function, alloc_cursor_local: u32) {
+    function.instruction(&Instruction::I32Const(GLOBAL_HEAP_CURSOR_OFFSET as i32));
+    function.instruction(&Instruction::I32Load(MemArg {
+        offset: 0,
+        align: 2,
+        memory_index: 0,
+    }));
+    function.instruction(&Instruction::LocalSet(alloc_cursor_local));
 }
 
 fn emit_push_tagged_ptr(function: &mut Function, ptr_local: u32, tag: u8) {
@@ -3185,6 +3272,8 @@ fn emit_list_each(
     function.instruction(&Instruction::I64ShrU);
     function.instruction(&Instruction::I64Const(i64::from(TAG_CLOSURE)));
     function.instruction(&Instruction::I64Eq);
+    // Sync local alloc cursor to global before call_indirect so callee starts from the right position.
+    emit_sync_cursor_to_global(function, hs.alloc_cursor_local);
     function.instruction(&Instruction::If(wasm_encoder::BlockType::Result(
         wasm_encoder::ValType::I64,
     )));
@@ -3216,6 +3305,8 @@ fn emit_list_each(
     });
     function.instruction(&Instruction::End);
     function.instruction(&Instruction::Drop); // discard result
+    // Reload alloc cursor from global after call_indirect to pick up callee allocations.
+    emit_sync_cursor_from_global(function, hs.alloc_cursor_local);
 
     // iter += 1
     function.instruction(&Instruction::LocalGet(s_iter));
@@ -3322,6 +3413,8 @@ fn emit_list_map(
     function.instruction(&Instruction::I64ShrU);
     function.instruction(&Instruction::I64Const(i64::from(TAG_CLOSURE)));
     function.instruction(&Instruction::I64Eq);
+    // Sync local alloc cursor to global before call_indirect so callee starts from the right position.
+    emit_sync_cursor_to_global(function, hs.alloc_cursor_local);
     function.instruction(&Instruction::If(wasm_encoder::BlockType::Result(
         wasm_encoder::ValType::I64,
     )));
@@ -3352,6 +3445,8 @@ fn emit_list_map(
         table_index: 0,
     });
     function.instruction(&Instruction::End);
+    // Reload alloc cursor from global after call_indirect to pick up callee allocations.
+    emit_sync_cursor_from_global(function, hs.alloc_cursor_local);
     function.instruction(&Instruction::LocalSet(s_elem));
 
     // result_ptr[4 + iter * 8] = mapped

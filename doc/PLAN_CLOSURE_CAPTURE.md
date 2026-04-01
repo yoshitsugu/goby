@@ -1,8 +1,8 @@
 # Goby Closure Capture Plan
 
-Last updated: 2026-04-01
+Last updated: 2026-04-02
 
-Status: CC0–CC3 complete; CC4 next
+Status: CC0–CC4 (mutable-write `each` slice) complete; remaining CC4 shapes and CC5–CC6 next
 
 Related documents:
 
@@ -335,11 +335,13 @@ Done when:
 
 ### CC4. Higher-order stdlib parity
 
-- [ ] Make `each` accept capturing closures.
-- [ ] Make `map` accept capturing closures.
-- [ ] Make `fold` accept capturing closures, including inline callbacks.
-- [ ] Remove any remaining backend limitation that exists only because a callback is capturing.
-- [ ] Rewrite captured mutable reads/writes to shared-cell loads/stores.
+- [x] Make `each` accept capturing closures.
+- [x] Make `map` accept capturing closures.
+- [x] Make `fold` accept capturing closures, including inline callbacks.
+- [x] Remove any remaining backend limitation that exists only because a callback is capturing.
+- [x] Rewrite captured mutable reads/writes to shared-cell loads/stores (`sum [1,2,3]` via `each` executes correctly).
+- [ ] Mutable capture: read-only inline lambda after outer mutation (deferred — `#[ignore]`).
+- [ ] Mutable capture: two closures sharing one cell from a helper decl (deferred — `#[ignore]`).
 
 Done when:
 
