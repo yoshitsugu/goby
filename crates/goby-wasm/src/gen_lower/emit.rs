@@ -1276,17 +1276,7 @@ fn emit_instrs(
 
             WasmBackendInstr::DeclCall { decl_name } => {
                 let func_idx = ctx.decl_func_idx(decl_name)?;
-                // Before calling an aux decl, write the current local alloc cursor to the
-                // global slot so the callee starts from the correct (post-caller-alloc) position.
-                // After the call, reload from the global slot to pick up any allocations
-                // the callee (or its recursive calls) performed.
-                if let Some(ref hs) = helper_state {
-                    emit_sync_cursor_to_global(function, hs.alloc_cursor_local);
-                }
-                function.instruction(&Instruction::Call(func_idx));
-                if let Some(ref hs) = helper_state {
-                    emit_sync_cursor_from_global(function, hs.alloc_cursor_local);
-                }
+                emit_heap_aware_direct_call(function, func_idx, helper_state.as_ref());
             }
 
             WasmBackendInstr::CaseMatch {
@@ -2019,6 +2009,25 @@ fn emit_decode_string_ptr(
     function.instruction(&Instruction::LocalSet(len_local));
 
     let _ = helper_state;
+}
+
+/// Emit a direct Wasm `call` with heap-cursor sync.
+///
+/// Writes the local alloc cursor to the global slot before the call, then reloads it
+/// after, so that any heap allocations inside the callee are visible to the caller.
+/// When `helper_state` is `None` (caller has no heap state), the sync is skipped.
+fn emit_heap_aware_direct_call(
+    function: &mut Function,
+    func_idx: u32,
+    helper_state: Option<&HelperEmitState>,
+) {
+    if let Some(hs) = helper_state {
+        emit_sync_cursor_to_global(function, hs.alloc_cursor_local);
+    }
+    function.instruction(&Instruction::Call(func_idx));
+    if let Some(hs) = helper_state {
+        emit_sync_cursor_from_global(function, hs.alloc_cursor_local);
+    }
 }
 
 /// Emit `i32.const GLOBAL_HEAP_CURSOR_OFFSET; local.get alloc_cursor_local; i32.store`
