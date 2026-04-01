@@ -155,8 +155,19 @@ pub fn analyze_lambda_callable_env(
     outer_bindings: &ClosureBindingEnv,
     known_decls: &HashSet<String>,
 ) -> CallableEnv {
+    analyze_lambda_callable_env_for_params(&[param.to_string()], body, outer_bindings, known_decls)
+}
+
+pub fn analyze_lambda_callable_env_for_params(
+    params: &[String],
+    body: &CompExpr,
+    outer_bindings: &ClosureBindingEnv,
+    known_decls: &HashSet<String>,
+) -> CallableEnv {
     let mut bindings = outer_bindings.clone();
-    bindings.bind_local_immutable(param.to_string());
+    for param in params {
+        bindings.bind_local_immutable(param.clone());
+    }
     let mut captures: BTreeMap<String, CallableEnvSlot> = BTreeMap::new();
     analyze_comp(body, &bindings, known_decls, &mut captures);
     CallableEnv {

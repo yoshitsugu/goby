@@ -6,7 +6,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU32, Ordering as AtomicOrdering};
 
 use goby_core::closure_capture::{
-    CallableEnv, CallableEnvSlotKind, ClosureBindingEnv, analyze_lambda_callable_env,
+    CallableEnv, CallableEnvSlotKind, ClosureBindingEnv, analyze_lambda_callable_env_for_params,
 };
 use goby_core::ir::{CompExpr, IrInterpPart, ValueExpr};
 
@@ -17,6 +17,16 @@ use crate::gen_lower::value::{ValueError, encode_bool, encode_int, encode_unit};
 
 /// Counter for generating unique lambda auxiliary declaration names (`__lambda_N`).
 static LAMBDA_COUNTER: AtomicU32 = AtomicU32::new(0);
+
+fn flatten_lambda_chain<'a>(param: &'a str, body: &'a CompExpr) -> (Vec<String>, &'a CompExpr) {
+    let mut params = vec![param.to_string()];
+    let mut current = body;
+    while let CompExpr::Value(ValueExpr::Lambda { param, body }) = current {
+        params.push(param.clone());
+        current = body;
+    }
+    (params, current)
+}
 
 /// An auxiliary Wasm function produced by lifting a `ValueExpr::Lambda` out of an expression.
 ///
@@ -134,6 +144,16 @@ pub(crate) fn lower_comp_collecting_lambdas(
     lambda_decls: &mut Vec<LambdaAuxDecl>,
 ) -> Result<Vec<WasmBackendInstr>, LowerError> {
     let bindings = ClosureBindingEnv::default();
+    lower_comp_inner(comp, &HashMap::new(), &bindings, known_decls, lambda_decls)
+}
+
+pub(crate) fn lower_comp_collecting_lambdas_with_params(
+    comp: &CompExpr,
+    decl_params: &[String],
+    known_decls: &HashSet<String>,
+    lambda_decls: &mut Vec<LambdaAuxDecl>,
+) -> Result<Vec<WasmBackendInstr>, LowerError> {
+    let bindings = ClosureBindingEnv::with_decl_params(decl_params.iter().map(String::as_str));
     lower_comp_inner(comp, &HashMap::new(), &bindings, known_decls, lambda_decls)
 }
 
@@ -460,28 +480,37 @@ fn lower_comp_inner(
                         aliases.get(name.as_str()) == Some(&AliasValue::CapturingClosure);
                     if is_capturing_closure {
                         // IndirectCallClosure: pass closure ptr as __clo + call arity-2 Wasm fn.
-                        if args.len() != 1 {
-                            return Err(LowerError::UnsupportedForm {
-                                node: format!(
-                                    "IndirectCallClosure via '{name}' with arity {} (only arity-1 supported)",
-                                    args.len()
-                                ),
-                            });
+                        if args.len() == 1 {
+                            let mut arg_instrs = Vec::new();
+                            for arg in args {
+                                arg_instrs.extend(lower_value_as_arg(
+                                    arg,
+                                    aliases,
+                                    bindings,
+                                    known_decls,
+                                    lambda_decls,
+                                )?);
+                            }
+                            Ok(vec![WasmBackendInstr::IndirectCallClosure {
+                                closure_local: name.clone(),
+                                arg_instrs,
+                            }])
+                        } else {
+                            let arity = args.len() as u8;
+                            let mut instrs = Vec::new();
+                            for arg in args {
+                                instrs.extend(lower_value_as_arg(
+                                    arg,
+                                    aliases,
+                                    bindings,
+                                    known_decls,
+                                    lambda_decls,
+                                )?);
+                            }
+                            instrs.push(WasmBackendInstr::LoadLocal { name: name.clone() });
+                            instrs.push(WasmBackendInstr::IndirectCall { arity });
+                            Ok(instrs)
                         }
-                        let mut arg_instrs = Vec::new();
-                        for arg in args {
-                            arg_instrs.extend(lower_value_as_arg(
-                                arg,
-                                aliases,
-                                bindings,
-                                known_decls,
-                                lambda_decls,
-                            )?);
-                        }
-                        Ok(vec![WasmBackendInstr::IndirectCallClosure {
-                            closure_local: name.clone(),
-                            arg_instrs,
-                        }])
                     } else {
                         let arity = args.len() as u8;
                         let mut instrs = Vec::new();
@@ -896,14 +925,18 @@ fn lower_lambda(
     known_decls: &HashSet<String>,
     lambda_decls: &mut Vec<LambdaAuxDecl>,
 ) -> Result<Vec<WasmBackendInstr>, LowerError> {
-    let callable_env = analyze_lambda_callable_env(param, body, bindings, known_decls);
+    let (params, flattened_body) = flatten_lambda_chain(param, body);
+    let callable_env =
+        analyze_lambda_callable_env_for_params(&params, flattened_body, bindings, known_decls);
 
     if callable_env.is_empty() {
-        // Zero-capture: lift as-is with the single lambda param.
+        // Zero-capture: lift as-is with the lambda params.
         let mut body_bindings = bindings.clone();
-        body_bindings.bind_outer_immutable(param.to_string());
+        for param in &params {
+            body_bindings.bind_outer_immutable(param.clone());
+        }
         let body_instrs = lower_comp_inner(
-            body,
+            flattened_body,
             &HashMap::new(),
             &body_bindings,
             known_decls,
@@ -913,7 +946,7 @@ fn lower_lambda(
         let decl_name = format!("__lambda_{n}");
         lambda_decls.push(LambdaAuxDecl {
             decl_name: decl_name.clone(),
-            param_names: vec![param.to_string()],
+            param_names: params,
             env: CallableEnv::default(),
             instrs: body_instrs,
         });
@@ -936,7 +969,7 @@ fn lower_lambda(
         }
     }
 
-    // Capturing lambda (ByValue only): param_names = ["__clo", param].
+    // Capturing lambda (ByValue only): param_names = ["__clo", params...].
     // Body preamble: for each captured slot, declare a local, load from closure, store.
     const CLO_LOCAL: &str = "__clo";
     let mut preamble: Vec<WasmBackendInstr> = Vec::new();
@@ -959,9 +992,11 @@ fn lower_lambda(
     for slot in &callable_env.slots {
         body_bindings.bind_outer_immutable(slot.name.clone());
     }
-    body_bindings.bind_outer_immutable(param.to_string());
+    for param in &params {
+        body_bindings.bind_outer_immutable(param.clone());
+    }
     let body_instrs = lower_comp_inner(
-        body,
+        flattened_body,
         &HashMap::new(),
         &body_bindings,
         known_decls,
@@ -972,9 +1007,11 @@ fn lower_lambda(
     let decl_name = format!("__lambda_{n}");
     let mut full_body = preamble;
     full_body.extend(body_instrs);
+    let mut param_names = vec![CLO_LOCAL.to_string()];
+    param_names.extend(params);
     lambda_decls.push(LambdaAuxDecl {
         decl_name: decl_name.clone(),
-        param_names: vec![CLO_LOCAL.to_string(), param.to_string()],
+        param_names,
         env: callable_env.clone(),
         instrs: full_body,
     });
@@ -2258,6 +2295,36 @@ mod tests {
             vec!["__clo", "x"],
             "capturing lambda param_names should be [__clo, param]"
         );
+    }
+
+    #[test]
+    fn lower_multi_param_lambda_with_capture_flattens_params_into_one_aux_decl() {
+        let known_decls: HashSet<String> = HashSet::new();
+        let comp = CompExpr::Value(ValueExpr::Lambda {
+            param: "acc".to_string(),
+            body: Box::new(CompExpr::Value(ValueExpr::Lambda {
+                param: "x".to_string(),
+                body: Box::new(CompExpr::Value(ValueExpr::BinOp {
+                    op: goby_core::ir::IrBinOp::Add,
+                    left: Box::new(ValueExpr::BinOp {
+                        op: goby_core::ir::IrBinOp::Add,
+                        left: Box::new(ValueExpr::Var("acc".to_string())),
+                        right: Box::new(ValueExpr::Var("x".to_string())),
+                    }),
+                    right: Box::new(ValueExpr::Var("bias".to_string())),
+                })),
+            })),
+        });
+        let mut lambda_decls = Vec::new();
+        let instrs = lower_comp_collecting_lambdas(&comp, &known_decls, &mut lambda_decls)
+            .expect("multi-param capturing lambda should lower");
+        assert!(
+            matches!(instrs.as_slice(), [WasmBackendInstr::CreateClosure { .. }]),
+            "expected CreateClosure, got: {:?}",
+            instrs
+        );
+        assert_eq!(lambda_decls.len(), 1, "expected one lifted lambda");
+        assert_eq!(lambda_decls[0].param_names, vec!["__clo", "acc", "x"]);
     }
 
     /// Let-bound capturing closure called directly emits `IndirectCallClosure`.

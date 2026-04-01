@@ -4,21 +4,25 @@ Last updated: 2026-04-01
 
 ## Current Focus
 
-**Track CC / CC4** (next): Higher-order stdlib parity — make `each`, `map`, `fold`
-accept capturing closures.
+**Track CC / by-value follow-up** (next): close the remaining helper-local runtime gap for
+by-value capture, then finish `SharedMutableCell` lowering so captured `mut` reads/writes match
+the locked shared-cell semantics.
 
-CC3 (lowering and call dispatch) is complete:
-- ByValue-capturing lambdas lower via `CreateClosure` + preamble locals
-- `IndirectCallClosure` dispatches direct closure calls with correct arity-2 signature
-- `instrs_load_local` recurses into `CreateClosure.slot_instrs` for alias detection
-- Effect-op GlobalRefs rejected as values in `lower_value`
-- Acceptance tests pass: `base=10; add=fn x→base+x; add 5` → 15
+CC4 (main immutable/by-value callback parity) is landed:
+- `list.each`, `list.map`, and inline `list.fold` now accept capturing closures on the Wasm path
+- generic `IndirectCall` emission branches on TAG_FUNC vs TAG_CLOSURE at runtime
+- multi-parameter lambdas flatten into one lifted aux decl (`fn acc x -> ...` → one Wasm callable)
+- helper-state scratch/allocator initialization is stable across recursive emit calls
+- focused execution tests pass for capturing `each`, capturing `map`, and inline capturing `fold`
 
 ## Recently Completed
 
-- **Track CC / prep** (2026-04-01): Verified the compile-time slice for helper-local capturing map callbacks.
-  - `compile_module_with_helper_closure_capture_succeeds` is now active coverage instead of ignored
-  - Runtime dispatch for capturing HOF callbacks is still incomplete; execution tests remain deferred to CC4
+- **Track CC / CC4** (2026-04-01): Main immutable/by-value callback parity landed on the Wasm path.
+  - `emit.rs` now handles TAG_FUNC vs TAG_CLOSURE dispatch for generic indirect calls and `list.each` / `list.map`
+  - nested/helper alloc-cursor resets no longer clobber earlier heap allocations during recursive emission
+  - `lower_lambda()` flattens curried multi-param lambdas into one aux decl, enabling inline `fold` callbacks
+  - focused tests cover capturing `each`, capturing `map`, inline capturing `fold`, and compile-time smoke coverage
+  - remaining follow-up: helper-local `runtime_read_captured_lambda.gb` still fails during runtime Wasm load
 - **Track CC / CC3** (2026-04-01): All CC3 milestones complete.
   - `lower_lambda()` handles zero-capture (PushFuncHandle) and ByValue-capture (CreateClosure) paths
   - Preamble locals pattern: `DeclareLocal + LoadClosureSlot + StoreLocal` per captured slot
@@ -49,7 +53,7 @@ CC3 (lowering and call dispatch) is complete:
 
 Next track candidates are in `doc/PLAN.md` §4:
 
-- **Track CC: Closure Capture** (§4.6): CC3 complete. Next: CC4 — make `each`, `map`, `fold` accept capturing closures; mutable-write captures (SharedMutableCell) lowering.
+- **Track CC: Closure Capture** (§4.6): main immutable/by-value callback parity is landed. Next: close the remaining helper-local runtime gap, then mutable-write captures (`SharedMutableCell`) lowering plus remaining diagnostics/docs closure.
 - **Track D follow-ups** (§4.1): D5 (`goby lint` unused-binding rule), D6c shared grammar asset.
 - **Track WB-3B** (deferred): WasmFX typed continuations — on hold until WebAssembly stack switching reaches Phase 4.
 - **Float support** (§4.7): `Float` type backed by Wasm `f64`; semantics to be locked before coding.
@@ -70,11 +74,11 @@ Next track candidates are in `doc/PLAN.md` §4:
   - Backend effect dispatch (typed `BackendEffectOp` / `BackendPrintOp`)
   - stdlib `list.each` / `list.map` / `list.fold`
   - Effect handlers: `Handle` / `WithHandler` / tail `Resume` (one-shot tail-resumptive subset)
-  - Function values: `Lambda` (zero-capture via `PushFuncHandle`; ByValue-capture via `CreateClosure` + `IndirectCallClosure`); stdlib `graphemes` via wrapper AuxDecl
+  - Function values: `Lambda` (zero-capture via `PushFuncHandle`; ByValue-capture via `CreateClosure`); direct calls and main callback dispatch now branch correctly for closures
   - Host intrinsics: `StringGraphemesList` (`__goby_string_graphemes_list`)
 - Known limitations:
   - non-tail / multi-resume handlers → `BackendLimitation` error
-  - capturing lambda passed to HOF callbacks via `list.each/map/fold` — Track CC4 will implement
+  - helper-local by-value capture runtime shape in `examples/bugs/runtime_read_captured_lambda.gb` still fails during Wasm load
   - mutable-write captures (SharedMutableCell) remain `UnsupportedForm` — Track CC4
   - interpreter path: capturing lambdas work but use snapshot semantics for `mut` captures (not the spec's shared-cell model); will be corrected as part of Track CC
 

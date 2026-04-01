@@ -458,7 +458,7 @@ main =
 
 #[test]
 #[cfg(unix)]
-fn run_command_reports_precise_helper_closure_capture_error() {
+fn run_command_reports_current_helper_closure_capture_runtime_gap() {
     let root = repo_root();
     let input = root.join("examples/bugs/runtime_read_captured_lambda.gb");
 
@@ -466,18 +466,13 @@ fn run_command_reports_precise_helper_closure_capture_error() {
 
     assert!(
         !output.status.success(),
-        "expected closure-capture failure, stderr: {}",
+        "expected helper closure-capture runtime gap, stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("general lowering unsupported: unsupported IR form"),
-        "expected precise general-lowering boundary error, stderr: {}",
-        stderr
-    );
-    assert!(
-        stderr.contains("Lambda with free variables"),
-        "expected closure-capture detail in stderr, got: {}",
+        stderr.contains("wasm load: failed to compile"),
+        "expected current runtime-load failure, stderr: {}",
         stderr
     );
 }

@@ -1386,35 +1386,23 @@ main =
     );
 }
 
-/// Inline capturing lambda passed to `fold` must not fully compile/execute on the
-/// current Wasm path. ByValue captures lower; mutable-write captures
-/// and indirect closure call dispatch remain unsupported.
+/// Inline capturing lambda passed to `fold` should compile on the Wasm path.
 #[test]
-fn inline_capturing_lambda_to_fold_does_not_compile_on_wasm_path() {
+fn inline_capturing_lambda_to_fold_compiles_on_wasm_path() {
     let source = r#"
 import goby/list ( fold )
-
-sum_with_bias : Int -> List Int -> Int
-sum_with_bias bias xs =
-  fold xs 0 (fn acc x -> acc + x + bias)
 
 main : Unit -> Unit can Print, Read
 main =
   _ = read()
-  println "${sum_with_bias 10 [1, 2, 3]}"
+  bias = 10
+  total = fold [1, 2, 3] 0 (fn acc x -> acc + x + bias)
+  println "${total}"
 "#;
     let module = parse_module(source).expect("source should parse");
-    // Acceptable failures: IR lowering error, unsupported form, or no IR decl.
-    let err = compile_module(&module).expect_err(
-        "capturing lambda to fold should not compile correctly on the current Wasm path",
-    );
-    assert!(
-        err.message.contains("unsupported IR form")
-            || err.message.contains("Lambda")
-            || err.message.contains("no IR decl"),
-        "error should indicate unsupported form or missing IR, got: {}",
-        err.message
-    );
+    let wasm =
+        compile_module(&module).expect("capturing lambda to fold should compile on the Wasm path");
+    assert!(!wasm.is_empty(), "compiled Wasm bytes should not be empty");
 }
 
 /// Two closures sharing one mutable cell must not compile on the current Wasm

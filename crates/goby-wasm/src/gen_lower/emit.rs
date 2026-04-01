@@ -46,7 +46,7 @@ const SPLIT_FUSED_SCRATCH_I32: u32 = 5;
 // scratch[1] = read_line total len
 const GENERIC_EFFECT_SCRATCH_I32: u32 = 2;
 // Non-fused helper emission needs two transient i64 locals for helper arguments.
-const HELPER_SCRATCH_I64: u32 = 2;
+const HELPER_SCRATCH_I64: u32 = 3;
 // Helper emission i32 scratch layout:
 // scratch[0] = text/string/list ptr
 // scratch[1] = text/string/list len
@@ -185,6 +185,9 @@ struct EmitContext {
     /// Type index for `(i64, i64) -> i64` in the Wasm type section, used by `IndirectCall { arity: 2 }`.
     /// `None` when the module has no arity-2 `IndirectCall` instructions.
     indirect_call_type_idx_2: Option<u32>,
+    /// Type index for `(i64, i64, i64) -> i64` in the Wasm type section, used by
+    /// closure-backed indirect calls with two user-visible arguments.
+    indirect_call_type_idx_3: Option<u32>,
     /// Map from record constructor name to module-local numeric tag used in `RecordLit`.
     record_ctor_tags: HashMap<String, u32>,
 }
@@ -198,6 +201,7 @@ impl EmitContext {
         decl_table_slots: HashMap<String, u32>,
         indirect_call_type_idx_1: Option<u32>,
         indirect_call_type_idx_2: Option<u32>,
+        indirect_call_type_idx_3: Option<u32>,
         record_ctor_tags: HashMap<String, u32>,
     ) -> Self {
         Self {
@@ -207,6 +211,7 @@ impl EmitContext {
             decl_table_slots,
             indirect_call_type_idx_1,
             indirect_call_type_idx_2,
+            indirect_call_type_idx_3,
             record_ctor_tags,
         }
     }
@@ -269,6 +274,11 @@ impl EmitContext {
             2 => self.indirect_call_type_idx_2.ok_or_else(|| CodegenError {
                 message:
                     "gen_lower/emit: arity-2 IndirectCall used but indirect_call_type_idx_2 not registered"
+                        .to_string(),
+            }),
+            3 => self.indirect_call_type_idx_3.ok_or_else(|| CodegenError {
+                message:
+                    "gen_lower/emit: arity-3 IndirectCall used but indirect_call_type_idx_3 not registered"
                         .to_string(),
             }),
             _ => Err(CodegenError {
@@ -531,7 +541,9 @@ fn required_i64_scratch_count(instrs: &[WasmBackendInstr]) -> u32 {
     let needs_scratch = all.iter().any(|i| match i {
         WasmBackendInstr::Intrinsic { .. }
         | WasmBackendInstr::ListEach { .. }
-        | WasmBackendInstr::ListMap { .. } => true,
+        | WasmBackendInstr::ListMap { .. }
+        | WasmBackendInstr::IndirectCall { .. }
+        | WasmBackendInstr::IndirectCallClosure { .. } => true,
         WasmBackendInstr::BinOp { op } => {
             matches!(op, IrBinOp::Mul | IrBinOp::Div | IrBinOp::Mod)
         }
@@ -608,6 +620,31 @@ fn default_effect_emit_strategy() -> EffectEmitStrategy {
     } else {
         EffectEmitStrategy::Wb3DirectCall
     }
+}
+
+fn initialize_helper_state_locals(
+    function: &mut Function,
+    layout: &MemoryLayout,
+    i32_base: u32,
+    static_strings: &StaticStringPool,
+) -> Result<(), CodegenError> {
+    let buffer_ptr = layout.heap_base as i32;
+    let alloc_cursor_local = i32_base + HELPER_ALLOC_CURSOR_OFFSET;
+    let heap_floor_local = i32_base + HELPER_HEAP_FLOOR_OFFSET;
+    let initial_cursor = align_down_i32(
+        i32::try_from(STATIC_STRING_LIMIT - static_strings.bytes_used).map_err(|_| {
+            CodegenError {
+                message: "gen_lower/emit: helper allocation cursor does not fit in i32".to_string(),
+            }
+        })?,
+        8,
+    );
+    let initial_floor = align_up_i32(buffer_ptr + 4, 8);
+    function.instruction(&Instruction::I32Const(initial_cursor));
+    function.instruction(&Instruction::LocalSet(alloc_cursor_local));
+    function.instruction(&Instruction::I32Const(initial_floor));
+    function.instruction(&Instruction::LocalSet(heap_floor_local));
+    Ok(())
 }
 
 pub(crate) fn supports_instrs(instrs: &[WasmBackendInstr]) -> bool {
@@ -755,11 +792,19 @@ pub(crate) fn emit_general_module_with_aux_and_options(
                 i,
                 WasmBackendInstr::IndirectCall { arity: 2 }
                     | WasmBackendInstr::IndirectCallClosure { .. }
+                    | WasmBackendInstr::IndirectCall { arity: 1 }
+                    | WasmBackendInstr::ListEach { .. }
+                    | WasmBackendInstr::ListMap { .. }
             )
         })
     });
+    let uses_indirect_call_3 = all_slices_iter().any(|slice| {
+        collect_all_instrs(slice)
+            .iter()
+            .any(|i| matches!(i, WasmBackendInstr::IndirectCall { arity: 2 }))
+    });
     // `uses_indirect_call` is true when any kind of indirect call requires a funcref table.
-    let uses_indirect_call = uses_indirect_call_1 || uses_indirect_call_2;
+    let uses_indirect_call = uses_indirect_call_1 || uses_indirect_call_2 || uses_indirect_call_3;
     let indirect_call_type_idx_1: Option<u32> = if uses_indirect_call_1 {
         let idx = types.len();
         types.ty().function([ValType::I64], [ValType::I64]);
@@ -772,6 +817,15 @@ pub(crate) fn emit_general_module_with_aux_and_options(
         types
             .ty()
             .function([ValType::I64, ValType::I64], [ValType::I64]);
+        Some(idx)
+    } else {
+        None
+    };
+    let indirect_call_type_idx_3: Option<u32> = if uses_indirect_call_3 {
+        let idx = types.len();
+        types
+            .ty()
+            .function([ValType::I64, ValType::I64, ValType::I64], [ValType::I64]);
         Some(idx)
     } else {
         None
@@ -895,8 +949,12 @@ pub(crate) fn emit_general_module_with_aux_and_options(
             decl_table_slots.clone(),
             indirect_call_type_idx_1,
             indirect_call_type_idx_2,
+            indirect_call_type_idx_3,
             record_ctor_tags.clone(),
         );
+        if needs_helper_state(instrs) {
+            initialize_helper_state_locals(&mut function, layout, main_i32_base, &static_strings)?;
+        }
         emit_instrs(
             &mut function,
             &mut ctx,
@@ -943,6 +1001,7 @@ pub(crate) fn emit_general_module_with_aux_and_options(
             decl_table_slots.clone(),
             indirect_call_type_idx_1,
             indirect_call_type_idx_2,
+            indirect_call_type_idx_3,
             record_ctor_tags.clone(),
         );
         for param_name in &decl.param_names {
@@ -950,6 +1009,9 @@ pub(crate) fn emit_general_module_with_aux_and_options(
             // We mirror that: declare each param name with an explicit local index.
             ctx.locals.insert(param_name.clone(), ctx.next_local);
             ctx.next_local += 1;
+        }
+        if needs_helper_state(&decl.instrs) {
+            initialize_helper_state_locals(&mut function, layout, aux_i32_base, &static_strings)?;
         }
         // After params, body locals start from aux_param_count.
         // named_i64_count passed to emit_instrs counts only DeclareLocal in body.
@@ -1005,7 +1067,11 @@ fn emit_instrs(
     let buffer_len =
         (STATIC_STRING_LIMIT - layout.heap_base - static_strings.bytes_used) as i32 - 4; // reserve 4 bytes for len prefix
     let newline_ptr = (layout.heap_base - 1) as i32;
-    let helper_i64_base = ctx.next_local + named_i64_count;
+    let helper_i64_base = i32_base
+        .checked_sub(helper_i64_scratch_count)
+        .ok_or_else(|| CodegenError {
+            message: "gen_lower/emit: helper i64 scratch base underflow".to_string(),
+        })?;
     // `helper_state` is constructed when bump allocator / i32 scratch is needed.
     // BinOp Mul/Div/Mod need only i64 scratch; those are provided via `helper_i64_base` directly
     // in `emit_bin_op`, without requiring the full HelperEmitState.
@@ -1013,20 +1079,6 @@ fn emit_instrs(
     let helper_state = if needs_helper_state(instrs) {
         let alloc_cursor_local = i32_base + HELPER_ALLOC_CURSOR_OFFSET;
         let heap_floor_local = i32_base + HELPER_HEAP_FLOOR_OFFSET;
-        let initial_cursor = align_down_i32(
-            i32::try_from(STATIC_STRING_LIMIT - static_strings.bytes_used).map_err(|_| {
-                CodegenError {
-                    message: "gen_lower/emit: helper allocation cursor does not fit in i32"
-                        .to_string(),
-                }
-            })?,
-            8,
-        );
-        let initial_floor = align_up_i32(buffer_ptr + 4, 8);
-        function.instruction(&Instruction::I32Const(initial_cursor));
-        function.instruction(&Instruction::LocalSet(alloc_cursor_local));
-        function.instruction(&Instruction::I32Const(initial_floor));
-        function.instruction(&Instruction::LocalSet(heap_floor_local));
         Some(HelperEmitState {
             i64_base: helper_i64_base,
             i32_base,
@@ -1347,17 +1399,99 @@ fn emit_instrs(
             }
 
             WasmBackendInstr::IndirectCall { arity } => {
-                // Stack: [..., arg0: i64, ..., argN-1: i64, callee_tagged: i64]
-                // Decode TAG_FUNC i64 → funcref table slot index (i32).
-                function.instruction(&Instruction::I64Const(0xFFFF_FFFFi64));
-                function.instruction(&Instruction::I64And);
-                function.instruction(&Instruction::I32WrapI64);
-                // call_indirect (i64^arity) -> i64 via funcref table 0.
-                let type_idx = ctx.indirect_call_type_idx(*arity)?;
-                function.instruction(&Instruction::CallIndirect {
-                    type_index: type_idx,
-                    table_index: 0,
-                });
+                let s_callee = helper_i64_base;
+                let s_arg0 = helper_i64_base + 1;
+                let s_arg1 = helper_i64_base + 2;
+                match arity {
+                    1 => {
+                        function.instruction(&Instruction::LocalSet(s_callee));
+                        function.instruction(&Instruction::LocalSet(s_arg0));
+                        function.instruction(&Instruction::LocalGet(s_callee));
+                        function.instruction(&Instruction::I64Const(60));
+                        function.instruction(&Instruction::I64ShrU);
+                        function.instruction(&Instruction::I64Const(i64::from(TAG_CLOSURE)));
+                        function.instruction(&Instruction::I64Eq);
+                        function.instruction(&Instruction::If(wasm_encoder::BlockType::Result(
+                            wasm_encoder::ValType::I64,
+                        )));
+                        function.instruction(&Instruction::LocalGet(s_callee));
+                        function.instruction(&Instruction::LocalGet(s_arg0));
+                        function.instruction(&Instruction::LocalGet(s_callee));
+                        function.instruction(&Instruction::I32WrapI64);
+                        function.instruction(&Instruction::I64Load(MemArg {
+                            offset: 0,
+                            align: 3,
+                            memory_index: 0,
+                        }));
+                        function.instruction(&Instruction::I64Const(0xFFFF_FFFFi64));
+                        function.instruction(&Instruction::I64And);
+                        function.instruction(&Instruction::I32WrapI64);
+                        function.instruction(&Instruction::CallIndirect {
+                            type_index: ctx.indirect_call_type_idx(2)?,
+                            table_index: 0,
+                        });
+                        function.instruction(&Instruction::Else);
+                        function.instruction(&Instruction::LocalGet(s_arg0));
+                        function.instruction(&Instruction::LocalGet(s_callee));
+                        function.instruction(&Instruction::I64Const(0xFFFF_FFFFi64));
+                        function.instruction(&Instruction::I64And);
+                        function.instruction(&Instruction::I32WrapI64);
+                        function.instruction(&Instruction::CallIndirect {
+                            type_index: ctx.indirect_call_type_idx(1)?,
+                            table_index: 0,
+                        });
+                        function.instruction(&Instruction::End);
+                    }
+                    2 => {
+                        function.instruction(&Instruction::LocalSet(s_callee));
+                        function.instruction(&Instruction::LocalSet(s_arg1));
+                        function.instruction(&Instruction::LocalSet(s_arg0));
+                        function.instruction(&Instruction::LocalGet(s_callee));
+                        function.instruction(&Instruction::I64Const(60));
+                        function.instruction(&Instruction::I64ShrU);
+                        function.instruction(&Instruction::I64Const(i64::from(TAG_CLOSURE)));
+                        function.instruction(&Instruction::I64Eq);
+                        function.instruction(&Instruction::If(wasm_encoder::BlockType::Result(
+                            wasm_encoder::ValType::I64,
+                        )));
+                        function.instruction(&Instruction::LocalGet(s_callee));
+                        function.instruction(&Instruction::LocalGet(s_arg0));
+                        function.instruction(&Instruction::LocalGet(s_arg1));
+                        function.instruction(&Instruction::LocalGet(s_callee));
+                        function.instruction(&Instruction::I32WrapI64);
+                        function.instruction(&Instruction::I64Load(MemArg {
+                            offset: 0,
+                            align: 3,
+                            memory_index: 0,
+                        }));
+                        function.instruction(&Instruction::I64Const(0xFFFF_FFFFi64));
+                        function.instruction(&Instruction::I64And);
+                        function.instruction(&Instruction::I32WrapI64);
+                        function.instruction(&Instruction::CallIndirect {
+                            type_index: ctx.indirect_call_type_idx(3)?,
+                            table_index: 0,
+                        });
+                        function.instruction(&Instruction::Else);
+                        function.instruction(&Instruction::LocalGet(s_arg0));
+                        function.instruction(&Instruction::LocalGet(s_arg1));
+                        function.instruction(&Instruction::LocalGet(s_callee));
+                        function.instruction(&Instruction::I64Const(0xFFFF_FFFFi64));
+                        function.instruction(&Instruction::I64And);
+                        function.instruction(&Instruction::I32WrapI64);
+                        function.instruction(&Instruction::CallIndirect {
+                            type_index: ctx.indirect_call_type_idx(2)?,
+                            table_index: 0,
+                        });
+                        function.instruction(&Instruction::End);
+                    }
+                    _ => {
+                        return Err(CodegenError {
+                            message: format!(
+                                "gen_lower/emit: IndirectCall with unsupported arity {arity}"
+                            ),
+                        });
+                    }
+                }
             }
 
             WasmBackendInstr::IndirectCallClosure {
@@ -1432,6 +1566,7 @@ fn emit_instrs(
             } => {
                 let hs = require_helper_state(helper_state, "ListEach")?;
                 let type_idx = ctx.indirect_call_type_idx(1)?;
+                let closure_type_idx = ctx.indirect_call_type_idx(2)?;
                 emit_instrs(
                     function,
                     ctx,
@@ -1454,7 +1589,7 @@ fn emit_instrs(
                     static_strings,
                     options,
                 )?;
-                emit_list_each(function, &hs, type_idx);
+                emit_list_each(function, &hs, type_idx, closure_type_idx);
             }
 
             WasmBackendInstr::ListMap {
@@ -1463,6 +1598,7 @@ fn emit_instrs(
             } => {
                 let hs = require_helper_state(helper_state, "ListMap")?;
                 let type_idx = ctx.indirect_call_type_idx(1)?;
+                let closure_type_idx = ctx.indirect_call_type_idx(2)?;
                 emit_instrs(
                     function,
                     ctx,
@@ -1485,7 +1621,7 @@ fn emit_instrs(
                     static_strings,
                     options,
                 )?;
-                emit_list_map(function, &hs, type_idx)?;
+                emit_list_map(function, &hs, type_idx, closure_type_idx)?;
             }
 
             WasmBackendInstr::TupleGet { tuple_local, index } => {
@@ -2985,7 +3121,12 @@ fn emit_split_each_print(
 ///
 /// I32 scratch slots used: HS_LIST_PTR (8), HS_ITEM_COUNT (6), HS_ITER (10).
 /// I64 scratch locals used: i64_base+0 (func handle), i64_base+1 (current element).
-fn emit_list_each(function: &mut Function, hs: &HelperEmitState, indirect_call_type_idx: u32) {
+fn emit_list_each(
+    function: &mut Function,
+    hs: &HelperEmitState,
+    indirect_call_type_idx: u32,
+    closure_call_type_idx: u32,
+) {
     let s_func = hs.i64_base; // i64 scratch: func handle
     let s_elem = hs.i64_base + 1; // i64 scratch: current element
     let s_list_ptr = hs.i32_base + HS_LIST_PTR; // i32 scratch: list pointer
@@ -3039,7 +3180,31 @@ fn emit_list_each(function: &mut Function, hs: &HelperEmitState, indirect_call_t
     }));
     function.instruction(&Instruction::LocalSet(s_elem));
 
-    // call_indirect(elem, func_slot)
+    function.instruction(&Instruction::LocalGet(s_func));
+    function.instruction(&Instruction::I64Const(60));
+    function.instruction(&Instruction::I64ShrU);
+    function.instruction(&Instruction::I64Const(i64::from(TAG_CLOSURE)));
+    function.instruction(&Instruction::I64Eq);
+    function.instruction(&Instruction::If(wasm_encoder::BlockType::Result(
+        wasm_encoder::ValType::I64,
+    )));
+    function.instruction(&Instruction::LocalGet(s_func));
+    function.instruction(&Instruction::LocalGet(s_elem));
+    function.instruction(&Instruction::LocalGet(s_func));
+    function.instruction(&Instruction::I32WrapI64);
+    function.instruction(&Instruction::I64Load(MemArg {
+        offset: 0,
+        align: 3,
+        memory_index: 0,
+    }));
+    function.instruction(&Instruction::I64Const(0xFFFF_FFFFi64));
+    function.instruction(&Instruction::I64And);
+    function.instruction(&Instruction::I32WrapI64);
+    function.instruction(&Instruction::CallIndirect {
+        type_index: closure_call_type_idx,
+        table_index: 0,
+    });
+    function.instruction(&Instruction::Else);
     function.instruction(&Instruction::LocalGet(s_elem));
     function.instruction(&Instruction::LocalGet(s_func));
     function.instruction(&Instruction::I64Const(0xFFFF_FFFFi64));
@@ -3049,6 +3214,7 @@ fn emit_list_each(function: &mut Function, hs: &HelperEmitState, indirect_call_t
         type_index: indirect_call_type_idx,
         table_index: 0,
     });
+    function.instruction(&Instruction::End);
     function.instruction(&Instruction::Drop); // discard result
 
     // iter += 1
@@ -3078,6 +3244,7 @@ fn emit_list_map(
     function: &mut Function,
     hs: &HelperEmitState,
     indirect_call_type_idx: u32,
+    closure_call_type_idx: u32,
 ) -> Result<(), CodegenError> {
     let s_func = hs.i64_base;
     let s_elem = hs.i64_base + 1;
@@ -3150,7 +3317,31 @@ fn emit_list_map(
     }));
     function.instruction(&Instruction::LocalSet(s_elem));
 
-    // mapped = call_indirect(elem, func_slot)
+    function.instruction(&Instruction::LocalGet(s_func));
+    function.instruction(&Instruction::I64Const(60));
+    function.instruction(&Instruction::I64ShrU);
+    function.instruction(&Instruction::I64Const(i64::from(TAG_CLOSURE)));
+    function.instruction(&Instruction::I64Eq);
+    function.instruction(&Instruction::If(wasm_encoder::BlockType::Result(
+        wasm_encoder::ValType::I64,
+    )));
+    function.instruction(&Instruction::LocalGet(s_func));
+    function.instruction(&Instruction::LocalGet(s_elem));
+    function.instruction(&Instruction::LocalGet(s_func));
+    function.instruction(&Instruction::I32WrapI64);
+    function.instruction(&Instruction::I64Load(MemArg {
+        offset: 0,
+        align: 3,
+        memory_index: 0,
+    }));
+    function.instruction(&Instruction::I64Const(0xFFFF_FFFFi64));
+    function.instruction(&Instruction::I64And);
+    function.instruction(&Instruction::I32WrapI64);
+    function.instruction(&Instruction::CallIndirect {
+        type_index: closure_call_type_idx,
+        table_index: 0,
+    });
+    function.instruction(&Instruction::Else);
     function.instruction(&Instruction::LocalGet(s_elem));
     function.instruction(&Instruction::LocalGet(s_func));
     function.instruction(&Instruction::I64Const(0xFFFF_FFFFi64));
@@ -3160,6 +3351,7 @@ fn emit_list_map(
         type_index: indirect_call_type_idx,
         table_index: 0,
     });
+    function.instruction(&Instruction::End);
     function.instruction(&Instruction::LocalSet(s_elem));
 
     // result_ptr[4 + iter * 8] = mapped

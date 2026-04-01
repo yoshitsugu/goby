@@ -1521,9 +1521,7 @@ main =
         assert_eq!(output.as_deref(), Some("1\n"), "pair.0 of (1, 2) must be 1");
     }
 
-    /// Runtime dispatch for capturing callbacks in list.map is still incomplete.
     #[test]
-    #[ignore = "runtime dispatch for capturing list.map callbacks is not implemented yet"]
     fn capturing_lambda_via_map_executes_correctly() {
         use goby_core::parse_module;
         let module = parse_module(
@@ -1535,7 +1533,7 @@ main =
   _ = read()
   prefix = "hello"
   result = map ["world"] (fn s -> "${prefix} ${s}")
-  println result[0]
+  println (result[0])
 "#,
         )
         .expect("source should parse");
@@ -1543,6 +1541,49 @@ main =
         let result = execute_runtime_module_with_stdin(&module, Some(String::new()));
         let output = result.expect("capturing lambda via map should execute successfully");
         assert_eq!(output.as_deref(), Some("hello world\n"));
+    }
+
+    #[test]
+    fn capturing_lambda_via_each_executes_correctly() {
+        use goby_core::parse_module;
+        let module = parse_module(
+            r#"
+import goby/list ( each )
+
+main : Unit -> Unit can Print, Read
+main =
+  _ = read()
+  prefix = "n="
+  each [1, 2] (fn n -> println "${prefix}${n}")
+"#,
+        )
+        .expect("source should parse");
+
+        let output = execute_runtime_module_with_stdin(&module, Some(String::new()))
+            .expect("capturing lambda via each should execute successfully");
+        assert_eq!(output.as_deref(), Some("n=1\nn=2\n"));
+    }
+
+    #[test]
+    fn inline_capturing_lambda_via_fold_executes_correctly() {
+        use goby_core::parse_module;
+        let module = parse_module(
+            r#"
+import goby/list ( fold )
+
+main : Unit -> Unit can Print, Read
+main =
+  _ = read()
+  bias = 10
+  total = fold [1, 2, 3] 0 (fn acc x -> acc + x + bias)
+  println "${total}"
+"#,
+        )
+        .expect("source should parse");
+
+        let output = execute_runtime_module_with_stdin(&module, Some(String::new()))
+            .expect("capturing inline fold lambda should execute successfully");
+        assert_eq!(output.as_deref(), Some("36\n"));
     }
 
     #[test]

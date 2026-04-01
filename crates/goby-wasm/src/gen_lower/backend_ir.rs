@@ -459,7 +459,7 @@ pub(crate) enum WasmBackendInstr {
     /// # Stack discipline
     /// - `value_instrs` produces the new i64 value.
     /// - `cell_ptr_instrs` produces the TAG_CELL-tagged pointer to the cell.
-    /// After: the store is performed; a tagged Unit i64 is pushed as the result.
+    /// - After: the store is performed; a tagged Unit i64 is pushed as the result.
     StoreCellValue {
         cell_ptr_instrs: Vec<WasmBackendInstr>,
         value_instrs: Vec<WasmBackendInstr>,

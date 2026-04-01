@@ -595,7 +595,12 @@ fn lower_aux_decl(
     let Some(body) = rewrite_safe_handlers_if_present(body, allow_safe_handler_lowering)? else {
         return Ok(Err(GeneralLowerUnsupportedReason::HandlerRewriteFailed));
     };
-    let instrs = match lower::lower_comp_collecting_lambdas(&body, known_decls, lambda_decls) {
+    let instrs = match lower::lower_comp_collecting_lambdas_with_params(
+        &body,
+        &param_names,
+        known_decls,
+        lambda_decls,
+    ) {
         Ok(i) => i,
         Err(lower::LowerError::UnsupportedForm { node }) => {
             return Ok(Err(GeneralLowerUnsupportedReason::UnsupportedIrForm {

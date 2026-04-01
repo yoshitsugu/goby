@@ -389,8 +389,16 @@ mod tests {
         let cell_tag = decode_tag(encode_cell_ptr(0));
         // All runtime tags must be distinct.
         let tags = [
-            unit_tag, int_tag, bool_tag, str_tag, list_tag, func_tag, tuple_tag, record_tag,
-            closure_tag, cell_tag,
+            unit_tag,
+            int_tag,
+            bool_tag,
+            str_tag,
+            list_tag,
+            func_tag,
+            tuple_tag,
+            record_tag,
+            closure_tag,
+            cell_tag,
         ];
         for i in 0..tags.len() {
             for j in (i + 1)..tags.len() {
