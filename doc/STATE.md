@@ -4,10 +4,14 @@ Last updated: 2026-04-02
 
 ## Current Focus
 
-**Track CC / CC5 — next**: CC4 core slices and post-review refactoring are complete. Next milestone is CC5 (diagnostics and regression safety).
+**Track CC / CC5 — in progress**: Section 3 spec-conformance coverage now runs on the Wasm path. Remaining CC5 work is narrowing deferred diagnostics and deciding how much fallback/interpreter parity should be locked before the interpreter shared-cell fix lands.
 
 ## Recently Completed
 
+- **Track CC / CC5 spec-conformance coverage** (2026-04-02): Section 3 closure-capture acceptance programs are now locked by one Wasm execution test set.
+  - `test(wasm-smoke)`: added a focused Section 3 spec-conformance test that executes all five acceptance programs on the Wasm path and checks their expected stdout.
+  - `test(wasm-smoke)`: added a helper-returned ByValue closure execution regression (`make_adder` / `add10 5`) so helper-produced capturing closures are pinned end-to-end rather than only via lowering smoke.
+  - `doc(plan)`: normalized Section 3.1 and 3.4 acceptance programs to bind the call result before interpolation/printing, keeping the acceptance set focused on closure semantics instead of the separate "call inside interpolation" IR limitation.
 - **Track CC / CC4 post-review refactoring** (2026-04-02): Three review findings addressed.
   - `fix`: zero-param aux decls now receive a synthetic `_unit` Wasm parameter, fixing the operand-stack leak when `helper()` (no explicit params) was called from main. `runtime_read_captured_lambda.gb` now executes correctly (`"hello world\n"`). `outer_mutation_after_closure_creation` test enabled (was `#[ignore]`).
   - `refactor(emit)`: heap-cursor sync protocol encapsulated in three helpers:
@@ -87,6 +91,7 @@ Next track candidates are in `doc/PLAN.md` §4:
 - Known limitations:
   - non-tail / multi-resume handlers → `BackendLimitation` error
   - interpreter path: capturing lambdas work but use snapshot semantics for `mut` captures (not the spec's shared-cell model); will be corrected as part of Track CC
+  - fallback/interpreter parity is not yet locked for every helper-returned closure shape; the new Section 3 Wasm conformance set intentionally covers the Wasm boundary first
 
 ## Key Entry Points
 

@@ -78,6 +78,17 @@ fn assert_has_fd_read_and_fd_write_imports(wasm: &[u8]) {
     );
 }
 
+fn assert_runtime_stdout_with_empty_stdin(source: &str, expected_stdout: &str) {
+    let module = parse_module(source).expect("source should parse");
+    let output = execute_runtime_module_with_stdin(&module, Some(String::new()))
+        .expect("program should execute on the Wasm runtime path");
+    assert_eq!(
+        output.as_deref(),
+        Some(expected_stdout),
+        "unexpected stdout for runtime-executed module"
+    );
+}
+
 #[test]
 fn exports_start_entrypoint() {
     let src = "main : Unit -> Unit\nmain = print \"Hello\"\n";
@@ -1282,25 +1293,15 @@ main =
 }
 
 // ---------------------------------------------------------------------------
-// Closure capture acceptance programs (failing until higher-order closure support lands)
-//
-// These tests correspond to the five acceptance programs in
-// doc/PLAN_CLOSURE_CAPTURE.md §3.  Each one exercises a distinct closure
-// capture shape that the current Wasm backend does not support.  The tests
-// assert that compilation fails with a recognisable "closure capture" error
-// rather than silently producing wrong code.
-//
-// When higher-order closure support is implemented, these tests should be updated to assert that
-// compilation *succeeds* and execution produces the expected output.
+// Closure capture Section 3 spec-conformance tests
 // ---------------------------------------------------------------------------
 
-/// Closure that reads an immutable outer binding (`base`) must not fully execute
-/// on the current Wasm path. The lambda itself lowers; indirect closure call
-/// dispatch is still needed for correct execution.
-/// The program fails at IR lowering level (no IR decl), at lowering, or at call dispatch.
 #[test]
-fn read_only_immutable_capture_does_not_compile_on_wasm_path() {
-    let source = r#"
+fn closure_capture_section3_acceptance_programs_execute_on_wasm_path() {
+    let cases = [
+        (
+            "section 3.1 read-only immutable capture",
+            r#"
 make_adder : Int -> (Int -> Int)
 make_adder base =
   fn x -> base + x
@@ -1309,28 +1310,14 @@ main : Unit -> Unit can Print, Read
 main =
   _ = read()
   add10 = make_adder 10
-  println "${add10 5}"
-"#;
-    let module = parse_module(source).expect("source should parse");
-    // The program currently fails at IR lowering (no IR decl) or Wasm lowering.
-    // Either error is acceptable until indirect closure call dispatch is complete.
-    let err = compile_module(&module).expect_err(
-        "capturing lambda program should not compile correctly on the current Wasm path",
-    );
-    assert!(
-        err.message.contains("unsupported IR form")
-            || err.message.contains("Lambda")
-            || err.message.contains("no IR decl"),
-        "error should indicate unsupported form or missing IR, got: {}",
-        err.message
-    );
-}
-
-/// Closure that writes to an outer mutable binding (`total`) executes correctly
-/// and produces the expected sum.
-#[test]
-fn mutable_write_capture_via_each_executes_correctly_on_wasm_path() {
-    let source = r#"
+  result = add10 5
+  println "${result}"
+"#,
+            "15\n",
+        ),
+        (
+            "section 3.2 mutable write capture via each",
+            r#"
 import goby/list ( each )
 
 sum : List Int -> Int
@@ -1346,21 +1333,12 @@ main =
   _ = read()
   result = sum [1, 2, 3]
   println "${result}"
-"#;
-    let module = parse_module(source).expect("source should parse");
-    let output = execute_runtime_module_with_stdin(&module, Some(String::new()))
-        .expect("mutable write capture via each should execute successfully");
-    assert_eq!(
-        output.as_deref(),
-        Some("6\n"),
-        "sum [1,2,3] with mutable capture should produce 6"
-    );
-}
-
-/// Outer mutation after closure creation: closure sees updated value via shared cell.
-#[test]
-fn outer_mutation_after_closure_creation_executes_correctly_on_wasm_path() {
-    let source = r#"
+"#,
+            "6\n",
+        ),
+        (
+            "section 3.3 outer mutation after closure creation",
+            r#"
 main : Unit -> Unit can Print, Read
 main =
   _ = read()
@@ -1369,41 +1347,29 @@ main =
   value := 7
   result = read_value ()
   println "${result}"
-"#;
-    let module = parse_module(source).expect("source should parse");
-    let output = execute_runtime_module_with_stdin(&module, Some(String::new()))
-        .expect("outer mutation after closure creation should execute");
-    assert_eq!(
-        output.as_deref(),
-        Some("7\n"),
-        "closure should see the mutated value via shared cell"
-    );
-}
-
-/// Inline capturing lambda passed to `fold` should compile on the Wasm path.
-#[test]
-fn inline_capturing_lambda_to_fold_compiles_on_wasm_path() {
-    let source = r#"
+"#,
+            "7\n",
+        ),
+        (
+            "section 3.4 inline capturing fold callback",
+            r#"
 import goby/list ( fold )
+
+sum_with_bias : Int -> List Int -> Int
+sum_with_bias bias xs =
+  fold xs 0 (fn acc x -> acc + x + bias)
 
 main : Unit -> Unit can Print, Read
 main =
   _ = read()
-  bias = 10
-  total = fold [1, 2, 3] 0 (fn acc x -> acc + x + bias)
+  total = sum_with_bias 10 [1, 2, 3]
   println "${total}"
-"#;
-    let module = parse_module(source).expect("source should parse");
-    let wasm =
-        compile_module(&module).expect("capturing lambda to fold should compile on the Wasm path");
-    assert!(!wasm.is_empty(), "compiled Wasm bytes should not be empty");
-}
-
-/// Two closures sharing one mutable cell: both see the same counter value.
-/// CC4 complete: enabled; previously rejected on the Wasm path.
-#[test]
-fn two_closures_sharing_mutable_cell_execute_correctly_on_wasm_path() {
-    let source = r#"
+"#,
+            "36\n",
+        ),
+        (
+            "section 3.5 two closures share one mutable cell",
+            r#"
 pair : Unit -> ((Unit -> Unit), (Unit -> Int))
 pair _ =
   mut count = 0
@@ -1420,15 +1386,22 @@ main =
   p.0()
   result = p.1()
   println "${result}"
-"#;
-    let module = parse_module(source).expect("source should parse");
-    let output = execute_runtime_module_with_stdin(&module, Some(String::new()))
-        .expect("two closures sharing mutable cell should execute");
-    assert_eq!(
-        output.as_deref(),
-        Some("2\n"),
-        "two inc() calls then get() should return 2"
-    );
+"#,
+            "2\n",
+        ),
+    ];
+
+    for (name, source, expected_stdout) in cases {
+        let module = parse_module(source).expect("source should parse");
+        let output = execute_runtime_module_with_stdin(&module, Some(String::new()))
+            .unwrap_or_else(|err| panic!("{} should execute successfully: {}", name, err.message));
+        assert_eq!(
+            output.as_deref(),
+            Some(expected_stdout),
+            "{} produced unexpected stdout",
+            name
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1440,7 +1413,7 @@ main =
 /// should print "15\n".
 #[test]
 fn cc3_inline_by_value_capture_executes_correctly() {
-    let module = parse_module(
+    assert_runtime_stdout_with_empty_stdin(
         r#"
 main : Unit -> Unit can Print, Read
 main =
@@ -1450,15 +1423,26 @@ main =
   result = add 5
   println "${result}"
 "#,
-    )
-    .expect("source should parse");
+        "15\n",
+    );
+}
 
-    let output = execute_runtime_module_with_stdin(&module, Some(String::new()))
-        .expect("inline ByValue capture should execute without error");
-    assert_eq!(
-        output.as_deref(),
-        Some("15\n"),
-        "add 5 with base=10 should produce 15"
+#[test]
+fn helper_returned_by_value_closure_executes_correctly() {
+    assert_runtime_stdout_with_empty_stdin(
+        r#"
+make_adder : Int -> (Int -> Int)
+make_adder base =
+  fn x -> base + x
+
+main : Unit -> Unit can Print, Read
+main =
+  _ = read()
+  add10 = make_adder 10
+  result = add10 5
+  println "${result}"
+"#,
+        "15\n",
     );
 }
 
@@ -1466,7 +1450,7 @@ main =
 /// The lambda captures `prefix` (a string) ByValue.
 #[test]
 fn cc3_string_capture_executes_correctly() {
-    let module = parse_module(
+    assert_runtime_stdout_with_empty_stdin(
         r#"
 main : Unit -> Unit can Print, Read
 main =
@@ -1476,14 +1460,6 @@ main =
   msg = greet "world"
   println msg
 "#,
-    )
-    .expect("source should parse");
-
-    let output = execute_runtime_module_with_stdin(&module, Some(String::new()))
-        .expect("string-capturing lambda should execute without error");
-    assert_eq!(
-        output.as_deref(),
-        Some("Hello, world!\n"),
-        "greet 'world' with prefix='Hello' should produce 'Hello, world!'"
+        "Hello, world!\n",
     );
 }

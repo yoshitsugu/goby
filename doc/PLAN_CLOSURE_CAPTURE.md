@@ -81,7 +81,8 @@ main : Unit -> Unit can Print, Read
 main =
   _ = read()
   add10 = make_adder 10
-  println "${add10 5}"
+  result = add10 5
+  println "${result}"
 ```
 
 Expected output:
@@ -145,7 +146,8 @@ sum_with_bias bias xs =
 main : Unit -> Unit can Print, Read
 main =
   _ = read()
-  println "${sum_with_bias 10 [1, 2, 3]}"
+  total = sum_with_bias 10 [1, 2, 3]
+  println "${total}"
 ```
 
 Expected output:
@@ -366,7 +368,7 @@ Note: Sections 3.2, 3.3, and 3.5 now pass on the Wasm path.
 - [ ] Keep precise diagnostics for any still-deferred edge cases.
 - [ ] Add targeted regression tests beside the ownership modules that implement the behavior.
 - [ ] Add end-to-end Wasm execution tests for closure capture parity with the interpreter path.
-- [ ] Add a focused spec-conformance test set for the Section 3 acceptance programs.
+- [x] Add a focused spec-conformance test set for the Section 3 acceptance programs.
 
 Done when:
 
@@ -374,6 +376,12 @@ Done when:
 - all Section 3 acceptance programs are covered by executable tests
 - supported cases have focused tests plus at least one end-to-end parity test
 - any remaining unsupported cases are listed explicitly in `doc/STATE.md`
+
+Progress note (2026-04-02):
+
+- A Wasm execution spec-conformance test now runs all five Section 3 acceptance programs end to end.
+- Helper-returned ByValue closure execution (`make_adder` returning `add10`) is now pinned by a dedicated Wasm regression.
+- Fallback/interpreter parity is still only partially locked for closure capture; helper-returned closure parity remains separate follow-up work from the Wasm conformance set.
 
 ### CC6. Documentation and examples closure
 
