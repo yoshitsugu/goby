@@ -343,6 +343,16 @@ impl<'m> RuntimeOutputResolver<'m> {
         evaluators: &RuntimeEvaluators<'_, '_>,
         depth: usize,
     ) -> Out<RuntimeValue> {
+        if let Some(RuntimeValue::Callable(callable)) = locals.get(fn_name) {
+            return self.eval_callable_value(
+                &callable,
+                arg_value,
+                locals,
+                callables,
+                evaluators,
+                depth + 1,
+            );
+        }
         if let Some(callable) = callables.get(fn_name) {
             return self.eval_callable_value(
                 callable,

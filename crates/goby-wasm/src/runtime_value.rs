@@ -3,6 +3,7 @@ use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use crate::InlineHandlerValue;
+use crate::runtime_eval::IntCallable;
 
 #[derive(Default, Clone)]
 pub(crate) struct RuntimeLocals {
@@ -181,6 +182,7 @@ pub(crate) fn runtime_value_eq(left: &RuntimeValue, right: &RuntimeValue) -> boo
                 })
         }
         (RuntimeValue::Handler(_), RuntimeValue::Handler(_)) => false,
+        (RuntimeValue::Callable(_), RuntimeValue::Callable(_)) => false,
         _ => false,
     }
 }
@@ -196,6 +198,7 @@ pub(crate) enum RuntimeValue {
     ListInt(Vec<i64>),
     ListString(Vec<String>),
     Handler(InlineHandlerValue),
+    Callable(Box<IntCallable>),
     Record {
         constructor: String,
         fields: HashMap<String, RuntimeValue>,
@@ -239,6 +242,7 @@ impl RuntimeValue {
                 format!("[{}]", parts.join(", "))
             }
             Self::Handler(_) => "<handler>".to_string(),
+            Self::Callable(_) => "<callable>".to_string(),
             Self::Record { constructor, .. } => constructor.clone(),
         }
     }

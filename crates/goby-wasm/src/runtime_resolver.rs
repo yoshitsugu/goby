@@ -1,6 +1,7 @@
 use super::*;
 use crate::call::flatten_named_call;
 use crate::grapheme_semantics::{ControlFlow, GraphemeSpan, for_each_extended_grapheme_span};
+use crate::runtime_eval::{AstLambdaCallable, IntCallable};
 use crate::runtime_flow::RcCallables;
 use goby_core::ast::UnaryOpKind;
 use std::rc::Rc;
@@ -632,6 +633,14 @@ impl<'m> RuntimeOutputResolver<'m> {
             Expr::Handler { clauses } => Some(RuntimeValue::Handler(
                 self.inline_handler_from_clauses(clauses, locals, callables),
             )),
+            Expr::Lambda { param, body } => Some(RuntimeValue::Callable(Box::new(
+                IntCallable::AstLambda(Box::new(AstLambdaCallable {
+                    parameter: param.clone(),
+                    body: (*body.clone()),
+                    captured_locals: locals.clone(),
+                    captured_callables: Rc::clone(callables),
+                })),
+            ))),
             Expr::UnaryOp { op, expr } => {
                 let inner = self.eval_expr_ast(expr, locals, callables, evaluators, depth + 1)?;
                 match (op, inner) {
@@ -752,7 +761,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                 );
                 self.complete_value_out(out, evaluators)
             }
-            Expr::Lambda { .. } | Expr::MethodCall { .. } => None,
+            Expr::MethodCall { .. } => None,
             Expr::ListIndex { list, index } => {
                 let list_val =
                     self.eval_expr_ast(list, locals, callables, evaluators, depth + 1)?;

@@ -3,6 +3,7 @@ use std::rc::Rc;
 
 use goby_core::{Expr, ast::InterpolatedPart};
 
+use crate::runtime_eval::{AstLambdaCallable, IntCallable};
 use crate::runtime_flow::{
     ApplyStep, Cont, DirectCallHead, Escape, FinishKind, Out, RcCallables, RuntimeError,
     RuntimeEvaluators,
@@ -172,7 +173,14 @@ impl<'m> RuntimeOutputResolver<'m> {
             Expr::Handler { clauses } => Out::Done(RuntimeValue::Handler(
                 self.inline_handler_from_clauses(clauses, locals, callables),
             )),
-            Expr::Lambda { .. } => Out::Err(RuntimeError::Unsupported),
+            Expr::Lambda { param, body } => Out::Done(RuntimeValue::Callable(Box::new(
+                IntCallable::AstLambda(Box::new(AstLambdaCallable {
+                    parameter: param.clone(),
+                    body: (*body.clone()),
+                    captured_locals: locals.clone(),
+                    captured_callables: Rc::clone(callables),
+                })),
+            ))),
             Expr::InterpolatedString(parts) => {
                 let mut out_so_far = String::new();
                 let parts_slice = parts.as_slice();
@@ -581,6 +589,10 @@ impl<'m> RuntimeOutputResolver<'m> {
                 if let Expr::Qualified {
                     receiver, member, ..
                 } = callee.as_ref()
+                    && !matches!(
+                        locals.get(receiver),
+                        Some(RuntimeValue::Tuple(_)) | Some(RuntimeValue::Record { .. })
+                    )
                 {
                     let arg_value =
                         match self.eval_expr(arg, locals, callables, evaluators, depth + 1) {
@@ -657,11 +669,42 @@ impl<'m> RuntimeOutputResolver<'m> {
                     );
                 }
 
-                let value = self.eval_expr_ast(expr, locals, callables, evaluators, depth);
-                match value {
-                    Some(v) => Out::Done(v),
-                    None => Out::Err(RuntimeError::Unsupported),
-                }
+                let callee_value =
+                    match self.eval_expr(callee, locals, callables, evaluators, depth + 1) {
+                        Out::Done(v) => v,
+                        Out::Suspend(cont) => return Out::Suspend(cont),
+                        Out::Escape(escape) => return Out::Escape(escape),
+                        Out::Err(_) => {
+                            let value =
+                                self.eval_expr_ast(expr, locals, callables, evaluators, depth);
+                            return match value {
+                                Some(v) => Out::Done(v),
+                                None => Out::Err(RuntimeError::Unsupported),
+                            };
+                        }
+                    };
+                let RuntimeValue::Callable(callable) = callee_value else {
+                    let value = self.eval_expr_ast(expr, locals, callables, evaluators, depth);
+                    return match value {
+                        Some(v) => Out::Done(v),
+                        None => Out::Err(RuntimeError::Unsupported),
+                    };
+                };
+                let arg_value = match self.eval_expr(arg, locals, callables, evaluators, depth + 1)
+                {
+                    Out::Done(v) => v,
+                    Out::Suspend(cont) => return Out::Suspend(cont),
+                    Out::Escape(escape) => return Out::Escape(escape),
+                    Out::Err(e) => return Out::Err(e),
+                };
+                return self.eval_callable_value(
+                    &callable,
+                    arg_value,
+                    locals,
+                    callables,
+                    evaluators,
+                    depth + 1,
+                );
             }
             Expr::MethodCall { method, args, .. } if method == "join" && args.len() == 2 => {
                 let list_value =

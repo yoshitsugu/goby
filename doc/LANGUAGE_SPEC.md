@@ -119,11 +119,6 @@ syntax/semantics.
       the lambda.
     - Multiple closures capturing the same `mut` binding share the same mutable cell and
       observe each other's writes.
-  - **Implementation status (2026-04-02):**
-    The Wasm `GeneralLowered` path fully implements these semantics.
-    The fallback/interpreter runtime supports callback closures with shared-cell
-    semantics but does not yet support helper-returned closure values (e.g. a
-    function returning a closure that the caller invokes).
 
 ## 4. Type/Entry Rules
 

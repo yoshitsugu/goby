@@ -26,7 +26,9 @@ impl<'m> RuntimeOutputResolver<'m> {
                 elements: values.iter().cloned().map(Expr::StringLit).collect(),
                 spread: None,
             }),
-            RuntimeValue::Handler(_) | RuntimeValue::Record { .. } => None,
+            RuntimeValue::Handler(_) | RuntimeValue::Callable(_) | RuntimeValue::Record { .. } => {
+                None
+            }
         }
     }
 

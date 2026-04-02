@@ -89,6 +89,10 @@ impl<'m> RuntimeOutputResolver<'m> {
             && let Expr::Qualified {
                 receiver, member, ..
             } = callee.as_ref()
+            && !matches!(
+                locals.get(receiver),
+                Some(RuntimeValue::Tuple(_)) | Some(RuntimeValue::Record { .. })
+            )
         {
             let arg_val = match self.eval_expr(arg, locals, callables, evaluators, depth + 1) {
                 Out::Done(v) => v,

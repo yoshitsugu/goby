@@ -545,8 +545,8 @@ Locked semantic target:
 Status: **CC0–CC6 complete** — the Wasm `GeneralLowered` path fully implements closure capture
 semantics including capture analysis, shared-cell model, direct closure calls, capturing
 callbacks for `each` / `map` / `fold`, helper-returned closure pairs, and documentation/examples
-closure.  The fallback/interpreter runtime supports callback closures with shared-cell semantics
-but does not yet support helper-returned closure values; this is tracked as a follow-up.
+closure. The fallback/interpreter runtime now matches the same closure-capture semantics,
+including helper-returned closure values.
 
 ### 4.7 `Float` / Wasm `f64` Support
 

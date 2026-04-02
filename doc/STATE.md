@@ -4,13 +4,18 @@ Last updated: 2026-04-02
 
 ## Current Focus
 
-**Track CC — complete (CC0–CC6)**: closure capture is fully implemented on the Wasm `GeneralLowered` path. The fallback/interpreter runtime supports callback closures with shared-cell semantics; helper-returned closure values are a remaining interpreter follow-up.
+**Track CC — complete (CC0–CC6)**: closure capture is fully implemented on both the Wasm `GeneralLowered` path and the fallback/interpreter runtime, including helper-returned closure values.
 
 ## Recently Completed
 
+- **Track CC interpreter helper-returned closure parity** (2026-04-02): fallback/interpreter runtime now supports helper-returned closure values and shared mutable-cell closure pairs.
+  - `runtime(value)`: `RuntimeValue` now carries callable values, allowing declaration bodies and locals to retain closures as first-class runtime values instead of dropping them at the value boundary.
+  - `runtime(eval)`: `Expr::Lambda` now evaluates to a captured callable value on the AST runtime path, and generic call evaluation now supports non-name callees that resolve to callable values (for example tuple-projected closures like `p.0 ()`).
+  - `test(runtime)`: helper-returned `make_adder` and shared-cell `pair` parity tests now assert concrete outputs (`15`, `2`) on both fallback and typed modes.
+  - `doc`: removed the temporary implementation-status note from `LANGUAGE_SPEC.md` and cleared the last closure-capture follow-up from `PLAN.md` / `PLAN_CLOSURE_CAPTURE.md`.
 - **Track CC / CC6 documentation and examples closure** (2026-04-02): CC6 milestone closed.
-  - `doc(spec)`: `LANGUAGE_SPEC.md` implementation-status note narrowed to the remaining interpreter gap (helper-returned closure values); Wasm path described as fully complete.
-  - `test(runtime)`: interpreter parity tests added for helper-returned ByValue closure (`make_adder`) and shared mutable cell pair closure (`pair`), locking the current interpreter gap with upgrade-ready assertions.
+  - `doc(spec)`: `LANGUAGE_SPEC.md` now describes closure semantics directly with no temporary implementation-status note.
+  - `test(runtime)`: interpreter parity tests cover helper-returned ByValue closure (`make_adder`) and shared mutable cell pair closure (`pair`).
   - `doc(plan)`: `PLAN_CLOSURE_CAPTURE.md` CC6 checklist marked complete; `PLAN.md` §4.6 updated to CC0–CC6 complete.
   - Prior CC6 work: `closure_capture.gb` and `closure_mut.gb` examples, CLI run regressions, stale comment cleanup, interpreter callback shared-cell parity.
 - **Track CC / CC6 interpreter callback shared-cell parity** (2026-04-02): fallback/interpreter callback closure paths now preserve `mut` shared-cell semantics instead of cloning snapshot values.
@@ -85,7 +90,6 @@ Last updated: 2026-04-02
 
 Next track candidates are in `doc/PLAN.md` §4:
 
-- **Interpreter closure follow-up**: extend the fallback/interpreter runtime to support helper-returned closure values (e.g. `make_adder` and `pair` patterns).
 - **Track D follow-ups** (§4.1): D5 (`goby lint` unused-binding rule), D6c shared grammar asset.
 - **Track WB-3B** (deferred): WasmFX typed continuations — on hold until WebAssembly stack switching reaches Phase 4.
 - **Float support** (§4.7): `Float` type backed by Wasm `f64`; semantics to be locked before coding.
@@ -110,7 +114,6 @@ Next track candidates are in `doc/PLAN.md` §4:
   - Host intrinsics: `StringGraphemesList` (`__goby_string_graphemes_list`)
 - Known limitations:
   - non-tail / multi-resume handlers → `BackendLimitation` error
-  - fallback/interpreter runtime does not support helper-returned closure values (e.g. `make_adder`, `pair` patterns); callback closures work with shared-cell semantics
 
 ## Key Entry Points
 
