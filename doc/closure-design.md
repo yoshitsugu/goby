@@ -1,10 +1,10 @@
 # Closure Representation Design — WB-3B
 
-**Status:** SUPERSEDED by `doc/PLAN_CLOSURE_CAPTURE.md` (2026-03-31)
+**Status:** HISTORICAL design note; superseded by the landed closure-capture implementation (2026-04-02)
 **Original revision:** 1.1 (locked 2026-03-26)
-**Scope:** Design only. This document has been superseded by `doc/PLAN_CLOSURE_CAPTURE.md`,
-which changes the mutable-capture direction (see § 5 note below). Refer to
-`doc/PLAN_CLOSURE_CAPTURE.md` and `doc/LANGUAGE_SPEC.md` for the current intended semantics.
+**Scope:** Design only. This document has been superseded by the landed closure-capture work,
+which changed the mutable-capture direction (see § 5 note below). Refer to
+`doc/LANGUAGE_SPEC.md` for the current semantics and `doc/STATE.md` for the implementation history.
 The low-level Wasm layout details in §§ 3–4 and 6–9 remain as a useful implementation
 reference, but the closure-capture semantic decisions in §§ 5 and 10 have been superseded.
 Nothing in this document should be read as the current implementation-status source of truth.
@@ -195,15 +195,14 @@ this will type-mismatch.
 
 Historical note: this section described the pre-closure rollout limitation where capturing
 lambdas passed to `each`/`map` still remained `UnsupportedIrForm`. That limitation is no longer
-the current Wasm status; see `doc/PLAN_CLOSURE_CAPTURE.md` and `doc/STATE.md` for the landed
-coverage.
+the current Wasm status; see `doc/STATE.md` for the landed coverage.
 
 ---
 
 ## 5. Mutable Local Capture — SUPERSEDED
 
-> **Note (2026-03-31):** The snapshot semantics described here have been superseded by
-> `doc/PLAN_CLOSURE_CAPTURE.md`. The locked semantic target is now **shared-cell semantics**
+> **Note (2026-03-31):** The snapshot semantics described here have been superseded by the
+> landed closure-capture implementation. The locked semantic target is now **shared-cell semantics**
 > for `mut` captures, not value-copy at closure creation time.
 > See `doc/LANGUAGE_SPEC.md` § 3 "Closure semantics" for the current specification.
 > The original snapshot decision and the write-capture restriction below are no longer the
@@ -316,7 +315,7 @@ The following changes are **deferred to WB-3B** and are **not part of H5**:
    - Register type 1 `(i64, i64) -> i64` in the type section when closures are present.
    - Update `ListEach`/`ListMap` or add closure variants (see Section 4).
 6. `gen_lower/mod.rs`: Update `UnsupportedIrForm` gate for capturing lambdas
-   (see `doc/PLAN_CLOSURE_CAPTURE.md` for the superseded direction — write captures
+   (see `doc/STATE.md` for the landed direction — write captures
    are now an explicit goal, not a permanent restriction).
 7. Tests: Add parity and shared-cell `mut`-capture tests. (The "snapshot-semantics" test name
    referenced in earlier drafts is superseded — see § 8 for the updated disposition.)
@@ -331,6 +330,6 @@ The following changes are **deferred to WB-3B** and are **not part of H5**:
 | env_ptr 32-bit limit | closure_ptr is a u32 heap offset. Heap must stay within 4 GiB (safe in practice). |
 | Single-param lambda | `LambdaAuxDecl.param_name` is a single `String`. Multi-param lambdas use currying. Closure + currying interaction is WB-3B scope. |
 | No GC | Closures are bump-allocated with arena lifetime (no freed until module execution ends). Long-lived programs creating many closures will leak. Acceptable for now. |
-| Mutable reference capture | ~~Reference semantics (shared mutable cell) is not supported. Only value capture (snapshot) is designed here.~~ **SUPERSEDED**: shared-cell semantics are now the locked target (see `doc/PLAN_CLOSURE_CAPTURE.md`). |
+| Mutable reference capture | ~~Reference semantics (shared mutable cell) is not supported. Only value capture (snapshot) is designed here.~~ **SUPERSEDED**: shared-cell semantics are now the locked target (see `doc/LANGUAGE_SPEC.md` / `doc/STATE.md`). |
 | Nested closures | A closure returning a closure is possible in principle (closure wrapper emits `CreateClosure`). Correct scope chain is WB-3B scope. |
 | `call_indirect` type dispatch | Whether dispatch is static (known at lower time) or dynamic (runtime tag check) is deferred to WB-3B. Both options preserve the `call_indirect` type safety guarantee. |

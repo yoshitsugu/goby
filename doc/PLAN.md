@@ -533,7 +533,6 @@ track in `doc/PLAN_ERROR.md`.
 ### 4.6 Track CC: Closure Capture (complete)
 
 Goal: enable lambda closure capture on the `GeneralLowered` Wasm path with correct lexical semantics.
-See `doc/PLAN_CLOSURE_CAPTURE.md` for the full design and milestone plan.
 
 Locked semantic target:
 
@@ -546,7 +545,8 @@ Status: **CC0–CC6 complete** — the Wasm `GeneralLowered` path fully implemen
 semantics including capture analysis, shared-cell model, direct closure calls, capturing
 callbacks for `each` / `map` / `fold`, helper-returned closure pairs, and documentation/examples
 closure. The fallback/interpreter runtime now matches the same closure-capture semantics,
-including helper-returned closure values.
+including helper-returned closure values. The current source of truth is `doc/LANGUAGE_SPEC.md`
+for semantics and `doc/STATE.md` for implementation history and restart notes.
 
 ### 4.7 `Float` / Wasm `f64` Support
 

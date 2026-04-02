@@ -12,11 +12,11 @@ Last updated: 2026-04-02
   - `runtime(value)`: `RuntimeValue` now carries callable values, allowing declaration bodies and locals to retain closures as first-class runtime values instead of dropping them at the value boundary.
   - `runtime(eval)`: `Expr::Lambda` now evaluates to a captured callable value on the AST runtime path, and generic call evaluation now supports non-name callees that resolve to callable values (for example tuple-projected closures like `p.0 ()`).
   - `test(runtime)`: helper-returned `make_adder` and shared-cell `pair` parity tests now assert concrete outputs (`15`, `2`) on both fallback and typed modes.
-  - `doc`: removed the temporary implementation-status note from `LANGUAGE_SPEC.md` and cleared the last closure-capture follow-up from `PLAN.md` / `PLAN_CLOSURE_CAPTURE.md`.
+  - `doc`: removed the temporary implementation-status note from `LANGUAGE_SPEC.md` and cleared the last closure-capture follow-up from `PLAN.md`.
 - **Track CC / CC6 documentation and examples closure** (2026-04-02): CC6 milestone closed.
   - `doc(spec)`: `LANGUAGE_SPEC.md` now describes closure semantics directly with no temporary implementation-status note.
   - `test(runtime)`: interpreter parity tests cover helper-returned ByValue closure (`make_adder`) and shared mutable cell pair closure (`pair`).
-  - `doc(plan)`: `PLAN_CLOSURE_CAPTURE.md` CC6 checklist marked complete; `PLAN.md` §4.6 updated to CC0–CC6 complete.
+  - `doc(plan)`: `PLAN.md` §4.6 updated to CC0–CC6 complete and the completed milestone tracker was retired.
   - Prior CC6 work: `closure_capture.gb` and `closure_mut.gb` examples, CLI run regressions, stale comment cleanup, interpreter callback shared-cell parity.
 - **Track CC / CC6 interpreter callback shared-cell parity** (2026-04-02): fallback/interpreter callback closure paths now preserve `mut` shared-cell semantics instead of cloning snapshot values.
   - `runtime(storage)`: `RuntimeLocals` now models `mut` bindings as shared cells, so cloning locals for captured callbacks preserves shared mutable storage while ordinary `let` bindings still copy by value.
@@ -118,7 +118,7 @@ Next track candidates are in `doc/PLAN.md` §4:
 ## Key Entry Points
 
 - `doc/PLAN_IR.md` — Wasm backend lowering design and phase plan
-- `doc/PLAN_CLOSURE_CAPTURE.md` — closure capture design and milestones
+- `doc/LANGUAGE_SPEC.md` — current closure semantics and language behavior
 - `crates/goby-core/src/closure_capture.rs` — shared closure-capture analysis and callable-environment metadata
 - `crates/goby-wasm/src/gen_lower/closure_env.rs` — `ClosureEnvHelper`: closure-environment load/store helper layer (CC2)
 - `crates/goby-wasm/src/gen_lower/lower.rs` — `lower_comp` / `lower_value`
