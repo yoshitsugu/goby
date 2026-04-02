@@ -1070,3 +1070,61 @@ main =
     assert_eq!(result.stdout.as_deref(), Some("42"));
     assert_eq!(result.runtime_error_kind, None);
 }
+
+/// Helper-returned closure (make_adder pattern) is not yet supported on either
+/// runtime resolver mode (fallback or typed).  Both modes agree (parity holds)
+/// but produce no output.  Wasm execution coverage for this shape lives in the
+/// Section 3 acceptance tests in `wasm_exports_and_smoke.rs`.
+/// When the resolver gains support, upgrade the assertion to `Some("15")`.
+#[test]
+fn typed_mode_matches_fallback_for_helper_returned_by_value_closure() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    let source = r#"
+make_adder : Int -> (Int -> Int)
+make_adder base =
+  fn x -> base + x
+
+main : Unit -> Unit
+main =
+  add10 = make_adder 10
+  result = add10 5
+  print result
+"#;
+    let module = parse_module(source).expect("parse should work");
+    let typed = assert_mode_parity(&module, "helper-returned by-value closure");
+    // Interpreter does not yet support helper-returned closures; both modes
+    // agree on None output.  Upgrade to Some("15") when interpreter support lands.
+    assert_eq!(typed.stdout, None);
+    assert_eq!(typed.runtime_error_kind, None);
+}
+
+/// Two closures sharing a mutable cell (pair pattern) is not yet supported on
+/// the fallback/interpreter path.  Parity holds but the interpreter produces no
+/// output.  Upgrade the assertion when interpreter support lands.
+#[test]
+fn typed_mode_matches_fallback_for_shared_mutable_cell_pair_closure() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    let source = r#"
+pair : Unit -> ((Unit -> Unit), (Unit -> Int))
+pair _ =
+  mut count = 0
+  inc = fn _ ->
+    count := count + 1
+  get = fn _ -> count
+  (inc, get)
+
+main : Unit -> Unit
+main =
+  p = pair ()
+  p.0 ()
+  p.0 ()
+  result = p.1 ()
+  print result
+"#;
+    let module = parse_module(source).expect("parse should work");
+    let typed = assert_mode_parity(&module, "shared mutable cell pair closure");
+    // Interpreter does not yet support pair-returned closures; both modes
+    // agree on None output.  Upgrade to Some("2") when interpreter support lands.
+    assert_eq!(typed.stdout, None);
+    assert_eq!(typed.runtime_error_kind, None);
+}

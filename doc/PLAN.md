@@ -530,7 +530,7 @@ Completed scope:
 Remaining diagnostic-rendering work now continues under the active TD follow-on
 track in `doc/PLAN_ERROR.md`.
 
-### 4.6 Track CC: Closure Capture (planned)
+### 4.6 Track CC: Closure Capture (complete)
 
 Goal: enable lambda closure capture on the `GeneralLowered` Wasm path with correct lexical semantics.
 See `doc/PLAN_CLOSURE_CAPTURE.md` for the full design and milestone plan.
@@ -542,15 +542,11 @@ Locked semantic target:
 - multiple closures capturing the same `mut` binding observe the same shared state.
 - all lambdas are conceptually closures; non-capturing lambdas are the zero-capture case.
 
-Status: **CC1-CC5 complete** — capture analysis, `MutableStorageId` shared-cell model,
-`CallableEnv` ownership, direct closure calls, capturing callback parity for `each` / `map` /
-inline `fold`, multi-parameter lambda flattening, helper-local multiline lambda parsing,
-shared-cell closure pairs from helper decls, and the CC5 regression-safety/diagnostic set are
-now landed on the Wasm path.
-
-Next step: continue CC6 documentation/examples clean-up. The fallback/interpreter runtime now
-matches shared-cell semantics for supported callback closure paths; the remaining follow-up is
-helper-returned/local closure-value parity before the temporary spec status note can be removed.
+Status: **CC0–CC6 complete** — the Wasm `GeneralLowered` path fully implements closure capture
+semantics including capture analysis, shared-cell model, direct closure calls, capturing
+callbacks for `each` / `map` / `fold`, helper-returned closure pairs, and documentation/examples
+closure.  The fallback/interpreter runtime supports callback closures with shared-cell semantics
+but does not yet support helper-returned closure values; this is tracked as a follow-up.
 
 ### 4.7 `Float` / Wasm `f64` Support
 

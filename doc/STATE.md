@@ -4,10 +4,15 @@ Last updated: 2026-04-02
 
 ## Current Focus
 
-**Track CC / CC6 — in progress**: closure-capture regression safety is complete on the Wasm path, and fallback/interpreter callback paths now match shared-cell `mut` semantics. Current work is narrowing the remaining docs/runtime gap to helper-returned and general local closure-value parity.
+**Track CC — complete (CC0–CC6)**: closure capture is fully implemented on the Wasm `GeneralLowered` path. The fallback/interpreter runtime supports callback closures with shared-cell semantics; helper-returned closure values are a remaining interpreter follow-up.
 
 ## Recently Completed
 
+- **Track CC / CC6 documentation and examples closure** (2026-04-02): CC6 milestone closed.
+  - `doc(spec)`: `LANGUAGE_SPEC.md` implementation-status note narrowed to the remaining interpreter gap (helper-returned closure values); Wasm path described as fully complete.
+  - `test(runtime)`: interpreter parity tests added for helper-returned ByValue closure (`make_adder`) and shared mutable cell pair closure (`pair`), locking the current interpreter gap with upgrade-ready assertions.
+  - `doc(plan)`: `PLAN_CLOSURE_CAPTURE.md` CC6 checklist marked complete; `PLAN.md` §4.6 updated to CC0–CC6 complete.
+  - Prior CC6 work: `closure_capture.gb` and `closure_mut.gb` examples, CLI run regressions, stale comment cleanup, interpreter callback shared-cell parity.
 - **Track CC / CC6 interpreter callback shared-cell parity** (2026-04-02): fallback/interpreter callback closure paths now preserve `mut` shared-cell semantics instead of cloning snapshot values.
   - `runtime(storage)`: `RuntimeLocals` now models `mut` bindings as shared cells, so cloning locals for captured callbacks preserves shared mutable storage while ordinary `let` bindings still copy by value.
   - `runtime(exec)`: string-path and AST-path local binding/assignment handlers now distinguish `mut` binding creation from immutable binding creation, and assignments update existing mutable cells instead of replacing them with immutable snapshots.
@@ -80,7 +85,7 @@ Last updated: 2026-04-02
 
 Next track candidates are in `doc/PLAN.md` §4:
 
-- **Track CC / CC6**: documentation/examples closure — finish closure-capture docs cleanup, refresh examples, and remove stale "Wasm-unsupported" notes that no longer apply.
+- **Interpreter closure follow-up**: extend the fallback/interpreter runtime to support helper-returned closure values (e.g. `make_adder` and `pair` patterns).
 - **Track D follow-ups** (§4.1): D5 (`goby lint` unused-binding rule), D6c shared grammar asset.
 - **Track WB-3B** (deferred): WasmFX typed continuations — on hold until WebAssembly stack switching reaches Phase 4.
 - **Float support** (§4.7): `Float` type backed by Wasm `f64`; semantics to be locked before coding.
@@ -105,7 +110,7 @@ Next track candidates are in `doc/PLAN.md` §4:
   - Host intrinsics: `StringGraphemesList` (`__goby_string_graphemes_list`)
 - Known limitations:
   - non-tail / multi-resume handlers → `BackendLimitation` error
-  - fallback/interpreter parity is not yet locked for every helper-returned or general local closure-value shape; supported callback closure paths now have shared-cell parity coverage, but helper-returned/local closure-value parity remains a follow-up
+  - fallback/interpreter runtime does not support helper-returned closure values (e.g. `make_adder`, `pair` patterns); callback closures work with shared-cell semantics
 
 ## Key Entry Points
 

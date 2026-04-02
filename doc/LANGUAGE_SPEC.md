@@ -1,7 +1,7 @@
 # Goby Language Specification (Current)
 
 Status: active
-Last updated: 2026-03-31
+Last updated: 2026-04-02
 
 This file is the current language-spec source of truth for user-visible Goby
 syntax/semantics.
@@ -120,15 +120,10 @@ syntax/semantics.
     - Multiple closures capturing the same `mut` binding share the same mutable cell and
       observe each other's writes.
   - **Implementation status (2026-04-02):**
-    - Wasm `GeneralLowered` supports immutable/by-value closure capture for direct calls,
-      capturing callbacks passed to `list.each` / `list.map`, inline `list.fold` callbacks,
-      helper-local multiline lambda bindings, and shared-cell closure pairs returned from helper
-      declarations.
-    - The fallback/interpreter runtime now uses shared-cell semantics for supported callback
-      closure paths as well.
-    - Remaining follow-up: helper-returned and general local closure-value parity on the
-      fallback/interpreter path is not yet locked end to end, so this temporary status note
-      remains until that runtime surface fully converges.
+    The Wasm `GeneralLowered` path fully implements these semantics.
+    The fallback/interpreter runtime supports callback closures with shared-cell
+    semantics but does not yet support helper-returned closure values (e.g. a
+    function returning a closure that the caller invokes).
 
 ## 4. Type/Entry Rules
 
