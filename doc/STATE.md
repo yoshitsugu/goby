@@ -4,7 +4,7 @@ Last updated: 2026-04-02
 
 ## Current Focus
 
-**Track CC / CC5 — next**: CC4 core slices and post-review refactoring are complete. One deferred CC4 shape remains (`two_closures_sharing_mutable_cell`, `#[ignore]`). Next milestone is CC5 (diagnostics and regression safety) or addressing the two-closures shape.
+**Track CC / CC5 — next**: CC4 core slices and post-review refactoring are complete. Next milestone is CC5 (diagnostics and regression safety).
 
 ## Recently Completed
 
@@ -15,12 +15,16 @@ Last updated: 2026-04-02
     - `emit_callable_dispatch` — TAG_CLOSURE dispatch + sync for all indirect-call sites (`IndirectCall` arity-1/2, `emit_list_each`, `emit_list_map`); TAG_CLOSURE branching expressed once instead of four times inline.
     - `emit_function_body` — prologue/epilogue lifecycle shared between main and aux-decl emit loops.
   - `refactor(closure)`: `BindingRepr { Local, HeapCell }` and `binding_repr_for_let_mut` added to `closure_capture.rs`; `lower.rs` now asks "how should this binding be represented?" rather than calling `has_mutable_write_capture_of` directly.
-  - Remaining deferred CC4 shape: `two_closures_sharing_mutable_cell` (`#[ignore]`).
+- **Track CC / CC4 helper-decl shared-cell completion** (2026-04-02): helper-local multiline lambda bindings now preserve `parsed_body`, so helper decls such as `pair _ =` lower through resolved IR instead of silently degrading to an empty body.
+  - `fix(parser)`: `parse_body_stmts` now accepts multiline lambda bindings in declaration bodies (`name = fn x ->` followed by an indented block).
+  - `fix(parser_expr)`: tuple-member calls such as `p.0()` now parse as call expressions, preserving `parsed_body` for the Wasm routing path.
+  - `fix(wasm-lower)`: generic indirect-call lowering now accepts tuple-projected callees, so tuple-returned closures can execute through the shared callable dispatch path.
+  - Acceptance test `two_closures_sharing_mutable_cell_execute_correctly_on_wasm_path` now passes without `#[ignore]`.
 - **Track CC / CC4 SharedMutableCell** (2026-04-02): Mutable-write capture via `each` executes correctly on Wasm path.
   - Root cause: bump allocator was independently re-initialized to `STATIC_STRING_LIMIT` in each Wasm function, causing callee allocations to overwrite caller heap data.
   - Fix: persistent global heap cursor at `GLOBAL_HEAP_CURSOR_OFFSET = 12` in linear memory; main writes initial value, aux decls load it; every `DeclCall`, `IndirectCall`, `IndirectCallClosure`, `list.each`, and `list.map` syncs cursor to/from global around `call_indirect`; aux decl epilogue writes final cursor back to global on return.
   - `needs_helper_state` now includes `DeclCall` and `IndirectCall` as triggers.
-  - Acceptance test `mutable_write_capture_via_each_executes_correctly_on_wasm_path` passes; two advanced CC4 shapes (`#[ignore]`) deferred.
+  - Acceptance test `mutable_write_capture_via_each_executes_correctly_on_wasm_path` passes.
 - **Track CC / CC4** (2026-04-01): Main immutable/by-value callback parity landed on the Wasm path.
   - `emit.rs` now handles TAG_FUNC vs TAG_CLOSURE dispatch for generic indirect calls and `list.each` / `list.map`
   - nested/helper alloc-cursor resets no longer clobber earlier heap allocations during recursive emission
@@ -57,7 +61,6 @@ Last updated: 2026-04-02
 
 Next track candidates are in `doc/PLAN.md` §4:
 
-- **Track CC / CC4 remaining shape**: `two_closures_sharing_mutable_cell` — two closures from a helper decl (`pair _ =`) sharing one mutable cell. Currently `#[ignore]`. Requires multi-closure cell sharing across aux decl boundary.
 - **Track CC / CC5**: Diagnostics and regression safety — precise errors for deferred cases, spec-conformance test set for all Section 3 acceptance programs.
 - **Track D follow-ups** (§4.1): D5 (`goby lint` unused-binding rule), D6c shared grammar asset.
 - **Track WB-3B** (deferred): WasmFX typed continuations — on hold until WebAssembly stack switching reaches Phase 4.
@@ -83,7 +86,6 @@ Next track candidates are in `doc/PLAN.md` §4:
   - Host intrinsics: `StringGraphemesList` (`__goby_string_graphemes_list`)
 - Known limitations:
   - non-tail / multi-resume handlers → `BackendLimitation` error
-  - two closures sharing one mutable cell from a helper decl (`pair _ =` shape) → `#[ignore]` pending CC4 completion
   - interpreter path: capturing lambdas work but use snapshot semantics for `mut` captures (not the spec's shared-cell model); will be corrected as part of Track CC
 
 ## Key Entry Points

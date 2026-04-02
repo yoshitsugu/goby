@@ -237,7 +237,10 @@ pub fn has_mutable_write_capture_of(
     envs.iter().any(|env| {
         env.slots.iter().any(|slot| {
             slot.name == name
-                && matches!(slot.slot_kind, CallableEnvSlotKind::SharedMutableCell { .. })
+                && matches!(
+                    slot.slot_kind,
+                    CallableEnvSlotKind::SharedMutableCell { .. }
+                )
         })
     })
 }

@@ -447,6 +447,27 @@ where
     F: Copy + Fn(&str) -> Option<Expr>,
 {
     let rhs_trimmed = rhs.trim();
+    if let Some(fn_stripped) = rhs_trimmed.strip_prefix("fn ") {
+        let arrow = fn_stripped.find("->")?;
+        let param = fn_stripped[..arrow].trim();
+        let rest = fn_stripped[arrow + 2..].trim();
+        if is_non_reserved_identifier(param) && rest.is_empty() {
+            let first_idx = find_next_nonblank(lines, line_idx + 1)?;
+            let first_stripped = strip_line_comment(lines[first_idx]).trim_end();
+            if indent_len(first_stripped) <= line_indent {
+                return None;
+            }
+            let (body_stmts, consumed) = parse_stmts_from_lines(lines, first_idx, parse_expr)?;
+            return Some((
+                Expr::Lambda {
+                    param: param.to_string(),
+                    body: Box::new(expr_from_branch_stmts(body_stmts)),
+                },
+                first_idx + consumed,
+            ));
+        }
+    }
+
     if rhs_trimmed == "with" {
         let (handler, next_i) =
             parse_handler_expr_from_lines(lines, line_idx + 1, line_indent, parse_expr)?;
@@ -1434,6 +1455,33 @@ mod tests {
                 _
             )
         ));
+    }
+
+    #[test]
+    fn parses_multiline_lambda_binding_body_as_block() {
+        let body = "inc = fn _ ->\n  count := count + 1\nget = fn _ -> count\n(inc, get)";
+        let stmts = parse_body_stmts(body).expect("should parse");
+        assert_eq!(
+            stmts.len(),
+            3,
+            "expected binding, binding, final tuple expr"
+        );
+        match &stmts[0] {
+            Stmt::Binding { name, value, .. } => {
+                assert_eq!(name, "inc");
+                match value {
+                    Expr::Lambda { param, body } => {
+                        assert_eq!(param, "_");
+                        assert!(
+                            matches!(body.as_ref(), Expr::Block(_)),
+                            "multiline lambda binding body should parse as block"
+                        );
+                    }
+                    other => panic!("expected lambda binding value, got {other:?}"),
+                }
+            }
+            other => panic!("expected first stmt binding, got {other:?}"),
+        }
     }
 
     #[test]

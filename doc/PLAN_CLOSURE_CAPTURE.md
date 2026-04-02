@@ -2,7 +2,7 @@
 
 Last updated: 2026-04-02
 
-Status: CC0–CC4 core slices complete; post-review encapsulation refactoring done; one deferred CC4 shape (`two_closures_sharing_mutable_cell`) and CC5–CC6 next
+Status: CC0–CC4 complete; post-review encapsulation refactoring done; CC5–CC6 next
 
 Related documents:
 
@@ -171,7 +171,8 @@ main =
   p = pair()
   p.0()
   p.0()
-  println "${p.1()}"
+  result = p.1()
+  println "${result}"
 ```
 
 Expected output:
@@ -341,7 +342,7 @@ Done when:
 - [x] Remove any remaining backend limitation that exists only because a callback is capturing.
 - [x] Rewrite captured mutable reads/writes to shared-cell loads/stores (`sum [1,2,3]` via `each` executes correctly).
 - [x] Mutable capture: read-only inline lambda after outer mutation (`outer_mutation_after_closure_creation` — enabled, no longer `#[ignore]`).
-- [ ] Mutable capture: two closures sharing one cell from a helper decl (deferred — `#[ignore]`).
+- [x] Mutable capture: two closures sharing one cell from a helper decl.
 
 Post-review encapsulation work also completed under CC4:
 
@@ -358,7 +359,7 @@ Done when:
 - captured `mut` bindings lower through the locked shared-cell model instead of snapshot-style capture
 - there is at least one focused execution test each for capturing `each`, capturing `map`, and inline capturing `fold`
 
-Note: Section 3.3 (outer mutation after closure creation) and 3.2 (mutable capture via `each`) pass. Section 3.5 (two closures sharing one cell) remains deferred.
+Note: Sections 3.2, 3.3, and 3.5 now pass on the Wasm path.
 
 ### CC5. Diagnostics and regression safety
 

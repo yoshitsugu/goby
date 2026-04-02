@@ -293,6 +293,47 @@ main =
     }
 
     #[test]
+    fn preserves_parsed_body_for_tuple_member_call_statements() {
+        let source = r#"
+pair : Unit -> ((Unit -> Unit), (Unit -> Int))
+pair _ =
+  mut count = 0
+  inc = fn _ ->
+    count := count + 1
+  get = fn _ -> count
+  (inc, get)
+
+main : Unit -> Unit can Print, Read
+main =
+  _ = read()
+  p = pair()
+  p.0()
+  p.0()
+  result = p.1()
+  println "${result}"
+"#;
+        let module = parse_module(source).expect("source should parse");
+        let pair = module
+            .declarations
+            .iter()
+            .find(|decl| decl.name == "pair")
+            .expect("pair should exist");
+        let main = module
+            .declarations
+            .iter()
+            .find(|decl| decl.name == "main")
+            .expect("main should exist");
+        assert!(
+            pair.parsed_body.is_some(),
+            "multiline lambda helper body should preserve parsed_body"
+        );
+        assert!(
+            main.parsed_body.is_some(),
+            "tuple-member call statements should preserve parsed_body"
+        );
+    }
+
+    #[test]
     fn parse_error_for_malformed_resume_in_declaration_body() {
         let source = "main = resume\n";
         let err = parse_module(source).expect_err("malformed resume should be rejected");

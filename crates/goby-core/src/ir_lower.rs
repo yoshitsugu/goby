@@ -2598,5 +2598,4 @@ count n =
             ir.decls[0].body
         );
     }
-
 }

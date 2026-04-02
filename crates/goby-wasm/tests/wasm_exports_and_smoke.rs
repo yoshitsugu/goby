@@ -1402,7 +1402,6 @@ main =
 /// Two closures sharing one mutable cell: both see the same counter value.
 /// CC4 complete: enabled; previously rejected on the Wasm path.
 #[test]
-#[ignore = "CC4-pending: multi-closure shared mutable cell not yet lowered on Wasm path"]
 fn two_closures_sharing_mutable_cell_execute_correctly_on_wasm_path() {
     let source = r#"
 pair : Unit -> ((Unit -> Unit), (Unit -> Int))
@@ -1419,7 +1418,8 @@ main =
   p = pair()
   p.0()
   p.0()
-  println "${p.1()}"
+  result = p.1()
+  println "${result}"
 "#;
     let module = parse_module(source).expect("source should parse");
     let output = execute_runtime_module_with_stdin(&module, Some(String::new()))

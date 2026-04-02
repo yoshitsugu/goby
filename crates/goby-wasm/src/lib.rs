@@ -1612,6 +1612,322 @@ main =
         let _ = wasm; // compilation success is sufficient for this step
     }
 
+    #[test]
+    fn helper_decl_multi_closure_shared_cell_classifies_as_general_lowered() {
+        use goby_core::parse_module;
+        let module = parse_module(
+            r#"
+pair : Unit -> ((Unit -> Unit), (Unit -> Int))
+pair _ =
+  mut count = 0
+  inc = fn _ ->
+    count := count + 1
+  get = fn _ -> count
+  (inc, get)
+
+main : Unit -> Unit can Print, Read
+main =
+  _ = read()
+  p = pair()
+  p.0()
+  p.0()
+  result = p.1()
+  println "${result}"
+"#,
+        )
+        .expect("source should parse");
+
+        let main_decl = module
+            .declarations
+            .iter()
+            .find(|decl| decl.name == "main")
+            .expect("main should exist");
+        let pair_decl = module
+            .declarations
+            .iter()
+            .find(|decl| decl.name == "pair")
+            .expect("pair should exist");
+        assert!(
+            pair_decl.parsed_body.is_some(),
+            "pair should preserve parsed_body for helper-decl lowering"
+        );
+        assert!(
+            main_decl.parsed_body.is_some(),
+            "main should preserve parsed_body for runtime-io classification"
+        );
+        assert!(
+            goby_core::ir_lower::lower_declaration(main_decl).is_ok(),
+            "main should lower to IR"
+        );
+
+        assert_eq!(
+            runtime_io_execution_kind(&module).expect("classification should succeed"),
+            RuntimeIoExecutionKind::GeneralLowered,
+            "helper-decl multi-closure shared-cell program must stay on the Wasm-owned execution path"
+        );
+    }
+
+    #[test]
+    fn helper_decl_multi_closure_shared_cell_executes_via_compiled_wasm() {
+        use goby_core::parse_module;
+        let module = parse_module(
+            r#"
+pair : Unit -> ((Unit -> Unit), (Unit -> Int))
+pair _ =
+  mut count = 0
+  inc = fn _ ->
+    count := count + 1
+  get = fn _ -> count
+  (inc, get)
+
+main : Unit -> Unit can Print, Read
+main =
+  _ = read()
+  p = pair()
+  p.0()
+  p.0()
+  result = p.1()
+  println "${result}"
+"#,
+        )
+        .expect("source should parse");
+
+        let wasm =
+            compile_module(&module).expect("helper-decl multi-closure program should compile");
+        let output = crate::wasm_exec::run_wasm_bytes_with_stdin(&wasm, Some(""))
+            .expect("compiled Wasm should execute");
+        assert_eq!(output, "2\n");
+    }
+
+    #[test]
+    fn tuple_projected_zero_capture_closure_executes_via_wasm() {
+        use goby_core::parse_module;
+        let module = parse_module(
+            r#"
+pair : Unit -> ((Unit -> Int), (Unit -> Int))
+pair _ =
+  left = fn _ -> 1
+  right = fn _ -> 2
+  (left, right)
+
+main : Unit -> Unit can Print, Read
+main =
+  _ = read()
+  p = pair()
+  result = p.1()
+  println "${result}"
+"#,
+        )
+        .expect("source should parse");
+
+        let wasm = compile_module(&module).expect("tuple-projected closure program should compile");
+        let output = crate::wasm_exec::run_wasm_bytes_with_stdin(&wasm, Some(""))
+            .expect("compiled Wasm should execute");
+        assert_eq!(output, "2\n");
+    }
+
+    #[test]
+    fn helper_decl_multi_closure_shared_cell_pair_creation_executes_via_wasm() {
+        use goby_core::parse_module;
+        let module = parse_module(
+            r#"
+pair : Unit -> ((Unit -> Unit), (Unit -> Int))
+pair _ =
+  mut count = 0
+  inc = fn _ ->
+    count := count + 1
+  get = fn _ -> count
+  (inc, get)
+
+main : Unit -> Unit can Print, Read
+main =
+  _ = read()
+  _p = pair()
+  println "ok"
+"#,
+        )
+        .expect("source should parse");
+
+        let wasm = compile_module(&module).expect("pair creation program should compile");
+        let output = crate::wasm_exec::run_wasm_bytes_with_stdin(&wasm, Some(""))
+            .expect("compiled Wasm should execute");
+        assert_eq!(output, "ok\n");
+    }
+
+    #[test]
+    fn helper_decl_multi_closure_shared_cell_read_only_call_executes_via_wasm() {
+        use goby_core::parse_module;
+        let module = parse_module(
+            r#"
+pair : Unit -> ((Unit -> Unit), (Unit -> Int))
+pair _ =
+  mut count = 0
+  inc = fn _ ->
+    count := count + 1
+  get = fn _ -> count
+  (inc, get)
+
+main : Unit -> Unit can Print, Read
+main =
+  _ = read()
+  p = pair()
+  result = p.1()
+  println "${result}"
+"#,
+        )
+        .expect("source should parse");
+
+        let wasm = compile_module(&module).expect("read-only call program should compile");
+        let output = crate::wasm_exec::run_wasm_bytes_with_stdin(&wasm, Some(""))
+            .expect("compiled Wasm should execute");
+        assert_eq!(output, "0\n");
+    }
+
+    #[test]
+    fn helper_decl_multi_closure_shared_cell_write_only_call_executes_via_wasm() {
+        use goby_core::parse_module;
+        let module = parse_module(
+            r#"
+pair : Unit -> ((Unit -> Unit), (Unit -> Int))
+pair _ =
+  mut count = 0
+  inc = fn _ ->
+    count := count + 1
+  get = fn _ -> count
+  (inc, get)
+
+main : Unit -> Unit can Print, Read
+main =
+  _ = read()
+  p = pair()
+  p.0()
+  println "ok"
+"#,
+        )
+        .expect("source should parse");
+
+        let wasm = compile_module(&module).expect("write-only call program should compile");
+        let output = crate::wasm_exec::run_wasm_bytes_with_stdin(&wasm, Some(""))
+            .expect("compiled Wasm should execute");
+        assert_eq!(output, "ok\n");
+    }
+
+    #[test]
+    fn tuple_projected_by_value_closure_executes_via_wasm() {
+        use goby_core::parse_module;
+        let module = parse_module(
+            r#"
+pair : Unit -> ((Unit -> Int), (Unit -> Int))
+pair _ =
+  base = 2
+  left = fn _ -> base
+  right = fn _ -> base + 1
+  (left, right)
+
+main : Unit -> Unit can Print, Read
+main =
+  _ = read()
+  p = pair()
+  result = p.1()
+  println "${result}"
+"#,
+        )
+        .expect("source should parse");
+
+        let wasm = compile_module(&module)
+            .expect("tuple-projected by-value closure program should compile");
+        let output = crate::wasm_exec::run_wasm_bytes_with_stdin(&wasm, Some(""))
+            .expect("compiled Wasm should execute");
+        assert_eq!(output, "3\n");
+    }
+
+    #[test]
+    fn helper_decl_single_shared_cell_closure_executes_via_wasm() {
+        use goby_core::parse_module;
+        let module = parse_module(
+            r#"
+make_reader : Unit -> (Unit -> Int)
+make_reader _ =
+  mut value = 1
+  read_value = fn _ -> value
+  value := 7
+  read_value
+
+main : Unit -> Unit can Print, Read
+main =
+  _ = read()
+  reader = make_reader()
+  result = reader ()
+  println "${result}"
+"#,
+        )
+        .expect("source should parse");
+
+        let wasm =
+            compile_module(&module).expect("single shared-cell helper closure should compile");
+        let output = crate::wasm_exec::run_wasm_bytes_with_stdin(&wasm, Some(""))
+            .expect("compiled Wasm should execute");
+        assert_eq!(output, "7\n");
+    }
+
+    #[test]
+    fn helper_decl_single_shared_cell_write_closure_executes_via_wasm() {
+        use goby_core::parse_module;
+        let module = parse_module(
+            r#"
+make_inc : Unit -> (Unit -> Unit)
+make_inc _ =
+  mut count = 0
+  inc = fn _ ->
+    count := count + 1
+  inc
+
+main : Unit -> Unit can Print, Read
+main =
+  _ = read()
+  inc = make_inc()
+  inc()
+  println "ok"
+"#,
+        )
+        .expect("source should parse");
+
+        let wasm = compile_module(&module)
+            .expect("single shared-cell write helper closure should compile");
+        let output = crate::wasm_exec::run_wasm_bytes_with_stdin(&wasm, Some(""))
+            .expect("compiled Wasm should execute");
+        assert_eq!(output, "ok\n");
+    }
+
+    #[test]
+    fn helper_decl_two_read_only_shared_cell_closures_execute_via_wasm() {
+        use goby_core::parse_module;
+        let module = parse_module(
+            r#"
+pair : Unit -> ((Unit -> Int), (Unit -> Int))
+pair _ =
+  mut count = 0
+  left = fn _ -> count
+  right = fn _ -> count
+  (left, right)
+
+main : Unit -> Unit can Print, Read
+main =
+  _ = read()
+  p = pair()
+  result = p.1()
+  println "${result}"
+"#,
+        )
+        .expect("source should parse");
+
+        let wasm =
+            compile_module(&module).expect("two-read shared-cell helper closures should compile");
+        let output = crate::wasm_exec::run_wasm_bytes_with_stdin(&wasm, Some(""))
+            .expect("compiled Wasm should execute");
+        assert_eq!(output, "0\n");
+    }
+
     // --- FOLD-M3b: 2-argument IndirectCall integration tests ---
     //
     // These tests confirm that `IndirectCall { arity: 2 }` actually works end-to-end:
@@ -1872,5 +2188,4 @@ main =
             .expect("mutable write capture via each should execute successfully");
         assert_eq!(output.as_deref(), Some("6\n"));
     }
-
 }

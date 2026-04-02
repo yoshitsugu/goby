@@ -119,16 +119,13 @@ syntax/semantics.
       the lambda.
     - Multiple closures capturing the same `mut` binding share the same mutable cell and
       observe each other's writes.
-  - **Implementation status (2026-04-01):**
+  - **Implementation status (2026-04-02):**
     - Wasm `GeneralLowered` supports immutable/by-value closure capture for direct calls,
-      capturing callbacks passed to `list.each` / `list.map`, and inline `list.fold` callbacks.
-    - The shared-cell semantics for captured `mut` bindings are still the intended spec, but
-      they are not fully implemented yet.
-    - Some helper-local runtime paths still need follow-up before every by-value capture shape is
-      executable end-to-end on the Wasm path.
-    - The interpreter still uses snapshot semantics for `mut` capture, and the Wasm backend
-      still rejects mutable-write capture (`SharedMutableCell`) cases until the remaining
-      Track CC work lands.
+      capturing callbacks passed to `list.each` / `list.map`, inline `list.fold` callbacks,
+      helper-local multiline lambda bindings, and shared-cell closure pairs returned from helper
+      declarations.
+    - The interpreter still uses snapshot semantics for `mut` capture and remains the main
+      follow-up area for Track CC.
 
 ## 4. Type/Entry Rules
 

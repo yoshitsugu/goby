@@ -530,9 +530,34 @@ fn lower_comp_inner(
                     }
                 }
             } else {
-                Err(LowerError::UnsupportedForm {
-                    node: format!("Call with unsupported callee: {:?}", callee),
-                })
+                if args.is_empty() {
+                    return Err(LowerError::UnsupportedForm {
+                        node: format!(
+                            "IndirectCall with unsupported zero-argument callee: {:?}",
+                            callee
+                        ),
+                    });
+                }
+                let arity = args.len() as u8;
+                let mut instrs = Vec::new();
+                for arg in args {
+                    instrs.extend(lower_value_as_arg(
+                        arg,
+                        aliases,
+                        bindings,
+                        known_decls,
+                        lambda_decls,
+                    )?);
+                }
+                instrs.extend(lower_value_as_arg(
+                    callee,
+                    aliases,
+                    bindings,
+                    known_decls,
+                    lambda_decls,
+                )?);
+                instrs.push(WasmBackendInstr::IndirectCall { arity });
+                Ok(instrs)
             }
         }
 
@@ -554,7 +579,8 @@ fn lower_comp_inner(
         } => {
             // Ask the analysis layer how this mutable binding should be represented.
             // HeapCell means at least one nested lambda captures it through a shared cell.
-            if binding_repr_for_let_mut(name, body, bindings, known_decls) == BindingRepr::HeapCell {
+            if binding_repr_for_let_mut(name, body, bindings, known_decls) == BindingRepr::HeapCell
+            {
                 // Cell-promotion path.
                 //
                 // 1. Lower the init expression into a temporary local (`__cell_init_<name>`)
@@ -636,9 +662,7 @@ fn lower_comp_inner(
                 let value_instrs =
                     lower_comp_inner(value, aliases, bindings, known_decls, lambda_decls)?;
                 let mut instrs = vec![WasmBackendInstr::StoreCellValue {
-                    cell_ptr_instrs: vec![WasmBackendInstr::LoadLocal {
-                        name: cell_local,
-                    }],
+                    cell_ptr_instrs: vec![WasmBackendInstr::LoadLocal { name: cell_local }],
                     value_instrs,
                 }];
                 // Assign produces Unit.
@@ -1096,9 +1120,7 @@ fn lower_lambda(
                     closure_local: CLO_LOCAL.to_string(),
                     slot_index,
                 });
-                preamble.push(WasmBackendInstr::StoreLocal {
-                    name: cell_local,
-                });
+                preamble.push(WasmBackendInstr::StoreLocal { name: cell_local });
                 body_aliases.insert(slot.name.clone(), AliasValue::CellPromoted);
             }
         }
@@ -2537,6 +2559,82 @@ mod tests {
             vec!["__clo", "x"],
             "capturing lambda should have param_names [__clo, x]"
         );
+    }
+
+    #[test]
+    fn lower_two_shared_cell_closures_capture_cell_pointer_in_both_envs() {
+        let known_decls: HashSet<String> = HashSet::new();
+        let comp = CompExpr::LetMut {
+            name: "count".to_string(),
+            ty: goby_core::ir::IrType::Unknown,
+            value: Box::new(CompExpr::Value(ValueExpr::IntLit(0))),
+            body: Box::new(CompExpr::Let {
+                name: "inc".to_string(),
+                ty: goby_core::ir::IrType::Unknown,
+                value: Box::new(CompExpr::Value(ValueExpr::Lambda {
+                    param: "_".to_string(),
+                    body: Box::new(CompExpr::Assign {
+                        name: "count".to_string(),
+                        value: Box::new(CompExpr::Value(ValueExpr::BinOp {
+                            op: goby_core::ir::IrBinOp::Add,
+                            left: Box::new(ValueExpr::Var("count".to_string())),
+                            right: Box::new(ValueExpr::IntLit(1)),
+                        })),
+                    }),
+                })),
+                body: Box::new(CompExpr::Let {
+                    name: "get".to_string(),
+                    ty: goby_core::ir::IrType::Unknown,
+                    value: Box::new(CompExpr::Value(ValueExpr::Lambda {
+                        param: "_".to_string(),
+                        body: Box::new(CompExpr::Value(ValueExpr::Var("count".to_string()))),
+                    })),
+                    body: Box::new(CompExpr::Value(ValueExpr::TupleLit(vec![
+                        ValueExpr::Var("inc".to_string()),
+                        ValueExpr::Var("get".to_string()),
+                    ]))),
+                }),
+            }),
+        };
+
+        let mut lambda_decls = Vec::new();
+        let instrs = lower_comp_collecting_lambdas(&comp, &known_decls, &mut lambda_decls)
+            .expect("shared-cell pair helper shape should lower");
+
+        let create_closures: Vec<&WasmBackendInstr> = instrs
+            .iter()
+            .filter(|instr| matches!(instr, WasmBackendInstr::CreateClosure { .. }))
+            .collect();
+        assert_eq!(create_closures.len(), 2, "expected two captured closures");
+        for instr in create_closures {
+            let WasmBackendInstr::CreateClosure { slot_instrs, .. } = instr else {
+                unreachable!();
+            };
+            assert_eq!(
+                slot_instrs.len(),
+                1,
+                "expected one shared-cell capture slot"
+            );
+            assert!(
+                matches!(
+                    slot_instrs[0].as_slice(),
+                    [WasmBackendInstr::LoadLocal { name }] if name == "__cell_count"
+                ),
+                "shared-cell capture must store the outer cell pointer, got {:?}",
+                slot_instrs
+            );
+        }
+        assert_eq!(lambda_decls.len(), 2, "expected two lifted lambda decls");
+        for lambda in &lambda_decls {
+            assert!(
+                lambda
+                    .instrs
+                    .iter()
+                    .any(|instr| matches!(instr, WasmBackendInstr::StoreLocal { name } if name == "__cell_count")),
+                "lambda body should hydrate __cell_count from the closure env, got {:?}",
+                lambda.instrs
+            );
+        }
     }
 
     /// `Call(GlobalRef { "string", "graphemes" }, [Var("text")])` → `Intrinsic { StringGraphemesList }`.

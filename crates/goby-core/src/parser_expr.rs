@@ -276,9 +276,13 @@ fn parse_call_expr_with_spans(src: &str, line: usize, col: usize) -> Option<Expr
     if let Some(open) = src.find('(').filter(|_| src.ends_with(')')) {
         let callee_src = src[..open].trim();
         let inner = src[open + 1..src.len() - 1].trim();
-        if is_identifier(callee_src) || is_qualified_name(callee_src) {
-            let callee_col = col + subslice_offset(src, callee_src);
-            let mut expr = parse_expr_with_spans(callee_src, line, callee_col)?;
+        let callee_col = col + subslice_offset(src, callee_src);
+        let callee_is_supported = is_identifier(callee_src)
+            || is_qualified_name(callee_src)
+            || parse_qualified_access(callee_src).is_some();
+        if callee_is_supported
+            && let Some(mut expr) = parse_expr_with_spans(callee_src, line, callee_col)
+        {
             if inner.is_empty() {
                 return Some(Expr::Call {
                     callee: Box::new(expr),
@@ -927,8 +931,10 @@ fn parse_call_expr(src: &str) -> Option<Expr> {
     if let Some(open) = src.find('(').filter(|_| src.ends_with(')')) {
         let callee = src[..open].trim();
         let inner = src[open + 1..src.len() - 1].trim();
-        if is_identifier(callee) || is_qualified_name(callee) {
-            let mut expr = parse_expr(callee)?;
+        let callee_is_supported = is_identifier(callee)
+            || is_qualified_name(callee)
+            || parse_qualified_access(callee).is_some();
+        if callee_is_supported && let Some(mut expr) = parse_expr(callee) {
             if inner.is_empty() {
                 return Some(Expr::Call {
                     callee: Box::new(expr),
@@ -1676,6 +1682,14 @@ mod tests {
         assert_eq!(
             parse_expr("user.name"),
             Some(Expr::qualified("user", "name"))
+        );
+    }
+
+    #[test]
+    fn parses_tuple_member_call_expression() {
+        assert_eq!(
+            parse_expr("p.0()"),
+            Some(Expr::call(Expr::qualified("p", "0"), Expr::unit_value()))
         );
     }
 

@@ -542,14 +542,13 @@ Locked semantic target:
 - multiple closures capturing the same `mut` binding observe the same shared state.
 - all lambdas are conceptually closures; non-capturing lambdas are the zero-capture case.
 
-Status: **CC1-CC4 (main immutable/by-value slice) mostly complete** — capture analysis,
-`MutableStorageId` shared-cell model, `CallableEnv` ownership, direct closure calls, capturing
-callback parity for `each` / `map` / inline `fold`, and multi-parameter lambda flattening landed on
-the Wasm path. One remaining by-value runtime gap remains for some helper-local execution shapes,
-and mutable capture lowering is still pending in the follow-up shared-cell slice.
+Status: **CC1-CC4 complete** — capture analysis, `MutableStorageId` shared-cell model,
+`CallableEnv` ownership, direct closure calls, capturing callback parity for `each` / `map` /
+inline `fold`, multi-parameter lambda flattening, helper-local multiline lambda parsing, and
+shared-cell closure pairs from helper decls now execute on the Wasm path.
 
-Next step: close the remaining helper-local runtime gap, then finish the mutable-capture slice by
-lowering `SharedMutableCell` reads/writes and finally close the CC5/CC6 diagnostics/docs work.
+Next step: move to CC5/CC6 diagnostics, regression safety, and docs clean-up while the
+interpreter still follows up to the shared-cell semantics.
 
 ### 4.7 `Float` / Wasm `f64` Support
 

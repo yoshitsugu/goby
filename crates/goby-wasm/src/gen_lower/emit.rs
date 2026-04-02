@@ -26,7 +26,7 @@ use crate::host_runtime::{
     HOST_BUMP_RESERVED_BYTES, HOST_INTRINSIC_IMPORTS, IntrinsicExecutionBoundary,
     host_import_for_intrinsic,
 };
-use crate::layout::{MemoryLayout, GLOBAL_HEAP_CURSOR_OFFSET};
+use crate::layout::{GLOBAL_HEAP_CURSOR_OFFSET, MemoryLayout};
 
 const WASM_PAGE_BYTES: u32 = 65_536;
 const STATIC_STRING_LIMIT: u32 = WASM_PAGE_BYTES - HOST_BUMP_RESERVED_BYTES;
@@ -1958,7 +1958,13 @@ fn emit_function_body(
 ) -> Result<(), CodegenError> {
     let has_heap = needs_helper_state(instrs);
     if has_heap {
-        initialize_helper_state_locals(function, layout, i32_base, static_strings, !emit_epilogue_cursor_sync)?;
+        initialize_helper_state_locals(
+            function,
+            layout,
+            i32_base,
+            static_strings,
+            !emit_epilogue_cursor_sync,
+        )?;
     }
     emit_instrs(
         function,
