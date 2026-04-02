@@ -186,11 +186,44 @@ pub fn collect_lambda_callable_envs(
     envs
 }
 
+/// The representation the lowering layer should use for a `LetMut` binding.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BindingRepr {
+    /// Plain Wasm local; no heap promotion needed.
+    Local,
+    /// Heap cell promoted; any nested lambda that accesses this binding shares the cell.
+    HeapCell,
+}
+
+/// Decide how a `LetMut` binding should be represented at the lowering layer.
+///
+/// Returns [`BindingRepr::HeapCell`] when any nested lambda captures `name` as a shared
+/// mutable cell, and [`BindingRepr::Local`] otherwise.  This hides the write/read
+/// distinction behind a single "how should this binding be represented?" answer so that
+/// the lowering layer does not need to reason about capture shape directly.
+///
+/// The caller must supply the `outer_bindings` that are in scope at the `LetMut` site
+/// (excluding `name` itself, which is added here as mutable).
+pub fn binding_repr_for_let_mut(
+    name: &str,
+    body: &CompExpr,
+    outer_bindings: &ClosureBindingEnv,
+    known_decls: &HashSet<String>,
+) -> BindingRepr {
+    if has_mutable_write_capture_of(name, body, outer_bindings, known_decls) {
+        BindingRepr::HeapCell
+    } else {
+        BindingRepr::Local
+    }
+}
+
 /// Returns `true` if any lambda nested in `body` captures `name` as a mutable write.
 ///
-/// This is used by the lowering pass to decide whether a `LetMut` binding should be
-/// promoted to a heap cell.  The caller must supply the `outer_bindings` that are in
-/// scope at the `LetMut` site (excluding `name` itself, which is added here as mutable).
+/// Prefer [`binding_repr_for_let_mut`] in new code; this function is retained for
+/// backward compatibility.
+///
+/// The caller must supply the `outer_bindings` that are in scope at the `LetMut` site
+/// (excluding `name` itself, which is added here as mutable).
 pub fn has_mutable_write_capture_of(
     name: &str,
     body: &CompExpr,

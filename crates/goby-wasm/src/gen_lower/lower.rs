@@ -6,8 +6,8 @@ use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU32, Ordering as AtomicOrdering};
 
 use goby_core::closure_capture::{
-    CallableEnv, CallableEnvSlotKind, ClosureBindingEnv, analyze_lambda_callable_env_for_params,
-    has_mutable_write_capture_of,
+    BindingRepr, CallableEnv, CallableEnvSlotKind, ClosureBindingEnv,
+    analyze_lambda_callable_env_for_params, binding_repr_for_let_mut,
 };
 use goby_core::ir::{CompExpr, IrInterpPart, ValueExpr};
 
@@ -552,10 +552,9 @@ fn lower_comp_inner(
         CompExpr::LetMut {
             name, value, body, ..
         } => {
-            // Check whether any nested lambda captures `name` as a mutable write.
-            // If so, the binding is promoted to a heap cell so writes inside the lambda
-            // update the same cell visible outside.
-            if has_mutable_write_capture_of(name, body, bindings, known_decls) {
+            // Ask the analysis layer how this mutable binding should be represented.
+            // HeapCell means at least one nested lambda captures it through a shared cell.
+            if binding_repr_for_let_mut(name, body, bindings, known_decls) == BindingRepr::HeapCell {
                 // Cell-promotion path.
                 //
                 // 1. Lower the init expression into a temporary local (`__cell_init_<name>`)
