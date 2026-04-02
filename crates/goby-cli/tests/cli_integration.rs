@@ -479,6 +479,48 @@ fn run_command_executes_helper_closure_capture_program() {
 
 #[test]
 #[cfg(unix)]
+fn run_command_executes_closure_capture_example() {
+    let root = repo_root();
+    let input = root.join("examples/closure_capture.gb");
+
+    let output = run_goby_with_stdin(&root, &input, b"");
+
+    assert!(
+        output.status.success(),
+        "expected successful execution, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(
+        stdout.as_ref(),
+        "15\nhi-goby\nhi-closure\n",
+        "expected closure_capture example output"
+    );
+}
+
+#[test]
+#[cfg(unix)]
+fn run_command_executes_closure_mut_example() {
+    let root = repo_root();
+    let input = root.join("examples/closure_mut.gb");
+
+    let output = run_goby_with_stdin(&root, &input, b"");
+
+    assert!(
+        output.status.success(),
+        "expected successful execution, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(
+        stdout.as_ref(),
+        "7\n",
+        "expected closure_mut example output"
+    );
+}
+
+#[test]
+#[cfg(unix)]
 fn run_command_rejects_call_inside_interpolation_with_specific_guidance() {
     let root = repo_root();
     let sandbox = TempDirGuard::new("run_call_inside_interpolation");

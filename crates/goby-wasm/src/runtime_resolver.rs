@@ -96,7 +96,7 @@ impl<'m> RuntimeOutputResolver<'m> {
         evaluators: &RuntimeEvaluators<'_, '_>,
     ) -> Option<()> {
         match stmt {
-            Stmt::Binding { name, value, .. } | Stmt::MutBinding { name, value, .. } => {
+            Stmt::Binding { name, value, .. } => {
                 // Propagate None so the caller can fall back to the string path
                 // rather than silently dropping the binding.
                 let runtime_val = self
@@ -119,8 +119,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                 self.locals.store(name, runtime_val);
                 Some(())
             }
-            Stmt::Assign { name, value, .. } => {
-                self.locals.get(name)?;
+            Stmt::MutBinding { name, value, .. } => {
                 let runtime_val = self
                     .eval_expr_to_option(
                         value,
@@ -138,7 +137,29 @@ impl<'m> RuntimeOutputResolver<'m> {
                             evaluators,
                         )
                     })?;
-                self.locals.store(name, runtime_val);
+                self.locals.store_mut(name, runtime_val);
+                Some(())
+            }
+            Stmt::Assign { name, value, .. } => {
+                self.locals.contains(name).then_some(())?;
+                let runtime_val = self
+                    .eval_expr_to_option(
+                        value,
+                        &self.locals.clone(),
+                        &Rc::new(HashMap::new()),
+                        evaluators,
+                        1,
+                    )
+                    .or_else(|| {
+                        let repr = value.to_str_repr()?;
+                        self.eval_value_with_context(
+                            &repr,
+                            &self.locals.clone(),
+                            &Rc::new(HashMap::new()),
+                            evaluators,
+                        )
+                    })?;
+                self.locals.assign(name, runtime_val).then_some(())?;
                 Some(())
             }
             Stmt::Expr(expr, _) => {
@@ -176,10 +197,10 @@ impl<'m> RuntimeOutputResolver<'m> {
     ) -> Option<()> {
         match statement {
             Statement::Binding { name, expr } => self.bind_local(name, expr, evaluators),
-            Statement::MutBinding { name, expr } => self.bind_local(name, expr, evaluators),
+            Statement::MutBinding { name, expr } => self.bind_local_mut(name, expr, evaluators),
             Statement::Assign { name, expr } => {
-                self.locals.get(name)?;
-                self.bind_local(name, expr, evaluators)
+                self.locals.contains(name).then_some(())?;
+                self.assign_local(name, expr, evaluators)
             }
             Statement::Print(expr) => self.capture_print(expr, evaluators),
             Statement::Expr(expr) => self.eval_side_effect(expr, evaluators),
@@ -196,6 +217,27 @@ impl<'m> RuntimeOutputResolver<'m> {
         let value = self.eval_value(expr, evaluators)?;
         self.locals.store(name, value);
         Some(())
+    }
+
+    pub(super) fn bind_local_mut(
+        &mut self,
+        name: &str,
+        expr: &str,
+        evaluators: &RuntimeEvaluators<'_, '_>,
+    ) -> Option<()> {
+        let value = self.eval_value(expr, evaluators)?;
+        self.locals.store_mut(name, value);
+        Some(())
+    }
+
+    pub(super) fn assign_local(
+        &mut self,
+        name: &str,
+        expr: &str,
+        evaluators: &RuntimeEvaluators<'_, '_>,
+    ) -> Option<()> {
+        let value = self.eval_value(expr, evaluators)?;
+        self.locals.assign(name, value).then_some(())
     }
 
     pub(super) fn capture_print(
@@ -273,18 +315,18 @@ impl<'m> RuntimeOutputResolver<'m> {
             return self.complete_value_out(out, evaluators);
         }
 
-        if let Some(text) = eval_string_expr(expr, locals.string_values()) {
+        let string_locals = locals.string_values();
+        if let Some(text) = eval_string_expr(expr, &string_locals) {
             return Some(RuntimeValue::String(text));
         }
 
-        if let Some(value) = evaluators
-            .int
-            .eval_expr(expr, locals.int_values(), callables)
-        {
+        let int_locals = locals.int_values();
+        if let Some(value) = evaluators.int.eval_expr(expr, &int_locals, callables) {
             return Some(RuntimeValue::Int(value));
         }
 
-        if let Some(values) = evaluators.list.eval_expr(expr, locals.list_int_values()) {
+        let list_int_locals = locals.list_int_values();
+        if let Some(values) = evaluators.list.eval_expr(expr, &list_int_locals) {
             return Some(RuntimeValue::ListInt(values));
         }
 

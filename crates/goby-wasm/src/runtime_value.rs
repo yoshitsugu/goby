@@ -1,4 +1,6 @@
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
 
 use crate::InlineHandlerValue;
 
@@ -8,19 +10,38 @@ pub(crate) struct RuntimeLocals {
     int_values: HashMap<String, i64>,
     list_int_values: HashMap<String, Vec<i64>>,
     record_values: HashMap<String, RuntimeValue>,
+    mut_values: HashMap<String, Rc<RefCell<RuntimeValue>>>,
 }
 
 impl RuntimeLocals {
-    pub(crate) fn string_values(&self) -> &HashMap<String, String> {
-        &self.string_values
+    pub(crate) fn string_values(&self) -> HashMap<String, String> {
+        let mut values = self.string_values.clone();
+        for (name, cell) in &self.mut_values {
+            if let RuntimeValue::String(text) = &*cell.borrow() {
+                values.insert(name.clone(), text.clone());
+            }
+        }
+        values
     }
 
-    pub(crate) fn int_values(&self) -> &HashMap<String, i64> {
-        &self.int_values
+    pub(crate) fn int_values(&self) -> HashMap<String, i64> {
+        let mut values = self.int_values.clone();
+        for (name, cell) in &self.mut_values {
+            if let RuntimeValue::Int(number) = &*cell.borrow() {
+                values.insert(name.clone(), *number);
+            }
+        }
+        values
     }
 
-    pub(crate) fn list_int_values(&self) -> &HashMap<String, Vec<i64>> {
-        &self.list_int_values
+    pub(crate) fn list_int_values(&self) -> HashMap<String, Vec<i64>> {
+        let mut values = self.list_int_values.clone();
+        for (name, cell) in &self.mut_values {
+            if let RuntimeValue::ListInt(items) = &*cell.borrow() {
+                values.insert(name.clone(), items.clone());
+            }
+        }
+        values
     }
 
     pub(crate) fn store(&mut self, name: &str, value: RuntimeValue) {
@@ -42,14 +63,36 @@ impl RuntimeLocals {
         }
     }
 
+    pub(crate) fn store_mut(&mut self, name: &str, value: RuntimeValue) {
+        self.clear(name);
+        self.mut_values
+            .insert(name.to_string(), Rc::new(RefCell::new(value)));
+    }
+
+    pub(crate) fn assign(&mut self, name: &str, value: RuntimeValue) -> bool {
+        if let Some(cell) = self.mut_values.get(name) {
+            *cell.borrow_mut() = value;
+            true
+        } else if self.contains(name) {
+            self.store(name, value);
+            true
+        } else {
+            false
+        }
+    }
+
     pub(crate) fn clear(&mut self, name: &str) {
         self.string_values.remove(name);
         self.int_values.remove(name);
         self.list_int_values.remove(name);
         self.record_values.remove(name);
+        self.mut_values.remove(name);
     }
 
     pub(crate) fn get(&self, name: &str) -> Option<RuntimeValue> {
+        if let Some(cell) = self.mut_values.get(name) {
+            return Some(cell.borrow().clone());
+        }
         if let Some(v) = self.int_values.get(name) {
             return Some(RuntimeValue::Int(*v));
         }
@@ -65,16 +108,30 @@ impl RuntimeLocals {
         None
     }
 
+    pub(crate) fn contains(&self, name: &str) -> bool {
+        self.mut_values.contains_key(name)
+            || self.int_values.contains_key(name)
+            || self.string_values.contains_key(name)
+            || self.list_int_values.contains_key(name)
+            || self.record_values.contains_key(name)
+    }
+
     pub(crate) fn binding_names(&self) -> Vec<String> {
         let mut names: HashSet<String> = self.int_values.keys().cloned().collect();
         names.extend(self.string_values.keys().cloned());
         names.extend(self.list_int_values.keys().cloned());
         names.extend(self.record_values.keys().cloned());
+        names.extend(self.mut_values.keys().cloned());
         names.into_iter().collect()
     }
 
     pub(crate) fn apply_selected_from(&mut self, other: &Self, names: &HashSet<String>) {
         for name in names {
+            if let Some(cell) = other.mut_values.get(name) {
+                self.clear(name);
+                self.mut_values.insert(name.clone(), Rc::clone(cell));
+                continue;
+            }
             match other.get(name) {
                 Some(value) => self.store(name, value),
                 None => self.clear(name),
@@ -217,6 +274,19 @@ mod tests {
             locals.string_values().get("s").map(String::as_str),
             Some("ok")
         );
+    }
+
+    #[test]
+    fn cloned_runtime_locals_share_mut_binding_cells() {
+        let mut locals = RuntimeLocals::default();
+        locals.store_mut("count", RuntimeValue::Int(1));
+
+        let mut cloned = locals.clone();
+        assert!(cloned.assign("count", RuntimeValue::Int(7)));
+
+        assert!(matches!(locals.get("count"), Some(RuntimeValue::Int(7))));
+        assert!(matches!(cloned.get("count"), Some(RuntimeValue::Int(7))));
+        assert_eq!(locals.int_values().get("count"), Some(&7));
     }
 
     #[test]

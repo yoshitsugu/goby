@@ -1,0 +1,14 @@
+import goby/list ( map )
+
+main : Unit -> Unit can Print, Read
+main =
+  _ = read()
+  base = 10
+  add10 = fn x -> base + x
+  sum = add10 5
+  println "${sum}"
+
+  prefix = "hi-"
+  prefixed = map ["goby", "closure"] (fn s -> "${prefix}${s}")
+  println(prefixed[0])
+  println(prefixed[1])

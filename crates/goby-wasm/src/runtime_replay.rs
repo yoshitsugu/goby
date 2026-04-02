@@ -13,7 +13,7 @@ impl<'m> RuntimeOutputResolver<'m> {
         depth: usize,
     ) -> Out<()> {
         match stmt {
-            Stmt::Binding { name, value, .. } | Stmt::MutBinding { name, value, .. } => {
+            Stmt::Binding { name, value, .. } => {
                 let v = match self.eval_expr(value, locals, callables, evaluators, depth) {
                     Out::Done(v) => v,
                     Out::Suspend(cont) => return Out::Suspend(cont),
@@ -23,8 +23,18 @@ impl<'m> RuntimeOutputResolver<'m> {
                 locals.store(name, v);
                 Out::Done(())
             }
+            Stmt::MutBinding { name, value, .. } => {
+                let v = match self.eval_expr(value, locals, callables, evaluators, depth) {
+                    Out::Done(v) => v,
+                    Out::Suspend(cont) => return Out::Suspend(cont),
+                    Out::Escape(escape) => return Out::Escape(escape),
+                    Out::Err(e) => return Out::Err(e),
+                };
+                locals.store_mut(name, v);
+                Out::Done(())
+            }
             Stmt::Assign { name, value, .. } => {
-                if locals.get(name).is_none() {
+                if !locals.contains(name) {
                     return Out::Err(RuntimeError::Unsupported);
                 }
                 let v = match self.eval_expr(value, locals, callables, evaluators, depth) {
@@ -33,7 +43,9 @@ impl<'m> RuntimeOutputResolver<'m> {
                     Out::Escape(escape) => return Out::Escape(escape),
                     Out::Err(e) => return Out::Err(e),
                 };
-                locals.store(name, v);
+                if !locals.assign(name, v) {
+                    return Out::Err(RuntimeError::Unsupported);
+                }
                 Out::Done(())
             }
             Stmt::Expr(expr, _) => {
@@ -162,7 +174,7 @@ impl<'m> RuntimeOutputResolver<'m> {
         for (i, stmt) in stmts.iter().enumerate() {
             let remaining = stmts[i + 1..].to_vec();
             match stmt {
-                Stmt::Binding { name, value, .. } | Stmt::MutBinding { name, value, .. } => {
+                Stmt::Binding { name, value, .. } => {
                     match self.eval_expr(value, &locals, &callables, evaluators, depth + 1) {
                         Out::Done(v) => {
                             locals.store(name, v);
@@ -183,15 +195,40 @@ impl<'m> RuntimeOutputResolver<'m> {
                         Out::Err(e) => return Out::Err(e),
                     }
                 }
+                Stmt::MutBinding { name, value, .. } => {
+                    match self.eval_expr(value, &locals, &callables, evaluators, depth + 1) {
+                        Out::Done(v) => {
+                            locals.store_mut(name, v);
+                        }
+                        Out::Escape(escape) => return Out::Escape(escape),
+                        Out::Suspend(cont) => {
+                            return Out::Suspend(Cont::StmtSeq {
+                                pending: Some(Box::new(cont)),
+                                store: Some(StoreOp::BindMut { name: name.clone() }),
+                                remaining,
+                                locals,
+                                callables,
+                                depth,
+                                handler_stack: self.active_inline_handler_stack.clone(),
+                                finish,
+                            });
+                        }
+                        Out::Err(e) => return Out::Err(e),
+                    }
+                }
                 Stmt::Assign { name, value, .. } => {
-                    if locals.get(name).is_none() {
+                    if !locals.contains(name) {
                         return Out::Err(RuntimeError::Abort {
                             kind: "assign_missing_var".into(),
                         });
                     }
                     match self.eval_expr(value, &locals, &callables, evaluators, depth + 1) {
                         Out::Done(v) => {
-                            locals.store(name, v);
+                            if !locals.assign(name, v) {
+                                return Out::Err(RuntimeError::Abort {
+                                    kind: "assign_missing_var".into(),
+                                });
+                            }
                         }
                         Out::Escape(escape) => return Out::Escape(escape),
                         Out::Suspend(cont) => {
@@ -509,13 +546,18 @@ impl<'m> RuntimeOutputResolver<'m> {
                 if let Some(store_op) = store {
                     match store_op {
                         StoreOp::Bind { name } => locals.store(&name, value),
+                        StoreOp::BindMut { name } => locals.store_mut(&name, value),
                         StoreOp::Assign { name } => {
-                            if locals.get(&name).is_none() {
+                            if !locals.contains(&name) {
                                 return Out::Err(RuntimeError::Abort {
                                     kind: "assign_missing_var".into(),
                                 });
                             }
-                            locals.store(&name, value);
+                            if !locals.assign(&name, value) {
+                                return Out::Err(RuntimeError::Abort {
+                                    kind: "assign_missing_var".into(),
+                                });
+                            }
                         }
                     }
                 }

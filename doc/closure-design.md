@@ -7,15 +7,17 @@ which changes the mutable-capture direction (see § 5 note below). Refer to
 `doc/PLAN_CLOSURE_CAPTURE.md` and `doc/LANGUAGE_SPEC.md` for the current intended semantics.
 The low-level Wasm layout details in §§ 3–4 and 6–9 remain as a useful implementation
 reference, but the closure-capture semantic decisions in §§ 5 and 10 have been superseded.
+Nothing in this document should be read as the current implementation-status source of truth.
+Where wording below still refers to WB-3A or "current" support, read it as historical context
+from the pre-CC closure rollout.
 
 ---
 
 ## 1. Overview and Motivation
 
-WB-3A (the current general-lowering path) supports only **non-capturing lambdas**: lambdas
-whose bodies reference no variables from the enclosing scope. Capturing lambdas — where the
-lambda body references outer `let` / `mut` bindings — currently fall back to the interpreter
-path and produce a precise diagnostic (H4).
+At the time this note was written, WB-3A supported only **non-capturing lambdas**: lambdas
+whose bodies referenced no variables from the enclosing scope. Capturing lambdas — where the
+lambda body referenced outer `let` / `mut` bindings — were still deferred to later work.
 
 H5 locks the design for closure representation so that WB-3B can implement closure lowering
 without making ad-hoc decisions about memory layout or calling conventions.
@@ -191,7 +193,10 @@ this will type-mismatch.
 - New `ListEachClosure`/`ListMapClosure` variants with two-arg dispatch.
 - A unified `TaggedListEach`/`TaggedListMap` that inspects the tag at runtime.
 
-Until WB-3B, capturing lambdas passed to `each`/`map` remain `UnsupportedIrForm`.
+Historical note: this section described the pre-closure rollout limitation where capturing
+lambdas passed to `each`/`map` still remained `UnsupportedIrForm`. That limitation is no longer
+the current Wasm status; see `doc/PLAN_CLOSURE_CAPTURE.md` and `doc/STATE.md` for the landed
+coverage.
 
 ---
 

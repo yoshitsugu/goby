@@ -124,8 +124,11 @@ syntax/semantics.
       capturing callbacks passed to `list.each` / `list.map`, inline `list.fold` callbacks,
       helper-local multiline lambda bindings, and shared-cell closure pairs returned from helper
       declarations.
-    - The interpreter still uses snapshot semantics for `mut` capture and remains the main
-      follow-up area for Track CC.
+    - The fallback/interpreter runtime now uses shared-cell semantics for supported callback
+      closure paths as well.
+    - Remaining follow-up: helper-returned and general local closure-value parity on the
+      fallback/interpreter path is not yet locked end to end, so this temporary status note
+      remains until that runtime surface fully converges.
 
 ## 4. Type/Entry Rules
 

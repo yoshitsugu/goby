@@ -1,0 +1,8 @@
+main : Unit -> Unit can Print, Read
+main =
+  _ = read()
+  mut value = 1
+  read_value = fn _ -> value
+  value := 7
+  result = read_value ()
+  println "${result}"

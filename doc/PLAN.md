@@ -548,8 +548,9 @@ inline `fold`, multi-parameter lambda flattening, helper-local multiline lambda 
 shared-cell closure pairs from helper decls, and the CC5 regression-safety/diagnostic set are
 now landed on the Wasm path.
 
-Next step: move to CC6 documentation/examples clean-up while the interpreter still follows up to
-the shared-cell semantics.
+Next step: continue CC6 documentation/examples clean-up. The fallback/interpreter runtime now
+matches shared-cell semantics for supported callback closure paths; the remaining follow-up is
+helper-returned/local closure-value parity before the temporary spec status note can be removed.
 
 ### 4.7 `Float` / Wasm `f64` Support
 

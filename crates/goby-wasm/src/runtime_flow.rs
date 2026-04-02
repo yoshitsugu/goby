@@ -116,6 +116,7 @@ pub(crate) enum Cont {
 #[derive(Clone)]
 pub(crate) enum StoreOp {
     Bind { name: String },
+    BindMut { name: String },
     Assign { name: String },
 }
 

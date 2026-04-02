@@ -381,7 +381,9 @@ Progress note (2026-04-02):
 
 - A Wasm execution spec-conformance test now runs all five Section 3 acceptance programs end to end.
 - Helper-returned ByValue closure execution (`make_adder` returning `add10`) is now pinned by a dedicated Wasm regression.
-- Existing runtime parity coverage now locks supported callback closure execution on the fallback/interpreter boundary, while helper-returned closure parity remains an explicit follow-up note in `doc/STATE.md`.
+- Existing runtime parity coverage now locks supported callback closure execution on the fallback/interpreter boundary.
+- The fallback/interpreter runtime now uses shared-cell semantics for supported `mut` callback-capture paths as well.
+- Helper-returned closure parity remains an explicit follow-up note in `doc/STATE.md`.
 
 ### CC6. Documentation and examples closure
 

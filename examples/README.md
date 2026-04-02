@@ -8,6 +8,8 @@ This directory contains small Goby programs grouped by purpose.
 - `basic_types.gb`: type and syntax showcase (parse/typecheck target)
 - `function.gb`: canonical function/lambda/list example used as run-parity target
 - `function_reference.gb`: named-function callback sample (`map xs add_ten`)
+- `closure_capture.gb`: immutable/by-value closure capture sample (direct call plus captured `map` callback)
+- `closure_mut.gb`: mutable capture sample (outer mutation remains visible through a closure)
 - `read.gb`: minimal stdin sample using prelude `Read.read_line` and `Read.read`
 - `to_integer.gb`: `int.parse` sample with `StringParseError` handler
 - `to_string.gb`: `int.to_string` sample for explicit `Int` to `String` conversion

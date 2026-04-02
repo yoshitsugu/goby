@@ -79,7 +79,7 @@ impl<'m> RuntimeOutputResolver<'m> {
         } else {
             for statement in statements(function.body.as_deref()?) {
                 match statement {
-                    Statement::Binding { name, expr } | Statement::MutBinding { name, expr } => {
+                    Statement::Binding { name, expr } => {
                         let value = self.eval_value_with_context(
                             expr,
                             &function_locals,
@@ -88,15 +88,24 @@ impl<'m> RuntimeOutputResolver<'m> {
                         )?;
                         function_locals.store(name, value);
                     }
-                    Statement::Assign { name, expr } => {
-                        function_locals.get(name)?;
+                    Statement::MutBinding { name, expr } => {
                         let value = self.eval_value_with_context(
                             expr,
                             &function_locals,
                             &function_callables,
                             evaluators,
                         )?;
-                        function_locals.store(name, value);
+                        function_locals.store_mut(name, value);
+                    }
+                    Statement::Assign { name, expr } => {
+                        function_locals.contains(name).then_some(())?;
+                        let value = self.eval_value_with_context(
+                            expr,
+                            &function_locals,
+                            &function_callables,
+                            evaluators,
+                        )?;
+                        function_locals.assign(name, value).then_some(())?;
                     }
                     Statement::Print(print_expr) => {
                         let value = self.eval_value_with_context(

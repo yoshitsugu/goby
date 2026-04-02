@@ -4,10 +4,20 @@ Last updated: 2026-04-02
 
 ## Current Focus
 
-**Track CC / CC6 — next**: closure-capture regression safety is complete on the Wasm path. Next milestone is documentation/examples closure while the interpreter `mut` snapshot gap remains explicitly documented.
+**Track CC / CC6 — in progress**: closure-capture regression safety is complete on the Wasm path, and fallback/interpreter callback paths now match shared-cell `mut` semantics. Current work is narrowing the remaining docs/runtime gap to helper-returned and general local closure-value parity.
 
 ## Recently Completed
 
+- **Track CC / CC6 interpreter callback shared-cell parity** (2026-04-02): fallback/interpreter callback closure paths now preserve `mut` shared-cell semantics instead of cloning snapshot values.
+  - `runtime(storage)`: `RuntimeLocals` now models `mut` bindings as shared cells, so cloning locals for captured callbacks preserves shared mutable storage while ordinary `let` bindings still copy by value.
+  - `runtime(exec)`: string-path and AST-path local binding/assignment handlers now distinguish `mut` binding creation from immutable binding creation, and assignments update existing mutable cells instead of replacing them with immutable snapshots.
+  - `test(runtime)`: added focused regressions for shared mutable cells in cloned locals and for fallback/typed-mode parity of `each` mutating a captured outer binding.
+  - `doc`: narrowed the remaining implementation-status note to helper-returned/local closure-value parity rather than the old generic interpreter snapshot gap.
+- **Track CC / CC6 examples/docs refresh (partial)** (2026-04-02): runnable closure-capture examples were added and stale closure-design status wording was pushed further into historical-note territory.
+  - `examples`: added `closure_capture.gb` (ByValue capture and captured `map` callback) and `closure_mut.gb` (two closures sharing one `mut` binding).
+  - `examples/readme`: indexed the new closure examples in `examples/README.md`.
+  - `test(cli)`: added run regressions for both new examples so docs/examples stay executable.
+  - `doc(closure-design)`: rewrote stale "current WB-3A" / "UnsupportedIrForm" wording as historical context instead of present-tense status.
 - **Track CC / CC5 spec-conformance coverage** (2026-04-02): Section 3 closure-capture acceptance programs are now locked by one Wasm execution test set.
   - `test(wasm-smoke)`: added a focused Section 3 spec-conformance test that executes all five acceptance programs on the Wasm path and checks their expected stdout.
   - `test(wasm-smoke)`: added a helper-returned ByValue closure execution regression (`make_adder` / `add10 5`) so helper-produced capturing closures are pinned end-to-end rather than only via lowering smoke.
@@ -95,8 +105,7 @@ Next track candidates are in `doc/PLAN.md` §4:
   - Host intrinsics: `StringGraphemesList` (`__goby_string_graphemes_list`)
 - Known limitations:
   - non-tail / multi-resume handlers → `BackendLimitation` error
-  - interpreter path: capturing lambdas work but use snapshot semantics for `mut` captures (not the spec's shared-cell model); will be corrected as part of Track CC
-  - fallback/interpreter parity is not yet locked for every helper-returned closure shape; supported callback closure paths already have parity coverage, but helper-returned closure parity remains a follow-up outside CC5 completion
+  - fallback/interpreter parity is not yet locked for every helper-returned or general local closure-value shape; supported callback closure paths now have shared-cell parity coverage, but helper-returned/local closure-value parity remains a follow-up
 
 ## Key Entry Points
 

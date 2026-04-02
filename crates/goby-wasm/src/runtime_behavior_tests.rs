@@ -828,6 +828,26 @@ main =
 }
 
 #[test]
+fn typed_mode_matches_fallback_for_mutable_callback_capture_shared_cell() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    let source = r#"
+import goby/list ( each )
+
+main : Unit -> Unit
+main =
+  mut total = 0
+  each [1, 2, 3] (fn n ->
+    total := total + n
+  )
+  print total
+"#;
+    let module = parse_module(source).expect("parse should work");
+    let typed = assert_mode_parity(&module, "mutable callback capture shared cell");
+    assert_eq!(typed.stdout.as_deref(), Some("6"));
+    assert_eq!(typed.runtime_error_kind, None);
+}
+
+#[test]
 fn case_scrutinee_suspends_and_arm_body_calls_effect() {
     let _guard = ENV_MUTEX.lock().unwrap();
     let source = r#"
