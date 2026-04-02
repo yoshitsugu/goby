@@ -980,10 +980,8 @@ pub(crate) fn emit_general_module_with_aux_and_options(
             indirect_call_type_idx_3,
             record_ctor_tags.clone(),
         );
-        if needs_helper_state(instrs) {
-            initialize_helper_state_locals(&mut function, layout, main_i32_base, &static_strings, true)?;
-        }
-        emit_instrs(
+        // main is the root caller; no outer caller needs to reload the cursor, so no epilogue sync.
+        emit_function_body(
             &mut function,
             &mut ctx,
             instrs,
@@ -993,8 +991,8 @@ pub(crate) fn emit_general_module_with_aux_and_options(
             main_i32_base,
             &static_strings,
             options,
+            false, // emit_epilogue_cursor_sync
         )?;
-        function.instruction(&Instruction::End);
         code.function(&function);
     }
 
@@ -1038,12 +1036,9 @@ pub(crate) fn emit_general_module_with_aux_and_options(
             ctx.locals.insert(param_name.clone(), ctx.next_local);
             ctx.next_local += 1;
         }
-        if needs_helper_state(&decl.instrs) {
-            initialize_helper_state_locals(&mut function, layout, aux_i32_base, &static_strings, false)?;
-        }
-        // After params, body locals start from aux_param_count.
-        // named_i64_count passed to emit_instrs counts only DeclareLocal in body.
-        emit_instrs(
+        // Aux decls write the final alloc cursor back to the global slot before returning
+        // so callers that use call_indirect (not DeclCall) can reload the updated cursor.
+        emit_function_body(
             &mut function,
             &mut ctx,
             &decl.instrs,
@@ -1053,14 +1048,8 @@ pub(crate) fn emit_general_module_with_aux_and_options(
             aux_i32_base,
             &static_strings,
             options,
+            true, // emit_epilogue_cursor_sync
         )?;
-        // Epilogue: write the final alloc cursor back to the global slot before returning,
-        // so callers that use call_indirect (not DeclCall) can reload the updated cursor.
-        if needs_helper_state(&decl.instrs) {
-            let alloc_cursor_local = aux_i32_base + HELPER_ALLOC_CURSOR_OFFSET;
-            emit_sync_cursor_to_global(&mut function, alloc_cursor_local);
-        }
-        function.instruction(&Instruction::End);
         code.function(&function);
     }
     module.section(&code);
@@ -1947,6 +1936,47 @@ fn emit_decode_string_ptr(
     function.instruction(&Instruction::LocalSet(len_local));
 
     let _ = helper_state;
+}
+
+/// Emit the body of one Wasm function: helper-state prologue, instructions, optional
+/// epilogue cursor sync, and the terminating `End` instruction.
+///
+/// `emit_epilogue_cursor_sync`: pass `true` for aux decls (callers need the updated cursor
+/// after `call_indirect`); pass `false` for `main`/`_start` (no caller to reload from it).
+#[allow(clippy::too_many_arguments)]
+fn emit_function_body(
+    function: &mut Function,
+    ctx: &mut EmitContext,
+    instrs: &[WasmBackendInstr],
+    layout: &MemoryLayout,
+    named_i64_count: u32,
+    helper_i64_scratch_count: u32,
+    i32_base: u32,
+    static_strings: &StaticStringPool,
+    options: EmitOptions,
+    emit_epilogue_cursor_sync: bool,
+) -> Result<(), CodegenError> {
+    let has_heap = needs_helper_state(instrs);
+    if has_heap {
+        initialize_helper_state_locals(function, layout, i32_base, static_strings, !emit_epilogue_cursor_sync)?;
+    }
+    emit_instrs(
+        function,
+        ctx,
+        instrs,
+        layout,
+        named_i64_count,
+        helper_i64_scratch_count,
+        i32_base,
+        static_strings,
+        options,
+    )?;
+    if has_heap && emit_epilogue_cursor_sync {
+        let alloc_cursor_local = i32_base + HELPER_ALLOC_CURSOR_OFFSET;
+        emit_sync_cursor_to_global(function, alloc_cursor_local);
+    }
+    function.instruction(&Instruction::End);
+    Ok(())
 }
 
 /// Emit a direct Wasm `call` with heap-cursor sync.
