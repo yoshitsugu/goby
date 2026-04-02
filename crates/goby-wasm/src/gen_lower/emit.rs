@@ -1438,97 +1438,35 @@ fn emit_instrs(
                 let s_arg1 = helper_i64_base + 2;
                 match arity {
                     1 => {
+                        // Stack: [arg0, callee] → pop callee then arg0 into scratch locals.
                         function.instruction(&Instruction::LocalSet(s_callee));
                         function.instruction(&Instruction::LocalSet(s_arg0));
-                        function.instruction(&Instruction::LocalGet(s_callee));
-                        function.instruction(&Instruction::I64Const(60));
-                        function.instruction(&Instruction::I64ShrU);
-                        function.instruction(&Instruction::I64Const(i64::from(TAG_CLOSURE)));
-                        function.instruction(&Instruction::I64Eq);
-                        if let Some(ref hs) = helper_state {
-                            emit_sync_cursor_to_global(function, hs.alloc_cursor_local);
-                        }
-                        function.instruction(&Instruction::If(wasm_encoder::BlockType::Result(
-                            wasm_encoder::ValType::I64,
-                        )));
-                        function.instruction(&Instruction::LocalGet(s_callee));
-                        function.instruction(&Instruction::LocalGet(s_arg0));
-                        function.instruction(&Instruction::LocalGet(s_callee));
-                        function.instruction(&Instruction::I32WrapI64);
-                        function.instruction(&Instruction::I64Load(MemArg {
-                            offset: 0,
-                            align: 3,
-                            memory_index: 0,
-                        }));
-                        function.instruction(&Instruction::I64Const(0xFFFF_FFFFi64));
-                        function.instruction(&Instruction::I64And);
-                        function.instruction(&Instruction::I32WrapI64);
-                        function.instruction(&Instruction::CallIndirect {
-                            type_index: ctx.indirect_call_type_idx(2)?,
-                            table_index: 0,
-                        });
-                        function.instruction(&Instruction::Else);
-                        function.instruction(&Instruction::LocalGet(s_arg0));
-                        function.instruction(&Instruction::LocalGet(s_callee));
-                        function.instruction(&Instruction::I64Const(0xFFFF_FFFFi64));
-                        function.instruction(&Instruction::I64And);
-                        function.instruction(&Instruction::I32WrapI64);
-                        function.instruction(&Instruction::CallIndirect {
-                            type_index: ctx.indirect_call_type_idx(1)?,
-                            table_index: 0,
-                        });
-                        function.instruction(&Instruction::End);
-                        if let Some(ref hs) = helper_state {
-                            emit_sync_cursor_from_global(function, hs.alloc_cursor_local);
-                        }
+                        let plain_type_idx = ctx.indirect_call_type_idx(1)?;
+                        let closure_type_idx = ctx.indirect_call_type_idx(2)?;
+                        emit_callable_dispatch(
+                            function,
+                            s_callee,
+                            &[s_arg0],
+                            plain_type_idx,
+                            closure_type_idx,
+                            helper_state.as_ref(),
+                        );
                     }
                     2 => {
+                        // Stack: [arg0, arg1, callee] → pop in reverse order.
                         function.instruction(&Instruction::LocalSet(s_callee));
                         function.instruction(&Instruction::LocalSet(s_arg1));
                         function.instruction(&Instruction::LocalSet(s_arg0));
-                        function.instruction(&Instruction::LocalGet(s_callee));
-                        function.instruction(&Instruction::I64Const(60));
-                        function.instruction(&Instruction::I64ShrU);
-                        function.instruction(&Instruction::I64Const(i64::from(TAG_CLOSURE)));
-                        function.instruction(&Instruction::I64Eq);
-                        if let Some(ref hs) = helper_state {
-                            emit_sync_cursor_to_global(function, hs.alloc_cursor_local);
-                        }
-                        function.instruction(&Instruction::If(wasm_encoder::BlockType::Result(
-                            wasm_encoder::ValType::I64,
-                        )));
-                        function.instruction(&Instruction::LocalGet(s_callee));
-                        function.instruction(&Instruction::LocalGet(s_arg0));
-                        function.instruction(&Instruction::LocalGet(s_arg1));
-                        function.instruction(&Instruction::LocalGet(s_callee));
-                        function.instruction(&Instruction::I32WrapI64);
-                        function.instruction(&Instruction::I64Load(MemArg {
-                            offset: 0,
-                            align: 3,
-                            memory_index: 0,
-                        }));
-                        function.instruction(&Instruction::I64Const(0xFFFF_FFFFi64));
-                        function.instruction(&Instruction::I64And);
-                        function.instruction(&Instruction::I32WrapI64);
-                        function.instruction(&Instruction::CallIndirect {
-                            type_index: ctx.indirect_call_type_idx(3)?,
-                            table_index: 0,
-                        });
-                        function.instruction(&Instruction::Else);
-                        function.instruction(&Instruction::LocalGet(s_arg0));
-                        function.instruction(&Instruction::LocalGet(s_arg1));
-                        function.instruction(&Instruction::LocalGet(s_callee));
-                        function.instruction(&Instruction::I64Const(0xFFFF_FFFFi64));
-                        function.instruction(&Instruction::I64And);
-                        function.instruction(&Instruction::I32WrapI64);
-                        function.instruction(&Instruction::CallIndirect {
-                            type_index: ctx.indirect_call_type_idx(2)?,
-                            table_index: 0,
-                        });
-                        function.instruction(&Instruction::End);
-                        if let Some(ref hs) = helper_state {
-                            emit_sync_cursor_from_global(function, hs.alloc_cursor_local);
-                        }
+                        let plain_type_idx = ctx.indirect_call_type_idx(2)?;
+                        let closure_type_idx = ctx.indirect_call_type_idx(3)?;
+                        emit_callable_dispatch(
+                            function,
+                            s_callee,
+                            &[s_arg0, s_arg1],
+                            plain_type_idx,
+                            closure_type_idx,
+                            helper_state.as_ref(),
+                        );
                     }
                     _ => {
                         return Err(CodegenError {
@@ -2052,6 +1990,79 @@ fn emit_sync_cursor_from_global(function: &mut Function, alloc_cursor_local: u32
         memory_index: 0,
     }));
     function.instruction(&Instruction::LocalSet(alloc_cursor_local));
+}
+
+/// Emit a `call_indirect` dispatch that handles both plain funcrefs and capturing closures.
+///
+/// The callee is already stored in `callee_local` (i64 tagged value).
+/// The arguments are already stored in `arg_locals` (in left-to-right order, i64 each).
+///
+/// Emitted Wasm (pseudo-code):
+/// ```text
+/// if callee_local >> 60 == TAG_CLOSURE {   // sync + If
+///   [callee_local, arg_locals..., load_func_ptr(callee_local)]  call_indirect closure_type
+/// } else {
+///   [arg_locals..., callee_low32]  call_indirect plain_type
+/// }                                // End + sync
+/// ```
+///
+/// The heap-cursor is synced around the `If/End` block when `hs` is `Some`.
+fn emit_callable_dispatch(
+    function: &mut Function,
+    callee_local: u32,
+    arg_locals: &[u32],
+    plain_type_idx: u32,
+    closure_type_idx: u32,
+    hs: Option<&HelperEmitState>,
+) {
+    // TAG_CLOSURE check: callee >> 60 == TAG_CLOSURE
+    function.instruction(&Instruction::LocalGet(callee_local));
+    function.instruction(&Instruction::I64Const(60));
+    function.instruction(&Instruction::I64ShrU);
+    function.instruction(&Instruction::I64Const(i64::from(TAG_CLOSURE)));
+    function.instruction(&Instruction::I64Eq);
+    if let Some(hs) = hs {
+        emit_sync_cursor_to_global(function, hs.alloc_cursor_local);
+    }
+    function.instruction(&Instruction::If(wasm_encoder::BlockType::Result(
+        wasm_encoder::ValType::I64,
+    )));
+    // Closure branch: push callee (env ptr), then args, then func_ptr from closure[0].
+    function.instruction(&Instruction::LocalGet(callee_local));
+    for &arg in arg_locals {
+        function.instruction(&Instruction::LocalGet(arg));
+    }
+    function.instruction(&Instruction::LocalGet(callee_local));
+    function.instruction(&Instruction::I32WrapI64);
+    function.instruction(&Instruction::I64Load(MemArg {
+        offset: 0,
+        align: 3,
+        memory_index: 0,
+    }));
+    function.instruction(&Instruction::I64Const(0xFFFF_FFFFi64));
+    function.instruction(&Instruction::I64And);
+    function.instruction(&Instruction::I32WrapI64);
+    function.instruction(&Instruction::CallIndirect {
+        type_index: closure_type_idx,
+        table_index: 0,
+    });
+    function.instruction(&Instruction::Else);
+    // Plain branch: push args, then callee low32 as table slot.
+    for &arg in arg_locals {
+        function.instruction(&Instruction::LocalGet(arg));
+    }
+    function.instruction(&Instruction::LocalGet(callee_local));
+    function.instruction(&Instruction::I64Const(0xFFFF_FFFFi64));
+    function.instruction(&Instruction::I64And);
+    function.instruction(&Instruction::I32WrapI64);
+    function.instruction(&Instruction::CallIndirect {
+        type_index: plain_type_idx,
+        table_index: 0,
+    });
+    function.instruction(&Instruction::End);
+    if let Some(hs) = hs {
+        emit_sync_cursor_from_global(function, hs.alloc_cursor_local);
+    }
 }
 
 fn emit_push_tagged_ptr(function: &mut Function, ptr_local: u32, tag: u8) {
@@ -3276,46 +3287,15 @@ fn emit_list_each(
     }));
     function.instruction(&Instruction::LocalSet(s_elem));
 
-    function.instruction(&Instruction::LocalGet(s_func));
-    function.instruction(&Instruction::I64Const(60));
-    function.instruction(&Instruction::I64ShrU);
-    function.instruction(&Instruction::I64Const(i64::from(TAG_CLOSURE)));
-    function.instruction(&Instruction::I64Eq);
-    // Sync local alloc cursor to global before call_indirect so callee starts from the right position.
-    emit_sync_cursor_to_global(function, hs.alloc_cursor_local);
-    function.instruction(&Instruction::If(wasm_encoder::BlockType::Result(
-        wasm_encoder::ValType::I64,
-    )));
-    function.instruction(&Instruction::LocalGet(s_func));
-    function.instruction(&Instruction::LocalGet(s_elem));
-    function.instruction(&Instruction::LocalGet(s_func));
-    function.instruction(&Instruction::I32WrapI64);
-    function.instruction(&Instruction::I64Load(MemArg {
-        offset: 0,
-        align: 3,
-        memory_index: 0,
-    }));
-    function.instruction(&Instruction::I64Const(0xFFFF_FFFFi64));
-    function.instruction(&Instruction::I64And);
-    function.instruction(&Instruction::I32WrapI64);
-    function.instruction(&Instruction::CallIndirect {
-        type_index: closure_call_type_idx,
-        table_index: 0,
-    });
-    function.instruction(&Instruction::Else);
-    function.instruction(&Instruction::LocalGet(s_elem));
-    function.instruction(&Instruction::LocalGet(s_func));
-    function.instruction(&Instruction::I64Const(0xFFFF_FFFFi64));
-    function.instruction(&Instruction::I64And);
-    function.instruction(&Instruction::I32WrapI64);
-    function.instruction(&Instruction::CallIndirect {
-        type_index: indirect_call_type_idx,
-        table_index: 0,
-    });
-    function.instruction(&Instruction::End);
+    emit_callable_dispatch(
+        function,
+        s_func,
+        &[s_elem],
+        indirect_call_type_idx,
+        closure_call_type_idx,
+        Some(hs),
+    );
     function.instruction(&Instruction::Drop); // discard result
-    // Reload alloc cursor from global after call_indirect to pick up callee allocations.
-    emit_sync_cursor_from_global(function, hs.alloc_cursor_local);
 
     // iter += 1
     function.instruction(&Instruction::LocalGet(s_iter));
@@ -3417,45 +3397,14 @@ fn emit_list_map(
     }));
     function.instruction(&Instruction::LocalSet(s_elem));
 
-    function.instruction(&Instruction::LocalGet(s_func));
-    function.instruction(&Instruction::I64Const(60));
-    function.instruction(&Instruction::I64ShrU);
-    function.instruction(&Instruction::I64Const(i64::from(TAG_CLOSURE)));
-    function.instruction(&Instruction::I64Eq);
-    // Sync local alloc cursor to global before call_indirect so callee starts from the right position.
-    emit_sync_cursor_to_global(function, hs.alloc_cursor_local);
-    function.instruction(&Instruction::If(wasm_encoder::BlockType::Result(
-        wasm_encoder::ValType::I64,
-    )));
-    function.instruction(&Instruction::LocalGet(s_func));
-    function.instruction(&Instruction::LocalGet(s_elem));
-    function.instruction(&Instruction::LocalGet(s_func));
-    function.instruction(&Instruction::I32WrapI64);
-    function.instruction(&Instruction::I64Load(MemArg {
-        offset: 0,
-        align: 3,
-        memory_index: 0,
-    }));
-    function.instruction(&Instruction::I64Const(0xFFFF_FFFFi64));
-    function.instruction(&Instruction::I64And);
-    function.instruction(&Instruction::I32WrapI64);
-    function.instruction(&Instruction::CallIndirect {
-        type_index: closure_call_type_idx,
-        table_index: 0,
-    });
-    function.instruction(&Instruction::Else);
-    function.instruction(&Instruction::LocalGet(s_elem));
-    function.instruction(&Instruction::LocalGet(s_func));
-    function.instruction(&Instruction::I64Const(0xFFFF_FFFFi64));
-    function.instruction(&Instruction::I64And);
-    function.instruction(&Instruction::I32WrapI64);
-    function.instruction(&Instruction::CallIndirect {
-        type_index: indirect_call_type_idx,
-        table_index: 0,
-    });
-    function.instruction(&Instruction::End);
-    // Reload alloc cursor from global after call_indirect to pick up callee allocations.
-    emit_sync_cursor_from_global(function, hs.alloc_cursor_local);
+    emit_callable_dispatch(
+        function,
+        s_func,
+        &[s_elem],
+        indirect_call_type_idx,
+        closure_call_type_idx,
+        Some(hs),
+    );
     function.instruction(&Instruction::LocalSet(s_elem));
 
     // result_ptr[4 + iter * 8] = mapped
