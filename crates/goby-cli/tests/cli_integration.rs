@@ -479,6 +479,43 @@ fn run_command_executes_helper_closure_capture_program() {
 
 #[test]
 #[cfg(unix)]
+fn run_command_rejects_call_inside_interpolation_with_specific_guidance() {
+    let root = repo_root();
+    let sandbox = TempDirGuard::new("run_call_inside_interpolation");
+    let input = sandbox.join("call_inside_interpolation.gb");
+    fs::write(
+        &input,
+        r#"
+add_one : Int -> Int
+add_one x = x + 1
+
+main : Unit -> Unit can Print, Read
+main =
+  _ = read()
+  println "${add_one 5}"
+"#,
+    )
+    .expect("temporary input should be writable");
+
+    let output = run_goby_with_stdin(&root, &input, b"");
+
+    assert!(
+        !output.status.success(),
+        "expected shared-IR rejection, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains(
+            "interpolated string contains a call expression; bind the result to a local before interpolation"
+        ),
+        "expected explicit interpolation guidance, stderr: {}",
+        stderr
+    );
+}
+
+#[test]
+#[cfg(unix)]
 fn run_command_executes_split_index_runtime_program_via_wasmtime_stdin() {
     let root = repo_root();
     let sandbox = TempDirGuard::new("run_split_index_runtime_program");

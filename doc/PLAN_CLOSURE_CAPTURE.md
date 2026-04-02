@@ -2,7 +2,7 @@
 
 Last updated: 2026-04-02
 
-Status: CC0–CC4 complete; post-review encapsulation refactoring done; CC5–CC6 next
+Status: CC0–CC5 complete; post-review encapsulation refactoring and regression-safety closure done; CC6 next
 
 Related documents:
 
@@ -365,9 +365,9 @@ Note: Sections 3.2, 3.3, and 3.5 now pass on the Wasm path.
 
 ### CC5. Diagnostics and regression safety
 
-- [ ] Keep precise diagnostics for any still-deferred edge cases.
-- [ ] Add targeted regression tests beside the ownership modules that implement the behavior.
-- [ ] Add end-to-end Wasm execution tests for closure capture parity with the interpreter path.
+- [x] Keep precise diagnostics for any still-deferred edge cases.
+- [x] Add targeted regression tests beside the ownership modules that implement the behavior.
+- [x] Add end-to-end Wasm execution tests for closure capture parity with the interpreter path.
 - [x] Add a focused spec-conformance test set for the Section 3 acceptance programs.
 
 Done when:
@@ -381,7 +381,7 @@ Progress note (2026-04-02):
 
 - A Wasm execution spec-conformance test now runs all five Section 3 acceptance programs end to end.
 - Helper-returned ByValue closure execution (`make_adder` returning `add10`) is now pinned by a dedicated Wasm regression.
-- Fallback/interpreter parity is still only partially locked for closure capture; helper-returned closure parity remains separate follow-up work from the Wasm conformance set.
+- Existing runtime parity coverage now locks supported callback closure execution on the fallback/interpreter boundary, while helper-returned closure parity remains an explicit follow-up note in `doc/STATE.md`.
 
 ### CC6. Documentation and examples closure
 

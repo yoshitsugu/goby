@@ -667,6 +667,17 @@ fn first_non_main_lowering_issue(
     Ok(None)
 }
 
+fn main_lowering_issue(module: &Module) -> Option<GeneralLowerUnsupportedReason> {
+    let main_decl = module
+        .declarations
+        .iter()
+        .find(|decl| decl.name == "main")?;
+    match goby_core::ir_lower::lower_declaration(main_decl) {
+        Ok(_) => None,
+        Err(err) => Some(GeneralLowerUnsupportedReason::UnsupportedIrForm { node: err.message }),
+    }
+}
+
 /// Recursively collect all `DeclCall` and `PushFuncHandle` target names from a flat
 /// backend-IR instruction list, traversing nested instruction vecs.
 fn collect_decl_call_names(instrs: &[backend_ir::WasmBackendInstr], out: &mut HashSet<String>) {
@@ -805,6 +816,9 @@ fn lower_module_to_instrs(module: &Module) -> Result<LowerModuleResult, CodegenE
             if let Some(reason) =
                 first_non_main_lowering_issue(module, allow_safe_handler_lowering)?
             {
+                return Ok(Err(reason));
+            }
+            if let Some(reason) = main_lowering_issue(module) {
                 return Ok(Err(reason));
             }
             return Ok(Err(GeneralLowerUnsupportedReason::NoIrDecl));
@@ -1300,6 +1314,30 @@ main =
             reason.is_none(),
             "ByValue-capturing lambda should be supported, got: {:?}",
             reason
+        );
+    }
+
+    #[test]
+    fn supports_general_lower_module_reports_specific_main_lowering_reason() {
+        let module = parse_module(
+            r#"
+add_one : Int -> Int
+add_one x = x + 1
+
+main : Unit -> Unit can Print, Read
+main =
+  _ = read()
+  println "${add_one 5}"
+"#,
+        )
+        .expect("source should parse");
+        let reason =
+            supports_general_lower_module(&module).expect("classification should not error");
+        assert_eq!(
+            reason,
+            Some(GeneralLowerUnsupportedReason::UnsupportedIrForm {
+                node: "interpolated string contains a call expression; bind the result to a local before interpolation".to_string(),
+            })
         );
     }
 }

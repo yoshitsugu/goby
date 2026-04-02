@@ -4,7 +4,7 @@ Last updated: 2026-04-02
 
 ## Current Focus
 
-**Track CC / CC5 — in progress**: Section 3 spec-conformance coverage now runs on the Wasm path. Remaining CC5 work is narrowing deferred diagnostics and deciding how much fallback/interpreter parity should be locked before the interpreter shared-cell fix lands.
+**Track CC / CC6 — next**: closure-capture regression safety is complete on the Wasm path. Next milestone is documentation/examples closure while the interpreter `mut` snapshot gap remains explicitly documented.
 
 ## Recently Completed
 
@@ -12,6 +12,11 @@ Last updated: 2026-04-02
   - `test(wasm-smoke)`: added a focused Section 3 spec-conformance test that executes all five acceptance programs on the Wasm path and checks their expected stdout.
   - `test(wasm-smoke)`: added a helper-returned ByValue closure execution regression (`make_adder` / `add10 5`) so helper-produced capturing closures are pinned end-to-end rather than only via lowering smoke.
   - `doc(plan)`: normalized Section 3.1 and 3.4 acceptance programs to bind the call result before interpolation/printing, keeping the acceptance set focused on closure semantics instead of the separate "call inside interpolation" IR limitation.
+- **Track CC / CC5 interpolation diagnostic tightening** (2026-04-02): call expressions inside interpolation now fail with actionable shared-IR guidance instead of collapsing to the generic `no IR decl available for main` boundary.
+  - `fix(ir-lower)`: interpolation lowering now distinguishes call expressions and reports `bind the result to a local before interpolation`.
+  - `fix(gen-lower)`: when `main` IR lowering fails, `supports_general_lower_module` now preserves that concrete lowering reason instead of degrading to `NoIrDecl`.
+  - `test(cli)`: `goby run` regression now locks the user-visible diagnostic for `println "${add_one 5}"`.
+  - `status`: this closes the remaining CC5 diagnostics/regression-safety checklist; CC6 is the next milestone.
 - **Track CC / CC4 post-review refactoring** (2026-04-02): Three review findings addressed.
   - `fix`: zero-param aux decls now receive a synthetic `_unit` Wasm parameter, fixing the operand-stack leak when `helper()` (no explicit params) was called from main. `runtime_read_captured_lambda.gb` now executes correctly (`"hello world\n"`). `outer_mutation_after_closure_creation` test enabled (was `#[ignore]`).
   - `refactor(emit)`: heap-cursor sync protocol encapsulated in three helpers:
@@ -65,7 +70,7 @@ Last updated: 2026-04-02
 
 Next track candidates are in `doc/PLAN.md` §4:
 
-- **Track CC / CC5**: Diagnostics and regression safety — precise errors for deferred cases, spec-conformance test set for all Section 3 acceptance programs.
+- **Track CC / CC6**: documentation/examples closure — finish closure-capture docs cleanup, refresh examples, and remove stale "Wasm-unsupported" notes that no longer apply.
 - **Track D follow-ups** (§4.1): D5 (`goby lint` unused-binding rule), D6c shared grammar asset.
 - **Track WB-3B** (deferred): WasmFX typed continuations — on hold until WebAssembly stack switching reaches Phase 4.
 - **Float support** (§4.7): `Float` type backed by Wasm `f64`; semantics to be locked before coding.
@@ -91,7 +96,7 @@ Next track candidates are in `doc/PLAN.md` §4:
 - Known limitations:
   - non-tail / multi-resume handlers → `BackendLimitation` error
   - interpreter path: capturing lambdas work but use snapshot semantics for `mut` captures (not the spec's shared-cell model); will be corrected as part of Track CC
-  - fallback/interpreter parity is not yet locked for every helper-returned closure shape; the new Section 3 Wasm conformance set intentionally covers the Wasm boundary first
+  - fallback/interpreter parity is not yet locked for every helper-returned closure shape; supported callback closure paths already have parity coverage, but helper-returned closure parity remains a follow-up outside CC5 completion
 
 ## Key Entry Points
 

@@ -396,10 +396,15 @@ fn try_lower_value(
                     ResolvedInterpolatedPart::Expr(inner) => match try_lower_value(ctx, inner)? {
                         Some(v) => ir_parts.push(IrInterpPart::Expr(v)),
                         None => {
-                            return Err(err(
-                                "interpolated string contains a non-pure expression; \
-                                     only pure values are supported in shared IR today",
-                            ));
+                            let msg = match inner.as_ref() {
+                                ResolvedExpr::Call { .. } => {
+                                    "interpolated string contains a call expression; bind the result to a local before interpolation"
+                                }
+                                _ => {
+                                    "interpolated string contains a non-pure expression; only pure values are supported in shared IR today"
+                                }
+                            };
+                            return Err(err(msg));
                         }
                     },
                 }
@@ -1423,6 +1428,34 @@ choose n =
             }
             other => panic!("expected let-bound capture feeding lambda, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn interpolated_string_with_call_expression_has_specific_diagnostic() {
+        let decl = decl_with_body(
+            "main",
+            vec![
+                binding(
+                    "add10",
+                    Expr::Lambda {
+                        param: "x".into(),
+                        body: Box::new(Expr::BinOp {
+                            op: BinOpKind::Add,
+                            left: Box::new(Expr::var("x")),
+                            right: Box::new(Expr::IntLit(10)),
+                        }),
+                    },
+                ),
+                expr_stmt(Expr::InterpolatedString(vec![InterpolatedPart::Expr(
+                    Box::new(Expr::call(Expr::var("add10"), Expr::IntLit(5))),
+                )])),
+            ],
+        );
+        let err = lower_declaration(&decl).expect_err("call interpolation should be rejected");
+        assert_eq!(
+            err.message,
+            "interpolated string contains a call expression; bind the result to a local before interpolation"
+        );
     }
 
     #[test]
