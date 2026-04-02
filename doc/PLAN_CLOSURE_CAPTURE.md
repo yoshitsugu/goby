@@ -2,7 +2,7 @@
 
 Last updated: 2026-04-02
 
-Status: CC0–CC4 (mutable-write `each` slice) complete; remaining CC4 shapes and CC5–CC6 next
+Status: CC0–CC4 core slices complete; post-review encapsulation refactoring done; one deferred CC4 shape (`two_closures_sharing_mutable_cell`) and CC5–CC6 next
 
 Related documents:
 
@@ -340,8 +340,16 @@ Done when:
 - [x] Make `fold` accept capturing closures, including inline callbacks.
 - [x] Remove any remaining backend limitation that exists only because a callback is capturing.
 - [x] Rewrite captured mutable reads/writes to shared-cell loads/stores (`sum [1,2,3]` via `each` executes correctly).
-- [ ] Mutable capture: read-only inline lambda after outer mutation (deferred — `#[ignore]`).
+- [x] Mutable capture: read-only inline lambda after outer mutation (`outer_mutation_after_closure_creation` — enabled, no longer `#[ignore]`).
 - [ ] Mutable capture: two closures sharing one cell from a helper decl (deferred — `#[ignore]`).
+
+Post-review encapsulation work also completed under CC4:
+
+- [x] `emit_heap_aware_direct_call`: heap-cursor sync protocol for `DeclCall` encapsulated in one helper.
+- [x] `emit_callable_dispatch`: TAG_CLOSURE dispatch + cursor sync expressed once; used by `IndirectCall` (arity-1/2), `emit_list_each`, `emit_list_map`.
+- [x] `emit_function_body`: prologue/epilogue lifecycle for main and aux-decl functions shared through one helper.
+- [x] `BindingRepr` + `binding_repr_for_let_mut` in `closure_capture.rs`: lowering layer now receives a "how to represent?" decision rather than asking a write-capture question.
+- [x] Zero-param aux decl synthetic `_unit` param: fixes operand-stack leak for `Unit -> X` declarations called from main; `runtime_read_captured_lambda.gb` executes correctly.
 
 Done when:
 
@@ -349,6 +357,8 @@ Done when:
 - list combinators do not need callback-shape exceptions
 - captured `mut` bindings lower through the locked shared-cell model instead of snapshot-style capture
 - there is at least one focused execution test each for capturing `each`, capturing `map`, and inline capturing `fold`
+
+Note: Section 3.3 (outer mutation after closure creation) and 3.2 (mutable capture via `each`) pass. Section 3.5 (two closures sharing one cell) remains deferred.
 
 ### CC5. Diagnostics and regression safety
 

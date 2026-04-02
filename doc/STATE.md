@@ -4,10 +4,18 @@ Last updated: 2026-04-02
 
 ## Current Focus
 
-**Track CC / CC4 mutable-write (SharedMutableCell) — partially complete**: `sum [1,2,3]` via `each` with mutable cell now executes correctly (`"6\n"`). Two advanced shapes remain as `#[ignore]` pending follow-up: read-only capture by inline lambda after mutation, and two closures sharing one cell from a helper decl.
+**Track CC / CC5 — next**: CC4 core slices and post-review refactoring are complete. One deferred CC4 shape remains (`two_closures_sharing_mutable_cell`, `#[ignore]`). Next milestone is CC5 (diagnostics and regression safety) or addressing the two-closures shape.
 
 ## Recently Completed
 
+- **Track CC / CC4 post-review refactoring** (2026-04-02): Three review findings addressed.
+  - `fix`: zero-param aux decls now receive a synthetic `_unit` Wasm parameter, fixing the operand-stack leak when `helper()` (no explicit params) was called from main. `runtime_read_captured_lambda.gb` now executes correctly (`"hello world\n"`). `outer_mutation_after_closure_creation` test enabled (was `#[ignore]`).
+  - `refactor(emit)`: heap-cursor sync protocol encapsulated in three helpers:
+    - `emit_heap_aware_direct_call` — sync-call-sync for `DeclCall`.
+    - `emit_callable_dispatch` — TAG_CLOSURE dispatch + sync for all indirect-call sites (`IndirectCall` arity-1/2, `emit_list_each`, `emit_list_map`); TAG_CLOSURE branching expressed once instead of four times inline.
+    - `emit_function_body` — prologue/epilogue lifecycle shared between main and aux-decl emit loops.
+  - `refactor(closure)`: `BindingRepr { Local, HeapCell }` and `binding_repr_for_let_mut` added to `closure_capture.rs`; `lower.rs` now asks "how should this binding be represented?" rather than calling `has_mutable_write_capture_of` directly.
+  - Remaining deferred CC4 shape: `two_closures_sharing_mutable_cell` (`#[ignore]`).
 - **Track CC / CC4 SharedMutableCell** (2026-04-02): Mutable-write capture via `each` executes correctly on Wasm path.
   - Root cause: bump allocator was independently re-initialized to `STATIC_STRING_LIMIT` in each Wasm function, causing callee allocations to overwrite caller heap data.
   - Fix: persistent global heap cursor at `GLOBAL_HEAP_CURSOR_OFFSET = 12` in linear memory; main writes initial value, aux decls load it; every `DeclCall`, `IndirectCall`, `IndirectCallClosure`, `list.each`, and `list.map` syncs cursor to/from global around `call_indirect`; aux decl epilogue writes final cursor back to global on return.
@@ -49,7 +57,8 @@ Last updated: 2026-04-02
 
 Next track candidates are in `doc/PLAN.md` §4:
 
-- **Track CC: Closure Capture** (§4.6): main immutable/by-value callback parity is landed. Next: close the remaining helper-local runtime gap, then mutable-write captures (`SharedMutableCell`) lowering plus remaining diagnostics/docs closure.
+- **Track CC / CC4 remaining shape**: `two_closures_sharing_mutable_cell` — two closures from a helper decl (`pair _ =`) sharing one mutable cell. Currently `#[ignore]`. Requires multi-closure cell sharing across aux decl boundary.
+- **Track CC / CC5**: Diagnostics and regression safety — precise errors for deferred cases, spec-conformance test set for all Section 3 acceptance programs.
 - **Track D follow-ups** (§4.1): D5 (`goby lint` unused-binding rule), D6c shared grammar asset.
 - **Track WB-3B** (deferred): WasmFX typed continuations — on hold until WebAssembly stack switching reaches Phase 4.
 - **Float support** (§4.7): `Float` type backed by Wasm `f64`; semantics to be locked before coding.
@@ -74,8 +83,7 @@ Next track candidates are in `doc/PLAN.md` §4:
   - Host intrinsics: `StringGraphemesList` (`__goby_string_graphemes_list`)
 - Known limitations:
   - non-tail / multi-resume handlers → `BackendLimitation` error
-  - helper-local by-value capture runtime shape in `examples/bugs/runtime_read_captured_lambda.gb` still fails during Wasm load
-  - mutable-write captures (SharedMutableCell) remain `UnsupportedForm` — Track CC4
+  - two closures sharing one mutable cell from a helper decl (`pair _ =` shape) → `#[ignore]` pending CC4 completion
   - interpreter path: capturing lambdas work but use snapshot semantics for `mut` captures (not the spec's shared-cell model); will be corrected as part of Track CC
 
 ## Key Entry Points
