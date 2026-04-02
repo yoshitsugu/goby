@@ -142,7 +142,8 @@ main : Unit -> Unit can Print, Read
 main =
   _ = read()
   add = fn a b -> a + b
-  println "${apply_twice add 5}"
+  result = apply_twice add 5
+  println "${result}"
 ```
 
 Expected output:
@@ -163,7 +164,8 @@ sum_with_bias bias xs =
 main : Unit -> Unit can Print, Read
 main =
   _ = read()
-  println "${sum_with_bias 10 [1, 2, 3]}"
+  result = sum_with_bias 10 [1, 2, 3]
+  println "${result}"
 ```
 
 Expected output:
@@ -185,7 +187,8 @@ pairwise_apply xs f =
 main : Unit -> Unit can Print, Read
 main =
   _ = read()
-  println "${pairwise_apply [1, 2, 3, 4] (fn a b -> a + b)}"
+  result = pairwise_apply [1, 2, 3, 4] (fn a b -> a + b)
+  println "${result}"
 ```
 
 Expected output:
@@ -418,10 +421,12 @@ Scope:
 - extend the runtime/fallback execution path to consume the same callable representation
 - eliminate the current gap where named helper callbacks work but equivalent inline lambdas do not
 - verify parity for pure and effectful inline multi-parameter callbacks
+- add compiled-Wasm execution coverage for the same representative callback shapes where that path is expected to support them
 
 Done when:
 
 - the acceptance programs in §4 execute through the runtime-stdin / general-lowering path
+- the representative pure/effectful/capturing cases also execute through the compiled-Wasm path, or are rejected there with the same explicit backend-limitation boundary when support is intentionally still pending
 - failures, if any remain, are explicit backend limitations at one shared boundary
 
 ### IMP4: Closure parity for inline multi-parameter lambdas
@@ -449,9 +454,16 @@ Scope:
 - remove transitional ad hoc branches introduced during development
 - update docs to describe the feature as implemented behavior rather than intended-only behavior
 
+Proof rule for this milestone:
+
+- the representative helper should be introduced as ordinary language/stdlib code first
+- after that helper exists, its inline multi-parameter lambda acceptance case should pass without any helper-specific parser, typechecker, backend, or runtime changes
+- if extra compiler/runtime work is still needed after introducing the helper, that is evidence that the shared callable boundary is still incomplete and IMP5 is not done
+
 Done when:
 
-- a new higher-order helper can accept inline multi-parameter lambdas without backend-specific work
+- a new higher-order helper can accept inline multi-parameter lambdas after being added without any helper-specific compiler/runtime changes
+- the same proof case is covered on every execution path that this track claims to support
 - the temporary implementation-status note can be removed from the spec/docs
 
 ---
