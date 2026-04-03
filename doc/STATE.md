@@ -1,10 +1,18 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-04-02
+Last updated: 2026-04-03
 
 ## Current Focus
 
-**Track CC — complete (CC0–CC6)**: closure capture is fully implemented on both the Wasm `GeneralLowered` path and the fallback/interpreter runtime, including helper-returned closure values.
+**Inline multi-parameter lambda track — next active development**: proceed with `doc/PLAN_INLINE_MULTI_PARAM_LAMBDA.md` as the next implementation track, using the completed closure-capture/callable groundwork as the base.
+
+- Immediate goal:
+  - make `fn a b -> expr` work as an ordinary first-class callable across both Wasm `GeneralLowered` and fallback/runtime-stdin paths, not only in specific stdlib helpers.
+- First implementation boundary:
+  - lock current failure shapes with acceptance tests from `doc/PLAN_INLINE_MULTI_PARAM_LAMBDA.md` §4,
+  - then tighten one shared callable/invocation boundary instead of adding `fold`/`map`-specific workarounds.
+- Current constraint:
+  - closure capture itself is complete; the remaining gap is shared callable shape/invocation parity for inline multi-parameter lambdas across execution paths.
 
 ## Recently Completed
 
@@ -88,11 +96,14 @@ Last updated: 2026-04-02
 
 ## Immediate Next Steps
 
-Next track candidates are in `doc/PLAN.md` §4:
+Next implementation track is `doc/PLAN_INLINE_MULTI_PARAM_LAMBDA.md`.
 
-- **Track D follow-ups** (§4.1): D5 (`goby lint` unused-binding rule), D6c shared grammar asset.
-- **Track WB-3B** (deferred): WasmFX typed continuations — on hold until WebAssembly stack switching reaches Phase 4.
-- **Float support** (§4.7): `Float` type backed by Wasm `f64`; semantics to be locked before coding.
+- **IMP0 acceptance lock**: add or enable the acceptance programs from §4 so the current gaps are pinned at the true ownership boundary.
+- **Shared callable audit**: inspect current callable metadata / lambda-lifting / invocation-planning flow and identify where inline multi-parameter lambdas still depend on path-specific handling.
+- **Doc sync during implementation**:
+  - keep `doc/PLAN.md` aligned with this as the next active track,
+  - update `doc/LANGUAGE_SPEC.md` only when user-visible semantics/status wording needs to change,
+  - keep `doc/STATE.md` explicit about which execution paths are complete vs still limited while the track is in progress.
 
 ## Architecture State
 
