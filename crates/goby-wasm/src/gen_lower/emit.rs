@@ -1900,6 +1900,7 @@ fn emit_helper_call(
             Ok(())
         }
         BackendIntrinsic::ListPushString => emit_list_push_string_helper(function, helper_state),
+        BackendIntrinsic::ListConcat => emit_list_concat_helper(function, helper_state),
     }?;
     let _ = (ctx, i32_base);
     Ok(())
@@ -2606,6 +2607,174 @@ fn emit_list_push_string_helper(
         align: 2,
         memory_index: 0,
     }));
+
+    emit_push_tagged_ptr(function, s_new_list_ptr, TAG_LIST);
+    Ok(())
+}
+
+fn emit_list_concat_helper(
+    function: &mut Function,
+    helper_state: &HelperEmitState,
+) -> Result<(), CodegenError> {
+    let tail_i64 = helper_state.i64_base;
+    let prefix_i64 = helper_state.i64_base + 1;
+    let s_prefix_ptr = helper_state.i32_base + HS_TEXT_PTR;
+    let s_prefix_len = helper_state.i32_base + HS_TEXT_LEN;
+    let s_tail_ptr = helper_state.i32_base + HS_SEP_PTR;
+    let s_tail_len = helper_state.i32_base + HS_SEP_LEN;
+    let s_new_list_ptr = helper_state.i32_base + HS_AUX_PTR;
+    let s_alloc_size = helper_state.i32_base + HS_ALLOC_SIZE;
+    let s_iter = helper_state.i32_base + HS_ITER;
+
+    function.instruction(&Instruction::LocalSet(tail_i64));
+    function.instruction(&Instruction::LocalSet(prefix_i64));
+
+    for list_i64 in [prefix_i64, tail_i64] {
+        function.instruction(&Instruction::LocalGet(list_i64));
+        function.instruction(&Instruction::I64Const((TAG_LIST as i64) << 60));
+        function.instruction(&Instruction::I64And);
+        function.instruction(&Instruction::I64Const((TAG_LIST as i64) << 60));
+        function.instruction(&Instruction::I64Ne);
+        function.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
+        emit_abort(function);
+        function.instruction(&Instruction::End);
+    }
+
+    function.instruction(&Instruction::LocalGet(prefix_i64));
+    function.instruction(&Instruction::I64Const(0xFFFF_FFFFi64));
+    function.instruction(&Instruction::I64And);
+    function.instruction(&Instruction::I32WrapI64);
+    function.instruction(&Instruction::LocalSet(s_prefix_ptr));
+
+    function.instruction(&Instruction::LocalGet(tail_i64));
+    function.instruction(&Instruction::I64Const(0xFFFF_FFFFi64));
+    function.instruction(&Instruction::I64And);
+    function.instruction(&Instruction::I32WrapI64);
+    function.instruction(&Instruction::LocalSet(s_tail_ptr));
+
+    function.instruction(&Instruction::LocalGet(s_prefix_ptr));
+    function.instruction(&Instruction::I32Load(MemArg {
+        offset: 0,
+        align: 2,
+        memory_index: 0,
+    }));
+    function.instruction(&Instruction::LocalSet(s_prefix_len));
+
+    function.instruction(&Instruction::LocalGet(s_tail_ptr));
+    function.instruction(&Instruction::I32Load(MemArg {
+        offset: 0,
+        align: 2,
+        memory_index: 0,
+    }));
+    function.instruction(&Instruction::LocalSet(s_tail_len));
+
+    function.instruction(&Instruction::LocalGet(s_prefix_len));
+    function.instruction(&Instruction::LocalGet(s_tail_len));
+    function.instruction(&Instruction::I32Add);
+    function.instruction(&Instruction::I32Const(8));
+    function.instruction(&Instruction::I32Mul);
+    function.instruction(&Instruction::I32Const(4));
+    function.instruction(&Instruction::I32Add);
+    function.instruction(&Instruction::LocalSet(s_alloc_size));
+    emit_alloc_from_top(function, helper_state, s_alloc_size, s_new_list_ptr);
+
+    function.instruction(&Instruction::LocalGet(s_new_list_ptr));
+    function.instruction(&Instruction::LocalGet(s_prefix_len));
+    function.instruction(&Instruction::LocalGet(s_tail_len));
+    function.instruction(&Instruction::I32Add);
+    function.instruction(&Instruction::I32Store(MemArg {
+        offset: 0,
+        align: 2,
+        memory_index: 0,
+    }));
+
+    function.instruction(&Instruction::I32Const(0));
+    function.instruction(&Instruction::LocalSet(s_iter));
+    function.instruction(&Instruction::Block(wasm_encoder::BlockType::Empty));
+    function.instruction(&Instruction::Loop(wasm_encoder::BlockType::Empty));
+    function.instruction(&Instruction::LocalGet(s_iter));
+    function.instruction(&Instruction::LocalGet(s_prefix_len));
+    function.instruction(&Instruction::I32GeU);
+    function.instruction(&Instruction::BrIf(1));
+
+    function.instruction(&Instruction::LocalGet(s_new_list_ptr));
+    function.instruction(&Instruction::I32Const(4));
+    function.instruction(&Instruction::I32Add);
+    function.instruction(&Instruction::LocalGet(s_iter));
+    function.instruction(&Instruction::I32Const(8));
+    function.instruction(&Instruction::I32Mul);
+    function.instruction(&Instruction::I32Add);
+
+    function.instruction(&Instruction::LocalGet(s_prefix_ptr));
+    function.instruction(&Instruction::I32Const(4));
+    function.instruction(&Instruction::I32Add);
+    function.instruction(&Instruction::LocalGet(s_iter));
+    function.instruction(&Instruction::I32Const(8));
+    function.instruction(&Instruction::I32Mul);
+    function.instruction(&Instruction::I32Add);
+    function.instruction(&Instruction::I64Load(MemArg {
+        offset: 0,
+        align: 3,
+        memory_index: 0,
+    }));
+    function.instruction(&Instruction::I64Store(MemArg {
+        offset: 0,
+        align: 3,
+        memory_index: 0,
+    }));
+
+    function.instruction(&Instruction::LocalGet(s_iter));
+    function.instruction(&Instruction::I32Const(1));
+    function.instruction(&Instruction::I32Add);
+    function.instruction(&Instruction::LocalSet(s_iter));
+    function.instruction(&Instruction::Br(0));
+    function.instruction(&Instruction::End);
+    function.instruction(&Instruction::End);
+
+    function.instruction(&Instruction::I32Const(0));
+    function.instruction(&Instruction::LocalSet(s_iter));
+    function.instruction(&Instruction::Block(wasm_encoder::BlockType::Empty));
+    function.instruction(&Instruction::Loop(wasm_encoder::BlockType::Empty));
+    function.instruction(&Instruction::LocalGet(s_iter));
+    function.instruction(&Instruction::LocalGet(s_tail_len));
+    function.instruction(&Instruction::I32GeU);
+    function.instruction(&Instruction::BrIf(1));
+
+    function.instruction(&Instruction::LocalGet(s_new_list_ptr));
+    function.instruction(&Instruction::I32Const(4));
+    function.instruction(&Instruction::I32Add);
+    function.instruction(&Instruction::LocalGet(s_prefix_len));
+    function.instruction(&Instruction::LocalGet(s_iter));
+    function.instruction(&Instruction::I32Add);
+    function.instruction(&Instruction::I32Const(8));
+    function.instruction(&Instruction::I32Mul);
+    function.instruction(&Instruction::I32Add);
+
+    function.instruction(&Instruction::LocalGet(s_tail_ptr));
+    function.instruction(&Instruction::I32Const(4));
+    function.instruction(&Instruction::I32Add);
+    function.instruction(&Instruction::LocalGet(s_iter));
+    function.instruction(&Instruction::I32Const(8));
+    function.instruction(&Instruction::I32Mul);
+    function.instruction(&Instruction::I32Add);
+    function.instruction(&Instruction::I64Load(MemArg {
+        offset: 0,
+        align: 3,
+        memory_index: 0,
+    }));
+    function.instruction(&Instruction::I64Store(MemArg {
+        offset: 0,
+        align: 3,
+        memory_index: 0,
+    }));
+
+    function.instruction(&Instruction::LocalGet(s_iter));
+    function.instruction(&Instruction::I32Const(1));
+    function.instruction(&Instruction::I32Add);
+    function.instruction(&Instruction::LocalSet(s_iter));
+    function.instruction(&Instruction::Br(0));
+    function.instruction(&Instruction::End);
+    function.instruction(&Instruction::End);
 
     emit_push_tagged_ptr(function, s_new_list_ptr, TAG_LIST);
     Ok(())
@@ -4580,6 +4749,27 @@ mod tests {
     }
 
     #[test]
+    fn supports_list_concat_intrinsic() {
+        let instrs = vec![
+            I::ListLit {
+                element_instrs: vec![vec![I::I64Const(
+                    crate::gen_lower::value::encode_int(1).unwrap(),
+                )]],
+            },
+            I::ListLit {
+                element_instrs: vec![vec![I::I64Const(
+                    crate::gen_lower::value::encode_int(2).unwrap(),
+                )]],
+            },
+            I::Intrinsic {
+                intrinsic: BackendIntrinsic::ListConcat,
+            },
+            I::Drop,
+        ];
+        assert!(supports_instrs(&instrs));
+    }
+
+    #[test]
     fn supports_track_e_host_grapheme_intrinsics() {
         let instrs = vec![
             I::PushStaticString {
@@ -4648,6 +4838,32 @@ mod tests {
         ];
         let wasm = emit_general_module(&instrs, &default_layout())
             .expect("emit ListPushString helper chain should succeed");
+        assert_valid_wasm(&wasm);
+    }
+
+    #[test]
+    fn emit_list_concat_produces_valid_wasm() {
+        let instrs = vec![
+            I::ListLit {
+                element_instrs: vec![vec![I::I64Const(
+                    crate::gen_lower::value::encode_int(1).unwrap(),
+                )]],
+            },
+            I::ListLit {
+                element_instrs: vec![vec![I::I64Const(
+                    crate::gen_lower::value::encode_int(2).unwrap(),
+                )]],
+            },
+            I::Intrinsic {
+                intrinsic: BackendIntrinsic::ListConcat,
+            },
+            I::EffectOp {
+                op: BackendEffectOp::Print(BackendPrintOp::Print),
+            },
+            I::Drop,
+        ];
+        let wasm = emit_general_module(&instrs, &default_layout())
+            .expect("emit ListConcat helper chain should succeed");
         assert_valid_wasm(&wasm);
     }
 

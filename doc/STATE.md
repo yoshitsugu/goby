@@ -12,18 +12,23 @@ Last updated: 2026-04-03
   - lock current failure shapes with acceptance tests from `doc/PLAN_INLINE_MULTI_PARAM_LAMBDA.md` §4,
   - then tighten one shared callable/invocation boundary instead of adding `fold`/`map`-specific workarounds.
 - Current constraint:
-  - closure capture itself is complete; the remaining inline multi-parameter lambda work is now narrowed to execution paths that are still blocked outside the shared callable apply boundary.
-  - acceptance-lock findings after the fallback callable-apply fix:
-    - Wasm/runtime-stdin execution handles pure `fold`, effectful `fold`, let-bound user-defined higher-order reuse, and capturing inline multi-parameter lambdas.
-    - portable fallback runtime-output now covers those same four acceptance shapes through the shared callable path.
-    - the future-facing `pairwise_apply` acceptance case is still blocked earlier by general-lowering list-spread support, so it remains not yet a clean callable-boundary regression.
+  - closure capture and inline multi-parameter callable execution are complete for the current acceptance set.
+  - acceptance-lock findings after the list-spread and list-pattern fixes:
+    - Wasm/runtime-stdin execution handles pure `fold`, effectful `fold`, let-bound user-defined higher-order reuse, capturing inline multi-parameter lambdas, and the future-helper `pairwise_apply` proof case.
+    - portable fallback runtime-output now covers the same acceptance shapes.
+    - no remaining blocker is known at the shared callable boundary for the current plan acceptance set.
 
 ## Recently Completed
+
+- **Inline multi-parameter lambda future-helper proof via list-spread lowering** (2026-04-03): general-lowering now supports list-spread execution on the shared Wasm path, and the `pairwise_apply` acceptance case executes with an inline multi-parameter lambda without helper-specific compiler/runtime branches.
+  - `gen_lower(lower/emit)`: `ValueExpr::ListLit { spread: Some(..) }` now lowers as prefix-list construction plus a generic `ListConcat` backend intrinsic, and Wasm emission includes the in-Wasm helper that concatenates two tagged lists.
+  - `test(wasm/runtime-output)`: enabled the compiled `pairwise_apply` acceptance test and added a portable fallback runtime-output regression for the same higher-order helper proof case.
+  - `semantics`: the newly exposed fallback/Wasm divergence for no-tail list patterns was resolved by aligning both paths and docs on exact-length matching for `[x]`, `[x, y]`, and similar forms, while tail patterns remain prefix matches.
 
 - **Inline multi-parameter lambda fallback callable parity** (2026-04-03): portable fallback/runtime-output now applies local and captured callable values sequentially, so nested `fn a b -> ...` lambdas execute through the shared callable boundary instead of falling out after the first argument.
   - `runtime(apply)`: `apply_named_value_call_args_out` now detects local/captured callable values and applies multi-argument calls by repeated shared callable evaluation rather than only via named decl lookup.
   - `test(runtime-output)`: enabled pure and effectful inline `fold` acceptance tests on the portable fallback path and added fallback regressions for let-bound user-defined HOF reuse and capturing inline multi-parameter lambdas.
-  - `status`: runtime-stdin/Wasm and portable fallback are now aligned for the first four acceptance programs from `doc/PLAN_INLINE_MULTI_PARAM_LAMBDA.md` §4; only `pairwise_apply` remains blocked earlier by list-spread lowering.
+  - `status`: runtime-stdin/Wasm and portable fallback are now aligned for the first four acceptance programs from `doc/PLAN_INLINE_MULTI_PARAM_LAMBDA.md` §4.
 
 - **Track CC interpreter helper-returned closure parity** (2026-04-02): fallback/interpreter runtime now supports helper-returned closure values and shared mutable-cell closure pairs.
   - `runtime(value)`: `RuntimeValue` now carries callable values, allowing declaration bodies and locals to retain closures as first-class runtime values instead of dropping them at the value boundary.
@@ -107,9 +112,9 @@ Last updated: 2026-04-03
 
 Next implementation track is `doc/PLAN_INLINE_MULTI_PARAM_LAMBDA.md`.
 
-- **Next blocker after callable parity**: raise or otherwise implement general-lowering support for list-spread execution so `pairwise_apply` can become a real inline multi-parameter lambda acceptance gate instead of an earlier lowering failure.
-- **Shared callable cleanup**: keep auditing for any remaining path-specific multi-arg callable handling that can now be deleted or unified after the fallback fix.
-- **Acceptance expansion**: once list-spread lowering is ready, enable the `pairwise_apply` acceptance program without adding helper-specific callable logic.
+- **Post-acceptance cleanup**: audit for any remaining path-specific multi-arg callable or list-spread branches that can now be deleted or unified.
+- **Broader proof set**: if another higher-order helper is introduced later, verify that inline multi-parameter lambdas continue to work without helper-specific compiler/runtime changes.
+- **Track transition**: decide whether the next slice should remain in inline-multi-parameter cleanup or move to the next roadmap item.
 - **Doc sync during implementation**:
   - keep `doc/PLAN.md` aligned with this as the next active track,
   - update `doc/LANGUAGE_SPEC.md` only when user-visible semantics/status wording needs to change,

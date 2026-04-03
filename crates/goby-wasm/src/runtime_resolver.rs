@@ -543,6 +543,9 @@ impl<'m> RuntimeOutputResolver<'m> {
         if values.len() < items.len() {
             return false;
         }
+        if tail.is_none() && values.len() != items.len() {
+            return false;
+        }
         for (item, value) in items.iter().zip(values.iter()) {
             match item {
                 ListPatternItem::IntLit(n) => {
@@ -575,6 +578,9 @@ impl<'m> RuntimeOutputResolver<'m> {
         arm_locals: &mut RuntimeLocals,
     ) -> bool {
         if values.len() < items.len() {
+            return false;
+        }
+        if tail.is_none() && values.len() != items.len() {
             return false;
         }
         for (item, value) in items.iter().zip(values.iter()) {

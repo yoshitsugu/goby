@@ -186,7 +186,8 @@ Based on `examples/*.gb`:
     - list patterns: `[]`, `[head, ..tail]`, `[x]`, `[x, y]`, `[4, ..]`, `[_, _]`
   - list-pattern typing/matching intent:
     - `[]` matches only empty `List _`.
-    - `[p1, p2, ...]` matches list length `>= item_count` (prefix match).
+    - `[p1, p2, ...]` without a tail matches list length exactly `item_count`.
+    - `[p1, p2, ..tail]` matches list length `>= item_count`.
     - in `[head, ..tail]` arm body, `head` is bound to element type `a`, `tail` is bound to `List a`.
     - `_` is wildcard and never creates a binding.
   - parser rejects malformed list patterns (e.g. `[..xs]`, `[x, ..x]`, `[x, ..tail, y]`).

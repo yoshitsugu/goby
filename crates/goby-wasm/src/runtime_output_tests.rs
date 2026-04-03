@@ -1287,6 +1287,27 @@ main =
 }
 
 #[test]
+fn resolves_runtime_output_for_pairwise_apply_with_inline_multi_param_lambda() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    let source = r#"
+pairwise_apply : List Int -> (Int -> Int -> Int) -> List Int
+pairwise_apply xs f =
+  case xs
+    [] -> []
+    [x] -> [x]
+    [x, y, ..rest] -> [f x y, ..pairwise_apply rest f]
+
+main : Unit -> Unit
+main =
+  result = pairwise_apply [1, 2, 3, 4] (fn a b -> a + b)
+  print "${result}"
+"#;
+    let module = parse_module(source).expect("parse should succeed");
+    let output = resolve_module_runtime_output(&module).expect("runtime output should resolve");
+    assert_eq!(output, "[3, 7]");
+}
+
+#[test]
 #[ignore = "qualified iterator handler clauses are not yet covered by fallback runtime-output locking"]
 fn locks_runtime_output_for_iterator_unified_gb() {
     let _guard = ENV_MUTEX.lock().unwrap();

@@ -2,7 +2,7 @@
 
 Last updated: 2026-04-03
 
-Status: planning document; implementation not started
+Status: acceptance coverage and core execution parity landed; remaining work is cleanup and follow-up proofs
 
 Related documents:
 
@@ -45,11 +45,11 @@ Today, Goby already has partial ingredients for this feature:
 - the Wasm backend has indirect-call support for callback arity 2
 - zero-capture and capturing lambdas already have a callable representation on some paths
 
-However, the support is not complete end-to-end:
+The original gaps for this track were:
 
-- inline multi-parameter lambdas still fail or degrade on the runtime-stdin / general-lowering path
-- some success cases depend on named helper declarations rather than the inline lambda itself
-- the current shape invites ad hoc fixes in individual stdlib combinators
+- inline multi-parameter lambdas failed or degraded on some runtime paths
+- some success cases depended on named helper declarations rather than the inline lambda itself
+- the shape invited ad hoc fixes in individual stdlib combinators
 
 The core issue is not syntax and not `fold` specifically. The real issue is that Goby does not yet
 have one fully shared lowering/runtime story for:
@@ -369,7 +369,7 @@ Do not let support failures leak out as:
 
 ### IMP0: Lock semantics and acceptance coverage
 
-Status: pending
+Status: complete
 
 Scope:
 
@@ -384,7 +384,7 @@ Done when:
 
 ### IMP1: Shared callable shape is explicit before backend emission
 
-Status: pending
+Status: complete
 
 Scope:
 
@@ -399,7 +399,7 @@ Done when:
 
 ### IMP2: Invocation planning becomes shared and generic
 
-Status: pending
+Status: complete
 
 Scope:
 
@@ -414,7 +414,7 @@ Done when:
 
 ### IMP3: General-lowering and runtime-stdin paths execute inline multi-parameter lambdas
 
-Status: pending
+Status: complete
 
 Scope:
 
@@ -431,7 +431,7 @@ Done when:
 
 ### IMP4: Closure parity for inline multi-parameter lambdas
 
-Status: pending
+Status: complete
 
 Scope:
 
@@ -446,7 +446,7 @@ Done when:
 
 ### IMP5: Future-helper proof and cleanup
 
-Status: pending
+Status: complete for the current acceptance proof set; further cleanup follow-ups may remain
 
 Scope:
 

@@ -836,16 +836,18 @@ fn lower_value_ctx(
             text: text.clone(),
         }]),
         ValueExpr::ListLit { elements, spread } => {
-            if spread.is_some() {
-                return Err(LowerError::UnsupportedForm {
-                    node: "ListLit with spread".to_string(),
-                });
-            }
             let mut element_instrs = Vec::with_capacity(elements.len());
             for elem in elements {
                 element_instrs.push(lower_value_ctx(elem, aliases)?);
             }
-            Ok(vec![WasmBackendInstr::ListLit { element_instrs }])
+            let mut instrs = vec![WasmBackendInstr::ListLit { element_instrs }];
+            if let Some(tail) = spread {
+                instrs.extend(lower_value_ctx(tail, aliases)?);
+                instrs.push(WasmBackendInstr::Intrinsic {
+                    intrinsic: BackendIntrinsic::ListConcat,
+                });
+            }
+            Ok(instrs)
         }
         ValueExpr::TupleLit(items) => {
             if items.is_empty() {
@@ -2427,6 +2429,29 @@ mod tests {
                 func_instrs
             );
         }
+    }
+
+    #[test]
+    fn lower_list_literal_with_spread_uses_list_concat_intrinsic() {
+        let comp = CompExpr::Value(ValueExpr::ListLit {
+            elements: vec![ValueExpr::IntLit(1), ValueExpr::IntLit(2)],
+            spread: Some(Box::new(ValueExpr::Var("rest".to_string()))),
+        });
+        let instrs = lower_comp(&comp).expect("list spread should lower");
+        assert!(
+            matches!(
+                instrs.as_slice(),
+                [
+                    I::ListLit { element_instrs },
+                    I::LoadLocal { name },
+                    I::Intrinsic {
+                        intrinsic: BackendIntrinsic::ListConcat
+                    }
+                ] if element_instrs.len() == 2 && name == "rest"
+            ),
+            "expected list spread to lower as prefix ListLit + tail + ListConcat, got: {:?}",
+            instrs
+        );
     }
 
     /// Lambda with a ByValue-captured free variable should now lower successfully.

@@ -99,8 +99,10 @@ syntax/semantics.
     - head/tail split: `[head, ..tail]`
       - `head` and `tail` are bindings available in the arm body
       - `tail` is the remaining list value
-    - prefix patterns (length `>= item_count`): `[1]`, `[_, _]`, `[a, b, c]`
+    - exact-length patterns (no tail): `[1]`, `[_, _]`, `[a, b, c]`
+      - these match only when the scrutinee length equals the item count
     - head-checked tail patterns: `[4, ..]`, `["x", ..rest]`
+      - these match when the scrutinee length is at least the fixed head-item count
     - tail ignore form: `[..]` is not supported; use at least one head item (e.g. `[x, ..]`)
     - list item literals currently supported in patterns: `Int`, `String` (not `Bool`)
   - `_` is always a wildcard (non-binding), including in list item positions.

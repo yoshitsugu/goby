@@ -1663,7 +1663,6 @@ main =
     }
 
     #[test]
-    #[ignore = "this acceptance shape is currently blocked earlier by general-lowering list-spread support, so it cannot yet isolate the callable boundary"]
     fn user_defined_pairwise_apply_with_inline_multi_param_lambda_executes_correctly() {
         use goby_core::parse_module;
         let module = parse_module(

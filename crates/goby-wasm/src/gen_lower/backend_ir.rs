@@ -76,6 +76,7 @@ pub(crate) enum BackendIntrinsic {
     StringEachGraphemeCount,
     StringEachGraphemeState,
     ListPushString,
+    ListConcat,
     StringConcat,
     /// Collect all Unicode Extended Grapheme Clusters from a string as a tagged list.
     ///
@@ -95,6 +96,7 @@ impl BackendIntrinsic {
             BackendIntrinsic::StringEachGraphemeCount => 1,
             BackendIntrinsic::StringEachGraphemeState => 2,
             BackendIntrinsic::ListPushString => 2,
+            BackendIntrinsic::ListConcat => 2,
             BackendIntrinsic::StringConcat => 2,
             BackendIntrinsic::StringGraphemesList => 1,
         }
@@ -110,7 +112,8 @@ impl BackendIntrinsic {
             BackendIntrinsic::StringSplit
             | BackendIntrinsic::ListGet
             | BackendIntrinsic::StringLength
-            | BackendIntrinsic::ListPushString => IntrinsicExecutionBoundary::InWasm,
+            | BackendIntrinsic::ListPushString
+            | BackendIntrinsic::ListConcat => IntrinsicExecutionBoundary::InWasm,
         }
     }
 }
