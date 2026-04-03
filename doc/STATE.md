@@ -4,7 +4,7 @@ Last updated: 2026-04-03
 
 ## Current Focus
 
-**Runtime memory plan (`doc/PLAN_MEMORY.md`)**: M0/M1 landed; M2 heap-only growth landed; M3 explicit exhaustion diagnostics landed; shared coexistence proof is next.
+**Runtime memory plan (`doc/PLAN_MEMORY.md`)**: M0/M1 landed; M2 heap-only growth landed; M3 explicit exhaustion diagnostics landed; M4 proof set is now covered by host-only, heap-only, and mixed-pressure success cases.
 
 - Locked direction:
   - Goby should move from fixed-page-aware memory assumptions to a bounded grow-aware memory model.
@@ -15,7 +15,8 @@ Last updated: 2026-04-03
   - M0/M1 are now complete for the host-write side: shared defaults are `256 KiB` initial memory, `64 MiB` maximum memory, and a shared host-bump/stack configuration boundary in `crates/goby-wasm/src/memory_config.rs`.
   - the first M2 slice is now complete for heap-only pressure shapes: `emit_alloc_from_top` can grow memory before heap exhaustion, and a compiled heap-allocation regression now crosses the initial page allocation without host temporary pressure.
   - M3 is now complete: bounded host-temporary exhaustion and bounded compiled-heap exhaustion both surface `runtime error: memory exhausted [E-MEMORY-EXHAUSTION]` instead of generic Wasm traps.
-  - the next implementation slice should stay on `doc/PLAN_MEMORY.md` and close the shared host-temp-plus-heap coexistence proof before opening a new unrelated feature track.
+  - M4 proof is now complete for the current scope: default-policy regressions cover host-temp-heavy pressure, heap-heavy pressure, and one mixed execution that allocates a large heap value and then formats it through the host boundary in the same `_start`.
+  - the next implementation slice should either measure representative workloads for the M5 reclamation decision or explicitly move to another feature track, rather than reopening allocator basics.
   - final closure for this track requires representative memory-pressure regressions that succeed under the default bounded-growth policy and explicit low-maximum regressions that fail with the intended exhaustion error.
 
 ## Recently Completed
@@ -29,6 +30,10 @@ Last updated: 2026-04-03
   - `emit(exhaustion)`: `emit_alloc_from_top` now checks available bytes before subtracting from the top-down cursor, fixing the prior underflow path that could skip growth and trap with out-of-bounds memory access under low maximums; failed heap growth sets the shared runtime-error slot and returns through the current function/call boundary instead of falling into a raw Wasm trap.
   - `runtime(error-surface)`: Goby-owned Wasm execution now reads the shared runtime-error slot after `_start`, so bounded memory failures normalize to `runtime error: memory exhausted [E-MEMORY-EXHAUSTION]: allocation exceeded the configured Wasm memory limit`.
   - `test(low-max)`: added/locked separate low-maximum regressions for host-backed `string_concat` growth and compiled heap growth, proving both paths report the same exhaustion error.
+
+- **Runtime memory M4 mixed-pressure coexistence proof** (2026-04-03): the default bounded-growth policy is now exercised by host-only, heap-only, and mixed host-plus-heap success regressions.
+  - `test(mixed-pressure)`: added a compiled-Wasm regression that allocates a 30,000-element list on the Goby heap and then formats that same list through host-backed interpolation in the same execution, proving the host bump and heap-growth paths can coexist without reintroducing fixed carve-out assumptions.
+  - `status`: the current memory-growth track now has focused success/failure coverage for the intended shared policy; the next question is whether measured workloads justify any reclamation follow-up.
 
 - **Runtime memory M0/M1 shared configuration + host growth helpers** (2026-04-03): Goby-owned Wasm execution and Wasm emission now share one bounded-memory configuration, and host-backed string/list writes can grow linear memory past the initial page allocation.
   - `memory(config)`: added `crates/goby-wasm/src/memory_config.rs` as the shared source of truth for initial pages, maximum pages, host bump reservation, and Wasmtime stack defaults; `backend.rs`, `gen_lower/emit.rs`, and `host_runtime.rs` now read from it instead of duplicating local constants.
@@ -139,9 +144,9 @@ Last updated: 2026-04-03
 
 ## Immediate Next Steps
 
-- Extend the shared-address-space proof so host temporary allocation and heap growth can coexist honestly in one execution instead of only via separate pressure regressions.
-- Add the remaining M4 memory-pressure success regressions under the default bounded-growth policy, especially mixed host-temp-plus-heap pressure shapes.
-- Keep the explicit exhaustion surface stable while adding those coexistence proofs; do not reintroduce generic Wasm traps on bounded-failure paths.
+- Decide whether to start the M5 reclamation follow-up from measurements or leave the current bounded-growth design consciously deferred without GC work.
+- If memory-track work continues immediately, add representative benchmark-style workloads rather than returning to allocator-constant churn or synthetic failure-only cases.
+- Keep the explicit exhaustion surface stable; do not reintroduce generic Wasm traps on bounded-failure paths.
 - Keep the completed inline multi-parameter lambda track closed unless a future helper or arity expansion explicitly requires a new follow-up slice.
 
 ## Architecture State

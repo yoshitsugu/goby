@@ -1776,6 +1776,36 @@ main =
     }
 
     #[test]
+    fn heap_growth_and_host_temp_growth_coexist_in_single_execution() {
+        use goby_core::parse_module;
+
+        let elements = (0..30_000)
+            .map(|n| n.to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let source = format!(
+            "main : Unit -> Unit can Print\nmain =\n  numbers = [{elements}]\n  println \"${{numbers}}\"\n"
+        );
+        let module = parse_module(&source).expect("source should parse");
+
+        let wasm =
+            compile_module(&module).expect("mixed memory-pressure regression should compile");
+        let output = crate::wasm_exec::run_wasm_bytes_with_stdin(&wasm, None)
+            .expect("heap growth plus host-backed formatting should execute successfully");
+
+        assert!(
+            output.starts_with("[0, 1, 2, 3, 4, 5"),
+            "expected formatted list prefix, got: {:?}",
+            output.get(..32)
+        );
+        assert!(
+            output.ends_with("29994, 29995, 29996, 29997, 29998, 29999]\n"),
+            "expected formatted list suffix, got tail: {:?}",
+            output.get(output.len().saturating_sub(64)..)
+        );
+    }
+
+    #[test]
     fn inline_capturing_lambda_via_fold_executes_correctly() {
         use goby_core::parse_module;
         let module = parse_module(

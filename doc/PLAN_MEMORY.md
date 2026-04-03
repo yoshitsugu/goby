@@ -512,13 +512,13 @@ Done when:
 
 ### 9.5 M4: Memory-pressure proof set
 
-- [ ] Add at least one representative memory-heavy success regression that exercises
+- [x] Add at least one representative memory-heavy success regression that exercises
   repeated string/interpolation or print-oriented temporary allocation under the
   default bounded-growth policy.
-- [ ] Add at least one representative memory-heavy success regression that exercises
+- [x] Add at least one representative memory-heavy success regression that exercises
   heap growth under the default bounded-growth policy without relying on host
   temporary allocation as the primary pressure source.
-- [ ] Verify these regressions pass without per-test manual memory-constant changes.
+- [x] Verify these regressions pass without per-test manual memory-constant changes.
 
 Done when:
 
@@ -527,6 +527,15 @@ Done when:
 - those regressions pass under the default memory policy,
 - the plan is no longer justified only by small synthetic examples or by one-off
   debugging sessions.
+
+Current status note:
+
+- The proof set now includes three complementary success cases under the shared
+  default policy: host-temp-heavy interpolation pressure, heap-heavy compiled
+  allocation pressure, and a mixed-pressure execution that allocates a large
+  heap list and then formats that same value through host-backed stringification.
+- The memory-growth track is therefore no longer justified only by isolated
+  host-only or heap-only examples.
 
 ### 9.6 M5: Reclamation follow-up decision
 
