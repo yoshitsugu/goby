@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use wasm_encoder::{
     CodeSection, ConstExpr, DataSection, ElementSection, Elements, EntityType, ExportKind,
     ExportSection, Function, FunctionSection, ImportSection, Instruction, MemArg, MemorySection,
-    MemoryType, Module, RefType, TableSection, TableType, TypeSection, ValType,
+    Module, RefType, TableSection, TableType, TypeSection, ValType,
 };
 
 use crate::CodegenError;
@@ -27,9 +27,10 @@ use crate::host_runtime::{
     host_import_for_intrinsic,
 };
 use crate::layout::{GLOBAL_HEAP_CURSOR_OFFSET, MemoryLayout};
+use crate::memory_config::DEFAULT_WASM_MEMORY_CONFIG;
 
-const WASM_PAGE_BYTES: u32 = 131_072;
-const STATIC_STRING_LIMIT: u32 = WASM_PAGE_BYTES - HOST_BUMP_RESERVED_BYTES;
+const STATIC_STRING_LIMIT: u32 =
+    DEFAULT_WASM_MEMORY_CONFIG.initial_linear_memory_bytes() - HOST_BUMP_RESERVED_BYTES;
 
 // Import function indices begin with the WASI pair and may be extended with
 // `goby-wasm` owned grapheme host intrinsics.
@@ -924,13 +925,7 @@ pub(crate) fn emit_general_module_with_aux_and_options(
 
     // Memory section
     let mut memories = MemorySection::new();
-    memories.memory(MemoryType {
-        minimum: 2,
-        maximum: None,
-        memory64: false,
-        shared: false,
-        page_size_log2: None,
-    });
+    memories.memory(DEFAULT_WASM_MEMORY_CONFIG.memory_type());
     module.section(&memories);
 
     // Export section — `_start` is always main (index stable across aux additions).

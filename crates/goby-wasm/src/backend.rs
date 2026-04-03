@@ -1,16 +1,15 @@
 use wasm_encoder::{
     CodeSection, ConstExpr, DataSection, EntityType, ExportKind, ExportSection, Function,
-    FunctionSection, ImportSection, Instruction, MemArg, MemorySection, MemoryType, Module,
-    TypeSection, ValType,
+    FunctionSection, ImportSection, Instruction, MemArg, MemorySection, Module, TypeSection,
+    ValType,
 };
 
 use crate::{
     CodegenError,
     layout::MemoryLayout,
+    memory_config::DEFAULT_WASM_MEMORY_CONFIG,
     runtime_io_plan::{OutputReadMode, StaticPrintSuffix},
 };
-
-const WASM_PAGE_BYTES: u32 = 65_536;
 
 struct RuntimeIoMemoryPlan {
     buffer_ptr: i32,
@@ -74,13 +73,7 @@ impl WasmProgramBuilder {
         module.section(&functions);
 
         let mut memories = MemorySection::new();
-        memories.memory(MemoryType {
-            minimum: 1,
-            maximum: None,
-            memory64: false,
-            shared: false,
-            page_size_log2: None,
-        });
+        memories.memory(DEFAULT_WASM_MEMORY_CONFIG.memory_type());
         module.section(&memories);
 
         let mut exports = ExportSection::new();
@@ -320,26 +313,30 @@ impl WasmProgramBuilder {
                 message: "nread offset does not fit in i32".to_string(),
             })?;
         let buffer_len = i32::try_from(
-            usize::try_from(WASM_PAGE_BYTES - self.layout.heap_base)
-                .map_err(|_| CodegenError {
-                    message: "stdin buffer length does not fit in usize".to_string(),
-                })?
-                .checked_sub(suffix_payloads_total)
-                .ok_or_else(|| CodegenError {
-                    message: "static print suffixes leave no room for stdin buffer".to_string(),
-                })?,
+            usize::try_from(
+                DEFAULT_WASM_MEMORY_CONFIG.initial_linear_memory_bytes() - self.layout.heap_base,
+            )
+            .map_err(|_| CodegenError {
+                message: "stdin buffer length does not fit in usize".to_string(),
+            })?
+            .checked_sub(suffix_payloads_total)
+            .ok_or_else(|| CodegenError {
+                message: "static print suffixes leave no room for stdin buffer".to_string(),
+            })?,
         )
         .map_err(|_| CodegenError {
             message: "stdin buffer length does not fit in i32".to_string(),
         })?;
-        let suffix_payload_base = usize::try_from(WASM_PAGE_BYTES)
-            .map_err(|_| CodegenError {
-                message: "wasm page size does not fit in usize".to_string(),
-            })?
-            .checked_sub(suffix_payloads_total)
-            .ok_or_else(|| CodegenError {
-                message: "static print suffix payloads overflow wasm memory page".to_string(),
-            })?;
+        let suffix_payload_base =
+            usize::try_from(DEFAULT_WASM_MEMORY_CONFIG.initial_linear_memory_bytes())
+                .map_err(|_| CodegenError {
+                    message: "initial wasm memory size does not fit in usize".to_string(),
+                })?
+                .checked_sub(suffix_payloads_total)
+                .ok_or_else(|| CodegenError {
+                    message: "static print suffix payloads overflow initial wasm memory"
+                        .to_string(),
+                })?;
 
         // Build module
         let mut module = Module::new();
@@ -372,13 +369,7 @@ impl WasmProgramBuilder {
         module.section(&functions);
 
         let mut memories = MemorySection::new();
-        memories.memory(MemoryType {
-            minimum: 1,
-            maximum: None,
-            memory64: false,
-            shared: false,
-            page_size_log2: None,
-        });
+        memories.memory(DEFAULT_WASM_MEMORY_CONFIG.memory_type());
         module.section(&memories);
 
         let mut exports = ExportSection::new();
@@ -671,14 +662,16 @@ impl WasmProgramBuilder {
                 message: "nread offset does not fit in i32".to_string(),
             })?;
         let buffer_len = i32::try_from(
-            usize::try_from(WASM_PAGE_BYTES - self.layout.heap_base)
-                .map_err(|_| CodegenError {
-                    message: "stdin buffer length does not fit in usize".to_string(),
-                })?
-                .checked_sub(suffix_bytes_total)
-                .ok_or_else(|| CodegenError {
-                    message: "static print suffixes leave no room for stdin buffer".to_string(),
-                })?,
+            usize::try_from(
+                DEFAULT_WASM_MEMORY_CONFIG.initial_linear_memory_bytes() - self.layout.heap_base,
+            )
+            .map_err(|_| CodegenError {
+                message: "stdin buffer length does not fit in usize".to_string(),
+            })?
+            .checked_sub(suffix_bytes_total)
+            .ok_or_else(|| CodegenError {
+                message: "static print suffixes leave no room for stdin buffer".to_string(),
+            })?,
         )
         .map_err(|_| CodegenError {
             message: "stdin buffer length does not fit in i32".to_string(),
@@ -686,13 +679,13 @@ impl WasmProgramBuilder {
         let newline_ptr = i32::try_from(self.layout.heap_base - 1).map_err(|_| CodegenError {
             message: "newline pointer does not fit in i32".to_string(),
         })?;
-        let suffix_base = usize::try_from(WASM_PAGE_BYTES)
+        let suffix_base = usize::try_from(DEFAULT_WASM_MEMORY_CONFIG.initial_linear_memory_bytes())
             .map_err(|_| CodegenError {
-                message: "wasm page size does not fit in usize".to_string(),
+                message: "initial wasm memory size does not fit in usize".to_string(),
             })?
             .checked_sub(suffix_bytes_total)
             .ok_or_else(|| CodegenError {
-                message: "static print suffix payloads overflow wasm memory page".to_string(),
+                message: "static print suffix payloads overflow initial wasm memory".to_string(),
             })?;
         Ok(RuntimeIoMemoryPlan {
             buffer_ptr,
@@ -745,13 +738,7 @@ impl WasmProgramBuilder {
         module.section(&functions);
 
         let mut memories = MemorySection::new();
-        memories.memory(MemoryType {
-            minimum: 1,
-            maximum: None,
-            memory64: false,
-            shared: false,
-            page_size_log2: None,
-        });
+        memories.memory(DEFAULT_WASM_MEMORY_CONFIG.memory_type());
         module.section(&memories);
 
         let mut exports = ExportSection::new();

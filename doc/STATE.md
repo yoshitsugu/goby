@@ -4,7 +4,7 @@ Last updated: 2026-04-03
 
 ## Current Focus
 
-**Runtime memory plan (`doc/PLAN_MEMORY.md`)**: design is drafted; implementation has not started.
+**Runtime memory plan (`doc/PLAN_MEMORY.md`)**: M0/M1 landed; M2 heap-growth and M3 exhaustion behavior are next.
 
 - Locked direction:
   - Goby should move from fixed-page-aware memory assumptions to a bounded grow-aware memory model.
@@ -12,10 +12,16 @@ Last updated: 2026-04-03
   - host temporary allocation and Wasm heap allocation must follow one explicit shared address-space rule.
   - explicit exhaustion errors are required; generic Wasm traps and pointer corruption are not acceptable memory-failure outcomes.
 - Execution target:
-  - the next implementation slice should start from `doc/PLAN_MEMORY.md` M0/M1 rather than opening a new unrelated feature track first.
+  - M0/M1 are now complete for the host-write side: shared defaults are `256 KiB` initial memory, `64 MiB` maximum memory, and a shared host-bump/stack configuration boundary in `crates/goby-wasm/src/memory_config.rs`.
+  - the next implementation slice should start from `doc/PLAN_MEMORY.md` M2/M3 rather than opening a new unrelated feature track first.
   - final closure for this track requires representative memory-pressure regressions that succeed under the default bounded-growth policy and explicit low-maximum regressions that fail with the intended exhaustion error.
 
 ## Recently Completed
+
+- **Runtime memory M0/M1 shared configuration + host growth helpers** (2026-04-03): Goby-owned Wasm execution and Wasm emission now share one bounded-memory configuration, and host-backed string/list writes can grow linear memory past the initial page allocation.
+  - `memory(config)`: added `crates/goby-wasm/src/memory_config.rs` as the shared source of truth for initial pages, maximum pages, host bump reservation, and Wasmtime stack defaults; `backend.rs`, `gen_lower/emit.rs`, and `host_runtime.rs` now read from it instead of duplicating local constants.
+  - `runtime(host-write)`: `wasm_exec.rs` now routes host-backed writes through grow-aware helpers that inspect current linear-memory size, call `memory.grow` when required, and refuse requests that exceed the configured maximum.
+  - `test(memory-pressure)`: added a focused Wasm execution regression that drives `__goby_string_concat` past the initial memory allocation and proves the host path still executes successfully under bounded growth.
 
 - **Inline multi-parameter lambda future-helper proof via list-spread lowering** (2026-04-03): general-lowering now supports list-spread execution on the shared Wasm path, and the `pairwise_apply` acceptance case executes with an inline multi-parameter lambda without helper-specific compiler/runtime branches.
   - `gen_lower(lower/emit)`: `ValueExpr::ListLit { spread: Some(..) }` now lowers as prefix-list construction plus a generic `ListConcat` backend intrinsic, and Wasm emission includes the in-Wasm helper that concatenates two tagged lists.
@@ -121,9 +127,9 @@ Last updated: 2026-04-03
 
 ## Immediate Next Steps
 
-- Start `doc/PLAN_MEMORY.md` M0: inventory all duplicated memory-capacity constants and lock one shared memory configuration boundary.
-- Implement `doc/PLAN_MEMORY.md` M1 next: add shared memory configuration plus grow-aware host-memory helpers before touching GC or broader runtime redesign.
-- Add focused memory-pressure regressions as part of this track, including both below-maximum success cases and intentionally low-maximum exhaustion cases.
+- Start `doc/PLAN_MEMORY.md` M2: audit compiled-Wasm heap allocation and heap-cursor checks so heap allocation can grow before hitting the current initial-memory ceiling.
+- Implement `doc/PLAN_MEMORY.md` M3 next: add explicit exhaustion diagnostics shared by host temporary allocation and future heap-growth failure paths.
+- Add the remaining focused memory-pressure regressions for this track, especially intentionally low-maximum failure cases and heap-growth-without-host-temp-pressure success cases.
 - Keep the completed inline multi-parameter lambda track closed unless a future helper or arity expansion explicitly requires a new follow-up slice.
 
 ## Architecture State

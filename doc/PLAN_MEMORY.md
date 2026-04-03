@@ -2,7 +2,7 @@
 
 Last updated: 2026-04-03
 
-Status: draft
+Status: active
 
 This document is the active planning note for Goby's Wasm/runtime memory model.
 It is intentionally design-first:
@@ -171,8 +171,9 @@ Near-term guidance:
 - keep stack limits separate from linear-memory size,
 - avoid tying temporary host allocation capacity to the full initial memory size.
 
-The exact default can be tuned during implementation, but the plan assumes the
-initial size is only a starting point, not the maximum supported workload.
+The implementation now locks `256 KiB` (`4` Wasm pages) as the default initial
+size for this track, but it remains only a starting point, not the maximum
+supported workload.
 
 ### 6.2 Runtime growth must stop at a realistic maximum
 
@@ -186,10 +187,10 @@ Near-term default policy:
 - make that maximum explicit in one shared runtime configuration,
 - return a stable exhaustion error once the maximum is reached.
 
-Current recommended default:
+Locked default for the first implementation slice:
 
-- initial linear memory: `256 KiB` to `1 MiB`
-- default maximum linear memory: `64 MiB`
+- initial linear memory: `256 KiB` (`4` Wasm pages)
+- default maximum linear memory: `64 MiB` (`1024` Wasm pages)
 
 Rationale:
 
@@ -446,12 +447,12 @@ Done when:
 
 ### 9.1 M0: Boundary lock
 
-- [ ] Identify every duplicated memory-capacity constant in backend/runtime code.
-- [ ] Lock the ownership split between initial memory config, host temporary allocation,
+- [x] Identify every duplicated memory-capacity constant in backend/runtime code.
+- [x] Lock the ownership split between initial memory config, host temporary allocation,
   Wasm heap allocation, and Wasmtime stack configuration.
-- [ ] Choose one initial-memory default, one default maximum, and one growth policy
+- [x] Choose one initial-memory default, one default maximum, and one growth policy
   for the first implementation.
-- [ ] Lock one explicit shared address-space rule for host temporary allocation
+- [x] Lock one explicit shared address-space rule for host temporary allocation
   and Wasm heap allocation.
 
 Done when:
@@ -464,9 +465,9 @@ Done when:
 
 ### 9.2 M1: Shared configuration and growth helpers
 
-- [ ] Add the shared memory-configuration module.
-- [ ] Add grow-aware helper APIs for host writes.
-- [ ] Update existing host runtime call sites to use those helpers.
+- [x] Add the shared memory-configuration module.
+- [x] Add grow-aware helper APIs for host writes.
+- [x] Update existing host runtime call sites to use those helpers.
 
 Done when:
 

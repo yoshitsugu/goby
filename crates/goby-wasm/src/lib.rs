@@ -11,6 +11,7 @@ mod grapheme_semantics;
 mod host_runtime;
 mod layout;
 mod lower;
+mod memory_config;
 mod planning;
 mod print_codegen;
 mod runtime_apply;
