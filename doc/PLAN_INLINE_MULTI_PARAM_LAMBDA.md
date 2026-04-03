@@ -9,9 +9,14 @@ Remaining follow-ups:
 - [x] Acceptance coverage for the Section 4 proof set is landed on the claimed execution paths.
 - [ ] Audit and remove any remaining path-specific multi-arg callable branches that are now redundant.
 - [ ] Audit and remove any remaining path-specific list-spread branches that were transitional for the proof case.
-- [ ] Clean up stale comments or status notes that still describe inline multi-parameter lambda execution as unsupported.
+- [x] Clean up stale comments or status notes that still describe inline multi-parameter lambda execution as unsupported.
 - [ ] Add at least one broader follow-up proof if a new higher-order helper is introduced, confirming it inherits support without helper-specific compiler/runtime work.
 - [ ] Decide whether to close this track after cleanup or keep it open for the broader-proof follow-up.
+
+Cleanup audit snapshot:
+
+- Multi-arg callable cleanup remains open: `crates/goby-wasm/src/gen_lower/emit.rs` still carries explicit arity-specialized indirect-call emission branches that should be audited before this track is closed.
+- List-spread cleanup remains open: support is landed for the shared Wasm path, but surrounding path-specific execution/coverage structure still needs a dedicated cleanup pass rather than a status-only checkbox flip.
 
 Related documents:
 

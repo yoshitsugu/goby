@@ -1192,11 +1192,7 @@ main =
 
 #[test]
 fn fold_with_inline_fn_lambda_callback_typechecks_and_parses() {
-    // `fold` with an inline `fn acc x -> acc + x` callback typechecks and parses correctly.
-    // Runtime execution of inline multi-param lambdas via fold is not yet supported by the
-    // general lowering path (unsupported IR: Lambda node in general lowering).
-    // The parity runtime gate is provided by `executes_hof_fold_print_example_with_locked_stdin_and_stdout`
-    // which uses a named callback (`step acc x = ...`) instead.
+    // Keep a focused parse/typecheck lock for the inline callback shape itself.
     let source = r#"
 import goby/list ( fold )
 
