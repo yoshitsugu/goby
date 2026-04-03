@@ -254,22 +254,6 @@ pub(crate) enum WasmBackendInstr {
     /// no symbol-name special casing and any future 2-argument higher-order function can
     /// reuse the same path.
     IndirectCall { arity: u8 },
-    /// Call a capturing (TAG_CLOSURE) closure stored in `closure_local`.
-    ///
-    /// Emits:
-    ///   1. Load closure ptr i64 from `closure_local` → i64 on stack.
-    ///   2. I32WrapI64 → i32 ptr.
-    ///   3. I64Load(offset 0) → func_handle i64 (tagged TAG_FUNC at slot 0 of closure record).
-    ///   4. Decode func_handle to table slot index (i32).
-    ///   5. Load closure ptr i64 again as first argument (the env parameter `__clo`).
-    ///   6. Emit each instruction in `arg_instrs` left-to-right.
-    ///   7. `call_indirect` with the arity-2 type signature (1 env + N args).
-    ///
-    /// Currently supports arity N=1 (single-arg lambdas); `arg_instrs.len()` must be 1.
-    IndirectCallClosure {
-        closure_local: String,
-        arg_instrs: Vec<WasmBackendInstr>,
-    },
     /// Pattern-match the scrutinee against a sequence of arms.
     ///
     /// # Stack discipline
@@ -518,21 +502,6 @@ mod tests {
         assert_eq!(instrs, cloned);
     }
 
-    #[test]
-    fn indirect_call_closure_round_trip() {
-        let instr = WasmBackendInstr::IndirectCallClosure {
-            closure_local: "add10".to_string(),
-            arg_instrs: vec![WasmBackendInstr::I64Const(5)],
-        };
-        let cloned = instr.clone();
-        assert_eq!(instr, cloned);
-        assert!(
-            format!("{:?}", instr).contains("IndirectCallClosure"),
-            "Debug output must mention IndirectCallClosure"
-        );
-    }
-
-    #[test]
     fn backend_instr_variants_are_debug_cloneable() {
         let instrs = vec![
             WasmBackendInstr::DeclareLocal {

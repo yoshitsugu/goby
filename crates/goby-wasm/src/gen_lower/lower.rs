@@ -195,8 +195,9 @@ fn lower_comp_inner(
             let mut instrs = vec![WasmBackendInstr::DeclareLocal { name: name.clone() }];
             let value_instrs =
                 lower_comp_inner(value, aliases, bindings, known_decls, lambda_decls)?;
-            // Track whether the local holds a capturing closure so that call sites can
-            // emit IndirectCallClosure instead of the generic IndirectCall.
+            // Track whether the local holds a capturing closure so later call sites can
+            // preserve closure-specific metadata even though emission converges on the
+            // generic indirect-call path.
             let value_is_capturing_closure = value_instrs
                 .iter()
                 .any(|i| matches!(i, WasmBackendInstr::CreateClosure { .. }));
@@ -476,58 +477,20 @@ fn lower_comp_inner(
                             ),
                         });
                     }
-                    // Check if this local is known to hold a capturing closure.
-                    let is_capturing_closure =
-                        aliases.get(name.as_str()) == Some(&AliasValue::CapturingClosure);
-                    if is_capturing_closure {
-                        // IndirectCallClosure: pass closure ptr as __clo + call arity-2 Wasm fn.
-                        if args.len() == 1 {
-                            let mut arg_instrs = Vec::new();
-                            for arg in args {
-                                arg_instrs.extend(lower_value_as_arg(
-                                    arg,
-                                    aliases,
-                                    bindings,
-                                    known_decls,
-                                    lambda_decls,
-                                )?);
-                            }
-                            Ok(vec![WasmBackendInstr::IndirectCallClosure {
-                                closure_local: name.clone(),
-                                arg_instrs,
-                            }])
-                        } else {
-                            let arity = args.len() as u8;
-                            let mut instrs = Vec::new();
-                            for arg in args {
-                                instrs.extend(lower_value_as_arg(
-                                    arg,
-                                    aliases,
-                                    bindings,
-                                    known_decls,
-                                    lambda_decls,
-                                )?);
-                            }
-                            instrs.push(WasmBackendInstr::LoadLocal { name: name.clone() });
-                            instrs.push(WasmBackendInstr::IndirectCall { arity });
-                            Ok(instrs)
-                        }
-                    } else {
-                        let arity = args.len() as u8;
-                        let mut instrs = Vec::new();
-                        for arg in args {
-                            instrs.extend(lower_value_as_arg(
-                                arg,
-                                aliases,
-                                bindings,
-                                known_decls,
-                                lambda_decls,
-                            )?);
-                        }
-                        instrs.push(WasmBackendInstr::LoadLocal { name: name.clone() });
-                        instrs.push(WasmBackendInstr::IndirectCall { arity });
-                        Ok(instrs)
+                    let arity = args.len() as u8;
+                    let mut instrs = Vec::new();
+                    for arg in args {
+                        instrs.extend(lower_value_as_arg(
+                            arg,
+                            aliases,
+                            bindings,
+                            known_decls,
+                            lambda_decls,
+                        )?);
                     }
+                    instrs.push(WasmBackendInstr::LoadLocal { name: name.clone() });
+                    instrs.push(WasmBackendInstr::IndirectCall { arity });
+                    Ok(instrs)
                 }
             } else {
                 if args.is_empty() {
@@ -1234,7 +1197,6 @@ enum AliasValue {
         name: String,
     },
     /// The local holds a TAG_CLOSURE value (capturing lambda).
-    /// Used by the Var-callee branch to emit IndirectCallClosure instead of IndirectCall.
     CapturingClosure,
     /// The binding has been cell-promoted: it is a mutable binding captured by a nested lambda.
     /// The actual value lives in a heap cell; `__cell_<name>` local holds the cell ptr.
@@ -2528,15 +2490,15 @@ mod tests {
         assert_eq!(lambda_decls[0].param_names, vec!["__clo", "acc", "x"]);
     }
 
-    /// Let-bound capturing closure called directly emits `IndirectCallClosure`.
+    /// Let-bound capturing closure called directly emits the generic indirect-call path.
     /// `base = 10; add10 = (fn x -> base + x); add10 5` — add10 is a closure.
     #[test]
-    fn lower_let_bound_capturing_lambda_call_emits_indirect_call_closure() {
+    fn lower_let_bound_capturing_lambda_call_emits_generic_indirect_call() {
         use std::collections::HashSet;
         // Simulate:
         //   base = 10
         //   add10 = fn x -> base + x   <- CreateClosure (capturing 'base')
-        //   add10 5                     <- IndirectCallClosure
+        //   add10 5                     <- IndirectCall { arity: 1 }
         let known_decls: HashSet<String> = HashSet::new();
 
         // let base = 10; let add10 = (fn x -> base + x); add10 5
@@ -2565,16 +2527,12 @@ mod tests {
         let mut lambda_decls = Vec::new();
         let instrs = lower_comp_collecting_lambdas(&comp, &known_decls, &mut lambda_decls)
             .expect("should lower successfully");
-        // The output should contain IndirectCallClosure for add10.
+        // The output should route through the generic indirect-call instruction.
         assert!(
-            instrs.iter().any(|i| matches!(
-                i,
-                WasmBackendInstr::IndirectCallClosure {
-                    closure_local,
-                    ..
-                } if closure_local == "add10"
-            )),
-            "expected IndirectCallClosure {{ closure_local: 'add10' }} in top-level instrs, got: {:?}",
+            instrs
+                .iter()
+                .any(|i| matches!(i, WasmBackendInstr::IndirectCall { arity: 1 })),
+            "expected IndirectCall {{ arity: 1 }} in top-level instrs, got: {:?}",
             instrs
         );
         // Lambda should be collected with __clo as first param.

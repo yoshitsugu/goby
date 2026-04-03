@@ -2,21 +2,27 @@
 
 Last updated: 2026-04-03
 
-Status: acceptance coverage and core execution parity landed; remaining work is cleanup and follow-up proofs
+Status: complete for the current scope; acceptance coverage, cleanup, and broader proof landed
 
 Remaining follow-ups:
 
 - [x] Acceptance coverage for the Section 4 proof set is landed on the claimed execution paths.
-- [ ] Audit and remove any remaining path-specific multi-arg callable branches that are now redundant.
-- [ ] Audit and remove any remaining path-specific list-spread branches that were transitional for the proof case.
+- [x] Audit and remove any remaining path-specific multi-arg callable branches that are now redundant.
+- [x] Audit and remove any remaining path-specific list-spread branches that were transitional for the proof case.
 - [x] Clean up stale comments or status notes that still describe inline multi-parameter lambda execution as unsupported.
-- [ ] Add at least one broader follow-up proof if a new higher-order helper is introduced, confirming it inherits support without helper-specific compiler/runtime work.
-- [ ] Decide whether to close this track after cleanup or keep it open for the broader-proof follow-up.
+- [x] Add at least one broader follow-up proof if a new higher-order helper is introduced, confirming it inherits support without helper-specific compiler/runtime work.
+- [x] Decide whether to close this track after cleanup or keep it open for the broader-proof follow-up.
 
 Cleanup audit snapshot:
 
-- Multi-arg callable cleanup remains open, but one emit-side cleanup slice landed: `crates/goby-wasm/src/gen_lower/emit.rs` now routes generic `IndirectCall` emission through one helper instead of hand-written arity-1/2 branches. Remaining limitation is structural rather than duplicated branch logic: `HELPER_SCRATCH_I64` still only budgets one callee plus two arguments, so plain indirect-call arity growth beyond the current acceptance set is not part of this cleanup checkbox yet.
-- List-spread cleanup remains open, but another cleanup slice landed: stale runtime-output assertions that treated simple list-spread programs as fallback-only were removed, and direct compiled-Wasm execution coverage now locks plain `[prefix, ..tail]` programs for both `Int` and `String` elements. The checkbox stays open because broader path-specific execution/coverage structure still needs a dedicated final audit.
+- Multi-arg callable cleanup completed for this track's scope: emit-side hand-written arity branches were unified, and the dedicated `IndirectCallClosure` path was removed so local capturing closures now reuse the same generic indirect-call dispatch as other callable values. Future arity growth beyond the current acceptance set remains separate capability work, not a blocker for this cleanup track.
+- List-spread cleanup completed for this track's scope: stale fallback-only assertions were removed, simple `[prefix, ..tail]` programs are locked on the compiled Wasm path, and no remaining helper-specific list-spread branch was identified in the current acceptance/proof surface.
+- Broader proof landed: user-defined helpers beyond `pairwise_apply` now include an `apply_two` proof case on both compiled-Wasm/runtime-stdin and portable fallback/runtime-output paths, confirming inline multi-parameter lambdas are not coupled to one helper shape.
+
+Track closure decision:
+
+- Close this track as complete for the current scope.
+- Record any future arity-N callable expansion or newly introduced helper proofs under their own follow-up slice instead of keeping this plan artificially open.
 
 Related documents:
 

@@ -392,9 +392,6 @@ fn collect_all_instrs(instrs: &[WasmBackendInstr]) -> Vec<&WasmBackendInstr> {
                 result.extend(collect_all_instrs(cell_ptr_instrs));
                 result.extend(collect_all_instrs(value_instrs));
             }
-            WasmBackendInstr::IndirectCallClosure { arg_instrs, .. } => {
-                result.extend(collect_all_instrs(arg_instrs));
-            }
             _ => {}
         }
     }
@@ -546,8 +543,7 @@ fn required_i64_scratch_count(instrs: &[WasmBackendInstr]) -> u32 {
         WasmBackendInstr::Intrinsic { .. }
         | WasmBackendInstr::ListEach { .. }
         | WasmBackendInstr::ListMap { .. }
-        | WasmBackendInstr::IndirectCall { .. }
-        | WasmBackendInstr::IndirectCallClosure { .. } => true,
+        | WasmBackendInstr::IndirectCall { .. } => true,
         WasmBackendInstr::BinOp { op } => {
             matches!(op, IrBinOp::Mul | IrBinOp::Div | IrBinOp::Mod)
         }
@@ -819,7 +815,6 @@ pub(crate) fn emit_general_module_with_aux_and_options(
             matches!(
                 i,
                 WasmBackendInstr::IndirectCall { arity: 2 }
-                    | WasmBackendInstr::IndirectCallClosure { .. }
                     | WasmBackendInstr::IndirectCall { arity: 1 }
                     | WasmBackendInstr::ListEach { .. }
                     | WasmBackendInstr::ListMap { .. }
@@ -1429,57 +1424,6 @@ fn emit_instrs(
                     *arity,
                     helper_state.as_ref(),
                 )?;
-            }
-
-            WasmBackendInstr::IndirectCallClosure {
-                closure_local,
-                arg_instrs,
-            } => {
-                // Call a capturing closure: call_indirect arity (1 env + N args).
-                // The closure record at offset 0 holds the func_handle (TAG_FUNC i64).
-                //
-                // Wasm call_indirect stack layout: [arg0, arg1, ..., table_slot_i32]
-                // where arg0 = __clo (closure ptr) and table_slot is on TOP.
-                let slot = ctx.get(closure_local)?;
-                // 1. Push closure ptr as the first argument (__clo env parameter).
-                function.instruction(&Instruction::LocalGet(slot));
-                // 2. Emit N argument instructions.
-                emit_instrs(
-                    function,
-                    ctx,
-                    arg_instrs,
-                    layout,
-                    named_i64_count,
-                    helper_i64_scratch_count,
-                    i32_base,
-                    static_strings,
-                    options,
-                )?;
-                // 3. Load func_handle from closure slot 0, decode TAG_FUNC → table slot (i32).
-                function.instruction(&Instruction::LocalGet(slot));
-                function.instruction(&Instruction::I32WrapI64);
-                function.instruction(&Instruction::I64Load(MemArg {
-                    offset: 0,
-                    align: 3,
-                    memory_index: 0,
-                }));
-                function.instruction(&Instruction::I64Const(0xFFFF_FFFFi64));
-                function.instruction(&Instruction::I64And);
-                function.instruction(&Instruction::I32WrapI64);
-                // 4. Sync cursor to global before call_indirect so callee starts at correct position.
-                if let Some(ref hs) = helper_state {
-                    emit_sync_cursor_to_global(function, hs.alloc_cursor_local);
-                }
-                // 5. call_indirect with arity 2 (1 __clo + 1 arg), table slot on top.
-                let type_idx = ctx.indirect_call_type_idx(2)?;
-                function.instruction(&Instruction::CallIndirect {
-                    type_index: type_idx,
-                    table_index: 0,
-                });
-                // 6. Reload cursor from global after call_indirect to pick up callee allocations.
-                if let Some(ref hs) = helper_state {
-                    emit_sync_cursor_from_global(function, hs.alloc_cursor_local);
-                }
             }
 
             WasmBackendInstr::ListEachEffect { list_instrs, op } => {

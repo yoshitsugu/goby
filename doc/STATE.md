@@ -4,19 +4,15 @@ Last updated: 2026-04-03
 
 ## Current Focus
 
-**Inline multi-parameter lambda track — next active development**: proceed with `doc/PLAN_INLINE_MULTI_PARAM_LAMBDA.md` as the next implementation track, using the completed closure-capture/callable groundwork as the base.
+**Inline multi-parameter lambda track**: complete for the current scope.
 
-- Immediate goal:
-  - make `fn a b -> expr` work as an ordinary first-class callable across both Wasm `GeneralLowered` and fallback/runtime-stdin paths, not only in specific stdlib helpers.
-- First implementation boundary:
-  - lock current failure shapes with acceptance tests from `doc/PLAN_INLINE_MULTI_PARAM_LAMBDA.md` §4,
-  - then tighten one shared callable/invocation boundary instead of adding `fold`/`map`-specific workarounds.
-- Current constraint:
-  - closure capture and inline multi-parameter callable execution are complete for the current acceptance set.
-  - acceptance-lock findings after the list-spread and list-pattern fixes:
-    - Wasm/runtime-stdin execution handles pure `fold`, effectful `fold`, let-bound user-defined higher-order reuse, capturing inline multi-parameter lambdas, and the future-helper `pairwise_apply` proof case.
-    - portable fallback runtime-output now covers the same acceptance shapes.
-    - no remaining blocker is known at the shared callable boundary for the current plan acceptance set.
+- Locked outcome:
+  - `fn a b -> expr` now behaves as an ordinary first-class callable across the track's claimed execution paths.
+  - Wasm/runtime-stdin execution handles pure `fold`, effectful `fold`, let-bound user-defined higher-order reuse, capturing inline multi-parameter lambdas, the future-helper `pairwise_apply` proof case, and the follow-up `apply_two` helper proof case.
+  - portable fallback runtime-output covers the same acceptance/proof shapes.
+- Track transition:
+  - `doc/PLAN_INLINE_MULTI_PARAM_LAMBDA.md` is now closed for the current scope.
+  - the next active development item should be selected from `doc/PLAN.md` rather than keeping this cleanup/proof track open.
 
 ## Recently Completed
 
@@ -27,12 +23,17 @@ Last updated: 2026-04-03
 
 - **Inline multi-parameter lambda emit cleanup (partial)** (2026-04-03): generic indirect-call emission no longer duplicates separate arity-1 and arity-2 stack-spill branches.
   - `emit(indirect-call)`: `WasmBackendInstr::IndirectCall` now goes through one helper that spills callee/args into scratch locals, derives the plain-vs-closure type indices from arity, and reuses the shared callable dispatch path.
-  - `status`: this reduces emit-side duplication, but the broader cleanup checkbox remains open because the current scratch-local budget still caps plain indirect-call emission to the existing acceptance-set arities.
+  - `status`: this was the first cleanup slice; the later cleanup-closure slice removed the remaining dedicated closure-only indirect-call path and closed the current-scope cleanup checklist.
 
 - **Inline multi-parameter lambda list-spread cleanup (partial)** (2026-04-03): simple list-spread programs are now explicitly locked on the compiled Wasm path instead of only via runtime-output coverage.
   - `test(wasm)`: added compiled-Wasm execution tests for `[1, ..rest]` and `["a", ..rest]`, proving shared list-spread lowering is not only exercised through the `pairwise_apply` acceptance case.
   - `test(cleanup)`: removed stale runtime-output assertions that described simple list-spread programs as fallback-only.
-  - `status`: the list-spread cleanup checkbox remains open because a broader audit of path-specific execution/coverage structure is still pending.
+  - `status`: this was the first list-spread cleanup slice; the later cleanup-closure slice closed the current-scope list-spread checklist.
+
+- **Inline multi-parameter lambda cleanup closure + broader proof** (2026-04-03): the current-scope cleanup/proof checklist is now complete.
+  - `cleanup(multi-arg)`: removed the dedicated `IndirectCallClosure` path so local capturing closures now use the same generic indirect-call dispatch path as other callable values.
+  - `proof(helper)`: added a second user-defined higher-order helper proof (`apply_two`) on both Wasm/runtime-stdin and portable fallback/runtime-output paths, confirming the feature is not tied to the earlier `pairwise_apply` shape.
+  - `track`: close `doc/PLAN_INLINE_MULTI_PARAM_LAMBDA.md` for the current scope; treat future arity expansion or later helper introductions as separate follow-up work.
 
 - **Inline multi-parameter lambda fallback callable parity** (2026-04-03): portable fallback/runtime-output now applies local and captured callable values sequentially, so nested `fn a b -> ...` lambdas execute through the shared callable boundary instead of falling out after the first argument.
   - `runtime(apply)`: `apply_named_value_call_args_out` now detects local/captured callable values and applies multi-argument calls by repeated shared callable evaluation rather than only via named decl lookup.
@@ -119,15 +120,9 @@ Last updated: 2026-04-03
 
 ## Immediate Next Steps
 
-Next implementation track is `doc/PLAN_INLINE_MULTI_PARAM_LAMBDA.md`.
-
-- **Post-acceptance cleanup**: audit for any remaining path-specific multi-arg callable or list-spread branches that can now be deleted or unified.
-- **Broader proof set**: if another higher-order helper is introduced later, verify that inline multi-parameter lambdas continue to work without helper-specific compiler/runtime changes.
-- **Track transition**: decide whether the next slice should remain in inline-multi-parameter cleanup or move to the next roadmap item.
-- **Doc sync during implementation**:
-  - keep `doc/PLAN.md` aligned with this as the next active track,
-  - update `doc/LANGUAGE_SPEC.md` only when user-visible semantics/status wording needs to change,
-  - keep `doc/STATE.md` explicit about which execution paths are complete vs still limited while the track is in progress.
+- Select the next roadmap item from `doc/PLAN.md`.
+- When a future higher-order helper is introduced, add one proof that inline multi-parameter lambdas continue to work without helper-specific compiler/runtime changes.
+- Treat arity growth beyond the current acceptance/proof surface as new capability work rather than reopening this completed cleanup track by default.
 
 ## Architecture State
 

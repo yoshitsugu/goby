@@ -1729,6 +1729,29 @@ main =
     }
 
     #[test]
+    fn user_defined_apply_two_with_inline_multi_param_lambda_executes_correctly() {
+        use goby_core::parse_module;
+        let module = parse_module(
+            r#"
+apply_two : (Int -> Int -> Int) -> Int -> Int -> Int
+apply_two f a b =
+  f a b
+
+main : Unit -> Unit can Print, Read
+main =
+  _ = read()
+  result = apply_two (fn a b -> a + b) 20 22
+  println "${result}"
+"#,
+        )
+        .expect("source should parse");
+
+        let output = execute_runtime_module_with_stdin(&module, Some(String::new()))
+            .expect("apply_two inline multi-param lambda should execute successfully");
+        assert_eq!(output.as_deref(), Some("42\n"));
+    }
+
+    #[test]
     fn compile_module_with_helper_closure_capture_succeeds() {
         use goby_core::parse_module;
         let module = parse_module(

@@ -1304,6 +1304,24 @@ main =
 }
 
 #[test]
+fn resolves_runtime_output_for_apply_two_with_inline_multi_param_lambda() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    let source = r#"
+apply_two : (Int -> Int -> Int) -> Int -> Int -> Int
+apply_two f a b =
+  f a b
+
+main : Unit -> Unit
+main =
+  result = apply_two (fn a b -> a + b) 20 22
+  print "${result}"
+"#;
+    let module = parse_module(source).expect("parse should succeed");
+    let output = resolve_module_runtime_output(&module).expect("runtime output should resolve");
+    assert_eq!(output, "42");
+}
+
+#[test]
 #[ignore = "qualified iterator handler clauses are not yet covered by fallback runtime-output locking"]
 fn locks_runtime_output_for_iterator_unified_gb() {
     let _guard = ENV_MUTEX.lock().unwrap();
