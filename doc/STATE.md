@@ -25,6 +25,10 @@ Last updated: 2026-04-03
   - `test(wasm/runtime-output)`: enabled the compiled `pairwise_apply` acceptance test and added a portable fallback runtime-output regression for the same higher-order helper proof case.
   - `semantics`: the newly exposed fallback/Wasm divergence for no-tail list patterns was resolved by aligning both paths and docs on exact-length matching for `[x]`, `[x, y]`, and similar forms, while tail patterns remain prefix matches.
 
+- **Inline multi-parameter lambda emit cleanup (partial)** (2026-04-03): generic indirect-call emission no longer duplicates separate arity-1 and arity-2 stack-spill branches.
+  - `emit(indirect-call)`: `WasmBackendInstr::IndirectCall` now goes through one helper that spills callee/args into scratch locals, derives the plain-vs-closure type indices from arity, and reuses the shared callable dispatch path.
+  - `status`: this reduces emit-side duplication, but the broader cleanup checkbox remains open because the current scratch-local budget still caps plain indirect-call emission to the existing acceptance-set arities.
+
 - **Inline multi-parameter lambda fallback callable parity** (2026-04-03): portable fallback/runtime-output now applies local and captured callable values sequentially, so nested `fn a b -> ...` lambdas execute through the shared callable boundary instead of falling out after the first argument.
   - `runtime(apply)`: `apply_named_value_call_args_out` now detects local/captured callable values and applies multi-argument calls by repeated shared callable evaluation rather than only via named decl lookup.
   - `test(runtime-output)`: enabled pure and effectful inline `fold` acceptance tests on the portable fallback path and added fallback regressions for let-bound user-defined HOF reuse and capturing inline multi-parameter lambdas.

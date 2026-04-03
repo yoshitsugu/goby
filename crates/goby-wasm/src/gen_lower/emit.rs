@@ -1422,49 +1422,13 @@ fn emit_instrs(
             }
 
             WasmBackendInstr::IndirectCall { arity } => {
-                let s_callee = helper_i64_base;
-                let s_arg0 = helper_i64_base + 1;
-                let s_arg1 = helper_i64_base + 2;
-                match arity {
-                    1 => {
-                        // Stack: [arg0, callee] → pop callee then arg0 into scratch locals.
-                        function.instruction(&Instruction::LocalSet(s_callee));
-                        function.instruction(&Instruction::LocalSet(s_arg0));
-                        let plain_type_idx = ctx.indirect_call_type_idx(1)?;
-                        let closure_type_idx = ctx.indirect_call_type_idx(2)?;
-                        emit_callable_dispatch(
-                            function,
-                            s_callee,
-                            &[s_arg0],
-                            plain_type_idx,
-                            closure_type_idx,
-                            helper_state.as_ref(),
-                        );
-                    }
-                    2 => {
-                        // Stack: [arg0, arg1, callee] → pop in reverse order.
-                        function.instruction(&Instruction::LocalSet(s_callee));
-                        function.instruction(&Instruction::LocalSet(s_arg1));
-                        function.instruction(&Instruction::LocalSet(s_arg0));
-                        let plain_type_idx = ctx.indirect_call_type_idx(2)?;
-                        let closure_type_idx = ctx.indirect_call_type_idx(3)?;
-                        emit_callable_dispatch(
-                            function,
-                            s_callee,
-                            &[s_arg0, s_arg1],
-                            plain_type_idx,
-                            closure_type_idx,
-                            helper_state.as_ref(),
-                        );
-                    }
-                    _ => {
-                        return Err(CodegenError {
-                            message: format!(
-                                "gen_lower/emit: IndirectCall with unsupported arity {arity}"
-                            ),
-                        });
-                    }
-                }
+                emit_indirect_call_dispatch(
+                    function,
+                    ctx,
+                    helper_i64_base,
+                    *arity,
+                    helper_state.as_ref(),
+                )?;
             }
 
             WasmBackendInstr::IndirectCallClosure {
@@ -2100,6 +2064,45 @@ fn emit_callable_dispatch(
     if let Some(hs) = hs {
         emit_sync_cursor_from_global(function, hs.alloc_cursor_local);
     }
+}
+
+fn emit_indirect_call_dispatch(
+    function: &mut Function,
+    ctx: &EmitContext,
+    helper_i64_base: u32,
+    arity: u8,
+    hs: Option<&HelperEmitState>,
+) -> Result<(), CodegenError> {
+    if arity == 0 || u32::from(arity + 1) > HELPER_SCRATCH_I64 {
+        return Err(CodegenError {
+            message: format!("gen_lower/emit: IndirectCall with unsupported arity {arity}"),
+        });
+    }
+
+    let callee_local = helper_i64_base;
+    let mut arg_locals = Vec::with_capacity(usize::from(arity));
+    for offset in 1..=u32::from(arity) {
+        arg_locals.push(helper_i64_base + offset);
+    }
+
+    // Stack before spill: [arg0, ..., argN-1, callee]. Pop in reverse order so the
+    // scratch locals preserve left-to-right argument order for shared callable dispatch.
+    function.instruction(&Instruction::LocalSet(callee_local));
+    for &arg_local in arg_locals.iter().rev() {
+        function.instruction(&Instruction::LocalSet(arg_local));
+    }
+
+    let plain_type_idx = ctx.indirect_call_type_idx(arity)?;
+    let closure_type_idx = ctx.indirect_call_type_idx(arity + 1)?;
+    emit_callable_dispatch(
+        function,
+        callee_local,
+        &arg_locals,
+        plain_type_idx,
+        closure_type_idx,
+        hs,
+    );
+    Ok(())
 }
 
 fn emit_push_tagged_ptr(function: &mut Function, ptr_local: u32, tag: u8) {

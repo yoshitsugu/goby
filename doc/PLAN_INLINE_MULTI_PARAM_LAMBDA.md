@@ -15,7 +15,7 @@ Remaining follow-ups:
 
 Cleanup audit snapshot:
 
-- Multi-arg callable cleanup remains open: `crates/goby-wasm/src/gen_lower/emit.rs` still carries explicit arity-specialized indirect-call emission branches that should be audited before this track is closed.
+- Multi-arg callable cleanup remains open, but one emit-side cleanup slice landed: `crates/goby-wasm/src/gen_lower/emit.rs` now routes generic `IndirectCall` emission through one helper instead of hand-written arity-1/2 branches. Remaining limitation is structural rather than duplicated branch logic: `HELPER_SCRATCH_I64` still only budgets one callee plus two arguments, so plain indirect-call arity growth beyond the current acceptance set is not part of this cleanup checkbox yet.
 - List-spread cleanup remains open: support is landed for the shared Wasm path, but surrounding path-specific execution/coverage structure still needs a dedicated cleanup pass rather than a status-only checkbox flip.
 
 Related documents:
