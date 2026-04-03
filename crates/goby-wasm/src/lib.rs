@@ -1757,6 +1757,25 @@ main =
     }
 
     #[test]
+    fn heap_only_recursive_tuple_allocation_grows_past_initial_pages() {
+        use goby_core::parse_module;
+
+        let elements = (0..30_000)
+            .map(|n| n.to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let source =
+            format!("main : Unit -> Unit can Print\nmain =\n  _ = [{elements}]\n  print \"ok\"\n");
+        let module = parse_module(&source).expect("source should parse");
+
+        let wasm = compile_module(&module).expect("heap-growth regression should compile");
+        let output = crate::wasm_exec::run_wasm_bytes_with_stdin(&wasm, None)
+            .expect("heap-only allocation should grow memory and execute successfully");
+
+        assert_eq!(output, "ok");
+    }
+
+    #[test]
     fn inline_capturing_lambda_via_fold_executes_correctly() {
         use goby_core::parse_module;
         let module = parse_module(

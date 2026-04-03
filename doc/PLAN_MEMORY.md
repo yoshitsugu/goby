@@ -477,15 +477,23 @@ Done when:
 
 ### 9.3 M2: Heap allocation growth
 
-- [ ] Audit compiled-Wasm heap allocation writes and cursor checks.
-- [ ] Introduce growth before heap exhaustion.
-- [ ] Add focused regressions for heap growth without host temporary pressure.
+- [x] Audit compiled-Wasm heap allocation writes and cursor checks.
+- [x] Introduce growth before heap exhaustion.
+- [x] Add focused regressions for heap growth without host temporary pressure.
 
 Done when:
 
 - ordinary Goby heap allocation is not limited to the initial page count,
 - the heap-growth regression passes under the shared address-space rule and
   below the configured maximum.
+
+Current status note:
+
+- The first heap-growth slice is landed for heap-only pressure shapes through
+  shared `emit_alloc_from_top` growth.
+- Shared host-temp-plus-heap coexistence and explicit exhaustion behavior remain
+  follow-up work; keep those under the next slice rather than treating M2/M3 as
+  fully closed.
 
 ### 9.4 M3: Explicit exhaustion behavior
 

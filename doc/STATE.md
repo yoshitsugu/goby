@@ -4,7 +4,7 @@ Last updated: 2026-04-03
 
 ## Current Focus
 
-**Runtime memory plan (`doc/PLAN_MEMORY.md`)**: M0/M1 landed; M2 heap-growth and M3 exhaustion behavior are next.
+**Runtime memory plan (`doc/PLAN_MEMORY.md`)**: M0/M1 landed; M2 heap-only growth landed; M3 exhaustion behavior and shared coexistence follow-up are next.
 
 - Locked direction:
   - Goby should move from fixed-page-aware memory assumptions to a bounded grow-aware memory model.
@@ -13,10 +13,16 @@ Last updated: 2026-04-03
   - explicit exhaustion errors are required; generic Wasm traps and pointer corruption are not acceptable memory-failure outcomes.
 - Execution target:
   - M0/M1 are now complete for the host-write side: shared defaults are `256 KiB` initial memory, `64 MiB` maximum memory, and a shared host-bump/stack configuration boundary in `crates/goby-wasm/src/memory_config.rs`.
-  - the next implementation slice should start from `doc/PLAN_MEMORY.md` M2/M3 rather than opening a new unrelated feature track first.
+  - the first M2 slice is now complete for heap-only pressure shapes: `emit_alloc_from_top` can grow memory before heap exhaustion, and a compiled heap-allocation regression now crosses the initial page allocation without host temporary pressure.
+  - the next implementation slice should start from `doc/PLAN_MEMORY.md` M3 / shared coexistence follow-up rather than opening a new unrelated feature track first.
   - final closure for this track requires representative memory-pressure regressions that succeed under the default bounded-growth policy and explicit low-maximum regressions that fail with the intended exhaustion error.
 
 ## Recently Completed
+
+- **Runtime memory M2 heap-growth slice (heap-only pressure)** (2026-04-03): compiled-Wasm heap allocation on the shared emitter path can now grow linear memory past the initial page allocation for heap-only pressure shapes.
+  - `emit(heap)`: `emit_alloc_from_top` now attempts `memory.grow` when the tentative heap allocation would cross the current heap floor, rebases the local/global heap cursor by the newly added pages, and preserves the existing shared allocation entrypoint for lists, tuples, records, closures, cells, and helper-produced lists.
+  - `test(heap-growth)`: added a focused regression that compiles and runs a program with a 30,000-element list literal, proving heap allocation can exceed the initial `256 KiB` allocation without relying on host temporary allocation pressure.
+  - `status`: this closes the first M2 slice only for heap-only pressure shapes; explicit exhaustion diagnostics and host-temp-plus-heap coexistence still need a follow-up slice.
 
 - **Runtime memory M0/M1 shared configuration + host growth helpers** (2026-04-03): Goby-owned Wasm execution and Wasm emission now share one bounded-memory configuration, and host-backed string/list writes can grow linear memory past the initial page allocation.
   - `memory(config)`: added `crates/goby-wasm/src/memory_config.rs` as the shared source of truth for initial pages, maximum pages, host bump reservation, and Wasmtime stack defaults; `backend.rs`, `gen_lower/emit.rs`, and `host_runtime.rs` now read from it instead of duplicating local constants.
@@ -127,9 +133,9 @@ Last updated: 2026-04-03
 
 ## Immediate Next Steps
 
-- Start `doc/PLAN_MEMORY.md` M2: audit compiled-Wasm heap allocation and heap-cursor checks so heap allocation can grow before hitting the current initial-memory ceiling.
-- Implement `doc/PLAN_MEMORY.md` M3 next: add explicit exhaustion diagnostics shared by host temporary allocation and future heap-growth failure paths.
-- Add the remaining focused memory-pressure regressions for this track, especially intentionally low-maximum failure cases and heap-growth-without-host-temp-pressure success cases.
+- Implement `doc/PLAN_MEMORY.md` M3 next: add explicit exhaustion diagnostics shared by host temporary allocation and heap-growth failure paths.
+- Extend the shared-address-space proof so host temporary allocation and heap growth can coexist honestly in one execution instead of only via separate pressure regressions.
+- Add the remaining focused memory-pressure regressions for this track, especially intentionally low-maximum failure cases.
 - Keep the completed inline multi-parameter lambda track closed unless a future helper or arity expansion explicitly requires a new follow-up slice.
 
 ## Architecture State

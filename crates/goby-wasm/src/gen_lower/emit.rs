@@ -27,7 +27,7 @@ use crate::host_runtime::{
     host_import_for_intrinsic,
 };
 use crate::layout::{GLOBAL_HEAP_CURSOR_OFFSET, MemoryLayout};
-use crate::memory_config::DEFAULT_WASM_MEMORY_CONFIG;
+use crate::memory_config::{DEFAULT_WASM_MEMORY_CONFIG, WASM_PAGE_BYTES};
 
 const STATIC_STRING_LIMIT: u32 =
     DEFAULT_WASM_MEMORY_CONFIG.initial_linear_memory_bytes() - HOST_BUMP_RESERVED_BYTES;
@@ -2066,7 +2066,35 @@ fn emit_alloc_from_top(
     function.instruction(&Instruction::LocalGet(helper_state.heap_floor_local));
     function.instruction(&Instruction::I32LtU);
     function.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
+    // Reuse `size_local` as a temporary for required growth pages after the
+    // tentative allocation size is no longer needed.
+    function.instruction(&Instruction::LocalGet(helper_state.heap_floor_local));
+    function.instruction(&Instruction::LocalGet(result_local));
+    function.instruction(&Instruction::I32Sub);
+    function.instruction(&Instruction::I32Const((WASM_PAGE_BYTES - 1) as i32));
+    function.instruction(&Instruction::I32Add);
+    function.instruction(&Instruction::I32Const(WASM_PAGE_BYTES as i32));
+    function.instruction(&Instruction::I32DivU);
+    function.instruction(&Instruction::LocalSet(size_local));
+    function.instruction(&Instruction::LocalGet(size_local));
+    function.instruction(&Instruction::MemoryGrow(0));
+    function.instruction(&Instruction::I32Const(-1));
+    function.instruction(&Instruction::I32Eq);
+    function.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
     emit_abort(function);
+    function.instruction(&Instruction::End);
+    function.instruction(&Instruction::LocalGet(size_local));
+    function.instruction(&Instruction::I32Const(WASM_PAGE_BYTES as i32));
+    function.instruction(&Instruction::I32Mul);
+    function.instruction(&Instruction::LocalSet(size_local));
+    function.instruction(&Instruction::LocalGet(helper_state.alloc_cursor_local));
+    function.instruction(&Instruction::LocalGet(size_local));
+    function.instruction(&Instruction::I32Add);
+    function.instruction(&Instruction::LocalSet(helper_state.alloc_cursor_local));
+    function.instruction(&Instruction::LocalGet(result_local));
+    function.instruction(&Instruction::LocalGet(size_local));
+    function.instruction(&Instruction::I32Add);
+    function.instruction(&Instruction::LocalSet(result_local));
     function.instruction(&Instruction::End);
     function.instruction(&Instruction::LocalGet(result_local));
     function.instruction(&Instruction::LocalSet(helper_state.alloc_cursor_local));
