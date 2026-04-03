@@ -367,104 +367,67 @@ Do not let support failures leak out as:
 
 ## 8. Milestones
 
-### IMP0: Lock semantics and acceptance coverage
+- [x] IMP0: Lock semantics and acceptance coverage
+  - Scope:
+    - add the acceptance programs in §4 as failing or ignored tests at the right ownership boundaries
+    - update `doc/LANGUAGE_SPEC.md` and `doc/STATE.md` if the current docs overstate support
+    - document the exact current limitation in user-visible terms
+  - Done when:
+    - the repo has stable regression coverage for the current failure shapes
+    - docs say clearly that inline multi-parameter lambdas are intended semantics but not yet complete
 
-Status: complete
+- [x] IMP1: Shared callable shape is explicit before backend emission
+  - Scope:
+    - audit the current lambda-lifting and callable metadata path
+    - remove any remaining places where multi-parameter inline lambdas survive too long as syntax-shaped special cases
+    - make arity and environment ownership explicit in the shared callable representation
+  - Done when:
+    - one compiler-owned callable representation covers the relevant lambda/function-value cases
+    - backend consumers no longer need to rediscover multi-parameter lambda structure from surface-shaped nodes
 
-Scope:
+- [x] IMP2: Invocation planning becomes shared and generic
+  - Scope:
+    - introduce one invocation planner for direct, indirect, and closure calls
+    - route stdlib higher-order execution through that planner rather than bespoke callback decisions
+    - keep fast direct-call paths only as optimization choices inside the shared plan
+  - Done when:
+    - `fold`, `map`, `each`, and user-defined higher-order functions rely on one invocation story
+    - no new API-specific callback dispatch code is needed to add another higher-order helper
 
-- add the acceptance programs in §4 as failing or ignored tests at the right ownership boundaries
-- update `doc/LANGUAGE_SPEC.md` and `doc/STATE.md` if the current docs overstate support
-- document the exact current limitation in user-visible terms
+- [x] IMP3: General-lowering and runtime-stdin paths execute inline multi-parameter lambdas
+  - Scope:
+    - extend the runtime/fallback execution path to consume the same callable representation
+    - eliminate the current gap where named helper callbacks work but equivalent inline lambdas do not
+    - verify parity for pure and effectful inline multi-parameter callbacks
+    - add compiled-Wasm execution coverage for the same representative callback shapes where that path is expected to support them
+  - Done when:
+    - the acceptance programs in §4 execute through the runtime-stdin / general-lowering path
+    - the representative pure/effectful/capturing cases also execute through the compiled-Wasm path, or are rejected there with the same explicit backend-limitation boundary when support is intentionally still pending
+    - failures, if any remain, are explicit backend limitations at one shared boundary
 
-Done when:
+- [x] IMP4: Closure parity for inline multi-parameter lambdas
+  - Scope:
+    - ensure capturing inline multi-parameter lambdas use the same closure environment model as the rest of the closure-capture implementation
+    - add regression tests for by-value capture and captured mutable-cell reads/writes where relevant
+  - Done when:
+    - inline multi-parameter lambdas with captures behave like equivalent named or single-parameter closure cases
+    - no callback-shape exception remains in higher-order helpers
 
-- the repo has stable regression coverage for the current failure shapes
-- docs say clearly that inline multi-parameter lambdas are intended semantics but not yet complete
-
-### IMP1: Shared callable shape is explicit before backend emission
-
-Status: complete
-
-Scope:
-
-- audit the current lambda-lifting and callable metadata path
-- remove any remaining places where multi-parameter inline lambdas survive too long as syntax-shaped special cases
-- make arity and environment ownership explicit in the shared callable representation
-
-Done when:
-
-- one compiler-owned callable representation covers the relevant lambda/function-value cases
-- backend consumers no longer need to rediscover multi-parameter lambda structure from surface-shaped nodes
-
-### IMP2: Invocation planning becomes shared and generic
-
-Status: complete
-
-Scope:
-
-- introduce one invocation planner for direct, indirect, and closure calls
-- route stdlib higher-order execution through that planner rather than bespoke callback decisions
-- keep fast direct-call paths only as optimization choices inside the shared plan
-
-Done when:
-
-- `fold`, `map`, `each`, and user-defined higher-order functions rely on one invocation story
-- no new API-specific callback dispatch code is needed to add another higher-order helper
-
-### IMP3: General-lowering and runtime-stdin paths execute inline multi-parameter lambdas
-
-Status: complete
-
-Scope:
-
-- extend the runtime/fallback execution path to consume the same callable representation
-- eliminate the current gap where named helper callbacks work but equivalent inline lambdas do not
-- verify parity for pure and effectful inline multi-parameter callbacks
-- add compiled-Wasm execution coverage for the same representative callback shapes where that path is expected to support them
-
-Done when:
-
-- the acceptance programs in §4 execute through the runtime-stdin / general-lowering path
-- the representative pure/effectful/capturing cases also execute through the compiled-Wasm path, or are rejected there with the same explicit backend-limitation boundary when support is intentionally still pending
-- failures, if any remain, are explicit backend limitations at one shared boundary
-
-### IMP4: Closure parity for inline multi-parameter lambdas
-
-Status: complete
-
-Scope:
-
-- ensure capturing inline multi-parameter lambdas use the same closure environment model as the
-  rest of the closure-capture implementation
-- add regression tests for by-value capture and captured mutable-cell reads/writes where relevant
-
-Done when:
-
-- inline multi-parameter lambdas with captures behave like equivalent named or single-parameter closure cases
-- no callback-shape exception remains in higher-order helpers
-
-### IMP5: Future-helper proof and cleanup
-
-Status: complete for the current acceptance proof set; further cleanup follow-ups may remain
-
-Scope:
-
-- add at least one representative higher-order helper beyond the current stdlib acceptance set
-- remove transitional ad hoc branches introduced during development
-- update docs to describe the feature as implemented behavior rather than intended-only behavior
-
-Proof rule for this milestone:
-
-- the representative helper should be introduced as ordinary language/stdlib code first
-- after that helper exists, its inline multi-parameter lambda acceptance case should pass without any helper-specific parser, typechecker, backend, or runtime changes
-- if extra compiler/runtime work is still needed after introducing the helper, that is evidence that the shared callable boundary is still incomplete and IMP5 is not done
-
-Done when:
-
-- a new higher-order helper can accept inline multi-parameter lambdas after being added without any helper-specific compiler/runtime changes
-- the same proof case is covered on every execution path that this track claims to support
-- the temporary implementation-status note can be removed from the spec/docs
+- [x] IMP5: Future-helper proof and cleanup
+  - Status note:
+    - complete for the current acceptance proof set; further cleanup follow-ups may remain
+  - Scope:
+    - add at least one representative higher-order helper beyond the current stdlib acceptance set
+    - remove transitional ad hoc branches introduced during development
+    - update docs to describe the feature as implemented behavior rather than intended-only behavior
+  - Proof rule:
+    - the representative helper should be introduced as ordinary language/stdlib code first
+    - after that helper exists, its inline multi-parameter lambda acceptance case should pass without any helper-specific parser, typechecker, backend, or runtime changes
+    - if extra compiler/runtime work is still needed after introducing the helper, that is evidence that the shared callable boundary is still incomplete and IMP5 is not done
+  - Done when:
+    - a new higher-order helper can accept inline multi-parameter lambdas after being added without any helper-specific compiler/runtime changes
+    - the same proof case is covered on every execution path that this track claims to support
+    - the temporary implementation-status note can be removed from the spec/docs
 
 ---
 
