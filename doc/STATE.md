@@ -29,6 +29,11 @@ Last updated: 2026-04-03
   - `emit(indirect-call)`: `WasmBackendInstr::IndirectCall` now goes through one helper that spills callee/args into scratch locals, derives the plain-vs-closure type indices from arity, and reuses the shared callable dispatch path.
   - `status`: this reduces emit-side duplication, but the broader cleanup checkbox remains open because the current scratch-local budget still caps plain indirect-call emission to the existing acceptance-set arities.
 
+- **Inline multi-parameter lambda list-spread cleanup (partial)** (2026-04-03): simple list-spread programs are now explicitly locked on the compiled Wasm path instead of only via runtime-output coverage.
+  - `test(wasm)`: added compiled-Wasm execution tests for `[1, ..rest]` and `["a", ..rest]`, proving shared list-spread lowering is not only exercised through the `pairwise_apply` acceptance case.
+  - `test(cleanup)`: removed stale runtime-output assertions that described simple list-spread programs as fallback-only.
+  - `status`: the list-spread cleanup checkbox remains open because a broader audit of path-specific execution/coverage structure is still pending.
+
 - **Inline multi-parameter lambda fallback callable parity** (2026-04-03): portable fallback/runtime-output now applies local and captured callable values sequentially, so nested `fn a b -> ...` lambdas execute through the shared callable boundary instead of falling out after the first argument.
   - `runtime(apply)`: `apply_named_value_call_args_out` now detects local/captured callable values and applies multi-argument calls by repeated shared callable evaluation rather than only via named decl lookup.
   - `test(runtime-output)`: enabled pure and effectful inline `fold` acceptance tests on the portable fallback path and added fallback regressions for let-bound user-defined HOF reuse and capturing inline multi-parameter lambdas.

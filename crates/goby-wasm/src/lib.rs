@@ -220,6 +220,46 @@ main =
     }
 
     #[test]
+    fn list_spread_int_values_execute_via_compiled_wasm() {
+        let module = parse_module(
+            r#"
+main : Unit -> Unit
+main =
+  rest = [2, 3]
+  print [1, ..rest]
+"#,
+        )
+        .expect("source should parse");
+
+        let wasm = compile_module(&module).expect("list spread program should compile");
+        assert_valid_wasm_module(&wasm);
+
+        let output = crate::wasm_exec::run_wasm_bytes_with_stdin(&wasm, None)
+            .expect("compiled list spread program should execute");
+        assert_eq!(output, "[1, 2, 3]");
+    }
+
+    #[test]
+    fn list_spread_string_values_execute_via_compiled_wasm() {
+        let module = parse_module(
+            r#"
+main : Unit -> Unit
+main =
+  rest = ["b", "c"]
+  print ["a", ..rest]
+"#,
+        )
+        .expect("source should parse");
+
+        let wasm = compile_module(&module).expect("list spread program should compile");
+        assert_valid_wasm_module(&wasm);
+
+        let output = crate::wasm_exec::run_wasm_bytes_with_stdin(&wasm, None)
+            .expect("compiled list spread program should execute");
+        assert_eq!(output, "[\"a\", \"b\", \"c\"]");
+    }
+
+    #[test]
     fn runtime_execution_needs_stdin_is_false_for_general_lowered_lambda_without_read() {
         let source = r#"
 import goby/list ( map, each )

@@ -3,7 +3,7 @@ use std::sync::Mutex;
 use goby_core::parse_module;
 
 use crate::{
-    RuntimeIoExecutionKind, assert_mode_parity, fallback, resolve_module_runtime_output,
+    RuntimeIoExecutionKind, assert_mode_parity, resolve_module_runtime_output,
     runtime_io_execution_kind,
 };
 
@@ -18,10 +18,6 @@ main =
   print [1, ..rest]
 "#;
     let module = parse_module(source).expect("source should parse");
-    assert!(
-        !fallback::supports_native_codegen(&module),
-        "list spread currently routes through fallback runtime path"
-    );
     let output = resolve_module_runtime_output(&module).expect("runtime output should resolve");
     assert_eq!(output, "[1, 2, 3]");
 }
@@ -35,10 +31,6 @@ main =
   print ["a", ..rest]
 "#;
     let module = parse_module(source).expect("source should parse");
-    assert!(
-        !fallback::supports_native_codegen(&module),
-        "list spread currently routes through fallback runtime path"
-    );
     let output = resolve_module_runtime_output(&module).expect("runtime output should resolve");
     assert_eq!(output, "[\"a\", \"b\", \"c\"]");
 }
