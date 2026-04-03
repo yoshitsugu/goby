@@ -1777,8 +1777,14 @@ main =
 
     #[test]
     fn heap_growth_and_host_temp_growth_coexist_in_single_execution() {
+        use crate::memory_config::DEFAULT_WASM_MEMORY_CONFIG;
         use goby_core::parse_module;
 
+        let heap_allocation_bytes = 4 + 8 * 30_000;
+        assert!(
+            heap_allocation_bytes > DEFAULT_WASM_MEMORY_CONFIG.host_bump_start(),
+            "test list allocation must exceed the initial heap floor to force heap growth"
+        );
         let elements = (0..30_000)
             .map(|n| n.to_string())
             .collect::<Vec<_>>()
@@ -1793,6 +1799,10 @@ main =
         let output = crate::wasm_exec::run_wasm_bytes_with_stdin(&wasm, None)
             .expect("heap growth plus host-backed formatting should execute successfully");
 
+        assert!(
+            output.len() as u32 > DEFAULT_WASM_MEMORY_CONFIG.host_bump_reserved_bytes,
+            "formatted output must exceed the initial host-reserved slice to force host growth"
+        );
         assert!(
             output.starts_with("[0, 1, 2, 3, 4, 5"),
             "expected formatted list prefix, got: {:?}",

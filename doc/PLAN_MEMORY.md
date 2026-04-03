@@ -539,14 +539,36 @@ Current status note:
 
 ### 9.6 M5: Reclamation follow-up decision
 
-- [ ] Measure representative workloads after dynamic growth lands.
-- [ ] Decide whether the next pressure point is retained heap growth, fragmentation,
+- [x] Measure representative workloads after dynamic growth lands.
+- [x] Decide whether the next pressure point is retained heap growth, fragmentation,
   startup footprint, or none of the above.
-- [ ] If needed, open a separate GC/reclamation plan with explicit scope and acceptance criteria.
+- [x] If needed, open a separate GC/reclamation plan with explicit scope and acceptance criteria.
 
 Done when:
 
 - GC is either deferred consciously or started from measured evidence.
+
+Decision note:
+
+- The representative default-policy workloads now cover:
+  - host-temp-heavy interpolation/debug output,
+  - heap-heavy compiled allocation,
+  - mixed pressure where one execution allocates a `240,004`-byte list on the
+    Goby heap and then formats it into an output that exceeds the initial
+    `49,152`-byte host-reserved slice.
+- All of these complete successfully under the current bounded-growth policy and
+  the low-maximum regressions fail with the intended exhaustion error.
+- The current Goby-owned Wasm execution model is still single-shot per `_start`:
+  heap objects and host temporary allocations die with the execution rather than
+  accumulating across a long-lived runtime.
+- Therefore the next pressure point is **none of the above for the current
+  scope**. There is not yet measured evidence that retained heap growth,
+  fragmentation, or startup footprint justifies starting GC or another
+  reclamation subsystem now.
+- No separate GC/reclamation plan is opened in this milestone. Revisit only if
+  Goby grows a long-lived runtime model, repeated in-process executions, or
+  workload measurements that show retained-memory pressure rather than bounded
+  growth pressure.
 
 ---
 
