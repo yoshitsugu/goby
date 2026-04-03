@@ -27,23 +27,27 @@
 //! # Host bump allocator
 //!
 //! `grapheme_state_host_inner` uses an upward bump allocator backed by the
-//! top `HOST_BUMP_RESERVED_BYTES` bytes of the single Wasm page
+//! top `HOST_BUMP_RESERVED_BYTES` bytes of the initial Wasm memory
 //! (`[WASM_PAGE_BYTES - HOST_BUMP_RESERVED_BYTES, WASM_PAGE_BYTES)`).  This region is
 //! reserved for host use and does not overlap with the Wasm-side allocator,
-//! which grows upward from `heap_base = 16`.  The bump pointer is shared
+//! which grows upward from `heap_base = 24`.  The bump pointer is shared
 //! across host intrinsic calls within one `_start` execution via
 //! `Arc<AtomicU32>`.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use wasmtime::{Caller, Engine, Linker, Module, Store};
+use wasmtime::{Caller, Config, Engine, Linker, Module, Store};
 use wasmtime_wasi::WasiCtxBuilder;
 use wasmtime_wasi::p1::{self, WasiP1Ctx};
 use wasmtime_wasi::p2::pipe::{MemoryInputPipe, MemoryOutputPipe};
 
-/// Total Wasm linear memory in bytes (1 page).
-const WASM_PAGE_BYTES: u32 = 65_536;
+/// Total initial Wasm linear memory in bytes (2 pages).
+const WASM_PAGE_BYTES: u32 = 131_072;
+/// Embedded runtime programs with recursive helper decls plus debug printing can exceed
+/// Wasmtime's 512 KiB default stack. Keep the limit explicit and comfortably above the
+/// current recursive AoC/debug workloads handled by `execute_runtime_module_with_stdin`.
+const MAX_WASM_STACK_BYTES: usize = 64 * 1024 * 1024;
 
 use crate::gen_lower::value::{
     TAG_BOOL, TAG_INT, TAG_LIST, TAG_RECORD, TAG_STRING, TAG_TUPLE, TAG_UNIT, decode_payload_int,
@@ -63,7 +67,10 @@ pub(crate) fn run_wasm_bytes_with_stdin(
     wasm: &[u8],
     stdin: Option<&str>,
 ) -> Result<String, String> {
-    let engine = Engine::default();
+    let mut config = Config::new();
+    config.max_wasm_stack(MAX_WASM_STACK_BYTES);
+    config.async_stack_size(MAX_WASM_STACK_BYTES);
+    let engine = Engine::new(&config).map_err(|e| format!("engine config: {e}"))?;
     let module = Module::from_binary(&engine, wasm).map_err(|e| format!("wasm load: {e}"))?;
 
     let stdout_pipe = MemoryOutputPipe::new(1024 * 1024);

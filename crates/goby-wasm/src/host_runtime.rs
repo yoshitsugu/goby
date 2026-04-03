@@ -2,7 +2,7 @@ use crate::gen_lower::backend_ir::BackendIntrinsic;
 
 /// Number of bytes reserved at the top of linear memory for host-owned
 /// temporary string/list allocations during Goby-managed Wasm execution.
-pub(crate) const HOST_BUMP_RESERVED_BYTES: u32 = 16_384;
+pub(crate) const HOST_BUMP_RESERVED_BYTES: u32 = 49_152;
 
 /// Backend ownership split for grapheme-related host intrinsics.
 ///

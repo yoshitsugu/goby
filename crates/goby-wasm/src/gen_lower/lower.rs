@@ -171,7 +171,7 @@ fn lower_comp_inner(
         CompExpr::Value(ValueExpr::Lambda { param, body }) => {
             lower_lambda(param, body, aliases, bindings, known_decls, lambda_decls)
         }
-        CompExpr::Value(v) => lower_value_ctx(v, aliases),
+        CompExpr::Value(v) => lower_value_ctx(v, aliases, bindings, known_decls),
 
         CompExpr::Let {
             name, value, body, ..
@@ -780,7 +780,12 @@ fn lower_case(
 /// captured mutably by nested lambdas) must be handled at the caller level by passing
 /// `aliases` to `lower_value_ctx` instead.
 pub(crate) fn lower_value(v: &ValueExpr) -> Result<Vec<WasmBackendInstr>, LowerError> {
-    lower_value_ctx(v, &HashMap::new())
+    lower_value_ctx(
+        v,
+        &HashMap::new(),
+        &ClosureBindingEnv::default(),
+        &HashSet::new(),
+    )
 }
 
 /// Like `lower_value` but aware of cell-promoted bindings in `aliases`.
@@ -790,6 +795,8 @@ pub(crate) fn lower_value(v: &ValueExpr) -> Result<Vec<WasmBackendInstr>, LowerE
 fn lower_value_ctx(
     v: &ValueExpr,
     aliases: &HashMap<String, AliasValue>,
+    bindings: &ClosureBindingEnv,
+    known_decls: &HashSet<String>,
 ) -> Result<Vec<WasmBackendInstr>, LowerError> {
     match v {
         ValueExpr::Unit => Ok(vec![WasmBackendInstr::I64Const(encode_unit())]),
@@ -801,11 +808,11 @@ fn lower_value_ctx(
         ValueExpr::ListLit { elements, spread } => {
             let mut element_instrs = Vec::with_capacity(elements.len());
             for elem in elements {
-                element_instrs.push(lower_value_ctx(elem, aliases)?);
+                element_instrs.push(lower_value_ctx(elem, aliases, bindings, known_decls)?);
             }
             let mut instrs = vec![WasmBackendInstr::ListLit { element_instrs }];
             if let Some(tail) = spread {
-                instrs.extend(lower_value_ctx(tail, aliases)?);
+                instrs.extend(lower_value_ctx(tail, aliases, bindings, known_decls)?);
                 instrs.push(WasmBackendInstr::Intrinsic {
                     intrinsic: BackendIntrinsic::ListConcat,
                 });
@@ -818,7 +825,7 @@ fn lower_value_ctx(
             }
             let mut element_instrs = Vec::with_capacity(items.len());
             for item in items {
-                element_instrs.push(lower_value_ctx(item, aliases)?);
+                element_instrs.push(lower_value_ctx(item, aliases, bindings, known_decls)?);
             }
             Ok(vec![WasmBackendInstr::TupleLit { element_instrs }])
         }
@@ -828,7 +835,7 @@ fn lower_value_ctx(
         } => {
             let mut field_instrs = Vec::with_capacity(fields.len());
             for (_, value) in fields {
-                field_instrs.push(lower_value_ctx(value, aliases)?);
+                field_instrs.push(lower_value_ctx(value, aliases, bindings, known_decls)?);
             }
             Ok(vec![WasmBackendInstr::RecordLit {
                 constructor: constructor.clone(),
@@ -843,6 +850,13 @@ fn lower_value_ctx(
                         name: cell_local_name(name),
                     },
                     WasmBackendInstr::LoadCellValue,
+                ])
+            } else if known_decls.contains(name.as_str()) && !bindings.is_bound(name) {
+                Ok(vec![
+                    WasmBackendInstr::I64Const(encode_unit()),
+                    WasmBackendInstr::DeclCall {
+                        decl_name: name.clone(),
+                    },
                 ])
             } else {
                 Ok(vec![WasmBackendInstr::LoadLocal { name: name.clone() }])
@@ -863,8 +877,8 @@ fn lower_value_ctx(
             }])
         }
         ValueExpr::BinOp { op, left, right } => {
-            let mut instrs = lower_value_ctx(left, aliases)?;
-            instrs.extend(lower_value_ctx(right, aliases)?);
+            let mut instrs = lower_value_ctx(left, aliases, bindings, known_decls)?;
+            instrs.extend(lower_value_ctx(right, aliases, bindings, known_decls)?);
             instrs.push(WasmBackendInstr::BinOp { op: op.clone() });
             Ok(instrs)
         }
@@ -882,7 +896,7 @@ fn lower_value_ctx(
                         instrs.push(WasmBackendInstr::PushStaticString { text: t.clone() });
                     }
                     IrInterpPart::Expr(e) => {
-                        instrs.extend(lower_value_ctx(e, aliases)?);
+                        instrs.extend(lower_value_ctx(e, aliases, bindings, known_decls)?);
                         instrs.push(WasmBackendInstr::Intrinsic {
                             intrinsic: BackendIntrinsic::ValueToString,
                         });

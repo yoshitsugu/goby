@@ -1657,6 +1657,105 @@ main =
     }
 
     #[test]
+    fn recursive_helper_with_fold_callback_println_executes_without_cursor_corruption() {
+        use goby_core::parse_module;
+        let module = parse_module(
+            r#"
+import goby/list ( fold )
+import goby/stdio
+
+probe : Int -> Bool can Print
+probe n =
+  total =
+    fold [1, 2, 3, 4, 5, 6, 7, 8] 0 (fn acc x ->
+      println("x")
+      acc
+    )
+  total == 0
+
+walk : Int -> Int -> Int -> Int -> Int can Print
+walk width height x y =
+  if y >= height
+    0
+  else
+    if x >= width
+      walk width height 0 (y + 1)
+    else
+      checked =
+        if probe x
+          1
+        else
+          0
+      checked + walk width height (x + 1) y
+
+main : Unit -> Unit can Print, Read
+main =
+  _ = read()
+  result = walk 10 10 0 0
+  println "${result}"
+"#,
+        )
+        .expect("source should parse");
+
+        let output = execute_runtime_module_with_stdin(&module, Some(String::new()))
+            .expect("recursive println callback program should execute successfully");
+        let expected = format!("{}100\n", "x\n".repeat(800));
+        assert_eq!(output.as_deref(), Some(expected.as_str()));
+    }
+
+    #[test]
+    fn recursive_helper_with_fold_callback_interpolation_executes_without_bump_exhaustion() {
+        use goby_core::parse_module;
+        let module = parse_module(
+            r#"
+import goby/list ( fold )
+import goby/stdio
+
+probe : Int -> Bool can Print
+probe n =
+  total =
+    fold [1, 2, 3, 4, 5, 6, 7, 8] 0 (fn acc x ->
+      println("${n},${x}")
+      acc
+    )
+  total == 0
+
+walk : Int -> Int -> Int -> Int -> Int can Print
+walk width height x y =
+  if y >= height
+    0
+  else
+    if x >= width
+      walk width height 0 (y + 1)
+    else
+      checked =
+        if probe x
+          1
+        else
+          0
+      checked + walk width height (x + 1) y
+
+main : Unit -> Unit can Print, Read
+main =
+  _ = read()
+  result = walk 10 10 0 0
+  println "${result}"
+"#,
+        )
+        .expect("source should parse");
+
+        let output = execute_runtime_module_with_stdin(&module, Some(String::new()))
+            .expect("recursive interpolation callback program should execute successfully");
+        assert!(
+            output
+                .as_deref()
+                .is_some_and(|text| text.ends_with("100\n") && text.contains("9,8\n")),
+            "expected interpolated callback output plus final total, got: {:?}",
+            output
+        );
+    }
+
+    #[test]
     fn inline_capturing_lambda_via_fold_executes_correctly() {
         use goby_core::parse_module;
         let module = parse_module(

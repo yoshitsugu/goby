@@ -28,7 +28,7 @@ use crate::host_runtime::{
 };
 use crate::layout::{GLOBAL_HEAP_CURSOR_OFFSET, MemoryLayout};
 
-const WASM_PAGE_BYTES: u32 = 65_536;
+const WASM_PAGE_BYTES: u32 = 131_072;
 const STATIC_STRING_LIMIT: u32 = WASM_PAGE_BYTES - HOST_BUMP_RESERVED_BYTES;
 
 // Import function indices begin with the WASI pair and may be extended with
@@ -925,7 +925,7 @@ pub(crate) fn emit_general_module_with_aux_and_options(
     // Memory section
     let mut memories = MemorySection::new();
     memories.memory(MemoryType {
-        minimum: 1,
+        minimum: 2,
         maximum: None,
         memory64: false,
         shared: false,

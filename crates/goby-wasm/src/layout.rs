@@ -5,7 +5,7 @@ pub(crate) const NWRITTEN_OFFSET: u32 = 8;
 /// callee heap allocations do not overwrite caller-allocated data.
 /// Layout: bytes [12..16) = i32 bump cursor (starts at STATIC_STRING_LIMIT).
 pub(crate) const GLOBAL_HEAP_CURSOR_OFFSET: u32 = 12;
-pub(crate) const HEAP_BASE: u32 = 16;
+pub(crate) const HEAP_BASE: u32 = 24;
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct MemoryLayout {

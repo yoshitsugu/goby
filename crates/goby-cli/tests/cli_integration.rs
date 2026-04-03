@@ -1123,6 +1123,56 @@ main =
 }
 
 #[test]
+fn run_command_executes_lambda_using_zero_arity_decl_value_with_runtime_stdin() {
+    let root = repo_root();
+    let sandbox = TempDirGuard::new("run_zero_arity_decl_value_in_lambda");
+    let input = sandbox.join("zero_arity_decl_lambda.gb");
+    fs::write(
+        &input,
+        r#"
+import goby/list ( fold )
+import goby/string ( length, split )
+
+threshold : Int
+threshold = 4
+
+main : Unit -> Unit can Print, Read
+main =
+  text = read()
+  lines = split text "\n"
+  total = fold lines 0 (fn acc line ->
+    if length(line) < threshold
+      acc + 1
+    else
+      acc
+  )
+  println "${total}"
+"#,
+    )
+    .expect("temporary input should be writable");
+
+    let output = run_goby_with_stdin(&root, &input, b"a\nabcd\nabc\nabcde");
+
+    assert!(
+        output.status.success(),
+        "expected runtime stdin execution to succeed, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("parsed and typechecked"),
+        "expected 'parsed and typechecked' in stderr; stdout: {}, stderr: {}",
+        stdout,
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        stdout.contains("2"),
+        "expected zero-arity declaration value to be visible inside lambda, stdout: {}",
+        stdout
+    );
+}
+
+#[test]
 fn check_command_rejects_legacy_syntax_by_default() {
     let root = repo_root();
     let sandbox = TempDirGuard::new("check_legacy_warnings");

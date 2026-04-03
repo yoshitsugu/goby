@@ -147,6 +147,10 @@ impl ClosureBindingEnv {
     fn get(&self, name: &str) -> Option<BindingInfo> {
         self.bindings.get(name).copied()
     }
+
+    pub fn is_bound(&self, name: &str) -> bool {
+        self.bindings.contains_key(name)
+    }
 }
 
 pub fn analyze_lambda_callable_env(

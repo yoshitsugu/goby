@@ -313,7 +313,7 @@ mod tests {
 
     #[test]
     fn list_ptr_heap_base_round_trip() {
-        // HEAP_BASE = 16 per layout.rs
+        // HEAP_BASE = 24 per layout.rs
         let v = encode_list_ptr(16);
         assert_eq!(decode_tag(v), TAG_LIST);
         assert_eq!(decode_payload_ptr(v), 16);
