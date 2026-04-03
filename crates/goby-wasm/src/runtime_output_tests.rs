@@ -1215,6 +1215,44 @@ main =
 }
 
 #[test]
+#[ignore = "portable fallback runtime-output still lacks end-to-end multi-parameter callable execution"]
+fn resolves_runtime_output_for_fold_with_inline_multi_param_lambda_callback() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    let source = r#"
+import goby/list ( fold )
+
+main : Unit -> Unit
+main =
+  total = fold [1, 2, 3] 0 (fn acc x -> acc + x)
+  print "${total}"
+"#;
+    let module = parse_module(source).expect("parse should succeed");
+    let output = resolve_module_runtime_output(&module).expect("runtime output should resolve");
+    assert_eq!(output, "6");
+}
+
+#[test]
+#[ignore = "portable fallback runtime-output still lacks end-to-end multi-parameter callable execution"]
+fn resolves_runtime_output_for_effectful_fold_with_inline_multi_param_lambda_callback() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    let source = r#"
+import goby/list ( fold )
+
+main : Unit -> Unit
+main =
+  total =
+    fold [1, 2, 3] 0 (fn acc x ->
+      println "acc=${acc} x=${x}"
+      acc + x
+    )
+  println "total=${total}"
+"#;
+    let module = parse_module(source).expect("parse should succeed");
+    let output = resolve_module_runtime_output(&module).expect("runtime output should resolve");
+    assert_eq!(output, "acc=0 x=1\nacc=1 x=2\nacc=3 x=3\ntotal=6\n");
+}
+
+#[test]
 #[ignore = "qualified iterator handler clauses are not yet covered by fallback runtime-output locking"]
 fn locks_runtime_output_for_iterator_unified_gb() {
     let _guard = ENV_MUTEX.lock().unwrap();

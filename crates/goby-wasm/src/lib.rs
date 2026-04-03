@@ -1565,6 +1565,56 @@ main =
     }
 
     #[test]
+    fn inline_pure_lambda_via_fold_executes_correctly() {
+        use goby_core::parse_module;
+        let module = parse_module(
+            r#"
+import goby/list ( fold )
+
+main : Unit -> Unit can Print, Read
+main =
+  _ = read()
+  total = fold [1, 2, 3] 0 (fn acc x -> acc + x)
+  println "${total}"
+"#,
+        )
+        .expect("source should parse");
+
+        let output = execute_runtime_module_with_stdin(&module, Some(String::new()))
+            .expect("pure inline fold lambda should execute successfully");
+        assert_eq!(output.as_deref(), Some("6\n"));
+    }
+
+    #[test]
+    #[ignore = "effectful inline multi-parameter fold callbacks still fail in Wasm codegen/runtime-stdin execution"]
+    fn effectful_inline_lambda_via_fold_executes_correctly() {
+        use goby_core::parse_module;
+        let module = parse_module(
+            r#"
+import goby/list ( fold )
+
+main : Unit -> Unit can Print, Read
+main =
+  _ = read()
+  total =
+    fold [1, 2, 3] 0 (fn acc x ->
+      println "acc=${acc} x=${x}"
+      acc + x
+    )
+  println "total=${total}"
+"#,
+        )
+        .expect("source should parse");
+
+        let output = execute_runtime_module_with_stdin(&module, Some(String::new()))
+            .expect("effectful inline fold lambda should execute successfully");
+        assert_eq!(
+            output.as_deref(),
+            Some("acc=0 x=1\nacc=1 x=2\nacc=3 x=3\ntotal=6\n")
+        );
+    }
+
+    #[test]
     fn inline_capturing_lambda_via_fold_executes_correctly() {
         use goby_core::parse_module;
         let module = parse_module(
@@ -1584,6 +1634,57 @@ main =
         let output = execute_runtime_module_with_stdin(&module, Some(String::new()))
             .expect("capturing inline fold lambda should execute successfully");
         assert_eq!(output.as_deref(), Some("36\n"));
+    }
+
+    #[test]
+    fn let_bound_inline_multi_param_lambda_via_user_hof_executes_correctly() {
+        use goby_core::parse_module;
+        let module = parse_module(
+            r#"
+apply_twice : (Int -> Int -> Int) -> Int -> Int
+apply_twice f x =
+  f x x
+
+main : Unit -> Unit can Print, Read
+main =
+  _ = read()
+  add = fn a b -> a + b
+  result = apply_twice add 5
+  println "${result}"
+"#,
+        )
+        .expect("source should parse");
+
+        let output = execute_runtime_module_with_stdin(&module, Some(String::new()))
+            .expect("let-bound inline multi-param lambda should execute successfully");
+        assert_eq!(output.as_deref(), Some("10\n"));
+    }
+
+    #[test]
+    #[ignore = "this acceptance shape is currently blocked earlier by general-lowering list-spread support, so it cannot yet isolate the callable boundary"]
+    fn user_defined_pairwise_apply_with_inline_multi_param_lambda_executes_correctly() {
+        use goby_core::parse_module;
+        let module = parse_module(
+            r#"
+pairwise_apply : List Int -> (Int -> Int -> Int) -> List Int
+pairwise_apply xs f =
+  case xs
+    [] -> []
+    [x] -> [x]
+    [x, y, ..rest] -> [f x y, ..pairwise_apply rest f]
+
+main : Unit -> Unit can Print, Read
+main =
+  _ = read()
+  result = pairwise_apply [1, 2, 3, 4] (fn a b -> a + b)
+  println "${result}"
+"#,
+        )
+        .expect("source should parse");
+
+        let output = execute_runtime_module_with_stdin(&module, Some(String::new()))
+            .expect("pairwise_apply inline multi-param lambda should execute successfully");
+        assert_eq!(output.as_deref(), Some("[3, 7]\n"));
     }
 
     #[test]

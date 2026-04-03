@@ -13,6 +13,11 @@ Last updated: 2026-04-03
   - then tighten one shared callable/invocation boundary instead of adding `fold`/`map`-specific workarounds.
 - Current constraint:
   - closure capture itself is complete; the remaining gap is shared callable shape/invocation parity for inline multi-parameter lambdas across execution paths.
+  - acceptance-lock findings from the first slice:
+    - runtime-stdin execution already handles pure `fold` callbacks and let-bound user-defined higher-order reuse for inline multi-parameter lambdas.
+    - portable fallback runtime-output still does not execute inline multi-parameter `fold` callbacks end-to-end.
+    - effectful inline multi-parameter `fold` callbacks still fail on the Wasm/runtime-stdin execution path.
+    - the future-facing `pairwise_apply` acceptance case is currently blocked earlier by general-lowering list-spread support, so it is not yet a clean callable-boundary regression.
 
 ## Recently Completed
 
@@ -100,6 +105,7 @@ Next implementation track is `doc/PLAN_INLINE_MULTI_PARAM_LAMBDA.md`.
 
 - **IMP0 acceptance lock**: add or enable the acceptance programs from §4 so the current gaps are pinned at the true ownership boundary.
 - **Shared callable audit**: inspect current callable metadata / lambda-lifting / invocation-planning flow and identify where inline multi-parameter lambdas still depend on path-specific handling.
+- **Next executable fix target**: start with the effectful inline multi-parameter `fold` callback failure on the Wasm/runtime-stdin path, because the pure and let-bound non-effectful shapes are already passing.
 - **Doc sync during implementation**:
   - keep `doc/PLAN.md` aligned with this as the next active track,
   - update `doc/LANGUAGE_SPEC.md` only when user-visible semantics/status wording needs to change,

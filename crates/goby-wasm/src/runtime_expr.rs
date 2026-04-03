@@ -697,14 +697,14 @@ impl<'m> RuntimeOutputResolver<'m> {
                     Out::Escape(escape) => return Out::Escape(escape),
                     Out::Err(e) => return Out::Err(e),
                 };
-                return self.eval_callable_value(
+                self.eval_callable_value(
                     &callable,
                     arg_value,
                     locals,
                     callables,
                     evaluators,
                     depth + 1,
-                );
+                )
             }
             Expr::MethodCall { method, args, .. } if method == "join" && args.len() == 2 => {
                 let list_value =
