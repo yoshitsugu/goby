@@ -34,11 +34,18 @@ Give Goby's Wasm execution paths a memory strategy that is:
 - resilient to moderate debug output and string-heavy workloads,
 - not dependent on repeatedly hand-tuning fixed byte constants,
 - compatible with the current bump-allocation runtime,
-- open to future garbage collection without forcing GC now.
+- open to future garbage collection without forcing GC now,
+- proven by representative memory-pressure regressions that execute successfully
+  under the intended bounded-growth policy.
 
 The immediate target is not a full managed runtime. The target is a practical
 memory model that stops small source edits such as additional `println` or
 string interpolation from causing arbitrary out-of-bounds failures.
+
+The end-state for this plan is not only a design document or a refactor. It is
+an implementation plus regression coverage showing that memory-heavy but
+reasonable workloads run successfully below the configured maximum, and fail
+with explicit exhaustion only when that maximum is intentionally exceeded.
 
 ---
 
@@ -327,6 +334,8 @@ The memory model is acceptable only when all of the following are true:
 7. Backend/runtime code paths that generate or execute modules use the same
    memory configuration source and the same growth assumptions.
 8. The chosen design does not block a later non-moving or moving GC design.
+9. Representative memory-heavy regression programs execute successfully under
+   the default bounded-growth policy without requiring per-test memory tuning.
 
 ---
 
@@ -489,7 +498,25 @@ Done when:
 - the configured-maximum regressions fail with the documented Goby exhaustion
   error rather than a generic Wasm trap.
 
-### 9.5 M4: Reclamation follow-up decision
+### 9.5 M4: Memory-pressure proof set
+
+- [ ] Add at least one representative memory-heavy success regression that exercises
+  repeated string/interpolation or print-oriented temporary allocation under the
+  default bounded-growth policy.
+- [ ] Add at least one representative memory-heavy success regression that exercises
+  heap growth under the default bounded-growth policy without relying on host
+  temporary allocation as the primary pressure source.
+- [ ] Verify these regressions pass without per-test manual memory-constant changes.
+
+Done when:
+
+- the repository contains focused memory-pressure regressions for both temporary
+  allocation pressure and heap pressure,
+- those regressions pass under the default memory policy,
+- the plan is no longer justified only by small synthetic examples or by one-off
+  debugging sessions.
+
+### 9.6 M5: Reclamation follow-up decision
 
 - [ ] Measure representative workloads after dynamic growth lands.
 - [ ] Decide whether the next pressure point is retained heap growth, fragmentation,
@@ -511,6 +538,8 @@ Required regression categories:
 - repeated `println` and interpolation workloads that previously exhausted temporary space,
 - recursive helper plus callback execution where host strings are produced inside nested calls,
 - heap-growth scenarios that exceed the initial page count without involving host stringification,
+- at least one broader memory-pressure success case large enough to require runtime growth
+  under the default policy,
 - explicit allocation-failure tests using an intentionally low configured maximum,
 - parity checks across the execution paths that share the Goby-owned Wasm runtime boundary.
 
