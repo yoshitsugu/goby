@@ -4,6 +4,15 @@ Last updated: 2026-04-03
 
 Status: acceptance coverage and core execution parity landed; remaining work is cleanup and follow-up proofs
 
+Remaining follow-ups:
+
+- [x] Acceptance coverage for the Section 4 proof set is landed on the claimed execution paths.
+- [ ] Audit and remove any remaining path-specific multi-arg callable branches that are now redundant.
+- [ ] Audit and remove any remaining path-specific list-spread branches that were transitional for the proof case.
+- [ ] Clean up stale comments or status notes that still describe inline multi-parameter lambda execution as unsupported.
+- [ ] Add at least one broader follow-up proof if a new higher-order helper is introduced, confirming it inherits support without helper-specific compiler/runtime work.
+- [ ] Decide whether to close this track after cleanup or keep it open for the broader-proof follow-up.
+
 Related documents:
 
 - `doc/LANGUAGE_SPEC.md` — current user-visible syntax and semantics
