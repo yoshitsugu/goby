@@ -1586,7 +1586,6 @@ main =
     }
 
     #[test]
-    #[ignore = "effectful inline multi-parameter fold callbacks still fail in Wasm codegen/runtime-stdin execution"]
     fn effectful_inline_lambda_via_fold_executes_correctly() {
         use goby_core::parse_module;
         let module = parse_module(
@@ -1605,6 +1604,9 @@ main =
 "#,
         )
         .expect("source should parse");
+
+        let wasm = compile_module(&module).expect("effectful inline fold lambda should compile");
+        assert_valid_wasm_module(&wasm);
 
         let output = execute_runtime_module_with_stdin(&module, Some(String::new()))
             .expect("effectful inline fold lambda should execute successfully");

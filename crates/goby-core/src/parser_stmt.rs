@@ -376,64 +376,9 @@ fn parse_multiline_lambda_call<F>(
 where
     F: Copy + Fn(&str) -> Option<Expr>,
 {
-    let open_idx = head.rfind('(')?;
-    let callee_src = head[..open_idx].trim();
-    let lambda_head = head[open_idx + 1..].trim();
-    // Accept `fn <param> ->` multiline lambda syntax.
-    let fn_stripped = lambda_head.strip_prefix("fn ")?;
-    let arrow = fn_stripped.find("->")?;
-    let param = fn_stripped[..arrow].trim();
-    if !is_non_reserved_identifier(param) {
-        return None;
-    }
-    let rest = fn_stripped[arrow + 2..].trim();
-    if !rest.is_empty() || callee_src.is_empty() {
-        return None;
-    }
-
-    let mut close_idx = line_idx + 1;
-    while close_idx < lines.len() {
-        let stripped = strip_line_comment(lines[close_idx]).trim_end();
-        let trimmed = stripped.trim();
-        if trimmed.is_empty() || trimmed.starts_with('#') {
-            close_idx += 1;
-            continue;
-        }
-        let indent = indent_len(stripped);
-        if indent == line_indent && trimmed == ")" {
-            break;
-        }
-        if indent <= line_indent {
-            return None;
-        }
-        close_idx += 1;
-    }
-    if close_idx >= lines.len() {
-        return None;
-    }
-
-    let inner_lines = &lines[line_idx + 1..close_idx];
-    let first_idx = find_next_nonblank(inner_lines, 0)?;
-    let first_stripped = strip_line_comment(inner_lines[first_idx]).trim_end();
-    if indent_len(first_stripped) <= line_indent {
-        return None;
-    }
-    let (body_stmts, consumed) = parse_stmts_from_lines(inner_lines, first_idx, parse_expr)?;
-    if first_idx + consumed != inner_lines.len() {
-        return None;
-    }
-
-    let lambda = Expr::Lambda {
-        param: param.to_string(),
-        body: Box::new(expr_from_branch_stmts(body_stmts)),
-    };
-    let call = Expr::Call {
-        callee: Box::new(parse_expr(callee_src)?),
-        arg: Box::new(lambda),
-        span: None,
-    };
-
-    Some((Stmt::Expr(call, None), close_idx + 1))
+    let (call, next_i) =
+        parse_multiline_lambda_call_expr(lines, line_idx, line_indent, head, parse_expr)?;
+    Some((Stmt::Expr(call, None), next_i))
 }
 
 fn parse_multiline_rhs_expr<F>(
@@ -447,25 +392,29 @@ where
     F: Copy + Fn(&str) -> Option<Expr>,
 {
     let rhs_trimmed = rhs.trim();
-    if let Some(fn_stripped) = rhs_trimmed.strip_prefix("fn ") {
-        let arrow = fn_stripped.find("->")?;
-        let param = fn_stripped[..arrow].trim();
-        let rest = fn_stripped[arrow + 2..].trim();
-        if is_non_reserved_identifier(param) && rest.is_empty() {
-            let first_idx = find_next_nonblank(lines, line_idx + 1)?;
-            let first_stripped = strip_line_comment(lines[first_idx]).trim_end();
-            if indent_len(first_stripped) <= line_indent {
-                return None;
-            }
-            let (body_stmts, consumed) = parse_stmts_from_lines(lines, first_idx, parse_expr)?;
-            return Some((
-                Expr::Lambda {
-                    param: param.to_string(),
-                    body: Box::new(expr_from_branch_stmts(body_stmts)),
-                },
-                first_idx + consumed,
-            ));
+    if let Some(params) = parse_multiline_lambda_head(rhs_trimmed) {
+        let first_idx = find_next_nonblank(lines, line_idx + 1)?;
+        let first_stripped = strip_line_comment(lines[first_idx]).trim_end();
+        if indent_len(first_stripped) <= line_indent {
+            return None;
         }
+        let (body_stmts, consumed) = parse_stmts_from_lines(lines, first_idx, parse_expr)?;
+        let lambda = params
+            .iter()
+            .rev()
+            .fold(expr_from_branch_stmts(body_stmts), |acc, param| {
+                Expr::Lambda {
+                    param: param.clone(),
+                    body: Box::new(acc),
+                }
+            });
+        return Some((lambda, first_idx + consumed));
+    }
+
+    if let Some((call, next_i)) =
+        parse_multiline_lambda_call_expr(lines, line_idx, line_indent, rhs_trimmed, parse_expr)
+    {
+        return Some((call, next_i));
     }
 
     if rhs_trimmed == "with" {
@@ -561,6 +510,88 @@ where
     }
 
     None
+}
+
+fn parse_multiline_lambda_head(src: &str) -> Option<Vec<String>> {
+    let fn_stripped = src.trim().strip_prefix("fn ")?;
+    let arrow = fn_stripped.find("->")?;
+    let params_src = fn_stripped[..arrow].trim();
+    let rest = fn_stripped[arrow + 2..].trim();
+    if !rest.is_empty() {
+        return None;
+    }
+    let params: Vec<&str> = params_src.split_whitespace().collect();
+    if params.is_empty() || !params.iter().all(|param| is_non_reserved_identifier(param)) {
+        return None;
+    }
+    Some(params.into_iter().map(str::to_string).collect())
+}
+
+fn parse_multiline_lambda_call_expr<F>(
+    lines: &[&str],
+    line_idx: usize,
+    line_indent: usize,
+    head: &str,
+    parse_expr: F,
+) -> Option<(Expr, usize)>
+where
+    F: Copy + Fn(&str) -> Option<Expr>,
+{
+    let open_idx = head.rfind('(')?;
+    let callee_src = head[..open_idx].trim();
+    let lambda_head = head[open_idx + 1..].trim();
+    let params = parse_multiline_lambda_head(lambda_head)?;
+    if callee_src.is_empty() {
+        return None;
+    }
+
+    let mut close_idx = line_idx + 1;
+    while close_idx < lines.len() {
+        let stripped = strip_line_comment(lines[close_idx]).trim_end();
+        let trimmed = stripped.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            close_idx += 1;
+            continue;
+        }
+        let indent = indent_len(stripped);
+        if indent == line_indent && trimmed == ")" {
+            break;
+        }
+        if indent <= line_indent {
+            return None;
+        }
+        close_idx += 1;
+    }
+    if close_idx >= lines.len() {
+        return None;
+    }
+
+    let inner_lines = &lines[line_idx + 1..close_idx];
+    let first_idx = find_next_nonblank(inner_lines, 0)?;
+    let first_stripped = strip_line_comment(inner_lines[first_idx]).trim_end();
+    if indent_len(first_stripped) <= line_indent {
+        return None;
+    }
+    let (body_stmts, consumed) = parse_stmts_from_lines(inner_lines, first_idx, parse_expr)?;
+    if first_idx + consumed != inner_lines.len() {
+        return None;
+    }
+
+    let lambda = params
+        .iter()
+        .rev()
+        .fold(expr_from_branch_stmts(body_stmts), |acc, param| {
+            Expr::Lambda {
+                param: param.clone(),
+                body: Box::new(acc),
+            }
+        });
+    let call = Expr::Call {
+        callee: Box::new(parse_expr(callee_src)?),
+        arg: Box::new(lambda),
+        span: None,
+    };
+    Some((call, close_idx + 1))
 }
 
 fn parse_with_in_body<F>(
@@ -1478,6 +1509,66 @@ mod tests {
                         );
                     }
                     other => panic!("expected lambda binding value, got {other:?}"),
+                }
+            }
+            other => panic!("expected first stmt binding, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_multiline_multi_param_lambda_binding_body_as_block() {
+        let body = "step = fn acc x ->\n  println \"tick\"\n  acc + x\nstep";
+        let stmts = parse_body_stmts(body).expect("should parse");
+        match &stmts[0] {
+            Stmt::Binding { name, value, .. } => {
+                assert_eq!(name, "step");
+                match value {
+                    Expr::Lambda { param, body } => {
+                        assert_eq!(param, "acc");
+                        match body.as_ref() {
+                            Expr::Lambda { param, body } => {
+                                assert_eq!(param, "x");
+                                assert!(
+                                    matches!(body.as_ref(), Expr::Block(_)),
+                                    "multiline multi-param lambda binding body should parse as block"
+                                );
+                            }
+                            other => panic!("expected nested lambda, got {other:?}"),
+                        }
+                    }
+                    other => panic!("expected lambda binding value, got {other:?}"),
+                }
+            }
+            other => panic!("expected first stmt binding, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_multiline_multi_param_lambda_call_argument_body_as_block() {
+        let body = "total = fold [1, 2, 3] 0 (fn acc x ->\n  println \"tick\"\n  acc + x\n)\ntotal";
+        let stmts = parse_body_stmts(body).expect("should parse");
+        match &stmts[0] {
+            Stmt::Binding { name, value, .. } => {
+                assert_eq!(name, "total");
+                let Expr::Call { callee, arg, .. } = value else {
+                    panic!("expected outer call expression, got {value:?}");
+                };
+                assert!(matches!(callee.as_ref(), Expr::Call { .. }));
+                match arg.as_ref() {
+                    Expr::Lambda { param, body } => {
+                        assert_eq!(param, "acc");
+                        match body.as_ref() {
+                            Expr::Lambda { param, body } => {
+                                assert_eq!(param, "x");
+                                assert!(
+                                    matches!(body.as_ref(), Expr::Block(_)),
+                                    "multiline multi-param lambda call arg body should parse as block"
+                                );
+                            }
+                            other => panic!("expected nested lambda, got {other:?}"),
+                        }
+                    }
+                    other => panic!("expected lambda call arg, got {other:?}"),
                 }
             }
             other => panic!("expected first stmt binding, got {other:?}"),
