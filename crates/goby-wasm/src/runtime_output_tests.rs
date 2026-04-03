@@ -1215,7 +1215,6 @@ main =
 }
 
 #[test]
-#[ignore = "portable fallback runtime-output still lacks end-to-end multi-parameter callable execution"]
 fn resolves_runtime_output_for_fold_with_inline_multi_param_lambda_callback() {
     let _guard = ENV_MUTEX.lock().unwrap();
     let source = r#"
@@ -1232,7 +1231,6 @@ main =
 }
 
 #[test]
-#[ignore = "portable fallback runtime-output still lacks end-to-end multi-parameter callable execution"]
 fn resolves_runtime_output_for_effectful_fold_with_inline_multi_param_lambda_callback() {
     let _guard = ENV_MUTEX.lock().unwrap();
     let source = r#"
@@ -1250,6 +1248,42 @@ main =
     let module = parse_module(source).expect("parse should succeed");
     let output = resolve_module_runtime_output(&module).expect("runtime output should resolve");
     assert_eq!(output, "acc=0 x=1\nacc=1 x=2\nacc=3 x=3\ntotal=6\n");
+}
+
+#[test]
+fn resolves_runtime_output_for_let_bound_inline_multi_param_lambda_via_user_hof() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    let source = r#"
+apply_twice : (Int -> Int -> Int) -> Int -> Int
+apply_twice f x =
+  f x x
+
+main : Unit -> Unit
+main =
+  add = fn a b -> a + b
+  result = apply_twice add 5
+  print "${result}"
+"#;
+    let module = parse_module(source).expect("parse should succeed");
+    let output = resolve_module_runtime_output(&module).expect("runtime output should resolve");
+    assert_eq!(output, "10");
+}
+
+#[test]
+fn resolves_runtime_output_for_capturing_inline_multi_param_lambda_via_fold() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    let source = r#"
+import goby/list ( fold )
+
+main : Unit -> Unit
+main =
+  bias = 10
+  total = fold [1, 2, 3] 0 (fn acc x -> acc + x + bias)
+  print "${total}"
+"#;
+    let module = parse_module(source).expect("parse should succeed");
+    let output = resolve_module_runtime_output(&module).expect("runtime output should resolve");
+    assert_eq!(output, "36");
 }
 
 #[test]

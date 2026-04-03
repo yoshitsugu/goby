@@ -9,6 +9,40 @@ use crate::runtime_value::{RuntimeLocals, RuntimeValue, runtime_value_eq};
 use crate::{MAX_EVAL_DEPTH, RuntimeOutputResolver};
 
 impl<'m> RuntimeOutputResolver<'m> {
+    fn apply_callable_args_out(
+        &mut self,
+        callable: &IntCallable,
+        arg_values: &[RuntimeValue],
+        locals: &RuntimeLocals,
+        callables: &RcCallables,
+        evaluators: &RuntimeEvaluators<'_, '_>,
+        depth: usize,
+    ) -> Out<RuntimeValue> {
+        let mut current = RuntimeValue::Callable(Box::new(callable.clone()));
+        for (idx, arg_value) in arg_values.iter().enumerate() {
+            let RuntimeValue::Callable(next_callable) = current else {
+                return Out::Err(RuntimeError::Unsupported);
+            };
+            current = match self.eval_callable_value(
+                &next_callable,
+                arg_value.clone(),
+                locals,
+                callables,
+                evaluators,
+                depth + 1,
+            ) {
+                Out::Done(value) => value,
+                Out::Suspend(cont) => return Out::Suspend(cont),
+                Out::Escape(escape) => return Out::Escape(escape),
+                Out::Err(err) => return Out::Err(err),
+            };
+            if idx + 1 < arg_values.len() && !matches!(current, RuntimeValue::Callable(_)) {
+                return Out::Err(RuntimeError::Unsupported);
+            }
+        }
+        Out::Done(current)
+    }
+
     pub(crate) fn eval_runtime_decl_body_out(
         &mut self,
         decl: &crate::runtime_flow::RuntimeDeclInfo,
@@ -447,6 +481,26 @@ impl<'m> RuntimeOutputResolver<'m> {
             arg_values.len() >= 2,
             "use apply_named_value_call_out for single-arg calls"
         );
+        if let Some(RuntimeValue::Callable(callable)) = locals.get(fn_name) {
+            return self.apply_callable_args_out(
+                &callable,
+                arg_values,
+                locals,
+                callables,
+                evaluators,
+                depth + 1,
+            );
+        }
+        if let Some(callable) = callables.get(fn_name) {
+            return self.apply_callable_args_out(
+                callable,
+                arg_values,
+                locals,
+                callables,
+                evaluators,
+                depth + 1,
+            );
+        }
         if let Some(method) = self.find_handler_method_by_name(fn_name) {
             return self.dispatch_handler_method_as_value_with_args_flow(
                 &method,
