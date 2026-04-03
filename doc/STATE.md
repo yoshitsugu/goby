@@ -4,15 +4,16 @@ Last updated: 2026-04-03
 
 ## Current Focus
 
-**Inline multi-parameter lambda track**: complete for the current scope.
+**Runtime memory plan (`doc/PLAN_MEMORY.md`)**: design is drafted; implementation has not started.
 
-- Locked outcome:
-  - `fn a b -> expr` now behaves as an ordinary first-class callable across the track's claimed execution paths.
-  - Wasm/runtime-stdin execution handles pure `fold`, effectful `fold`, let-bound user-defined higher-order reuse, capturing inline multi-parameter lambdas, the future-helper `pairwise_apply` proof case, and the follow-up `apply_two` helper proof case.
-  - portable fallback runtime-output covers the same acceptance/proof shapes.
-- Track transition:
-  - `doc/PLAN_INLINE_MULTI_PARAM_LAMBDA.md` is now closed for the current scope.
-  - the next active development item should be selected from `doc/PLAN.md` rather than keeping this cleanup/proof track open.
+- Locked direction:
+  - Goby should move from fixed-page-aware memory assumptions to a bounded grow-aware memory model.
+  - initial memory stays modest, runtime growth is allowed, and growth must stop at a configured maximum rather than becoming effectively unbounded.
+  - host temporary allocation and Wasm heap allocation must follow one explicit shared address-space rule.
+  - explicit exhaustion errors are required; generic Wasm traps and pointer corruption are not acceptable memory-failure outcomes.
+- Execution target:
+  - the next implementation slice should start from `doc/PLAN_MEMORY.md` M0/M1 rather than opening a new unrelated feature track first.
+  - final closure for this track requires representative memory-pressure regressions that succeed under the default bounded-growth policy and explicit low-maximum regressions that fail with the intended exhaustion error.
 
 ## Recently Completed
 
@@ -33,12 +34,12 @@ Last updated: 2026-04-03
 - **Inline multi-parameter lambda cleanup closure + broader proof** (2026-04-03): the current-scope cleanup/proof checklist is now complete.
   - `cleanup(multi-arg)`: removed the dedicated `IndirectCallClosure` path so local capturing closures now use the same generic indirect-call dispatch path as other callable values.
   - `proof(helper)`: added a second user-defined higher-order helper proof (`apply_two`) on both Wasm/runtime-stdin and portable fallback/runtime-output paths, confirming the feature is not tied to the earlier `pairwise_apply` shape.
-  - `track`: close `doc/PLAN_INLINE_MULTI_PARAM_LAMBDA.md` for the current scope; treat future arity expansion or later helper introductions as separate follow-up work.
+  - `track`: inline multi-parameter lambda support is complete for the current scope; treat future arity expansion or later helper introductions as separate follow-up work.
 
 - **Inline multi-parameter lambda fallback callable parity** (2026-04-03): portable fallback/runtime-output now applies local and captured callable values sequentially, so nested `fn a b -> ...` lambdas execute through the shared callable boundary instead of falling out after the first argument.
   - `runtime(apply)`: `apply_named_value_call_args_out` now detects local/captured callable values and applies multi-argument calls by repeated shared callable evaluation rather than only via named decl lookup.
   - `test(runtime-output)`: enabled pure and effectful inline `fold` acceptance tests on the portable fallback path and added fallback regressions for let-bound user-defined HOF reuse and capturing inline multi-parameter lambdas.
-  - `status`: runtime-stdin/Wasm and portable fallback are now aligned for the first four acceptance programs from `doc/PLAN_INLINE_MULTI_PARAM_LAMBDA.md` §4.
+  - `status`: runtime-stdin/Wasm and portable fallback are aligned for the tracked acceptance shapes: pure/effectful `fold`, let-bound user-defined higher-order reuse, and capturing inline multi-parameter lambdas.
 
 - **Track CC interpreter helper-returned closure parity** (2026-04-02): fallback/interpreter runtime now supports helper-returned closure values and shared mutable-cell closure pairs.
   - `runtime(value)`: `RuntimeValue` now carries callable values, allowing declaration bodies and locals to retain closures as first-class runtime values instead of dropping them at the value boundary.
@@ -120,9 +121,10 @@ Last updated: 2026-04-03
 
 ## Immediate Next Steps
 
-- Select the next roadmap item from `doc/PLAN.md`.
-- When a future higher-order helper is introduced, add one proof that inline multi-parameter lambdas continue to work without helper-specific compiler/runtime changes.
-- Treat arity growth beyond the current acceptance/proof surface as new capability work rather than reopening this completed cleanup track by default.
+- Start `doc/PLAN_MEMORY.md` M0: inventory all duplicated memory-capacity constants and lock one shared memory configuration boundary.
+- Implement `doc/PLAN_MEMORY.md` M1 next: add shared memory configuration plus grow-aware host-memory helpers before touching GC or broader runtime redesign.
+- Add focused memory-pressure regressions as part of this track, including both below-maximum success cases and intentionally low-maximum exhaustion cases.
+- Keep the completed inline multi-parameter lambda track closed unless a future helper or arity expansion explicitly requires a new follow-up slice.
 
 ## Architecture State
 
