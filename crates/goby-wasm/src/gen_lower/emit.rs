@@ -26,7 +26,10 @@ use crate::host_runtime::{
     HOST_BUMP_RESERVED_BYTES, HOST_INTRINSIC_IMPORTS, IntrinsicExecutionBoundary,
     host_import_for_intrinsic,
 };
-use crate::layout::{GLOBAL_HEAP_CURSOR_OFFSET, MemoryLayout};
+use crate::layout::{
+    GLOBAL_HEAP_CURSOR_OFFSET, GLOBAL_RUNTIME_ERROR_OFFSET, MemoryLayout,
+    RUNTIME_ERROR_MEMORY_EXHAUSTION,
+};
 use crate::memory_config::{DEFAULT_WASM_MEMORY_CONFIG, WASM_PAGE_BYTES};
 
 const STATIC_STRING_LIMIT: u32 =
@@ -295,6 +298,7 @@ struct HelperEmitState {
     i32_base: u32,
     alloc_cursor_local: u32,
     heap_floor_local: u32,
+    function_returns_i64: bool,
 }
 
 /// Extract `helper_state`, returning a `CodegenError` if it is absent.
@@ -605,12 +609,14 @@ pub(crate) enum EffectEmitStrategy {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct EmitOptions {
     pub(crate) effect_emit_strategy: EffectEmitStrategy,
+    pub(crate) memory_config: crate::memory_config::WasmMemoryConfig,
 }
 
 impl Default for EmitOptions {
     fn default() -> Self {
         Self {
             effect_emit_strategy: default_effect_emit_strategy(),
+            memory_config: DEFAULT_WASM_MEMORY_CONFIG,
         }
     }
 }
@@ -646,6 +652,13 @@ fn initialize_helper_state_locals(
         // main initializes the global heap cursor in linear memory, then loads it locally.
         function.instruction(&Instruction::I32Const(GLOBAL_HEAP_CURSOR_OFFSET as i32));
         function.instruction(&Instruction::I32Const(initial_cursor));
+        function.instruction(&Instruction::I32Store(MemArg {
+            offset: 0,
+            align: 2,
+            memory_index: 0,
+        }));
+        function.instruction(&Instruction::I32Const(GLOBAL_RUNTIME_ERROR_OFFSET as i32));
+        function.instruction(&Instruction::I32Const(0));
         function.instruction(&Instruction::I32Store(MemArg {
             offset: 0,
             align: 2,
@@ -925,7 +938,7 @@ pub(crate) fn emit_general_module_with_aux_and_options(
 
     // Memory section
     let mut memories = MemorySection::new();
-    memories.memory(DEFAULT_WASM_MEMORY_CONFIG.memory_type());
+    memories.memory(options.memory_config.memory_type());
     module.section(&memories);
 
     // Export section — `_start` is always main (index stable across aux additions).
@@ -1073,6 +1086,7 @@ fn emit_instrs(
     i32_base: u32,
     static_strings: &StaticStringPool,
     options: EmitOptions,
+    function_returns_i64: bool,
 ) -> Result<(), CodegenError> {
     let iovec_offset = layout.iovec_offset as i32;
     let nread_offset = layout.nwritten_offset as i32;
@@ -1097,6 +1111,7 @@ fn emit_instrs(
             i32_base,
             alloc_cursor_local,
             heap_floor_local,
+            function_returns_i64,
         })
     } else {
         None
@@ -1237,6 +1252,7 @@ fn emit_instrs(
                     i32_base,
                     static_strings,
                     options,
+                    function_returns_i64,
                 )?;
                 function.instruction(&Instruction::Else);
                 emit_instrs(
@@ -1249,6 +1265,7 @@ fn emit_instrs(
                     i32_base,
                     static_strings,
                     options,
+                    function_returns_i64,
                 )?;
                 function.instruction(&Instruction::End);
             }
@@ -1274,6 +1291,7 @@ fn emit_instrs(
                     static_strings,
                     &helper_state,
                     options,
+                    function_returns_i64,
                 )?;
             }
 
@@ -1311,6 +1329,7 @@ fn emit_instrs(
                         i32_base,
                         static_strings,
                         options,
+                        function_returns_i64,
                     )?;
                     function.instruction(&Instruction::I64Store(MemArg {
                         offset: 0,
@@ -1351,6 +1370,7 @@ fn emit_instrs(
                         i32_base,
                         static_strings,
                         options,
+                        function_returns_i64,
                     )?;
                     function.instruction(&Instruction::I64Store(MemArg {
                         offset: 0,
@@ -1394,6 +1414,7 @@ fn emit_instrs(
                         i32_base,
                         static_strings,
                         options,
+                        function_returns_i64,
                     )?;
                     function.instruction(&Instruction::I64Store(MemArg {
                         offset: 0,
@@ -1433,6 +1454,7 @@ fn emit_instrs(
                     i32_base,
                     static_strings,
                     options,
+                    function_returns_i64,
                 )?;
                 emit_list_each_effect(
                     function,
@@ -1461,6 +1483,7 @@ fn emit_instrs(
                     i32_base,
                     static_strings,
                     options,
+                    function_returns_i64,
                 )?;
                 emit_instrs(
                     function,
@@ -1472,6 +1495,7 @@ fn emit_instrs(
                     i32_base,
                     static_strings,
                     options,
+                    function_returns_i64,
                 )?;
                 emit_list_each(function, &hs, type_idx, closure_type_idx);
             }
@@ -1493,6 +1517,7 @@ fn emit_instrs(
                     i32_base,
                     static_strings,
                     options,
+                    function_returns_i64,
                 )?;
                 emit_instrs(
                     function,
@@ -1504,6 +1529,7 @@ fn emit_instrs(
                     i32_base,
                     static_strings,
                     options,
+                    function_returns_i64,
                 )?;
                 emit_list_map(function, &hs, type_idx, closure_type_idx)?;
             }
@@ -1577,6 +1603,7 @@ fn emit_instrs(
                     i32_base,
                     static_strings,
                     options,
+                    function_returns_i64,
                 )?;
                 function.instruction(&Instruction::I64Store(MemArg {
                     offset: 0,
@@ -1599,6 +1626,7 @@ fn emit_instrs(
                         i32_base,
                         static_strings,
                         options,
+                        function_returns_i64,
                     )?;
                     function.instruction(&Instruction::I64Store(MemArg {
                         offset: 0,
@@ -1667,6 +1695,7 @@ fn emit_instrs(
                     i32_base,
                     static_strings,
                     options,
+                    function_returns_i64,
                 )?;
                 function.instruction(&Instruction::I64Store(MemArg {
                     offset: 0,
@@ -1703,6 +1732,7 @@ fn emit_instrs(
                     i32_base,
                     static_strings,
                     options,
+                    function_returns_i64,
                 )?;
                 function.instruction(&Instruction::I32WrapI64);
                 // Emit the new value (i64) to store.
@@ -1716,6 +1746,7 @@ fn emit_instrs(
                     i32_base,
                     static_strings,
                     options,
+                    function_returns_i64,
                 )?;
                 // Store value into cell at offset 0.
                 function.instruction(&Instruction::I64Store(MemArg {
@@ -1880,6 +1911,7 @@ fn emit_function_body(
         i32_base,
         static_strings,
         options,
+        emit_epilogue_cursor_sync,
     )?;
     if has_heap && emit_epilogue_cursor_sync {
         let alloc_cursor_local = i32_base + HELPER_ALLOC_CURSOR_OFFSET;
@@ -1904,8 +1936,26 @@ fn emit_heap_aware_direct_call(
     }
     function.instruction(&Instruction::Call(func_idx));
     if let Some(hs) = helper_state {
+        emit_return_if_runtime_error(function, hs);
         emit_sync_cursor_from_global(function, hs.alloc_cursor_local);
     }
+}
+
+fn emit_return_if_runtime_error(function: &mut Function, helper_state: &HelperEmitState) {
+    function.instruction(&Instruction::I32Const(GLOBAL_RUNTIME_ERROR_OFFSET as i32));
+    function.instruction(&Instruction::I32Load(MemArg {
+        offset: 0,
+        align: 2,
+        memory_index: 0,
+    }));
+    function.instruction(&Instruction::I32Eqz);
+    function.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
+    function.instruction(&Instruction::Else);
+    if helper_state.function_returns_i64 {
+        function.instruction(&Instruction::I64Const(0));
+    }
+    function.instruction(&Instruction::Return);
+    function.instruction(&Instruction::End);
 }
 
 /// Emit `i32.const GLOBAL_HEAP_CURSOR_OFFSET; local.get alloc_cursor_local; i32.store`
@@ -2041,6 +2091,11 @@ fn emit_indirect_call_dispatch(
         closure_type_idx,
         hs,
     );
+    if let Some(hs) = hs {
+        function.instruction(&Instruction::LocalSet(callee_local));
+        emit_return_if_runtime_error(function, hs);
+        function.instruction(&Instruction::LocalGet(callee_local));
+    }
     Ok(())
 }
 
@@ -2058,45 +2113,43 @@ fn emit_alloc_from_top(
     result_local: u32,
 ) {
     function.instruction(&Instruction::LocalGet(helper_state.alloc_cursor_local));
-    function.instruction(&Instruction::LocalGet(size_local));
-    function.instruction(&Instruction::I32Sub);
-    function.instruction(&Instruction::I32Const(!7));
-    function.instruction(&Instruction::I32And);
-    function.instruction(&Instruction::LocalTee(result_local));
     function.instruction(&Instruction::LocalGet(helper_state.heap_floor_local));
+    function.instruction(&Instruction::I32Sub);
+    function.instruction(&Instruction::LocalTee(result_local));
+    function.instruction(&Instruction::LocalGet(size_local));
     function.instruction(&Instruction::I32LtU);
     function.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
-    // Reuse `size_local` as a temporary for required growth pages after the
-    // tentative allocation size is no longer needed.
-    function.instruction(&Instruction::LocalGet(helper_state.heap_floor_local));
+    // `result_local` currently holds available bytes between the top-down cursor
+    // and the heap floor. Grow by the extra bytes required for this allocation.
+    function.instruction(&Instruction::LocalGet(size_local));
     function.instruction(&Instruction::LocalGet(result_local));
     function.instruction(&Instruction::I32Sub);
     function.instruction(&Instruction::I32Const((WASM_PAGE_BYTES - 1) as i32));
     function.instruction(&Instruction::I32Add);
     function.instruction(&Instruction::I32Const(WASM_PAGE_BYTES as i32));
     function.instruction(&Instruction::I32DivU);
-    function.instruction(&Instruction::LocalSet(size_local));
-    function.instruction(&Instruction::LocalGet(size_local));
+    function.instruction(&Instruction::LocalTee(result_local));
     function.instruction(&Instruction::MemoryGrow(0));
     function.instruction(&Instruction::I32Const(-1));
     function.instruction(&Instruction::I32Eq);
     function.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
-    emit_abort(function);
+    emit_memory_exhaustion_abort(function, helper_state);
     function.instruction(&Instruction::End);
-    function.instruction(&Instruction::LocalGet(size_local));
+    function.instruction(&Instruction::LocalGet(result_local));
     function.instruction(&Instruction::I32Const(WASM_PAGE_BYTES as i32));
     function.instruction(&Instruction::I32Mul);
-    function.instruction(&Instruction::LocalSet(size_local));
+    function.instruction(&Instruction::LocalSet(result_local));
     function.instruction(&Instruction::LocalGet(helper_state.alloc_cursor_local));
-    function.instruction(&Instruction::LocalGet(size_local));
+    function.instruction(&Instruction::LocalGet(result_local));
     function.instruction(&Instruction::I32Add);
     function.instruction(&Instruction::LocalSet(helper_state.alloc_cursor_local));
-    function.instruction(&Instruction::LocalGet(result_local));
-    function.instruction(&Instruction::LocalGet(size_local));
-    function.instruction(&Instruction::I32Add);
-    function.instruction(&Instruction::LocalSet(result_local));
     function.instruction(&Instruction::End);
-    function.instruction(&Instruction::LocalGet(result_local));
+    function.instruction(&Instruction::LocalGet(helper_state.alloc_cursor_local));
+    function.instruction(&Instruction::LocalGet(size_local));
+    function.instruction(&Instruction::I32Sub);
+    function.instruction(&Instruction::I32Const(!7));
+    function.instruction(&Instruction::I32And);
+    function.instruction(&Instruction::LocalTee(result_local));
     function.instruction(&Instruction::LocalSet(helper_state.alloc_cursor_local));
 }
 
@@ -3470,7 +3523,8 @@ fn emit_list_each(
         closure_call_type_idx,
         Some(hs),
     );
-    function.instruction(&Instruction::Drop); // discard result
+    function.instruction(&Instruction::LocalSet(s_elem));
+    emit_return_if_runtime_error(function, hs);
 
     // iter += 1
     function.instruction(&Instruction::LocalGet(s_iter));
@@ -3581,6 +3635,7 @@ fn emit_list_map(
         Some(hs),
     );
     function.instruction(&Instruction::LocalSet(s_elem));
+    emit_return_if_runtime_error(function, hs);
 
     // result_ptr[4 + iter * 8] = mapped
     function.instruction(&Instruction::LocalGet(s_result_ptr));
@@ -3787,6 +3842,7 @@ fn emit_case_match(
     static_strings: &StaticStringPool,
     helper_state: &Option<HelperEmitState>,
     options: EmitOptions,
+    function_returns_i64: bool,
 ) -> Result<(), CodegenError> {
     use crate::gen_lower::backend_ir::BackendCasePattern;
 
@@ -3822,6 +3878,7 @@ fn emit_case_match(
                     i32_base,
                     static_strings,
                     options,
+                    function_returns_i64,
                 )?;
                 function.instruction(&Instruction::Br(0));
                 // Any arms after Wildcard are unreachable; stop emitting.
@@ -3850,6 +3907,7 @@ fn emit_case_match(
                     i32_base,
                     static_strings,
                     options,
+                    function_returns_i64,
                 )?;
                 function.instruction(&Instruction::Br(1)); // br out of enclosing block
                 function.instruction(&Instruction::End); // end if
@@ -3871,6 +3929,7 @@ fn emit_case_match(
                     i32_base,
                     static_strings,
                     options,
+                    function_returns_i64,
                 )?;
                 function.instruction(&Instruction::Br(1));
                 function.instruction(&Instruction::End);
@@ -3988,6 +4047,7 @@ fn emit_case_match(
                     i32_base,
                     static_strings,
                     options,
+                    function_returns_i64,
                 )?;
                 function.instruction(&Instruction::Br(2)); // br out of: if(same len) + outer block
                 function.instruction(&Instruction::End); // end if (same len)
@@ -4034,6 +4094,7 @@ fn emit_case_match(
                     i32_base,
                     static_strings,
                     options,
+                    function_returns_i64,
                 )?;
                 function.instruction(&Instruction::Br(2)); // out of: if(len==0) + if(is list) + block
                 function.instruction(&Instruction::End); // end if (len == 0)
@@ -4222,6 +4283,7 @@ fn emit_case_match(
                     i32_base,
                     static_strings,
                     options,
+                    function_returns_i64,
                 )?;
                 function.instruction(&Instruction::Br(2));
                 function.instruction(&Instruction::End); // end if_len
@@ -4244,6 +4306,22 @@ fn emit_case_match(
 
 fn emit_abort(function: &mut Function) {
     function.instruction(&Instruction::Unreachable);
+}
+
+fn emit_memory_exhaustion_abort(function: &mut Function, helper_state: &HelperEmitState) {
+    function.instruction(&Instruction::I32Const(GLOBAL_RUNTIME_ERROR_OFFSET as i32));
+    function.instruction(&Instruction::I32Const(
+        RUNTIME_ERROR_MEMORY_EXHAUSTION as i32,
+    ));
+    function.instruction(&Instruction::I32Store(MemArg {
+        offset: 0,
+        align: 2,
+        memory_index: 0,
+    }));
+    if helper_state.function_returns_i64 {
+        function.instruction(&Instruction::I64Const(0));
+    }
+    function.instruction(&Instruction::Return);
 }
 
 fn emit_split_index_operand(
@@ -4551,6 +4629,7 @@ mod tests {
             &default_layout(),
             EmitOptions {
                 effect_emit_strategy: EffectEmitStrategy::Wb3DirectCall,
+                memory_config: DEFAULT_WASM_MEMORY_CONFIG,
             },
         )
         .expect("direct emit should succeed");
@@ -4560,6 +4639,7 @@ mod tests {
             &default_layout(),
             EmitOptions {
                 effect_emit_strategy: EffectEmitStrategy::Wb3BWasmFxExperimental,
+                memory_config: DEFAULT_WASM_MEMORY_CONFIG,
             },
         )
         .expect("experimental wasmfx emit should succeed");
@@ -4691,6 +4771,49 @@ mod tests {
         let wasm = emit_general_module(&instrs, &default_layout())
             .expect("emit static string print should succeed");
         assert_valid_wasm(&wasm);
+    }
+
+    #[test]
+    fn heap_allocation_reports_runtime_error_when_growth_hits_maximum() {
+        let element_instrs = (0..40_000)
+            .map(|n| {
+                vec![I::I64Const(
+                    crate::gen_lower::value::encode_int(n).expect("int encode"),
+                )]
+            })
+            .collect::<Vec<_>>();
+        let instrs = vec![
+            I::ListLit { element_instrs },
+            I::Drop,
+            I::PushStaticString {
+                text: "done".to_string(),
+            },
+            I::EffectOp {
+                op: BackendEffectOp::Print(BackendPrintOp::Print),
+            },
+            I::Drop,
+        ];
+        let wasm = emit_general_module_with_aux_and_options(
+            &instrs,
+            &[],
+            &default_layout(),
+            EmitOptions {
+                effect_emit_strategy: EffectEmitStrategy::Wb3DirectCall,
+                memory_config: crate::memory_config::WasmMemoryConfig {
+                    initial_pages: DEFAULT_WASM_MEMORY_CONFIG.initial_pages,
+                    max_pages: DEFAULT_WASM_MEMORY_CONFIG.initial_pages,
+                    host_bump_reserved_bytes: DEFAULT_WASM_MEMORY_CONFIG.host_bump_reserved_bytes,
+                    max_wasm_stack_bytes: DEFAULT_WASM_MEMORY_CONFIG.max_wasm_stack_bytes,
+                },
+            },
+        )
+        .expect("low-max emit should still produce a module");
+        let err = crate::wasm_exec::run_wasm_bytes_with_stdin(&wasm, None)
+            .expect_err("heap growth beyond the configured maximum should fail");
+        assert_eq!(
+            err,
+            "runtime error: memory exhausted [E-MEMORY-EXHAUSTION]: allocation exceeded the configured Wasm memory limit"
+        );
     }
 
     #[test]

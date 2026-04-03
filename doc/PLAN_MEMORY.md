@@ -489,17 +489,20 @@ Done when:
 
 Current status note:
 
-- The first heap-growth slice is landed for heap-only pressure shapes through
-  shared `emit_alloc_from_top` growth.
-- Shared host-temp-plus-heap coexistence and explicit exhaustion behavior remain
-  follow-up work; keep those under the next slice rather than treating M2/M3 as
-  fully closed.
+- The heap-growth path now computes available bytes before subtracting from the
+  top-down cursor, so low-maximum configurations no longer wrap past the heap
+  floor and drift into generic out-of-bounds traps.
+- Explicit exhaustion now routes through the shared runtime-error slot for both
+  host temporary allocation and compiled heap growth; bounded failures surface
+  as Goby runtime errors rather than raw Wasm traps.
+- Shared host-temp-plus-heap coexistence under one execution is still follow-up
+  proof work and belongs to the next slice, not to M2/M3.
 
 ### 9.4 M3: Explicit exhaustion behavior
 
-- [ ] Add stable runtime errors for failed memory growth.
-- [ ] Cover host temporary exhaustion and heap exhaustion separately in tests.
-- [ ] Ensure CLI/runtime surfaces render these failures as Goby runtime errors.
+- [x] Add stable runtime errors for failed memory growth.
+- [x] Cover host temporary exhaustion and heap exhaustion separately in tests.
+- [x] Ensure CLI/runtime surfaces render these failures as Goby runtime errors.
 
 Done when:
 

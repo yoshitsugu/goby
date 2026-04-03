@@ -1072,12 +1072,14 @@ mod tests {
     use super::*;
     use crate::gen_lower::backend_ir::WasmBackendInstr;
     use crate::gen_lower::emit::{EffectEmitStrategy, EmitOptions};
+    use crate::memory_config::DEFAULT_WASM_MEMORY_CONFIG;
 
     fn assert_strategy_parity(module: &goby_core::Module) {
         let direct = try_general_lower_module_with_options(
             module,
             EmitOptions {
                 effect_emit_strategy: EffectEmitStrategy::Wb3DirectCall,
+                memory_config: DEFAULT_WASM_MEMORY_CONFIG,
             },
         )
         .expect("direct-call lowering should not error")
@@ -1086,6 +1088,7 @@ mod tests {
             module,
             EmitOptions {
                 effect_emit_strategy: EffectEmitStrategy::Wb3BWasmFxExperimental,
+                memory_config: DEFAULT_WASM_MEMORY_CONFIG,
             },
         )
         .expect("future handler-path lowering should not error")
@@ -1109,6 +1112,7 @@ mod tests {
             module,
             EmitOptions {
                 effect_emit_strategy: expected_strategy,
+                memory_config: DEFAULT_WASM_MEMORY_CONFIG,
             },
         )
         .expect("explicit lowering should not error")

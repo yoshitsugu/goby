@@ -46,7 +46,13 @@ use crate::gen_lower::value::{
 };
 use crate::grapheme_semantics::collect_extended_grapheme_spans;
 use crate::host_runtime::HostIntrinsicImport;
+use crate::layout::{
+    GLOBAL_RUNTIME_ERROR_OFFSET, RUNTIME_ERROR_MEMORY_EXHAUSTION, RUNTIME_ERROR_NONE,
+};
 use crate::memory_config::{DEFAULT_WASM_MEMORY_CONFIG, WASM_PAGE_BYTES};
+
+const ERR_MEMORY_EXHAUSTION: &str =
+    "memory exhausted [E-MEMORY-EXHAUSTION]: allocation exceeded the configured Wasm memory limit";
 
 /// Execute Wasm bytes produced by `compile_module` with optional stdin input.
 ///
@@ -59,9 +65,17 @@ pub(crate) fn run_wasm_bytes_with_stdin(
     wasm: &[u8],
     stdin: Option<&str>,
 ) -> Result<String, String> {
+    run_wasm_bytes_with_stdin_and_config(wasm, stdin, DEFAULT_WASM_MEMORY_CONFIG)
+}
+
+fn run_wasm_bytes_with_stdin_and_config(
+    wasm: &[u8],
+    stdin: Option<&str>,
+    memory_config: crate::memory_config::WasmMemoryConfig,
+) -> Result<String, String> {
     let mut config = Config::new();
-    config.max_wasm_stack(DEFAULT_WASM_MEMORY_CONFIG.max_wasm_stack_bytes);
-    config.async_stack_size(DEFAULT_WASM_MEMORY_CONFIG.max_wasm_stack_bytes);
+    config.max_wasm_stack(memory_config.max_wasm_stack_bytes);
+    config.async_stack_size(memory_config.max_wasm_stack_bytes);
     let engine = Engine::new(&config).map_err(|e| format!("engine config: {e}"))?;
     let module = Module::from_binary(&engine, wasm).map_err(|e| format!("wasm load: {e}"))?;
 
@@ -85,7 +99,7 @@ pub(crate) fn run_wasm_bytes_with_stdin(
 
     // Upward bump allocator for host-backed string/list writes. It starts in the
     // host-reserved region of the initial memory image and may trigger memory growth.
-    let bump = Arc::new(AtomicU32::new(DEFAULT_WASM_MEMORY_CONFIG.host_bump_start()));
+    let bump = Arc::new(AtomicU32::new(memory_config.host_bump_start()));
 
     let bump_for_value_to_string = Arc::clone(&bump);
     linker
@@ -93,7 +107,12 @@ pub(crate) fn run_wasm_bytes_with_stdin(
             module_name,
             HostIntrinsicImport::ValueToString.name(),
             move |caller: Caller<'_, WasiP1Ctx>, tagged_value: i64| -> i64 {
-                value_to_string_host(caller, tagged_value, &bump_for_value_to_string)
+                value_to_string_host(
+                    caller,
+                    tagged_value,
+                    &bump_for_value_to_string,
+                    memory_config,
+                )
             },
         )
         .map_err(|e| format!("linker register value_to_string: {e}"))?;
@@ -114,7 +133,13 @@ pub(crate) fn run_wasm_bytes_with_stdin(
             module_name,
             HostIntrinsicImport::StringEachGraphemeState.name(),
             move |caller: Caller<'_, WasiP1Ctx>, tagged_str: i64, idx_tagged: i64| -> i64 {
-                grapheme_state_host_inner(caller, tagged_str, idx_tagged, &bump_for_state)
+                grapheme_state_host_inner(
+                    caller,
+                    tagged_str,
+                    idx_tagged,
+                    &bump_for_state,
+                    memory_config,
+                )
             },
         )
         .map_err(|e| format!("linker register grapheme_state: {e}"))?;
@@ -125,7 +150,7 @@ pub(crate) fn run_wasm_bytes_with_stdin(
             module_name,
             HostIntrinsicImport::StringConcat.name(),
             move |caller: Caller<'_, WasiP1Ctx>, tagged_a: i64, tagged_b: i64| -> i64 {
-                string_concat_host(caller, tagged_a, tagged_b, &bump_for_concat)
+                string_concat_host(caller, tagged_a, tagged_b, &bump_for_concat, memory_config)
             },
         )
         .map_err(|e| format!("linker register string_concat: {e}"))?;
@@ -136,7 +161,7 @@ pub(crate) fn run_wasm_bytes_with_stdin(
             module_name,
             HostIntrinsicImport::StringGraphemesList.name(),
             move |caller: Caller<'_, WasiP1Ctx>, tagged_str: i64| -> i64 {
-                graphemes_list_host(caller, tagged_str, &bump_for_graphemes_list)
+                graphemes_list_host(caller, tagged_str, &bump_for_graphemes_list, memory_config)
             },
         )
         .map_err(|e| format!("linker register graphemes_list: {e}"))?;
@@ -149,9 +174,22 @@ pub(crate) fn run_wasm_bytes_with_stdin(
         .get_typed_func::<(), ()>(&mut store, "_start")
         .map_err(|e| format!("_start not found: {e}"))?;
 
-    start
-        .call(&mut store, ())
-        .map_err(|e| format!("execution: {e}"))?;
+    match start.call(&mut store, ()) {
+        Ok(()) => {
+            if let Some(runtime_err) = take_runtime_error(&mut store, &instance) {
+                return Err(format!("runtime error: {runtime_err}"));
+            }
+        }
+        Err(e) => {
+            if let Some(runtime_err) = take_runtime_error(&mut store, &instance) {
+                return Err(format!("runtime error: {runtime_err}"));
+            }
+            if is_memory_exhaustion_trap(&e) {
+                return Err(format!("runtime error: {ERR_MEMORY_EXHAUSTION}"));
+            }
+            return Err(format!("execution: {e}"));
+        }
+    }
 
     // Drop the store to release the Arc borrow on `stdout_pipe` so that
     // `stdout_capture.contents()` can acquire the lock below.
@@ -165,12 +203,13 @@ fn value_to_string_host(
     mut caller: Caller<'_, WasiP1Ctx>,
     tagged_value: i64,
     bump: &AtomicU32,
+    memory_config: crate::memory_config::WasmMemoryConfig,
 ) -> i64 {
     let Ok(rendered) = format_tagged_value(&mut caller, tagged_value) else {
-        return encode_string_in_host_bump(&mut caller, "<unsupported>", bump)
+        return encode_string_in_host_bump(&mut caller, "<unsupported>", bump, memory_config)
             .unwrap_or(tagged_value);
     };
-    encode_string_in_host_bump(&mut caller, &rendered, bump).unwrap_or(tagged_value)
+    encode_string_in_host_bump(&mut caller, &rendered, bump, memory_config).unwrap_or(tagged_value)
 }
 
 /// Host implementation: count grapheme clusters in a tagged string.
@@ -210,6 +249,7 @@ fn grapheme_state_host_inner(
     tagged_str: i64,
     idx_tagged: i64,
     bump: &AtomicU32,
+    memory_config: crate::memory_config::WasmMemoryConfig,
 ) -> i64 {
     let Ok(str_slice) = read_wasm_string(&mut caller, tagged_str) else {
         return tagged_str; // fallback: return original string
@@ -233,16 +273,17 @@ fn grapheme_state_host_inner(
         1..=3 => {
             // No safe 4-byte in-place slot. Allocate from the host bump region.
             let needed = 4u32 + grapheme_len;
-            let Some(new_ptr) = alloc_from_host_bump(&mut caller, bump, needed) else {
+            let Some(new_ptr) = alloc_from_host_bump(&mut caller, bump, needed, memory_config)
+            else {
                 return tagged_str;
             };
             let len_bytes = (grapheme_len as i32).to_le_bytes();
-            if write_host_bytes(&mut caller, new_ptr, &len_bytes).is_err() {
+            if write_host_bytes(&mut caller, new_ptr, &len_bytes, memory_config).is_err() {
                 return tagged_str;
             }
             // Copy grapheme bytes after the len header.
             let grapheme_bytes = &str_slice.as_bytes()[span.start..span.end];
-            if write_host_bytes(&mut caller, new_ptr + 4, grapheme_bytes).is_err() {
+            if write_host_bytes(&mut caller, new_ptr + 4, grapheme_bytes, memory_config).is_err() {
                 return tagged_str;
             }
             return encode_string_ptr(new_ptr);
@@ -261,7 +302,7 @@ fn grapheme_state_host_inner(
     );
 
     let len_bytes = (grapheme_len as i32).to_le_bytes();
-    if write_host_bytes(&mut caller, header_ptr as u32, &len_bytes).is_err() {
+    if write_host_bytes(&mut caller, header_ptr as u32, &len_bytes, memory_config).is_err() {
         return tagged_str;
     }
 
@@ -278,6 +319,7 @@ fn string_concat_host(
     tagged_a: i64,
     tagged_b: i64,
     bump: &AtomicU32,
+    memory_config: crate::memory_config::WasmMemoryConfig,
 ) -> i64 {
     let Ok(a) = read_wasm_string(&mut caller, tagged_a) else {
         return tagged_a;
@@ -289,14 +331,14 @@ fn string_concat_host(
     let bytes = combined.as_bytes();
     let total_len = 4u32 + bytes.len() as u32;
 
-    let Some(alloc_ptr) = alloc_from_host_bump(&mut caller, bump, total_len) else {
+    let Some(alloc_ptr) = alloc_from_host_bump(&mut caller, bump, total_len, memory_config) else {
         return tagged_a;
     };
     let len_bytes = (bytes.len() as i32).to_le_bytes();
-    if write_host_bytes(&mut caller, alloc_ptr, &len_bytes).is_err() {
+    if write_host_bytes(&mut caller, alloc_ptr, &len_bytes, memory_config).is_err() {
         return tagged_a;
     }
-    if write_host_bytes(&mut caller, alloc_ptr + 4, bytes).is_err() {
+    if write_host_bytes(&mut caller, alloc_ptr + 4, bytes, memory_config).is_err() {
         return tagged_a;
     }
     encode_string_ptr(alloc_ptr)
@@ -350,6 +392,64 @@ fn host_memory(caller: &mut Caller<'_, WasiP1Ctx>) -> Result<Memory, ()> {
     }
 }
 
+fn set_runtime_error_once(caller: &mut Caller<'_, WasiP1Ctx>, code: u32) {
+    let Ok(memory) = host_memory(caller) else {
+        return;
+    };
+    let mut current = [0u8; 4];
+    if memory
+        .read(
+            &mut *caller,
+            GLOBAL_RUNTIME_ERROR_OFFSET as usize,
+            &mut current,
+        )
+        .is_err()
+    {
+        return;
+    }
+    if u32::from_le_bytes(current) != RUNTIME_ERROR_NONE {
+        return;
+    }
+    let _ = memory.write(
+        &mut *caller,
+        GLOBAL_RUNTIME_ERROR_OFFSET as usize,
+        &code.to_le_bytes(),
+    );
+}
+
+fn runtime_error_message(code: u32) -> Option<&'static str> {
+    match code {
+        RUNTIME_ERROR_MEMORY_EXHAUSTION => Some(ERR_MEMORY_EXHAUSTION),
+        _ => None,
+    }
+}
+
+fn is_memory_exhaustion_trap(error: &wasmtime::Error) -> bool {
+    let mut current: Option<&(dyn std::error::Error + 'static)> = Some(error.root_cause());
+    while let Some(err) = current {
+        let text = err.to_string();
+        if text.contains("E-MEMORY-EXHAUSTION") || text.contains(ERR_MEMORY_EXHAUSTION) {
+            return true;
+        }
+        current = err.source();
+    }
+    false
+}
+
+fn take_runtime_error(
+    store: &mut Store<WasiP1Ctx>,
+    instance: &wasmtime::Instance,
+) -> Option<String> {
+    let memory = instance.get_memory(&mut *store, "memory")?;
+    let data = memory.data(&*store);
+    let code = u32::from_le_bytes(
+        data.get(GLOBAL_RUNTIME_ERROR_OFFSET as usize..GLOBAL_RUNTIME_ERROR_OFFSET as usize + 4)?
+            .try_into()
+            .ok()?,
+    );
+    runtime_error_message(code).map(str::to_string)
+}
+
 fn current_linear_memory_bytes(memory: &Memory, caller: &Caller<'_, WasiP1Ctx>) -> Result<u32, ()> {
     let pages = memory.size(caller);
     let bytes = pages.checked_mul(u64::from(WASM_PAGE_BYTES)).ok_or(())?;
@@ -359,8 +459,10 @@ fn current_linear_memory_bytes(memory: &Memory, caller: &Caller<'_, WasiP1Ctx>) 
 fn ensure_linear_memory_capacity(
     caller: &mut Caller<'_, WasiP1Ctx>,
     required_end: u32,
+    memory_config: crate::memory_config::WasmMemoryConfig,
 ) -> Result<(), ()> {
-    if required_end > DEFAULT_WASM_MEMORY_CONFIG.max_linear_memory_bytes() {
+    if required_end > memory_config.max_linear_memory_bytes() {
+        set_runtime_error_once(caller, RUNTIME_ERROR_MEMORY_EXHAUSTION);
         return Err(());
     }
     let memory = host_memory(caller)?;
@@ -375,19 +477,27 @@ fn ensure_linear_memory_capacity(
         .size(&mut *caller)
         .checked_add(u64::from(delta_pages))
         .ok_or(())?;
-    if next_pages > u64::from(DEFAULT_WASM_MEMORY_CONFIG.max_pages) {
+    if next_pages > u64::from(memory_config.max_pages) {
+        set_runtime_error_once(caller, RUNTIME_ERROR_MEMORY_EXHAUSTION);
         return Err(());
     }
     memory
         .grow(&mut *caller, u64::from(delta_pages))
-        .map_err(|_| ())?;
+        .map_err(|_| {
+            set_runtime_error_once(caller, RUNTIME_ERROR_MEMORY_EXHAUSTION);
+        })?;
     Ok(())
 }
 
-fn write_host_bytes(caller: &mut Caller<'_, WasiP1Ctx>, ptr: u32, bytes: &[u8]) -> Result<(), ()> {
+fn write_host_bytes(
+    caller: &mut Caller<'_, WasiP1Ctx>,
+    ptr: u32,
+    bytes: &[u8],
+    memory_config: crate::memory_config::WasmMemoryConfig,
+) -> Result<(), ()> {
     let len = u32::try_from(bytes.len()).map_err(|_| ())?;
     let required_end = ptr.checked_add(len).ok_or(())?;
-    ensure_linear_memory_capacity(caller, required_end)?;
+    ensure_linear_memory_capacity(caller, required_end, memory_config)?;
     let memory = host_memory(caller)?;
     memory.write(caller, ptr as usize, bytes).map_err(|_| ())
 }
@@ -396,13 +506,14 @@ fn encode_string_in_host_bump(
     caller: &mut Caller<'_, WasiP1Ctx>,
     text: &str,
     bump: &AtomicU32,
+    memory_config: crate::memory_config::WasmMemoryConfig,
 ) -> Option<i64> {
     let bytes = text.as_bytes();
     let total_len = 4u32 + bytes.len() as u32;
-    let alloc_ptr = alloc_from_host_bump(caller, bump, total_len)?;
+    let alloc_ptr = alloc_from_host_bump(caller, bump, total_len, memory_config)?;
     let len_bytes = (bytes.len() as i32).to_le_bytes();
-    write_host_bytes(caller, alloc_ptr, &len_bytes).ok()?;
-    write_host_bytes(caller, alloc_ptr + 4, bytes).ok()?;
+    write_host_bytes(caller, alloc_ptr, &len_bytes, memory_config).ok()?;
+    write_host_bytes(caller, alloc_ptr + 4, bytes, memory_config).ok()?;
     Some(encode_string_ptr(alloc_ptr))
 }
 
@@ -410,11 +521,12 @@ fn alloc_from_host_bump(
     caller: &mut Caller<'_, WasiP1Ctx>,
     bump: &AtomicU32,
     bytes: u32,
+    memory_config: crate::memory_config::WasmMemoryConfig,
 ) -> Option<u32> {
     let mut cur = bump.load(Ordering::Relaxed);
     loop {
         let next = cur.checked_add(bytes)?;
-        if ensure_linear_memory_capacity(caller, next).is_err() {
+        if ensure_linear_memory_capacity(caller, next, memory_config).is_err() {
             return None;
         }
         match bump.compare_exchange_weak(cur, next, Ordering::Relaxed, Ordering::Relaxed) {
@@ -453,18 +565,23 @@ fn graphemes_list_host(
     mut caller: Caller<'_, WasiP1Ctx>,
     tagged_str: i64,
     bump: &AtomicU32,
+    memory_config: crate::memory_config::WasmMemoryConfig,
 ) -> i64 {
     /// Allocate 4 bytes for an empty list `(count=0)` in the bump region as a safe fallback.
-    fn alloc_empty_list(caller: &mut Caller<'_, WasiP1Ctx>, bump: &AtomicU32) -> Option<u32> {
-        alloc_from_host_bump(caller, bump, 4)
+    fn alloc_empty_list(
+        caller: &mut Caller<'_, WasiP1Ctx>,
+        bump: &AtomicU32,
+        memory_config: crate::memory_config::WasmMemoryConfig,
+    ) -> Option<u32> {
+        alloc_from_host_bump(caller, bump, 4, memory_config)
     }
 
     let Ok(str_val) = read_wasm_string(&mut caller, tagged_str) else {
         // On decode failure, allocate an empty list so the Wasm side can safely iterate it.
-        let Some(empty_ptr) = alloc_empty_list(&mut caller, bump) else {
+        let Some(empty_ptr) = alloc_empty_list(&mut caller, bump, memory_config) else {
             return encode_list_ptr(0); // last resort: ptr=0 — count read will be 0 in .bss
         };
-        let _ = write_host_bytes(&mut caller, empty_ptr, &0i32.to_le_bytes());
+        let _ = write_host_bytes(&mut caller, empty_ptr, &0i32.to_le_bytes(), memory_config);
         return encode_list_ptr(empty_ptr);
     };
 
@@ -478,17 +595,18 @@ fn graphemes_list_host(
     let grapheme_bytes_total: u32 = spans.iter().map(|s| 4u32 + (s.end - s.start) as u32).sum();
     let total_needed = 4 + 8 * n + grapheme_bytes_total;
 
-    let Some(block_ptr) = alloc_from_host_bump(&mut caller, bump, total_needed) else {
-        let Some(empty_ptr) = alloc_empty_list(&mut caller, bump) else {
+    let Some(block_ptr) = alloc_from_host_bump(&mut caller, bump, total_needed, memory_config)
+    else {
+        let Some(empty_ptr) = alloc_empty_list(&mut caller, bump, memory_config) else {
             return encode_list_ptr(0);
         };
-        let _ = write_host_bytes(&mut caller, empty_ptr, &0i32.to_le_bytes());
+        let _ = write_host_bytes(&mut caller, empty_ptr, &0i32.to_le_bytes(), memory_config);
         return encode_list_ptr(empty_ptr);
     };
 
     // Write list count header at block_ptr.
     let count_bytes = (n as i32).to_le_bytes();
-    if write_host_bytes(&mut caller, block_ptr, &count_bytes).is_err() {
+    if write_host_bytes(&mut caller, block_ptr, &count_bytes, memory_config).is_err() {
         return encode_list_ptr(0);
     }
 
@@ -503,12 +621,12 @@ fn graphemes_list_host(
 
         // Write string length header.
         let len_bytes = (grapheme_len as i32).to_le_bytes();
-        if write_host_bytes(&mut caller, str_ptr, &len_bytes).is_err() {
+        if write_host_bytes(&mut caller, str_ptr, &len_bytes, memory_config).is_err() {
             return encode_list_ptr(0);
         }
         // Write grapheme bytes.
         let bytes = &str_val.as_bytes()[span.start..span.end];
-        if write_host_bytes(&mut caller, str_ptr + 4, bytes).is_err() {
+        if write_host_bytes(&mut caller, str_ptr + 4, bytes, memory_config).is_err() {
             return encode_list_ptr(0);
         }
 
@@ -516,7 +634,7 @@ fn graphemes_list_host(
         let tagged_elem = encode_string_ptr(str_ptr);
         let elem_ptr = block_ptr + 4 + 8 * i as u32;
         let elem_bytes = tagged_elem.to_le_bytes();
-        if write_host_bytes(&mut caller, elem_ptr, &elem_bytes).is_err() {
+        if write_host_bytes(&mut caller, elem_ptr, &elem_bytes, memory_config).is_err() {
             return encode_list_ptr(0);
         }
 
@@ -608,28 +726,29 @@ mod tests {
         blob
     }
 
-    fn build_string_concat_growth_wasm() -> Vec<u8> {
+    fn build_string_concat_growth_wasm(
+        memory_config: crate::memory_config::WasmMemoryConfig,
+    ) -> Vec<u8> {
         let a_bytes = vec![b'a'; 80 * 1024];
         let b_bytes = vec![b'b'; 80 * 1024];
         let a_blob = encode_wasm_string_blob(&a_bytes);
         let b_blob = encode_wasm_string_blob(&b_bytes);
 
-        let a_ptr = 0u32;
-        let b_ptr = a_blob.len() as u32;
+        let a_ptr = 32u32;
+        let b_ptr = a_ptr + a_blob.len() as u32;
         let iovec_ptr = b_ptr + b_blob.len() as u32;
         let nwritten_ptr = iovec_ptr + 8;
 
         assert!(
-            nwritten_ptr < DEFAULT_WASM_MEMORY_CONFIG.initial_linear_memory_bytes(),
+            nwritten_ptr < memory_config.initial_linear_memory_bytes(),
             "test inputs must fit within the initial memory image"
         );
         assert!(
-            (a_bytes.len() + b_bytes.len() + 4) as u32
-                > DEFAULT_WASM_MEMORY_CONFIG.host_bump_reserved_bytes,
+            (a_bytes.len() + b_bytes.len() + 4) as u32 > memory_config.host_bump_reserved_bytes,
             "concatenated output must exceed the host-reserved slice to force growth"
         );
         assert!(
-            nwritten_ptr < DEFAULT_WASM_MEMORY_CONFIG.host_bump_start(),
+            nwritten_ptr < memory_config.host_bump_start(),
             "test metadata must stay below the host bump start"
         );
 
@@ -667,7 +786,7 @@ mod tests {
         module.section(&functions);
 
         let mut memories = MemorySection::new();
-        memories.memory(DEFAULT_WASM_MEMORY_CONFIG.memory_type());
+        memories.memory(memory_config.memory_type());
         module.section(&memories);
 
         let mut exports = ExportSection::new();
@@ -807,7 +926,7 @@ main =
 
     #[test]
     fn host_string_concat_grows_linear_memory_past_initial_pages() {
-        let wasm = build_string_concat_growth_wasm();
+        let wasm = build_string_concat_growth_wasm(DEFAULT_WASM_MEMORY_CONFIG);
         Validator::new()
             .validate_all(&wasm)
             .expect("handcrafted concat-growth module should validate");
@@ -817,5 +936,19 @@ main =
         assert_eq!(output.len(), 160 * 1024);
         assert!(output.starts_with(&"a".repeat(32)));
         assert!(output.ends_with(&"b".repeat(32)));
+    }
+
+    #[test]
+    fn host_string_concat_reports_runtime_error_when_growth_hits_maximum() {
+        let low_max = crate::memory_config::WasmMemoryConfig {
+            initial_pages: DEFAULT_WASM_MEMORY_CONFIG.initial_pages,
+            max_pages: DEFAULT_WASM_MEMORY_CONFIG.initial_pages,
+            host_bump_reserved_bytes: DEFAULT_WASM_MEMORY_CONFIG.host_bump_reserved_bytes,
+            max_wasm_stack_bytes: DEFAULT_WASM_MEMORY_CONFIG.max_wasm_stack_bytes,
+        };
+        let wasm = build_string_concat_growth_wasm(low_max);
+        let err = run_wasm_bytes_with_stdin_and_config(&wasm, None, low_max)
+            .expect_err("bounded host growth should surface a runtime error");
+        assert_eq!(err, format!("runtime error: {ERR_MEMORY_EXHAUSTION}"));
     }
 }

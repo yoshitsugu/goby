@@ -5,6 +5,11 @@ pub(crate) const NWRITTEN_OFFSET: u32 = 8;
 /// callee heap allocations do not overwrite caller-allocated data.
 /// Layout: bytes [12..16) = i32 bump cursor (starts at STATIC_STRING_LIMIT).
 pub(crate) const GLOBAL_HEAP_CURSOR_OFFSET: u32 = 12;
+/// Shared runtime error code slot used by Goby-owned Wasm execution.
+/// Layout: bytes [16..20) = i32 error code, where 0 means "no runtime error".
+pub(crate) const GLOBAL_RUNTIME_ERROR_OFFSET: u32 = 16;
+pub(crate) const RUNTIME_ERROR_NONE: u32 = 0;
+pub(crate) const RUNTIME_ERROR_MEMORY_EXHAUSTION: u32 = 1;
 pub(crate) const HEAP_BASE: u32 = 24;
 
 #[derive(Debug, Clone, Copy)]
