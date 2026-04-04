@@ -4,21 +4,17 @@ Last updated: 2026-04-04
 
 ## Current Focus
 
-**Runtime memory plan (`doc/PLAN_MEMORY.md`)**: M0/M1 landed; M2 heap-only growth landed; M3 explicit exhaustion diagnostics landed; M4 proof set and M5 reclamation decision are complete for the current scope.
+**GeneralLowered string equality bug**: dynamic strings produced on the runtime-stdin / Wasm path currently fail equality against identical literals in the user-reported `read_lines () -> graphemes` shape.
 
 - Locked direction:
-  - Goby should move from fixed-page-aware memory assumptions to a bounded grow-aware memory model.
-  - initial memory stays modest, runtime growth is allowed, and growth must stop at a configured maximum rather than becoming effectively unbounded.
-  - host temporary allocation and Wasm heap allocation must follow one explicit shared address-space rule.
-  - explicit exhaustion errors are required; generic Wasm traps and pointer corruption are not acceptable memory-failure outcomes.
+  - treat this as a shared equality-boundary bug, not as a `graphemes`-specific exception.
+  - preserve current `Int`, `Bool`, and `Unit` equality semantics while correcting `String == String` on the `GeneralLowered` Wasm path.
+  - keep the new minimal regression authoritative: `read_lines () -> map graphemes -> rows[0][0] == "@"` must return `True`.
+  - verify the original AoC reproduction after the focused fix lands.
 - Execution target:
-  - M0/M1 are now complete for the host-write side: shared defaults are `256 KiB` initial memory, `64 MiB` maximum memory, and a shared host-bump/stack configuration boundary in `crates/goby-wasm/src/memory_config.rs`.
-  - the first M2 slice is now complete for heap-only pressure shapes: `emit_alloc_from_top` can grow memory before heap exhaustion, and a compiled heap-allocation regression now crosses the initial page allocation without host temporary pressure.
-  - M3 is now complete: bounded host-temporary exhaustion and bounded compiled-heap exhaustion both surface `runtime error: memory exhausted [E-MEMORY-EXHAUSTION]` instead of generic Wasm traps.
-  - M4 proof is now complete for the current scope: default-policy regressions cover host-temp-heavy pressure, heap-heavy pressure, and one mixed execution that allocates a large heap value and then formats it through the host boundary in the same `_start`.
-  - M5 is now complete: current representative workloads do not justify opening a GC/reclamation subsystem, because Goby-owned Wasm execution is still single-shot per `_start` and no retained-memory pressure has been measured beyond bounded growth.
-  - the memory-growth milestone track is therefore complete for the current scope; the next implementation slice should move to another roadmap item unless new evidence reopens reclamation work.
-  - final closure for this track requires representative memory-pressure regressions that succeed under the default bounded-growth policy and explicit low-maximum regressions that fail with the intended exhaustion error.
+  - next implementation step is to fix the Wasm `Eq` path used by `GeneralLowered` execution so `String` equality is content-based instead of tagged-value identity.
+  - the ignored regression `execute_runtime_module_with_stdin_compares_dynamic_grapheme_strings_by_contents` should be enabled once the fix is in place.
+  - after the focused fix, rerun the original `cat sample | goby run solve.gb` AoC reproduction to confirm the observed `@` comparisons no longer collapse to false.
 
 ## Recently Completed
 

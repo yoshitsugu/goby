@@ -341,7 +341,7 @@ main =
     }
 
     #[test]
-    fn execute_runtime_module_with_stdin_supports_read_lines_interpreter_bridge() {
+    fn execute_runtime_module_with_stdin_supports_read_lines_general_lowering() {
         let module = parse_module(
             r#"
 import goby/list ( each )
@@ -356,14 +356,73 @@ main =
 
         assert_eq!(
             runtime_io_execution_kind(&module).expect("classification should succeed"),
-            RuntimeIoExecutionKind::InterpreterBridge,
-            "read_lines should classify as InterpreterBridge"
+            RuntimeIoExecutionKind::GeneralLowered,
+            "read_lines should classify as GeneralLowered"
         );
 
         let output =
             execute_runtime_module_with_stdin(&module, Some("alpha\r\nbeta\ngamma\r".to_string()))
-                .expect("read_lines interpreter execution should succeed");
+                .expect("read_lines runtime execution should succeed");
         assert_eq!(output.as_deref(), Some("alpha\nbeta\ngamma\n"));
+    }
+
+    #[test]
+    fn execute_runtime_module_with_stdin_supports_read_lines_map_graphemes_general_lowering() {
+        let module = parse_module(
+            r#"
+import goby/list ( each, map )
+import goby/string ( graphemes )
+
+main : Unit -> Unit can Print, Read
+main =
+  lines = read_lines ()
+  rolls = map lines graphemes
+  each (rolls[1]) println
+"#,
+        )
+        .expect("parse should work");
+
+        assert_eq!(
+            runtime_io_execution_kind(&module).expect("classification should succeed"),
+            RuntimeIoExecutionKind::GeneralLowered,
+            "read_lines + map(graphemes) should classify via general lowering"
+        );
+
+        let output = execute_runtime_module_with_stdin(&module, Some("ab\r\ncde\n".to_string()))
+            .expect("read_lines map graphemes execution should succeed");
+        assert_eq!(output.as_deref(), Some("c\nd\ne\n"));
+    }
+
+    #[test]
+    #[ignore = "known bug: GeneralLowered string equality compares dynamic graphemes against literals by identity"]
+    fn execute_runtime_module_with_stdin_compares_dynamic_grapheme_strings_by_contents() {
+        let module = parse_module(
+            r#"
+import goby/list ( map )
+import goby/string ( graphemes )
+
+main : Unit -> Unit can Print, Read
+main =
+  lines = read_lines ()
+  rows = map lines graphemes
+  print (rows[0][0] == "@")
+"#,
+        )
+        .expect("parse should work");
+
+        assert_eq!(
+            runtime_io_execution_kind(&module).expect("classification should succeed"),
+            RuntimeIoExecutionKind::GeneralLowered,
+            "read_lines + map(graphemes) + string equality should classify via general lowering"
+        );
+
+        let output = execute_runtime_module_with_stdin(&module, Some("@\n".to_string()))
+            .expect("string equality repro should execute");
+        assert_eq!(
+            output.as_deref(),
+            Some("True"),
+            "dynamic grapheme strings should compare equal to identical string literals"
+        );
     }
 
     #[test]

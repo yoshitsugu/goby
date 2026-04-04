@@ -627,6 +627,13 @@ These items are intentionally kept as short placeholders until they become activ
 - Import system: filesystem-backed/local package resolution, dependency graph rules.
 - Equality/comparison:
   - implemented operator set now includes `||`, `&&`, `!`, `==`, `<`, `>`, `<=`, `>=`, `+`, `-`, `*`, `/`, `%`.
+  - immediate bug fix plan:
+    - fix `GeneralLowered` string equality so dynamic strings compare by contents rather than tagged-word identity.
+    - lock the current regression shape first: `read_lines () -> list.map string.graphemes -> rows[0][0] == "@"` must evaluate to `True`.
+    - implement the fix at the shared Wasm equality boundary, not as a `graphemes`-specific special case.
+    - preserve existing `Int`, `Bool`, and `Unit` equality behavior while adding correct `String == String` behavior on the Wasm path.
+    - add parity coverage for both static string equality and dynamic string equality produced through runtime stdin / `GeneralLowered`.
+    - confirm the user-reported AoC shape (`cat sample | goby run solve.gb`) after the focused regression passes.
   - still open:
     - exact long-term policy for equality over all language-level value categories,
     - `!=`,
