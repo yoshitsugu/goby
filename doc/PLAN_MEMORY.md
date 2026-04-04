@@ -1,11 +1,27 @@
 # Goby Runtime Memory Plan
 
-Last updated: 2026-04-03
+Last updated: 2026-04-05
 
-Status: active
+Status: complete for current scope
 
-This document is the active planning note for Goby's Wasm/runtime memory model.
-It is intentionally design-first:
+This document records the now-completed current-scope plan for Goby's
+Wasm/runtime memory model.
+
+Closure summary:
+
+- the bounded-growth memory policy is implemented
+- shared memory configuration is in place
+- host temporary allocation, heap growth, explicit exhaustion, and mixed-pressure
+  coexistence are covered by focused regressions
+- GC / reclamation is consciously deferred until runtime-lifetime evidence
+  justifies reopening the topic
+
+Keep this document as the architecture and closure record for the completed
+memory-growth track. Open a new focused follow-up plan rather than reopening
+this document unless the trigger conditions in `doc/PLAN.md` and `doc/STATE.md`
+are met.
+
+This document remains design-first:
 
 - define the ownership boundaries before changing constants or allocator code,
 - prefer shared runtime rules over path-specific memory exceptions,
@@ -595,6 +611,9 @@ Anti-patterns:
 ---
 
 ## 11. Open Questions
+
+These are reopen triggers or future-architecture questions, not active blockers
+for the completed current-scope track.
 
 1. Should the default maximum remain a single global ceiling, or should Goby
    later separate development/debug defaults from stricter embedded defaults?

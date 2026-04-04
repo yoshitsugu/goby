@@ -401,6 +401,10 @@ Based on `examples/*.gb`:
 - Current model: native Wasm code generation for the supported subset, with deterministic
   fallback behavior for unsupported forms.
 - Error location strategy (line/column reporting) — deferred.
+- GC / reclamation is not part of the current runtime scope.
+  Re-evaluate only if Goby grows long-lived in-process execution, repeated module
+  reuse within one runtime, or measured workloads show retained-memory pressure
+  or fragmentation rather than bounded-growth pressure.
 
 ### 2.6 Tooling Scope (MVP)
 
