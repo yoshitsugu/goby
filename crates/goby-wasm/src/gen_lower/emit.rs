@@ -65,7 +65,12 @@ const HELPER_SCRATCH_I64: u32 = 3;
 // scratch[10] = copy or match index
 // scratch[11] = alloc cursor (persistent)
 // scratch[12] = heap floor (persistent)
-const HELPER_SCRATCH_I32: u32 = 14;
+//
+// Additional i32 locals may be appended after this fixed helper pool. Those
+// extra locals are reserved for heap-base spill slots used by nested composite
+// allocations (`ListLit`, `TupleLit`, `RecordLit`, `CreateClosure`) so parent
+// allocation pointers survive child heap allocations.
+const HELPER_SCRATCH_I32: u32 = 13;
 const HELPER_ALLOC_CURSOR_OFFSET: u32 = 11;
 const HELPER_HEAP_FLOOR_OFFSET: u32 = 12;
 
@@ -84,12 +89,6 @@ const HS_AUX_PTR: u32 = 7; // auxiliary pointer (tail ptr in ListPattern, list p
 const HS_LIST_PTR: u32 = 8; // secondary list ptr
 const HS_ALLOC_SIZE: u32 = 9; // allocation size temp
 const HS_ITER: u32 = 10; // copy or match index
-/// Dedicated scratch slot for the closure base pointer in `CreateClosure`.
-///
-/// `CreateClosure` saves its allocation result here immediately after `emit_alloc_from_top`,
-/// so that slot_instrs (which may themselves call `AllocMutableCell` and overwrite `HS_AUX_PTR`)
-/// cannot corrupt the outer closure pointer.
-const HS_CLOSURE_BASE_PTR: u32 = 13;
 
 #[derive(Debug, Clone)]
 struct StaticStringPool {
@@ -534,11 +533,83 @@ fn required_i32_scratch_count(instrs: &[WasmBackendInstr]) -> u32 {
         0
     };
     let helper_count = if needs_helper_state(instrs) {
-        HELPER_SCRATCH_I32
+        HELPER_SCRATCH_I32 + required_heap_base_spill_count(instrs)
     } else {
         0
     };
     split_count.max(generic_count).max(helper_count)
+}
+
+fn required_heap_base_spill_count(instrs: &[WasmBackendInstr]) -> u32 {
+    instrs
+        .iter()
+        .map(required_heap_base_spill_count_instr)
+        .max()
+        .unwrap_or(0)
+}
+
+fn required_heap_base_spill_count_instr(instr: &WasmBackendInstr) -> u32 {
+    match instr {
+        WasmBackendInstr::If {
+            then_instrs,
+            else_instrs,
+        } => required_heap_base_spill_count(then_instrs)
+            .max(required_heap_base_spill_count(else_instrs)),
+        WasmBackendInstr::CaseMatch { arms, .. } => arms
+            .iter()
+            .map(|arm| required_heap_base_spill_count(&arm.body_instrs))
+            .max()
+            .unwrap_or(0),
+        WasmBackendInstr::ListLit { element_instrs } => {
+            1 + element_instrs
+                .iter()
+                .map(|child| required_heap_base_spill_count(child))
+                .max()
+                .unwrap_or(0)
+        }
+        WasmBackendInstr::TupleLit { element_instrs } => {
+            1 + element_instrs
+                .iter()
+                .map(|child| required_heap_base_spill_count(child))
+                .max()
+                .unwrap_or(0)
+        }
+        WasmBackendInstr::RecordLit { field_instrs, .. } => {
+            1 + field_instrs
+                .iter()
+                .map(|child| required_heap_base_spill_count(child))
+                .max()
+                .unwrap_or(0)
+        }
+        WasmBackendInstr::ListEachEffect { list_instrs, .. } => {
+            required_heap_base_spill_count(list_instrs)
+        }
+        WasmBackendInstr::ListEach {
+            list_instrs,
+            func_instrs,
+        }
+        | WasmBackendInstr::ListMap {
+            list_instrs,
+            func_instrs,
+        } => required_heap_base_spill_count(list_instrs)
+            .max(required_heap_base_spill_count(func_instrs)),
+        WasmBackendInstr::CreateClosure {
+            func_handle_instrs,
+            slot_instrs,
+        } => {
+            1 + required_heap_base_spill_count(func_handle_instrs).max(
+                slot_instrs
+                    .iter()
+                    .map(|child| required_heap_base_spill_count(child))
+                    .max()
+                    .unwrap_or(0),
+            )
+        }
+        WasmBackendInstr::AllocMutableCell { init_instrs } => {
+            required_heap_base_spill_count(init_instrs)
+        }
+        _ => 0,
+    }
 }
 
 fn required_i64_scratch_count(instrs: &[WasmBackendInstr]) -> u32 {
@@ -1088,6 +1159,35 @@ fn emit_instrs(
     options: EmitOptions,
     function_returns_i64: bool,
 ) -> Result<(), CodegenError> {
+    emit_instrs_with_heap_depth(
+        function,
+        ctx,
+        instrs,
+        layout,
+        named_i64_count,
+        helper_i64_scratch_count,
+        i32_base,
+        static_strings,
+        options,
+        function_returns_i64,
+        0,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn emit_instrs_with_heap_depth(
+    function: &mut Function,
+    ctx: &mut EmitContext,
+    instrs: &[WasmBackendInstr],
+    layout: &MemoryLayout,
+    named_i64_count: u32,
+    helper_i64_scratch_count: u32,
+    i32_base: u32,
+    static_strings: &StaticStringPool,
+    options: EmitOptions,
+    function_returns_i64: bool,
+    heap_base_depth: u32,
+) -> Result<(), CodegenError> {
     let iovec_offset = layout.iovec_offset as i32;
     let nread_offset = layout.nwritten_offset as i32;
     let buffer_ptr = layout.heap_base as i32;
@@ -1242,7 +1342,7 @@ fn emit_instrs(
                 function.instruction(&Instruction::If(wasm_encoder::BlockType::Result(
                     wasm_encoder::ValType::I64,
                 )));
-                emit_instrs(
+                emit_instrs_with_heap_depth(
                     function,
                     ctx,
                     then_instrs,
@@ -1253,9 +1353,10 @@ fn emit_instrs(
                     static_strings,
                     options,
                     function_returns_i64,
+                    heap_base_depth,
                 )?;
                 function.instruction(&Instruction::Else);
-                emit_instrs(
+                emit_instrs_with_heap_depth(
                     function,
                     ctx,
                     else_instrs,
@@ -1266,6 +1367,7 @@ fn emit_instrs(
                     static_strings,
                     options,
                     function_returns_i64,
+                    heap_base_depth,
                 )?;
                 function.instruction(&Instruction::End);
             }
@@ -1297,13 +1399,16 @@ fn emit_instrs(
 
             WasmBackendInstr::ListLit { element_instrs } => {
                 let hs = require_helper_state(helper_state, "ListLit")?;
-                let s_list_ptr = hs.i32_base + HS_AUX_PTR;
+                let s_list_ptr = hs.i32_base + HELPER_SCRATCH_I32 + heap_base_depth;
+                let s_alloc_ptr = hs.i32_base + HS_AUX_PTR;
                 let s_alloc_size = hs.i32_base + HS_ALLOC_SIZE;
                 let n = element_instrs.len() as i32;
                 // alloc_size = 4 + 8 * n
                 function.instruction(&Instruction::I32Const(4 + 8 * n));
                 function.instruction(&Instruction::LocalSet(s_alloc_size));
-                emit_alloc_from_top(function, &hs, s_alloc_size, s_list_ptr);
+                emit_alloc_from_top(function, &hs, s_alloc_size, s_alloc_ptr);
+                function.instruction(&Instruction::LocalGet(s_alloc_ptr));
+                function.instruction(&Instruction::LocalSet(s_list_ptr));
                 // Write length header: i32 at [s_list_ptr + 0]
                 function.instruction(&Instruction::LocalGet(s_list_ptr));
                 function.instruction(&Instruction::I32Const(n));
@@ -1319,7 +1424,7 @@ fn emit_instrs(
                     function.instruction(&Instruction::I32Const(4 + 8 * i as i32));
                     function.instruction(&Instruction::I32Add);
                     // push element value (tagged i64)
-                    emit_instrs(
+                    emit_instrs_with_heap_depth(
                         function,
                         ctx,
                         elem_instrs,
@@ -1330,6 +1435,7 @@ fn emit_instrs(
                         static_strings,
                         options,
                         function_returns_i64,
+                        heap_base_depth + 1,
                     )?;
                     function.instruction(&Instruction::I64Store(MemArg {
                         offset: 0,
@@ -1343,12 +1449,15 @@ fn emit_instrs(
 
             WasmBackendInstr::TupleLit { element_instrs } => {
                 let hs = require_helper_state(helper_state, "TupleLit")?;
-                let s_tuple_ptr = hs.i32_base + HS_AUX_PTR;
+                let s_tuple_ptr = hs.i32_base + HELPER_SCRATCH_I32 + heap_base_depth;
+                let s_alloc_ptr = hs.i32_base + HS_AUX_PTR;
                 let s_alloc_size = hs.i32_base + HS_ALLOC_SIZE;
                 let n = element_instrs.len() as i32;
                 function.instruction(&Instruction::I32Const(4 + 8 * n));
                 function.instruction(&Instruction::LocalSet(s_alloc_size));
-                emit_alloc_from_top(function, &hs, s_alloc_size, s_tuple_ptr);
+                emit_alloc_from_top(function, &hs, s_alloc_size, s_alloc_ptr);
+                function.instruction(&Instruction::LocalGet(s_alloc_ptr));
+                function.instruction(&Instruction::LocalSet(s_tuple_ptr));
                 function.instruction(&Instruction::LocalGet(s_tuple_ptr));
                 function.instruction(&Instruction::I32Const(n));
                 function.instruction(&Instruction::I32Store(MemArg {
@@ -1360,7 +1469,7 @@ fn emit_instrs(
                     function.instruction(&Instruction::LocalGet(s_tuple_ptr));
                     function.instruction(&Instruction::I32Const(4 + 8 * i as i32));
                     function.instruction(&Instruction::I32Add);
-                    emit_instrs(
+                    emit_instrs_with_heap_depth(
                         function,
                         ctx,
                         elem_instrs,
@@ -1371,6 +1480,7 @@ fn emit_instrs(
                         static_strings,
                         options,
                         function_returns_i64,
+                        heap_base_depth + 1,
                     )?;
                     function.instruction(&Instruction::I64Store(MemArg {
                         offset: 0,
@@ -1387,12 +1497,15 @@ fn emit_instrs(
             } => {
                 let hs = require_helper_state(helper_state, "RecordLit")?;
                 let ctor_tag = ctx.record_ctor_tag(constructor)? as i64;
-                let s_record_ptr = hs.i32_base + HS_AUX_PTR;
+                let s_record_ptr = hs.i32_base + HELPER_SCRATCH_I32 + heap_base_depth;
+                let s_alloc_ptr = hs.i32_base + HS_AUX_PTR;
                 let s_alloc_size = hs.i32_base + HS_ALLOC_SIZE;
                 let n = field_instrs.len() as i32;
                 function.instruction(&Instruction::I32Const(8 + 8 * n));
                 function.instruction(&Instruction::LocalSet(s_alloc_size));
-                emit_alloc_from_top(function, &hs, s_alloc_size, s_record_ptr);
+                emit_alloc_from_top(function, &hs, s_alloc_size, s_alloc_ptr);
+                function.instruction(&Instruction::LocalGet(s_alloc_ptr));
+                function.instruction(&Instruction::LocalSet(s_record_ptr));
                 function.instruction(&Instruction::LocalGet(s_record_ptr));
                 function.instruction(&Instruction::I64Const(ctor_tag));
                 function.instruction(&Instruction::I64Store(MemArg {
@@ -1404,7 +1517,7 @@ fn emit_instrs(
                     function.instruction(&Instruction::LocalGet(s_record_ptr));
                     function.instruction(&Instruction::I32Const(8 + 8 * i as i32));
                     function.instruction(&Instruction::I32Add);
-                    emit_instrs(
+                    emit_instrs_with_heap_depth(
                         function,
                         ctx,
                         field_instrs,
@@ -1415,6 +1528,7 @@ fn emit_instrs(
                         static_strings,
                         options,
                         function_returns_i64,
+                        heap_base_depth + 1,
                     )?;
                     function.instruction(&Instruction::I64Store(MemArg {
                         offset: 0,
@@ -1575,12 +1689,10 @@ fn emit_instrs(
             } => {
                 // Layout: (func_handle: i64, slots: [i64; N]) = 8 + 8*N bytes.
                 //
-                // The closure base pointer is saved to HS_CLOSURE_BASE_PTR (slot 13) immediately
-                // after allocation.  This protects it from being overwritten when slot_instrs
-                // contain heap-allocating instructions (e.g. AllocMutableCell) that reuse
-                // HS_AUX_PTR (slot 7) for their own allocation results.
+                // The closure base pointer is saved to a depth-indexed spill local immediately
+                // after allocation so nested heap allocations cannot corrupt the outer pointer.
                 let hs = require_helper_state(helper_state, "CreateClosure")?;
-                let s_closure_ptr = hs.i32_base + HS_CLOSURE_BASE_PTR;
+                let s_closure_ptr = hs.i32_base + HELPER_SCRATCH_I32 + heap_base_depth;
                 let s_aux = hs.i32_base + HS_AUX_PTR; // temp for alloc, then discarded
                 let s_alloc_size = hs.i32_base + HS_ALLOC_SIZE;
                 let n = slot_instrs.len() as i32;
@@ -1593,7 +1705,7 @@ fn emit_instrs(
                 function.instruction(&Instruction::LocalSet(s_closure_ptr));
                 // Store func_handle (TAG_FUNC i64) at offset 0.
                 function.instruction(&Instruction::LocalGet(s_closure_ptr));
-                emit_instrs(
+                emit_instrs_with_heap_depth(
                     function,
                     ctx,
                     func_handle_instrs,
@@ -1604,6 +1716,7 @@ fn emit_instrs(
                     static_strings,
                     options,
                     function_returns_i64,
+                    heap_base_depth + 1,
                 )?;
                 function.instruction(&Instruction::I64Store(MemArg {
                     offset: 0,
@@ -1616,7 +1729,7 @@ fn emit_instrs(
                     function.instruction(&Instruction::LocalGet(s_closure_ptr));
                     function.instruction(&Instruction::I32Const(8 + 8 * i as i32));
                     function.instruction(&Instruction::I32Add);
-                    emit_instrs(
+                    emit_instrs_with_heap_depth(
                         function,
                         ctx,
                         slot_instrs_i,
@@ -1627,6 +1740,7 @@ fn emit_instrs(
                         static_strings,
                         options,
                         function_returns_i64,
+                        heap_base_depth + 1,
                     )?;
                     function.instruction(&Instruction::I64Store(MemArg {
                         offset: 0,
