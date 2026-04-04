@@ -1,5 +1,4 @@
 use super::*;
-use crate::grapheme_semantics::collect_extended_grapheme_spans;
 use crate::runtime_flow::RcCallables;
 use crate::runtime_support::flatten_direct_call;
 use crate::wasm_exec_plan::decl_exec_plan;
@@ -87,23 +86,24 @@ impl<'m> RuntimeOutputResolver<'m> {
             return None;
         }
         let (head, args) = flatten_direct_call(expr)?;
-        if self.imported_head_matches_string_graphemes(&head) && args.len() == 1 {
-            let value = self.eval_expr_to_option(
-                args[0],
-                caller_locals,
-                caller_callables,
+        if let Some((module_path, member)) = self.resolve_imported_runtime_intrinsic_head(&head) {
+            let mut arg_values = Vec::with_capacity(args.len());
+            for arg in args {
+                arg_values.push(self.eval_expr_to_option(
+                    arg,
+                    caller_locals,
+                    caller_callables,
+                    evaluators,
+                    depth + 1,
+                )?);
+            }
+            return self.apply_imported_runtime_intrinsic(
+                module_path,
+                member,
+                &arg_values,
                 evaluators,
                 depth + 1,
-            )?;
-            return match value {
-                RuntimeValue::String(s) => Some(RuntimeValue::ListString(
-                    collect_extended_grapheme_spans(&s)
-                        .into_iter()
-                        .map(|span| s[span.start..span.end].to_string())
-                        .collect(),
-                )),
-                _ => None,
-            };
+            );
         }
         let decl = self.resolve_imported_runtime_decl(&head)?;
         if decl.params.len() != args.len() {
@@ -134,7 +134,10 @@ impl<'m> RuntimeOutputResolver<'m> {
         self.complete_value_out(out, evaluators)
     }
 
-    fn imported_head_matches_string_graphemes(&self, head: &DirectCallHead) -> bool {
+    fn resolve_imported_runtime_intrinsic_head(
+        &self,
+        head: &DirectCallHead,
+    ) -> Option<(&'static str, &'static str)> {
         match head {
             DirectCallHead::Bare(name) if name == "graphemes" => {
                 effective_runtime_imports(self.current_runtime_module())
@@ -143,6 +146,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                         import.module_path == "goby/string"
                             && runtime_import_selects_name(&import.kind, "graphemes")
                     })
+                    .then_some(("goby/string", "graphemes"))
             }
             DirectCallHead::Qualified { receiver, member } if member == "graphemes" => {
                 if receiver == "string"
@@ -150,7 +154,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                         .into_iter()
                         .any(|import| import.module_path == "goby/string")
                 {
-                    return true;
+                    return Some(("goby/string", "graphemes"));
                 }
                 effective_runtime_imports(self.current_runtime_module())
                     .into_iter()
@@ -168,8 +172,9 @@ impl<'m> RuntimeOutputResolver<'m> {
                             goby_core::ImportKind::Selective(_) => false,
                         }
                     })
+                    .then_some(("goby/string", "graphemes"))
             }
-            _ => false,
+            _ => None,
         }
     }
 

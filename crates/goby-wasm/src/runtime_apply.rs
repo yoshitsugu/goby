@@ -9,6 +9,24 @@ use crate::runtime_value::{RuntimeLocals, RuntimeValue, runtime_value_eq};
 use crate::{MAX_EVAL_DEPTH, RuntimeOutputResolver};
 
 impl<'m> RuntimeOutputResolver<'m> {
+    pub(crate) fn apply_imported_runtime_intrinsic(
+        &mut self,
+        module_path: &str,
+        member: &str,
+        args: &[RuntimeValue],
+        _evaluators: &RuntimeEvaluators<'_, '_>,
+        _depth: usize,
+    ) -> Option<RuntimeValue> {
+        match (module_path, member, args) {
+            ("goby/string", "graphemes", [RuntimeValue::String(value)]) => {
+                Some(RuntimeValue::ListString(
+                    crate::grapheme_semantics::collect_extended_graphemes(value),
+                ))
+            }
+            _ => None,
+        }
+    }
+
     fn apply_callable_args_out(
         &mut self,
         callable: &IntCallable,
@@ -447,13 +465,14 @@ impl<'m> RuntimeOutputResolver<'m> {
         if depth >= MAX_EVAL_DEPTH {
             return Out::Err(RuntimeError::Unsupported);
         }
-        if module_path == "goby/string" && member == "graphemes" {
-            let RuntimeValue::String(value) = arg_value else {
-                return Out::Err(RuntimeError::Unsupported);
-            };
-            return Out::Done(RuntimeValue::ListString(
-                crate::grapheme_semantics::collect_extended_graphemes(&value),
-            ));
+        if let Some(value) = self.apply_imported_runtime_intrinsic(
+            module_path,
+            member,
+            std::slice::from_ref(&arg_value),
+            evaluators,
+            depth + 1,
+        ) {
+            return Out::Done(value);
         }
         let Some(decl) = self.resolve_runtime_decl_from_module_path(module_path, member) else {
             return Out::Err(RuntimeError::Unsupported);

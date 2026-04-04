@@ -292,27 +292,41 @@ impl EmitContext {
 }
 
 #[derive(Clone, Copy)]
-struct HelperEmitState {
+struct EmitScratchState {
     i64_base: u32,
     i32_base: u32,
-    alloc_cursor_local: u32,
-    heap_floor_local: u32,
     function_returns_i64: bool,
 }
 
-/// Extract `helper_state`, returning a `CodegenError` if it is absent.
+#[derive(Clone, Copy)]
+struct HeapEmitState {
+    scratch: EmitScratchState,
+    alloc_cursor_local: u32,
+    heap_floor_local: u32,
+}
+
+/// Extract scratch state, returning a `CodegenError` if it is absent.
 ///
 /// `context` names the instruction or operation that requires scratch state,
 /// and appears verbatim in the error message so callers do not need to repeat
 /// the error-construction boilerplate.
 ///
-/// `HelperEmitState` is `Copy`, so callers pass the `Option<HelperEmitState>` value directly.
-fn require_helper_state(
-    helper_state: Option<HelperEmitState>,
+/// `EmitScratchState` is `Copy`, so callers pass the `Option<EmitScratchState>` value directly.
+fn require_scratch_state(
+    scratch_state: Option<EmitScratchState>,
     context: &str,
-) -> Result<HelperEmitState, CodegenError> {
-    helper_state.ok_or_else(|| CodegenError {
+) -> Result<EmitScratchState, CodegenError> {
+    scratch_state.ok_or_else(|| CodegenError {
         message: format!("gen_lower/emit: {context} requires helper scratch state"),
+    })
+}
+
+fn require_heap_state(
+    heap_state: Option<HeapEmitState>,
+    context: &str,
+) -> Result<HeapEmitState, CodegenError> {
+    heap_state.ok_or_else(|| CodegenError {
+        message: format!("gen_lower/emit: {context} requires heap helper state"),
     })
 }
 
@@ -402,49 +416,37 @@ fn collect_all_instrs(instrs: &[WasmBackendInstr]) -> Vec<&WasmBackendInstr> {
     result
 }
 
-/// Returns true when `instrs` require the `HelperEmitState` bump-allocator / i32 scratch pool.
-///
-/// This is the single source of truth for the helper-state gate used both in
-/// `emit_instrs` and `required_i32_scratch_count`.  A function needs helper state when it
-/// contains any of:
-/// - An `Intrinsic` instruction (uses the full HELPER_SCRATCH_I32 pool).
-/// - A `ListLit` instruction (uses bump allocator via `emit_alloc_from_top`).
-/// - A `TupleLit` instruction (uses bump allocator via `emit_alloc_from_top`).
-/// - A `RecordLit` instruction (uses bump allocator via `emit_alloc_from_top`).
-/// - A `CaseMatch` arm with a `ListPattern` (needs bump allocator for tail sub-list).
-/// - A `CaseMatch` arm with an `EmptyList` pattern (needs one i32 to load the list pointer).
+/// Returns true when `instrs` require heap-cursor state.
 fn needs_helper_state(instrs: &[WasmBackendInstr]) -> bool {
     use crate::gen_lower::backend_ir::BackendCasePattern;
-    use goby_core::ir::IrBinOp;
     collect_all_instrs(instrs).iter().any(|i| {
         matches!(
             i,
-            WasmBackendInstr::Intrinsic { .. }
-                | WasmBackendInstr::ListLit { .. }
+            WasmBackendInstr::ListLit { .. }
                 | WasmBackendInstr::TupleLit { .. }
                 | WasmBackendInstr::RecordLit { .. }
-                | WasmBackendInstr::ListEachEffect { .. }
                 | WasmBackendInstr::ListEach { .. }
                 | WasmBackendInstr::ListMap { .. }
                 | WasmBackendInstr::CreateClosure { .. }
                 | WasmBackendInstr::AllocMutableCell { .. }
+                | WasmBackendInstr::Intrinsic {
+                    intrinsic: BackendIntrinsic::StringSplit
+                        | BackendIntrinsic::ListPushString
+                        | BackendIntrinsic::ListConcat
+                }
                 // DeclCall / IndirectCall may trigger callee heap allocations; the global cursor
                 // must be synchronized before and after the call, which requires alloc_cursor_local.
                 | WasmBackendInstr::DeclCall { .. }
                 | WasmBackendInstr::IndirectCall { .. }
-        ) || matches!(i, WasmBackendInstr::BinOp { op: IrBinOp::Eq })
+        )
     }) || {
-        // Check for ListPattern or EmptyList patterns in CaseMatch arms.
+        // Check for heap-allocating list patterns in CaseMatch arms.
         fn has_heap_pattern(instrs: &[WasmBackendInstr]) -> bool {
             for instr in instrs {
                 match instr {
                     WasmBackendInstr::CaseMatch { arms, .. } => {
                         for arm in arms {
-                            if matches!(
-                                &arm.pattern,
-                                BackendCasePattern::ListPattern { .. }
-                                    | BackendCasePattern::EmptyList
-                            ) {
+                            if matches!(&arm.pattern, BackendCasePattern::ListPattern { .. }) {
                                 return true;
                             }
                             if has_heap_pattern(&arm.body_instrs) {
@@ -508,6 +510,30 @@ fn needs_helper_state(instrs: &[WasmBackendInstr]) -> bool {
     }
 }
 
+fn needs_scratch_state(instrs: &[WasmBackendInstr]) -> bool {
+    use crate::gen_lower::backend_ir::BackendCasePattern;
+    use goby_core::ir::IrBinOp;
+
+    if needs_helper_state(instrs) {
+        return true;
+    }
+
+    collect_all_instrs(instrs).iter().any(|instr| match instr {
+        WasmBackendInstr::BinOp { op } => matches!(op, IrBinOp::Eq),
+        WasmBackendInstr::ListEachEffect { .. } => true,
+        WasmBackendInstr::Intrinsic {
+            intrinsic: BackendIntrinsic::ListGet | BackendIntrinsic::StringLength,
+        } => true,
+        WasmBackendInstr::CaseMatch { arms, .. } => arms.iter().any(|arm| {
+            matches!(
+                arm.pattern,
+                BackendCasePattern::StrLit(_) | BackendCasePattern::EmptyList
+            )
+        }),
+        _ => false,
+    })
+}
+
 fn required_i32_scratch_count(instrs: &[WasmBackendInstr]) -> u32 {
     let all = collect_all_instrs(instrs);
     let split = all.iter().any(|i| {
@@ -533,8 +559,13 @@ fn required_i32_scratch_count(instrs: &[WasmBackendInstr]) -> u32 {
     } else {
         0
     };
-    let helper_count = if needs_helper_state(instrs) {
-        HELPER_SCRATCH_I32 + required_heap_base_spill_count(instrs)
+    let helper_count = if needs_scratch_state(instrs) {
+        HELPER_SCRATCH_I32
+            + if needs_helper_state(instrs) {
+                required_heap_base_spill_count(instrs)
+            } else {
+                0
+            }
     } else {
         0
     };
@@ -1200,19 +1231,22 @@ fn emit_instrs_with_heap_depth(
         .ok_or_else(|| CodegenError {
             message: "gen_lower/emit: helper i64 scratch base underflow".to_string(),
         })?;
-    // `helper_state` is constructed when bump allocator / i32 scratch is needed.
-    // BinOp Mul/Div/Mod need only i64 scratch; those are provided via `helper_i64_base` directly
-    // in `emit_bin_op`, without requiring the full HelperEmitState.
-    // `needs_helper_state` is the single source of truth for when the helper pool is required.
+    let scratch_state = if needs_scratch_state(instrs) {
+        Some(EmitScratchState {
+            i64_base: helper_i64_base,
+            i32_base,
+            function_returns_i64,
+        })
+    } else {
+        None
+    };
     let helper_state = if needs_helper_state(instrs) {
         let alloc_cursor_local = i32_base + HELPER_ALLOC_CURSOR_OFFSET;
         let heap_floor_local = i32_base + HELPER_HEAP_FLOOR_OFFSET;
-        Some(HelperEmitState {
-            i64_base: helper_i64_base,
-            i32_base,
+        Some(HeapEmitState {
+            scratch: scratch_state.expect("heap state requires scratch state"),
             alloc_cursor_local,
             heap_floor_local,
-            function_returns_i64,
         })
     } else {
         None
@@ -1255,7 +1289,7 @@ fn emit_instrs_with_heap_depth(
                 } else {
                     None
                 };
-                emit_bin_op(function, op, i64_scratch_base, helper_state)?;
+                emit_bin_op(function, op, i64_scratch_base, scratch_state)?;
             }
 
             WasmBackendInstr::EffectOp { op } => {
@@ -1274,7 +1308,14 @@ fn emit_instrs_with_heap_depth(
             }
 
             WasmBackendInstr::Intrinsic { intrinsic } => {
-                emit_helper_call(function, ctx, *intrinsic, i32_base, helper_state.as_ref())?;
+                emit_helper_call(
+                    function,
+                    ctx,
+                    *intrinsic,
+                    i32_base,
+                    scratch_state.as_ref(),
+                    helper_state.as_ref(),
+                )?;
             }
 
             WasmBackendInstr::SplitEachPrint {
@@ -1392,6 +1433,7 @@ fn emit_instrs_with_heap_depth(
                     helper_i64_scratch_count,
                     i32_base,
                     static_strings,
+                    &scratch_state,
                     &helper_state,
                     options,
                     function_returns_i64,
@@ -1399,10 +1441,10 @@ fn emit_instrs_with_heap_depth(
             }
 
             WasmBackendInstr::ListLit { element_instrs } => {
-                let hs = require_helper_state(helper_state, "ListLit")?;
-                let s_list_ptr = hs.i32_base + HELPER_SCRATCH_I32 + heap_base_depth;
-                let s_alloc_ptr = hs.i32_base + HS_AUX_PTR;
-                let s_alloc_size = hs.i32_base + HS_ALLOC_SIZE;
+                let hs = require_heap_state(helper_state, "ListLit")?;
+                let s_list_ptr = hs.scratch.i32_base + HELPER_SCRATCH_I32 + heap_base_depth;
+                let s_alloc_ptr = hs.scratch.i32_base + HS_AUX_PTR;
+                let s_alloc_size = hs.scratch.i32_base + HS_ALLOC_SIZE;
                 let n = element_instrs.len() as i32;
                 // alloc_size = 4 + 8 * n
                 function.instruction(&Instruction::I32Const(4 + 8 * n));
@@ -1449,10 +1491,10 @@ fn emit_instrs_with_heap_depth(
             }
 
             WasmBackendInstr::TupleLit { element_instrs } => {
-                let hs = require_helper_state(helper_state, "TupleLit")?;
-                let s_tuple_ptr = hs.i32_base + HELPER_SCRATCH_I32 + heap_base_depth;
-                let s_alloc_ptr = hs.i32_base + HS_AUX_PTR;
-                let s_alloc_size = hs.i32_base + HS_ALLOC_SIZE;
+                let hs = require_heap_state(helper_state, "TupleLit")?;
+                let s_tuple_ptr = hs.scratch.i32_base + HELPER_SCRATCH_I32 + heap_base_depth;
+                let s_alloc_ptr = hs.scratch.i32_base + HS_AUX_PTR;
+                let s_alloc_size = hs.scratch.i32_base + HS_ALLOC_SIZE;
                 let n = element_instrs.len() as i32;
                 function.instruction(&Instruction::I32Const(4 + 8 * n));
                 function.instruction(&Instruction::LocalSet(s_alloc_size));
@@ -1496,11 +1538,11 @@ fn emit_instrs_with_heap_depth(
                 constructor,
                 field_instrs,
             } => {
-                let hs = require_helper_state(helper_state, "RecordLit")?;
+                let hs = require_heap_state(helper_state, "RecordLit")?;
                 let ctor_tag = ctx.record_ctor_tag(constructor)? as i64;
-                let s_record_ptr = hs.i32_base + HELPER_SCRATCH_I32 + heap_base_depth;
-                let s_alloc_ptr = hs.i32_base + HS_AUX_PTR;
-                let s_alloc_size = hs.i32_base + HS_ALLOC_SIZE;
+                let s_record_ptr = hs.scratch.i32_base + HELPER_SCRATCH_I32 + heap_base_depth;
+                let s_alloc_ptr = hs.scratch.i32_base + HS_AUX_PTR;
+                let s_alloc_size = hs.scratch.i32_base + HS_ALLOC_SIZE;
                 let n = field_instrs.len() as i32;
                 function.instruction(&Instruction::I32Const(8 + 8 * n));
                 function.instruction(&Instruction::LocalSet(s_alloc_size));
@@ -1558,7 +1600,6 @@ fn emit_instrs_with_heap_depth(
             }
 
             WasmBackendInstr::ListEachEffect { list_instrs, op } => {
-                let _hs = require_helper_state(helper_state, "ListEachEffect")?;
                 emit_instrs(
                     function,
                     ctx,
@@ -1585,7 +1626,7 @@ fn emit_instrs_with_heap_depth(
                 list_instrs,
                 func_instrs,
             } => {
-                let hs = require_helper_state(helper_state, "ListEach")?;
+                let hs = require_heap_state(helper_state, "ListEach")?;
                 let type_idx = ctx.indirect_call_type_idx(1)?;
                 let closure_type_idx = ctx.indirect_call_type_idx(2)?;
                 emit_instrs(
@@ -1619,7 +1660,7 @@ fn emit_instrs_with_heap_depth(
                 list_instrs,
                 func_instrs,
             } => {
-                let hs = require_helper_state(helper_state, "ListMap")?;
+                let hs = require_heap_state(helper_state, "ListMap")?;
                 let type_idx = ctx.indirect_call_type_idx(1)?;
                 let closure_type_idx = ctx.indirect_call_type_idx(2)?;
                 emit_instrs(
@@ -1692,10 +1733,10 @@ fn emit_instrs_with_heap_depth(
                 //
                 // The closure base pointer is saved to a depth-indexed spill local immediately
                 // after allocation so nested heap allocations cannot corrupt the outer pointer.
-                let hs = require_helper_state(helper_state, "CreateClosure")?;
-                let s_closure_ptr = hs.i32_base + HELPER_SCRATCH_I32 + heap_base_depth;
-                let s_aux = hs.i32_base + HS_AUX_PTR; // temp for alloc, then discarded
-                let s_alloc_size = hs.i32_base + HS_ALLOC_SIZE;
+                let hs = require_heap_state(helper_state, "CreateClosure")?;
+                let s_closure_ptr = hs.scratch.i32_base + HELPER_SCRATCH_I32 + heap_base_depth;
+                let s_aux = hs.scratch.i32_base + HS_AUX_PTR; // temp for alloc, then discarded
+                let s_alloc_size = hs.scratch.i32_base + HS_ALLOC_SIZE;
                 let n = slot_instrs.len() as i32;
                 // alloc_size = 8 + 8 * n  (8 bytes for func_handle, 8 bytes per slot)
                 function.instruction(&Instruction::I32Const(8 + 8 * n));
@@ -1792,9 +1833,9 @@ fn emit_instrs_with_heap_depth(
                 // init_instrs contains a nested heap allocation. The lowering pass must ensure
                 // init_instrs does not allocate; typically init_instrs is a single
                 // I64Const or LoadLocal, never a heap-allocating sequence.
-                let hs = require_helper_state(helper_state, "AllocMutableCell")?;
-                let s_cell_ptr = hs.i32_base + HS_AUX_PTR;
-                let s_alloc_size = hs.i32_base + HS_ALLOC_SIZE;
+                let hs = require_heap_state(helper_state, "AllocMutableCell")?;
+                let s_cell_ptr = hs.scratch.i32_base + HS_AUX_PTR;
+                let s_alloc_size = hs.scratch.i32_base + HS_ALLOC_SIZE;
                 function.instruction(&Instruction::I32Const(8));
                 function.instruction(&Instruction::LocalSet(s_alloc_size));
                 emit_alloc_from_top(function, &hs, s_alloc_size, s_cell_ptr);
@@ -1918,15 +1959,34 @@ fn emit_helper_call(
     ctx: &EmitContext,
     intrinsic: BackendIntrinsic,
     i32_base: u32,
-    helper_state: Option<&HelperEmitState>,
+    scratch_state: Option<&EmitScratchState>,
+    heap_state: Option<&HeapEmitState>,
 ) -> Result<(), CodegenError> {
-    let helper_state = helper_state.ok_or_else(|| CodegenError {
-        message: format!("gen_lower/emit: intrinsic '{intrinsic:?}' requires helper scratch state"),
-    })?;
     match intrinsic {
-        BackendIntrinsic::StringSplit => emit_string_split_helper(function, helper_state),
-        BackendIntrinsic::ListGet => emit_list_get_helper(function, helper_state),
-        BackendIntrinsic::StringLength => emit_string_length_helper(function, helper_state),
+        BackendIntrinsic::StringSplit => emit_string_split_helper(
+            function,
+            heap_state.ok_or_else(|| CodegenError {
+                message: format!(
+                    "gen_lower/emit: intrinsic '{intrinsic:?}' requires heap helper state"
+                ),
+            })?,
+        ),
+        BackendIntrinsic::ListGet => emit_list_get_helper(
+            function,
+            scratch_state.ok_or_else(|| CodegenError {
+                message: format!(
+                    "gen_lower/emit: intrinsic '{intrinsic:?}' requires helper scratch state"
+                ),
+            })?,
+        ),
+        BackendIntrinsic::StringLength => emit_string_length_helper(
+            function,
+            scratch_state.ok_or_else(|| CodegenError {
+                message: format!(
+                    "gen_lower/emit: intrinsic '{intrinsic:?}' requires helper scratch state"
+                ),
+            })?,
+        ),
         BackendIntrinsic::ValueToString
         | BackendIntrinsic::StringEachGraphemeCount
         | BackendIntrinsic::StringEachGraphemeState
@@ -1949,8 +2009,22 @@ fn emit_helper_call(
             function.instruction(&Instruction::Call(HOST_IMPORT_BASE_IDX + host_offset));
             Ok(())
         }
-        BackendIntrinsic::ListPushString => emit_list_push_string_helper(function, helper_state),
-        BackendIntrinsic::ListConcat => emit_list_concat_helper(function, helper_state),
+        BackendIntrinsic::ListPushString => emit_list_push_string_helper(
+            function,
+            heap_state.ok_or_else(|| CodegenError {
+                message: format!(
+                    "gen_lower/emit: intrinsic '{intrinsic:?}' requires heap helper state"
+                ),
+            })?,
+        ),
+        BackendIntrinsic::ListConcat => emit_list_concat_helper(
+            function,
+            heap_state.ok_or_else(|| CodegenError {
+                message: format!(
+                    "gen_lower/emit: intrinsic '{intrinsic:?}' requires heap helper state"
+                ),
+            })?,
+        ),
     }?;
     let _ = (ctx, i32_base);
     Ok(())
@@ -1958,7 +2032,7 @@ fn emit_helper_call(
 
 fn emit_decode_string_ptr(
     function: &mut Function,
-    helper_state: &HelperEmitState,
+    helper_state: &EmitScratchState,
     source_i64_local: u32,
     ptr_local: u32,
     len_local: u32,
@@ -2106,7 +2180,7 @@ fn emit_function_body(
 fn emit_heap_aware_direct_call(
     function: &mut Function,
     func_idx: u32,
-    helper_state: Option<&HelperEmitState>,
+    helper_state: Option<&HeapEmitState>,
 ) {
     if let Some(hs) = helper_state {
         emit_sync_cursor_to_global(function, hs.alloc_cursor_local);
@@ -2118,7 +2192,7 @@ fn emit_heap_aware_direct_call(
     }
 }
 
-fn emit_return_if_runtime_error(function: &mut Function, helper_state: &HelperEmitState) {
+fn emit_return_if_runtime_error(function: &mut Function, helper_state: &HeapEmitState) {
     function.instruction(&Instruction::I32Const(GLOBAL_RUNTIME_ERROR_OFFSET as i32));
     function.instruction(&Instruction::I32Load(MemArg {
         offset: 0,
@@ -2128,7 +2202,7 @@ fn emit_return_if_runtime_error(function: &mut Function, helper_state: &HelperEm
     function.instruction(&Instruction::I32Eqz);
     function.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
     function.instruction(&Instruction::Else);
-    if helper_state.function_returns_i64 {
+    if helper_state.scratch.function_returns_i64 {
         function.instruction(&Instruction::I64Const(0));
     }
     function.instruction(&Instruction::Return);
@@ -2180,7 +2254,7 @@ fn emit_callable_dispatch(
     arg_locals: &[u32],
     plain_type_idx: u32,
     closure_type_idx: u32,
-    hs: Option<&HelperEmitState>,
+    hs: Option<&HeapEmitState>,
 ) {
     // TAG_CLOSURE check: callee >> 60 == TAG_CLOSURE
     function.instruction(&Instruction::LocalGet(callee_local));
@@ -2237,7 +2311,7 @@ fn emit_indirect_call_dispatch(
     ctx: &EmitContext,
     helper_i64_base: u32,
     arity: u8,
-    hs: Option<&HelperEmitState>,
+    hs: Option<&HeapEmitState>,
 ) -> Result<(), CodegenError> {
     if arity == 0 || u32::from(arity + 1) > HELPER_SCRATCH_I64 {
         return Err(CodegenError {
@@ -2285,7 +2359,7 @@ fn emit_push_tagged_ptr(function: &mut Function, ptr_local: u32, tag: u8) {
 
 fn emit_alloc_from_top(
     function: &mut Function,
-    helper_state: &HelperEmitState,
+    helper_state: &HeapEmitState,
     size_local: u32,
     result_local: u32,
 ) {
@@ -2419,27 +2493,39 @@ fn emit_copy_string_slice_to_alloc(
 
 fn emit_string_split_helper(
     function: &mut Function,
-    helper_state: &HelperEmitState,
+    helper_state: &HeapEmitState,
 ) -> Result<(), CodegenError> {
-    let text_i64 = helper_state.i64_base;
-    let sep_i64 = helper_state.i64_base + 1;
-    let s_text_ptr = helper_state.i32_base + HS_TEXT_PTR;
-    let s_text_len = helper_state.i32_base + HS_TEXT_LEN;
-    let s_sep_ptr = helper_state.i32_base + HS_SEP_PTR;
-    let s_sep_len = helper_state.i32_base + HS_SEP_LEN;
-    let s_pos = helper_state.i32_base + HS_SCAN_POS;
-    let s_start = helper_state.i32_base + HS_SEG_START;
-    let s_item_count = helper_state.i32_base + HS_ITEM_COUNT;
-    let s_aux_ptr = helper_state.i32_base + HS_AUX_PTR;
-    let s_list_ptr = helper_state.i32_base + HS_LIST_PTR;
-    let s_alloc_size = helper_state.i32_base + HS_ALLOC_SIZE;
-    let s_iter = helper_state.i32_base + HS_ITER;
+    let text_i64 = helper_state.scratch.i64_base;
+    let sep_i64 = helper_state.scratch.i64_base + 1;
+    let s_text_ptr = helper_state.scratch.i32_base + HS_TEXT_PTR;
+    let s_text_len = helper_state.scratch.i32_base + HS_TEXT_LEN;
+    let s_sep_ptr = helper_state.scratch.i32_base + HS_SEP_PTR;
+    let s_sep_len = helper_state.scratch.i32_base + HS_SEP_LEN;
+    let s_pos = helper_state.scratch.i32_base + HS_SCAN_POS;
+    let s_start = helper_state.scratch.i32_base + HS_SEG_START;
+    let s_item_count = helper_state.scratch.i32_base + HS_ITEM_COUNT;
+    let s_aux_ptr = helper_state.scratch.i32_base + HS_AUX_PTR;
+    let s_list_ptr = helper_state.scratch.i32_base + HS_LIST_PTR;
+    let s_alloc_size = helper_state.scratch.i32_base + HS_ALLOC_SIZE;
+    let s_iter = helper_state.scratch.i32_base + HS_ITER;
 
     function.instruction(&Instruction::LocalSet(sep_i64));
     function.instruction(&Instruction::LocalSet(text_i64));
 
-    emit_decode_string_ptr(function, helper_state, text_i64, s_text_ptr, s_text_len);
-    emit_decode_string_ptr(function, helper_state, sep_i64, s_sep_ptr, s_sep_len);
+    emit_decode_string_ptr(
+        function,
+        &helper_state.scratch,
+        text_i64,
+        s_text_ptr,
+        s_text_len,
+    );
+    emit_decode_string_ptr(
+        function,
+        &helper_state.scratch,
+        sep_i64,
+        s_sep_ptr,
+        s_sep_len,
+    );
 
     function.instruction(&Instruction::LocalGet(s_sep_len));
     function.instruction(&Instruction::I32Eqz);
@@ -2586,7 +2672,7 @@ fn emit_string_split_helper(
 
 fn emit_list_get_helper(
     function: &mut Function,
-    helper_state: &HelperEmitState,
+    helper_state: &EmitScratchState,
 ) -> Result<(), CodegenError> {
     let list_i64 = helper_state.i64_base;
     let index_i64 = helper_state.i64_base + 1;
@@ -2668,7 +2754,7 @@ fn emit_list_get_helper(
 
 fn emit_string_length_helper(
     function: &mut Function,
-    helper_state: &HelperEmitState,
+    helper_state: &EmitScratchState,
 ) -> Result<(), CodegenError> {
     let string_i64 = helper_state.i64_base;
     let s_ptr = helper_state.i32_base + HS_TEXT_PTR;
@@ -2684,17 +2770,17 @@ fn emit_string_length_helper(
 
 fn emit_list_push_string_helper(
     function: &mut Function,
-    helper_state: &HelperEmitState,
+    helper_state: &HeapEmitState,
 ) -> Result<(), CodegenError> {
-    let list_i64 = helper_state.i64_base;
-    let string_i64 = helper_state.i64_base + 1;
-    let s_list_ptr = helper_state.i32_base + HS_TEXT_PTR;
-    let s_list_len = helper_state.i32_base + HS_TEXT_LEN;
-    let s_string_ptr = helper_state.i32_base + HS_SEP_PTR;
-    let s_string_len = helper_state.i32_base + HS_SEP_LEN;
-    let s_new_list_ptr = helper_state.i32_base + HS_AUX_PTR;
-    let s_alloc_size = helper_state.i32_base + HS_ALLOC_SIZE;
-    let s_iter = helper_state.i32_base + HS_ITER;
+    let list_i64 = helper_state.scratch.i64_base;
+    let string_i64 = helper_state.scratch.i64_base + 1;
+    let s_list_ptr = helper_state.scratch.i32_base + HS_TEXT_PTR;
+    let s_list_len = helper_state.scratch.i32_base + HS_TEXT_LEN;
+    let s_string_ptr = helper_state.scratch.i32_base + HS_SEP_PTR;
+    let s_string_len = helper_state.scratch.i32_base + HS_SEP_LEN;
+    let s_new_list_ptr = helper_state.scratch.i32_base + HS_AUX_PTR;
+    let s_alloc_size = helper_state.scratch.i32_base + HS_ALLOC_SIZE;
+    let s_iter = helper_state.scratch.i32_base + HS_ITER;
 
     function.instruction(&Instruction::LocalSet(string_i64));
     function.instruction(&Instruction::LocalSet(list_i64));
@@ -2710,7 +2796,7 @@ fn emit_list_push_string_helper(
 
     emit_decode_string_ptr(
         function,
-        helper_state,
+        &helper_state.scratch,
         string_i64,
         s_string_ptr,
         s_string_len,
@@ -2814,17 +2900,17 @@ fn emit_list_push_string_helper(
 
 fn emit_list_concat_helper(
     function: &mut Function,
-    helper_state: &HelperEmitState,
+    helper_state: &HeapEmitState,
 ) -> Result<(), CodegenError> {
-    let tail_i64 = helper_state.i64_base;
-    let prefix_i64 = helper_state.i64_base + 1;
-    let s_prefix_ptr = helper_state.i32_base + HS_TEXT_PTR;
-    let s_prefix_len = helper_state.i32_base + HS_TEXT_LEN;
-    let s_tail_ptr = helper_state.i32_base + HS_SEP_PTR;
-    let s_tail_len = helper_state.i32_base + HS_SEP_LEN;
-    let s_new_list_ptr = helper_state.i32_base + HS_AUX_PTR;
-    let s_alloc_size = helper_state.i32_base + HS_ALLOC_SIZE;
-    let s_iter = helper_state.i32_base + HS_ITER;
+    let tail_i64 = helper_state.scratch.i64_base;
+    let prefix_i64 = helper_state.scratch.i64_base + 1;
+    let s_prefix_ptr = helper_state.scratch.i32_base + HS_TEXT_PTR;
+    let s_prefix_len = helper_state.scratch.i32_base + HS_TEXT_LEN;
+    let s_tail_ptr = helper_state.scratch.i32_base + HS_SEP_PTR;
+    let s_tail_len = helper_state.scratch.i32_base + HS_SEP_LEN;
+    let s_new_list_ptr = helper_state.scratch.i32_base + HS_AUX_PTR;
+    let s_alloc_size = helper_state.scratch.i32_base + HS_ALLOC_SIZE;
+    let s_iter = helper_state.scratch.i32_base + HS_ITER;
 
     function.instruction(&Instruction::LocalSet(tail_i64));
     function.instruction(&Instruction::LocalSet(prefix_i64));
@@ -3011,7 +3097,7 @@ fn emit_bin_op(
     function: &mut Function,
     op: &IrBinOp,
     i64_scratch_base: Option<u32>,
-    helper_state: Option<HelperEmitState>,
+    helper_state: Option<EmitScratchState>,
 ) -> Result<(), CodegenError> {
     const PAYLOAD_MASK: i64 = (1i64 << 60) - 1;
     const TAG_INT_SHIFT: i64 = (TAG_INT as i64) << 60;
@@ -3150,7 +3236,7 @@ fn emit_bin_op(
             // - otherwise String/String falls through to content comparison,
             // - all other unequal pairs are false.
             let (right_i64, left_i64) = require_scratch!(i64_scratch_base, "Eq");
-            let hs = require_helper_state(helper_state, "BinOp::Eq")?;
+            let hs = require_scratch_state(helper_state, "BinOp::Eq")?;
             let s_left_ptr = hs.i32_base + HS_TEXT_PTR;
             let s_left_len = hs.i32_base + HS_TEXT_LEN;
             let s_right_ptr = hs.i32_base + HS_SEP_PTR;
@@ -3261,7 +3347,7 @@ fn emit_effect_op(
     buffer_len: i32,
     newline_ptr: i32,
     i32_base: u32,
-    helper_state: Option<&HelperEmitState>,
+    helper_state: Option<&HeapEmitState>,
     strategy: EffectEmitStrategy,
 ) -> Result<(), CodegenError> {
     match strategy {
@@ -3294,7 +3380,7 @@ fn emit_effect_op_wb3_direct(
     buffer_len: i32,
     newline_ptr: i32,
     i32_base: u32,
-    helper_state: Option<&HelperEmitState>,
+    helper_state: Option<&HeapEmitState>,
 ) -> Result<(), CodegenError> {
     match op {
         BackendEffectOp::Read(BackendReadOp::Read) => {
@@ -3689,15 +3775,15 @@ fn emit_split_each_print(
 /// I64 scratch locals used: i64_base+0 (func handle), i64_base+1 (current element).
 fn emit_list_each(
     function: &mut Function,
-    hs: &HelperEmitState,
+    hs: &HeapEmitState,
     indirect_call_type_idx: u32,
     closure_call_type_idx: u32,
 ) {
-    let s_func = hs.i64_base; // i64 scratch: func handle
-    let s_elem = hs.i64_base + 1; // i64 scratch: current element
-    let s_list_ptr = hs.i32_base + HS_LIST_PTR; // i32 scratch: list pointer
-    let s_list_len = hs.i32_base + HS_ITEM_COUNT; // i32 scratch: list length
-    let s_iter = hs.i32_base + HS_ITER; // i32 scratch: loop counter
+    let s_func = hs.scratch.i64_base; // i64 scratch: func handle
+    let s_elem = hs.scratch.i64_base + 1; // i64 scratch: current element
+    let s_list_ptr = hs.scratch.i32_base + HS_LIST_PTR; // i32 scratch: list pointer
+    let s_list_len = hs.scratch.i32_base + HS_ITEM_COUNT; // i32 scratch: list length
+    let s_iter = hs.scratch.i32_base + HS_ITER; // i32 scratch: loop counter
 
     // Stack: [list_tagged, func_tagged]
     function.instruction(&Instruction::LocalSet(s_func));
@@ -3782,17 +3868,17 @@ fn emit_list_each(
 /// I64 scratch locals: i64_base+0 (func handle), i64_base+1 (current element / result).
 fn emit_list_map(
     function: &mut Function,
-    hs: &HelperEmitState,
+    hs: &HeapEmitState,
     indirect_call_type_idx: u32,
     closure_call_type_idx: u32,
 ) -> Result<(), CodegenError> {
-    let s_func = hs.i64_base;
-    let s_elem = hs.i64_base + 1;
-    let s_list_ptr = hs.i32_base + HS_LIST_PTR;
-    let s_list_len = hs.i32_base + HS_ITEM_COUNT;
-    let s_iter = hs.i32_base + HS_ITER;
-    let s_result_ptr = hs.i32_base + HS_AUX_PTR;
-    let s_alloc_size = hs.i32_base + HS_ALLOC_SIZE;
+    let s_func = hs.scratch.i64_base;
+    let s_elem = hs.scratch.i64_base + 1;
+    let s_list_ptr = hs.scratch.i32_base + HS_LIST_PTR;
+    let s_list_len = hs.scratch.i32_base + HS_ITEM_COUNT;
+    let s_iter = hs.scratch.i32_base + HS_ITER;
+    let s_result_ptr = hs.scratch.i32_base + HS_AUX_PTR;
+    let s_alloc_size = hs.scratch.i32_base + HS_ALLOC_SIZE;
 
     // Stack: [list_tagged, func_tagged]
     function.instruction(&Instruction::LocalSet(s_func));
@@ -4071,7 +4157,8 @@ fn emit_case_match(
     helper_i64_scratch_count: u32,
     i32_base: u32,
     static_strings: &StaticStringPool,
-    helper_state: &Option<HelperEmitState>,
+    scratch_state: &Option<EmitScratchState>,
+    heap_state: &Option<HeapEmitState>,
     options: EmitOptions,
     function_returns_i64: bool,
 ) -> Result<(), CodegenError> {
@@ -4167,7 +4254,7 @@ fn emit_case_match(
             }
 
             BackendCasePattern::StrLit(pattern_text) => {
-                let hs = require_helper_state(*helper_state, "StrLit case pattern")?;
+                let hs = require_scratch_state(*scratch_state, "StrLit case pattern")?;
                 let s_pat_ptr = hs.i32_base + HS_TEXT_PTR;
                 let s_pat_len = hs.i32_base + HS_TEXT_LEN;
                 let s_scr_ptr = hs.i32_base + HS_SEP_PTR;
@@ -4246,7 +4333,7 @@ fn emit_case_match(
                 // Extract list pointer (one i32 local from helper pool), load len at offset 0.
                 // `needs_helper_state` returns true for any function with an EmptyList pattern,
                 // so helper_state is always Some here.  The error path is unreachable in practice.
-                let s_ptr = helper_state
+                let s_ptr = scratch_state
                     .map(|hs| hs.i32_base + HS_TEXT_PTR)
                     .ok_or_else(|| CodegenError {
                         message: "gen_lower/emit: EmptyList pattern requires helper state (internal error: needs_helper_state should have set this up)".to_string(),
@@ -4283,12 +4370,12 @@ fn emit_case_match(
 
             BackendCasePattern::ListPattern { items, tail } => {
                 use crate::gen_lower::backend_ir::BackendListPatternItem;
-                let hs = require_helper_state(*helper_state, "ListPattern")?;
-                let s_list_ptr = hs.i32_base + HS_TEXT_PTR;
-                let s_list_len = hs.i32_base + HS_TEXT_LEN;
-                let s_alloc_size = hs.i32_base + HS_ALLOC_SIZE;
-                let s_iter = hs.i32_base + HS_ITER;
-                let s_tail_ptr = hs.i32_base + HS_AUX_PTR;
+                let hs = require_heap_state(*heap_state, "ListPattern")?;
+                let s_list_ptr = hs.scratch.i32_base + HS_TEXT_PTR;
+                let s_list_len = hs.scratch.i32_base + HS_TEXT_LEN;
+                let s_alloc_size = hs.scratch.i32_base + HS_ALLOC_SIZE;
+                let s_iter = hs.scratch.i32_base + HS_ITER;
+                let s_tail_ptr = hs.scratch.i32_base + HS_AUX_PTR;
                 let n_items = items.len() as i32;
 
                 // Check tag == TAG_LIST
@@ -4488,7 +4575,7 @@ fn emit_abort(function: &mut Function) {
     function.instruction(&Instruction::Unreachable);
 }
 
-fn emit_memory_exhaustion_abort(function: &mut Function, helper_state: &HelperEmitState) {
+fn emit_memory_exhaustion_abort(function: &mut Function, helper_state: &HeapEmitState) {
     function.instruction(&Instruction::I32Const(GLOBAL_RUNTIME_ERROR_OFFSET as i32));
     function.instruction(&Instruction::I32Const(
         RUNTIME_ERROR_MEMORY_EXHAUSTION as i32,
@@ -4498,7 +4585,7 @@ fn emit_memory_exhaustion_abort(function: &mut Function, helper_state: &HelperEm
         align: 2,
         memory_index: 0,
     }));
-    if helper_state.function_returns_i64 {
+    if helper_state.scratch.function_returns_i64 {
         function.instruction(&Instruction::I64Const(0));
     }
     function.instruction(&Instruction::Return);
