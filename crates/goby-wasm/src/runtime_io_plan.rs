@@ -440,6 +440,38 @@ fn ir_has_read_op(comp: &CompExpr) -> bool {
     }
 }
 
+fn ir_has_specific_read_op(comp: &CompExpr, target_op: &str) -> bool {
+    match comp {
+        CompExpr::PerformEffect { effect, op, .. } if effect == "Read" && op == target_op => true,
+        CompExpr::PerformEffect { .. } => false,
+        CompExpr::Value(_) => false,
+        CompExpr::Let { value, body, .. } | CompExpr::LetMut { value, body, .. } => {
+            ir_has_specific_read_op(value, target_op) || ir_has_specific_read_op(body, target_op)
+        }
+        CompExpr::Seq { stmts, tail } => {
+            stmts
+                .iter()
+                .any(|stmt| ir_has_specific_read_op(stmt, target_op))
+                || ir_has_specific_read_op(tail, target_op)
+        }
+        CompExpr::If { then_, else_, .. } => {
+            ir_has_specific_read_op(then_, target_op) || ir_has_specific_read_op(else_, target_op)
+        }
+        CompExpr::Call { .. } => false,
+        CompExpr::Assign { value, .. } => ir_has_specific_read_op(value, target_op),
+        CompExpr::Case { arms, .. } => arms
+            .iter()
+            .any(|arm| ir_has_specific_read_op(&arm.body, target_op)),
+        CompExpr::Handle { clauses } => clauses
+            .iter()
+            .any(|clause| ir_has_specific_read_op(&clause.body, target_op)),
+        CompExpr::WithHandler { handler, body } => {
+            ir_has_specific_read_op(handler, target_op) || ir_has_specific_read_op(body, target_op)
+        }
+        CompExpr::Resume { .. } => false,
+    }
+}
+
 /// Attempt to detect an Echo plan from the IR body of `main`.
 ///
 /// Recognizes the binding form, including alias chains of pure
@@ -687,6 +719,9 @@ pub(crate) fn classify_runtime_io_from_ir(ir_module: &IrModule) -> RuntimeIoClas
 fn classify_runtime_io_from_ir_decl(main_decl: &goby_core::ir::IrDecl) -> RuntimeIoClassification {
     let body = &main_decl.body;
     if ir_has_read_op(body) {
+        if ir_has_specific_read_op(body, "read_lines") {
+            return RuntimeIoClassification::InterpreterBridge;
+        }
         if let Some(plan) = ir_plan_echo(body) {
             return RuntimeIoClassification::DynamicWasiIo(plan);
         }
@@ -848,6 +883,7 @@ fn expr_contains_runtime_read(expr: &Expr) -> bool {
         Expr::Call { callee, arg, .. } => {
             is_read_all_expr(expr)
                 || is_read_line_expr(expr)
+                || is_read_lines_expr(expr)
                 || expr_contains_runtime_read(callee)
                 || expr_contains_runtime_read(arg)
         }
@@ -951,6 +987,31 @@ fn is_read_line_expr(expr: &Expr) -> bool {
             args,
             ..
         } => receiver == "Read" && method == "read_line" && args.iter().all(Expr::is_unit_value),
+        _ => false,
+    }
+}
+
+fn is_read_lines_expr(expr: &Expr) -> bool {
+    match expr {
+        Expr::Call { callee, arg, .. } if arg.is_unit_value() => match callee.as_ref() {
+            Expr::Var { name, .. } => name == "read_lines",
+            Expr::Qualified {
+                receiver, member, ..
+            } => receiver == "Read" && member == "read_lines",
+            Expr::MethodCall {
+                receiver,
+                method,
+                args,
+                ..
+            } => receiver == "Read" && method == "read_lines" && args.is_empty(),
+            _ => false,
+        },
+        Expr::MethodCall {
+            receiver,
+            method,
+            args,
+            ..
+        } => receiver == "Read" && method == "read_lines" && args.iter().all(Expr::is_unit_value),
         _ => false,
     }
 }

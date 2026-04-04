@@ -259,6 +259,9 @@ syntax/semantics.
   - `Read.read ()` returns remaining stdin text and then `""` on subsequent reads.
   - `Read.read_line ()` returns one line with one trailing terminator removed
     (`\n`, `\r\n`, `\r`); EOF returns `""`.
+  - `Read.read_lines ()` returns remaining stdin split into `List String` by line
+    terminators (`\n`, `\r\n`, `\r`), consumes the remaining input, and omits a
+    trailing empty item introduced only by the final terminator.
   - stdin is decoded as UTF-8 with replacement for invalid sequences.
 - `@embed` default handlers are active for `main` effect validation and runtime
   fallback behavior where configured.

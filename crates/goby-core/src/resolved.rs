@@ -537,6 +537,10 @@ fn builtin_bare_ref(name: &str) -> Option<ResolvedRef> {
             effect: "Read".to_string(),
             op: "read_line".to_string(),
         }),
+        "read_lines" => Some(ResolvedRef::EffectOp {
+            effect: "Read".to_string(),
+            op: "read_lines".to_string(),
+        }),
         "print" => Some(ResolvedRef::EffectOp {
             effect: "Print".to_string(),
             op: "print".to_string(),
@@ -563,10 +567,12 @@ fn builtin_bare_ref(name: &str) -> Option<ResolvedRef> {
 
 fn builtin_qualified_ref(receiver: &str, member: &str) -> Option<ResolvedRef> {
     match (receiver, member) {
-        ("Read", "read") | ("Read", "read_line") => Some(ResolvedRef::EffectOp {
-            effect: "Read".to_string(),
-            op: member.to_string(),
-        }),
+        ("Read", "read") | ("Read", "read_line") | ("Read", "read_lines") => {
+            Some(ResolvedRef::EffectOp {
+                effect: "Read".to_string(),
+                op: member.to_string(),
+            })
+        }
         ("Print", "print") | ("Print", "println") => Some(ResolvedRef::EffectOp {
             effect: "Print".to_string(),
             op: member.to_string(),

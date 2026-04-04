@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-04-03
+Last updated: 2026-04-04
 
 ## Current Focus
 
@@ -21,6 +21,16 @@ Last updated: 2026-04-03
   - final closure for this track requires representative memory-pressure regressions that succeed under the default bounded-growth policy and explicit low-maximum regressions that fail with the intended exhaustion error.
 
 ## Recently Completed
+
+- **Prelude `Read.read_lines` embedded handler** (2026-04-04): runtime stdin now supports `read_lines ()` through the embedded `Read` handler path.
+  - `fix(runtime)`: embedded stdin runtime now normalizes `\n`, `\r`, and `\r\n`, returns `List String`, and consumes the remaining stdin just like `Read.read`.
+  - `fix(classification)`: `read_lines` programs are now recognized as runtime-stdin programs and routed through the interpreter-bridge execution path instead of falling through to non-stdin execution.
+  - `test`: added runtime and CLI regressions for mixed newline input and end-to-end `goby run` execution.
+
+- **Nested composite-literal heap-pointer preservation** (2026-04-03): compiled-Wasm composite literals no longer corrupt outer allocation pointers when child elements allocate on the Goby heap.
+  - `fix(emit)`: `ListLit`, `TupleLit`, `RecordLit`, and `CreateClosure` now spill their base pointers into depth-indexed i32 locals instead of reusing one shared helper slot across nested heap allocations.
+  - `fix(scratch-sizing)`: emitter local sizing now reserves additional spill locals based on the maximum nested composite-allocation depth in the backend instruction tree.
+  - `test(wasm)`: added a regression that folds over a list of tuples on the GeneralLowered path, locking the user-reported `[(1, 2), ...]` corruption shape.
 
 - **Runtime memory M2 heap-growth slice (heap-only pressure)** (2026-04-03): compiled-Wasm heap allocation on the shared emitter path can now grow linear memory past the initial page allocation for heap-only pressure shapes.
   - `emit(heap)`: `emit_alloc_from_top` now attempts `memory.grow` when the tentative heap allocation would cross the current heap floor, rebases the local/global heap cursor by the newly added pages, and preserves the existing shared allocation entrypoint for lists, tuples, records, closures, cells, and helper-produced lists.

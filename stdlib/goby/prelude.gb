@@ -10,5 +10,6 @@ effect Print
 effect Read
   read : Unit -> String
   read_line : Unit -> String
+  read_lines : Unit -> List String
 
 @embed Read __goby_embeded_effect_stdin_handler

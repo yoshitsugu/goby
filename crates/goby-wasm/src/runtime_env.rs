@@ -84,6 +84,12 @@ impl EmbeddedEffectRuntime {
                 self.read_stdin_line("read_line")
                     .map(|text| Some(RuntimeValue::String(text)))
             }
+            (EmbeddedRuntimeHandlerKind::Stdin, "read_lines")
+                if matches!(arg_val, RuntimeValue::Unit) =>
+            {
+                self.read_stdin_lines("read_lines")
+                    .map(|lines| Some(RuntimeValue::ListString(lines)))
+            }
             _ => Ok(None),
         }
     }
@@ -150,6 +156,43 @@ impl EmbeddedEffectRuntime {
         self.stdin_cursor = content.len();
         Ok(line)
     }
+
+    fn read_stdin_lines(&mut self, op_name: &str) -> Result<Vec<String>, String> {
+        let tail = self.read_stdin_remaining(op_name)?;
+        Ok(split_input_lines(&tail))
+    }
+}
+
+pub(crate) fn split_input_lines(text: &str) -> Vec<String> {
+    let bytes = text.as_bytes();
+    let mut lines = Vec::new();
+    let mut start = 0usize;
+    let mut idx = 0usize;
+
+    while idx < bytes.len() {
+        match bytes[idx] {
+            b'\n' => {
+                lines.push(text[start..idx].to_string());
+                idx += 1;
+                start = idx;
+            }
+            b'\r' => {
+                lines.push(text[start..idx].to_string());
+                idx += 1;
+                if idx < bytes.len() && bytes[idx] == b'\n' {
+                    idx += 1;
+                }
+                start = idx;
+            }
+            _ => idx += 1,
+        }
+    }
+
+    if start < bytes.len() {
+        lines.push(text[start..].to_string());
+    }
+
+    lines
 }
 
 pub(crate) fn load_runtime_import_context(module: &Module) -> RuntimeImportContext {
@@ -231,7 +274,10 @@ fn resolve_runtime_stdlib_root() -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use super::{EmbeddedEffectRuntime, effective_runtime_imports, runtime_import_selects_name};
+    use super::{
+        EmbeddedEffectRuntime, effective_runtime_imports, runtime_import_selects_name,
+        split_input_lines,
+    };
     use goby_core::{ImportKind, parse_module, stdlib::EmbeddedRuntimeHandlerKind};
 
     #[test]
@@ -348,6 +394,46 @@ mod tests {
         ));
         assert!(matches!(
             third,
+            Some(crate::RuntimeValue::String(text)) if text.is_empty()
+        ));
+    }
+
+    #[test]
+    fn split_input_lines_normalizes_all_newline_forms() {
+        assert_eq!(
+            split_input_lines("a\r\nb\nc\rd\r\n"),
+            vec!["a", "b", "c", "d"]
+        );
+        assert_eq!(split_input_lines(""), Vec::<String>::new());
+        assert_eq!(split_input_lines("\n"), vec![""]);
+    }
+
+    #[test]
+    fn embedded_effect_runtime_read_lines_consumes_remaining_input() {
+        let mut runtime = EmbeddedEffectRuntime::new(Some("a\r\nb\nc\rd\r\n".to_string()), true);
+
+        let lines = runtime
+            .invoke(
+                EmbeddedRuntimeHandlerKind::Stdin,
+                "read_lines",
+                crate::RuntimeValue::Unit,
+            )
+            .expect("stdin read_lines should succeed");
+        let rest = runtime
+            .invoke(
+                EmbeddedRuntimeHandlerKind::Stdin,
+                "read",
+                crate::RuntimeValue::Unit,
+            )
+            .expect("stdin read after read_lines should succeed");
+
+        assert!(matches!(
+            lines,
+            Some(crate::RuntimeValue::ListString(lines))
+                if lines == vec!["a", "b", "c", "d"]
+        ));
+        assert!(matches!(
+            rest,
             Some(crate::RuntimeValue::String(text)) if text.is_empty()
         ));
     }

@@ -1056,6 +1056,39 @@ main =
 }
 
 #[test]
+fn run_command_executes_read_lines_program_with_runtime_stdin() {
+    let root = repo_root();
+    let sandbox = TempDirGuard::new("run_read_lines_interpreter_bridge");
+    let input = sandbox.join("read_lines.gb");
+    fs::write(
+        &input,
+        r#"
+import goby/list ( each )
+
+main : Unit -> Unit can Print, Read
+main =
+  lines = read_lines ()
+  each lines (fn line -> println "${line}!")
+"#,
+    )
+    .expect("temporary input should be writable");
+
+    let output = run_goby_with_stdin(&root, &input, b"hogehoge\r\nfugafuga\npiyo\r");
+
+    assert!(
+        output.status.success(),
+        "expected runtime stdin execution to succeed, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("hogehoge!\nfugafuga!\npiyo!"),
+        "expected newline-normalized read_lines output, stdout: {}",
+        stdout
+    );
+}
+
+#[test]
 fn run_command_does_not_wait_for_eof_on_general_lowered_program_without_read() {
     let root = repo_root();
     let sandbox = TempDirGuard::new("run_general_lowered_without_read");

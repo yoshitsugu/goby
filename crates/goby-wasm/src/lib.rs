@@ -341,6 +341,32 @@ main =
     }
 
     #[test]
+    fn execute_runtime_module_with_stdin_supports_read_lines_interpreter_bridge() {
+        let module = parse_module(
+            r#"
+import goby/list ( each )
+
+main : Unit -> Unit can Print, Read
+main =
+  lines = read_lines ()
+  each lines (fn line -> println line)
+"#,
+        )
+        .expect("parse should work");
+
+        assert_eq!(
+            runtime_io_execution_kind(&module).expect("classification should succeed"),
+            RuntimeIoExecutionKind::InterpreterBridge,
+            "read_lines should classify as InterpreterBridge"
+        );
+
+        let output =
+            execute_runtime_module_with_stdin(&module, Some("alpha\r\nbeta\ngamma\r".to_string()))
+                .expect("read_lines interpreter execution should succeed");
+        assert_eq!(output.as_deref(), Some("alpha\nbeta\ngamma\n"));
+    }
+
+    #[test]
     fn e4_backend_path_grapheme_count_compiles_with_host_import() {
         // E4 parity test: proves that `__goby_string_each_grapheme` (count form, 1-arg)
         // compiles to Wasm and emits the host import name
@@ -1560,6 +1586,37 @@ main =
         let output = execute_runtime_module_with_stdin(&module, Some(String::new()))
             .expect("Read+tuple+interpolated string must execute via GeneralLowered");
         assert_eq!(output.as_deref(), Some("1\n"), "pair.0 of (1, 2) must be 1");
+    }
+
+    #[test]
+    fn fold_over_list_of_tuples_preserves_tuple_elements_on_wasm_path() {
+        let module = parse_module(
+            r#"
+import goby/list ( fold )
+
+main : Unit -> Unit can Print, Read
+main =
+  _ = read()
+  pairs = [(1, 2), (3, 4), (5, 6)]
+  total = fold pairs 0 (fn acc pair -> acc + pair.0 + pair.1)
+  println "${total}"
+"#,
+        )
+        .expect("parse should work");
+
+        assert_eq!(
+            runtime_io_execution_kind(&module).expect("classification should succeed"),
+            RuntimeIoExecutionKind::GeneralLowered,
+            "list-of-tuples fold program must route to GeneralLowered"
+        );
+
+        let output = execute_runtime_module_with_stdin(&module, Some(String::new()))
+            .expect("list-of-tuples fold program should execute via GeneralLowered");
+        assert_eq!(
+            output.as_deref(),
+            Some("21\n"),
+            "fold should observe intact tuple elements inside the list literal"
+        );
     }
 
     #[test]
