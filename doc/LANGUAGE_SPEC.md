@@ -210,6 +210,15 @@ syntax/semantics.
   - `@embed` is intentionally narrow.
   - current intended use is the prelude-backed `Print` / `Read` defaults so users
     can write simple I/O before learning full effect-handler patterns.
+  - the primary user-facing goal is that small scripts can use `Print` / `Read`
+    with minimal ceremony, including simple cases that do not require explicit
+    imports or user-defined handlers.
+  - although `@embed` is stdlib-only, future expansion of its meaning or target
+    surface should be treated as a language-design decision, not a convenience-only
+    implementation tweak.
+  - any future extension should explicitly evaluate its effect on implicit
+    availability, module ownership, diagnostics, and runtime semantics before the
+    feature is broadened beyond the current `Print` / `Read` onboarding scope.
   - `@embed` is not the general extension mechanism for future host capabilities
     such as file, clock, or network access.
 - Legacy form `@embed effect <EffectName>` is rejected.
