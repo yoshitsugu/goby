@@ -31,6 +31,7 @@ pub(crate) enum HostIntrinsicImport {
     StringEachGraphemeState,
     StringConcat,
     StringGraphemesList,
+    StringSplitLines,
 }
 
 impl HostIntrinsicImport {
@@ -48,6 +49,7 @@ impl HostIntrinsicImport {
             Self::StringEachGraphemeState => "__goby_string_each_grapheme_state",
             Self::StringConcat => "__goby_string_concat",
             Self::StringGraphemesList => "__goby_string_graphemes_list",
+            Self::StringSplitLines => "__goby_string_split_lines",
         }
     }
 
@@ -58,7 +60,7 @@ impl HostIntrinsicImport {
             Self::StringEachGraphemeCount => &[ValType::I64],
             Self::StringEachGraphemeState => &[ValType::I64, ValType::I64],
             Self::StringConcat => &[ValType::I64, ValType::I64],
-            Self::StringGraphemesList => &[ValType::I64],
+            Self::StringGraphemesList | Self::StringSplitLines => &[ValType::I64],
         }
     }
 
@@ -68,12 +70,13 @@ impl HostIntrinsicImport {
     }
 }
 
-pub(crate) const HOST_INTRINSIC_IMPORTS: [HostIntrinsicImport; 5] = [
+pub(crate) const HOST_INTRINSIC_IMPORTS: [HostIntrinsicImport; 6] = [
     HostIntrinsicImport::ValueToString,
     HostIntrinsicImport::StringEachGraphemeCount,
     HostIntrinsicImport::StringEachGraphemeState,
     HostIntrinsicImport::StringConcat,
     HostIntrinsicImport::StringGraphemesList,
+    HostIntrinsicImport::StringSplitLines,
 ];
 
 pub(crate) const fn host_import_for_intrinsic(
@@ -89,6 +92,7 @@ pub(crate) const fn host_import_for_intrinsic(
         }
         BackendIntrinsic::StringConcat => Some(HostIntrinsicImport::StringConcat),
         BackendIntrinsic::StringGraphemesList => Some(HostIntrinsicImport::StringGraphemesList),
+        BackendIntrinsic::StringSplitLines => Some(HostIntrinsicImport::StringSplitLines),
         BackendIntrinsic::StringSplit
         | BackendIntrinsic::ListGet
         | BackendIntrinsic::StringLength

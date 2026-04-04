@@ -50,6 +50,7 @@ use crate::layout::{
     GLOBAL_RUNTIME_ERROR_OFFSET, RUNTIME_ERROR_MEMORY_EXHAUSTION, RUNTIME_ERROR_NONE,
 };
 use crate::memory_config::{DEFAULT_WASM_MEMORY_CONFIG, WASM_PAGE_BYTES};
+use crate::runtime_env::split_input_lines;
 
 const ERR_MEMORY_EXHAUSTION: &str =
     "memory exhausted [E-MEMORY-EXHAUSTION]: allocation exceeded the configured Wasm memory limit";
@@ -165,6 +166,17 @@ fn run_wasm_bytes_with_stdin_and_config(
             },
         )
         .map_err(|e| format!("linker register graphemes_list: {e}"))?;
+
+    let bump_for_split_lines = Arc::clone(&bump);
+    linker
+        .func_wrap(
+            module_name,
+            HostIntrinsicImport::StringSplitLines.name(),
+            move |caller: Caller<'_, WasiP1Ctx>, tagged_str: i64| -> i64 {
+                split_lines_host(caller, tagged_str, &bump_for_split_lines, memory_config)
+            },
+        )
+        .map_err(|e| format!("linker register split_lines: {e}"))?;
 
     let instance = linker
         .instantiate(&mut store, &module)
@@ -556,6 +568,37 @@ fn read_i64_le(caller: &mut Caller<'_, WasiP1Ctx>, ptr: usize) -> Result<i64, ()
     Ok(i64::from_le_bytes(buf))
 }
 
+fn alloc_list_string_host(
+    caller: &mut Caller<'_, WasiP1Ctx>,
+    values: &[String],
+    bump: &AtomicU32,
+    memory_config: crate::memory_config::WasmMemoryConfig,
+) -> Option<u32> {
+    let n = values.len() as u32;
+    let payload_bytes: u32 = values.iter().map(|value| 4u32 + value.len() as u32).sum();
+    let total_needed = 4 + 8 * n + payload_bytes;
+    let block_ptr = alloc_from_host_bump(caller, bump, total_needed.max(4), memory_config)?;
+
+    let count_bytes = (n as i32).to_le_bytes();
+    write_host_bytes(caller, block_ptr, &count_bytes, memory_config).ok()?;
+
+    let str_data_base = block_ptr + 4 + 8 * n;
+    let mut str_offset = 0u32;
+    for (i, value) in values.iter().enumerate() {
+        let str_ptr = str_data_base + str_offset;
+        let len_bytes = (value.len() as i32).to_le_bytes();
+        write_host_bytes(caller, str_ptr, &len_bytes, memory_config).ok()?;
+        write_host_bytes(caller, str_ptr + 4, value.as_bytes(), memory_config).ok()?;
+
+        let tagged_elem = encode_string_ptr(str_ptr);
+        let elem_ptr = block_ptr + 4 + 8 * i as u32;
+        write_host_bytes(caller, elem_ptr, &tagged_elem.to_le_bytes(), memory_config).ok()?;
+        str_offset += 4 + value.len() as u32;
+    }
+
+    Some(block_ptr)
+}
+
 /// Host implementation: collect all grapheme clusters from a tagged string into a tagged list.
 ///
 /// Allocates `(count: i32, elem[0]: i64, ..., elem[N-1]: i64)` in the host bump region.
@@ -567,81 +610,33 @@ fn graphemes_list_host(
     bump: &AtomicU32,
     memory_config: crate::memory_config::WasmMemoryConfig,
 ) -> i64 {
-    /// Allocate 4 bytes for an empty list `(count=0)` in the bump region as a safe fallback.
-    fn alloc_empty_list(
-        caller: &mut Caller<'_, WasiP1Ctx>,
-        bump: &AtomicU32,
-        memory_config: crate::memory_config::WasmMemoryConfig,
-    ) -> Option<u32> {
-        alloc_from_host_bump(caller, bump, 4, memory_config)
-    }
-
     let Ok(str_val) = read_wasm_string(&mut caller, tagged_str) else {
-        // On decode failure, allocate an empty list so the Wasm side can safely iterate it.
-        let Some(empty_ptr) = alloc_empty_list(&mut caller, bump, memory_config) else {
+        let Some(empty_ptr) = alloc_list_string_host(&mut caller, &[], bump, memory_config) else {
             return encode_list_ptr(0); // last resort: ptr=0 — count read will be 0 in .bss
         };
-        let _ = write_host_bytes(&mut caller, empty_ptr, &0i32.to_le_bytes(), memory_config);
         return encode_list_ptr(empty_ptr);
     };
+    let graphemes: Vec<String> = collect_extended_grapheme_spans(&str_val)
+        .into_iter()
+        .map(|span| str_val[span.start..span.end].to_string())
+        .collect();
+    alloc_list_string_host(&mut caller, &graphemes, bump, memory_config)
+        .map_or_else(|| encode_list_ptr(0), encode_list_ptr)
+}
 
-    let spans = collect_extended_grapheme_spans(&str_val);
-    let n = spans.len() as u32;
-
-    // Compute total needed space:
-    //   list header: 4 bytes (i32 count)
-    //   N elements:  8 bytes each (tagged i64)
-    //   Each grapheme string: 4 bytes (i32 len) + grapheme bytes
-    let grapheme_bytes_total: u32 = spans.iter().map(|s| 4u32 + (s.end - s.start) as u32).sum();
-    let total_needed = 4 + 8 * n + grapheme_bytes_total;
-
-    let Some(block_ptr) = alloc_from_host_bump(&mut caller, bump, total_needed, memory_config)
-    else {
-        let Some(empty_ptr) = alloc_empty_list(&mut caller, bump, memory_config) else {
-            return encode_list_ptr(0);
-        };
-        let _ = write_host_bytes(&mut caller, empty_ptr, &0i32.to_le_bytes(), memory_config);
-        return encode_list_ptr(empty_ptr);
+fn split_lines_host(
+    mut caller: Caller<'_, WasiP1Ctx>,
+    tagged_str: i64,
+    bump: &AtomicU32,
+    memory_config: crate::memory_config::WasmMemoryConfig,
+) -> i64 {
+    let Ok(str_val) = read_wasm_string(&mut caller, tagged_str) else {
+        return alloc_list_string_host(&mut caller, &[], bump, memory_config)
+            .map_or_else(|| encode_list_ptr(0), encode_list_ptr);
     };
-
-    // Write list count header at block_ptr.
-    let count_bytes = (n as i32).to_le_bytes();
-    if write_host_bytes(&mut caller, block_ptr, &count_bytes, memory_config).is_err() {
-        return encode_list_ptr(0);
-    }
-
-    // Grapheme string data starts right after the list header + element slots.
-    // Layout: [list_count(4)][elem0(8)]...[elemN-1(8)][str0(4+len0)]...[strN-1(4+lenN-1)]
-    let str_data_base = block_ptr + 4 + 8 * n;
-
-    let mut str_offset = 0u32;
-    for (i, span) in spans.iter().enumerate() {
-        let grapheme_len = (span.end - span.start) as u32;
-        let str_ptr = str_data_base + str_offset;
-
-        // Write string length header.
-        let len_bytes = (grapheme_len as i32).to_le_bytes();
-        if write_host_bytes(&mut caller, str_ptr, &len_bytes, memory_config).is_err() {
-            return encode_list_ptr(0);
-        }
-        // Write grapheme bytes.
-        let bytes = &str_val.as_bytes()[span.start..span.end];
-        if write_host_bytes(&mut caller, str_ptr + 4, bytes, memory_config).is_err() {
-            return encode_list_ptr(0);
-        }
-
-        // Write tagged string pointer into list element slot.
-        let tagged_elem = encode_string_ptr(str_ptr);
-        let elem_ptr = block_ptr + 4 + 8 * i as u32;
-        let elem_bytes = tagged_elem.to_le_bytes();
-        if write_host_bytes(&mut caller, elem_ptr, &elem_bytes, memory_config).is_err() {
-            return encode_list_ptr(0);
-        }
-
-        str_offset += 4 + grapheme_len;
-    }
-
-    encode_list_ptr(block_ptr)
+    let lines = split_input_lines(&str_val);
+    alloc_list_string_host(&mut caller, &lines, bump, memory_config)
+        .map_or_else(|| encode_list_ptr(0), encode_list_ptr)
 }
 
 /// Read a Wasm linear-memory string from a tagged `String` value.

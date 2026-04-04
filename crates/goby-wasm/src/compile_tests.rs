@@ -1379,6 +1379,29 @@ main =
     assert_valid_wasm_module(&wasm);
 }
 
+#[test]
+fn runtime_io_execution_kind_general_lowers_read_lines_map_graphemes_program() {
+    let source = r#"
+import goby/list ( each, map )
+import goby/string ( graphemes )
+
+main : Unit -> Unit can Print, Read
+main =
+  lines = read_lines ()
+  rolls = map lines graphemes
+  each (rolls[1]) println
+"#;
+    let module = parse_module(source).expect("source should parse");
+    assert_eq!(
+        runtime_io_execution_kind(&module).expect("classification should succeed"),
+        crate::RuntimeIoExecutionKind::GeneralLowered,
+        "read_lines -> map(graphemes) -> list.get -> each(println) should classify as GeneralLowered"
+    );
+    let wasm =
+        compile_module(&module).expect("read_lines -> map(graphemes) program should compile");
+    assert_valid_wasm_module(&wasm);
+}
+
 // ---------------------------------------------------------------------------
 // Plain read+print parity: programs previously handled by handwritten runtime-I/O plans must
 // produce valid Wasm through the general lowering path.

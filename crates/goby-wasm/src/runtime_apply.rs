@@ -447,6 +447,14 @@ impl<'m> RuntimeOutputResolver<'m> {
         if depth >= MAX_EVAL_DEPTH {
             return Out::Err(RuntimeError::Unsupported);
         }
+        if module_path == "goby/string" && member == "graphemes" {
+            let RuntimeValue::String(value) = arg_value else {
+                return Out::Err(RuntimeError::Unsupported);
+            };
+            return Out::Done(RuntimeValue::ListString(
+                crate::grapheme_semantics::collect_extended_graphemes(&value),
+            ));
+        }
         let Some(decl) = self.resolve_runtime_decl_from_module_path(module_path, member) else {
             return Out::Err(RuntimeError::Unsupported);
         };

@@ -244,6 +244,16 @@ fn lower_comp_inner(
         }
 
         CompExpr::PerformEffect { effect, op, args } => {
+            if effect == "Read" && op == "read_lines" && args.is_empty() {
+                return Ok(vec![
+                    WasmBackendInstr::EffectOp {
+                        op: BackendEffectOp::Read(BackendReadOp::Read),
+                    },
+                    WasmBackendInstr::Intrinsic {
+                        intrinsic: BackendIntrinsic::StringSplitLines,
+                    },
+                ]);
+            }
             let op = backend_effect_op(effect, op).ok_or_else(|| LowerError::UnsupportedForm {
                 node: format!("unsupported effect op '{effect}.{op}'"),
             })?;

@@ -84,6 +84,12 @@ pub(crate) enum BackendIntrinsic {
     /// Implemented as a host import; the host allocates grapheme strings and a list
     /// in the host bump region and returns a tagged list pointer.
     StringGraphemesList,
+    /// Split a string into lines using Goby's `read_lines` newline normalization rules.
+    ///
+    /// Signature: `(tagged_str: i64) -> i64` (tagged `List String`).
+    /// Implemented as a host import so CRLF/CR/LF normalization stays aligned with the
+    /// runtime-bridge `Read.read_lines` behavior.
+    StringSplitLines,
 }
 
 impl BackendIntrinsic {
@@ -99,6 +105,7 @@ impl BackendIntrinsic {
             BackendIntrinsic::ListConcat => 2,
             BackendIntrinsic::StringConcat => 2,
             BackendIntrinsic::StringGraphemesList => 1,
+            BackendIntrinsic::StringSplitLines => 1,
         }
     }
 
@@ -108,7 +115,8 @@ impl BackendIntrinsic {
             | BackendIntrinsic::StringEachGraphemeCount
             | BackendIntrinsic::StringEachGraphemeState
             | BackendIntrinsic::StringConcat
-            | BackendIntrinsic::StringGraphemesList => IntrinsicExecutionBoundary::HostImport,
+            | BackendIntrinsic::StringGraphemesList
+            | BackendIntrinsic::StringSplitLines => IntrinsicExecutionBoundary::HostImport,
             BackendIntrinsic::StringSplit
             | BackendIntrinsic::ListGet
             | BackendIntrinsic::StringLength
