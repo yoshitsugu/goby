@@ -394,7 +394,6 @@ main =
     }
 
     #[test]
-    #[ignore = "known bug: GeneralLowered string equality compares dynamic graphemes against literals by identity"]
     fn execute_runtime_module_with_stdin_compares_dynamic_grapheme_strings_by_contents() {
         let module = parse_module(
             r#"
@@ -405,7 +404,10 @@ main : Unit -> Unit can Print, Read
 main =
   lines = read_lines ()
   rows = map lines graphemes
-  print (rows[0][0] == "@")
+  if rows[0][0] == "@"
+    print "True"
+  else
+    print "False"
 "#,
         )
         .expect("parse should work");

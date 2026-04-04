@@ -4,19 +4,16 @@ Last updated: 2026-04-04
 
 ## Current Focus
 
-**GeneralLowered string equality bug**: dynamic strings produced on the runtime-stdin / Wasm path currently fail equality against identical literals in the user-reported `read_lines () -> graphemes` shape.
-
-- Locked direction:
-  - treat this as a shared equality-boundary bug, not as a `graphemes`-specific exception.
-  - preserve current `Int`, `Bool`, and `Unit` equality semantics while correcting `String == String` on the `GeneralLowered` Wasm path.
-  - keep the new minimal regression authoritative: `read_lines () -> map graphemes -> rows[0][0] == "@"` must return `True`.
-  - verify the original AoC reproduction after the focused fix lands.
-- Execution target:
-  - next implementation step is to fix the Wasm `Eq` path used by `GeneralLowered` execution so `String` equality is content-based instead of tagged-value identity.
-  - the ignored regression `execute_runtime_module_with_stdin_compares_dynamic_grapheme_strings_by_contents` should be enabled once the fix is in place.
-  - after the focused fix, rerun the original `cat sample | goby run solve.gb` AoC reproduction to confirm the observed `@` comparisons no longer collapse to false.
+No urgent blocker is currently pinned in `STATE.md`; the latest runtime-stdin / Wasm string-equality regression is closed, so the next implementation target should come from the remaining roadmap items in `doc/PLAN.md`.
 
 ## Recently Completed
+
+- **GeneralLowered string equality uses content semantics for `String == String`** (2026-04-04): runtime-stdin / Wasm execution no longer compares dynamic strings by tagged-pointer identity.
+  - `fix(eq-boundary)`: the shared Wasm `Eq` emission path now keeps the fast tagged-value equality check, but falls through to bytewise content comparison when both unequal operands are tagged `String` values.
+  - `fix(scratch-sizing)`: `Eq` now reserves the helper scratch state it needs for string decoding and byte comparison instead of assuming integer/bool-only equality.
+  - `test(wasm)`: enabled `execute_runtime_module_with_stdin_compares_dynamic_grapheme_strings_by_contents`.
+  - `test(cli)`: added `run_command_compares_dynamic_grapheme_strings_by_contents` so `goby run` locks the same behavior end to end.
+  - `status`: the original AoC `cat sample | goby run solve.gb` reproduction could not be rerun in-repo because the referenced `solve.gb` / `sample` fixtures are not present in the current workspace.
 
 - **Prelude `Read.read_lines` embedded handler** (2026-04-04): runtime stdin now supports `read_lines ()` through the embedded `Read` handler path.
   - `fix(runtime)`: embedded stdin runtime now normalizes `\n`, `\r`, and `\r\n`, returns `List String`, and consumes the remaining stdin just like `Read.read`.

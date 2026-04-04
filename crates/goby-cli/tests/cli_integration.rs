@@ -1124,6 +1124,44 @@ main =
 }
 
 #[test]
+fn run_command_compares_dynamic_grapheme_strings_by_contents() {
+    let root = repo_root();
+    let sandbox = TempDirGuard::new("run_read_lines_map_graphemes_eq");
+    let input = sandbox.join("read_lines_map_graphemes_eq.gb");
+    fs::write(
+        &input,
+        r#"
+import goby/list ( map )
+import goby/string ( graphemes )
+
+main : Unit -> Unit can Print, Read
+main =
+  lines = read_lines ()
+  rows = map lines graphemes
+  if rows[0][0] == "@"
+    print "True"
+  else
+    print "False"
+"#,
+    )
+    .expect("temporary input should be writable");
+
+    let output = run_goby_with_stdin(&root, &input, b"@\n");
+
+    assert!(
+        output.status.success(),
+        "expected dynamic string equality runtime execution to succeed, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("True"),
+        "expected content-based equality for dynamic grapheme strings, stdout: {}",
+        stdout
+    );
+}
+
+#[test]
 fn run_command_does_not_wait_for_eof_on_general_lowered_program_without_read() {
     let root = repo_root();
     let sandbox = TempDirGuard::new("run_general_lowered_without_read");

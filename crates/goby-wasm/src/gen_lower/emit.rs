@@ -415,6 +415,7 @@ fn collect_all_instrs(instrs: &[WasmBackendInstr]) -> Vec<&WasmBackendInstr> {
 /// - A `CaseMatch` arm with an `EmptyList` pattern (needs one i32 to load the list pointer).
 fn needs_helper_state(instrs: &[WasmBackendInstr]) -> bool {
     use crate::gen_lower::backend_ir::BackendCasePattern;
+    use goby_core::ir::IrBinOp;
     collect_all_instrs(instrs).iter().any(|i| {
         matches!(
             i,
@@ -431,7 +432,7 @@ fn needs_helper_state(instrs: &[WasmBackendInstr]) -> bool {
                 // must be synchronized before and after the call, which requires alloc_cursor_local.
                 | WasmBackendInstr::DeclCall { .. }
                 | WasmBackendInstr::IndirectCall { .. }
-        )
+        ) || matches!(i, WasmBackendInstr::BinOp { op: IrBinOp::Eq })
     }) || {
         // Check for ListPattern or EmptyList patterns in CaseMatch arms.
         fn has_heap_pattern(instrs: &[WasmBackendInstr]) -> bool {
@@ -621,7 +622,7 @@ fn required_i64_scratch_count(instrs: &[WasmBackendInstr]) -> u32 {
         | WasmBackendInstr::ListMap { .. }
         | WasmBackendInstr::IndirectCall { .. } => true,
         WasmBackendInstr::BinOp { op } => {
-            matches!(op, IrBinOp::Mul | IrBinOp::Div | IrBinOp::Mod)
+            matches!(op, IrBinOp::Mul | IrBinOp::Div | IrBinOp::Mod | IrBinOp::Eq)
         }
         _ => false,
     });
@@ -1254,7 +1255,7 @@ fn emit_instrs_with_heap_depth(
                 } else {
                     None
                 };
-                emit_bin_op(function, op, i64_scratch_base)?;
+                emit_bin_op(function, op, i64_scratch_base, helper_state)?;
             }
 
             WasmBackendInstr::EffectOp { op } => {
@@ -1986,6 +1987,67 @@ fn emit_decode_string_ptr(
     function.instruction(&Instruction::LocalSet(len_local));
 
     let _ = helper_state;
+}
+
+fn emit_compare_decoded_strings(
+    function: &mut Function,
+    left_ptr_local: u32,
+    left_len_local: u32,
+    right_ptr_local: u32,
+    right_len_local: u32,
+    iter_local: u32,
+    result_local: u32,
+) {
+    function.instruction(&Instruction::I32Const(0));
+    function.instruction(&Instruction::LocalSet(result_local));
+    function.instruction(&Instruction::LocalGet(left_len_local));
+    function.instruction(&Instruction::LocalGet(right_len_local));
+    function.instruction(&Instruction::I32Eq);
+    function.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
+    function.instruction(&Instruction::I32Const(1));
+    function.instruction(&Instruction::LocalSet(result_local));
+    function.instruction(&Instruction::I32Const(0));
+    function.instruction(&Instruction::LocalSet(iter_local));
+    function.instruction(&Instruction::Block(wasm_encoder::BlockType::Empty));
+    function.instruction(&Instruction::Loop(wasm_encoder::BlockType::Empty));
+    function.instruction(&Instruction::LocalGet(iter_local));
+    function.instruction(&Instruction::LocalGet(left_len_local));
+    function.instruction(&Instruction::I32GeU);
+    function.instruction(&Instruction::BrIf(1));
+    function.instruction(&Instruction::LocalGet(left_ptr_local));
+    function.instruction(&Instruction::I32Const(4));
+    function.instruction(&Instruction::I32Add);
+    function.instruction(&Instruction::LocalGet(iter_local));
+    function.instruction(&Instruction::I32Add);
+    function.instruction(&Instruction::I32Load8U(MemArg {
+        offset: 0,
+        align: 0,
+        memory_index: 0,
+    }));
+    function.instruction(&Instruction::LocalGet(right_ptr_local));
+    function.instruction(&Instruction::I32Const(4));
+    function.instruction(&Instruction::I32Add);
+    function.instruction(&Instruction::LocalGet(iter_local));
+    function.instruction(&Instruction::I32Add);
+    function.instruction(&Instruction::I32Load8U(MemArg {
+        offset: 0,
+        align: 0,
+        memory_index: 0,
+    }));
+    function.instruction(&Instruction::I32Ne);
+    function.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
+    function.instruction(&Instruction::I32Const(0));
+    function.instruction(&Instruction::LocalSet(result_local));
+    function.instruction(&Instruction::Br(2));
+    function.instruction(&Instruction::End);
+    function.instruction(&Instruction::LocalGet(iter_local));
+    function.instruction(&Instruction::I32Const(1));
+    function.instruction(&Instruction::I32Add);
+    function.instruction(&Instruction::LocalSet(iter_local));
+    function.instruction(&Instruction::Br(0));
+    function.instruction(&Instruction::End);
+    function.instruction(&Instruction::End);
+    function.instruction(&Instruction::End);
 }
 
 /// Emit the body of one Wasm function: helper-state prologue, instructions, optional
@@ -2949,6 +3011,7 @@ fn emit_bin_op(
     function: &mut Function,
     op: &IrBinOp,
     i64_scratch_base: Option<u32>,
+    helper_state: Option<HelperEmitState>,
 ) -> Result<(), CodegenError> {
     const PAYLOAD_MASK: i64 = (1i64 << 60) - 1;
     const TAG_INT_SHIFT: i64 = (TAG_INT as i64) << 60;
@@ -3082,9 +3145,62 @@ fn emit_bin_op(
             Ok(())
         }
         IrBinOp::Eq => {
-            // Two tagged Ints are equal iff their tagged representations are equal
-            // (same tag bits + same payload). i64.eq is correct without untagging.
+            // General tagged equality:
+            // - identical tagged values are equal,
+            // - otherwise String/String falls through to content comparison,
+            // - all other unequal pairs are false.
+            let (right_i64, left_i64) = require_scratch!(i64_scratch_base, "Eq");
+            let hs = require_helper_state(helper_state, "BinOp::Eq")?;
+            let s_left_ptr = hs.i32_base + HS_TEXT_PTR;
+            let s_left_len = hs.i32_base + HS_TEXT_LEN;
+            let s_right_ptr = hs.i32_base + HS_SEP_PTR;
+            let s_right_len = hs.i32_base + HS_SEP_LEN;
+            let s_iter = hs.i32_base + HS_SCAN_POS;
+            let s_result = hs.i32_base + HS_ITEM_COUNT;
+
+            function.instruction(&Instruction::LocalSet(right_i64));
+            function.instruction(&Instruction::LocalSet(left_i64));
+            function.instruction(&Instruction::I32Const(0));
+            function.instruction(&Instruction::LocalSet(s_result));
+
+            function.instruction(&Instruction::LocalGet(left_i64));
+            function.instruction(&Instruction::LocalGet(right_i64));
             function.instruction(&Instruction::I64Eq);
+            function.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
+            function.instruction(&Instruction::I32Const(1));
+            function.instruction(&Instruction::LocalSet(s_result));
+            function.instruction(&Instruction::Else);
+
+            function.instruction(&Instruction::LocalGet(left_i64));
+            function.instruction(&Instruction::I64Const((TAG_STRING as i64) << 60));
+            function.instruction(&Instruction::I64And);
+            function.instruction(&Instruction::I64Const((TAG_STRING as i64) << 60));
+            function.instruction(&Instruction::I64Eq);
+            function.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
+
+            function.instruction(&Instruction::LocalGet(right_i64));
+            function.instruction(&Instruction::I64Const((TAG_STRING as i64) << 60));
+            function.instruction(&Instruction::I64And);
+            function.instruction(&Instruction::I64Const((TAG_STRING as i64) << 60));
+            function.instruction(&Instruction::I64Eq);
+            function.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
+
+            emit_decode_string_ptr(function, &hs, left_i64, s_left_ptr, s_left_len);
+            emit_decode_string_ptr(function, &hs, right_i64, s_right_ptr, s_right_len);
+            emit_compare_decoded_strings(
+                function,
+                s_left_ptr,
+                s_left_len,
+                s_right_ptr,
+                s_right_len,
+                s_iter,
+                s_result,
+            );
+            function.instruction(&Instruction::End);
+            function.instruction(&Instruction::End);
+            function.instruction(&Instruction::End);
+
+            function.instruction(&Instruction::LocalGet(s_result));
             bool_from_i32!(function);
             Ok(())
         }
@@ -4051,24 +4167,14 @@ fn emit_case_match(
             }
 
             BackendCasePattern::StrLit(pattern_text) => {
-                // Inline byte-wise string comparison (no host import needed).
-                // Algorithm:
-                //   pat_ptr, pat_len = decode_string(static pattern)
-                //   scr_ptr, scr_len = decode_string(scrutinee)
-                //   match = (pat_len == scr_len) && byte_loop_eq(pat, scr, pat_len)
                 let hs = require_helper_state(*helper_state, "StrLit case pattern")?;
-                // i32 scratch locals (borrowing from helper pool):
-                // We need 4 i32 locals: pat_ptr, pat_len, scr_ptr, scr_len, + loop_iter
-                // Use the generic helper i32 slots starting at hs.i32_base.
-                // These slots are also used by Intrinsic helpers, but CaseMatch patterns
-                // are not interleaved with running intrinsics, so reuse is safe.
                 let s_pat_ptr = hs.i32_base + HS_TEXT_PTR;
                 let s_pat_len = hs.i32_base + HS_TEXT_LEN;
                 let s_scr_ptr = hs.i32_base + HS_SEP_PTR;
                 let s_scr_len = hs.i32_base + HS_SEP_LEN;
                 let s_loop_iter = hs.i32_base + HS_SCAN_POS;
+                let s_match = hs.i32_base + HS_ITEM_COUNT;
 
-                // Push static string for pattern.
                 let pat_ptr = static_strings.ptr(pattern_text)?;
                 function.instruction(&Instruction::I32Const(pat_ptr));
                 function.instruction(&Instruction::LocalSet(s_pat_ptr));
@@ -4079,16 +4185,15 @@ fn emit_case_match(
                     memory_index: 0,
                 }));
                 function.instruction(&Instruction::LocalSet(s_pat_len));
+                function.instruction(&Instruction::I32Const(0));
+                function.instruction(&Instruction::LocalSet(s_match));
 
-                // Decode scrutinee string pointer.
-                // First verify it's a string tag:
                 function.instruction(&Instruction::LocalGet(scrutinee_idx));
                 function.instruction(&Instruction::I64Const((TAG_STRING as i64) << 60));
                 function.instruction(&Instruction::I64And);
                 function.instruction(&Instruction::I64Const((TAG_STRING as i64) << 60));
                 function.instruction(&Instruction::I64Eq);
                 function.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
-                // Is a string: decode ptr
                 function.instruction(&Instruction::LocalGet(scrutinee_idx));
                 function.instruction(&Instruction::I64Const(0xFFFF_FFFFi64));
                 function.instruction(&Instruction::I64And);
@@ -4101,57 +4206,18 @@ fn emit_case_match(
                     memory_index: 0,
                 }));
                 function.instruction(&Instruction::LocalSet(s_scr_len));
-                // Compare lengths:
-                function.instruction(&Instruction::LocalGet(s_pat_len));
-                function.instruction(&Instruction::LocalGet(s_scr_len));
-                function.instruction(&Instruction::I32Eq);
+                emit_compare_decoded_strings(
+                    function,
+                    s_pat_ptr,
+                    s_pat_len,
+                    s_scr_ptr,
+                    s_scr_len,
+                    s_loop_iter,
+                    s_match,
+                );
+                function.instruction(&Instruction::End);
+                function.instruction(&Instruction::LocalGet(s_match));
                 function.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
-                // Same length: byte loop
-                function.instruction(&Instruction::I32Const(0));
-                function.instruction(&Instruction::LocalSet(s_loop_iter));
-                function.instruction(&Instruction::Block(wasm_encoder::BlockType::Empty)); // block_outer
-                function.instruction(&Instruction::Loop(wasm_encoder::BlockType::Empty)); // loop
-                // if iter >= len → break out (full match)
-                function.instruction(&Instruction::LocalGet(s_loop_iter));
-                function.instruction(&Instruction::LocalGet(s_pat_len));
-                function.instruction(&Instruction::I32GeU);
-                function.instruction(&Instruction::BrIf(1)); // br block_outer → match succeeded
-                // load pat byte
-                function.instruction(&Instruction::LocalGet(s_pat_ptr));
-                function.instruction(&Instruction::I32Const(4));
-                function.instruction(&Instruction::I32Add);
-                function.instruction(&Instruction::LocalGet(s_loop_iter));
-                function.instruction(&Instruction::I32Add);
-                function.instruction(&Instruction::I32Load8U(MemArg {
-                    offset: 0,
-                    align: 0,
-                    memory_index: 0,
-                }));
-                // load scr byte
-                function.instruction(&Instruction::LocalGet(s_scr_ptr));
-                function.instruction(&Instruction::I32Const(4));
-                function.instruction(&Instruction::I32Add);
-                function.instruction(&Instruction::LocalGet(s_loop_iter));
-                function.instruction(&Instruction::I32Add);
-                function.instruction(&Instruction::I32Load8U(MemArg {
-                    offset: 0,
-                    align: 0,
-                    memory_index: 0,
-                }));
-                function.instruction(&Instruction::I32Ne);
-                function.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
-                // Bytes differ → jump out of loop + if → no match
-                function.instruction(&Instruction::Br(3)); // br out of loop + block_outer + if(same len)
-                function.instruction(&Instruction::End); // end if (bytes differ)
-                // iter++
-                function.instruction(&Instruction::LocalGet(s_loop_iter));
-                function.instruction(&Instruction::I32Const(1));
-                function.instruction(&Instruction::I32Add);
-                function.instruction(&Instruction::LocalSet(s_loop_iter));
-                function.instruction(&Instruction::Br(0)); // loop back
-                function.instruction(&Instruction::End); // end loop
-                function.instruction(&Instruction::End); // end block_outer
-                // Strings are equal → emit body + br out
                 emit_instrs(
                     function,
                     ctx,
@@ -4164,9 +4230,8 @@ fn emit_case_match(
                     options,
                     function_returns_i64,
                 )?;
-                function.instruction(&Instruction::Br(2)); // br out of: if(same len) + outer block
-                function.instruction(&Instruction::End); // end if (same len)
-                function.instruction(&Instruction::End); // end if (is string)
+                function.instruction(&Instruction::Br(1));
+                function.instruction(&Instruction::End);
             }
 
             BackendCasePattern::EmptyList => {
