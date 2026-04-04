@@ -37,7 +37,7 @@ No urgent blocker is currently pinned in `STATE.md`; the latest runtime-stdin / 
 
 - **Runtime memory M4 mixed-pressure coexistence proof** (2026-04-03): the default bounded-growth policy is now exercised by host-only, heap-only, and mixed host-plus-heap success regressions.
   - `test(mixed-pressure)`: added a compiled-Wasm regression that allocates a 30,000-element list on the Goby heap and then formats that same list through host-backed interpolation in the same execution, proving the host bump and heap-growth paths can coexist without reintroducing fixed carve-out assumptions.
-  - `status`: the current memory-growth track now has focused success/failure coverage for the intended shared policy; the next question is whether measured workloads justify any reclamation follow-up.
+  - `status`: the current runtime memory work now has focused success/failure coverage for the intended shared policy; the next question is whether measured workloads justify any reclamation follow-up.
 
 - **Runtime memory M5 reclamation decision** (2026-04-03): GC/reclamation work is consciously deferred for the current Goby-owned Wasm runtime scope.
   - `measurement(scope)`: the current proof set now covers host-temp-heavy pressure, heap-heavy pressure, and a mixed execution whose heap allocation exceeds the initial heap floor and whose formatted output exceeds the initial host-reserved slice.
@@ -153,7 +153,7 @@ No urgent blocker is currently pinned in `STATE.md`; the latest runtime-stdin / 
 
 ## Immediate Next Steps
 
-- Keep the completed memory-growth track closed unless new runtime-lifetime evidence justifies reopening GC/reclamation work.
+- Treat the current runtime memory work as closed unless new runtime-lifetime evidence justifies reopening GC/reclamation work.
 - Move to the next roadmap item from `doc/PLAN.md` rather than extending allocator work without new pressure data.
 - If memory-track work reopens later, keep the explicit exhaustion surface stable; do not reintroduce generic Wasm traps on bounded-failure paths.
 - Keep the completed inline multi-parameter lambda track closed unless a future helper or arity expansion explicitly requires a new follow-up slice.
