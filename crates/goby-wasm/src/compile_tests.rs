@@ -25,9 +25,8 @@ fn read_example(name: &str) -> String {
 
 fn read_runtime_io_general_lowering_fixture(name: &str) -> String {
     let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    path.push("..");
-    path.push("..");
     path.push("tests");
+    path.push("fixtures");
     path.push("runtime-io-general-lowering");
     path.push(name);
     std::fs::read_to_string(&path).unwrap_or_else(|e| {
