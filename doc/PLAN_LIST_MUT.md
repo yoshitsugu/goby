@@ -1,6 +1,6 @@
 # Goby Mutable List Plan
 
-Last updated: 2026-04-05
+Last updated: 2026-04-06
 
 This document is the active implementation plan for mutable list updates such as:
 
@@ -229,7 +229,7 @@ The implementation strategy should remain flexible:
 
 ### Milestone LM0: Semantics Lock
 
-- [ ] Define the exact language rule in `doc/LANGUAGE_SPEC.md` for:
+- [x] Define the exact language rule in `doc/LANGUAGE_SPEC.md` for:
   - mutable list element assignment
   - nested indexed assignment
   - immutable-by-default rejection
@@ -237,8 +237,8 @@ The implementation strategy should remain flexible:
   - creating a new mutable root from a read value
   - value-oriented list reads as a general rule across bindings, call
     arguments, returns, and closures
-  - out-of-bounds behavior for indexed assignment
-- [ ] Update `doc/PLAN.md` with the roadmap-level decision and scope boundary.
+  - out-of-bounds behavior for indexed assignment (aborts: `RuntimeError::Abort`)
+- [x] Update `doc/PLAN.md` with the roadmap-level decision and scope boundary.
 - [ ] Add representative examples covering:
   - mutable one-level list update
   - mutable nested list update

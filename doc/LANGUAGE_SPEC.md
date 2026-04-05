@@ -1,7 +1,7 @@
 # Goby Language Specification (Current)
 
 Status: active
-Last updated: 2026-04-02
+Last updated: 2026-04-06
 
 This file is the current language-spec source of truth for user-visible Goby
 syntax/semantics.
@@ -108,7 +108,37 @@ syntax/semantics.
   - `_` is always a wildcard (non-binding), including in list item positions.
 - Mutable locals:
   - declaration: `mut x = expr`
-  - assignment: `x := expr`
+  - variable assignment: `x := expr`
+  - list element assignment: `x[i] := expr`
+    - valid only when `x` is declared with `mut`; assigning through an immutable binding is a type error.
+    - `i` must be `Int`; `x` must have type `List a`; `expr` must have type `a`.
+    - negative or out-of-bounds index aborts the program (`RuntimeError::Abort`).
+    - chained indexed assignment `x[i][j] := expr` updates the element at depth two;
+      the same rules apply recursively: the root binding must be `mut`,
+      `x[i]` must be `List b`, and `expr` must have type `b`.
+    - arbitrary nesting depth is supported by the same rule.
+  - mutable list update semantics:
+    - mutation is a **rooted update** through the mutable binding.
+      After `x[i] := v`, the value stored in `x` changes; any value previously read
+      out of `x[i]` is unaffected.
+    - reading a list element produces a **value**, not a shared mutable alias.
+      ```
+      mut a = [[1, 2, 3], [4, 5, 6]]
+      b = a[0]          # b is a snapshot value [1, 2, 3]
+      a[0][1] := 10
+      a[0][1]   # -> 10
+      b[1]      # -> 2  (b is unchanged)
+      ```
+    - a read value stored into a new `mut` binding creates an independent mutable root:
+      ```
+      a = [[1, 2, 3], [4, 5, 6]]
+      mut b = a[0]      # b owns [1, 2, 3] independently
+      b[0] := 10
+      a[0][0]   # -> 1  (a is unchanged)
+      b[0]      # -> 10
+      ```
+    - this value-oriented read rule applies uniformly across bindings, function call
+      arguments, function return values, and closure captures.
 - Closure semantics:
   - All lambdas (`fn x -> expr`) are conceptually closures. A non-capturing lambda is the
     zero-capture case of the same model.

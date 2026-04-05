@@ -675,7 +675,32 @@ Acceptance criteria:
 - diagnostics clearly distinguish `Int` from `Float`.
 - docs/examples/spec are updated in the same slice that lands behavior.
 
-### 4.8 Parking Lot (Needs Revalidation Before Implementation)
+### 4.8 Track LM: Mutable List Element Assignment (active, 2026-04-06)
+
+Goal: support `a[1] := 10` and `a[1][0] := 99` through one shared assignment-target abstraction.
+
+Locked semantic contract (see `doc/LANGUAGE_SPEC.md` §3 "list element assignment"):
+
+- element assignment is valid only through a `mut` root binding.
+- reads are value-oriented; values extracted from mutable lists do not alias the source.
+- mutation is a rooted update; previous reads from the updated path are unaffected.
+
+Scope:
+
+- one shared `AssignTarget` representation replaces the current `name: String`-only assignment
+  AST node; existing variable assignment reuses the same abstraction.
+- list-index projection support at arbitrary depth through chained `AssignTarget::ListIndex`.
+- type-checked legality before lowering/runtime.
+- path-copying runtime execution; no shared mutable alias semantics.
+
+Out of scope for this slice: separate mutable list type, record-field mutation,
+general reference types, broad runtime container redesign.
+
+Detail plan: `doc/PLAN_LIST_MUT.md`.
+
+Status: LM0 complete (2026-04-06). LM1–LM4 in progress.
+
+### 4.9 Parking Lot (Needs Revalidation Before Implementation)
 
 - CLI `build` expansion details (`--target`, `--engine-compat`, verify modes).
 - CLI binary naming migration (`goby-cli` -> `goby`) final policy.
