@@ -196,18 +196,25 @@ syntax/semantics.
 ## 6. `@embed` (Stdlib-only)
 
 - Purpose: stdlib default-effect-handler declaration for the minimal built-in
-  `Print` / `Read` onboarding path.
+  implicit-prelude `Print` / `Read` onboarding path.
 - Canonical form:
   - `@embed <EffectName> <HandlerName>`
   - example: `@embed Print __goby_embeded_effect_stdout_handler`
 - Rules:
-  - allowed only in stdlib sources
-  - requires `effect <EffectName>` in same module
+  - allowed only in `goby/prelude` under stdlib sources
+  - the referenced effect must be visible in `goby/prelude`
+    - visibility may come from a local declaration or an imported stdlib module
   - one embed per effect per module
   - handler name must be in `__goby_embeded_effect_*`
   - handler must be in known intrinsic set
+  - `@embed` both binds the runtime default handler and adds that effect to the
+    implicit prelude surface
 - Design intent:
   - `@embed` is intentionally narrow.
+  - `goby/prelude` remains the only implicit-import entrypoint.
+  - `goby/stdio` is the canonical stdlib owner of both `Print` and `Read`;
+    `goby/prelude` chooses which visible stdlib-owned effects participate in the
+    implicit default surface.
   - current intended use is the prelude-backed `Print` / `Read` defaults so users
     can write simple I/O before learning full effect-handler patterns.
   - the primary user-facing goal is that small scripts can use `Print` / `Read`
@@ -258,7 +265,8 @@ syntax/semantics.
   - invalid input delegates to `StringParseError.invalid_integer : String -> Int`.
 - Stdlib `goby/int` also provides `to_string : Int -> String`.
   - result is canonical base-10 decimal text (`0`, `123`, `-7`).
-- `Print` / `Read` effect resolution is provided via stdlib prelude (`goby/prelude`) embed defaults.
+- `Print` / `Read` implicit availability is anchored at stdlib prelude (`goby/prelude`) `@embed` metadata.
+- `goby/stdio` is the canonical owner of the `Print` / `Read` effect declarations and operations.
 - These prelude defaults are intentionally a minimal convenience layer, not a
   general host-effect abstraction.
 - Prelude `Print` effect exposes:

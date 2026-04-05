@@ -80,14 +80,58 @@ pub(crate) fn validate_embed_declarations(
                 ),
             });
         }
+
+        let module_path = stdlib_module_path(source_path, &stdlib_root);
+        if module_path.as_deref() != Some(PRELUDE_MODULE_PATH) {
+            let span = module
+                .embed_declarations
+                .first()
+                .map(|embed| Span::point(embed.line, 1));
+            return Err(TypecheckError {
+                declaration: None,
+                span,
+                message: format!(
+                    "@embed declarations are only allowed in `{}`",
+                    PRELUDE_MODULE_PATH
+                ),
+            });
+        }
+
+        if let Some(module_path) = module_path {
+            let resolver = StdlibResolver::new(stdlib_root.clone());
+            if let Ok(resolved) = resolver.resolve_module(&module_path) {
+                for embed in &module.embed_declarations {
+                    let visible_matches = resolved
+                        .visible_effects
+                        .iter()
+                        .filter(|effect| effect.decl.name == embed.effect_name)
+                        .count();
+                    if visible_matches == 0 {
+                        return Err(TypecheckError {
+                            declaration: None,
+                            span: Some(Span::point(embed.line, 1)),
+                            message: format!(
+                                "embedded effect `{}` must be visible in `{}`",
+                                embed.effect_name, module_path
+                            ),
+                        });
+                    }
+                    if visible_matches > 1 {
+                        return Err(TypecheckError {
+                            declaration: None,
+                            span: Some(Span::point(embed.line, 1)),
+                            message: format!(
+                                "embedded effect `{}` is ambiguous in `{}`",
+                                embed.effect_name, module_path
+                            ),
+                        });
+                    }
+                }
+            }
+        }
     }
 
     let mut seen = HashSet::new();
-    let declared_effects: HashSet<&str> = module
-        .effect_declarations
-        .iter()
-        .map(|effect| effect.name.as_str())
-        .collect();
     for embed in &module.embed_declarations {
         if !seen.insert(embed.effect_name.clone()) {
             return Err(TypecheckError {
@@ -116,7 +160,12 @@ pub(crate) fn validate_embed_declarations(
                 ),
             });
         }
-        if !declared_effects.contains(embed.effect_name.as_str()) {
+        if source_path.is_none()
+            && !module
+                .effect_declarations
+                .iter()
+                .any(|effect| effect.name == embed.effect_name)
+        {
             return Err(TypecheckError {
                 declaration: None,
                 span: Some(Span::point(embed.line, 1)),
@@ -177,10 +226,13 @@ pub(crate) fn collect_imported_embedded_defaults(
     let resolver = StdlibResolver::new(stdlib_root.to_path_buf());
     let mut defaults = HashMap::new();
     for import in effective_imports(module, &resolver) {
+        if import.module_path != PRELUDE_MODULE_PATH {
+            continue;
+        }
         let Ok(resolved) = resolver.resolve_module(&import.module_path) else {
             continue;
         };
-        for embed in resolved.embedded_defaults {
+        for embed in resolved.embedded_effect_exports {
             if let Some(existing) = defaults.get(&embed.effect_name)
                 && existing != &embed.handler_name
             {
@@ -206,21 +258,28 @@ pub(crate) fn collect_imported_effect_declarations(
     let resolver = StdlibResolver::new(stdlib_root.to_path_buf());
     let mut effects = Vec::new();
     for import in effective_imports(module, &resolver) {
-        let Ok(source_path) = resolver.module_file_path(&import.module_path) else {
+        let Ok(resolved) = resolver.resolve_module(&import.module_path) else {
             continue;
         };
-        let Ok(source) = std::fs::read_to_string(source_path) else {
+        if import.module_path == PRELUDE_MODULE_PATH {
+            effects.extend(resolved.embedded_effect_exports.into_iter().map(|export| {
+                ImportedEffectDecl {
+                    source_module: export.source_module,
+                    decl: export.decl,
+                }
+            }));
             continue;
-        };
-        let Ok(parsed) = crate::parse_module(&source) else {
-            continue;
-        };
-        effects.extend(parsed.effect_declarations.into_iter().filter_map(|decl| {
-            import_selects_name(&import.kind, &decl.name).then_some(ImportedEffectDecl {
-                source_module: import.module_path.clone(),
-                decl,
-            })
-        }));
+        }
+        effects.extend(
+            resolved
+                .visible_effects
+                .into_iter()
+                .filter(|effect| import_selects_name(&import.kind, &effect.decl.name))
+                .map(|effect| ImportedEffectDecl {
+                    source_module: effect.source_module,
+                    decl: effect.decl,
+                }),
+        );
     }
     effects
 }
@@ -310,9 +369,17 @@ pub(crate) fn collect_imported_effect_names(
         let Ok(resolved) = resolver.resolve_module(&import.module_path) else {
             continue;
         };
-        effects.extend(
+        let names = if import.module_path == PRELUDE_MODULE_PATH {
             resolved
-                .effects
+                .embedded_effect_exports
+                .into_iter()
+                .map(|export| export.effect_name)
+                .collect::<Vec<_>>()
+        } else {
+            resolved.effects
+        };
+        effects.extend(
+            names
                 .into_iter()
                 .filter(|name| import_selects_name(&import.kind, name)),
         );
@@ -335,13 +402,14 @@ pub(crate) fn inject_imported_symbols(
 ) {
     let resolver = StdlibResolver::new(stdlib_root.to_path_buf());
     for import in effective_imports(module, &resolver) {
-        let Ok(exports) = module_exports_for_import_with_resolver(
-            &import.module_path,
-            &resolver,
-            import.module_path_span,
-        ) else {
+        let Ok(resolved) = resolver.resolve_module(&import.module_path) else {
             continue;
         };
+        let exports = resolved
+            .exports
+            .iter()
+            .map(|(name, annotation)| (name.clone(), ty_from_import_annotation(annotation)))
+            .collect::<HashMap<_, _>>();
         match &import.kind {
             ImportKind::Plain => {
                 if import.module_path == PRELUDE_MODULE_PATH {
@@ -422,6 +490,15 @@ fn canonical_or_absolute(path: &Path) -> PathBuf {
     }
 }
 
+fn stdlib_module_path(source_path: &Path, stdlib_root: &Path) -> Option<String> {
+    let source = canonical_or_absolute(source_path);
+    let root = canonical_or_absolute(stdlib_root);
+    let relative = source.strip_prefix(root).ok()?;
+    let without_ext = relative.with_extension("");
+    Some(without_ext.to_string_lossy().replace('\\', "/"))
+}
+
+#[cfg(test)]
 pub(crate) fn module_exports_for_import_with_resolver(
     module_path: &str,
     resolver: &StdlibResolver,

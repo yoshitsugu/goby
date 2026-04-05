@@ -377,10 +377,10 @@ Add or update tests for:
 
 ### M1. Semantics Lock
 
-- [ ] Update `doc/LANGUAGE_SPEC.md` so `@embed` is explicitly `goby/prelude`-only.
-- [ ] Lock that implicit availability remains anchored at `goby/prelude`.
-- [ ] Lock that `goby/stdio` is the canonical owner of both `Print` and `Read`.
-- [ ] Remove plan wording that still assumes stdlib-wide `@embed`.
+- [x] Update `doc/LANGUAGE_SPEC.md` so `@embed` is explicitly `goby/prelude`-only.
+- [x] Lock that implicit availability remains anchored at `goby/prelude`.
+- [x] Lock that `goby/stdio` is the canonical owner of both `Print` and `Read`.
+- [x] Remove plan wording that still assumes stdlib-wide `@embed`.
 
 Done when:
 
@@ -389,12 +389,12 @@ Done when:
 
 ### M2. Shared Metadata Model
 
-- [ ] Refactor stdlib resolver metadata so visible imported effects, prelude
+- [x] Refactor stdlib resolver metadata so visible imported effects, prelude
   `@embed` bindings, and implicit-prelude-export candidates are represented in
   one shared model.
-- [ ] Ensure the new model can represent both `Print` and `Read` without
+- [x] Ensure the new model can represent both `Print` and `Read` without
   symbol-specific branching.
-- [ ] Remove assumptions that embedded defaults only come from locally declared
+- [x] Remove assumptions that embedded defaults only come from locally declared
   effects.
 
 Done when:
@@ -404,10 +404,10 @@ Done when:
 
 ### M3. Validation And Resolution Migration
 
-- [ ] Change `@embed` validation to require visible effects rather than
+- [x] Change `@embed` validation to require visible effects rather than
   same-module declarations.
-- [ ] Restrict accepted `@embed` source modules to `goby/prelude`.
-- [ ] Rework known-effect collection and implicit symbol injection to use the
+- [x] Restrict accepted `@embed` source modules to `goby/prelude`.
+- [x] Rework known-effect collection and implicit symbol injection to use the
   shared metadata model.
 - [ ] Rework resolved-name handling so implicit bare effect-op names come from
   prelude `@embed` metadata rather than fixed `Print` / `Read` tables.

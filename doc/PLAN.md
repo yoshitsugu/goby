@@ -157,6 +157,10 @@ Based on `examples/*.gb`:
   - list mapping should use stdlib `goby/list.map`.
   - `print` execution is resolved by compiler/runtime internals (default stdio print path),
     not by a user-visible stdlib handler definition.
+  - `@embed` direction is locked to `goby/prelude` only.
+    - implicit `Print` / `Read` availability remains anchored at `goby/prelude`.
+    - `goby/stdio` is the canonical owner of both effects; prelude decides which
+      visible stdlib-owned effects participate in the implicit default surface.
 - Stdlib integer parse entrypoint is `int.parse`.
   - contract: parse optional leading `-` + one or more ASCII digits as base-10 `Int`.
   - failure path is effect-based: `StringParseError.invalid_integer : String -> Int`.

@@ -13,6 +13,17 @@ Current intent:
 - derive implicit `Print` / `Read` availability from prelude `@embed` metadata
   rather than from hard-coded name tables or duplicated stdlib declarations
 
+Current slice status:
+
+- M1 semantics lock is complete in `doc/LANGUAGE_SPEC.md` and `doc/PLAN.md`.
+- The shared typecheck-facing metadata path is in place:
+  - stdlib resolver now tracks visible imported effects and prelude-selected
+    embedded effect exports with provenance
+  - embed validation now requires a visible effect in `goby/prelude`
+  - implicit `main` effect/default-handler and bare-op injection now flow from
+    prelude embed metadata instead of same-module embed assumptions
+- Remaining work is the resolved-name migration plus the stdlib file ownership move.
+
 ## Locked Decisions
 
 - `goby/prelude` remains the only implicit-import entrypoint.
@@ -25,10 +36,14 @@ Current intent:
 
 ## Immediate Next Steps
 
-- Complete M1 in [`doc/PLAN_EXPORT_EMBED.md`](/home/yoshitsugu/src/github.com/yoshitsugu/goby/doc/PLAN_EXPORT_EMBED.md) by locking the spec wording in `doc/LANGUAGE_SPEC.md`.
-- Implement the shared metadata path before changing stdlib file layout.
-- Avoid symbol-specific bridging such as `if effect == "Print"` / `if effect == "Read"` during the migration.
-- After the compiler path is shared, move `Print` and `Read` declarations into `stdlib/goby/stdio.gb` and keep `stdlib/goby/prelude.gb` responsible only for imports plus `@embed`.
+- Complete the remaining M3 resolved-name migration so implicit bare effect-op
+  names come from prelude embed metadata instead of fixed `Print` / `Read`
+  tables in `resolved.rs`.
+- Keep avoiding symbol-specific bridging such as
+  `if effect == "Print"` / `if effect == "Read"` during the migration.
+- After the remaining compiler path is shared, move `Print` and `Read`
+  declarations into `stdlib/goby/stdio.gb` and keep `stdlib/goby/prelude.gb`
+  responsible only for imports plus `@embed`.
 
 ## Architecture State
 

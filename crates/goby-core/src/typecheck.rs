@@ -1028,6 +1028,22 @@ main =
     }
 
     #[test]
+    fn implicit_prelude_injects_bare_print_symbol_into_type_env() {
+        let source = "main : Unit -> Unit can Print\nmain = print \"hi\"\n";
+        let module = parse_module(source).expect("should parse");
+        let stdlib_root = crate::typecheck_phase::default_typecheck_stdlib_root(None);
+        let env = crate::typecheck_build::build_type_env(&module, &stdlib_root);
+        assert!(
+            env.globals.contains_key("print"),
+            "expected implicit prelude to inject bare print symbol"
+        );
+        assert!(
+            env.ambiguous_sources("print").is_none(),
+            "implicit prelude should not inject `print` ambiguously"
+        );
+    }
+
+    #[test]
     fn accepts_println_call_with_implicit_prelude_print_effect() {
         let source = "main : Unit -> Unit can Print\nmain = println \"hi\"\n";
         let module = parse_module(source).expect("should parse");
@@ -1618,25 +1634,29 @@ f = fetch_env_var(\"HOME\")
     }
 
     #[test]
-    fn main_can_clause_accepts_imported_embedded_default_effect() {
-        let sandbox = TempDirGuard::new("embedded_effect_visible");
+    fn main_can_clause_accepts_prelude_embedded_default_effect_from_imported_owner() {
+        let sandbox = TempDirGuard::new("prelude_embedded_effect_visible");
         let root = sandbox.path.join("stdlib");
         fs::create_dir_all(root.join("goby")).expect("stdlib/goby should be creatable");
         fs::write(
             root.join("goby/stdio.gb"),
-            "effect Console\n  log : String -> Unit\n@embed Console __goby_embeded_effect_stdout_handler\nlog : String -> Unit can Console\nlog msg = msg |> print\n",
+            "effect Console\n  log : String -> Unit\nlog : String -> Unit can Console\nlog msg = ()\n",
+        )
+        .expect("stdlib file should be writable");
+        fs::write(
+            root.join("goby/prelude.gb"),
+            "import goby/stdio\n@embed Console __goby_embeded_effect_stdout_handler\n",
         )
         .expect("stdlib file should be writable");
         let source_path = sandbox.path.join("main.gb");
         let source = "\
-import goby/stdio ( log )
 main : Unit -> Unit can Console
 main = ()
 ";
         fs::write(&source_path, source).expect("fixture file should be writable");
         let module = parse_module(source).expect("should parse");
         typecheck_module_with_context(&module, Some(&source_path), Some(&root))
-            .expect("main can-clause should accept imported embedded default effect");
+            .expect("main can-clause should accept prelude embedded default effect");
     }
 
     #[test]
@@ -1644,59 +1664,70 @@ main = ()
         let sandbox = TempDirGuard::new("embedded_effect_conflict");
         let root = sandbox.path.join("stdlib");
         fs::create_dir_all(root.join("goby")).expect("stdlib/goby should be creatable");
+        let source_path = root.join("goby/prelude.gb");
         fs::write(
             root.join("goby/a.gb"),
-            "effect Console\n  log : String -> Unit\n@embed Console __goby_embeded_effect_stdout_handler\nlog : String -> Unit can Console\nlog msg = msg |> print\n",
+            "effect Console\n  log : String -> Unit\n",
         )
         .expect("stdlib file should be writable");
         fs::write(
             root.join("goby/b.gb"),
-            "effect Console\n  log : String -> Unit\n@embed Console __goby_embeded_effect_other_handler\nlog : String -> Unit can Console\nlog msg = msg |> print\n",
+            "effect Console\n  log : String -> Unit\n",
         )
         .expect("stdlib file should be writable");
-        let source_path = sandbox.path.join("main.gb");
-        let source = "\
-import goby/a ( log )
-import goby/b
-main : Unit -> Unit can Console
-main = ()
-";
-        fs::write(&source_path, source).expect("fixture file should be writable");
+        fs::write(
+            &source_path,
+            "import goby/a\nimport goby/b\n@embed Console __goby_embeded_effect_stdout_handler\n",
+        )
+        .expect("stdlib file should be writable");
+        let source =
+            "import goby/a\nimport goby/b\n@embed Console __goby_embeded_effect_stdout_handler\n";
         let module = parse_module(source).expect("should parse");
         let err = typecheck_module_with_context(&module, Some(&source_path), Some(&root))
-            .expect_err("conflicting embedded defaults across imports should be rejected");
+            .expect_err(
+                "ambiguous embedded effect visibility across prelude imports should be rejected",
+            );
         assert!(
             err.message
-                .contains("conflicting embedded default handler for effect"),
+                .contains("embedded effect `Console` is ambiguous"),
             "unexpected message: {}",
             err.message
         );
     }
 
     #[test]
-    fn non_main_unhandled_embedded_default_effect_is_rejected() {
+    fn non_main_can_clause_with_prelude_embedded_effect_is_rejected() {
         let sandbox = TempDirGuard::new("embedded_effect_local_visible");
         let stdlib_root = sandbox.path.join("stdlib");
-        let source_path = stdlib_root.join("goby/console.gb");
-        fs::create_dir_all(source_path.parent().expect("parent should exist"))
-            .expect("stdlib path should be creatable");
-        let source = "\
+        let source_path = sandbox.path.join("main.gb");
+        fs::create_dir_all(stdlib_root.join("goby")).expect("stdlib path should be creatable");
+        fs::write(
+            stdlib_root.join("goby/console.gb"),
+            "\
 effect Console
   log : String -> Unit
-@embed Console __goby_embeded_effect_stdout_handler
 log_value : String -> Unit can Console
 log_value msg = Console.log msg
-f : Unit -> Unit
-f = log_value \"x\"
+",
+        )
+        .expect("fixture file should be writable");
+        fs::write(
+            stdlib_root.join("goby/prelude.gb"),
+            "import goby/console\n@embed Console __goby_embeded_effect_stdout_handler\n",
+        )
+        .expect("fixture file should be writable");
+        let source = "\
+f : Unit -> Unit can Console
+f = ()
 main : Unit -> Unit
 main = ()
 ";
         fs::write(&source_path, source).expect("fixture file should be writable");
         let module = parse_module(source).expect("should parse");
         let err = typecheck_module_with_context(&module, Some(&source_path), Some(&stdlib_root))
-            .expect_err("non-main unhandled embedded default effect should be rejected");
+            .expect_err("non-main can-clause should not accept prelude embedded effect");
         assert!(
-            err.message.contains("not handled"),
+            err.message.contains("unknown effect"),
             "unexpected message: {}",
             err.message
         );
@@ -2256,17 +2287,22 @@ f = print \"hi\"
     }
 
     #[test]
-    fn accepts_embed_declaration_inside_stdlib_root_with_context() {
-        let sandbox = TempDirGuard::new("embed_in_stdlib");
+    fn accepts_embed_declaration_inside_prelude_for_imported_effect() {
+        let sandbox = TempDirGuard::new("embed_in_prelude");
         let stdlib_root = sandbox.path.join("stdlib");
-        let source_path = stdlib_root.join("goby/stdio.gb");
+        let source_path = stdlib_root.join("goby/prelude.gb");
         fs::create_dir_all(source_path.parent().expect("parent should exist"))
             .expect("stdlib path should be creatable");
-        let source = "effect Print\n  print : String -> Unit\n@embed Print __goby_embeded_effect_stdout_handler\nf : Unit -> Int\nf = 1\n";
+        fs::write(
+            stdlib_root.join("goby/stdio.gb"),
+            "effect Print\n  print : String -> Unit\n",
+        )
+        .expect("fixture file should be writable");
+        let source = "import goby/stdio\n@embed Print __goby_embeded_effect_stdout_handler\nf : Unit -> Int\nf = 1\n";
         fs::write(&source_path, source).expect("fixture file should be writable");
         let module = parse_module(source).expect("should parse");
         typecheck_module_with_context(&module, Some(&source_path), Some(&stdlib_root))
-            .expect("@embed under stdlib root should be accepted");
+            .expect("@embed in prelude should accept imported visible effect");
     }
 
     #[test]
@@ -2351,7 +2387,6 @@ f = print \"hi\"
         let source = "\
 effect Iterator a b
   yield : a -> b -> (Bool, b)
-@embed Iterator __goby_embeded_effect_stdout_handler
 count_graphemes : String -> Int can Iterator
 count_graphemes s =
   with
@@ -2377,7 +2412,6 @@ count_graphemes s =
 type GraphemeState = GraphemeState(grapheme: String, current: String)
 effect Iterator a b
   yield : a -> b -> (Bool, b)
-@embed Iterator __goby_embeded_effect_stdout_handler
 f : String -> GraphemeState can Iterator
 f s =
   state = GraphemeState(grapheme: \"\", current: \"\")
@@ -2507,19 +2541,20 @@ f =
     }
 
     #[test]
-    fn rejects_embed_when_effect_is_not_declared_in_same_module() {
-        let sandbox = TempDirGuard::new("embed_missing_effect");
+    fn rejects_embed_declaration_inside_non_prelude_stdlib_module() {
+        let sandbox = TempDirGuard::new("embed_non_prelude");
         let stdlib_root = sandbox.path.join("stdlib");
         let source_path = stdlib_root.join("goby/stdio.gb");
         fs::create_dir_all(source_path.parent().expect("parent should exist"))
             .expect("stdlib path should be creatable");
-        let source = "@embed Print __goby_embeded_effect_stdout_handler\nf : Unit -> Int\nf = 1\n";
+        let source = "effect Print\n  print : String -> Unit\n@embed Print __goby_embeded_effect_stdout_handler\nf : Unit -> Int\nf = 1\n";
         fs::write(&source_path, source).expect("fixture file should be writable");
         let module = parse_module(source).expect("should parse");
         let err = typecheck_module_with_context(&module, Some(&source_path), Some(&stdlib_root))
-            .expect_err("embedded effect should require in-module effect declaration");
+            .expect_err("@embed should be rejected outside goby/prelude");
         assert!(
-            err.message.contains("must be declared in the same module"),
+            err.message
+                .contains("@embed declarations are only allowed in `goby/prelude`"),
             "unexpected message: {}",
             err.message
         );
@@ -2529,7 +2564,7 @@ f =
     fn rejects_duplicate_embed_declaration_names_in_stdlib() {
         let sandbox = TempDirGuard::new("embed_duplicate");
         let stdlib_root = sandbox.path.join("stdlib");
-        let source_path = stdlib_root.join("goby/stdio.gb");
+        let source_path = stdlib_root.join("goby/prelude.gb");
         fs::create_dir_all(source_path.parent().expect("parent should exist"))
             .expect("stdlib path should be creatable");
         let source = "effect Print\n  print : String -> Unit\n  println : String -> Unit\n@embed Print __goby_embeded_effect_stdout_handler\n@embed Print __goby_embeded_effect_stdout_handler\nf : Unit -> Int\nf = 1\n";
@@ -2544,7 +2579,7 @@ f =
     fn rejects_embed_with_invalid_handler_namespace() {
         let sandbox = TempDirGuard::new("embed_invalid_handler_namespace");
         let stdlib_root = sandbox.path.join("stdlib");
-        let source_path = stdlib_root.join("goby/stdio.gb");
+        let source_path = stdlib_root.join("goby/prelude.gb");
         fs::create_dir_all(source_path.parent().expect("parent should exist"))
             .expect("stdlib path should be creatable");
         let source = "effect Print\n  print : String -> Unit\n  println : String -> Unit\n@embed Print stdout_handler\nf : Unit -> Int\nf = 1\n";
@@ -2562,7 +2597,7 @@ f =
     fn rejects_embed_with_unknown_handler_intrinsic() {
         let sandbox = TempDirGuard::new("embed_unknown_handler_intrinsic");
         let stdlib_root = sandbox.path.join("stdlib");
-        let source_path = stdlib_root.join("goby/stdio.gb");
+        let source_path = stdlib_root.join("goby/prelude.gb");
         fs::create_dir_all(source_path.parent().expect("parent should exist"))
             .expect("stdlib path should be creatable");
         let source = "effect Print\n  print : String -> Unit\n@embed Print __goby_embeded_effect_missing\nf : Unit -> Int\nf = 1\n";

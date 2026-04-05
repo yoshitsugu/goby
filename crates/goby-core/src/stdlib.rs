@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
+use crate::ast::ImportKind;
 use crate::parse_module;
 use crate::parser_util::is_identifier;
 
@@ -16,7 +17,9 @@ pub struct ResolvedStdlibModule {
     pub exports: HashMap<String, String>,
     pub types: Vec<String>,
     pub effects: Vec<String>,
+    pub visible_effects: Vec<VisibleEffectDecl>,
     pub embedded_defaults: Vec<EmbeddedDefaultHandlerDecl>,
+    pub embedded_effect_exports: Vec<EmbeddedEffectExport>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -40,6 +43,21 @@ pub struct EmbeddedDefaultHandlerDecl {
     pub effect_name: String,
     pub handler_name: String,
     pub runtime_kind: Option<EmbeddedRuntimeHandlerKind>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VisibleEffectDecl {
+    pub source_module: String,
+    pub decl: crate::ast::EffectDecl,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EmbeddedEffectExport {
+    pub effect_name: String,
+    pub handler_name: String,
+    pub runtime_kind: Option<EmbeddedRuntimeHandlerKind>,
+    pub source_module: String,
+    pub decl: crate::ast::EffectDecl,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -80,6 +98,21 @@ impl StdlibResolver {
         &self,
         module_path: &str,
     ) -> Result<ResolvedStdlibModule, StdlibResolveError> {
+        let mut visiting = HashSet::new();
+        self.resolve_module_inner(module_path, &mut visiting)
+    }
+
+    fn resolve_module_inner(
+        &self,
+        module_path: &str,
+        visiting: &mut HashSet<String>,
+    ) -> Result<ResolvedStdlibModule, StdlibResolveError> {
+        if !visiting.insert(module_path.to_string()) {
+            return Err(StdlibResolveError::ParseFailed {
+                module_path: module_path.to_string(),
+                message: "cyclic stdlib import in resolver metadata".to_string(),
+            });
+        }
         let attempted_path = self.module_file_path(module_path)?;
         let source =
             std::fs::read_to_string(&attempted_path).map_err(|read_err| match read_err.kind() {
@@ -99,15 +132,21 @@ impl StdlibResolver {
             })?;
         let exports = collect_exports(module_path, &module.declarations)?;
         let types = collect_types(&module.type_declarations);
-        let effects = collect_effects(&module.effect_declarations);
         let embedded_defaults = collect_embedded_defaults(module_path, &module.embed_declarations)?;
+        let visible_effects = collect_visible_effects(self, module_path, &module, visiting)?;
+        let effects = collect_effect_names(&visible_effects);
+        let embedded_effect_exports =
+            collect_embedded_effect_exports(&embedded_defaults, &visible_effects);
+        visiting.remove(module_path);
         Ok(ResolvedStdlibModule {
             module_path: module_path.to_string(),
             module,
             exports,
             types,
             effects,
+            visible_effects,
             embedded_defaults,
+            embedded_effect_exports,
         })
     }
 
@@ -181,8 +220,77 @@ fn collect_embedded_defaults(
     Ok(defaults)
 }
 
-fn collect_effects(effects: &[crate::ast::EffectDecl]) -> Vec<String> {
-    effects.iter().map(|effect| effect.name.clone()).collect()
+fn collect_visible_effects(
+    resolver: &StdlibResolver,
+    module_path: &str,
+    module: &crate::ast::Module,
+    visiting: &mut HashSet<String>,
+) -> Result<Vec<VisibleEffectDecl>, StdlibResolveError> {
+    let mut visible = module
+        .effect_declarations
+        .iter()
+        .cloned()
+        .map(|decl| VisibleEffectDecl {
+            source_module: module_path.to_string(),
+            decl,
+        })
+        .collect::<Vec<_>>();
+
+    for import in &module.imports {
+        let imported = resolver.resolve_module_inner(&import.module_path, visiting)?;
+        visible.extend(
+            imported
+                .visible_effects
+                .into_iter()
+                .filter(|effect| import_selects_name(&import.kind, &effect.decl.name)),
+        );
+    }
+
+    Ok(visible)
+}
+
+fn collect_effect_names(visible_effects: &[VisibleEffectDecl]) -> Vec<String> {
+    let mut seen = HashSet::new();
+    let mut names = Vec::new();
+    for effect in visible_effects {
+        if seen.insert(effect.decl.name.clone()) {
+            names.push(effect.decl.name.clone());
+        }
+    }
+    names
+}
+
+fn collect_embedded_effect_exports(
+    embedded_defaults: &[EmbeddedDefaultHandlerDecl],
+    visible_effects: &[VisibleEffectDecl],
+) -> Vec<EmbeddedEffectExport> {
+    let mut exports = Vec::new();
+    for embed in embedded_defaults {
+        let mut matches = visible_effects
+            .iter()
+            .filter(|effect| effect.decl.name == embed.effect_name);
+        let Some(effect) = matches.next() else {
+            continue;
+        };
+        if matches.next().is_some() {
+            continue;
+        }
+        exports.push(EmbeddedEffectExport {
+            effect_name: embed.effect_name.clone(),
+            handler_name: embed.handler_name.clone(),
+            runtime_kind: embed.runtime_kind,
+            source_module: effect.source_module.clone(),
+            decl: effect.decl.clone(),
+        });
+    }
+    exports
+}
+
+fn import_selects_name(kind: &ImportKind, name: &str) -> bool {
+    match kind {
+        ImportKind::Selective(names) => names.iter().any(|selected| selected == name),
+        ImportKind::Plain | ImportKind::Alias(_) => true,
+    }
 }
 
 fn collect_types(types: &[crate::ast::TypeDeclaration]) -> Vec<String> {
@@ -309,6 +417,37 @@ mod tests {
                 runtime_kind: Some(super::EmbeddedRuntimeHandlerKind::Stdout),
             }]
         );
+    }
+
+    #[test]
+    fn resolves_visible_imported_effect_for_prelude_embed() {
+        let sandbox = TempDirGuard::new("resolve_prelude_embed_import");
+        let root = sandbox.path.join("stdlib");
+        fs::create_dir_all(root.join("goby")).expect("stdlib/goby should be creatable");
+        fs::write(
+            root.join("goby/stdio.gb"),
+            "effect Print\n  print : String -> Unit\n  println : String -> Unit\n",
+        )
+        .expect("stdlib file should be writable");
+        fs::write(
+            root.join("goby/prelude.gb"),
+            "import goby/stdio\n@embed Print __goby_embeded_effect_stdout_handler\n",
+        )
+        .expect("stdlib file should be writable");
+
+        let resolver = StdlibResolver::new(root);
+        let resolved = resolver
+            .resolve_module("goby/prelude")
+            .expect("prelude module should resolve");
+        assert_eq!(resolved.effects, vec!["Print".to_string()]);
+        assert_eq!(resolved.visible_effects.len(), 1);
+        assert_eq!(resolved.visible_effects[0].source_module, "goby/stdio");
+        assert_eq!(resolved.embedded_effect_exports.len(), 1);
+        assert_eq!(
+            resolved.embedded_effect_exports[0].source_module,
+            "goby/stdio"
+        );
+        assert_eq!(resolved.embedded_effect_exports[0].effect_name, "Print");
     }
 
     #[test]
