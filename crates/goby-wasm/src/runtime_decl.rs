@@ -17,12 +17,11 @@ impl<'m> RuntimeOutputResolver<'m> {
                     .map(Self::runtime_value_to_expr)
                     .collect::<Option<Vec<_>>>()?,
             )),
-            RuntimeValue::ListInt(values) => Some(Expr::ListLit {
-                elements: values.iter().copied().map(Expr::IntLit).collect(),
-                spread: None,
-            }),
-            RuntimeValue::ListString(values) => Some(Expr::ListLit {
-                elements: values.iter().cloned().map(Expr::StringLit).collect(),
+            RuntimeValue::List(values) => Some(Expr::ListLit {
+                elements: values
+                    .iter()
+                    .map(Self::runtime_value_to_expr)
+                    .collect::<Option<Vec<_>>>()?,
                 spread: None,
             }),
             RuntimeValue::Handler(_) | RuntimeValue::Callable(_) | RuntimeValue::Record { .. } => {

@@ -919,6 +919,79 @@ main =
 }
 
 #[test]
+fn run_command_accepts_nested_list_index_program_without_wasmtime() {
+    let root = repo_root();
+    let sandbox = TempDirGuard::new("run_nested_list_index_no_wasmtime");
+    let empty_bin = sandbox.join("empty-bin");
+    fs::create_dir_all(&empty_bin).expect("empty bin should be creatable");
+    let input = sandbox.join("nested_list_index.gb");
+    fs::write(
+        &input,
+        r#"
+main : Unit -> Unit can Print
+main =
+  a = [[1,2,3], [4,5,6], [7, 8, 9]]
+  b = a[0][1]
+  println("${b}")
+"#,
+    )
+    .expect("temporary input should be writable");
+
+    let output = command_for_goby_cli()
+        .arg("run")
+        .arg(&input)
+        .env("PATH", &empty_bin)
+        .current_dir(&root)
+        .output()
+        .expect("cli should execute");
+
+    assert!(
+        output.status.success(),
+        "expected success, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("parsed and typechecked"));
+    assert!(stderr.contains("wasmtime not found; skipped wasm execution"));
+}
+
+#[test]
+fn run_command_accepts_nested_list_index_interpolation_program_without_wasmtime() {
+    let root = repo_root();
+    let sandbox = TempDirGuard::new("run_nested_list_interp_no_wasmtime");
+    let empty_bin = sandbox.join("empty-bin");
+    fs::create_dir_all(&empty_bin).expect("empty bin should be creatable");
+    let input = sandbox.join("nested_list_index_interp.gb");
+    fs::write(
+        &input,
+        r#"
+main : Unit -> Unit can Print
+main =
+  a = [[1,2,3], [4,5,6], [7, 8, 9]]
+  println("${a[0][1]}")
+"#,
+    )
+    .expect("temporary input should be writable");
+
+    let output = command_for_goby_cli()
+        .arg("run")
+        .arg(&input)
+        .env("PATH", &empty_bin)
+        .current_dir(&root)
+        .output()
+        .expect("cli should execute");
+
+    assert!(
+        output.status.success(),
+        "expected success, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("parsed and typechecked"));
+    assert!(stderr.contains("wasmtime not found; skipped wasm execution"));
+}
+
+#[test]
 fn run_command_executes_read_program_with_runtime_stdin() {
     let root = repo_root();
     let sandbox = TempDirGuard::new("run_read_runtime_stdin");

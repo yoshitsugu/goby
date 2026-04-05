@@ -4,32 +4,7 @@ use std::rc::Rc;
 
 impl<'m> RuntimeOutputResolver<'m> {
     pub(super) fn build_runtime_list(&self, values: Vec<RuntimeValue>) -> Out<RuntimeValue> {
-        let mut ints = Vec::with_capacity(values.len());
-        let mut strings = Vec::with_capacity(values.len());
-        let mut kind: Option<&'static str> = None;
-        for value in values {
-            match value {
-                RuntimeValue::Int(n) => {
-                    if kind == Some("string") {
-                        return Out::Err(RuntimeError::Unsupported);
-                    }
-                    kind = Some("int");
-                    ints.push(n);
-                }
-                RuntimeValue::String(text) => {
-                    if kind == Some("int") {
-                        return Out::Err(RuntimeError::Unsupported);
-                    }
-                    kind = Some("string");
-                    strings.push(text);
-                }
-                _ => return Out::Err(RuntimeError::Unsupported),
-            }
-        }
-        match kind {
-            Some("string") => Out::Done(RuntimeValue::ListString(strings)),
-            _ => Out::Done(RuntimeValue::ListInt(ints)),
-        }
+        Out::Done(RuntimeValue::List(values))
     }
 
     pub(super) fn execute_unit_call(

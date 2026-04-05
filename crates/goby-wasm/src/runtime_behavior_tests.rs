@@ -955,6 +955,37 @@ main =
 }
 
 #[test]
+fn resolves_nested_list_index_via_bound_local_before_interpolation() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    let source = r#"
+main : Unit -> Unit can Print
+main =
+  a = [[1,2,3], [4,5,6], [7, 8, 9]]
+  b = a[0][1]
+  println("${b}")
+"#;
+    let module = parse_module(source).expect("parse should work");
+    let typed = assert_mode_parity(&module, "nested list index via local before interpolation");
+    assert_eq!(typed.stdout.as_deref(), Some("2\n"));
+    assert_eq!(typed.runtime_error_kind, None);
+}
+
+#[test]
+fn resolves_nested_list_index_directly_inside_interpolation() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    let source = r#"
+main : Unit -> Unit can Print
+main =
+  a = [[1,2,3], [4,5,6], [7, 8, 9]]
+  println("${a[0][1]}")
+"#;
+    let module = parse_module(source).expect("parse should work");
+    let typed = assert_mode_parity(&module, "nested list index directly inside interpolation");
+    assert_eq!(typed.stdout.as_deref(), Some("2\n"));
+    assert_eq!(typed.runtime_error_kind, None);
+}
+
+#[test]
 fn list_index_out_of_bounds_aborts() {
     let _guard = ENV_MUTEX.lock().unwrap();
     let source = r#"

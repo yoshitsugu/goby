@@ -328,7 +328,7 @@ impl<'m> RuntimeOutputResolver<'m> {
 
         let list_int_locals = locals.list_int_values();
         if let Some(values) = evaluators.list.eval_expr(expr, &list_int_locals) {
-            return Some(RuntimeValue::ListInt(values));
+            return Some(RuntimeValue::list_from_ints(values));
         }
 
         None
@@ -513,16 +513,18 @@ impl<'m> RuntimeOutputResolver<'m> {
                 let RuntimeValue::String(value) = &args[1] else {
                     return None;
                 };
-                match list {
-                    RuntimeValue::ListString(items) => {
-                        let mut next = items.clone();
-                        next.push(value.clone());
-                        Some(RuntimeValue::ListString(next))
+                match list.as_list() {
+                    Some(items) => {
+                        if let Some(mut next) = list.as_string_list() {
+                            next.push(value.clone());
+                            Some(RuntimeValue::list_from_strings(next))
+                        } else if items.is_empty() {
+                            Some(RuntimeValue::list_from_strings(vec![value.clone()]))
+                        } else {
+                            None
+                        }
                     }
-                    RuntimeValue::ListInt(items) if items.is_empty() => {
-                        Some(RuntimeValue::ListString(vec![value.clone()]))
-                    }
-                    _ => None,
+                    None => None,
                 }
             }
             _ => None,
@@ -537,7 +539,7 @@ impl<'m> RuntimeOutputResolver<'m> {
         &self,
         items: &[ListPatternItem],
         tail: Option<&ListPatternTail>,
-        values: &[i64],
+        values: &[RuntimeValue],
         arm_locals: &mut RuntimeLocals,
     ) -> bool {
         if values.len() < items.len() {
@@ -549,13 +551,13 @@ impl<'m> RuntimeOutputResolver<'m> {
         for (item, value) in items.iter().zip(values.iter()) {
             match item {
                 ListPatternItem::IntLit(n) => {
-                    if *n != *value {
+                    if !matches!(value, RuntimeValue::Int(v) if n == v) {
                         return false;
                     }
                 }
                 ListPatternItem::Bind(name) => {
                     if name != "_" {
-                        arm_locals.store(name, RuntimeValue::Int(*value));
+                        arm_locals.store(name, value.clone());
                     }
                 }
                 ListPatternItem::Wildcard => {}
@@ -565,7 +567,7 @@ impl<'m> RuntimeOutputResolver<'m> {
         if let Some(ListPatternTail::Bind(name)) = tail
             && name != "_"
         {
-            arm_locals.store(name, RuntimeValue::ListInt(values[items.len()..].to_vec()));
+            arm_locals.store(name, RuntimeValue::List(values[items.len()..].to_vec()));
         }
         true
     }
@@ -574,7 +576,7 @@ impl<'m> RuntimeOutputResolver<'m> {
         &self,
         items: &[ListPatternItem],
         tail: Option<&ListPatternTail>,
-        values: &[String],
+        values: &[RuntimeValue],
         arm_locals: &mut RuntimeLocals,
     ) -> bool {
         if values.len() < items.len() {
@@ -586,13 +588,13 @@ impl<'m> RuntimeOutputResolver<'m> {
         for (item, value) in items.iter().zip(values.iter()) {
             match item {
                 ListPatternItem::StringLit(s) => {
-                    if s != value {
+                    if !matches!(value, RuntimeValue::String(v) if s == v) {
                         return false;
                     }
                 }
                 ListPatternItem::Bind(name) => {
                     if name != "_" {
-                        arm_locals.store(name, RuntimeValue::String(value.clone()));
+                        arm_locals.store(name, value.clone());
                     }
                 }
                 ListPatternItem::Wildcard => {}
@@ -602,10 +604,7 @@ impl<'m> RuntimeOutputResolver<'m> {
         if let Some(ListPatternTail::Bind(name)) = tail
             && name != "_"
         {
-            arm_locals.store(
-                name,
-                RuntimeValue::ListString(values[items.len()..].to_vec()),
-            );
+            arm_locals.store(name, RuntimeValue::List(values[items.len()..].to_vec()));
         }
         true
     }
@@ -742,12 +741,13 @@ impl<'m> RuntimeOutputResolver<'m> {
                 let sep_v =
                     self.eval_expr_ast(&args[1], locals, callables, evaluators, depth + 1)?;
                 match (list_v, sep_v) {
-                    (RuntimeValue::ListString(parts), RuntimeValue::String(sep)) => {
+                    (list_value, RuntimeValue::String(sep))
+                        if list_value.as_string_list().is_some() =>
+                    {
+                        let parts = list_value.as_string_list().expect("checked above");
                         Some(RuntimeValue::String(parts.join(&sep)))
                     }
-                    (RuntimeValue::ListInt(parts), RuntimeValue::String(_sep))
-                        if parts.is_empty() =>
-                    {
+                    (RuntimeValue::List(parts), RuntimeValue::String(_sep)) if parts.is_empty() => {
                         Some(RuntimeValue::String(String::new()))
                     }
                     _ => None,
@@ -780,21 +780,14 @@ impl<'m> RuntimeOutputResolver<'m> {
                     return None;
                 };
                 match list_val {
-                    RuntimeValue::ListInt(items) => {
+                    RuntimeValue::List(items) => {
                         // Use `i >= items.len() as i64` rather than `i as usize >= items.len()`
                         // to avoid silent truncation on 32-bit WASM targets where usize is 32-bit.
                         if i < 0 || i >= items.len() as i64 {
                             self.mark_runtime_abort();
                             return None;
                         }
-                        Some(RuntimeValue::Int(items[i as usize]))
-                    }
-                    RuntimeValue::ListString(items) => {
-                        if i < 0 || i >= items.len() as i64 {
-                            self.mark_runtime_abort();
-                            return None;
-                        }
-                        Some(RuntimeValue::String(items[i as usize].clone()))
+                        Some(items[i as usize].clone())
                     }
                     _ => {
                         // The type system should have rejected a non-list receiver,
@@ -821,13 +814,15 @@ impl<'m> RuntimeOutputResolver<'m> {
                 (CasePattern::IntLit(n), RuntimeValue::Int(v)) => n == v,
                 (CasePattern::StringLit(s), RuntimeValue::String(v)) => s == v,
                 (CasePattern::BoolLit(b), RuntimeValue::Bool(v)) => b == v,
-                (CasePattern::EmptyList, RuntimeValue::ListInt(values)) => values.is_empty(),
-                (CasePattern::EmptyList, RuntimeValue::ListString(values)) => values.is_empty(),
-                (CasePattern::ListPattern { items, tail }, RuntimeValue::ListInt(values)) => {
+                (CasePattern::EmptyList, RuntimeValue::List(values)) => values.is_empty(),
+                (CasePattern::ListPattern { items, tail }, RuntimeValue::List(values)) => {
                     self.match_list_pattern_int(items, tail.as_ref(), values, &mut arm_locals)
-                }
-                (CasePattern::ListPattern { items, tail }, RuntimeValue::ListString(values)) => {
-                    self.match_list_pattern_string(items, tail.as_ref(), values, &mut arm_locals)
+                        || self.match_list_pattern_string(
+                            items,
+                            tail.as_ref(),
+                            values,
+                            &mut arm_locals,
+                        )
                 }
                 _ => false,
             };

@@ -88,7 +88,7 @@ impl EmbeddedEffectRuntime {
                 if matches!(arg_val, RuntimeValue::Unit) =>
             {
                 self.read_stdin_lines("read_lines")
-                    .map(|lines| Some(RuntimeValue::ListString(lines)))
+                    .map(|lines| Some(RuntimeValue::list_from_strings(lines)))
             }
             _ => Ok(None),
         }
@@ -429,8 +429,12 @@ mod tests {
 
         assert!(matches!(
             lines,
-            Some(crate::RuntimeValue::ListString(lines))
-                if lines == vec!["a", "b", "c", "d"]
+            Some(crate::RuntimeValue::List(lines))
+                if lines.len() == 4
+                    && matches!(&lines[0], crate::RuntimeValue::String(text) if text == "a")
+                    && matches!(&lines[1], crate::RuntimeValue::String(text) if text == "b")
+                    && matches!(&lines[2], crate::RuntimeValue::String(text) if text == "c")
+                    && matches!(&lines[3], crate::RuntimeValue::String(text) if text == "d")
         ));
         assert!(matches!(
             rest,

@@ -19,7 +19,7 @@ impl<'m> RuntimeOutputResolver<'m> {
     ) -> Option<RuntimeValue> {
         match (module_path, member, args) {
             ("goby/string", "graphemes", [RuntimeValue::String(value)]) => {
-                Some(RuntimeValue::ListString(
+                Some(RuntimeValue::list_from_strings(
                     crate::grapheme_semantics::collect_extended_graphemes(value),
                 ))
             }
@@ -373,14 +373,14 @@ impl<'m> RuntimeOutputResolver<'m> {
                         Out::Done(RuntimeValue::Int(value))
                     });
             }
-        } else if let RuntimeValue::ListInt(arg_list) = arg_val
+        } else if let Some(arg_list) = arg_val.as_int_list()
             && let Some(function) = evaluators.list.functions.get(fn_name)
         {
             return evaluators
                 .list
                 .eval_function(function, Some(arg_list))
                 .map_or(Out::Err(RuntimeError::Unsupported), |values| {
-                    Out::Done(RuntimeValue::ListInt(values))
+                    Out::Done(RuntimeValue::list_from_ints(values))
                 });
         }
         Out::Err(RuntimeError::Unsupported)

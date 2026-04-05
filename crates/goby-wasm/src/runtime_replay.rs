@@ -804,32 +804,14 @@ impl<'m> RuntimeOutputResolver<'m> {
                         resuming_spread,
                     } => {
                         if resuming_spread {
-                            match value {
-                                RuntimeValue::ListInt(mut ints) => {
+                            match value.into_list() {
+                                Some(mut tail_items) => {
                                     for item in evaluated.into_iter().rev() {
-                                        match item {
-                                            RuntimeValue::Int(n) => ints.insert(0, n),
-                                            RuntimeValue::String(_) => {
-                                                return Out::Err(RuntimeError::Unsupported);
-                                            }
-                                            _ => return Out::Err(RuntimeError::Unsupported),
-                                        }
+                                        tail_items.insert(0, item);
                                     }
-                                    return Out::Done(RuntimeValue::ListInt(ints));
+                                    return Out::Done(RuntimeValue::List(tail_items));
                                 }
-                                RuntimeValue::ListString(mut strings) => {
-                                    for item in evaluated.into_iter().rev() {
-                                        match item {
-                                            RuntimeValue::String(text) => strings.insert(0, text),
-                                            RuntimeValue::Int(_) => {
-                                                return Out::Err(RuntimeError::Unsupported);
-                                            }
-                                            _ => return Out::Err(RuntimeError::Unsupported),
-                                        }
-                                    }
-                                    return Out::Done(RuntimeValue::ListString(strings));
-                                }
-                                _ => return Out::Err(RuntimeError::Unsupported),
+                                None => return Out::Err(RuntimeError::Unsupported),
                             }
                         }
 
@@ -870,44 +852,19 @@ impl<'m> RuntimeOutputResolver<'m> {
                             {
                                 Out::Done(tail_value) => {
                                     return match (self.build_runtime_list(evaluated), tail_value) {
-                                        (
-                                            Out::Done(RuntimeValue::ListInt(mut ints)),
-                                            RuntimeValue::ListInt(mut tail_ints),
-                                        ) => {
-                                            ints.append(&mut tail_ints);
-                                            Out::Done(RuntimeValue::ListInt(ints))
-                                        }
-                                        (
-                                            Out::Done(RuntimeValue::ListString(mut strings)),
-                                            RuntimeValue::ListString(mut tail_strings),
-                                        ) => {
-                                            strings.append(&mut tail_strings);
-                                            Out::Done(RuntimeValue::ListString(strings))
-                                        }
-                                        (
-                                            Out::Done(RuntimeValue::ListInt(ints)),
-                                            RuntimeValue::ListString(tail_strings),
-                                        ) => {
-                                            if ints.is_empty() && tail_strings.is_empty() {
-                                                Out::Done(RuntimeValue::ListInt(ints))
-                                            } else {
-                                                Out::Err(RuntimeError::Unsupported)
+                                        (Out::Done(RuntimeValue::List(mut values)), tail_value) => {
+                                            match tail_value.into_list() {
+                                                Some(mut tail_values) => {
+                                                    values.append(&mut tail_values);
+                                                    Out::Done(RuntimeValue::List(values))
+                                                }
+                                                None => Out::Err(RuntimeError::Unsupported),
                                             }
                                         }
-                                        (
-                                            Out::Done(RuntimeValue::ListString(strings)),
-                                            RuntimeValue::ListInt(tail_ints),
-                                        ) => {
-                                            if strings.is_empty() && tail_ints.is_empty() {
-                                                Out::Done(RuntimeValue::ListString(strings))
-                                            } else {
-                                                Out::Err(RuntimeError::Unsupported)
-                                            }
-                                        }
-                                        (Out::Done(_), _) => Out::Err(RuntimeError::Unsupported),
                                         (Out::Err(e), _) => Out::Err(e),
                                         (Out::Suspend(_), _) => Out::Err(RuntimeError::Unsupported),
                                         (Out::Escape(escape), _) => Out::Escape(escape),
+                                        (Out::Done(_), _) => Out::Err(RuntimeError::Unsupported),
                                     };
                                 }
                                 Out::Suspend(_) => {

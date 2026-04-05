@@ -265,43 +265,17 @@ impl<'m> RuntimeOutputResolver<'m> {
                 }
             }
             Expr::ListLit { elements, spread } => {
-                let mut int_items: Vec<i64> = Vec::with_capacity(elements.len());
-                let mut string_items: Vec<String> = Vec::with_capacity(elements.len());
-                let mut list_kind: Option<&'static str> = None;
+                let mut evaluated: Vec<RuntimeValue> = Vec::with_capacity(elements.len());
                 let elems_slice = elements.as_slice();
                 let mut i = 0;
                 while i < elems_slice.len() {
                     match self.eval_expr(&elems_slice[i], locals, callables, evaluators, depth + 1)
                     {
                         Out::Done(value) => {
-                            match &value {
-                                RuntimeValue::Int(n) => {
-                                    if list_kind == Some("string") {
-                                        return Out::Err(RuntimeError::Unsupported);
-                                    }
-                                    list_kind = Some("int");
-                                    int_items.push(*n);
-                                }
-                                RuntimeValue::String(text) => {
-                                    if list_kind == Some("int") {
-                                        return Out::Err(RuntimeError::Unsupported);
-                                    }
-                                    list_kind = Some("string");
-                                    string_items.push(text.clone());
-                                }
-                                _ => return Out::Err(RuntimeError::Unsupported),
-                            }
+                            evaluated.push(value);
                             i += 1;
                         }
                         Out::Suspend(_) => {
-                            let evaluated: Vec<RuntimeValue> = if list_kind == Some("string") {
-                                string_items
-                                    .iter()
-                                    .map(|s| RuntimeValue::String(s.clone()))
-                                    .collect()
-                            } else {
-                                int_items.iter().map(|n| RuntimeValue::Int(*n)).collect()
-                            };
                             let remaining = elems_slice[i + 1..].to_vec();
                             return Out::Suspend(Cont::Apply {
                                 step: ApplyStep::ListLitElement {
@@ -323,43 +297,15 @@ impl<'m> RuntimeOutputResolver<'m> {
                 if let Some(tail) = spread {
                     match self.eval_expr(tail, locals, callables, evaluators, depth + 1) {
                         Out::Done(tail_value) => {
-                            return match tail_value {
-                                RuntimeValue::ListInt(mut values) => {
-                                    if list_kind == Some("string") {
-                                        if values.is_empty() {
-                                            Out::Done(RuntimeValue::ListString(string_items))
-                                        } else {
-                                            Out::Err(RuntimeError::Unsupported)
-                                        }
-                                    } else {
-                                        int_items.append(&mut values);
-                                        Out::Done(RuntimeValue::ListInt(int_items))
-                                    }
+                            return match tail_value.into_list() {
+                                Some(mut values) => {
+                                    evaluated.append(&mut values);
+                                    Out::Done(RuntimeValue::List(evaluated))
                                 }
-                                RuntimeValue::ListString(mut values) => {
-                                    if list_kind == Some("int") {
-                                        if values.is_empty() {
-                                            Out::Done(RuntimeValue::ListInt(int_items))
-                                        } else {
-                                            Out::Err(RuntimeError::Unsupported)
-                                        }
-                                    } else {
-                                        string_items.append(&mut values);
-                                        Out::Done(RuntimeValue::ListString(string_items))
-                                    }
-                                }
-                                _ => Out::Err(RuntimeError::Unsupported),
+                                None => Out::Err(RuntimeError::Unsupported),
                             };
                         }
                         Out::Suspend(_) => {
-                            let evaluated: Vec<RuntimeValue> = if list_kind == Some("string") {
-                                string_items
-                                    .iter()
-                                    .map(|s| RuntimeValue::String(s.clone()))
-                                    .collect()
-                            } else {
-                                int_items.iter().map(|n| RuntimeValue::Int(*n)).collect()
-                            };
                             return Out::Suspend(Cont::Apply {
                                 step: ApplyStep::ListLitElement {
                                     evaluated,
@@ -377,10 +323,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                         Out::Err(e) => return Out::Err(e),
                     }
                 }
-                match list_kind {
-                    Some("string") => Out::Done(RuntimeValue::ListString(string_items)),
-                    _ => Out::Done(RuntimeValue::ListInt(int_items)),
-                }
+                Out::Done(RuntimeValue::List(evaluated))
             }
             Expr::TupleLit(items) => {
                 if items.is_empty() {
@@ -722,12 +665,13 @@ impl<'m> RuntimeOutputResolver<'m> {
                         Out::Err(e) => return Out::Err(e),
                     };
                 match (list_value, sep_value) {
-                    (RuntimeValue::ListString(parts), RuntimeValue::String(sep)) => {
+                    (list_value, RuntimeValue::String(sep))
+                        if list_value.as_string_list().is_some() =>
+                    {
+                        let parts = list_value.as_string_list().expect("checked above");
                         Out::Done(RuntimeValue::String(parts.join(&sep)))
                     }
-                    (RuntimeValue::ListInt(parts), RuntimeValue::String(_sep))
-                        if parts.is_empty() =>
-                    {
+                    (RuntimeValue::List(parts), RuntimeValue::String(_sep)) if parts.is_empty() => {
                         Out::Done(RuntimeValue::String(String::new()))
                     }
                     _ => Out::Err(RuntimeError::Unsupported),

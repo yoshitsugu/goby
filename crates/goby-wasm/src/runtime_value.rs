@@ -38,8 +38,8 @@ impl RuntimeLocals {
     pub(crate) fn list_int_values(&self) -> HashMap<String, Vec<i64>> {
         let mut values = self.list_int_values.clone();
         for (name, cell) in &self.mut_values {
-            if let RuntimeValue::ListInt(items) = &*cell.borrow() {
-                values.insert(name.clone(), items.clone());
+            if let Some(items) = cell.borrow().as_int_list() {
+                values.insert(name.clone(), items);
             }
         }
         values
@@ -55,8 +55,11 @@ impl RuntimeLocals {
             RuntimeValue::Int(number) => {
                 self.int_values.insert(key, number);
             }
-            RuntimeValue::ListInt(values) => {
-                self.list_int_values.insert(key, values);
+            RuntimeValue::List(values) => {
+                if let Some(ints) = runtime_list_slice_as_ints(&values) {
+                    self.list_int_values.insert(key.clone(), ints);
+                }
+                self.record_values.insert(key, RuntimeValue::List(values));
             }
             other => {
                 self.record_values.insert(key, other);
@@ -101,7 +104,7 @@ impl RuntimeLocals {
             return Some(RuntimeValue::String(v.clone()));
         }
         if let Some(v) = self.list_int_values.get(name) {
-            return Some(RuntimeValue::ListInt(v.clone()));
+            return Some(RuntimeValue::list_from_ints(v.clone()));
         }
         if let Some(v) = self.record_values.get(name) {
             return Some(v.clone());
@@ -161,8 +164,9 @@ pub(crate) fn runtime_value_eq(left: &RuntimeValue, right: &RuntimeValue) -> boo
         (RuntimeValue::Tuple(a), RuntimeValue::Tuple(b)) => {
             a.len() == b.len() && a.iter().zip(b).all(|(a, b)| runtime_value_eq(a, b))
         }
-        (RuntimeValue::ListInt(a), RuntimeValue::ListInt(b)) => a == b,
-        (RuntimeValue::ListString(a), RuntimeValue::ListString(b)) => a == b,
+        (RuntimeValue::List(a), RuntimeValue::List(b)) => {
+            a.len() == b.len() && a.iter().zip(b).all(|(a, b)| runtime_value_eq(a, b))
+        }
         (
             RuntimeValue::Record {
                 constructor: a_ctor,
@@ -195,8 +199,7 @@ pub(crate) enum RuntimeValue {
     Unit,
     Bool(bool),
     Tuple(Vec<RuntimeValue>),
-    ListInt(Vec<i64>),
-    ListString(Vec<String>),
+    List(Vec<RuntimeValue>),
     Handler(InlineHandlerValue),
     Callable(Box<IntCallable>),
     Record {
@@ -206,6 +209,36 @@ pub(crate) enum RuntimeValue {
 }
 
 impl RuntimeValue {
+    pub(crate) fn list_from_ints(values: Vec<i64>) -> Self {
+        Self::List(values.into_iter().map(Self::Int).collect())
+    }
+
+    pub(crate) fn list_from_strings(values: Vec<String>) -> Self {
+        Self::List(values.into_iter().map(Self::String).collect())
+    }
+
+    pub(crate) fn as_list(&self) -> Option<&[RuntimeValue]> {
+        match self {
+            Self::List(values) => Some(values.as_slice()),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn into_list(self) -> Option<Vec<RuntimeValue>> {
+        match self {
+            Self::List(values) => Some(values),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn as_int_list(&self) -> Option<Vec<i64>> {
+        self.as_list().and_then(runtime_list_slice_as_ints)
+    }
+
+    pub(crate) fn as_string_list(&self) -> Option<Vec<String>> {
+        self.as_list().and_then(runtime_list_slice_as_strings)
+    }
+
     /// Format value for runtime output (e.g. `print`/`println`).
     /// Strings are emitted as-is; use `to_expression_text` for quoted form.
     pub(crate) fn to_output_text(&self) -> String {
@@ -236,9 +269,11 @@ impl RuntimeValue {
                     .collect();
                 format!("({})", parts.join(", "))
             }
-            Self::ListInt(values) => format_list_int(values),
-            Self::ListString(values) => {
-                let parts: Vec<String> = values.iter().map(|s| format!("\"{}\"", s)).collect();
+            Self::List(values) => {
+                let parts: Vec<String> = values
+                    .iter()
+                    .map(|v| v.format_text(true))
+                    .collect();
                 format!("[{}]", parts.join(", "))
             }
             Self::Handler(_) => "<handler>".to_string(),
@@ -248,13 +283,24 @@ impl RuntimeValue {
     }
 }
 
-fn format_list_int(values: &[i64]) -> String {
-    let joined = values
+fn runtime_list_slice_as_ints(values: &[RuntimeValue]) -> Option<Vec<i64>> {
+    values
         .iter()
-        .map(i64::to_string)
-        .collect::<Vec<_>>()
-        .join(", ");
-    format!("[{}]", joined)
+        .map(|value| match value {
+            RuntimeValue::Int(n) => Some(*n),
+            _ => None,
+        })
+        .collect()
+}
+
+fn runtime_list_slice_as_strings(values: &[RuntimeValue]) -> Option<Vec<String>> {
+    values
+        .iter()
+        .map(|value| match value {
+            RuntimeValue::String(text) => Some(text.clone()),
+            _ => None,
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -312,5 +358,16 @@ mod tests {
 
         assert!(runtime_value_eq(&left, &right));
         assert!(runtime_value_option_eq(Some(&left), Some(&right)));
+    }
+
+    #[test]
+    fn runtime_value_formats_nested_lists_recursively() {
+        let value = RuntimeValue::List(vec![
+            RuntimeValue::list_from_ints(vec![1, 2, 3]),
+            RuntimeValue::list_from_ints(vec![4, 5, 6]),
+        ]);
+
+        assert_eq!(value.to_output_text(), "[[1, 2, 3], [4, 5, 6]]");
+        assert_eq!(value.to_expression_text(), "[[1, 2, 3], [4, 5, 6]]");
     }
 }
