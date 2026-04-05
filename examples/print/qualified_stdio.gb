@@ -1,0 +1,6 @@
+import goby/stdio
+
+main : Unit -> Unit can Print
+main =
+  Print.print "owned by "
+  Print.println "goby/stdio"

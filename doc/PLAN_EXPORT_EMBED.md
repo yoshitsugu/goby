@@ -433,10 +433,10 @@ Done when:
 
 ### M5. Regression Lock And Closure
 
-- [ ] Add or update focused tests for implicit `Print` and implicit `Read`.
-- [ ] Add regressions proving `@embed` outside `goby/prelude` is rejected.
-- [ ] Add CLI and LSP parity coverage for preserved implicit behavior.
-- [ ] Update examples and `doc/STATE.md` to record the final ownership model.
+- [x] Add or update focused tests for implicit `Print` and implicit `Read`.
+- [x] Add regressions proving `@embed` outside `goby/prelude` is rejected.
+- [x] Add CLI and LSP parity coverage for preserved implicit behavior.
+- [x] Update examples and `doc/STATE.md` to record the final ownership model.
 
 Done when:
 

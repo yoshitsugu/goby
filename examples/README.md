@@ -26,6 +26,7 @@ This directory contains small Goby programs grouped by purpose.
   - `local_binding.gb`: println a local string binding
   - `concat.gb`: println interpolated string result
   - `println.gb`: `print` (no newline) と `println` (末尾改行あり) の差分
+  - `qualified_stdio.gb`: explicit `import goby/stdio` + `Print.print` / `Print.println`
 - `parser/`: parser behavior examples
   - `mixed_indent.gb`: mixed tabs/spaces indentation sample
 - `iterator.gb`: unified iterator runtime contract sample (`import goby/iterator`)
@@ -46,12 +47,11 @@ This directory contains small Goby programs grouped by purpose.
     - `3`
     - `1`
 
-## Planned Stdlib Syntax (Not Implemented Yet)
+## Current Stdlib Surface
 
-- Standard-library planning includes a `goby/stdio` module and a stdlib-only
-  embed annotation for runtime-bridged effects.
-- Illustrative target shape:
-  - `@embed Print __goby_embeded_effect_stdout_handler`
-  - `print : String -> Unit can Print`
-  - `println : String -> Unit can Print`
-- Important: `@embed` is planned as stdlib-only and must be rejected in user code.
+- Implicit `Print` / `Read` availability comes from stdlib prelude metadata, so
+  small programs can keep using bare `print`, `println`, `read`, and
+  `read_line` without explicit imports.
+- `goby/stdio` is the canonical owner of the `Print` / `Read` effects.
+- Import `goby/stdio` when you want to show the owner module explicitly or use
+  qualified names such as `Print.println`.

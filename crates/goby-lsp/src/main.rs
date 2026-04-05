@@ -753,6 +753,45 @@ mod tests {
     }
 
     #[test]
+    fn analyze_valid_implicit_read_source_returns_empty() {
+        let Some(root) = stdlib_root() else {
+            return;
+        };
+        let source = "\
+main : Unit -> Unit can Read
+main =
+  text = read ()
+  ()
+";
+        let diags = analyze(source, Some(&root));
+        assert!(
+            diags.is_empty(),
+            "expected no diagnostics, got: {:?}",
+            diags
+        );
+    }
+
+    #[test]
+    fn analyze_valid_source_with_explicit_stdio_import_returns_empty() {
+        let Some(root) = stdlib_root() else {
+            return;
+        };
+        let source = "\
+import goby/stdio
+
+main : Unit -> Unit can Print
+main =
+  Print.println \"hello\"
+";
+        let diags = analyze(source, Some(&root));
+        assert!(
+            diags.is_empty(),
+            "expected no diagnostics, got: {:?}",
+            diags
+        );
+    }
+
+    #[test]
     fn analyze_parse_error_returns_one_diagnostic() {
         // "= broken" is not a valid top-level definition.
         // Pass stdlib_root explicitly to ensure we test the parse-error path

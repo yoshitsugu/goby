@@ -37,7 +37,11 @@ Current slice status:
     `goby/prelude -> goby/stdio`
   - general lowering now also seeds stdlib export lookup from the effective
     implicit-import surface rather than from explicit user imports only
-- Remaining work is regression/doc closure for the fully landed export/embed change.
+- Regression/doc closure is complete for the export/embed change:
+  - examples now describe the current `goby/stdio` ownership model rather than
+    the old planned split layout
+  - LSP parity covers both implicit `Read` and explicit `goby/stdio` usage
+  - `doc/PLAN_EXPORT_EMBED.md` is now at completion-state for this slice
 
 ## Locked Decisions
 
@@ -51,13 +55,12 @@ Current slice status:
 
 ## Immediate Next Steps
 
-- Close out the remaining M5 follow-up in
-  [`doc/PLAN_EXPORT_EMBED.md`](/home/yoshitsugu/src/github.com/yoshitsugu/goby/doc/PLAN_EXPORT_EMBED.md):
-  - sweep for any remaining docs/examples/tests that still describe the old split layout
-  - keep CLI/LSP parity locked for the preserved implicit `Print` / `Read` behavior
-  - decide whether any additional focused regression should be added nearer the
-    wasm/runtime transitive-import boundary itself, beyond the now-passing
-    existing smoke/runtime tests
+- Treat
+  [`doc/PLAN_EXPORT_EMBED.md`](/home/yoshitsugu/src/github.com/yoshitsugu/goby/doc/PLAN_EXPORT_EMBED.md)
+  as closed unless a regression reopens it.
+- Pick the next top-level slice from
+  [`doc/PLAN.md`](/home/yoshitsugu/src/github.com/yoshitsugu/goby/doc/PLAN.md)
+  rather than continuing to add compatibility churn around export/embed.
 - Keep avoiding symbol-specific bridging such as
   `if effect == "Print"` / `if effect == "Read"` in any follow-up cleanup.
 
