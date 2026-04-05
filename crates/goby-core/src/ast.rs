@@ -308,6 +308,34 @@ pub enum Expr {
     },
 }
 
+/// The left-hand side of a `:=` assignment statement.
+///
+/// Kept as an AST-level type that stays close to source syntax.
+/// Resolved/lowered layers normalise this into their own target representations.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AssignTarget {
+    /// Plain variable assignment: `x := expr`.
+    Var(String),
+    /// List-index assignment: `base[index] := expr`.
+    ///
+    /// `base` is itself an `AssignTarget`, enabling arbitrary nesting such as
+    /// `a[i][j] := expr` (`ListIndex { base: ListIndex { base: Var("a"), index: i }, index: j }`).
+    ListIndex {
+        base: Box<AssignTarget>,
+        index: Box<Expr>,
+    },
+}
+
+impl AssignTarget {
+    /// Return the root variable name that this target is rooted at.
+    pub fn root_name(&self) -> &str {
+        match self {
+            AssignTarget::Var(name) => name,
+            AssignTarget::ListIndex { base, .. } => base.root_name(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Stmt {
     Binding {
@@ -321,7 +349,7 @@ pub enum Stmt {
         span: Option<Span>,
     },
     Assign {
-        name: String,
+        target: AssignTarget,
         value: Expr,
         span: Option<Span>,
     },

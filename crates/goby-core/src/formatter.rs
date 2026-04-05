@@ -534,6 +534,15 @@ fn format_expr_stmt(expr: &Expr, indent: usize) -> String {
     apply_indent(&expr_str, indent)
 }
 
+fn format_assign_target(target: &crate::ast::AssignTarget) -> String {
+    match target {
+        crate::ast::AssignTarget::Var(name) => name.clone(),
+        crate::ast::AssignTarget::ListIndex { base, index } => {
+            format!("{}[{}]", format_assign_target(base), format_expr(index, 0))
+        }
+    }
+}
+
 pub(crate) fn format_stmt(stmt: &Stmt, indent: usize) -> String {
     let pad = indent_str(indent);
     match stmt {
@@ -545,9 +554,10 @@ pub(crate) fn format_stmt(stmt: &Stmt, indent: usize) -> String {
             let val_str = format_expr_rhs(value, indent);
             format_binding_stmt(&pad, &format!("mut {}", name), "=", &val_str)
         }
-        Stmt::Assign { name, value, .. } => {
+        Stmt::Assign { target, value, .. } => {
             let val_str = format_expr_rhs(value, indent);
-            format_binding_stmt(&pad, name, ":=", &val_str)
+            let lhs = format_assign_target(target);
+            format_binding_stmt(&pad, &lhs, ":=", &val_str)
         }
         Stmt::Expr(expr, _) => format_expr_stmt(expr, indent),
     }
@@ -1073,7 +1083,7 @@ mod tests {
     #[test]
     fn format_stmt_assign() {
         let stmt = Stmt::Assign {
-            name: "counter".to_string(),
+            target: crate::ast::AssignTarget::Var("counter".to_string()),
             value: Expr::BinOp {
                 op: BinOpKind::Add,
                 left: Box::new(Expr::var("counter")),

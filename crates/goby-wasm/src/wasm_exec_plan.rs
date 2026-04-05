@@ -99,7 +99,7 @@ fn comp_to_stmts(comp: &CompExpr) -> Option<Vec<Stmt>> {
             Some(out)
         }
         CompExpr::Assign { name, value } => Some(vec![Stmt::Assign {
-            name: name.clone(),
+            target: goby_core::ast::AssignTarget::Var(name.clone()),
             value: comp_to_expr(value)?,
             span: None,
         }]),
@@ -313,7 +313,14 @@ fn stmt_to_source(stmt: &Stmt) -> Option<String> {
         Stmt::MutBinding { name, value, .. } => {
             Some(format!("mut {name} = {}", value.to_str_repr()?))
         }
-        Stmt::Assign { name, value, .. } => Some(format!("{name} = {}", value.to_str_repr()?)),
+        Stmt::Assign { target, value, .. } => {
+            // List-index assignment is not representable in source-string form; opt out.
+            let name = match target {
+                goby_core::ast::AssignTarget::Var(n) => n,
+                goby_core::ast::AssignTarget::ListIndex { .. } => return None,
+            };
+            Some(format!("{name} = {}", value.to_str_repr()?))
+        }
         Stmt::Expr(expr, _) => expr.to_str_repr(),
     }
 }

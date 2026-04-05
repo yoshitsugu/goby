@@ -326,11 +326,21 @@ impl Resolver {
                 self.bind_local(name.clone());
                 resolved
             }
-            Stmt::Assign { name, value, span } => ResolvedStmt::Assign {
-                target: self.resolve_name(name),
-                value: self.resolve_expr(value),
-                span: *span,
-            },
+            Stmt::Assign { target, value, span } => {
+                let resolved_target = match target {
+                    crate::ast::AssignTarget::Var(name) => self.resolve_name(name),
+                    crate::ast::AssignTarget::ListIndex { .. } => {
+                        // Resolved-layer support for list-index assignment targets is added in LM1c.
+                        // For now, produce a placeholder so the codebase compiles.
+                        ResolvedRef::ValueName("__unresolved_list_index_target".to_string())
+                    }
+                };
+                ResolvedStmt::Assign {
+                    target: resolved_target,
+                    value: self.resolve_expr(value),
+                    span: *span,
+                }
+            }
             Stmt::Expr(expr, span) => ResolvedStmt::Expr(self.resolve_expr(expr), *span),
         }
     }

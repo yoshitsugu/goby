@@ -140,56 +140,75 @@ fn check_stmt(
             local_mutability.insert(name.clone(), true);
             Ok(())
         }
-        Stmt::Assign { name, value, span } => {
-            if !local_mutability.contains_key(name) {
-                return Err(TypecheckError {
-                    declaration: Some(decl_name.to_string()),
-                    span: *span,
-                    message: format!("cannot assign to undeclared variable `{}`", name),
-                });
+        Stmt::Assign { target, value, span } => {
+            match target {
+                crate::ast::AssignTarget::Var(name) => {
+                    if !local_mutability.contains_key(name) {
+                        return Err(TypecheckError {
+                            declaration: Some(decl_name.to_string()),
+                            span: *span,
+                            message: format!("cannot assign to undeclared variable `{}`", name),
+                        });
+                    }
+                    if !local_mutability.get(name).copied().unwrap_or(false) {
+                        return Err(TypecheckError {
+                            declaration: Some(decl_name.to_string()),
+                            span: *span,
+                            message: format!(
+                                "cannot assign to immutable variable `{}`; declare it with `mut` first",
+                                name
+                            ),
+                        });
+                    }
+                    validate_stmt_value(
+                        value,
+                        local_env,
+                        local_mutability,
+                        required_effects_map,
+                        effect_map,
+                        covered_ops,
+                        decl_name,
+                    )?;
+                    let current_ty = local_env.locals.get(name).cloned().unwrap_or(Ty::Unknown);
+                    let assigned_ty = check_expr(value, local_env);
+                    if current_ty != Ty::Unknown
+                        && assigned_ty != Ty::Unknown
+                        && !env.are_compatible(&current_ty, &assigned_ty)
+                    {
+                        return Err(TypecheckError {
+                            declaration: Some(decl_name.to_string()),
+                            span: *span,
+                            message: format!(
+                                "assignment type `{}` does not match variable `{}` type `{}`",
+                                ty_name(&assigned_ty),
+                                name,
+                                ty_name(&current_ty)
+                            ),
+                        });
+                    }
+                    if current_ty == Ty::Unknown {
+                        local_env
+                            .locals
+                            .insert(name.clone(), infer_expr_binding_ty(value, local_env));
+                    }
+                    Ok(())
+                }
+                crate::ast::AssignTarget::ListIndex { .. } => {
+                    // Full type-checking for list-index assignment targets is implemented in LM2.
+                    // This includes the root-variable mutability check (`root_name()` is available
+                    // but intentionally not applied yet), List/index type checks, and element type
+                    // compatibility. Only the RHS is validated here to catch effect/resume errors.
+                    validate_stmt_value(
+                        value,
+                        local_env,
+                        local_mutability,
+                        required_effects_map,
+                        effect_map,
+                        covered_ops,
+                        decl_name,
+                    )
+                }
             }
-            if !local_mutability.get(name).copied().unwrap_or(false) {
-                return Err(TypecheckError {
-                    declaration: Some(decl_name.to_string()),
-                    span: *span,
-                    message: format!(
-                        "cannot assign to immutable variable `{}`; declare it with `mut` first",
-                        name
-                    ),
-                });
-            }
-            validate_stmt_value(
-                value,
-                local_env,
-                local_mutability,
-                required_effects_map,
-                effect_map,
-                covered_ops,
-                decl_name,
-            )?;
-            let current_ty = local_env.locals.get(name).cloned().unwrap_or(Ty::Unknown);
-            let assigned_ty = check_expr(value, local_env);
-            if current_ty != Ty::Unknown
-                && assigned_ty != Ty::Unknown
-                && !env.are_compatible(&current_ty, &assigned_ty)
-            {
-                return Err(TypecheckError {
-                    declaration: Some(decl_name.to_string()),
-                    span: *span,
-                    message: format!(
-                        "assignment type `{}` does not match variable `{}` type `{}`",
-                        ty_name(&assigned_ty),
-                        name,
-                        ty_name(&current_ty)
-                    ),
-                });
-            }
-            if current_ty == Ty::Unknown {
-                local_env
-                    .locals
-                    .insert(name.clone(), infer_expr_binding_ty(value, local_env));
-            }
-            Ok(())
         }
         Stmt::Expr(expr, _) => validate_stmt_value(
             expr,

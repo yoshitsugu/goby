@@ -165,10 +165,14 @@ fn collect_stmts(stmts: &[Stmt], env: &mut TypeEnv, result: &mut Vec<LocalBindin
                     });
                 }
             }
-            Stmt::Assign { name, value, .. } => {
+            Stmt::Assign { target, value, .. } => {
                 let ty = check_expr(value, env);
                 if ty != Ty::Unknown {
-                    env.locals.insert(name.clone(), ty);
+                    // Only update the type environment for plain variable assignment.
+                    // List-index assignment does not introduce a new binding.
+                    if let crate::ast::AssignTarget::Var(name) = target {
+                        env.locals.insert(name.clone(), ty);
+                    }
                 }
             }
             Stmt::Expr(expr, _) => {

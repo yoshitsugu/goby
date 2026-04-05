@@ -33,7 +33,13 @@ impl<'m> RuntimeOutputResolver<'m> {
                 locals.store_mut(name, v);
                 Out::Done(())
             }
-            Stmt::Assign { name, value, .. } => {
+            Stmt::Assign { target, value, .. } => {
+                let name = match target {
+                    goby_core::ast::AssignTarget::Var(n) => n,
+                    goby_core::ast::AssignTarget::ListIndex { .. } => {
+                        return Out::Err(RuntimeError::Unsupported);
+                    }
+                };
                 if !locals.contains(name) {
                     return Out::Err(RuntimeError::Unsupported);
                 }
@@ -216,7 +222,13 @@ impl<'m> RuntimeOutputResolver<'m> {
                         Out::Err(e) => return Out::Err(e),
                     }
                 }
-                Stmt::Assign { name, value, .. } => {
+                Stmt::Assign { target, value, .. } => {
+                    let name = match target {
+                        goby_core::ast::AssignTarget::Var(n) => n,
+                        goby_core::ast::AssignTarget::ListIndex { .. } => {
+                            return Out::Err(RuntimeError::Unsupported);
+                        }
+                    };
                     if !locals.contains(name) {
                         return Out::Err(RuntimeError::Abort {
                             kind: "assign_missing_var".into(),

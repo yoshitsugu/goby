@@ -270,7 +270,7 @@ where
                     parse_multiline_rhs_expr(lines, next_i, next_indent, next_trimmed, parse_expr)
             {
                 stmts.push(Stmt::Assign {
-                    name: lhs.trim().to_string(),
+                    target: crate::ast::AssignTarget::Var(lhs.trim().to_string()),
                     value,
                     span: Some(stmt_span),
                 });
@@ -286,7 +286,7 @@ where
             let rhs_col = stmt_col + subslice_offset(trimmed, rhs);
             enrich_expr_spans(&mut value, rhs, stmt_line, rhs_col);
             stmts.push(Stmt::Assign {
-                name: name.to_string(),
+                target: crate::ast::AssignTarget::Var(name.to_string()),
                 value,
                 span: Some(stmt_span),
             });
@@ -1147,7 +1147,7 @@ where
         let rhs_col = span.col + subslice_offset(line, rhs);
         enrich_expr_spans(&mut value, rhs, span.line, rhs_col);
         return Some(Stmt::Assign {
-            name: name.to_string(),
+            target: crate::ast::AssignTarget::Var(name.to_string()),
             value,
             span: Some(span),
         });
@@ -1430,7 +1430,7 @@ mod tests {
         let stmts = parse_body_stmts(body).expect("should parse");
         assert_eq!(stmts.len(), 3);
         assert!(matches!(&stmts[0], Stmt::MutBinding { name, .. } if name == "a"));
-        assert!(matches!(&stmts[1], Stmt::Assign { name, .. } if name == "a"));
+        assert!(matches!(&stmts[1], Stmt::Assign { target: crate::ast::AssignTarget::Var(name), .. } if name == "a"));
         assert!(matches!(&stmts[2], Stmt::Expr(Expr::Var { name, .. }, _) if name == "a"));
     }
 
@@ -1597,8 +1597,8 @@ mod tests {
         let stmts = parse_body_stmts(body).expect("should parse");
         assert_eq!(stmts.len(), 3);
         match &stmts[1] {
-            Stmt::Assign { name, value, .. } => {
-                assert_eq!(name, "x");
+            Stmt::Assign { target, value, .. } => {
+                assert_eq!(target.root_name(), "x");
                 assert!(matches!(value, Expr::With { .. }));
             }
             other => panic!("unexpected statement: {other:?}"),
@@ -1654,8 +1654,8 @@ mod tests {
         let stmts = parse_body_stmts(body).expect("should parse");
         assert_eq!(stmts.len(), 3);
         match &stmts[1] {
-            Stmt::Assign { name, value, .. } => {
-                assert_eq!(name, "x");
+            Stmt::Assign { target, value, .. } => {
+                assert_eq!(target.root_name(), "x");
                 assert!(matches!(value, Expr::With { .. }));
             }
             other => panic!("unexpected statement: {other:?}"),
@@ -2155,11 +2155,11 @@ else
         let stmts = parse_body_stmts("mut n = 0\nn := 1\nn").expect("should parse");
         match &stmts[1] {
             Stmt::Assign {
-                name,
+                target,
                 span: Some(span),
                 ..
             } => {
-                assert_eq!(name, "n");
+                assert_eq!(target.root_name(), "n");
                 assert_eq!(span.line, 2);
                 assert_eq!(span.col, 1);
             }

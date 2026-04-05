@@ -141,7 +141,11 @@ impl<'m> RuntimeOutputResolver<'m> {
                 self.locals.store_mut(name, runtime_val);
                 Some(())
             }
-            Stmt::Assign { name, value, .. } => {
+            Stmt::Assign { target, value, .. } => {
+                let name = match target {
+                    goby_core::ast::AssignTarget::Var(n) => n,
+                    goby_core::ast::AssignTarget::ListIndex { .. } => return None,
+                };
                 self.locals.contains(name).then_some(())?;
                 let runtime_val = self
                     .eval_expr_to_option(

@@ -888,7 +888,11 @@ fn ref_name(reference: &ResolvedRef) -> &str {
 
 fn mutable_target_name(reference: &ResolvedRef) -> Result<&str, LowerError> {
     match reference {
-        ResolvedRef::Local(name) | ResolvedRef::ValueName(name) => Ok(name),
+        ResolvedRef::Local(name) => Ok(name),
+        ResolvedRef::ValueName(name) if name != "__unresolved_list_index_target" => Ok(name),
+        ResolvedRef::ValueName(_) => Err(err(
+            "list-index assignment target is not yet supported in the lowering layer".to_string(),
+        )),
         other => Err(err(format!(
             "assignment target must be a mutable local, got `{}`",
             ref_name(other)
@@ -1747,7 +1751,7 @@ choose n =
                     span: None,
                 },
                 Stmt::Assign {
-                    name: "x".into(),
+                    target: crate::ast::AssignTarget::Var("x".into()),
                     value: Expr::IntLit(2),
                     span: None,
                 },
@@ -1782,13 +1786,36 @@ choose n =
         let decl = decl_with_body(
             "assign_test",
             vec![Stmt::Assign {
-                name: "print".into(),
+                target: crate::ast::AssignTarget::Var("print".into()),
                 value: Expr::IntLit(1),
                 span: None,
             }],
         );
         let err = lower_declaration(&decl).unwrap_err();
         assert!(err.message.contains("assignment target"), "{}", err.message);
+    }
+
+    #[test]
+    fn reject_list_index_assign_target() {
+        // AssignTarget::ListIndex is not yet supported through the lowering path.
+        // The resolver produces a sentinel ValueName and ir_lower rejects it.
+        let decl = decl_with_body(
+            "list_index_assign_test",
+            vec![Stmt::Assign {
+                target: crate::ast::AssignTarget::ListIndex {
+                    base: Box::new(crate::ast::AssignTarget::Var("xs".into())),
+                    index: Box::new(Expr::IntLit(0)),
+                },
+                value: Expr::IntLit(99),
+                span: None,
+            }],
+        );
+        let err = lower_declaration(&decl).unwrap_err();
+        assert!(
+            err.message.contains("list-index assignment"),
+            "expected list-index rejection, got: {}",
+            err.message
+        );
     }
 
     // --- lone binding semantics test ---
