@@ -48,6 +48,7 @@ pub(crate) struct EffectMap {
 #[derive(Debug, Clone)]
 pub(crate) struct ImportedEffectDecl {
     pub(crate) source_module: String,
+    pub(crate) imported_via_prelude: bool,
     pub(crate) decl: crate::ast::EffectDecl,
 }
 

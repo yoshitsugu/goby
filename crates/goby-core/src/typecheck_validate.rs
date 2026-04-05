@@ -265,6 +265,7 @@ pub(crate) fn collect_imported_effect_declarations(
             effects.extend(resolved.embedded_effect_exports.into_iter().map(|export| {
                 ImportedEffectDecl {
                     source_module: export.source_module,
+                    imported_via_prelude: true,
                     decl: export.decl,
                 }
             }));
@@ -277,6 +278,7 @@ pub(crate) fn collect_imported_effect_declarations(
                 .filter(|effect| import_selects_name(&import.kind, &effect.decl.name))
                 .map(|effect| ImportedEffectDecl {
                     source_module: effect.source_module,
+                    imported_via_prelude: false,
                     decl: effect.decl,
                 }),
         );

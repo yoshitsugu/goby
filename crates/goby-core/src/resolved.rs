@@ -4,11 +4,15 @@
 //! normalize callable/effect identity before `ir_lower` constructs shared IR.
 
 use std::collections::{HashMap, HashSet};
+use std::path::Path;
 
 use crate::ast::{
     BinOpKind, CaseArm, CasePattern, Declaration, Expr, HandlerClause, ImportKind,
     InterpolatedPart, Module, Span, Stmt, UnaryOpKind,
 };
+use crate::stdlib::StdlibResolver;
+use crate::typecheck::PRELUDE_MODULE_PATH;
+use crate::typecheck_validate::{default_stdlib_root, effective_imports, import_selects_name};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedModule {
@@ -144,17 +148,31 @@ pub enum ResolvedExpr {
 }
 
 pub fn resolve_module(module: &Module) -> ResolvedModule {
+    resolve_module_with_stdlib(module, &default_stdlib_root())
+}
+
+pub fn resolve_module_with_stdlib(module: &Module, stdlib_root: &Path) -> ResolvedModule {
     let decl_names = declaration_names(module);
+    let resolver_metadata = ResolverMetadata::collect(module, stdlib_root);
     ResolvedModule {
         declarations: module
             .declarations
             .iter()
-            .map(|decl| resolve_declaration_with_names(module, &decl_names, decl))
+            .map(|decl| {
+                resolve_declaration_with_names(module, &decl_names, decl, &resolver_metadata)
+            })
             .collect(),
     }
 }
 
 pub fn resolve_declaration(decl: &Declaration) -> ResolvedDeclaration {
+    resolve_declaration_with_stdlib(decl, &default_stdlib_root())
+}
+
+pub fn resolve_declaration_with_stdlib(
+    decl: &Declaration,
+    stdlib_root: &Path,
+) -> ResolvedDeclaration {
     let module = Module {
         imports: vec![],
         embed_declarations: vec![],
@@ -163,15 +181,17 @@ pub fn resolve_declaration(decl: &Declaration) -> ResolvedDeclaration {
         declarations: vec![decl.clone()],
     };
     let decl_names = declaration_names(&module);
-    resolve_declaration_with_names(&module, &decl_names, decl)
+    let resolver_metadata = ResolverMetadata::collect(&module, stdlib_root);
+    resolve_declaration_with_names(&module, &decl_names, decl, &resolver_metadata)
 }
 
 fn resolve_declaration_with_names(
     module: &Module,
     decl_names: &HashSet<String>,
     decl: &Declaration,
+    metadata: &ResolverMetadata,
 ) -> ResolvedDeclaration {
-    let mut resolver = Resolver::new(module, decl_names);
+    let mut resolver = Resolver::new(module, decl_names, metadata);
     resolver.push_scope();
     for param in &decl.params {
         resolver.bind_local(param.clone());
@@ -207,11 +227,13 @@ struct Resolver {
     decl_names: HashSet<String>,
     selective_imports: HashMap<String, ResolvedRef>,
     qualified_receivers: HashMap<String, String>,
+    bare_effect_ops: HashMap<String, String>,
+    qualified_effect_ops: HashMap<String, HashSet<String>>,
     scopes: Vec<HashSet<String>>,
 }
 
 impl Resolver {
-    fn new(module: &Module, decl_names: &HashSet<String>) -> Self {
+    fn new(module: &Module, decl_names: &HashSet<String>, metadata: &ResolverMetadata) -> Self {
         let mut selective_imports = HashMap::new();
         let mut qualified_receivers = HashMap::new();
 
@@ -226,8 +248,10 @@ impl Resolver {
                 }
                 ImportKind::Selective(names) => {
                     for name in names {
-                        selective_imports
-                            .insert(name.clone(), imported_symbol_ref(&canonical_module, name));
+                        selective_imports.insert(
+                            name.clone(),
+                            imported_symbol_ref(&canonical_module, name, metadata),
+                        );
                     }
                 }
             }
@@ -237,6 +261,8 @@ impl Resolver {
             decl_names: decl_names.clone(),
             selective_imports,
             qualified_receivers,
+            bare_effect_ops: metadata.bare_effect_ops.clone(),
+            qualified_effect_ops: metadata.qualified_effect_ops.clone(),
             scopes: vec![],
         }
     }
@@ -489,8 +515,14 @@ impl Resolver {
         if let Some(imported) = self.selective_imports.get(name) {
             return imported.clone();
         }
-        if let Some(builtin) = builtin_bare_ref(name) {
-            return builtin;
+        if let Some(effect) = self.bare_effect_ops.get(name) {
+            return ResolvedRef::EffectOp {
+                effect: effect.clone(),
+                op: name.to_string(),
+            };
+        }
+        if let Some(helper) = helper_bare_ref(name) {
+            return helper;
         }
         ResolvedRef::ValueName(name.to_string())
     }
@@ -501,8 +533,16 @@ impl Resolver {
             .get(receiver)
             .map(String::as_str)
             .unwrap_or(receiver);
-        if let Some(builtin) = builtin_qualified_ref(canonical_module, member) {
-            return builtin;
+        if let Some(ops) = self.qualified_effect_ops.get(canonical_module)
+            && ops.contains(member)
+        {
+            return ResolvedRef::EffectOp {
+                effect: canonical_module.to_string(),
+                op: member.to_string(),
+            };
+        }
+        if let Some(helper) = helper_qualified_ref(canonical_module, member) {
+            return helper;
         }
         ResolvedRef::Global {
             module: canonical_module.to_string(),
@@ -511,44 +551,95 @@ impl Resolver {
     }
 }
 
+#[derive(Default, Clone)]
+struct ResolverMetadata {
+    bare_effect_ops: HashMap<String, String>,
+    qualified_effect_ops: HashMap<String, HashSet<String>>,
+}
+
+impl ResolverMetadata {
+    fn collect(module: &Module, stdlib_root: &Path) -> Self {
+        let resolver = StdlibResolver::new(stdlib_root.to_path_buf());
+        let mut metadata = Self::default();
+
+        for import in effective_imports(module, &resolver) {
+            let Ok(resolved) = resolver.resolve_module(&import.module_path) else {
+                continue;
+            };
+            if import.module_path == PRELUDE_MODULE_PATH {
+                for export in &resolved.embedded_effect_exports {
+                    let ops = export
+                        .decl
+                        .members
+                        .iter()
+                        .map(|member| member.name.clone())
+                        .collect::<HashSet<_>>();
+                    metadata
+                        .qualified_effect_ops
+                        .entry(export.effect_name.clone())
+                        .or_default()
+                        .extend(ops.iter().cloned());
+                    match import.kind {
+                        ImportKind::Plain => {
+                            for op in ops {
+                                metadata
+                                    .bare_effect_ops
+                                    .insert(op, export.effect_name.clone());
+                            }
+                        }
+                        ImportKind::Selective(_) | ImportKind::Alias(_) => {}
+                    }
+                }
+                if let ImportKind::Selective(names) = &import.kind {
+                    for export in &resolved.embedded_effect_exports {
+                        for member in &export.decl.members {
+                            if names.iter().any(|selected| selected == &member.name) {
+                                metadata
+                                    .bare_effect_ops
+                                    .insert(member.name.clone(), export.effect_name.clone());
+                            }
+                        }
+                    }
+                }
+                continue;
+            }
+
+            for effect in resolved.visible_effects {
+                if import_selects_name(&import.kind, &effect.decl.name) {
+                    metadata
+                        .qualified_effect_ops
+                        .entry(effect.decl.name.clone())
+                        .or_default()
+                        .extend(effect.decl.members.iter().map(|member| member.name.clone()));
+                }
+            }
+        }
+
+        metadata
+    }
+}
+
 fn module_basename(module_path: &str) -> &str {
     module_path.rsplit('/').next().unwrap_or(module_path)
 }
 
-fn imported_symbol_ref(module: &str, name: &str) -> ResolvedRef {
+fn imported_symbol_ref(module: &str, name: &str, metadata: &ResolverMetadata) -> ResolvedRef {
     if module == "prelude"
-        && let Some(builtin) = builtin_bare_ref(name)
+        && let Some(effect) = metadata.bare_effect_ops.get(name)
     {
-        return builtin;
+        return ResolvedRef::EffectOp {
+            effect: effect.clone(),
+            op: name.to_string(),
+        };
     }
-    builtin_qualified_ref(module, name).unwrap_or_else(|| ResolvedRef::Global {
+    helper_qualified_ref(module, name).unwrap_or_else(|| ResolvedRef::Global {
         module: module.to_string(),
         name: name.to_string(),
     })
 }
 
-fn builtin_bare_ref(name: &str) -> Option<ResolvedRef> {
+fn helper_bare_ref(name: &str) -> Option<ResolvedRef> {
     match name {
-        "read" => Some(ResolvedRef::EffectOp {
-            effect: "Read".to_string(),
-            op: "read".to_string(),
-        }),
-        "read_line" => Some(ResolvedRef::EffectOp {
-            effect: "Read".to_string(),
-            op: "read_line".to_string(),
-        }),
-        "read_lines" => Some(ResolvedRef::EffectOp {
-            effect: "Read".to_string(),
-            op: "read_lines".to_string(),
-        }),
-        "print" => Some(ResolvedRef::EffectOp {
-            effect: "Print".to_string(),
-            op: "print".to_string(),
-        }),
-        "println" => Some(ResolvedRef::EffectOp {
-            effect: "Print".to_string(),
-            op: "println".to_string(),
-        }),
         "split" => Some(ResolvedRef::Helper {
             module: "string".to_string(),
             name: "split".to_string(),
@@ -565,18 +656,8 @@ fn builtin_bare_ref(name: &str) -> Option<ResolvedRef> {
     }
 }
 
-fn builtin_qualified_ref(receiver: &str, member: &str) -> Option<ResolvedRef> {
+fn helper_qualified_ref(receiver: &str, member: &str) -> Option<ResolvedRef> {
     match (receiver, member) {
-        ("Read", "read") | ("Read", "read_line") | ("Read", "read_lines") => {
-            Some(ResolvedRef::EffectOp {
-                effect: "Read".to_string(),
-                op: member.to_string(),
-            })
-        }
-        ("Print", "print") | ("Print", "println") => Some(ResolvedRef::EffectOp {
-            effect: "Print".to_string(),
-            op: member.to_string(),
-        }),
         ("string", "split") | ("list", "each") | ("list", "get") => Some(ResolvedRef::Helper {
             module: receiver.to_string(),
             name: member.to_string(),
@@ -587,8 +668,39 @@ fn builtin_qualified_ref(receiver: &str, member: &str) -> Option<ResolvedRef> {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
     use super::*;
     use crate::ast::{Expr, ImportDecl, ImportKind};
+
+    struct TempDirGuard {
+        path: PathBuf,
+    }
+
+    impl TempDirGuard {
+        fn new(label: &str) -> Self {
+            let nanos = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("clock should be monotonic enough for tests")
+                .as_nanos();
+            let path = std::env::temp_dir().join(format!(
+                "goby_core_resolved_{}_{}_{}",
+                label,
+                std::process::id(),
+                nanos
+            ));
+            fs::create_dir_all(&path).expect("temp directory should be creatable");
+            Self { path }
+        }
+    }
+
+    impl Drop for TempDirGuard {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.path);
+        }
+    }
 
     fn module_with_imports(imports: Vec<ImportDecl>, body: Vec<Stmt>) -> Module {
         Module {
@@ -692,6 +804,79 @@ mod tests {
                     None,
                 ),
             ]
+        );
+    }
+
+    #[test]
+    fn resolves_bare_effect_op_via_prelude_embed_imported_from_stdio() {
+        let sandbox = TempDirGuard::new("prelude_embed_imported_stdio");
+        let stdlib_root = sandbox.path.join("stdlib");
+        fs::create_dir_all(stdlib_root.join("goby")).expect("stdlib/goby should be creatable");
+        fs::write(
+            stdlib_root.join("goby/stdio.gb"),
+            "effect Print\n  print : String -> Unit\n  println : String -> Unit\n",
+        )
+        .expect("stdio file should be writable");
+        fs::write(
+            stdlib_root.join("goby/prelude.gb"),
+            "import goby/stdio\n@embed Print __goby_embeded_effect_stdout_handler\n",
+        )
+        .expect("prelude file should be writable");
+
+        let decl = Declaration {
+            name: "main".to_string(),
+            type_annotation: None,
+            params: vec![],
+            body: String::new(),
+            parsed_body: Some(vec![Stmt::Expr(Expr::var("print"), None)]),
+            line: 1,
+            col: 1,
+        };
+
+        let resolved = resolve_declaration_with_stdlib(&decl, &stdlib_root);
+        assert_eq!(
+            resolved.body,
+            vec![ResolvedStmt::Expr(
+                ResolvedExpr::Ref(ResolvedRef::EffectOp {
+                    effect: "Print".to_string(),
+                    op: "print".to_string(),
+                }),
+                None,
+            )]
+        );
+    }
+
+    #[test]
+    fn resolves_qualified_effect_op_via_explicit_imported_effect_owner() {
+        let sandbox = TempDirGuard::new("qualified_imported_effect_owner");
+        let stdlib_root = sandbox.path.join("stdlib");
+        fs::create_dir_all(stdlib_root.join("goby")).expect("stdlib/goby should be creatable");
+        fs::write(
+            stdlib_root.join("goby/stdio.gb"),
+            "effect Print\n  print : String -> Unit\n  println : String -> Unit\n",
+        )
+        .expect("stdio file should be writable");
+
+        let module = module_with_imports(
+            vec![ImportDecl {
+                module_path: "goby/stdio".to_string(),
+                kind: ImportKind::Plain,
+                module_path_span: None,
+                kind_span: None,
+            }],
+            vec![Stmt::Expr(Expr::qualified("Print", "print"), None)],
+        );
+
+        let resolved = resolve_module_with_stdlib(&module, &stdlib_root);
+        assert_eq!(
+            resolved.declarations[0].body,
+            vec![ResolvedStmt::Expr(
+                ResolvedExpr::Ref(ResolvedRef::EffectOp {
+                    effect: "Print".to_string(),
+                    op: "print".to_string(),
+                }),
+                None,
+            )]
         );
     }
 

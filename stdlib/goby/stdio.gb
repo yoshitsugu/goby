@@ -2,4 +2,7 @@ effect Print
   print : String -> Unit
   println : String -> Unit
 
-@embed Print __goby_embeded_effect_stdout_handler
+effect Read
+  read : Unit -> String
+  read_line : Unit -> String
+  read_lines : Unit -> List String

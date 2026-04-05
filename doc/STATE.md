@@ -22,7 +22,22 @@ Current slice status:
   - embed validation now requires a visible effect in `goby/prelude`
   - implicit `main` effect/default-handler and bare-op injection now flow from
     prelude embed metadata instead of same-module embed assumptions
-- Remaining work is the resolved-name migration plus the stdlib file ownership move.
+- The resolved-name migration is complete:
+  - `resolved.rs` now derives implicit bare effect-op names from prelude embed
+    metadata and explicit qualified effect-op names from visible imported effects
+  - fixed `Print` / `Read` tables are no longer the source of implicit effect-op resolution
+- Stdlib ownership has been moved to the intended end-state layout:
+  - `stdlib/goby/stdio.gb` is now the canonical declaration site for both
+    `Print` and `Read`
+  - `stdlib/goby/prelude.gb` now contains only `import goby/stdio` plus `@embed`
+    declarations for the implicit surface
+- Wasm/runtime parity is preserved after the ownership move:
+  - fallback runtime effect-op visibility now follows effective runtime imports
+    transitively, so bare `print` / `read` still resolve through
+    `goby/prelude -> goby/stdio`
+  - general lowering now also seeds stdlib export lookup from the effective
+    implicit-import surface rather than from explicit user imports only
+- Remaining work is regression/doc closure for the fully landed export/embed change.
 
 ## Locked Decisions
 
@@ -36,14 +51,15 @@ Current slice status:
 
 ## Immediate Next Steps
 
-- Complete the remaining M3 resolved-name migration so implicit bare effect-op
-  names come from prelude embed metadata instead of fixed `Print` / `Read`
-  tables in `resolved.rs`.
+- Close out the remaining M5 follow-up in
+  [`doc/PLAN_EXPORT_EMBED.md`](/home/yoshitsugu/src/github.com/yoshitsugu/goby/doc/PLAN_EXPORT_EMBED.md):
+  - sweep for any remaining docs/examples/tests that still describe the old split layout
+  - keep CLI/LSP parity locked for the preserved implicit `Print` / `Read` behavior
+  - decide whether any additional focused regression should be added nearer the
+    wasm/runtime transitive-import boundary itself, beyond the now-passing
+    existing smoke/runtime tests
 - Keep avoiding symbol-specific bridging such as
-  `if effect == "Print"` / `if effect == "Read"` during the migration.
-- After the remaining compiler path is shared, move `Print` and `Read`
-  declarations into `stdlib/goby/stdio.gb` and keep `stdlib/goby/prelude.gb`
-  responsible only for imports plus `@embed`.
+  `if effect == "Print"` / `if effect == "Read"` in any follow-up cleanup.
 
 ## Architecture State
 

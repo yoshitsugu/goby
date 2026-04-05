@@ -5,7 +5,7 @@ use crate::{
     Module,
     ast::TypeDeclaration,
     stdlib::StdlibResolver,
-    typecheck::{PRELUDE_MODULE_PATH, TypecheckError},
+    typecheck::TypecheckError,
     typecheck_annotation::strip_effect_clause,
     typecheck_diag::err_name_ambiguous,
     typecheck_env::{GlobalBinding, ImportedEffectDecl, RecordTypeInfo, Ty, TypeEnv},
@@ -174,7 +174,7 @@ fn inject_imported_effect_symbols(
     globals: &mut HashMap<String, GlobalBinding>,
 ) {
     for imported in imported_effects {
-        if imported.source_module != PRELUDE_MODULE_PATH {
+        if !imported.imported_via_prelude {
             continue;
         }
         for member in &imported.decl.members {

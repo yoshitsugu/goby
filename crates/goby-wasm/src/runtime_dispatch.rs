@@ -207,8 +207,13 @@ impl<'m> RuntimeOutputResolver<'m> {
             .filter(|effect| effect.members.iter().any(|member| member.name == op_name))
             .map(|effect| effect.name.clone())
             .collect();
+        let mut visited_modules: HashSet<String> = HashSet::new();
+        let mut pending = effective_runtime_imports(module);
 
-        for import in effective_runtime_imports(module) {
+        while let Some(import) = pending.pop() {
+            if !visited_modules.insert(import.module_path.clone()) {
+                continue;
+            }
             let Some(imported) = self.runtime_imports.modules.get(&import.module_path) else {
                 continue;
             };
@@ -220,6 +225,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                     names.insert(effect.name.clone());
                 }
             }
+            pending.extend(effective_runtime_imports(imported));
         }
 
         names

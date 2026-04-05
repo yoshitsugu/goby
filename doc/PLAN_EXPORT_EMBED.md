@@ -409,7 +409,7 @@ Done when:
 - [x] Restrict accepted `@embed` source modules to `goby/prelude`.
 - [x] Rework known-effect collection and implicit symbol injection to use the
   shared metadata model.
-- [ ] Rework resolved-name handling so implicit bare effect-op names come from
+- [x] Rework resolved-name handling so implicit bare effect-op names come from
   prelude `@embed` metadata rather than fixed `Print` / `Read` tables.
 
 Done when:
@@ -419,11 +419,11 @@ Done when:
 
 ### M4. Stdlib Ownership Restructure
 
-- [ ] Move `Print` and `Read` effect declarations into `stdlib/goby/stdio.gb`.
-- [ ] Remove `Print` / `Read` declarations from `stdlib/goby/prelude.gb`.
-- [ ] Keep `stdlib/goby/prelude.gb` responsible only for imports plus `@embed`
+- [x] Move `Print` and `Read` effect declarations into `stdlib/goby/stdio.gb`.
+- [x] Remove `Print` / `Read` declarations from `stdlib/goby/prelude.gb`.
+- [x] Keep `stdlib/goby/prelude.gb` responsible only for imports plus `@embed`
   declarations for the implicit surface.
-- [ ] Avoid transitional coexistence where both old and new ownership layouts
+- [x] Avoid transitional coexistence where both old and new ownership layouts
   remain intentionally supported.
 
 Done when:

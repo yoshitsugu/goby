@@ -43,6 +43,7 @@ use crate::gen_lower::backend_ir::{BackendEffectOp, BackendReadOp};
 use crate::gen_lower::emit::AuxDecl;
 use crate::gen_lower::lower::LambdaAuxDecl;
 use crate::layout::MemoryLayout;
+use crate::runtime_env::effective_runtime_imports;
 use crate::wasm_exec_plan::decl_exec_plan;
 
 /// Reason why a program cannot be lowered via the general-lowering path.
@@ -624,12 +625,8 @@ fn first_non_main_lowering_issue(
     module: &Module,
     allow_safe_handler_lowering: bool,
 ) -> Result<Option<GeneralLowerUnsupportedReason>, CodegenError> {
-    let stdlib_export_map = if !module.imports.is_empty() {
-        let stdlib_resolver = StdlibResolver::new(resolve_stdlib_root());
-        build_stdlib_export_map(module, &stdlib_resolver)
-    } else {
-        HashMap::new()
-    };
+    let stdlib_resolver = StdlibResolver::new(resolve_stdlib_root());
+    let stdlib_export_map = build_stdlib_export_map(module, &stdlib_resolver);
 
     let mut known_decls: HashSet<String> = module
         .declarations
@@ -743,10 +740,9 @@ fn build_stdlib_export_map(
     // name conflicts between multiple stdlib modules resolve in favour of the module the user
     // explicitly imported.  Transitive imports are collected in a separate pending list and
     // processed afterwards; `or_insert_with` ensures they do not override direct imports.
-    let direct_paths: Vec<String> = module
-        .imports
-        .iter()
-        .map(|imp| imp.module_path.clone())
+    let direct_paths: Vec<String> = effective_runtime_imports(module)
+        .into_iter()
+        .map(|imp| imp.module_path)
         .collect();
     let mut transitive_pending: Vec<String> = Vec::new();
 
@@ -862,12 +858,8 @@ fn lower_module_to_instrs(module: &Module) -> Result<LowerModuleResult, CodegenE
 
     // Resolve stdlib exports once; reused for both known_decls population and the
     // transitive-closure loop below.
-    let stdlib_export_map = if !module.imports.is_empty() {
-        let stdlib_resolver = StdlibResolver::new(resolve_stdlib_root());
-        build_stdlib_export_map(module, &stdlib_resolver)
-    } else {
-        HashMap::new()
-    };
+    let stdlib_resolver = StdlibResolver::new(resolve_stdlib_root());
+    let stdlib_export_map = build_stdlib_export_map(module, &stdlib_resolver);
 
     // Collect names of all non-main top-level declarations so callee `Var(name)` can be
     // recognised as a DeclCall during lowering.
