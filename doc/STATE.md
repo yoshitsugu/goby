@@ -4,65 +4,53 @@ Last updated: 2026-04-05
 
 ## Current Focus
 
-The next implementation target is [`doc/PLAN_EXPORT_EMBED.md`](/home/yoshitsugu/src/github.com/yoshitsugu/goby/doc/PLAN_EXPORT_EMBED.md).
+The next implementation target is [`doc/PLAN_ERROR.md`](/home/yoshitsugu/src/github.com/yoshitsugu/goby/doc/PLAN_ERROR.md).
 
 Current intent:
 
-- make `@embed` a `goby/prelude`-only feature
-- move both `Print` and `Read` ownership into `goby/stdio`
-- derive implicit `Print` / `Read` availability from prelude `@embed` metadata
-  rather than from hard-coded name tables or duplicated stdlib declarations
+- lock the initial typed-diagnostic migration boundary explicitly
+- preserve the rule that `goby-core` owns typed diagnostic spans while CLI/LSP
+  only render them
+- add parity coverage for ordinary-call typed mismatches whose blamed argument
+  already owns a precise AST span
 
 Current slice status:
 
-- M1 semantics lock is complete in `doc/LANGUAGE_SPEC.md` and `doc/PLAN.md`.
-- The shared typecheck-facing metadata path is in place:
-  - stdlib resolver now tracks visible imported effects and prelude-selected
-    embedded effect exports with provenance
-  - embed validation now requires a visible effect in `goby/prelude`
-  - implicit `main` effect/default-handler and bare-op injection now flow from
-    prelude embed metadata instead of same-module embed assumptions
-- The resolved-name migration is complete:
-  - `resolved.rs` now derives implicit bare effect-op names from prelude embed
-    metadata and explicit qualified effect-op names from visible imported effects
-  - fixed `Print` / `Read` tables are no longer the source of implicit effect-op resolution
-- Stdlib ownership has been moved to the intended end-state layout:
-  - `stdlib/goby/stdio.gb` is now the canonical declaration site for both
-    `Print` and `Read`
-  - `stdlib/goby/prelude.gb` now contains only `import goby/stdio` plus `@embed`
-    declarations for the implicit surface
-- Wasm/runtime parity is preserved after the ownership move:
-  - fallback runtime effect-op visibility now follows effective runtime imports
-    transitively, so bare `print` / `read` still resolve through
-    `goby/prelude -> goby/stdio`
-  - general lowering now also seeds stdlib export lookup from the effective
-    implicit-import surface rather than from explicit user imports only
-- Regression/doc closure is complete for the export/embed change:
-  - examples now describe the current `goby/stdio` ownership model rather than
-    the old planned split layout
-  - LSP parity covers both implicit `Read` and explicit `goby/stdio` usage
-  - `doc/PLAN_EXPORT_EMBED.md` is now at completion-state for this slice
+- `doc/PLAN_EXPORT_EMBED.md` is closed unless a regression reopens it.
+- TD0 boundary lock is now explicit in `doc/PLAN_ERROR.md`:
+  - the initial typed-diagnostic migration set is limited to ordinary-call
+    argument mismatches whose blamed argument already owns a precise AST span
+  - literal/interpolated/list/tuple/block argument expressions remain deferred
+    until expression-span ownership is widened honestly
+- Ordinary-call typed mismatch parity is regression-locked for the current
+  bounded subset:
+  - `goby-core` tests assert token-aligned spans for bare, qualified,
+    later-argument, and partially-applied remainder mismatches on bound
+    variable arguments
+  - CLI fixture/rendering parity is locked for the bounded representative case
+  - LSP range parity is locked for ordinary and qualified cases, including a
+    UTF-16 conversion case on a line containing emoji before the blamed token
+- Remaining TD work is to widen honest expression-span ownership so the
+  representative literal-argument case can gain the same snippet/range quality.
 
 ## Locked Decisions
 
-- `goby/prelude` remains the only implicit-import entrypoint.
-- `@embed` is only valid in `goby/prelude`.
-- `goby/stdio` is the canonical owner of both `Print` and `Read`.
-- All operations of an embedded effect become bare names automatically when that
-  effect is part of the implicit prelude surface.
-- Implementation should follow the long-term ownership model directly; do not
-  add compatibility layers that preserve the old split design.
+- `goby-core` remains the sole owner of typed diagnostic spans and messages.
+- The current TD slice is intentionally bounded to argument expressions that
+  already own precise AST spans.
+- Do not fabricate pseudo-precise spans for string/int/bool literals or other
+  span-less expression shapes just to satisfy frontend fixture quality.
+- CLI and LSP parity should be added only after the core span source is honest.
 
 ## Immediate Next Steps
 
-- Treat
-  [`doc/PLAN_EXPORT_EMBED.md`](/home/yoshitsugu/src/github.com/yoshitsugu/goby/doc/PLAN_EXPORT_EMBED.md)
-  as closed unless a regression reopens it.
-- Pick the next top-level slice from
-  [`doc/PLAN.md`](/home/yoshitsugu/src/github.com/yoshitsugu/goby/doc/PLAN.md)
-  rather than continuing to add compatibility churn around export/embed.
-- Keep avoiding symbol-specific bridging such as
-  `if effect == "Print"` / `if effect == "Read"` in any follow-up cleanup.
+- Continue `doc/PLAN_ERROR.md` from the bounded TD1 frontier:
+  - decide whether to widen `Expr` span ownership for literals/interpolated/list/tuple/block
+    expressions, or to add a narrower argument-slice ownership layer
+  - once that ownership exists, move the canonical `f "a"` ordinary-call
+    mismatch fixture onto snippet/range parity
+- Keep avoiding symbol-specific typed-diagnostic branches such as special-casing
+  `print`, `println`, or one fixture function name.
 
 ## Architecture State
 
@@ -75,9 +63,9 @@ Current slice status:
 ## Key Entry Points
 
 - [`doc/PLAN.md`](/home/yoshitsugu/src/github.com/yoshitsugu/goby/doc/PLAN.md) — top-level roadmap
-- [`doc/PLAN_EXPORT_EMBED.md`](/home/yoshitsugu/src/github.com/yoshitsugu/goby/doc/PLAN_EXPORT_EMBED.md) — current target plan
+- [`doc/PLAN_ERROR.md`](/home/yoshitsugu/src/github.com/yoshitsugu/goby/doc/PLAN_ERROR.md) — active typed-diagnostic plan
 - [`doc/LANGUAGE_SPEC.md`](/home/yoshitsugu/src/github.com/yoshitsugu/goby/doc/LANGUAGE_SPEC.md) — current language behavior
-- [`crates/goby-core/src/stdlib.rs`](/home/yoshitsugu/src/github.com/yoshitsugu/goby/crates/goby-core/src/stdlib.rs) — stdlib resolver
-- [`crates/goby-core/src/typecheck_validate.rs`](/home/yoshitsugu/src/github.com/yoshitsugu/goby/crates/goby-core/src/typecheck_validate.rs) — import / embed validation and implicit-prelude plumbing
-- [`crates/goby-core/src/typecheck_phase.rs`](/home/yoshitsugu/src/github.com/yoshitsugu/goby/crates/goby-core/src/typecheck_phase.rs) — known-effect and embedded-default phase wiring
-- [`crates/goby-core/src/resolved.rs`](/home/yoshitsugu/src/github.com/yoshitsugu/goby/crates/goby-core/src/resolved.rs) — bare / qualified name resolution behavior
+- [`crates/goby-core/src/typecheck_call.rs`](/home/yoshitsugu/src/github.com/yoshitsugu/goby/crates/goby-core/src/typecheck_call.rs) — ordinary-call typed mismatch diagnostics
+- [`crates/goby-core/src/typecheck_span.rs`](/home/yoshitsugu/src/github.com/yoshitsugu/goby/crates/goby-core/src/typecheck_span.rs) — span selection helpers
+- [`crates/goby-cli/src/main.rs`](/home/yoshitsugu/src/github.com/yoshitsugu/goby/crates/goby-cli/src/main.rs) — CLI diagnostic rendering
+- [`crates/goby-lsp/src/main.rs`](/home/yoshitsugu/src/github.com/yoshitsugu/goby/crates/goby-lsp/src/main.rs) — LSP diagnostic range parity

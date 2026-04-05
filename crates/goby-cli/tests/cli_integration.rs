@@ -1458,6 +1458,73 @@ fn typecheck_error_output_matches_fixture() {
 }
 
 #[test]
+fn type_mismatch_arg_output_matches_fixture() {
+    let root = repo_root();
+    let input = "crates/goby-cli/tests/fixtures/type_mismatch_arg_input.gb";
+    let expected_path = root.join("crates/goby-cli/tests/fixtures/type_mismatch_arg_expected.txt");
+    assert!(
+        root.join(input).exists(),
+        "fixture input must exist at {}",
+        input
+    );
+    assert!(
+        expected_path.exists(),
+        "expected fixture must exist at {:?}",
+        expected_path
+    );
+    let expected_raw = fs::read_to_string(&expected_path).expect("fixture should be readable");
+
+    let output = command_for_goby_cli()
+        .arg("check")
+        .arg(input)
+        .current_dir(&root)
+        .output()
+        .expect("cli should execute");
+
+    assert!(
+        !output.status.success(),
+        "type mismatch fixture should fail"
+    );
+    let actual = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(
+        actual.trim_end_matches('\n'),
+        expected_raw.trim_end_matches('\n'),
+        "stderr does not match type_mismatch_arg_expected.txt"
+    );
+}
+
+#[test]
+fn run_type_mismatch_arg_matches_check_fixture_before_codegen() {
+    let root = repo_root();
+    let input = "crates/goby-cli/tests/fixtures/type_mismatch_arg_input.gb";
+    let expected_path = root.join("crates/goby-cli/tests/fixtures/type_mismatch_arg_expected.txt");
+    let expected_raw = fs::read_to_string(&expected_path).expect("fixture should be readable");
+
+    let output = command_for_goby_cli()
+        .arg("run")
+        .arg(input)
+        .current_dir(&root)
+        .output()
+        .expect("cli should execute");
+
+    assert!(
+        !output.status.success(),
+        "run should fail during typecheck for the typed mismatch fixture"
+    );
+    let actual = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(
+        actual.trim_end_matches('\n'),
+        expected_raw.trim_end_matches('\n'),
+        "run stderr does not match type_mismatch_arg_expected.txt"
+    );
+    assert!(
+        !actual.contains("codegen error"),
+        "run should fail before lowering/codegen, stderr: {}",
+        actual
+    );
+}
+
+#[test]
 fn unresolved_name_error_output_matches_fixture() {
     let root = repo_root();
     let input = "crates/goby-cli/tests/fixtures/unresolved_name_error_input.gb";
@@ -1491,6 +1558,50 @@ fn unresolved_name_error_output_matches_fixture() {
         actual.trim_end_matches('\n'),
         expected_raw.trim_end_matches('\n'),
         "stderr does not match unresolved_name_error_expected.txt"
+    );
+}
+
+#[test]
+fn qualified_type_mismatch_renders_token_aligned_snippet() {
+    let root = repo_root();
+    let sandbox = TempDirGuard::new("qualified_typed_mismatch_render");
+    let input = sandbox.join("qualified_arg_type_mismatch.gb");
+    fs::write(
+        &input,
+        r#"
+import goby/string as s
+
+render : Unit -> Int
+render =
+  value = 1
+  s.length value
+"#,
+    )
+    .expect("temporary input should be writable");
+
+    let output = command_for_goby_cli()
+        .arg("check")
+        .arg(&input)
+        .current_dir(&root)
+        .output()
+        .expect("cli should execute");
+
+    assert!(
+        !output.status.success(),
+        "qualified mismatch fixture should fail"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains(
+            ":7:12: error: `s.length` expects argument of type `String` but got `Int` in 'render'"
+        ),
+        "unexpected stderr: {}",
+        stderr
+    );
+    assert!(
+        stderr.contains("7 |   s.length value\n  |            ^^^^^"),
+        "expected token-aligned snippet, stderr: {}",
+        stderr
     );
 }
 

@@ -693,6 +693,27 @@ mod tests {
     }
 
     #[test]
+    fn span_to_lsp_range_typed_argument_after_emoji_prefix_keeps_utf16_width() {
+        let source = "  note = \"😀\"; b = f value";
+        let span = make_span(1, 24, 1, 29);
+        let r = span_to_lsp_range(source, Some(&span));
+        assert_eq!(
+            r.start,
+            Position {
+                line: 0,
+                character: 21
+            }
+        );
+        assert_eq!(
+            r.end,
+            Position {
+                line: 0,
+                character: 26
+            }
+        );
+    }
+
+    #[test]
     fn span_to_lsp_range_end_line_zero_collapses_to_start() {
         // end_line == 0 is not produced by current Span constructors but is handled
         // defensively: collapse end to start.
@@ -841,6 +862,64 @@ main =
         assert_eq!(diags.len(), 2, "expected two diagnostics, got: {:?}", diags);
         assert_eq!(diags[0].severity, Some(DiagnosticSeverity::ERROR));
         assert_eq!(diags[1].severity, Some(DiagnosticSeverity::ERROR));
+    }
+
+    #[test]
+    fn analyze_ordinary_type_mismatch_returns_argument_range() {
+        let Some(root) = stdlib_root() else {
+            return;
+        };
+        let source = "\
+f : Int -> Int
+f a = a + 10
+
+main : Unit -> Unit can Print
+main =
+  value = \"a\"
+  b = f value
+  println \"test\"
+";
+        let diags = analyze(source, Some(&root));
+        assert_eq!(diags.len(), 1, "expected one diagnostic, got: {:?}", diags);
+        assert!(
+            diags[0]
+                .message
+                .contains("`f` expects argument of type `Int` but got `String`"),
+            "unexpected diagnostic: {:?}",
+            diags[0]
+        );
+        assert_eq!(diags[0].range.start.line, 6);
+        assert_eq!(diags[0].range.start.character, 8);
+        assert_eq!(diags[0].range.end.line, 6);
+        assert_eq!(diags[0].range.end.character, 13);
+    }
+
+    #[test]
+    fn analyze_qualified_type_mismatch_returns_argument_range() {
+        let Some(root) = stdlib_root() else {
+            return;
+        };
+        let source = "\
+import goby/string as s
+
+render : Unit -> Int
+render =
+  value = 1
+  s.length value
+";
+        let diags = analyze(source, Some(&root));
+        assert_eq!(diags.len(), 1, "expected one diagnostic, got: {:?}", diags);
+        assert!(
+            diags[0]
+                .message
+                .contains("`s.length` expects argument of type `String` but got `Int`"),
+            "unexpected diagnostic: {:?}",
+            diags[0]
+        );
+        assert_eq!(diags[0].range.start.line, 5);
+        assert_eq!(diags[0].range.start.character, 11);
+        assert_eq!(diags[0].range.end.line, 5);
+        assert_eq!(diags[0].range.end.character, 16);
     }
 
     #[test]

@@ -125,14 +125,20 @@ And the corresponding LSP diagnostic should:
 
 Locked acceptance fixture for TD:
 
-- program: `crates/goby-cli/tests/fixtures/type_mismatch_arg_input.gb`
-- expected CLI stderr: `crates/goby-cli/tests/fixtures/type_mismatch_arg_expected.txt`
+- current bounded fixture program: `crates/goby-cli/tests/fixtures/type_mismatch_arg_input.gb`
+- current bounded expected CLI stderr: `crates/goby-cli/tests/fixtures/type_mismatch_arg_expected.txt`
 - canonical `check` command:
   - `cargo run -p goby-cli -- check crates/goby-cli/tests/fixtures/type_mismatch_arg_input.gb`
 - canonical `run` parity command:
   - `cargo run -p goby-cli -- run crates/goby-cli/tests/fixtures/type_mismatch_arg_input.gb`
 - `check` and `run` must agree on the typecheck diagnostic family and rendered
   message/snippet for this fixture; `run` must fail before lowering/codegen.
+- note:
+  - the bounded fixture currently uses a local-bound argument expression (`f value`)
+    rather than a string literal (`f "a"`), because literal/interpolated/list/tuple
+    argument expressions do not yet own precise AST spans.
+  - literal-argument ordinary-call diagnostics remain deferred until expression-span
+    ownership is widened honestly.
 
 ### 3.1 Scope
 
@@ -184,16 +190,38 @@ Track TD is complete when all of the following are true:
 
 #### Milestone TD0: Boundary Lock and Inventory
 
-- [ ] TD0.1 Enumerate typed diagnostic families that already know the blamed
+- [x] TD0.1 Enumerate typed diagnostic families that already know the blamed
   expression but still return `span: None` or an overly wide span.
-- [ ] TD0.2 Partition those families into:
+- [x] TD0.2 Partition those families into:
   - can become token-precise with existing AST ownership,
   - require new span ownership or a separate follow-up track.
-- [ ] TD0.3 Lock the initial family set for TD so the slice stays bounded.
+- [x] TD0.3 Lock the initial family set for TD so the slice stays bounded.
 
 Done when:
 
 - the first typed-diagnostic migration set is explicit rather than open-ended.
+
+Locked initial TD family set:
+
+- ordinary-call argument mismatches where the blamed argument already owns a
+  precise expression span today:
+  - bound variable arguments,
+  - qualified-name arguments,
+  - nested call / method-call / record-construction arguments with direct node spans,
+  - later-argument and partially-applied remainder mismatches when the blamed
+    argument is one of the span-owning shapes above.
+
+Deferred outside the current TD1 boundary:
+
+- ordinary/effect-op/`resume` mismatches whose blamed argument is currently a
+  span-less expression shape:
+  - `IntLit`, `StringLit`, `BoolLit`, `InterpolatedString`,
+  - list / tuple / block expressions without direct span ownership.
+- typed diagnostics not centered on an argument expression:
+  - declaration body vs declared return-type mismatch,
+  - required-effect coverage failures,
+  - conflicting import/embed/type-declaration validation families already listed
+    in the ER deferred section.
 
 #### Milestone TD1: Ordinary Call Argument Mismatch Spans
 

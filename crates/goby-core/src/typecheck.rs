@@ -2808,6 +2808,23 @@ main =
     }
 
     #[test]
+    fn ordinary_call_argument_type_mismatch_on_bound_arg_carries_arg_span() {
+        let source = "\
+f : Int -> Int
+f a = a + 10
+
+render : Unit -> Int
+render =
+  value = \"a\"
+  f value
+";
+        let module = parse_module(source).expect("should parse");
+        let err =
+            typecheck_module(&module).expect_err("ordinary call arg mismatch should have span");
+        assert_eq!(err.span, Some(Span::new(7, 5, 7, 10)));
+    }
+
+    #[test]
     fn rejects_qualified_ordinary_call_argument_type_mismatch() {
         let source = "\
 import goby/string as s
@@ -2826,6 +2843,22 @@ render =
             "unexpected message: {}",
             err.message
         );
+    }
+
+    #[test]
+    fn qualified_ordinary_call_argument_type_mismatch_on_bound_arg_carries_arg_span() {
+        let source = "\
+import goby/string as s
+
+render : Unit -> Int
+render =
+  value = 1
+  s.length value
+";
+        let module = parse_module(source).expect("should parse");
+        let err = typecheck_module(&module)
+            .expect_err("qualified ordinary call arg mismatch should fail");
+        assert_eq!(err.span, Some(Span::new(6, 12, 6, 17)));
     }
 
     #[test]
@@ -2848,6 +2881,23 @@ render =
             "unexpected message: {}",
             err.message
         );
+    }
+
+    #[test]
+    fn later_argument_type_mismatch_on_bound_arg_carries_arg_span() {
+        let source = "\
+add_tag : Int -> String -> Int
+add_tag n tag = n
+
+render : Unit -> Int
+render =
+  value = 2
+  add_tag 1 value
+";
+        let module = parse_module(source).expect("should parse");
+        let err =
+            typecheck_module(&module).expect_err("later ordinary call arg mismatch should fail");
+        assert_eq!(err.span, Some(Span::new(7, 13, 7, 18)));
     }
 
     #[test]
@@ -2894,6 +2944,24 @@ render =
             "unexpected message: {}",
             err.message
         );
+    }
+
+    #[test]
+    fn partially_applied_ordinary_call_remainder_mismatch_on_bound_arg_carries_arg_span() {
+        let source = "\
+prefix : String -> String -> String
+prefix p value = \"${p}${value}\"
+
+render : Unit -> String
+render =
+  with_prefix = prefix \"n=\"
+  value = 1
+  with_prefix value
+";
+        let module = parse_module(source).expect("should parse");
+        let err = typecheck_module(&module)
+            .expect_err("partially applied ordinary call remainder mismatch should fail");
+        assert_eq!(err.span, Some(Span::new(8, 15, 8, 20)));
     }
 
     #[test]

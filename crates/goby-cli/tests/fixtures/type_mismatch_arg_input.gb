@@ -1,0 +1,8 @@
+f : Int -> Int
+f a = a + 10
+
+main : Unit -> Unit can Print
+main =
+  value = "a"
+  b = f value
+  println "test"
