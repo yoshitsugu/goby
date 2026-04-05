@@ -272,6 +272,7 @@ pub(crate) fn check_unhandled_effects_in_expr(
     }
 
     match expr {
+        Expr::Spanned { expr, .. } => recurse!(expr),
         Expr::IntLit(_) | Expr::BoolLit(_) | Expr::StringLit(_) => Ok(()),
         Expr::InterpolatedString(parts) => {
             for part in parts {

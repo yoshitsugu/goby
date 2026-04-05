@@ -2799,6 +2799,7 @@ main =
         let module = parse_module(source).expect("should parse");
         let err = typecheck_module(&module).expect_err("ordinary call arg mismatch should fail");
         assert_eq!(err.declaration.as_deref(), Some("main"));
+        assert_eq!(err.span, Some(Span::new(6, 9, 6, 12)));
         assert!(
             err.message
                 .contains("`f` expects argument of type `Int` but got `String`"),

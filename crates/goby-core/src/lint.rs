@@ -27,6 +27,7 @@ fn lint_stmts(stmts: &[Stmt], decl: &Declaration, diagnostics: &mut Vec<Diagnost
 
 fn lint_expr(expr: &Expr, decl: &Declaration, diagnostics: &mut Vec<Diagnostic>) {
     match expr {
+        Expr::Spanned { expr, .. } => lint_expr(expr, decl, diagnostics),
         Expr::IntLit(_) | Expr::BoolLit(_) | Expr::StringLit(_) | Expr::Var { .. } => {}
         Expr::InterpolatedString(parts) => {
             for part in parts {

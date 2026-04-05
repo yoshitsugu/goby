@@ -82,6 +82,7 @@ fn apply_indent(s: &str, level: usize) -> String {
 /// level for internal sub-structures.
 pub(crate) fn format_expr(expr: &Expr, indent: usize) -> String {
     match expr {
+        Expr::Spanned { expr, .. } => format_expr(expr, indent),
         Expr::IntLit(n) => n.to_string(),
         Expr::BoolLit(v) => if *v { "True" } else { "False" }.to_string(),
         Expr::StringLit(s) => format!("\"{}\"", escape_string(s)),

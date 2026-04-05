@@ -4,15 +4,16 @@ use goby_core::{Expr, ImportKind, Module};
 
 use crate::runtime_eval::{is_identifier, is_string_literal};
 use crate::runtime_flow::DirectCallHead;
+use crate::support::peel_expr_spans;
 
 pub(crate) fn flatten_direct_call(expr: &Expr) -> Option<(DirectCallHead, Vec<&Expr>)> {
     let mut args = Vec::new();
-    let mut cur = expr;
+    let mut cur = peel_expr_spans(expr);
     loop {
         match cur {
             Expr::Call { callee, arg, .. } => {
                 args.push(arg.as_ref());
-                cur = callee.as_ref();
+                cur = peel_expr_spans(callee.as_ref());
             }
             Expr::MethodCall {
                 receiver,

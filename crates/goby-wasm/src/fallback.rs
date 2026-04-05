@@ -36,7 +36,10 @@ use crate::{
         flatten_named_call, resolve_direct_call_target,
     },
     planning::build_lowering_plan,
-    support::{is_supported_binop_kind, is_supported_case_pattern, is_supported_list_item_expr},
+    support::{
+        is_supported_binop_kind, is_supported_case_pattern, is_supported_list_item_expr,
+        peel_expr_spans,
+    },
     wasm_exec_plan::decl_exec_plan,
 };
 
@@ -168,6 +171,7 @@ fn unsupported_stmt_expr_reason(
     module: &Module,
     stack: &mut HashSet<String>,
 ) -> Option<UnsupportedReason> {
+    let expr = peel_expr_spans(expr);
     match expr {
         Expr::Call { .. } => match extract_direct_print_call_arg(expr) {
             Ok(arg) => unsupported_value_expr_reason(arg, module, stack),
@@ -192,6 +196,7 @@ fn unsupported_value_expr_reason(
     module: &Module,
     stack: &mut HashSet<String>,
 ) -> Option<UnsupportedReason> {
+    let expr = peel_expr_spans(expr);
     match expr {
         Expr::StringLit(_) | Expr::IntLit(_) | Expr::BoolLit(_) | Expr::Var { name: _, .. } => None,
         Expr::ListLit { elements, spread } => {
@@ -356,6 +361,7 @@ fn is_decl_stmt_supported(stmt: &Stmt, module: &Module, stack: &mut HashSet<Stri
 }
 
 fn is_decl_value_expr_supported(expr: &Expr, module: &Module, stack: &mut HashSet<String>) -> bool {
+    let expr = peel_expr_spans(expr);
     match expr {
         Expr::StringLit(_) | Expr::IntLit(_) | Expr::BoolLit(_) | Expr::Var { name: _, .. } => true,
         Expr::ListLit { elements, spread } => {

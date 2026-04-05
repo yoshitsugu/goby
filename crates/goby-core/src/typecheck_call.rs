@@ -28,6 +28,7 @@ pub(crate) fn check_ordinary_call_arg_types_in_expr(
     decl_name: &str,
 ) -> Result<(), TypecheckError> {
     match expr {
+        Expr::Spanned { expr, .. } => check_ordinary_call_arg_types_in_expr(expr, env, decl_name),
         Expr::Call { callee, arg, .. } => {
             check_ordinary_call_arg_types_in_expr(callee, env, decl_name)?;
             check_ordinary_call_arg_types_in_expr(arg, env, decl_name)?;

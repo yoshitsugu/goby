@@ -13,6 +13,7 @@ pub(crate) fn check_expr(expr: &Expr, env: &TypeEnv) -> Ty {
 
 fn infer_expr_ty(expr: &Expr, env: &TypeEnv) -> Ty {
     match expr {
+        Expr::Spanned { expr, .. } => infer_expr_ty(expr, env),
         Expr::IntLit(_) => Ty::Int,
         Expr::BoolLit(_) => Ty::Bool,
         Expr::StringLit(_) => Ty::Str,

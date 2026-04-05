@@ -1,6 +1,6 @@
 # Goby Error Reporting Plan
 
-Last updated: 2026-03-29
+Last updated: 2026-04-05
 
 This document is the active planning note for compiler-diagnostic quality.
 It is intentionally kept compact:
@@ -134,10 +134,10 @@ Locked acceptance fixture for TD:
 - `check` and `run` must agree on the typecheck diagnostic family and rendered
   message/snippet for this fixture; `run` must fail before lowering/codegen.
 - note:
-  - the bounded fixture currently uses a local-bound argument expression (`f value`)
-    rather than a string literal (`f "a"`), because literal/interpolated/list/tuple
-    argument expressions do not yet own precise AST spans.
-  - literal-argument ordinary-call diagnostics remain deferred until expression-span
+  - the canonical representative fixture is now the direct literal case (`f "a"`).
+  - this is possible because single-line parser-owned literal / interpolated /
+    list / tuple expressions now carry honest whole-expression spans.
+  - multiline block expressions remain deferred until body-relative expression
     ownership is widened honestly.
 
 ### 3.1 Scope
@@ -213,10 +213,11 @@ Locked initial TD family set:
 
 Deferred outside the current TD1 boundary:
 
-- ordinary/effect-op/`resume` mismatches whose blamed argument is currently a
-  span-less expression shape:
-  - `IntLit`, `StringLit`, `BoolLit`, `InterpolatedString`,
-  - list / tuple / block expressions without direct span ownership.
+- ordinary/effect-op/`resume` mismatches whose blamed argument is still a
+  multiline/body-relative expression shape without honest direct ownership:
+  - block expressions,
+  - other future multiline forms that are not yet represented by a precise
+    file-relative argument span.
 - typed diagnostics not centered on an argument expression:
   - declaration body vs declared return-type mismatch,
   - required-effect coverage failures,
@@ -225,14 +226,14 @@ Deferred outside the current TD1 boundary:
 
 #### Milestone TD1: Ordinary Call Argument Mismatch Spans
 
-- [ ] TD1.1 Ensure ordinary first-order argument mismatch diagnostics point at
+- [x] TD1.1 Ensure ordinary first-order argument mismatch diagnostics point at
   the mismatched argument expression, not only declaration context.
-- [ ] TD1.2 Add focused regressions for:
+- [x] TD1.2 Add focused regressions for:
   - bare ordinary call mismatch,
   - qualified ordinary call mismatch,
   - later-argument mismatch,
   - partially-applied remainder mismatch.
-- [ ] TD1.3 Record any remaining ordinary-call mismatch sites that still cannot
+- [x] TD1.3 Record any remaining ordinary-call mismatch sites that still cannot
   become precise and why.
 
 Done when:
@@ -256,12 +257,12 @@ Done when:
 
 #### Milestone TD3: CLI Rendering Lock for Typed Diagnostics
 
-- [ ] TD3.1 Add a representative `goby check` fixture for the ordinary mismatch
+- [x] TD3.1 Add a representative `goby check` fixture for the ordinary mismatch
   example above.
-- [ ] TD3.2 Add a `goby run` regression proving the same invalid program fails
+- [x] TD3.2 Add a `goby run` regression proving the same invalid program fails
   during typecheck with the same rendered diagnostic rather than drifting into
   lowering/codegen.
-- [ ] TD3.3 Lock at least one later-argument or qualified-call typed mismatch
+- [x] TD3.3 Lock at least one later-argument or qualified-call typed mismatch
   rendering case.
 
 Done when:
@@ -271,10 +272,10 @@ Done when:
 
 #### Milestone TD4: LSP Range Parity for Typed Diagnostics
 
-- [ ] TD4.1 Add LSP tests for ordinary argument mismatch range selection.
-- [ ] TD4.2 Add at least one parity test for a qualified or later-argument
+- [x] TD4.1 Add LSP tests for ordinary argument mismatch range selection.
+- [x] TD4.2 Add at least one parity test for a qualified or later-argument
   typed mismatch.
-- [ ] TD4.3 Confirm UTF-16 conversion remains correct for typed diagnostic
+- [x] TD4.3 Confirm UTF-16 conversion remains correct for typed diagnostic
   ranges on multibyte-adjacent lines.
 
 Done when:
@@ -284,10 +285,10 @@ Done when:
 
 #### Milestone TD5: Closure and Deferred-Gap Report
 
-- [ ] TD5.1 Record which typed diagnostic families now have snippet/range parity.
-- [ ] TD5.2 Explicitly catalog the remaining typed diagnostics that still lack
+- [x] TD5.1 Record which typed diagnostic families now have snippet/range parity.
+- [x] TD5.2 Explicitly catalog the remaining typed diagnostics that still lack
   precise spans and the ownership reason for each.
-- [ ] TD5.3 Update `doc/STATE.md` with closure or next-slice notes.
+- [x] TD5.3 Update `doc/STATE.md` with closure or next-slice notes.
 
 Done when:
 

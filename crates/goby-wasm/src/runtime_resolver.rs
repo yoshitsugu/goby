@@ -627,6 +627,9 @@ impl<'m> RuntimeOutputResolver<'m> {
         }
 
         match expr {
+            Expr::Spanned { expr, .. } => {
+                self.eval_expr_ast(expr, locals, callables, evaluators, depth)
+            }
             Expr::IntLit(n) => Some(RuntimeValue::Int(*n)),
             Expr::BoolLit(b) => Some(RuntimeValue::Bool(*b)),
             Expr::StringLit(s) => Some(RuntimeValue::String(s.clone())),

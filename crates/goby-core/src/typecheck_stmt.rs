@@ -233,6 +233,7 @@ fn ensure_known_call_targets_in_expr(
     decl_name: &str,
 ) -> Result<(), TypecheckError> {
     match expr {
+        Expr::Spanned { expr, .. } => ensure_known_call_targets_in_expr(expr, env, decl_name),
         Expr::Call { callee, arg, .. } => {
             if let Expr::Var { name, .. } = callee.as_ref() {
                 let callee_ty = env.lookup(name);

@@ -3,6 +3,7 @@ use crate::ast::{Expr, Span};
 /// Return the span stored directly on this expression node, if any.
 pub(crate) fn direct_expr_span(expr: &Expr) -> Option<Span> {
     match expr {
+        Expr::Spanned { span, .. } => Some(*span),
         Expr::Var { span, .. }
         | Expr::Qualified { span, .. }
         | Expr::Call { span, .. }
@@ -20,6 +21,7 @@ pub(crate) fn direct_expr_span(expr: &Expr) -> Option<Span> {
 /// - pipeline callees use callee_span when available.
 pub(crate) fn best_available_name_use_span(expr: &Expr) -> Option<Span> {
     match expr {
+        Expr::Spanned { expr, .. } => best_available_name_use_span(expr),
         Expr::Var { span, .. } | Expr::Qualified { span, .. } => *span,
         Expr::Call { callee, span, .. } => best_available_name_use_span(callee).or(*span),
         Expr::Pipeline { callee_span, .. } => *callee_span,
@@ -60,6 +62,20 @@ mod tests {
         assert_eq!(
             best_available_expr_span(&expr),
             Some(Span::new(3, 7, 3, 10))
+        );
+    }
+
+    #[test]
+    fn direct_expr_span_returns_spanned_literal_span() {
+        let expr = Expr::Spanned {
+            expr: Box::new(Expr::StringLit("a".to_string())),
+            span: Span::new(7, 9, 7, 12),
+        };
+
+        assert_eq!(direct_expr_span(&expr), Some(Span::new(7, 9, 7, 12)));
+        assert_eq!(
+            best_available_expr_span(&expr),
+            Some(Span::new(7, 9, 7, 12))
         );
     }
 
@@ -233,6 +249,35 @@ mod tests {
                 assert_eq!(*span, Span::new(1, 7, 1, 8));
             }
             other => panic!("expected Pipeline with callee_span, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_body_stmts_populates_literal_argument_span_for_typed_diagnostics() {
+        let stmts = parse_body_stmts("f \"a\"").expect("should parse");
+
+        match &stmts[0] {
+            Stmt::Expr(
+                Expr::Call {
+                    arg,
+                    span: Some(call_span),
+                    ..
+                },
+                Some(stmt_span),
+            ) => {
+                assert_eq!(*stmt_span, Span::point(1, 1));
+                assert_eq!(*call_span, Span::new(1, 1, 1, 6));
+                assert!(matches!(
+                    arg.as_ref(),
+                    Expr::Spanned {
+                        expr,
+                        span
+                    } if matches!(expr.as_ref(), Expr::StringLit(text) if text == "a")
+                        && *span == Span::new(1, 3, 1, 6)
+                ));
+                assert_eq!(best_available_expr_span(arg), Some(Span::new(1, 3, 1, 6)));
+            }
+            other => panic!("expected call with spanned literal arg, got {:?}", other),
         }
     }
 }

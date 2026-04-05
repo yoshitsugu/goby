@@ -226,6 +226,10 @@ pub enum InterpolatedPart {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Expr {
+    Spanned {
+        expr: Box<Expr>,
+        span: Span,
+    },
     IntLit(i64),
     BoolLit(bool),
     StringLit(String),
@@ -357,13 +361,20 @@ impl Expr {
     }
 
     pub fn is_unit_value(&self) -> bool {
-        matches!(self, Expr::TupleLit(items) if items.is_empty())
+        match self {
+            Expr::Spanned { expr, .. } => expr.is_unit_value(),
+            Expr::TupleLit(items) => items.is_empty(),
+            _ => false,
+        }
     }
 
     /// Returns true if this expression needs parentheses when used as a
     /// sub-expression (e.g. as an argument or operand) to preserve meaning.
     pub fn needs_parens_as_subexpr(&self) -> bool {
         matches!(
+            self,
+            Expr::Spanned { expr, .. } if expr.needs_parens_as_subexpr()
+        ) || matches!(
             self,
             Expr::UnaryOp { .. }
                 | Expr::BinOp { .. }
@@ -387,6 +398,7 @@ impl Expr {
     /// Returns `None` if the expression cannot be represented as a simple string.
     pub fn to_str_repr(&self) -> Option<String> {
         match self {
+            Expr::Spanned { expr, .. } => expr.to_str_repr(),
             Expr::IntLit(n) => Some(n.to_string()),
             Expr::BoolLit(v) => Some(if *v { "True" } else { "False" }.to_string()),
             Expr::StringLit(s) => Some(format!("\"{}\"", s)),

@@ -8,49 +8,45 @@ The next implementation target is [`doc/PLAN_ERROR.md`](/home/yoshitsugu/src/git
 
 Current intent:
 
-- lock the initial typed-diagnostic migration boundary explicitly
+- close ordinary-call typed-diagnostic parity on the canonical literal fixture
 - preserve the rule that `goby-core` owns typed diagnostic spans while CLI/LSP
   only render them
-- add parity coverage for ordinary-call typed mismatches whose blamed argument
-  already owns a precise AST span
+- keep widening span ownership only where the parser can honestly point at the
+  whole blamed argument expression
 
 Current slice status:
 
 - `doc/PLAN_EXPORT_EMBED.md` is closed unless a regression reopens it.
-- TD0 boundary lock is now explicit in `doc/PLAN_ERROR.md`:
-  - the initial typed-diagnostic migration set is limited to ordinary-call
-    argument mismatches whose blamed argument already owns a precise AST span
-  - literal/interpolated/list/tuple/block argument expressions remain deferred
-    until expression-span ownership is widened honestly
-- Ordinary-call typed mismatch parity is regression-locked for the current
-  bounded subset:
-  - `goby-core` tests assert token-aligned spans for bare, qualified,
-    later-argument, and partially-applied remainder mismatches on bound
-    variable arguments
-  - CLI fixture/rendering parity is locked for the bounded representative case
-  - LSP range parity is locked for ordinary and qualified cases, including a
-    UTF-16 conversion case on a line containing emoji before the blamed token
-- Remaining TD work is to widen honest expression-span ownership so the
-  representative literal-argument case can gain the same snippet/range quality.
+- Ordinary-call typed mismatch parity is now locked on the canonical literal
+  fixture as well as the previously covered bound-variable / qualified /
+  later-argument / partially-applied cases:
+  - single-line parser-owned literal / interpolated / list / tuple expressions
+    now carry honest whole-expression spans via a transparent AST wrapper
+  - `goby-core` keeps owning the resulting span; CLI/LSP still only render it
+  - `goby check` / `goby run` parity is locked for the direct `f "a"` fixture
+  - LSP range parity remains locked for ordinary and qualified cases, including
+    UTF-16 conversion on a line with emoji before the blamed token
+- The remaining deferred ownership gap inside ordinary typed mismatches is now
+  multiline/body-relative expression shapes, primarily block arguments.
 
 ## Locked Decisions
 
 - `goby-core` remains the sole owner of typed diagnostic spans and messages.
-- The current TD slice is intentionally bounded to argument expressions that
-  already own precise AST spans.
-- Do not fabricate pseudo-precise spans for string/int/bool literals or other
-  span-less expression shapes just to satisfy frontend fixture quality.
+- Single-line parser-owned literal / interpolated / list / tuple expressions may
+  use honest whole-expression spans for typed diagnostics.
+- Do not fabricate pseudo-precise spans for multiline block arguments or other
+  body-relative shapes that still lack direct file-relative ownership.
 - CLI and LSP parity should be added only after the core span source is honest.
 
 ## Immediate Next Steps
 
-- Continue `doc/PLAN_ERROR.md` from the bounded TD1 frontier:
-  - decide whether to widen `Expr` span ownership for literals/interpolated/list/tuple/block
-    expressions, or to add a narrower argument-slice ownership layer
-  - once that ownership exists, move the canonical `f "a"` ordinary-call
-    mismatch fixture onto snippet/range parity
-- Keep avoiding symbol-specific typed-diagnostic branches such as special-casing
-  `print`, `println`, or one fixture function name.
+- Continue `doc/PLAN_ERROR.md` at TD2:
+  - audit effect-op argument mismatches and `resume` mismatches that can now
+    benefit from the widened parser-owned expression spans
+  - add parity regressions only where `goby-core` already knows the blamed
+    argument expression honestly
+- Keep deferring multiline block-argument ownership until there is a credible
+  file-relative span source rather than widening by frontend guesswork.
 
 ## Architecture State
 

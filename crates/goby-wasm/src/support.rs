@@ -1,5 +1,12 @@
 use goby_core::{BinOpKind, CasePattern, Expr};
 
+pub(crate) fn peel_expr_spans(mut expr: &Expr) -> &Expr {
+    while let Expr::Spanned { expr: inner, .. } = expr {
+        expr = inner;
+    }
+    expr
+}
+
 pub(crate) fn is_supported_case_pattern(pattern: &CasePattern) -> bool {
     match pattern {
         CasePattern::IntLit(_)
@@ -11,7 +18,10 @@ pub(crate) fn is_supported_case_pattern(pattern: &CasePattern) -> bool {
 }
 
 pub(crate) fn is_supported_list_item_expr(expr: &Expr) -> bool {
-    matches!(expr, Expr::IntLit(_) | Expr::Var { name: _, .. })
+    matches!(
+        peel_expr_spans(expr),
+        Expr::IntLit(_) | Expr::Var { name: _, .. }
+    )
 }
 
 pub(crate) fn is_supported_binop_kind(op: &BinOpKind) -> bool {

@@ -367,7 +367,14 @@ main =
         assert_eq!(parsed.len(), 1);
         match &parsed[0] {
             Stmt::Expr(Expr::Call { arg, .. }, _) => {
-                assert_eq!(**arg, Expr::StringLit("a#b".to_string()));
+                assert!(matches!(
+                    arg.as_ref(),
+                    Expr::Spanned {
+                        expr,
+                        span
+                    } if matches!(expr.as_ref(), Expr::StringLit(text) if text == "a#b")
+                        && *span == crate::ast::Span::new(1, 7, 1, 12)
+                ));
             }
             other => panic!("unexpected stmt: {:?}", other),
         }

@@ -579,6 +579,13 @@ fn inspect_expr(
     collect_operation_refs(expr, out, qualified_operation_index, op_name_index);
 
     match expr {
+        Expr::Spanned { expr, .. } => inspect_expr(
+            expr,
+            out,
+            declaration_names,
+            qualified_operation_index,
+            op_name_index,
+        ),
         Expr::IntLit(_)
         | Expr::BoolLit(_)
         | Expr::StringLit(_)
@@ -846,6 +853,7 @@ fn stmt_contains_handler_resume(stmt: &Stmt) -> bool {
 
 fn expr_contains_handler_resume(expr: &Expr) -> bool {
     match expr {
+        Expr::Spanned { expr, .. } => expr_contains_handler_resume(expr),
         Expr::IntLit(_)
         | Expr::BoolLit(_)
         | Expr::StringLit(_)

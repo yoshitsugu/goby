@@ -337,6 +337,7 @@ impl Resolver {
 
     fn resolve_expr(&mut self, expr: &Expr) -> ResolvedExpr {
         match expr {
+            Expr::Spanned { expr, .. } => self.resolve_expr(expr),
             Expr::IntLit(n) => ResolvedExpr::IntLit(*n),
             Expr::BoolLit(b) => ResolvedExpr::BoolLit(*b),
             Expr::StringLit(s) => ResolvedExpr::StringLit(s.clone()),

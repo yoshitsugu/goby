@@ -1,5 +1,7 @@
 use goby_core::{Declaration, Expr, Module};
 
+use crate::support::peel_expr_spans;
+
 /// Flatten left-associative call chains into `(callee_name, args)` when the
 /// callee is a direct named function.
 ///
@@ -12,12 +14,12 @@ use goby_core::{Declaration, Expr, Module};
 /// - `obj.method a`
 pub(crate) fn flatten_named_call(expr: &Expr) -> Option<(&str, Vec<&Expr>)> {
     let mut args = Vec::new();
-    let mut cur = expr;
+    let mut cur = peel_expr_spans(expr);
     loop {
         match cur {
             Expr::Call { callee, arg, .. } => {
                 args.push(arg.as_ref());
-                cur = callee.as_ref();
+                cur = peel_expr_spans(callee.as_ref());
             }
             Expr::Var { name, .. } => {
                 args.reverse();
@@ -67,12 +69,12 @@ pub(crate) fn extract_direct_print_call_arg(expr: &Expr) -> Result<&Expr, PrintC
 
 pub(crate) fn direct_print_call(expr: &Expr) -> Result<(PrintCallKind, &Expr), PrintCallError> {
     let mut args = Vec::new();
-    let mut cur = expr;
+    let mut cur = peel_expr_spans(expr);
     loop {
         match cur {
             Expr::Call { callee, arg, .. } => {
                 args.push(arg.as_ref());
-                cur = callee.as_ref();
+                cur = peel_expr_spans(callee.as_ref());
             }
             Expr::Var { name, .. } => {
                 args.reverse();
@@ -102,7 +104,7 @@ fn classify_print_head<'a>(
     if args.len() != 1 {
         return Err(PrintCallError::ArityNotOne);
     }
-    Ok((kind, args[0]))
+    Ok((kind, peel_expr_spans(args[0])))
 }
 
 #[cfg(test)]

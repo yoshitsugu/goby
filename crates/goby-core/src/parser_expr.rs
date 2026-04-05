@@ -269,7 +269,11 @@ fn parse_expr_with_spans(src: &str, line: usize, col: usize) -> Option<Expr> {
         });
     }
 
-    parse_expr(trimmed)
+    let expr = parse_expr(trimmed)?;
+    Some(wrap_expr_span_if_supported(
+        expr,
+        Span::new(line, col, line, col + trimmed.len()),
+    ))
 }
 
 fn parse_call_expr_with_spans(src: &str, line: usize, col: usize) -> Option<Expr> {
@@ -334,6 +338,11 @@ fn parse_call_expr_with_spans(src: &str, line: usize, col: usize) -> Option<Expr
 }
 
 fn copy_expr_spans(dst: &mut Expr, src: &Expr) {
+    if let Expr::Spanned { expr, span } = src {
+        copy_expr_spans(dst, expr);
+        attach_expr_span(dst, *span);
+        return;
+    }
     match (dst, src) {
         (Expr::Var { span: dst_span, .. }, Expr::Var { span: src_span, .. }) => {
             *dst_span = *src_span
@@ -377,6 +386,57 @@ fn copy_expr_spans(dst: &mut Expr, src: &Expr) {
             },
         ) => {
             *dst_cs = *src_cs;
+        }
+        _ => {}
+    }
+}
+
+fn wrap_expr_span_if_supported(expr: Expr, span: Span) -> Expr {
+    match expr {
+        Expr::IntLit(_)
+        | Expr::BoolLit(_)
+        | Expr::StringLit(_)
+        | Expr::InterpolatedString(_)
+        | Expr::ListLit { .. }
+        | Expr::TupleLit(_) => Expr::Spanned {
+            expr: Box::new(expr),
+            span,
+        },
+        other => other,
+    }
+}
+
+fn attach_expr_span(expr: &mut Expr, span: Span) {
+    match expr {
+        Expr::Spanned {
+            span: expr_span, ..
+        } => *expr_span = span,
+        Expr::Var {
+            span: expr_span, ..
+        }
+        | Expr::Qualified {
+            span: expr_span, ..
+        }
+        | Expr::Call {
+            span: expr_span, ..
+        }
+        | Expr::MethodCall {
+            span: expr_span, ..
+        }
+        | Expr::RecordConstruct {
+            span: expr_span, ..
+        } => *expr_span = Some(span),
+        Expr::IntLit(_)
+        | Expr::BoolLit(_)
+        | Expr::StringLit(_)
+        | Expr::InterpolatedString(_)
+        | Expr::ListLit { .. }
+        | Expr::TupleLit(_) => {
+            let original = std::mem::replace(expr, Expr::unit_value());
+            *expr = Expr::Spanned {
+                expr: Box::new(original),
+                span,
+            };
         }
         _ => {}
     }

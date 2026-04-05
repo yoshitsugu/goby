@@ -3,6 +3,5 @@ f a = a + 10
 
 main : Unit -> Unit can Print
 main =
-  value = "a"
-  b = f value
+  b = f "a"
   println "test"

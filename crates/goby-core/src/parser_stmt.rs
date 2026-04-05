@@ -1165,7 +1165,14 @@ mod tests {
                         span: Some(span)
                     } if name == "print" && *span == Span::new(1, 1, 1, 6)
                 ));
-                assert_eq!(**arg, Expr::StringLit("hello".to_string()));
+                assert!(matches!(
+                    arg.as_ref(),
+                    Expr::Spanned {
+                        expr,
+                        span
+                    } if matches!(expr.as_ref(), Expr::StringLit(text) if text == "hello")
+                        && *span == Span::new(1, 7, 1, 14)
+                ));
             }
             other => panic!("unexpected: {:?}", other),
         }

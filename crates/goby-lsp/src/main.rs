@@ -694,8 +694,8 @@ mod tests {
 
     #[test]
     fn span_to_lsp_range_typed_argument_after_emoji_prefix_keeps_utf16_width() {
-        let source = "  note = \"😀\"; b = f value";
-        let span = make_span(1, 24, 1, 29);
+        let source = "  note = \"😀\"; b = f \"a\"";
+        let span = make_span(1, 24, 1, 27);
         let r = span_to_lsp_range(source, Some(&span));
         assert_eq!(
             r.start,
@@ -708,7 +708,7 @@ mod tests {
             r.end,
             Position {
                 line: 0,
-                character: 26
+                character: 24
             }
         );
     }
@@ -875,8 +875,7 @@ f a = a + 10
 
 main : Unit -> Unit can Print
 main =
-  value = \"a\"
-  b = f value
+  b = f \"a\"
   println \"test\"
 ";
         let diags = analyze(source, Some(&root));
@@ -888,10 +887,10 @@ main =
             "unexpected diagnostic: {:?}",
             diags[0]
         );
-        assert_eq!(diags[0].range.start.line, 6);
+        assert_eq!(diags[0].range.start.line, 5);
         assert_eq!(diags[0].range.start.character, 8);
-        assert_eq!(diags[0].range.end.line, 6);
-        assert_eq!(diags[0].range.end.character, 13);
+        assert_eq!(diags[0].range.end.line, 5);
+        assert_eq!(diags[0].range.end.character, 11);
     }
 
     #[test]

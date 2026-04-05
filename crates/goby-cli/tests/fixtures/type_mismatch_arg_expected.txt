@@ -1,3 +1,3 @@
-crates/goby-cli/tests/fixtures/type_mismatch_arg_input.gb:7:9: error: `f` expects argument of type `Int` but got `String` in 'main'
-7 |   b = f value
-  |         ^^^^^
+crates/goby-cli/tests/fixtures/type_mismatch_arg_input.gb:6:9: error: `f` expects argument of type `Int` but got `String` in 'main'
+6 |   b = f "a"
+  |         ^^^

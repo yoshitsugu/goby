@@ -46,6 +46,7 @@ pub(crate) fn check_branch_type_consistency_in_expr(
     }
 
     match expr {
+        Expr::Spanned { expr, .. } => recurse!(expr),
         Expr::IntLit(_) | Expr::BoolLit(_) | Expr::StringLit(_) | Expr::Var { .. } => Ok(()),
         Expr::InterpolatedString(parts) => {
             for part in parts {
