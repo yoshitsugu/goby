@@ -922,6 +922,70 @@ render =
     }
 
     #[test]
+    fn analyze_effect_op_type_mismatch_returns_argument_range() {
+        let Some(root) = stdlib_root() else {
+            return;
+        };
+        let source = "\
+effect Iter
+  op: String -> Unit
+
+main : Unit -> Unit
+main =
+  with
+    op _ ->
+      resume ()
+  in
+    op 1
+";
+        let diags = analyze(source, Some(&root));
+        assert_eq!(diags.len(), 1, "expected one diagnostic, got: {:?}", diags);
+        assert!(
+            diags[0]
+                .message
+                .contains("effect operation `op` expects argument of type `String` but got `Int`"),
+            "unexpected diagnostic: {:?}",
+            diags[0]
+        );
+        assert_eq!(diags[0].range.start.line, 9);
+        assert_eq!(diags[0].range.start.character, 7);
+        assert_eq!(diags[0].range.end.line, 9);
+        assert_eq!(diags[0].range.end.character, 8);
+    }
+
+    #[test]
+    fn analyze_resume_type_mismatch_returns_argument_range() {
+        let Some(root) = stdlib_root() else {
+            return;
+        };
+        let source = "\
+effect Iter
+  next: Unit -> Int
+
+main : Unit -> Unit
+main =
+  with
+    next x ->
+      resume \"oops\"
+  in
+    print \"ok\"
+";
+        let diags = analyze(source, Some(&root));
+        assert_eq!(diags.len(), 1, "expected one diagnostic, got: {:?}", diags);
+        assert!(
+            diags[0].message.contains(
+                "resume_arg_type_mismatch: `resume` expects argument of type `Int` but got `String`"
+            ),
+            "unexpected diagnostic: {:?}",
+            diags[0]
+        );
+        assert_eq!(diags[0].range.start.line, 7);
+        assert_eq!(diags[0].range.start.character, 13);
+        assert_eq!(diags[0].range.end.line, 7);
+        assert_eq!(diags[0].range.end.character, 19);
+    }
+
+    #[test]
     fn analyze_unknown_bare_name_returns_token_aligned_range() {
         let Some(root) = stdlib_root() else {
             return;

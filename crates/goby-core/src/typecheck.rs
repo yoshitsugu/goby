@@ -3488,6 +3488,31 @@ main =
     }
 
     #[test]
+    fn effect_op_arg_type_mismatch_uses_argument_expression_span() {
+        let source = "\
+effect Iter
+  op: String -> Unit
+
+main : Unit -> Unit
+main =
+  with
+    op _ ->
+      resume ()
+  in
+    op 1
+";
+        let module = parse_module(source).expect("should parse");
+        let err = typecheck_module(&module).expect_err("effect-op arg mismatch should fail");
+        assert!(
+            err.message
+                .contains("effect operation `op` expects argument of type `String` but got `Int`"),
+            "unexpected error: {}",
+            err.message
+        );
+        assert_eq!(err.span, Some(Span::new(10, 8, 10, 9)));
+    }
+
+    #[test]
     fn rejects_effect_op_call_with_type_hole_conflict_note() {
         let source = "
 effect Iter
@@ -3594,7 +3619,7 @@ main =
 
     #[test]
     fn rejects_resume_arg_type_mismatch_in_handler_method() {
-        let source = "
+        let source = "\
 effect Iter
   next: Unit -> Int
 
@@ -3618,6 +3643,7 @@ main =
             "unexpected error: {}",
             err.message
         );
+        assert_eq!(err.span, Some(Span::new(8, 14, 8, 20)));
     }
 
     #[test]

@@ -243,17 +243,27 @@ Done when:
 
 #### Milestone TD2: Existing Typed-Argument Families Parity
 
-- [ ] TD2.1 Audit and tighten effect-op argument mismatch spans where the wrong
+- [x] TD2.1 Audit and tighten effect-op argument mismatch spans where the wrong
   argument expression is already known.
-- [ ] TD2.2 Audit and tighten `resume` argument mismatch spans for the same
+- [x] TD2.2 Audit and tighten `resume` argument mismatch spans for the same
   reason.
-- [ ] TD2.3 Add focused regressions proving these families keep their current
+- [x] TD2.3 Add focused regressions proving these families keep their current
   ownership/messages while gaining precise spans.
 
 Done when:
 
 - typed argument-mismatch families that already know the blamed argument gain
   snippet/range parity without moving diagnosis out of `goby-core`.
+
+TD2 closure summary:
+
+- effect-op argument mismatch diagnostics now lock the blamed argument
+  expression span in `goby-core` and render aligned snippets/ranges in CLI/LSP.
+- `resume` argument mismatch diagnostics now do the same, including handler
+  clause body cases that previously lost file-relative span ownership because
+  clause parsed bodies were still body-local.
+- multiline/body-relative argument shapes that still lack honest direct span
+  ownership remain deferred outside this milestone.
 
 #### Milestone TD3: CLI Rendering Lock for Typed Diagnostics
 

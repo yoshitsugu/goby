@@ -8,7 +8,7 @@ The next implementation target is [`doc/PLAN_ERROR.md`](/home/yoshitsugu/src/git
 
 Current intent:
 
-- close ordinary-call typed-diagnostic parity on the canonical literal fixture
+- continue `doc/PLAN_ERROR.md` after closing TD2 typed-argument parity
 - preserve the rule that `goby-core` owns typed diagnostic spans while CLI/LSP
   only render them
 - keep widening span ownership only where the parser can honestly point at the
@@ -25,25 +25,37 @@ Current slice status:
   - `goby check` / `goby run` parity is locked for the direct `f "a"` fixture
   - LSP range parity remains locked for ordinary and qualified cases, including
     UTF-16 conversion on a line with emoji before the blamed token
-- The remaining deferred ownership gap inside ordinary typed mismatches is now
-  multiline/body-relative expression shapes, primarily block arguments.
+- TD2 typed-argument parity is now also locked for effect-op and `resume`
+  argument mismatches where the blamed argument expression already has honest
+  parser-owned span support:
+  - effect-op mismatch diagnostics now point at the mismatched argument
+    expression in `goby-core` and render aligned snippets/ranges in CLI/LSP
+  - `resume` mismatch diagnostics now do the same, including handler clause
+    body cases after rebasing clause parsed-body spans to declaration-body
+    coordinates before source-file conversion
+- The remaining deferred ownership gap inside typed mismatches is now
+  multiline/body-relative expression shapes that still lack honest direct
+  ownership, primarily block arguments and any future equivalent forms.
 
 ## Locked Decisions
 
 - `goby-core` remains the sole owner of typed diagnostic spans and messages.
 - Single-line parser-owned literal / interpolated / list / tuple expressions may
   use honest whole-expression spans for typed diagnostics.
+- Handler clause parsed-body diagnostics may rebase body-local spans to
+  declaration-body coordinates inside `goby-core` before final source-file
+  conversion when that mapping is structurally known.
 - Do not fabricate pseudo-precise spans for multiline block arguments or other
   body-relative shapes that still lack direct file-relative ownership.
 - CLI and LSP parity should be added only after the core span source is honest.
 
 ## Immediate Next Steps
 
-- Continue `doc/PLAN_ERROR.md` at TD2:
-  - audit effect-op argument mismatches and `resume` mismatches that can now
-    benefit from the widened parser-owned expression spans
-  - add parity regressions only where `goby-core` already knows the blamed
-    argument expression honestly
+- Continue `doc/PLAN_ERROR.md` after TD2:
+  - audit which remaining typed diagnostic families still already know an honest
+    blame site versus which still lack source ownership
+  - keep multiline block-argument ownership deferred until there is a credible
+    file-relative span source rather than widening by frontend guesswork
 - Keep deferring multiline block-argument ownership until there is a credible
   file-relative span source rather than widening by frontend guesswork.
 

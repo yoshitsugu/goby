@@ -270,10 +270,7 @@ impl RuntimeValue {
                 format!("({})", parts.join(", "))
             }
             Self::List(values) => {
-                let parts: Vec<String> = values
-                    .iter()
-                    .map(|v| v.format_text(true))
-                    .collect();
+                let parts: Vec<String> = values.iter().map(|v| v.format_text(true)).collect();
                 format!("[{}]", parts.join(", "))
             }
             Self::Handler(_) => "<handler>".to_string(),

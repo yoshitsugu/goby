@@ -280,4 +280,28 @@ mod tests {
             other => panic!("expected call with spanned literal arg, got {:?}", other),
         }
     }
+
+    #[test]
+    fn parse_body_stmts_populates_resume_literal_argument_span_for_typed_diagnostics() {
+        let stmts = parse_body_stmts("resume \"oops\"").expect("should parse");
+
+        match &stmts[0] {
+            Stmt::Expr(Expr::Resume { value }, Some(stmt_span)) => {
+                assert_eq!(*stmt_span, Span::point(1, 1));
+                assert!(matches!(
+                    value.as_ref(),
+                    Expr::Spanned {
+                        expr,
+                        span
+                    } if matches!(expr.as_ref(), Expr::StringLit(text) if text == "oops")
+                        && *span == Span::new(1, 8, 1, 14)
+                ));
+                assert_eq!(
+                    best_available_expr_span(value),
+                    Some(Span::new(1, 8, 1, 14))
+                );
+            }
+            other => panic!("expected resume with spanned literal arg, got {:?}", other),
+        }
+    }
 }

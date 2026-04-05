@@ -1,4 +1,4 @@
-use crate::ast::{CaseArm, Expr, HandlerClause, Span, Stmt};
+use crate::ast::{CaseArm, Expr, HandlerClause, InterpolatedPart, Span, Stmt};
 use crate::parser_expr::enrich_expr_spans;
 use crate::parser_pattern::parse_case_pattern;
 use crate::parser_util::{
@@ -681,19 +681,316 @@ where
         }
 
         let parsed_body = parse_body_stmts_with(&body, parse_expr);
-        clauses.push(HandlerClause {
+        let mut clause = HandlerClause {
             name,
             params,
             body,
             parsed_body,
             span: Span::point(clause_line_no, clause_col),
-        });
+        };
+        if let Some(parsed_body) = clause.parsed_body.as_mut() {
+            let clause_span = clause.span;
+            let inline_body_col = handler_clause_inline_body_col_from_parts(
+                &clause.name,
+                &clause.params,
+                &clause.body,
+                clause_span.col,
+            );
+            rebase_handler_body_stmt_spans(
+                parsed_body,
+                clause_span.line,
+                clause_span.col,
+                inline_body_col,
+            );
+        }
+        clauses.push(clause);
     }
 
     if clauses.is_empty() {
         return None;
     }
     Some((Expr::Handler { clauses }, i))
+}
+
+fn rebase_handler_body_stmt_spans(
+    stmts: &mut [Stmt],
+    clause_line: usize,
+    clause_col: usize,
+    inline_body_col: Option<usize>,
+) {
+    for stmt in stmts {
+        rebase_stmt_span_from_handler_body(stmt, clause_line, clause_col, inline_body_col);
+    }
+}
+
+fn handler_clause_inline_body_col_from_parts(
+    clause_name: &str,
+    clause_params: &[String],
+    clause_body: &str,
+    clause_col: usize,
+) -> Option<usize> {
+    let first_line = clause_body.lines().next().unwrap_or("");
+    if first_line
+        .chars()
+        .next()
+        .is_some_and(|ch| ch == ' ' || ch == '\t')
+    {
+        return None;
+    }
+    let mut header = clause_name.to_string();
+    if !clause_params.is_empty() {
+        header.push(' ');
+        header.push_str(&clause_params.join(" "));
+    }
+    header.push_str(" -> ");
+    Some(clause_col + header.len())
+}
+
+fn rebase_stmt_span_from_handler_body(
+    stmt: &mut Stmt,
+    clause_line: usize,
+    clause_col: usize,
+    inline_body_col: Option<usize>,
+) {
+    match stmt {
+        Stmt::Binding { value, span, .. }
+        | Stmt::MutBinding { value, span, .. }
+        | Stmt::Assign { value, span, .. } => {
+            if let Some(stmt_span) = span.as_mut() {
+                *stmt_span = rebase_span_from_handler_body(
+                    *stmt_span,
+                    clause_line,
+                    clause_col,
+                    inline_body_col,
+                );
+            }
+            rebase_expr_span_from_handler_body(value, clause_line, clause_col, inline_body_col);
+        }
+        Stmt::Expr(expr, span) => {
+            if let Some(stmt_span) = span.as_mut() {
+                *stmt_span = rebase_span_from_handler_body(
+                    *stmt_span,
+                    clause_line,
+                    clause_col,
+                    inline_body_col,
+                );
+            }
+            rebase_expr_span_from_handler_body(expr, clause_line, clause_col, inline_body_col);
+        }
+    }
+}
+
+fn rebase_expr_span_from_handler_body(
+    expr: &mut Expr,
+    clause_line: usize,
+    clause_col: usize,
+    inline_body_col: Option<usize>,
+) {
+    match expr {
+        Expr::Spanned { expr, span } => {
+            *span = rebase_span_from_handler_body(*span, clause_line, clause_col, inline_body_col);
+            rebase_expr_span_from_handler_body(expr, clause_line, clause_col, inline_body_col);
+        }
+        Expr::Var { span, .. } | Expr::Qualified { span, .. } => {
+            if let Some(expr_span) = span.as_mut() {
+                *expr_span = rebase_span_from_handler_body(
+                    *expr_span,
+                    clause_line,
+                    clause_col,
+                    inline_body_col,
+                );
+            }
+        }
+        Expr::Call { callee, arg, span } => {
+            if let Some(expr_span) = span.as_mut() {
+                *expr_span = rebase_span_from_handler_body(
+                    *expr_span,
+                    clause_line,
+                    clause_col,
+                    inline_body_col,
+                );
+            }
+            rebase_expr_span_from_handler_body(callee, clause_line, clause_col, inline_body_col);
+            rebase_expr_span_from_handler_body(arg, clause_line, clause_col, inline_body_col);
+        }
+        Expr::MethodCall { args, span, .. } => {
+            if let Some(expr_span) = span.as_mut() {
+                *expr_span = rebase_span_from_handler_body(
+                    *expr_span,
+                    clause_line,
+                    clause_col,
+                    inline_body_col,
+                );
+            }
+            for arg in args {
+                rebase_expr_span_from_handler_body(arg, clause_line, clause_col, inline_body_col);
+            }
+        }
+        Expr::RecordConstruct { fields, span, .. } => {
+            if let Some(expr_span) = span.as_mut() {
+                *expr_span = rebase_span_from_handler_body(
+                    *expr_span,
+                    clause_line,
+                    clause_col,
+                    inline_body_col,
+                );
+            }
+            for (_, value) in fields {
+                rebase_expr_span_from_handler_body(value, clause_line, clause_col, inline_body_col);
+            }
+        }
+        Expr::Pipeline {
+            value, callee_span, ..
+        } => {
+            if let Some(span) = callee_span.as_mut() {
+                *span =
+                    rebase_span_from_handler_body(*span, clause_line, clause_col, inline_body_col);
+            }
+            rebase_expr_span_from_handler_body(value, clause_line, clause_col, inline_body_col);
+        }
+        Expr::InterpolatedString(parts) => {
+            for part in parts {
+                if let InterpolatedPart::Expr(expr) = part {
+                    rebase_expr_span_from_handler_body(
+                        expr,
+                        clause_line,
+                        clause_col,
+                        inline_body_col,
+                    );
+                }
+            }
+        }
+        Expr::ListLit { elements, spread } => {
+            for element in elements {
+                rebase_expr_span_from_handler_body(
+                    element,
+                    clause_line,
+                    clause_col,
+                    inline_body_col,
+                );
+            }
+            if let Some(spread) = spread {
+                rebase_expr_span_from_handler_body(
+                    spread,
+                    clause_line,
+                    clause_col,
+                    inline_body_col,
+                );
+            }
+        }
+        Expr::TupleLit(items) => {
+            for item in items {
+                rebase_expr_span_from_handler_body(item, clause_line, clause_col, inline_body_col);
+            }
+        }
+        Expr::UnaryOp { expr, .. } => {
+            rebase_expr_span_from_handler_body(expr, clause_line, clause_col, inline_body_col);
+        }
+        Expr::BinOp { left, right, .. } => {
+            rebase_expr_span_from_handler_body(left, clause_line, clause_col, inline_body_col);
+            rebase_expr_span_from_handler_body(right, clause_line, clause_col, inline_body_col);
+        }
+        Expr::Lambda { body, .. } => {
+            rebase_expr_span_from_handler_body(body, clause_line, clause_col, inline_body_col);
+        }
+        Expr::Handler { clauses } => {
+            for clause in clauses {
+                let rebased_clause_span = rebase_span_from_handler_body(
+                    clause.span,
+                    clause_line,
+                    clause_col,
+                    inline_body_col,
+                );
+                clause.span = rebased_clause_span;
+                if let Some(parsed_body) = clause.parsed_body.as_mut() {
+                    let nested_inline_body_col = handler_clause_inline_body_col_from_parts(
+                        &clause.name,
+                        &clause.params,
+                        &clause.body,
+                        clause.span.col,
+                    );
+                    rebase_handler_body_stmt_spans(
+                        parsed_body,
+                        clause.span.line,
+                        clause.span.col,
+                        nested_inline_body_col,
+                    );
+                }
+            }
+        }
+        Expr::With { handler, body } => {
+            rebase_expr_span_from_handler_body(handler, clause_line, clause_col, inline_body_col);
+            for stmt in body {
+                rebase_stmt_span_from_handler_body(stmt, clause_line, clause_col, inline_body_col);
+            }
+        }
+        Expr::Resume { value } => {
+            rebase_expr_span_from_handler_body(value, clause_line, clause_col, inline_body_col);
+        }
+        Expr::Block(stmts) => {
+            for stmt in stmts {
+                rebase_stmt_span_from_handler_body(stmt, clause_line, clause_col, inline_body_col);
+            }
+        }
+        Expr::Case { scrutinee, arms } => {
+            rebase_expr_span_from_handler_body(scrutinee, clause_line, clause_col, inline_body_col);
+            for arm in arms {
+                arm.span = rebase_span_from_handler_body(
+                    arm.span,
+                    clause_line,
+                    clause_col,
+                    inline_body_col,
+                );
+                rebase_expr_span_from_handler_body(
+                    &mut arm.body,
+                    clause_line,
+                    clause_col,
+                    inline_body_col,
+                );
+            }
+        }
+        Expr::If {
+            condition,
+            then_expr,
+            else_expr,
+        } => {
+            rebase_expr_span_from_handler_body(condition, clause_line, clause_col, inline_body_col);
+            rebase_expr_span_from_handler_body(then_expr, clause_line, clause_col, inline_body_col);
+            rebase_expr_span_from_handler_body(else_expr, clause_line, clause_col, inline_body_col);
+        }
+        Expr::ListIndex { list, index } => {
+            rebase_expr_span_from_handler_body(list, clause_line, clause_col, inline_body_col);
+            rebase_expr_span_from_handler_body(index, clause_line, clause_col, inline_body_col);
+        }
+        Expr::IntLit(_) | Expr::BoolLit(_) | Expr::StringLit(_) => {}
+    }
+}
+
+fn rebase_span_from_handler_body(
+    span: Span,
+    clause_line: usize,
+    clause_col: usize,
+    inline_body_col: Option<usize>,
+) -> Span {
+    let map_line = |line: usize| match inline_body_col {
+        Some(_) => clause_line + line - 1,
+        None => clause_line + line,
+    };
+    let map_col = |line: usize, col: usize| {
+        let base_col = if line == 1 {
+            inline_body_col.unwrap_or(clause_col)
+        } else {
+            clause_col
+        };
+        base_col + col - 1
+    };
+
+    Span::new(
+        map_line(span.line),
+        map_col(span.line, span.col),
+        map_line(span.end_line),
+        map_col(span.end_line, span.end_col),
+    )
 }
 
 fn parse_multiline_expr<F>(lines: &[&str], start: usize, parse_expr: F) -> Option<(Expr, usize)>

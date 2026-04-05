@@ -1679,6 +1679,102 @@ render =
 }
 
 #[test]
+fn effect_op_type_mismatch_renders_argument_aligned_snippet() {
+    let root = repo_root();
+    let sandbox = TempDirGuard::new("effect_op_typed_mismatch_render");
+    let input = sandbox.join("effect_op_arg_type_mismatch.gb");
+    fs::write(
+        &input,
+        r#"
+effect Iter
+  op: String -> Unit
+
+main : Unit -> Unit
+main =
+  with
+    op _ ->
+      resume ()
+  in
+    op 1
+"#,
+    )
+    .expect("temporary input should be writable");
+
+    let output = command_for_goby_cli()
+        .arg("check")
+        .arg(&input)
+        .current_dir(&root)
+        .output()
+        .expect("cli should execute");
+
+    assert!(
+        !output.status.success(),
+        "effect-op mismatch fixture should fail"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains(
+            ":11:8: error: effect operation `op` expects argument of type `String` but got `Int` in 'main'"
+        ),
+        "unexpected stderr: {}",
+        stderr
+    );
+    assert!(
+        stderr.contains("11 |     op 1\n   |        ^"),
+        "expected token-aligned snippet, stderr: {}",
+        stderr
+    );
+}
+
+#[test]
+fn resume_type_mismatch_renders_argument_aligned_snippet() {
+    let root = repo_root();
+    let sandbox = TempDirGuard::new("resume_typed_mismatch_render");
+    let input = sandbox.join("resume_arg_type_mismatch.gb");
+    fs::write(
+        &input,
+        r#"
+effect Iter
+  next: Unit -> Int
+
+main : Unit -> Unit
+main =
+  with
+    next x ->
+      resume "oops"
+  in
+    print "ok"
+"#,
+    )
+    .expect("temporary input should be writable");
+
+    let output = command_for_goby_cli()
+        .arg("check")
+        .arg(&input)
+        .current_dir(&root)
+        .output()
+        .expect("cli should execute");
+
+    assert!(
+        !output.status.success(),
+        "resume mismatch fixture should fail"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains(
+            ":9:14: error: resume_arg_type_mismatch: `resume` expects argument of type `Int` but got `String` in 'main'"
+        ),
+        "unexpected stderr: {}",
+        stderr
+    );
+    assert!(
+        stderr.contains(" 9 |       resume \"oops\"\n   |              ^^^^^^"),
+        "expected token-aligned snippet, stderr: {}",
+        stderr
+    );
+}
+
+#[test]
 fn import_typo_error_output_matches_fixture() {
     let root = repo_root();
     let input = "crates/goby-cli/tests/fixtures/import_typo_error_input.gb";

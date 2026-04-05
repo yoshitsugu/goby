@@ -245,6 +245,10 @@ fn parse_expr_with_spans(src: &str, line: usize, col: usize) -> Option<Expr> {
         }
     }
 
+    if let Some(expr) = parse_resume_expr_with_spans(trimmed, line, col) {
+        return Some(expr);
+    }
+
     if let Some(expr) = parse_call_expr_with_spans(trimmed, line, col) {
         return Some(expr);
     }
@@ -386,6 +390,9 @@ fn copy_expr_spans(dst: &mut Expr, src: &Expr) {
             },
         ) => {
             *dst_cs = *src_cs;
+        }
+        (Expr::Resume { value: dst_value }, Expr::Resume { value: src_value }) => {
+            copy_expr_spans(dst_value, src_value);
         }
         _ => {}
     }
@@ -581,6 +588,24 @@ fn parse_resume_expr(src: &str) -> Option<Expr> {
     let value = parse_expr(value_src)?;
     Some(Expr::Resume {
         value: Box::new(value),
+    })
+}
+
+fn parse_resume_expr_with_spans(src: &str, line: usize, col: usize) -> Option<Expr> {
+    let rest = src.strip_prefix("resume")?;
+    if rest.is_empty() {
+        return None;
+    }
+    if !rest.chars().next().is_some_and(char::is_whitespace) {
+        return None;
+    }
+    let value_src = rest.trim();
+    if value_src.is_empty() {
+        return None;
+    }
+    let value_col = col + subslice_offset(src, value_src);
+    Some(Expr::Resume {
+        value: Box::new(parse_expr_with_spans(value_src, line, value_col)?),
     })
 }
 
