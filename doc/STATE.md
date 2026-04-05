@@ -16,7 +16,6 @@ Current intent:
 
 Current slice status:
 
-- `doc/PLAN_EXPORT_EMBED.md` is closed unless a regression reopens it.
 - Ordinary-call typed mismatch parity is now locked on the canonical literal
   fixture as well as the previously covered bound-variable / qualified /
   later-argument / partially-applied cases:
