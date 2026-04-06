@@ -42,21 +42,6 @@ impl RuntimeLocals {
         result
     }
 
-    pub(crate) fn list_int_values(&self) -> HashMap<String, Vec<i64>> {
-        let mut result = HashMap::new();
-        for (name, value) in &self.values {
-            if let Some(items) = value.as_int_list() {
-                result.insert(name.clone(), items);
-            }
-        }
-        for (name, cell) in &self.mut_values {
-            if let Some(items) = cell.borrow().as_int_list() {
-                result.insert(name.clone(), items);
-            }
-        }
-        result
-    }
-
     pub(crate) fn store(&mut self, name: &str, value: RuntimeValue) {
         self.clear(name);
         self.values.insert(name.to_string(), value);
@@ -384,7 +369,8 @@ mod tests {
         );
         let val = locals.get("xs").unwrap();
         assert!(matches!(val, RuntimeValue::List(_)));
-        assert!(!locals.list_int_values().contains_key("xs"));
+        // Mixed list should not be representable as pure int list
+        assert!(val.as_int_list().is_none());
     }
 
     #[test]

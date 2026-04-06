@@ -5,7 +5,7 @@ use goby_core::{Expr, Stmt, ast::InterpolatedPart, stdlib::EmbeddedRuntimeHandle
 
 use crate::{
     RuntimeLocals, RuntimeValue,
-    runtime_eval::{EvaluatedFunctions, IntCallable, IntEvaluator, ListIntEvaluator},
+    runtime_eval::{EvaluatedFunctions, IntCallable, IntEvaluator},
 };
 
 pub(crate) type WithId = u64;
@@ -228,7 +228,6 @@ pub(crate) struct RuntimeHandlerMethod {
 
 pub(crate) struct RuntimeEvaluators<'a, 'b> {
     pub(crate) int: &'b IntEvaluator<'a>,
-    pub(crate) list: &'b ListIntEvaluator<'a>,
     pub(crate) unit: &'b EvaluatedFunctions<'a>,
 }
 

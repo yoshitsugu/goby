@@ -14,7 +14,7 @@ pub(crate) fn collect_functions_with_result<'a>(
     expected_result_type: &str,
 ) -> EvaluatedFunctions<'a> {
     // Restrict to at-most-one-argument functions: multi-arg helpers are not
-    // eligible for the single-pass Int/ListInt evaluators.
+    // eligible for the single-pass Int evaluator.
     collect_functions(module, |ft| {
         ft.result == expected_result_type && ft.arguments.len() <= 1
     })
@@ -262,101 +262,6 @@ impl<'a> IntEvaluator<'a> {
     }
 }
 
-pub(crate) struct ListIntEvaluator<'a> {
-    pub(crate) functions: &'a EvaluatedFunctions<'a>,
-    allow_imported_list_map: bool,
-    depth: usize,
-}
-
-impl<'a> ListIntEvaluator<'a> {
-    pub(crate) fn root(
-        functions: &'a EvaluatedFunctions<'a>,
-        allow_imported_list_map: bool,
-    ) -> Self {
-        Self {
-            functions,
-            allow_imported_list_map,
-            depth: 0,
-        }
-    }
-
-    fn descend(&self) -> Option<Self> {
-        if self.depth >= MAX_EVAL_DEPTH {
-            return None;
-        }
-
-        Some(Self {
-            functions: self.functions,
-            allow_imported_list_map: self.allow_imported_list_map,
-            depth: self.depth + 1,
-        })
-    }
-
-    pub(crate) fn eval_expr(
-        &self,
-        expr: &str,
-        locals: &HashMap<String, Vec<i64>>,
-    ) -> Option<Vec<i64>> {
-        let expr = expr.trim();
-        if expr.is_empty() {
-            return None;
-        }
-
-        if let Some(values) = parse_list_int_literal(expr) {
-            return Some(values);
-        }
-
-        if let Some(value) = locals.get(expr) {
-            return Some(value.clone());
-        }
-
-        if self.allow_imported_list_map
-            && let Some((list_expr, lambda_expr)) = parse_map_call(expr)
-        {
-            let list_values = self.descend()?.eval_expr(list_expr, locals)?;
-            let lambda = parse_map_lambda(lambda_expr)?;
-            return apply_map_lambda(&list_values, &lambda);
-        }
-
-        if let Some((callee, arg_expr)) = parse_call(expr) {
-            let function = self.functions.get(callee)?;
-            let arg_values = self.descend()?.eval_expr(arg_expr, locals)?;
-            return self.descend()?.eval_function(function, Some(arg_values));
-        }
-
-        let function = self.functions.get(expr)?;
-        self.descend()?.eval_function(function, None)
-    }
-
-    pub(crate) fn eval_function(
-        &self,
-        function: &EvaluatedFunction<'a>,
-        arg: Option<Vec<i64>>,
-    ) -> Option<Vec<i64>> {
-        let mut locals = HashMap::new();
-        seed_locals_from_parameter(&mut locals, function.parameter.as_deref(), arg);
-        let body = function.body.as_deref()?;
-
-        let mut result_expr = None;
-        for line in code_lines(body) {
-            if let Some((name, expr)) = split_binding(line) {
-                let value = self.descend()?.eval_expr(expr, &locals);
-                assign_local(name, value, &mut locals);
-                continue;
-            }
-
-            if parse_print_call(line).is_some() {
-                return None;
-            }
-
-            result_expr = Some(line);
-        }
-
-        let expr = result_expr?;
-        self.descend()?.eval_expr(expr, &locals)
-    }
-}
-
 pub(crate) enum Statement<'a> {
     Binding { name: &'a str, expr: &'a str },
     MutBinding { name: &'a str, expr: &'a str },
@@ -367,48 +272,6 @@ pub(crate) enum Statement<'a> {
 
 pub(crate) fn statements(body: &str) -> impl Iterator<Item = Statement<'_>> {
     code_lines(body).map(parse_statement)
-}
-
-struct MapLambda {
-    parameter: String,
-    body: String,
-}
-
-fn parse_map_lambda(expr: &str) -> Option<MapLambda> {
-    let lambda = parse_inline_lambda(expr)?;
-    Some(MapLambda {
-        parameter: lambda.parameter,
-        body: lambda.body,
-    })
-}
-
-fn apply_map_lambda(values: &[i64], lambda: &MapLambda) -> Option<Vec<i64>> {
-    let empty_functions = HashMap::new();
-    let empty_callables = HashMap::new();
-    let evaluator = IntEvaluator::root(&empty_functions);
-    let mut out = Vec::with_capacity(values.len());
-    for value in values {
-        let mut locals = HashMap::new();
-        locals.insert(lambda.parameter.to_string(), *value);
-        let mapped = evaluator.eval_expr(&lambda.body, &locals, &empty_callables)?;
-        out.push(mapped);
-    }
-    Some(out)
-}
-
-fn parse_map_call(expr: &str) -> Option<(&str, &str)> {
-    let rest = expr.strip_prefix("map ")?;
-    let split_idx = rest.rfind(" (")?;
-    let list_expr = rest[..split_idx].trim();
-    let lambda_group = rest[split_idx + 1..].trim();
-    if list_expr.is_empty() || !lambda_group.starts_with('(') || !lambda_group.ends_with(')') {
-        return None;
-    }
-    let lambda_expr = lambda_group[1..lambda_group.len() - 1].trim();
-    if lambda_expr.is_empty() {
-        return None;
-    }
-    Some((list_expr, lambda_expr))
 }
 
 fn parse_inline_lambda(expr: &str) -> Option<IntLambda> {
@@ -469,28 +332,6 @@ fn parse_callable_head(expr: &str) -> Option<DirectCallHead> {
     })
 }
 
-fn parse_list_int_literal(expr: &str) -> Option<Vec<i64>> {
-    if !is_list_literal(expr) {
-        return None;
-    }
-
-    let inner = &expr[1..expr.len() - 1];
-    let inner = inner.trim();
-    if inner.is_empty() {
-        return Some(Vec::new());
-    }
-
-    let mut out = Vec::new();
-    for part in inner.split(',') {
-        let item = part.trim();
-        if !is_int_literal(item) {
-            return None;
-        }
-        out.push(item.parse().ok()?);
-    }
-    Some(out)
-}
-
 #[derive(Clone)]
 pub(crate) struct EvaluatedFunction<'a> {
     pub(crate) body: Option<Cow<'a, str>>,
@@ -536,10 +377,6 @@ pub(crate) fn is_string_literal(expr: &str) -> bool {
 pub(crate) fn is_int_literal(expr: &str) -> bool {
     let raw = expr.strip_prefix('-').unwrap_or(expr);
     !raw.is_empty() && raw.chars().all(|c| c.is_ascii_digit())
-}
-
-pub(crate) fn is_list_literal(expr: &str) -> bool {
-    expr.starts_with('[') && expr.ends_with(']')
 }
 
 fn assign_local<T>(name: &str, value: Option<T>, locals: &mut HashMap<String, T>) {

@@ -373,15 +373,6 @@ impl<'m> RuntimeOutputResolver<'m> {
                         Out::Done(RuntimeValue::Int(value))
                     });
             }
-        } else if let Some(arg_list) = arg_val.as_int_list()
-            && let Some(function) = evaluators.list.functions.get(fn_name)
-        {
-            return evaluators
-                .list
-                .eval_function(function, Some(arg_list))
-                .map_or(Out::Err(RuntimeError::Unsupported), |values| {
-                    Out::Done(RuntimeValue::list_from_ints(values))
-                });
         }
         Out::Err(RuntimeError::Unsupported)
     }

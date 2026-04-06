@@ -363,11 +363,6 @@ impl<'m> RuntimeOutputResolver<'m> {
             return Some(RuntimeValue::Int(value));
         }
 
-        let list_int_locals = locals.list_int_values();
-        if let Some(values) = evaluators.list.eval_expr(expr, &list_int_locals) {
-            return Some(RuntimeValue::list_from_ints(values));
-        }
-
         None
     }
 
