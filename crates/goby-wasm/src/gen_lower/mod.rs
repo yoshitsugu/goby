@@ -160,12 +160,19 @@ fn has_runtime_read_effect(comp: &CompExpr) -> bool {
         CompExpr::Assign { value, .. } => has_runtime_read_effect(value),
         CompExpr::Case { arms, .. } => arms.iter().any(|arm| has_runtime_read_effect(&arm.body)),
         CompExpr::Handle { .. } | CompExpr::WithHandler { .. } | CompExpr::Resume { .. } => false,
+        CompExpr::AssignIndex { path, value, .. } => {
+            let _ = path;
+            has_runtime_read_effect(value)
+        }
     }
 }
 
 fn has_handler_constructs(comp: &CompExpr) -> bool {
     match comp {
         CompExpr::Handle { .. } | CompExpr::WithHandler { .. } | CompExpr::Resume { .. } => true,
+        CompExpr::AssignIndex { path, value, .. } => {
+            path.iter().any(value_has_handler_constructs) || has_handler_constructs(value)
+        }
         CompExpr::Value(value) => value_has_handler_constructs(value),
         CompExpr::Let { value, body, .. } | CompExpr::LetMut { value, body, .. } => {
             has_handler_constructs(value) || has_handler_constructs(body)
@@ -206,6 +213,7 @@ fn has_handler_rewrite_entrypoints(comp: &CompExpr) -> bool {
             .iter()
             .any(|arm| has_handler_rewrite_entrypoints(&arm.body)),
         CompExpr::PerformEffect { .. } => false,
+        CompExpr::AssignIndex { value, .. } => has_handler_rewrite_entrypoints(value),
     }
 }
 
@@ -299,6 +307,7 @@ fn contains_future_handler_intrinsics(comp: &CompExpr) -> bool {
         | CompExpr::Handle { .. }
         | CompExpr::WithHandler { .. }
         | CompExpr::Resume { .. } => false,
+        CompExpr::AssignIndex { value, .. } => contains_future_handler_intrinsics(value),
     }
 }
 
@@ -363,6 +372,7 @@ fn comp_has_effect_boundary_activity(comp: &CompExpr) -> bool {
         CompExpr::Case { arms, .. } => arms
             .iter()
             .any(|arm| comp_has_effect_boundary_activity(&arm.body)),
+        CompExpr::AssignIndex { value, .. } => comp_has_effect_boundary_activity(value),
     }
 }
 
@@ -426,6 +436,9 @@ fn has_lambda_in_comp(comp: &CompExpr) -> bool {
             has_lambda_in_value(scrutinee) || arms.iter().any(|arm| has_lambda_in_comp(&arm.body))
         }
         CompExpr::Handle { .. } | CompExpr::WithHandler { .. } | CompExpr::Resume { .. } => false,
+        CompExpr::AssignIndex { path, value, .. } => {
+            path.iter().any(has_lambda_in_value) || has_lambda_in_comp(value)
+        }
     }
 }
 
@@ -479,6 +492,9 @@ fn has_tuple_project_in_comp(comp: &CompExpr) -> bool {
                 || arms.iter().any(|arm| has_tuple_project_in_comp(&arm.body))
         }
         CompExpr::Handle { .. } | CompExpr::WithHandler { .. } | CompExpr::Resume { .. } => false,
+        CompExpr::AssignIndex { path, value, .. } => {
+            path.iter().any(has_tuple_project_in_value) || has_tuple_project_in_comp(value)
+        }
     }
 }
 

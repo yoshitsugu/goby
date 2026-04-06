@@ -371,6 +371,7 @@ fn eval_comp(
         }
         CompExpr::Assign { .. } | CompExpr::Case { .. } => None,
         CompExpr::Handle { .. } | CompExpr::WithHandler { .. } | CompExpr::Resume { .. } => None,
+        CompExpr::AssignIndex { .. } => None,
     }
 }
 

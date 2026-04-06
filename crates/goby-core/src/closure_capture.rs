@@ -293,6 +293,12 @@ fn collect_comp_lambda_envs(
         CompExpr::Assign { value, .. } => {
             collect_comp_lambda_envs(value, bindings, known_decls, envs);
         }
+        CompExpr::AssignIndex { path, value, .. } => {
+            for idx in path {
+                collect_value_lambda_envs(idx, bindings, known_decls, envs);
+            }
+            collect_comp_lambda_envs(value, bindings, known_decls, envs);
+        }
         CompExpr::Case { scrutinee, arms } => {
             collect_value_lambda_envs(scrutinee, bindings, known_decls, envs);
             for arm in arms {
@@ -436,6 +442,13 @@ fn analyze_comp(
         }
         CompExpr::Assign { name, value } => {
             record_mutable_write_capture(name, bindings, known_decls, captures);
+            analyze_comp(value, bindings, known_decls, captures);
+        }
+        CompExpr::AssignIndex { root, path, value } => {
+            record_mutable_write_capture(root, bindings, known_decls, captures);
+            for idx in path {
+                analyze_value(idx, bindings, known_decls, captures);
+            }
             analyze_comp(value, bindings, known_decls, captures);
         }
         CompExpr::Case { scrutinee, arms } => {

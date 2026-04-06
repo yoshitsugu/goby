@@ -458,6 +458,12 @@ fn inspect_ir_comp(
             out.contains_resume = true;
             inspect_ir_value(value, out, declaration_names, qualified_operation_index);
         }
+        CompExpr::AssignIndex { path, value, .. } => {
+            for idx in path {
+                inspect_ir_value(idx, out, declaration_names, qualified_operation_index);
+            }
+            inspect_ir_comp(value, out, declaration_names, qualified_operation_index);
+        }
     }
 }
 
@@ -533,6 +539,7 @@ fn ir_comp_contains_resume(comp: &CompExpr) -> bool {
         CompExpr::WithHandler { handler, body } => {
             ir_comp_contains_resume(handler) || ir_comp_contains_resume(body)
         }
+        CompExpr::AssignIndex { value, .. } => ir_comp_contains_resume(value),
     }
 }
 

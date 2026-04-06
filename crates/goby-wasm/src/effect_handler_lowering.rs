@@ -272,6 +272,9 @@ fn rewrite_comp(
             };
             resume_k(rewrite_value(value, names)?, names)
         }
+        CompExpr::AssignIndex { .. } => Err(CodegenError {
+            message: "effect handler lowering: AssignIndex not yet implemented (LM3c)".to_string(),
+        }),
     }
 }
 

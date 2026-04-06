@@ -164,6 +164,12 @@ fn collect_comp_legality(
             collect_comp_legality(decl_name, body, env, summary);
         }
         CompExpr::Resume { value } => collect_value_legality(decl_name, value, env, summary),
+        CompExpr::AssignIndex { path, value, .. } => {
+            for idx in path {
+                collect_value_legality(decl_name, idx, env, summary);
+            }
+            collect_comp_legality(decl_name, value, env, summary);
+        }
     }
 }
 
@@ -335,6 +341,13 @@ fn analyze_comp(comp: &CompExpr, tail_position: bool) -> Result<bool, HandlerLeg
             } else {
                 Err(HandlerLegalityIssue::ResumeNotInTailPosition)
             }
+        }
+        CompExpr::AssignIndex { path, value, .. } => {
+            for idx in path {
+                analyze_value(idx)?;
+            }
+            analyze_comp(value, false)?;
+            Ok(false)
         }
     }
 }

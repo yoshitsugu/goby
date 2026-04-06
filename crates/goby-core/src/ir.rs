@@ -137,6 +137,15 @@ pub enum CompExpr {
     },
     /// Assignment to a mutable local. Produces `Unit`.
     Assign { name: String, value: Box<CompExpr> },
+    /// List-index assignment: update element(s) of a mutable list local using
+    /// path-copying semantics.  `root` names the mutable local; `path` is a
+    /// non-empty sequence of pure index expressions (outermost first); `value`
+    /// is the new element value.  Produces `Unit`.
+    AssignIndex {
+        root: String,
+        path: Vec<ValueExpr>,
+        value: Box<CompExpr>,
+    },
     /// Pattern-matching case expression.
     Case {
         scrutinee: Box<ValueExpr>,
@@ -513,6 +522,18 @@ fn fmt_comp(out: &mut String, c: &CompExpr, depth: usize) {
             out.push_str(" =\n");
             fmt_comp(out, value, depth + 1);
         }
+        CompExpr::AssignIndex { root, path, value } => {
+            indent(out, depth);
+            out.push_str("assign_index ");
+            out.push_str(root);
+            for idx in path {
+                out.push('[');
+                fmt_value(out, idx);
+                out.push(']');
+            }
+            out.push_str(" =\n");
+            fmt_comp(out, value, depth + 1);
+        }
         CompExpr::Case { scrutinee, arms } => {
             indent(out, depth);
             out.push_str("case ");
@@ -684,6 +705,12 @@ fn validate_comp(c: &CompExpr, decl_name: &str) -> Result<(), IrValidateError> {
             }
         }
         CompExpr::Assign { value, .. } => validate_comp(value, decl_name),
+        CompExpr::AssignIndex { path, value, .. } => {
+            for idx in path {
+                validate_value(idx, decl_name)?;
+            }
+            validate_comp(value, decl_name)
+        }
         CompExpr::Case { scrutinee, arms } => {
             if arms.is_empty() {
                 return Err(IrValidateError {

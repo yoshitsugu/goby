@@ -2111,6 +2111,7 @@ choose n =
                 count_perform(handler, effect, op) + count_perform(body, effect, op)
             }
             CompExpr::Resume { .. } => 0,
+            CompExpr::AssignIndex { value, .. } => count_perform(value, effect, op),
         }
     }
 

@@ -438,6 +438,7 @@ fn ir_has_read_op(comp: &CompExpr) -> bool {
         CompExpr::Handle { clauses } => clauses.iter().any(|c| ir_has_read_op(&c.body)),
         CompExpr::WithHandler { handler, body } => ir_has_read_op(handler) || ir_has_read_op(body),
         CompExpr::Resume { .. } => false,
+        CompExpr::AssignIndex { value, .. } => ir_has_read_op(value),
     }
 }
 
@@ -470,6 +471,7 @@ fn ir_has_specific_read_op(comp: &CompExpr, target_op: &str) -> bool {
             ir_has_specific_read_op(handler, target_op) || ir_has_specific_read_op(body, target_op)
         }
         CompExpr::Resume { .. } => false,
+        CompExpr::AssignIndex { value, .. } => ir_has_specific_read_op(value, target_op),
     }
 }
 
