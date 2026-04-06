@@ -212,68 +212,23 @@ Based on `examples/*.gb`:
     - whether CLI `run` should always emit a `.wasm` artifact even for Goby-owned execution paths,
     - whether the long-term contract should expose a separate Goby runner instead of overloading
       raw external `wasmtime` execution.
-  - Planned correction: fallback/static runtime value parity for nested aggregates.
-    - Problem:
-      - `doc/BUGS.md` currently tracks a reproducible failure where `goby run` rejects
-        programs such as `[[1,2,3], [4,5,6]][0][1]` even though they parse and typecheck.
-      - the current fallback/static output resolver models lists too narrowly
-        (`ListInt`, `ListString`) and therefore cannot represent first-class nested
-        aggregate values such as `List (List Int)`.
-      - interpolation is only where the failure becomes visible in one reproduction;
-        the actual missing capability is broader: the fallback evaluator cannot
-        construct, carry, index, compare, or stringify recursive runtime values
-        uniformly across the pure evaluator boundary.
-    - Missing capability:
-      - the Goby-owned fallback evaluator needs one recursive runtime value domain
-        for language-level first-class values, instead of parallel ad hoc encodings
-        for specific element types.
-      - list operations in that evaluator should be defined over generic runtime
-        values, with type restrictions enforced by the frontend/typechecker rather
-        than by hard-coded runtime enum variants for particular list element kinds.
-      - string interpolation/output formatting should consume that same recursive
-        value model, so nested values are rendered by one shared formatting path
-        rather than by isolated `List Int` / `List String` special cases.
-    - Ideal behavior:
-      - if a program is well-typed and remains within the supported pure fallback
-        subset, `goby run` should evaluate it successfully regardless of whether
-        the values involved are scalars, tuples, records, `List Int`, `List String`,
-        or nested aggregates such as `List (List Int)`.
-      - `a = [[1,2,3], [4,5,6], [7,8,9]]; println("${a[0][1]}")` should therefore
-        behave the same as the corresponding native/runtime-executed path and print `2`.
-      - interpolation should not need a separate nested-list exception; it should
-        work automatically once the fallback runtime can evaluate and stringify
-        recursive values honestly.
-    - Anti-goals:
-      - do not fix this by adding only `ListListInt`, `ListBool`, or other
-        combinatorial runtime variants.
-      - do not patch only the interpolation path while leaving plain binding/index
-        evaluation unable to represent nested lists.
-      - do not encode a special-case "nested list print" escape hatch that bypasses
-        the shared fallback evaluator semantics.
-    - Recommended implementation direction:
-      - replace the specialized fallback list representation with a recursive value
-        shape such as `List(Vec<RuntimeValue>)`, or an equivalent typed/boxed form
-        that preserves one uniform evaluator model.
-      - migrate list literal evaluation, list indexing, equality support, and
-        output/stringification helpers onto that shared representation in one
-        coherent slice.
-      - add parity tests that cover both:
-        - plain nested-list binding/indexing before printing
-        - nested-list indexing inside interpolation
-      - keep the long-term bar that native lowering and fallback execution should
-        disagree only because of an explicit unsupported feature boundary, not
-        because the fallback runtime models a smaller value universe than the
-        source language exposes.
-    - Completion criteria for this fix:
-      - add regression coverage that executes the exact bug shapes currently
-        recorded in `doc/BUGS.md`, not only reduced internal unit fragments.
-      - at minimum, `goby run`-equivalent coverage must prove both programs
-        succeed and print `2`:
-        - `a = [[1,2,3], [4,5,6], [7,8,9]]; b = a[0][1]; println("${b}")`
-        - `a = [[1,2,3], [4,5,6], [7,8,9]]; println("${a[0][1]}")`
-      - the fix is not complete if only one of the two shapes passes, because
-        the current bug report shows both plain nested-list indexing and the
-        interpolation-surfaced variant must share the same repaired runtime model.
+  - Mutable nested-list execution boundary (updated 2026-04-06):
+    - rooted list update (`a[i] := v`, `a[i][j] := v`) is now treated as a semantic runtime
+      capability, not as an incidental consequence of `Read`, handlers, lambdas, or tuples.
+    - execution planning therefore routes well-typed mutable-list programs through the
+      `GeneralLowered` Goby-owned Wasm path even when they are `Print`-only.
+    - shared IR now carries pure `list.get` reads inside interpolation/output contexts, so
+      update-followed-by-interpolation programs such as
+      `mut a = [[1,2,3], [4,5,6], [7,8,9]]; a[1][1] := 30; println("${a[1][0]},${a[1][1]}")`
+      execute successfully under `goby run`.
+    - current explicit boundary:
+      - fallback/static execution may still evaluate recursive aggregate reads for the supported
+        pure subset,
+      - but rooted list updates are owned by the `GeneralLowered` runtime path and must not be
+        routed into fallback execution.
+    - remaining follow-up:
+      - continue converging fallback/runtime recursive aggregate semantics so the supported pure
+        subset uses one honest value model and one clearly documented unsupported boundary.
 
 - **`fn`-only anonymous functions** (complete, 2026-03-31).
   - `fn x -> expr` is the only anonymous function syntax.

@@ -217,6 +217,31 @@ fn has_handler_rewrite_entrypoints(comp: &CompExpr) -> bool {
     }
 }
 
+fn has_rooted_list_update(comp: &CompExpr) -> bool {
+    match comp {
+        CompExpr::AssignIndex { .. } => true,
+        CompExpr::Value(value) => value_has_rooted_list_update(value),
+        CompExpr::Let { value, body, .. } | CompExpr::LetMut { value, body, .. } => {
+            has_rooted_list_update(value) || has_rooted_list_update(body)
+        }
+        CompExpr::Seq { stmts, tail } => {
+            stmts.iter().any(has_rooted_list_update) || has_rooted_list_update(tail)
+        }
+        CompExpr::If { then_, else_, .. } => {
+            has_rooted_list_update(then_) || has_rooted_list_update(else_)
+        }
+        CompExpr::Call { .. } | CompExpr::PerformEffect { .. } | CompExpr::Resume { .. } => false,
+        CompExpr::Assign { value, .. } => has_rooted_list_update(value),
+        CompExpr::Case { arms, .. } => arms.iter().any(|arm| has_rooted_list_update(&arm.body)),
+        CompExpr::Handle { clauses } => clauses
+            .iter()
+            .any(|clause| has_rooted_list_update(&clause.body)),
+        CompExpr::WithHandler { handler, body } => {
+            has_rooted_list_update(handler) || has_rooted_list_update(body)
+        }
+    }
+}
+
 fn value_has_handler_constructs(value: &goby_core::ir::ValueExpr) -> bool {
     match value {
         goby_core::ir::ValueExpr::ListLit { elements, spread } => {
@@ -236,6 +261,40 @@ fn value_has_handler_constructs(value: &goby_core::ir::ValueExpr) -> bool {
             value_has_handler_constructs(left) || value_has_handler_constructs(right)
         }
         goby_core::ir::ValueExpr::TupleProject { tuple, .. } => value_has_handler_constructs(tuple),
+        goby_core::ir::ValueExpr::ListGet { list, index } => {
+            value_has_handler_constructs(list) || value_has_handler_constructs(index)
+        }
+        goby_core::ir::ValueExpr::IntLit(_)
+        | goby_core::ir::ValueExpr::BoolLit(_)
+        | goby_core::ir::ValueExpr::StrLit(_)
+        | goby_core::ir::ValueExpr::Var(_)
+        | goby_core::ir::ValueExpr::GlobalRef { .. }
+        | goby_core::ir::ValueExpr::Unit => false,
+    }
+}
+
+fn value_has_rooted_list_update(value: &goby_core::ir::ValueExpr) -> bool {
+    match value {
+        goby_core::ir::ValueExpr::ListLit { elements, spread } => {
+            elements.iter().any(value_has_rooted_list_update)
+                || spread.as_deref().is_some_and(value_has_rooted_list_update)
+        }
+        goby_core::ir::ValueExpr::TupleLit(items) => items.iter().any(value_has_rooted_list_update),
+        goby_core::ir::ValueExpr::RecordLit { fields, .. } => fields
+            .iter()
+            .any(|(_, value)| value_has_rooted_list_update(value)),
+        goby_core::ir::ValueExpr::Lambda { body, .. } => has_rooted_list_update(body),
+        goby_core::ir::ValueExpr::Interp(parts) => parts.iter().any(|part| match part {
+            goby_core::ir::IrInterpPart::Text(_) => false,
+            goby_core::ir::IrInterpPart::Expr(value) => value_has_rooted_list_update(value),
+        }),
+        goby_core::ir::ValueExpr::BinOp { left, right, .. } => {
+            value_has_rooted_list_update(left) || value_has_rooted_list_update(right)
+        }
+        goby_core::ir::ValueExpr::TupleProject { tuple, .. } => value_has_rooted_list_update(tuple),
+        goby_core::ir::ValueExpr::ListGet { list, index } => {
+            value_has_rooted_list_update(list) || value_has_rooted_list_update(index)
+        }
         goby_core::ir::ValueExpr::IntLit(_)
         | goby_core::ir::ValueExpr::BoolLit(_)
         | goby_core::ir::ValueExpr::StrLit(_)
@@ -272,6 +331,10 @@ fn value_has_handler_rewrite_entrypoints(value: &goby_core::ir::ValueExpr) -> bo
         }
         goby_core::ir::ValueExpr::TupleProject { tuple, .. } => {
             value_has_handler_rewrite_entrypoints(tuple)
+        }
+        goby_core::ir::ValueExpr::ListGet { list, index } => {
+            value_has_handler_rewrite_entrypoints(list)
+                || value_has_handler_rewrite_entrypoints(index)
         }
         goby_core::ir::ValueExpr::IntLit(_)
         | goby_core::ir::ValueExpr::BoolLit(_)
@@ -341,6 +404,10 @@ fn value_contains_future_handler_intrinsics(value: &goby_core::ir::ValueExpr) ->
         goby_core::ir::ValueExpr::TupleProject { tuple, .. } => {
             value_contains_future_handler_intrinsics(tuple)
         }
+        goby_core::ir::ValueExpr::ListGet { list, index } => {
+            value_contains_future_handler_intrinsics(list)
+                || value_contains_future_handler_intrinsics(index)
+        }
         goby_core::ir::ValueExpr::IntLit(_)
         | goby_core::ir::ValueExpr::BoolLit(_)
         | goby_core::ir::ValueExpr::StrLit(_)
@@ -400,6 +467,9 @@ fn value_has_effect_boundary_activity(value: &goby_core::ir::ValueExpr) -> bool 
         }
         goby_core::ir::ValueExpr::TupleProject { tuple, .. } => {
             value_has_effect_boundary_activity(tuple)
+        }
+        goby_core::ir::ValueExpr::ListGet { list, index } => {
+            value_has_effect_boundary_activity(list) || value_has_effect_boundary_activity(index)
         }
         goby_core::ir::ValueExpr::IntLit(_)
         | goby_core::ir::ValueExpr::BoolLit(_)
@@ -860,11 +930,13 @@ fn lower_module_to_instrs(module: &Module) -> Result<LowerModuleResult, CodegenE
     //   - a runtime Read effect, OR
     //   - safe handler constructs, OR
     //   - a Lambda expression, OR
-    //   - a tuple member projection (TupleProject; native evaluator does not support it).
+    //   - a tuple member projection (TupleProject; native evaluator does not support it), OR
+    //   - a rooted list update (`AssignIndex`), which the fallback evaluator does not support.
     // Pure-Print programs without any of the above can stay on the simpler paths.
     if !has_runtime_read_effect(&ir_decl.body)
         && !has_handler_rewrite_entrypoints(&ir_decl.body)
         && !has_lambda_in_comp(&ir_decl.body)
+        && !has_rooted_list_update(&ir_decl.body)
         && !has_tuple_project_in_comp(&ir_decl.body)
     {
         return Ok(Err(
@@ -1325,6 +1397,27 @@ main =
         assert!(
             reason.is_none(),
             "ByValue-capturing lambda should be supported, got: {:?}",
+            reason
+        );
+    }
+
+    #[test]
+    fn supports_general_lower_module_accepts_rooted_list_update_without_read() {
+        let module = parse_module(
+            r#"
+main : Unit -> Unit can Print
+main =
+  mut xs = [[1, 2], [3, 4]]
+  xs[0][1] := 99
+  println "${xs[0][1]}"
+"#,
+        )
+        .expect("source should parse");
+        let reason =
+            supports_general_lower_module(&module).expect("classification should not error");
+        assert!(
+            reason.is_none(),
+            "rooted list update should require GeneralLowered support, got: {:?}",
             reason
         );
     }

@@ -91,6 +91,11 @@ pub enum ValueExpr {
         tuple: Box<ValueExpr>,
         index: usize,
     },
+    /// Pure list indexing (`list.get list index`) lowered as a value expression.
+    ListGet {
+        list: Box<ValueExpr>,
+        index: Box<ValueExpr>,
+    },
 }
 
 /// A part of a pure interpolated string.
@@ -437,6 +442,12 @@ fn fmt_value(out: &mut String, v: &ValueExpr) {
             out.push(')');
             out.push('.');
             out.push_str(&index.to_string());
+        }
+        ValueExpr::ListGet { list, index } => {
+            out.push_str("list.get ");
+            fmt_value(out, list);
+            out.push(' ');
+            fmt_value(out, index);
         }
     }
 }
@@ -792,6 +803,10 @@ fn validate_value(value: &ValueExpr, decl_name: &str) -> Result<(), IrValidateEr
             validate_value(right, decl_name)
         }
         ValueExpr::TupleProject { tuple, .. } => validate_value(tuple, decl_name),
+        ValueExpr::ListGet { list, index } => {
+            validate_value(list, decl_name)?;
+            validate_value(index, decl_name)
+        }
         ValueExpr::IntLit(_)
         | ValueExpr::BoolLit(_)
         | ValueExpr::StrLit(_)

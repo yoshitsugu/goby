@@ -323,6 +323,52 @@ fn run_command_emits_locked_function_output_via_wasmtime() {
 
 #[test]
 #[cfg(unix)]
+fn run_command_executes_mutable_nested_list_program_via_runtime_owned_wasm() {
+    let root = repo_root();
+    let sandbox = TempDirGuard::new("run_mutable_nested_list");
+    let input = sandbox.join("mutable_nested_list.gb");
+    fs::write(
+        &input,
+        r#"
+main : Unit -> Unit can Print
+main =
+  mut a = [[1,2,3], [4,5,6], [7,8,9]]
+  println("${a[0][1]}")
+  a[1][1] := 30
+  println("${a[1][0]},${a[1][1]}")
+"#,
+    )
+    .expect("temporary input should be writable");
+
+    let output = command_for_goby_cli()
+        .arg("run")
+        .arg(&input)
+        .current_dir(&root)
+        .output()
+        .expect("cli should execute");
+
+    assert!(
+        output.status.success(),
+        "expected success, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("parsed and typechecked"),
+        "expected parse summary in stderr: {}",
+        stderr
+    );
+    assert!(
+        !stderr.contains("generated wasm"),
+        "runtime-owned execution should not claim file-based Wasm generation: {}",
+        stderr
+    );
+    assert_eq!(stdout, "2\n4,30\n");
+}
+
+#[test]
+#[cfg(unix)]
 fn run_command_executes_dynamic_read_program_via_wasmtime_stdin() {
     let root = repo_root();
     let sandbox = TempDirGuard::new("run_dynamic_read_via_fake_wasmtime");

@@ -4,14 +4,24 @@ Last updated: 2026-04-06
 
 ## Current Focus
 
-No designated active track at this point.
+### Track MLF: Mutable List Runtime Execution Fix
 
-Candidates for the next track:
+Current staged status:
 
-1. **Track Float** (`PLAN.md §4.7`) — add a first-class `Float` type.
-2. **Track EP** (`PLAN.md §4.9`) — effect row polymorphism for HOF effect propagation.
+- rooted mutable-list updates now classify as a semantic runtime capability and route to the
+  `GeneralLowered` Goby-owned Wasm path even for `Print`-only programs.
+- shared IR now carries pure `list.get` reads inside interpolation, so `goby run` succeeds for
+  update-followed-by-interpolation shapes such as `println("${a[1][0]},${a[1][1]}")` after
+  `a[1][1] := 30`.
+- remaining work is the longer-term fallback/runtime recursive-aggregate convergence described in
+  `doc/PLAN_MUT_LIST_FIX.md` MLF-2.
 
 ## Recently Completed
+
+### Track MLF staged milestone (2026-04-06)
+
+Complete for the routing slice: mutable rooted list updates no longer fall through to
+fallback/static execution, and the exact `goby run` reproduction now succeeds.
 
 ### Track LM: Mutable List Element Assignment (2026-04-06)
 
@@ -44,7 +54,8 @@ Complete (TD0–TD5). Remaining: multiline/body-relative expression span ownersh
 - Span ownership for multiline block arguments (`PLAN.md §4.5`)
 - `Float` type (`PLAN.md §4.7`)
 - Migrate effect runtime dispatch to compiled `EffectId`/`OpId` tables (`PLAN.md §5`)
-- Nested list evaluation in the fallback runtime (`doc/BUGS.md`)
+- Recursive aggregate convergence in the fallback runtime after the mutable-list routing fix
+  (`doc/PLAN_MUT_LIST_FIX.md` MLF-2)
 
 ## Key Entry Points
 

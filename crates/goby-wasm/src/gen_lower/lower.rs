@@ -742,7 +742,7 @@ fn lower_assign_index(
     // descent_tmp(1) = list.get(descent_tmp(0), path[1])
     // ...
     // descent_tmp(depth-2) = list.get(descent_tmp(depth-3), path[depth-2])
-    for i in 0..depth.saturating_sub(1) {
+    for (i, index_value) in path.iter().enumerate().take(depth.saturating_sub(1)) {
         let list_source = if i == 0 {
             WasmBackendInstr::LoadLocal {
                 name: root.to_string(),
@@ -753,7 +753,12 @@ fn lower_assign_index(
             }
         };
         instrs.push(list_source);
-        instrs.extend(lower_value_ctx(&path[i], aliases, bindings, known_decls)?);
+        instrs.extend(lower_value_ctx(
+            index_value,
+            aliases,
+            bindings,
+            known_decls,
+        )?);
         instrs.push(WasmBackendInstr::Intrinsic {
             intrinsic: BackendIntrinsic::ListGet,
         });
@@ -1072,6 +1077,14 @@ fn lower_value_ctx(
                 tuple_local: tuple_local.clone(),
                 index: *index,
             }])
+        }
+        ValueExpr::ListGet { list, index } => {
+            let mut instrs = lower_value_ctx(list, aliases, bindings, known_decls)?;
+            instrs.extend(lower_value_ctx(index, aliases, bindings, known_decls)?);
+            instrs.push(WasmBackendInstr::Intrinsic {
+                intrinsic: BackendIntrinsic::ListGet,
+            });
+            Ok(instrs)
         }
         // NOTE: Lambda is intercepted at the CompExpr::Value(Lambda) level in lower_comp_inner,
         // which has access to bindings/known_decls/lambda_decls.  lower_value is never called

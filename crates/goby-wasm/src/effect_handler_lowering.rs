@@ -390,6 +390,10 @@ fn rewrite_value(value: &ValueExpr, names: &mut NameSupply) -> Result<ValueExpr,
             tuple: Box::new(rewrite_value(tuple, names)?),
             index: *index,
         }),
+        ValueExpr::ListGet { list, index } => Ok(ValueExpr::ListGet {
+            list: Box::new(rewrite_value(list, names)?),
+            index: Box::new(rewrite_value(index, names)?),
+        }),
         ValueExpr::IntLit(_)
         | ValueExpr::BoolLit(_)
         | ValueExpr::StrLit(_)

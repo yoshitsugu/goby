@@ -2,6 +2,17 @@
 
 Last updated: 2026-04-06
 
+## Current Status
+
+Staged milestone landed on 2026-04-06:
+
+- rooted mutable-list updates are now classified as a semantic runtime capability and routed to
+  the `GeneralLowered` Goby-owned Wasm path, even for `Print`-only modules,
+- pure `list.get` reads inside interpolation now lower through shared IR, so exact
+  `goby run` reproductions such as `println("${a[0][1]}")` before or after rooted updates
+  execute successfully,
+- fallback/runtime recursive aggregate convergence remains open as the follow-up slice in MLF-2.
+
 ## Goal
 
 Restore `goby run` correctness for mutable list programs without adding special cases for
@@ -134,11 +145,11 @@ long-term execution contract is coherent and documented.
 
 ### MLF-0: Lock the semantic contract
 
-- [ ] Write an explicit execution-planning note that defines mutable list assignment and recursive
+- [x] Write an explicit execution-planning note that defines mutable list assignment and recursive
       aggregate handling as semantic capability requirements, not incidental backend features.
-- [ ] Define which active execution modes are intended to support rooted list updates.
-- [ ] Document the fallback contract: supported semantics vs. explicit unsupported boundary.
-- [ ] Record how this track interacts with existing nested-aggregate parity work in `doc/PLAN.md`
+- [x] Define which active execution modes are intended to support rooted list updates.
+- [x] Document the fallback contract: supported semantics vs. explicit unsupported boundary.
+- [x] Record how this track interacts with existing nested-aggregate parity work in `doc/PLAN.md`
       and `doc/BUGS.md`.
 
 Definition of done:
@@ -150,13 +161,13 @@ Definition of done:
 
 ### MLF-1: Repair execution-path selection
 
-- [ ] Introduce an execution capability analysis that classifies mutable list rooted updates and
+- [x] Introduce an execution capability analysis that classifies mutable list rooted updates and
       recursive aggregate requirements directly.
-- [ ] Replace or refactor routing gates that currently treat "runtime-needed" as
+- [x] Replace or refactor routing gates that currently treat "runtime-needed" as
       `Read`/handler/lambda/tuple-only.
-- [ ] Ensure `goby run` selects an execution path that can actually execute list-index assignment
+- [x] Ensure `goby run` selects an execution path that can actually execute list-index assignment
       when the source program requires it.
-- [ ] Add regression coverage for path selection itself, not just final stdout.
+- [x] Add regression coverage for path selection itself, not just final stdout.
 
 Definition of done:
 
@@ -193,7 +204,7 @@ Definition of done:
       - update followed by interpolation/output.
 - [ ] Add parity tests that compare fallback/interpreter-visible behavior against the compiled
       Wasm path wherever both are intended to support the same semantics.
-- [ ] Update `doc/BUGS.md`, `doc/PLAN.md`, and `doc/STATE.md` to reflect the repaired boundary and
+- [x] Update `doc/BUGS.md`, `doc/PLAN.md`, and `doc/STATE.md` to reflect the repaired boundary and
       any deliberately remaining unsupported cases.
 
 Definition of done:
@@ -210,12 +221,12 @@ The track is not complete unless the test suite contains end-to-end coverage for
 following language behaviors under the intended runtime boundary:
 
 - [ ] `mut xs = [1,2,3]; xs[1] := 10; println("${xs[1]}")`
-- [ ] `mut xs = [[1,2], [3,4]]; xs[0][1] := 99; println("${xs[0][1]}")`
+- [x] `mut xs = [[1,2], [3,4]]; xs[0][1] := 99; println("${xs[0][1]}")`
 - [ ] `mut xs = [[1,2], [3,4]]; inner = xs[0]; println("${inner[1]}")`
 - [ ] `mut xs = [[1,2], [3,4]]; before = xs[1][1]; xs[1][1] := 30; println("${before}")`
-- [ ] `mut xs = [[1,2], [3,4]]; xs[1][1] := 30; println("${xs[1][0]},${xs[1][1]}")`
+- [x] `mut xs = [[1,2], [3,4]]; xs[1][1] := 30; println("${xs[1][0]},${xs[1][1]}")`
 - [ ] A non-mutable nested-list read program still succeeds without mutation.
-- [ ] Routing coverage proves the selected execution path is one that implements the required
+- [x] Routing coverage proves the selected execution path is one that implements the required
       semantics.
 
 ## Review Checklist
@@ -233,15 +244,15 @@ following language behaviors under the intended runtime boundary:
 
 This track is complete only when all of the following are true:
 
-- [ ] `goby run` handles well-typed mutable list programs through an execution path that is
+- [x] `goby run` handles well-typed mutable list programs through an execution path that is
       semantically capable of running them.
-- [ ] No active runtime path selected for those programs rejects `AssignTarget::ListIndex` as an
+- [x] No active runtime path selected for those programs rejects `AssignTarget::ListIndex` as an
       internal unsupported case.
 - [ ] Recursive aggregate values used by the supported fallback subset are modeled uniformly rather
       than via ad hoc special cases.
 - [ ] End-to-end tests cover both reads and writes on nested mutable lists.
-- [ ] The repaired boundary is documented in `doc/PLAN.md` and reflected in `doc/STATE.md`.
-- [ ] `doc/BUGS.md` is either cleared for this issue or narrowed to a deliberate, documented
+- [x] The repaired boundary is documented in `doc/PLAN.md` and reflected in `doc/STATE.md`.
+- [x] `doc/BUGS.md` is either cleared for this issue or narrowed to a deliberate, documented
       unsupported remainder.
 
 Failure to meet any one of these items means the track remains open.

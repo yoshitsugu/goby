@@ -482,6 +482,7 @@ fn eval_value(
         // Programs using it are routed to the GeneralLowered (Wasm) path via the
         // has_tuple_project_in_comp gate in gen_lower/mod.rs.
         ValueExpr::TupleProject { .. } => None,
+        ValueExpr::ListGet { .. } => None,
     }
 }
 

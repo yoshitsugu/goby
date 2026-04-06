@@ -390,6 +390,10 @@ fn collect_value_lambda_envs(
         ValueExpr::TupleProject { tuple, .. } => {
             collect_value_lambda_envs(tuple, bindings, known_decls, envs);
         }
+        ValueExpr::ListGet { list, index } => {
+            collect_value_lambda_envs(list, bindings, known_decls, envs);
+            collect_value_lambda_envs(index, bindings, known_decls, envs);
+        }
         ValueExpr::IntLit(_)
         | ValueExpr::BoolLit(_)
         | ValueExpr::StrLit(_)
@@ -523,6 +527,10 @@ fn analyze_value(
         }
         ValueExpr::TupleProject { tuple, .. } => {
             analyze_value(tuple, bindings, known_decls, captures);
+        }
+        ValueExpr::ListGet { list, index } => {
+            analyze_value(list, bindings, known_decls, captures);
+            analyze_value(index, bindings, known_decls, captures);
         }
         ValueExpr::IntLit(_)
         | ValueExpr::BoolLit(_)

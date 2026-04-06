@@ -423,9 +423,14 @@ fn try_lower_value(
             tuple: Box::new(ValueExpr::Var(receiver.clone())),
             index: *index,
         })),
+        ResolvedExpr::Call { .. } => {
+            if let Some(value) = try_lower_pure_list_get_value(ctx, expr)? {
+                return Ok(Some(value));
+            }
+            Ok(None)
+        }
         ResolvedExpr::If { .. }
         | ResolvedExpr::Block(_)
-        | ResolvedExpr::Call { .. }
         | ResolvedExpr::Handler { .. }
         | ResolvedExpr::With { .. }
         | ResolvedExpr::Resume { .. }
@@ -433,6 +438,29 @@ fn try_lower_value(
         | ResolvedExpr::Pipeline { .. }
         | ResolvedExpr::Case { .. } => Ok(None),
     }
+}
+
+fn try_lower_pure_list_get_value(
+    ctx: &mut LowerCtx,
+    expr: &ResolvedExpr,
+) -> Result<Option<ValueExpr>, LowerError> {
+    let (callee, args) = collect_call_chain(expr);
+    let ResolvedExpr::Ref(ResolvedRef::Helper { module, name }) = callee else {
+        return Ok(None);
+    };
+    if module != "list" || name != "get" || args.len() != 2 {
+        return Ok(None);
+    }
+    let Some(list) = try_lower_value(ctx, args[0])? else {
+        return Ok(None);
+    };
+    let Some(index) = try_lower_value(ctx, args[1])? else {
+        return Ok(None);
+    };
+    Ok(Some(ValueExpr::ListGet {
+        list: Box::new(list),
+        index: Box::new(index),
+    }))
 }
 
 fn lower_list_literal(
@@ -2302,7 +2330,7 @@ choose n =
     }
 
     #[test]
-    fn lower_ordinary_call_with_list_index_argument_introduces_temp_binding() {
+    fn lower_ordinary_call_with_list_index_argument_stays_as_pure_list_get_value() {
         let module = crate::parse_module(
             r#"
 import goby/list
@@ -2319,8 +2347,17 @@ main lines =
             .find(|decl| decl.name == "main")
             .expect("main decl should be present");
         assert!(
-            matches!(main_decl.body, CompExpr::Let { .. }),
-            "expected ANF let binding around list-index call arg, got {:?}",
+            matches!(
+                &main_decl.body,
+                CompExpr::Call { callee, args }
+                    if matches!(
+                        callee.as_ref(),
+                        ValueExpr::GlobalRef { module, name }
+                            if module == "list" && name == "each"
+                    )
+                    && matches!(args.first(), Some(ValueExpr::ListGet { .. }))
+            ),
+            "expected list-index call arg to lower as pure ListGet value, got {:?}",
             main_decl.body
         );
     }
@@ -2348,7 +2385,7 @@ main lines =
     }
 
     #[test]
-    fn lower_list_index_to_list_get_call() {
+    fn lower_list_index_to_list_get_value() {
         let expr = Expr::ListIndex {
             list: Box::new(Expr::var("lines")),
             index: Box::new(Expr::IntLit(1)),
@@ -2358,12 +2395,11 @@ main lines =
         assert!(
             matches!(
                 &ir_decl.body,
-                CompExpr::Call { callee, args }
-                    if matches!(callee.as_ref(), ValueExpr::GlobalRef { module, name }
-                        if module == "list" && name == "get")
-                        && args.len() == 2
+                CompExpr::Value(ValueExpr::ListGet { list, index })
+                    if matches!(list.as_ref(), ValueExpr::Var(name) if name == "lines")
+                        && matches!(index.as_ref(), ValueExpr::IntLit(1))
             ),
-            "expected resolved-form canonicalization to list.get IR call, got {:?}",
+            "expected resolved-form canonicalization to pure ListGet IR value, got {:?}",
             ir_decl.body
         );
     }
@@ -2573,30 +2609,29 @@ main =
                         },
                     ) => match (inline_rolls_body.as_ref(), explicit_rolls_body.as_ref()) {
                         (
-                            CompExpr::Let {
-                                value: inline_value,
-                                body: inline_each_body,
-                                ..
-                            },
+                            CompExpr::Call { callee, args },
                             CompExpr::Let {
                                 value: explicit_value,
                                 body: explicit_each_body,
                                 ..
                             },
                         ) => {
-                            assert_eq!(inline_value, explicit_value);
                             assert!(
                                 matches!(
-                                    inline_each_body.as_ref(),
-                                    CompExpr::Call { callee, args }
-                                        if matches!(
-                                            callee.as_ref(),
-                                            ValueExpr::GlobalRef { module, name }
-                                                if module == "list" && name == "each"
-                                        ) && args.len() == 2
+                                    callee.as_ref(),
+                                    ValueExpr::GlobalRef { module, name }
+                                        if module == "list" && name == "each"
+                                ) && matches!(args.first(), Some(ValueExpr::ListGet { .. })),
+                                "inline body should lower the indexed argument as ListGet, got {:?}",
+                                inline_rolls_body
+                            );
+                            assert!(
+                                matches!(
+                                    explicit_value.as_ref(),
+                                    CompExpr::Value(ValueExpr::ListGet { .. })
                                 ),
-                                "inline body should end in list.each call, got {:?}",
-                                inline_each_body
+                                "explicit binding should also lower to a pure ListGet value, got {:?}",
+                                explicit_value
                             );
                             assert!(
                                 matches!(
@@ -2606,16 +2641,13 @@ main =
                                             callee.as_ref(),
                                             ValueExpr::GlobalRef { module, name }
                                                 if module == "list" && name == "each"
-                                        ) && args.len() == 2
+                                        ) && matches!(args.first(), Some(ValueExpr::Var(name)) if name == "row2")
                                 ),
-                                "explicit body should end in list.each call, got {:?}",
+                                "explicit body should still call list.each through the bound local, got {:?}",
                                 explicit_each_body
                             );
                         }
-                        other => panic!(
-                            "expected matching ANF let before list.each, got {:?}",
-                            other
-                        ),
+                        other => panic!("expected list.each call body, got {:?}", other),
                     },
                     other => panic!("expected matching rolls let, got {:?}", other),
                 },
@@ -2755,13 +2787,11 @@ count n =
         assert!(
             matches!(
                 &ir.decls[0].body,
-                CompExpr::Call {
-                    callee,
-                    args
-                } if matches!(callee.as_ref(), ValueExpr::GlobalRef { module, name } if module == "list" && name == "get")
-                    && args.len() == 2
+                CompExpr::Value(ValueExpr::ListGet { list, index })
+                    if matches!(list.as_ref(), ValueExpr::Var(name) if name == "xs")
+                        && matches!(index.as_ref(), ValueExpr::IntLit(1))
             ),
-            "expected selective import to canonicalize to list.get; got {:?}",
+            "expected selective import to canonicalize to ListGet; got {:?}",
             ir.decls[0].body
         );
     }

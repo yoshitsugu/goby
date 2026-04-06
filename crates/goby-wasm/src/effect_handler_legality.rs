@@ -213,6 +213,10 @@ fn collect_value_legality(
         ValueExpr::TupleProject { tuple, .. } => {
             collect_value_legality(decl_name, tuple, env, summary);
         }
+        ValueExpr::ListGet { list, index } => {
+            collect_value_legality(decl_name, list, env, summary);
+            collect_value_legality(decl_name, index, env, summary);
+        }
         ValueExpr::IntLit(_)
         | ValueExpr::BoolLit(_)
         | ValueExpr::StrLit(_)
@@ -388,6 +392,10 @@ fn analyze_value(value: &ValueExpr) -> Result<(), HandlerLegalityIssue> {
         }
         ValueExpr::TupleProject { tuple, .. } => {
             analyze_value(tuple)?;
+        }
+        ValueExpr::ListGet { list, index } => {
+            analyze_value(list)?;
+            analyze_value(index)?;
         }
         ValueExpr::IntLit(_)
         | ValueExpr::BoolLit(_)

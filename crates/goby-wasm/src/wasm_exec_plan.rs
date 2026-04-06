@@ -233,6 +233,15 @@ fn value_to_expr(value: &ValueExpr) -> Option<Expr> {
         ValueExpr::Unit => Some(Expr::unit_value()),
         // Tuple projection has no direct AST equivalent; cannot round-trip.
         ValueExpr::TupleProject { .. } => None,
+        ValueExpr::ListGet { list, index } => Some(Expr::Call {
+            callee: Box::new(Expr::Call {
+                callee: Box::new(Expr::qualified("list", "get")),
+                arg: Box::new(value_to_expr(list)?),
+                span: None,
+            }),
+            arg: Box::new(value_to_expr(index)?),
+            span: None,
+        }),
     }
 }
 
@@ -379,15 +388,15 @@ main =
         let body = stmts_to_body_source(&stmts).expect("IR bridge should render source");
         assert_eq!(
             body,
-            "text = Read.read ()\nlines = string.split text \"\n\"\n__goby_ir_effect_arg_0 = list.get lines 1\nPrint.println __goby_ir_effect_arg_0"
+            "text = Read.read ()\nlines = string.split text \"\n\"\nPrint.println (list.get lines 1)"
         );
-        let stmt_src = match &stmts[3] {
+        let stmt_src = match &stmts[2] {
             Stmt::Expr(expr, _) => expr.to_str_repr(),
             other => panic!("expected trailing expr stmt, got {:?}", other),
         };
         assert_eq!(
             stmt_src.as_deref(),
-            Some("Print.println __goby_ir_effect_arg_0")
+            Some("Print.println (list.get lines 1)")
         );
     }
 
@@ -447,7 +456,7 @@ main =
         let body = runtime.body.expect("body should exist");
         assert_eq!(
             body,
-            "text = Read.read ()\nlines = string.split text \"\n\"\n__goby_ir_effect_arg_0 = list.get lines 1\nPrint.println __goby_ir_effect_arg_0"
+            "text = Read.read ()\nlines = string.split text \"\n\"\nPrint.println (list.get lines 1)"
         );
     }
 

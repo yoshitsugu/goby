@@ -661,6 +661,25 @@ main =
 }
 
 #[test]
+fn compile_module_accepts_mutable_nested_list_update_via_general_lowering() {
+    let source = r#"
+main : Unit -> Unit can Print
+main =
+  mut xs = [[1, 2], [3, 4]]
+  xs[0][1] := 99
+  println "${xs[0][1]}"
+"#;
+    let module = parse_module(source).expect("source should parse");
+    assert_eq!(
+        runtime_io_execution_kind(&module).expect("classification should succeed"),
+        crate::RuntimeIoExecutionKind::GeneralLowered,
+        "mutable nested-list program should classify by rooted-update capability"
+    );
+    let wasm = compile_module(&module).expect("mutable nested-list program should compile");
+    assert_valid_wasm_module(&wasm);
+}
+
+#[test]
 fn compile_module_routes_echo_read_line_println_through_dynamic_wasi_io_classification() {
     let source = r#"
 main : Unit -> Unit can Print, Read
