@@ -680,6 +680,32 @@ main =
 }
 
 #[test]
+fn compile_module_preserves_mutable_nested_list_output_parity_with_fallback_runtime() {
+    let source = r#"
+main : Unit -> Unit can Print
+main =
+  mut xs = [[1, 2], [3, 4]]
+  before = xs[1][1]
+  xs[1][1] := 30
+  println("${before}")
+  println("${xs[1][0]},${xs[1][1]}")
+"#;
+    let module = parse_module(source).expect("source should parse");
+    assert_eq!(
+        runtime_io_execution_kind(&module).expect("classification should succeed"),
+        crate::RuntimeIoExecutionKind::GeneralLowered,
+        "mutable nested-list parity sample should classify as GeneralLowered"
+    );
+    let expected = resolve_module_runtime_output(&module)
+        .expect("fallback runtime should resolve mutable nested-list output");
+    let wasm = compile_module(&module).expect("mutable nested-list parity sample should compile");
+    assert_valid_wasm_module(&wasm);
+    let actual = crate::wasm_exec::run_wasm_bytes_with_stdin(&wasm, None)
+        .expect("compiled Wasm should execute mutable nested-list parity sample");
+    assert_eq!(actual, expected);
+}
+
+#[test]
 fn compile_module_routes_echo_read_line_println_through_dynamic_wasi_io_classification() {
     let source = r#"
 main : Unit -> Unit can Print, Read

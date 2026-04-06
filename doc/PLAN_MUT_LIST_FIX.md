@@ -205,7 +205,7 @@ Definition of done:
       - two-level mutable list update,
       - read-after-write through the same mutable root,
       - update followed by interpolation/output.
-- [ ] Add parity tests that compare fallback/interpreter-visible behavior against the compiled
+- [x] Add parity tests that compare fallback/interpreter-visible behavior against the compiled
       Wasm path wherever both are intended to support the same semantics.
 - [x] Update `doc/BUGS.md`, `doc/PLAN.md`, and `doc/STATE.md` to reflect the repaired boundary and
       any deliberately remaining unsupported cases.
