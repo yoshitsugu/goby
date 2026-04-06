@@ -1463,3 +1463,87 @@ main =
         "Hello, world!\n",
     );
 }
+
+// ---------------------------------------------------------------------------
+// Track LM: Mutable list element assignment
+// ---------------------------------------------------------------------------
+
+/// Single-level `xs[i] := v` updates the correct element.
+#[test]
+fn lm_single_level_list_assign_updates_element() {
+    assert_runtime_stdout_with_empty_stdin(
+        r#"
+main : Unit -> Unit can Print, Read
+main =
+  _ = Read.read ()
+  mut xs = [10, 20, 30]
+  xs[0] := 99
+  v = list.get xs 0
+  Print.println "${v}"
+"#,
+        "99\n",
+    );
+}
+
+/// Multiple assignments to different indices are independent.
+#[test]
+fn lm_multiple_assigns_to_different_indices() {
+    assert_runtime_stdout_with_empty_stdin(
+        r#"
+main : Unit -> Unit can Print, Read
+main =
+  _ = Read.read ()
+  mut xs = [1, 2, 3]
+  xs[1] := 42
+  xs[2] := 77
+  a = list.get xs 0
+  b = list.get xs 1
+  c = list.get xs 2
+  Print.println "${a}"
+  Print.println "${b}"
+  Print.println "${c}"
+"#,
+        "1\n42\n77\n",
+    );
+}
+
+/// Assigning back from another element preserves value semantics (no aliasing).
+#[test]
+fn lm_value_semantics_no_aliasing() {
+    assert_runtime_stdout_with_empty_stdin(
+        r#"
+main : Unit -> Unit can Print, Read
+main =
+  _ = Read.read ()
+  mut xs = [10, 20, 30]
+  xs[2] := list.get xs 0
+  xs[0] := 99
+  v = list.get xs 2
+  Print.println "${v}"
+"#,
+        "10\n",
+    );
+}
+
+/// Two-level nested list assignment updates the correct inner element.
+#[test]
+fn lm_nested_two_level_list_assign() {
+    assert_runtime_stdout_with_empty_stdin(
+        r#"
+main : Unit -> Unit can Print, Read
+main =
+  _ = Read.read ()
+  mut xs = [[1, 2], [3, 4]]
+  xs[0][1] := 99
+  inner = list.get xs 0
+  a = list.get inner 0
+  b = list.get inner 1
+  outer1 = list.get xs 1
+  c = list.get outer1 0
+  Print.println "${a}"
+  Print.println "${b}"
+  Print.println "${c}"
+"#,
+        "1\n99\n3\n",
+    );
+}

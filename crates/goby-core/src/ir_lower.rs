@@ -966,14 +966,15 @@ fn lower_list_index_assign(
     };
 
     // Wrap in any ANF Let bindings, outermost first.
-    let result = anf_bindings.into_iter().rev().fold(assign_node, |body, (name, comp)| {
-        CompExpr::Let {
+    let result = anf_bindings
+        .into_iter()
+        .rev()
+        .fold(assign_node, |body, (name, comp)| CompExpr::Let {
             name,
             ty: IrType::Unknown,
             value: Box::new(comp),
             body: Box::new(body),
-        }
-    });
+        });
 
     Ok(result)
 }

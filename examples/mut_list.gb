@@ -1,0 +1,13 @@
+main : Unit -> Unit can Print, Read
+main =
+  _ = Read.read ()
+  mut xs = [10, 20, 30]
+  xs[0] := 99
+  v0 = list.get xs 0
+  Print.println "${v0}"
+  xs[1] := 42
+  v1 = list.get xs 1
+  Print.println "${v1}"
+  xs[2] := list.get xs 0
+  v2 = list.get xs 2
+  Print.println "${v2}"

@@ -657,9 +657,15 @@ fn lower_comp_inner(
             }
         }
 
-        CompExpr::AssignIndex { root, path, value } => {
-            lower_assign_index(root, path, value, aliases, bindings, known_decls, lambda_decls)
-        }
+        CompExpr::AssignIndex { root, path, value } => lower_assign_index(
+            root,
+            path,
+            value,
+            aliases,
+            bindings,
+            known_decls,
+            lambda_decls,
+        ),
 
         CompExpr::Case { scrutinee, arms } => lower_case(
             scrutinee,
