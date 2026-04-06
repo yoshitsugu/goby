@@ -401,7 +401,7 @@ Based on `examples/*.gb`:
 - Current runtime behavior:
   - effect operations dispatch through installed handlers.
 - How to represent multiple effects (`can Print + Read` or other syntax) — deferred.
-- Effect propagation rules for higher-order functions — deferred.
+- Effect propagation rules for higher-order functions — deferred; see §4.9 Track EP for the planned effect row polymorphism work.
 - Effect diagnostics UX polish (wording/format consistency) — deferred.
 - Warning mechanism for lexical shadowing of visible effect operation names
   (for example local `a` shadows operation `a`) — deferred.
@@ -700,7 +700,79 @@ All LM0–LM4 milestones complete:
 
 Detail plan: `doc/PLAN_LIST_MUT.md`.
 
-### 4.9 Parking Lot (Needs Revalidation Before Implementation)
+### 4.9 Track EP: Effect Row Polymorphism
+
+Goal: add effect-variable quantification so higher-order functions propagate
+callee effects through the type system, closing the largest gap between Goby's
+effect system and the algebraic-effect theory (Plotkin & Pretnar 2009).
+
+Why this matters:
+
+- without effect polymorphism, `map`, `fold`, `each` and any user-defined HOF
+  cannot express "I propagate whatever effects my callback carries" at the type level.
+- callers must manually account for callback effects with ad hoc `can` annotations,
+  and the typechecker cannot verify completeness.
+- this is the single most impactful missing piece for Goby to be a credible
+  algebraic-effect language; Koka, Eff, and Frank all have this, and even
+  OCaml 5 (which lacks typed effects) motivates its absence as a known limitation.
+
+Scope to lock before coding:
+
+1. Effect-variable syntax
+   - decide surface syntax for effect variables in type annotations
+     (for example `f : (a -> b can {e}) -> List a -> List b can {e}`
+     or Koka-style `f : (a -> e b) -> list<a> -> e list<b>`).
+   - decide whether effect variables are implicitly universally quantified
+     (like type variables `a`, `b` today) or require explicit binders.
+2. Effect-row representation
+   - internal representation: ordered set, unordered set, or row-variable model.
+   - decide whether effect rows support closed rows (`can Log`) and open rows
+     (`can Log, {e}`) or open rows only.
+3. Unification / inference rules
+   - effect-variable unification strategy in the typechecker.
+   - interaction with existing `can` checking and `with`-based discharge.
+4. Backward compatibility
+   - existing `can X, Y` annotations must continue to work unchanged.
+   - monomorphic effect annotations remain valid (they are the zero-variable case).
+
+Execution phases:
+
+1. **EP-0: Semantics lock and spec update**
+   - write the effect-variable syntax and inference rules in `doc/LANGUAGE_SPEC.md`.
+   - add motivating examples showing current gap and intended behavior.
+   - update `doc/PLAN.md` §2.3 deferred items.
+
+2. **EP-1: Internal effect-row representation**
+   - extend `Ty` / effect representation with effect variables.
+   - implement effect-row unification in `typecheck_unify.rs`.
+   - keep runtime behavior unchanged (effects remain name-dispatched).
+
+3. **EP-2: HOF effect propagation**
+   - teach the typechecker to infer effect variables for callback parameters.
+   - stdlib HOFs (`each`, `map`, `fold`) get polymorphic effect annotations.
+   - add regression tests: effectful callback through `map`/`fold` must propagate
+     the callback's effects to the caller's `can` clause.
+
+4. **EP-3: Diagnostics and edge cases**
+   - error messages for effect-variable mismatch.
+   - interaction with `with` discharge (effect variable partially discharged).
+   - interaction with generic type parameters (effect + type polymorphism).
+
+Acceptance criteria:
+
+- `map xs (fn x -> Log.log x; x)` in a function without `can Log` is a type error.
+- `map xs (fn x -> Log.log x; x)` in a function with `can Log` typechecks.
+- the above holds without any special-casing of `map`; the mechanism is general.
+- existing programs with monomorphic `can` annotations are unaffected.
+
+References:
+
+- Plotkin & Pretnar, "Handlers of Algebraic Effects" (LICS 2009)
+- Leijen, "Type Directed Compilation of Row-Typed Algebraic Effects" (POPL 2017) — Koka's foundation
+- Hillerström & Lindley, "Shallow Effect Handlers" (APLAS 2018)
+- Bauer & Pretnar, "Programming with Algebraic Effects and Handlers" (JLAMP 2015)
+
+### 4.10 Parking Lot (Needs Revalidation Before Implementation)
 
 - CLI `build` expansion details (`--target`, `--engine-compat`, verify modes).
 - CLI binary naming migration (`goby-cli` -> `goby`) final policy.
