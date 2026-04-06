@@ -129,11 +129,10 @@ pub(crate) fn parse_expr(src: &str) -> Option<Expr> {
     }
 
     // List index access: `expr[index]` — placed after binary-op splits so that
-    // `xs[0] + 1` parses as `BinOp(+, ListIndex(xs,0), 1)` (the `+` split fires
-    // first and recurses, hitting `parse_list_index_suffix` on `xs[0]`).
-    // Note: `f xs[0]` ends with `]` so `parse_list_index_suffix` fires on the
-    // whole string here, producing `ListIndex(Call(f, xs), 0)`.  Users who need
-    // `Call(f, ListIndex(xs, 0))` should write `f (xs[0])` explicitly.
+    // `xs[0] + 1` parses as `BinOp(+, ListIndex(xs,0), 1)`.
+    // When the prefix contains top-level whitespace (e.g. `f xs[0]`), the index
+    // suffix is rejected so that `parse_call_expr` handles it instead, giving
+    // index access higher precedence than whitespace function application.
     // Placed before the `starts_with('[')` list-literal gate so that `[1,2,3][0]`
     // is not consumed as a plain list literal.
     if let Some(expr) = parse_list_index_suffix(src) {
@@ -1130,16 +1129,56 @@ fn split_top_level_whitespace_terms(src: &str) -> Vec<&str> {
     terms
 }
 
+/// Returns `true` if `src` contains whitespace outside of brackets, parens,
+/// and string literals — i.e., it looks like a whitespace-separated function
+/// application such as `f xs` or `f a b`.
+fn has_top_level_whitespace(src: &str) -> bool {
+    let mut depth = 0usize;
+    let mut in_string = false;
+    let mut escaped = false;
+
+    for ch in src.chars() {
+        if in_string {
+            if escaped {
+                escaped = false;
+                continue;
+            }
+            if ch == '\\' {
+                escaped = true;
+                continue;
+            }
+            if ch == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+
+        match ch {
+            '"' => in_string = true,
+            '(' | '[' => depth += 1,
+            ')' | ']' => depth = depth.saturating_sub(1),
+            c if c.is_whitespace() && depth == 0 => return true,
+            _ => {}
+        }
+    }
+    false
+}
+
 /// Try to parse `src` as a list-index expression `expr[index]`.
 ///
 /// Scans from the right end of `src` looking for a top-level `[…]` suffix.
 /// If found and the prefix (the `list` expression) is non-empty, recurses to
 /// parse both sub-expressions.
 ///
-/// Placed after binary-op splits so that binary operators bind more tightly than
+/// Placed after binary-op splits so that binary operators bind more loosely than
 /// index access (e.g. `xs[0] + 1` → `(xs[0]) + 1` since `+` split fires first).
 /// Placed before the `starts_with('[')` list-literal gate so that `[1,2,3][0]`
 /// is not consumed as a plain list literal.
+///
+/// When the prefix (the part before `[`) contains top-level whitespace (e.g.
+/// `f xs` from `f xs[0]`), this function returns `None` so that
+/// `parse_call_expr` handles the full expression, giving index access higher
+/// precedence than whitespace function application.
 ///
 /// Chaining (`xs[0][1]`) works naturally because the recursive call to
 /// `parse_expr` on the prefix will re-enter this function.
@@ -1149,8 +1188,8 @@ fn split_top_level_whitespace_terms(src: &str) -> Vec<&str> {
 ///   `)`, so `(xs)[0]` and `(f x)[0]` both work via `parse_tuple_or_grouped_expr`.
 /// - String literals in the index containing `]` are handled correctly because
 ///   the scan tracks string literal boundaries right-to-left.
-/// - `f xs[0]` parses as `ListIndex(Call(f, xs), 0)` because the whole string ends
-///   with `]` and this function fires before `parse_call_expr`.
+/// - `f()[0]` and `f(x)[0]` work: the prefix has no top-level whitespace so the
+///   guard does not fire.
 fn parse_list_index_suffix(src: &str) -> Option<Expr> {
     // Quick rejection: must end with `]` to possibly be an index access.
     if !src.ends_with(']') {
@@ -1225,6 +1264,16 @@ fn parse_list_index_suffix(src: &str) -> Option<Expr> {
     let list_src = src[..bracket_start].trim();
     if list_src.is_empty() {
         // `[…]` with no prefix — plain list literal, not an index access.
+        return None;
+    }
+
+    // If the prefix looks like a whitespace-separated function application
+    // (e.g. `f xs` from `f xs[0]`), reject the index parse so that
+    // `parse_call_expr` handles the full expression instead.  This gives
+    // index access higher precedence than whitespace function application:
+    // `f xs[0]` → `Call(f, ListIndex(xs, 0))` rather than
+    // `ListIndex(Call(f, xs), 0)`.
+    if has_top_level_whitespace(list_src) {
         return None;
     }
 
@@ -1852,20 +1901,27 @@ mod tests {
 
     #[test]
     fn list_index_in_call_arg_position() {
-        // `f xs[0]` — ListIndex suffix fires only after binary-op splits but
-        // BEFORE parse_call_expr; however parse_call_expr splits on whitespace
-        // terms and each term is recursively parsed, so the result depends on
-        // whether `parse_list_index_suffix` fires on the whole string first.
-        // Current behaviour: "f xs[0]" ends with `]`, so `parse_list_index_suffix`
-        // fires first and produces ListIndex(Call(f, xs), 0).
-        // This matches the right-to-left scan finding `[` at position 4 with
-        // list_src = "f xs" parsed as Call(f, xs).
-        // Document the actual parse so regressions are caught.
+        // `f xs[0]` — parse_call_expr fires first, splits on whitespace into
+        // ["f", "xs[0]"]. Each term is recursively parsed: "xs[0]" becomes
+        // ListIndex(xs, 0). Result: Call(f, ListIndex(xs, 0)).
+        // Index access binds tighter than whitespace function application.
         assert_eq!(
             parse_expr("f xs[0]"),
-            Some(list_index(
-                Expr::call(Expr::var("f"), Expr::var("xs")),
-                Expr::IntLit(0)
+            Some(Expr::call(
+                Expr::var("f"),
+                list_index(Expr::var("xs"), Expr::IntLit(0))
+            ))
+        );
+    }
+
+    #[test]
+    fn multi_arg_call_with_index_last() {
+        // `f a b[0]` → Call(Call(f, a), ListIndex(b, 0))
+        assert_eq!(
+            parse_expr("f a b[0]"),
+            Some(Expr::call(
+                Expr::call(Expr::var("f"), Expr::var("a")),
+                list_index(Expr::var("b"), Expr::IntLit(0))
             ))
         );
     }

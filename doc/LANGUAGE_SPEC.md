@@ -62,8 +62,8 @@ syntax/semantics.
   - chaining syntax is supported: `xs[0][1]` indexes into the result of `xs[0]`
     (current runtime limitation: chained indexing only works if intermediate results
     are `Int` or `String` values; `List (List T)` is not yet a representable runtime value)
-  - precedence: `expr[expr]` binds tighter than function call application —
-    `f xs[0]` parses as `(f xs)[0]`, not `f (xs[0])`; use `f (xs[0])` when indexing before calling
+  - precedence: `expr[expr]` binds tighter than whitespace function application —
+    `f xs[0]` parses as `f (xs[0])`
 - Tuple member access uses numeric qualified form: `pair.0`, `pair.1`, ...
 - Unit value spelling: `()` (canonical).
   - Legacy expression-form `Unit` is rejected.

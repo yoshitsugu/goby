@@ -921,8 +921,8 @@ main =
 #[test]
 fn resolves_list_index_int_access() {
     let _guard = ENV_MUTEX.lock().unwrap();
-    // Note: `print xs[1]` would parse as `(print xs)[1]` (call-receiver precedence).
-    // Use `print (xs[1])` to explicitly index then print.
+    // `print xs[1]` parses as `Call(print, ListIndex(xs, 1))` — index access
+    // binds tighter than whitespace function application.
     let source = r#"
 xs : List Int
 xs = [10, 20, 30]

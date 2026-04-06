@@ -417,7 +417,6 @@ impl Expr {
                 | Expr::Block(..)
                 | Expr::Case { .. }
                 | Expr::If { .. }
-                | Expr::ListIndex { .. }
         )
     }
 

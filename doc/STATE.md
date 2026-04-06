@@ -8,10 +8,8 @@ No designated active track at this point.
 
 Candidates for the next track:
 
-1. **List index precedence fix** (`PLAN.md §2.1`) — `f xs[0]` currently parses as
-   `(f xs)[0]` instead of `f (xs[0])`; the parser's postfix precedence is wrong.
-2. **Track Float** (`PLAN.md §4.7`) — add a first-class `Float` type.
-3. **Track EP** (`PLAN.md §4.9`) — effect row polymorphism for HOF effect propagation.
+1. **Track Float** (`PLAN.md §4.7`) — add a first-class `Float` type.
+2. **Track EP** (`PLAN.md §4.9`) — effect row polymorphism for HOF effect propagation.
 
 ## Recently Completed
 
@@ -43,7 +41,6 @@ Complete (TD0–TD5). Remaining: multiline/body-relative expression span ownersh
 
 ## Known Deferred Items
 
-- Parser precedence bug: `f xs[0]` parses as `(f xs)[0]` (`PLAN.md §2.1`)
 - Span ownership for multiline block arguments (`PLAN.md §4.5`)
 - `Float` type (`PLAN.md §4.7`)
 - Migrate effect runtime dispatch to compiled `EffectId`/`OpId` tables (`PLAN.md §5`)
