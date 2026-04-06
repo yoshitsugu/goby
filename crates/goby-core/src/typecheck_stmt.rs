@@ -193,11 +193,36 @@ fn check_stmt(
                     }
                     Ok(())
                 }
-                crate::ast::AssignTarget::ListIndex { .. } => {
-                    // Full type-checking for list-index assignment targets is implemented in LM2.
-                    // This includes the root-variable mutability check (`root_name()` is available
-                    // but intentionally not applied yet), List/index type checks, and element type
-                    // compatibility. Only the RHS is validated here to catch effect/resume errors.
+                list_index_target @ crate::ast::AssignTarget::ListIndex { .. } => {
+                    let root = list_index_target.root_name();
+                    // Root variable must be declared.
+                    if !local_mutability.contains_key(root) {
+                        return Err(TypecheckError {
+                            declaration: Some(decl_name.to_string()),
+                            span: *span,
+                            message: format!(
+                                "cannot assign to undeclared variable `{}`",
+                                root
+                            ),
+                        });
+                    }
+                    // Root variable must be mutable.
+                    if !local_mutability.get(root).copied().unwrap_or(false) {
+                        return Err(TypecheckError {
+                            declaration: Some(decl_name.to_string()),
+                            span: *span,
+                            message: format!(
+                                "cannot assign to immutable variable `{}`; declare it with `mut` first",
+                                root
+                            ),
+                        });
+                    }
+                    // Validate the RHS for effect/resume errors.
+                    // Note: index expressions inside the AssignTarget chain (e.g. the `i` in
+                    // `a[i] := v`) currently bypass effect/ambiguity checks because the
+                    // infrastructure checks (`typecheck_ambiguity`, `typecheck_effect_usage`)
+                    // only inspect `Stmt::Assign.value`. Effectful index expressions in the LHS
+                    // would silently pass. This is a known gap to address in a follow-up.
                     validate_stmt_value(
                         value,
                         local_env,
@@ -206,7 +231,33 @@ fn check_stmt(
                         effect_map,
                         covered_ops,
                         decl_name,
-                    )
+                    )?;
+                    // Walk the target chain and check each projection's receiver and index types.
+                    let root_ty = local_env.locals.get(root).cloned().unwrap_or(Ty::Unknown);
+                    let elem_ty = check_assign_target_chain(
+                        list_index_target,
+                        root_ty,
+                        local_env,
+                        decl_name,
+                        *span,
+                    )?;
+                    // Check that the assigned value type matches the element type.
+                    let assigned_ty = check_expr(value, local_env);
+                    if elem_ty != Ty::Unknown
+                        && assigned_ty != Ty::Unknown
+                        && !env.are_compatible(&elem_ty, &assigned_ty)
+                    {
+                        return Err(TypecheckError {
+                            declaration: Some(decl_name.to_string()),
+                            span: *span,
+                            message: format!(
+                                "assignment type `{}` does not match list element type `{}`",
+                                ty_name(&assigned_ty),
+                                ty_name(&elem_ty),
+                            ),
+                        });
+                    }
+                    Ok(())
                 }
             }
         }
@@ -219,6 +270,62 @@ fn check_stmt(
             covered_ops,
             decl_name,
         ),
+    }
+}
+
+/// Walk an `AssignTarget` chain starting from the known `receiver_ty` and return
+/// the element type that the final `ListIndex` projection writes into.
+///
+/// Returns `Ty::Unknown` when type information is insufficient (best-effort).
+/// Returns an error when a projection is provably invalid (non-List receiver,
+/// non-Int index).
+fn check_assign_target_chain(
+    target: &crate::ast::AssignTarget,
+    receiver_ty: Ty,
+    local_env: &TypeEnv,
+    decl_name: &str,
+    span: Option<crate::ast::Span>,
+) -> Result<Ty, TypecheckError> {
+    match target {
+        crate::ast::AssignTarget::Var(_) => {
+            // Plain variable: the "element type" is the variable's own type.
+            Ok(receiver_ty)
+        }
+        crate::ast::AssignTarget::ListIndex { base, index } => {
+            // First, find what the base's type contributes as the receiver of this index.
+            let base_ty = check_assign_target_chain(base, receiver_ty, local_env, decl_name, span)?;
+
+            // The base type must be a List or Unknown.
+            let elem_ty = match base_ty {
+                Ty::List(inner) => *inner,
+                Ty::Unknown => Ty::Unknown,
+                other => {
+                    return Err(TypecheckError {
+                        declaration: Some(decl_name.to_string()),
+                        span,
+                        message: format!(
+                            "cannot index into type `{}`; expected a `List` value",
+                            ty_name(&other)
+                        ),
+                    });
+                }
+            };
+
+            // The index expression must be Int or Unknown.
+            let index_ty = check_expr(index, local_env);
+            if index_ty != Ty::Unknown && index_ty != Ty::Int {
+                return Err(TypecheckError {
+                    declaration: Some(decl_name.to_string()),
+                    span,
+                    message: format!(
+                        "list index must be `Int`, but got `{}`",
+                        ty_name(&index_ty)
+                    ),
+                });
+            }
+
+            Ok(elem_ty)
+        }
     }
 }
 
