@@ -586,20 +586,26 @@ Note:
 - Critical correctness items from the same review batch were already fixed:
   parser explicit early-return clarity and planning `u16` overflow fail-fast behavior.
 
-### 4.5 Track ER: Compiler Error Reporting (complete, 2026-03-29)
+### 4.5 Track ER + TD: Compiler Error Reporting (complete)
 
-See `doc/PLAN_ERROR.md` for the active follow-on plan.
+Track ER (name-resolution diagnostics, 2026-03-29) and Track TD (typed diagnostic
+rendering parity, TD0–TD5, 2026-04-05) are both complete.
 
 Completed scope:
 
-- unresolved bare-name diagnostics,
-- unresolved qualified-name diagnostics,
-- ambiguity-at-use-site diagnostics,
-- import module / selective-symbol diagnostics,
-- CLI and LSP parity locks for those families.
+- unresolved bare-name / qualified-name / ambiguity / import diagnostics (ER),
+- ordinary-call argument mismatch spans (TD1),
+- effect-op and `resume` argument mismatch spans (TD2),
+- CLI snippet and LSP range parity for all covered families (TD3–TD4).
 
-Remaining diagnostic-rendering work now continues under the active TD follow-on
-track in `doc/PLAN_ERROR.md`.
+Remaining deferred diagnostic work (not yet planned as a track):
+
+- block-structure validation spans (`typecheck_ambiguity.rs`),
+- declaration body vs declared return-type mismatch spans (`typecheck_stmt.rs`),
+- required-effect coverage failure spans (`typecheck_effect_usage.rs`),
+- conflicting effect declarations / `@embed` validation spans (`typecheck_validate.rs`),
+- type-declaration validation spans (`typecheck_types.rs`),
+- multiline/body-relative expression span ownership (needs body-relative-to-file-relative wiring).
 
 ### 4.6 Track CC: Closure Capture (complete)
 

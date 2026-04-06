@@ -4,7 +4,6 @@ Use this directory as follows:
 
 - `LANGUAGE_SPEC.md`: active language specification (latest user-visible syntax/semantics).
 - `PLAN.md`: active top-level planning/roadmap reference.
-- `PLAN_ERROR.md`: focused plan for richer diagnostics and precise error spans.
 - `STATE.md`: restart-safe execution snapshot (latest milestones, open items, next actions).
 - `BUGS.md`: known issues and their status.
 
@@ -12,7 +11,6 @@ Recommended reading order:
 
 1. `LANGUAGE_SPEC.md`
 2. `PLAN.md`
-3. `PLAN_ERROR.md` when working on diagnostics/LSP/CLI error UX
 4. `STATE.md`
 5. `BUGS.md` (when fixing defects)
 
