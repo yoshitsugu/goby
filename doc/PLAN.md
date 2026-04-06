@@ -698,8 +698,6 @@ All LM0–LM4 milestones complete:
 - **LM4**: `examples/mut_list.gb`; 4 runtime integration tests covering single-level,
   multi-index, value-semantics, and two-level nested update.
 
-Detail plan: `doc/PLAN_LIST_MUT.md`.
-
 ### 4.9 Track EP: Effect Row Polymorphism
 
 Goal: add effect-variable quantification so higher-order functions propagate
