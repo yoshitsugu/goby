@@ -13,8 +13,11 @@ Current staged status:
 - shared IR now carries pure `list.get` reads inside interpolation, so `goby run` succeeds for
   update-followed-by-interpolation shapes such as `println("${a[1][0]},${a[1][1]}")` after
   `a[1][1] := 30`.
-- remaining work is the longer-term fallback/runtime recursive-aggregate convergence described in
-  `doc/PLAN_MUT_LIST_FIX.md` MLF-2.
+- fallback/interpreter execution now also centralizes rooted list updates through one path-copy
+  helper and has parity coverage for single-level updates, nested updates, read-before-write,
+  and non-mutating nested reads.
+- remaining work is the narrower cleanup in `doc/PLAN_MUT_LIST_FIX.md` MLF-2: remove lingering
+  shape-specific fallback assumptions and finish the uniform recursive-aggregate model audit.
 
 ## Recently Completed
 
@@ -55,7 +58,8 @@ Complete (TD0–TD5). Remaining: multiline/body-relative expression span ownersh
 - `Float` type (`PLAN.md §4.7`)
 - Migrate effect runtime dispatch to compiled `EffectId`/`OpId` tables (`PLAN.md §5`)
 - Recursive aggregate convergence in the fallback runtime after the mutable-list routing fix
-  (`doc/PLAN_MUT_LIST_FIX.md` MLF-2)
+  (`doc/PLAN_MUT_LIST_FIX.md` MLF-2), now narrowed to cleanup of lingering shape-specific
+  assumptions rather than missing rooted-update execution
 
 ## Key Entry Points
 

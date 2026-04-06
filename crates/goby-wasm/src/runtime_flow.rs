@@ -117,7 +117,7 @@ pub(crate) enum Cont {
 pub(crate) enum StoreOp {
     Bind { name: String },
     BindMut { name: String },
-    Assign { name: String },
+    Assign { name: String, indices: Vec<usize> },
 }
 
 #[allow(dead_code)]

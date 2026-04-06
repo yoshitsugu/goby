@@ -85,6 +85,25 @@ impl RuntimeLocals {
         }
     }
 
+    pub(crate) fn assign_rooted(
+        &mut self,
+        name: &str,
+        indices: &[usize],
+        value: RuntimeValue,
+    ) -> RootedAssignResult {
+        let Some(root_value) = self.get(name) else {
+            return RootedAssignResult::MissingRoot;
+        };
+        let Some(updated_root) = assign_runtime_value_at_path(root_value, indices, value) else {
+            return RootedAssignResult::InvalidPath;
+        };
+        if self.assign(name, updated_root) {
+            RootedAssignResult::Applied
+        } else {
+            RootedAssignResult::MissingRoot
+        }
+    }
+
     pub(crate) fn clear(&mut self, name: &str) {
         self.string_values.remove(name);
         self.int_values.remove(name);
@@ -189,6 +208,13 @@ pub(crate) fn runtime_value_eq(left: &RuntimeValue, right: &RuntimeValue) -> boo
         (RuntimeValue::Callable(_), RuntimeValue::Callable(_)) => false,
         _ => false,
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RootedAssignResult {
+    Applied,
+    MissingRoot,
+    InvalidPath,
 }
 
 #[derive(Clone)]
@@ -300,9 +326,28 @@ fn runtime_list_slice_as_strings(values: &[RuntimeValue]) -> Option<Vec<String>>
         .collect()
 }
 
+fn assign_runtime_value_at_path(
+    value: RuntimeValue,
+    indices: &[usize],
+    replacement: RuntimeValue,
+) -> Option<RuntimeValue> {
+    let Some((&head, tail)) = indices.split_first() else {
+        return Some(replacement);
+    };
+    let RuntimeValue::List(mut items) = value else {
+        return None;
+    };
+    let slot = items.get_mut(head)?;
+    let updated = assign_runtime_value_at_path(slot.clone(), tail, replacement)?;
+    *slot = updated;
+    Some(RuntimeValue::List(items))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{RuntimeLocals, RuntimeValue, runtime_value_eq, runtime_value_option_eq};
+    use super::{
+        RootedAssignResult, RuntimeLocals, RuntimeValue, runtime_value_eq, runtime_value_option_eq,
+    };
     use std::collections::HashMap;
 
     #[test]
@@ -366,5 +411,47 @@ mod tests {
 
         assert_eq!(value.to_output_text(), "[[1, 2, 3], [4, 5, 6]]");
         assert_eq!(value.to_expression_text(), "[[1, 2, 3], [4, 5, 6]]");
+    }
+
+    #[test]
+    fn rooted_assign_updates_nested_list_via_path_copy() {
+        let mut locals = RuntimeLocals::default();
+        locals.store_mut(
+            "xs",
+            RuntimeValue::List(vec![
+                RuntimeValue::list_from_ints(vec![1, 2]),
+                RuntimeValue::list_from_ints(vec![3, 4]),
+            ]),
+        );
+
+        assert_eq!(
+            locals.assign_rooted("xs", &[1, 1], RuntimeValue::Int(30)),
+            RootedAssignResult::Applied
+        );
+        assert_eq!(
+            locals
+                .get("xs")
+                .expect("root should exist")
+                .to_expression_text(),
+            "[[1, 2], [3, 30]]"
+        );
+    }
+
+    #[test]
+    fn rooted_assign_rejects_invalid_list_path() {
+        let mut locals = RuntimeLocals::default();
+        locals.store_mut("xs", RuntimeValue::list_from_ints(vec![1, 2]));
+
+        assert_eq!(
+            locals.assign_rooted("xs", &[1, 0], RuntimeValue::Int(30)),
+            RootedAssignResult::InvalidPath
+        );
+        assert_eq!(
+            locals
+                .get("xs")
+                .expect("root should exist")
+                .to_expression_text(),
+            "[1, 2]"
+        );
     }
 }

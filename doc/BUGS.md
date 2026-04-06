@@ -13,7 +13,9 @@ Resolved on 2026-04-06:
 Current boundary note:
 
 - rooted mutable list updates are intentionally routed through the `GeneralLowered`
-  Goby-owned Wasm path rather than the fallback/static runtime-output resolver.
+  Goby-owned Wasm path for normal `goby run` planning.
+- fallback/interpreter execution now has centralized rooted-update semantics for the supported
+  recursive-aggregate subset, so parity tests can exercise the same language behavior there too.
 - further recursive-aggregate fallback convergence remains planning work, but it is
   no longer allowed to surface as a late `fallback runtime output could not be resolved`
   failure for well-typed mutable-list programs.

@@ -3,6 +3,7 @@ use crate::call::flatten_named_call;
 use crate::grapheme_semantics::{ControlFlow, GraphemeSpan, for_each_extended_grapheme_span};
 use crate::runtime_eval::{AstLambdaCallable, IntCallable};
 use crate::runtime_flow::RcCallables;
+use crate::runtime_value::RootedAssignResult;
 use goby_core::ast::UnaryOpKind;
 use std::rc::Rc;
 
@@ -12,6 +13,40 @@ pub(super) struct ResolvedRuntimeOutput {
 }
 
 impl<'m> RuntimeOutputResolver<'m> {
+    fn eval_assign_target_indices_option(
+        &mut self,
+        target: &goby_core::ast::AssignTarget,
+        locals: &RuntimeLocals,
+        callables: &RcCallables,
+        evaluators: &RuntimeEvaluators<'_, '_>,
+        depth: usize,
+    ) -> Option<Vec<usize>> {
+        match target {
+            goby_core::ast::AssignTarget::Var(_) => Some(Vec::new()),
+            goby_core::ast::AssignTarget::ListIndex { base, index } => {
+                let mut indices = self.eval_assign_target_indices_option(
+                    base,
+                    locals,
+                    callables,
+                    evaluators,
+                    depth + 1,
+                )?;
+                let index_value =
+                    self.eval_expr_ast(index, locals, callables, evaluators, depth + 1)?;
+                let RuntimeValue::Int(index) = index_value else {
+                    self.mark_runtime_abort();
+                    return None;
+                };
+                if index < 0 {
+                    self.mark_runtime_abort();
+                    return None;
+                }
+                indices.push(index as usize);
+                Some(indices)
+            }
+        }
+    }
+
     pub(super) fn resolve_detailed(
         module: &'m Module,
         body: Option<&str>,
@@ -142,29 +177,27 @@ impl<'m> RuntimeOutputResolver<'m> {
                 Some(())
             }
             Stmt::Assign { target, value, .. } => {
-                let name = match target {
-                    goby_core::ast::AssignTarget::Var(n) => n,
-                    goby_core::ast::AssignTarget::ListIndex { .. } => return None,
-                };
+                let callables = Rc::new(HashMap::new());
+                let locals = self.locals.clone();
+                let indices = self.eval_assign_target_indices_option(
+                    target, &locals, &callables, evaluators, 1,
+                )?;
+                let name = target.root_name();
                 self.locals.contains(name).then_some(())?;
                 let runtime_val = self
-                    .eval_expr_to_option(
-                        value,
-                        &self.locals.clone(),
-                        &Rc::new(HashMap::new()),
-                        evaluators,
-                        1,
-                    )
+                    .eval_expr_to_option(value, &locals, &callables, evaluators, 1)
                     .or_else(|| {
                         let repr = value.to_str_repr()?;
-                        self.eval_value_with_context(
-                            &repr,
-                            &self.locals.clone(),
-                            &Rc::new(HashMap::new()),
-                            evaluators,
-                        )
+                        self.eval_value_with_context(&repr, &locals, &callables, evaluators)
                     })?;
-                self.locals.assign(name, runtime_val).then_some(())?;
+                match self.locals.assign_rooted(name, &indices, runtime_val) {
+                    RootedAssignResult::Applied => {}
+                    RootedAssignResult::MissingRoot => return None,
+                    RootedAssignResult::InvalidPath => {
+                        self.mark_runtime_abort();
+                        return None;
+                    }
+                }
                 Some(())
             }
             Stmt::Expr(expr, _) => {

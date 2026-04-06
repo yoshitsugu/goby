@@ -971,6 +971,87 @@ main =
 }
 
 #[test]
+fn mutable_single_level_list_update_survives_mode_parity() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    let source = r#"
+main : Unit -> Unit can Print
+main =
+  mut xs = [1,2,3]
+  xs[1] := 10
+  println("${xs[1]}")
+"#;
+    let module = parse_module(source).expect("parse should work");
+    let typed = assert_mode_parity(&module, "single-level mutable list update");
+    assert_eq!(typed.stdout.as_deref(), Some("10\n"));
+    assert_eq!(typed.runtime_error_kind, None);
+}
+
+#[test]
+fn nested_list_read_via_inner_binding_survives_mode_parity() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    let source = r#"
+main : Unit -> Unit can Print
+main =
+  xs = [[1,2], [3,4]]
+  inner = xs[0]
+  println("${inner[1]}")
+"#;
+    let module = parse_module(source).expect("parse should work");
+    let typed = assert_mode_parity(&module, "nested list read via inner binding");
+    assert_eq!(typed.stdout.as_deref(), Some("2\n"));
+    assert_eq!(typed.runtime_error_kind, None);
+}
+
+#[test]
+fn mutable_nested_list_read_before_write_survives_mode_parity() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    let source = r#"
+main : Unit -> Unit can Print
+main =
+  mut xs = [[1,2], [3,4]]
+  before = xs[1][1]
+  xs[1][1] := 30
+  println("${before}")
+"#;
+    let module = parse_module(source).expect("parse should work");
+    let typed = assert_mode_parity(&module, "nested list read before rooted update");
+    assert_eq!(typed.stdout.as_deref(), Some("4\n"));
+    assert_eq!(typed.runtime_error_kind, None);
+}
+
+#[test]
+fn mutable_nested_list_update_visible_through_same_root_survives_mode_parity() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    let source = r#"
+main : Unit -> Unit can Print
+main =
+  mut xs = [[1,2], [3,4]]
+  xs[0][1] := 99
+  println("${xs[0][1]}")
+"#;
+    let module = parse_module(source).expect("parse should work");
+    let typed = assert_mode_parity(&module, "nested rooted update visible via same root");
+    assert_eq!(typed.stdout.as_deref(), Some("99\n"));
+    assert_eq!(typed.runtime_error_kind, None);
+}
+
+#[test]
+fn mutable_nested_list_update_followed_by_interpolation_survives_mode_parity() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    let source = r#"
+main : Unit -> Unit can Print
+main =
+  mut xs = [[1,2], [3,4]]
+  xs[1][1] := 30
+  println("${xs[1][0]},${xs[1][1]}")
+"#;
+    let module = parse_module(source).expect("parse should work");
+    let typed = assert_mode_parity(&module, "nested rooted update followed by interpolation");
+    assert_eq!(typed.stdout.as_deref(), Some("3,30\n"));
+    assert_eq!(typed.runtime_error_kind, None);
+}
+
+#[test]
 fn resolves_nested_list_index_directly_inside_interpolation() {
     let _guard = ENV_MUTEX.lock().unwrap();
     let source = r#"

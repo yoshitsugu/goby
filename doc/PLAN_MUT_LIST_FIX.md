@@ -11,7 +11,10 @@ Staged milestone landed on 2026-04-06:
 - pure `list.get` reads inside interpolation now lower through shared IR, so exact
   `goby run` reproductions such as `println("${a[0][1]}")` before or after rooted updates
   execute successfully,
-- fallback/runtime recursive aggregate convergence remains open as the follow-up slice in MLF-2.
+- fallback/interpreter execution now centralizes rooted list updates through one path-copy helper
+  with parity coverage for single-level updates, nested updates, and read-before-write cases,
+- fallback/runtime recursive aggregate convergence still remains open as the follow-up slice in
+  MLF-2.
 
 ## Goal
 
@@ -180,10 +183,10 @@ Definition of done:
 
 - [ ] Remove shape-specific assumptions in fallback/runtime-output evaluation that prevent honest
       recursive aggregate support.
-- [ ] Ensure recursive runtime values are representable, comparable where supported, and
+- [x] Ensure recursive runtime values are representable, comparable where supported, and
       stringifiable through one shared formatting path.
-- [ ] Implement or centralize rooted list-update evaluation for fallback/interpreter execution.
-- [ ] Validate that mutable bindings containing nested aggregates remain coherent after updates.
+- [x] Implement or centralize rooted list-update evaluation for fallback/interpreter execution.
+- [x] Validate that mutable bindings containing nested aggregates remain coherent after updates.
 
 Definition of done:
 
@@ -195,7 +198,7 @@ Definition of done:
 
 ### MLF-3: End-to-end parity and regression closure
 
-- [ ] Add `goby run`-equivalent regression tests for:
+- [x] Add `goby run`-equivalent regression tests for:
       - nested list read before interpolation,
       - nested list read inside interpolation,
       - single-level mutable list update,
@@ -220,12 +223,12 @@ Definition of done:
 The track is not complete unless the test suite contains end-to-end coverage for all of the
 following language behaviors under the intended runtime boundary:
 
-- [ ] `mut xs = [1,2,3]; xs[1] := 10; println("${xs[1]}")`
+- [x] `mut xs = [1,2,3]; xs[1] := 10; println("${xs[1]}")`
 - [x] `mut xs = [[1,2], [3,4]]; xs[0][1] := 99; println("${xs[0][1]}")`
-- [ ] `mut xs = [[1,2], [3,4]]; inner = xs[0]; println("${inner[1]}")`
-- [ ] `mut xs = [[1,2], [3,4]]; before = xs[1][1]; xs[1][1] := 30; println("${before}")`
+- [x] `mut xs = [[1,2], [3,4]]; inner = xs[0]; println("${inner[1]}")`
+- [x] `mut xs = [[1,2], [3,4]]; before = xs[1][1]; xs[1][1] := 30; println("${before}")`
 - [x] `mut xs = [[1,2], [3,4]]; xs[1][1] := 30; println("${xs[1][0]},${xs[1][1]}")`
-- [ ] A non-mutable nested-list read program still succeeds without mutation.
+- [x] A non-mutable nested-list read program still succeeds without mutation.
 - [x] Routing coverage proves the selected execution path is one that implements the required
       semantics.
 
@@ -235,7 +238,7 @@ following language behaviors under the intended runtime boundary:
       or "interpolation".
 - [ ] No fake capability trigger is introduced merely to force a different backend.
 - [ ] The chosen runtime value model scales to lists of tuples, records, and future aggregates.
-- [ ] Rooted update semantics are defined once and reused, or else multiple implementations are
+- [x] Rooted update semantics are defined once and reused, or else multiple implementations are
       intentionally aligned and covered by parity tests.
 - [ ] Documentation states both what is supported and where unsupported cases are rejected.
 - [ ] The implementation would still make architectural sense if more backends are added later.
@@ -250,7 +253,7 @@ This track is complete only when all of the following are true:
       internal unsupported case.
 - [ ] Recursive aggregate values used by the supported fallback subset are modeled uniformly rather
       than via ad hoc special cases.
-- [ ] End-to-end tests cover both reads and writes on nested mutable lists.
+- [x] End-to-end tests cover both reads and writes on nested mutable lists.
 - [x] The repaired boundary is documented in `doc/PLAN.md` and reflected in `doc/STATE.md`.
 - [x] `doc/BUGS.md` is either cleared for this issue or narrowed to a deliberate, documented
       unsupported remainder.

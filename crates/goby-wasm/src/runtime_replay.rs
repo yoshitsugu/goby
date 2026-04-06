@@ -1,8 +1,57 @@
 use super::*;
 use crate::runtime_flow::RcCallables;
+use crate::runtime_value::RootedAssignResult;
 use std::rc::Rc;
 
 impl<'m> RuntimeOutputResolver<'m> {
+    fn eval_assign_target_indices(
+        &mut self,
+        target: &goby_core::ast::AssignTarget,
+        locals: &RuntimeLocals,
+        callables: &RcCallables,
+        evaluators: &RuntimeEvaluators<'_, '_>,
+        depth: usize,
+    ) -> Out<Vec<usize>> {
+        match target {
+            goby_core::ast::AssignTarget::Var(_) => Out::Done(Vec::new()),
+            goby_core::ast::AssignTarget::ListIndex { base, index } => {
+                let mut indices = match self.eval_assign_target_indices(
+                    base,
+                    locals,
+                    callables,
+                    evaluators,
+                    depth + 1,
+                ) {
+                    Out::Done(indices) => indices,
+                    Out::Suspend(_) => return Out::Err(RuntimeError::Unsupported),
+                    Out::Escape(escape) => return Out::Escape(escape),
+                    Out::Err(err) => return Out::Err(err),
+                };
+                let index_value =
+                    match self.eval_expr(index, locals, callables, evaluators, depth + 1) {
+                        Out::Done(value) => value,
+                        Out::Suspend(_) => return Out::Err(RuntimeError::Unsupported),
+                        Out::Escape(escape) => return Out::Escape(escape),
+                        Out::Err(err) => return Out::Err(err),
+                    };
+                let RuntimeValue::Int(index) = index_value else {
+                    self.mark_runtime_abort();
+                    return Out::Err(RuntimeError::Abort {
+                        kind: "aborted".into(),
+                    });
+                };
+                if index < 0 {
+                    self.mark_runtime_abort();
+                    return Out::Err(RuntimeError::Abort {
+                        kind: "aborted".into(),
+                    });
+                }
+                indices.push(index as usize);
+                Out::Done(indices)
+            }
+        }
+    }
+
     /// Execute a single AST statement inside a unit-returning function body.
     pub(super) fn execute_unit_ast_stmt(
         &mut self,
@@ -34,12 +83,19 @@ impl<'m> RuntimeOutputResolver<'m> {
                 Out::Done(())
             }
             Stmt::Assign { target, value, .. } => {
-                let name = match target {
-                    goby_core::ast::AssignTarget::Var(n) => n,
-                    goby_core::ast::AssignTarget::ListIndex { .. } => {
-                        return Out::Err(RuntimeError::Unsupported);
-                    }
+                let indices = match self.eval_assign_target_indices(
+                    target,
+                    locals,
+                    callables,
+                    evaluators,
+                    depth + 1,
+                ) {
+                    Out::Done(indices) => indices,
+                    Out::Suspend(cont) => return Out::Suspend(cont),
+                    Out::Escape(escape) => return Out::Escape(escape),
+                    Out::Err(e) => return Out::Err(e),
                 };
+                let name = target.root_name();
                 if !locals.contains(name) {
                     return Out::Err(RuntimeError::Unsupported);
                 }
@@ -49,10 +105,16 @@ impl<'m> RuntimeOutputResolver<'m> {
                     Out::Escape(escape) => return Out::Escape(escape),
                     Out::Err(e) => return Out::Err(e),
                 };
-                if !locals.assign(name, v) {
-                    return Out::Err(RuntimeError::Unsupported);
+                match locals.assign_rooted(name, &indices, v) {
+                    RootedAssignResult::Applied => Out::Done(()),
+                    RootedAssignResult::MissingRoot => Out::Err(RuntimeError::Unsupported),
+                    RootedAssignResult::InvalidPath => {
+                        self.mark_runtime_abort();
+                        Out::Err(RuntimeError::Abort {
+                            kind: "aborted".into(),
+                        })
+                    }
                 }
-                Out::Done(())
             }
             Stmt::Expr(expr, _) => {
                 self.execute_unit_expr_ast(expr, locals, callables, evaluators, depth)
@@ -223,30 +285,47 @@ impl<'m> RuntimeOutputResolver<'m> {
                     }
                 }
                 Stmt::Assign { target, value, .. } => {
-                    let name = match target {
-                        goby_core::ast::AssignTarget::Var(n) => n,
-                        goby_core::ast::AssignTarget::ListIndex { .. } => {
-                            return Out::Err(RuntimeError::Unsupported);
-                        }
+                    let indices = match self.eval_assign_target_indices(
+                        target,
+                        &locals,
+                        &callables,
+                        evaluators,
+                        depth + 1,
+                    ) {
+                        Out::Done(indices) => indices,
+                        Out::Suspend(cont) => return Out::Suspend(cont),
+                        Out::Escape(escape) => return Out::Escape(escape),
+                        Out::Err(e) => return Out::Err(e),
                     };
+                    let name = target.root_name();
                     if !locals.contains(name) {
                         return Out::Err(RuntimeError::Abort {
                             kind: "assign_missing_var".into(),
                         });
                     }
                     match self.eval_expr(value, &locals, &callables, evaluators, depth + 1) {
-                        Out::Done(v) => {
-                            if !locals.assign(name, v) {
+                        Out::Done(v) => match locals.assign_rooted(name, &indices, v) {
+                            RootedAssignResult::Applied => {}
+                            RootedAssignResult::MissingRoot => {
                                 return Out::Err(RuntimeError::Abort {
                                     kind: "assign_missing_var".into(),
                                 });
                             }
-                        }
+                            RootedAssignResult::InvalidPath => {
+                                self.mark_runtime_abort();
+                                return Out::Err(RuntimeError::Abort {
+                                    kind: "aborted".into(),
+                                });
+                            }
+                        },
                         Out::Escape(escape) => return Out::Escape(escape),
                         Out::Suspend(cont) => {
                             return Out::Suspend(Cont::StmtSeq {
                                 pending: Some(Box::new(cont)),
-                                store: Some(StoreOp::Assign { name: name.clone() }),
+                                store: Some(StoreOp::Assign {
+                                    name: name.to_string(),
+                                    indices,
+                                }),
                                 remaining,
                                 locals,
                                 callables,
@@ -559,16 +638,20 @@ impl<'m> RuntimeOutputResolver<'m> {
                     match store_op {
                         StoreOp::Bind { name } => locals.store(&name, value),
                         StoreOp::BindMut { name } => locals.store_mut(&name, value),
-                        StoreOp::Assign { name } => {
-                            if !locals.contains(&name) {
-                                return Out::Err(RuntimeError::Abort {
-                                    kind: "assign_missing_var".into(),
-                                });
-                            }
-                            if !locals.assign(&name, value) {
-                                return Out::Err(RuntimeError::Abort {
-                                    kind: "assign_missing_var".into(),
-                                });
+                        StoreOp::Assign { name, indices } => {
+                            match locals.assign_rooted(&name, &indices, value) {
+                                RootedAssignResult::Applied => {}
+                                RootedAssignResult::MissingRoot => {
+                                    return Out::Err(RuntimeError::Abort {
+                                        kind: "assign_missing_var".into(),
+                                    });
+                                }
+                                RootedAssignResult::InvalidPath => {
+                                    self.mark_runtime_abort();
+                                    return Out::Err(RuntimeError::Abort {
+                                        kind: "aborted".into(),
+                                    });
+                                }
                             }
                         }
                     }

@@ -222,13 +222,15 @@ Based on `examples/*.gb`:
       `mut a = [[1,2,3], [4,5,6], [7,8,9]]; a[1][1] := 30; println("${a[1][0]},${a[1][1]}")`
       execute successfully under `goby run`.
     - current explicit boundary:
-      - fallback/static execution may still evaluate recursive aggregate reads for the supported
-        pure subset,
-      - but rooted list updates are owned by the `GeneralLowered` runtime path and must not be
-        routed into fallback execution.
+      - `goby run` planning still routes mutable rooted-update programs through the
+        `GeneralLowered` runtime path,
+      - fallback/interpreter execution now uses the same centralized path-copy rooted-update
+        semantic for the supported recursive-aggregate subset, including parity-tested single-
+        and two-level updates plus read-before-write cases.
     - remaining follow-up:
-      - continue converging fallback/runtime recursive aggregate semantics so the supported pure
-        subset uses one honest value model and one clearly documented unsupported boundary.
+      - continue removing lingering shape-specific fallback/runtime assumptions so the supported
+        recursive-aggregate subset uses one honest value model and one clearly documented
+        unsupported boundary.
 
 - **`fn`-only anonymous functions** (complete, 2026-03-31).
   - `fn x -> expr` is the only anonymous function syntax.
