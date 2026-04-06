@@ -58,7 +58,7 @@ use crate::runtime_flow::{
 pub use crate::runtime_io_plan::{
     RuntimeIoExecutionKind, runtime_execution_needs_stdin, runtime_io_execution_kind,
 };
-use crate::runtime_support::{eval_string_expr, parse_pipeline};
+use crate::runtime_support::parse_pipeline;
 use crate::runtime_value::{RuntimeLocals, RuntimeValue, runtime_value_option_eq};
 use goby_core::{
     CasePattern, Expr, HandlerClause, ListPatternItem, ListPatternTail, Module, Stmt,

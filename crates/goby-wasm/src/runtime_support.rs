@@ -1,8 +1,6 @@
-use std::collections::HashMap;
-
 use goby_core::{Expr, ImportKind, Module};
 
-use crate::runtime_eval::{is_identifier, is_string_literal};
+use crate::runtime_eval::is_identifier;
 use crate::runtime_flow::DirectCallHead;
 use crate::support::peel_expr_spans;
 
@@ -78,16 +76,3 @@ pub(crate) fn parse_pipeline(expr: &str) -> Option<(&str, &str)> {
     Some((left, right))
 }
 
-pub(crate) fn eval_string_expr(expr: &str, locals: &HashMap<String, String>) -> Option<String> {
-    let expr = expr.trim();
-
-    if is_string_literal(expr) {
-        return Some(expr[1..expr.len() - 1].to_string());
-    }
-
-    if is_identifier(expr) {
-        return locals.get(expr).cloned();
-    }
-
-    None
-}

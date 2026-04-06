@@ -12,21 +12,6 @@ pub(crate) struct RuntimeLocals {
 }
 
 impl RuntimeLocals {
-    pub(crate) fn string_values(&self) -> HashMap<String, String> {
-        let mut result = HashMap::new();
-        for (name, value) in &self.values {
-            if let RuntimeValue::String(text) = value {
-                result.insert(name.clone(), text.clone());
-            }
-        }
-        for (name, cell) in &self.mut_values {
-            if let RuntimeValue::String(text) = &*cell.borrow() {
-                result.insert(name.clone(), text.clone());
-            }
-        }
-        result
-    }
-
     /// Return a filtered view of Int-typed bindings for the IntEvaluator.
     pub(crate) fn int_view(&self) -> HashMap<String, i64> {
         let mut result = HashMap::new();
