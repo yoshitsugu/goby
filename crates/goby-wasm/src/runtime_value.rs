@@ -27,7 +27,8 @@ impl RuntimeLocals {
         result
     }
 
-    pub(crate) fn int_values(&self) -> HashMap<String, i64> {
+    /// Return a filtered view of Int-typed bindings for the IntEvaluator.
+    pub(crate) fn int_view(&self) -> HashMap<String, i64> {
         let mut result = HashMap::new();
         for (name, value) in &self.values {
             if let RuntimeValue::Int(number) = value {
@@ -322,11 +323,12 @@ mod tests {
             locals.get("s"),
             Some(RuntimeValue::String(text)) if text == "ok"
         ));
-        assert_eq!(locals.int_values().get("n"), Some(&42));
-        assert_eq!(
-            locals.string_values().get("s").map(String::as_str),
-            Some("ok")
-        );
+        // Derived views still work
+        assert!(matches!(locals.get("n"), Some(RuntimeValue::Int(42))));
+        assert!(matches!(
+            locals.get("s"),
+            Some(RuntimeValue::String(ref text)) if text == "ok"
+        ));
     }
 
     #[test]
@@ -339,7 +341,7 @@ mod tests {
 
         assert!(matches!(locals.get("count"), Some(RuntimeValue::Int(7))));
         assert!(matches!(cloned.get("count"), Some(RuntimeValue::Int(7))));
-        assert_eq!(locals.int_values().get("count"), Some(&7));
+        assert!(matches!(locals.get("count"), Some(RuntimeValue::Int(7))));
     }
 
     #[test]

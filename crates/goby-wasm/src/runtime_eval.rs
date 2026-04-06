@@ -119,6 +119,24 @@ impl<'a> IntEvaluator<'a> {
         })
     }
 
+    /// Top-level entry point that reads locals from a `RuntimeLocals` store.
+    /// Internal recursive calls use `eval_expr` with `HashMap<String, i64>`.
+    pub(crate) fn eval_expr_from_locals(
+        &self,
+        expr: &str,
+        locals: &RuntimeLocals,
+        callables: &HashMap<String, IntCallable>,
+    ) -> Option<i64> {
+        let expr = expr.trim();
+        if expr.is_empty() {
+            return None;
+        }
+
+        // Extract Int-typed bindings for internal recursive evaluation
+        let int_locals = locals.int_view();
+        self.eval_expr_inner(expr, &int_locals, callables)
+    }
+
     pub(crate) fn eval_expr(
         &self,
         expr: &str,
@@ -129,7 +147,15 @@ impl<'a> IntEvaluator<'a> {
         if expr.is_empty() {
             return None;
         }
+        self.eval_expr_inner(expr, locals, callables)
+    }
 
+    fn eval_expr_inner(
+        &self,
+        expr: &str,
+        locals: &HashMap<String, i64>,
+        callables: &HashMap<String, IntCallable>,
+    ) -> Option<i64> {
         if let Some(value) = self.eval_binary_expr(expr, locals, callables) {
             return Some(value);
         }
