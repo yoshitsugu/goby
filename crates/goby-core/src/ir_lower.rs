@@ -11,7 +11,7 @@ use crate::ir::{
 };
 use crate::resolved::{
     ResolvedDeclaration, ResolvedExpr, ResolvedHandlerClause, ResolvedInterpolatedPart,
-    ResolvedModule, ResolvedRef, ResolvedStmt,
+    ResolvedModule, ResolvedRef, ResolvedStmt, ResolvedTarget,
 };
 
 /// An error produced when an AST node cannot be lowered to IR.
@@ -886,13 +886,25 @@ fn ref_name(reference: &ResolvedRef) -> &str {
     }
 }
 
-fn mutable_target_name(reference: &ResolvedRef) -> Result<&str, LowerError> {
+fn mutable_target_name(target: &ResolvedTarget) -> Result<&str, LowerError> {
+    match target {
+        ResolvedTarget::Var(reference) => mutable_ref_name(reference),
+        ResolvedTarget::ListIndex { .. } => Err(err(
+            "list-index assignment target lowering is not yet implemented (planned for LM3b)"
+                .to_string(),
+        )),
+    }
+}
+
+fn mutable_ref_name(reference: &ResolvedRef) -> Result<&str, LowerError> {
     match reference {
         ResolvedRef::Local(name) => Ok(name),
-        ResolvedRef::ValueName(name) if name != "__unresolved_list_index_target" => Ok(name),
-        ResolvedRef::ValueName(_) => Err(err(
-            "list-index assignment target is not yet supported in the lowering layer".to_string(),
-        )),
+        // ValueName is the resolver's catch-all for unresolved names (typos, forward refs).
+        // Accepting it here is a best-effort policy: the assignment will attempt to write
+        // to a local of that name; if none exists at runtime, execution will abort.
+        // The typechecker (LM2) is responsible for rejecting undeclared assignment targets
+        // before this point.
+        ResolvedRef::ValueName(name) => Ok(name),
         other => Err(err(format!(
             "assignment target must be a mutable local, got `{}`",
             ref_name(other)
@@ -1798,7 +1810,8 @@ choose n =
     #[test]
     fn reject_list_index_assign_target() {
         // AssignTarget::ListIndex is not yet supported through the lowering path.
-        // The resolver produces a sentinel ValueName and ir_lower rejects it.
+        // The resolver now produces a real ResolvedTarget::ListIndex (not a sentinel),
+        // and ir_lower rejects it until LM3b implements path-copy lowering.
         let decl = decl_with_body(
             "list_index_assign_test",
             vec![Stmt::Assign {

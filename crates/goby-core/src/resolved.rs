@@ -27,6 +27,33 @@ pub struct ResolvedDeclaration {
     pub body: Vec<ResolvedStmt>,
 }
 
+/// The resolved form of an assignment left-hand side.
+///
+/// Mirrors `ast::AssignTarget` but with identifiers resolved to `ResolvedRef`.
+/// Note: the `index` expressions inside `ListIndex` are `ResolvedExpr`
+/// (resolved from `ast::Expr`) so they can be lowered without re-running
+/// name resolution.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ResolvedTarget {
+    /// Plain mutable variable assignment: `x := expr`.
+    Var(ResolvedRef),
+    /// List-index assignment: `base[index] := expr`.
+    ListIndex {
+        base: Box<ResolvedTarget>,
+        index: Box<ResolvedExpr>,
+    },
+}
+
+impl ResolvedTarget {
+    /// Return the root `ResolvedRef` (the variable at the base of the target chain).
+    pub fn root_ref(&self) -> &ResolvedRef {
+        match self {
+            ResolvedTarget::Var(r) => r,
+            ResolvedTarget::ListIndex { base, .. } => base.root_ref(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ResolvedStmt {
     Binding {
@@ -40,7 +67,7 @@ pub enum ResolvedStmt {
         span: Option<Span>,
     },
     Assign {
-        target: ResolvedRef,
+        target: ResolvedTarget,
         value: ResolvedExpr,
         span: Option<Span>,
     },
@@ -326,22 +353,27 @@ impl Resolver {
                 self.bind_local(name.clone());
                 resolved
             }
-            Stmt::Assign { target, value, span } => {
-                let resolved_target = match target {
-                    crate::ast::AssignTarget::Var(name) => self.resolve_name(name),
-                    crate::ast::AssignTarget::ListIndex { .. } => {
-                        // Resolved-layer support for list-index assignment targets is added in LM1c.
-                        // For now, produce a placeholder so the codebase compiles.
-                        ResolvedRef::ValueName("__unresolved_list_index_target".to_string())
-                    }
-                };
-                ResolvedStmt::Assign {
-                    target: resolved_target,
-                    value: self.resolve_expr(value),
-                    span: *span,
-                }
-            }
+            Stmt::Assign { target, value, span } => ResolvedStmt::Assign {
+                target: self.resolve_assign_target(target),
+                value: self.resolve_expr(value),
+                span: *span,
+            },
             Stmt::Expr(expr, span) => ResolvedStmt::Expr(self.resolve_expr(expr), *span),
+        }
+    }
+
+    /// Resolve an `ast::AssignTarget` into a `ResolvedTarget`.
+    ///
+    /// Important: the `base` of a `ListIndex` target is resolved recursively as a
+    /// `ResolvedTarget`, NOT through `resolve_list_index` / `resolve_expr`. The index
+    /// expression IS resolved through `resolve_expr` because it is a read expression.
+    fn resolve_assign_target(&mut self, target: &crate::ast::AssignTarget) -> ResolvedTarget {
+        match target {
+            crate::ast::AssignTarget::Var(name) => ResolvedTarget::Var(self.resolve_name(name)),
+            crate::ast::AssignTarget::ListIndex { base, index } => ResolvedTarget::ListIndex {
+                base: Box::new(self.resolve_assign_target(base)),
+                index: Box::new(self.resolve_expr(index)),
+            },
         }
     }
 
@@ -984,5 +1016,66 @@ mod tests {
                 None,
             )]
         );
+    }
+
+    /// Verify that `AssignTarget::ListIndex` is resolved to `ResolvedTarget::ListIndex`
+    /// (NOT desugared into a `list.get` call chain as `Expr::ListIndex` would be).
+    #[test]
+    fn resolve_assign_target_list_index_does_not_desugar_to_list_get() {
+        use crate::ast::{AssignTarget, Stmt};
+        let decl = Declaration {
+            name: "main".to_string(),
+            type_annotation: None,
+            params: vec![],
+            body: String::new(),
+            parsed_body: Some(vec![
+                Stmt::MutBinding {
+                    name: "xs".to_string(),
+                    value: Expr::ListLit {
+                        elements: vec![Expr::IntLit(1), Expr::IntLit(2)],
+                        spread: None,
+                    },
+                    span: None,
+                },
+                Stmt::Assign {
+                    target: AssignTarget::ListIndex {
+                        base: Box::new(AssignTarget::Var("xs".to_string())),
+                        index: Box::new(Expr::IntLit(0)),
+                    },
+                    value: Expr::IntLit(99),
+                    span: None,
+                },
+            ]),
+            line: 1,
+            col: 1,
+        };
+        let resolved = resolve_declaration(&decl);
+
+        // The Assign stmt target must be ResolvedTarget::ListIndex, not a call to list.get.
+        match &resolved.body[1] {
+            ResolvedStmt::Assign { target, .. } => {
+                match target {
+                    ResolvedTarget::ListIndex { base, index } => {
+                        // base must be Var(Local("xs")), not a list.get call.
+                        assert!(
+                            matches!(base.as_ref(), ResolvedTarget::Var(ResolvedRef::Local(n)) if n == "xs"),
+                            "base should be Var(Local(\"xs\")), got {:?}",
+                            base
+                        );
+                        // index must be IntLit(0).
+                        assert!(
+                            matches!(index.as_ref(), ResolvedExpr::IntLit(0)),
+                            "index should be IntLit(0), got {:?}",
+                            index
+                        );
+                    }
+                    other => panic!(
+                        "expected ResolvedTarget::ListIndex, got {:?}",
+                        other
+                    ),
+                }
+            }
+            other => panic!("expected Assign stmt, got {:?}", other),
+        }
     }
 }
