@@ -1,78 +1,73 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-04-05
+Last updated: 2026-04-06
 
 ## Current Focus
 
-The next implementation target is [`doc/PLAN_ERROR.md`](/home/yoshitsugu/src/github.com/yoshitsugu/goby/doc/PLAN_ERROR.md).
+Track LM (Mutable List Element Assignment) が完了した。
+現時点での明確な次アクティブトラックはない。
 
-Current intent:
+候補:
 
-- continue `doc/PLAN_ERROR.md` after closing TD2 typed-argument parity
-- preserve the rule that `goby-core` owns typed diagnostic spans while CLI/LSP
-  only render them
-- keep widening span ownership only where the parser can honestly point at the
-  whole blamed argument expression
+1. **Track TD2 続行** (`doc/PLAN_ERROR.md`) — 型付き診断スパンの残余カバレッジ
+   (multiline/body-relative expressions が deferred のまま)
+2. **List index precedence 修正** (`PLAN.md §2.1`) — `f xs[0]` が `(f xs)[0]` になる
+   現パーサーの誤り修正
+3. **Track Float** (`PLAN.md §4.7`) — `Float` 型の追加
 
-Current slice status:
+## Recently Completed
 
-- Ordinary-call typed mismatch parity is now locked on the canonical literal
-  fixture as well as the previously covered bound-variable / qualified /
-  later-argument / partially-applied cases:
-  - single-line parser-owned literal / interpolated / list / tuple expressions
-    now carry honest whole-expression spans via a transparent AST wrapper
-  - `goby-core` keeps owning the resulting span; CLI/LSP still only render it
-  - `goby check` / `goby run` parity is locked for the direct `f "a"` fixture
-  - LSP range parity remains locked for ordinary and qualified cases, including
-    UTF-16 conversion on a line with emoji before the blamed token
-- TD2 typed-argument parity is now also locked for effect-op and `resume`
-  argument mismatches where the blamed argument expression already has honest
-  parser-owned span support:
-  - effect-op mismatch diagnostics now point at the mismatched argument
-    expression in `goby-core` and render aligned snippets/ranges in CLI/LSP
-  - `resume` mismatch diagnostics now do the same, including handler clause
-    body cases after rebasing clause parsed-body spans to declaration-body
-    coordinates before source-file conversion
-- The remaining deferred ownership gap inside typed mismatches is now
-  multiline/body-relative expression shapes that still lack honest direct
-  ownership, primarily block arguments and any future equivalent forms.
+### Track LM: Mutable List Element Assignment (2026-04-06)
 
-## Locked Decisions
+`a[i] := v` および `a[i][j] := v` が Goby コンパイラの全パイプラインで動作。
 
-- `goby-core` remains the sole owner of typed diagnostic spans and messages.
-- Single-line parser-owned literal / interpolated / list / tuple expressions may
-  use honest whole-expression spans for typed diagnostics.
-- Handler clause parsed-body diagnostics may rebase body-local spans to
-  declaration-body coordinates inside `goby-core` before final source-file
-  conversion when that mapping is structurally known.
-- Do not fabricate pseudo-precise spans for multiline block arguments or other
-  body-relative shapes that still lack direct file-relative ownership.
-- CLI and LSP parity should be added only after the core span source is honest.
+- LM0: `LANGUAGE_SPEC.md` §3 にセマンティクスを記述
+- LM1a–c: `AssignTarget` / `ResolvedTarget` AST 拡張、パーサー、リゾルバー
+- LM2: 型チェック (`check_assign_target_chain`、7 件のテスト)
+- LM3a: IR `CompExpr::AssignIndex` ノード追加
+- LM3b: `ir_lower.rs` で `ResolvedTarget::ListIndex` → `AssignIndex` 変換
+- LM3c: Wasm バックエンド `BackendIntrinsic::ListSet` (path-copy alloc) + `lower_assign_index`
+- LM4: `examples/mut_list.gb`、4 件のランタイム統合テスト
 
-## Immediate Next Steps
+最終テスト数: 688 goby-core + 560 goby-wasm + 62 integration = 全パス
 
-- Continue `doc/PLAN_ERROR.md` after TD2:
-  - audit which remaining typed diagnostic families still already know an honest
-    blame site versus which still lack source ownership
-  - keep multiline block-argument ownership deferred until there is a credible
-    file-relative span source rather than widening by frontend guesswork
-- Keep deferring multiline block-argument ownership until there is a credible
-  file-relative span source rather than widening by frontend guesswork.
+### Track CC: Closure Capture (2026-04-02)
+
+CC0–CC6 全完了。`GeneralLowered` Wasm パスでクロージャキャプチャが正常動作。
+フォールバック/インタープリターランタイムも同じセマンティクスに揃った。
+
+### Track TD2: Typed Diagnostic Spans (2026-04-05 時点)
+
+effect-op および `resume` 引数不一致の診断スパンが `goby-core` に実装済み。
+残余: multiline/body-relative expressions の honest span ownership (deferred)。
 
 ## Architecture State
 
-- Resolved-form → shared IR boundary is stable.
-- Wasm backend lowering design remains locked in [`doc/PLAN_IR.md`](/home/yoshitsugu/src/github.com/yoshitsugu/goby/doc/PLAN_IR.md).
-- Current runtime memory work is closed unless future runtime-lifetime evidence justifies reopening GC / reclamation planning.
-- Known backend limitation still in scope:
-  - non-tail / multi-resume handlers produce `BackendLimitation`
+| レイヤー | 状態 |
+|---|---|
+| Parser (`parser_stmt.rs`) | `AssignTarget` でリストインデックス代入を解析可能 |
+| Resolver (`resolved.rs`) | `ResolvedTarget` で代入先を表現 |
+| Typechecker | `check_assign_target_chain` でリストインデックス代入を検証 |
+| IR (`ir.rs`) | `CompExpr::AssignIndex` 実装済み |
+| IR lowering (`ir_lower.rs`) | `lower_list_index_assign` で path-copy 変換 |
+| Wasm backend | `BackendIntrinsic::ListSet` + `lower_assign_index` 実装済み |
+| Effect handlers | 非末尾/multi-resume は `BackendLimitation` のまま |
+| Resolved→IR 境界 | 安定。`doc/PLAN_IR.md` がリファレンス |
+| GC/reclamation | 対象外。バンプアロケーターのまま |
+
+## Known Deferred Items
+
+- `f xs[0]` のパーサー優先度誤り (`PLAN.md §2.1`)
+- multiline block 引数のスパン所有権 (`doc/PLAN_ERROR.md`)
+- `Float` 型 (`PLAN.md §4.7`)
+- effect runtime を `EffectId`/`OpId` テーブルに移行 (`PLAN.md §5`)
+- `doc/BUGS.md` の nested list 評価 (fallback ランタイム)
 
 ## Key Entry Points
 
-- [`doc/PLAN.md`](/home/yoshitsugu/src/github.com/yoshitsugu/goby/doc/PLAN.md) — top-level roadmap
-- [`doc/PLAN_ERROR.md`](/home/yoshitsugu/src/github.com/yoshitsugu/goby/doc/PLAN_ERROR.md) — active typed-diagnostic plan
-- [`doc/LANGUAGE_SPEC.md`](/home/yoshitsugu/src/github.com/yoshitsugu/goby/doc/LANGUAGE_SPEC.md) — current language behavior
-- [`crates/goby-core/src/typecheck_call.rs`](/home/yoshitsugu/src/github.com/yoshitsugu/goby/crates/goby-core/src/typecheck_call.rs) — ordinary-call typed mismatch diagnostics
-- [`crates/goby-core/src/typecheck_span.rs`](/home/yoshitsugu/src/github.com/yoshitsugu/goby/crates/goby-core/src/typecheck_span.rs) — span selection helpers
-- [`crates/goby-cli/src/main.rs`](/home/yoshitsugu/src/github.com/yoshitsugu/goby/crates/goby-cli/src/main.rs) — CLI diagnostic rendering
-- [`crates/goby-lsp/src/main.rs`](/home/yoshitsugu/src/github.com/yoshitsugu/goby/crates/goby-lsp/src/main.rs) — LSP diagnostic range parity
+- [`doc/PLAN.md`](PLAN.md) — トップレベルロードマップ
+- [`doc/PLAN_ERROR.md`](PLAN_ERROR.md) — 型付き診断スパン計画 (次候補)
+- [`doc/PLAN_LIST_MUT.md`](PLAN_LIST_MUT.md) — 完了済み LM 詳細計画
+- [`doc/LANGUAGE_SPEC.md`](LANGUAGE_SPEC.md) — 現在の言語仕様
+- [`doc/PLAN_IR.md`](PLAN_IR.md) — IR lowering 境界設計リファレンス
+- [`doc/BUGS.md`](BUGS.md) — 既知バグトラッカー

@@ -675,7 +675,7 @@ Acceptance criteria:
 - diagnostics clearly distinguish `Int` from `Float`.
 - docs/examples/spec are updated in the same slice that lands behavior.
 
-### 4.8 Track LM: Mutable List Element Assignment (active, 2026-04-06)
+### 4.8 Track LM: Mutable List Element Assignment (complete, 2026-04-06)
 
 Goal: support `a[1] := 10` and `a[1][0] := 99` through one shared assignment-target abstraction.
 
@@ -685,20 +685,20 @@ Locked semantic contract (see `doc/LANGUAGE_SPEC.md` §3 "list element assignmen
 - reads are value-oriented; values extracted from mutable lists do not alias the source.
 - mutation is a rooted update; previous reads from the updated path are unaffected.
 
-Scope:
+All LM0–LM4 milestones complete:
 
-- one shared `AssignTarget` representation replaces the current `name: String`-only assignment
-  AST node; existing variable assignment reuses the same abstraction.
-- list-index projection support at arbitrary depth through chained `AssignTarget::ListIndex`.
-- type-checked legality before lowering/runtime.
-- path-copying runtime execution; no shared mutable alias semantics.
-
-Out of scope for this slice: separate mutable list type, record-field mutation,
-general reference types, broad runtime container redesign.
+- **LM0**: Semantics locked in `doc/LANGUAGE_SPEC.md`.
+- **LM1a–c**: `AssignTarget` / `ResolvedTarget` AST + resolver extensions; parser handles
+  both single-level and nested index forms; all ~15 construction sites updated.
+- **LM2**: Typechecker rejects immutable roots, undeclared roots, non-List receivers, type
+  mismatches, and non-Int index expressions via `check_assign_target_chain`.
+- **LM3a–c**: IR `CompExpr::AssignIndex` node; lowering from `ResolvedTarget::ListIndex`;
+  Wasm `BackendIntrinsic::ListSet` helper (alloc + path-copy) and `lower_assign_index`
+  for arbitrary nesting depth.
+- **LM4**: `examples/mut_list.gb`; 4 runtime integration tests covering single-level,
+  multi-index, value-semantics, and two-level nested update.
 
 Detail plan: `doc/PLAN_LIST_MUT.md`.
-
-Status: LM0 complete (2026-04-06). LM1–LM4 in progress.
 
 ### 4.9 Parking Lot (Needs Revalidation Before Implementation)
 
