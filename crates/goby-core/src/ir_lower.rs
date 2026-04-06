@@ -136,13 +136,16 @@ fn lower_stmts_slice(ctx: &mut LowerCtx, stmts: &[ResolvedStmt]) -> Result<CompE
                 body: Box::new(CompExpr::Value(ValueExpr::Var(name.clone()))),
             })
         }
-        [ResolvedStmt::Assign { target, value, .. }] => {
-            let target_name = mutable_target_name(target)?;
-            Ok(CompExpr::Assign {
-                name: target_name.to_string(),
-                value: Box::new(lower_expr_as_comp(ctx, value)?),
-            })
-        }
+        [ResolvedStmt::Assign { target, value, .. }] => match target {
+            ResolvedTarget::Var(_) => {
+                let target_name = mutable_target_name(target)?;
+                Ok(CompExpr::Assign {
+                    name: target_name.to_string(),
+                    value: Box::new(lower_expr_as_comp(ctx, value)?),
+                })
+            }
+            ResolvedTarget::ListIndex { .. } => lower_list_index_assign(ctx, target, value),
+        },
         [head, rest @ ..] => match head {
             ResolvedStmt::Binding { name, value, .. } => {
                 let val_comp = lower_expr_as_comp(ctx, value)?;
@@ -187,9 +190,14 @@ fn lower_stmts_slice(ctx: &mut LowerCtx, stmts: &[ResolvedStmt]) -> Result<CompE
                 })
             }
             ResolvedStmt::Assign { target, value, .. } => {
-                let head_comp = CompExpr::Assign {
-                    name: mutable_target_name(target)?.to_string(),
-                    value: Box::new(lower_expr_as_comp(ctx, value)?),
+                let head_comp = match target {
+                    ResolvedTarget::Var(_) => CompExpr::Assign {
+                        name: mutable_target_name(target)?.to_string(),
+                        value: Box::new(lower_expr_as_comp(ctx, value)?),
+                    },
+                    ResolvedTarget::ListIndex { .. } => {
+                        lower_list_index_assign(ctx, target, value)?
+                    }
                 };
                 let tail = lower_stmts_slice(ctx, rest)?;
                 match tail {
@@ -890,10 +898,84 @@ fn mutable_target_name(target: &ResolvedTarget) -> Result<&str, LowerError> {
     match target {
         ResolvedTarget::Var(reference) => mutable_ref_name(reference),
         ResolvedTarget::ListIndex { .. } => Err(err(
-            "list-index assignment target lowering is not yet implemented (planned for LM3b)"
+            "mutable_target_name called on ListIndex — use lower_list_index_assign instead"
                 .to_string(),
         )),
     }
+}
+
+/// Collect the (root_name, path_of_index_exprs) from a `ResolvedTarget::ListIndex` chain.
+///
+/// The returned `path` is outermost-index-first: for `a[i][j]` it is `[i_expr, j_expr]`.
+fn collect_target_path(target: &ResolvedTarget) -> Result<(&str, Vec<&ResolvedExpr>), LowerError> {
+    let mut path: Vec<&ResolvedExpr> = Vec::new();
+    let mut cur = target;
+    loop {
+        match cur {
+            ResolvedTarget::Var(reference) => {
+                let name = mutable_ref_name(reference)?;
+                path.reverse(); // collected innermost-first, reverse to outermost-first
+                return Ok((name, path));
+            }
+            ResolvedTarget::ListIndex { base, index } => {
+                path.push(index.as_ref());
+                cur = base.as_ref();
+            }
+        }
+    }
+}
+
+/// Lower a list-index assignment `target[i1][i2]... := value` to `CompExpr::AssignIndex`.
+///
+/// Index expressions that are effectful are ANF-lifted via Let bindings wrapping the
+/// `AssignIndex` node.
+fn lower_list_index_assign(
+    ctx: &mut LowerCtx,
+    target: &ResolvedTarget,
+    value_expr: &ResolvedExpr,
+) -> Result<CompExpr, LowerError> {
+    let (root, path_exprs) = collect_target_path(target)?;
+    let root = root.to_string();
+
+    // Lower the RHS value.
+    let rhs_comp = lower_expr_as_comp(ctx, value_expr)?;
+
+    // Lower each path index to a ValueExpr, ANF-lifting effectful ones.
+    // We build the result inside-out: start with the AssignIndex node and wrap
+    // in Let bindings for any effectful index expressions (outermost first).
+    // First, materialise all indices (pure or via temp names).
+    let mut path_vals: Vec<ValueExpr> = Vec::with_capacity(path_exprs.len());
+    let mut anf_bindings: Vec<(String, CompExpr)> = Vec::new();
+
+    for index_expr in path_exprs {
+        match try_lower_value(ctx, index_expr)? {
+            Some(v) => path_vals.push(v),
+            None => {
+                let tmp = ctx.fresh_tmp("idx");
+                let idx_comp = lower_expr_as_comp(ctx, index_expr)?;
+                anf_bindings.push((tmp.clone(), idx_comp));
+                path_vals.push(ValueExpr::Var(tmp));
+            }
+        }
+    }
+
+    let assign_node = CompExpr::AssignIndex {
+        root,
+        path: path_vals,
+        value: Box::new(rhs_comp),
+    };
+
+    // Wrap in any ANF Let bindings, outermost first.
+    let result = anf_bindings.into_iter().rev().fold(assign_node, |body, (name, comp)| {
+        CompExpr::Let {
+            name,
+            ty: IrType::Unknown,
+            value: Box::new(comp),
+            body: Box::new(body),
+        }
+    });
+
+    Ok(result)
 }
 
 fn mutable_ref_name(reference: &ResolvedRef) -> Result<&str, LowerError> {
@@ -1808,10 +1890,8 @@ choose n =
     }
 
     #[test]
-    fn reject_list_index_assign_target() {
-        // AssignTarget::ListIndex is not yet supported through the lowering path.
-        // The resolver now produces a real ResolvedTarget::ListIndex (not a sentinel),
-        // and ir_lower rejects it until LM3b implements path-copy lowering.
+    fn lower_list_index_assign_produces_assign_index_node() {
+        // `xs[0] := 99` should lower to CompExpr::AssignIndex { root: "xs", path: [0], value: 99 }
         let decl = decl_with_body(
             "list_index_assign_test",
             vec![Stmt::Assign {
@@ -1823,12 +1903,24 @@ choose n =
                 span: None,
             }],
         );
-        let err = lower_declaration(&decl).unwrap_err();
-        assert!(
-            err.message.contains("list-index assignment"),
-            "expected list-index rejection, got: {}",
-            err.message
-        );
+        let ir_decl = lower_declaration(&decl).unwrap();
+        match &ir_decl.body {
+            CompExpr::AssignIndex { root, path, value } => {
+                assert_eq!(root, "xs");
+                assert_eq!(path.len(), 1);
+                assert!(
+                    matches!(&path[0], ValueExpr::IntLit(0)),
+                    "expected IntLit(0) path, got {:?}",
+                    path[0]
+                );
+                assert!(
+                    matches!(value.as_ref(), CompExpr::Value(ValueExpr::IntLit(99))),
+                    "expected IntLit(99) value, got {:?}",
+                    value
+                );
+            }
+            other => panic!("expected AssignIndex, got {:?}", other),
+        }
     }
 
     // --- lone binding semantics test ---
