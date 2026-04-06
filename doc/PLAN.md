@@ -258,8 +258,14 @@ Based on `examples/*.gb`:
   - Effectful expressions inside `case` arm blocks work with parity between `check` and `run`.
   - Follow-up: generalize expression-level block parsing beyond `case` arms.
   - Planned semantic relaxation:
+    - longer-term direction: move the language toward a more expression-oriented model where
+      all major constructs, including bindings and assignments, are usable as expressions with
+      well-defined result values rather than remaining statement-only forms.
     - once binding and assignment forms are expression-valued as `()`, block tails ending in
       `name = expr`, `mut name = expr`, or `name := expr` should be accepted as valid `Unit`-valued endings.
+    - the same relaxation should apply to lambda bodies and other expression positions, so
+      callbacks such as `fn i -> b[0] := b[0] + i` do not need a trailing explicit `()`
+      when the final assignment is intended to produce `Unit`.
 - **Tuple index access `expr.N`** (implemented).
   - `a.0`, `a.1` parse as qualified numeric member access and are typechecked/runtime-evaluated as tuple index access.
   - Numeric member access is valid only for tuple receivers.
