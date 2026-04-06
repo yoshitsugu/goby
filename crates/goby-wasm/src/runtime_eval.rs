@@ -396,10 +396,6 @@ pub(crate) fn parse_call(expr: &str) -> Option<(&str, &str)> {
 
 pub(crate) use goby_core::is_identifier;
 
-pub(crate) fn is_string_literal(expr: &str) -> bool {
-    expr.starts_with('"') && expr.ends_with('"') && expr.len() >= 2
-}
-
 pub(crate) fn is_int_literal(expr: &str) -> bool {
     let raw = expr.strip_prefix('-').unwrap_or(expr);
     !raw.is_empty() && raw.chars().all(|c| c.is_ascii_digit())

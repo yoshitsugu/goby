@@ -182,10 +182,6 @@ pub(crate) enum RuntimeValue {
 }
 
 impl RuntimeValue {
-    pub(crate) fn list_from_ints(values: Vec<i64>) -> Self {
-        Self::List(values.into_iter().map(Self::Int).collect())
-    }
-
     pub(crate) fn list_from_strings(values: Vec<String>) -> Self {
         Self::List(values.into_iter().map(Self::String).collect())
     }
@@ -202,10 +198,6 @@ impl RuntimeValue {
             Self::List(values) => Some(values),
             _ => None,
         }
-    }
-
-    pub(crate) fn as_int_list(&self) -> Option<Vec<i64>> {
-        self.as_list().and_then(runtime_list_slice_as_ints)
     }
 
     pub(crate) fn as_string_list(&self) -> Option<Vec<String>> {
@@ -253,16 +245,6 @@ impl RuntimeValue {
     }
 }
 
-fn runtime_list_slice_as_ints(values: &[RuntimeValue]) -> Option<Vec<i64>> {
-    values
-        .iter()
-        .map(|value| match value {
-            RuntimeValue::Int(n) => Some(*n),
-            _ => None,
-        })
-        .collect()
-}
-
 fn runtime_list_slice_as_strings(values: &[RuntimeValue]) -> Option<Vec<String>> {
     values
         .iter()
@@ -296,6 +278,22 @@ mod tests {
         RootedAssignResult, RuntimeLocals, RuntimeValue, runtime_value_eq, runtime_value_option_eq,
     };
     use std::collections::HashMap;
+
+    fn list_from_ints(values: Vec<i64>) -> RuntimeValue {
+        RuntimeValue::List(values.into_iter().map(RuntimeValue::Int).collect())
+    }
+
+    fn as_int_list(value: &RuntimeValue) -> Option<Vec<i64>> {
+        value.as_list().and_then(|values| {
+            values
+                .iter()
+                .map(|v| match v {
+                    RuntimeValue::Int(n) => Some(*n),
+                    _ => None,
+                })
+                .collect()
+        })
+    }
 
     #[test]
     fn runtime_locals_round_trip_int_and_string_bindings() {
@@ -357,7 +355,7 @@ mod tests {
         let val = locals.get("xs").unwrap();
         assert!(matches!(val, RuntimeValue::List(_)));
         // Mixed list should not be representable as pure int list
-        assert!(val.as_int_list().is_none());
+        assert!(as_int_list(&val).is_none());
     }
 
     #[test]
@@ -384,8 +382,8 @@ mod tests {
     #[test]
     fn runtime_value_formats_nested_lists_recursively() {
         let value = RuntimeValue::List(vec![
-            RuntimeValue::list_from_ints(vec![1, 2, 3]),
-            RuntimeValue::list_from_ints(vec![4, 5, 6]),
+            list_from_ints(vec![1, 2, 3]),
+            list_from_ints(vec![4, 5, 6]),
         ]);
 
         assert_eq!(value.to_output_text(), "[[1, 2, 3], [4, 5, 6]]");
@@ -398,8 +396,8 @@ mod tests {
         locals.store_mut(
             "xs",
             RuntimeValue::List(vec![
-                RuntimeValue::list_from_ints(vec![1, 2]),
-                RuntimeValue::list_from_ints(vec![3, 4]),
+                list_from_ints(vec![1, 2]),
+                list_from_ints(vec![3, 4]),
             ]),
         );
 
@@ -419,7 +417,7 @@ mod tests {
     #[test]
     fn rooted_assign_rejects_invalid_list_path() {
         let mut locals = RuntimeLocals::default();
-        locals.store_mut("xs", RuntimeValue::list_from_ints(vec![1, 2]));
+        locals.store_mut("xs", list_from_ints(vec![1, 2]));
 
         assert_eq!(
             locals.assign_rooted("xs", &[1, 0], RuntimeValue::Int(30)),

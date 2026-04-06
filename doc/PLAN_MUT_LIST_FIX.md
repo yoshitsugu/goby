@@ -1,20 +1,22 @@
 # Plan: Mutable List Runtime Execution Fix
 
-Last updated: 2026-04-06
+Last updated: 2026-04-07
 
 ## Current Status
 
-Staged milestone landed on 2026-04-06:
+**Track complete.**
 
-- rooted mutable-list updates are now classified as a semantic runtime capability and routed to
+All milestones (MLF-0 through MLF-3) are done, including MLF-2 fallback runtime
+value unification:
+
+- rooted mutable-list updates are classified as a semantic runtime capability and routed to
   the `GeneralLowered` Goby-owned Wasm path, even for `Print`-only modules,
-- pure `list.get` reads inside interpolation now lower through shared IR, so exact
-  `goby run` reproductions such as `println("${a[0][1]}")` before or after rooted updates
-  execute successfully,
-- fallback/interpreter execution now centralizes rooted list updates through one path-copy helper
-  with parity coverage for single-level updates, nested updates, and read-before-write cases,
-- fallback/runtime recursive aggregate convergence still remains open as the follow-up slice in
-  MLF-2.
+- pure `list.get` reads inside interpolation lower through shared IR,
+- fallback/interpreter execution centralizes rooted list updates through one path-copy helper,
+- `RuntimeLocals` uses a single unified `values: HashMap<String, RuntimeValue>` store —
+  shape-specific type maps (`string_values`, `int_values`, `list_int_values`) and the
+  `ListIntEvaluator` have been removed. `IntEvaluator` reads from `RuntimeLocals` via
+  `int_view()` at the entry point and uses internal `HashMap<String, i64>` for recursion.
 
 ## Goal
 
@@ -181,7 +183,7 @@ Definition of done:
 
 ### MLF-2: Unify fallback runtime value semantics
 
-- [ ] Remove shape-specific assumptions in fallback/runtime-output evaluation that prevent honest
+- [x] Remove shape-specific assumptions in fallback/runtime-output evaluation that prevent honest
       recursive aggregate support.
 - [x] Ensure recursive runtime values are representable, comparable where supported, and
       stringifiable through one shared formatting path.
@@ -234,14 +236,14 @@ following language behaviors under the intended runtime boundary:
 
 ## Review Checklist
 
-- [ ] No new routing rule is keyed only to a narrow source spelling such as "nested list literal"
+- [x] No new routing rule is keyed only to a narrow source spelling such as "nested list literal"
       or "interpolation".
-- [ ] No fake capability trigger is introduced merely to force a different backend.
-- [ ] The chosen runtime value model scales to lists of tuples, records, and future aggregates.
+- [x] No fake capability trigger is introduced merely to force a different backend.
+- [x] The chosen runtime value model scales to lists of tuples, records, and future aggregates.
 - [x] Rooted update semantics are defined once and reused, or else multiple implementations are
       intentionally aligned and covered by parity tests.
-- [ ] Documentation states both what is supported and where unsupported cases are rejected.
-- [ ] The implementation would still make architectural sense if more backends are added later.
+- [x] Documentation states both what is supported and where unsupported cases are rejected.
+- [x] The implementation would still make architectural sense if more backends are added later.
 
 ## Completion Bar
 
@@ -251,7 +253,7 @@ This track is complete only when all of the following are true:
       semantically capable of running them.
 - [x] No active runtime path selected for those programs rejects `AssignTarget::ListIndex` as an
       internal unsupported case.
-- [ ] Recursive aggregate values used by the supported fallback subset are modeled uniformly rather
+- [x] Recursive aggregate values used by the supported fallback subset are modeled uniformly rather
       than via ad hoc special cases.
 - [x] End-to-end tests cover both reads and writes on nested mutable lists.
 - [x] The repaired boundary is documented in `doc/PLAN.md` and reflected in `doc/STATE.md`.

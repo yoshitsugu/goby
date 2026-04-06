@@ -1,25 +1,20 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-04-06
+Last updated: 2026-04-07
 
 ## Current Focus
 
-### Track MLF: Mutable List Runtime Execution Fix
-
-Current staged status:
-
-- rooted mutable-list updates now classify as a semantic runtime capability and route to the
-  `GeneralLowered` Goby-owned Wasm path even for `Print`-only programs.
-- shared IR now carries pure `list.get` reads inside interpolation, so `goby run` succeeds for
-  update-followed-by-interpolation shapes such as `println("${a[1][0]},${a[1][1]}")` after
-  `a[1][1] := 30`.
-- fallback/interpreter execution now also centralizes rooted list updates through one path-copy
-  helper and has parity coverage for single-level updates, nested updates, read-before-write,
-  and non-mutating nested reads.
-- remaining work is the narrower cleanup in `doc/PLAN_MUT_LIST_FIX.md` MLF-2: remove lingering
-  shape-specific fallback assumptions and finish the uniform recursive-aggregate model audit.
+No active track. See `doc/PLAN.md` for next candidates.
 
 ## Recently Completed
+
+### Track MLF: Mutable List Runtime Execution Fix (complete, 2026-04-07)
+
+All milestones complete (MLF-0 through MLF-3, including MLF-2 fallback runtime value
+unification). `RuntimeLocals` now uses a single `values: HashMap<String, RuntimeValue>` store;
+`ListIntEvaluator` and shape-specific type maps have been removed. `IntEvaluator` reads from
+`RuntimeLocals` via `int_view()` at the entry point. Rooted mutable-list updates route through
+the `GeneralLowered` Wasm path for all well-typed programs.
 
 ### Track MLF staged milestone (2026-04-06)
 
@@ -57,10 +52,6 @@ Complete (TD0–TD5). Remaining: multiline/body-relative expression span ownersh
 - Span ownership for multiline block arguments (`PLAN.md §4.5`)
 - `Float` type (`PLAN.md §4.7`)
 - Migrate effect runtime dispatch to compiled `EffectId`/`OpId` tables (`PLAN.md §5`)
-- Recursive aggregate convergence in the fallback runtime after the mutable-list routing fix
-  (`doc/PLAN_MUT_LIST_FIX.md` MLF-2), now narrowed to cleanup of lingering shape-specific
-  assumptions rather than missing rooted-update execution
-
 ## Key Entry Points
 
 - [`doc/PLAN.md`](PLAN.md) — top-level roadmap

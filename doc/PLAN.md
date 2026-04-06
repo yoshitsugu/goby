@@ -227,10 +227,9 @@ Based on `examples/*.gb`:
       - fallback/interpreter execution now uses the same centralized path-copy rooted-update
         semantic for the supported recursive-aggregate subset, including parity-tested single-
         and two-level updates plus read-before-write cases.
-    - remaining follow-up:
-      - continue removing lingering shape-specific fallback/runtime assumptions so the supported
-        recursive-aggregate subset uses one honest value model and one clearly documented
-        unsupported boundary.
+    - MLF-2 (fallback runtime value unification) is complete as of 2026-04-07:
+      `RuntimeLocals` uses a single `RuntimeValue`-based store; `ListIntEvaluator` and
+      shape-specific type maps have been removed.
 
 - **`fn`-only anonymous functions** (complete, 2026-03-31).
   - `fn x -> expr` is the only anonymous function syntax.
