@@ -7,64 +7,59 @@ use crate::runtime_eval::IntCallable;
 
 #[derive(Default, Clone)]
 pub(crate) struct RuntimeLocals {
-    string_values: HashMap<String, String>,
-    int_values: HashMap<String, i64>,
-    list_int_values: HashMap<String, Vec<i64>>,
-    record_values: HashMap<String, RuntimeValue>,
+    values: HashMap<String, RuntimeValue>,
     mut_values: HashMap<String, Rc<RefCell<RuntimeValue>>>,
 }
 
 impl RuntimeLocals {
     pub(crate) fn string_values(&self) -> HashMap<String, String> {
-        let mut values = self.string_values.clone();
-        for (name, cell) in &self.mut_values {
-            if let RuntimeValue::String(text) = &*cell.borrow() {
-                values.insert(name.clone(), text.clone());
+        let mut result = HashMap::new();
+        for (name, value) in &self.values {
+            if let RuntimeValue::String(text) = value {
+                result.insert(name.clone(), text.clone());
             }
         }
-        values
+        for (name, cell) in &self.mut_values {
+            if let RuntimeValue::String(text) = &*cell.borrow() {
+                result.insert(name.clone(), text.clone());
+            }
+        }
+        result
     }
 
     pub(crate) fn int_values(&self) -> HashMap<String, i64> {
-        let mut values = self.int_values.clone();
-        for (name, cell) in &self.mut_values {
-            if let RuntimeValue::Int(number) = &*cell.borrow() {
-                values.insert(name.clone(), *number);
+        let mut result = HashMap::new();
+        for (name, value) in &self.values {
+            if let RuntimeValue::Int(number) = value {
+                result.insert(name.clone(), *number);
             }
         }
-        values
+        for (name, cell) in &self.mut_values {
+            if let RuntimeValue::Int(number) = &*cell.borrow() {
+                result.insert(name.clone(), *number);
+            }
+        }
+        result
     }
 
     pub(crate) fn list_int_values(&self) -> HashMap<String, Vec<i64>> {
-        let mut values = self.list_int_values.clone();
-        for (name, cell) in &self.mut_values {
-            if let Some(items) = cell.borrow().as_int_list() {
-                values.insert(name.clone(), items);
+        let mut result = HashMap::new();
+        for (name, value) in &self.values {
+            if let Some(items) = value.as_int_list() {
+                result.insert(name.clone(), items);
             }
         }
-        values
+        for (name, cell) in &self.mut_values {
+            if let Some(items) = cell.borrow().as_int_list() {
+                result.insert(name.clone(), items);
+            }
+        }
+        result
     }
 
     pub(crate) fn store(&mut self, name: &str, value: RuntimeValue) {
         self.clear(name);
-        let key = name.to_string();
-        match value {
-            RuntimeValue::String(text) => {
-                self.string_values.insert(key, text);
-            }
-            RuntimeValue::Int(number) => {
-                self.int_values.insert(key, number);
-            }
-            RuntimeValue::List(values) => {
-                if let Some(ints) = runtime_list_slice_as_ints(&values) {
-                    self.list_int_values.insert(key.clone(), ints);
-                }
-                self.record_values.insert(key, RuntimeValue::List(values));
-            }
-            other => {
-                self.record_values.insert(key, other);
-            }
-        }
+        self.values.insert(name.to_string(), value);
     }
 
     pub(crate) fn store_mut(&mut self, name: &str, value: RuntimeValue) {
@@ -105,10 +100,7 @@ impl RuntimeLocals {
     }
 
     pub(crate) fn clear(&mut self, name: &str) {
-        self.string_values.remove(name);
-        self.int_values.remove(name);
-        self.list_int_values.remove(name);
-        self.record_values.remove(name);
+        self.values.remove(name);
         self.mut_values.remove(name);
     }
 
@@ -116,34 +108,18 @@ impl RuntimeLocals {
         if let Some(cell) = self.mut_values.get(name) {
             return Some(cell.borrow().clone());
         }
-        if let Some(v) = self.int_values.get(name) {
-            return Some(RuntimeValue::Int(*v));
-        }
-        if let Some(v) = self.string_values.get(name) {
-            return Some(RuntimeValue::String(v.clone()));
-        }
-        if let Some(v) = self.list_int_values.get(name) {
-            return Some(RuntimeValue::list_from_ints(v.clone()));
-        }
-        if let Some(v) = self.record_values.get(name) {
+        if let Some(v) = self.values.get(name) {
             return Some(v.clone());
         }
         None
     }
 
     pub(crate) fn contains(&self, name: &str) -> bool {
-        self.mut_values.contains_key(name)
-            || self.int_values.contains_key(name)
-            || self.string_values.contains_key(name)
-            || self.list_int_values.contains_key(name)
-            || self.record_values.contains_key(name)
+        self.mut_values.contains_key(name) || self.values.contains_key(name)
     }
 
     pub(crate) fn binding_names(&self) -> Vec<String> {
-        let mut names: HashSet<String> = self.int_values.keys().cloned().collect();
-        names.extend(self.string_values.keys().cloned());
-        names.extend(self.list_int_values.keys().cloned());
-        names.extend(self.record_values.keys().cloned());
+        let mut names: HashSet<String> = self.values.keys().cloned().collect();
         names.extend(self.mut_values.keys().cloned());
         names.into_iter().collect()
     }
@@ -379,6 +355,36 @@ mod tests {
         assert!(matches!(locals.get("count"), Some(RuntimeValue::Int(7))));
         assert!(matches!(cloned.get("count"), Some(RuntimeValue::Int(7))));
         assert_eq!(locals.int_values().get("count"), Some(&7));
+    }
+
+    #[test]
+    fn runtime_locals_round_trip_bool_and_unit() {
+        let mut locals = RuntimeLocals::default();
+        locals.store("flag", RuntimeValue::Bool(true));
+        locals.store("u", RuntimeValue::Unit);
+        assert!(matches!(
+            locals.get("flag"),
+            Some(RuntimeValue::Bool(true))
+        ));
+        assert!(matches!(locals.get("u"), Some(RuntimeValue::Unit)));
+        let names = locals.binding_names();
+        assert!(names.contains(&"flag".to_string()));
+        assert!(names.contains(&"u".to_string()));
+    }
+
+    #[test]
+    fn runtime_locals_mixed_list_round_trips() {
+        let mut locals = RuntimeLocals::default();
+        locals.store(
+            "xs",
+            RuntimeValue::List(vec![
+                RuntimeValue::Int(1),
+                RuntimeValue::String("a".to_string()),
+            ]),
+        );
+        let val = locals.get("xs").unwrap();
+        assert!(matches!(val, RuntimeValue::List(_)));
+        assert!(!locals.list_int_values().contains_key("xs"));
     }
 
     #[test]
