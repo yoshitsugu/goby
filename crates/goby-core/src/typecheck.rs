@@ -3951,8 +3951,7 @@ main =
 
     #[test]
     fn accepts_mut_list_nested_assignment() {
-        let source =
-            "f : Unit -> Unit\nf =\n  mut a = [[1, 2], [3, 4]]\n  a[1][0] := 99\n  ()\n";
+        let source = "f : Unit -> Unit\nf =\n  mut a = [[1, 2], [3, 4]]\n  a[1][0] := 99\n  ()\n";
         let module = parse_module(source).expect("should parse");
         typecheck_module(&module).expect("mut list nested assignment should typecheck");
     }
@@ -3961,10 +3960,10 @@ main =
     fn rejects_list_index_assignment_on_immutable_binding() {
         let source = "f : Unit -> Unit\nf =\n  a = [1, 2, 3]\n  a[0] := 10\n  ()\n";
         let module = parse_module(source).expect("should parse");
-        let err =
-            typecheck_module(&module).expect_err("assignment to immutable list should fail");
+        let err = typecheck_module(&module).expect_err("assignment to immutable list should fail");
         assert!(
-            err.message.contains("cannot assign to immutable variable `a`"),
+            err.message
+                .contains("cannot assign to immutable variable `a`"),
             "unexpected error: {}",
             err.message
         );
@@ -3976,7 +3975,8 @@ main =
         let module = parse_module(source).expect("should parse");
         let err = typecheck_module(&module).expect_err("assignment to undeclared should fail");
         assert!(
-            err.message.contains("cannot assign to undeclared variable `x`"),
+            err.message
+                .contains("cannot assign to undeclared variable `x`"),
             "unexpected error: {}",
             err.message
         );
@@ -3986,8 +3986,7 @@ main =
     fn rejects_list_index_into_non_list_type() {
         let source = "f : Unit -> Unit\nf =\n  mut a = 42\n  a[0] := 1\n  ()\n";
         let module = parse_module(source).expect("should parse");
-        let err =
-            typecheck_module(&module).expect_err("indexing into non-list should fail");
+        let err = typecheck_module(&module).expect_err("indexing into non-list should fail");
         assert!(
             err.message.contains("cannot index into type `Int`"),
             "unexpected error: {}",
@@ -4000,8 +3999,7 @@ main =
         // Assigning String to a List Int slot.
         let source = "f : Unit -> Unit\nf =\n  mut a = [1, 2, 3]\n  a[0] := \"hello\"\n  ()\n";
         let module = parse_module(source).expect("should parse");
-        let err = typecheck_module(&module)
-            .expect_err("element type mismatch should fail");
+        let err = typecheck_module(&module).expect_err("element type mismatch should fail");
         assert!(
             err.message.contains("does not match list element type"),
             "unexpected error: {}",
@@ -4012,11 +4010,10 @@ main =
     #[test]
     fn rejects_list_index_assignment_non_int_index() {
         // Using a String as the list index.
-        let source =
-            "f : Unit -> Unit\nf =\n  mut a = [1, 2, 3]\n  a[\"x\"] := 10\n  ()\n";
+        let source = "f : Unit -> Unit\nf =\n  mut a = [1, 2, 3]\n  a[\"x\"] := 10\n  ()\n";
         let module = parse_module(source).expect("should parse");
-        let err = typecheck_module(&module)
-            .expect_err("non-Int index in assignment target should fail");
+        let err =
+            typecheck_module(&module).expect_err("non-Int index in assignment target should fail");
         assert!(
             err.message.contains("list index must be `Int`"),
             "unexpected error: {}",

@@ -353,7 +353,11 @@ impl Resolver {
                 self.bind_local(name.clone());
                 resolved
             }
-            Stmt::Assign { target, value, span } => ResolvedStmt::Assign {
+            Stmt::Assign {
+                target,
+                value,
+                span,
+            } => ResolvedStmt::Assign {
                 target: self.resolve_assign_target(target),
                 value: self.resolve_expr(value),
                 span: *span,
@@ -1069,10 +1073,7 @@ mod tests {
                             index
                         );
                     }
-                    other => panic!(
-                        "expected ResolvedTarget::ListIndex, got {:?}",
-                        other
-                    ),
+                    other => panic!("expected ResolvedTarget::ListIndex, got {:?}", other),
                 }
             }
             other => panic!("expected Assign stmt, got {:?}", other),

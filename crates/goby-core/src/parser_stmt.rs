@@ -1558,7 +1558,9 @@ mod tests {
         let stmts = parse_body_stmts(body).expect("should parse");
         assert_eq!(stmts.len(), 3);
         assert!(matches!(&stmts[0], Stmt::MutBinding { name, .. } if name == "a"));
-        assert!(matches!(&stmts[1], Stmt::Assign { target: crate::ast::AssignTarget::Var(name), .. } if name == "a"));
+        assert!(
+            matches!(&stmts[1], Stmt::Assign { target: crate::ast::AssignTarget::Var(name), .. } if name == "a")
+        );
         assert!(matches!(&stmts[2], Stmt::Expr(Expr::Var { name, .. }, _) if name == "a"));
     }
 
@@ -1581,7 +1583,11 @@ mod tests {
                     Expr::Spanned { expr, .. } => expr.as_ref(),
                     v => v,
                 };
-                assert!(matches!(unwrapped, Expr::IntLit(10)), "got: {:?}", unwrapped);
+                assert!(
+                    matches!(unwrapped, Expr::IntLit(10)),
+                    "got: {:?}",
+                    unwrapped
+                );
             }
             other => panic!("expected Assign, got {:?}", other),
         }
@@ -1602,15 +1608,28 @@ mod tests {
                             Expr::Spanned { expr, .. } => expr.as_ref(),
                             v => v,
                         };
-                        assert!(matches!(idx_unwrapped, Expr::IntLit(0)), "outer idx: {:?}", idx_unwrapped);
+                        assert!(
+                            matches!(idx_unwrapped, Expr::IntLit(0)),
+                            "outer idx: {:?}",
+                            idx_unwrapped
+                        );
                         match base.as_ref() {
-                            AssignTarget::ListIndex { base: inner_base, index: inner_idx } => {
-                                assert!(matches!(inner_base.as_ref(), AssignTarget::Var(n) if n == "a"));
+                            AssignTarget::ListIndex {
+                                base: inner_base,
+                                index: inner_idx,
+                            } => {
+                                assert!(
+                                    matches!(inner_base.as_ref(), AssignTarget::Var(n) if n == "a")
+                                );
                                 let inner_unwrapped = match inner_idx.as_ref() {
                                     Expr::Spanned { expr, .. } => expr.as_ref(),
                                     v => v,
                                 };
-                                assert!(matches!(inner_unwrapped, Expr::IntLit(1)), "inner idx: {:?}", inner_unwrapped);
+                                assert!(
+                                    matches!(inner_unwrapped, Expr::IntLit(1)),
+                                    "inner idx: {:?}",
+                                    inner_unwrapped
+                                );
                             }
                             other => panic!("expected inner ListIndex, got {:?}", other),
                         }
@@ -1621,7 +1640,11 @@ mod tests {
                     Expr::Spanned { expr, .. } => expr.as_ref(),
                     v => v,
                 };
-                assert!(matches!(val_unwrapped, Expr::IntLit(99)), "value: {:?}", val_unwrapped);
+                assert!(
+                    matches!(val_unwrapped, Expr::IntLit(99)),
+                    "value: {:?}",
+                    val_unwrapped
+                );
             }
             other => panic!("expected Assign, got {:?}", other),
         }
@@ -1645,7 +1668,11 @@ mod tests {
                     Expr::Spanned { expr, .. } => expr.as_ref(),
                     v => v,
                 };
-                assert!(matches!(val_unwrapped, Expr::IntLit(10)), "value: {:?}", val_unwrapped);
+                assert!(
+                    matches!(val_unwrapped, Expr::IntLit(10)),
+                    "value: {:?}",
+                    val_unwrapped
+                );
             }
             other => panic!("expected Assign, got {:?}", other),
         }

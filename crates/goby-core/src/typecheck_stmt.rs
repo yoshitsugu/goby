@@ -140,7 +140,11 @@ fn check_stmt(
             local_mutability.insert(name.clone(), true);
             Ok(())
         }
-        Stmt::Assign { target, value, span } => {
+        Stmt::Assign {
+            target,
+            value,
+            span,
+        } => {
             match target {
                 crate::ast::AssignTarget::Var(name) => {
                     if !local_mutability.contains_key(name) {
@@ -200,10 +204,7 @@ fn check_stmt(
                         return Err(TypecheckError {
                             declaration: Some(decl_name.to_string()),
                             span: *span,
-                            message: format!(
-                                "cannot assign to undeclared variable `{}`",
-                                root
-                            ),
+                            message: format!("cannot assign to undeclared variable `{}`", root),
                         });
                     }
                     // Root variable must be mutable.
@@ -317,10 +318,7 @@ fn check_assign_target_chain(
                 return Err(TypecheckError {
                     declaration: Some(decl_name.to_string()),
                     span,
-                    message: format!(
-                        "list index must be `Int`, but got `{}`",
-                        ty_name(&index_ty)
-                    ),
+                    message: format!("list index must be `Int`, but got `{}`", ty_name(&index_ty)),
                 });
             }
 
