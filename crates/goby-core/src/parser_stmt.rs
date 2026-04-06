@@ -257,20 +257,25 @@ where
             continue;
         }
 
+        // Multiline RHS: `name :=` or `name[i][j] :=` (plain-var or indexed LHS)
+        // followed by indented lines. `split_once` is safe here because `:=` cannot
+        // appear inside a valid LHS form, and `rhs.trim().is_empty()` guards that no
+        // RHS content follows on this line.
         if let Some((lhs, rhs)) = trimmed.split_once(":=")
             && rhs.trim().is_empty()
-            && is_non_reserved_identifier(lhs.trim())
             && let Some(next_i) = find_next_nonblank(lines, i + 1)
         {
+            let lhs = lhs.trim();
             let next_stripped = strip_line_comment(lines[next_i]).trim_end();
             let next_trimmed = next_stripped.trim();
             let next_indent = indent_len(next_stripped);
             if next_indent > this_indent
+                && let Some(target) = parse_assign_target_lhs(lhs, parse_expr)
                 && let Some((value, after)) =
                     parse_multiline_rhs_expr(lines, next_i, next_indent, next_trimmed, parse_expr)
             {
                 stmts.push(Stmt::Assign {
-                    target: crate::ast::AssignTarget::Var(lhs.trim().to_string()),
+                    target,
                     value,
                     span: Some(stmt_span),
                 });
@@ -279,6 +284,23 @@ where
             }
         }
 
+        // Single-line index assignment: `name[i] := expr`.
+        if let Some((target, rhs)) = try_split_index_assignment(trimmed, parse_expr)
+            && let Some((mut value, next_i)) =
+                parse_multiline_rhs_expr(lines, i, this_indent, rhs, parse_expr)
+        {
+            let rhs_col = stmt_col + subslice_offset(trimmed, rhs);
+            enrich_expr_spans(&mut value, rhs, stmt_line, rhs_col);
+            stmts.push(Stmt::Assign {
+                target,
+                value,
+                span: Some(stmt_span),
+            });
+            i = next_i;
+            continue;
+        }
+
+        // Single-line plain variable assignment: `name := expr`.
         if let Some((name, rhs)) = try_split_assignment(trimmed)
             && let Some((mut value, next_i)) =
                 parse_multiline_rhs_expr(lines, i, this_indent, rhs, parse_expr)
@@ -1142,6 +1164,16 @@ where
             span: Some(span),
         });
     }
+    if let Some((target, rhs)) = try_split_index_assignment(line, parse_expr) {
+        let mut value = parse_expr(rhs)?;
+        let rhs_col = span.col + subslice_offset(line, rhs);
+        enrich_expr_spans(&mut value, rhs, span.line, rhs_col);
+        return Some(Stmt::Assign {
+            target,
+            value,
+            span: Some(span),
+        });
+    }
     if let Some((name, rhs)) = try_split_assignment(line) {
         let mut value = parse_expr(rhs)?;
         let rhs_col = span.col + subslice_offset(line, rhs);
@@ -1370,6 +1402,102 @@ fn try_split_assignment(line: &str) -> Option<(&str, &str)> {
     Some((lhs, rhs))
 }
 
+/// Try to split `a[i][j] := rhs` into an `AssignTarget` and the RHS string.
+///
+/// Returns `None` if the line is not an indexed assignment.
+/// The `parse_expr` parameter is used to parse each bracket index expression.
+fn try_split_index_assignment<F>(
+    line: &str,
+    parse_expr: F,
+) -> Option<(crate::ast::AssignTarget, &str)>
+where
+    F: Copy + Fn(&str) -> Option<Expr>,
+{
+    // Find the outermost `:=` respecting bracket nesting.
+    let bytes = line.as_bytes();
+    let mut depth: i32 = 0;
+    let mut coloneq_pos = None;
+    let mut i = 0;
+    while i + 1 < bytes.len() {
+        match bytes[i] {
+            b'[' => depth += 1,
+            b']' => depth -= 1,
+            b':' if depth == 0 && bytes[i + 1] == b'=' => {
+                coloneq_pos = Some(i);
+                break;
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    let coloneq = coloneq_pos?;
+
+    let lhs = line[..coloneq].trim();
+    let rhs = line[coloneq + 2..].trim();
+
+    if lhs.is_empty() || rhs.is_empty() {
+        return None;
+    }
+
+    // Parse the LHS into an AssignTarget. Must be `name` or `name[e1][e2]...`.
+    let target = parse_assign_target_lhs(lhs, parse_expr)?;
+    // Must contain at least one ListIndex (otherwise try_split_assignment handles it).
+    if matches!(target, crate::ast::AssignTarget::Var(_)) {
+        return None;
+    }
+    Some((target, rhs))
+}
+
+/// Parse a string like `a`, `a[i]`, or `a[i][j]` into an `AssignTarget`.
+fn parse_assign_target_lhs<F>(lhs: &str, parse_expr: F) -> Option<crate::ast::AssignTarget>
+where
+    F: Copy + Fn(&str) -> Option<Expr>,
+{
+    // Try plain identifier first.
+    if is_non_reserved_identifier(lhs) {
+        return Some(crate::ast::AssignTarget::Var(lhs.to_string()));
+    }
+
+    // Must end with `]` for indexed form.
+    if !lhs.ends_with(']') {
+        return None;
+    }
+
+    // Find the matching `[` for the last `]`.
+    let bytes = lhs.as_bytes();
+    let mut depth = 0i32;
+    let mut bracket_start = None;
+    for i in (0..bytes.len()).rev() {
+        match bytes[i] {
+            b']' => depth += 1,
+            b'[' => {
+                depth -= 1;
+                if depth == 0 {
+                    bracket_start = Some(i);
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    let open = bracket_start?;
+
+    let base_src = lhs[..open].trim();
+    let index_src = lhs[open + 1..lhs.len() - 1].trim();
+
+    if base_src.is_empty() || index_src.is_empty() {
+        return None;
+    }
+
+    let base = parse_assign_target_lhs(base_src, parse_expr)?;
+    let index = parse_expr(index_src)?;
+
+    Some(crate::ast::AssignTarget::ListIndex {
+        base: Box::new(base),
+        index: Box::new(index),
+    })
+}
+
 fn is_assignment_eq(line: &str, eq_index: usize) -> bool {
     let bytes = line.as_bytes();
     if eq_index > 0 && bytes[eq_index - 1] == b'=' {
@@ -1432,6 +1560,144 @@ mod tests {
         assert!(matches!(&stmts[0], Stmt::MutBinding { name, .. } if name == "a"));
         assert!(matches!(&stmts[1], Stmt::Assign { target: crate::ast::AssignTarget::Var(name), .. } if name == "a"));
         assert!(matches!(&stmts[2], Stmt::Expr(Expr::Var { name, .. }, _) if name == "a"));
+    }
+
+    #[test]
+    fn parses_list_index_assignment_single_level() {
+        use crate::ast::AssignTarget;
+        let body = "mut a = [1, 2, 3]\na[1] := 10\na";
+        let stmts = parse_body_stmts(body).expect("should parse");
+        assert_eq!(stmts.len(), 3);
+        match &stmts[1] {
+            Stmt::Assign { target, value, .. } => {
+                assert!(
+                    matches!(target, AssignTarget::ListIndex { base, .. }
+                        if matches!(base.as_ref(), AssignTarget::Var(n) if n == "a")),
+                    "expected ListIndex(a, ...), got {:?}",
+                    target
+                );
+                // Value may be wrapped in Expr::Spanned after span enrichment.
+                let unwrapped = match value {
+                    Expr::Spanned { expr, .. } => expr.as_ref(),
+                    v => v,
+                };
+                assert!(matches!(unwrapped, Expr::IntLit(10)), "got: {:?}", unwrapped);
+            }
+            other => panic!("expected Assign, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parses_list_index_assignment_nested() {
+        use crate::ast::AssignTarget;
+        let body = "mut a = [[1, 2], [3, 4]]\na[1][0] := 99\na";
+        let stmts = parse_body_stmts(body).expect("should parse");
+        assert_eq!(stmts.len(), 3);
+        match &stmts[1] {
+            Stmt::Assign { target, value, .. } => {
+                // outer: a[1][0] → ListIndex { base: ListIndex { base: Var("a"), 1 }, 0 }
+                match target {
+                    AssignTarget::ListIndex { base, index } => {
+                        let idx_unwrapped = match index.as_ref() {
+                            Expr::Spanned { expr, .. } => expr.as_ref(),
+                            v => v,
+                        };
+                        assert!(matches!(idx_unwrapped, Expr::IntLit(0)), "outer idx: {:?}", idx_unwrapped);
+                        match base.as_ref() {
+                            AssignTarget::ListIndex { base: inner_base, index: inner_idx } => {
+                                assert!(matches!(inner_base.as_ref(), AssignTarget::Var(n) if n == "a"));
+                                let inner_unwrapped = match inner_idx.as_ref() {
+                                    Expr::Spanned { expr, .. } => expr.as_ref(),
+                                    v => v,
+                                };
+                                assert!(matches!(inner_unwrapped, Expr::IntLit(1)), "inner idx: {:?}", inner_unwrapped);
+                            }
+                            other => panic!("expected inner ListIndex, got {:?}", other),
+                        }
+                    }
+                    other => panic!("expected outer ListIndex, got {:?}", other),
+                }
+                let val_unwrapped = match value {
+                    Expr::Spanned { expr, .. } => expr.as_ref(),
+                    v => v,
+                };
+                assert!(matches!(val_unwrapped, Expr::IntLit(99)), "value: {:?}", val_unwrapped);
+            }
+            other => panic!("expected Assign, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parses_list_index_assignment_multiline_rhs() {
+        use crate::ast::AssignTarget;
+        let body = "mut a = [1, 2]\na[0] :=\n  10\na";
+        let stmts = parse_body_stmts(body).expect("should parse");
+        assert_eq!(stmts.len(), 3);
+        match &stmts[1] {
+            Stmt::Assign { target, value, .. } => {
+                assert!(
+                    matches!(target, AssignTarget::ListIndex { base, .. }
+                        if matches!(base.as_ref(), AssignTarget::Var(n) if n == "a")),
+                    "expected ListIndex(a, ...), got {:?}",
+                    target
+                );
+                let val_unwrapped = match value {
+                    Expr::Spanned { expr, .. } => expr.as_ref(),
+                    v => v,
+                };
+                assert!(matches!(val_unwrapped, Expr::IntLit(10)), "value: {:?}", val_unwrapped);
+            }
+            other => panic!("expected Assign, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn list_index_assign_plain_var_still_uses_var_target() {
+        use crate::ast::AssignTarget;
+        // Plain `x := 5` must still produce Var target, not ListIndex.
+        let body = "mut x = 0\nx := 5\nx";
+        let stmts = parse_body_stmts(body).expect("should parse");
+        assert!(
+            matches!(&stmts[1], Stmt::Assign { target: AssignTarget::Var(n), .. } if n == "x"),
+            "expected Var target, got {:?}",
+            stmts[1]
+        );
+    }
+
+    #[test]
+    fn list_index_assign_rhs_is_list_literal() {
+        use crate::ast::AssignTarget;
+        // RHS `[1, 2]` contains `[` — make sure it does not confuse the LHS scanner.
+        let body = "mut a = [[1, 2], [3, 4]]\na[0] := [9, 8]\na";
+        let stmts = parse_body_stmts(body).expect("should parse");
+        assert_eq!(stmts.len(), 3);
+        assert!(
+            matches!(&stmts[1], Stmt::Assign { target: AssignTarget::ListIndex { base, .. }, .. }
+                if matches!(base.as_ref(), AssignTarget::Var(n) if n == "a")),
+            "expected ListIndex(a, ...), got {:?}",
+            stmts[1]
+        );
+    }
+
+    #[test]
+    fn list_index_assign_multiline_nested() {
+        use crate::ast::AssignTarget;
+        // Multiline RHS with nested index: `a[1][0] :=\n  99`
+        let body = "mut a = [[1, 2], [3, 4]]\na[1][0] :=\n  99\na";
+        let stmts = parse_body_stmts(body).expect("should parse");
+        assert_eq!(stmts.len(), 3);
+        match &stmts[1] {
+            Stmt::Assign { target, .. } => {
+                assert!(
+                    matches!(target, AssignTarget::ListIndex { base, .. }
+                        if matches!(base.as_ref(), AssignTarget::ListIndex { base: inner, .. }
+                            if matches!(inner.as_ref(), AssignTarget::Var(n) if n == "a"))),
+                    "expected nested ListIndex(a, ...), got {:?}",
+                    target
+                );
+            }
+            other => panic!("expected Assign, got {:?}", other),
+        }
     }
 
     #[test]

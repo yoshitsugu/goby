@@ -1094,6 +1094,35 @@ mod tests {
         assert_eq!(format_stmt(&stmt, 0), "counter := counter + 1");
     }
 
+    #[test]
+    fn format_stmt_assign_list_index() {
+        let stmt = Stmt::Assign {
+            target: crate::ast::AssignTarget::ListIndex {
+                base: Box::new(crate::ast::AssignTarget::Var("xs".to_string())),
+                index: Box::new(Expr::IntLit(0)),
+            },
+            value: Expr::IntLit(42),
+            span: None,
+        };
+        assert_eq!(format_stmt(&stmt, 0), "xs[0] := 42");
+    }
+
+    #[test]
+    fn format_stmt_assign_list_index_nested() {
+        let stmt = Stmt::Assign {
+            target: crate::ast::AssignTarget::ListIndex {
+                base: Box::new(crate::ast::AssignTarget::ListIndex {
+                    base: Box::new(crate::ast::AssignTarget::Var("a".to_string())),
+                    index: Box::new(Expr::IntLit(1)),
+                }),
+                index: Box::new(Expr::IntLit(0)),
+            },
+            value: Expr::IntLit(99),
+            span: None,
+        };
+        assert_eq!(format_stmt(&stmt, 0), "a[1][0] := 99");
+    }
+
     // --- Top-level formatters ---
 
     #[test]
