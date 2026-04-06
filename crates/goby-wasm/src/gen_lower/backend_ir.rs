@@ -76,6 +76,11 @@ pub(crate) enum BackendIntrinsic {
     StringEachGraphemeCount,
     StringEachGraphemeState,
     ListPushString,
+    /// Set an element of a list by index, returning a new list (path-copy semantics).
+    ///
+    /// Signature: `(list: i64, index: i64, value: i64) -> i64` (tagged `List`).
+    /// Out-of-bounds or non-list/non-int abort.
+    ListSet,
     ListConcat,
     StringConcat,
     /// Collect all Unicode Extended Grapheme Clusters from a string as a tagged list.
@@ -102,6 +107,7 @@ impl BackendIntrinsic {
             BackendIntrinsic::StringEachGraphemeCount => 1,
             BackendIntrinsic::StringEachGraphemeState => 2,
             BackendIntrinsic::ListPushString => 2,
+            BackendIntrinsic::ListSet => 3,
             BackendIntrinsic::ListConcat => 2,
             BackendIntrinsic::StringConcat => 2,
             BackendIntrinsic::StringGraphemesList => 1,
@@ -121,6 +127,7 @@ impl BackendIntrinsic {
             | BackendIntrinsic::ListGet
             | BackendIntrinsic::StringLength
             | BackendIntrinsic::ListPushString
+            | BackendIntrinsic::ListSet
             | BackendIntrinsic::ListConcat => IntrinsicExecutionBoundary::InWasm,
         }
     }

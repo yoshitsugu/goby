@@ -657,6 +657,10 @@ fn lower_comp_inner(
             }
         }
 
+        CompExpr::AssignIndex { root, path, value } => {
+            lower_assign_index(root, path, value, aliases, bindings, known_decls, lambda_decls)
+        }
+
         CompExpr::Case { scrutinee, arms } => lower_case(
             scrutinee,
             arms,
@@ -675,6 +679,137 @@ fn lower_comp_inner(
 /// Lower a `CompExpr::Case` to backend IR.
 ///
 /// Emits:
+/// Lower `CompExpr::AssignIndex` to path-copy Wasm backend IR.
+///
+/// For `root[p0][p1]...[pN-1] := value`:
+/// - Descend through the list using `list.get` for each prefix index, storing
+///   intermediate lists in temporary locals.
+/// - Ascend using `list.set` to build updated copies from the innermost out.
+/// - Write the final updated root list back to the root local.
+/// - Leaves a tagged `Unit` on the stack (assignment produces Unit).
+///
+/// Temporary local names use `__lset_<root>_<depth>` to avoid clashes.
+fn lower_assign_index(
+    root: &str,
+    path: &[ValueExpr],
+    value: &CompExpr,
+    aliases: &HashMap<String, AliasValue>,
+    bindings: &ClosureBindingEnv,
+    known_decls: &HashSet<String>,
+    lambda_decls: &mut Vec<LambdaAuxDecl>,
+) -> Result<Vec<WasmBackendInstr>, LowerError> {
+    let depth = path.len();
+    if depth == 0 {
+        return Err(LowerError::UnsupportedForm {
+            node: "AssignIndex with empty path".to_string(),
+        });
+    }
+
+    let mut instrs: Vec<WasmBackendInstr> = Vec::new();
+
+    // Temp local names: __lset_<root>_0, ..., __lset_<root>_<depth-2> hold intermediate lists
+    // obtained by list.get descents. There are depth-1 such temps (one per prefix).
+    // We also need temps to hold the ascending list_set results:
+    // __lset_<root>_up_<d> for d in 0..depth-1.
+    //
+    // Layout:
+    //   descent temps:  __lset_<root>_d<i>  for i in 0..depth-1  (hold list_get results)
+    //   ascent temps:   __lset_<root>_u<i>  for i in 0..depth-1  (hold list_set results)
+    let descent_tmp = |i: usize| format!("__lset_{}_d{}", root, i);
+    let ascent_tmp = |i: usize| format!("__lset_{}_u{}", root, i);
+
+    // Declare descent temporaries (depth-1 of them, for depth > 1)
+    for i in 0..depth.saturating_sub(1) {
+        instrs.push(WasmBackendInstr::DeclareLocal {
+            name: descent_tmp(i),
+        });
+    }
+    // Declare ascent temporaries (depth of them — one per list.set call)
+    for i in 0..depth {
+        instrs.push(WasmBackendInstr::DeclareLocal {
+            name: ascent_tmp(i),
+        });
+    }
+
+    // Descent phase: compute intermediate lists via list.get.
+    // descent_tmp(0) = list.get(root, path[0])
+    // descent_tmp(1) = list.get(descent_tmp(0), path[1])
+    // ...
+    // descent_tmp(depth-2) = list.get(descent_tmp(depth-3), path[depth-2])
+    for i in 0..depth.saturating_sub(1) {
+        let list_source = if i == 0 {
+            WasmBackendInstr::LoadLocal {
+                name: root.to_string(),
+            }
+        } else {
+            WasmBackendInstr::LoadLocal {
+                name: descent_tmp(i - 1),
+            }
+        };
+        instrs.push(list_source);
+        instrs.extend(lower_value_ctx(&path[i], aliases, bindings, known_decls)?);
+        instrs.push(WasmBackendInstr::Intrinsic {
+            intrinsic: BackendIntrinsic::ListGet,
+        });
+        instrs.push(WasmBackendInstr::StoreLocal {
+            name: descent_tmp(i),
+        });
+    }
+
+    // Ascent phase (innermost to outermost):
+    // ascent_tmp(depth-1) = list.set(descent_tmp(depth-2) or root, path[depth-1], rhs_value)
+    // ascent_tmp(depth-2) = list.set(descent_tmp(depth-3) or root, path[depth-2], ascent_tmp(depth-1))
+    // ...
+    // ascent_tmp(0)       = list.set(root, path[0], ascent_tmp(1))
+    //
+    // For depth=1: ascent_tmp(0) = list.set(root, path[0], rhs_value)
+    let rhs_instrs = lower_comp_inner(value, aliases, bindings, known_decls, lambda_decls)?;
+
+    for i in (0..depth).rev() {
+        let list_source = if i == 0 {
+            WasmBackendInstr::LoadLocal {
+                name: root.to_string(),
+            }
+        } else {
+            WasmBackendInstr::LoadLocal {
+                name: descent_tmp(i - 1),
+            }
+        };
+        instrs.push(list_source);
+        instrs.extend(lower_value_ctx(&path[i], aliases, bindings, known_decls)?);
+        if i == depth - 1 {
+            // Innermost: use the actual rhs computation
+            instrs.extend(rhs_instrs.clone());
+        } else {
+            // Use the ascent result from the next deeper level
+            instrs.push(WasmBackendInstr::LoadLocal {
+                name: ascent_tmp(i + 1),
+            });
+        }
+        instrs.push(WasmBackendInstr::Intrinsic {
+            intrinsic: BackendIntrinsic::ListSet,
+        });
+        instrs.push(WasmBackendInstr::StoreLocal {
+            name: ascent_tmp(i),
+        });
+    }
+
+    // Write the final updated root list back
+    instrs.push(WasmBackendInstr::LoadLocal {
+        name: ascent_tmp(0),
+    });
+    instrs.push(WasmBackendInstr::StoreLocal {
+        name: root.to_string(),
+    });
+
+    // AssignIndex produces Unit
+    instrs.push(WasmBackendInstr::I64Const(
+        crate::gen_lower::value::encode_unit(),
+    ));
+
+    Ok(instrs)
+}
+
 ///   1. `DeclareLocal { name: scrutinee_local }`
 ///   2. scrutinee value instructions
 ///   3. `StoreLocal { name: scrutinee_local }`
@@ -2760,6 +2895,121 @@ mod tests {
                 I::DeclCall {
                     decl_name: "add".to_string()
                 },
+            ]
+        );
+    }
+
+    #[test]
+    fn lower_assign_index_single_level_emits_list_set_and_store() {
+        use crate::gen_lower::value::{encode_int, encode_unit};
+        // xs[0] := 99  (single-depth path)
+        let comp = CompExpr::AssignIndex {
+            root: "xs".to_string(),
+            path: vec![ValueExpr::IntLit(0)],
+            value: Box::new(CompExpr::Value(ValueExpr::IntLit(99))),
+        };
+        let instrs = lower_comp(&comp).expect("AssignIndex single-level should lower");
+        assert_eq!(
+            instrs,
+            vec![
+                // Declare ascent tmp
+                I::DeclareLocal {
+                    name: "__lset_xs_u0".to_string()
+                },
+                // Ascent: list_set(xs, 0, 99), store to ascent_tmp(0)
+                I::LoadLocal {
+                    name: "xs".to_string()
+                },
+                I::I64Const(encode_int(0).unwrap()),
+                I::I64Const(encode_int(99).unwrap()),
+                I::Intrinsic {
+                    intrinsic: BackendIntrinsic::ListSet
+                },
+                I::StoreLocal {
+                    name: "__lset_xs_u0".to_string()
+                },
+                // Write back ascent_tmp(0) to root
+                I::LoadLocal {
+                    name: "__lset_xs_u0".to_string()
+                },
+                I::StoreLocal {
+                    name: "xs".to_string()
+                },
+                // Unit
+                I::I64Const(encode_unit()),
+            ]
+        );
+    }
+
+    #[test]
+    fn lower_assign_index_two_levels_emits_get_and_set_chain() {
+        use crate::gen_lower::value::{encode_int, encode_unit};
+        // xs[1][0] := 42  (two-depth path)
+        let comp = CompExpr::AssignIndex {
+            root: "xs".to_string(),
+            path: vec![ValueExpr::IntLit(1), ValueExpr::IntLit(0)],
+            value: Box::new(CompExpr::Value(ValueExpr::IntLit(42))),
+        };
+        let instrs = lower_comp(&comp).expect("AssignIndex two-level should lower");
+        assert_eq!(
+            instrs,
+            vec![
+                // descent tmp + two ascent tmps
+                I::DeclareLocal {
+                    name: "__lset_xs_d0".to_string()
+                },
+                I::DeclareLocal {
+                    name: "__lset_xs_u0".to_string()
+                },
+                I::DeclareLocal {
+                    name: "__lset_xs_u1".to_string()
+                },
+                // Descent: xs[1] → d0
+                I::LoadLocal {
+                    name: "xs".to_string()
+                },
+                I::I64Const(encode_int(1).unwrap()),
+                I::Intrinsic {
+                    intrinsic: BackendIntrinsic::ListGet
+                },
+                I::StoreLocal {
+                    name: "__lset_xs_d0".to_string()
+                },
+                // Ascent innermost: list_set(d0, 0, 42) → u1
+                I::LoadLocal {
+                    name: "__lset_xs_d0".to_string()
+                },
+                I::I64Const(encode_int(0).unwrap()),
+                I::I64Const(encode_int(42).unwrap()),
+                I::Intrinsic {
+                    intrinsic: BackendIntrinsic::ListSet
+                },
+                I::StoreLocal {
+                    name: "__lset_xs_u1".to_string()
+                },
+                // Ascent outer: list_set(xs, 1, u1) → u0
+                I::LoadLocal {
+                    name: "xs".to_string()
+                },
+                I::I64Const(encode_int(1).unwrap()),
+                I::LoadLocal {
+                    name: "__lset_xs_u1".to_string()
+                },
+                I::Intrinsic {
+                    intrinsic: BackendIntrinsic::ListSet
+                },
+                I::StoreLocal {
+                    name: "__lset_xs_u0".to_string()
+                },
+                // Write back
+                I::LoadLocal {
+                    name: "__lset_xs_u0".to_string()
+                },
+                I::StoreLocal {
+                    name: "xs".to_string()
+                },
+                // Unit
+                I::I64Const(encode_unit()),
             ]
         );
     }

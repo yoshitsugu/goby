@@ -432,6 +432,7 @@ fn needs_helper_state(instrs: &[WasmBackendInstr]) -> bool {
                 | WasmBackendInstr::Intrinsic {
                     intrinsic: BackendIntrinsic::StringSplit
                         | BackendIntrinsic::ListPushString
+                        | BackendIntrinsic::ListSet
                         | BackendIntrinsic::ListConcat
                 }
                 // DeclCall / IndirectCall may trigger callee heap allocations; the global cursor
@@ -2017,6 +2018,14 @@ fn emit_helper_call(
                 ),
             })?,
         ),
+        BackendIntrinsic::ListSet => emit_list_set_helper(
+            function,
+            heap_state.ok_or_else(|| CodegenError {
+                message: format!(
+                    "gen_lower/emit: intrinsic '{intrinsic:?}' requires heap helper state"
+                ),
+            })?,
+        ),
         BackendIntrinsic::ListConcat => emit_list_concat_helper(
             function,
             heap_state.ok_or_else(|| CodegenError {
@@ -3061,6 +3070,178 @@ fn emit_list_concat_helper(
     function.instruction(&Instruction::Br(0));
     function.instruction(&Instruction::End);
     function.instruction(&Instruction::End);
+
+    emit_push_tagged_ptr(function, s_new_list_ptr, TAG_LIST);
+    Ok(())
+}
+
+/// Emit Wasm instructions for the `list.set(list, index, value)` intrinsic.
+///
+/// Stack on entry (bottom to top): list_i64, index_i64, value_i64.
+/// Returns a new tagged List value with element `index` replaced by `value`.
+/// Out-of-bounds or wrong-tag inputs abort.
+///
+/// Memory layout of a list at pointer `p`:
+///   `[p+0]`  : i32  length (number of elements)
+///   `[p+4+i*8]` : i64  element i (tagged)
+fn emit_list_set_helper(
+    function: &mut Function,
+    helper_state: &HeapEmitState,
+) -> Result<(), CodegenError> {
+    let value_i64 = helper_state.scratch.i64_base;
+    let list_i64 = helper_state.scratch.i64_base + 1;
+    let index_i64 = helper_state.scratch.i64_base + 2;
+    let s_list_ptr = helper_state.scratch.i32_base + HS_TEXT_PTR;
+    let s_list_len = helper_state.scratch.i32_base + HS_TEXT_LEN;
+    let s_index = helper_state.scratch.i32_base + HS_SEP_PTR;
+    let s_new_list_ptr = helper_state.scratch.i32_base + HS_AUX_PTR;
+    let s_alloc_size = helper_state.scratch.i32_base + HS_ALLOC_SIZE;
+    let s_iter = helper_state.scratch.i32_base + HS_ITER;
+
+    // Stack: list, index, value (value on top)
+    function.instruction(&Instruction::LocalSet(value_i64));
+    function.instruction(&Instruction::LocalSet(index_i64));
+    function.instruction(&Instruction::LocalSet(list_i64));
+
+    // Validate list tag
+    function.instruction(&Instruction::LocalGet(list_i64));
+    function.instruction(&Instruction::I64Const((TAG_LIST as i64) << 60));
+    function.instruction(&Instruction::I64And);
+    function.instruction(&Instruction::I64Const((TAG_LIST as i64) << 60));
+    function.instruction(&Instruction::I64Ne);
+    function.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
+    emit_abort(function);
+    function.instruction(&Instruction::End);
+
+    // Validate index tag
+    function.instruction(&Instruction::LocalGet(index_i64));
+    function.instruction(&Instruction::I64Const((TAG_INT as i64) << 60));
+    function.instruction(&Instruction::I64And);
+    function.instruction(&Instruction::I64Const((TAG_INT as i64) << 60));
+    function.instruction(&Instruction::I64Ne);
+    function.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
+    emit_abort(function);
+    function.instruction(&Instruction::End);
+
+    // Decode index to signed i32
+    function.instruction(&Instruction::LocalGet(index_i64));
+    function.instruction(&Instruction::I64Const(4));
+    function.instruction(&Instruction::I64Shl);
+    function.instruction(&Instruction::I64Const(4));
+    function.instruction(&Instruction::I64ShrS);
+    function.instruction(&Instruction::I32WrapI64);
+    function.instruction(&Instruction::LocalSet(s_index));
+
+    // Reject negative index
+    function.instruction(&Instruction::LocalGet(s_index));
+    function.instruction(&Instruction::I32Const(0));
+    function.instruction(&Instruction::I32LtS);
+    function.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
+    emit_abort(function);
+    function.instruction(&Instruction::End);
+
+    // Decode list ptr
+    function.instruction(&Instruction::LocalGet(list_i64));
+    function.instruction(&Instruction::I64Const(0xFFFF_FFFFi64));
+    function.instruction(&Instruction::I64And);
+    function.instruction(&Instruction::I32WrapI64);
+    function.instruction(&Instruction::LocalSet(s_list_ptr));
+
+    // Load list length
+    function.instruction(&Instruction::LocalGet(s_list_ptr));
+    function.instruction(&Instruction::I32Load(MemArg {
+        offset: 0,
+        align: 2,
+        memory_index: 0,
+    }));
+    function.instruction(&Instruction::LocalSet(s_list_len));
+
+    // Bounds check: index >= len → abort
+    function.instruction(&Instruction::LocalGet(s_index));
+    function.instruction(&Instruction::LocalGet(s_list_len));
+    function.instruction(&Instruction::I32GeU);
+    function.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
+    emit_abort(function);
+    function.instruction(&Instruction::End);
+
+    // Allocate new list: 4 + len * 8 bytes
+    function.instruction(&Instruction::LocalGet(s_list_len));
+    function.instruction(&Instruction::I32Const(8));
+    function.instruction(&Instruction::I32Mul);
+    function.instruction(&Instruction::I32Const(4));
+    function.instruction(&Instruction::I32Add);
+    function.instruction(&Instruction::LocalSet(s_alloc_size));
+    emit_alloc_from_top(function, helper_state, s_alloc_size, s_new_list_ptr);
+
+    // Write length to new list
+    function.instruction(&Instruction::LocalGet(s_new_list_ptr));
+    function.instruction(&Instruction::LocalGet(s_list_len));
+    function.instruction(&Instruction::I32Store(MemArg {
+        offset: 0,
+        align: 2,
+        memory_index: 0,
+    }));
+
+    // Copy all elements from old list to new list
+    function.instruction(&Instruction::I32Const(0));
+    function.instruction(&Instruction::LocalSet(s_iter));
+    function.instruction(&Instruction::Block(wasm_encoder::BlockType::Empty));
+    function.instruction(&Instruction::Loop(wasm_encoder::BlockType::Empty));
+    function.instruction(&Instruction::LocalGet(s_iter));
+    function.instruction(&Instruction::LocalGet(s_list_len));
+    function.instruction(&Instruction::I32GeU);
+    function.instruction(&Instruction::BrIf(1));
+
+    // dst = new_list_ptr + 4 + iter * 8
+    function.instruction(&Instruction::LocalGet(s_new_list_ptr));
+    function.instruction(&Instruction::I32Const(4));
+    function.instruction(&Instruction::I32Add);
+    function.instruction(&Instruction::LocalGet(s_iter));
+    function.instruction(&Instruction::I32Const(8));
+    function.instruction(&Instruction::I32Mul);
+    function.instruction(&Instruction::I32Add);
+
+    // src = old_list_ptr + 4 + iter * 8
+    function.instruction(&Instruction::LocalGet(s_list_ptr));
+    function.instruction(&Instruction::I32Const(4));
+    function.instruction(&Instruction::I32Add);
+    function.instruction(&Instruction::LocalGet(s_iter));
+    function.instruction(&Instruction::I32Const(8));
+    function.instruction(&Instruction::I32Mul);
+    function.instruction(&Instruction::I32Add);
+    function.instruction(&Instruction::I64Load(MemArg {
+        offset: 0,
+        align: 3,
+        memory_index: 0,
+    }));
+    function.instruction(&Instruction::I64Store(MemArg {
+        offset: 0,
+        align: 3,
+        memory_index: 0,
+    }));
+
+    function.instruction(&Instruction::LocalGet(s_iter));
+    function.instruction(&Instruction::I32Const(1));
+    function.instruction(&Instruction::I32Add);
+    function.instruction(&Instruction::LocalSet(s_iter));
+    function.instruction(&Instruction::Br(0));
+    function.instruction(&Instruction::End);
+    function.instruction(&Instruction::End);
+
+    // Overwrite element at index with new value
+    function.instruction(&Instruction::LocalGet(s_new_list_ptr));
+    function.instruction(&Instruction::I32Const(4));
+    function.instruction(&Instruction::I32Add);
+    function.instruction(&Instruction::LocalGet(s_index));
+    function.instruction(&Instruction::I32Const(8));
+    function.instruction(&Instruction::I32Mul);
+    function.instruction(&Instruction::I32Add);
+    function.instruction(&Instruction::LocalGet(value_i64));
+    function.instruction(&Instruction::I64Store(MemArg {
+        offset: 0,
+        align: 3,
+        memory_index: 0,
+    }));
 
     emit_push_tagged_ptr(function, s_new_list_ptr, TAG_LIST);
     Ok(())
@@ -5224,6 +5405,32 @@ mod tests {
         ];
         let wasm = emit_general_module(&instrs, &default_layout())
             .expect("emit ListConcat helper chain should succeed");
+        assert_valid_wasm(&wasm);
+    }
+
+    #[test]
+    fn emit_list_set_produces_valid_wasm() {
+        // Simulate: `list.set([1, 2, 3], 0, 99)` — update index 0 to 99, then print result
+        let instrs = vec![
+            I::ListLit {
+                element_instrs: vec![
+                    vec![I::I64Const(crate::gen_lower::value::encode_int(1).unwrap())],
+                    vec![I::I64Const(crate::gen_lower::value::encode_int(2).unwrap())],
+                    vec![I::I64Const(crate::gen_lower::value::encode_int(3).unwrap())],
+                ],
+            },
+            I::I64Const(crate::gen_lower::value::encode_int(0).unwrap()),
+            I::I64Const(crate::gen_lower::value::encode_int(99).unwrap()),
+            I::Intrinsic {
+                intrinsic: BackendIntrinsic::ListSet,
+            },
+            I::EffectOp {
+                op: BackendEffectOp::Print(BackendPrintOp::Print),
+            },
+            I::Drop,
+        ];
+        let wasm = emit_general_module(&instrs, &default_layout())
+            .expect("emit ListSet helper chain should succeed");
         assert_valid_wasm(&wasm);
     }
 

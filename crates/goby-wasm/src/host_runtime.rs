@@ -97,6 +97,7 @@ pub(crate) const fn host_import_for_intrinsic(
         | BackendIntrinsic::ListGet
         | BackendIntrinsic::StringLength
         | BackendIntrinsic::ListPushString
+        | BackendIntrinsic::ListSet
         | BackendIntrinsic::ListConcat => None,
     }
 }
