@@ -14,10 +14,6 @@ Recommended reading order:
 4. `STATE.md`
 5. `BUGS.md` (when fixing defects)
 
-Archive policy:
-
-- Historical completed plans are stored under `doc/old/` and are not part of normal workflow.
-
 Maintenance rules:
 
 - When syntax/semantics change, update `LANGUAGE_SPEC.md` in the same change.
