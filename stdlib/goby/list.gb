@@ -3,7 +3,9 @@ join values sep =
   case values
     [] -> ""
     [x] -> x
-    [x, ..xxs] -> "${x}${sep}${join xxs sep}"
+    [x, ..xxs] ->
+      rest = join xxs sep
+      "${x}${sep}${rest}"
 
 each : List a -> (a -> Unit) -> Unit
 each xs f =
