@@ -860,43 +860,57 @@ This policy serves two goals:
    in the `.gb` source — not silently implied by its name appearing in a Rust
    constant.
 
-### 7.2 Marking Intrinsics in .gb Source
+### 7.2 How Host-Level Operations Are Expressed in Goby
 
-When a stdlib function requires host-runtime support, it must carry a
-`@intrinsic` annotation (exact syntax TBD; the following is a proposal):
+Goby already has two explicit mechanisms for expressing host-runtime dependencies
+in `.gb` source. These are the only acceptable forms of special treatment:
 
-```goby
-@intrinsic("StringGraphemesList")
-graphemes : String -> List String
-```
+**`__goby_xxx` builtin calls**
 
-The `@intrinsic` annotation signals:
-- The `.gb` body (if any) is a placeholder and is never executed.
-- The backend substitutes the named host operation at the call site.
-- The function name appears in `INTRINSIC_STDLIB_NAMES` in Rust, explaining why.
-
-Until `@intrinsic` syntax is implemented, a structured comment is used as an
-interim convention:
+Names prefixed with `__goby_` are host builtins resolved by the backend.
+They appear directly in `.gb` function bodies:
 
 ```goby
-# @intrinsic StringGraphemesList
-# This function is implemented in the host runtime (Rust).
-# The body below is a placeholder and is never executed.
-graphemes : String -> List String
-graphemes s = []
+# stdlib/goby/string.gb
+grapheme_count : String -> Int
+grapheme_count value =
+  mut n = 0
+  with
+    yield _ _ -> resume (True, ())
+  in
+    n := __goby_string_each_grapheme value
+  n
 ```
+
+A function body that contains a `__goby_` call is clearly not pure Goby —
+the dependency is visible without reading any Rust code.
+
+**`@embed` annotation**
+
+Used to bind a host-implemented effect handler to an effect type:
+
+```goby
+# stdlib/goby/prelude.gb
+@embed Print __goby_embeded_effect_stdout_handler
+@embed Read  __goby_embeded_effect_stdin_handler
+```
+
+**Rule:** if a stdlib function cannot be written in ordinary Goby, it must
+use one of these two forms. Any other Rust-side special-casing (e.g. matching
+on function names in `lower_comp_inner`) is a violation of this policy.
 
 ### 7.3 Current Violations (as of 2026-04-07)
 
-The following stdlib functions are currently special-cased in Rust without
-any marker in the `.gb` source:
+The following stdlib functions are special-cased in Rust
+(`SPECIALLY_LOWERED_STDLIB_NAMES` in `gen_lower/mod.rs`,
+special branches in `gen_lower/lower.rs`) without any marker in the `.gb` source:
 
-| Function | Module | Special treatment | Policy verdict |
+| Function | Module | Rust special treatment | Policy verdict |
 |---|---|---|---|
 | `each` | `list` | `ListEach`/`ListEachEffect` Wasm instructions | **Violation** — pure Goby recursion works |
 | `map` | `list` | `ListMap` Wasm instruction | **Violation** — pure Goby recursion works |
-| `graphemes` | `string` | `StringGraphemesList` host intrinsic | **Allowed** — needs intrinsic marker |
-| `split` (empty sep) | `string` | Redirected to `StringGraphemesList` | **Allowed** — needs intrinsic marker |
+| `graphemes` | `string` | `StringGraphemesList` host intrinsic | **Compliant** — body uses `__goby_string_each_grapheme` |
+| `split` (empty sep) | `string` | Redirected to `StringGraphemesList` | **Compliant** — body uses `__goby_` builtins |
 
 ### 7.4 Refactoring Plan
 
@@ -911,25 +925,16 @@ any marker in the `.gb` source:
 - Done when: all existing tests pass, and `each`/`map` work correctly via
   stdlib `.gb` recursion (both lambda callbacks and named-function references).
 
-#### Step 2: Add intrinsic markers to `graphemes` and `split`
+#### Step 2: Rename `SPECIALLY_LOWERED_STDLIB_NAMES`
 
-- Add `# @intrinsic` comment (interim) above `graphemes` and relevant `split`
-  behaviour in `stdlib/goby/string.gb`.
-- Rename `SPECIALLY_LOWERED_STDLIB_NAMES` → `INTRINSIC_STDLIB_NAMES` in Rust
-  and update its doc comment to reference the `@intrinsic` convention.
-- Done when: the Rust constant and the `.gb` source are in 1-to-1 correspondence
+- Rename to `INTRINSIC_STDLIB_NAMES` (or similar) to reflect that it now only
+  lists names whose `.gb` bodies contain `__goby_` calls and must not be routed
+  through the generic DeclCall path for other reasons.
+- Update the doc comment to reference the `__goby_` convention.
+- Done when: the Rust constant and the `.gb` sources are in 1-to-1 correspondence
   and the intent is clear without reading both files simultaneously.
 
-#### Step 3 (future): Implement `@intrinsic` as a first-class annotation
-
-- Design and parse `@intrinsic("name")` as a declaration-level annotation in
-  the goby grammar.
-- The type-checker validates that the named intrinsic exists.
-- The backend rejects any call to an `@intrinsic` function through the generic
-  DeclCall path (compile error, not silent wrong behavior).
-- The `.gb` body of an `@intrinsic` function is forbidden (or ignored).
-
-#### Step 4 (future): Stdlib as an integration test suite
+#### Step 3 (future): Stdlib as an integration test suite
 
 - Add a test runner that compiles and executes every function in stdlib with
   representative inputs, comparing output against expected values.
