@@ -658,6 +658,73 @@ Acceptance criteria:
 - full `cargo test` passes (not just AssignIndex-related tests).
 - no new ad-hoc root-name rewriting or source-shape recognizer is introduced.
 
+### 4.8b Track OOB: List Index Out-of-Bounds Error Message
+
+Goal: `xs[i]` で `i` がリストの長さ以上（または負）の場合に、わかりやすいエラーメッセージを出す。
+
+#### 現状
+
+- **インタープリタ**: `runtime_resolver.rs` の `Expr::ListIndex` アームが OOB を検知すると
+  `mark_runtime_abort()` を呼ぶ。これは `runtime_error` フィールドに内部マーカー文字列
+  `"__goby_runtime_abort__"` をセットするだけで、最終出力は
+  `runtime error: __goby_runtime_abort__` という不親切なメッセージになる。
+- **Wasm**: `emit_list_get_helper` が OOB を検知すると `emit_abort`（= `Unreachable` 命令）
+  でトラップする。エラーコードスロット（`GLOBAL_RUNTIME_ERROR_OFFSET`）には何も書かず、
+  wasmtime が `"wasm trap: wasm \`unreachable\` instruction executed"` を返す。
+  `RUNTIME_ERROR_MEMORY_EXHAUSTION` のような専用コードは存在しない。
+
+#### 目標動作
+
+```
+runtime error: index out of bounds: index 5, list length 3
+```
+
+インタープリタ・Wasm 双方で同じ書式のメッセージが出ること。
+
+#### 設計方針
+
+**インタープリタ側** (`runtime_dispatch.rs` / `runtime_resolver.rs`):
+
+- `mark_runtime_abort()` の代わりに `set_runtime_error_once(message)` を呼ぶ。
+  `set_runtime_error_once` はすでに存在し、任意のメッセージをセットできる。
+- メッセージは `format!("index out of bounds: index {i}, list length {}", items.len())`。
+- `mark_runtime_error_is_abort_marker()` の判定ロジックはそのまま保持し、
+  OOB のメッセージはマーカーではない普通のエラーとして通過させる。
+
+**Wasm側** (`layout.rs` / `gen_lower/emit.rs` / `wasm_exec.rs`):
+
+- `layout.rs` に `RUNTIME_ERROR_INDEX_OUT_OF_BOUNDS: u32 = 2` を追加。
+- `emit_list_get_helper` の OOB ブランチを `emit_abort` から
+  `emit_memory_exhaustion_abort` と同パターンの「エラーコードを書いて return」に変更
+  （新関数 `emit_index_oob_abort` を追加）。
+- `wasm_exec.rs` の `runtime_error_message` に
+  `RUNTIME_ERROR_INDEX_OUT_OF_BOUNDS => Some(ERR_INDEX_OUT_OF_BOUNDS)` を追加。
+  ただし Wasm では実行時にインデックス値・長さを文字列として出力できないため、
+  まず固定メッセージ `"index out of bounds"` で十分とする（OOB-3 でインデックス値付きに拡張可能）。
+
+#### マイルストーン
+
+1. **OOB-1**: インタープリタ側の OOB メッセージ改善。
+   - `runtime_resolver.rs` の `Expr::ListIndex` アームで `set_runtime_error_once` を使用。
+   - テスト: インタープリタパスで OOB アクセスをするプログラムが
+     `"runtime error: index out of bounds: index N, list length M"` を出力する。
+2. **OOB-2**: Wasm 側の OOB エラーコード追加。
+   - `layout.rs` に `RUNTIME_ERROR_INDEX_OUT_OF_BOUNDS = 2` を追加。
+   - `emit_list_get_helper` で OOB 時に新コードをメモリスロットへ書き込んで return。
+   - `wasm_exec.rs` の `runtime_error_message` で新コードを `"index out of bounds"` にマップ。
+   - テスト: Wasm パスで OOB アクセスが `"index out of bounds"` エラーになる。
+3. **OOB-3** (任意): Wasm 側でもインデックス値・長さを含むメッセージを出す。
+   - エラーコードスロットの拡張または文字列スロットの追加が必要。
+   - 複雑度が高いため MVP では OOB-2 の固定メッセージで許容し、後回し可。
+4. **OOB-4**: `cargo test` 全通過確認・`doc/BUGS.md` 更新。
+
+#### 受け入れ基準
+
+- `xs[5]`（`xs` の長さが 3）を実行すると、インタープリタ・Wasm 双方で
+  人間が読めるエラーメッセージが出る。
+- 既存の OOB 以外のパスで `mark_runtime_abort()` の挙動が変わらないこと。
+- `cargo test` 全通過。
+
 ### 4.9 Track EP: Effect Row Polymorphism
 
 Goal: add effect-variable quantification so higher-order functions propagate
