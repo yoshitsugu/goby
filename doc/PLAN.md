@@ -212,24 +212,10 @@ Based on `examples/*.gb`:
     - whether CLI `run` should always emit a `.wasm` artifact even for Goby-owned execution paths,
     - whether the long-term contract should expose a separate Goby runner instead of overloading
       raw external `wasmtime` execution.
-  - Mutable nested-list execution boundary (updated 2026-04-06):
-    - rooted list update (`a[i] := v`, `a[i][j] := v`) is now treated as a semantic runtime
-      capability, not as an incidental consequence of `Read`, handlers, lambdas, or tuples.
-    - execution planning therefore routes well-typed mutable-list programs through the
-      `GeneralLowered` Goby-owned Wasm path even when they are `Print`-only.
-    - shared IR now carries pure `list.get` reads inside interpolation/output contexts, so
-      update-followed-by-interpolation programs such as
-      `mut a = [[1,2,3], [4,5,6], [7,8,9]]; a[1][1] := 30; println("${a[1][0]},${a[1][1]}")`
-      execute successfully under `goby run`.
-    - current explicit boundary:
-      - `goby run` planning still routes mutable rooted-update programs through the
-        `GeneralLowered` runtime path,
-      - fallback/interpreter execution now uses the same centralized path-copy rooted-update
-        semantic for the supported recursive-aggregate subset, including parity-tested single-
-        and two-level updates plus read-before-write cases.
-    - MLF-2 (fallback runtime value unification) is complete as of 2026-04-07:
-      `RuntimeLocals` uses a single `RuntimeValue`-based store; `ListIntEvaluator` and
-      shape-specific type maps have been removed.
+  - Mutable list execution boundary (complete, 2026-04-07):
+    - rooted list update (`a[i] := v`, `a[i][j] := v`) is a semantic runtime capability;
+      execution planning routes these programs through the `GeneralLowered` Wasm path.
+    - `RuntimeLocals` uses a single unified `RuntimeValue`-based store.
 
 - **`fn`-only anonymous functions** (complete, 2026-03-31).
   - `fn x -> expr` is the only anonymous function syntax.
@@ -481,16 +467,11 @@ Output format: human-readable (default) and JSON lines (`--json`).
 
 ### 4.2 Track E: Higher-Order Function-Type Checking (complete, 2026-03-27)
 
-All E1–E5 milestones complete. Callback positions such as `each xs println` are rejected during
-`goby-cli check` with a higher-order mismatch diagnostic. The shared matcher in `typecheck_unify.rs`
-handles named, qualified, generic, and partially applied callbacks uniformly.
-Regressions cover direct/qualified/named/generic/partial-application callback cases.
+HOF callback mismatch diagnostic via shared matcher in `typecheck_unify.rs`.
 
 ### 4.3 Track F: Stdlib `int.to_string` (complete, 2026-03-25)
 
-`goby/int.to_string : Int -> String` is implemented end-to-end.
-Direct calls and named callback use (`map xs int.to_string`) are covered in
-typecheck, fallback runtime resolution, and compiled Wasm execution tests.
+`goby/int.to_string : Int -> String` implemented end-to-end.
 
 ### 4.4 Review Follow-ups (Backlog)
 
@@ -528,42 +509,18 @@ Note:
 
 ### 4.5 Track ER + TD: Compiler Error Reporting (complete)
 
-Track ER (name-resolution diagnostics, 2026-03-29) and Track TD (typed diagnostic
-rendering parity, TD0–TD5, 2026-04-05) are both complete.
-
-Completed scope:
-
-- unresolved bare-name / qualified-name / ambiguity / import diagnostics (ER),
-- ordinary-call argument mismatch spans (TD1),
-- effect-op and `resume` argument mismatch spans (TD2),
-- CLI snippet and LSP range parity for all covered families (TD3–TD4).
+ER (name-resolution diagnostics) and TD (typed diagnostic spans, TD0–TD5) complete.
 
 Remaining deferred diagnostic work (not yet planned as a track):
 
-- block-structure validation spans (`typecheck_ambiguity.rs`),
-- declaration body vs declared return-type mismatch spans (`typecheck_stmt.rs`),
-- required-effect coverage failure spans (`typecheck_effect_usage.rs`),
-- conflicting effect declarations / `@embed` validation spans (`typecheck_validate.rs`),
-- type-declaration validation spans (`typecheck_types.rs`),
-- multiline/body-relative expression span ownership (needs body-relative-to-file-relative wiring).
+- block-structure validation spans, declaration body vs return-type mismatch spans,
+  required-effect coverage failure spans, conflicting effect / `@embed` validation spans,
+  type-declaration validation spans, multiline/body-relative expression span ownership.
 
 ### 4.6 Track CC: Closure Capture (complete)
 
-Goal: enable lambda closure capture on the `GeneralLowered` Wasm path with correct lexical semantics.
-
-Locked semantic target:
-
-- immutable bindings (`let`) are captured by value.
-- mutable bindings (`mut`) are captured via shared mutable cell (not snapshot).
-- multiple closures capturing the same `mut` binding observe the same shared state.
-- all lambdas are conceptually closures; non-capturing lambdas are the zero-capture case.
-
-Status: **CC0–CC6 complete** — the Wasm `GeneralLowered` path fully implements closure capture
-semantics including capture analysis, shared-cell model, direct closure calls, capturing
-callbacks for `each` / `map` / `fold`, helper-returned closure pairs, and documentation/examples
-closure. The fallback/interpreter runtime now matches the same closure-capture semantics,
-including helper-returned closure values. The current source of truth is `doc/LANGUAGE_SPEC.md`
-for semantics and `doc/STATE.md` for implementation history and restart notes.
+CC0–CC6 complete. Immutable capture by value, mutable capture via shared cell.
+Semantics in `doc/LANGUAGE_SPEC.md`.
 
 ### 4.7 `Float` / Wasm `f64` Support
 
@@ -623,26 +580,7 @@ Acceptance criteria:
 
 ### 4.8 Track LM: Mutable List Element Assignment (complete, 2026-04-06)
 
-Goal: support `a[1] := 10` and `a[1][0] := 99` through one shared assignment-target abstraction.
-
-Locked semantic contract (see `doc/LANGUAGE_SPEC.md` §3 "list element assignment"):
-
-- element assignment is valid only through a `mut` root binding.
-- reads are value-oriented; values extracted from mutable lists do not alias the source.
-- mutation is a rooted update; previous reads from the updated path are unaffected.
-
-All LM0–LM4 milestones complete:
-
-- **LM0**: Semantics locked in `doc/LANGUAGE_SPEC.md`.
-- **LM1a–c**: `AssignTarget` / `ResolvedTarget` AST + resolver extensions; parser handles
-  both single-level and nested index forms; all ~15 construction sites updated.
-- **LM2**: Typechecker rejects immutable roots, undeclared roots, non-List receivers, type
-  mismatches, and non-Int index expressions via `check_assign_target_chain`.
-- **LM3a–c**: IR `CompExpr::AssignIndex` node; lowering from `ResolvedTarget::ListIndex`;
-  Wasm `BackendIntrinsic::ListSet` helper (alloc + path-copy) and `lower_assign_index`
-  for arbitrary nesting depth.
-- **LM4**: `examples/mut_list.gb`; 4 runtime integration tests covering single-level,
-  multi-index, value-semantics, and two-level nested update.
+`a[i] := v` and `a[i][j] := v` work end-to-end (LM0–LM4). Semantics in `doc/LANGUAGE_SPEC.md` §3.
 
 ### 4.9 Track EP: Effect Row Polymorphism
 

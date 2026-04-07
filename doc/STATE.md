@@ -8,31 +8,10 @@ No active track. See `doc/PLAN.md` for next candidates.
 
 ## Recently Completed
 
-### Track MLF: Mutable List Runtime Execution Fix (complete, 2026-04-07)
-
-All milestones complete (MLF-0 through MLF-3, including MLF-2 fallback runtime value
-unification). `RuntimeLocals` now uses a single `values: HashMap<String, RuntimeValue>` store;
-`ListIntEvaluator` and shape-specific type maps have been removed. `IntEvaluator` reads from
-`RuntimeLocals` via `int_view()` at the entry point. Rooted mutable-list updates route through
-the `GeneralLowered` Wasm path for all well-typed programs.
-
-### Track MLF staged milestone (2026-04-06)
-
-Complete for the routing slice: mutable rooted list updates no longer fall through to
-fallback/static execution, and the exact `goby run` reproduction now succeeds.
-
-### Track LM: Mutable List Element Assignment (2026-04-06)
-
-Complete. `a[i] := v` and `a[i][j] := v` work end-to-end (LM0–LM4).
-
-### Track CC: Closure Capture (2026-04-02)
-
-CC0–CC6 complete. The `GeneralLowered` Wasm path fully implements closure capture
-semantics. The fallback/interpreter runtime now matches the same semantics.
-
-### Track TD: Typed Diagnostic Spans (2026-04-05)
-
-Complete (TD0–TD5). Remaining: multiline/body-relative expression span ownership (deferred).
+- **Track MLF**: Mutable list runtime execution fix (complete, 2026-04-07). Unified `RuntimeLocals` store.
+- **Track LM**: Mutable list element assignment (complete, 2026-04-06). `a[i] := v`, `a[i][j] := v`.
+- **Track CC**: Closure capture (complete, 2026-04-02). CC0–CC6, shared-cell model.
+- **Track TD**: Typed diagnostic spans (complete, 2026-04-05). TD0–TD5.
 
 ## Architecture State
 
