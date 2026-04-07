@@ -2,29 +2,15 @@
 
 This document tracks confirmed, reproducible bugs in the current Goby toolchain.
 
-Open bugs:
+Open bugs: none.
 
-- `goby run` fails for rooted list updates on a mutable binding captured by a lambda/closure.
-  Reproduction:
-  ```goby
-  import goby/list
+Resolved on 2026-04-07:
 
-  main : Unit -> Unit can Print
-  main =
-    a = [1, 2, 3]
-    mut b = [10, 20, 30]
-    list.each a (fn i ->
-      b[0] := b[0] + i
-      ()
-    )
-    println("${b[0]}")
-  ```
-  Current behavior:
-  `goby run` fails with `runtime error: gen_lower/emit: unknown local 'b'`.
-  Boundary:
-  plain rooted mutable-list updates are already routed and executed correctly, but the
-  `GeneralLowered` Wasm lowering path still mishandles `AssignIndex` when the mutable root is a
-  closure-captured shared cell rather than a directly declared local.
+- `goby run` failed for rooted list updates on a mutable binding captured by a lambda/closure.
+  Fix: `lower_assign_index` now reads/writes through the cell when root is cell-promoted;
+  `PerformEffect` and `Call` (effect target) arg lowering now uses `lower_value_ctx` so that
+  cell-promoted bindings in interpolated expressions (`println("${b[0]}")`) resolve correctly.
+  Verified by `examples/closure_mut_list.gb` (→ 16) and `examples/closure_mut_nested_list.gb` (→ 99).
 
 Resolved on 2026-04-06:
 

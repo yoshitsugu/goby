@@ -4,14 +4,14 @@ Last updated: 2026-04-07
 
 ## Current Focus
 
-Track CL: Closure-captured mutable list assignment fix. See `doc/PLAN.md` §4.8a.
+No active track. See `doc/PLAN.md` for next candidates.
 
 ## Recently Completed
 
+- **Track CL**: Closure-captured mutable list fix (complete, 2026-04-07). `lower_value_ctx` for effect/call args; cell-promoted `AssignIndex` write-back.
 - **Track MLF**: Mutable list runtime execution fix (complete, 2026-04-07). Unified `RuntimeLocals` store.
 - **Track LM**: Mutable list element assignment (complete, 2026-04-06). `a[i] := v`, `a[i][j] := v`.
 - **Track CC**: Closure capture (complete, 2026-04-02). CC0–CC6, shared-cell model.
-- **Track TD**: Typed diagnostic spans (complete, 2026-04-05). TD0–TD5.
 
 ## Architecture State
 
