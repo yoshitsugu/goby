@@ -836,84 +836,110 @@ These items are intentionally kept as short placeholders until they become activ
 - WasmFX: Typed Continuations and Stack Switching for WebAssembly (Hillerstrom et al., ICFP 2024): practical path for direct-style effect handlers on Wasm backends.
   - <https://arxiv.org/abs/2403.01036>
 
-## 7. Stdlib Normalization Plan
+## 7. Stdlib Design Policy and Normalization Plan
 
-### Background
+### 7.1 Policy: Stdlib as Ordinary Goby Code
 
-`SPECIALLY_LOWERED_STDLIB_NAMES` in `crates/goby-wasm/src/gen_lower/mod.rs` currently
-excludes `each`, `map`, `graphemes`, `split` from the generic DeclCall lowering path.
-The intent is to route them through dedicated `lower_comp_inner` branches.
+**The guiding principle for the standard library is:**
 
-The problem: a developer reading only `stdlib/goby/list.gb` or `stdlib/goby/string.gb`
-cannot tell that adding a new function there may silently fall through to a non-functional
-path unless the name is also registered in Rust. This creates a hidden contract that is
-easy to violate.
+> stdlib functions are written as ordinary Goby code wherever possible.
+> Host-level special treatment is allowed only when the feature genuinely
+> cannot be expressed in Goby (e.g. I/O, Unicode algorithms, memory layout).
+> Every such exception must be explicitly marked in the `.gb` source.
 
-### Goal
+This policy serves two goals:
 
-Make the stdlib/backend contract explicit and uniform:
-- Functions that require host intrinsics (implemented in Rust, not expressible in goby)
-  are marked visibly in the stdlib `.gb` file with a comment convention.
-- Functions that are pure goby (recursion, pattern-match, etc.) are lowered as ordinary
-  DeclCall aux-decls with no Rust special-casing.
+1. **Stdlib as a language test.** Because stdlib functions go through the same
+   compiler pipeline as user code, they exercise type-checking, IR lowering,
+   and code generation. Bugs caught in stdlib are bugs caught before they hit
+   users.
 
-### Analysis of each special-cased name
+2. **No hidden contracts.** A developer who reads only a `.gb` file must be
+   able to understand whether adding a new function will work. If a function
+   requires a Rust-side hook to be functional, that dependency must be visible
+   in the `.gb` source — not silently implied by its name appearing in a Rust
+   constant.
 
-| Name | Why special-cased | Can be removed? |
-|---|---|---|
-| `each` | Lowered to `ListEach`/`ListEachEffect` Wasm instructions | Yes — stdlib .gb recursion works via DeclCall |
-| `map` | Lowered to `ListMap` Wasm instruction | Yes — stdlib .gb recursion works via DeclCall |
-| `graphemes` | `StringGraphemesList` host intrinsic (Unicode EGC splitting is in Rust) | No — intrinsic required |
-| `split` (empty sep) | Redirected to `StringGraphemesList` | No — depends on `graphemes` intrinsic |
+### 7.2 Marking Intrinsics in .gb Source
 
-Note: `each` and `map` were special-cased for the `ListEachEffect` Print-fusion
-optimization (direct fd_write without call_indirect). That optimization is not
-correctness-critical; the generic path produces correct output.
-
-### Steps
-
-#### Step 1: Remove `each` and `map` from `SPECIALLY_LOWERED_STDLIB_NAMES`
-
-- Remove `"each"` and `"map"` from the constant.
-- Remove the `GlobalRef { module="list", name="each" }` and `GlobalRef { module="list", name="map" }`
-  special branches in `lower_comp_inner` (lower.rs lines ~314–351).
-- Remove the corresponding `Var` branches (lower.rs lines ~403–442).
-- Remove `WasmBackendInstr::ListEach`, `ListEachEffect`, `ListMap` variants and all
-  emit/support code that references them.
-- Update comments in mod.rs and the constant itself.
-- Done when: existing tests pass, and the examples below produce correct output:
-  - `cat sample | goby run examples/list_case.gb`
-  - A new test using `each`/`map` with a lambda callback.
-
-#### Step 2: Add intrinsic marker comments to stdlib
-
-Add a standard comment above intrinsic-backed functions in `stdlib/goby/string.gb`
-(and any future stdlib files) to make the contract visible:
+When a stdlib function requires host-runtime support, it must carry a
+`@intrinsic` annotation (exact syntax TBD; the following is a proposal):
 
 ```goby
-# INTRINSIC: implemented in the host runtime (Rust). Not lowerable as pure goby.
+@intrinsic("StringGraphemesList")
 graphemes : String -> List String
-graphemes s = ...  # body is never executed; host replaces this call
 ```
 
-The exact syntax of the marker is TBD; the key requirement is that it is visible
-in the `.gb` source without reading Rust code.
+The `@intrinsic` annotation signals:
+- The `.gb` body (if any) is a placeholder and is never executed.
+- The backend substitutes the named host operation at the call site.
+- The function name appears in `INTRINSIC_STDLIB_NAMES` in Rust, explaining why.
 
-#### Step 3: Update `SPECIALLY_LOWERED_STDLIB_NAMES` to only contain intrinsics
+Until `@intrinsic` syntax is implemented, a structured comment is used as an
+interim convention:
 
-After Step 1, the constant should only list names that genuinely require host
-dispatch (`graphemes`, `split`). Rename or document it to reflect its true meaning:
-
-```rust
-/// Stdlib names backed by host intrinsics. These must NOT be routed through
-/// the generic DeclCall path because their .gb bodies are placeholders only.
-const INTRINSIC_STDLIB_NAMES: &[&str] = &["graphemes", "split"];
+```goby
+# @intrinsic StringGraphemesList
+# This function is implemented in the host runtime (Rust).
+# The body below is a placeholder and is never executed.
+graphemes : String -> List String
+graphemes s = []
 ```
 
-### Risks
+### 7.3 Current Violations (as of 2026-04-07)
 
-- `ListEachEffect` removal drops a print-fusion optimization. Impact is performance
-  only, not correctness. Accept for now; can be re-added as a backend optimization
-  later if profiling shows it matters.
-- Recursive stdlib `each`/`map` may be slower for large lists (stack depth vs. loop).
-  Accept for MVP; tail-call or iterative lowering is a later optimization track.
+The following stdlib functions are currently special-cased in Rust without
+any marker in the `.gb` source:
+
+| Function | Module | Special treatment | Policy verdict |
+|---|---|---|---|
+| `each` | `list` | `ListEach`/`ListEachEffect` Wasm instructions | **Violation** — pure Goby recursion works |
+| `map` | `list` | `ListMap` Wasm instruction | **Violation** — pure Goby recursion works |
+| `graphemes` | `string` | `StringGraphemesList` host intrinsic | **Allowed** — needs intrinsic marker |
+| `split` (empty sep) | `string` | Redirected to `StringGraphemesList` | **Allowed** — needs intrinsic marker |
+
+### 7.4 Refactoring Plan
+
+#### Step 1: Remove `each` and `map` special-casing
+
+- Remove `"each"` and `"map"` from `SPECIALLY_LOWERED_STDLIB_NAMES`.
+- Remove the `GlobalRef { module="list", name="each"/"map" }` special branches
+  in `lower_comp_inner` (`gen_lower/lower.rs`).
+- Remove the corresponding `Var` branches for bare-name calls.
+- Remove `WasmBackendInstr::ListEach`, `ListEachEffect`, `ListMap` variants
+  and all emit/support code that references them.
+- Done when: all existing tests pass, and `each`/`map` work correctly via
+  stdlib `.gb` recursion (both lambda callbacks and named-function references).
+
+#### Step 2: Add intrinsic markers to `graphemes` and `split`
+
+- Add `# @intrinsic` comment (interim) above `graphemes` and relevant `split`
+  behaviour in `stdlib/goby/string.gb`.
+- Rename `SPECIALLY_LOWERED_STDLIB_NAMES` → `INTRINSIC_STDLIB_NAMES` in Rust
+  and update its doc comment to reference the `@intrinsic` convention.
+- Done when: the Rust constant and the `.gb` source are in 1-to-1 correspondence
+  and the intent is clear without reading both files simultaneously.
+
+#### Step 3 (future): Implement `@intrinsic` as a first-class annotation
+
+- Design and parse `@intrinsic("name")` as a declaration-level annotation in
+  the goby grammar.
+- The type-checker validates that the named intrinsic exists.
+- The backend rejects any call to an `@intrinsic` function through the generic
+  DeclCall path (compile error, not silent wrong behavior).
+- The `.gb` body of an `@intrinsic` function is forbidden (or ignored).
+
+#### Step 4 (future): Stdlib as an integration test suite
+
+- Add a test runner that compiles and executes every function in stdlib with
+  representative inputs, comparing output against expected values.
+- This makes stdlib regressions immediately visible when the compiler changes.
+
+### 7.5 Risks
+
+- `ListEachEffect` removal drops a print-fusion optimization (direct `fd_write`
+  without `call_indirect`). This is a performance trade-off only, not a
+  correctness issue. Accept for now; re-add as an explicit backend optimization
+  pass later if profiling shows it matters.
+- Recursive stdlib `each`/`map` has O(n) stack depth. Accept for MVP;
+  tail-call or iterative lowering is a separate optimization track.
