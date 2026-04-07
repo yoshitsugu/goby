@@ -4,7 +4,7 @@ Last updated: 2026-04-07
 
 ## Current Focus
 
-No active track. See `doc/PLAN.md` for next candidates.
+Track CL: Closure-captured mutable list assignment fix. See `doc/PLAN.md` §4.8a.
 
 ## Recently Completed
 

@@ -582,6 +582,82 @@ Acceptance criteria:
 
 `a[i] := v` and `a[i][j] := v` work end-to-end (LM0–LM4). Semantics in `doc/LANGUAGE_SPEC.md` §3.
 
+### 4.8a Track CL: Closure-Captured Mutable List Assignment
+
+Goal: make `AssignIndex` work when the mutable root binding is a closure-captured
+shared cell, closing the last open bug in `doc/BUGS.md`.
+
+Reproduction:
+
+```goby
+import goby/list
+
+main : Unit -> Unit can Print
+main =
+  a = [1, 2, 3]
+  mut b = [10, 20, 30]
+  list.each a (fn i ->
+    b[0] := b[0] + i
+    ()
+  )
+  println("${b[0]}")
+```
+
+Current behavior: `goby run` fails with `runtime error: gen_lower/emit: unknown local 'b'`.
+
+Root cause:
+
+- Track CC established that mutable bindings captured by a lambda are promoted to
+  shared heap cells. Inside the lambda body, the real local is `__cell_<name>` and
+  reads/writes go through `LoadCellValue`/`StoreCellValue`.
+- `CompExpr::Assign` already handles this: it checks the `aliases` map for
+  `CellPromoted` and routes through `StoreCellValue` (lower.rs ~631–658).
+- `lower_assign_index` does not perform this check. It unconditionally emits
+  `LoadLocal { root }` and `StoreLocal { root }`, which reference a local that
+  does not exist inside a lambda body where the root was cell-promoted.
+
+Design principle:
+
+- the lowering layer contract is: any instruction sequence that accesses a named
+  binding must resolve the binding's storage mode (plain local, cell-promoted, or
+  closure slot) through `aliases`. Direct `LoadLocal`/`StoreLocal` with a raw
+  binding name is valid only for locals whose plain-local status is structurally
+  guaranteed (e.g. temporaries declared within the same function via `DeclareLocal`).
+- for reads, `lower_value_ctx` already centralizes this resolution at the `Var`
+  level. For writes, `Assign` handles cell-promotion inline. This fix applies the
+  same inline pattern to `AssignIndex`.
+- note for future work: if a third write-side node appears (e.g. `AssignField` for
+  record updates), consider extracting a shared `store_to_binding` helper to avoid
+  repeating the cell-promotion check. This is not in scope for the current fix.
+
+Fix scope (`lower_assign_index` in `gen_lower/lower.rs`):
+
+1. At function entry, determine whether root is cell-promoted via `aliases`.
+2. Replace the three sites that reference root as a plain local:
+   - descent phase root load (currently `LoadLocal { root }`) →
+     `LoadLocal { __cell_<root> }` + `LoadCellValue`.
+   - ascent phase root load (same pattern).
+   - write-back (currently `StoreLocal { root }`) →
+     `StoreCellValue { cell_ptr: LoadLocal { __cell_<root> }, value: ascent result }`.
+3. Non-root intermediate locals (`__lset_<root>_d*`, `__lset_<root>_u*`) are
+   function-scoped temporaries and are never cell-promoted; they remain unchanged.
+
+Milestones:
+
+1. **CL-1**: Apply the fix to `lower_assign_index`.
+2. **CL-2**: Add integration tests:
+   - depth-1: the reproduction case above (single-level closure-captured index update).
+   - depth-2: nested index update on a closure-captured mut binding
+     (e.g. `mut b = [[1,2],[3,4]]; list.each xs (fn _ -> b[0][1] := 99; ())`).
+3. **CL-3**: Run full test suite (`cargo test`), update `doc/BUGS.md`.
+
+Acceptance criteria:
+
+- the depth-1 reproduction program prints `16` (= 10 + 1 + 2 + 3).
+- the depth-2 test reads back the updated nested value correctly.
+- full `cargo test` passes (not just AssignIndex-related tests).
+- no new ad-hoc root-name rewriting or source-shape recognizer is introduced.
+
 ### 4.9 Track EP: Effect Row Polymorphism
 
 Goal: add effect-variable quantification so higher-order functions propagate
