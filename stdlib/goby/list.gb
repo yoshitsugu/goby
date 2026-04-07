@@ -1,5 +1,9 @@
 join : List String -> String -> String
-join values sep = list.join(values, sep)
+join values sep =
+  case values
+    [] -> ""
+    [x] -> x
+    [x, ..xxs] -> "${x}${sep}${join xxs sep}"
 
 each : List a -> (a -> Unit) -> Unit
 each xs f =

@@ -1322,6 +1322,90 @@ main =
 }
 
 #[test]
+fn list_join_empty_list_returns_empty_string() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    let source = r#"
+import goby/list ( join )
+
+main : Unit -> Unit can Print
+main =
+  s = join [] "-"
+  println s
+"#;
+    let module = parse_module(source).expect("parse should work");
+    let wasm = crate::compile_module(&module).expect("join empty-list should compile");
+    let output = crate::wasm_exec::run_wasm_bytes_with_stdin(&wasm, None)
+        .expect("join empty-list wasm should execute");
+    assert_eq!(output, "\n");
+}
+
+#[test]
+fn list_join_single_element_returns_element_without_sep() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    let source = r#"
+import goby/list ( join )
+
+main : Unit -> Unit can Print
+main =
+  s = join ["only"] ","
+  println s
+"#;
+    let module = parse_module(source).expect("parse should work");
+    let wasm = crate::compile_module(&module).expect("join single-element should compile");
+    let output = crate::wasm_exec::run_wasm_bytes_with_stdin(&wasm, None)
+        .expect("join single-element wasm should execute");
+    assert_eq!(output, "only\n");
+}
+
+#[test]
+fn list_join_multi_element_no_trailing_sep() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    let source = r#"
+import goby/list ( join )
+
+main : Unit -> Unit can Print
+main =
+  s = join ["a", "b", "c"] "-"
+  println s
+"#;
+    let module = parse_module(source).expect("parse should work");
+    let wasm = crate::compile_module(&module).expect("join multi-element should compile");
+    let output = crate::wasm_exec::run_wasm_bytes_with_stdin(&wasm, None)
+        .expect("join multi-element wasm should execute");
+    assert_eq!(output, "a-b-c\n");
+}
+
+#[test]
+fn resolves_runtime_output_for_list_join_single_element() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    let source = r#"
+import goby/list as l
+
+main : Unit -> Unit
+main =
+  println l.join(["only"], ",")
+"#;
+    let module = parse_module(source).expect("parse should work");
+    let output = resolve_module_runtime_output(&module).expect("runtime output should resolve");
+    assert_eq!(output, "only\n");
+}
+
+#[test]
+fn resolves_runtime_output_for_list_join_multi_element_no_trailing_sep() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    let source = r#"
+import goby/list as l
+
+main : Unit -> Unit
+main =
+  println l.join(["a", "b", "c"], "-")
+"#;
+    let module = parse_module(source).expect("parse should work");
+    let output = resolve_module_runtime_output(&module).expect("runtime output should resolve");
+    assert_eq!(output, "a-b-c\n");
+}
+
+#[test]
 #[ignore = "qualified iterator handler clauses are not yet covered by fallback runtime-output locking"]
 fn locks_runtime_output_for_iterator_unified_gb() {
     let _guard = ENV_MUTEX.lock().unwrap();
@@ -1330,3 +1414,4 @@ fn locks_runtime_output_for_iterator_unified_gb() {
     let output = resolve_module_runtime_output(&module).expect("runtime output should resolve");
     assert_eq!(output, "tick:atick:btick:c31");
 }
+
