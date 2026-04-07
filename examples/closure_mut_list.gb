@@ -1,0 +1,13 @@
+import goby/list
+
+# Demonstrates mutable list element assignment through a closure-captured mut binding.
+# The lambda captures `b` by shared cell; each iteration updates b[0] in-place.
+main : Unit -> Unit can Print
+main =
+  a = [1, 2, 3]
+  mut b = [10, 20, 30]
+  list.each a (fn i ->
+    b[0] := b[0] + i
+    ()
+  )
+  println("${b[0]}")

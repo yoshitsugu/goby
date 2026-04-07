@@ -1,0 +1,13 @@
+import goby/list
+
+# Demonstrates nested mutable list assignment through a closure-captured mut binding.
+# The lambda captures `b` by shared cell and performs a two-level index update.
+main : Unit -> Unit can Print
+main =
+  xs = [0]
+  mut b = [[1, 2], [3, 4]]
+  list.each xs (fn _ ->
+    b[0][1] := 99
+    ()
+  )
+  println("${b[0][1]}")

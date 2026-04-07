@@ -567,6 +567,48 @@ fn run_command_executes_closure_mut_example() {
 
 #[test]
 #[cfg(unix)]
+fn run_command_executes_closure_mut_list_example() {
+    let root = repo_root();
+    let input = root.join("examples/closure_mut_list.gb");
+
+    let output = run_goby_with_stdin(&root, &input, b"");
+
+    assert!(
+        output.status.success(),
+        "expected successful execution, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(
+        stdout.as_ref(),
+        "16\n",
+        "expected 16 (= 10 + 1 + 2 + 3) from closure-captured mut list update"
+    );
+}
+
+#[test]
+#[cfg(unix)]
+fn run_command_executes_closure_mut_nested_list_example() {
+    let root = repo_root();
+    let input = root.join("examples/closure_mut_nested_list.gb");
+
+    let output = run_goby_with_stdin(&root, &input, b"");
+
+    assert!(
+        output.status.success(),
+        "expected successful execution, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(
+        stdout.as_ref(),
+        "99\n",
+        "expected 99 from closure-captured nested mut list update"
+    );
+}
+
+#[test]
+#[cfg(unix)]
 fn run_command_rejects_call_inside_interpolation_with_specific_guidance() {
     let root = repo_root();
     let sandbox = TempDirGuard::new("run_call_inside_interpolation");

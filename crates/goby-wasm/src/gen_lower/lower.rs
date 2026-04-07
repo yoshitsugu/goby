@@ -259,7 +259,7 @@ fn lower_comp_inner(
             })?;
             let mut instrs = Vec::new();
             for arg in args {
-                instrs.extend(lower_value(arg)?);
+                instrs.extend(lower_value_ctx(arg, aliases, bindings, known_decls)?);
             }
             instrs.push(WasmBackendInstr::EffectOp { op });
             Ok(instrs)
@@ -269,7 +269,7 @@ fn lower_comp_inner(
             if let Some(op) = resolve_effect_call_target(callee, aliases) {
                 let mut instrs = Vec::new();
                 for arg in args {
-                    instrs.extend(lower_value(arg)?);
+                    instrs.extend(lower_value_ctx(arg, aliases, bindings, known_decls)?);
                 }
                 instrs.push(WasmBackendInstr::EffectOp { op });
                 Ok(instrs)
@@ -724,6 +724,34 @@ fn lower_assign_index(
     let descent_tmp = |i: usize| format!("__lset_{}_d{}", root, i);
     let ascent_tmp = |i: usize| format!("__lset_{}_u{}", root, i);
 
+    // Determine whether root is a closure-captured mutable binding (cell-promoted).
+    // If so, root loads must go through LoadCellValue and write-back through StoreCellValue,
+    // following the same contract as CompExpr::Assign. Non-root temporaries (__lset_* locals)
+    // are structurally plain locals declared within this function and are never cell-promoted.
+    let root_is_cell = aliases.get(root) == Some(&AliasValue::CellPromoted);
+
+    // If root is cell-promoted, cache its current list value into a plain scratch local once.
+    // This avoids reading the cell twice (once during descent, once during ascent's i==0 load),
+    // which would produce different results if the rhs expression mutates the same cell.
+    let root_local: String = if root_is_cell {
+        let scratch = format!("__lset_{}_root", root);
+        instrs.push(WasmBackendInstr::DeclareLocal {
+            name: scratch.clone(),
+        });
+        instrs.extend(lower_value_ctx(
+            &ValueExpr::Var(root.to_string()),
+            aliases,
+            bindings,
+            known_decls,
+        )?);
+        instrs.push(WasmBackendInstr::StoreLocal {
+            name: scratch.clone(),
+        });
+        scratch
+    } else {
+        root.to_string()
+    };
+
     // Declare descent temporaries (depth-1 of them, for depth > 1)
     for i in 0..depth.saturating_sub(1) {
         instrs.push(WasmBackendInstr::DeclareLocal {
@@ -743,16 +771,13 @@ fn lower_assign_index(
     // ...
     // descent_tmp(depth-2) = list.get(descent_tmp(depth-3), path[depth-2])
     for (i, index_value) in path.iter().enumerate().take(depth.saturating_sub(1)) {
-        let list_source = if i == 0 {
-            WasmBackendInstr::LoadLocal {
-                name: root.to_string(),
-            }
-        } else {
-            WasmBackendInstr::LoadLocal {
-                name: descent_tmp(i - 1),
-            }
-        };
-        instrs.push(list_source);
+        instrs.push(WasmBackendInstr::LoadLocal {
+            name: if i == 0 {
+                root_local.clone()
+            } else {
+                descent_tmp(i - 1)
+            },
+        });
         instrs.extend(lower_value_ctx(
             index_value,
             aliases,
@@ -777,16 +802,13 @@ fn lower_assign_index(
     let rhs_instrs = lower_comp_inner(value, aliases, bindings, known_decls, lambda_decls)?;
 
     for i in (0..depth).rev() {
-        let list_source = if i == 0 {
-            WasmBackendInstr::LoadLocal {
-                name: root.to_string(),
-            }
-        } else {
-            WasmBackendInstr::LoadLocal {
-                name: descent_tmp(i - 1),
-            }
-        };
-        instrs.push(list_source);
+        instrs.push(WasmBackendInstr::LoadLocal {
+            name: if i == 0 {
+                root_local.clone()
+            } else {
+                descent_tmp(i - 1)
+            },
+        });
         instrs.extend(lower_value_ctx(&path[i], aliases, bindings, known_decls)?);
         if i == depth - 1 {
             // Innermost: use the actual rhs computation
@@ -805,13 +827,25 @@ fn lower_assign_index(
         });
     }
 
-    // Write the final updated root list back
-    instrs.push(WasmBackendInstr::LoadLocal {
-        name: ascent_tmp(0),
-    });
-    instrs.push(WasmBackendInstr::StoreLocal {
-        name: root.to_string(),
-    });
+    // Write the final updated root list back.
+    // If root is cell-promoted, write through the shared cell; otherwise plain store.
+    if root_is_cell {
+        instrs.push(WasmBackendInstr::StoreCellValue {
+            cell_ptr_instrs: vec![WasmBackendInstr::LoadLocal {
+                name: cell_local_name(root),
+            }],
+            value_instrs: vec![WasmBackendInstr::LoadLocal {
+                name: ascent_tmp(0),
+            }],
+        });
+    } else {
+        instrs.push(WasmBackendInstr::LoadLocal {
+            name: ascent_tmp(0),
+        });
+        instrs.push(WasmBackendInstr::StoreLocal {
+            name: root.to_string(),
+        });
+    }
 
     // AssignIndex produces Unit
     instrs.push(WasmBackendInstr::I64Const(
@@ -1619,6 +1653,15 @@ mod tests {
     use crate::gen_lower::backend_ir::{
         BackendEffectOp, BackendIntrinsic, BackendPrintOp, BackendReadOp, WasmBackendInstr as I,
     };
+
+    fn lower_comp_with_aliases(
+        comp: &CompExpr,
+        aliases: &HashMap<String, AliasValue>,
+    ) -> Result<Vec<WasmBackendInstr>, LowerError> {
+        let mut lambda_decls = Vec::new();
+        let bindings = ClosureBindingEnv::default();
+        lower_comp_inner(comp, aliases, &bindings, &HashSet::new(), &mut lambda_decls)
+    }
 
     #[test]
     fn lower_perform_read() {
@@ -2914,6 +2957,157 @@ mod tests {
                 I::DeclCall {
                     decl_name: "add".to_string()
                 },
+            ]
+        );
+    }
+
+    /// Cell-promoted root (closure-captured mut), depth-1.
+    /// xs[0] := 99 where xs is CellPromoted.
+    /// Expected: scratch local read from cell, list_set, StoreCellValue write-back.
+    #[test]
+    fn lower_assign_index_cell_promoted_single_level_uses_cell() {
+        use crate::gen_lower::value::{encode_int, encode_unit};
+        let comp = CompExpr::AssignIndex {
+            root: "xs".to_string(),
+            path: vec![ValueExpr::IntLit(0)],
+            value: Box::new(CompExpr::Value(ValueExpr::IntLit(99))),
+        };
+        let aliases: HashMap<String, AliasValue> =
+            [("xs".to_string(), AliasValue::CellPromoted)].into();
+        let instrs =
+            lower_comp_with_aliases(&comp, &aliases).expect("cell-promoted AssignIndex should lower");
+        assert_eq!(
+            instrs,
+            vec![
+                // Scratch local: cache cell value once
+                I::DeclareLocal {
+                    name: "__lset_xs_root".to_string()
+                },
+                I::LoadLocal {
+                    name: "__cell_xs".to_string()
+                },
+                I::LoadCellValue,
+                I::StoreLocal {
+                    name: "__lset_xs_root".to_string()
+                },
+                // Ascent tmp
+                I::DeclareLocal {
+                    name: "__lset_xs_u0".to_string()
+                },
+                // Ascent: list_set(root_scratch, 0, 99) → u0
+                I::LoadLocal {
+                    name: "__lset_xs_root".to_string()
+                },
+                I::I64Const(encode_int(0).unwrap()),
+                I::I64Const(encode_int(99).unwrap()),
+                I::Intrinsic {
+                    intrinsic: BackendIntrinsic::ListSet
+                },
+                I::StoreLocal {
+                    name: "__lset_xs_u0".to_string()
+                },
+                // Write back through cell
+                I::StoreCellValue {
+                    cell_ptr_instrs: vec![I::LoadLocal {
+                        name: "__cell_xs".to_string()
+                    }],
+                    value_instrs: vec![I::LoadLocal {
+                        name: "__lset_xs_u0".to_string()
+                    }],
+                },
+                // Unit
+                I::I64Const(encode_unit()),
+            ]
+        );
+    }
+
+    /// Cell-promoted root (closure-captured mut), depth-2.
+    /// xs[1][0] := 42 where xs is CellPromoted.
+    /// Expected: scratch local, descent via list_get, ascent, StoreCellValue write-back.
+    #[test]
+    fn lower_assign_index_cell_promoted_two_levels_uses_cell() {
+        use crate::gen_lower::value::{encode_int, encode_unit};
+        let comp = CompExpr::AssignIndex {
+            root: "xs".to_string(),
+            path: vec![ValueExpr::IntLit(1), ValueExpr::IntLit(0)],
+            value: Box::new(CompExpr::Value(ValueExpr::IntLit(42))),
+        };
+        let aliases: HashMap<String, AliasValue> =
+            [("xs".to_string(), AliasValue::CellPromoted)].into();
+        let instrs =
+            lower_comp_with_aliases(&comp, &aliases).expect("cell-promoted two-level AssignIndex should lower");
+        assert_eq!(
+            instrs,
+            vec![
+                // Scratch local
+                I::DeclareLocal {
+                    name: "__lset_xs_root".to_string()
+                },
+                I::LoadLocal {
+                    name: "__cell_xs".to_string()
+                },
+                I::LoadCellValue,
+                I::StoreLocal {
+                    name: "__lset_xs_root".to_string()
+                },
+                // Descent tmp + two ascent tmps
+                I::DeclareLocal {
+                    name: "__lset_xs_d0".to_string()
+                },
+                I::DeclareLocal {
+                    name: "__lset_xs_u0".to_string()
+                },
+                I::DeclareLocal {
+                    name: "__lset_xs_u1".to_string()
+                },
+                // Descent: root_scratch[1] → d0
+                I::LoadLocal {
+                    name: "__lset_xs_root".to_string()
+                },
+                I::I64Const(encode_int(1).unwrap()),
+                I::Intrinsic {
+                    intrinsic: BackendIntrinsic::ListGet
+                },
+                I::StoreLocal {
+                    name: "__lset_xs_d0".to_string()
+                },
+                // Ascent innermost: list_set(d0, 0, 42) → u1
+                I::LoadLocal {
+                    name: "__lset_xs_d0".to_string()
+                },
+                I::I64Const(encode_int(0).unwrap()),
+                I::I64Const(encode_int(42).unwrap()),
+                I::Intrinsic {
+                    intrinsic: BackendIntrinsic::ListSet
+                },
+                I::StoreLocal {
+                    name: "__lset_xs_u1".to_string()
+                },
+                // Ascent outer: list_set(root_scratch, 1, u1) → u0
+                I::LoadLocal {
+                    name: "__lset_xs_root".to_string()
+                },
+                I::I64Const(encode_int(1).unwrap()),
+                I::LoadLocal {
+                    name: "__lset_xs_u1".to_string()
+                },
+                I::Intrinsic {
+                    intrinsic: BackendIntrinsic::ListSet
+                },
+                I::StoreLocal {
+                    name: "__lset_xs_u0".to_string()
+                },
+                // Write back through cell
+                I::StoreCellValue {
+                    cell_ptr_instrs: vec![I::LoadLocal {
+                        name: "__cell_xs".to_string()
+                    }],
+                    value_instrs: vec![I::LoadLocal {
+                        name: "__lset_xs_u0".to_string()
+                    }],
+                },
+                // Unit
+                I::I64Const(encode_unit()),
             ]
         );
     }
