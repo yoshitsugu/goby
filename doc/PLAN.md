@@ -835,3 +835,85 @@ These items are intentionally kept as short placeholders until they become activ
   - <https://arxiv.org/abs/2106.00160>
 - WasmFX: Typed Continuations and Stack Switching for WebAssembly (Hillerstrom et al., ICFP 2024): practical path for direct-style effect handlers on Wasm backends.
   - <https://arxiv.org/abs/2403.01036>
+
+## 7. Stdlib Normalization Plan
+
+### Background
+
+`SPECIALLY_LOWERED_STDLIB_NAMES` in `crates/goby-wasm/src/gen_lower/mod.rs` currently
+excludes `each`, `map`, `graphemes`, `split` from the generic DeclCall lowering path.
+The intent is to route them through dedicated `lower_comp_inner` branches.
+
+The problem: a developer reading only `stdlib/goby/list.gb` or `stdlib/goby/string.gb`
+cannot tell that adding a new function there may silently fall through to a non-functional
+path unless the name is also registered in Rust. This creates a hidden contract that is
+easy to violate.
+
+### Goal
+
+Make the stdlib/backend contract explicit and uniform:
+- Functions that require host intrinsics (implemented in Rust, not expressible in goby)
+  are marked visibly in the stdlib `.gb` file with a comment convention.
+- Functions that are pure goby (recursion, pattern-match, etc.) are lowered as ordinary
+  DeclCall aux-decls with no Rust special-casing.
+
+### Analysis of each special-cased name
+
+| Name | Why special-cased | Can be removed? |
+|---|---|---|
+| `each` | Lowered to `ListEach`/`ListEachEffect` Wasm instructions | Yes — stdlib .gb recursion works via DeclCall |
+| `map` | Lowered to `ListMap` Wasm instruction | Yes — stdlib .gb recursion works via DeclCall |
+| `graphemes` | `StringGraphemesList` host intrinsic (Unicode EGC splitting is in Rust) | No — intrinsic required |
+| `split` (empty sep) | Redirected to `StringGraphemesList` | No — depends on `graphemes` intrinsic |
+
+Note: `each` and `map` were special-cased for the `ListEachEffect` Print-fusion
+optimization (direct fd_write without call_indirect). That optimization is not
+correctness-critical; the generic path produces correct output.
+
+### Steps
+
+#### Step 1: Remove `each` and `map` from `SPECIALLY_LOWERED_STDLIB_NAMES`
+
+- Remove `"each"` and `"map"` from the constant.
+- Remove the `GlobalRef { module="list", name="each" }` and `GlobalRef { module="list", name="map" }`
+  special branches in `lower_comp_inner` (lower.rs lines ~314–351).
+- Remove the corresponding `Var` branches (lower.rs lines ~403–442).
+- Remove `WasmBackendInstr::ListEach`, `ListEachEffect`, `ListMap` variants and all
+  emit/support code that references them.
+- Update comments in mod.rs and the constant itself.
+- Done when: existing tests pass, and the examples below produce correct output:
+  - `cat sample | goby run examples/list_case.gb`
+  - A new test using `each`/`map` with a lambda callback.
+
+#### Step 2: Add intrinsic marker comments to stdlib
+
+Add a standard comment above intrinsic-backed functions in `stdlib/goby/string.gb`
+(and any future stdlib files) to make the contract visible:
+
+```goby
+# INTRINSIC: implemented in the host runtime (Rust). Not lowerable as pure goby.
+graphemes : String -> List String
+graphemes s = ...  # body is never executed; host replaces this call
+```
+
+The exact syntax of the marker is TBD; the key requirement is that it is visible
+in the `.gb` source without reading Rust code.
+
+#### Step 3: Update `SPECIALLY_LOWERED_STDLIB_NAMES` to only contain intrinsics
+
+After Step 1, the constant should only list names that genuinely require host
+dispatch (`graphemes`, `split`). Rename or document it to reflect its true meaning:
+
+```rust
+/// Stdlib names backed by host intrinsics. These must NOT be routed through
+/// the generic DeclCall path because their .gb bodies are placeholders only.
+const INTRINSIC_STDLIB_NAMES: &[&str] = &["graphemes", "split"];
+```
+
+### Risks
+
+- `ListEachEffect` removal drops a print-fusion optimization. Impact is performance
+  only, not correctness. Accept for now; can be re-added as a backend optimization
+  later if profiling shows it matters.
+- Recursive stdlib `each`/`map` may be slower for large lists (stack depth vs. loop).
+  Accept for MVP; tail-call or iterative lowering is a later optimization track.
