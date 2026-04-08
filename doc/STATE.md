@@ -6,16 +6,36 @@ Last updated: 2026-04-08
 
 Next track: **Track RR** (`PLAN.md §4.8c`) - runtime resource failure diagnostics and resilience.
 
+Locked ideal goal for RR:
+
+- make "write the obvious recursive/list-building program first" a rational
+  default for Goby users;
+- push resilience into shared lowering/runtime boundaries instead of accumulating
+  source-shape-specific exceptions;
+- keep the remaining limits explicit, attributable, and honestly diagnosed.
+
+RR execution reminder:
+
+- at the start of each RR implementation step, review the locked ideal goal
+  above and reject any step that cannot be justified as progress toward that
+  shared design.
+
 Immediate next steps:
 
-- **RR-2**: improve recursion resilience without asking users to rewrite natural
-  recursive code first.
-  - start by identifying tail-recursive shapes that can be lowered to loops or
-    otherwise made less stack-hungry in the general-lowered Wasm path.
-- **RR-3**: improve list-spread resilience for recursive list builders such as
-  `[x, ..rest]`.
-  - investigate ownership in lowering/runtime first, so the fix target stays in
-    Goby rather than in user programs.
+- **RR-2**: decompose the current "solve2-style" failure into representative
+  owned buckets before attempting another runtime/lowering fix.
+  - preserve separate repros for:
+    - self tail recursion,
+    - non-tail recursive scanning,
+    - recursive list spread / concat growth,
+    - callback-assisted recursion (`fold` in the hot path).
+- **RR-3**: target recursion resilience only at the boundary that RR-2 shows is
+  actually dominant.
+  - current evidence says self tail recursion alone is not enough; the hotter
+    path is `fold -> should_prune_cell/check_around_rolls ->
+    collect_prune_positions/count_valid_roll`.
+- **RR-4**: improve list-spread resilience for recursive list builders such as
+  `[x, ..rest]` after ownership is clearer.
 - keep RR-1 diagnostics best-effort and explicit about uncertainty
   (`likely stack pressure`, `memory exhaustion`, `unknown runtime trap`) as
   later resilience work lands.
@@ -82,11 +102,10 @@ Immediate next steps:
 
 ## Open Questions
 
-- For RR-2, what is the smallest honest lowering/runtime boundary that can reduce
-  stack pressure for non-tail recursive scans without destabilizing existing call
-  semantics?
-- For RR-3, is the first real win in list representation, list-spread lowering,
-  or memory-limit tuning after ownership is clearer?
+- For RR-3, what is the smallest honest boundary that can reduce stack pressure
+  for non-tail recursive scans without destabilizing existing call semantics?
+- For RR-4, is the first real win in list representation, list-spread lowering,
+  concat runtime behavior, or memory-limit tuning after ownership is clearer?
 
 ## Key Entry Points
 

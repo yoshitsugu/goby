@@ -741,6 +741,42 @@ Motivation:
 - before Goby can avoid these failures entirely, it must at least tell the user
   what kind of resource limit they hit.
 
+Ideal end-state for Track RR:
+
+- straightforward Goby code should usually run because the runtime/lowering
+  stack is resilient enough, not because users were taught a growing list of
+  "safe" rewrites.
+- runtime resource behavior should be owned by shared compiler/runtime
+  boundaries, not by source-program-specific exceptions.
+- diagnostics should expose the remaining limits honestly:
+  - classify what Goby knows,
+  - say "likely" when Goby is inferring,
+  - keep engine detail available as secondary evidence,
+  - make it obvious which Goby functions dominated the failure.
+- recursion support should converge on principled lowering/runtime rules:
+  - tail-recursive shapes should naturally run in constant stack where Goby can
+    model that honestly,
+  - non-tail recursive scans should either be supported by a shared execution
+    strategy or fail with a diagnosis that clearly says why they remain costly.
+- list construction should converge on a representation/lowering strategy where
+  intuitive persistent-style code such as `[x, ..rest]` is not pathologically
+  punished by default for moderate workloads.
+- limit tuning should be the final polish layer, not the primary design answer.
+
+Stated differently: the ideal RR outcome is a Goby runtime where "write the
+obvious recursive/list-building program first" is a rational default, and where
+the remaining failures are principled, attributable, and rare rather than
+mysterious or fixture-dependent.
+
+Execution rule for RR work:
+
+- before starting each RR implementation slice, explicitly review the ideal
+  end-state above and ask:
+  - does this step move a shared boundary toward that end-state,
+  - or is it merely a local workaround for one failing program?
+- if a proposed step cannot be explained as movement toward the ideal shared
+  design, narrow it, redesign it, or reject it before coding.
+
 Current confirmed bug shape:
 
 - a runtime-`Read` / `GeneralLowered` program that recursively builds a list via
@@ -822,20 +858,72 @@ Milestones:
      unknown traps, and now emits Wasm function names for Goby-generated
      functions so backtraces identify frames such as `goby!check` or
      `goby!update_rolls`.
-3. **RR-2: recursion resilience**
-   - improve runtime/lowering behavior for recursion depth.
-   - start with tail-recursive lowering opportunities before attempting broader
-     general-call changes.
-4. **RR-3: list-spread resilience**
-   - improve runtime/lowering behavior for list-spread
-   memory growth.
-   - focus on eliminating avoidable O(n^2)-style intermediate allocation patterns
+3. **RR-2: representative failure decomposition**
+   - before more optimizer/runtime work, separate the currently conflated failure
+     shapes into owned buckets with preserved repros and tests.
+   - at minimum, keep distinct representative programs for:
+     - self tail recursion,
+     - non-tail recursive grid/list scans,
+     - recursive list spread / concat growth,
+     - mixed callback recursion (for example `fold` inside the scan).
+   - use the new named Wasm frames to record which functions actually dominate
+     each failure path.
+   - success criterion for RR-2 is not "fix the bug", but "know which ownership
+     boundary each remaining failure belongs to".
+   - RR-2 output must explicitly name the intended implementation boundary for
+     each bucket, for example:
+     - IR/lowering owns it,
+     - backend IR / Wasm emission owns it,
+     - runtime data representation owns it,
+     - resource-limit tuning is explicitly *not* the first fix.
+   - avoid ending RR-2 with only observational notes; the deliverable must be a
+     constrained implementation choice with rejected boundaries recorded.
+4. **RR-3: recursion resilience at the right boundary**
+   - improve runtime/lowering behavior for recursion depth, but only after RR-2
+     confirms which recursion class is worth targeting first.
+   - current evidence says self tail recursion alone is not the dominant issue
+     for the `solve2.gb` / iterative-grid class; the hotter path is non-tail
+     recursive scanning (`collect_prune_positions` / `count_valid_roll`) plus
+     callback recursion in `fold`.
+   - therefore the first RR-3 candidates should be:
+     - a narrow, explicitly modeled lowering for iterative grid/list scans, or
+     - another shared boundary that reduces stack growth for non-tail recursive
+       scans without changing unrelated call semantics.
+   - "iterative grid/list scans" here must be treated as a placeholder symptom,
+     not as a source-level special case. Any implementation must be justified as
+     a shared rule over a recognizable recursion/control-flow shape, not as a
+     symbol-specific or fixture-specific optimization for names such as
+     `collect_prune_positions` or `count_valid_roll`.
+   - treat "generic self-tail-call lowering" as a useful subproblem, but not as
+     the default next slice unless a representative RR-2 repro shows it carries
+     a real user-facing win by itself.
+   - design guardrails for RR-3:
+     - do not add source-symbol special cases,
+     - do not key behavior on one AoC fixture's AST spelling,
+     - do not accept a local lowering hack unless its applicability can be
+       described as a reusable rule over backend-IR or control-flow structure.
+5. **RR-4: list-spread resilience**
+   - improve runtime/lowering behavior for recursive list-spread memory growth.
+   - current evidence says contiguous list allocation plus `ListConcat` copying
+     still creates avoidable O(n^2)-style growth for shapes like `[x, ..rest]`.
+   - focus first on clarifying the real ownership boundary:
+     - list representation,
+     - spread lowering shape,
+     - concat runtime implementation,
      before simply raising limits.
-5. **RR-4: limit tuning and follow-through**
-   - revisit stack/memory defaults only after RR-1 through RR-3 give clearer
+   - selection criteria for the first RR-4 implementation:
+     - prefer the boundary that improves the pathological shape without baking in
+       a one-off special case for `[x, ..rest]` alone,
+     - prefer changes that remain compatible with a future better `List`
+       representation instead of hard-coding today's contiguous-copy behavior as
+       permanent language semantics,
+     - treat pure limit tuning as a fallback after structural options are
+       rejected, not as the default fix.
+6. **RR-5: limit tuning and follow-through**
+   - revisit stack/memory defaults only after RR-2 through RR-4 give clearer
      ownership and failure modes.
    - only after that, revisit whether docs/examples should recommend more efficient
-   user-code patterns for extreme workloads.
+     user-code patterns for extreme workloads.
 
 Acceptance criteria:
 
