@@ -26,11 +26,10 @@
 //!
 //! # Host bump allocator
 //!
-//! `grapheme_state_host_inner` uses an upward bump allocator that starts in the
-//! host-reserved region of the initial Wasm memory and grows linear memory when
-//! host-backed string/list writes exceed the current capacity. The bump pointer
-//! is shared across host intrinsic calls within one `_start` execution via
-//! `Arc<AtomicU32>`.
+//! Host-backed string/list writes use an upward bump allocator in the
+//! host-reserved region near the top of linear memory. When that arena needs to
+//! grow, the shared top-down Wasm heap cursor is moved upward by the same page
+//! delta so the two allocators remain disjoint.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -47,7 +46,8 @@ use crate::gen_lower::value::{
 use crate::grapheme_semantics::collect_extended_grapheme_spans;
 use crate::host_runtime::HostIntrinsicImport;
 use crate::layout::{
-    GLOBAL_RUNTIME_ERROR_OFFSET, RUNTIME_ERROR_MEMORY_EXHAUSTION, RUNTIME_ERROR_NONE,
+    GLOBAL_HEAP_CURSOR_OFFSET, GLOBAL_RUNTIME_ERROR_OFFSET, RUNTIME_ERROR_MEMORY_EXHAUSTION,
+    RUNTIME_ERROR_NONE,
 };
 use crate::memory_config::{DEFAULT_WASM_MEMORY_CONFIG, WASM_PAGE_BYTES};
 use crate::runtime_env::split_input_lines;
@@ -97,9 +97,6 @@ fn run_wasm_bytes_with_stdin_and_config(
 
     // Register grapheme host intrinsics on the `goby:runtime/track-e` module.
     let module_name = HostIntrinsicImport::MODULE;
-
-    // Upward bump allocator for host-backed string/list writes. It starts in the
-    // host-reserved region of the initial memory image and may trigger memory growth.
     let bump = Arc::new(AtomicU32::new(memory_config.host_bump_start()));
 
     let bump_for_value_to_string = Arc::clone(&bump);
@@ -283,7 +280,7 @@ fn grapheme_state_host_inner(
     let header_ptr = match span.start {
         0 => str_ptr,
         1..=3 => {
-            // No safe 4-byte in-place slot. Allocate from the host bump region.
+            // No safe 4-byte in-place slot. Allocate a fresh string in the host arena.
             let needed = 4u32 + grapheme_len;
             let Some(new_ptr) = alloc_from_host_bump(&mut caller, bump, needed, memory_config)
             else {
@@ -324,7 +321,7 @@ fn grapheme_state_host_inner(
 /// Host implementation: concatenate two tagged strings.
 ///
 /// Reads both strings from Wasm linear memory, concatenates them, writes the
-/// result into the host bump allocator region, and returns a tagged `String`.
+/// result into the host arena, and returns a tagged `String`.
 /// Falls back to `tagged_a` on any allocation or decode failure.
 fn string_concat_host(
     mut caller: Caller<'_, WasiP1Ctx>,
@@ -529,6 +526,26 @@ fn encode_string_in_host_bump(
     Some(encode_string_ptr(alloc_ptr))
 }
 
+fn read_global_heap_cursor(caller: &mut Caller<'_, WasiP1Ctx>) -> Result<u32, ()> {
+    let memory = host_memory(caller)?;
+    let mut bytes = [0u8; 4];
+    memory
+        .read(&mut *caller, GLOBAL_HEAP_CURSOR_OFFSET as usize, &mut bytes)
+        .map_err(|_| ())?;
+    Ok(u32::from_le_bytes(bytes))
+}
+
+fn write_global_heap_cursor(caller: &mut Caller<'_, WasiP1Ctx>, cursor: u32) -> Result<(), ()> {
+    let memory = host_memory(caller)?;
+    memory
+        .write(
+            &mut *caller,
+            GLOBAL_HEAP_CURSOR_OFFSET as usize,
+            &cursor.to_le_bytes(),
+        )
+        .map_err(|_| ())
+}
+
 fn alloc_from_host_bump(
     caller: &mut Caller<'_, WasiP1Ctx>,
     bump: &AtomicU32,
@@ -538,7 +555,17 @@ fn alloc_from_host_bump(
     let mut cur = bump.load(Ordering::Relaxed);
     loop {
         let next = cur.checked_add(bytes)?;
-        if ensure_linear_memory_capacity(caller, next, memory_config).is_err() {
+        let heap_cursor = read_global_heap_cursor(caller).ok()?;
+        if next > heap_cursor {
+            let missing = next - heap_cursor;
+            let delta_pages = missing.div_ceil(WASM_PAGE_BYTES);
+            let growth_bytes = delta_pages.checked_mul(WASM_PAGE_BYTES)?;
+            let new_heap_cursor = heap_cursor.checked_add(growth_bytes)?;
+            if ensure_linear_memory_capacity(caller, new_heap_cursor, memory_config).is_err() {
+                return None;
+            }
+            write_global_heap_cursor(caller, new_heap_cursor).ok()?;
+        } else if ensure_linear_memory_capacity(caller, next, memory_config).is_err() {
             return None;
         }
         match bump.compare_exchange_weak(cur, next, Ordering::Relaxed, Ordering::Relaxed) {
@@ -601,8 +628,8 @@ fn alloc_list_string_host(
 
 /// Host implementation: collect all grapheme clusters from a tagged string into a tagged list.
 ///
-/// Allocates `(count: i32, elem[0]: i64, ..., elem[N-1]: i64)` in the host bump region.
-/// Each element is a tagged `String` pointing into fresh bump memory `(len: i32, bytes...)`.
+/// Allocates `(count: i32, elem[0]: i64, ..., elem[N-1]: i64)` in the host arena.
+/// Each element is a tagged `String` pointing into fresh host-allocated memory `(len: i32, bytes...)`.
 /// Returns the tagged `List String`, or a tagged empty list on any failure.
 fn graphemes_list_host(
     mut caller: Caller<'_, WasiP1Ctx>,
@@ -724,27 +751,28 @@ mod tests {
     fn build_string_concat_growth_wasm(
         memory_config: crate::memory_config::WasmMemoryConfig,
     ) -> Vec<u8> {
-        let a_bytes = vec![b'a'; 80 * 1024];
-        let b_bytes = vec![b'b'; 80 * 1024];
+        let a_bytes = vec![b'a'; 40 * 1024];
+        let b_bytes = vec![b'b'; 40 * 1024];
         let a_blob = encode_wasm_string_blob(&a_bytes);
         let b_blob = encode_wasm_string_blob(&b_bytes);
 
-        let a_ptr = 32u32;
-        let b_ptr = a_ptr + a_blob.len() as u32;
-        let iovec_ptr = b_ptr + b_blob.len() as u32;
+        let iovec_ptr = 32u32;
         let nwritten_ptr = iovec_ptr + 8;
+        let a_ptr = 64u32;
+        let b_ptr = a_ptr + a_blob.len() as u32;
 
         assert!(
-            nwritten_ptr < memory_config.initial_linear_memory_bytes(),
+            b_ptr + b_blob.len() as u32 <= memory_config.initial_linear_memory_bytes(),
             "test inputs must fit within the initial memory image"
         );
+        let initial_cursor = (memory_config.host_bump_start() / 8) * 8;
         assert!(
-            (a_bytes.len() + b_bytes.len() + 4) as u32 > memory_config.host_bump_reserved_bytes,
-            "concatenated output must exceed the host-reserved slice to force growth"
+            (a_bytes.len() + b_bytes.len()) as u32 * 4 + 4 > initial_cursor - 32,
+            "concatenated output must exceed initial shared-heap capacity to force growth"
         );
         assert!(
-            nwritten_ptr < memory_config.host_bump_start(),
-            "test metadata must stay below the host bump start"
+            nwritten_ptr < initial_cursor,
+            "test metadata must stay below the initial shared heap cursor"
         );
 
         let mut module = Module::new();
@@ -790,15 +818,25 @@ mod tests {
         module.section(&exports);
 
         let mut code = CodeSection::new();
-        let mut function = Function::new([(1, ValType::I32)]);
+        let mut function = Function::new([(1, ValType::I64), (1, ValType::I32)]);
         function.instruction(&Instruction::I64Const(encode_string_ptr(a_ptr)));
         function.instruction(&Instruction::I64Const(encode_string_ptr(b_ptr)));
         function.instruction(&Instruction::Call(1));
-        function.instruction(&Instruction::I32WrapI64);
         function.instruction(&Instruction::LocalSet(0));
 
-        function.instruction(&Instruction::I32Const(iovec_ptr as i32));
         function.instruction(&Instruction::LocalGet(0));
+        function.instruction(&Instruction::LocalGet(0));
+        function.instruction(&Instruction::Call(1));
+        function.instruction(&Instruction::LocalSet(0));
+
+        function.instruction(&Instruction::LocalGet(0));
+        function.instruction(&Instruction::LocalGet(0));
+        function.instruction(&Instruction::Call(1));
+        function.instruction(&Instruction::I32WrapI64);
+        function.instruction(&Instruction::LocalSet(1));
+
+        function.instruction(&Instruction::I32Const(iovec_ptr as i32));
+        function.instruction(&Instruction::LocalGet(1));
         function.instruction(&Instruction::I32Const(4));
         function.instruction(&Instruction::I32Add);
         function.instruction(&Instruction::I32Store(MemArg {
@@ -808,7 +846,7 @@ mod tests {
         }));
 
         function.instruction(&Instruction::I32Const((iovec_ptr + 4) as i32));
-        function.instruction(&Instruction::LocalGet(0));
+        function.instruction(&Instruction::LocalGet(1));
         function.instruction(&Instruction::I32Load(MemArg {
             offset: 0,
             align: 2,
@@ -831,6 +869,16 @@ mod tests {
         module.section(&code);
 
         let mut data = DataSection::new();
+        data.active(
+            0,
+            &ConstExpr::i32_const(GLOBAL_HEAP_CURSOR_OFFSET as i32),
+            initial_cursor.to_le_bytes().to_vec(),
+        );
+        data.active(
+            0,
+            &ConstExpr::i32_const(GLOBAL_RUNTIME_ERROR_OFFSET as i32),
+            0u32.to_le_bytes().to_vec(),
+        );
         data.active(0, &ConstExpr::i32_const(a_ptr as i32), a_blob);
         data.active(0, &ConstExpr::i32_const(b_ptr as i32), b_blob);
         module.section(&data);
@@ -839,14 +887,14 @@ mod tests {
     }
 
     #[test]
-    fn grapheme_state_bump_allocator_produces_correct_result_for_ascii_then_emoji() {
+    fn grapheme_state_shared_allocator_produces_correct_result_for_ascii_then_emoji() {
         // "a👨‍👩‍👧‍👦b": grapheme clusters are ["a", "👨‍👩‍👧‍👦", "b"].
         // When the Wasm intrinsic is called with idx=1, span.start == 1 (one ASCII byte).
-        // This falls into the 1..=3 branch and must use the bump allocator.
+        // This falls into the 1..=3 branch and must allocate a fresh string.
         //
         // We compile a GeneralLowered program that uses the count intrinsic only
         // (simpler than state), then verify the wasm_exec path works end-to-end.
-        // The state intrinsic (bump path) is indirectly validated by the existing
+        // The state intrinsic allocation path is indirectly validated by the existing
         // InterpreterBridge test execute_runtime_module_with_stdin_owns_interpreter_bridge_branch
         // which correctly returns index 1 — confirming the interpreter-side grapheme logic.
         //
@@ -874,7 +922,7 @@ main =
             Ok(w) => w,
             Err(_) => {
                 // If this shape doesn't compile (e.g. effect form unsupported),
-                // skip rather than fail — the bump allocator is tested by
+                // skip rather than fail — the fresh-allocation path is tested by
                 // the execute_runtime_module_with_stdin_owns_interpreter_bridge_branch
                 // integration test at the interpreter level.
                 return;
@@ -928,7 +976,7 @@ main =
         let output = run_wasm_bytes_with_stdin(&wasm, None)
             .expect("host-backed concat should grow memory and execute successfully");
 
-        assert_eq!(output.len(), 160 * 1024);
+        assert_eq!(output.len(), 320 * 1024);
         assert!(output.starts_with(&"a".repeat(32)));
         assert!(output.ends_with(&"b".repeat(32)));
     }

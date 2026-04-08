@@ -431,6 +431,12 @@ fn needs_helper_state(instrs: &[WasmBackendInstr]) -> bool {
                 | WasmBackendInstr::AllocMutableCell { .. }
                 | WasmBackendInstr::Intrinsic {
                     intrinsic: BackendIntrinsic::StringSplit
+                        | BackendIntrinsic::ValueToString
+                        | BackendIntrinsic::StringEachGraphemeCount
+                        | BackendIntrinsic::StringEachGraphemeState
+                        | BackendIntrinsic::StringConcat
+                        | BackendIntrinsic::StringGraphemesList
+                        | BackendIntrinsic::StringSplitLines
                         | BackendIntrinsic::ListPushString
                         | BackendIntrinsic::ListSet
                         | BackendIntrinsic::ListConcat
@@ -2007,7 +2013,14 @@ fn emit_helper_call(
                         "gen_lower/emit: missing host import index for '{host_import:?}'"
                     ),
                 })? as u32;
+            if let Some(hs) = heap_state {
+                emit_sync_cursor_to_global(function, hs.alloc_cursor_local);
+            }
             function.instruction(&Instruction::Call(HOST_IMPORT_BASE_IDX + host_offset));
+            if let Some(hs) = heap_state {
+                emit_return_if_runtime_error(function, hs);
+                emit_sync_cursor_from_global(function, hs.alloc_cursor_local);
+            }
             Ok(())
         }
         BackendIntrinsic::ListPushString => emit_list_push_string_helper(
