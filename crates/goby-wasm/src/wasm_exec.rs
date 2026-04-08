@@ -51,8 +51,9 @@ use crate::layout::{
 use crate::memory_config::{DEFAULT_WASM_MEMORY_CONFIG, WASM_PAGE_BYTES};
 use crate::runtime_env::split_input_lines;
 
-const ERR_MEMORY_EXHAUSTION: &str =
-    "memory exhausted [E-MEMORY-EXHAUSTION]: allocation exceeded the configured Wasm memory limit";
+const ERR_MEMORY_EXHAUSTION: &str = "memory exhausted [E-MEMORY-EXHAUSTION]: allocation exceeded the configured Wasm memory limit; consider reducing recursive list-spread construction or other large intermediate allocations";
+const ERR_LIKELY_STACK_PRESSURE: &str = "likely stack pressure [E-STACK-PRESSURE]: WebAssembly execution likely hit a stack limit; consider rewriting deep recursion in a tail-recursive or iterative style";
+const ERR_UNKNOWN_RUNTIME_TRAP: &str = "unknown runtime trap [E-RUNTIME-TRAP]: WebAssembly execution trapped before Goby could classify the cause; this can happen with deep recursion or another runtime resource limit, so consider a tail-recursive or iterative rewrite if applicable";
 
 /// Execute Wasm bytes produced by `compile_module` with optional stdin input.
 ///
@@ -192,10 +193,7 @@ fn run_wasm_bytes_with_stdin_and_config(
             if let Some(runtime_err) = take_runtime_error(&mut store, &instance) {
                 return Err(format!("runtime error: {runtime_err}"));
             }
-            if is_memory_exhaustion_trap(&e) {
-                return Err(format!("runtime error: {ERR_MEMORY_EXHAUSTION}"));
-            }
-            return Err(format!("execution: {e}"));
+            return Err(classify_execution_error(&e));
         }
     }
 
@@ -432,6 +430,17 @@ fn runtime_error_message(code: u32) -> Option<&'static str> {
     }
 }
 
+fn classify_execution_error(error: &wasmtime::Error) -> String {
+    if is_memory_exhaustion_trap(error) {
+        return format!("runtime error: {ERR_MEMORY_EXHAUSTION}");
+    }
+    if is_likely_stack_pressure_trap(error) {
+        return format!("runtime error: {ERR_LIKELY_STACK_PRESSURE}");
+    }
+    let detail = summarize_trap_detail(error);
+    format!("runtime error: {ERR_UNKNOWN_RUNTIME_TRAP} (details: {detail})")
+}
+
 fn is_memory_exhaustion_trap(error: &wasmtime::Error) -> bool {
     let mut current: Option<&(dyn std::error::Error + 'static)> = Some(error.root_cause());
     while let Some(err) = current {
@@ -442,6 +451,32 @@ fn is_memory_exhaustion_trap(error: &wasmtime::Error) -> bool {
         current = err.source();
     }
     false
+}
+
+fn is_likely_stack_pressure_trap(error: &wasmtime::Error) -> bool {
+    let mut current: Option<&(dyn std::error::Error + 'static)> = Some(error.root_cause());
+    while let Some(err) = current {
+        let text = err.to_string().to_ascii_lowercase();
+        if text.contains("stack overflow")
+            || text.contains("call stack exhausted")
+            || text.contains("stack exhausted")
+            || text.contains("call stack limit")
+        {
+            return true;
+        }
+        current = err.source();
+    }
+    false
+}
+
+fn summarize_trap_detail(error: &wasmtime::Error) -> String {
+    let text = error.to_string().replace('\n', " ");
+    let compact = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if compact.is_empty() {
+        "no engine detail available".to_string()
+    } else {
+        compact
+    }
 }
 
 fn take_runtime_error(
@@ -968,5 +1003,63 @@ main =
         let err = run_wasm_bytes_with_stdin_and_config(&wasm, None, low_max)
             .expect_err("bounded host growth should surface a runtime error");
         assert_eq!(err, format!("runtime error: {ERR_MEMORY_EXHAUSTION}"));
+    }
+
+    #[test]
+    fn classify_execution_error_reports_likely_stack_pressure_when_engine_mentions_stack() {
+        let err = wasmtime::Error::msg("wasm trap: call stack exhausted");
+        assert_eq!(
+            classify_execution_error(&err),
+            format!("runtime error: {ERR_LIKELY_STACK_PRESSURE}")
+        );
+    }
+
+    #[test]
+    fn run_wasm_bytes_with_stdin_reports_unknown_runtime_trap_with_detail() {
+        let mut module = Module::new();
+
+        let mut types = TypeSection::new();
+        let start_type = types.len();
+        types.ty().function([], []);
+        module.section(&types);
+
+        let mut functions = FunctionSection::new();
+        functions.function(start_type);
+        module.section(&functions);
+
+        let mut memories = MemorySection::new();
+        memories.memory(DEFAULT_WASM_MEMORY_CONFIG.memory_type());
+        module.section(&memories);
+
+        let mut exports = ExportSection::new();
+        exports.export("memory", ExportKind::Memory, 0);
+        exports.export("_start", ExportKind::Func, 0);
+        module.section(&exports);
+
+        let mut code = CodeSection::new();
+        let mut function = Function::new([]);
+        function.instruction(&Instruction::Unreachable);
+        function.instruction(&Instruction::End);
+        code.function(&function);
+        module.section(&code);
+
+        let mut data = DataSection::new();
+        data.active(
+            0,
+            &ConstExpr::i32_const(GLOBAL_RUNTIME_ERROR_OFFSET as i32),
+            0u32.to_le_bytes().to_vec(),
+        );
+        module.section(&data);
+
+        let err = run_wasm_bytes_with_stdin(&module.finish(), None)
+            .expect_err("unreachable start should surface a classified runtime trap");
+        assert!(
+            err.contains(ERR_UNKNOWN_RUNTIME_TRAP),
+            "expected unknown runtime trap classification, got: {err}"
+        );
+        assert!(
+            err.contains("error while executing at wasm backtrace"),
+            "expected raw engine detail to be retained as secondary detail, got: {err}"
+        );
     }
 }

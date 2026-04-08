@@ -433,7 +433,7 @@ fn collect_all_instrs(instrs: &[WasmBackendInstr]) -> Vec<&WasmBackendInstr> {
 }
 
 /// Returns true when `instrs` require heap-cursor state.
-fn needs_helper_state(instrs: &[WasmBackendInstr]) -> bool {
+pub(crate) fn needs_helper_state(instrs: &[WasmBackendInstr]) -> bool {
     use crate::gen_lower::backend_ir::BackendCasePattern;
     collect_all_instrs(instrs).iter().any(|i| {
         matches!(
@@ -2221,29 +2221,26 @@ fn emit_function_body(
 
 /// Emit a direct Wasm `call`.
 ///
-/// Functions that return Wasm-owned heap data must synchronize the caller's local
-/// allocation cursor with the callee, otherwise the caller may overwrite the
-/// returned value. Scalar / host-backed returns keep their callee-local heap
-/// temporaries frame-local and do not reload the caller cursor.
+/// Direct calls always flush the caller's local allocation cursor first so any
+/// caller-owned heap values that remain live across the call are visible to the
+/// callee. Heap-returning callees additionally refresh the caller cursor from
+/// the shared global slot after the call so later allocations do not overwrite
+/// the returned value.
 fn emit_heap_aware_direct_call(
     function: &mut Function,
     func_idx: u32,
     helper_state: Option<&HeapEmitState>,
     returns_wasm_heap: bool,
 ) {
-    if returns_wasm_heap {
-        if let Some(hs) = helper_state {
-            emit_sync_cursor_to_global(function, hs.alloc_cursor_local);
-        }
+    if let Some(hs) = helper_state {
+        emit_sync_cursor_to_global(function, hs.alloc_cursor_local);
     }
     function.instruction(&Instruction::Call(func_idx));
     if let Some(hs) = helper_state {
         emit_return_if_runtime_error(function, hs);
     }
-    if returns_wasm_heap {
-        if let Some(hs) = helper_state {
-            emit_sync_cursor_from_global(function, hs.alloc_cursor_local);
-        }
+    if returns_wasm_heap && let Some(hs) = helper_state {
+        emit_sync_cursor_from_global(function, hs.alloc_cursor_local);
     }
 }
 
@@ -5306,7 +5303,7 @@ mod tests {
             .expect_err("heap growth beyond the configured maximum should fail");
         assert_eq!(
             err,
-            "runtime error: memory exhausted [E-MEMORY-EXHAUSTION]: allocation exceeded the configured Wasm memory limit"
+            "runtime error: memory exhausted [E-MEMORY-EXHAUSTION]: allocation exceeded the configured Wasm memory limit; consider reducing recursive list-spread construction or other large intermediate allocations"
         );
     }
 

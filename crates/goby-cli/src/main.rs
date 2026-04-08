@@ -257,7 +257,7 @@ fn run_command(module: &goby_core::Module, file: &str) -> Result<(), CliError> {
             None
         };
         match goby_wasm::execute_runtime_module_with_stdin(module, stdin_text)
-            .map_err(|err| CliError::Runtime(format!("runtime error: {}", err.message)))?
+            .map_err(|err| CliError::Runtime(format_runtime_error_message(&err.message)))?
         {
             Some(output) => {
                 print_parse_summary(module.declarations.len(), file);
@@ -292,6 +292,14 @@ fn run_command(module: &goby_core::Module, file: &str) -> Result<(), CliError> {
         }
     }
     Ok(())
+}
+
+fn format_runtime_error_message(message: &str) -> String {
+    if message.starts_with("runtime error: ") {
+        message.to_string()
+    } else {
+        format!("runtime error: {message}")
+    }
 }
 
 fn run_lint_command(module: &goby_core::Module, file: &str, source: &str) -> Result<(), CliError> {
@@ -526,6 +534,18 @@ mod tests {
         let span = Span::new(1, 1, 1, 1);
         let snippet = render_snippet(source, &span);
         assert_eq!(snippet, "1 | foo = bar\n  | ^");
+    }
+
+    #[test]
+    fn format_runtime_error_message_avoids_double_prefix() {
+        assert_eq!(
+            format_runtime_error_message("runtime error: memory exhausted"),
+            "runtime error: memory exhausted"
+        );
+        assert_eq!(
+            format_runtime_error_message("general lowering unsupported"),
+            "runtime error: general lowering unsupported"
+        );
     }
 
     #[test]

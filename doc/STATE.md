@@ -8,14 +8,33 @@ Next track: **Track RR** (`PLAN.md §4.8c`) - runtime resource failure diagnosti
 
 Immediate next steps:
 
-- **RR-0**: convert the new `doc/BUGS.md` recursive list-spread reproduction into a regression test.
-- **RR-1**: improve `goby-cli` / `goby-wasm` runtime error reporting so resource-related failures
-  surface as a user-facing explanation instead of a raw Wasm backtrace.
-- keep the first message layer best-effort and explicit about uncertainty
-  (`likely stack pressure`, `memory exhaustion`, `unknown runtime trap`).
+- **RR-2**: improve recursion resilience without asking users to rewrite natural
+  recursive code first.
+  - start by identifying tail-recursive shapes that can be lowered to loops or
+    otherwise made less stack-hungry in the general-lowered Wasm path.
+- **RR-3**: improve list-spread resilience for recursive list builders such as
+  `[x, ..rest]`.
+  - investigate ownership in lowering/runtime first, so the fix target stays in
+    Goby rather than in user programs.
+- keep RR-1 diagnostics best-effort and explicit about uncertainty
+  (`likely stack pressure`, `memory exhaustion`, `unknown runtime trap`) as
+  later resilience work lands.
 
 ## Recently Completed
 
+- **Track RR, RR-0 / RR-1** (complete, 2026-04-08).
+  - added a CLI regression for the minimal recursive list-spread memory bug.
+  - classified runtime traps in `goby-wasm` with user-facing English messages
+    and normalized CLI rendering.
+  - fixed direct-call heap-cursor synchronization so:
+    - caller-owned live heap values are flushed before every direct call,
+    - heap-returning callees still refresh the caller cursor after the call.
+  - verified this against:
+    - the new recursive list-spread regression,
+    - `cc4_mutable_write_capture_via_each_executes_correctly`,
+    - `iterative_grid_pruning_after_render_executes_without_heap_cursor_corruption`,
+    - `cargo clippy -- -D warnings`,
+    - `cargo test --workspace`.
 - **Track RR planning** (recorded, 2026-04-08). Added `PLAN.md §4.8c` to prioritize
   user-facing diagnostics first, then recursion/list-spread/runtime-limit resilience work.
 - **Bug capture** (recorded, 2026-04-08). Added a minimal non-AoC reproduction to `doc/BUGS.md`
@@ -46,10 +65,10 @@ Immediate next steps:
 
 ## Open Questions
 
-- For RR-1, how much trap classification can be made reliable from Wasmtime error surfaces
-  versus Goby-owned explicit runtime error codes?
-- For RR-2/RR-3, which limit is the better first target after diagnostics:
-  recursion depth, recursive list-spread allocation shape, or both in parallel?
+- For RR-2, what is the smallest honest lowering/runtime boundary that can reduce
+  stack pressure without destabilizing existing call semantics?
+- For RR-3, is the first real win in list representation, list-spread lowering,
+  or memory-limit tuning after ownership is clearer?
 
 ## Key Entry Points
 

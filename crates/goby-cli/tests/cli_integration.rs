@@ -525,6 +525,52 @@ fn run_command_executes_helper_closure_capture_program() {
 
 #[test]
 #[cfg(unix)]
+fn run_command_reports_recursive_list_spread_memory_exhaustion_without_raw_backtrace() {
+    let root = repo_root();
+    let sandbox = TempDirGuard::new("run_recursive_list_spread_memory_exhaustion");
+    let input = sandbox.join("recursive_list_spread.gb");
+    fs::write(
+        &input,
+        r#"
+import goby/stdio
+
+build : Int -> List Int can Print
+build n =
+  if n == 0
+    []
+  else
+    rest = build (n - 1)
+    [n, ..rest]
+
+main : Unit -> Unit can Print, Read
+main =
+  _lines = read_lines ()
+  xs = build 5000
+  println "${xs[0]}"
+"#,
+    )
+    .expect("temporary input should be writable");
+
+    let output = run_goby_with_stdin(&root, &input, b"x\n");
+
+    assert!(
+        !output.status.success(),
+        "expected runtime failure, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("memory exhausted [E-MEMORY-EXHAUSTION]"),
+        "expected memory exhaustion classification, stderr: {stderr}"
+    );
+    assert!(
+        !stderr.contains("error while executing at wasm backtrace"),
+        "expected raw wasm backtrace to be suppressed for this known case, stderr: {stderr}"
+    );
+}
+
+#[test]
+#[cfg(unix)]
 fn run_command_executes_closure_capture_example() {
     let root = repo_root();
     let input = root.join("examples/closure_capture.gb");

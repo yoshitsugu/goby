@@ -805,22 +805,21 @@ Design stance:
 
 Milestones:
 
-1. **RR-0: minimal reproductions and test ownership**
-   - keep minimal reproductions in `doc/BUGS.md` and convert them into regression
-   tests in the Goby repo.
-   - separate known shapes into at least:
-     - recursive list-spread memory growth,
-     - likely deep-recursion stack pressure,
-     - unknown trap fallback.
-2. **RR-1: runtime failure classification and message surface**
-   - implement resource-failure classification and clearer runtime errors first.
-   - primary ownership is the Goby-owned execution boundary (`goby-cli` /
-     `goby-wasm`), especially the place where Wasmtime traps are converted into
-     user-visible errors.
-   - use explicit runtime error codes where Goby itself knows the reason
-     (`memory exhausted`, future stack/resource codes).
-   - add best-effort trap-text classification for engine-originated failures that
-     Goby does not yet tag itself.
+1. **RR-0: minimal reproductions and test ownership** (complete, 2026-04-08)
+   - `doc/BUGS.md` now records the minimal runtime-`Read` recursive list-spread
+     reproduction.
+   - `crates/goby-cli/tests/cli_integration.rs` covers the recursive
+     list-spread memory-exhaustion shape and asserts that the user-facing error
+     stays classified instead of falling back to a raw Wasm backtrace.
+2. **RR-1: runtime failure classification and message surface** (complete, 2026-04-08)
+   - `goby-wasm` now classifies Wasm execution failures on a best-effort basis as:
+     - `memory exhausted [E-MEMORY-EXHAUSTION]`,
+     - `likely stack pressure [E-STACK-PRESSURE]`,
+     - `unknown runtime trap [E-RUNTIME-TRAP]`.
+   - `goby-cli` normalizes the rendered runtime error so classified messages are
+     not prefixed twice.
+   - the current boundary keeps raw engine detail only as secondary detail for
+     unknown traps.
 3. **RR-2: recursion resilience**
    - improve runtime/lowering behavior for recursion depth.
    - start with tail-recursive lowering opportunities before attempting broader
