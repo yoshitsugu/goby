@@ -4,7 +4,8 @@ Last updated: 2026-04-08
 
 ## Current Focus
 
-Next track: **Track RR** (`PLAN.md §4.8c`) - runtime resource failure diagnostics and resilience.
+Next slice: **Track RR, RR-3** (`PLAN.md §4.8c`) - recursion resilience at the shared
+non-tail scan boundary.
 
 Locked ideal goal for RR:
 
@@ -22,29 +23,46 @@ RR execution reminder:
 
 Immediate next steps:
 
-- **RR-2**: decompose the current "solve2-style" failure into representative
-  owned buckets before attempting another runtime/lowering fix.
-  - preserve separate repros for:
-    - self tail recursion,
-    - non-tail recursive scanning,
-    - recursive list spread / concat growth,
-    - callback-assisted recursion (`fold` in the hot path).
-- **RR-3**: target recursion resilience only at the boundary that RR-2 shows is
-  actually dominant.
-  - current evidence says self tail recursion alone is not enough; the hotter
-    path is `fold -> should_prune_cell/check_around_rolls ->
+- **RR-3**: prototype the smallest shared lowering/runtime boundary that reduces
+  stack pressure for non-tail recursive scans.
+  - start from the scan-shaped hot path visible in named Wasm frames:
+    `fold -> should_prune_cell/check_around_rolls ->
     collect_prune_positions/count_valid_roll`.
-- **RR-4**: improve list-spread resilience for recursive list builders such as
-  `[x, ..rest]` after ownership is clearer.
+  - reject symbol-name-specific or fixture-name-specific rewrites.
+- keep callback-assisted recursion in scope only where it stresses that same
+  shared scan boundary rather than treating callback dispatch as an isolated bug.
+- **RR-4**: keep recursive list spread / concat growth as a separate ownership
+  track after RR-3, since RR-2 kept it in runtime data representation/list
+  concat ownership rather than recursion lowering.
 - keep RR-1 diagnostics best-effort and explicit about uncertainty
   (`likely stack pressure`, `memory exhaustion`, `unknown runtime trap`) as
   later resilience work lands.
 
 ## Recently Completed
 
+- **Track RR, RR-2 representative decomposition** (complete, 2026-04-08).
+  - added focused Goby-owned representative repro tests in
+    `crates/goby-wasm/src/runtime_rr_tests.rs` for:
+    - self tail recursion under a tight stack limit,
+    - non-tail recursive scan,
+    - recursive list spread / concat growth,
+    - callback-assisted recursion in the scan hot path.
+  - locked the RR-2 ownership decision:
+    - self tail recursion belongs to shared recursion lowering/runtime stack
+      behavior, but is not the default next slice by itself;
+    - non-tail recursive scans are the primary RR-3 target;
+    - callback-assisted recursion currently stays bundled with that same RR-3
+      scan boundary rather than a separate callback-only fix;
+    - recursive list spread remains RR-4 work owned by list representation /
+      concat behavior, not by recursion lowering.
+  - explicitly rejected these first-fix boundaries:
+    - Wasm limit tuning alone,
+    - symbol-specific rewrites for `count_valid_roll` /
+      `collect_prune_positions`,
+    - self-tail-only lowering as the default next slice.
 - **Track RR, RR-2 exploration note** (recorded, 2026-04-08; reverted, no code change kept).
   - tried a narrow lowering/emission experiment for aux-decl self tail recursion
-    only.
+  only.
   - the experiment was reverted because it broke existing Wasm validation / runtime
     behavior for recursive list-pruning programs such as
     `iterative_grid_pruning_after_render_executes_without_heap_cursor_corruption`
@@ -104,6 +122,9 @@ Immediate next steps:
 
 - For RR-3, what is the smallest honest boundary that can reduce stack pressure
   for non-tail recursive scans without destabilizing existing call semantics?
+- Within that RR-3 boundary, should callback-assisted scans be improved by the
+  same rule automatically, or do they expose a second shared sub-boundary once
+  the scan case is modeled?
 - For RR-4, is the first real win in list representation, list-spread lowering,
   concat runtime behavior, or memory-limit tuning after ownership is clearer?
 

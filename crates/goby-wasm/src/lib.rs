@@ -34,6 +34,8 @@ mod runtime_replay;
 mod runtime_resolver;
 #[cfg(test)]
 mod runtime_resume_tests;
+#[cfg(test)]
+mod runtime_rr_tests;
 mod runtime_support;
 mod runtime_unit;
 mod runtime_value;

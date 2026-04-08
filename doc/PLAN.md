@@ -858,26 +858,36 @@ Milestones:
      unknown traps, and now emits Wasm function names for Goby-generated
      functions so backtraces identify frames such as `goby!check` or
      `goby!update_rolls`.
-3. **RR-2: representative failure decomposition**
-   - before more optimizer/runtime work, separate the currently conflated failure
-     shapes into owned buckets with preserved repros and tests.
-   - at minimum, keep distinct representative programs for:
-     - self tail recursion,
-     - non-tail recursive grid/list scans,
-     - recursive list spread / concat growth,
-     - mixed callback recursion (for example `fold` inside the scan).
-   - use the new named Wasm frames to record which functions actually dominate
-     each failure path.
-   - success criterion for RR-2 is not "fix the bug", but "know which ownership
-     boundary each remaining failure belongs to".
-   - RR-2 output must explicitly name the intended implementation boundary for
-     each bucket, for example:
-     - IR/lowering owns it,
-     - backend IR / Wasm emission owns it,
-     - runtime data representation owns it,
-     - resource-limit tuning is explicitly *not* the first fix.
-   - avoid ending RR-2 with only observational notes; the deliverable must be a
-     constrained implementation choice with rejected boundaries recorded.
+3. **RR-2: representative failure decomposition** (complete, 2026-04-08)
+   - preserved Goby-owned representative repros/tests for the four buckets:
+     - self tail recursion:
+       `runtime_rr_tests::rr2_self_tail_recursion_repro_surfaces_stack_pressure_under_tight_stack_limit`
+     - non-tail recursive scan:
+       `runtime_rr_tests::rr2_non_tail_recursive_scan_repro_executes_as_general_lowered`
+     - recursive list spread / concat growth:
+       `runtime_rr_tests::rr2_recursive_list_spread_repro_reports_memory_exhaustion`
+       plus the CLI-level regression
+       `run_command_reports_recursive_list_spread_memory_exhaustion_without_raw_backtrace`
+     - mixed callback recursion:
+       `runtime_rr_tests::rr2_callback_assisted_scan_repro_executes_as_general_lowered`
+   - the preserved buckets now imply these ownership boundaries:
+     - self tail recursion belongs to shared recursion lowering/runtime call-stack
+       behavior, but is not the default next slice because it does not explain the
+       hotter `solve2.gb` path by itself.
+     - non-tail recursive scans are the primary RR-3 target and belong to a shared
+       lowering/runtime boundary that reduces stack growth without symbol-specific
+       rewrites.
+     - callback-assisted recursion is not split into a separate first fix; current
+       evidence keeps it in the same shared RR-3 boundary as non-tail scans because
+       the hot path is the scan-with-callback shape rather than callback dispatch
+       alone.
+     - recursive list spread / concat growth belongs to runtime data representation
+       and concat/list-spread ownership, so it stays deferred to RR-4.
+   - rejected first-fix boundaries recorded by RR-2:
+     - Wasm stack/memory limit tuning alone,
+     - symbol-specific rewrites for `count_valid_roll` / `collect_prune_positions`,
+     - generic self-tail lowering as the default next slice without a broader user win,
+     - treating callback dispatch as an isolated bug before the shared scan boundary.
 4. **RR-3: recursion resilience at the right boundary**
    - improve runtime/lowering behavior for recursion depth, but only after RR-2
      confirms which recursion class is worth targeting first.
@@ -902,6 +912,12 @@ Milestones:
      - do not key behavior on one AoC fixture's AST spelling,
      - do not accept a local lowering hack unless its applicability can be
        described as a reusable rule over backend-IR or control-flow structure.
+   - locked RR-2 handoff into RR-3:
+     - start from the shared non-tail scan boundary first,
+     - keep callback-assisted recursion in scope only where it exercises that same
+       boundary,
+     - do not spend the first RR-3 slice on self-tail-only lowering unless a
+       representative RR-2 repro demonstrates a broader win than the scan bucket.
 5. **RR-4: list-spread resilience**
    - improve runtime/lowering behavior for recursive list-spread memory growth.
    - current evidence says contiguous list allocation plus `ListConcat` copying

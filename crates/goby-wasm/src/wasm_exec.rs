@@ -69,6 +69,15 @@ pub(crate) fn run_wasm_bytes_with_stdin(
     run_wasm_bytes_with_stdin_and_config(wasm, stdin, DEFAULT_WASM_MEMORY_CONFIG)
 }
 
+#[cfg(test)]
+pub(crate) fn run_wasm_bytes_with_stdin_for_tests(
+    wasm: &[u8],
+    stdin: Option<&str>,
+    memory_config: crate::memory_config::WasmMemoryConfig,
+) -> Result<String, String> {
+    run_wasm_bytes_with_stdin_and_config(wasm, stdin, memory_config)
+}
+
 fn run_wasm_bytes_with_stdin_and_config(
     wasm: &[u8],
     stdin: Option<&str>,
