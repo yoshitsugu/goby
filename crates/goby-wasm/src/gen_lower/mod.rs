@@ -33,7 +33,7 @@ pub(crate) mod value;
 use std::collections::{HashMap, HashSet};
 
 use goby_core::Module;
-use goby_core::ir::{CompExpr, IrType};
+use goby_core::ir::CompExpr;
 use goby_core::stdlib::StdlibResolver;
 use goby_core::types::{TypeExpr, parse_function_type, parse_type_expr};
 
@@ -46,6 +46,11 @@ use crate::gen_lower::lower::LambdaAuxDecl;
 use crate::layout::MemoryLayout;
 use crate::runtime_env::effective_runtime_imports;
 use crate::wasm_exec_plan::decl_exec_plan;
+
+fn decl_annotation_returns_int(annotation: Option<&str>) -> bool {
+    parse_function_type(annotation.unwrap_or_default())
+        .is_some_and(|function_ty| function_ty.result.trim() == "Int")
+}
 
 /// Reason why a program cannot be lowered via the general-lowering path.
 ///
@@ -699,7 +704,7 @@ fn read_line_instrs_are_supported(instrs: &[backend_ir::WasmBackendInstr]) -> bo
 fn lower_aux_decl(
     name: &str,
     param_names: Vec<String>,
-    result_ty: &IrType,
+    type_annotation: Option<&str>,
     body: &CompExpr,
     known_decls: &HashSet<String>,
     allow_safe_handler_lowering: bool,
@@ -708,7 +713,7 @@ fn lower_aux_decl(
     let Some(body) = rewrite_safe_handlers_if_present(body, allow_safe_handler_lowering)? else {
         return Ok(Err(GeneralLowerUnsupportedReason::HandlerRewriteFailed));
     };
-    let lowered = if matches!(result_ty, IrType::Int) {
+    let lowered = if decl_annotation_returns_int(type_annotation) {
         match lower::lower_supported_self_recursive_int_scan(
             name,
             &body,
@@ -784,7 +789,7 @@ fn first_non_main_lowering_issue(
         match lower_aux_decl(
             &aux_ir_decl.name,
             param_names,
-            &aux_ir_decl.result_ty,
+            goby_decl.type_annotation.as_deref(),
             &aux_ir_decl.body,
             &known_decls,
             allow_safe_handler_lowering,
@@ -824,6 +829,9 @@ fn collect_decl_call_names(instrs: &[backend_ir::WasmBackendInstr], out: &mut Ha
             } => {
                 collect_decl_call_names(then_instrs, out);
                 collect_decl_call_names(else_instrs, out);
+            }
+            backend_ir::WasmBackendInstr::Loop { body_instrs } => {
+                collect_decl_call_names(body_instrs, out);
             }
             backend_ir::WasmBackendInstr::CaseMatch { arms, .. } => {
                 for arm in arms {
@@ -937,7 +945,7 @@ type LowerModuleResult =
 /// Returns `Ok(Ok((main_instrs, aux_decls)))` when the general path succeeds,
 /// `Ok(Err(reason))` when the IR contains unsupported forms (fall through to next path),
 /// or `Err(CodegenError)` on hard codegen failures.
-fn lower_module_to_instrs(module: &Module) -> Result<LowerModuleResult, CodegenError> {
+pub(crate) fn lower_module_to_instrs(module: &Module) -> Result<LowerModuleResult, CodegenError> {
     let handler_legality = analyze_module_handler_legality(module)?;
     let allow_safe_handler_lowering = handler_legality.all_one_shot_tail_resumptive();
     let ir_module = match goby_core::ir_lower::lower_module(module) {
@@ -1048,6 +1056,11 @@ fn lower_module_to_instrs(module: &Module) -> Result<LowerModuleResult, CodegenE
     for aux_ir_decl in ir_module.decls.iter().filter(|decl| decl.name != "main") {
         let mut param_names: Vec<String> =
             aux_ir_decl.params.iter().map(|(n, _)| n.clone()).collect();
+        let source_decl = module
+            .declarations
+            .iter()
+            .find(|decl| decl.name == aux_ir_decl.name)
+            .expect("source decl for lowered user aux must exist");
         // A declaration with no explicit params is still called with a synthetic Unit arg in the IR
         // (e.g. `helper()` lowers to `Call { args: [Unit] }`).  The Wasm function must accept that
         // i64 so the caller-pushed Unit does not leak on the operand stack.
@@ -1057,18 +1070,13 @@ fn lower_module_to_instrs(module: &Module) -> Result<LowerModuleResult, CodegenE
         match lower_aux_decl(
             &aux_ir_decl.name,
             param_names,
-            &aux_ir_decl.result_ty,
+            source_decl.type_annotation.as_deref(),
             &aux_ir_decl.body,
             &known_decls,
             allow_safe_handler_lowering,
             &mut lambda_decls,
         )? {
             Ok(mut aux) => {
-                let source_decl = module
-                    .declarations
-                    .iter()
-                    .find(|decl| decl.name == aux_ir_decl.name)
-                    .expect("source decl for lowered user aux must exist");
                 aux.returns_wasm_heap =
                     decl_return_type_uses_wasm_heap(source_decl.type_annotation.as_deref());
                 aux_decls.push(aux);
@@ -1134,7 +1142,7 @@ fn lower_module_to_instrs(module: &Module) -> Result<LowerModuleResult, CodegenE
                 match lower_aux_decl(
                     &aux_ir_decl.name,
                     param_names,
-                    &aux_ir_decl.result_ty,
+                    goby_decl.type_annotation.as_deref(),
                     &aux_ir_decl.body,
                     &known_decls,
                     true, // stdlib handlers are one-shot tail-resumptive by construction

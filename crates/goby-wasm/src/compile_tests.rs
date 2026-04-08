@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use goby_core::parse_module;
-use wasmparser::Validator;
+use wasmparser::{Operator, Parser, Payload, Validator};
 
 use super::*;
 
@@ -12,6 +12,66 @@ fn assert_valid_wasm_module(wasm: &[u8]) {
     Validator::new()
         .validate_all(wasm)
         .expect("module should pass wasm validation");
+}
+
+fn import_function_count(wasm: &[u8]) -> u32 {
+    let mut count = 0u32;
+    for payload in Parser::new(0).parse_all(wasm) {
+        let Ok(payload) = payload else { continue };
+        if let Payload::ImportSection(reader) = payload {
+            for import in reader {
+                let Ok(import) = import else { continue };
+                match import {
+                    wasmparser::Imports::Single(_, import) => {
+                        if matches!(
+                            import.ty,
+                            wasmparser::TypeRef::Func(_) | wasmparser::TypeRef::FuncExact(_)
+                        ) {
+                            count += 1;
+                        }
+                    }
+                    wasmparser::Imports::Compact1 { items, .. } => {
+                        for item in items {
+                            let Ok(item) = item else { continue };
+                            if matches!(
+                                item.ty,
+                                wasmparser::TypeRef::Func(_) | wasmparser::TypeRef::FuncExact(_)
+                            ) {
+                                count += 1;
+                            }
+                        }
+                    }
+                    wasmparser::Imports::Compact2 { ty, names, .. } => {
+                        if matches!(
+                            ty,
+                            wasmparser::TypeRef::Func(_) | wasmparser::TypeRef::FuncExact(_)
+                        ) {
+                            count += names.count();
+                        }
+                    }
+                }
+            }
+        }
+    }
+    count
+}
+
+fn all_code_body_ops(wasm: &[u8]) -> Vec<Vec<Operator<'_>>> {
+    let mut bodies = Vec::new();
+    for payload in Parser::new(0).parse_all(wasm) {
+        let Ok(payload) = payload else { continue };
+        if let Payload::CodeSectionEntry(body) = payload {
+            let mut ops = Vec::new();
+            let reader = body
+                .get_operators_reader()
+                .expect("operators reader should be available");
+            for op in reader {
+                ops.push(op.expect("operator should decode"));
+            }
+            bodies.push(ops);
+        }
+    }
+    bodies
 }
 
 fn read_example(name: &str) -> String {
@@ -227,6 +287,72 @@ main =
         resolve_module_runtime_output(&module).expect("runtime output should resolve");
     assert_eq!(expected_text, "42");
     assert_valid_wasm_module(&wasm);
+}
+
+#[test]
+fn compile_module_scan_loop_lowering_eliminates_walk_self_call_in_wasm() {
+    let source = r#"
+import goby/stdio
+
+probe : Int -> Bool can Print
+probe n =
+  n >= 0
+
+walk : Int -> Int -> Int -> Int -> Int can Print
+walk width height x y =
+  if y >= height
+    0
+  else
+    if x >= width
+      walk width height 0 (y + 1)
+    else
+      checked =
+        if probe x
+          1
+        else
+          0
+      checked + walk width height (x + 1) y
+
+main : Unit -> Unit can Print, Read
+main =
+  _ = read()
+  result = walk 10 10 0 0
+  println "${result}"
+"#;
+    let module = parse_module(source).expect("source should parse");
+    let (main_instrs, aux_decls) = crate::gen_lower::lower_module_to_instrs(&module)
+        .expect("lowering should not hard-fail")
+        .expect("general lowering should accept recursive scan module");
+    let walk_aux = aux_decls
+        .iter()
+        .find(|decl| decl.decl_name == "walk")
+        .expect("walk aux decl should exist");
+    assert!(
+        walk_aux.instrs.iter().any(|instr| matches!(
+            instr,
+            crate::gen_lower::backend_ir::WasmBackendInstr::Loop { .. }
+        )),
+        "walk should lower to backend loop, got aux decls: {aux_decls:?}; main: {main_instrs:?}"
+    );
+    let wasm = compile_module(&module).expect("codegen should succeed");
+    assert_valid_wasm_module(&wasm);
+
+    let imported = import_function_count(&wasm);
+    let bodies = all_code_body_ops(&wasm);
+    let loop_body = bodies
+        .iter()
+        .enumerate()
+        .find(|(_, ops)| ops.iter().any(|op| matches!(op, Operator::Loop { .. })))
+        .expect("one defined function body should contain a loop after RR-3 lowering");
+    let loop_func_index = imported + loop_body.0 as u32;
+    let loop_ops = loop_body.1;
+
+    assert!(
+        !loop_ops.iter().any(
+            |op| matches!(op, Operator::Call { function_index } if *function_index == loop_func_index)
+        ),
+        "loop-lowered body should not directly call itself after RR-3 lowering, ops: {loop_ops:?}"
+    );
 }
 
 #[test]

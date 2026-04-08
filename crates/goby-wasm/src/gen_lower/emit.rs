@@ -1464,10 +1464,9 @@ fn emit_instrs_with_heap_depth(
             }
 
             WasmBackendInstr::Loop { body_instrs } => {
-                function.instruction(&Instruction::Block(wasm_encoder::BlockType::Result(
+                function.instruction(&Instruction::Loop(wasm_encoder::BlockType::Result(
                     wasm_encoder::ValType::I64,
                 )));
-                function.instruction(&Instruction::Loop(wasm_encoder::BlockType::Empty));
                 emit_instrs_with_heap_depth(
                     function,
                     ctx,
@@ -1481,8 +1480,6 @@ fn emit_instrs_with_heap_depth(
                     function_returns_i64,
                     heap_base_depth,
                 )?;
-                function.instruction(&Instruction::Br(1));
-                function.instruction(&Instruction::End);
                 function.instruction(&Instruction::End);
             }
 

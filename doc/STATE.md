@@ -23,37 +23,35 @@ RR execution reminder:
 
 Immediate next steps:
 
-- **RR-3**: prototype the smallest shared lowering/runtime boundary that reduces
-  stack pressure for non-tail recursive scans.
-  - start from the scan-shaped hot path visible in named Wasm frames:
-    `fold -> should_prune_cell/check_around_rolls ->
-    collect_prune_positions/count_valid_roll`.
-  - reject symbol-name-specific or fixture-name-specific rewrites.
-- keep callback-assisted recursion in scope only where it stresses that same
-  shared scan boundary rather than treating callback dispatch as an isolated bug.
-- tighten the current RR-3 sub-slice from compile-path proof to execution-path
-  proof.
-  - the lowering now recognizes a restricted self-recursive Int scan shape and
-    emits loop-form backend IR instead of self `DeclCall`.
-  - the next step is to prove that this actually survives the intended tight
-    Wasm stack configuration at runtime, or else identify the remaining boundary
-    that still consumes stack.
 - **RR-4**: keep recursive list spread / concat growth as a separate ownership
   track after RR-3, since RR-2 kept it in runtime data representation/list
   concat ownership rather than recursion lowering.
+  - preserve the RR-3 boundary split: recursion lowering now owns the scan
+    buckets, while list-spread resilience should be solved in list/runtime
+    ownership rather than by adding more recursion-specific rewrites.
 - keep RR-1 diagnostics best-effort and explicit about uncertainty
   (`likely stack pressure`, `memory exhaustion`, `unknown runtime trap`) as
   later resilience work lands.
 
 ## Recently Completed
 
-- **Track RR, RR-3 lowering scaffold** (partial, 2026-04-08).
+- **Track RR, RR-3 tight-stack proof** (complete, 2026-04-09).
+  - kept the RR-3 fix at the shared scan boundary: restricted self-recursive
+    Int scans now lower to loop-form backend IR instead of self `DeclCall`.
+  - proved the compile path end-to-end: emitted Wasm validates and the looped
+    helper body no longer directly calls itself.
+  - proved the execution boundary under the RR low-stack configuration for both
+    the primary non-tail scan bucket and the callback-assisted scan bucket.
+  - RR-3 is now closed for the currently locked representative scan buckets;
+    remaining resilience work moves to RR-4 list-spread ownership.
+
+- **Track RR, RR-3 emitted-Wasm proof** (partial, 2026-04-09).
   - added backend-IR loop support plus a lowering rewrite for a restricted
     self-recursive Int scan shape in `gen_lower/lower.rs`.
-  - verified at unit level that supported scan shapes lower to `Loop` and
-    eliminate self `DeclCall`.
-  - did not yet close the runtime proof under tight Wasm stack limits; that is
-    the next RR-3 step.
+  - switched loop emission to `loop (result i64)` so the specialized scan shape
+    produces valid Wasm without relying on an outer result block.
+  - verified both that supported scan shapes lower to `Loop` and that the
+    compiled Wasm helper body validates and eliminates direct self `call`.
 - **Track RR, RR-2 representative decomposition** (complete, 2026-04-08).
   - added focused Goby-owned representative repro tests in
     `crates/goby-wasm/src/runtime_rr_tests.rs` for:

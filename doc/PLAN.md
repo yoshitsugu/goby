@@ -918,14 +918,23 @@ Milestones:
        boundary,
      - do not spend the first RR-3 slice on self-tail-only lowering unless a
        representative RR-2 repro demonstrates a broader win than the scan bucket.
-   - current in-progress RR-3 sub-slice (2026-04-08):
+   - RR-3 status (2026-04-09):
      - `gen_lower/lower.rs` now recognizes a restricted self-recursive Int scan
        shape and lowers it to backend-IR loop form instead of self `DeclCall`.
-     - unit coverage currently proves the compile-path ownership decision
-       (`lowers_supported_self_recursive_int_scan_to_loop`).
-     - the remaining open item is execution-boundary proof under tight Wasm stack
-       limits; keep that as the next RR-3 follow-up before calling the milestone
-       complete.
+     - compile coverage now proves both the lowering decision and the emitted
+       Wasm shape for that scan bucket:
+       `lowers_supported_self_recursive_int_scan_to_loop` keeps the backend-IR
+       proof, and `compile_module_scan_loop_lowering_eliminates_walk_self_call_in_wasm`
+       proves the compiled Wasm validates and no longer self-calls in the looped
+       helper body.
+     - tight-stack runtime coverage now proves the same shared boundary for both
+       the primary non-tail scan bucket and the callback-assisted scan bucket:
+       `rr3_non_tail_recursive_scan_repro_survives_tight_stack_limit_after_loop_lowering`
+       and `rr3_callback_assisted_scan_repro_survives_tight_stack_limit_on_same_boundary`
+       both succeed under the RR low-stack configuration.
+     - RR-3 is therefore complete for the currently locked representative scan
+       buckets; remaining recursion-resilience work now moves to RR-4 list-spread
+       ownership.
 5. **RR-4: list-spread resilience**
    - improve runtime/lowering behavior for recursive list-spread memory growth.
    - current evidence says contiguous list allocation plus `ListConcat` copying

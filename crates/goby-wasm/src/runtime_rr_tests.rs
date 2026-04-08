@@ -105,6 +105,52 @@ main =
   println "${result}"
 "#;
 
+fn non_tail_scan_main_source(
+    extra_imports: &str,
+    probe_body: &str,
+    width: usize,
+    height: usize,
+) -> String {
+    format!(
+        r#"
+import goby/stdio
+{extra_imports}
+
+probe : Int -> Bool can Print
+probe n =
+{probe_body}
+
+walk : Int -> Int -> Int -> Int -> Int can Print
+walk width height x y =
+  if y >= height
+    0
+  else
+    if x >= width
+      walk width height 0 (y + 1)
+    else
+      checked =
+        if probe x
+          1
+        else
+          0
+      checked + walk width height (x + 1) y
+
+main : Unit -> Unit can Print, Read
+main =
+  _ = read()
+  result = walk {width} {height} 0 0
+  println "${{result}}"
+"#
+    )
+}
+
+fn rr_tight_stack_config() -> crate::memory_config::WasmMemoryConfig {
+    crate::memory_config::WasmMemoryConfig {
+        max_wasm_stack_bytes: 64 * 1024,
+        ..DEFAULT_WASM_MEMORY_CONFIG
+    }
+}
+
 fn parse_general_lowered_module(source: &str) -> goby_core::Module {
     let module = parse_module(source).expect("representative RR source should parse");
     assert_eq!(
@@ -120,10 +166,7 @@ fn parse_general_lowered_module(source: &str) -> goby_core::Module {
 fn rr2_self_tail_recursion_repro_surfaces_stack_pressure_under_tight_stack_limit() {
     let module = parse_general_lowered_module(SELF_TAIL_RECURSION_SOURCE);
     let wasm = compile_module(&module).expect("self-tail recursion repro should compile");
-    let low_stack = crate::memory_config::WasmMemoryConfig {
-        max_wasm_stack_bytes: 64 * 1024,
-        ..DEFAULT_WASM_MEMORY_CONFIG
-    };
+    let low_stack = rr_tight_stack_config();
 
     let err = run_wasm_bytes_with_stdin_for_tests(&wasm, Some("x\n"), low_stack)
         .expect_err("tight stack limit should preserve the self-tail recursion bucket");
@@ -139,6 +182,17 @@ fn rr2_non_tail_recursive_scan_repro_executes_as_general_lowered() {
     let output = execute_runtime_module_with_stdin(&module, Some(String::new()))
         .expect("non-tail recursive scan representative should execute successfully");
     assert_eq!(output.as_deref(), Some("100\n"));
+}
+
+#[test]
+fn rr3_non_tail_recursive_scan_repro_survives_tight_stack_limit_after_loop_lowering() {
+    let source = non_tail_scan_main_source("", "  n >= 0", 1, 200_000);
+    let module = parse_general_lowered_module(&source);
+    let wasm = compile_module(&module).expect("tight-stack non-tail scan repro should compile");
+
+    let output = run_wasm_bytes_with_stdin_for_tests(&wasm, Some("x\n"), rr_tight_stack_config())
+        .expect("loop-lowered scan should survive the tight stack limit");
+    assert_eq!(output, "200000\n");
 }
 
 #[test]
@@ -159,4 +213,25 @@ fn rr2_callback_assisted_scan_repro_executes_as_general_lowered() {
     let output = execute_runtime_module_with_stdin(&module, Some(String::new()))
         .expect("callback-assisted recursive scan representative should execute successfully");
     assert_eq!(output.as_deref(), Some("100\n"));
+}
+
+#[test]
+fn rr3_callback_assisted_scan_repro_survives_tight_stack_limit_on_same_boundary() {
+    let source = non_tail_scan_main_source(
+        "import goby/list ( fold )",
+        r#"  total =
+    fold [1, 2, 3, 4, 5, 6, 7, 8] 0 (fn acc x ->
+      acc + x + n
+    )
+  total >= 0"#,
+        1,
+        40_000,
+    );
+    let module = parse_general_lowered_module(&source);
+    let wasm =
+        compile_module(&module).expect("tight-stack callback-assisted scan repro should compile");
+
+    let output = run_wasm_bytes_with_stdin_for_tests(&wasm, Some("x\n"), rr_tight_stack_config())
+        .expect("callback-assisted scan should survive the same tight stack limit");
+    assert_eq!(output, "40000\n");
 }
