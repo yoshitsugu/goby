@@ -2,7 +2,46 @@
 
 This document tracks confirmed, reproducible bugs in the current Goby toolchain.
 
-Open bugs: none.
+Open bugs:
+
+- `goby run` can exhaust Wasm memory for a small runtime-`Read` program that recursively
+  builds a list via spread, even when the stdin payload is small and otherwise irrelevant.
+
+  Repro:
+
+  ```gb
+  import goby/stdio
+
+  build : Int -> List Int can Print
+  build n =
+    if n == 0
+      []
+    else
+      rest = build (n - 1)
+      [n, ..rest]
+
+  main : Unit -> Unit can Print, Read
+  main =
+    _lines = read_lines ()
+    xs = build 5000
+    println "${xs[0]}"
+  ```
+
+  Run:
+
+  ```sh
+  printf 'x\n' | goby run repro.gb
+  ```
+
+  Current result:
+
+  ```text
+  runtime error: runtime error: memory exhausted [E-MEMORY-EXHAUSTION]: allocation exceeded the configured Wasm memory limit
+  ```
+
+  Notes:
+  the failure reproduces without any Advent of Code-specific logic. The key shape is
+  `Read`-driven runtime execution plus recursive `[x, ..rest]` list construction.
 
 Resolved on 2026-04-07:
 
