@@ -22,6 +22,20 @@ Immediate next steps:
 
 ## Recently Completed
 
+- **Track RR, RR-2 exploration note** (recorded, 2026-04-08; reverted, no code change kept).
+  - tried a narrow lowering/emission experiment for aux-decl self tail recursion
+    only.
+  - the experiment was reverted because it broke existing Wasm validation / runtime
+    behavior for recursive list-pruning programs such as
+    `iterative_grid_pruning_after_render_executes_without_heap_cursor_corruption`
+    and `aoc2025/04/solve2.gb`.
+  - the failed slice still established two useful facts:
+    - self tail recursion alone is not the dominant issue for the `solve2.gb`
+      class of failures;
+    - with named Goby frames now present in Wasm backtraces, the hot failing path
+      is visible as `fold -> should_prune_cell/check_around_rolls ->
+      collect_prune_positions/count_valid_roll`, which points more strongly to
+      non-tail recursive scanning and list-building than to `check` alone.
 - **Track RR, RR-0 / RR-1** (complete, 2026-04-08).
   - added a CLI regression for the minimal recursive list-spread memory bug.
   - classified runtime traps in `goby-wasm` with user-facing English messages
@@ -69,7 +83,8 @@ Immediate next steps:
 ## Open Questions
 
 - For RR-2, what is the smallest honest lowering/runtime boundary that can reduce
-  stack pressure without destabilizing existing call semantics?
+  stack pressure for non-tail recursive scans without destabilizing existing call
+  semantics?
 - For RR-3, is the first real win in list representation, list-spread lowering,
   or memory-limit tuning after ownership is clearer?
 
