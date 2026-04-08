@@ -1095,6 +1095,8 @@ where
         i = then_start + consumed;
 
         let mut found_else = false;
+        // Whether the `else` keyword was written as `else if ...` on a single line.
+        let mut else_if_inline: Option<(usize, String)> = None; // (kw_indent, "if ..." suffix)
         while i < lines.len() && !found_else {
             let kw_raw = lines[i];
             let kw_stripped = strip_line_comment(kw_raw).trim_end();
@@ -1104,37 +1106,65 @@ where
                 continue;
             }
             let kw_indent = indent_len(kw_stripped);
-            if kw_indent != case_indent || kw_trimmed != "else" {
+            if kw_indent != case_indent {
                 return None;
             }
-            found_else = true;
-            i += 1;
+            if kw_trimmed == "else" {
+                found_else = true;
+                i += 1;
+            } else if let Some(if_rest) = kw_trimmed.strip_prefix("else if ") {
+                // `else if cond` on one line — treat as `else` followed by an indented `if`.
+                else_if_inline = Some((kw_indent, format!("if {}", if_rest)));
+                found_else = true;
+                i += 1; // advance past the `else if ...` line
+            } else {
+                return None;
+            }
         }
         if !found_else {
             return None;
         }
 
-        while i < lines.len() {
-            let else_raw = lines[i];
-            let else_stripped = strip_line_comment(else_raw).trim_end();
-            let else_trimmed = else_stripped.trim();
-            if else_trimmed.is_empty() || else_trimmed.starts_with('#') {
-                i += 1;
-                continue;
+        let else_expr;
+        if let Some((kw_indent, if_line)) = else_if_inline {
+            // Build a virtual line slice: the `if ...` at the same indentation as `else if`,
+            // followed by all remaining original lines (they already have the right indentation).
+            // The then/else bodies of the inner `if` are already indented deeper in `lines`.
+            let inner_indent = kw_indent;
+            let virtual_if_line = format!("{}{}", " ".repeat(inner_indent), if_line);
+            let mut virtual_lines: Vec<String> = std::iter::once(virtual_if_line).collect();
+            for raw in &lines[i..] {
+                virtual_lines.push((*raw).to_string());
             }
-            let else_indent = indent_len(else_stripped);
-            if else_indent <= case_indent {
+            let refs: Vec<&str> = virtual_lines.iter().map(String::as_str).collect();
+            let (else_stmts, consumed) = parse_stmts_from_lines(&refs, 0, parse_expr)?;
+            else_expr = expr_from_branch_stmts(else_stmts);
+            // `consumed` counts lines in the virtual slice; virtual_lines[0] is the synthetic
+            // `if` line (not present in `lines`), so advance `i` by `consumed - 1`.
+            i += consumed.saturating_sub(1);
+        } else {
+            while i < lines.len() {
+                let else_raw = lines[i];
+                let else_stripped = strip_line_comment(else_raw).trim_end();
+                let else_trimmed = else_stripped.trim();
+                if else_trimmed.is_empty() || else_trimmed.starts_with('#') {
+                    i += 1;
+                    continue;
+                }
+                let else_indent = indent_len(else_stripped);
+                if else_indent <= case_indent {
+                    return None;
+                }
+                break;
+            }
+            if i >= lines.len() {
                 return None;
             }
-            break;
+            let else_start = i;
+            let (else_stmts, consumed) = parse_stmts_from_lines(lines, else_start, parse_expr)?;
+            else_expr = expr_from_branch_stmts(else_stmts);
+            i = else_start + consumed;
         }
-        if i >= lines.len() {
-            return None;
-        }
-        let else_start = i;
-        let (else_stmts, consumed) = parse_stmts_from_lines(lines, else_start, parse_expr)?;
-        let else_expr = expr_from_branch_stmts(else_stmts);
-        i = else_start + consumed;
 
         Some((
             Expr::If {
