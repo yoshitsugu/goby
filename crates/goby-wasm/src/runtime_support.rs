@@ -75,4 +75,3 @@ pub(crate) fn parse_pipeline(expr: &str) -> Option<(&str, &str)> {
     }
     Some((left, right))
 }
-

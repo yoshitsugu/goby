@@ -353,7 +353,10 @@ impl<'m> RuntimeOutputResolver<'m> {
             return self.complete_value_out(out, evaluators);
         }
 
-        if let Some(value) = evaluators.int.eval_expr_from_locals(expr, locals, callables) {
+        if let Some(value) = evaluators
+            .int
+            .eval_expr_from_locals(expr, locals, callables)
+        {
             return Some(RuntimeValue::Int(value));
         }
 

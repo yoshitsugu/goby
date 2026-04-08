@@ -2,9 +2,7 @@ use goby_core::{Module, Stmt};
 
 use crate::RuntimeOutputResolver;
 use crate::lower;
-use crate::runtime_eval::{
-    IntEvaluator, collect_functions_with_result, collect_unit_functions,
-};
+use crate::runtime_eval::{IntEvaluator, collect_functions_with_result, collect_unit_functions};
 use crate::runtime_flow::RuntimeEvaluators;
 use crate::runtime_resolver::ResolvedRuntimeOutput;
 

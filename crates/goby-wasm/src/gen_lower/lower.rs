@@ -2974,8 +2974,8 @@ mod tests {
         };
         let aliases: HashMap<String, AliasValue> =
             [("xs".to_string(), AliasValue::CellPromoted)].into();
-        let instrs =
-            lower_comp_with_aliases(&comp, &aliases).expect("cell-promoted AssignIndex should lower");
+        let instrs = lower_comp_with_aliases(&comp, &aliases)
+            .expect("cell-promoted AssignIndex should lower");
         assert_eq!(
             instrs,
             vec![
@@ -3034,8 +3034,8 @@ mod tests {
         };
         let aliases: HashMap<String, AliasValue> =
             [("xs".to_string(), AliasValue::CellPromoted)].into();
-        let instrs =
-            lower_comp_with_aliases(&comp, &aliases).expect("cell-promoted two-level AssignIndex should lower");
+        let instrs = lower_comp_with_aliases(&comp, &aliases)
+            .expect("cell-promoted two-level AssignIndex should lower");
         assert_eq!(
             instrs,
             vec![

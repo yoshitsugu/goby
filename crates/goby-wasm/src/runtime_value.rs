@@ -332,10 +332,7 @@ mod tests {
         let mut locals = RuntimeLocals::default();
         locals.store("flag", RuntimeValue::Bool(true));
         locals.store("u", RuntimeValue::Unit);
-        assert!(matches!(
-            locals.get("flag"),
-            Some(RuntimeValue::Bool(true))
-        ));
+        assert!(matches!(locals.get("flag"), Some(RuntimeValue::Bool(true))));
         assert!(matches!(locals.get("u"), Some(RuntimeValue::Unit)));
         let names = locals.binding_names();
         assert!(names.contains(&"flag".to_string()));
@@ -395,10 +392,7 @@ mod tests {
         let mut locals = RuntimeLocals::default();
         locals.store_mut(
             "xs",
-            RuntimeValue::List(vec![
-                list_from_ints(vec![1, 2]),
-                list_from_ints(vec![3, 4]),
-            ]),
+            RuntimeValue::List(vec![list_from_ints(vec![1, 2]), list_from_ints(vec![3, 4])]),
         );
 
         assert_eq!(
