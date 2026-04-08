@@ -725,6 +725,128 @@ runtime error: index out of bounds: index 5, list length 3
 - 既存の OOB 以外のパスで `mark_runtime_abort()` の挙動が変わらないこと。
 - `cargo test` 全通過。
 
+### 4.8c Track RR: Runtime Resource Failure Diagnostics and Resilience
+
+Goal: when `goby run` fails because user code consumes too much runtime stack,
+memory, or other bounded execution resources, report that clearly first, then
+incrementally improve the runtime so that straightforward but inefficient Goby
+code keeps working on realistic inputs.
+
+Motivation:
+
+- the desired product direction is "prefer code that behaves intuitively even if
+  it is not especially efficient".
+- for the `solve2.gb` class of failures, the main fix target should be Goby's
+  runtime/lowering/runtime-diagnostics layers, not the user's program shape.
+- before Goby can avoid these failures entirely, it must at least tell the user
+  what kind of resource limit they hit.
+
+Current confirmed bug shape:
+
+- a runtime-`Read` / `GeneralLowered` program that recursively builds a list via
+  `[x, ..rest]` can fail with Wasm memory exhaustion even when stdin is tiny.
+- larger recursive programs can also fail with an unhelpful Wasm backtrace that
+  does not explain whether the likely cause is stack growth, memory growth, or
+  another runtime trap.
+
+Two-stage plan:
+
+1. **Stage RR-A: diagnose clearly**
+   - prioritize user-facing error messages before attempting to eliminate the
+     underlying limits.
+   - whenever possible, classify runtime failures into coarse buckets such as:
+     - stack growth / likely deep recursion,
+     - memory exhaustion / large intermediate values,
+     - generic runtime trap / unknown resource failure.
+   - this classification must be explicitly best-effort. Goby should not claim
+     certainty about stack overflow unless the runtime/engine surface provides a
+     reliable signal; otherwise the wording should stay at "likely" / "possible".
+   - error text may stay in English for now.
+   - when classification is confident enough, include actionable wording such as:
+     `"runtime error: likely stack overflow from deep recursion; consider rewriting this function in a tail-recursive or iterative style"`
+     or
+     `"runtime error: memory exhausted while building large intermediate lists; consider reducing recursive list-spread construction"`
+   - if exact attribution is not available, prefer an honest partial diagnosis
+     over a raw Wasm backtrace.
+   - keep the raw engine/backtrace details as an optional secondary detail for
+     debugging, not as the primary user-facing error.
+
+2. **Stage RR-B: make straightforward code survive**
+   - after diagnostics land, improve the runtime/lowering path so these failures
+     become less common for normal Goby programs.
+   - prioritize work in this order:
+     1. improve tolerance for deep recursion:
+        - tail-recursive loops like `count_valid_roll` / `check` should not fail
+          early merely because they are written naturally.
+        - candidate approaches: explicit tail-recursion lowering to loops, or
+          other stack-consumption reductions for general calls where feasible.
+     2. allow intuitive list construction more often:
+        - patterns like `[(x, y), ..rest]` should not immediately explode on
+          moderately large inputs.
+        - investigate list representation and list-spread lowering/runtime
+          behavior before asking users to rewrite such code.
+     3. widen practical runtime resource limits:
+        - current Wasm stack/memory bounds may be too conservative for "AoC-size"
+          workloads.
+        - raising limits is acceptable when it is honest and keeps failure modes
+          predictable.
+     4. keep refining diagnostics for the remaining hard limits:
+        - even after resilience work, residual failures should report likely
+          cause rather than a bare trap/backtrace.
+
+Design stance:
+
+- user code rewrites are the last resort, not the default answer.
+- Goby should carry the burden of supporting straightforward recursive and list-
+  building code as far as the execution environment honestly allows.
+- limits may still exist because Wasm is bounded and general recursion is not
+  free, but the toolchain should fail transparently and push those limits back
+  where practical.
+
+Milestones:
+
+1. **RR-0: minimal reproductions and test ownership**
+   - keep minimal reproductions in `doc/BUGS.md` and convert them into regression
+   tests in the Goby repo.
+   - separate known shapes into at least:
+     - recursive list-spread memory growth,
+     - likely deep-recursion stack pressure,
+     - unknown trap fallback.
+2. **RR-1: runtime failure classification and message surface**
+   - implement resource-failure classification and clearer runtime errors first.
+   - primary ownership is the Goby-owned execution boundary (`goby-cli` /
+     `goby-wasm`), especially the place where Wasmtime traps are converted into
+     user-visible errors.
+   - use explicit runtime error codes where Goby itself knows the reason
+     (`memory exhausted`, future stack/resource codes).
+   - add best-effort trap-text classification for engine-originated failures that
+     Goby does not yet tag itself.
+3. **RR-2: recursion resilience**
+   - improve runtime/lowering behavior for recursion depth.
+   - start with tail-recursive lowering opportunities before attempting broader
+     general-call changes.
+4. **RR-3: list-spread resilience**
+   - improve runtime/lowering behavior for list-spread
+   memory growth.
+   - focus on eliminating avoidable O(n^2)-style intermediate allocation patterns
+     before simply raising limits.
+5. **RR-4: limit tuning and follow-through**
+   - revisit stack/memory defaults only after RR-1 through RR-3 give clearer
+     ownership and failure modes.
+   - only after that, revisit whether docs/examples should recommend more efficient
+   user-code patterns for extreme workloads.
+
+Acceptance criteria:
+
+- resource-related runtime failures no longer surface as raw Wasm backtraces in
+  the common known cases.
+- at least one known failure shape reports a clear English message indicating
+  likely stack pressure, memory pressure, or unknown runtime resource failure.
+- the `doc/BUGS.md` reproduction for recursive list spread is covered by a
+  regression test and is tracked against a concrete resilience improvement step.
+- the initial message layer does not over-claim certainty where the engine only
+  exposes an opaque trap.
+
 ### 4.9 Track EP: Effect Row Polymorphism
 
 Goal: add effect-variable quantification so higher-order functions propagate
