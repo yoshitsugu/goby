@@ -356,6 +356,61 @@ main =
 }
 
 #[test]
+fn compile_module_list_spread_builder_lowering_validates_and_eliminates_build_self_call() {
+    let source = r#"
+import goby/stdio
+
+build : Int -> List Int can Print
+build n =
+  if n == 0
+    []
+  else
+    rest = build (n - 1)
+    [n, ..rest]
+
+main : Unit -> Unit can Print, Read
+main =
+  _ = read()
+  xs = build 32
+  println "${xs[0]}"
+"#;
+    let module = parse_module(source).expect("source should parse");
+    let (main_instrs, aux_decls) = crate::gen_lower::lower_module_to_instrs(&module)
+        .expect("lowering should not hard-fail")
+        .expect("general lowering should accept recursive list-spread module");
+    let build_aux = aux_decls
+        .iter()
+        .find(|decl| decl.decl_name == "build")
+        .expect("build aux decl should exist");
+    assert!(
+        build_aux.instrs.iter().any(|instr| matches!(
+            instr,
+            crate::gen_lower::backend_ir::WasmBackendInstr::ListBuilderNew { .. }
+        )),
+        "build should lower to builder-backed loop, got aux decls: {aux_decls:?}; main: {main_instrs:?}"
+    );
+    let wasm = compile_module(&module).expect("codegen should succeed");
+    assert_valid_wasm_module(&wasm);
+
+    let imported = import_function_count(&wasm);
+    let bodies = all_code_body_ops(&wasm);
+    let loop_body = bodies
+        .iter()
+        .enumerate()
+        .find(|(_, ops)| ops.iter().any(|op| matches!(op, Operator::Loop { .. })))
+        .expect("one defined function body should contain a loop after RR-4 lowering");
+    let loop_func_index = imported + loop_body.0 as u32;
+    let loop_ops = loop_body.1;
+
+    assert!(
+        !loop_ops.iter().any(
+            |op| matches!(op, Operator::Call { function_index } if *function_index == loop_func_index)
+        ),
+        "loop-lowered builder body should not directly call itself after RR-4 lowering, ops: {loop_ops:?}"
+    );
+}
+
+#[test]
 fn compile_module_uses_native_emitter_for_multi_arg_direct_function_call_subset() {
     let source = r#"
 add4 : Int -> Int -> Int -> Int -> Int

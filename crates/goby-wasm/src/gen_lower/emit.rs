@@ -386,6 +386,9 @@ fn collect_all_instrs(instrs: &[WasmBackendInstr]) -> Vec<&WasmBackendInstr> {
                     result.extend(collect_all_instrs(elem));
                 }
             }
+            WasmBackendInstr::ListBuilderPush { value_instrs, .. } => {
+                result.extend(collect_all_instrs(value_instrs));
+            }
             WasmBackendInstr::TupleLit { element_instrs } => {
                 for elem in element_instrs {
                     result.extend(collect_all_instrs(elem));
@@ -442,6 +445,9 @@ pub(crate) fn needs_helper_state(instrs: &[WasmBackendInstr]) -> bool {
         matches!(
             i,
             WasmBackendInstr::ListLit { .. }
+                | WasmBackendInstr::ListBuilderNew { .. }
+                | WasmBackendInstr::ListBuilderPush { .. }
+                | WasmBackendInstr::ListBuilderFinish { .. }
                 | WasmBackendInstr::TupleLit { .. }
                 | WasmBackendInstr::RecordLit { .. }
                 | WasmBackendInstr::ListEach { .. }
@@ -490,6 +496,11 @@ pub(crate) fn needs_helper_state(instrs: &[WasmBackendInstr]) -> bool {
                     }
                     WasmBackendInstr::Loop { body_instrs } => {
                         if has_heap_pattern(body_instrs) {
+                            return true;
+                        }
+                    }
+                    WasmBackendInstr::ListBuilderPush { value_instrs, .. } => {
+                        if has_heap_pattern(value_instrs) {
                             return true;
                         }
                     }
@@ -619,6 +630,9 @@ fn required_heap_base_spill_count_instr(instr: &WasmBackendInstr) -> u32 {
         } => required_heap_base_spill_count(then_instrs)
             .max(required_heap_base_spill_count(else_instrs)),
         WasmBackendInstr::Loop { body_instrs } => required_heap_base_spill_count(body_instrs),
+        WasmBackendInstr::ListBuilderPush { value_instrs, .. } => {
+            required_heap_base_spill_count(value_instrs)
+        }
         WasmBackendInstr::CaseMatch { arms, .. } => arms
             .iter()
             .map(|arm| required_heap_base_spill_count(&arm.body_instrs))
@@ -683,6 +697,7 @@ fn required_i64_scratch_count(instrs: &[WasmBackendInstr]) -> u32 {
         WasmBackendInstr::Intrinsic { .. }
         | WasmBackendInstr::ListEach { .. }
         | WasmBackendInstr::ListMap { .. }
+        | WasmBackendInstr::ListBuilderPush { .. }
         | WasmBackendInstr::IndirectCall { .. } => true,
         WasmBackendInstr::BinOp { op } => {
             matches!(op, IrBinOp::Mul | IrBinOp::Div | IrBinOp::Mod | IrBinOp::Eq)
@@ -1569,6 +1584,193 @@ fn emit_instrs_with_heap_depth(
                 emit_push_tagged_ptr(function, s_list_ptr, TAG_LIST);
             }
 
+            WasmBackendInstr::ListBuilderNew {
+                ptr_local,
+                len_local,
+                cap_local,
+                initial_capacity,
+            } => {
+                let hs = require_heap_state(helper_state, "ListBuilderNew")?;
+                let s_ptr = hs.scratch.i32_base + HS_TEXT_PTR;
+                let s_len = hs.scratch.i32_base + HS_TEXT_LEN;
+                let s_cap = hs.scratch.i32_base + HS_SEP_PTR;
+                let s_alloc_size = hs.scratch.i32_base + HS_ALLOC_SIZE;
+                let s_alloc_ptr = hs.scratch.i32_base + HS_AUX_PTR;
+                let initial_capacity = (*initial_capacity).max(1);
+
+                function.instruction(&Instruction::I32Const(initial_capacity as i32));
+                function.instruction(&Instruction::LocalSet(s_cap));
+                function.instruction(&Instruction::I32Const(0));
+                function.instruction(&Instruction::LocalSet(s_len));
+                function.instruction(&Instruction::LocalGet(s_cap));
+                function.instruction(&Instruction::I32Const(8));
+                function.instruction(&Instruction::I32Mul);
+                function.instruction(&Instruction::I32Const(4));
+                function.instruction(&Instruction::I32Add);
+                function.instruction(&Instruction::LocalSet(s_alloc_size));
+                emit_alloc_from_top(function, &hs, s_alloc_size, s_alloc_ptr);
+                function.instruction(&Instruction::LocalGet(s_alloc_ptr));
+                function.instruction(&Instruction::LocalSet(s_ptr));
+                function.instruction(&Instruction::LocalGet(s_ptr));
+                function.instruction(&Instruction::I32Const(0));
+                function.instruction(&Instruction::I32Store(MemArg {
+                    offset: 0,
+                    align: 2,
+                    memory_index: 0,
+                }));
+                emit_store_raw_i32_into_named_i64_local(function, ctx, ptr_local, s_ptr)?;
+                emit_store_raw_i32_into_named_i64_local(function, ctx, len_local, s_len)?;
+                emit_store_raw_i32_into_named_i64_local(function, ctx, cap_local, s_cap)?;
+            }
+
+            WasmBackendInstr::ListBuilderPush {
+                ptr_local,
+                len_local,
+                cap_local,
+                value_instrs,
+            } => {
+                let hs = require_heap_state(helper_state, "ListBuilderPush")?;
+                let scratch = require_scratch_state(scratch_state, "ListBuilderPush")?;
+                let value_i64 = scratch.i64_base;
+                let s_ptr = hs.scratch.i32_base + HS_TEXT_PTR;
+                let s_len = hs.scratch.i32_base + HS_TEXT_LEN;
+                let s_cap = hs.scratch.i32_base + HS_SEP_PTR;
+                let s_new_ptr = hs.scratch.i32_base + HS_AUX_PTR;
+                let s_alloc_size = hs.scratch.i32_base + HS_ALLOC_SIZE;
+                let s_iter = hs.scratch.i32_base + HS_ITER;
+
+                emit_load_raw_i32_from_named_i64_local(function, ctx, ptr_local, s_ptr)?;
+                emit_load_raw_i32_from_named_i64_local(function, ctx, len_local, s_len)?;
+                emit_load_raw_i32_from_named_i64_local(function, ctx, cap_local, s_cap)?;
+
+                function.instruction(&Instruction::LocalGet(s_len));
+                function.instruction(&Instruction::LocalGet(s_cap));
+                function.instruction(&Instruction::I32Eq);
+                function.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
+
+                function.instruction(&Instruction::LocalGet(s_cap));
+                function.instruction(&Instruction::I32Const(2));
+                function.instruction(&Instruction::I32Mul);
+                function.instruction(&Instruction::LocalSet(s_cap));
+                function.instruction(&Instruction::LocalGet(s_cap));
+                function.instruction(&Instruction::I32Const(8));
+                function.instruction(&Instruction::I32Mul);
+                function.instruction(&Instruction::I32Const(4));
+                function.instruction(&Instruction::I32Add);
+                function.instruction(&Instruction::LocalSet(s_alloc_size));
+                emit_alloc_from_top(function, &hs, s_alloc_size, s_new_ptr);
+
+                function.instruction(&Instruction::LocalGet(s_new_ptr));
+                function.instruction(&Instruction::LocalGet(s_len));
+                function.instruction(&Instruction::I32Store(MemArg {
+                    offset: 0,
+                    align: 2,
+                    memory_index: 0,
+                }));
+
+                function.instruction(&Instruction::I32Const(0));
+                function.instruction(&Instruction::LocalSet(s_iter));
+                function.instruction(&Instruction::Block(wasm_encoder::BlockType::Empty));
+                function.instruction(&Instruction::Loop(wasm_encoder::BlockType::Empty));
+                function.instruction(&Instruction::LocalGet(s_iter));
+                function.instruction(&Instruction::LocalGet(s_len));
+                function.instruction(&Instruction::I32GeU);
+                function.instruction(&Instruction::BrIf(1));
+
+                function.instruction(&Instruction::LocalGet(s_new_ptr));
+                function.instruction(&Instruction::I32Const(4));
+                function.instruction(&Instruction::I32Add);
+                function.instruction(&Instruction::LocalGet(s_iter));
+                function.instruction(&Instruction::I32Const(8));
+                function.instruction(&Instruction::I32Mul);
+                function.instruction(&Instruction::I32Add);
+
+                function.instruction(&Instruction::LocalGet(s_ptr));
+                function.instruction(&Instruction::I32Const(4));
+                function.instruction(&Instruction::I32Add);
+                function.instruction(&Instruction::LocalGet(s_iter));
+                function.instruction(&Instruction::I32Const(8));
+                function.instruction(&Instruction::I32Mul);
+                function.instruction(&Instruction::I32Add);
+                function.instruction(&Instruction::I64Load(MemArg {
+                    offset: 0,
+                    align: 3,
+                    memory_index: 0,
+                }));
+                function.instruction(&Instruction::I64Store(MemArg {
+                    offset: 0,
+                    align: 3,
+                    memory_index: 0,
+                }));
+
+                function.instruction(&Instruction::LocalGet(s_iter));
+                function.instruction(&Instruction::I32Const(1));
+                function.instruction(&Instruction::I32Add);
+                function.instruction(&Instruction::LocalSet(s_iter));
+                function.instruction(&Instruction::Br(0));
+                function.instruction(&Instruction::End);
+                function.instruction(&Instruction::End);
+
+                function.instruction(&Instruction::LocalGet(s_new_ptr));
+                function.instruction(&Instruction::LocalSet(s_ptr));
+                emit_store_raw_i32_into_named_i64_local(function, ctx, ptr_local, s_ptr)?;
+                emit_store_raw_i32_into_named_i64_local(function, ctx, cap_local, s_cap)?;
+                function.instruction(&Instruction::End);
+
+                emit_instrs_with_heap_depth(
+                    function,
+                    ctx,
+                    value_instrs,
+                    layout,
+                    named_i64_count,
+                    helper_i64_scratch_count,
+                    i32_base,
+                    static_strings,
+                    options,
+                    function_returns_i64,
+                    heap_base_depth + 1,
+                )?;
+                function.instruction(&Instruction::LocalSet(value_i64));
+
+                emit_load_raw_i32_from_named_i64_local(function, ctx, ptr_local, s_ptr)?;
+                emit_load_raw_i32_from_named_i64_local(function, ctx, len_local, s_len)?;
+                function.instruction(&Instruction::LocalGet(s_ptr));
+                function.instruction(&Instruction::I32Const(4));
+                function.instruction(&Instruction::I32Add);
+                function.instruction(&Instruction::LocalGet(s_len));
+                function.instruction(&Instruction::I32Const(8));
+                function.instruction(&Instruction::I32Mul);
+                function.instruction(&Instruction::I32Add);
+                function.instruction(&Instruction::LocalGet(value_i64));
+                function.instruction(&Instruction::I64Store(MemArg {
+                    offset: 0,
+                    align: 3,
+                    memory_index: 0,
+                }));
+
+                function.instruction(&Instruction::LocalGet(s_len));
+                function.instruction(&Instruction::I32Const(1));
+                function.instruction(&Instruction::I32Add);
+                function.instruction(&Instruction::LocalSet(s_len));
+                function.instruction(&Instruction::LocalGet(s_ptr));
+                function.instruction(&Instruction::LocalGet(s_len));
+                function.instruction(&Instruction::I32Store(MemArg {
+                    offset: 0,
+                    align: 2,
+                    memory_index: 0,
+                }));
+                emit_store_raw_i32_into_named_i64_local(function, ctx, len_local, s_len)?;
+            }
+
+            WasmBackendInstr::ListBuilderFinish { ptr_local } => {
+                let idx = ctx.get(ptr_local)?;
+                function.instruction(&Instruction::LocalGet(idx));
+                function.instruction(&Instruction::I64Const(0xFFFF_FFFFi64));
+                function.instruction(&Instruction::I64And);
+                function.instruction(&Instruction::I64Const((TAG_LIST as i64) << 60));
+                function.instruction(&Instruction::I64Or);
+            }
+
             WasmBackendInstr::TupleLit { element_instrs } => {
                 let hs = require_heap_state(helper_state, "TupleLit")?;
                 let s_tuple_ptr = hs.scratch.i32_base + HELPER_SCRATCH_I32 + heap_base_depth;
@@ -2151,6 +2353,32 @@ fn emit_decode_string_ptr(
     function.instruction(&Instruction::LocalSet(len_local));
 
     let _ = helper_state;
+}
+
+fn emit_load_raw_i32_from_named_i64_local(
+    function: &mut Function,
+    ctx: &EmitContext,
+    local_name: &str,
+    scratch_local: u32,
+) -> Result<(), CodegenError> {
+    let idx = ctx.get(local_name)?;
+    function.instruction(&Instruction::LocalGet(idx));
+    function.instruction(&Instruction::I32WrapI64);
+    function.instruction(&Instruction::LocalSet(scratch_local));
+    Ok(())
+}
+
+fn emit_store_raw_i32_into_named_i64_local(
+    function: &mut Function,
+    ctx: &EmitContext,
+    local_name: &str,
+    scratch_local: u32,
+) -> Result<(), CodegenError> {
+    let idx = ctx.get(local_name)?;
+    function.instruction(&Instruction::LocalGet(scratch_local));
+    function.instruction(&Instruction::I64ExtendI32U);
+    function.instruction(&Instruction::LocalSet(idx));
+    Ok(())
 }
 
 fn emit_compare_decoded_strings(

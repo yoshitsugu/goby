@@ -952,6 +952,21 @@ Milestones:
        permanent language semantics,
      - treat pure limit tuning as a fallback after structural options are
        rejected, not as the default fix.
+   - RR-4 status (2026-04-09):
+     - the first structural slice landed at the list-spread lowering/runtime
+       boundary rather than by changing the user-visible `List` representation:
+       restricted self-recursive list builders that return `[prefix..., ..rest]`
+       now lower to a builder-backed loop instead of recursive `ListConcat`.
+     - compile coverage proves the emitted Wasm validates and removes direct
+       self-calls from the helper body
+       (`compile_module_list_spread_builder_lowering_validates_and_eliminates_build_self_call`).
+     - runtime coverage now locks both the historical `doc/BUGS.md` repro and a
+       larger builder-shaped variant as successful executions
+       (`rr4_recursive_list_spread_repro_executes_after_builder_lowering`,
+       `rr4_recursive_list_spread_large_builder_shape_scales_past_bug_repro_size`).
+     - remaining RR-4 follow-up is to decide whether more general non-recursive
+       spread/concat chains should reuse the same builder ownership boundary or
+       stay on ordinary `ListConcat`.
 6. **RR-5: limit tuning and follow-through**
    - revisit stack/memory defaults only after RR-2 through RR-4 give clearer
      ownership and failure modes.

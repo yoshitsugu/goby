@@ -525,7 +525,7 @@ fn run_command_executes_helper_closure_capture_program() {
 
 #[test]
 #[cfg(unix)]
-fn run_command_reports_recursive_list_spread_memory_exhaustion_without_raw_backtrace() {
+fn run_command_executes_recursive_list_spread_bug_repro_after_rr4_fix() {
     let root = repo_root();
     let sandbox = TempDirGuard::new("run_recursive_list_spread_memory_exhaustion");
     let input = sandbox.join("recursive_list_spread.gb");
@@ -554,18 +554,14 @@ main =
     let output = run_goby_with_stdin(&root, &input, b"x\n");
 
     assert!(
-        !output.status.success(),
-        "expected runtime failure, stderr: {}",
+        output.status.success(),
+        "expected successful execution, stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        stderr.contains("memory exhausted [E-MEMORY-EXHAUSTION]"),
-        "expected memory exhaustion classification, stderr: {stderr}"
-    );
-    assert!(
-        !stderr.contains("error while executing at wasm backtrace"),
-        "expected raw wasm backtrace to be suppressed for this known case, stderr: {stderr}"
+        stdout.ends_with("5000\n"),
+        "expected recursive list-spread repro to print the head element, stdout: {stdout}"
     );
 }
 

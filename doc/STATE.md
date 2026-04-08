@@ -26,14 +26,30 @@ Immediate next steps:
 - **RR-4**: keep recursive list spread / concat growth as a separate ownership
   track after RR-3, since RR-2 kept it in runtime data representation/list
   concat ownership rather than recursion lowering.
-  - preserve the RR-3 boundary split: recursion lowering now owns the scan
-    buckets, while list-spread resilience should be solved in list/runtime
-    ownership rather than by adding more recursion-specific rewrites.
+  - preserve the RR-3 boundary split: recursion lowering owns the scan buckets,
+    while RR-4 currently owns the self-recursive list-builder bucket through the
+    list-spread lowering/runtime boundary.
+  - next RR-4 follow-up: decide whether ordinary non-recursive spread/concat
+    chains should adopt the same builder ownership boundary or stay on direct
+    `ListConcat`.
 - keep RR-1 diagnostics best-effort and explicit about uncertainty
   (`likely stack pressure`, `memory exhaustion`, `unknown runtime trap`) as
   later resilience work lands.
 
 ## Recently Completed
+
+- **Track RR, RR-4 builder-backed list-spread lowering** (partial, 2026-04-09).
+  - fixed the historical recursive `[x, ..rest]` memory-exhaustion bug without
+    changing the external `List` representation.
+  - restricted self-recursive list builders now lower to a loop plus internal
+    growable builder ops instead of recursively materializing singleton prefix
+    lists and concatenating the full tail at every step.
+  - compile coverage now proves the emitted Wasm validates and no longer
+    directly self-calls in the specialized helper body.
+  - runtime coverage now locks both the original `doc/BUGS.md` repro and a
+    larger builder-shaped variant as successful executions.
+  - open RR-4 scope remains for non-recursive spread/concat chains and for any
+    future decision about whether the builder boundary should widen further.
 
 - **Track RR, RR-3 tight-stack proof** (complete, 2026-04-09).
   - kept the RR-3 fix at the shared scan boundary: restricted self-recursive

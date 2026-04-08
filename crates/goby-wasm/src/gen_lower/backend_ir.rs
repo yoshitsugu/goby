@@ -310,6 +310,35 @@ pub(crate) enum WasmBackendInstr {
     ListLit {
         element_instrs: Vec<Vec<WasmBackendInstr>>,
     },
+    /// Initialize a growable list builder stored in named locals.
+    ///
+    /// The builder is internal to specialized lowering paths. It uses the same
+    /// physical memory layout as a normal list (`len: i32` + elements) but may
+    /// reserve extra trailing capacity that remains invisible to ordinary list
+    /// consumers after `ListBuilderFinish`.
+    ListBuilderNew {
+        ptr_local: String,
+        len_local: String,
+        cap_local: String,
+        initial_capacity: u32,
+    },
+    /// Append one tagged value to a growable list builder.
+    ///
+    /// `value_instrs` must leave exactly one tagged i64 on the stack.
+    /// The emitter grows the underlying contiguous storage geometrically when
+    /// `len == cap`, preserving amortized append behavior for specialized
+    /// self-recursive list-spread builders.
+    ListBuilderPush {
+        ptr_local: String,
+        len_local: String,
+        cap_local: String,
+        value_instrs: Vec<WasmBackendInstr>,
+    },
+    /// Finalize a growable list builder and push a tagged `List` pointer.
+    ///
+    /// The returned value is indistinguishable from an ordinary `ListLit`
+    /// result; any reserved capacity remains an internal implementation detail.
+    ListBuilderFinish { ptr_local: String },
     /// Construct a tuple value from a fixed number of element instruction sequences.
     ///
     /// Each inner `Vec<WasmBackendInstr>` produces one tagged i64 element.

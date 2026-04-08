@@ -71,6 +71,28 @@ main =
   println "${xs[0]}"
 "#;
 
+fn recursive_list_spread_source(n: usize) -> String {
+    format!(
+        r#"
+import goby/stdio
+
+build : Int -> List Int can Print
+build n =
+  if n == 0
+    []
+  else
+    rest = build (n - 1)
+    [n, ..rest]
+
+main : Unit -> Unit can Print, Read
+main =
+  _lines = read_lines ()
+  xs = build {n}
+  println "${{xs[0]}}"
+"#
+    )
+}
+
 const CALLBACK_ASSISTED_SCAN_SOURCE: &str = r#"
 import goby/list ( fold )
 import goby/stdio
@@ -196,15 +218,19 @@ fn rr3_non_tail_recursive_scan_repro_survives_tight_stack_limit_after_loop_lower
 }
 
 #[test]
-fn rr2_recursive_list_spread_repro_reports_memory_exhaustion() {
+fn rr4_recursive_list_spread_repro_executes_after_builder_lowering() {
     let module = parse_general_lowered_module(RECURSIVE_LIST_SPREAD_SOURCE);
-    let err = execute_runtime_module_with_stdin(&module, Some("x\n".to_string()))
-        .expect_err("recursive list-spread representative should preserve memory exhaustion");
-    assert!(
-        err.message
-            .contains("memory exhausted [E-MEMORY-EXHAUSTION]"),
-        "expected memory exhaustion classification, got: {err:?}"
-    );
+    let output = execute_runtime_module_with_stdin(&module, Some("x\n".to_string()))
+        .expect("recursive list-spread representative should execute after RR-4 lowering");
+    assert_eq!(output.as_deref(), Some("5000\n"));
+}
+
+#[test]
+fn rr4_recursive_list_spread_large_builder_shape_scales_past_bug_repro_size() {
+    let module = parse_general_lowered_module(&recursive_list_spread_source(50_000));
+    let output = execute_runtime_module_with_stdin(&module, Some("x\n".to_string()))
+        .expect("larger recursive list-spread builder shape should execute successfully");
+    assert_eq!(output.as_deref(), Some("50000\n"));
 }
 
 #[test]

@@ -52,6 +52,17 @@ fn decl_annotation_returns_int(annotation: Option<&str>) -> bool {
         .is_some_and(|function_ty| function_ty.result.trim() == "Int")
 }
 
+fn decl_annotation_returns_list(annotation: Option<&str>) -> bool {
+    let Some(function_ty) = parse_function_type(annotation.unwrap_or_default()) else {
+        return false;
+    };
+    matches!(
+        parse_type_expr(&function_ty.result),
+        Some(TypeExpr::Apply { head, .. })
+            if matches!(head.as_ref(), TypeExpr::Name(name) if name == "List")
+    )
+}
+
 /// Reason why a program cannot be lowered via the general-lowering path.
 ///
 /// Returned by [`supports_general_lower_module`] when it returns `Some(reason)`.
@@ -715,6 +726,23 @@ fn lower_aux_decl(
     };
     let lowered = if decl_annotation_returns_int(type_annotation) {
         match lower::lower_supported_self_recursive_int_scan(
+            name,
+            &body,
+            &param_names,
+            known_decls,
+            lambda_decls,
+        ) {
+            Ok(Some(instrs)) => Ok(instrs),
+            Ok(None) => lower::lower_comp_collecting_lambdas_with_params(
+                &body,
+                &param_names,
+                known_decls,
+                lambda_decls,
+            ),
+            Err(err) => Err(err),
+        }
+    } else if decl_annotation_returns_list(type_annotation) {
+        match lower::lower_supported_self_recursive_list_spread_builder(
             name,
             &body,
             &param_names,

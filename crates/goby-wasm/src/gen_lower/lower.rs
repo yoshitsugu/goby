@@ -208,6 +208,155 @@ pub(crate) fn lower_supported_self_recursive_int_scan(
     Ok(Some(decl_instrs))
 }
 
+pub(crate) fn lower_supported_self_recursive_list_spread_builder(
+    decl_name: &str,
+    comp: &CompExpr,
+    decl_params: &[String],
+    known_decls: &HashSet<String>,
+    _lambda_decls: &mut Vec<LambdaAuxDecl>,
+) -> Result<Option<Vec<WasmBackendInstr>>, LowerError> {
+    let CompExpr::If { cond, then_, else_ } = comp else {
+        return Ok(None);
+    };
+    if !matches_empty_list_comp(then_) {
+        return Ok(None);
+    }
+    let CompExpr::Let {
+        name, value, body, ..
+    } = else_.as_ref()
+    else {
+        return Ok(None);
+    };
+    let CompExpr::Call { callee, args } = value.as_ref() else {
+        return Ok(None);
+    };
+    if !is_self_decl_callee(callee, decl_name) || args.len() != decl_params.len() {
+        return Ok(None);
+    }
+    let CompExpr::Value(ValueExpr::ListLit { elements, spread }) = body.as_ref() else {
+        return Ok(None);
+    };
+    let Some(spread) = spread.as_ref() else {
+        return Ok(None);
+    };
+    let ValueExpr::Var(spread_name) = spread.as_ref() else {
+        return Ok(None);
+    };
+    if spread_name != name {
+        return Ok(None);
+    }
+
+    let bindings = ClosureBindingEnv::with_decl_params(decl_params.iter().map(String::as_str));
+    let mut decls: HashSet<String> = [
+        "__rr4_list_ptr".to_string(),
+        "__rr4_list_len".to_string(),
+        "__rr4_list_cap".to_string(),
+    ]
+    .into();
+    let mut recur_temp_counter = 0usize;
+    let body_instrs = lower_self_recursive_list_spread_loop_body(
+        cond,
+        elements,
+        decl_params,
+        args,
+        &bindings,
+        known_decls,
+        &mut decls,
+        &mut recur_temp_counter,
+    )?;
+
+    let mut decl_instrs: Vec<WasmBackendInstr> = decls
+        .into_iter()
+        .map(|name| WasmBackendInstr::DeclareLocal { name })
+        .collect();
+    decl_instrs.sort_by(|left, right| match (left, right) {
+        (
+            WasmBackendInstr::DeclareLocal { name: left },
+            WasmBackendInstr::DeclareLocal { name: right },
+        ) => left.cmp(right),
+        _ => std::cmp::Ordering::Equal,
+    });
+    decl_instrs.push(WasmBackendInstr::ListBuilderNew {
+        ptr_local: "__rr4_list_ptr".to_string(),
+        len_local: "__rr4_list_len".to_string(),
+        cap_local: "__rr4_list_cap".to_string(),
+        initial_capacity: 4,
+    });
+    decl_instrs.push(WasmBackendInstr::Loop { body_instrs });
+    Ok(Some(decl_instrs))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn lower_self_recursive_list_spread_loop_body(
+    cond: &ValueExpr,
+    elements: &[ValueExpr],
+    decl_params: &[String],
+    next_args: &[ValueExpr],
+    bindings: &ClosureBindingEnv,
+    known_decls: &HashSet<String>,
+    decls: &mut HashSet<String>,
+    recur_temp_counter: &mut usize,
+) -> Result<Vec<WasmBackendInstr>, LowerError> {
+    let mut then_instrs = vec![WasmBackendInstr::ListBuilderFinish {
+        ptr_local: "__rr4_list_ptr".to_string(),
+    }];
+
+    let mut else_instrs = Vec::new();
+    for elem in elements {
+        else_instrs.push(WasmBackendInstr::ListBuilderPush {
+            ptr_local: "__rr4_list_ptr".to_string(),
+            len_local: "__rr4_list_len".to_string(),
+            cap_local: "__rr4_list_cap".to_string(),
+            value_instrs: lower_value_ctx(elem, &HashMap::new(), bindings, known_decls)?,
+        });
+    }
+
+    let mut temp_names = Vec::with_capacity(decl_params.len());
+    for param in decl_params {
+        let temp_name = format!("__rr4_next_{}_{}", param, *recur_temp_counter);
+        *recur_temp_counter += 1;
+        decls.insert(temp_name.clone());
+        temp_names.push(temp_name);
+    }
+    for (arg, temp_name) in next_args.iter().zip(temp_names.iter()) {
+        else_instrs.extend(lower_value_ctx(
+            arg,
+            &HashMap::new(),
+            bindings,
+            known_decls,
+        )?);
+        else_instrs.push(WasmBackendInstr::StoreLocal {
+            name: temp_name.clone(),
+        });
+    }
+    for (param, temp_name) in decl_params.iter().zip(temp_names.iter()) {
+        else_instrs.push(WasmBackendInstr::LoadLocal {
+            name: temp_name.clone(),
+        });
+        else_instrs.push(WasmBackendInstr::StoreLocal {
+            name: param.clone(),
+        });
+    }
+    else_instrs.push(WasmBackendInstr::ContinueLoop { relative_depth: 1 });
+
+    let mut instrs = lower_value_ctx(cond, &HashMap::new(), bindings, known_decls)?;
+    instrs.push(WasmBackendInstr::If {
+        then_instrs: std::mem::take(&mut then_instrs),
+        else_instrs,
+    });
+    Ok(instrs)
+}
+
+fn matches_empty_list_comp(comp: &CompExpr) -> bool {
+    matches!(
+        comp,
+        CompExpr::Value(ValueExpr::ListLit {
+            elements,
+            spread: None
+        }) if elements.is_empty()
+    )
+}
+
 #[allow(clippy::too_many_arguments)]
 fn lower_self_recursive_int_scan_case(
     decl_name: &str,
@@ -505,6 +654,17 @@ fn hoist_declare_locals(
                     body_instrs: hoist_declare_locals(body_instrs, decls),
                 });
             }
+            WasmBackendInstr::ListBuilderPush {
+                ptr_local,
+                len_local,
+                cap_local,
+                value_instrs,
+            } => lowered.push(WasmBackendInstr::ListBuilderPush {
+                ptr_local,
+                len_local,
+                cap_local,
+                value_instrs: hoist_declare_locals(value_instrs, decls),
+            }),
             WasmBackendInstr::CaseMatch {
                 scrutinee_local,
                 arms,
@@ -2198,6 +2358,60 @@ walk width height x y =
         assert!(
             !rendered.contains("DeclCall { decl_name: \"walk\" }"),
             "specialized loop should eliminate self DeclCall(walk), got: {rendered}"
+        );
+    }
+
+    #[test]
+    fn lowers_supported_self_recursive_list_spread_builder_to_loop_and_builder_ops() {
+        let module = goby_core::parse_module(
+            r#"
+build : Int -> List Int can Print
+build n =
+  if n == 0
+    []
+  else
+    rest = build (n - 1)
+    [n, ..rest]
+"#,
+        )
+        .expect("source should parse");
+        let build_decl = module
+            .declarations
+            .iter()
+            .find(|decl| decl.name == "build")
+            .expect("build declaration should exist");
+        let ir_decl =
+            goby_core::ir_lower::lower_declaration(build_decl).expect("IR lowering should work");
+        let known_decls: HashSet<String> = ["build".to_string()].into();
+        let mut lambda_decls = Vec::new();
+        let lowered = lower_supported_self_recursive_list_spread_builder(
+            "build",
+            &ir_decl.body,
+            &ir_decl
+                .params
+                .iter()
+                .map(|(name, _)| name.clone())
+                .collect::<Vec<_>>(),
+            &known_decls,
+            &mut lambda_decls,
+        )
+        .expect("specialized lowering should not error")
+        .expect("builder shape should lower");
+
+        assert!(
+            lowered.iter().any(|instr| matches!(instr, I::Loop { .. })),
+            "list-spread builder should lower to a loop, got: {lowered:?}"
+        );
+        assert!(
+            lowered
+                .iter()
+                .any(|instr| matches!(instr, I::ListBuilderNew { .. })),
+            "list-spread builder should initialize a builder, got: {lowered:?}"
+        );
+        let rendered = format!("{lowered:?}");
+        assert!(
+            !rendered.contains("DeclCall { decl_name: \"build\" }"),
+            "specialized builder loop should eliminate self DeclCall(build), got: {rendered}"
         );
     }
 
