@@ -1035,11 +1035,15 @@ fn lower_module_to_instrs(module: &Module) -> Result<LowerModuleResult, CodegenE
             .collect();
 
         loop {
-            // Collect all DeclCall/PushFuncHandle names across main + current aux_decls.
+            // Collect all DeclCall/PushFuncHandle names across main + current aux_decls +
+            // lambda_decls (lambdas captured during lowering may themselves call stdlib fns).
             let mut referenced: HashSet<String> = HashSet::new();
             collect_decl_call_names(&main_instrs, &mut referenced);
             for aux in &aux_decls {
                 collect_decl_call_names(&aux.instrs, &mut referenced);
+            }
+            for lam in &lambda_decls {
+                collect_decl_call_names(&lam.instrs, &mut referenced);
             }
             // Find stdlib-exported names referenced but not yet added to aux_decls.
             let unresolved: Vec<String> = referenced

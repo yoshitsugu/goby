@@ -1405,6 +1405,30 @@ main =
     assert_eq!(output, "a-b-c\n");
 }
 
+// Regression test: stdlib function called inside a lambda (each callback) must be resolved
+// as an aux_decl.  Previously, lambda_decls were not scanned during the stdlib fixpoint loop,
+// so a stdlib DeclCall reachable only through a lambda was never added to aux_decls and the
+// emit step raised "unknown declaration '...' in DeclCall".
+#[test]
+fn resolves_runtime_output_for_stdlib_decl_call_inside_each_lambda() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    let source = r#"
+import goby/list (each, join)
+import goby/stdio
+
+main : Unit -> Unit can Print
+main =
+  rows = [["x", "y"], ["a", "b"]]
+  each rows (fn row ->
+    line = join row "-"
+    println line
+  )
+"#;
+    let module = parse_module(source).expect("parse should work");
+    let output = resolve_module_runtime_output(&module).expect("runtime output should resolve");
+    assert_eq!(output, "x-y\na-b\n");
+}
+
 #[test]
 #[ignore = "qualified iterator handler clauses are not yet covered by fallback runtime-output locking"]
 fn locks_runtime_output_for_iterator_unified_gb() {
@@ -1414,4 +1438,3 @@ fn locks_runtime_output_for_iterator_unified_gb() {
     let output = resolve_module_runtime_output(&module).expect("runtime output should resolve");
     assert_eq!(output, "tick:atick:btick:c31");
 }
-
