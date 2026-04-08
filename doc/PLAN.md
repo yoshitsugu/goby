@@ -819,7 +819,9 @@ Milestones:
    - `goby-cli` normalizes the rendered runtime error so classified messages are
      not prefixed twice.
    - the current boundary keeps raw engine detail only as secondary detail for
-     unknown traps.
+     unknown traps, and now emits Wasm function names for Goby-generated
+     functions so backtraces identify frames such as `goby!check` or
+     `goby!update_rolls`.
 3. **RR-2: recursion resilience**
    - improve runtime/lowering behavior for recursion depth.
    - start with tail-recursive lowering opportunities before attempting broader

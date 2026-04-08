@@ -26,6 +26,9 @@ Immediate next steps:
   - added a CLI regression for the minimal recursive list-spread memory bug.
   - classified runtime traps in `goby-wasm` with user-facing English messages
     and normalized CLI rendering.
+  - emitted Wasm function names for Goby-generated functions so unknown-trap
+    secondary detail now identifies frames like `goby!check` instead of only
+    raw function indices.
   - fixed direct-call heap-cursor synchronization so:
     - caller-owned live heap values are flushed before every direct call,
     - heap-returning callees still refresh the caller cursor after the call.

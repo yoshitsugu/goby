@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use wasm_encoder::{
     CodeSection, ConstExpr, DataSection, ElementSection, Elements, EntityType, ExportKind,
     ExportSection, Function, FunctionSection, ImportSection, Instruction, MemArg, MemorySection,
-    Module, RefType, TableSection, TableType, TypeSection, ValType,
+    Module, NameMap, NameSection, RefType, TableSection, TableType, TypeSection, ValType,
 };
 
 use crate::CodegenError;
@@ -1189,6 +1189,16 @@ pub(crate) fn emit_general_module_with_aux_and_options(
         code.function(&function);
     }
     module.section(&code);
+
+    let mut names = NameSection::new();
+    names.module("goby");
+    let mut function_names = NameMap::new();
+    function_names.append(main_func_idx, "main");
+    for (i, decl) in aux_decls.iter().enumerate() {
+        function_names.append(main_func_idx + 1 + i as u32, &decl.decl_name);
+    }
+    names.functions(&function_names);
+    module.section(&names);
 
     // Data section: newline byte for println (if needed).
     let needs_newline =
@@ -5475,6 +5485,28 @@ mod tests {
         let wasm = emit_general_module(&instrs, &default_layout())
             .expect("emit ListSet helper chain should succeed");
         assert_valid_wasm(&wasm);
+    }
+
+    #[test]
+    fn emit_general_module_with_aux_includes_function_names() {
+        let instrs = vec![I::I64Const(crate::gen_lower::value::encode_unit())];
+        let aux_decls = vec![AuxDecl {
+            decl_name: "__rr_named_helper".to_string(),
+            param_names: vec!["_unit".to_string()],
+            returns_wasm_heap: false,
+            instrs: vec![I::I64Const(crate::gen_lower::value::encode_int(1).unwrap())],
+        }];
+        let wasm = emit_general_module_with_aux(&instrs, &aux_decls, &default_layout())
+            .expect("module with aux decl should emit");
+        assert!(
+            wasm.windows("__rr_named_helper".len())
+                .any(|w| w == b"__rr_named_helper"),
+            "expected function name section to contain aux decl name"
+        );
+        assert!(
+            wasm.windows("main".len()).any(|w| w == b"main"),
+            "expected function name section to contain main"
+        );
     }
 
     // --- BinOp emission ---
