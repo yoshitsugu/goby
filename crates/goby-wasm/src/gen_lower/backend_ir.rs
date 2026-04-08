@@ -213,6 +213,19 @@ pub(crate) enum WasmBackendInstr {
         then_instrs: Vec<WasmBackendInstr>,
         else_instrs: Vec<WasmBackendInstr>,
     },
+    /// Structured loop expression used by shared lowering rewrites that replace
+    /// self-recursive scans with explicit local-state iteration.
+    ///
+    /// `body_instrs` either:
+    /// - leaves one tagged i64 result on the stack to exit the loop expression, or
+    /// - executes `ContinueLoop`, which branches back to the loop head after any
+    ///   required local updates have already been stored.
+    Loop { body_instrs: Vec<WasmBackendInstr> },
+    /// Continue the innermost `Loop`.
+    ///
+    /// This instruction is polymorphic in Wasm terms: callers should update all
+    /// loop-carried locals before emitting it.
+    ContinueLoop { relative_depth: u32 },
     /// Binary operation on two tagged i64 values.
     ///
     /// Both operands are expected to be on the Wasm stack (left operand deeper, right on top).

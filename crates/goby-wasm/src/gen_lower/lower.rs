@@ -9,7 +9,7 @@ use goby_core::closure_capture::{
     BindingRepr, CallableEnv, CallableEnvSlotKind, ClosureBindingEnv,
     analyze_lambda_callable_env_for_params, binding_repr_for_let_mut,
 };
-use goby_core::ir::{CompExpr, IrInterpPart, ValueExpr};
+use goby_core::ir::{CompExpr, IrBinOp, IrInterpPart, ValueExpr};
 
 use crate::gen_lower::backend_ir::{
     BackendEffectOp, BackendIntrinsic, BackendPrintOp, BackendReadOp, WasmBackendInstr,
@@ -156,6 +156,480 @@ pub(crate) fn lower_comp_collecting_lambdas_with_params(
 ) -> Result<Vec<WasmBackendInstr>, LowerError> {
     let bindings = ClosureBindingEnv::with_decl_params(decl_params.iter().map(String::as_str));
     lower_comp_inner(comp, &HashMap::new(), &bindings, known_decls, lambda_decls)
+}
+
+pub(crate) fn lower_supported_self_recursive_int_scan(
+    decl_name: &str,
+    comp: &CompExpr,
+    decl_params: &[String],
+    known_decls: &HashSet<String>,
+    lambda_decls: &mut Vec<LambdaAuxDecl>,
+) -> Result<Option<Vec<WasmBackendInstr>>, LowerError> {
+    let bindings = ClosureBindingEnv::with_decl_params(decl_params.iter().map(String::as_str));
+    let aliases = HashMap::new();
+    let mut decls = HashSet::new();
+    let mut recur_temp_counter = 0usize;
+    let acc_local = "__rr3_scan_acc".to_string();
+    decls.insert(acc_local.clone());
+
+    let Some(body_instrs) = lower_self_recursive_int_scan_case(
+        decl_name,
+        comp,
+        decl_params,
+        &acc_local,
+        0,
+        &aliases,
+        &bindings,
+        known_decls,
+        lambda_decls,
+        &mut decls,
+        &mut recur_temp_counter,
+    )?
+    else {
+        return Ok(None);
+    };
+
+    let mut decl_instrs: Vec<WasmBackendInstr> = decls
+        .into_iter()
+        .map(|name| WasmBackendInstr::DeclareLocal { name })
+        .collect();
+    decl_instrs.sort_by(|left, right| match (left, right) {
+        (
+            WasmBackendInstr::DeclareLocal { name: left },
+            WasmBackendInstr::DeclareLocal { name: right },
+        ) => left.cmp(right),
+        _ => std::cmp::Ordering::Equal,
+    });
+    decl_instrs.push(WasmBackendInstr::I64Const(encode_int(0)?));
+    decl_instrs.push(WasmBackendInstr::StoreLocal {
+        name: acc_local.clone(),
+    });
+    decl_instrs.push(WasmBackendInstr::Loop { body_instrs });
+    Ok(Some(decl_instrs))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn lower_self_recursive_int_scan_case(
+    decl_name: &str,
+    comp: &CompExpr,
+    decl_params: &[String],
+    acc_local: &str,
+    loop_depth: u32,
+    aliases: &HashMap<String, AliasValue>,
+    bindings: &ClosureBindingEnv,
+    known_decls: &HashSet<String>,
+    lambda_decls: &mut Vec<LambdaAuxDecl>,
+    decls: &mut HashSet<String>,
+    recur_temp_counter: &mut usize,
+) -> Result<Option<Vec<WasmBackendInstr>>, LowerError> {
+    match comp {
+        CompExpr::If { cond, then_, else_ } => {
+            let Some(then_instrs) = lower_self_recursive_int_scan_case(
+                decl_name,
+                then_,
+                decl_params,
+                acc_local,
+                loop_depth + 1,
+                aliases,
+                bindings,
+                known_decls,
+                lambda_decls,
+                decls,
+                recur_temp_counter,
+            )?
+            else {
+                return Ok(None);
+            };
+            let Some(else_instrs) = lower_self_recursive_int_scan_case(
+                decl_name,
+                else_,
+                decl_params,
+                acc_local,
+                loop_depth + 1,
+                aliases,
+                bindings,
+                known_decls,
+                lambda_decls,
+                decls,
+                recur_temp_counter,
+            )?
+            else {
+                return Ok(None);
+            };
+            let mut instrs = lower_value_ctx(cond, aliases, bindings, known_decls)?;
+            instrs.push(WasmBackendInstr::If {
+                then_instrs,
+                else_instrs,
+            });
+            Ok(Some(instrs))
+        }
+        CompExpr::Let {
+            name, value, body, ..
+        } => {
+            if let Some(recur_instrs) = try_lower_self_recursive_int_scan_recur(
+                decl_name,
+                decl_params,
+                name,
+                value,
+                body,
+                acc_local,
+                loop_depth,
+                aliases,
+                bindings,
+                known_decls,
+                decls,
+                recur_temp_counter,
+            )? {
+                return Ok(Some(recur_instrs));
+            }
+            if contains_self_decl_call(value, decl_name) {
+                return Ok(None);
+            }
+            decls.insert(name.clone());
+            let value_instrs =
+                lower_comp_inner(value, aliases, bindings, known_decls, lambda_decls)?;
+            let mut instrs = hoist_declare_locals(value_instrs, decls);
+            instrs.push(WasmBackendInstr::StoreLocal { name: name.clone() });
+            let mut scoped_bindings = bindings.clone();
+            scoped_bindings.bind_outer_immutable(name.clone());
+            let Some(body_instrs) = lower_self_recursive_int_scan_case(
+                decl_name,
+                body,
+                decl_params,
+                acc_local,
+                loop_depth,
+                aliases,
+                &scoped_bindings,
+                known_decls,
+                lambda_decls,
+                decls,
+                recur_temp_counter,
+            )?
+            else {
+                return Ok(None);
+            };
+            instrs.extend(body_instrs);
+            Ok(Some(instrs))
+        }
+        CompExpr::Seq { stmts, tail } => {
+            let mut instrs = Vec::new();
+            for stmt in stmts {
+                if contains_self_decl_call(stmt, decl_name) {
+                    return Ok(None);
+                }
+                let stmt_instrs =
+                    lower_comp_inner(stmt, aliases, bindings, known_decls, lambda_decls)?;
+                instrs.extend(hoist_declare_locals(stmt_instrs, decls));
+                instrs.push(WasmBackendInstr::Drop);
+            }
+            let Some(tail_instrs) = lower_self_recursive_int_scan_case(
+                decl_name,
+                tail,
+                decl_params,
+                acc_local,
+                loop_depth,
+                aliases,
+                bindings,
+                known_decls,
+                lambda_decls,
+                decls,
+                recur_temp_counter,
+            )?
+            else {
+                return Ok(None);
+            };
+            instrs.extend(tail_instrs);
+            Ok(Some(instrs))
+        }
+        CompExpr::Call { callee, args } if is_self_decl_callee(callee, decl_name) => {
+            lower_self_recursive_int_scan_continue(
+                decl_params,
+                args,
+                None,
+                acc_local,
+                loop_depth,
+                aliases,
+                bindings,
+                known_decls,
+                decls,
+                recur_temp_counter,
+            )
+            .map(Some)
+        }
+        _ => {
+            if contains_self_decl_call(comp, decl_name) {
+                return Ok(None);
+            }
+            let base_instrs = lower_comp_inner(comp, aliases, bindings, known_decls, lambda_decls)?;
+            let mut instrs = vec![WasmBackendInstr::LoadLocal {
+                name: acc_local.to_string(),
+            }];
+            instrs.extend(hoist_declare_locals(base_instrs, decls));
+            instrs.push(WasmBackendInstr::BinOp { op: IrBinOp::Add });
+            Ok(Some(instrs))
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn try_lower_self_recursive_int_scan_recur(
+    decl_name: &str,
+    decl_params: &[String],
+    let_name: &str,
+    value: &CompExpr,
+    body: &CompExpr,
+    acc_local: &str,
+    loop_depth: u32,
+    aliases: &HashMap<String, AliasValue>,
+    bindings: &ClosureBindingEnv,
+    known_decls: &HashSet<String>,
+    decls: &mut HashSet<String>,
+    recur_temp_counter: &mut usize,
+) -> Result<Option<Vec<WasmBackendInstr>>, LowerError> {
+    let CompExpr::Call { callee, args } = value else {
+        return Ok(None);
+    };
+    if !is_self_decl_callee(callee, decl_name) {
+        return Ok(None);
+    }
+
+    let acc_delta = match body {
+        CompExpr::Value(ValueExpr::Var(name)) if name == let_name => None,
+        CompExpr::Value(ValueExpr::BinOp { op, left, right }) if *op == IrBinOp::Add => {
+            match (left.as_ref(), right.as_ref()) {
+                (ValueExpr::Var(name), other) | (other, ValueExpr::Var(name))
+                    if name == let_name =>
+                {
+                    Some(other.clone())
+                }
+                _ => return Ok(None),
+            }
+        }
+        _ => return Ok(None),
+    };
+
+    lower_self_recursive_int_scan_continue(
+        decl_params,
+        args,
+        acc_delta.as_ref(),
+        acc_local,
+        loop_depth,
+        aliases,
+        bindings,
+        known_decls,
+        decls,
+        recur_temp_counter,
+    )
+    .map(Some)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn lower_self_recursive_int_scan_continue(
+    decl_params: &[String],
+    args: &[ValueExpr],
+    acc_delta: Option<&ValueExpr>,
+    acc_local: &str,
+    loop_depth: u32,
+    aliases: &HashMap<String, AliasValue>,
+    bindings: &ClosureBindingEnv,
+    known_decls: &HashSet<String>,
+    decls: &mut HashSet<String>,
+    recur_temp_counter: &mut usize,
+) -> Result<Vec<WasmBackendInstr>, LowerError> {
+    if args.len() != decl_params.len() {
+        return Err(LowerError::UnsupportedForm {
+            node: "self-recursive scan lowering requires matching arity".to_string(),
+        });
+    }
+
+    let mut instrs = Vec::new();
+    if let Some(delta) = acc_delta {
+        instrs.push(WasmBackendInstr::LoadLocal {
+            name: acc_local.to_string(),
+        });
+        instrs.extend(lower_value_ctx(delta, aliases, bindings, known_decls)?);
+        instrs.push(WasmBackendInstr::BinOp { op: IrBinOp::Add });
+        instrs.push(WasmBackendInstr::StoreLocal {
+            name: acc_local.to_string(),
+        });
+    }
+
+    let mut temp_names = Vec::with_capacity(decl_params.len());
+    for param in decl_params {
+        let temp_name = format!("__rr3_next_{}_{}", param, *recur_temp_counter);
+        *recur_temp_counter += 1;
+        decls.insert(temp_name.clone());
+        temp_names.push(temp_name);
+    }
+    for (arg, temp_name) in args.iter().zip(temp_names.iter()) {
+        instrs.extend(lower_value_ctx(arg, aliases, bindings, known_decls)?);
+        instrs.push(WasmBackendInstr::StoreLocal {
+            name: temp_name.clone(),
+        });
+    }
+    for (param, temp_name) in decl_params.iter().zip(temp_names.iter()) {
+        instrs.push(WasmBackendInstr::LoadLocal {
+            name: temp_name.clone(),
+        });
+        instrs.push(WasmBackendInstr::StoreLocal {
+            name: param.clone(),
+        });
+    }
+    instrs.push(WasmBackendInstr::ContinueLoop {
+        relative_depth: loop_depth,
+    });
+    Ok(instrs)
+}
+
+fn hoist_declare_locals(
+    instrs: Vec<WasmBackendInstr>,
+    decls: &mut HashSet<String>,
+) -> Vec<WasmBackendInstr> {
+    let mut lowered = Vec::new();
+    for instr in instrs {
+        match instr {
+            WasmBackendInstr::DeclareLocal { name } => {
+                decls.insert(name);
+            }
+            WasmBackendInstr::If {
+                then_instrs,
+                else_instrs,
+            } => {
+                lowered.push(WasmBackendInstr::If {
+                    then_instrs: hoist_declare_locals(then_instrs, decls),
+                    else_instrs: hoist_declare_locals(else_instrs, decls),
+                });
+            }
+            WasmBackendInstr::Loop { body_instrs } => {
+                lowered.push(WasmBackendInstr::Loop {
+                    body_instrs: hoist_declare_locals(body_instrs, decls),
+                });
+            }
+            WasmBackendInstr::CaseMatch {
+                scrutinee_local,
+                arms,
+            } => lowered.push(WasmBackendInstr::CaseMatch {
+                scrutinee_local,
+                arms: arms
+                    .into_iter()
+                    .map(|arm| crate::gen_lower::backend_ir::CaseArmInstr {
+                        pattern: arm.pattern,
+                        body_instrs: hoist_declare_locals(arm.body_instrs, decls),
+                    })
+                    .collect(),
+            }),
+            WasmBackendInstr::ListLit { element_instrs } => {
+                lowered.push(WasmBackendInstr::ListLit {
+                    element_instrs: element_instrs
+                        .into_iter()
+                        .map(|child| hoist_declare_locals(child, decls))
+                        .collect(),
+                });
+            }
+            WasmBackendInstr::TupleLit { element_instrs } => {
+                lowered.push(WasmBackendInstr::TupleLit {
+                    element_instrs: element_instrs
+                        .into_iter()
+                        .map(|child| hoist_declare_locals(child, decls))
+                        .collect(),
+                });
+            }
+            WasmBackendInstr::RecordLit {
+                constructor,
+                field_instrs,
+            } => lowered.push(WasmBackendInstr::RecordLit {
+                constructor,
+                field_instrs: field_instrs
+                    .into_iter()
+                    .map(|child| hoist_declare_locals(child, decls))
+                    .collect(),
+            }),
+            WasmBackendInstr::ListEachEffect { list_instrs, op } => {
+                lowered.push(WasmBackendInstr::ListEachEffect {
+                    list_instrs: hoist_declare_locals(list_instrs, decls),
+                    op,
+                });
+            }
+            WasmBackendInstr::ListEach {
+                list_instrs,
+                func_instrs,
+            } => lowered.push(WasmBackendInstr::ListEach {
+                list_instrs: hoist_declare_locals(list_instrs, decls),
+                func_instrs: hoist_declare_locals(func_instrs, decls),
+            }),
+            WasmBackendInstr::ListMap {
+                list_instrs,
+                func_instrs,
+            } => lowered.push(WasmBackendInstr::ListMap {
+                list_instrs: hoist_declare_locals(list_instrs, decls),
+                func_instrs: hoist_declare_locals(func_instrs, decls),
+            }),
+            WasmBackendInstr::CreateClosure {
+                func_handle_instrs,
+                slot_instrs,
+            } => lowered.push(WasmBackendInstr::CreateClosure {
+                func_handle_instrs: hoist_declare_locals(func_handle_instrs, decls),
+                slot_instrs: slot_instrs
+                    .into_iter()
+                    .map(|child| hoist_declare_locals(child, decls))
+                    .collect(),
+            }),
+            WasmBackendInstr::AllocMutableCell { init_instrs } => {
+                lowered.push(WasmBackendInstr::AllocMutableCell {
+                    init_instrs: hoist_declare_locals(init_instrs, decls),
+                });
+            }
+            WasmBackendInstr::StoreCellValue {
+                cell_ptr_instrs,
+                value_instrs,
+            } => lowered.push(WasmBackendInstr::StoreCellValue {
+                cell_ptr_instrs: hoist_declare_locals(cell_ptr_instrs, decls),
+                value_instrs: hoist_declare_locals(value_instrs, decls),
+            }),
+            other => lowered.push(other),
+        }
+    }
+    lowered
+}
+
+fn contains_self_decl_call(comp: &CompExpr, decl_name: &str) -> bool {
+    match comp {
+        CompExpr::Value(_) => false,
+        CompExpr::Let { value, body, .. } | CompExpr::LetMut { value, body, .. } => {
+            contains_self_decl_call(value, decl_name) || contains_self_decl_call(body, decl_name)
+        }
+        CompExpr::Seq { stmts, tail } => {
+            stmts
+                .iter()
+                .any(|stmt| contains_self_decl_call(stmt, decl_name))
+                || contains_self_decl_call(tail, decl_name)
+        }
+        CompExpr::If { then_, else_, .. } => {
+            contains_self_decl_call(then_, decl_name) || contains_self_decl_call(else_, decl_name)
+        }
+        CompExpr::Call { callee, .. } => is_self_decl_callee(callee, decl_name),
+        CompExpr::Assign { value, .. } => contains_self_decl_call(value, decl_name),
+        CompExpr::AssignIndex { value, .. } => contains_self_decl_call(value, decl_name),
+        CompExpr::Case { arms, .. } => arms
+            .iter()
+            .any(|arm| contains_self_decl_call(&arm.body, decl_name)),
+        CompExpr::PerformEffect { .. } => false,
+        CompExpr::Handle { clauses } => clauses
+            .iter()
+            .any(|clause| contains_self_decl_call(&clause.body, decl_name)),
+        CompExpr::WithHandler { handler, body } => {
+            contains_self_decl_call(handler, decl_name) || contains_self_decl_call(body, decl_name)
+        }
+        CompExpr::Resume { .. } => false,
+    }
+}
+
+fn is_self_decl_callee(callee: &ValueExpr, decl_name: &str) -> bool {
+    match callee {
+        ValueExpr::Var(name) => name == decl_name,
+        ValueExpr::GlobalRef { name, .. } => name == decl_name,
+        _ => false,
+    }
 }
 
 fn lower_comp_inner(
@@ -1661,6 +2135,70 @@ mod tests {
         let mut lambda_decls = Vec::new();
         let bindings = ClosureBindingEnv::default();
         lower_comp_inner(comp, aliases, &bindings, &HashSet::new(), &mut lambda_decls)
+    }
+
+    #[test]
+    fn lowers_supported_self_recursive_int_scan_to_loop() {
+        let module = goby_core::parse_module(
+            r#"
+import goby/stdio
+
+probe : Int -> Bool can Print
+probe n =
+  n >= 0
+
+walk : Int -> Int -> Int -> Int -> Int can Print
+walk width height x y =
+  if y >= height
+    0
+  else
+    if x >= width
+      walk width height 0 (y + 1)
+    else
+      checked =
+        if probe x
+          1
+        else
+          0
+      checked + walk width height (x + 1) y
+"#,
+        )
+        .expect("source should parse");
+        let walk_decl = module
+            .declarations
+            .iter()
+            .find(|decl| decl.name == "walk")
+            .expect("walk declaration should exist");
+        let ir_decl =
+            goby_core::ir_lower::lower_declaration(walk_decl).expect("IR lowering should work");
+        let known_decls: HashSet<String> = ["probe".to_string(), "walk".to_string()].into();
+        let mut lambda_decls = Vec::new();
+        let lowered = lower_supported_self_recursive_int_scan(
+            "walk",
+            &ir_decl.body,
+            &ir_decl
+                .params
+                .iter()
+                .map(|(name, _)| name.clone())
+                .collect::<Vec<_>>(),
+            &known_decls,
+            &mut lambda_decls,
+        )
+        .expect("specialized lowering should not error");
+
+        assert!(
+            lowered
+                .as_ref()
+                .is_some_and(|instrs| instrs.iter().any(|instr| matches!(instr, I::Loop { .. }))),
+            "supported recursive scan should lower to a loop, got: {:?}",
+            lowered
+        );
+        let lowered = lowered.expect("supported scan should lower");
+        let rendered = format!("{lowered:?}");
+        assert!(
+            !rendered.contains("DeclCall { decl_name: \"walk\" }"),
+            "specialized loop should eliminate self DeclCall(walk), got: {rendered}"
+        );
     }
 
     #[test]

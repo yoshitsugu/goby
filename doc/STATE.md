@@ -31,6 +31,13 @@ Immediate next steps:
   - reject symbol-name-specific or fixture-name-specific rewrites.
 - keep callback-assisted recursion in scope only where it stresses that same
   shared scan boundary rather than treating callback dispatch as an isolated bug.
+- tighten the current RR-3 sub-slice from compile-path proof to execution-path
+  proof.
+  - the lowering now recognizes a restricted self-recursive Int scan shape and
+    emits loop-form backend IR instead of self `DeclCall`.
+  - the next step is to prove that this actually survives the intended tight
+    Wasm stack configuration at runtime, or else identify the remaining boundary
+    that still consumes stack.
 - **RR-4**: keep recursive list spread / concat growth as a separate ownership
   track after RR-3, since RR-2 kept it in runtime data representation/list
   concat ownership rather than recursion lowering.
@@ -40,6 +47,13 @@ Immediate next steps:
 
 ## Recently Completed
 
+- **Track RR, RR-3 lowering scaffold** (partial, 2026-04-08).
+  - added backend-IR loop support plus a lowering rewrite for a restricted
+    self-recursive Int scan shape in `gen_lower/lower.rs`.
+  - verified at unit level that supported scan shapes lower to `Loop` and
+    eliminate self `DeclCall`.
+  - did not yet close the runtime proof under tight Wasm stack limits; that is
+    the next RR-3 step.
 - **Track RR, RR-2 representative decomposition** (complete, 2026-04-08).
   - added focused Goby-owned representative repro tests in
     `crates/goby-wasm/src/runtime_rr_tests.rs` for:
@@ -122,6 +136,9 @@ Immediate next steps:
 
 - For RR-3, what is the smallest honest boundary that can reduce stack pressure
   for non-tail recursive scans without destabilizing existing call semantics?
+- Why does the current loop-form lowering still lack a confirmed tight-stack
+  runtime win: remaining Wasm emission shape, stack-limit calibration, or some
+  other execution-boundary cost?
 - Within that RR-3 boundary, should callback-assisted scans be improved by the
   same rule automatically, or do they expose a second shared sub-boundary once
   the scan case is modeled?

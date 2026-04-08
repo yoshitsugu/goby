@@ -33,7 +33,7 @@ pub(crate) mod value;
 use std::collections::{HashMap, HashSet};
 
 use goby_core::Module;
-use goby_core::ir::CompExpr;
+use goby_core::ir::{CompExpr, IrType};
 use goby_core::stdlib::StdlibResolver;
 use goby_core::types::{TypeExpr, parse_function_type, parse_type_expr};
 
@@ -699,6 +699,7 @@ fn read_line_instrs_are_supported(instrs: &[backend_ir::WasmBackendInstr]) -> bo
 fn lower_aux_decl(
     name: &str,
     param_names: Vec<String>,
+    result_ty: &IrType,
     body: &CompExpr,
     known_decls: &HashSet<String>,
     allow_safe_handler_lowering: bool,
@@ -707,12 +708,32 @@ fn lower_aux_decl(
     let Some(body) = rewrite_safe_handlers_if_present(body, allow_safe_handler_lowering)? else {
         return Ok(Err(GeneralLowerUnsupportedReason::HandlerRewriteFailed));
     };
-    let instrs = match lower::lower_comp_collecting_lambdas_with_params(
-        &body,
-        &param_names,
-        known_decls,
-        lambda_decls,
-    ) {
+    let lowered = if matches!(result_ty, IrType::Int) {
+        match lower::lower_supported_self_recursive_int_scan(
+            name,
+            &body,
+            &param_names,
+            known_decls,
+            lambda_decls,
+        ) {
+            Ok(Some(instrs)) => Ok(instrs),
+            Ok(None) => lower::lower_comp_collecting_lambdas_with_params(
+                &body,
+                &param_names,
+                known_decls,
+                lambda_decls,
+            ),
+            Err(err) => Err(err),
+        }
+    } else {
+        lower::lower_comp_collecting_lambdas_with_params(
+            &body,
+            &param_names,
+            known_decls,
+            lambda_decls,
+        )
+    };
+    let instrs = match lowered {
         Ok(i) => i,
         Err(lower::LowerError::UnsupportedForm { node }) => {
             return Ok(Err(GeneralLowerUnsupportedReason::UnsupportedIrForm {
@@ -763,6 +784,7 @@ fn first_non_main_lowering_issue(
         match lower_aux_decl(
             &aux_ir_decl.name,
             param_names,
+            &aux_ir_decl.result_ty,
             &aux_ir_decl.body,
             &known_decls,
             allow_safe_handler_lowering,
@@ -1035,6 +1057,7 @@ fn lower_module_to_instrs(module: &Module) -> Result<LowerModuleResult, CodegenE
         match lower_aux_decl(
             &aux_ir_decl.name,
             param_names,
+            &aux_ir_decl.result_ty,
             &aux_ir_decl.body,
             &known_decls,
             allow_safe_handler_lowering,
@@ -1111,6 +1134,7 @@ fn lower_module_to_instrs(module: &Module) -> Result<LowerModuleResult, CodegenE
                 match lower_aux_decl(
                     &aux_ir_decl.name,
                     param_names,
+                    &aux_ir_decl.result_ty,
                     &aux_ir_decl.body,
                     &known_decls,
                     true, // stdlib handlers are one-shot tail-resumptive by construction

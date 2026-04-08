@@ -373,6 +373,9 @@ fn collect_all_instrs(instrs: &[WasmBackendInstr]) -> Vec<&WasmBackendInstr> {
                 result.extend(collect_all_instrs(then_instrs));
                 result.extend(collect_all_instrs(else_instrs));
             }
+            WasmBackendInstr::Loop { body_instrs } => {
+                result.extend(collect_all_instrs(body_instrs));
+            }
             WasmBackendInstr::CaseMatch { arms, .. } => {
                 for arm in arms {
                     result.extend(collect_all_instrs(&arm.body_instrs));
@@ -482,6 +485,11 @@ pub(crate) fn needs_helper_state(instrs: &[WasmBackendInstr]) -> bool {
                         else_instrs,
                     } => {
                         if has_heap_pattern(then_instrs) || has_heap_pattern(else_instrs) {
+                            return true;
+                        }
+                    }
+                    WasmBackendInstr::Loop { body_instrs } => {
+                        if has_heap_pattern(body_instrs) {
                             return true;
                         }
                     }
@@ -610,6 +618,7 @@ fn required_heap_base_spill_count_instr(instr: &WasmBackendInstr) -> u32 {
             else_instrs,
         } => required_heap_base_spill_count(then_instrs)
             .max(required_heap_base_spill_count(else_instrs)),
+        WasmBackendInstr::Loop { body_instrs } => required_heap_base_spill_count(body_instrs),
         WasmBackendInstr::CaseMatch { arms, .. } => arms
             .iter()
             .map(|arm| required_heap_base_spill_count(&arm.body_instrs))
@@ -1452,6 +1461,33 @@ fn emit_instrs_with_heap_depth(
                     heap_base_depth,
                 )?;
                 function.instruction(&Instruction::End);
+            }
+
+            WasmBackendInstr::Loop { body_instrs } => {
+                function.instruction(&Instruction::Block(wasm_encoder::BlockType::Result(
+                    wasm_encoder::ValType::I64,
+                )));
+                function.instruction(&Instruction::Loop(wasm_encoder::BlockType::Empty));
+                emit_instrs_with_heap_depth(
+                    function,
+                    ctx,
+                    body_instrs,
+                    layout,
+                    named_i64_count,
+                    helper_i64_scratch_count,
+                    i32_base,
+                    static_strings,
+                    options,
+                    function_returns_i64,
+                    heap_base_depth,
+                )?;
+                function.instruction(&Instruction::Br(1));
+                function.instruction(&Instruction::End);
+                function.instruction(&Instruction::End);
+            }
+
+            WasmBackendInstr::ContinueLoop { relative_depth } => {
+                function.instruction(&Instruction::Br(*relative_depth));
             }
 
             WasmBackendInstr::DeclCall { decl_name } => {
