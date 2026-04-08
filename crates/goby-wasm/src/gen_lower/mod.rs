@@ -35,6 +35,7 @@ use std::collections::{HashMap, HashSet};
 use goby_core::Module;
 use goby_core::ir::CompExpr;
 use goby_core::stdlib::StdlibResolver;
+use goby_core::types::{TypeExpr, parse_function_type, parse_type_expr};
 
 use crate::CodegenError;
 use crate::effect_handler_legality::analyze_module_handler_legality;
@@ -133,6 +134,30 @@ impl std::fmt::Display for GeneralLowerUnsupportedReason {
 /// - `split`: handled by `StringSplit` intrinsic (non-empty sep) or redirected to
 ///   `StringGraphemesList` (empty string literal sep) before reaching the intrinsic path.
 const SPECIALLY_LOWERED_STDLIB_NAMES: &[&str] = &["each", "map", "graphemes", "split"];
+
+fn type_expr_returns_wasm_heap(expr: &TypeExpr) -> bool {
+    match expr {
+        TypeExpr::Name(name) => !matches!(name.as_str(), "Int" | "Bool" | "String" | "Unit"),
+        TypeExpr::Tuple(_) | TypeExpr::Function { .. } => true,
+        TypeExpr::Apply { head, .. } => match head.as_ref() {
+            TypeExpr::Name(name) => !matches!(name.as_str(), "String"),
+            _ => true,
+        },
+    }
+}
+
+fn decl_return_type_uses_wasm_heap(annotation: Option<&str>) -> bool {
+    let Some(annotation) = annotation else {
+        return true;
+    };
+    let Some(function_ty) = parse_function_type(annotation) else {
+        return true;
+    };
+    let Some(result_ty) = parse_type_expr(&function_ty.result) else {
+        return true;
+    };
+    type_expr_returns_wasm_heap(&result_ty)
+}
 
 fn resolve_stdlib_root() -> std::path::PathBuf {
     std::env::var_os("GOBY_STDLIB_ROOT")
@@ -703,6 +728,7 @@ fn lower_aux_decl(
     Ok(Ok(AuxDecl {
         decl_name: name.to_string(),
         param_names,
+        returns_wasm_heap: true,
         instrs,
     }))
 }
@@ -1014,7 +1040,16 @@ fn lower_module_to_instrs(module: &Module) -> Result<LowerModuleResult, CodegenE
             allow_safe_handler_lowering,
             &mut lambda_decls,
         )? {
-            Ok(aux) => aux_decls.push(aux),
+            Ok(mut aux) => {
+                let source_decl = module
+                    .declarations
+                    .iter()
+                    .find(|decl| decl.name == aux_ir_decl.name)
+                    .expect("source decl for lowered user aux must exist");
+                aux.returns_wasm_heap =
+                    decl_return_type_uses_wasm_heap(source_decl.type_annotation.as_deref());
+                aux_decls.push(aux);
+            }
             Err(reason) => return Ok(Err(reason)),
         }
     }
@@ -1081,7 +1116,9 @@ fn lower_module_to_instrs(module: &Module) -> Result<LowerModuleResult, CodegenE
                     true, // stdlib handlers are one-shot tail-resumptive by construction
                     &mut lambda_decls,
                 )? {
-                    Ok(aux) => {
+                    Ok(mut aux) => {
+                        aux.returns_wasm_heap =
+                            decl_return_type_uses_wasm_heap(goby_decl.type_annotation.as_deref());
                         aux_decls.push(aux);
                         aux_added.insert(name.clone());
                         added_any = true;
@@ -1102,6 +1139,7 @@ fn lower_module_to_instrs(module: &Module) -> Result<LowerModuleResult, CodegenE
         aux_decls.push(AuxDecl {
             decl_name: lam.decl_name,
             param_names: lam.param_names,
+            returns_wasm_heap: true,
             instrs: lam.instrs,
         });
     }

@@ -1875,6 +1875,110 @@ main =
     }
 
     #[test]
+    fn iterative_grid_pruning_after_render_executes_without_heap_cursor_corruption() {
+        use goby_core::parse_module;
+        let module = parse_module(
+            r#"
+import goby/list (each, fold, join, length, map)
+import goby/string (graphemes)
+import goby/stdio
+
+neighbor_threshold : Int
+neighbor_threshold = 4
+
+should_prune_cell : List (List String) -> Int -> Int -> Int -> Int -> Bool can Print
+should_prune_cell grid x y width height =
+  if grid[y][x] == "@"
+    neighbor_offsets = [(-1, -1), (0, -1), (1, -1), (-1, 0), (1, 0), (-1, 1), (0, 1), (1, 1)]
+    occupied_neighbors =
+      fold neighbor_offsets 0 (fn total offset ->
+        next_y = y + offset.1
+        next_x = x + offset.0
+        if 0 <= next_y && next_y < height && 0 <= next_x && next_x < width
+          if grid[y + offset.1][x + offset.0] == "@"
+            total + 1
+          else
+            total
+        else
+          total
+      )
+    occupied_neighbors < neighbor_threshold
+  else
+    False
+
+collect_prune_positions : List (List String) -> Int -> Int -> Int -> Int -> List (Int, Int) can Print
+collect_prune_positions grid x y width height =
+  if y >= height
+    []
+  else
+    if x >= width
+      collect_prune_positions grid 0 (y + 1) width height
+    else
+      rest = collect_prune_positions grid (x + 1) y width height
+      if should_prune_cell grid x y width height
+        [(x, y), ..rest]
+      else
+        rest
+
+apply_prune_positions : List (List String) -> List (Int, Int) -> List (List String) can Print
+apply_prune_positions grid positions =
+  mut updated = grid
+  each positions (fn pos ->
+    updated[pos.1][pos.0] := "."
+    ()
+  )
+  updated
+
+render_grid : List (List String) -> Unit can Print
+render_grid grid =
+  each grid (fn row ->
+    line = join row ""
+    println line
+  )
+
+prune_until_stable : List (List String) -> Int -> Int can Print
+prune_until_stable grid total =
+  height = length grid
+  width = length(grid[0])
+  positions = collect_prune_positions grid 0 0 width height
+  count = length positions
+  if count > 0
+    updated = apply_prune_positions grid positions
+    render_grid updated
+    prune_until_stable updated (total + count)
+  else
+    total
+
+main : Unit -> Unit can Print, Read
+main =
+  grid = map (read_lines ()) graphemes
+  total = prune_until_stable grid 0
+  println "${total}"
+"#,
+        )
+        .expect("source should parse");
+
+        let input = "\
+..@@.@@@@.\n\
+@@@.@.@.@@\n\
+@@@@@.@.@@\n\
+@.@@@@..@.\n\
+@@.@@@@.@@\n\
+.@@@@@@@.@\n\
+.@.@.@.@@@\n\
+@.@@@.@@@@\n\
+.@@@@@@@@.\n\
+@.@.@@@.@.\n";
+        let output = execute_runtime_module_with_stdin(&module, Some(input.to_string()))
+            .expect("iterative grid pruning program should execute successfully");
+        assert!(
+            output.as_deref().is_some_and(|text| text.ends_with("43\n")),
+            "final output should end with the stable-pruning total, got {:?}",
+            output
+        );
+    }
+
+    #[test]
     fn heap_only_recursive_tuple_allocation_grows_past_initial_pages() {
         use goby_core::parse_module;
 

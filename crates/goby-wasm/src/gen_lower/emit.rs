@@ -179,6 +179,9 @@ struct EmitContext {
     /// Map from declaration name to Wasm function index (for direct `DeclCall`).
     /// Built by `emit_general_module` before emitting any function body.
     decl_func_indices: HashMap<String, u32>,
+    /// Map from declaration name to whether the result may reference
+    /// Wasm-owned heap allocations that must survive after the call returns.
+    decl_returns_wasm_heap: HashMap<String, bool>,
     /// Map from declaration name to funcref table slot index (for `PushFuncHandle`).
     /// Slot 0 = first aux decl, slot 1 = second aux decl, etc.
     decl_table_slots: HashMap<String, u32>,
@@ -201,6 +204,7 @@ impl EmitContext {
     /// that need to pre-register Wasm function parameters insert them afterwards.
     fn with_module_tables(
         decl_func_indices: HashMap<String, u32>,
+        decl_returns_wasm_heap: HashMap<String, bool>,
         decl_table_slots: HashMap<String, u32>,
         indirect_call_type_idx_1: Option<u32>,
         indirect_call_type_idx_2: Option<u32>,
@@ -211,6 +215,7 @@ impl EmitContext {
             locals: HashMap::new(),
             next_local: 0,
             decl_func_indices,
+            decl_returns_wasm_heap,
             decl_table_slots,
             indirect_call_type_idx_1,
             indirect_call_type_idx_2,
@@ -238,6 +243,17 @@ impl EmitContext {
             .copied()
             .ok_or_else(|| CodegenError {
                 message: format!("gen_lower/emit: unknown declaration '{decl_name}' in DeclCall"),
+            })
+    }
+
+    fn decl_returns_wasm_heap(&self, decl_name: &str) -> Result<bool, CodegenError> {
+        self.decl_returns_wasm_heap
+            .get(decl_name)
+            .copied()
+            .ok_or_else(|| CodegenError {
+                message: format!(
+                    "gen_lower/emit: missing return ownership for declaration '{decl_name}'"
+                ),
             })
     }
 
@@ -707,6 +723,7 @@ fn needs_newline_data(instrs: &[WasmBackendInstr]) -> bool {
 pub(crate) struct AuxDecl {
     pub(crate) decl_name: String,
     pub(crate) param_names: Vec<String>,
+    pub(crate) returns_wasm_heap: bool,
     pub(crate) instrs: Vec<WasmBackendInstr>,
 }
 
@@ -1022,6 +1039,10 @@ pub(crate) fn emit_general_module_with_aux_and_options(
         .enumerate()
         .map(|(i, decl)| (decl.decl_name.clone(), main_func_idx + 1 + i as u32))
         .collect();
+    let decl_returns_wasm_heap: HashMap<String, bool> = aux_decls
+        .iter()
+        .map(|decl| (decl.decl_name.clone(), decl.returns_wasm_heap))
+        .collect();
 
     // Build decl_name → table slot index for PushFuncHandle resolution.
     // Table slot N corresponds to aux decl N (0-based); main is excluded from the table.
@@ -1087,6 +1108,7 @@ pub(crate) fn emit_general_module_with_aux_and_options(
         let mut function = Function::new(locals_vec);
         let mut ctx = EmitContext::with_module_tables(
             decl_func_indices.clone(),
+            decl_returns_wasm_heap.clone(),
             decl_table_slots.clone(),
             indirect_call_type_idx_1,
             indirect_call_type_idx_2,
@@ -1137,6 +1159,7 @@ pub(crate) fn emit_general_module_with_aux_and_options(
         // Pre-register param names in EmitContext so LoadLocal/StoreLocal resolve correctly.
         let mut ctx = EmitContext::with_module_tables(
             decl_func_indices.clone(),
+            decl_returns_wasm_heap.clone(),
             decl_table_slots.clone(),
             indirect_call_type_idx_1,
             indirect_call_type_idx_2,
@@ -1423,7 +1446,13 @@ fn emit_instrs_with_heap_depth(
 
             WasmBackendInstr::DeclCall { decl_name } => {
                 let func_idx = ctx.decl_func_idx(decl_name)?;
-                emit_heap_aware_direct_call(function, func_idx, helper_state.as_ref());
+                let returns_wasm_heap = ctx.decl_returns_wasm_heap(decl_name)?;
+                emit_heap_aware_direct_call(
+                    function,
+                    func_idx,
+                    helper_state.as_ref(),
+                    returns_wasm_heap,
+                );
             }
 
             WasmBackendInstr::CaseMatch {
@@ -2013,13 +2042,9 @@ fn emit_helper_call(
                         "gen_lower/emit: missing host import index for '{host_import:?}'"
                     ),
                 })? as u32;
-            if let Some(hs) = heap_state {
-                emit_sync_cursor_to_global(function, hs.alloc_cursor_local);
-            }
             function.instruction(&Instruction::Call(HOST_IMPORT_BASE_IDX + host_offset));
             if let Some(hs) = heap_state {
                 emit_return_if_runtime_error(function, hs);
-                emit_sync_cursor_from_global(function, hs.alloc_cursor_local);
             }
             Ok(())
         }
@@ -2194,23 +2219,31 @@ fn emit_function_body(
     Ok(())
 }
 
-/// Emit a direct Wasm `call` with heap-cursor sync.
+/// Emit a direct Wasm `call`.
 ///
-/// Writes the local alloc cursor to the global slot before the call, then reloads it
-/// after, so that any heap allocations inside the callee are visible to the caller.
-/// When `helper_state` is `None` (caller has no heap state), the sync is skipped.
+/// Functions that return Wasm-owned heap data must synchronize the caller's local
+/// allocation cursor with the callee, otherwise the caller may overwrite the
+/// returned value. Scalar / host-backed returns keep their callee-local heap
+/// temporaries frame-local and do not reload the caller cursor.
 fn emit_heap_aware_direct_call(
     function: &mut Function,
     func_idx: u32,
     helper_state: Option<&HeapEmitState>,
+    returns_wasm_heap: bool,
 ) {
-    if let Some(hs) = helper_state {
-        emit_sync_cursor_to_global(function, hs.alloc_cursor_local);
+    if returns_wasm_heap {
+        if let Some(hs) = helper_state {
+            emit_sync_cursor_to_global(function, hs.alloc_cursor_local);
+        }
     }
     function.instruction(&Instruction::Call(func_idx));
     if let Some(hs) = helper_state {
         emit_return_if_runtime_error(function, hs);
-        emit_sync_cursor_from_global(function, hs.alloc_cursor_local);
+    }
+    if returns_wasm_heap {
+        if let Some(hs) = helper_state {
+            emit_sync_cursor_from_global(function, hs.alloc_cursor_local);
+        }
     }
 }
 

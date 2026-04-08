@@ -46,8 +46,7 @@ use crate::gen_lower::value::{
 use crate::grapheme_semantics::collect_extended_grapheme_spans;
 use crate::host_runtime::HostIntrinsicImport;
 use crate::layout::{
-    GLOBAL_HEAP_CURSOR_OFFSET, GLOBAL_RUNTIME_ERROR_OFFSET, RUNTIME_ERROR_MEMORY_EXHAUSTION,
-    RUNTIME_ERROR_NONE,
+    GLOBAL_RUNTIME_ERROR_OFFSET, RUNTIME_ERROR_MEMORY_EXHAUSTION, RUNTIME_ERROR_NONE,
 };
 use crate::memory_config::{DEFAULT_WASM_MEMORY_CONFIG, WASM_PAGE_BYTES};
 use crate::runtime_env::split_input_lines;
@@ -526,26 +525,6 @@ fn encode_string_in_host_bump(
     Some(encode_string_ptr(alloc_ptr))
 }
 
-fn read_global_heap_cursor(caller: &mut Caller<'_, WasiP1Ctx>) -> Result<u32, ()> {
-    let memory = host_memory(caller)?;
-    let mut bytes = [0u8; 4];
-    memory
-        .read(&mut *caller, GLOBAL_HEAP_CURSOR_OFFSET as usize, &mut bytes)
-        .map_err(|_| ())?;
-    Ok(u32::from_le_bytes(bytes))
-}
-
-fn write_global_heap_cursor(caller: &mut Caller<'_, WasiP1Ctx>, cursor: u32) -> Result<(), ()> {
-    let memory = host_memory(caller)?;
-    memory
-        .write(
-            &mut *caller,
-            GLOBAL_HEAP_CURSOR_OFFSET as usize,
-            &cursor.to_le_bytes(),
-        )
-        .map_err(|_| ())
-}
-
 fn alloc_from_host_bump(
     caller: &mut Caller<'_, WasiP1Ctx>,
     bump: &AtomicU32,
@@ -555,17 +534,12 @@ fn alloc_from_host_bump(
     let mut cur = bump.load(Ordering::Relaxed);
     loop {
         let next = cur.checked_add(bytes)?;
-        let heap_cursor = read_global_heap_cursor(caller).ok()?;
-        if next > heap_cursor {
-            let missing = next - heap_cursor;
-            let delta_pages = missing.div_ceil(WASM_PAGE_BYTES);
-            let growth_bytes = delta_pages.checked_mul(WASM_PAGE_BYTES)?;
-            let new_heap_cursor = heap_cursor.checked_add(growth_bytes)?;
-            if ensure_linear_memory_capacity(caller, new_heap_cursor, memory_config).is_err() {
-                return None;
-            }
-            write_global_heap_cursor(caller, new_heap_cursor).ok()?;
-        } else if ensure_linear_memory_capacity(caller, next, memory_config).is_err() {
+        // The host bump arena grows upward from the reserved top-of-page region,
+        // while the Wasm-owned heap grows downward from the static-string limit.
+        // They share the module's linear memory budget, but not a single moving
+        // allocation cursor. Updating the Wasm heap cursor here would let later
+        // top-down allocations overwrite host-owned list/string data.
+        if ensure_linear_memory_capacity(caller, next, memory_config).is_err() {
             return None;
         }
         match bump.compare_exchange_weak(cur, next, Ordering::Relaxed, Ordering::Relaxed) {
@@ -701,6 +675,7 @@ fn read_wasm_string(caller: &mut Caller<'_, WasiP1Ctx>, tagged: i64) -> Result<S
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::layout::GLOBAL_HEAP_CURSOR_OFFSET;
     use wasm_encoder::{
         CodeSection, ConstExpr, DataSection, EntityType, ExportKind, ExportSection, Function,
         FunctionSection, ImportSection, Instruction, MemArg, MemorySection, Module, TypeSection,
