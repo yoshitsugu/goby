@@ -4,9 +4,12 @@ This document tracks confirmed, reproducible bugs in the current Goby toolchain.
 
 Open bugs:
 
-- `goby run` can still exhaust Wasm memory for named-callback list-building
-  chains that repeatedly return `[x, ..acc]` through stdlib `fold`, even after
-  the self-recursive builder bug and the inline callback fold bucket were fixed.
+- none currently recorded
+
+Resolved on 2026-04-09:
+
+- `goby run` could exhaust Wasm memory for named-callback list-building chains
+  that repeatedly returned `[x, ..acc]` through stdlib `fold`.
 
   Repro:
 
@@ -37,13 +40,14 @@ Open bugs:
   Current result:
 
   ```text
-  runtime error: memory exhausted [E-MEMORY-EXHAUSTION]: allocation exceeded the configured Wasm memory limit
+  1
   ```
 
   Notes:
-  the RR-4 lowering now handles the inline `fold seed [] (fn acc x -> [x,
-  ..acc])` builder shape, but named callback paths still route through ordinary
-  stdlib `fold` + `ListConcat`.
+  fixed by rewriting supported named/local callback `fold` shapes into the same
+  inline reverse-fold lowering boundary used by the earlier callback builder
+  slice, eliminating the stdlib `fold` + `ListConcat` chain for these prepend
+  builders.
 
 Resolved on 2026-04-09:
 

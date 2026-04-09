@@ -971,15 +971,41 @@ Milestones:
        dedicated reverse traversal, and
        `rr4_inline_fold_prepend_builder_executes_after_specialized_lowering`
        locks the runtime success case.
-     - one RR-4 bucket still remains open, but it is now narrower:
-       named-callback prepend chains still route through ordinary stdlib `fold`
-       and preserve the old memory failure shape
-       (`rr4_named_callback_list_spread_chain_still_reports_memory_exhaustion`).
-     - the next RR-4 decision is therefore narrower:
-       determine whether named/local callback prepend builders should reuse this
-       same reverse-fold boundary or whether a different shared stdlib-call /
-       concat boundary would be more honest.
-6. **RR-5: limit tuning and follow-through**
+     - the final RR-4 slice closed the remaining named/local callback bucket by
+       rewriting supported named callback `fold` calls onto that same shared
+       reverse-fold boundary instead of leaving them on ordinary stdlib `fold`.
+     - compile coverage now locks both the direct named callback and a local
+       alias to that callback:
+       `compile_module_named_fold_prepend_lowering_rewrites_decl_callback_chain_in_main`
+       and
+       `compile_module_local_alias_fold_prepend_lowering_rewrites_decl_callback_chain_in_main`.
+     - runtime coverage now locks both execution shapes as successful:
+       `rr4_named_callback_list_spread_chain_executes_after_callback_rewrite`
+       and
+       `rr4_local_named_callback_list_spread_chain_executes_after_callback_rewrite`.
+     - RR-4 is therefore complete for the currently locked representative
+       list-spread / prepend-builder buckets. Remaining recursion work moves to
+       the planned generic TCO track rather than another RR-4 concat slice.
+6. **RR-5: generic tail-call optimization (planned)**
+   - after the current RR-3/RR-4 representative buckets are closed, add a
+     separate optimization track for generic self-tail recursion and, if the
+     Wasm/runtime boundary remains honest enough, broader tail-call shapes.
+   - this is intentionally not bundled into RR-3's current scan-specific work:
+     the project already proved that generic self-tail lowering is a useful
+     subproblem, but not the highest-value first fix for the locked
+     representative failures.
+   - scope guardrails for a future RR-5/TCO track:
+     - do not special-case source symbols or individual fixtures,
+     - prefer a shared control-flow rule that can be described independently of
+       any one stdlib/helper function,
+     - keep diagnostics honest when a recursive shape still falls outside the
+       optimized subset,
+     - do not claim language-level guaranteed TCO until the coverage is broad
+       enough across the supported backends/runtime paths.
+   - expected user-facing goal:
+     - obvious self-tail-recursive helpers should eventually run in constant
+       stack on the Wasm path without requiring manual loop rewrites.
+7. **RR-6: limit tuning and follow-through**
    - revisit stack/memory defaults only after RR-2 through RR-4 give clearer
      ownership and failure modes.
    - only after that, revisit whether docs/examples should recommend more efficient

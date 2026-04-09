@@ -33,7 +33,7 @@ pub(crate) mod value;
 use std::collections::{HashMap, HashSet};
 
 use goby_core::Module;
-use goby_core::ir::CompExpr;
+use goby_core::ir::{CompExpr, IrCaseArm, IrDecl, IrHandlerClause, IrInterpPart, ValueExpr};
 use goby_core::stdlib::StdlibResolver;
 use goby_core::types::{TypeExpr, parse_function_type, parse_type_expr};
 
@@ -61,6 +61,479 @@ fn decl_annotation_returns_list(annotation: Option<&str>) -> bool {
         Some(TypeExpr::Apply { head, .. })
             if matches!(head.as_ref(), TypeExpr::Name(name) if name == "List")
     )
+}
+
+#[derive(Debug, Clone)]
+struct FoldPrependCallbackShape {
+    acc_param: String,
+    item_param: String,
+    body: CompExpr,
+}
+
+fn value_mentions_name(value: &ValueExpr, target: &str) -> bool {
+    match value {
+        ValueExpr::IntLit(_)
+        | ValueExpr::BoolLit(_)
+        | ValueExpr::StrLit(_)
+        | ValueExpr::GlobalRef { .. }
+        | ValueExpr::Unit => false,
+        ValueExpr::Var(name) => name == target,
+        ValueExpr::ListLit { elements, spread } => {
+            elements
+                .iter()
+                .any(|elem| value_mentions_name(elem, target))
+                || spread
+                    .as_deref()
+                    .is_some_and(|tail| value_mentions_name(tail, target))
+        }
+        ValueExpr::TupleLit(items) => items.iter().any(|item| value_mentions_name(item, target)),
+        ValueExpr::RecordLit { fields, .. } => fields
+            .iter()
+            .any(|(_, field)| value_mentions_name(field, target)),
+        ValueExpr::Lambda { param, body } => {
+            if param == target {
+                false
+            } else {
+                comp_mentions_name(body, target)
+            }
+        }
+        ValueExpr::Interp(parts) => parts.iter().any(|part| match part {
+            IrInterpPart::Text(_) => false,
+            IrInterpPart::Expr(value) => value_mentions_name(value, target),
+        }),
+        ValueExpr::BinOp { left, right, .. } => {
+            value_mentions_name(left, target) || value_mentions_name(right, target)
+        }
+        ValueExpr::TupleProject { tuple, .. } => value_mentions_name(tuple, target),
+        ValueExpr::ListGet { list, index } => {
+            value_mentions_name(list, target) || value_mentions_name(index, target)
+        }
+    }
+}
+
+fn comp_mentions_name(comp: &CompExpr, target: &str) -> bool {
+    match comp {
+        CompExpr::Value(value) => value_mentions_name(value, target),
+        CompExpr::Let {
+            name, value, body, ..
+        }
+        | CompExpr::LetMut {
+            name, value, body, ..
+        } => {
+            comp_mentions_name(value, target)
+                || if name == target {
+                    false
+                } else {
+                    comp_mentions_name(body, target)
+                }
+        }
+        CompExpr::Seq { stmts, tail } => {
+            stmts.iter().any(|stmt| comp_mentions_name(stmt, target))
+                || comp_mentions_name(tail, target)
+        }
+        CompExpr::If { cond, then_, else_ } => {
+            value_mentions_name(cond, target)
+                || comp_mentions_name(then_, target)
+                || comp_mentions_name(else_, target)
+        }
+        CompExpr::Call { callee, args } => {
+            value_mentions_name(callee, target)
+                || args.iter().any(|arg| value_mentions_name(arg, target))
+        }
+        CompExpr::Assign { name, value } => name == target || comp_mentions_name(value, target),
+        CompExpr::AssignIndex { root, path, value } => {
+            root == target
+                || path.iter().any(|index| value_mentions_name(index, target))
+                || comp_mentions_name(value, target)
+        }
+        CompExpr::Case { scrutinee, arms } => {
+            value_mentions_name(scrutinee, target)
+                || arms.iter().any(|arm| comp_mentions_name(&arm.body, target))
+        }
+        CompExpr::PerformEffect { args, .. } => {
+            args.iter().any(|arg| value_mentions_name(arg, target))
+        }
+        CompExpr::Handle { clauses } => clauses
+            .iter()
+            .any(|clause| comp_mentions_name(&clause.body, target)),
+        CompExpr::WithHandler { handler, body } => {
+            comp_mentions_name(handler, target) || comp_mentions_name(body, target)
+        }
+        CompExpr::Resume { value } => value_mentions_name(value, target),
+    }
+}
+
+fn fold_prepend_callback_shape(decl: &IrDecl) -> Option<FoldPrependCallbackShape> {
+    if decl.params.len() != 2 {
+        return None;
+    }
+    let acc_param = decl.params[0].0.clone();
+    let item_param = decl.params[1].0.clone();
+    let CompExpr::Value(ValueExpr::ListLit { elements, spread }) = &decl.body else {
+        return None;
+    };
+    let spread = spread.as_deref()?;
+    let ValueExpr::Var(spread_name) = spread else {
+        return None;
+    };
+    if spread_name != &acc_param
+        || elements
+            .iter()
+            .any(|elem| value_mentions_name(elem, &acc_param))
+    {
+        return None;
+    }
+    Some(FoldPrependCallbackShape {
+        acc_param,
+        item_param,
+        body: decl.body.clone(),
+    })
+}
+
+fn rewrite_value_fold_prepend_callbacks(
+    value: &ValueExpr,
+    callback_shapes: &HashMap<String, FoldPrependCallbackShape>,
+    aliases: &HashMap<String, String>,
+) -> ValueExpr {
+    match value {
+        ValueExpr::ListLit { elements, spread } => ValueExpr::ListLit {
+            elements: elements
+                .iter()
+                .map(|elem| rewrite_value_fold_prepend_callbacks(elem, callback_shapes, aliases))
+                .collect(),
+            spread: spread.as_deref().map(|tail| {
+                Box::new(rewrite_value_fold_prepend_callbacks(
+                    tail,
+                    callback_shapes,
+                    aliases,
+                ))
+            }),
+        },
+        ValueExpr::TupleLit(items) => ValueExpr::TupleLit(
+            items
+                .iter()
+                .map(|item| rewrite_value_fold_prepend_callbacks(item, callback_shapes, aliases))
+                .collect(),
+        ),
+        ValueExpr::RecordLit {
+            constructor,
+            fields,
+        } => ValueExpr::RecordLit {
+            constructor: constructor.clone(),
+            fields: fields
+                .iter()
+                .map(|(name, field)| {
+                    (
+                        name.clone(),
+                        rewrite_value_fold_prepend_callbacks(field, callback_shapes, aliases),
+                    )
+                })
+                .collect(),
+        },
+        ValueExpr::Lambda { param, body } => {
+            let mut lambda_aliases = aliases.clone();
+            lambda_aliases.remove(param);
+            ValueExpr::Lambda {
+                param: param.clone(),
+                body: Box::new(rewrite_comp_fold_prepend_callbacks(
+                    body,
+                    callback_shapes,
+                    &lambda_aliases,
+                )),
+            }
+        }
+        ValueExpr::Interp(parts) => ValueExpr::Interp(
+            parts
+                .iter()
+                .map(|part| match part {
+                    IrInterpPart::Text(text) => IrInterpPart::Text(text.clone()),
+                    IrInterpPart::Expr(value) => IrInterpPart::Expr(
+                        rewrite_value_fold_prepend_callbacks(value, callback_shapes, aliases),
+                    ),
+                })
+                .collect(),
+        ),
+        ValueExpr::BinOp { op, left, right } => ValueExpr::BinOp {
+            op: op.clone(),
+            left: Box::new(rewrite_value_fold_prepend_callbacks(
+                left,
+                callback_shapes,
+                aliases,
+            )),
+            right: Box::new(rewrite_value_fold_prepend_callbacks(
+                right,
+                callback_shapes,
+                aliases,
+            )),
+        },
+        ValueExpr::TupleProject { tuple, index } => ValueExpr::TupleProject {
+            tuple: Box::new(rewrite_value_fold_prepend_callbacks(
+                tuple,
+                callback_shapes,
+                aliases,
+            )),
+            index: *index,
+        },
+        ValueExpr::ListGet { list, index } => ValueExpr::ListGet {
+            list: Box::new(rewrite_value_fold_prepend_callbacks(
+                list,
+                callback_shapes,
+                aliases,
+            )),
+            index: Box::new(rewrite_value_fold_prepend_callbacks(
+                index,
+                callback_shapes,
+                aliases,
+            )),
+        },
+        _ => value.clone(),
+    }
+}
+
+fn resolve_callback_shape_name<'a>(
+    callback: &'a ValueExpr,
+    callback_shapes: &'a HashMap<String, FoldPrependCallbackShape>,
+    aliases: &'a HashMap<String, String>,
+) -> Option<&'a str> {
+    match callback {
+        ValueExpr::Var(name) => {
+            let resolved = aliases.get(name).map_or(name.as_str(), String::as_str);
+            callback_shapes.contains_key(resolved).then_some(resolved)
+        }
+        _ => None,
+    }
+}
+
+fn inline_fold_prepend_callback(shape: &FoldPrependCallbackShape) -> ValueExpr {
+    ValueExpr::Lambda {
+        param: shape.acc_param.clone(),
+        body: Box::new(CompExpr::Value(ValueExpr::Lambda {
+            param: shape.item_param.clone(),
+            body: Box::new(shape.body.clone()),
+        })),
+    }
+}
+
+fn rewrite_comp_fold_prepend_callbacks(
+    comp: &CompExpr,
+    callback_shapes: &HashMap<String, FoldPrependCallbackShape>,
+    aliases: &HashMap<String, String>,
+) -> CompExpr {
+    match comp {
+        CompExpr::Value(value) => CompExpr::Value(rewrite_value_fold_prepend_callbacks(
+            value,
+            callback_shapes,
+            aliases,
+        )),
+        CompExpr::Let {
+            name,
+            ty,
+            value,
+            body,
+        } => {
+            let rewritten_value =
+                rewrite_comp_fold_prepend_callbacks(value, callback_shapes, aliases);
+            let mut next_aliases = aliases.clone();
+            if let CompExpr::Value(ValueExpr::Var(target)) = &rewritten_value {
+                let resolved = aliases
+                    .get(target)
+                    .cloned()
+                    .unwrap_or_else(|| target.clone());
+                if callback_shapes.contains_key(&resolved) {
+                    next_aliases.insert(name.clone(), resolved);
+                } else {
+                    next_aliases.remove(name);
+                }
+            } else {
+                next_aliases.remove(name);
+            }
+            CompExpr::Let {
+                name: name.clone(),
+                ty: ty.clone(),
+                value: Box::new(rewritten_value),
+                body: Box::new(rewrite_comp_fold_prepend_callbacks(
+                    body,
+                    callback_shapes,
+                    &next_aliases,
+                )),
+            }
+        }
+        CompExpr::LetMut {
+            name,
+            ty,
+            value,
+            body,
+        } => {
+            let rewritten_value =
+                rewrite_comp_fold_prepend_callbacks(value, callback_shapes, aliases);
+            let mut next_aliases = aliases.clone();
+            next_aliases.remove(name);
+            CompExpr::LetMut {
+                name: name.clone(),
+                ty: ty.clone(),
+                value: Box::new(rewritten_value),
+                body: Box::new(rewrite_comp_fold_prepend_callbacks(
+                    body,
+                    callback_shapes,
+                    &next_aliases,
+                )),
+            }
+        }
+        CompExpr::Seq { stmts, tail } => {
+            let mut seq_aliases = aliases.clone();
+            let mut rewritten_stmts = Vec::with_capacity(stmts.len());
+            for stmt in stmts {
+                let rewritten =
+                    rewrite_comp_fold_prepend_callbacks(stmt, callback_shapes, &seq_aliases);
+                match &rewritten {
+                    CompExpr::Let { name, value, .. } => {
+                        if let CompExpr::Value(ValueExpr::Var(target)) = value.as_ref() {
+                            let resolved = seq_aliases
+                                .get(target)
+                                .cloned()
+                                .unwrap_or_else(|| target.clone());
+                            if callback_shapes.contains_key(&resolved) {
+                                seq_aliases.insert(name.clone(), resolved);
+                            } else {
+                                seq_aliases.remove(name);
+                            }
+                        } else {
+                            seq_aliases.remove(name);
+                        }
+                    }
+                    CompExpr::LetMut { name, .. } => {
+                        seq_aliases.remove(name);
+                    }
+                    _ => {}
+                }
+                rewritten_stmts.push(rewritten);
+            }
+            CompExpr::Seq {
+                stmts: rewritten_stmts,
+                tail: Box::new(rewrite_comp_fold_prepend_callbacks(
+                    tail,
+                    callback_shapes,
+                    &seq_aliases,
+                )),
+            }
+        }
+        CompExpr::If { cond, then_, else_ } => CompExpr::If {
+            cond: Box::new(rewrite_value_fold_prepend_callbacks(
+                cond,
+                callback_shapes,
+                aliases,
+            )),
+            then_: Box::new(rewrite_comp_fold_prepend_callbacks(
+                then_,
+                callback_shapes,
+                aliases,
+            )),
+            else_: Box::new(rewrite_comp_fold_prepend_callbacks(
+                else_,
+                callback_shapes,
+                aliases,
+            )),
+        },
+        CompExpr::Call { callee, args } => {
+            let rewritten_callee =
+                rewrite_value_fold_prepend_callbacks(callee, callback_shapes, aliases);
+            let mut rewritten_args: Vec<ValueExpr> = args
+                .iter()
+                .map(|arg| rewrite_value_fold_prepend_callbacks(arg, callback_shapes, aliases))
+                .collect();
+            let is_fold = matches!(
+                &rewritten_callee,
+                ValueExpr::GlobalRef { module, name } if module == "list" && name == "fold"
+            ) || matches!(&rewritten_callee, ValueExpr::Var(name) if name == "fold");
+            if is_fold
+                && rewritten_args.len() == 3
+                && let Some(callback_name) =
+                    resolve_callback_shape_name(&rewritten_args[2], callback_shapes, aliases)
+                && let Some(shape) = callback_shapes.get(callback_name)
+            {
+                rewritten_args[2] = inline_fold_prepend_callback(shape);
+            }
+            CompExpr::Call {
+                callee: Box::new(rewritten_callee),
+                args: rewritten_args,
+            }
+        }
+        CompExpr::Assign { name, value } => CompExpr::Assign {
+            name: name.clone(),
+            value: Box::new(rewrite_comp_fold_prepend_callbacks(
+                value,
+                callback_shapes,
+                aliases,
+            )),
+        },
+        CompExpr::AssignIndex { root, path, value } => CompExpr::AssignIndex {
+            root: root.clone(),
+            path: path
+                .iter()
+                .map(|index| rewrite_value_fold_prepend_callbacks(index, callback_shapes, aliases))
+                .collect(),
+            value: Box::new(rewrite_comp_fold_prepend_callbacks(
+                value,
+                callback_shapes,
+                aliases,
+            )),
+        },
+        CompExpr::Case { scrutinee, arms } => CompExpr::Case {
+            scrutinee: Box::new(rewrite_value_fold_prepend_callbacks(
+                scrutinee,
+                callback_shapes,
+                aliases,
+            )),
+            arms: arms
+                .iter()
+                .map(|arm| IrCaseArm {
+                    pattern: arm.pattern.clone(),
+                    body: rewrite_comp_fold_prepend_callbacks(&arm.body, callback_shapes, aliases),
+                })
+                .collect(),
+        },
+        CompExpr::PerformEffect { effect, op, args } => CompExpr::PerformEffect {
+            effect: effect.clone(),
+            op: op.clone(),
+            args: args
+                .iter()
+                .map(|arg| rewrite_value_fold_prepend_callbacks(arg, callback_shapes, aliases))
+                .collect(),
+        },
+        CompExpr::Handle { clauses } => CompExpr::Handle {
+            clauses: clauses
+                .iter()
+                .map(|clause| IrHandlerClause {
+                    op_name: clause.op_name.clone(),
+                    params: clause.params.clone(),
+                    body: rewrite_comp_fold_prepend_callbacks(
+                        &clause.body,
+                        callback_shapes,
+                        aliases,
+                    ),
+                })
+                .collect(),
+        },
+        CompExpr::WithHandler { handler, body } => CompExpr::WithHandler {
+            handler: Box::new(rewrite_comp_fold_prepend_callbacks(
+                handler,
+                callback_shapes,
+                aliases,
+            )),
+            body: Box::new(rewrite_comp_fold_prepend_callbacks(
+                body,
+                callback_shapes,
+                aliases,
+            )),
+        },
+        CompExpr::Resume { value } => CompExpr::Resume {
+            value: Box::new(rewrite_value_fold_prepend_callbacks(
+                value,
+                callback_shapes,
+                aliases,
+            )),
+        },
+    }
 }
 
 /// Reason why a program cannot be lowered via the general-lowering path.
@@ -1003,11 +1476,23 @@ pub(crate) fn lower_module_to_instrs(module: &Module) -> Result<LowerModuleResul
     let Some(ir_decl) = ir_module.decls.iter().find(|decl| decl.name == "main") else {
         return Ok(Err(GeneralLowerUnsupportedReason::NoMainExecPlan));
     };
+    let mut fold_prepend_callback_shapes: HashMap<String, FoldPrependCallbackShape> = ir_module
+        .decls
+        .iter()
+        .filter_map(|decl| {
+            fold_prepend_callback_shape(decl).map(|shape| (decl.name.clone(), shape))
+        })
+        .collect();
     let Some(main_body) =
         rewrite_safe_handlers_if_present(&ir_decl.body, allow_safe_handler_lowering)?
     else {
         return Ok(Err(GeneralLowerUnsupportedReason::HandlerRewriteFailed));
     };
+    let main_body = rewrite_comp_fold_prepend_callbacks(
+        &main_body,
+        &fold_prepend_callback_shapes,
+        &HashMap::new(),
+    );
 
     let main_is_handler_only_candidate =
         !has_runtime_read_effect(&ir_decl.body) && has_handler_rewrite_entrypoints(&ir_decl.body);
@@ -1105,11 +1590,16 @@ pub(crate) fn lower_module_to_instrs(module: &Module) -> Result<LowerModuleResul
         if param_names.is_empty() {
             param_names.push("_unit".to_string());
         }
+        let rewritten_body = rewrite_comp_fold_prepend_callbacks(
+            &aux_ir_decl.body,
+            &fold_prepend_callback_shapes,
+            &HashMap::new(),
+        );
         match lower_aux_decl(
             &aux_ir_decl.name,
             param_names,
             source_decl.type_annotation.as_deref(),
-            &aux_ir_decl.body,
+            &rewritten_body,
             &known_decls,
             allow_safe_handler_lowering,
             &mut lambda_decls,
@@ -1172,8 +1662,16 @@ pub(crate) fn lower_module_to_instrs(module: &Module) -> Result<LowerModuleResul
                         ));
                     }
                 };
+                if let Some(shape) = fold_prepend_callback_shape(&aux_ir_decl) {
+                    fold_prepend_callback_shapes.insert(aux_ir_decl.name.clone(), shape);
+                }
                 let param_names: Vec<String> =
                     aux_ir_decl.params.iter().map(|(n, _)| n.clone()).collect();
+                let rewritten_body = rewrite_comp_fold_prepend_callbacks(
+                    &aux_ir_decl.body,
+                    &fold_prepend_callback_shapes,
+                    &HashMap::new(),
+                );
                 // Stdlib functions use safe (one-shot tail-resumptive) handlers; always
                 // allow handler lowering for stdlib aux decls regardless of whether the
                 // user's main body has handlers.
@@ -1181,7 +1679,7 @@ pub(crate) fn lower_module_to_instrs(module: &Module) -> Result<LowerModuleResul
                     &aux_ir_decl.name,
                     param_names,
                     goby_decl.type_annotation.as_deref(),
-                    &aux_ir_decl.body,
+                    &rewritten_body,
                     &known_decls,
                     true, // stdlib handlers are one-shot tail-resumptive by construction
                     &mut lambda_decls,

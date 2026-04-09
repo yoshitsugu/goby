@@ -459,6 +459,97 @@ main =
 }
 
 #[test]
+fn compile_module_named_fold_prepend_lowering_rewrites_decl_callback_chain_in_main() {
+    let source = r#"
+import goby/list ( fold )
+import goby/stdio
+
+build : Int -> List Int can Print
+build n =
+  if n == 0
+    []
+  else
+    rest = build (n - 1)
+    [n, ..rest]
+
+prepend : List Int -> Int -> List Int can Print
+prepend acc x =
+  [x, ..acc]
+
+main : Unit -> Unit can Print, Read
+main =
+  _lines = read_lines ()
+  seed = build 32
+  xs = fold seed [] prepend
+  println "${xs[0]}"
+"#;
+    let module = parse_module(source).expect("source should parse");
+    let (main_instrs, aux_decls) = crate::gen_lower::lower_module_to_instrs(&module)
+        .expect("lowering should not hard-fail")
+        .expect("general lowering should accept named fold prepend module");
+    assert!(
+        main_instrs.iter().any(|instr| matches!(
+            instr,
+            crate::gen_lower::backend_ir::WasmBackendInstr::ListReverseFoldPrepend { .. }
+        )),
+        "main should lower named fold prepend builder to dedicated reverse-fold instruction, got main: {main_instrs:?}; aux: {aux_decls:?}"
+    );
+    let rendered = format!("{main_instrs:?}");
+    assert!(
+        !rendered.contains("DeclCall { decl_name: \"fold\" }"),
+        "named callback rewrite should eliminate direct stdlib fold call, got: {rendered}"
+    );
+    let wasm = compile_module(&module).expect("codegen should succeed");
+    assert_valid_wasm_module(&wasm);
+}
+
+#[test]
+fn compile_module_local_alias_fold_prepend_lowering_rewrites_decl_callback_chain_in_main() {
+    let source = r#"
+import goby/list ( fold )
+import goby/stdio
+
+build : Int -> List Int can Print
+build n =
+  if n == 0
+    []
+  else
+    rest = build (n - 1)
+    [n, ..rest]
+
+prepend : List Int -> Int -> List Int can Print
+prepend acc x =
+  [x, ..acc]
+
+main : Unit -> Unit can Print, Read
+main =
+  _lines = read_lines ()
+  seed = build 32
+  f = prepend
+  xs = fold seed [] f
+  println "${xs[0]}"
+"#;
+    let module = parse_module(source).expect("source should parse");
+    let (main_instrs, aux_decls) = crate::gen_lower::lower_module_to_instrs(&module)
+        .expect("lowering should not hard-fail")
+        .expect("general lowering should accept local alias fold prepend module");
+    assert!(
+        main_instrs.iter().any(|instr| matches!(
+            instr,
+            crate::gen_lower::backend_ir::WasmBackendInstr::ListReverseFoldPrepend { .. }
+        )),
+        "main should lower local alias fold prepend builder to dedicated reverse-fold instruction, got main: {main_instrs:?}; aux: {aux_decls:?}"
+    );
+    let rendered = format!("{main_instrs:?}");
+    assert!(
+        !rendered.contains("DeclCall { decl_name: \"fold\" }"),
+        "local alias callback rewrite should eliminate direct stdlib fold call, got: {rendered}"
+    );
+    let wasm = compile_module(&module).expect("codegen should succeed");
+    assert_valid_wasm_module(&wasm);
+}
+
+#[test]
 fn compile_module_uses_native_emitter_for_multi_arg_direct_function_call_subset() {
     let source = r#"
 add4 : Int -> Int -> Int -> Int -> Int

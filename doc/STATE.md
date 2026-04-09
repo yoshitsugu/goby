@@ -4,8 +4,8 @@ Last updated: 2026-04-09
 
 ## Current Focus
 
-Next slice: **Track RR, RR-4** (`PLAN.md §4.8c`) - list-spread resilience at the
-remaining named/local callback prepend boundary.
+Next slice: **Track RR, RR-5** (`PLAN.md §4.8c`) - planned generic tail-call
+optimization after the representative RR-3/RR-4 buckets.
 
 Locked ideal goal for RR:
 
@@ -23,26 +23,21 @@ RR execution reminder:
 
 Immediate next steps:
 
-- **RR-4**: keep recursive list spread / concat growth as a separate ownership
-  track after RR-3, since RR-2 kept it in runtime data representation/list
-  concat ownership rather than recursion lowering.
-  - preserve the RR-3 boundary split: recursion lowering owns the scan buckets,
-    while RR-4 currently owns the self-recursive list-builder bucket through the
-    list-spread lowering/runtime boundary.
-  - next RR-4 follow-up: decide whether named/local callback prepend builders
-    should adopt the same reverse-fold ownership boundary or whether a
-    different shared stdlib-call / concat boundary is more honest.
-  - current evidence: the self-recursive builder bug is fixed, and the inline
-    callback bucket `fold seed [] (fn acc x -> [x, ..acc])` is now fixed too,
-    but named callback chains such as `fold seed [] prepend` still report
-    memory exhaustion and remain the live RR-4 bucket.
+- **RR-5**: start the planned generic tail-call optimization track now that the
+  representative RR-3 scan buckets and RR-4 list-builder buckets are closed.
+  - keep the RR-3/RR-4 shared-boundary discipline: prefer reusable control-flow
+    rules over symbol-specific recursion rewrites.
+  - first RR-5 task: decide the smallest honest shared boundary for generic
+    self-tail recursion on the Wasm path without overstating language-level TCO.
+  - keep current diagnostics explicit for shapes that still fall outside the
+    optimized subset.
 - keep RR-1 diagnostics best-effort and explicit about uncertainty
   (`likely stack pressure`, `memory exhaustion`, `unknown runtime trap`) as
   later resilience work lands.
 
 ## Recently Completed
 
-- **Track RR, RR-4 builder-backed list-spread lowering** (partial, 2026-04-09).
+- **Track RR, RR-4 builder-backed list-spread lowering** (complete, 2026-04-09).
   - fixed the historical recursive `[x, ..rest]` memory-exhaustion bug without
     changing the external `List` representation.
   - restricted self-recursive list builders now lower to a loop plus internal
@@ -59,9 +54,18 @@ Immediate next steps:
     `compile_module_inline_fold_prepend_lowering_rewrites_concat_chain_in_main`.
   - runtime coverage now locks the inline callback success case via
     `rr4_inline_fold_prepend_builder_executes_after_specialized_lowering`.
-  - the remaining RR-4 bucket is narrower: named callback prepend chains still
-    report memory exhaustion
-    (`rr4_named_callback_list_spread_chain_still_reports_memory_exhaustion`).
+  - the final RR-4 slice rewrote supported named/local callback prepend shapes
+    onto the same reverse-fold boundary, closing the remaining `fold seed []
+    prepend` style bucket without changing user-visible `List` semantics.
+  - compile coverage now locks the named/local callback rewrite via
+    `compile_module_named_fold_prepend_lowering_rewrites_decl_callback_chain_in_main`
+    and
+    `compile_module_local_alias_fold_prepend_lowering_rewrites_decl_callback_chain_in_main`.
+  - runtime coverage now locks both named/local callback executions via
+    `rr4_named_callback_list_spread_chain_executes_after_callback_rewrite` and
+    `rr4_local_named_callback_list_spread_chain_executes_after_callback_rewrite`.
+  - RR-4 is complete for the currently locked representative list-spread /
+    prepend-builder buckets.
 
 - **Track RR, RR-3 tight-stack proof** (complete, 2026-04-09).
   - kept the RR-3 fix at the shared scan boundary: restricted self-recursive
