@@ -4,8 +4,8 @@ Last updated: 2026-04-09
 
 ## Current Focus
 
-Next slice: **Track RR, RR-5** (`PLAN.md §4.5`) - direct-call group execution
-model on top of normalized `TailDeclCall` backend IR.
+Next slice: **Track RR, RR-5** (`PLAN.md §4.5`) - widen the `TailDeclCall`
+execution model from self-tail loops to grouped sibling/mutual direct calls.
 
 Locked ideal goal for RR:
 
@@ -24,14 +24,14 @@ RR execution reminder:
 Immediate next steps:
 
 - **RR-5**: continue the planned generic tail-call optimization track now that
-  the first shared tail-position analysis and direct tail-call normalization
-  slices are in place.
+  the first shared tail-position analysis, direct tail-call normalization, and
+  self-tail loop execution slices are in place.
   - keep the RR-3/RR-4 shared-boundary discipline: prefer reusable control-flow
     rules over symbol-specific recursion rewrites.
-  - next RR-5 task: define the smallest honest grouped execution model that can
-    run `TailDeclCall` in constant stack for direct known-declaration calls.
-  - keep self-tail recursion only as one member of that direct-call group
-    model, not the headline feature claim.
+  - next RR-5 task: widen the execution model so sibling and mutually
+    recursive direct `TailDeclCall` groups can share one constant-stack path.
+  - keep the current self-tail loop as one member of that broader direct-call
+    group story, not the headline feature claim by itself.
   - keep current diagnostics explicit for shapes that still fall outside the
     optimized subset.
 - keep RR-1 diagnostics best-effort and explicit about uncertainty
@@ -67,6 +67,22 @@ Immediate next steps:
     - root tail-position direct calls,
     - non-tail `seq` statements staying ordinary,
     - `case` arm tails normalizing to the tail-call marker.
+
+- **Track RR, RR-5 self-tail loop execution** (partial, 2026-04-10).
+  - `goby-wasm` now gives aux declarations with self `TailDeclCall` a looped
+    Wasm helper body and rewrites the recursive tail edge to parameter updates
+    plus a branch back to the loop head.
+  - this moves the historical self-tail recursion bucket off raw stack growth
+    through the shared `TailDeclCall` boundary instead of another declaration-
+    specific lowering rule.
+  - compile coverage now proves the emitted helper body validates and contains a
+    loop without directly calling itself via
+    `compile_module_self_tail_tail_decl_call_emits_looped_helper_without_recursive_call`.
+  - runtime coverage now proves the tight-stack self-tail representative
+    succeeds via
+    `rr5_self_tail_recursion_repro_survives_tight_stack_limit_after_tail_decl_loop`.
+  - non-self and mutually recursive direct tail-call groups remain the next
+    RR-5 execution slice.
 
 - **Track RR, RR-4 builder-backed list-spread lowering** (complete, 2026-04-09).
   - fixed the historical recursive `[x, ..rest]` memory-exhaustion bug without
@@ -204,6 +220,9 @@ Immediate next steps:
 - Should the first constant-stack execution model handle only self
   `TailDeclCall`, or grouped sibling direct calls from the start so RR-5 does
   not stall at a self-recursion-only boundary?
+- Which grouped execution shape is the smallest honest next step for non-self
+  direct tail calls: SCC-local trampoline dispatch, grouped loops with a callee
+  tag local, or another backend-owned jump model?
 - For unsupported tail-call shapes, what is the stable contract: explicit
   compile-time rejection, ordinary non-TCO execution, or backend-specific
   capability reporting?

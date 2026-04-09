@@ -1321,6 +1321,7 @@ fn collect_decl_call_names(instrs: &[backend_ir::WasmBackendInstr], out: &mut Ha
     for instr in instrs {
         match instr {
             backend_ir::WasmBackendInstr::DeclCall { decl_name }
+            | backend_ir::WasmBackendInstr::TailDeclCall { decl_name }
             | backend_ir::WasmBackendInstr::PushFuncHandle { decl_name } => {
                 out.insert(decl_name.clone());
             }

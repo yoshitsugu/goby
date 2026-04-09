@@ -269,17 +269,12 @@ fn parse_general_lowered_module(source: &str) -> goby_core::Module {
 }
 
 #[test]
-fn rr2_self_tail_recursion_repro_surfaces_stack_pressure_under_tight_stack_limit() {
+fn rr5_self_tail_recursion_repro_survives_tight_stack_limit_after_tail_decl_loop() {
     let module = parse_general_lowered_module(SELF_TAIL_RECURSION_SOURCE);
     let wasm = compile_module(&module).expect("self-tail recursion repro should compile");
-    let low_stack = rr_tight_stack_config();
-
-    let err = run_wasm_bytes_with_stdin_for_tests(&wasm, Some("x\n"), low_stack)
-        .expect_err("tight stack limit should preserve the self-tail recursion bucket");
-    assert!(
-        err.contains("likely stack pressure [E-STACK-PRESSURE]"),
-        "expected stack-pressure classification, got: {err}"
-    );
+    let output = run_wasm_bytes_with_stdin_for_tests(&wasm, Some("x\n"), rr_tight_stack_config())
+        .expect("self TailDeclCall loop should survive the tight stack limit");
+    assert_eq!(output, "done\n");
 }
 
 #[test]

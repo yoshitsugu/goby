@@ -222,6 +222,15 @@ If any of these remain missing, the wording should stay narrower, such as
     dispatch, backend jumps, or another shared mechanism.
   - Prove that the model is compatible with Goby's evaluation order and local
     variable semantics.
+  - 2026-04-10 initial slice:
+    - aux declarations that contain self `TailDeclCall` now emit a looped Wasm
+      helper body and rewrite the recursive tail edge to parameter rewrites plus
+      a branch back to the loop head;
+    - this makes generic direct self-tail recursion run in constant stack on
+      the compiled Wasm path without reusing the old RR-2 symbol-specific
+      strategy;
+    - non-self and mutually recursive `TailDeclCall` still execute like ordinary
+      direct calls until a wider direct-call group model lands.
 
 - [ ] **M4: Lower the shared tail-call form to constant-stack Wasm execution**
   - Implement backend lowering for the shared tail-call form and direct-call

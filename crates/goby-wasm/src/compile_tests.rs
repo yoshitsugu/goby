@@ -98,6 +98,47 @@ fn read_runtime_io_general_lowering_fixture(name: &str) -> String {
 }
 
 #[test]
+fn compile_module_self_tail_tail_decl_call_emits_looped_helper_without_recursive_call() {
+    let source = r#"
+import goby/stdio
+
+count_down : Int -> Unit can Print
+count_down n =
+  if n == 0
+    ()
+  else
+    count_down (n - 1)
+
+main : Unit -> Unit can Print, Read
+main =
+  _ = read()
+  count_down 1000
+  println "done"
+"#;
+    let module = parse_module(source).expect("source should parse");
+    let wasm = compile_module(&module).expect("module should compile");
+
+    let import_count = import_function_count(&wasm);
+    let helper_func_idx = import_count + 1;
+    let bodies = all_code_body_ops(&wasm);
+    let helper_ops = &bodies[1];
+    assert_valid_wasm_module(&wasm);
+    assert!(
+        helper_ops
+            .iter()
+            .any(|op| matches!(op, Operator::Loop { .. })),
+        "self-tail helper should contain a looped execution body, got: {helper_ops:?}"
+    );
+    assert!(
+        !helper_ops.iter().any(|op| matches!(
+            op,
+            Operator::Call { function_index } if *function_index == helper_func_idx
+        )),
+        "self-tail helper should not call itself recursively after RR-5 loop emission, got: {helper_ops:?}"
+    );
+}
+
+#[test]
 fn native_codegen_capability_checker_rejects_hello_effect_boundary_subset() {
     let source = read_example("hello.gb");
     let module = parse_module(&source).expect("hello.gb should parse");

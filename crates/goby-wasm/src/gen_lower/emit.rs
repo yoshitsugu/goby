@@ -196,6 +196,15 @@ struct EmitContext {
     indirect_call_type_idx_3: Option<u32>,
     /// Map from record constructor name to module-local numeric tag used in `RecordLit`.
     record_ctor_tags: HashMap<String, u32>,
+    /// Optional self-tail execution metadata for the function currently being emitted.
+    self_tail_loop: Option<SelfTailLoopState>,
+}
+
+#[derive(Debug, Clone)]
+struct SelfTailLoopState {
+    decl_name: String,
+    param_locals: Vec<u32>,
+    arg_scratch_base: u32,
 }
 
 impl EmitContext {
@@ -221,6 +230,7 @@ impl EmitContext {
             indirect_call_type_idx_2,
             indirect_call_type_idx_3,
             record_ctor_tags,
+            self_tail_loop: None,
         }
     }
 
@@ -731,6 +741,15 @@ fn required_i64_scratch_count(instrs: &[WasmBackendInstr]) -> u32 {
     if needs_scratch { HELPER_SCRATCH_I64 } else { 0 }
 }
 
+fn has_self_tail_decl_call(instrs: &[WasmBackendInstr], decl_name: &str) -> bool {
+    collect_all_instrs(instrs).iter().any(|instr| {
+        matches!(
+            instr,
+            WasmBackendInstr::TailDeclCall { decl_name: target } if target == decl_name
+        )
+    })
+}
+
 /// Returns true if any print-with-newline instruction is present (needs newline data segment).
 fn needs_newline_data(instrs: &[WasmBackendInstr]) -> bool {
     let all = collect_all_instrs(instrs);
@@ -1175,6 +1194,7 @@ pub(crate) fn emit_general_module_with_aux_and_options(
             &static_strings,
             options,
             false, // emit_epilogue_cursor_sync
+            None,
         )?;
         code.function(&function);
     }
@@ -1187,10 +1207,17 @@ pub(crate) fn emit_general_module_with_aux_and_options(
             .filter(|i| matches!(i, WasmBackendInstr::DeclareLocal { .. }))
             .count() as u32;
         let aux_helper_i64_scratch_count = required_i64_scratch_count(&decl.instrs);
+        let aux_self_tail_scratch_count = if has_self_tail_decl_call(&decl.instrs, &decl.decl_name)
+        {
+            decl.param_names.len() as u32
+        } else {
+            0
+        };
         // Aux decl params are Wasm function parameters (i64 each), not DeclareLocal slots.
         // In Wasm, function params are locals[0..param_names.len()-1]; body locals follow after.
         let aux_param_count = decl.param_names.len() as u32;
-        let aux_i64_count = aux_named_i64_count + aux_helper_i64_scratch_count;
+        let aux_i64_count =
+            aux_named_i64_count + aux_self_tail_scratch_count + aux_helper_i64_scratch_count;
         let aux_i32_scratch_count = required_i32_scratch_count(&decl.instrs);
         let aux_i32_base = aux_param_count + aux_i64_count;
 
@@ -1220,6 +1247,19 @@ pub(crate) fn emit_general_module_with_aux_and_options(
             ctx.locals.insert(param_name.clone(), ctx.next_local);
             ctx.next_local += 1;
         }
+        let self_tail_loop = if aux_self_tail_scratch_count > 0 {
+            Some(SelfTailLoopState {
+                decl_name: decl.decl_name.clone(),
+                param_locals: decl
+                    .param_names
+                    .iter()
+                    .map(|param_name| ctx.get(param_name))
+                    .collect::<Result<Vec<_>, _>>()?,
+                arg_scratch_base: aux_param_count + aux_named_i64_count,
+            })
+        } else {
+            None
+        };
         // Aux decls write the final alloc cursor back to the global slot before returning
         // so callers that use call_indirect (not DeclCall) can reload the updated cursor.
         emit_function_body(
@@ -1233,6 +1273,7 @@ pub(crate) fn emit_general_module_with_aux_and_options(
             &static_strings,
             options,
             true, // emit_epilogue_cursor_sync
+            self_tail_loop,
         )?;
         code.function(&function);
     }
@@ -1278,6 +1319,7 @@ fn emit_instrs(
     static_strings: &StaticStringPool,
     options: EmitOptions,
     function_returns_i64: bool,
+    self_tail_loop_depth: u32,
 ) -> Result<(), CodegenError> {
     emit_instrs_with_heap_depth(
         function,
@@ -1291,6 +1333,7 @@ fn emit_instrs(
         options,
         function_returns_i64,
         0,
+        self_tail_loop_depth,
     )
 }
 
@@ -1307,6 +1350,7 @@ fn emit_instrs_with_heap_depth(
     options: EmitOptions,
     function_returns_i64: bool,
     heap_base_depth: u32,
+    self_tail_loop_depth: u32,
 ) -> Result<(), CodegenError> {
     let iovec_offset = layout.iovec_offset as i32;
     let nread_offset = layout.nwritten_offset as i32;
@@ -1484,6 +1528,7 @@ fn emit_instrs_with_heap_depth(
                     options,
                     function_returns_i64,
                     heap_base_depth,
+                    self_tail_loop_depth + 1,
                 )?;
                 function.instruction(&Instruction::Else);
                 emit_instrs_with_heap_depth(
@@ -1498,6 +1543,7 @@ fn emit_instrs_with_heap_depth(
                     options,
                     function_returns_i64,
                     heap_base_depth,
+                    self_tail_loop_depth + 1,
                 )?;
                 function.instruction(&Instruction::End);
             }
@@ -1518,6 +1564,7 @@ fn emit_instrs_with_heap_depth(
                     options,
                     function_returns_i64,
                     heap_base_depth,
+                    self_tail_loop_depth + 1,
                 )?;
                 function.instruction(&Instruction::End);
             }
@@ -1526,8 +1573,7 @@ fn emit_instrs_with_heap_depth(
                 function.instruction(&Instruction::Br(*relative_depth));
             }
 
-            WasmBackendInstr::DeclCall { decl_name }
-            | WasmBackendInstr::TailDeclCall { decl_name } => {
+            WasmBackendInstr::DeclCall { decl_name } => {
                 let func_idx = ctx.decl_func_idx(decl_name)?;
                 let returns_wasm_heap = ctx.decl_returns_wasm_heap(decl_name)?;
                 emit_heap_aware_direct_call(
@@ -1536,6 +1582,34 @@ fn emit_instrs_with_heap_depth(
                     helper_state.as_ref(),
                     returns_wasm_heap,
                 );
+            }
+
+            WasmBackendInstr::TailDeclCall { decl_name } => {
+                if let Some(loop_state) = &ctx.self_tail_loop
+                    && loop_state.decl_name == *decl_name
+                {
+                    for (offset, _) in loop_state.param_locals.iter().enumerate().rev() {
+                        function.instruction(&Instruction::LocalSet(
+                            loop_state.arg_scratch_base + offset as u32,
+                        ));
+                    }
+                    for (offset, param_local) in loop_state.param_locals.iter().enumerate() {
+                        function.instruction(&Instruction::LocalGet(
+                            loop_state.arg_scratch_base + offset as u32,
+                        ));
+                        function.instruction(&Instruction::LocalSet(*param_local));
+                    }
+                    function.instruction(&Instruction::Br(self_tail_loop_depth));
+                } else {
+                    let func_idx = ctx.decl_func_idx(decl_name)?;
+                    let returns_wasm_heap = ctx.decl_returns_wasm_heap(decl_name)?;
+                    emit_heap_aware_direct_call(
+                        function,
+                        func_idx,
+                        helper_state.as_ref(),
+                        returns_wasm_heap,
+                    );
+                }
             }
 
             WasmBackendInstr::CaseMatch {
@@ -1556,6 +1630,7 @@ fn emit_instrs_with_heap_depth(
                     &helper_state,
                     options,
                     function_returns_i64,
+                    self_tail_loop_depth,
                 )?;
             }
 
@@ -1598,6 +1673,7 @@ fn emit_instrs_with_heap_depth(
                         options,
                         function_returns_i64,
                         heap_base_depth + 1,
+                        self_tail_loop_depth,
                     )?;
                     function.instruction(&Instruction::I64Store(MemArg {
                         offset: 0,
@@ -1754,6 +1830,7 @@ fn emit_instrs_with_heap_depth(
                     options,
                     function_returns_i64,
                     heap_base_depth + 1,
+                    self_tail_loop_depth,
                 )?;
                 function.instruction(&Instruction::LocalSet(value_i64));
 
@@ -1830,6 +1907,7 @@ fn emit_instrs_with_heap_depth(
                         options,
                         function_returns_i64,
                         heap_base_depth + 1,
+                        self_tail_loop_depth,
                     )?;
                     function.instruction(&Instruction::I64Store(MemArg {
                         offset: 0,
@@ -1878,6 +1956,7 @@ fn emit_instrs_with_heap_depth(
                         options,
                         function_returns_i64,
                         heap_base_depth + 1,
+                        self_tail_loop_depth,
                     )?;
                     function.instruction(&Instruction::I64Store(MemArg {
                         offset: 0,
@@ -1917,6 +1996,7 @@ fn emit_instrs_with_heap_depth(
                     static_strings,
                     options,
                     function_returns_i64,
+                    self_tail_loop_depth,
                 )?;
                 emit_list_each_effect(
                     function,
@@ -1946,6 +2026,7 @@ fn emit_instrs_with_heap_depth(
                     static_strings,
                     options,
                     function_returns_i64,
+                    self_tail_loop_depth,
                 )?;
                 emit_instrs(
                     function,
@@ -1958,6 +2039,7 @@ fn emit_instrs_with_heap_depth(
                     static_strings,
                     options,
                     function_returns_i64,
+                    self_tail_loop_depth,
                 )?;
                 emit_list_each(function, &hs, type_idx, closure_type_idx);
             }
@@ -1980,6 +2062,7 @@ fn emit_instrs_with_heap_depth(
                     static_strings,
                     options,
                     function_returns_i64,
+                    self_tail_loop_depth,
                 )?;
                 emit_instrs(
                     function,
@@ -1992,6 +2075,7 @@ fn emit_instrs_with_heap_depth(
                     static_strings,
                     options,
                     function_returns_i64,
+                    self_tail_loop_depth,
                 )?;
                 emit_list_map(function, &hs, type_idx, closure_type_idx)?;
             }
@@ -2014,6 +2098,7 @@ fn emit_instrs_with_heap_depth(
                     static_strings,
                     options,
                     function_returns_i64,
+                    self_tail_loop_depth,
                 )?;
                 emit_list_reverse_fold_prepend(
                     function,
@@ -2100,6 +2185,7 @@ fn emit_instrs_with_heap_depth(
                     options,
                     function_returns_i64,
                     heap_base_depth + 1,
+                    self_tail_loop_depth,
                 )?;
                 function.instruction(&Instruction::I64Store(MemArg {
                     offset: 0,
@@ -2124,6 +2210,7 @@ fn emit_instrs_with_heap_depth(
                         options,
                         function_returns_i64,
                         heap_base_depth + 1,
+                        self_tail_loop_depth,
                     )?;
                     function.instruction(&Instruction::I64Store(MemArg {
                         offset: 0,
@@ -2193,6 +2280,7 @@ fn emit_instrs_with_heap_depth(
                     static_strings,
                     options,
                     function_returns_i64,
+                    self_tail_loop_depth,
                 )?;
                 function.instruction(&Instruction::I64Store(MemArg {
                     offset: 0,
@@ -2230,6 +2318,7 @@ fn emit_instrs_with_heap_depth(
                     static_strings,
                     options,
                     function_returns_i64,
+                    self_tail_loop_depth,
                 )?;
                 function.instruction(&Instruction::I32WrapI64);
                 // Emit the new value (i64) to store.
@@ -2244,6 +2333,7 @@ fn emit_instrs_with_heap_depth(
                     static_strings,
                     options,
                     function_returns_i64,
+                    self_tail_loop_depth,
                 )?;
                 // Store value into cell at offset 0.
                 function.instruction(&Instruction::I64Store(MemArg {
@@ -2519,7 +2609,9 @@ fn emit_function_body(
     static_strings: &StaticStringPool,
     options: EmitOptions,
     emit_epilogue_cursor_sync: bool,
+    self_tail_loop: Option<SelfTailLoopState>,
 ) -> Result<(), CodegenError> {
+    ctx.self_tail_loop = self_tail_loop;
     let has_heap = needs_helper_state(instrs);
     if has_heap {
         initialize_helper_state_locals(
@@ -2530,23 +2622,45 @@ fn emit_function_body(
             !emit_epilogue_cursor_sync,
         )?;
     }
-    emit_instrs(
-        function,
-        ctx,
-        instrs,
-        layout,
-        named_i64_count,
-        helper_i64_scratch_count,
-        i32_base,
-        static_strings,
-        options,
-        emit_epilogue_cursor_sync,
-    )?;
+    if ctx.self_tail_loop.is_some() {
+        function.instruction(&Instruction::Loop(wasm_encoder::BlockType::Result(
+            wasm_encoder::ValType::I64,
+        )));
+        emit_instrs(
+            function,
+            ctx,
+            instrs,
+            layout,
+            named_i64_count,
+            helper_i64_scratch_count,
+            i32_base,
+            static_strings,
+            options,
+            emit_epilogue_cursor_sync,
+            0,
+        )?;
+        function.instruction(&Instruction::End);
+    } else {
+        emit_instrs(
+            function,
+            ctx,
+            instrs,
+            layout,
+            named_i64_count,
+            helper_i64_scratch_count,
+            i32_base,
+            static_strings,
+            options,
+            emit_epilogue_cursor_sync,
+            0,
+        )?;
+    }
     if has_heap && emit_epilogue_cursor_sync {
         let alloc_cursor_local = i32_base + HELPER_ALLOC_CURSOR_OFFSET;
         emit_sync_cursor_to_global(function, alloc_cursor_local);
     }
     function.instruction(&Instruction::End);
+    ctx.self_tail_loop = None;
     Ok(())
 }
 
@@ -4657,6 +4771,7 @@ fn emit_list_reverse_fold_prepend(
             static_strings,
             *options,
             function_returns_i64,
+            0,
         )?;
 
         function.instruction(&Instruction::I64Store(MemArg {
@@ -4861,6 +4976,7 @@ fn emit_case_match(
     heap_state: &Option<HeapEmitState>,
     options: EmitOptions,
     function_returns_i64: bool,
+    self_tail_loop_depth: u32,
 ) -> Result<(), CodegenError> {
     use crate::gen_lower::backend_ir::BackendCasePattern;
 
@@ -4897,6 +5013,7 @@ fn emit_case_match(
                     static_strings,
                     options,
                     function_returns_i64,
+                    self_tail_loop_depth + 1,
                 )?;
                 function.instruction(&Instruction::Br(0));
                 // Any arms after Wildcard are unreachable; stop emitting.
@@ -4926,6 +5043,7 @@ fn emit_case_match(
                     static_strings,
                     options,
                     function_returns_i64,
+                    self_tail_loop_depth + 2,
                 )?;
                 function.instruction(&Instruction::Br(1)); // br out of enclosing block
                 function.instruction(&Instruction::End); // end if
@@ -4948,6 +5066,7 @@ fn emit_case_match(
                     static_strings,
                     options,
                     function_returns_i64,
+                    self_tail_loop_depth + 2,
                 )?;
                 function.instruction(&Instruction::Br(1));
                 function.instruction(&Instruction::End);
@@ -5016,6 +5135,7 @@ fn emit_case_match(
                     static_strings,
                     options,
                     function_returns_i64,
+                    self_tail_loop_depth + 2,
                 )?;
                 function.instruction(&Instruction::Br(1));
                 function.instruction(&Instruction::End);
@@ -5062,6 +5182,7 @@ fn emit_case_match(
                     static_strings,
                     options,
                     function_returns_i64,
+                    self_tail_loop_depth + 3,
                 )?;
                 function.instruction(&Instruction::Br(2)); // out of: if(len==0) + if(is list) + block
                 function.instruction(&Instruction::End); // end if (len == 0)
@@ -5251,6 +5372,7 @@ fn emit_case_match(
                     static_strings,
                     options,
                     function_returns_i64,
+                    self_tail_loop_depth + 3,
                 )?;
                 function.instruction(&Instruction::Br(2));
                 function.instruction(&Instruction::End); // end if_len
