@@ -1,7 +1,7 @@
 # Goby Language Specification (Current)
 
 Status: active
-Last updated: 2026-04-06
+Last updated: 2026-04-10
 
 This file is the current language-spec source of truth for user-visible Goby
 syntax/semantics.
@@ -169,6 +169,40 @@ syntax/semantics.
   type-hole marker (full inference behavior rollout is tracked in `doc/PLAN.md`).
 - `if` / `case` are value expressions and all branches must resolve to one compatible result type.
 - `void` spelling is rejected; use `Unit`.
+
+## 4.1 Tail-Call Optimization Contract
+
+- Tail-call optimization is currently a property of Goby's compiled Wasm
+  execution path.
+- The current guarantee applies only to statically resolvable direct calls to
+  known top-level declarations in tail position.
+- On that compiled Wasm path, Goby currently guarantees constant-stack
+  execution for:
+  - direct self tail recursion among known top-level declarations;
+  - direct sibling/top-level tail calls among known top-level declarations;
+  - direct mutually recursive tail-call groups among known top-level
+    declarations;
+  - tail calls that remain in tail position through currently supported control
+    flow joins, including `if` and `case`.
+- This contract is structural. It does not depend on specific declaration
+  names, stdlib helpers, or hand-picked source fixtures.
+- This contract is not yet the full "Goby has generic TCO" claim. In
+  particular, the current language/runtime guarantee does not yet cover every
+  statically resolvable direct-call shape described in `doc/PLAN_TCO.md`.
+- Unsupported or uncovered shapes currently include:
+  - indirect or higher-order calls;
+  - local function values that are not statically resolved as direct top-level
+    calls;
+  - recursion that is not in tail position;
+  - direct-call shapes outside the currently documented compiled-Wasm subset.
+- For unsupported or uncovered shapes, Goby does not promise constant-stack
+  execution.
+  - the compiler/runtime may still accept and run them as ordinary calls;
+  - those executions may still consume stack and fail with ordinary stack-limit
+    runtime behavior;
+  - Goby must not document those shapes as covered TCO.
+- Future backends may implement stronger tail-call support, but the current
+  language-level guarantee is defined only for the compiled Wasm path above.
 
 ## 5. Effects and Handlers
 

@@ -756,6 +756,11 @@ Active milestones:
        now execute through a shared looped dispatcher helper on the compiled
        Wasm path, extending the same constant-stack boundary to sibling/mutual
        recursion without changing the public direct-call/funcref entrypoints.
+     - the current language-level contract is now locked in
+       `doc/LANGUAGE_SPEC.md`: this is a compiled-Wasm-path guarantee for the
+       currently covered direct-call subset, not yet a claim that every
+       statically resolvable direct tail call in Goby has finished generic TCO
+       coverage.
    - scope guardrails for a future RR-5/TCO track:
      - do not special-case source symbols or individual fixtures,
      - prefer a shared control-flow rule that can be described independently of

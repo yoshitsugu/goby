@@ -8,6 +8,16 @@ Next slice: **Track RR, RR-5** (`PLAN.md §4.5`) - follow through on the direct
 tail-call group model now that sibling/mutual aux-decl groups execute in
 constant stack on the compiled Wasm path.
 
+Locked TCO contract reminder:
+
+- the current language-level TCO guarantee is now locked in
+  `doc/LANGUAGE_SPEC.md`;
+- it applies to the compiled Wasm path for the currently covered statically
+  resolvable direct tail-call subset among known top-level declarations;
+- unsupported or uncovered shapes may still execute as ordinary calls, but they
+  are not part of the constant-stack guarantee and must not be described as
+  covered generic TCO.
+
 Locked ideal goal for RR:
 
 - make "write the obvious recursive/list-building program first" a rational
@@ -35,8 +45,9 @@ Immediate next steps:
   - prove the remaining control-flow/user-shape coverage (`if`/`case` joins,
     local aliases, and other direct-call representatives) under the new grouped
     execution model.
-  - keep current diagnostics explicit for shapes that still fall outside the
-    optimized subset or still execute as ordinary calls.
+  - keep current diagnostics and docs aligned with the locked M0 contract for
+    shapes that still fall outside the optimized subset or still execute as
+    ordinary calls.
 - keep RR-1 diagnostics best-effort and explicit about uncertainty
   (`likely stack pressure`, `memory exhaustion`, `unknown runtime trap`) as
   later resilience work lands.
@@ -240,12 +251,8 @@ Immediate next steps:
   `tail_analysis` has marked tail position: only direct declaration names, or
   also resolvable local aliases to those names?
 - How far should the new SCC-local dispatcher boundary extend before Goby can
-  honestly make a broader user-facing TCO statement: aux declarations only, or
-  every documented statically resolvable direct-call entrypoint on the compiled
-  path?
-- For unsupported tail-call shapes, what is the stable contract: explicit
-  compile-time rejection, ordinary non-TCO execution, or backend-specific
-  capability reporting?
+  honestly broaden the current M0 contract toward the stronger generic-TCO
+  statement targeted by `doc/PLAN_TCO.md`?
 
 ## Key Entry Points
 

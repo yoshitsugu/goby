@@ -185,13 +185,28 @@ If any of these remain missing, the wording should stay narrower, such as
 
 ## 7. Milestones
 
-- [ ] **M0: Lock the feature contract**
+- [x] **M0: Lock the feature contract**
   - Define the precise first-version TCO guarantee in `doc/LANGUAGE_SPEC.md`
     and align `doc/PLAN.md`/`doc/STATE.md`.
   - Decide exactly which execution path may claim generic TCO first.
   - Define the unsupported cases that must remain explicit.
+  - 2026-04-10 contract lock:
+    - `doc/LANGUAGE_SPEC.md` now defines the current TCO guarantee as a
+      compiled-Wasm-path property of statically resolvable direct tail calls
+      among known top-level declarations;
+    - the currently guaranteed subset is explicit: direct self tail recursion,
+      sibling direct tail calls, and mutually recursive top-level direct-call
+      groups on that path, including the supported tail `if` / `case` joins;
+    - unsupported cases are also explicit: indirect/higher-order calls,
+      local function values that are not statically resolved as direct
+      top-level calls, non-tail recursion, and direct-call shapes outside the
+      currently documented compiled-Wasm subset;
+    - the contract also locks the honesty rule: unsupported shapes may still be
+      accepted and run as ordinary calls, but Goby does not promise
+      constant-stack execution for them and must not describe them as covered
+      generic TCO.
 
-- [ ] **M1: Introduce a tail-position model**
+- [x] **M1: Introduce a tail-position model**
   - Add a compiler-owned representation or analysis that can answer whether a
     computation is in tail position without relying on symbol names.
   - Cover `if`, `case`, block tails, and let-tail structure.
@@ -202,7 +217,7 @@ If any of these remain missing, the wording should stay narrower, such as
     - `effect_handler_legality` consumes that shared analysis so the boundary is
       exercised by existing compiler behavior before TCO normalization begins.
 
-- [ ] **M2: Normalize direct tail calls into a shared IR boundary**
+- [x] **M2: Normalize direct tail calls into a shared IR boundary**
   - Introduce a backend-neutral form for eligible direct tail calls.
   - Ensure self and non-self direct tail calls use the same conceptual model.
   - Preserve correct behavior for argument evaluation order and locals.
@@ -215,7 +230,7 @@ If any of these remain missing, the wording should stay narrower, such as
       locks the shared normalization boundary without yet claiming constant-stack
       execution.
 
-- [ ] **M3: Add a direct-call group execution model**
+- [x] **M3: Add a direct-call group execution model**
   - Define how non-self and mutually recursive direct tail calls execute in
     constant stack.
   - Choose the long-term model explicitly: grouped loops, trampoline-style
