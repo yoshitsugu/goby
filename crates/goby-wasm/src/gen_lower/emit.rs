@@ -480,6 +480,7 @@ pub(crate) fn needs_helper_state(instrs: &[WasmBackendInstr]) -> bool {
                 // DeclCall / IndirectCall may trigger callee heap allocations; the global cursor
                 // must be synchronized before and after the call, which requires alloc_cursor_local.
                 | WasmBackendInstr::DeclCall { .. }
+                | WasmBackendInstr::TailDeclCall { .. }
                 | WasmBackendInstr::IndirectCall { .. }
         )
     }) || {
@@ -866,7 +867,7 @@ pub(crate) fn supports_instrs(instrs: &[WasmBackendInstr]) -> bool {
         },
         // DeclCall is fully supported: emit_general_module_with_aux builds the
         // decl_name → func_idx table and threads it through EmitContext.
-        WasmBackendInstr::DeclCall { .. } => true,
+        WasmBackendInstr::DeclCall { .. } | WasmBackendInstr::TailDeclCall { .. } => true,
         _ => true,
     })
 }
@@ -1525,7 +1526,8 @@ fn emit_instrs_with_heap_depth(
                 function.instruction(&Instruction::Br(*relative_depth));
             }
 
-            WasmBackendInstr::DeclCall { decl_name } => {
+            WasmBackendInstr::DeclCall { decl_name }
+            | WasmBackendInstr::TailDeclCall { decl_name } => {
                 let func_idx = ctx.decl_func_idx(decl_name)?;
                 let returns_wasm_heap = ctx.decl_returns_wasm_heap(decl_name)?;
                 emit_heap_aware_direct_call(

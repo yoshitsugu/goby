@@ -206,6 +206,14 @@ If any of these remain missing, the wording should stay narrower, such as
   - Introduce a backend-neutral form for eligible direct tail calls.
   - Ensure self and non-self direct tail calls use the same conceptual model.
   - Preserve correct behavior for argument evaluation order and locals.
+  - 2026-04-09 initial slice:
+    - direct top-level declaration calls in tail position now lower to
+      `WasmBackendInstr::TailDeclCall` instead of the ordinary `DeclCall`;
+    - `if` / `case` tail joins propagate that normalization, while non-tail
+      statement positions keep the ordinary call form;
+    - the emitter still executes `TailDeclCall` like `DeclCall`, so this slice
+      locks the shared normalization boundary without yet claiming constant-stack
+      execution.
 
 - [ ] **M3: Add a direct-call group execution model**
   - Define how non-self and mutually recursive direct tail calls execute in

@@ -746,6 +746,10 @@ Active milestones:
      - land a shared IR tail-position analysis boundary in `goby-core`,
        exercise it through existing legality checks, and use that as the
        ownership handoff into later direct tail-call normalization work.
+   - current implementation status:
+     - direct known-declaration calls in tail position now normalize to a
+       dedicated `TailDeclCall` backend-IR marker, but they still execute like
+       ordinary direct calls until the direct-call group execution model lands.
    - scope guardrails for a future RR-5/TCO track:
      - do not special-case source symbols or individual fixtures,
      - prefer a shared control-flow rule that can be described independently of

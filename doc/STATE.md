@@ -4,8 +4,8 @@ Last updated: 2026-04-09
 
 ## Current Focus
 
-Next slice: **Track RR, RR-5** (`PLAN.md §4.5`) - direct tail-call
-normalization on top of the new shared tail-position analysis boundary.
+Next slice: **Track RR, RR-5** (`PLAN.md §4.5`) - direct-call group execution
+model on top of normalized `TailDeclCall` backend IR.
 
 Locked ideal goal for RR:
 
@@ -24,14 +24,14 @@ RR execution reminder:
 Immediate next steps:
 
 - **RR-5**: continue the planned generic tail-call optimization track now that
-  the first shared tail-position analysis slice is in place.
+  the first shared tail-position analysis and direct tail-call normalization
+  slices are in place.
   - keep the RR-3/RR-4 shared-boundary discipline: prefer reusable control-flow
     rules over symbol-specific recursion rewrites.
-  - next RR-5 task: use the shared IR tail-position analysis to define the
-    smallest honest direct tail-call normalization boundary for known
-    declaration calls on the Wasm path.
-  - keep self-tail recursion only as a subset of that boundary, not the
-    headline feature claim.
+  - next RR-5 task: define the smallest honest grouped execution model that can
+    run `TailDeclCall` in constant stack for direct known-declaration calls.
+  - keep self-tail recursion only as one member of that direct-call group
+    model, not the headline feature claim.
   - keep current diagnostics explicit for shapes that still fall outside the
     optimized subset.
 - keep RR-1 diagnostics best-effort and explicit about uncertainty
@@ -53,6 +53,20 @@ Immediate next steps:
     resumptive subset.
   - this slice establishes RR-5 milestone M1 ownership but does not yet
     normalize or execute generic tail calls in constant stack.
+
+- **Track RR, RR-5 direct tail-call normalization** (partial, 2026-04-09).
+  - normalized eligible direct top-level declaration calls in tail position to
+    `WasmBackendInstr::TailDeclCall` rather than leaving them indistinguishable
+    from ordinary `DeclCall`.
+  - propagated that normalization through tail `if` / `case` joins while
+    keeping non-tail statement positions on the ordinary direct-call form.
+  - kept emitter behavior unchanged for now, so `TailDeclCall` still executes
+    like a normal direct Wasm call until the direct-call group execution model
+    lands.
+  - locked focused lowering tests for:
+    - root tail-position direct calls,
+    - non-tail `seq` statements staying ordinary,
+    - `case` arm tails normalizing to the tail-call marker.
 
 - **Track RR, RR-4 builder-backed list-spread lowering** (complete, 2026-04-09).
   - fixed the historical recursive `[x, ..rest]` memory-exhaustion bug without
@@ -187,6 +201,9 @@ Immediate next steps:
 - Which direct-call forms should the first normalization slice accept once
   `tail_analysis` has marked tail position: only direct declaration names, or
   also resolvable local aliases to those names?
+- Should the first constant-stack execution model handle only self
+  `TailDeclCall`, or grouped sibling direct calls from the start so RR-5 does
+  not stall at a self-recursion-only boundary?
 - For unsupported tail-call shapes, what is the stable contract: explicit
   compile-time rejection, ordinary non-TCO execution, or backend-specific
   capability reporting?

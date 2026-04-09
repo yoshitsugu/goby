@@ -254,6 +254,12 @@ pub(crate) enum WasmBackendInstr {
     /// The emitter resolves it to a Wasm function index using the module-level
     /// `decl_name → func_idx` table built during `emit_general_module`.
     DeclCall { decl_name: String },
+    /// Tail-position direct call to a user-defined top-level declaration.
+    ///
+    /// This is the RR-5 direct-tail-call normalization marker. For now the
+    /// emitter still executes it like `DeclCall`; later RR-5 slices will give
+    /// this form a distinct constant-stack execution model.
+    TailDeclCall { decl_name: String },
     /// Push a tagged function-handle (TAG_FUNC i64) for a named top-level declaration.
     ///
     /// The emitter encodes the funcref table slot index for `decl_name` as a tagged i64
