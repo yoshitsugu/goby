@@ -263,6 +263,25 @@ If any of these remain missing, the wording should stay narrower, such as
   - Keep the implementation reusable across direct self, non-self, and mutual
     direct-call cases.
   - Do not couple the feature definition to Wasm tail-call instructions.
+  - Checkpoints:
+    - [ ] identify the remaining covered direct-call shapes that still leave the
+      shared form but do not yet enter the grouped constant-stack engine;
+    - [ ] make the grouped execution mechanism own those shapes without adding a
+      second independent TCO execution path;
+    - [ ] prove argument evaluation order is preserved when entering the shared
+      constant-stack engine;
+    - [ ] prove parameter/local update semantics are preserved across repeated
+      loop/dispatcher iterations;
+    - [ ] prove observable direct-call semantics and function-value behavior
+      are preserved after routing covered calls through the shared engine,
+      without requiring the current wrapper structure to remain the long-term
+      implementation shape;
+    - [ ] add compile tests showing covered shapes no longer fall back to
+      ordinary direct `DeclCall` emission on the constant-stack path;
+    - [ ] add tight-stack runtime tests showing the widened covered set now
+      survives without stack-growth failures;
+    - [ ] confirm the implementation still does not depend on Wasm native
+      tail-call instructions.
 
 - [ ] **M5: Prove control-flow completeness**
   - Add regression coverage for tail calls through:
@@ -271,6 +290,44 @@ If any of these remain missing, the wording should stay narrower, such as
     - let-bound tail expressions,
     - local aliases to known functions.
   - Ensure these remain constant-stack under tight-stack execution.
+  - Completion criteria:
+    - each covered shape must have both compile-path proof and tight-stack
+      runtime proof;
+    - compile-path proof must show the call stays on the shared tail-call form
+      rather than silently falling back to ordinary direct calls;
+    - runtime proof must use representative user-written programs rather than
+      synthetic single-function micro-cases only.
+  - Clarifications for this milestone:
+    - `if` / `case` completion means the tail-call guarantee survives control-
+      flow joins where all outgoing tail branches target the covered direct-call
+      subset;
+    - let/block completion means tail-position administrative structure does not
+      accidentally break the same shared lowering boundary;
+    - local-alias completion means ordinary local alias chains to known top-
+      level declarations preserve the same guarantee when the callee remains
+      statically resolvable, not merely when the source uses the declaration
+      name directly.
+  - Checkpoints:
+    - [ ] add a compile-path regression for tail `if` joins targeting the
+      covered direct-call subset;
+    - [ ] add a tight-stack runtime regression for the same tail `if` join
+      shape;
+    - [ ] add a compile-path regression for tail `case` joins targeting the
+      covered direct-call subset;
+    - [ ] add a tight-stack runtime regression for the same tail `case` join
+      shape;
+    - [ ] add a compile-path regression for let/block-shaped tail expressions
+      that should preserve the covered direct-call guarantee;
+    - [ ] add a tight-stack runtime regression for the same let/block-shaped
+      representative;
+    - [ ] add a compile-path regression for local alias chains to known top-
+      level declarations in tail position;
+    - [ ] add a tight-stack runtime regression for the same local-alias
+      representative;
+    - [ ] confirm all newly covered control-flow shapes stay on the shared
+      tail-call form rather than a shape-specific fast path;
+    - [ ] update the milestone notes once the representative proof set is
+      complete.
 
 - [ ] **M6: Define and test the failure boundary**
   - Lock diagnostics and tests for unsupported cases such as:
@@ -282,6 +339,50 @@ If any of these remain missing, the wording should stay narrower, such as
     - ordinary call execution with possible stack growth, or
     - documented backend-dependent behavior.
   - Make sure Goby does not over-claim support.
+  - Failure-boundary matrix that this milestone must close:
+    - covered but not yet optimized due to a compiler bug:
+      this is a regression and must be fixed, not documented as an allowed
+      fallback;
+    - intentionally unsupported tail-looking direct-call shape:
+      execution may remain an ordinary call, but the docs/tests must classify it
+      as outside the guarantee;
+    - indirect/higher-order tail-looking call:
+      allowed to execute ordinarily unless a stronger rejection rule is chosen,
+      but must not inherit the direct-call TCO claim;
+    - non-tail recursion:
+      explicitly outside the TCO guarantee and expected to retain ordinary
+      stack-consuming behavior unless another optimization track covers it;
+    - backend/path mismatch:
+      any claim stronger than the compiled Wasm path must be documented as
+      backend-dependent until separately proven.
+  - Diagnostic/coverage requirements:
+    - at least one locked test per unsupported bucket proving the chosen
+      contract, not just a prose note;
+    - docs and diagnostics must distinguish "outside the guarantee" from
+      "compiler bug/regression" and from "compile-time unsupported";
+    - the user-facing wording must stay consistent with `doc/LANGUAGE_SPEC.md`
+      and must not imply that ordinary successful execution means the shape is
+      covered by constant-stack TCO.
+  - Checkpoints:
+    - [ ] enumerate the unsupported tail-looking buckets that remain after M5,
+      with one owner decision per bucket;
+    - [ ] decide which buckets are compile-time rejected and which are allowed
+      to execute as ordinary stack-consuming calls;
+    - [ ] add at least one locked test for an indirect/higher-order tail-looking
+      call proving the chosen contract;
+    - [ ] add at least one locked test for an unresolved local function-value
+      tail-looking call proving the chosen contract;
+    - [ ] add at least one locked test for non-tail recursion proving it
+      remains outside the TCO guarantee;
+    - [ ] either add at least one locked test for a backend/path mismatch case
+      or explicitly remove that bucket from the supported/unsupported matrix
+      with matching doc wording;
+    - [ ] audit diagnostics/docs so "outside the guarantee" wording is distinct
+      from "unsupported" and from "compiler regression";
+    - [ ] update `doc/LANGUAGE_SPEC.md` / `doc/PLAN_TCO.md` if any unsupported
+      bucket contract changes while closing this milestone;
+    - [ ] record the final unsupported-shape matrix in the plan/state docs once
+      the boundary is stable.
 
 - [ ] **M7: Publish the user-facing TCO guarantee**
   - Update docs/examples so users can understand what is guaranteed and what is
@@ -290,8 +391,89 @@ If any of these remain missing, the wording should stay narrower, such as
     subset.
   - After this milestone, it should be reasonable to say that Goby has generic
     TCO on the documented compiled path.
+  - Completion criteria:
+    - the user-facing docs name the supported direct-call TCO subset in
+      language terms rather than implementation terms;
+    - the docs also name the main unsupported buckets and state that they are
+      outside the guarantee;
+    - the examples used to illustrate the guarantee correspond to locked
+      compile/runtime coverage already present in the test suite;
+    - the final wording is strong enough to be useful but narrow enough to stay
+      true across the documented compiled path.
+  - Clarifications for this milestone:
+    - this milestone is not just a wording edit; it is the point where Goby
+      decides whether the stronger phrase "Goby has generic TCO" is now honest;
+    - if the covered subset is still too narrow when M7 is reached, the docs
+      should publish the narrower guarantee instead of over-claiming completion;
+    - user-facing docs should avoid internal mechanism names unless they are
+      necessary to explain a limitation.
+  - Checkpoints:
+    - [ ] choose the final public wording for the TCO guarantee on the
+      documented compiled path;
+    - [ ] update `doc/LANGUAGE_SPEC.md` so the published contract matches the
+      completed M4-M6 reality;
+    - [ ] update `README.md` with a short high-level statement of the TCO
+      guarantee and its current boundary;
+    - [ ] add or update examples that demonstrate:
+      - [ ] direct self tail recursion in the published subset;
+      - [ ] direct sibling/non-self tail calls in the published subset;
+      - [ ] direct mutually recursive tail-call groups in the published subset;
+      - [ ] at least one supported control-flow-preserving tail-call example
+        (`if`, `case`, let/block, or alias) from the completed M5 set;
+    - [ ] state explicitly in the docs/examples whether one example is allowed
+      to satisfy multiple published guarantee buckets;
+    - [ ] add or update documentation that explicitly names the main unsupported
+      buckets from M6;
+    - [ ] verify the published examples correspond to locked compile/runtime
+      proof and are not merely aspirational;
+    - [ ] review `doc/PLAN.md`, `doc/PLAN_TCO.md`, and `doc/STATE.md` so the
+      public wording and internal plan wording do not contradict each other;
+    - [ ] make the final call on whether it is now honest to say "Goby has
+      generic TCO" or whether the published wording must remain narrower.
 
-## 8. Implementation Guardrails
+## 8. Internal Implementation Target
+
+The user-facing contract in `doc/LANGUAGE_SPEC.md` intentionally avoids fixing
+backend internals. For M4 and later work, the project also locks the following
+implementation target so the remaining slices converge on one coherent
+architecture instead of a growing collection of compatible-looking rewrites.
+
+Internal target:
+
+- tail position is decided before Wasm emission at a shared compiler boundary,
+  not rediscovered by backend-specific peepholes;
+- eligible direct tail calls are represented in one shared form across self,
+  sibling, and mutual recursion rather than split into unrelated special cases;
+- execution ownership for constant-stack direct calls lives in one backend-owned
+  grouped-call mechanism that can describe both single-function and multi-
+  function strongly connected components;
+- public call entrypoints may remain thin wrappers, but the constant-stack
+  engine itself should be shared for all covered direct-call members in the
+  group, while leaving internal entry structure free to change as long as
+  observable direct-call semantics and function-value behavior stay correct;
+- control-flow preservation (`if`, `case`, let/block tail structure, and later
+  local-alias support) should widen the same shared form, not introduce new
+  per-shape execution paths;
+- unsupported tail-looking shapes should fail or fall back at an explicit phase
+  boundary that can be documented, tested, and reasoned about independently of
+  Wasm instruction choices.
+
+Practical implication for M4+:
+
+- prefer extending the existing shared tail-call boundary and grouped dispatcher
+  model over adding a second constant-stack mechanism for another source shape;
+- if a new covered case cannot be expressed in the current shared boundary,
+  first fix the boundary definition, then extend lowering/emission;
+- treat backend-native tail-call instructions, if adopted later, as an
+  implementation refinement of this shared model, not as a replacement product
+  definition.
+- when deciding whether a remaining task belongs to M4, M5, or M6:
+  - M4 owns execution machinery changes;
+  - M5 owns proof that already-covered source/control-flow structure stays on
+    that machinery;
+  - M6 owns the explicit contract for shapes that still do not.
+
+## 9. Implementation Guardrails
 
 Every implementation slice under this plan must satisfy these rules:
 
@@ -306,7 +488,7 @@ Every implementation slice under this plan must satisfy these rules:
 - no self-recursion-only design presented as if it already solved generic
   direct-call TCO.
 
-## 9. Open Strategic Questions
+## 10. Open Strategic Questions
 
 These questions must be resolved during the plan, not bypassed:
 
@@ -322,7 +504,7 @@ These questions must be resolved during the plan, not bypassed:
   allowed as ordinary stack-consuming calls?
 - What exact wording in the language/runtime docs is honest once M7 is done?
 
-## 10. Current Status
+## 11. Current Status
 
 Current status before this plan starts:
 
