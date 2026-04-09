@@ -303,8 +303,8 @@ Based on `examples/*.gb`:
   - type mismatch diagnostics must include both expected and actual type names.
   - composite types should be rendered with full shape (for example: `List Int`, `(String, Int)`), not collapsed labels.
   - line/column reporting is not required in MVP.
-- Higher-order function-type checking is complete; see Track E in §4 for the
-  shipped callback mismatch behavior and remaining follow-up boundary.
+- Higher-order function-type checking is implemented.
+  Callback mismatch behavior is now part of the shipped typechecker baseline.
 
 ### 2.3 Effect System
 
@@ -327,7 +327,7 @@ Based on `examples/*.gb`:
 - Current runtime behavior:
   - effect operations dispatch through installed handlers.
 - How to represent multiple effects (`can Print + Read` or other syntax) — deferred.
-- Effect propagation rules for higher-order functions — deferred; see §4.9 Track EP for the planned effect row polymorphism work.
+- Effect propagation rules for higher-order functions — deferred; see §4.6 Track EP for the planned effect row polymorphism work.
 - Effect diagnostics UX polish (wording/format consistency) — deferred.
 - Warning mechanism for lexical shadowing of visible effect operation names
   (for example local `a` shadows operation `a`) — deferred.
@@ -374,8 +374,7 @@ Based on `examples/*.gb`:
 - Core modules to ship first (`Int`, `String`, `List`, `Env`) — minimal built-ins implemented.
 - Naming conventions for stdlib functions — established.
 - Minimal collection API for immutable workflows — deferred.
-- `int.to_string` is complete; see Track F in §4 for the shipped behavior and
-  parity coverage summary.
+- `int.to_string` is implemented and treated as part of the shipped stdlib baseline.
 - `List.map` migration plan (planned):
   - keep canonical map behavior in `stdlib/goby/list.gb` (`list.map` export path).
   - replace internal/builtin-path map callsites with stdlib module usage where possible.
@@ -441,6 +440,9 @@ Priority rule:
 - if future work reopens an architectural lowering gap, extend `doc/PLAN_IR.md`
   before adding new boundary-specific workarounds.
 
+Completed tracks are intentionally summarized in `doc/STATE.md`.
+This section keeps only still-active work and deferred-but-live design tracks.
+
 ### 4.1 Active Track D: Developer Tooling Foundation
 
 Most of Track D is complete. Only still-relevant follow-up items are kept here.
@@ -465,15 +467,7 @@ Output format: human-readable (default) and JSON lines (`--json`).
   and Neovim/Vim syntax files.
 - **D6b-ts: Tree-sitter grammar** — defer until after D6c.
 
-### 4.2 Track E: Higher-Order Function-Type Checking (complete, 2026-03-27)
-
-HOF callback mismatch diagnostic via shared matcher in `typecheck_unify.rs`.
-
-### 4.3 Track F: Stdlib `int.to_string` (complete, 2026-03-25)
-
-`goby/int.to_string : Int -> String` implemented end-to-end.
-
-### 4.4 Review Follow-ups (Backlog)
+### 4.2 Review Follow-ups (Backlog)
 
 The following items were identified in a focused code review and are tracked as
 near/mid-term engineering debt after current active tracks.
@@ -507,22 +501,7 @@ Note:
 - Critical correctness items from the same review batch were already fixed:
   parser explicit early-return clarity and planning `u16` overflow fail-fast behavior.
 
-### 4.5 Track ER + TD: Compiler Error Reporting (complete)
-
-ER (name-resolution diagnostics) and TD (typed diagnostic spans, TD0–TD5) complete.
-
-Remaining deferred diagnostic work (not yet planned as a track):
-
-- block-structure validation spans, declaration body vs return-type mismatch spans,
-  required-effect coverage failure spans, conflicting effect / `@embed` validation spans,
-  type-declaration validation spans, multiline/body-relative expression span ownership.
-
-### 4.6 Track CC: Closure Capture (complete)
-
-CC0–CC6 complete. Immutable capture by value, mutable capture via shared cell.
-Semantics in `doc/LANGUAGE_SPEC.md`.
-
-### 4.7 `Float` / Wasm `f64` Support
+### 4.3 `Float` / Wasm `f64` Support
 
 Goal: add a first-class `Float` type with predictable parser/typechecker/runtime/Wasm behavior.
 
@@ -578,154 +557,63 @@ Acceptance criteria:
 - diagnostics clearly distinguish `Int` from `Float`.
 - docs/examples/spec are updated in the same slice that lands behavior.
 
-### 4.8 Track LM: Mutable List Element Assignment (complete, 2026-04-06)
+### 4.4 Track OOB: List Index Out-of-Bounds Error Message
 
-`a[i] := v` and `a[i][j] := v` work end-to-end (LM0–LM4). Semantics in `doc/LANGUAGE_SPEC.md` §3.
+Goal: when `xs[i]` uses an index that is negative or at least the list length,
+report a human-readable runtime error instead of an internal abort marker or raw
+Wasm trap.
 
-### 4.8a Track CL: Closure-Captured Mutable List Assignment
+Current gap:
 
-Goal: make `AssignIndex` work when the mutable root binding is a closure-captured
-shared cell, closing the last open bug in `doc/BUGS.md`.
+- **Interpreter path**: the `Expr::ListIndex` path still reports the internal
+  abort marker instead of a user-facing out-of-bounds message.
+- **Wasm path**: list-index helpers still trap without storing a dedicated
+  runtime error code, so users can see a raw `unreachable`-style engine error.
 
-Reproduction:
+Target behavior:
 
-```goby
-import goby/list
-
-main : Unit -> Unit can Print
-main =
-  a = [1, 2, 3]
-  mut b = [10, 20, 30]
-  list.each a (fn i ->
-    b[0] := b[0] + i
-    ()
-  )
-  println("${b[0]}")
-```
-
-Current behavior: `goby run` fails with `runtime error: gen_lower/emit: unknown local 'b'`.
-
-Root cause:
-
-- Track CC established that mutable bindings captured by a lambda are promoted to
-  shared heap cells. Inside the lambda body, the real local is `__cell_<name>` and
-  reads/writes go through `LoadCellValue`/`StoreCellValue`.
-- `CompExpr::Assign` already handles this: it checks the `aliases` map for
-  `CellPromoted` and routes through `StoreCellValue` (lower.rs ~631–658).
-- `lower_assign_index` does not perform this check. It unconditionally emits
-  `LoadLocal { root }` and `StoreLocal { root }`, which reference a local that
-  does not exist inside a lambda body where the root was cell-promoted.
-
-Design principle:
-
-- the lowering layer contract is: any instruction sequence that accesses a named
-  binding must resolve the binding's storage mode (plain local, cell-promoted, or
-  closure slot) through `aliases`. Direct `LoadLocal`/`StoreLocal` with a raw
-  binding name is valid only for locals whose plain-local status is structurally
-  guaranteed (e.g. temporaries declared within the same function via `DeclareLocal`).
-- for reads, `lower_value_ctx` already centralizes this resolution at the `Var`
-  level. For writes, `Assign` handles cell-promotion inline. This fix applies the
-  same inline pattern to `AssignIndex`.
-- note for future work: if a third write-side node appears (e.g. `AssignField` for
-  record updates), consider extracting a shared `store_to_binding` helper to avoid
-  repeating the cell-promotion check. This is not in scope for the current fix.
-
-Fix scope (`lower_assign_index` in `gen_lower/lower.rs`):
-
-1. At function entry, determine whether root is cell-promoted via `aliases`.
-2. Replace the three sites that reference root as a plain local:
-   - descent phase root load (currently `LoadLocal { root }`) →
-     `LoadLocal { __cell_<root> }` + `LoadCellValue`.
-   - ascent phase root load (same pattern).
-   - write-back (currently `StoreLocal { root }`) →
-     `StoreCellValue { cell_ptr: LoadLocal { __cell_<root> }, value: ascent result }`.
-3. Non-root intermediate locals (`__lset_<root>_d*`, `__lset_<root>_u*`) are
-   function-scoped temporaries and are never cell-promoted; they remain unchanged.
-
-Milestones:
-
-1. **CL-1**: Apply the fix to `lower_assign_index`.
-2. **CL-2**: Add integration tests:
-   - depth-1: the reproduction case above (single-level closure-captured index update).
-   - depth-2: nested index update on a closure-captured mut binding
-     (e.g. `mut b = [[1,2],[3,4]]; list.each xs (fn _ -> b[0][1] := 99; ())`).
-3. **CL-3**: Run full test suite (`cargo test`), update `doc/BUGS.md`.
-
-Acceptance criteria:
-
-- the depth-1 reproduction program prints `16` (= 10 + 1 + 2 + 3).
-- the depth-2 test reads back the updated nested value correctly.
-- full `cargo test` passes (not just AssignIndex-related tests).
-- no new ad-hoc root-name rewriting or source-shape recognizer is introduced.
-
-### 4.8b Track OOB: List Index Out-of-Bounds Error Message
-
-Goal: `xs[i]` で `i` がリストの長さ以上（または負）の場合に、わかりやすいエラーメッセージを出す。
-
-#### 現状
-
-- **インタープリタ**: `runtime_resolver.rs` の `Expr::ListIndex` アームが OOB を検知すると
-  `mark_runtime_abort()` を呼ぶ。これは `runtime_error` フィールドに内部マーカー文字列
-  `"__goby_runtime_abort__"` をセットするだけで、最終出力は
-  `runtime error: __goby_runtime_abort__` という不親切なメッセージになる。
-- **Wasm**: `emit_list_get_helper` が OOB を検知すると `emit_abort`（= `Unreachable` 命令）
-  でトラップする。エラーコードスロット（`GLOBAL_RUNTIME_ERROR_OFFSET`）には何も書かず、
-  wasmtime が `"wasm trap: wasm \`unreachable\` instruction executed"` を返す。
-  `RUNTIME_ERROR_MEMORY_EXHAUSTION` のような専用コードは存在しない。
-
-#### 目標動作
-
-```
+```text
 runtime error: index out of bounds: index 5, list length 3
 ```
 
-インタープリタ・Wasm 双方で同じ書式のメッセージが出ること。
+The long-term goal is to keep the message shape aligned across the interpreter
+and Wasm paths. A fixed Wasm message such as `index out of bounds` is an
+acceptable first slice if dynamic index/length formatting is not yet available.
 
-#### 設計方針
+Design direction:
 
-**インタープリタ側** (`runtime_dispatch.rs` / `runtime_resolver.rs`):
+- on the interpreter path, replace the abort marker with
+  `set_runtime_error_once(...)` so out-of-bounds remains a normal runtime error.
+- on the Wasm path, add a dedicated runtime error code and return through the
+  existing runtime-error slot instead of trapping with `Unreachable`.
+- keep the change at the shared list-index/runtime-error boundary rather than
+  introducing path-specific ad hoc formatting.
 
-- `mark_runtime_abort()` の代わりに `set_runtime_error_once(message)` を呼ぶ。
-  `set_runtime_error_once` はすでに存在し、任意のメッセージをセットできる。
-- メッセージは `format!("index out of bounds: index {i}, list length {}", items.len())`。
-- `mark_runtime_error_is_abort_marker()` の判定ロジックはそのまま保持し、
-  OOB のメッセージはマーカーではない普通のエラーとして通過させる。
+Milestones:
 
-**Wasm側** (`layout.rs` / `gen_lower/emit.rs` / `wasm_exec.rs`):
+1. **OOB-1**: interpreter message upgrade.
+   - switch `Expr::ListIndex` to a user-facing out-of-bounds error message.
+   - add interpreter coverage for both too-large and negative indices.
+2. **OOB-2**: Wasm error-code path.
+   - add a dedicated out-of-bounds runtime error code.
+   - make list-index helpers report that code instead of trapping.
+   - map the code to a human-readable CLI/runtime message.
+3. **OOB-3**: message parity follow-through.
+   - decide whether Wasm should also report index and list length exactly, or
+     whether fixed wording is the stable cross-backend contract.
+4. **OOB-4**: regression and docs follow-through.
+   - run the full test suite.
+   - update `doc/BUGS.md` if the current bug entry can be closed or narrowed.
 
-- `layout.rs` に `RUNTIME_ERROR_INDEX_OUT_OF_BOUNDS: u32 = 2` を追加。
-- `emit_list_get_helper` の OOB ブランチを `emit_abort` から
-  `emit_memory_exhaustion_abort` と同パターンの「エラーコードを書いて return」に変更
-  （新関数 `emit_index_oob_abort` を追加）。
-- `wasm_exec.rs` の `runtime_error_message` に
-  `RUNTIME_ERROR_INDEX_OUT_OF_BOUNDS => Some(ERR_INDEX_OUT_OF_BOUNDS)` を追加。
-  ただし Wasm では実行時にインデックス値・長さを文字列として出力できないため、
-  まず固定メッセージ `"index out of bounds"` で十分とする（OOB-3 でインデックス値付きに拡張可能）。
+Acceptance criteria:
 
-#### マイルストーン
+- both interpreter and Wasm execution paths report a human-readable
+  out-of-bounds error.
+- ordinary non-OOB runtime abort behavior is unchanged.
+- the implementation uses the existing shared runtime-error surface rather than
+  backend-specific trap wording.
 
-1. **OOB-1**: インタープリタ側の OOB メッセージ改善。
-   - `runtime_resolver.rs` の `Expr::ListIndex` アームで `set_runtime_error_once` を使用。
-   - テスト: インタープリタパスで OOB アクセスをするプログラムが
-     `"runtime error: index out of bounds: index N, list length M"` を出力する。
-2. **OOB-2**: Wasm 側の OOB エラーコード追加。
-   - `layout.rs` に `RUNTIME_ERROR_INDEX_OUT_OF_BOUNDS = 2` を追加。
-   - `emit_list_get_helper` で OOB 時に新コードをメモリスロットへ書き込んで return。
-   - `wasm_exec.rs` の `runtime_error_message` で新コードを `"index out of bounds"` にマップ。
-   - テスト: Wasm パスで OOB アクセスが `"index out of bounds"` エラーになる。
-3. **OOB-3** (任意): Wasm 側でもインデックス値・長さを含むメッセージを出す。
-   - エラーコードスロットの拡張または文字列スロットの追加が必要。
-   - 複雑度が高いため MVP では OOB-2 の固定メッセージで許容し、後回し可。
-4. **OOB-4**: `cargo test` 全通過確認・`doc/BUGS.md` 更新。
-
-#### 受け入れ基準
-
-- `xs[5]`（`xs` の長さが 3）を実行すると、インタープリタ・Wasm 双方で
-  人間が読めるエラーメッセージが出る。
-- 既存の OOB 以外のパスで `mark_runtime_abort()` の挙動が変わらないこと。
-- `cargo test` 全通過。
-
-### 4.8c Track RR: Runtime Resource Failure Diagnostics and Resilience
+### 4.5 Track RR: Runtime Resource Failure Diagnostics and Resilience
 
 Goal: when `goby run` fails because user code consumes too much runtime stack,
 memory, or other bounded execution resources, report that clearly first, then
@@ -839,161 +727,21 @@ Design stance:
   free, but the toolchain should fail transparently and push those limits back
   where practical.
 
-Milestones:
+Status summary:
 
-1. **RR-0: minimal reproductions and test ownership** (complete, 2026-04-08)
-   - `doc/BUGS.md` now records the minimal runtime-`Read` recursive list-spread
-     reproduction.
-   - `crates/goby-cli/tests/cli_integration.rs` covers the recursive
-     list-spread memory-exhaustion shape and asserts that the user-facing error
-     stays classified instead of falling back to a raw Wasm backtrace.
-2. **RR-1: runtime failure classification and message surface** (complete, 2026-04-08)
-   - `goby-wasm` now classifies Wasm execution failures on a best-effort basis as:
-     - `memory exhausted [E-MEMORY-EXHAUSTION]`,
-     - `likely stack pressure [E-STACK-PRESSURE]`,
-     - `unknown runtime trap [E-RUNTIME-TRAP]`.
-   - `goby-cli` normalizes the rendered runtime error so classified messages are
-     not prefixed twice.
-   - the current boundary keeps raw engine detail only as secondary detail for
-     unknown traps, and now emits Wasm function names for Goby-generated
-     functions so backtraces identify frames such as `goby!check` or
-     `goby!update_rolls`.
-3. **RR-2: representative failure decomposition** (complete, 2026-04-08)
-   - preserved Goby-owned representative repros/tests for the four buckets:
-     - self tail recursion:
-       `runtime_rr_tests::rr2_self_tail_recursion_repro_surfaces_stack_pressure_under_tight_stack_limit`
-     - non-tail recursive scan:
-       `runtime_rr_tests::rr2_non_tail_recursive_scan_repro_executes_as_general_lowered`
-     - recursive list spread / concat growth:
-       `runtime_rr_tests::rr2_recursive_list_spread_repro_reports_memory_exhaustion`
-       plus the CLI-level regression
-       `run_command_reports_recursive_list_spread_memory_exhaustion_without_raw_backtrace`
-     - mixed callback recursion:
-       `runtime_rr_tests::rr2_callback_assisted_scan_repro_executes_as_general_lowered`
-   - the preserved buckets now imply these ownership boundaries:
-     - self tail recursion belongs to shared recursion lowering/runtime call-stack
-       behavior, but is not the default next slice because it does not explain the
-       hotter `solve2.gb` path by itself.
-     - non-tail recursive scans are the primary RR-3 target and belong to a shared
-       lowering/runtime boundary that reduces stack growth without symbol-specific
-       rewrites.
-     - callback-assisted recursion is not split into a separate first fix; current
-       evidence keeps it in the same shared RR-3 boundary as non-tail scans because
-       the hot path is the scan-with-callback shape rather than callback dispatch
-       alone.
-     - recursive list spread / concat growth belongs to runtime data representation
-       and concat/list-spread ownership, so it stays deferred to RR-4.
-   - rejected first-fix boundaries recorded by RR-2:
-     - Wasm stack/memory limit tuning alone,
-     - symbol-specific rewrites for `count_valid_roll` / `collect_prune_positions`,
-     - generic self-tail lowering as the default next slice without a broader user win,
-     - treating callback dispatch as an isolated bug before the shared scan boundary.
-4. **RR-3: recursion resilience at the right boundary**
-   - improve runtime/lowering behavior for recursion depth, but only after RR-2
-     confirms which recursion class is worth targeting first.
-   - current evidence says self tail recursion alone is not the dominant issue
-     for the `solve2.gb` / iterative-grid class; the hotter path is non-tail
-     recursive scanning (`collect_prune_positions` / `count_valid_roll`) plus
-     callback recursion in `fold`.
-   - therefore the first RR-3 candidates should be:
-     - a narrow, explicitly modeled lowering for iterative grid/list scans, or
-     - another shared boundary that reduces stack growth for non-tail recursive
-       scans without changing unrelated call semantics.
-   - "iterative grid/list scans" here must be treated as a placeholder symptom,
-     not as a source-level special case. Any implementation must be justified as
-     a shared rule over a recognizable recursion/control-flow shape, not as a
-     symbol-specific or fixture-specific optimization for names such as
-     `collect_prune_positions` or `count_valid_roll`.
-   - treat "generic self-tail-call lowering" as a useful subproblem, but not as
-     the default next slice unless a representative RR-2 repro shows it carries
-     a real user-facing win by itself.
-   - design guardrails for RR-3:
-     - do not add source-symbol special cases,
-     - do not key behavior on one AoC fixture's AST spelling,
-     - do not accept a local lowering hack unless its applicability can be
-       described as a reusable rule over backend-IR or control-flow structure.
-   - locked RR-2 handoff into RR-3:
-     - start from the shared non-tail scan boundary first,
-     - keep callback-assisted recursion in scope only where it exercises that same
-       boundary,
-     - do not spend the first RR-3 slice on self-tail-only lowering unless a
-       representative RR-2 repro demonstrates a broader win than the scan bucket.
-   - RR-3 status (2026-04-09):
-     - `gen_lower/lower.rs` now recognizes a restricted self-recursive Int scan
-       shape and lowers it to backend-IR loop form instead of self `DeclCall`.
-     - compile coverage now proves both the lowering decision and the emitted
-       Wasm shape for that scan bucket:
-       `lowers_supported_self_recursive_int_scan_to_loop` keeps the backend-IR
-       proof, and `compile_module_scan_loop_lowering_eliminates_walk_self_call_in_wasm`
-       proves the compiled Wasm validates and no longer self-calls in the looped
-       helper body.
-     - tight-stack runtime coverage now proves the same shared boundary for both
-       the primary non-tail scan bucket and the callback-assisted scan bucket:
-       `rr3_non_tail_recursive_scan_repro_survives_tight_stack_limit_after_loop_lowering`
-       and `rr3_callback_assisted_scan_repro_survives_tight_stack_limit_on_same_boundary`
-       both succeed under the RR low-stack configuration.
-     - RR-3 is therefore complete for the currently locked representative scan
-       buckets; remaining recursion-resilience work now moves to RR-4 list-spread
-       ownership.
-5. **RR-4: list-spread resilience**
-   - improve runtime/lowering behavior for recursive list-spread memory growth.
-   - current evidence says contiguous list allocation plus `ListConcat` copying
-     still creates avoidable O(n^2)-style growth for shapes like `[x, ..rest]`.
-   - focus first on clarifying the real ownership boundary:
-     - list representation,
-     - spread lowering shape,
-     - concat runtime implementation,
-     before simply raising limits.
-   - selection criteria for the first RR-4 implementation:
-     - prefer the boundary that improves the pathological shape without baking in
-       a one-off special case for `[x, ..rest]` alone,
-     - prefer changes that remain compatible with a future better `List`
-       representation instead of hard-coding today's contiguous-copy behavior as
-       permanent language semantics,
-     - treat pure limit tuning as a fallback after structural options are
-       rejected, not as the default fix.
-   - RR-4 status (2026-04-09):
-     - the first structural slice landed at the list-spread lowering/runtime
-       boundary rather than by changing the user-visible `List` representation:
-       restricted self-recursive list builders that return `[prefix..., ..rest]`
-       now lower to a builder-backed loop instead of recursive `ListConcat`.
-     - compile coverage proves the emitted Wasm validates and removes direct
-       self-calls from the helper body
-       (`compile_module_list_spread_builder_lowering_validates_and_eliminates_build_self_call`).
-     - runtime coverage now locks both the historical `doc/BUGS.md` repro and a
-       larger builder-shaped variant as successful executions
-       (`rr4_recursive_list_spread_repro_executes_after_builder_lowering`,
-       `rr4_recursive_list_spread_large_builder_shape_scales_past_bug_repro_size`).
-     - the next structural slice widened that same ownership to inline empty-acc
-       `fold` callbacks that prepend onto the accumulator:
-       `compile_module_inline_fold_prepend_lowering_rewrites_concat_chain_in_main`
-       proves main lowering switches from callback-side `ListConcat` to a
-       dedicated reverse traversal, and
-       `rr4_inline_fold_prepend_builder_executes_after_specialized_lowering`
-       locks the runtime success case.
-     - the final RR-4 slice closed the remaining named/local callback bucket by
-       rewriting supported named callback `fold` calls onto that same shared
-       reverse-fold boundary instead of leaving them on ordinary stdlib `fold`.
-     - compile coverage now locks both the direct named callback and a local
-       alias to that callback:
-       `compile_module_named_fold_prepend_lowering_rewrites_decl_callback_chain_in_main`
-       and
-       `compile_module_local_alias_fold_prepend_lowering_rewrites_decl_callback_chain_in_main`.
-     - runtime coverage now locks both execution shapes as successful:
-       `rr4_named_callback_list_spread_chain_executes_after_callback_rewrite`
-       and
-       `rr4_local_named_callback_list_spread_chain_executes_after_callback_rewrite`.
-     - RR-4 is therefore complete for the currently locked representative
-       list-spread / prepend-builder buckets. Remaining recursion work moves to
-       the planned generic TCO track rather than another RR-4 concat slice.
-6. **RR-5: generic tail-call optimization (planned)**
+- RR-0 through RR-4 are complete and archived in `doc/STATE.md`.
+- the currently active RR work is RR-5, the generic tail-call optimization track.
+- detailed long-range design for generic TCO lives in `doc/PLAN_TCO.md`.
+
+Active milestones:
+
+1. **RR-5: generic tail-call optimization**
    - after the current RR-3/RR-4 representative buckets are closed, add a
      separate optimization track for generic self-tail recursion and, if the
      Wasm/runtime boundary remains honest enough, broader tail-call shapes.
-   - this is intentionally not bundled into RR-3's current scan-specific work:
-     the project already proved that generic self-tail lowering is a useful
-     subproblem, but not the highest-value first fix for the locked
-     representative failures.
+   - this track should not become another RR-specific shape rewrite. Its
+     language-level target, architecture, and milestones are defined in
+     `doc/PLAN_TCO.md`.
    - scope guardrails for a future RR-5/TCO track:
      - do not special-case source symbols or individual fixtures,
      - prefer a shared control-flow rule that can be described independently of
@@ -1003,9 +751,10 @@ Milestones:
      - do not claim language-level guaranteed TCO until the coverage is broad
        enough across the supported backends/runtime paths.
    - expected user-facing goal:
-     - obvious self-tail-recursive helpers should eventually run in constant
-       stack on the Wasm path without requiring manual loop rewrites.
-7. **RR-6: limit tuning and follow-through**
+     - Goby should eventually support generic direct-call TCO strongly enough
+       that "Goby has generic TCO" is an honest high-level statement, not just
+       a description of a few recognized recursive shapes.
+2. **RR-6: limit tuning and follow-through**
    - revisit stack/memory defaults only after RR-2 through RR-4 give clearer
      ownership and failure modes.
    - only after that, revisit whether docs/examples should recommend more efficient
@@ -1022,7 +771,7 @@ Acceptance criteria:
 - the initial message layer does not over-claim certainty where the engine only
   exposes an opaque trap.
 
-### 4.9 Track EP: Effect Row Polymorphism
+### 4.6 Track EP: Effect Row Polymorphism
 
 Goal: add effect-variable quantification so higher-order functions propagate
 callee effects through the type system, closing the largest gap between Goby's
@@ -1094,7 +843,7 @@ References:
 - Hillerström & Lindley, "Shallow Effect Handlers" (APLAS 2018)
 - Bauer & Pretnar, "Programming with Algebraic Effects and Handlers" (JLAMP 2015)
 
-### 4.10 Parking Lot (Needs Revalidation Before Implementation)
+### 4.7 Parking Lot (Needs Revalidation Before Implementation)
 
 - CLI `build` expansion details (`--target`, `--engine-compat`, verify modes).
 - CLI binary naming migration (`goby-cli` -> `goby`) final policy.

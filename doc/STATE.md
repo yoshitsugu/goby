@@ -4,7 +4,7 @@ Last updated: 2026-04-09
 
 ## Current Focus
 
-Next slice: **Track RR, RR-5** (`PLAN.md §4.8c`) - planned generic tail-call
+Next slice: **Track RR, RR-5** (`PLAN.md §4.5`) - planned generic tail-call
 optimization after the representative RR-3/RR-4 buckets.
 
 Locked ideal goal for RR:
@@ -134,7 +134,7 @@ Immediate next steps:
     - `iterative_grid_pruning_after_render_executes_without_heap_cursor_corruption`,
     - `cargo clippy -- -D warnings`,
     - `cargo test --workspace`.
-- **Track RR planning** (recorded, 2026-04-08). Added `PLAN.md §4.8c` to prioritize
+- **Track RR planning** (recorded, 2026-04-08). Added `PLAN.md §4.5` to prioritize
   user-facing diagnostics first, then recursion/list-spread/runtime-limit resilience work.
 - **Bug capture** (recorded, 2026-04-08). Added a minimal non-AoC reproduction to `doc/BUGS.md`
   for runtime-`Read` recursive list-spread memory exhaustion.
@@ -158,22 +158,23 @@ Immediate next steps:
 
 ## Known Deferred Items
 
-- Span ownership for multiline block arguments (`PLAN.md §4.5`)
-- `Float` type (`PLAN.md §4.7`)
+- Multiline/body-relative span ownership for diagnostics (`doc/PLAN.md`, review follow-ups and spec-detail notes)
+- `Float` type (`PLAN.md §4.3`)
 - Migrate effect runtime dispatch to compiled `EffectId`/`OpId` tables (`PLAN.md §5`)
 
 ## Open Questions
 
-- For RR-3, what is the smallest honest boundary that can reduce stack pressure
-  for non-tail recursive scans without destabilizing existing call semantics?
-- Why does the current loop-form lowering still lack a confirmed tight-stack
-  runtime win: remaining Wasm emission shape, stack-limit calibration, or some
-  other execution-boundary cost?
-- Within that RR-3 boundary, should callback-assisted scans be improved by the
-  same rule automatically, or do they expose a second shared sub-boundary once
-  the scan case is modeled?
-- For RR-4, is the first real win in list representation, list-spread lowering,
-  concat runtime behavior, or memory-limit tuning after ownership is clearer?
+- For RR-5, what is the smallest honest first boundary that can start generic
+  TCO without falling back into self-recursion-only marketing?
+- Should the first generic TCO slice target direct self-tail calls only, or
+  should it include mutually tail-recursive direct calls from the start so the
+  eventual language-level claim stays stable?
+- Which internal contract should own tail-position eligibility long term:
+  source AST, lowered IR, or a dedicated control-flow analysis layer shared by
+  backends?
+- For unsupported tail-call shapes, what is the stable contract: explicit
+  compile-time rejection, ordinary non-TCO execution, or backend-specific
+  capability reporting?
 
 ## Key Entry Points
 
