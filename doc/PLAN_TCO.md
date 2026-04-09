@@ -196,6 +196,11 @@ If any of these remain missing, the wording should stay narrower, such as
     computation is in tail position without relying on symbol names.
   - Cover `if`, `case`, block tails, and let-tail structure.
   - Reject source-shape-specific hacks at this stage.
+  - 2026-04-09 initial slice:
+    - shared `goby_core::tail_analysis` now models tail-position propagation
+      over IR control flow and exposes nested-body policy explicitly;
+    - `effect_handler_legality` consumes that shared analysis so the boundary is
+      exercised by existing compiler behavior before TCO normalization begins.
 
 - [ ] **M2: Normalize direct tail calls into a shared IR boundary**
   - Introduce a backend-neutral form for eligible direct tail calls.

@@ -742,6 +742,10 @@ Active milestones:
    - this track should not become another RR-specific shape rewrite. Its
      language-level target, architecture, and milestones are defined in
      `doc/PLAN_TCO.md`.
+   - first locked implementation step:
+     - land a shared IR tail-position analysis boundary in `goby-core`,
+       exercise it through existing legality checks, and use that as the
+       ownership handoff into later direct tail-call normalization work.
    - scope guardrails for a future RR-5/TCO track:
      - do not special-case source symbols or individual fixtures,
      - prefer a shared control-flow rule that can be described independently of

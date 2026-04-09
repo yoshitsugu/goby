@@ -24,6 +24,7 @@ pub mod span;
 pub mod stdlib;
 pub mod str_util;
 pub mod symbol_index;
+pub mod tail_analysis;
 pub mod typecheck;
 mod typecheck_ambiguity;
 mod typecheck_annotation;

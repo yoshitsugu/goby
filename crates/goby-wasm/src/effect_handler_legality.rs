@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use goby_core::Module;
 use goby_core::ir::{CompExpr, IrDecl, IrHandlerClause, IrInterpPart, ValueExpr};
+use goby_core::tail_analysis::{TailWalkConfig, walk_comp};
 
 use crate::CodegenError;
 use crate::wasm_exec_plan::decl_exec_plan;
@@ -289,122 +290,25 @@ fn resolve_handler_clauses(
 }
 
 fn analyze_clause_body(comp: &CompExpr) -> Result<bool, HandlerLegalityIssue> {
-    analyze_comp(comp, true)
-}
-
-fn analyze_comp(comp: &CompExpr, tail_position: bool) -> Result<bool, HandlerLegalityIssue> {
-    match comp {
-        CompExpr::Value(value) => {
-            analyze_value(value)?;
-            Ok(false)
-        }
-        CompExpr::Let { value, body, .. } | CompExpr::LetMut { value, body, .. } => {
-            analyze_comp(value, false)?;
-            analyze_comp(body, tail_position)
-        }
-        CompExpr::Seq { stmts, tail } => {
-            for stmt in stmts {
-                analyze_comp(stmt, false)?;
+    let mut any_resume = false;
+    let mut issue = None;
+    walk_comp(
+        comp,
+        TailWalkConfig::HANDLER_CLAUSE_BODY,
+        |node, tail_position| {
+            if issue.is_some() {
+                return;
             }
-            analyze_comp(tail, tail_position)
-        }
-        CompExpr::If { cond, then_, else_ } => {
-            analyze_value(cond)?;
-            Ok(analyze_comp(then_, tail_position)? || analyze_comp(else_, tail_position)?)
-        }
-        CompExpr::Call { callee, args } => {
-            analyze_value(callee)?;
-            for arg in args {
-                analyze_value(arg)?;
-            }
-            Ok(false)
-        }
-        CompExpr::Assign { value, .. } => {
-            analyze_comp(value, false)?;
-            Ok(false)
-        }
-        CompExpr::Case { scrutinee, arms } => {
-            analyze_value(scrutinee)?;
-            let mut any_resume = false;
-            for arm in arms {
-                any_resume |= analyze_comp(&arm.body, tail_position)?;
-            }
-            Ok(any_resume)
-        }
-        CompExpr::PerformEffect { args, .. } => {
-            for arg in args {
-                analyze_value(arg)?;
-            }
-            Ok(false)
-        }
-        CompExpr::Handle { .. } | CompExpr::WithHandler { .. } => Ok(false),
-        CompExpr::Resume { value } => {
-            analyze_value(value)?;
-            if tail_position {
-                Ok(true)
-            } else {
-                Err(HandlerLegalityIssue::ResumeNotInTailPosition)
-            }
-        }
-        CompExpr::AssignIndex { path, value, .. } => {
-            for idx in path {
-                analyze_value(idx)?;
-            }
-            analyze_comp(value, false)?;
-            Ok(false)
-        }
-    }
-}
-
-fn analyze_value(value: &ValueExpr) -> Result<(), HandlerLegalityIssue> {
-    match value {
-        ValueExpr::ListLit { elements, spread } => {
-            for element in elements {
-                analyze_value(element)?;
-            }
-            if let Some(spread) = spread {
-                analyze_value(spread)?;
-            }
-        }
-        ValueExpr::TupleLit(items) => {
-            for item in items {
-                analyze_value(item)?;
-            }
-        }
-        ValueExpr::RecordLit { fields, .. } => {
-            for (_, field) in fields {
-                analyze_value(field)?;
-            }
-        }
-        ValueExpr::Lambda { body, .. } => {
-            analyze_comp(body, false)?;
-        }
-        ValueExpr::Interp(parts) => {
-            for part in parts {
-                if let IrInterpPart::Expr(expr) = part {
-                    analyze_value(expr)?;
+            if let CompExpr::Resume { .. } = node {
+                if tail_position.is_tail() {
+                    any_resume = true;
+                } else {
+                    issue = Some(HandlerLegalityIssue::ResumeNotInTailPosition);
                 }
             }
-        }
-        ValueExpr::BinOp { left, right, .. } => {
-            analyze_value(left)?;
-            analyze_value(right)?;
-        }
-        ValueExpr::TupleProject { tuple, .. } => {
-            analyze_value(tuple)?;
-        }
-        ValueExpr::ListGet { list, index } => {
-            analyze_value(list)?;
-            analyze_value(index)?;
-        }
-        ValueExpr::IntLit(_)
-        | ValueExpr::BoolLit(_)
-        | ValueExpr::StrLit(_)
-        | ValueExpr::Var(_)
-        | ValueExpr::GlobalRef { .. }
-        | ValueExpr::Unit => {}
-    }
-    Ok(())
+        },
+    );
+    issue.map_or(Ok(any_resume), Err)
 }
 
 #[cfg(test)]

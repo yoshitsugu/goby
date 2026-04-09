@@ -4,8 +4,8 @@ Last updated: 2026-04-09
 
 ## Current Focus
 
-Next slice: **Track RR, RR-5** (`PLAN.md §4.5`) - planned generic tail-call
-optimization after the representative RR-3/RR-4 buckets.
+Next slice: **Track RR, RR-5** (`PLAN.md §4.5`) - direct tail-call
+normalization on top of the new shared tail-position analysis boundary.
 
 Locked ideal goal for RR:
 
@@ -23,12 +23,15 @@ RR execution reminder:
 
 Immediate next steps:
 
-- **RR-5**: start the planned generic tail-call optimization track now that the
-  representative RR-3 scan buckets and RR-4 list-builder buckets are closed.
+- **RR-5**: continue the planned generic tail-call optimization track now that
+  the first shared tail-position analysis slice is in place.
   - keep the RR-3/RR-4 shared-boundary discipline: prefer reusable control-flow
     rules over symbol-specific recursion rewrites.
-  - first RR-5 task: decide the smallest honest shared boundary for generic
-    self-tail recursion on the Wasm path without overstating language-level TCO.
+  - next RR-5 task: use the shared IR tail-position analysis to define the
+    smallest honest direct tail-call normalization boundary for known
+    declaration calls on the Wasm path.
+  - keep self-tail recursion only as a subset of that boundary, not the
+    headline feature claim.
   - keep current diagnostics explicit for shapes that still fall outside the
     optimized subset.
 - keep RR-1 diagnostics best-effort and explicit about uncertainty
@@ -36,6 +39,20 @@ Immediate next steps:
   later resilience work lands.
 
 ## Recently Completed
+
+- **Track RR, RR-5 shared tail-position boundary** (partial, 2026-04-09).
+  - added `goby_core::tail_analysis` as a compiler-owned IR analysis for tail
+    position propagation through `let`, `seq`, `if`, and `case`.
+  - made nested computation boundaries explicit via configurable lambda /
+    handler-clause policies so future TCO work can state exactly which bodies it
+    analyzes.
+  - locked focused tests for direct tail-call collection in declaration mode and
+    non-tail treatment of nested lambda bodies for resumptive-handler mode.
+  - rewired `goby-wasm` handler legality to use the shared analysis, proving
+    the new RR-5 boundary in existing behavior without widening the accepted
+    resumptive subset.
+  - this slice establishes RR-5 milestone M1 ownership but does not yet
+    normalize or execute generic tail calls in constant stack.
 
 - **Track RR, RR-4 builder-backed list-spread lowering** (complete, 2026-04-09).
   - fixed the historical recursive `[x, ..rest]` memory-exhaustion bug without
@@ -164,14 +181,12 @@ Immediate next steps:
 
 ## Open Questions
 
-- For RR-5, what is the smallest honest first boundary that can start generic
-  TCO without falling back into self-recursion-only marketing?
 - Should the first generic TCO slice target direct self-tail calls only, or
   should it include mutually tail-recursive direct calls from the start so the
   eventual language-level claim stays stable?
-- Which internal contract should own tail-position eligibility long term:
-  source AST, lowered IR, or a dedicated control-flow analysis layer shared by
-  backends?
+- Which direct-call forms should the first normalization slice accept once
+  `tail_analysis` has marked tail position: only direct declaration names, or
+  also resolvable local aliases to those names?
 - For unsupported tail-call shapes, what is the stable contract: explicit
   compile-time rejection, ordinary non-TCO execution, or backend-specific
   capability reporting?
