@@ -888,6 +888,16 @@ fn collect_decl_call_names(instrs: &[backend_ir::WasmBackendInstr], out: &mut Ha
                 collect_decl_call_names(list_instrs, out);
                 collect_decl_call_names(func_instrs, out);
             }
+            backend_ir::WasmBackendInstr::ListReverseFoldPrepend {
+                list_instrs,
+                prefix_element_instrs,
+                ..
+            } => {
+                collect_decl_call_names(list_instrs, out);
+                for elem in prefix_element_instrs {
+                    collect_decl_call_names(elem, out);
+                }
+            }
             backend_ir::WasmBackendInstr::ListEachEffect { list_instrs, .. } => {
                 collect_decl_call_names(list_instrs, out);
             }

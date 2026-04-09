@@ -964,9 +964,21 @@ Milestones:
        larger builder-shaped variant as successful executions
        (`rr4_recursive_list_spread_repro_executes_after_builder_lowering`,
        `rr4_recursive_list_spread_large_builder_shape_scales_past_bug_repro_size`).
-     - remaining RR-4 follow-up is to decide whether more general non-recursive
-       spread/concat chains should reuse the same builder ownership boundary or
-       stay on ordinary `ListConcat`.
+     - the next structural slice widened that same ownership to inline empty-acc
+       `fold` callbacks that prepend onto the accumulator:
+       `compile_module_inline_fold_prepend_lowering_rewrites_concat_chain_in_main`
+       proves main lowering switches from callback-side `ListConcat` to a
+       dedicated reverse traversal, and
+       `rr4_inline_fold_prepend_builder_executes_after_specialized_lowering`
+       locks the runtime success case.
+     - one RR-4 bucket still remains open, but it is now narrower:
+       named-callback prepend chains still route through ordinary stdlib `fold`
+       and preserve the old memory failure shape
+       (`rr4_named_callback_list_spread_chain_still_reports_memory_exhaustion`).
+     - the next RR-4 decision is therefore narrower:
+       determine whether named/local callback prepend builders should reuse this
+       same reverse-fold boundary or whether a different shared stdlib-call /
+       concat boundary would be more honest.
 6. **RR-5: limit tuning and follow-through**
    - revisit stack/memory defaults only after RR-2 through RR-4 give clearer
      ownership and failure modes.

@@ -413,6 +413,16 @@ fn collect_all_instrs(instrs: &[WasmBackendInstr]) -> Vec<&WasmBackendInstr> {
                 result.extend(collect_all_instrs(list_instrs));
                 result.extend(collect_all_instrs(func_instrs));
             }
+            WasmBackendInstr::ListReverseFoldPrepend {
+                list_instrs,
+                prefix_element_instrs,
+                ..
+            } => {
+                result.extend(collect_all_instrs(list_instrs));
+                for elem in prefix_element_instrs {
+                    result.extend(collect_all_instrs(elem));
+                }
+            }
             WasmBackendInstr::CreateClosure {
                 func_handle_instrs,
                 slot_instrs,
@@ -452,6 +462,7 @@ pub(crate) fn needs_helper_state(instrs: &[WasmBackendInstr]) -> bool {
                 | WasmBackendInstr::RecordLit { .. }
                 | WasmBackendInstr::ListEach { .. }
                 | WasmBackendInstr::ListMap { .. }
+                | WasmBackendInstr::ListReverseFoldPrepend { .. }
                 | WasmBackendInstr::CreateClosure { .. }
                 | WasmBackendInstr::AllocMutableCell { .. }
                 | WasmBackendInstr::Intrinsic {
@@ -671,6 +682,17 @@ fn required_heap_base_spill_count_instr(instr: &WasmBackendInstr) -> u32 {
             func_instrs,
         } => required_heap_base_spill_count(list_instrs)
             .max(required_heap_base_spill_count(func_instrs)),
+        WasmBackendInstr::ListReverseFoldPrepend {
+            list_instrs,
+            prefix_element_instrs,
+            ..
+        } => required_heap_base_spill_count(list_instrs).max(
+            prefix_element_instrs
+                .iter()
+                .map(|child| required_heap_base_spill_count(child))
+                .max()
+                .unwrap_or(0),
+        ),
         WasmBackendInstr::CreateClosure {
             func_handle_instrs,
             slot_instrs,
@@ -697,6 +719,7 @@ fn required_i64_scratch_count(instrs: &[WasmBackendInstr]) -> u32 {
         WasmBackendInstr::Intrinsic { .. }
         | WasmBackendInstr::ListEach { .. }
         | WasmBackendInstr::ListMap { .. }
+        | WasmBackendInstr::ListReverseFoldPrepend { .. }
         | WasmBackendInstr::ListBuilderPush { .. }
         | WasmBackendInstr::IndirectCall { .. } => true,
         WasmBackendInstr::BinOp { op } => {
@@ -1969,6 +1992,41 @@ fn emit_instrs_with_heap_depth(
                     function_returns_i64,
                 )?;
                 emit_list_map(function, &hs, type_idx, closure_type_idx)?;
+            }
+
+            WasmBackendInstr::ListReverseFoldPrepend {
+                list_instrs,
+                item_local,
+                prefix_element_instrs,
+            } => {
+                let hs = require_heap_state(helper_state, "ListReverseFoldPrepend")?;
+                let item_local_idx = ctx.get(item_local)?;
+                emit_instrs(
+                    function,
+                    ctx,
+                    list_instrs,
+                    layout,
+                    named_i64_count,
+                    helper_i64_scratch_count,
+                    i32_base,
+                    static_strings,
+                    options,
+                    function_returns_i64,
+                )?;
+                emit_list_reverse_fold_prepend(
+                    function,
+                    ctx,
+                    &hs,
+                    item_local_idx,
+                    prefix_element_instrs,
+                    layout,
+                    named_i64_count,
+                    helper_i64_scratch_count,
+                    i32_base,
+                    static_strings,
+                    &options,
+                    function_returns_i64,
+                )?;
             }
 
             WasmBackendInstr::TupleGet { tuple_local, index } => {
@@ -4475,6 +4533,151 @@ fn emit_list_map(
     function.instruction(&Instruction::End); // end block
 
     // Push tagged list pointer as result
+    emit_push_tagged_ptr(function, s_result_ptr, TAG_LIST);
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn emit_list_reverse_fold_prepend(
+    function: &mut Function,
+    ctx: &mut EmitContext,
+    hs: &HeapEmitState,
+    item_local_idx: u32,
+    prefix_element_instrs: &[Vec<WasmBackendInstr>],
+    layout: &MemoryLayout,
+    named_i64_count: u32,
+    helper_i64_scratch_count: u32,
+    i32_base: u32,
+    static_strings: &StaticStringPool,
+    options: &EmitOptions,
+    function_returns_i64: bool,
+) -> Result<(), CodegenError> {
+    let s_list_ptr = hs.scratch.i32_base + HS_LIST_PTR;
+    let s_list_len = hs.scratch.i32_base + HS_ITEM_COUNT;
+    let s_result_ptr = hs.scratch.i32_base + HS_AUX_PTR;
+    let s_alloc_size = hs.scratch.i32_base + HS_ALLOC_SIZE;
+    let s_iter = hs.scratch.i32_base + HS_ITER;
+    let s_output_len = hs.scratch.i32_base + HS_TEXT_PTR;
+    let s_output_index = hs.scratch.i32_base + HS_SEG_START;
+    let s_source_index = hs.scratch.i32_base + HS_SEP_PTR;
+
+    // Stack: [list_tagged]
+    function.instruction(&Instruction::I64Const(0xFFFF_FFFFi64));
+    function.instruction(&Instruction::I64And);
+    function.instruction(&Instruction::I32WrapI64);
+    function.instruction(&Instruction::LocalSet(s_list_ptr));
+
+    function.instruction(&Instruction::LocalGet(s_list_ptr));
+    function.instruction(&Instruction::I32Load(MemArg {
+        offset: 0,
+        align: 2,
+        memory_index: 0,
+    }));
+    function.instruction(&Instruction::LocalSet(s_list_len));
+
+    function.instruction(&Instruction::LocalGet(s_list_len));
+    function.instruction(&Instruction::I32Const(
+        i32::try_from(prefix_element_instrs.len()).map_err(|_| CodegenError {
+            message: "gen_lower/emit: fold prepend prefix length does not fit in i32".to_string(),
+        })?,
+    ));
+    function.instruction(&Instruction::I32Mul);
+    function.instruction(&Instruction::LocalSet(s_output_len));
+
+    function.instruction(&Instruction::I32Const(4));
+    function.instruction(&Instruction::LocalGet(s_output_len));
+    function.instruction(&Instruction::I32Const(8));
+    function.instruction(&Instruction::I32Mul);
+    function.instruction(&Instruction::I32Add);
+    function.instruction(&Instruction::LocalSet(s_alloc_size));
+
+    emit_alloc_from_top(function, hs, s_alloc_size, s_result_ptr);
+
+    function.instruction(&Instruction::LocalGet(s_result_ptr));
+    function.instruction(&Instruction::LocalGet(s_output_len));
+    function.instruction(&Instruction::I32Store(MemArg {
+        offset: 0,
+        align: 2,
+        memory_index: 0,
+    }));
+
+    function.instruction(&Instruction::I32Const(0));
+    function.instruction(&Instruction::LocalSet(s_iter));
+    function.instruction(&Instruction::I32Const(0));
+    function.instruction(&Instruction::LocalSet(s_output_index));
+
+    function.instruction(&Instruction::Block(wasm_encoder::BlockType::Empty));
+    function.instruction(&Instruction::Loop(wasm_encoder::BlockType::Empty));
+
+    function.instruction(&Instruction::LocalGet(s_iter));
+    function.instruction(&Instruction::LocalGet(s_list_len));
+    function.instruction(&Instruction::I32GeU);
+    function.instruction(&Instruction::BrIf(1));
+
+    function.instruction(&Instruction::LocalGet(s_list_len));
+    function.instruction(&Instruction::LocalGet(s_iter));
+    function.instruction(&Instruction::I32Sub);
+    function.instruction(&Instruction::I32Const(1));
+    function.instruction(&Instruction::I32Sub);
+    function.instruction(&Instruction::LocalSet(s_source_index));
+
+    function.instruction(&Instruction::LocalGet(s_list_ptr));
+    function.instruction(&Instruction::I32Const(4));
+    function.instruction(&Instruction::I32Add);
+    function.instruction(&Instruction::LocalGet(s_source_index));
+    function.instruction(&Instruction::I32Const(8));
+    function.instruction(&Instruction::I32Mul);
+    function.instruction(&Instruction::I32Add);
+    function.instruction(&Instruction::I64Load(MemArg {
+        offset: 0,
+        align: 3,
+        memory_index: 0,
+    }));
+    function.instruction(&Instruction::LocalSet(item_local_idx));
+
+    for elem_instrs in prefix_element_instrs {
+        function.instruction(&Instruction::LocalGet(s_result_ptr));
+        function.instruction(&Instruction::I32Const(4));
+        function.instruction(&Instruction::I32Add);
+        function.instruction(&Instruction::LocalGet(s_output_index));
+        function.instruction(&Instruction::I32Const(8));
+        function.instruction(&Instruction::I32Mul);
+        function.instruction(&Instruction::I32Add);
+
+        emit_instrs(
+            function,
+            ctx,
+            elem_instrs,
+            layout,
+            named_i64_count,
+            helper_i64_scratch_count,
+            i32_base,
+            static_strings,
+            *options,
+            function_returns_i64,
+        )?;
+
+        function.instruction(&Instruction::I64Store(MemArg {
+            offset: 0,
+            align: 3,
+            memory_index: 0,
+        }));
+
+        function.instruction(&Instruction::LocalGet(s_output_index));
+        function.instruction(&Instruction::I32Const(1));
+        function.instruction(&Instruction::I32Add);
+        function.instruction(&Instruction::LocalSet(s_output_index));
+    }
+
+    function.instruction(&Instruction::LocalGet(s_iter));
+    function.instruction(&Instruction::I32Const(1));
+    function.instruction(&Instruction::I32Add);
+    function.instruction(&Instruction::LocalSet(s_iter));
+    function.instruction(&Instruction::Br(0));
+
+    function.instruction(&Instruction::End);
+    function.instruction(&Instruction::End);
+
     emit_push_tagged_ptr(function, s_result_ptr, TAG_LIST);
     Ok(())
 }

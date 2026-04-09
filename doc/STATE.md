@@ -1,11 +1,11 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-04-08
+Last updated: 2026-04-09
 
 ## Current Focus
 
-Next slice: **Track RR, RR-3** (`PLAN.md §4.8c`) - recursion resilience at the shared
-non-tail scan boundary.
+Next slice: **Track RR, RR-4** (`PLAN.md §4.8c`) - list-spread resilience at the
+remaining named/local callback prepend boundary.
 
 Locked ideal goal for RR:
 
@@ -29,9 +29,13 @@ Immediate next steps:
   - preserve the RR-3 boundary split: recursion lowering owns the scan buckets,
     while RR-4 currently owns the self-recursive list-builder bucket through the
     list-spread lowering/runtime boundary.
-  - next RR-4 follow-up: decide whether ordinary non-recursive spread/concat
-    chains should adopt the same builder ownership boundary or stay on direct
-    `ListConcat`.
+  - next RR-4 follow-up: decide whether named/local callback prepend builders
+    should adopt the same reverse-fold ownership boundary or whether a
+    different shared stdlib-call / concat boundary is more honest.
+  - current evidence: the self-recursive builder bug is fixed, and the inline
+    callback bucket `fold seed [] (fn acc x -> [x, ..acc])` is now fixed too,
+    but named callback chains such as `fold seed [] prepend` still report
+    memory exhaustion and remain the live RR-4 bucket.
 - keep RR-1 diagnostics best-effort and explicit about uncertainty
   (`likely stack pressure`, `memory exhaustion`, `unknown runtime trap`) as
   later resilience work lands.
@@ -48,8 +52,16 @@ Immediate next steps:
     directly self-calls in the specialized helper body.
   - runtime coverage now locks both the original `doc/BUGS.md` repro and a
     larger builder-shaped variant as successful executions.
-  - open RR-4 scope remains for non-recursive spread/concat chains and for any
-    future decision about whether the builder boundary should widen further.
+  - a follow-up slice widened the same RR-4 ownership to inline empty-acc
+    `fold` callbacks that prepend with `[x, ..acc]`, replacing callback-side
+    concat chains with a reverse traversal over the source list.
+  - compile coverage now locks that main-level rewrite via
+    `compile_module_inline_fold_prepend_lowering_rewrites_concat_chain_in_main`.
+  - runtime coverage now locks the inline callback success case via
+    `rr4_inline_fold_prepend_builder_executes_after_specialized_lowering`.
+  - the remaining RR-4 bucket is narrower: named callback prepend chains still
+    report memory exhaustion
+    (`rr4_named_callback_list_spread_chain_still_reports_memory_exhaustion`).
 
 - **Track RR, RR-3 tight-stack proof** (complete, 2026-04-09).
   - kept the RR-3 fix at the shared scan boundary: restricted self-recursive

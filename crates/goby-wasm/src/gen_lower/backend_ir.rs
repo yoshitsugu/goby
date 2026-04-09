@@ -400,6 +400,21 @@ pub(crate) enum WasmBackendInstr {
         list_instrs: Vec<WasmBackendInstr>,
         func_instrs: Vec<WasmBackendInstr>,
     },
+    /// Specialized left-fold lowering for list-builder callbacks of the form
+    /// `fold xs [] (fn acc x -> [prefix..., ..acc])`.
+    ///
+    /// The callback shape prepends a fixed prefix chunk onto the accumulator at
+    /// each step. That is equivalent to iterating the source list in reverse
+    /// order and appending the same prefix chunk into a freshly allocated result
+    /// list.
+    ///
+    /// `item_local` names the Wasm local that receives the current source
+    /// element before each `prefix_element_instrs` sequence runs.
+    ListReverseFoldPrepend {
+        list_instrs: Vec<WasmBackendInstr>,
+        item_local: String,
+        prefix_element_instrs: Vec<Vec<WasmBackendInstr>>,
+    },
     /// Fused: split `text_local` (a tagged-i64 string) on `sep_bytes`, then call
     /// `effect.op` on each resulting segment.
     ///

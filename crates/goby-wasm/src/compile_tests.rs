@@ -411,6 +411,54 @@ main =
 }
 
 #[test]
+fn compile_module_inline_fold_prepend_lowering_rewrites_concat_chain_in_main() {
+    let source = r#"
+import goby/list ( fold )
+import goby/stdio
+
+build : Int -> List Int can Print
+build n =
+  if n == 0
+    []
+  else
+    rest = build (n - 1)
+    [n, ..rest]
+
+main : Unit -> Unit can Print, Read
+main =
+  _lines = read_lines ()
+  seed = build 32
+  xs =
+    fold seed [] (fn acc x ->
+      [x, ..acc]
+    )
+  println "${xs[0]}"
+"#;
+    let module = parse_module(source).expect("source should parse");
+    let (main_instrs, aux_decls) = crate::gen_lower::lower_module_to_instrs(&module)
+        .expect("lowering should not hard-fail")
+        .expect("general lowering should accept inline fold prepend module");
+    assert!(
+        main_instrs.iter().any(|instr| matches!(
+            instr,
+            crate::gen_lower::backend_ir::WasmBackendInstr::ListReverseFoldPrepend { .. }
+        )),
+        "main should lower inline fold prepend builder to dedicated reverse-fold instruction, got main: {main_instrs:?}; aux: {aux_decls:?}"
+    );
+    let rendered = format!("{main_instrs:?}");
+    assert!(
+        !rendered.contains("DeclCall { decl_name: \"fold\" }"),
+        "specialized inline fold prepend lowering should eliminate direct stdlib fold call, got: {rendered}"
+    );
+    assert!(
+        !rendered.contains("ListConcat"),
+        "specialized inline fold prepend lowering should eliminate callback ListConcat chain, got: {rendered}"
+    );
+    let wasm = compile_module(&module).expect("codegen should succeed");
+    assert_valid_wasm_module(&wasm);
+}
+
+#[test]
 fn compile_module_uses_native_emitter_for_multi_arg_direct_function_call_subset() {
     let source = r#"
 add4 : Int -> Int -> Int -> Int -> Int

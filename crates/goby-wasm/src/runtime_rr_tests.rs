@@ -93,6 +93,61 @@ main =
     )
 }
 
+fn named_callback_list_spread_chain_source(n: usize) -> String {
+    format!(
+        r#"
+import goby/list ( fold )
+import goby/stdio
+
+build : Int -> List Int can Print
+build n =
+  if n == 0
+    []
+  else
+    rest = build (n - 1)
+    [n, ..rest]
+
+prepend : List Int -> Int -> List Int can Print
+prepend acc x =
+  [x, ..acc]
+
+main : Unit -> Unit can Print, Read
+main =
+  _lines = read_lines ()
+  seed = build {n}
+  xs = fold seed [] prepend
+  println "${{xs[0]}}"
+"#
+    )
+}
+
+fn inline_callback_list_spread_chain_source(n: usize) -> String {
+    format!(
+        r#"
+import goby/list ( fold )
+import goby/stdio
+
+build : Int -> List Int can Print
+build n =
+  if n == 0
+    []
+  else
+    rest = build (n - 1)
+    [n, ..rest]
+
+main : Unit -> Unit can Print, Read
+main =
+  _lines = read_lines ()
+  seed = build {n}
+  xs =
+    fold seed [] (fn acc x ->
+      [x, ..acc]
+    )
+  println "${{xs[0]}}"
+"#
+    )
+}
+
 const CALLBACK_ASSISTED_SCAN_SOURCE: &str = r#"
 import goby/list ( fold )
 import goby/stdio
@@ -231,6 +286,26 @@ fn rr4_recursive_list_spread_large_builder_shape_scales_past_bug_repro_size() {
     let output = execute_runtime_module_with_stdin(&module, Some("x\n".to_string()))
         .expect("larger recursive list-spread builder shape should execute successfully");
     assert_eq!(output.as_deref(), Some("50000\n"));
+}
+
+#[test]
+fn rr4_inline_fold_prepend_builder_executes_after_specialized_lowering() {
+    let module = parse_general_lowered_module(&inline_callback_list_spread_chain_source(20_000));
+    let output = execute_runtime_module_with_stdin(&module, Some("x\n".to_string()))
+        .expect("inline fold prepend builder should execute after specialized lowering");
+    assert_eq!(output.as_deref(), Some("1\n"));
+}
+
+#[test]
+fn rr4_named_callback_list_spread_chain_still_reports_memory_exhaustion() {
+    let module = parse_general_lowered_module(&named_callback_list_spread_chain_source(20_000));
+    let err = execute_runtime_module_with_stdin(&module, Some("x\n".to_string()))
+        .expect_err("named callback list-spread chain should remain an open RR-4 bucket for now");
+    assert!(
+        err.message
+            .contains("memory exhausted [E-MEMORY-EXHAUSTION]"),
+        "expected memory exhaustion classification, got: {err:?}"
+    );
 }
 
 #[test]

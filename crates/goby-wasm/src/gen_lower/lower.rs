@@ -18,6 +18,7 @@ use crate::gen_lower::value::{ValueError, encode_bool, encode_int, encode_unit};
 
 /// Counter for generating unique lambda auxiliary declaration names (`__lambda_N`).
 static LAMBDA_COUNTER: AtomicU32 = AtomicU32::new(0);
+static RR4_FOLD_PREPEND_COUNTER: AtomicU32 = AtomicU32::new(0);
 
 fn flatten_lambda_chain<'a>(param: &'a str, body: &'a CompExpr) -> (Vec<String>, &'a CompExpr) {
     let mut params = vec![param.to_string()];
@@ -284,6 +285,357 @@ pub(crate) fn lower_supported_self_recursive_list_spread_builder(
     });
     decl_instrs.push(WasmBackendInstr::Loop { body_instrs });
     Ok(Some(decl_instrs))
+}
+
+fn matches_empty_list_value(value: &ValueExpr) -> bool {
+    matches!(
+        value,
+        ValueExpr::ListLit {
+            elements,
+            spread: None
+        } if elements.is_empty()
+    )
+}
+
+fn value_expr_mentions_var(value: &ValueExpr, target: &str) -> bool {
+    match value {
+        ValueExpr::IntLit(_)
+        | ValueExpr::BoolLit(_)
+        | ValueExpr::StrLit(_)
+        | ValueExpr::GlobalRef { .. }
+        | ValueExpr::Unit => false,
+        ValueExpr::Var(name) => name == target,
+        ValueExpr::ListLit { elements, spread } => {
+            elements
+                .iter()
+                .any(|elem| value_expr_mentions_var(elem, target))
+                || spread
+                    .as_deref()
+                    .is_some_and(|tail| value_expr_mentions_var(tail, target))
+        }
+        ValueExpr::TupleLit(items) => items
+            .iter()
+            .any(|item| value_expr_mentions_var(item, target)),
+        ValueExpr::RecordLit { fields, .. } => fields
+            .iter()
+            .any(|(_, value)| value_expr_mentions_var(value, target)),
+        ValueExpr::Lambda { param, body } => {
+            if param == target {
+                false
+            } else {
+                comp_expr_mentions_var(body, target)
+            }
+        }
+        ValueExpr::Interp(parts) => parts.iter().any(|part| match part {
+            IrInterpPart::Text(_) => false,
+            IrInterpPart::Expr(value) => value_expr_mentions_var(value, target),
+        }),
+        ValueExpr::BinOp { left, right, .. } => {
+            value_expr_mentions_var(left, target) || value_expr_mentions_var(right, target)
+        }
+        ValueExpr::TupleProject { tuple, .. } => value_expr_mentions_var(tuple, target),
+        ValueExpr::ListGet { list, index } => {
+            value_expr_mentions_var(list, target) || value_expr_mentions_var(index, target)
+        }
+    }
+}
+
+fn comp_expr_mentions_var(comp: &CompExpr, target: &str) -> bool {
+    match comp {
+        CompExpr::Value(value) => value_expr_mentions_var(value, target),
+        CompExpr::Let {
+            name, value, body, ..
+        }
+        | CompExpr::LetMut {
+            name, value, body, ..
+        } => {
+            comp_expr_mentions_var(value, target)
+                || if name == target {
+                    false
+                } else {
+                    comp_expr_mentions_var(body, target)
+                }
+        }
+        CompExpr::Seq { stmts, tail } => {
+            stmts
+                .iter()
+                .any(|stmt| comp_expr_mentions_var(stmt, target))
+                || comp_expr_mentions_var(tail, target)
+        }
+        CompExpr::If { cond, then_, else_ } => {
+            value_expr_mentions_var(cond, target)
+                || comp_expr_mentions_var(then_, target)
+                || comp_expr_mentions_var(else_, target)
+        }
+        CompExpr::Call { callee, args } => {
+            value_expr_mentions_var(callee, target)
+                || args.iter().any(|arg| value_expr_mentions_var(arg, target))
+        }
+        CompExpr::Assign { name, value } => {
+            (name == target) || comp_expr_mentions_var(value, target)
+        }
+        CompExpr::AssignIndex { root, path, value } => {
+            root == target
+                || path
+                    .iter()
+                    .any(|item| value_expr_mentions_var(item, target))
+                || comp_expr_mentions_var(value, target)
+        }
+        CompExpr::Case { scrutinee, arms } => {
+            value_expr_mentions_var(scrutinee, target)
+                || arms
+                    .iter()
+                    .any(|arm| comp_expr_mentions_var(&arm.body, target))
+        }
+        CompExpr::PerformEffect { args, .. } => {
+            args.iter().any(|arg| value_expr_mentions_var(arg, target))
+        }
+        CompExpr::Handle { .. } | CompExpr::WithHandler { .. } | CompExpr::Resume { .. } => true,
+    }
+}
+
+fn rename_value_var(value: &ValueExpr, from: &str, to: &str) -> ValueExpr {
+    match value {
+        ValueExpr::IntLit(_)
+        | ValueExpr::BoolLit(_)
+        | ValueExpr::StrLit(_)
+        | ValueExpr::GlobalRef { .. }
+        | ValueExpr::Unit => value.clone(),
+        ValueExpr::Var(name) => {
+            if name == from {
+                ValueExpr::Var(to.to_string())
+            } else {
+                value.clone()
+            }
+        }
+        ValueExpr::ListLit { elements, spread } => ValueExpr::ListLit {
+            elements: elements
+                .iter()
+                .map(|elem| rename_value_var(elem, from, to))
+                .collect(),
+            spread: spread
+                .as_deref()
+                .map(|tail| Box::new(rename_value_var(tail, from, to))),
+        },
+        ValueExpr::TupleLit(items) => ValueExpr::TupleLit(
+            items
+                .iter()
+                .map(|item| rename_value_var(item, from, to))
+                .collect(),
+        ),
+        ValueExpr::RecordLit {
+            constructor,
+            fields,
+        } => ValueExpr::RecordLit {
+            constructor: constructor.clone(),
+            fields: fields
+                .iter()
+                .map(|(name, value)| (name.clone(), rename_value_var(value, from, to)))
+                .collect(),
+        },
+        ValueExpr::Lambda { param, body } => ValueExpr::Lambda {
+            param: param.clone(),
+            body: if param == from {
+                body.clone()
+            } else {
+                Box::new(rename_comp_var(body, from, to))
+            },
+        },
+        ValueExpr::Interp(parts) => ValueExpr::Interp(
+            parts
+                .iter()
+                .map(|part| match part {
+                    IrInterpPart::Text(text) => IrInterpPart::Text(text.clone()),
+                    IrInterpPart::Expr(value) => {
+                        IrInterpPart::Expr(rename_value_var(value, from, to))
+                    }
+                })
+                .collect(),
+        ),
+        ValueExpr::BinOp { op, left, right } => ValueExpr::BinOp {
+            op: op.clone(),
+            left: Box::new(rename_value_var(left, from, to)),
+            right: Box::new(rename_value_var(right, from, to)),
+        },
+        ValueExpr::TupleProject { tuple, index } => ValueExpr::TupleProject {
+            tuple: Box::new(rename_value_var(tuple, from, to)),
+            index: *index,
+        },
+        ValueExpr::ListGet { list, index } => ValueExpr::ListGet {
+            list: Box::new(rename_value_var(list, from, to)),
+            index: Box::new(rename_value_var(index, from, to)),
+        },
+    }
+}
+
+fn rename_comp_var(comp: &CompExpr, from: &str, to: &str) -> CompExpr {
+    match comp {
+        CompExpr::Value(value) => CompExpr::Value(rename_value_var(value, from, to)),
+        CompExpr::Let {
+            name,
+            ty,
+            value,
+            body,
+        } => CompExpr::Let {
+            name: name.clone(),
+            ty: ty.clone(),
+            value: Box::new(rename_comp_var(value, from, to)),
+            body: if name == from {
+                body.clone()
+            } else {
+                Box::new(rename_comp_var(body, from, to))
+            },
+        },
+        CompExpr::LetMut {
+            name,
+            ty,
+            value,
+            body,
+        } => CompExpr::LetMut {
+            name: name.clone(),
+            ty: ty.clone(),
+            value: Box::new(rename_comp_var(value, from, to)),
+            body: if name == from {
+                body.clone()
+            } else {
+                Box::new(rename_comp_var(body, from, to))
+            },
+        },
+        CompExpr::Seq { stmts, tail } => CompExpr::Seq {
+            stmts: stmts
+                .iter()
+                .map(|stmt| rename_comp_var(stmt, from, to))
+                .collect(),
+            tail: Box::new(rename_comp_var(tail, from, to)),
+        },
+        CompExpr::If { cond, then_, else_ } => CompExpr::If {
+            cond: Box::new(rename_value_var(cond, from, to)),
+            then_: Box::new(rename_comp_var(then_, from, to)),
+            else_: Box::new(rename_comp_var(else_, from, to)),
+        },
+        CompExpr::Call { callee, args } => CompExpr::Call {
+            callee: Box::new(rename_value_var(callee, from, to)),
+            args: args
+                .iter()
+                .map(|arg| rename_value_var(arg, from, to))
+                .collect(),
+        },
+        CompExpr::Assign { name, value } => CompExpr::Assign {
+            name: name.clone(),
+            value: Box::new(rename_comp_var(value, from, to)),
+        },
+        CompExpr::AssignIndex { root, path, value } => CompExpr::AssignIndex {
+            root: root.clone(),
+            path: path
+                .iter()
+                .map(|item| rename_value_var(item, from, to))
+                .collect(),
+            value: Box::new(rename_comp_var(value, from, to)),
+        },
+        CompExpr::Case { scrutinee, arms } => CompExpr::Case {
+            scrutinee: Box::new(rename_value_var(scrutinee, from, to)),
+            arms: arms
+                .iter()
+                .map(|arm| goby_core::ir::IrCaseArm {
+                    pattern: arm.pattern.clone(),
+                    body: rename_comp_var(&arm.body, from, to),
+                })
+                .collect(),
+        },
+        CompExpr::PerformEffect { effect, op, args } => CompExpr::PerformEffect {
+            effect: effect.clone(),
+            op: op.clone(),
+            args: args
+                .iter()
+                .map(|arg| rename_value_var(arg, from, to))
+                .collect(),
+        },
+        CompExpr::Handle { clauses } => CompExpr::Handle {
+            clauses: clauses
+                .iter()
+                .map(|clause| goby_core::ir::IrHandlerClause {
+                    op_name: clause.op_name.clone(),
+                    params: clause.params.clone(),
+                    body: rename_comp_var(&clause.body, from, to),
+                })
+                .collect(),
+        },
+        CompExpr::WithHandler { handler, body } => CompExpr::WithHandler {
+            handler: handler.clone(),
+            body: Box::new(rename_comp_var(body, from, to)),
+        },
+        CompExpr::Resume { value } => CompExpr::Resume {
+            value: Box::new(rename_value_var(value, from, to)),
+        },
+    }
+}
+
+fn lower_supported_inline_list_fold_prepend_builder(
+    args: &[ValueExpr],
+    aliases: &HashMap<String, AliasValue>,
+    bindings: &ClosureBindingEnv,
+    known_decls: &HashSet<String>,
+    lambda_decls: &mut Vec<LambdaAuxDecl>,
+) -> Result<Option<Vec<WasmBackendInstr>>, LowerError> {
+    if args.len() != 3 || !matches_empty_list_value(&args[1]) {
+        return Ok(None);
+    }
+    let ValueExpr::Lambda {
+        param: acc_param,
+        body,
+    } = &args[2]
+    else {
+        return Ok(None);
+    };
+    let CompExpr::Value(ValueExpr::Lambda {
+        param: item_param,
+        body,
+    }) = body.as_ref()
+    else {
+        return Ok(None);
+    };
+    let CompExpr::Value(ValueExpr::ListLit { elements, spread }) = body.as_ref() else {
+        return Ok(None);
+    };
+    let Some(spread) = spread.as_deref() else {
+        return Ok(None);
+    };
+    let ValueExpr::Var(spread_name) = spread else {
+        return Ok(None);
+    };
+    if spread_name != acc_param {
+        return Ok(None);
+    }
+    if elements
+        .iter()
+        .any(|elem| value_expr_mentions_var(elem, acc_param))
+    {
+        return Ok(None);
+    }
+
+    let item_local = format!(
+        "__rr4_fold_item_{}",
+        RR4_FOLD_PREPEND_COUNTER.fetch_add(1, AtomicOrdering::Relaxed)
+    );
+    let list_instrs = lower_value_as_arg(&args[0], aliases, bindings, known_decls, lambda_decls)?;
+    let prefix_element_instrs = elements
+        .iter()
+        .map(|elem| {
+            let renamed = rename_value_var(elem, item_param, &item_local);
+            lower_value_ctx(&renamed, aliases, bindings, known_decls)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    Ok(Some(vec![
+        WasmBackendInstr::DeclareLocal {
+            name: item_local.clone(),
+        },
+        WasmBackendInstr::ListReverseFoldPrepend {
+            list_instrs,
+            item_local,
+            prefix_element_instrs,
+        },
+    ]))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -724,6 +1076,18 @@ fn hoist_declare_locals(
                 list_instrs: hoist_declare_locals(list_instrs, decls),
                 func_instrs: hoist_declare_locals(func_instrs, decls),
             }),
+            WasmBackendInstr::ListReverseFoldPrepend {
+                list_instrs,
+                item_local,
+                prefix_element_instrs,
+            } => lowered.push(WasmBackendInstr::ListReverseFoldPrepend {
+                list_instrs: hoist_declare_locals(list_instrs, decls),
+                item_local,
+                prefix_element_instrs: prefix_element_instrs
+                    .into_iter()
+                    .map(|child| hoist_declare_locals(child, decls))
+                    .collect(),
+            }),
             WasmBackendInstr::CreateClosure {
                 func_handle_instrs,
                 slot_instrs,
@@ -984,6 +1348,35 @@ fn lower_comp_inner(
                     func_instrs,
                 }])
             } else if let goby_core::ir::ValueExpr::GlobalRef { module, name } = callee.as_ref()
+                && module == "list"
+                && name == "fold"
+                && args.len() == 3
+            {
+                if let Some(instrs) = lower_supported_inline_list_fold_prepend_builder(
+                    args,
+                    aliases,
+                    bindings,
+                    known_decls,
+                    lambda_decls,
+                )? {
+                    Ok(instrs)
+                } else {
+                    let mut instrs = Vec::new();
+                    for arg in args {
+                        instrs.extend(lower_value_as_arg(
+                            arg,
+                            aliases,
+                            bindings,
+                            known_decls,
+                            lambda_decls,
+                        )?);
+                    }
+                    instrs.push(WasmBackendInstr::DeclCall {
+                        decl_name: name.clone(),
+                    });
+                    Ok(instrs)
+                }
+            } else if let goby_core::ir::ValueExpr::GlobalRef { module, name } = callee.as_ref()
                 && module == "string"
                 && name == "graphemes"
                 && args.len() == 1
@@ -1074,6 +1467,34 @@ fn lower_comp_inner(
                         list_instrs,
                         func_instrs,
                     }])
+                } else if (name == "fold"
+                    || resolve_global_ref(name, aliases) == Some(("list", "fold")))
+                    && args.len() == 3
+                {
+                    if let Some(instrs) = lower_supported_inline_list_fold_prepend_builder(
+                        args,
+                        aliases,
+                        bindings,
+                        known_decls,
+                        lambda_decls,
+                    )? {
+                        Ok(instrs)
+                    } else {
+                        let mut instrs = Vec::new();
+                        for arg in args {
+                            instrs.extend(lower_value_as_arg(
+                                arg,
+                                aliases,
+                                bindings,
+                                known_decls,
+                                lambda_decls,
+                            )?);
+                        }
+                        instrs.push(WasmBackendInstr::DeclCall {
+                            decl_name: name.clone(),
+                        });
+                        Ok(instrs)
+                    }
                 } else if (name == "graphemes"
                     || resolve_global_ref(name, aliases) == Some(("string", "graphemes")))
                     && args.len() == 1
@@ -2251,6 +2672,16 @@ fn instrs_load_local(instrs: &[WasmBackendInstr], name: &str) -> bool {
             list_instrs,
             func_instrs,
         } => instrs_load_local(list_instrs, name) || instrs_load_local(func_instrs, name),
+        WasmBackendInstr::ListReverseFoldPrepend {
+            list_instrs,
+            prefix_element_instrs,
+            ..
+        } => {
+            instrs_load_local(list_instrs, name)
+                || prefix_element_instrs
+                    .iter()
+                    .any(|instrs| instrs_load_local(instrs, name))
+        }
         WasmBackendInstr::ListEachEffect { list_instrs, .. } => {
             instrs_load_local(list_instrs, name)
         }
