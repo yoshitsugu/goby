@@ -231,6 +231,16 @@ If any of these remain missing, the wording should stay narrower, such as
       strategy;
     - non-self and mutually recursive `TailDeclCall` still execute like ordinary
       direct calls until a wider direct-call group model lands.
+  - 2026-04-10 follow-up slice:
+    - strongly connected aux-decl groups linked by `TailDeclCall` now emit one
+      shared dispatcher helper with a looped constant-stack execution path for
+      the whole group;
+    - each public aux decl remains a thin wrapper so existing direct-call and
+      funcref entrypoints stay stable while grouped tail recursion moves onto
+      the shared dispatcher boundary;
+    - representative compile/runtime coverage now proves sibling/mutual direct
+      tail recursion survives a deliberately tight stack limit on the compiled
+      Wasm path.
 
 - [ ] **M4: Lower the shared tail-call form to constant-stack Wasm execution**
   - Implement backend lowering for the shared tail-call form and direct-call

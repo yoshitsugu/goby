@@ -1,11 +1,12 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-04-09
+Last updated: 2026-04-10
 
 ## Current Focus
 
-Next slice: **Track RR, RR-5** (`PLAN.md §4.5`) - widen the `TailDeclCall`
-execution model from self-tail loops to grouped sibling/mutual direct calls.
+Next slice: **Track RR, RR-5** (`PLAN.md §4.5`) - follow through on the direct
+tail-call group model now that sibling/mutual aux-decl groups execute in
+constant stack on the compiled Wasm path.
 
 Locked ideal goal for RR:
 
@@ -24,16 +25,18 @@ RR execution reminder:
 Immediate next steps:
 
 - **RR-5**: continue the planned generic tail-call optimization track now that
-  the first shared tail-position analysis, direct tail-call normalization, and
-  self-tail loop execution slices are in place.
+  the shared tail-position analysis, direct tail-call normalization, self-tail
+  loop execution, and SCC-local direct-call dispatcher slices are in place.
   - keep the RR-3/RR-4 shared-boundary discipline: prefer reusable control-flow
     rules over symbol-specific recursion rewrites.
-  - next RR-5 task: widen the execution model so sibling and mutually
-    recursive direct `TailDeclCall` groups can share one constant-stack path.
-  - keep the current self-tail loop as one member of that broader direct-call
-    group story, not the headline feature claim by itself.
+  - next RR-5 task: widen the same shared `TailDeclCall` contract beyond aux-
+    decl SCC dispatchers so the eventual user-facing TCO statement can cover
+    more of the documented direct-call subset without backend caveats.
+  - prove the remaining control-flow/user-shape coverage (`if`/`case` joins,
+    local aliases, and other direct-call representatives) under the new grouped
+    execution model.
   - keep current diagnostics explicit for shapes that still fall outside the
-    optimized subset.
+    optimized subset or still execute as ordinary calls.
 - keep RR-1 diagnostics best-effort and explicit about uncertainty
   (`likely stack pressure`, `memory exhaustion`, `unknown runtime trap`) as
   later resilience work lands.
@@ -83,6 +86,28 @@ Immediate next steps:
     `rr5_self_tail_recursion_repro_survives_tight_stack_limit_after_tail_decl_loop`.
   - non-self and mutually recursive direct tail-call groups remain the next
     RR-5 execution slice.
+
+- **Track RR, RR-5 sibling/mutual direct-call group execution** (partial, 2026-04-10).
+  - `goby-wasm` now detects strongly connected aux-decl groups linked by
+    `TailDeclCall` and emits a shared dispatcher helper with one looped
+    constant-stack execution path for the whole group.
+  - each public aux decl in such a group now becomes a thin wrapper that seeds
+    the dispatcher tag/arguments, preserving existing direct-call and funcref
+    entrypoints while moving sibling/mutual recursion onto the shared
+    backend-owned boundary.
+  - tail-position intra-group edges now rewrite to dispatcher-local tag/arg
+    updates plus a branch back to the shared loop head, extending the RR-5
+    constant-stack story beyond self recursion without adding symbol-specific
+    rewrites.
+  - compile coverage now proves a representative mutual tail-recursive pair
+    lowers to a looped dispatcher without recursing through the public wrappers
+    via
+    `compile_module_mutual_tail_decl_group_emits_dispatch_loop_without_wrapper_recursion`.
+  - runtime coverage now proves the tight-stack mutual representative succeeds
+    via
+    `rr5_mutual_tail_recursion_repro_survives_tight_stack_limit_after_group_dispatch`.
+  - the current grouped execution model is SCC-local to aux declarations on the
+    compiled Wasm path; broader direct-call guarantee work remains open.
 
 - **Track RR, RR-4 builder-backed list-spread lowering** (complete, 2026-04-09).
   - fixed the historical recursive `[x, ..rest]` memory-exhaustion bug without
@@ -211,18 +236,13 @@ Immediate next steps:
 
 ## Open Questions
 
-- Should the first generic TCO slice target direct self-tail calls only, or
-  should it include mutually tail-recursive direct calls from the start so the
-  eventual language-level claim stays stable?
-- Which direct-call forms should the first normalization slice accept once
+- Which direct-call forms should the next normalization slice accept once
   `tail_analysis` has marked tail position: only direct declaration names, or
   also resolvable local aliases to those names?
-- Should the first constant-stack execution model handle only self
-  `TailDeclCall`, or grouped sibling direct calls from the start so RR-5 does
-  not stall at a self-recursion-only boundary?
-- Which grouped execution shape is the smallest honest next step for non-self
-  direct tail calls: SCC-local trampoline dispatch, grouped loops with a callee
-  tag local, or another backend-owned jump model?
+- How far should the new SCC-local dispatcher boundary extend before Goby can
+  honestly make a broader user-facing TCO statement: aux declarations only, or
+  every documented statically resolvable direct-call entrypoint on the compiled
+  path?
 - For unsupported tail-call shapes, what is the stable contract: explicit
   compile-time rejection, ordinary non-TCO execution, or backend-specific
   capability reporting?

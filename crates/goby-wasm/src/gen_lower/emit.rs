@@ -196,8 +196,8 @@ struct EmitContext {
     indirect_call_type_idx_3: Option<u32>,
     /// Map from record constructor name to module-local numeric tag used in `RecordLit`.
     record_ctor_tags: HashMap<String, u32>,
-    /// Optional self-tail execution metadata for the function currently being emitted.
-    self_tail_loop: Option<SelfTailLoopState>,
+    /// Optional tail-call execution metadata for the function currently being emitted.
+    tail_call_mode: Option<TailCallMode>,
 }
 
 #[derive(Debug, Clone)]
@@ -205,6 +205,30 @@ struct SelfTailLoopState {
     decl_name: String,
     param_locals: Vec<u32>,
     arg_scratch_base: u32,
+}
+
+#[derive(Debug, Clone)]
+enum TailCallMode {
+    SelfLoop(SelfTailLoopState),
+    Group(TailCallGroupState),
+}
+
+#[derive(Debug, Clone)]
+struct TailCallGroupState {
+    tag_local: u32,
+    shared_arg_locals: Vec<u32>,
+    arg_scratch_base: u32,
+    member_tags: HashMap<String, u32>,
+    member_arities: HashMap<String, usize>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct TailCallGroupPlan {
+    pub(crate) dispatcher_name: String,
+    pub(crate) member_names: Vec<String>,
+    member_tags: HashMap<String, u32>,
+    member_arities: HashMap<String, usize>,
+    pub(crate) max_arity: usize,
 }
 
 impl EmitContext {
@@ -230,7 +254,7 @@ impl EmitContext {
             indirect_call_type_idx_2,
             indirect_call_type_idx_3,
             record_ctor_tags,
-            self_tail_loop: None,
+            tail_call_mode: None,
         }
     }
 
@@ -371,7 +395,7 @@ fn align_down_i32(value: i32, align: i32) -> i32 {
 /// `WasmBackendInstr::If` contains nested `then_instrs` / `else_instrs`. All pre-scan
 /// functions (scratch counts, static string pool, etc.) must recurse into these to avoid
 /// emitting locals or data segments that reference missing declarations.
-fn collect_all_instrs(instrs: &[WasmBackendInstr]) -> Vec<&WasmBackendInstr> {
+pub(crate) fn collect_all_instrs(instrs: &[WasmBackendInstr]) -> Vec<&WasmBackendInstr> {
     let mut result = Vec::new();
     for instr in instrs {
         result.push(instr);
@@ -750,6 +774,133 @@ fn has_self_tail_decl_call(instrs: &[WasmBackendInstr], decl_name: &str) -> bool
     })
 }
 
+fn collect_tail_decl_targets(instrs: &[WasmBackendInstr]) -> Vec<String> {
+    collect_all_instrs(instrs)
+        .into_iter()
+        .filter_map(|instr| match instr {
+            WasmBackendInstr::TailDeclCall { decl_name } => Some(decl_name.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+pub(crate) fn compute_tail_call_group_plans(aux_decls: &[AuxDecl]) -> Vec<TailCallGroupPlan> {
+    let decl_index_by_name: HashMap<String, usize> = aux_decls
+        .iter()
+        .enumerate()
+        .map(|(idx, decl)| (decl.decl_name.clone(), idx))
+        .collect();
+    let edges: Vec<Vec<usize>> = aux_decls
+        .iter()
+        .map(|decl| {
+            collect_tail_decl_targets(&decl.instrs)
+                .into_iter()
+                .filter_map(|target| decl_index_by_name.get(&target).copied())
+                .collect()
+        })
+        .collect();
+
+    struct Tarjan<'a> {
+        edges: &'a [Vec<usize>],
+        next_index: usize,
+        indices: Vec<Option<usize>>,
+        lowlinks: Vec<usize>,
+        stack: Vec<usize>,
+        on_stack: Vec<bool>,
+        sccs: Vec<Vec<usize>>,
+    }
+
+    impl<'a> Tarjan<'a> {
+        fn new(edges: &'a [Vec<usize>]) -> Self {
+            let len = edges.len();
+            Self {
+                edges,
+                next_index: 0,
+                indices: vec![None; len],
+                lowlinks: vec![0; len],
+                stack: Vec::new(),
+                on_stack: vec![false; len],
+                sccs: Vec::new(),
+            }
+        }
+
+        fn run(mut self) -> Vec<Vec<usize>> {
+            for node in 0..self.edges.len() {
+                if self.indices[node].is_none() {
+                    self.visit(node);
+                }
+            }
+            self.sccs
+        }
+
+        fn visit(&mut self, node: usize) {
+            let index = self.next_index;
+            self.next_index += 1;
+            self.indices[node] = Some(index);
+            self.lowlinks[node] = index;
+            self.stack.push(node);
+            self.on_stack[node] = true;
+
+            for &neighbor in &self.edges[node] {
+                if self.indices[neighbor].is_none() {
+                    self.visit(neighbor);
+                    self.lowlinks[node] = self.lowlinks[node].min(self.lowlinks[neighbor]);
+                } else if self.on_stack[neighbor] {
+                    let neighbor_index = self.indices[neighbor].expect("visited neighbor index");
+                    self.lowlinks[node] = self.lowlinks[node].min(neighbor_index);
+                }
+            }
+
+            if self.lowlinks[node] == index {
+                let mut scc = Vec::new();
+                while let Some(member) = self.stack.pop() {
+                    self.on_stack[member] = false;
+                    scc.push(member);
+                    if member == node {
+                        break;
+                    }
+                }
+                self.sccs.push(scc);
+            }
+        }
+    }
+
+    let mut plans = Vec::new();
+    for (group_idx, mut scc) in Tarjan::new(&edges).run().into_iter().enumerate() {
+        scc.sort_unstable();
+        if scc.len() <= 1 {
+            continue;
+        }
+        let member_names: Vec<String> = scc
+            .iter()
+            .map(|&idx| aux_decls[idx].decl_name.clone())
+            .collect();
+        let member_tags: HashMap<String, u32> = member_names
+            .iter()
+            .enumerate()
+            .map(|(tag, name)| (name.clone(), tag as u32))
+            .collect();
+        let member_arities: HashMap<String, usize> = scc
+            .iter()
+            .map(|&idx| {
+                (
+                    aux_decls[idx].decl_name.clone(),
+                    aux_decls[idx].param_names.len(),
+                )
+            })
+            .collect();
+        let max_arity = member_arities.values().copied().max().unwrap_or(0);
+        plans.push(TailCallGroupPlan {
+            dispatcher_name: format!("__tail_group_dispatch_{group_idx}"),
+            member_names,
+            member_tags,
+            member_arities,
+            max_arity,
+        });
+    }
+    plans
+}
+
 /// Returns true if any print-with-newline instruction is present (needs newline data segment).
 fn needs_newline_data(instrs: &[WasmBackendInstr]) -> bool {
     let all = collect_all_instrs(instrs);
@@ -938,6 +1089,16 @@ pub(crate) fn emit_general_module_with_aux_and_options(
             }
         }
     }
+    let tail_group_plans = compute_tail_call_group_plans(aux_decls);
+    let tail_group_plan_by_member: HashMap<String, TailCallGroupPlan> = tail_group_plans
+        .iter()
+        .flat_map(|plan| {
+            plan.member_names
+                .iter()
+                .cloned()
+                .map(move |member| (member, plan.clone()))
+        })
+        .collect();
 
     // --- Pre-scan for main: count declared I64 locals and detect I32 scratch needs ---
     // Use collect_all_instrs to recurse into nested If branches.
@@ -1001,6 +1162,15 @@ pub(crate) fn emit_general_module_with_aux_and_options(
         .map(|decl| {
             let idx = types.len();
             let params: Vec<ValType> = vec![ValType::I64; decl.param_names.len()];
+            types.ty().function(params, [ValType::I64]);
+            idx
+        })
+        .collect();
+    let tail_group_dispatch_type_indices: Vec<u32> = tail_group_plans
+        .iter()
+        .map(|plan| {
+            let idx = types.len();
+            let params: Vec<ValType> = vec![ValType::I64; 1 + plan.max_arity];
             types.ty().function(params, [ValType::I64]);
             idx
         })
@@ -1097,6 +1267,9 @@ pub(crate) fn emit_general_module_with_aux_and_options(
     for aux_type_idx in &aux_type_indices {
         functions.function(*aux_type_idx);
     }
+    for dispatch_type_idx in &tail_group_dispatch_type_indices {
+        functions.function(*dispatch_type_idx);
+    }
     module.section(&functions);
 
     // Build decl_name → func_idx table for DeclCall resolution.
@@ -1105,6 +1278,16 @@ pub(crate) fn emit_general_module_with_aux_and_options(
         .iter()
         .enumerate()
         .map(|(i, decl)| (decl.decl_name.clone(), main_func_idx + 1 + i as u32))
+        .collect();
+    let tail_group_dispatch_indices: HashMap<String, u32> = tail_group_plans
+        .iter()
+        .enumerate()
+        .map(|(i, plan)| {
+            (
+                plan.dispatcher_name.clone(),
+                main_func_idx + 1 + aux_decls.len() as u32 + i as u32,
+            )
+        })
         .collect();
     let decl_returns_wasm_heap: HashMap<String, bool> = aux_decls
         .iter()
@@ -1199,8 +1382,42 @@ pub(crate) fn emit_general_module_with_aux_and_options(
         code.function(&function);
     }
 
-    // Aux decl functions (after main).
+    // Aux decl functions (after main). Tail-call-group members keep their public
+    // wrapper signatures; shared constant-stack execution lives in dispatcher helpers.
     for decl in aux_decls {
+        if let Some(group_plan) = tail_group_plan_by_member.get(&decl.decl_name) {
+            let dispatcher_func_idx = *tail_group_dispatch_indices
+                .get(&group_plan.dispatcher_name)
+                .ok_or_else(|| CodegenError {
+                    message: format!(
+                        "gen_lower/emit: missing dispatcher function index for '{}'",
+                        group_plan.dispatcher_name
+                    ),
+                })?;
+            let member_tag =
+                *group_plan
+                    .member_tags
+                    .get(&decl.decl_name)
+                    .ok_or_else(|| CodegenError {
+                        message: format!(
+                            "gen_lower/emit: missing group tag for tail-call member '{}'",
+                            decl.decl_name
+                        ),
+                    })?;
+            let mut function = Function::new(Vec::new());
+            function.instruction(&Instruction::I64Const(member_tag as i64));
+            for param_idx in 0..decl.param_names.len() as u32 {
+                function.instruction(&Instruction::LocalGet(param_idx));
+            }
+            for _ in decl.param_names.len()..group_plan.max_arity {
+                function.instruction(&Instruction::I64Const(0));
+            }
+            function.instruction(&Instruction::Call(dispatcher_func_idx));
+            function.instruction(&Instruction::End);
+            code.function(&function);
+            continue;
+        }
+
         let aux_all = collect_all_instrs(&decl.instrs);
         let aux_named_i64_count = aux_all
             .iter()
@@ -1213,8 +1430,6 @@ pub(crate) fn emit_general_module_with_aux_and_options(
         } else {
             0
         };
-        // Aux decl params are Wasm function parameters (i64 each), not DeclareLocal slots.
-        // In Wasm, function params are locals[0..param_names.len()-1]; body locals follow after.
         let aux_param_count = decl.param_names.len() as u32;
         let aux_i64_count =
             aux_named_i64_count + aux_self_tail_scratch_count + aux_helper_i64_scratch_count;
@@ -1230,8 +1445,6 @@ pub(crate) fn emit_general_module_with_aux_and_options(
         }
         let mut function = Function::new(locals_vec);
 
-        // Params occupy local indices 0..param_names.len()-1 in Wasm; body locals follow.
-        // Pre-register param names in EmitContext so LoadLocal/StoreLocal resolve correctly.
         let mut ctx = EmitContext::with_module_tables(
             decl_func_indices.clone(),
             decl_returns_wasm_heap.clone(),
@@ -1242,13 +1455,11 @@ pub(crate) fn emit_general_module_with_aux_and_options(
             record_ctor_tags.clone(),
         );
         for param_name in &decl.param_names {
-            // Wasm assigns local indices for params in declaration order before any body locals.
-            // We mirror that: declare each param name with an explicit local index.
             ctx.locals.insert(param_name.clone(), ctx.next_local);
             ctx.next_local += 1;
         }
-        let self_tail_loop = if aux_self_tail_scratch_count > 0 {
-            Some(SelfTailLoopState {
+        let tail_call_mode = if aux_self_tail_scratch_count > 0 {
+            Some(TailCallMode::SelfLoop(SelfTailLoopState {
                 decl_name: decl.decl_name.clone(),
                 param_locals: decl
                     .param_names
@@ -1256,12 +1467,10 @@ pub(crate) fn emit_general_module_with_aux_and_options(
                     .map(|param_name| ctx.get(param_name))
                     .collect::<Result<Vec<_>, _>>()?,
                 arg_scratch_base: aux_param_count + aux_named_i64_count,
-            })
+            }))
         } else {
             None
         };
-        // Aux decls write the final alloc cursor back to the global slot before returning
-        // so callers that use call_indirect (not DeclCall) can reload the updated cursor.
         emit_function_body(
             &mut function,
             &mut ctx,
@@ -1272,10 +1481,27 @@ pub(crate) fn emit_general_module_with_aux_and_options(
             aux_i32_base,
             &static_strings,
             options,
-            true, // emit_epilogue_cursor_sync
-            self_tail_loop,
+            true,
+            tail_call_mode,
         )?;
         code.function(&function);
+    }
+    for group_plan in &tail_group_plans {
+        emit_tail_call_group_dispatcher(
+            &mut code,
+            group_plan,
+            aux_decls,
+            &decl_func_indices,
+            &decl_returns_wasm_heap,
+            &decl_table_slots,
+            indirect_call_type_idx_1,
+            indirect_call_type_idx_2,
+            indirect_call_type_idx_3,
+            &record_ctor_tags,
+            &static_strings,
+            layout,
+            options,
+        )?;
     }
     module.section(&code);
 
@@ -1285,6 +1511,12 @@ pub(crate) fn emit_general_module_with_aux_and_options(
     function_names.append(main_func_idx, "main");
     for (i, decl) in aux_decls.iter().enumerate() {
         function_names.append(main_func_idx + 1 + i as u32, &decl.decl_name);
+    }
+    for (i, plan) in tail_group_plans.iter().enumerate() {
+        function_names.append(
+            main_func_idx + 1 + aux_decls.len() as u32 + i as u32,
+            &plan.dispatcher_name,
+        );
     }
     names.functions(&function_names);
     module.section(&names);
@@ -1584,10 +1816,8 @@ fn emit_instrs_with_heap_depth(
                 );
             }
 
-            WasmBackendInstr::TailDeclCall { decl_name } => {
-                if let Some(loop_state) = &ctx.self_tail_loop
-                    && loop_state.decl_name == *decl_name
-                {
+            WasmBackendInstr::TailDeclCall { decl_name } => match &ctx.tail_call_mode {
+                Some(TailCallMode::SelfLoop(loop_state)) if loop_state.decl_name == *decl_name => {
                     for (offset, _) in loop_state.param_locals.iter().enumerate().rev() {
                         function.instruction(&Instruction::LocalSet(
                             loop_state.arg_scratch_base + offset as u32,
@@ -1600,7 +1830,41 @@ fn emit_instrs_with_heap_depth(
                         function.instruction(&Instruction::LocalSet(*param_local));
                     }
                     function.instruction(&Instruction::Br(self_tail_loop_depth));
-                } else {
+                }
+                Some(TailCallMode::Group(group_state))
+                    if group_state.member_tags.contains_key(decl_name) =>
+                {
+                    let target_arity = *group_state
+                            .member_arities
+                            .get(decl_name)
+                            .ok_or_else(|| CodegenError {
+                                message: format!(
+                                    "gen_lower/emit: missing arity for tail-call group member '{decl_name}'"
+                                ),
+                            })?;
+                    for offset in (0..target_arity).rev() {
+                        function.instruction(&Instruction::LocalSet(
+                            group_state.arg_scratch_base + offset as u32,
+                        ));
+                    }
+                    for offset in 0..target_arity {
+                        function.instruction(&Instruction::LocalGet(
+                            group_state.arg_scratch_base + offset as u32,
+                        ));
+                        function.instruction(&Instruction::LocalSet(
+                            group_state.shared_arg_locals[offset],
+                        ));
+                    }
+                    function.instruction(&Instruction::I64Const(
+                        *group_state
+                            .member_tags
+                            .get(decl_name)
+                            .expect("tail-call group tag") as i64,
+                    ));
+                    function.instruction(&Instruction::LocalSet(group_state.tag_local));
+                    function.instruction(&Instruction::Br(self_tail_loop_depth));
+                }
+                _ => {
                     let func_idx = ctx.decl_func_idx(decl_name)?;
                     let returns_wasm_heap = ctx.decl_returns_wasm_heap(decl_name)?;
                     emit_heap_aware_direct_call(
@@ -1610,7 +1874,7 @@ fn emit_instrs_with_heap_depth(
                         returns_wasm_heap,
                     );
                 }
-            }
+            },
 
             WasmBackendInstr::CaseMatch {
                 scrutinee_local,
@@ -2609,9 +2873,9 @@ fn emit_function_body(
     static_strings: &StaticStringPool,
     options: EmitOptions,
     emit_epilogue_cursor_sync: bool,
-    self_tail_loop: Option<SelfTailLoopState>,
+    tail_call_mode: Option<TailCallMode>,
 ) -> Result<(), CodegenError> {
-    ctx.self_tail_loop = self_tail_loop;
+    ctx.tail_call_mode = tail_call_mode;
     let has_heap = needs_helper_state(instrs);
     if has_heap {
         initialize_helper_state_locals(
@@ -2622,7 +2886,7 @@ fn emit_function_body(
             !emit_epilogue_cursor_sync,
         )?;
     }
-    if ctx.self_tail_loop.is_some() {
+    if ctx.tail_call_mode.is_some() {
         function.instruction(&Instruction::Loop(wasm_encoder::BlockType::Result(
             wasm_encoder::ValType::I64,
         )));
@@ -2660,7 +2924,215 @@ fn emit_function_body(
         emit_sync_cursor_to_global(function, alloc_cursor_local);
     }
     function.instruction(&Instruction::End);
-    ctx.self_tail_loop = None;
+    ctx.tail_call_mode = None;
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn emit_tail_call_group_dispatcher(
+    code: &mut CodeSection,
+    group_plan: &TailCallGroupPlan,
+    aux_decls: &[AuxDecl],
+    decl_func_indices: &HashMap<String, u32>,
+    decl_returns_wasm_heap: &HashMap<String, bool>,
+    decl_table_slots: &HashMap<String, u32>,
+    indirect_call_type_idx_1: Option<u32>,
+    indirect_call_type_idx_2: Option<u32>,
+    indirect_call_type_idx_3: Option<u32>,
+    record_ctor_tags: &HashMap<String, u32>,
+    static_strings: &StaticStringPool,
+    layout: &MemoryLayout,
+    options: EmitOptions,
+) -> Result<(), CodegenError> {
+    let member_by_name: HashMap<&str, &AuxDecl> = aux_decls
+        .iter()
+        .map(|decl| (decl.decl_name.as_str(), decl))
+        .collect();
+    let mut named_local_bases = HashMap::new();
+    let mut next_named_local_base = 1 + group_plan.max_arity as u32;
+    let mut total_named_i64_count = 0u32;
+    let mut helper_i64_scratch_count = 0u32;
+    let mut i32_scratch_count = 0u32;
+    let mut needs_heap = false;
+    for member_name in &group_plan.member_names {
+        let decl = member_by_name
+            .get(member_name.as_str())
+            .copied()
+            .ok_or_else(|| CodegenError {
+                message: format!(
+                    "gen_lower/emit: missing aux decl for tail-call group member '{member_name}'"
+                ),
+            })?;
+        let named_count = collect_all_instrs(&decl.instrs)
+            .into_iter()
+            .filter(|instr| matches!(instr, WasmBackendInstr::DeclareLocal { .. }))
+            .count() as u32;
+        named_local_bases.insert(member_name.clone(), next_named_local_base);
+        next_named_local_base += named_count;
+        total_named_i64_count += named_count;
+        helper_i64_scratch_count =
+            helper_i64_scratch_count.max(required_i64_scratch_count(&decl.instrs));
+        i32_scratch_count = i32_scratch_count.max(required_i32_scratch_count(&decl.instrs));
+        needs_heap |= needs_helper_state(&decl.instrs);
+    }
+    let group_arg_scratch_count = group_plan.max_arity as u32;
+    let dispatcher_param_count = 1 + group_plan.max_arity as u32;
+    let total_i64_count =
+        total_named_i64_count + group_arg_scratch_count + helper_i64_scratch_count;
+    let i32_base = dispatcher_param_count + total_i64_count;
+
+    let mut locals_vec: Vec<(u32, ValType)> = Vec::new();
+    if total_i64_count > 0 {
+        locals_vec.push((total_i64_count, ValType::I64));
+    }
+    if i32_scratch_count > 0 {
+        locals_vec.push((i32_scratch_count, ValType::I32));
+    }
+    let mut function = Function::new(locals_vec);
+
+    if needs_heap {
+        initialize_helper_state_locals(&mut function, layout, i32_base, static_strings, false)?;
+    }
+    function.instruction(&Instruction::Loop(wasm_encoder::BlockType::Result(
+        wasm_encoder::ValType::I64,
+    )));
+
+    emit_tail_call_group_dispatch_chain(
+        &mut function,
+        group_plan,
+        &member_by_name,
+        &named_local_bases,
+        decl_func_indices,
+        decl_returns_wasm_heap,
+        decl_table_slots,
+        indirect_call_type_idx_1,
+        indirect_call_type_idx_2,
+        indirect_call_type_idx_3,
+        record_ctor_tags,
+        static_strings,
+        layout,
+        options,
+        total_named_i64_count,
+        helper_i64_scratch_count,
+        i32_base,
+        0,
+    )?;
+
+    function.instruction(&Instruction::End);
+    if needs_heap {
+        let alloc_cursor_local = i32_base + HELPER_ALLOC_CURSOR_OFFSET;
+        emit_sync_cursor_to_global(&mut function, alloc_cursor_local);
+    }
+    function.instruction(&Instruction::End);
+    code.function(&function);
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn emit_tail_call_group_dispatch_chain(
+    function: &mut Function,
+    group_plan: &TailCallGroupPlan,
+    member_by_name: &HashMap<&str, &AuxDecl>,
+    named_local_bases: &HashMap<String, u32>,
+    decl_func_indices: &HashMap<String, u32>,
+    decl_returns_wasm_heap: &HashMap<String, bool>,
+    decl_table_slots: &HashMap<String, u32>,
+    indirect_call_type_idx_1: Option<u32>,
+    indirect_call_type_idx_2: Option<u32>,
+    indirect_call_type_idx_3: Option<u32>,
+    record_ctor_tags: &HashMap<String, u32>,
+    static_strings: &StaticStringPool,
+    layout: &MemoryLayout,
+    options: EmitOptions,
+    total_named_i64_count: u32,
+    helper_i64_scratch_count: u32,
+    i32_base: u32,
+    member_idx: usize,
+) -> Result<(), CodegenError> {
+    let member_name = &group_plan.member_names[member_idx];
+    let decl = member_by_name
+        .get(member_name.as_str())
+        .copied()
+        .ok_or_else(|| CodegenError {
+            message: format!(
+                "gen_lower/emit: missing aux decl while emitting tail-call dispatcher member '{member_name}'"
+            ),
+        })?;
+    let tag = *group_plan
+        .member_tags
+        .get(member_name)
+        .expect("tail-call group member tag");
+
+    function.instruction(&Instruction::LocalGet(0));
+    function.instruction(&Instruction::I64Const(tag as i64));
+    function.instruction(&Instruction::I64Eq);
+    function.instruction(&Instruction::If(wasm_encoder::BlockType::Result(
+        wasm_encoder::ValType::I64,
+    )));
+
+    let mut ctx = EmitContext::with_module_tables(
+        decl_func_indices.clone(),
+        decl_returns_wasm_heap.clone(),
+        decl_table_slots.clone(),
+        indirect_call_type_idx_1,
+        indirect_call_type_idx_2,
+        indirect_call_type_idx_3,
+        record_ctor_tags.clone(),
+    );
+    for (param_idx, param_name) in decl.param_names.iter().enumerate() {
+        ctx.locals.insert(param_name.clone(), 1 + param_idx as u32);
+    }
+    ctx.next_local = *named_local_bases
+        .get(member_name)
+        .expect("dispatcher member named-local base");
+    ctx.tail_call_mode = Some(TailCallMode::Group(TailCallGroupState {
+        tag_local: 0,
+        shared_arg_locals: (0..group_plan.max_arity)
+            .map(|idx| 1 + idx as u32)
+            .collect(),
+        arg_scratch_base: 1 + group_plan.max_arity as u32 + total_named_i64_count,
+        member_tags: group_plan.member_tags.clone(),
+        member_arities: group_plan.member_arities.clone(),
+    }));
+    emit_instrs(
+        function,
+        &mut ctx,
+        &decl.instrs,
+        layout,
+        total_named_i64_count,
+        helper_i64_scratch_count,
+        i32_base,
+        static_strings,
+        options,
+        true,
+        member_idx as u32 + 1,
+    )?;
+    function.instruction(&Instruction::Else);
+    if member_idx + 1 == group_plan.member_names.len() {
+        function.instruction(&Instruction::Unreachable);
+    } else {
+        emit_tail_call_group_dispatch_chain(
+            function,
+            group_plan,
+            member_by_name,
+            named_local_bases,
+            decl_func_indices,
+            decl_returns_wasm_heap,
+            decl_table_slots,
+            indirect_call_type_idx_1,
+            indirect_call_type_idx_2,
+            indirect_call_type_idx_3,
+            record_ctor_tags,
+            static_strings,
+            layout,
+            options,
+            total_named_i64_count,
+            helper_i64_scratch_count,
+            i32_base,
+            member_idx + 1,
+        )?;
+    }
+    function.instruction(&Instruction::End);
     Ok(())
 }
 

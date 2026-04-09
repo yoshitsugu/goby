@@ -24,6 +24,28 @@ main =
   println "done"
 "#;
 
+const MUTUAL_TAIL_RECURSION_SOURCE: &str = r#"
+ping : Int -> Unit
+ping n =
+  if n == 0
+    ()
+  else
+    pong (n - 1)
+
+pong : Int -> Unit
+pong n =
+  if n == 0
+    ()
+  else
+    ping (n - 1)
+
+main : Unit -> Unit can Print, Read
+main =
+  _ = read()
+  ping 200000
+  println "done"
+"#;
+
 const NON_TAIL_SCAN_SOURCE: &str = r#"
 import goby/stdio
 
@@ -274,6 +296,15 @@ fn rr5_self_tail_recursion_repro_survives_tight_stack_limit_after_tail_decl_loop
     let wasm = compile_module(&module).expect("self-tail recursion repro should compile");
     let output = run_wasm_bytes_with_stdin_for_tests(&wasm, Some("x\n"), rr_tight_stack_config())
         .expect("self TailDeclCall loop should survive the tight stack limit");
+    assert_eq!(output, "done\n");
+}
+
+#[test]
+fn rr5_mutual_tail_recursion_repro_survives_tight_stack_limit_after_group_dispatch() {
+    let module = parse_general_lowered_module(MUTUAL_TAIL_RECURSION_SOURCE);
+    let wasm = compile_module(&module).expect("mutual tail recursion repro should compile");
+    let output = run_wasm_bytes_with_stdin_for_tests(&wasm, Some("x\n"), rr_tight_stack_config())
+        .expect("mutual TailDeclCall dispatcher should survive the tight stack limit");
     assert_eq!(output, "done\n");
 }
 

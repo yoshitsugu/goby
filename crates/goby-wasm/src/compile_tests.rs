@@ -139,6 +139,91 @@ main =
 }
 
 #[test]
+fn compile_module_mutual_tail_decl_group_emits_dispatch_loop_without_wrapper_recursion() {
+    let source = r#"
+ping : Int -> Unit
+ping n =
+  if n == 0
+    ()
+  else
+    pong (n - 1)
+
+pong : Int -> Unit
+pong n =
+  if n == 0
+    ()
+  else
+    ping (n - 1)
+
+main : Unit -> Unit can Print, Read
+main =
+  _ = read()
+  ping 1000
+  println "done"
+"#;
+    let module = parse_module(source).expect("source should parse");
+    let (_main_instrs, aux_decls) = crate::gen_lower::lower_module_to_instrs(&module)
+        .expect("lowering should not fail")
+        .expect("source should use the general lowering path");
+    assert!(
+        aux_decls.iter().any(|decl| {
+            decl.decl_name == "ping"
+                && crate::gen_lower::emit::collect_all_instrs(&decl.instrs).iter().any(
+                    |instr| matches!(instr, crate::gen_lower::backend_ir::WasmBackendInstr::TailDeclCall { decl_name } if decl_name == "pong")
+                )
+        }),
+        "ping should lower tail call to pong, got: {aux_decls:?}"
+    );
+    assert!(
+        aux_decls.iter().any(|decl| {
+            decl.decl_name == "pong"
+                && crate::gen_lower::emit::collect_all_instrs(&decl.instrs).iter().any(
+                    |instr| matches!(instr, crate::gen_lower::backend_ir::WasmBackendInstr::TailDeclCall { decl_name } if decl_name == "ping")
+                )
+        }),
+        "pong should lower tail call to ping, got: {aux_decls:?}"
+    );
+    assert!(
+        !aux_decls.iter().any(|decl| {
+            (decl.decl_name == "ping" || decl.decl_name == "pong")
+                && crate::gen_lower::emit::collect_all_instrs(&decl.instrs).iter().any(
+                    |instr| matches!(instr, crate::gen_lower::backend_ir::WasmBackendInstr::DeclCall { decl_name } if decl_name == "ping" || decl_name == "pong")
+                )
+        }),
+        "mutual tail helpers should not retain non-tail direct calls within the group, got: {aux_decls:?}"
+    );
+    let group_plans = crate::gen_lower::emit::compute_tail_call_group_plans(&aux_decls);
+    assert!(
+        group_plans
+            .iter()
+            .any(|plan| plan.member_names == ["ping", "pong"]),
+        "mutual tail group should be discovered, got: {group_plans:?}"
+    );
+    let wasm = compile_module(&module).expect("module should compile");
+
+    let import_count = import_function_count(&wasm);
+    let ping_wrapper_idx = import_count + 1;
+    let pong_wrapper_idx = import_count + 2;
+    let bodies = all_code_body_ops(&wasm);
+    let dispatcher_ops = bodies.last().expect("dispatcher body should exist");
+    assert_valid_wasm_module(&wasm);
+    assert!(
+        dispatcher_ops
+            .iter()
+            .any(|op| matches!(op, Operator::Loop { .. })),
+        "mutual tail dispatcher should contain a looped execution body, got: {dispatcher_ops:?}"
+    );
+    assert!(
+        !dispatcher_ops.iter().any(|op| matches!(
+            op,
+            Operator::Call { function_index }
+                if *function_index == ping_wrapper_idx || *function_index == pong_wrapper_idx
+        )),
+        "mutual tail dispatcher should not recurse via public wrappers, got: {dispatcher_ops:?}"
+    );
+}
+
+#[test]
 fn native_codegen_capability_checker_rejects_hello_effect_boundary_subset() {
     let source = read_example("hello.gb");
     let module = parse_module(&source).expect("hello.gb should parse");
