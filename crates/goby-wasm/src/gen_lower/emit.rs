@@ -201,15 +201,7 @@ struct EmitContext {
 }
 
 #[derive(Debug, Clone)]
-struct SelfTailLoopState {
-    decl_name: String,
-    param_locals: Vec<u32>,
-    arg_scratch_base: u32,
-}
-
-#[derive(Debug, Clone)]
 enum TailCallMode {
-    SelfLoop(SelfTailLoopState),
     Group(TailCallGroupState),
 }
 
@@ -765,15 +757,6 @@ fn required_i64_scratch_count(instrs: &[WasmBackendInstr]) -> u32 {
     if needs_scratch { HELPER_SCRATCH_I64 } else { 0 }
 }
 
-fn has_self_tail_decl_call(instrs: &[WasmBackendInstr], decl_name: &str) -> bool {
-    collect_all_instrs(instrs).iter().any(|instr| {
-        matches!(
-            instr,
-            WasmBackendInstr::TailDeclCall { decl_name: target } if target == decl_name
-        )
-    })
-}
-
 fn collect_tail_decl_targets(instrs: &[WasmBackendInstr]) -> Vec<String> {
     collect_all_instrs(instrs)
         .into_iter()
@@ -800,78 +783,40 @@ pub(crate) fn compute_tail_call_group_plans(aux_decls: &[AuxDecl]) -> Vec<TailCa
         })
         .collect();
 
-    struct Tarjan<'a> {
-        edges: &'a [Vec<usize>],
-        next_index: usize,
-        indices: Vec<Option<usize>>,
-        lowlinks: Vec<usize>,
-        stack: Vec<usize>,
-        on_stack: Vec<bool>,
-        sccs: Vec<Vec<usize>>,
-    }
-
-    impl<'a> Tarjan<'a> {
-        fn new(edges: &'a [Vec<usize>]) -> Self {
-            let len = edges.len();
-            Self {
-                edges,
-                next_index: 0,
-                indices: vec![None; len],
-                lowlinks: vec![0; len],
-                stack: Vec::new(),
-                on_stack: vec![false; len],
-                sccs: Vec::new(),
-            }
-        }
-
-        fn run(mut self) -> Vec<Vec<usize>> {
-            for node in 0..self.edges.len() {
-                if self.indices[node].is_none() {
-                    self.visit(node);
-                }
-            }
-            self.sccs
-        }
-
-        fn visit(&mut self, node: usize) {
-            let index = self.next_index;
-            self.next_index += 1;
-            self.indices[node] = Some(index);
-            self.lowlinks[node] = index;
-            self.stack.push(node);
-            self.on_stack[node] = true;
-
-            for &neighbor in &self.edges[node] {
-                if self.indices[neighbor].is_none() {
-                    self.visit(neighbor);
-                    self.lowlinks[node] = self.lowlinks[node].min(self.lowlinks[neighbor]);
-                } else if self.on_stack[neighbor] {
-                    let neighbor_index = self.indices[neighbor].expect("visited neighbor index");
-                    self.lowlinks[node] = self.lowlinks[node].min(neighbor_index);
-                }
-            }
-
-            if self.lowlinks[node] == index {
-                let mut scc = Vec::new();
-                while let Some(member) = self.stack.pop() {
-                    self.on_stack[member] = false;
-                    scc.push(member);
-                    if member == node {
-                        break;
-                    }
-                }
-                self.sccs.push(scc);
+    let mut undirected_edges: Vec<Vec<usize>> = vec![Vec::new(); aux_decls.len()];
+    let mut participates = vec![false; aux_decls.len()];
+    for (src_idx, targets) in edges.iter().enumerate() {
+        for &target_idx in targets {
+            participates[src_idx] = true;
+            participates[target_idx] = true;
+            undirected_edges[src_idx].push(target_idx);
+            if src_idx != target_idx {
+                undirected_edges[target_idx].push(src_idx);
             }
         }
     }
 
     let mut plans = Vec::new();
-    for (group_idx, mut scc) in Tarjan::new(&edges).run().into_iter().enumerate() {
-        scc.sort_unstable();
-        if scc.len() <= 1 {
+    let mut visited = vec![false; aux_decls.len()];
+    let mut group_idx = 0usize;
+    for start_idx in 0..aux_decls.len() {
+        if visited[start_idx] || !participates[start_idx] {
             continue;
         }
-        let member_names: Vec<String> = scc
+        let mut stack = vec![start_idx];
+        let mut component = Vec::new();
+        visited[start_idx] = true;
+        while let Some(node) = stack.pop() {
+            component.push(node);
+            for &neighbor in &undirected_edges[node] {
+                if !visited[neighbor] {
+                    visited[neighbor] = true;
+                    stack.push(neighbor);
+                }
+            }
+        }
+        component.sort_unstable();
+        let member_names: Vec<String> = component
             .iter()
             .map(|&idx| aux_decls[idx].decl_name.clone())
             .collect();
@@ -880,7 +825,7 @@ pub(crate) fn compute_tail_call_group_plans(aux_decls: &[AuxDecl]) -> Vec<TailCa
             .enumerate()
             .map(|(tag, name)| (name.clone(), tag as u32))
             .collect();
-        let member_arities: HashMap<String, usize> = scc
+        let member_arities: HashMap<String, usize> = component
             .iter()
             .map(|&idx| {
                 (
@@ -897,6 +842,7 @@ pub(crate) fn compute_tail_call_group_plans(aux_decls: &[AuxDecl]) -> Vec<TailCa
             member_arities,
             max_arity,
         });
+        group_idx += 1;
     }
     plans
 }
@@ -1424,15 +1370,8 @@ pub(crate) fn emit_general_module_with_aux_and_options(
             .filter(|i| matches!(i, WasmBackendInstr::DeclareLocal { .. }))
             .count() as u32;
         let aux_helper_i64_scratch_count = required_i64_scratch_count(&decl.instrs);
-        let aux_self_tail_scratch_count = if has_self_tail_decl_call(&decl.instrs, &decl.decl_name)
-        {
-            decl.param_names.len() as u32
-        } else {
-            0
-        };
         let aux_param_count = decl.param_names.len() as u32;
-        let aux_i64_count =
-            aux_named_i64_count + aux_self_tail_scratch_count + aux_helper_i64_scratch_count;
+        let aux_i64_count = aux_named_i64_count + aux_helper_i64_scratch_count;
         let aux_i32_scratch_count = required_i32_scratch_count(&decl.instrs);
         let aux_i32_base = aux_param_count + aux_i64_count;
 
@@ -1458,19 +1397,6 @@ pub(crate) fn emit_general_module_with_aux_and_options(
             ctx.locals.insert(param_name.clone(), ctx.next_local);
             ctx.next_local += 1;
         }
-        let tail_call_mode = if aux_self_tail_scratch_count > 0 {
-            Some(TailCallMode::SelfLoop(SelfTailLoopState {
-                decl_name: decl.decl_name.clone(),
-                param_locals: decl
-                    .param_names
-                    .iter()
-                    .map(|param_name| ctx.get(param_name))
-                    .collect::<Result<Vec<_>, _>>()?,
-                arg_scratch_base: aux_param_count + aux_named_i64_count,
-            }))
-        } else {
-            None
-        };
         emit_function_body(
             &mut function,
             &mut ctx,
@@ -1482,7 +1408,7 @@ pub(crate) fn emit_general_module_with_aux_and_options(
             &static_strings,
             options,
             true,
-            tail_call_mode,
+            None,
         )?;
         code.function(&function);
     }
@@ -1817,20 +1743,6 @@ fn emit_instrs_with_heap_depth(
             }
 
             WasmBackendInstr::TailDeclCall { decl_name } => match &ctx.tail_call_mode {
-                Some(TailCallMode::SelfLoop(loop_state)) if loop_state.decl_name == *decl_name => {
-                    for (offset, _) in loop_state.param_locals.iter().enumerate().rev() {
-                        function.instruction(&Instruction::LocalSet(
-                            loop_state.arg_scratch_base + offset as u32,
-                        ));
-                    }
-                    for (offset, param_local) in loop_state.param_locals.iter().enumerate() {
-                        function.instruction(&Instruction::LocalGet(
-                            loop_state.arg_scratch_base + offset as u32,
-                        ));
-                        function.instruction(&Instruction::LocalSet(*param_local));
-                    }
-                    function.instruction(&Instruction::Br(self_tail_loop_depth));
-                }
                 Some(TailCallMode::Group(group_state))
                     if group_state.member_tags.contains_key(decl_name) =>
                 {

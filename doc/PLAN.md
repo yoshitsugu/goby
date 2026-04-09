@@ -748,14 +748,16 @@ Active milestones:
        ownership handoff into later direct tail-call normalization work.
    - current implementation status:
      - direct known-declaration calls in tail position now normalize to a
-       dedicated `TailDeclCall` backend-IR marker, but they still execute like
-       ordinary direct calls until the direct-call group execution model lands.
-     - self `TailDeclCall` now executes through a looped Wasm helper body on
-       the compiled path.
-     - strongly connected aux-decl direct-call groups linked by `TailDeclCall`
-       now execute through a shared looped dispatcher helper on the compiled
-       Wasm path, extending the same constant-stack boundary to sibling/mutual
-       recursion without changing the public direct-call/funcref entrypoints.
+       dedicated `TailDeclCall` backend-IR marker before Wasm emission.
+     - covered aux declarations that participate in the direct `TailDeclCall`
+       graph now execute through one shared dispatcher-based constant-stack
+       engine on the compiled Wasm path.
+     - that shared engine now covers single-member self-tail declarations,
+       sibling/mutual groups, and acyclic direct-tail chains into covered
+       recursive members without introducing a second execution path.
+     - public aux decl wrappers and funcref-visible entrypoints remain stable,
+       so the implementation change does not alter observable direct-call or
+       function-value behavior for covered declarations.
      - the current language-level contract is now locked in
        `doc/LANGUAGE_SPEC.md`: this is a compiled-Wasm-path guarantee for the
        currently covered direct-call subset, not yet a claim that every

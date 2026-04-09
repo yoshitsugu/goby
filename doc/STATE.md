@@ -4,9 +4,9 @@ Last updated: 2026-04-10
 
 ## Current Focus
 
-Next slice: **Track RR, RR-5** (`PLAN.md §4.5`) - follow through on the direct
-tail-call group model now that sibling/mutual aux-decl groups execute in
-constant stack on the compiled Wasm path.
+Next slice: **Track RR, RR-5** (`PLAN.md §4.5`) - move from the completed M4
+shared dispatcher execution model into M5 control-flow completeness and then
+M6 failure-boundary honesty.
 
 Locked TCO contract reminder:
 
@@ -35,16 +35,15 @@ RR execution reminder:
 Immediate next steps:
 
 - **RR-5**: continue the planned generic tail-call optimization track now that
-  the shared tail-position analysis, direct tail-call normalization, self-tail
-  loop execution, and SCC-local direct-call dispatcher slices are in place.
+  the shared tail-position analysis, direct tail-call normalization, and
+  unified dispatcher-based constant-stack execution model are in place.
   - keep the RR-3/RR-4 shared-boundary discipline: prefer reusable control-flow
     rules over symbol-specific recursion rewrites.
-  - next RR-5 task: widen the same shared `TailDeclCall` contract beyond aux-
-    decl SCC dispatchers so the eventual user-facing TCO statement can cover
-    more of the documented direct-call subset without backend caveats.
-  - prove the remaining control-flow/user-shape coverage (`if`/`case` joins,
-    local aliases, and other direct-call representatives) under the new grouped
-    execution model.
+  - next RR-5 task: finish M5 proof work for the already documented shared
+    `TailDeclCall` contract across the remaining representative control-flow
+    shapes (`if`/`case` joins, let/block tails, and local aliases).
+  - after M5, close M6 by making the unsupported tail-looking buckets explicit
+    in tests/docs instead of leaving them implicit implementation fallout.
   - keep current diagnostics and docs aligned with the locked M0 contract for
     shapes that still fall outside the optimized subset or still execute as
     ordinary calls.
@@ -53,6 +52,36 @@ Immediate next steps:
   later resilience work lands.
 
 ## Recently Completed
+
+- **Track RR, RR-5 shared dispatcher execution model** (complete for M4,
+  2026-04-10).
+  - `goby-wasm` now routes every covered aux declaration that participates in
+    the direct `TailDeclCall` graph through one shared dispatcher-based
+    constant-stack engine on the compiled Wasm path.
+  - this replaces the split self-tail loop vs SCC-dispatch design with one
+    backend-owned execution boundary that covers single-member self-tail
+    declarations, sibling/mutual groups, and acyclic direct-tail chains into
+    covered recursive members.
+  - public aux declaration wrappers remain as stable direct-call/funcref
+    entrypoints, so grouped declarations still behave the same when referenced
+    as function values.
+  - compile coverage now locks:
+    - shared-dispatch self-tail execution without wrapper recursion via
+      `compile_module_self_tail_decl_member_uses_shared_dispatcher_without_wrapper_recursion`;
+    - shared-dispatch acyclic covered-tail execution without direct-call
+      fallback via
+      `compile_module_acyclic_tail_chain_member_uses_shared_dispatcher_without_direct_call_fallback`;
+    - shared-dispatch mutual recursion without wrapper recursion via
+      `compile_module_mutual_tail_decl_group_emits_dispatch_loop_without_wrapper_recursion`.
+  - runtime coverage now locks:
+    - tight-stack shared-dispatch self tail via
+      `rr5_self_tail_recursion_repro_survives_tight_stack_limit_after_tail_decl_loop`;
+    - tight-stack shared-dispatch mutual recursion via
+      `rr5_mutual_tail_recursion_repro_survives_tight_stack_limit_after_group_dispatch`;
+    - tight-stack shared-dispatch acyclic covered tail via
+      `rr5_acyclic_tail_chain_repro_survives_tight_stack_limit_on_shared_dispatcher`;
+    - preserved grouped function-value entry behavior via
+      `grouped_tail_decl_member_still_works_through_function_value_entrypoint`.
 
 - **Track RR, RR-5 shared tail-position boundary** (partial, 2026-04-09).
   - added `goby_core::tail_analysis` as a compiler-owned IR analysis for tail
@@ -117,8 +146,8 @@ Immediate next steps:
   - runtime coverage now proves the tight-stack mutual representative succeeds
     via
     `rr5_mutual_tail_recursion_repro_survives_tight_stack_limit_after_group_dispatch`.
-  - the current grouped execution model is SCC-local to aux declarations on the
-    compiled Wasm path; broader direct-call guarantee work remains open.
+  - this historical slice established the initial grouped dispatcher boundary;
+    the later M4 completion slice widened it beyond SCC-local membership.
 
 - **Track RR, RR-4 builder-backed list-spread lowering** (complete, 2026-04-09).
   - fixed the historical recursive `[x, ..rest]` memory-exhaustion bug without

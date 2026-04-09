@@ -257,30 +257,50 @@ If any of these remain missing, the wording should stay narrower, such as
       tail recursion survives a deliberately tight stack limit on the compiled
       Wasm path.
 
-- [ ] **M4: Lower the shared tail-call form to constant-stack Wasm execution**
+- [x] **M4: Lower the shared tail-call form to constant-stack Wasm execution**
   - Implement backend lowering for the shared tail-call form and direct-call
     group model.
   - Keep the implementation reusable across direct self, non-self, and mutual
     direct-call cases.
   - Do not couple the feature definition to Wasm tail-call instructions.
+  - 2026-04-10 completion slice:
+    - `goby-wasm` now routes every aux declaration that participates in the
+      covered direct `TailDeclCall` graph through one shared dispatcher-based
+      constant-stack engine rather than splitting self recursion into a
+      separate loop path and leaving other covered members on ordinary calls;
+    - the grouped execution boundary now covers single-member self-tail
+      declarations, sibling/mutual groups, and acyclic direct-tail chains into
+      covered recursive members on the compiled Wasm path;
+    - public aux declarations remain thin wrappers that seed the dispatcher
+      tag/arguments, preserving direct-call and funcref-visible entry behavior
+      while keeping constant-stack execution ownership in one backend-owned
+      mechanism;
+    - compile coverage now proves both self-tail and acyclic covered members
+      lower through the shared dispatcher without recursing back through public
+      wrappers;
+    - tight-stack runtime coverage now proves the widened covered set executes
+      successfully, and a dedicated function-value regression locks wrapper /
+      funcref behavior after the routing change;
+    - the implementation still uses explicit Wasm loops/dispatcher control
+      flow only; it does not depend on Wasm native tail-call instructions.
   - Checkpoints:
-    - [ ] identify the remaining covered direct-call shapes that still leave the
+    - [x] identify the remaining covered direct-call shapes that still leave the
       shared form but do not yet enter the grouped constant-stack engine;
-    - [ ] make the grouped execution mechanism own those shapes without adding a
+    - [x] make the grouped execution mechanism own those shapes without adding a
       second independent TCO execution path;
-    - [ ] prove argument evaluation order is preserved when entering the shared
+    - [x] prove argument evaluation order is preserved when entering the shared
       constant-stack engine;
-    - [ ] prove parameter/local update semantics are preserved across repeated
+    - [x] prove parameter/local update semantics are preserved across repeated
       loop/dispatcher iterations;
-    - [ ] prove observable direct-call semantics and function-value behavior
+    - [x] prove observable direct-call semantics and function-value behavior
       are preserved after routing covered calls through the shared engine,
       without requiring the current wrapper structure to remain the long-term
       implementation shape;
-    - [ ] add compile tests showing covered shapes no longer fall back to
+    - [x] add compile tests showing covered shapes no longer fall back to
       ordinary direct `DeclCall` emission on the constant-stack path;
-    - [ ] add tight-stack runtime tests showing the widened covered set now
+    - [x] add tight-stack runtime tests showing the widened covered set now
       survives without stack-growth failures;
-    - [ ] confirm the implementation still does not depend on Wasm native
+    - [x] confirm the implementation still does not depend on Wasm native
       tail-call instructions.
 
 - [ ] **M5: Prove control-flow completeness**

@@ -46,6 +46,48 @@ main =
   println "done"
 "#;
 
+const ACYCLIC_TAIL_CHAIN_SOURCE: &str = r#"
+import goby/stdio
+
+start : Int -> Unit can Print
+start n =
+  count_down n
+
+count_down : Int -> Unit can Print
+count_down n =
+  if n == 0
+    ()
+  else
+    count_down (n - 1)
+
+main : Unit -> Unit can Print, Read
+main =
+  _ = read()
+  start 1000000
+  println "done"
+"#;
+
+const GROUPED_DECL_FUNCREF_SOURCE: &str = r#"
+import goby/stdio
+
+apply : (Int -> Unit) -> Int -> Unit can Print
+apply f n =
+  f n
+
+count_down : Int -> Unit can Print
+count_down n =
+  if n == 0
+    ()
+  else
+    count_down (n - 1)
+
+main : Unit -> Unit can Print, Read
+main =
+  _ = read()
+  apply count_down 32
+  println "done"
+"#;
+
 const NON_TAIL_SCAN_SOURCE: &str = r#"
 import goby/stdio
 
@@ -305,6 +347,24 @@ fn rr5_mutual_tail_recursion_repro_survives_tight_stack_limit_after_group_dispat
     let wasm = compile_module(&module).expect("mutual tail recursion repro should compile");
     let output = run_wasm_bytes_with_stdin_for_tests(&wasm, Some("x\n"), rr_tight_stack_config())
         .expect("mutual TailDeclCall dispatcher should survive the tight stack limit");
+    assert_eq!(output, "done\n");
+}
+
+#[test]
+fn rr5_acyclic_tail_chain_repro_survives_tight_stack_limit_on_shared_dispatcher() {
+    let module = parse_general_lowered_module(ACYCLIC_TAIL_CHAIN_SOURCE);
+    let wasm = compile_module(&module).expect("acyclic tail-chain repro should compile");
+    let output = run_wasm_bytes_with_stdin_for_tests(&wasm, Some("x\n"), rr_tight_stack_config())
+        .expect("shared dispatcher should execute the covered acyclic tail chain");
+    assert_eq!(output, "done\n");
+}
+
+#[test]
+fn grouped_tail_decl_member_still_works_through_function_value_entrypoint() {
+    let module = parse_general_lowered_module(GROUPED_DECL_FUNCREF_SOURCE);
+    let wasm = compile_module(&module).expect("grouped function-value repro should compile");
+    let output = run_wasm_bytes_with_stdin_for_tests(&wasm, Some("x\n"), rr_tight_stack_config())
+        .expect("grouped declaration should still be callable through a function value");
     assert_eq!(output, "done\n");
 }
 

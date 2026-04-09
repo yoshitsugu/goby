@@ -98,7 +98,7 @@ fn read_runtime_io_general_lowering_fixture(name: &str) -> String {
 }
 
 #[test]
-fn compile_module_self_tail_tail_decl_call_emits_looped_helper_without_recursive_call() {
+fn compile_module_self_tail_decl_member_uses_shared_dispatcher_without_wrapper_recursion() {
     let source = r#"
 import goby/stdio
 
@@ -116,25 +116,35 @@ main =
   println "done"
 "#;
     let module = parse_module(source).expect("source should parse");
+    let (_main_instrs, aux_decls) = crate::gen_lower::lower_module_to_instrs(&module)
+        .expect("lowering should not fail")
+        .expect("source should use the general lowering path");
+    let group_plans = crate::gen_lower::emit::compute_tail_call_group_plans(&aux_decls);
+    assert!(
+        group_plans
+            .iter()
+            .any(|plan| plan.member_names == ["count_down"]),
+        "self-tail declaration should use a single-member dispatcher plan, got: {group_plans:?}"
+    );
     let wasm = compile_module(&module).expect("module should compile");
 
     let import_count = import_function_count(&wasm);
-    let helper_func_idx = import_count + 1;
+    let count_down_wrapper_idx = import_count + 1;
     let bodies = all_code_body_ops(&wasm);
-    let helper_ops = &bodies[1];
+    let dispatcher_ops = bodies.last().expect("dispatcher body should exist");
     assert_valid_wasm_module(&wasm);
     assert!(
-        helper_ops
+        dispatcher_ops
             .iter()
             .any(|op| matches!(op, Operator::Loop { .. })),
-        "self-tail helper should contain a looped execution body, got: {helper_ops:?}"
+        "self-tail dispatcher should contain a looped execution body, got: {dispatcher_ops:?}"
     );
     assert!(
-        !helper_ops.iter().any(|op| matches!(
+        !dispatcher_ops.iter().any(|op| matches!(
             op,
-            Operator::Call { function_index } if *function_index == helper_func_idx
+            Operator::Call { function_index } if *function_index == count_down_wrapper_idx
         )),
-        "self-tail helper should not call itself recursively after RR-5 loop emission, got: {helper_ops:?}"
+        "self-tail dispatcher should not recurse via the public wrapper, got: {dispatcher_ops:?}"
     );
 }
 
@@ -220,6 +230,74 @@ main =
                 if *function_index == ping_wrapper_idx || *function_index == pong_wrapper_idx
         )),
         "mutual tail dispatcher should not recurse via public wrappers, got: {dispatcher_ops:?}"
+    );
+}
+
+#[test]
+fn compile_module_acyclic_tail_chain_member_uses_shared_dispatcher_without_direct_call_fallback() {
+    let source = r#"
+import goby/stdio
+
+start : Int -> Unit can Print
+start n =
+  count_down n
+
+count_down : Int -> Unit can Print
+count_down n =
+  if n == 0
+    ()
+  else
+    count_down (n - 1)
+
+main : Unit -> Unit can Print, Read
+main =
+  _ = read()
+  start 1000
+  println "done"
+"#;
+    let module = parse_module(source).expect("source should parse");
+    let (_main_instrs, aux_decls) = crate::gen_lower::lower_module_to_instrs(&module)
+        .expect("lowering should not fail")
+        .expect("source should use the general lowering path");
+    assert!(
+        aux_decls.iter().any(|decl| {
+            decl.decl_name == "start"
+                && crate::gen_lower::emit::collect_all_instrs(&decl.instrs).iter().any(
+                    |instr| matches!(instr, crate::gen_lower::backend_ir::WasmBackendInstr::TailDeclCall { decl_name } if decl_name == "count_down")
+                )
+        }),
+        "start should lower tail call to count_down, got: {aux_decls:?}"
+    );
+    let group_plans = crate::gen_lower::emit::compute_tail_call_group_plans(&aux_decls);
+    assert!(
+        group_plans.iter().any(|plan| {
+            plan.member_names.len() == 2
+                && plan.member_names.iter().any(|name| name == "start")
+                && plan.member_names.iter().any(|name| name == "count_down")
+        }),
+        "acyclic tail chain should join one shared dispatcher plan, got: {group_plans:?}"
+    );
+    let wasm = compile_module(&module).expect("module should compile");
+
+    let import_count = import_function_count(&wasm);
+    let start_wrapper_idx = import_count + 1;
+    let count_down_wrapper_idx = import_count + 2;
+    let bodies = all_code_body_ops(&wasm);
+    let dispatcher_ops = bodies.last().expect("dispatcher body should exist");
+    assert_valid_wasm_module(&wasm);
+    assert!(
+        dispatcher_ops
+            .iter()
+            .any(|op| matches!(op, Operator::Loop { .. })),
+        "acyclic tail-chain dispatcher should contain a looped execution body, got: {dispatcher_ops:?}"
+    );
+    assert!(
+        !dispatcher_ops.iter().any(|op| matches!(
+            op,
+            Operator::Call { function_index }
+                if *function_index == start_wrapper_idx || *function_index == count_down_wrapper_idx
+        )),
+        "dispatcher should not fall back to public wrappers for covered tail members, got: {dispatcher_ops:?}"
     );
 }
 
