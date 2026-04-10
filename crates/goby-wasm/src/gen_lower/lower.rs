@@ -265,9 +265,11 @@ pub(crate) fn lower_supported_self_recursive_list_spread_builder(
 
     let bindings = ClosureBindingEnv::with_decl_params(decl_params.iter().map(String::as_str));
     let mut decls: HashSet<String> = [
-        "__rr4_list_ptr".to_string(),
-        "__rr4_list_len".to_string(),
-        "__rr4_list_cap".to_string(),
+        "__rr4_list_header_ptr".to_string(),
+        "__rr4_list_header_cap".to_string(),
+        "__rr4_list_n_chunks".to_string(),
+        "__rr4_list_chunk_ptr".to_string(),
+        "__rr4_list_total_len".to_string(),
     ]
     .into();
     let mut recur_temp_counter = 0usize;
@@ -294,9 +296,11 @@ pub(crate) fn lower_supported_self_recursive_list_spread_builder(
         _ => std::cmp::Ordering::Equal,
     });
     decl_instrs.push(WasmBackendInstr::ListBuilderNew {
-        ptr_local: "__rr4_list_ptr".to_string(),
-        len_local: "__rr4_list_len".to_string(),
-        cap_local: "__rr4_list_cap".to_string(),
+        header_ptr_local: "__rr4_list_header_ptr".to_string(),
+        header_cap_local: "__rr4_list_header_cap".to_string(),
+        n_chunks_local: "__rr4_list_n_chunks".to_string(),
+        chunk_ptr_local: "__rr4_list_chunk_ptr".to_string(),
+        total_len_local: "__rr4_list_total_len".to_string(),
         initial_capacity: 4,
     });
     decl_instrs.push(WasmBackendInstr::Loop { body_instrs });
@@ -666,15 +670,19 @@ fn lower_self_recursive_list_spread_loop_body(
     recur_temp_counter: &mut usize,
 ) -> Result<Vec<WasmBackendInstr>, LowerError> {
     let mut then_instrs = vec![WasmBackendInstr::ListBuilderFinish {
-        ptr_local: "__rr4_list_ptr".to_string(),
+        header_ptr_local: "__rr4_list_header_ptr".to_string(),
+        n_chunks_local: "__rr4_list_n_chunks".to_string(),
+        total_len_local: "__rr4_list_total_len".to_string(),
     }];
 
     let mut else_instrs = Vec::new();
     for elem in elements {
         else_instrs.push(WasmBackendInstr::ListBuilderPush {
-            ptr_local: "__rr4_list_ptr".to_string(),
-            len_local: "__rr4_list_len".to_string(),
-            cap_local: "__rr4_list_cap".to_string(),
+            header_ptr_local: "__rr4_list_header_ptr".to_string(),
+            header_cap_local: "__rr4_list_header_cap".to_string(),
+            n_chunks_local: "__rr4_list_n_chunks".to_string(),
+            chunk_ptr_local: "__rr4_list_chunk_ptr".to_string(),
+            total_len_local: "__rr4_list_total_len".to_string(),
             value_instrs: lower_value_ctx(elem, &HashMap::new(), bindings, known_decls)?,
         });
     }
@@ -1024,14 +1032,18 @@ fn hoist_declare_locals(
                 });
             }
             WasmBackendInstr::ListBuilderPush {
-                ptr_local,
-                len_local,
-                cap_local,
+                header_ptr_local,
+                header_cap_local,
+                n_chunks_local,
+                chunk_ptr_local,
+                total_len_local,
                 value_instrs,
             } => lowered.push(WasmBackendInstr::ListBuilderPush {
-                ptr_local,
-                len_local,
-                cap_local,
+                header_ptr_local,
+                header_cap_local,
+                n_chunks_local,
+                chunk_ptr_local,
+                total_len_local,
                 value_instrs: hoist_declare_locals(value_instrs, decls),
             }),
             WasmBackendInstr::CaseMatch {

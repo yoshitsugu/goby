@@ -923,6 +923,10 @@ main =
         .find(|decl| decl.decl_name == "build")
         .expect("build aux decl should exist");
     assert!(
+        build_aux.returns_wasm_heap,
+        "build aux decl should be marked heap-returning for cursor sync, got: {build_aux:?}"
+    );
+    assert!(
         build_aux.instrs.iter().any(|instr| matches!(
             instr,
             crate::gen_lower::backend_ir::WasmBackendInstr::ListBuilderNew { .. }
@@ -948,6 +952,78 @@ main =
         ),
         "loop-lowered builder body should not directly call itself after RR-4 lowering, ops: {loop_ops:?}"
     );
+}
+
+#[test]
+fn compile_module_rr4_read_lines_builder_shape_still_lowers_build_to_builder_loop() {
+    let source = r#"
+import goby/stdio
+
+build : Int -> List Int can Print
+build n =
+  if n == 0
+    []
+  else
+    rest = build (n - 1)
+    [n, ..rest]
+
+main : Unit -> Unit can Print, Read
+main =
+  _lines = read_lines ()
+  xs = build 50000
+  println "${xs[0]}"
+"#;
+    let module = parse_module(source).expect("source should parse");
+    let (_main_instrs, aux_decls) = crate::gen_lower::lower_module_to_instrs(&module)
+        .expect("lowering should not hard-fail")
+        .expect("general lowering should accept rr4 read_lines builder module");
+    let build_aux = aux_decls
+        .iter()
+        .find(|decl| decl.decl_name == "build")
+        .expect("build aux decl should exist");
+    assert!(
+        build_aux.instrs.iter().any(|instr| matches!(
+            instr,
+            crate::gen_lower::backend_ir::WasmBackendInstr::ListBuilderNew { .. }
+        )),
+        "build should still lower to builder-backed loop for read_lines rr4 shape, got aux decls: {aux_decls:?}"
+    );
+}
+
+#[test]
+fn compile_module_rr4_read_lines_builder_shape_has_no_direct_self_recursive_call_in_wasm() {
+    let source = r#"
+import goby/stdio
+
+build : Int -> List Int can Print
+build n =
+  if n == 0
+    []
+  else
+    rest = build (n - 1)
+    [n, ..rest]
+
+main : Unit -> Unit can Print, Read
+main =
+  _lines = read_lines ()
+  xs = build 50000
+  println "${xs[0]}"
+"#;
+    let module = parse_module(source).expect("source should parse");
+    let wasm = compile_module(&module).expect("codegen should succeed");
+    assert_valid_wasm_module(&wasm);
+
+    let imported = import_function_count(&wasm);
+    let bodies = all_code_body_ops(&wasm);
+    for (body_idx, ops) in bodies.iter().enumerate() {
+        let func_idx = imported + body_idx as u32;
+        assert!(
+            !ops.iter().any(
+                |op| matches!(op, Operator::Call { function_index } if *function_index == func_idx)
+            ),
+            "rr4 builder shape should not leave a direct self-recursive call in wasm func idx {func_idx}, ops: {ops:?}"
+        );
+    }
 }
 
 #[test]

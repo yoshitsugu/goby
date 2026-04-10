@@ -39,6 +39,7 @@ use wasmtime_wasi::WasiCtxBuilder;
 use wasmtime_wasi::p1::{self, WasiP1Ctx};
 use wasmtime_wasi::p2::pipe::{MemoryInputPipe, MemoryOutputPipe};
 
+use crate::gen_lower::emit::CHUNK_SIZE;
 use crate::gen_lower::value::{
     TAG_BOOL, TAG_INT, TAG_LIST, TAG_RECORD, TAG_STRING, TAG_TUPLE, TAG_UNIT, decode_payload_int,
     decode_payload_ptr, decode_tag, encode_int, encode_list_ptr, encode_string_ptr,
@@ -365,14 +366,14 @@ fn format_tagged_value(caller: &mut Caller<'_, WasiP1Ctx>, tagged: i64) -> Resul
         TAG_INT => Ok(decode_payload_int(tagged).to_string()),
         TAG_BOOL => Ok(if (tagged & 1) == 1 { "True" } else { "False" }.to_string()),
         TAG_UNIT => Ok("Unit".to_string()),
-        TAG_LIST => format_tagged_sequence(caller, tagged, "[", "]", true),
-        TAG_TUPLE => format_tagged_sequence(caller, tagged, "(", ")", false),
+        TAG_LIST => format_tagged_list(caller, tagged, "[", "]", true),
+        TAG_TUPLE => format_tagged_flat_sequence(caller, tagged, "(", ")", false),
         TAG_RECORD => Ok("Record".to_string()),
         _ => Err(()),
     }
 }
 
-fn format_tagged_sequence(
+fn format_tagged_flat_sequence(
     caller: &mut Caller<'_, WasiP1Ctx>,
     tagged: i64,
     prefix: &str,
@@ -394,6 +395,35 @@ fn format_tagged_sequence(
             parts.push(format!("\"{}\"", text));
         } else {
             parts.push(format_tagged_value(caller, *elem)?);
+        }
+    }
+
+    Ok(format!("{prefix}{}{suffix}", parts.join(", ")))
+}
+
+fn format_tagged_list(
+    caller: &mut Caller<'_, WasiP1Ctx>,
+    tagged: i64,
+    prefix: &str,
+    suffix: &str,
+    quote_strings: bool,
+) -> Result<String, ()> {
+    let header_ptr = decode_payload_ptr(tagged) as usize;
+    let total_len = read_i32_le(caller, header_ptr)? as usize;
+    let n_chunks = read_i32_le(caller, header_ptr + 4)? as usize;
+    let mut parts = Vec::with_capacity(total_len);
+
+    for chunk_idx in 0..n_chunks {
+        let chunk_ptr = read_i32_le(caller, header_ptr + 8 + chunk_idx * 4)? as usize;
+        let chunk_len = read_i32_le(caller, chunk_ptr)? as usize;
+        for item_idx in 0..chunk_len {
+            let elem = read_i64_le(caller, chunk_ptr + 4 + item_idx * 8)?;
+            if quote_strings && decode_tag(elem) == TAG_STRING {
+                let text = read_wasm_string(caller, elem)?;
+                parts.push(format!("\"{}\"", text));
+            } else {
+                parts.push(format_tagged_value(caller, elem)?);
+            }
         }
     }
 
@@ -619,34 +649,65 @@ fn alloc_list_string_host(
     bump: &AtomicU32,
     memory_config: crate::memory_config::WasmMemoryConfig,
 ) -> Option<u32> {
-    let n = values.len() as u32;
-    let payload_bytes: u32 = values.iter().map(|value| 4u32 + value.len() as u32).sum();
-    let total_needed = 4 + 8 * n + payload_bytes;
-    let block_ptr = alloc_from_host_bump(caller, bump, total_needed.max(4), memory_config)?;
+    let total_len = values.len() as u32;
+    let n_chunks = total_len.div_ceil(CHUNK_SIZE);
+    let header_ptr = alloc_from_host_bump(caller, bump, (8 + n_chunks * 4).max(8), memory_config)?;
 
-    let count_bytes = (n as i32).to_le_bytes();
-    write_host_bytes(caller, block_ptr, &count_bytes, memory_config).ok()?;
+    write_host_bytes(
+        caller,
+        header_ptr,
+        &(total_len as i32).to_le_bytes(),
+        memory_config,
+    )
+    .ok()?;
+    write_host_bytes(
+        caller,
+        header_ptr + 4,
+        &(n_chunks as i32).to_le_bytes(),
+        memory_config,
+    )
+    .ok()?;
 
-    let str_data_base = block_ptr + 4 + 8 * n;
-    let mut str_offset = 0u32;
-    for (i, value) in values.iter().enumerate() {
-        let str_ptr = str_data_base + str_offset;
-        let len_bytes = (value.len() as i32).to_le_bytes();
-        write_host_bytes(caller, str_ptr, &len_bytes, memory_config).ok()?;
-        write_host_bytes(caller, str_ptr + 4, value.as_bytes(), memory_config).ok()?;
+    for chunk_idx in 0..n_chunks {
+        let chunk_ptr = alloc_from_host_bump(caller, bump, 4 + CHUNK_SIZE * 8, memory_config)?;
+        write_host_bytes(
+            caller,
+            header_ptr + 8 + chunk_idx * 4,
+            &(chunk_ptr as i32).to_le_bytes(),
+            memory_config,
+        )
+        .ok()?;
 
-        let tagged_elem = encode_string_ptr(str_ptr);
-        let elem_ptr = block_ptr + 4 + 8 * i as u32;
-        write_host_bytes(caller, elem_ptr, &tagged_elem.to_le_bytes(), memory_config).ok()?;
-        str_offset += 4 + value.len() as u32;
+        let start = (chunk_idx * CHUNK_SIZE) as usize;
+        let end = ((chunk_idx + 1) * CHUNK_SIZE).min(total_len) as usize;
+        let chunk_len = (end - start) as i32;
+        write_host_bytes(caller, chunk_ptr, &chunk_len.to_le_bytes(), memory_config).ok()?;
+
+        for (item_idx, value) in values[start..end].iter().enumerate() {
+            let str_bytes = value.as_bytes();
+            let str_ptr =
+                alloc_from_host_bump(caller, bump, 4 + str_bytes.len() as u32, memory_config)?;
+            write_host_bytes(
+                caller,
+                str_ptr,
+                &(str_bytes.len() as i32).to_le_bytes(),
+                memory_config,
+            )
+            .ok()?;
+            write_host_bytes(caller, str_ptr + 4, str_bytes, memory_config).ok()?;
+
+            let tagged_elem = encode_string_ptr(str_ptr);
+            let elem_ptr = chunk_ptr + 4 + item_idx as u32 * 8;
+            write_host_bytes(caller, elem_ptr, &tagged_elem.to_le_bytes(), memory_config).ok()?;
+        }
     }
 
-    Some(block_ptr)
+    Some(header_ptr)
 }
 
 /// Host implementation: collect all grapheme clusters from a tagged string into a tagged list.
 ///
-/// Allocates `(count: i32, elem[0]: i64, ..., elem[N-1]: i64)` in the host arena.
+/// Allocates a chunked-sequence `List String` in the host arena.
 /// Each element is a tagged `String` pointing into fresh host-allocated memory `(len: i32, bytes...)`.
 /// Returns the tagged `List String`, or a tagged empty list on any failure.
 fn graphemes_list_host(

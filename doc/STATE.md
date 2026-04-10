@@ -35,6 +35,63 @@ Immediate next steps:
   - Forward dependency: M3 must add at least one integration test for the core
     Candidate B operation (e.g., `[h, ..t]` pattern on a large list).
 
+Checkpoint update (2026-04-10, later slice):
+- `goby-wasm` Candidate B migration advanced substantially in
+  `gen_lower/emit.rs`, `gen_lower/lower.rs`, and `wasm_exec.rs`.
+- Newly fixed in this slice:
+  - host-side List formatting/allocation paths now understand chunked List
+    headers/chunks (instead of flat `[len][items...]` assumptions);
+  - `string.split` helper now emits chunked List values and passes
+    `e5_split_list_get_print_executes_via_goby_owned_wasm_runtime`;
+  - list-pattern (`[]`, `[h, ..t]`) Wasm validation/runtime regressions caused by
+    missing i64 scratch accounting were fixed;
+  - nested heap-value list literals (e.g. `List (Tuple ...)`) no longer corrupt
+    element placement due to chunk-pointer scratch clobber during element
+    emission;
+  - mutable nested-list parity and tuple-in-list fold regressions are now green.
+- Current blocker set after this checkpoint:
+  - RR-4 large-shape runtime regressions remain:
+    - `runtime_rr_tests::rr4_recursive_list_spread_large_builder_shape_scales_past_bug_repro_size`
+    - `runtime_rr_tests::rr4_named_callback_list_spread_chain_executes_after_callback_rewrite`
+    - `runtime_rr_tests::rr4_local_named_callback_list_spread_chain_executes_after_callback_rewrite`
+  - all other `cargo test -p goby-wasm list` cases are passing at this checkpoint.
+
+Additional checkpoint (2026-04-10, continued):
+- fixed allocator-boundary inconsistency in `emit_alloc_from_top`:
+  allocation size is now rounded to 8-byte alignment before both capacity
+  checks and cursor movement, removing the previous mismatch where checks used
+  unaligned `size` but cursor movement consumed aligned bytes.
+- despite that fix, three RR-4 large-shape regressions remain red:
+  - `runtime_rr_tests::rr4_recursive_list_spread_large_builder_shape_scales_past_bug_repro_size`
+  - `runtime_rr_tests::rr4_named_callback_list_spread_chain_executes_after_callback_rewrite`
+  - `runtime_rr_tests::rr4_local_named_callback_list_spread_chain_executes_after_callback_rewrite`
+- current observed shape:
+  - small/medium recursive list-spread builder samples are green;
+  - large `build N` (around N≈40k+) can trap when consuming the resulting list
+    via index/pattern paths (`xs[0]`, `[h, ..t]`), while a build-only path can
+    still complete.
+  - this suggests remaining corruption/contract mismatch around large-shape
+    builder result consumption rather than parser/typecheck or small-shape
+    lowering.
+
+Latest checkpoint (2026-04-10, RR-4 large-shape follow-up):
+- RR-4 large-shape regressions are now resolved.
+  - `runtime_rr_tests::rr4_recursive_list_spread_large_builder_shape_scales_past_bug_repro_size`
+  - `runtime_rr_tests::rr4_named_callback_list_spread_chain_executes_after_callback_rewrite`
+  - `runtime_rr_tests::rr4_local_named_callback_list_spread_chain_executes_after_callback_rewrite`
+- Root cause (Candidate B builder path): top-down heap growth reused already
+  allocated segments after `memory.grow`, which corrupted earlier list chunks
+  in large builders.
+- Fixes landed:
+  - `emit_alloc_from_top` now treats each post-grow heap span as a disjoint
+    segment by moving the heap floor to the previous top and rebasing cursor to
+    the current dynamic top (`memory.size * page - reserved`);
+  - `list.each` fused print-effect path no longer aliases `item_iter` and
+    string-pointer scratch locals; this restored full-element iteration for
+    direct callbacks like `each xs println`.
+- Verification checkpoint:
+  - `cargo test -p goby-wasm` is green.
+
 ## Recently Completed
 
 - **Sequence-backed List M2** (complete, 2026-04-10). Evaluated Candidates A/B/C

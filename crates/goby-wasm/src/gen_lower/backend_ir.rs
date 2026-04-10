@@ -316,35 +316,49 @@ pub(crate) enum WasmBackendInstr {
     ListLit {
         element_instrs: Vec<Vec<WasmBackendInstr>>,
     },
-    /// Initialize a growable list builder stored in named locals.
+    /// Initialize a growable Chunked Sequence list builder stored in named locals.
     ///
-    /// The builder is internal to specialized lowering paths. It uses the same
-    /// physical memory layout as a normal list (`len: i32` + elements) but may
-    /// reserve extra trailing capacity that remains invisible to ordinary list
-    /// consumers after `ListBuilderFinish`.
+    /// The builder maintains a chunked sequence header + per-chunk state.
+    /// After `ListBuilderFinish` the result is indistinguishable from a `ListLit`
+    /// result in the Candidate B (Chunked Sequence) layout.
+    ///
+    /// Named locals:
+    ///   - `header_ptr_local`: u32 ptr to the current header allocation
+    ///   - `header_cap_local`: i32 number of chunk-ptr slots allocated in header
+    ///   - `n_chunks_local`:   i32 number of chunks currently used
+    ///   - `chunk_ptr_local`:  u32 ptr to the current (last) chunk being filled
+    ///   - `total_len_local`:  i32 total elements pushed so far
     ListBuilderNew {
-        ptr_local: String,
-        len_local: String,
-        cap_local: String,
+        header_ptr_local: String,
+        header_cap_local: String,
+        n_chunks_local: String,
+        chunk_ptr_local: String,
+        total_len_local: String,
         initial_capacity: u32,
     },
-    /// Append one tagged value to a growable list builder.
+    /// Append one tagged value to a growable Chunked Sequence list builder.
     ///
     /// `value_instrs` must leave exactly one tagged i64 on the stack.
-    /// The emitter grows the underlying contiguous storage geometrically when
-    /// `len == cap`, preserving amortized append behavior for specialized
-    /// self-recursive list-spread builders.
+    /// The emitter fills the current chunk; when it is full (len == CHUNK_SIZE),
+    /// it grows the header if needed (geometric reallocation under bump allocator)
+    /// and starts a new chunk.
     ListBuilderPush {
-        ptr_local: String,
-        len_local: String,
-        cap_local: String,
+        header_ptr_local: String,
+        header_cap_local: String,
+        n_chunks_local: String,
+        chunk_ptr_local: String,
+        total_len_local: String,
         value_instrs: Vec<WasmBackendInstr>,
     },
-    /// Finalize a growable list builder and push a tagged `List` pointer.
+    /// Finalize a growable Chunked Sequence list builder and push a tagged `List` pointer.
     ///
-    /// The returned value is indistinguishable from an ordinary `ListLit`
-    /// result; any reserved capacity remains an internal implementation detail.
-    ListBuilderFinish { ptr_local: String },
+    /// Writes `total_len` and `n_chunks` into the header and returns a tagged header ptr.
+    /// The result is indistinguishable from an ordinary `ListLit` result.
+    ListBuilderFinish {
+        header_ptr_local: String,
+        n_chunks_local: String,
+        total_len_local: String,
+    },
     /// Construct a tuple value from a fixed number of element instruction sequences.
     ///
     /// Each inner `Vec<WasmBackendInstr>` produces one tagged i64 element.
