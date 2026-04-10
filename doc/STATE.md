@@ -4,58 +4,55 @@ Last updated: 2026-04-10
 
 ## Current Focus
 
-Next slice: **Track RR, RR-5** (`PLAN.md §4.5`) - M7 is complete; any next TCO
-work is post-publication extension work rather than contract bootstrapping.
+Next slice: **Sequence-backed List M3** (`doc/PLAN_SEQUENCE.md`) — implement
+the Chunked Sequence (Candidate B) runtime representation and introduce explicit
+sequence operation boundaries.
 
-Locked TCO contract reminder:
+M3 context:
+- M0–M2 of the Sequence-backed List redesign are complete (2026-04-10).
+- Candidate B (Chunked Sequence) is locked as the direction in `doc/PLAN_SEQUENCE.md §8`.
+- M3 must implement the representation, lock CHUNK_SIZE as a named constant,
+  add explicit boundaries for index read / update / pattern split / iteration,
+  and run the full §6.6 workload suite to validate the conditional direction lock.
 
-- the current language-level TCO guarantee is now locked in
-  `doc/LANGUAGE_SPEC.md`;
-- it applies to the compiled Wasm path for the currently covered statically
-  resolvable direct tail-call subset among known top-level declarations;
-- unsupported or uncovered shapes may still execute as ordinary calls, but they
-  are not part of the constant-stack guarantee and must not be described as
-  covered generic TCO.
-
-Locked ideal goal for RR:
-
-- make "write the obvious recursive/list-building program first" a rational
-  default for Goby users;
-- push resilience into shared lowering/runtime boundaries instead of accumulating
-  source-shape-specific exceptions;
-- keep the remaining limits explicit, attributable, and honestly diagnosed.
-
-RR execution reminder:
-
-- at the start of each RR implementation step, review the locked ideal goal
-  above and reject any step that cannot be justified as progress toward that
-  shared design.
+TCO contract reminder (stable, no action needed):
+- generic TCO is published and locked in `doc/LANGUAGE_SPEC.md`.
+- any next TCO work is post-publication extension (widening backends or call
+  categories), not contract bootstrapping.
+- the supported/unsupported split (direct tail calls among known top-level
+  declarations vs. higher-order/non-tail) is stable and must not be silently
+  widened.
 
 Immediate next steps:
 
-- **RR-5**: continue the planned generic tail-call optimization track now that
-  the shared tail-position analysis, direct tail-call normalization, and
-  unified dispatcher-based constant-stack execution model are in place.
-  - keep the RR-3/RR-4 shared-boundary discipline: prefer reusable control-flow
-    rules over symbol-specific recursion rewrites.
-  - the public wording decision is now locked:
-    Goby has generic TCO on the documented compiled Wasm path for statically
-    resolvable direct tail calls among known top-level declarations.
-  - any next RR-5/TCO task is therefore an extension question:
-    whether to widen backend scope, call categories, or diagnostics beyond the
-    published direct-call compiled-Wasm contract.
-  - keep the documented supported/unsupported split stable:
-    let/block tails and statically resolvable local alias chains are covered;
-    indirect/higher-order tails, unresolved local funcrefs, and non-tail
-    recursion remain outside the guarantee.
-  - keep current diagnostics and docs aligned with the locked M0 contract for
-    shapes that still fall outside the optimized subset or still execute as
-    ordinary calls.
-- keep RR-1 diagnostics best-effort and explicit about uncertainty
-  (`likely stack pressure`, `memory exhaustion`, `unknown runtime trap`) as
-  later resilience work lands.
+- **Sequence M3**: implement Chunked Sequence runtime representation.
+  - Candidate B layout: `(n_chunks: i32, chunk_ptrs: [u32; n_chunks])` header
+    + flat `(len: i32, items: [i64; CHUNK_SIZE])` chunks.
+  - Lock CHUNK_SIZE as a named compile-time constant (TBD ~32 elements).
+  - Add explicit runtime boundaries for index read, update, pattern split,
+    length, and iteration.
+  - Run full §6.6 workload suite; if success bar not met, pause and revise §8.
+  - Forward dependency: M3 must add at least one integration test for the core
+    Candidate B operation (e.g., `[h, ..t]` pattern on a large list).
 
 ## Recently Completed
+
+- **Sequence-backed List M2** (complete, 2026-04-10). Evaluated Candidates A/B/C
+  via static complexity + allocator-pressure analysis. Locked direction as
+  Candidate B (Chunked Sequence). §6.6 workload matrix and success bar recorded.
+  Candidate A rejected (O(n) prepend/split, harmful in RR-4). Candidate C
+  rejected (O(n/32) indexed read and update). See `doc/PLAN_SEQUENCE.md`.
+
+- **Sequence-backed List M1** (complete, 2026-04-10). Rewrote `List` description
+  in `doc/LANGUAGE_SPEC.md` as surface-semantic (not linked-list identity).
+  list patterns described as sequence views. Indexed access noted as intended-
+  practical with no current complexity guarantee. `doc/PLAN.md` preamble updated
+  to register `doc/PLAN_SEQUENCE.md`.
+
+- **Sequence-backed List M0** (complete, 2026-04-10). Product contract locked
+  in `doc/PLAN_SEQUENCE.md`: `List` is the user-facing surface; runtime direction
+  locked toward sequence-backed form; success bar defined as "practical for
+  ordinary scripts"; optimization-boundary policy adopted from §4.3/§4.8.
 
 - **Track RR, RR-5 published TCO guarantee** (complete for M7, 2026-04-10).
   - the final public wording decision is now locked:
@@ -337,16 +334,23 @@ Immediate next steps:
 
 ## Open Questions
 
-- Which direct-call forms should the next normalization slice accept once
-  `tail_analysis` has marked tail position: only direct declaration names, or
-  also resolvable local aliases to those names?
-- How far should the new SCC-local dispatcher boundary extend before Goby can
-  honestly broaden the current M0 contract toward the stronger generic-TCO
-  statement targeted by `doc/PLAN_TCO.md`?
+- **Resolved**: which direct-call forms to accept after `tail_analysis`? —
+  local alias chains to known top-level declarations are now covered (M5).
+- **Resolved**: how far to extend the dispatcher boundary? — locked at M7;
+  current published guarantee covers statically resolvable direct tail calls
+  among known top-level declarations on the compiled Wasm path.
+- What is the right CHUNK_SIZE for Goby's Chunked Sequence workload profile?
+  (TBD in M3 after benchmark execution.)
+- How much should stdlib traversal optimization be expressed in sequence
+  intrinsics versus iterator/effect lowering? (M5 scope.)
+- What is the minimum explicit intrinsic/lowerer surface for `List` that keeps
+  stdlib readable? (M5 scope.)
 
 ## Key Entry Points
 
 - [`doc/PLAN.md`](PLAN.md) — top-level roadmap
 - [`doc/LANGUAGE_SPEC.md`](LANGUAGE_SPEC.md) — current language specification
 - [`doc/PLAN_IR.md`](PLAN_IR.md) — IR lowering boundary design reference
+- [`doc/PLAN_SEQUENCE.md`](PLAN_SEQUENCE.md) — active List redesign roadmap (M3 next)
+- [`doc/PLAN_TCO.md`](PLAN_TCO.md) — TCO plan (all milestones complete)
 - [`doc/BUGS.md`](BUGS.md) — known bug tracker

@@ -732,9 +732,16 @@ Design stance:
 
 Status summary:
 
-- RR-0 through RR-4 are complete and archived in `doc/STATE.md`.
-- the currently active RR work is RR-5, the generic tail-call optimization track.
-- detailed long-range design for generic TCO lives in `doc/PLAN_TCO.md`.
+- RR-0 through RR-5 are complete and archived in `doc/STATE.md`.
+- all `doc/PLAN_TCO.md` milestones (M0–M7) are complete (2026-04-10).
+- the published TCO guarantee is locked in `doc/LANGUAGE_SPEC.md`:
+  Goby has generic TCO on the compiled Wasm path for statically resolvable
+  direct tail calls among known top-level declarations.
+- any further RR/TCO work is post-publication extension, not contract
+  bootstrapping. RR-6 (limit tuning) remains deferred.
+- active development has moved to the Sequence-backed List track
+  (`doc/PLAN_SEQUENCE.md`), which addresses the list-construction resilience
+  goal originally scoped under RR Stage RR-B.
 
 Active milestones:
 
