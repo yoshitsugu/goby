@@ -13,6 +13,9 @@ Notes:
 - `PLAN.md` is the top-level roadmap and execution-planning document.
 - `doc/PLAN_IR.md` is the completed detailed roadmap for IR-lowering convergence and
   remains the reference when new lowering-boundary issues appear.
+- `doc/PLAN_SEQUENCE.md` is the active roadmap for the sequence-backed `List`
+  redesign; it is the reference for List representation direction, benchmark
+  gates, and optimization-boundary policy decisions.
 - When language syntax or semantics change, update
   `doc/LANGUAGE_SPEC.md` in the same change.
 - When language syntax changes, also verify whether syntax

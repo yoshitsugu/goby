@@ -49,6 +49,13 @@ syntax/semantics.
 ## 3. Expressions and Statements
 
 - Literals: `Int`, `String`, `Bool` (`True` / `False`), list, tuple.
+- `List` is Goby's default ordered collection surface. The runtime representation
+  is not guaranteed to be a linked list; the direction is locked toward a
+  sequence-backed internal form (see `doc/PLAN_SEQUENCE.md`). List-pattern forms
+  are treated as sequence views — that is, pattern matching operates on
+  positional structure without exposing or assuming a linked-list node layout.
+  No specific complexity bounds for indexing or update are guaranteed until the
+  representation direction is benchmarked (see `doc/PLAN_SEQUENCE.md`).
 - List literal spread (expression side):
   - `[a, b, ..xs]` (zero or more prefix elements + one trailing spread segment)
   - spread segment is expression-only syntax and must be trailing
@@ -64,6 +71,8 @@ syntax/semantics.
     are `Int` or `String` values; `List (List T)` is not yet a representable runtime value)
   - precedence: `expr[expr]` binds tighter than whitespace function application —
     `f xs[0]` parses as `f (xs[0])`
+  - performance: see the `List` framing note above and `doc/PLAN_SEQUENCE.md`
+    for the intended-practicality goal and current limits.
 - Tuple member access uses numeric qualified form: `pair.0`, `pair.1`, ...
 - Unit value spelling: `()` (canonical).
   - Legacy expression-form `Unit` is rejected.
@@ -94,7 +103,8 @@ syntax/semantics.
   - `case ...` arms support both:
     - inline body: `pattern -> expr`
     - block body: `pattern ->` then deeper-indented statements (last expression is arm result)
-  - list patterns:
+  - list patterns (sequence views: match against positional structure without
+    exposing or assuming a linked-list node layout):
     - empty list: `[]`
     - head/tail split: `[head, ..tail]`
       - `head` and `tail` are bindings available in the arm body

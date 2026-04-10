@@ -394,7 +394,7 @@ The following product-direction decisions are already locked for this plan:
     product contract and design principles in this plan; `doc/LANGUAGE_SPEC.md`
     will be updated in M1 to reflect them.
 
-- [ ] **M1: Rewrite the language/spec wording around `List`**
+- [x] **M1: Rewrite the language/spec wording around `List`** (complete, 2026-04-10)
   - Update `doc/LANGUAGE_SPEC.md` so `List` is described in surface-semantic
     terms rather than as a linked-list identity.
   - Document list patterns as sequence views.
@@ -403,7 +403,9 @@ The following product-direction decisions are already locked for this plan:
     leaving their exact performance promise to the later benchmarked design
     decision.
   - Audit README/examples wording so user-facing docs do not over-teach a
-    linked-list mental model.
+    linked-list mental model. (Audited 2026-04-10: no "linked list", "cons",
+    or head/tail-as-idiomatic framing found in README.md or examples/README.md;
+    no changes required.)
 
 - [ ] **M2: Prototype candidate internal representations**
   - Evaluate at least two viable sequence-backed `List` representation
