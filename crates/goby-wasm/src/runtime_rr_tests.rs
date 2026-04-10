@@ -298,6 +298,44 @@ main =
     )
 }
 
+fn recursive_list_spread_exact_pattern_source(n: usize, exact_len: usize) -> String {
+    let mut items = Vec::with_capacity(exact_len);
+    for i in 1..=exact_len {
+        if i == 1 {
+            items.push("first".to_string());
+        } else if i == exact_len {
+            items.push("last".to_string());
+        } else {
+            items.push("_".to_string());
+        }
+    }
+    let pattern = items.join(", ");
+    format!(
+        r#"
+import goby/stdio
+
+build : Int -> List Int can Print
+build n =
+  if n == 0
+    []
+  else
+    rest = build (n - 1)
+    [n, ..rest]
+
+main : Unit -> Unit can Print, Read
+main =
+  _lines = read_lines ()
+  xs = build {n}
+  case xs
+    [{pattern}] ->
+      println "${{first}}"
+      println "${{last}}"
+    _ ->
+      println "mismatch"
+"#
+    )
+}
+
 fn named_callback_list_spread_chain_source(n: usize) -> String {
     format!(
         r#"
@@ -596,6 +634,14 @@ fn rr4_repeated_head_tail_decomposition_crosses_chunk_boundaries() {
     let output = execute_runtime_module_with_stdin(&module, Some("x\n".to_string()))
         .expect("large prefix list pattern should bind across chunk boundaries");
     assert_eq!(output.as_deref(), Some("100\n68\n67\n"));
+}
+
+#[test]
+fn rr4_exact_length_pattern_crosses_chunk_boundary_and_matches() {
+    let module = parse_general_lowered_module(&recursive_list_spread_exact_pattern_source(33, 33));
+    let output = execute_runtime_module_with_stdin(&module, Some("x\n".to_string()))
+        .expect("exact-length list pattern should match across the first chunk boundary");
+    assert_eq!(output.as_deref(), Some("33\n1\n"));
 }
 
 #[test]

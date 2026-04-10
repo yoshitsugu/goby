@@ -4332,6 +4332,35 @@ fn emit_chunked_load_const(function: &mut Function, header_ptr_local: u32, logic
     }));
 }
 
+#[inline]
+fn emit_case_list_tag_check(function: &mut Function, scrutinee_idx: u32) {
+    function.instruction(&Instruction::LocalGet(scrutinee_idx));
+    function.instruction(&Instruction::I64Const((TAG_LIST as i64) << 60));
+    function.instruction(&Instruction::I64And);
+    function.instruction(&Instruction::I64Const((TAG_LIST as i64) << 60));
+    function.instruction(&Instruction::I64Eq);
+}
+
+#[inline]
+fn emit_decode_list_header_ptr(function: &mut Function, scrutinee_idx: u32, s_header_ptr: u32) {
+    function.instruction(&Instruction::LocalGet(scrutinee_idx));
+    function.instruction(&Instruction::I64Const(0xFFFF_FFFFi64));
+    function.instruction(&Instruction::I64And);
+    function.instruction(&Instruction::I32WrapI64);
+    function.instruction(&Instruction::LocalSet(s_header_ptr));
+}
+
+#[inline]
+fn emit_load_list_total_len(function: &mut Function, s_header_ptr: u32, s_total_len: u32) {
+    function.instruction(&Instruction::LocalGet(s_header_ptr));
+    function.instruction(&Instruction::I32Load(MemArg {
+        offset: header_total_len_offset() as u64,
+        align: 2,
+        memory_index: 0,
+    }));
+    function.instruction(&Instruction::LocalSet(s_total_len));
+}
+
 /// Emit Wasm that stores a tagged i64 value (currently on the Wasm value stack)
 /// to logical index `index_local` in the chunked list at `header_ptr_local`.
 ///
@@ -7020,32 +7049,25 @@ fn emit_case_match(
 
             BackendCasePattern::EmptyList => {
                 // Emit true iff scrutinee is a List with len == 0.
-                // Check: tag bits == TAG_LIST
-                function.instruction(&Instruction::LocalGet(scrutinee_idx));
-                function.instruction(&Instruction::I64Const((TAG_LIST as i64) << 60));
-                function.instruction(&Instruction::I64And);
-                function.instruction(&Instruction::I64Const((TAG_LIST as i64) << 60));
-                function.instruction(&Instruction::I64Eq);
+                // Check: tag bits == TAG_LIST.
+                emit_case_list_tag_check(function, scrutinee_idx);
                 function.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
                 // Extract list pointer (one i32 local from helper pool), load len at offset 0.
                 // `needs_helper_state` returns true for any function with an EmptyList pattern,
                 // so helper_state is always Some here.  The error path is unreachable in practice.
-                let s_ptr = scratch_state
+                let s_list_ptr = scratch_state
                     .map(|hs| hs.i32_base + HS_TEXT_PTR)
                     .ok_or_else(|| CodegenError {
                         message: "gen_lower/emit: EmptyList pattern requires helper state (internal error: needs_helper_state should have set this up)".to_string(),
                     })?;
-                function.instruction(&Instruction::LocalGet(scrutinee_idx));
-                function.instruction(&Instruction::I64Const(0xFFFF_FFFFi64));
-                function.instruction(&Instruction::I64And);
-                function.instruction(&Instruction::I32WrapI64);
-                function.instruction(&Instruction::LocalSet(s_ptr));
-                function.instruction(&Instruction::LocalGet(s_ptr));
-                function.instruction(&Instruction::I32Load(MemArg {
-                    offset: 0,
-                    align: 2,
-                    memory_index: 0,
-                }));
+                let s_list_len = scratch_state
+                    .map(|hs| hs.i32_base + HS_TEXT_LEN)
+                    .ok_or_else(|| CodegenError {
+                        message: "gen_lower/emit: EmptyList pattern requires helper state (internal error: needs_helper_state should have set this up)".to_string(),
+                    })?;
+                emit_decode_list_header_ptr(function, scrutinee_idx, s_list_ptr);
+                emit_load_list_total_len(function, s_list_ptr, s_list_len);
+                function.instruction(&Instruction::LocalGet(s_list_len));
                 function.instruction(&Instruction::I32Eqz);
                 function.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
                 emit_instrs(
@@ -7088,26 +7110,12 @@ fn emit_case_match(
                 let n_items = items.len() as i32;
 
                 // Check tag == TAG_LIST
-                function.instruction(&Instruction::LocalGet(scrutinee_idx));
-                function.instruction(&Instruction::I64Const((TAG_LIST as i64) << 60));
-                function.instruction(&Instruction::I64And);
-                function.instruction(&Instruction::I64Const((TAG_LIST as i64) << 60));
-                function.instruction(&Instruction::I64Eq);
+                emit_case_list_tag_check(function, scrutinee_idx);
                 function.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
 
                 // Decode header ptr, load total_len
-                function.instruction(&Instruction::LocalGet(scrutinee_idx));
-                function.instruction(&Instruction::I64Const(0xFFFF_FFFFi64));
-                function.instruction(&Instruction::I64And);
-                function.instruction(&Instruction::I32WrapI64);
-                function.instruction(&Instruction::LocalSet(s_list_ptr));
-                function.instruction(&Instruction::LocalGet(s_list_ptr));
-                function.instruction(&Instruction::I32Load(MemArg {
-                    offset: header_total_len_offset() as u64,
-                    align: 2,
-                    memory_index: 0,
-                }));
-                function.instruction(&Instruction::LocalSet(s_list_len));
+                emit_decode_list_header_ptr(function, scrutinee_idx, s_list_ptr);
+                emit_load_list_total_len(function, s_list_ptr, s_list_len);
 
                 // Length check: exact (no tail) or >= n_items (with tail)
                 function.instruction(&Instruction::LocalGet(s_list_len));

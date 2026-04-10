@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-04-10
+Last updated: 2026-04-11
 
 ## Current Focus
 
@@ -104,6 +104,17 @@ M4 kickoff checkpoint (2026-04-10, pattern-boundary refactor slice):
     (33-item prefix + tail binding over a chunked list).
 - Verification checkpoint:
   - `cargo test -p goby-wasm` is green (`623 passed, 0 failed`).
+
+M4 follow-up checkpoint (2026-04-11, shared list-view guards):
+- `emit_case_match` now shares list-scrutinee boundary helpers between `[]`
+  and non-empty list-pattern arms:
+  - `emit_case_list_tag_check`
+  - `emit_decode_list_header_ptr`
+  - `emit_load_list_total_len`
+- Added exact-length list-pattern regression across the first chunk boundary:
+  - `runtime_rr_tests::rr4_exact_length_pattern_crosses_chunk_boundary_and_matches`
+- Verification checkpoint:
+  - `cargo test -p goby-wasm` is green (`624 passed, 0 failed`).
 
 ## Recently Completed
 
