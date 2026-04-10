@@ -303,7 +303,7 @@ If any of these remain missing, the wording should stay narrower, such as
     - [x] confirm the implementation still does not depend on Wasm native
       tail-call instructions.
 
-- [ ] **M5: Prove control-flow completeness**
+- [x] **M5: Prove control-flow completeness**
   - Add regression coverage for tail calls through:
     - `if` joins,
     - `case` joins,
@@ -327,26 +327,38 @@ If any of these remain missing, the wording should stay narrower, such as
       level declarations preserve the same guarantee when the callee remains
       statically resolvable, not merely when the source uses the declaration
       name directly.
+  - 2026-04-10 completion slice:
+    - compile/runtime proof now locks tail `if` joins, tail `case` joins,
+      let/block-shaped tail expressions, and local alias chains to known top-
+      level declarations on the shared dispatcher boundary;
+    - local alias calls in tail position now resolve through the same
+      direct-declaration normalization path instead of falling through to an
+      indirect call when the alias is still statically resolvable;
+    - the language spec now explicitly includes let/block tails and statically
+      resolvable local alias chains in the current compiled-Wasm direct-call
+      constant-stack guarantee;
+    - this milestone closes proof of the currently intended covered source
+      shapes and leaves M6 to define the explicit unsupported-bucket contract.
   - Checkpoints:
-    - [ ] add a compile-path regression for tail `if` joins targeting the
+    - [x] add a compile-path regression for tail `if` joins targeting the
       covered direct-call subset;
-    - [ ] add a tight-stack runtime regression for the same tail `if` join
+    - [x] add a tight-stack runtime regression for the same tail `if` join
       shape;
-    - [ ] add a compile-path regression for tail `case` joins targeting the
+    - [x] add a compile-path regression for tail `case` joins targeting the
       covered direct-call subset;
-    - [ ] add a tight-stack runtime regression for the same tail `case` join
+    - [x] add a tight-stack runtime regression for the same tail `case` join
       shape;
-    - [ ] add a compile-path regression for let/block-shaped tail expressions
+    - [x] add a compile-path regression for let/block-shaped tail expressions
       that should preserve the covered direct-call guarantee;
-    - [ ] add a tight-stack runtime regression for the same let/block-shaped
+    - [x] add a tight-stack runtime regression for the same let/block-shaped
       representative;
-    - [ ] add a compile-path regression for local alias chains to known top-
+    - [x] add a compile-path regression for local alias chains to known top-
       level declarations in tail position;
-    - [ ] add a tight-stack runtime regression for the same local-alias
+    - [x] add a tight-stack runtime regression for the same local-alias
       representative;
-    - [ ] confirm all newly covered control-flow shapes stay on the shared
+    - [x] confirm all newly covered control-flow shapes stay on the shared
       tail-call form rather than a shape-specific fast path;
-    - [ ] update the milestone notes once the representative proof set is
+    - [x] update the milestone notes once the representative proof set is
       complete.
 
 - [ ] **M6: Define and test the failure boundary**

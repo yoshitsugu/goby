@@ -1444,7 +1444,9 @@ fn lower_comp_inner(
                 instrs.push(direct_decl_call_instr(name, tail_position));
                 Ok(instrs)
             } else if let goby_core::ir::ValueExpr::Var(name) = callee.as_ref() {
-                if known_decls.contains(name.as_str()) {
+                if let Some(resolved_name) = resolve_var_alias(name, aliases)
+                    && known_decls.contains(resolved_name)
+                {
                     // Direct call to a known top-level declaration.
                     let mut instrs = Vec::new();
                     for arg in args {
@@ -1456,7 +1458,7 @@ fn lower_comp_inner(
                             lambda_decls,
                         )?);
                     }
-                    instrs.push(direct_decl_call_instr(name, tail_position));
+                    instrs.push(direct_decl_call_instr(resolved_name, tail_position));
                     Ok(instrs)
                 } else if (name == "each"
                     || resolve_global_ref(name, aliases) == Some(("list", "each")))

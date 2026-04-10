@@ -302,6 +302,193 @@ main =
 }
 
 #[test]
+fn compile_module_tail_if_join_uses_shared_dispatcher_boundary() {
+    let source = r#"
+import goby/stdio
+
+count_down : Bool -> Int -> Unit can Print
+count_down flip n =
+  if n == 0
+    ()
+  else
+    if flip
+      count_down False (n - 1)
+    else
+      count_down True (n - 1)
+
+main : Unit -> Unit can Print, Read
+main =
+  _ = read()
+  count_down True 1000
+  println "done"
+"#;
+    let module = parse_module(source).expect("source should parse");
+    let (_main_instrs, aux_decls) = crate::gen_lower::lower_module_to_instrs(&module)
+        .expect("lowering should not fail")
+        .expect("source should use the general lowering path");
+    let count_down = aux_decls
+        .iter()
+        .find(|decl| decl.decl_name == "count_down")
+        .expect("count_down aux decl should exist");
+    let instrs = crate::gen_lower::emit::collect_all_instrs(&count_down.instrs);
+    assert!(
+        instrs.iter().any(|instr| matches!(
+            instr,
+            crate::gen_lower::backend_ir::WasmBackendInstr::TailDeclCall { decl_name }
+                if decl_name == "count_down"
+        )),
+        "tail if-join body should stay on TailDeclCall(count_down), got: {instrs:?}"
+    );
+    assert!(
+        !instrs.iter().any(|instr| matches!(
+            instr,
+            crate::gen_lower::backend_ir::WasmBackendInstr::DeclCall { decl_name }
+                if decl_name == "count_down"
+        )),
+        "tail if-join body should not fall back to DeclCall(count_down), got: {instrs:?}"
+    );
+}
+
+#[test]
+fn compile_module_tail_case_join_uses_shared_dispatcher_boundary() {
+    let source = r#"
+import goby/stdio
+
+count_down : Bool -> Int -> Unit can Print
+count_down flip n =
+  if n == 0
+    ()
+  else
+    case flip
+      True -> count_down False (n - 1)
+      False -> count_down True (n - 1)
+
+main : Unit -> Unit can Print, Read
+main =
+  _ = read()
+  count_down True 1000
+  println "done"
+"#;
+    let module = parse_module(source).expect("source should parse");
+    let (_main_instrs, aux_decls) = crate::gen_lower::lower_module_to_instrs(&module)
+        .expect("lowering should not fail")
+        .expect("source should use the general lowering path");
+    let count_down = aux_decls
+        .iter()
+        .find(|decl| decl.decl_name == "count_down")
+        .expect("count_down aux decl should exist");
+    let instrs = crate::gen_lower::emit::collect_all_instrs(&count_down.instrs);
+    assert!(
+        instrs.iter().any(|instr| matches!(
+            instr,
+            crate::gen_lower::backend_ir::WasmBackendInstr::TailDeclCall { decl_name }
+                if decl_name == "count_down"
+        )),
+        "tail case-join body should stay on TailDeclCall(count_down), got: {instrs:?}"
+    );
+    assert!(
+        !instrs.iter().any(|instr| matches!(
+            instr,
+            crate::gen_lower::backend_ir::WasmBackendInstr::DeclCall { decl_name }
+                if decl_name == "count_down"
+        )),
+        "tail case-join body should not fall back to DeclCall(count_down), got: {instrs:?}"
+    );
+}
+
+#[test]
+fn compile_module_let_tail_decl_call_uses_shared_dispatcher_boundary() {
+    let source = r#"
+import goby/stdio
+
+count_down : Int -> Unit can Print
+count_down n =
+  if n == 0
+    ()
+  else
+    next = n - 1
+    count_down next
+
+main : Unit -> Unit can Print, Read
+main =
+  _ = read()
+  count_down 1000
+  println "done"
+"#;
+    let module = parse_module(source).expect("source should parse");
+    let (_main_instrs, aux_decls) = crate::gen_lower::lower_module_to_instrs(&module)
+        .expect("lowering should not fail")
+        .expect("source should use the general lowering path");
+    let count_down = aux_decls
+        .iter()
+        .find(|decl| decl.decl_name == "count_down")
+        .expect("count_down aux decl should exist");
+    let instrs = crate::gen_lower::emit::collect_all_instrs(&count_down.instrs);
+    assert!(
+        instrs.iter().any(|instr| matches!(
+            instr,
+            crate::gen_lower::backend_ir::WasmBackendInstr::TailDeclCall { decl_name }
+                if decl_name == "count_down"
+        )),
+        "let-tail body should stay on TailDeclCall(count_down), got: {instrs:?}"
+    );
+    assert!(
+        !instrs.iter().any(|instr| matches!(
+            instr,
+            crate::gen_lower::backend_ir::WasmBackendInstr::DeclCall { decl_name }
+                if decl_name == "count_down"
+        )),
+        "let-tail body should not fall back to DeclCall(count_down), got: {instrs:?}"
+    );
+}
+
+#[test]
+fn compile_module_local_alias_tail_decl_call_uses_shared_dispatcher_boundary() {
+    let source = r#"
+import goby/stdio
+
+count_down : Int -> Unit can Print
+count_down n =
+  if n == 0
+    ()
+  else
+    step = count_down
+    step (n - 1)
+
+main : Unit -> Unit can Print, Read
+main =
+  _ = read()
+  count_down 1000
+  println "done"
+"#;
+    let module = parse_module(source).expect("source should parse");
+    let (_main_instrs, aux_decls) = crate::gen_lower::lower_module_to_instrs(&module)
+        .expect("lowering should not fail")
+        .expect("source should use the general lowering path");
+    let count_down = aux_decls
+        .iter()
+        .find(|decl| decl.decl_name == "count_down")
+        .expect("count_down aux decl should exist");
+    let instrs = crate::gen_lower::emit::collect_all_instrs(&count_down.instrs);
+    assert!(
+        instrs.iter().any(|instr| matches!(
+            instr,
+            crate::gen_lower::backend_ir::WasmBackendInstr::TailDeclCall { decl_name }
+                if decl_name == "count_down"
+        )),
+        "local alias tail call should resolve to TailDeclCall(count_down), got: {instrs:?}"
+    );
+    assert!(
+        !instrs.iter().any(|instr| matches!(
+            instr,
+            crate::gen_lower::backend_ir::WasmBackendInstr::DeclCall { decl_name }
+                if decl_name == "count_down"
+        )),
+        "local alias tail call should not fall back to DeclCall(count_down), got: {instrs:?}"
+    );
+}
+
+#[test]
 fn native_codegen_capability_checker_rejects_hello_effect_boundary_subset() {
     let source = read_example("hello.gb");
     let module = parse_module(&source).expect("hello.gb should parse");

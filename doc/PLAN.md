@@ -755,6 +755,9 @@ Active milestones:
      - that shared engine now covers single-member self-tail declarations,
        sibling/mutual groups, and acyclic direct-tail chains into covered
        recursive members without introducing a second execution path.
+     - compile/runtime proof now locks that the same covered boundary survives
+       tail `if` joins, `case` joins, let/block tails, and statically
+       resolvable local alias chains to known top-level declarations.
      - public aux decl wrappers and funcref-visible entrypoints remain stable,
        so the implementation change does not alter observable direct-call or
        function-value behavior for covered declarations.

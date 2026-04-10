@@ -4,9 +4,8 @@ Last updated: 2026-04-10
 
 ## Current Focus
 
-Next slice: **Track RR, RR-5** (`PLAN.md §4.5`) - move from the completed M4
-shared dispatcher execution model into M5 control-flow completeness and then
-M6 failure-boundary honesty.
+Next slice: **Track RR, RR-5** (`PLAN.md §4.5`) - move from the completed M5
+covered-shape proof set into M6 failure-boundary honesty.
 
 Locked TCO contract reminder:
 
@@ -39,11 +38,12 @@ Immediate next steps:
   unified dispatcher-based constant-stack execution model are in place.
   - keep the RR-3/RR-4 shared-boundary discipline: prefer reusable control-flow
     rules over symbol-specific recursion rewrites.
-  - next RR-5 task: finish M5 proof work for the already documented shared
-    `TailDeclCall` contract across the remaining representative control-flow
-    shapes (`if`/`case` joins, let/block tails, and local aliases).
-  - after M5, close M6 by making the unsupported tail-looking buckets explicit
-    in tests/docs instead of leaving them implicit implementation fallout.
+  - next RR-5 task: close M6 by making the unsupported tail-looking buckets
+    explicit in tests/docs instead of leaving them implicit implementation
+    fallout.
+  - keep the newly documented covered subset stable: let/block tails and
+    statically resolvable local alias chains are now part of the shared direct-
+    call guarantee on the compiled Wasm path.
   - keep current diagnostics and docs aligned with the locked M0 contract for
     shapes that still fall outside the optimized subset or still execute as
     ordinary calls.
@@ -52,6 +52,30 @@ Immediate next steps:
   later resilience work lands.
 
 ## Recently Completed
+
+- **Track RR, RR-5 control-flow completeness proof** (complete for M5,
+  2026-04-10).
+  - compile/runtime proof now locks the current covered shared-tail-call
+    boundary through:
+    - tail `if` joins via
+      `compile_module_tail_if_join_uses_shared_dispatcher_boundary` and
+      `rr5_tail_if_join_repro_survives_tight_stack_limit`;
+    - tail `case` joins via
+      `compile_module_tail_case_join_uses_shared_dispatcher_boundary` and
+      `rr5_tail_case_join_repro_survives_tight_stack_limit`;
+    - let/block tail structure via
+      `compile_module_let_tail_decl_call_uses_shared_dispatcher_boundary` and
+      `rr5_let_tail_repro_survives_tight_stack_limit`;
+    - local alias chains to known top-level declarations via
+      `compile_module_local_alias_tail_decl_call_uses_shared_dispatcher_boundary`
+      and
+      `rr5_local_alias_tail_repro_survives_tight_stack_limit`.
+  - `goby-wasm` tail-call lowering now resolves statically known local alias
+    chains through the same direct-declaration boundary, so covered alias tails
+    no longer fall back to indirect calls.
+  - `doc/LANGUAGE_SPEC.md` now explicitly includes let/block tails and
+    statically resolvable local alias chains in the current compiled-Wasm
+    constant-stack direct-call guarantee.
 
 - **Track RR, RR-5 shared dispatcher execution model** (complete for M4,
   2026-04-10).

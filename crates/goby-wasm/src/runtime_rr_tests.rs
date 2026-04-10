@@ -88,6 +88,81 @@ main =
   println "done"
 "#;
 
+const TAIL_IF_JOIN_SOURCE: &str = r#"
+import goby/stdio
+
+count_down : Bool -> Int -> Unit can Print
+count_down flip n =
+  if n == 0
+    ()
+  else
+    if flip
+      count_down False (n - 1)
+    else
+      count_down True (n - 1)
+
+main : Unit -> Unit can Print, Read
+main =
+  _ = read()
+  count_down True 1000000
+  println "done"
+"#;
+
+const TAIL_CASE_JOIN_SOURCE: &str = r#"
+import goby/stdio
+
+count_down : Bool -> Int -> Unit can Print
+count_down flip n =
+  if n == 0
+    ()
+  else
+    case flip
+      True -> count_down False (n - 1)
+      False -> count_down True (n - 1)
+
+main : Unit -> Unit can Print, Read
+main =
+  _ = read()
+  count_down True 1000000
+  println "done"
+"#;
+
+const LET_TAIL_SOURCE: &str = r#"
+import goby/stdio
+
+count_down : Int -> Unit can Print
+count_down n =
+  if n == 0
+    ()
+  else
+    next = n - 1
+    count_down next
+
+main : Unit -> Unit can Print, Read
+main =
+  _ = read()
+  count_down 1000000
+  println "done"
+"#;
+
+const LOCAL_ALIAS_TAIL_SOURCE: &str = r#"
+import goby/stdio
+
+count_down : Int -> Unit can Print
+count_down n =
+  if n == 0
+    ()
+  else
+    step = count_down
+    step (n - 1)
+
+main : Unit -> Unit can Print, Read
+main =
+  _ = read()
+  count_down 1000000
+  println "done"
+"#;
+
 const NON_TAIL_SCAN_SOURCE: &str = r#"
 import goby/stdio
 
@@ -365,6 +440,42 @@ fn grouped_tail_decl_member_still_works_through_function_value_entrypoint() {
     let wasm = compile_module(&module).expect("grouped function-value repro should compile");
     let output = run_wasm_bytes_with_stdin_for_tests(&wasm, Some("x\n"), rr_tight_stack_config())
         .expect("grouped declaration should still be callable through a function value");
+    assert_eq!(output, "done\n");
+}
+
+#[test]
+fn rr5_tail_if_join_repro_survives_tight_stack_limit() {
+    let module = parse_general_lowered_module(TAIL_IF_JOIN_SOURCE);
+    let wasm = compile_module(&module).expect("tail if-join repro should compile");
+    let output = run_wasm_bytes_with_stdin_for_tests(&wasm, Some("x\n"), rr_tight_stack_config())
+        .expect("tail if-join representative should stay constant-stack");
+    assert_eq!(output, "done\n");
+}
+
+#[test]
+fn rr5_tail_case_join_repro_survives_tight_stack_limit() {
+    let module = parse_general_lowered_module(TAIL_CASE_JOIN_SOURCE);
+    let wasm = compile_module(&module).expect("tail case-join repro should compile");
+    let output = run_wasm_bytes_with_stdin_for_tests(&wasm, Some("x\n"), rr_tight_stack_config())
+        .expect("tail case-join representative should stay constant-stack");
+    assert_eq!(output, "done\n");
+}
+
+#[test]
+fn rr5_let_tail_repro_survives_tight_stack_limit() {
+    let module = parse_general_lowered_module(LET_TAIL_SOURCE);
+    let wasm = compile_module(&module).expect("let-tail repro should compile");
+    let output = run_wasm_bytes_with_stdin_for_tests(&wasm, Some("x\n"), rr_tight_stack_config())
+        .expect("let-tail representative should stay constant-stack");
+    assert_eq!(output, "done\n");
+}
+
+#[test]
+fn rr5_local_alias_tail_repro_survives_tight_stack_limit() {
+    let module = parse_general_lowered_module(LOCAL_ALIAS_TAIL_SOURCE);
+    let wasm = compile_module(&module).expect("local-alias tail repro should compile");
+    let output = run_wasm_bytes_with_stdin_for_tests(&wasm, Some("x\n"), rr_tight_stack_config())
+        .expect("local-alias tail representative should stay constant-stack");
     assert_eq!(output, "done\n");
 }
 
