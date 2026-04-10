@@ -232,6 +232,33 @@ main =
     )
 }
 
+fn recursive_list_spread_head_tail_pattern_source(n: usize) -> String {
+    format!(
+        r#"
+import goby/stdio
+
+build : Int -> List Int can Print
+build n =
+  if n == 0
+    []
+  else
+    rest = build (n - 1)
+    [n, ..rest]
+
+main : Unit -> Unit can Print, Read
+main =
+  _lines = read_lines ()
+  xs = build {n}
+  case xs
+    [h, ..t] ->
+      println "${{h}}"
+      println "${{t[0]}}"
+    [] ->
+      println "empty"
+"#
+    )
+}
+
 fn named_callback_list_spread_chain_source(n: usize) -> String {
     format!(
         r#"
@@ -512,6 +539,15 @@ fn rr4_recursive_list_spread_large_builder_shape_scales_past_bug_repro_size() {
     let output = execute_runtime_module_with_stdin(&module, Some("x\n".to_string()))
         .expect("larger recursive list-spread builder shape should execute successfully");
     assert_eq!(output.as_deref(), Some("50000\n"));
+}
+
+#[test]
+fn rr4_recursive_list_spread_large_head_tail_pattern_executes_after_chunked_migration() {
+    let module =
+        parse_general_lowered_module(&recursive_list_spread_head_tail_pattern_source(10_000));
+    let output = execute_runtime_module_with_stdin(&module, Some("x\n".to_string()))
+        .expect("multi-chunk [h, ..t] pattern over builder result should execute successfully");
+    assert_eq!(output.as_deref(), Some("10000\n9999\n"));
 }
 
 #[test]

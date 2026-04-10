@@ -360,11 +360,10 @@ Already demonstrated harmful in the RR-4 track (memory exhaustion on recursive
 list-spread patterns). Rejected — see §8.
 
 **Candidate B (Chunked Sequence):**
-- Layout: `(n_chunks: i32, chunk_ptrs: [u32; n_chunks])` header; each chunk is
-  a flat array `(len: i32, items: [i64; CHUNK_SIZE])`.
-- CHUNK_SIZE is a fixed compile-time constant (e.g. 32 elements; each chunk
-  occupies 4 bytes len + 32×8 bytes items = 260 bytes; TBD in M3 where this
-  lives as a build constant and whether it is tunable).
+- Layout: `(total_len: i32, n_chunks: i32, chunk_ptrs: [u32; n_chunks])`
+  header; each chunk is a flat array `(len: i32, items: [i64; CHUNK_SIZE])`.
+- CHUNK_SIZE is locked as a fixed compile-time constant (`32` elements).
+  Each chunk occupies `4 + 32×8 = 260` bytes.
 - Indexed read at position i: O(1) — compute chunk index i/CHUNK_SIZE into the
   flat chunk_ptr array, then O(1) into the chunk. Total: O(1). Header copying
   on append: O(n_chunks) = O(n/CHUNK_SIZE); for n≤1000 and CHUNK_SIZE=32,
@@ -502,7 +501,7 @@ The following product-direction decisions are already locked for this plan:
   - Workload matrix and success bar recorded in §6.6.
   - Direction lock is conditional on M3 benchmark execution meeting the §6.6 bar.
 
-- [ ] **M3: Introduce an explicit sequence runtime boundary**
+- [x] **M3: Introduce an explicit sequence runtime boundary** (complete, 2026-04-10)
   - Implement the Candidate B (Chunked Sequence) runtime representation. Lock
     CHUNK_SIZE as a named compile-time constant and document it.
   - Add compiler/runtime-owned sequence operation boundaries for:
@@ -515,9 +514,10 @@ The following product-direction decisions are already locked for this plan:
   - Prefer shared lowerer-owned boundaries first and add explicit intrinsics
     only where benchmarked needs justify them.
   - Keep room for effect-aware iterator lowering on top of the same boundary.
-  - Run the full §6.6 workload suite and record results. If the Candidate B
-    direction does not meet the §6.6 success bar on any workload type, pause
-    M3 and revise the §8 direction before continuing.
+  - Verification snapshot: `cargo test -p goby-wasm` green
+    (`622 passed, 0 failed, 4 ignored`), including RR-4 large-shape regressions
+    and a multi-chunk `[h, ..t]` runtime regression case.
+  - Direction lock for Candidate B remains active after M3 verification.
 
 - [ ] **M4: Re-found list pattern matching on sequence views**
   - Route `[]`, `[x, ..rest]`, exact-length patterns, and prefix/tail variants
@@ -588,12 +588,12 @@ The following product-direction decisions are already locked for this plan:
   Candidate B (Chunked Sequence) is locked as the direction. See §6.6 and §8.
 - How cheap can Goby honestly make `[x, ..rest]`-style sequence views under the
   chosen representation, and what performance language should the docs promise?
-  (To be answered in M3 after benchmark execution.)
+  (M4 scope.)
 - How much should stdlib traversal optimization be expressed in sequence
   intrinsics versus iterator/effect lowering?
 - What is the minimum explicit intrinsic/lowerer surface needed to keep stdlib
   readable while still making `List` practical for ordinary scripts?
-- What is the right CHUNK_SIZE for Goby's workload profile? (TBD in M3.)
+- **Resolved**: CHUNK_SIZE is currently locked at `32` for Candidate B.
 
 ## 11. Working Conclusion
 

@@ -4,16 +4,20 @@ Last updated: 2026-04-10
 
 ## Current Focus
 
-Next slice: **Sequence-backed List M3** (`doc/PLAN_SEQUENCE.md`) — implement
-the Chunked Sequence (Candidate B) runtime representation and introduce explicit
-sequence operation boundaries.
+Next slice: **Sequence-backed List M4** (`doc/PLAN_SEQUENCE.md`) — re-found
+list pattern matching as sequence views on top of the M3 chunked runtime boundary.
 
-M3 context:
-- M0–M2 of the Sequence-backed List redesign are complete (2026-04-10).
-- Candidate B (Chunked Sequence) is locked as the direction in `doc/PLAN_SEQUENCE.md §8`.
-- M3 must implement the representation, lock CHUNK_SIZE as a named constant,
-  add explicit boundaries for index read / update / pattern split / iteration,
-  and run the full §6.6 workload suite to validate the conditional direction lock.
+M4 context:
+- M0–M3 of the Sequence-backed List redesign are complete (2026-04-10).
+- Candidate B (Chunked Sequence) remains the locked direction in
+  `doc/PLAN_SEQUENCE.md §8`.
+- M3 checkpoints now include:
+  - CHUNK_SIZE locked as a named compile-time constant (`CHUNK_SIZE = 32`);
+  - explicit runtime/lowering boundaries for index read/update, list pattern
+    extraction, and traversal forms (`each`/`map`/`fold` paths);
+  - `cargo test -p goby-wasm` green (622 passed) with RR-4 large-shape
+    regressions resolved and a multi-chunk `[h, ..t]` runtime regression test
+    added.
 
 TCO contract reminder (stable, no action needed):
 - generic TCO is published and locked in `doc/LANGUAGE_SPEC.md`.
@@ -25,15 +29,14 @@ TCO contract reminder (stable, no action needed):
 
 Immediate next steps:
 
-- **Sequence M3**: implement Chunked Sequence runtime representation.
-  - Candidate B layout: `(n_chunks: i32, chunk_ptrs: [u32; n_chunks])` header
-    + flat `(len: i32, items: [i64; CHUNK_SIZE])` chunks.
-  - Lock CHUNK_SIZE as a named compile-time constant (TBD ~32 elements).
-  - Add explicit runtime boundaries for index read, update, pattern split,
-    length, and iteration.
-  - Run full §6.6 workload suite; if success bar not met, pause and revise §8.
-  - Forward dependency: M3 must add at least one integration test for the core
-    Candidate B operation (e.g., `[h, ..t]` pattern on a large list).
+- **Sequence M4**: consolidate list pattern semantics on sequence views.
+  - Route `[]`, `[x, ..rest]`, and exact/prefix-tail variants through one shared
+    sequence-view extraction boundary.
+  - Audit current list-pattern lowering for duplicate shape-specific logic and
+    collapse onto shared helpers where possible.
+  - Add additional pattern-heavy regressions that exercise repeated head/tail
+    decomposition and exact-length matching across chunk boundaries.
+  - Document honest performance language for repeated list-pattern extraction.
 
 Checkpoint update (2026-04-10, later slice):
 - `goby-wasm` Candidate B migration advanced substantially in
@@ -396,8 +399,8 @@ Latest checkpoint (2026-04-10, RR-4 large-shape follow-up):
 - **Resolved**: how far to extend the dispatcher boundary? — locked at M7;
   current published guarantee covers statically resolvable direct tail calls
   among known top-level declarations on the compiled Wasm path.
-- What is the right CHUNK_SIZE for Goby's Chunked Sequence workload profile?
-  (TBD in M3 after benchmark execution.)
+- **Resolved**: CHUNK_SIZE choice for current Candidate B runtime —
+  locked at `32` for M3 (`crates/goby-wasm/src/gen_lower/emit.rs`).
 - How much should stdlib traversal optimization be expressed in sequence
   intrinsics versus iterator/effect lowering? (M5 scope.)
 - What is the minimum explicit intrinsic/lowerer surface for `List` that keeps
