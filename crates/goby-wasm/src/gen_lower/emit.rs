@@ -4361,6 +4361,184 @@ fn emit_load_list_total_len(function: &mut Function, s_header_ptr: u32, s_total_
     function.instruction(&Instruction::LocalSet(s_total_len));
 }
 
+#[allow(clippy::too_many_arguments)]
+fn emit_case_bind_tail_list(
+    function: &mut Function,
+    hs: &HeapEmitState,
+    tail_local: u32,
+    s_list_ptr: u32,
+    s_list_len: u32,
+    s_alloc_size: u32,
+    s_iter: u32,
+    s_tail_ptr: u32,
+    s_chunk_idx: u32,
+    s_item_idx: u32,
+    s_chunk_ptr: u32,
+    s_tail_chunk_ptr: u32,
+    s_tail_chunk_len: u32,
+    s_load_chunk_ptr: u32,
+    n_items: i32,
+) {
+    // tail_len = s_list_len - n_items (runtime value)
+    function.instruction(&Instruction::LocalGet(s_list_len));
+    function.instruction(&Instruction::I32Const(n_items));
+    function.instruction(&Instruction::I32Sub);
+    function.instruction(&Instruction::LocalSet(s_iter)); // s_iter = tail_len
+
+    // Allocate tail header with enough slots for ceil(total_len / CHUNK_SIZE).
+    function.instruction(&Instruction::LocalGet(s_list_len));
+    function.instruction(&Instruction::I32Const(CHUNK_SIZE as i32 - 1));
+    function.instruction(&Instruction::I32Add);
+    function.instruction(&Instruction::I32Const(CHUNK_SIZE as i32));
+    function.instruction(&Instruction::I32DivU);
+    function.instruction(&Instruction::I32Const(4));
+    function.instruction(&Instruction::I32Mul);
+    function.instruction(&Instruction::I32Const(8));
+    function.instruction(&Instruction::I32Add);
+    function.instruction(&Instruction::LocalSet(s_alloc_size));
+    emit_alloc_from_top(function, hs, s_alloc_size, s_tail_ptr);
+
+    // Allocate first tail chunk.
+    function.instruction(&Instruction::I32Const(chunk_alloc_size() as i32));
+    function.instruction(&Instruction::LocalSet(s_alloc_size));
+    emit_alloc_from_top(function, hs, s_alloc_size, s_tail_chunk_ptr);
+    function.instruction(&Instruction::I32Const(0));
+    function.instruction(&Instruction::LocalSet(s_tail_chunk_len));
+    function.instruction(&Instruction::I32Const(0));
+    function.instruction(&Instruction::LocalSet(s_chunk_idx)); // n_tail_chunks
+
+    // copy_i = 0
+    function.instruction(&Instruction::I32Const(0));
+    function.instruction(&Instruction::LocalSet(s_item_idx));
+
+    function.instruction(&Instruction::Block(wasm_encoder::BlockType::Empty));
+    function.instruction(&Instruction::Loop(wasm_encoder::BlockType::Empty));
+
+    // if copy_i >= tail_len: break
+    function.instruction(&Instruction::LocalGet(s_item_idx));
+    function.instruction(&Instruction::LocalGet(s_iter)); // tail_len
+    function.instruction(&Instruction::I32GeU);
+    function.instruction(&Instruction::BrIf(1));
+
+    // src_logical = n_items + copy_i
+    function.instruction(&Instruction::LocalGet(s_item_idx));
+    function.instruction(&Instruction::I32Const(n_items));
+    function.instruction(&Instruction::I32Add);
+    function.instruction(&Instruction::LocalSet(s_alloc_size)); // src_logical
+    emit_chunked_load(
+        function,
+        s_list_ptr,
+        s_alloc_size,
+        s_list_len,
+        s_chunk_ptr,
+        s_load_chunk_ptr,
+    ); // val on stack (i64)
+
+    let val_i64 = hs.scratch.i64_base;
+    function.instruction(&Instruction::LocalSet(val_i64)); // save val
+
+    // Rotate chunk if full.
+    function.instruction(&Instruction::LocalGet(s_tail_chunk_len));
+    function.instruction(&Instruction::I32Const(CHUNK_SIZE as i32));
+    function.instruction(&Instruction::I32Eq);
+    function.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
+    function.instruction(&Instruction::LocalGet(s_tail_ptr));
+    function.instruction(&Instruction::LocalGet(s_chunk_idx)); // n_tail_chunks
+    function.instruction(&Instruction::I32Const(4));
+    function.instruction(&Instruction::I32Mul);
+    function.instruction(&Instruction::I32Add);
+    function.instruction(&Instruction::LocalGet(s_tail_chunk_ptr));
+    function.instruction(&Instruction::I32Store(MemArg {
+        offset: header_chunk_ptr_offset(0) as u64,
+        align: 2,
+        memory_index: 0,
+    }));
+    function.instruction(&Instruction::LocalGet(s_chunk_idx));
+    function.instruction(&Instruction::I32Const(1));
+    function.instruction(&Instruction::I32Add);
+    function.instruction(&Instruction::LocalSet(s_chunk_idx));
+    function.instruction(&Instruction::I32Const(chunk_alloc_size() as i32));
+    function.instruction(&Instruction::LocalSet(s_alloc_size));
+    emit_alloc_from_top(function, hs, s_alloc_size, s_tail_chunk_ptr);
+    function.instruction(&Instruction::I32Const(0));
+    function.instruction(&Instruction::LocalSet(s_tail_chunk_len));
+    function.instruction(&Instruction::End);
+
+    // tail_chunk[tail_chunk_len] = val
+    function.instruction(&Instruction::LocalGet(s_tail_chunk_ptr));
+    function.instruction(&Instruction::LocalGet(s_tail_chunk_len));
+    function.instruction(&Instruction::I32Const(8));
+    function.instruction(&Instruction::I32Mul);
+    function.instruction(&Instruction::I32Add);
+    function.instruction(&Instruction::LocalGet(val_i64));
+    function.instruction(&Instruction::I64Store(MemArg {
+        offset: chunk_item_offset(0) as u64,
+        align: 3,
+        memory_index: 0,
+    }));
+    function.instruction(&Instruction::LocalGet(s_tail_chunk_len));
+    function.instruction(&Instruction::I32Const(1));
+    function.instruction(&Instruction::I32Add);
+    function.instruction(&Instruction::LocalSet(s_tail_chunk_len));
+    function.instruction(&Instruction::LocalGet(s_tail_chunk_ptr));
+    function.instruction(&Instruction::LocalGet(s_tail_chunk_len));
+    function.instruction(&Instruction::I32Store(MemArg {
+        offset: 0,
+        align: 2,
+        memory_index: 0,
+    }));
+
+    // copy_i++
+    function.instruction(&Instruction::LocalGet(s_item_idx));
+    function.instruction(&Instruction::I32Const(1));
+    function.instruction(&Instruction::I32Add);
+    function.instruction(&Instruction::LocalSet(s_item_idx));
+    function.instruction(&Instruction::Br(0));
+    function.instruction(&Instruction::End);
+    function.instruction(&Instruction::End);
+
+    // Finalize last chunk iff tail_len > 0
+    function.instruction(&Instruction::LocalGet(s_iter));
+    function.instruction(&Instruction::I32Eqz);
+    function.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
+    function.instruction(&Instruction::Else);
+    function.instruction(&Instruction::LocalGet(s_tail_ptr));
+    function.instruction(&Instruction::LocalGet(s_chunk_idx));
+    function.instruction(&Instruction::I32Const(4));
+    function.instruction(&Instruction::I32Mul);
+    function.instruction(&Instruction::I32Add);
+    function.instruction(&Instruction::LocalGet(s_tail_chunk_ptr));
+    function.instruction(&Instruction::I32Store(MemArg {
+        offset: header_chunk_ptr_offset(0) as u64,
+        align: 2,
+        memory_index: 0,
+    }));
+    function.instruction(&Instruction::LocalGet(s_chunk_idx));
+    function.instruction(&Instruction::I32Const(1));
+    function.instruction(&Instruction::I32Add);
+    function.instruction(&Instruction::LocalSet(s_chunk_idx));
+    function.instruction(&Instruction::End);
+
+    // header.total_len = tail_len; header.n_chunks = n_tail_chunks
+    function.instruction(&Instruction::LocalGet(s_tail_ptr));
+    function.instruction(&Instruction::LocalGet(s_iter));
+    function.instruction(&Instruction::I32Store(MemArg {
+        offset: header_total_len_offset() as u64,
+        align: 2,
+        memory_index: 0,
+    }));
+    function.instruction(&Instruction::LocalGet(s_tail_ptr));
+    function.instruction(&Instruction::LocalGet(s_chunk_idx));
+    function.instruction(&Instruction::I32Store(MemArg {
+        offset: header_n_chunks_offset() as u64,
+        align: 2,
+        memory_index: 0,
+    }));
+
+    emit_push_tagged_ptr(function, s_tail_ptr, TAG_LIST);
+    function.instruction(&Instruction::LocalSet(tail_local));
+}
+
 /// Emit Wasm that stores a tagged i64 value (currently on the Wasm value stack)
 /// to logical index `index_local` in the chunked list at `header_ptr_local`.
 ///
@@ -7164,229 +7342,25 @@ fn emit_case_match(
                 }
 
                 // Tail binding: build a new chunked list for elements [n_items..total_len].
-                // Strategy: allocate a 1-chunk header, loop over source elements using
-                // runtime chunk-aware indexing to build the tail chunked list.
                 if let Some(tail_name) = tail {
                     let tail_local = ctx.get(tail_name)?;
-
-                    // tail_len = s_list_len - n_items (runtime value)
-                    // Compute tail_len and store in s_iter (reuse as tail_len here)
-                    function.instruction(&Instruction::LocalGet(s_list_len));
-                    function.instruction(&Instruction::I32Const(n_items));
-                    function.instruction(&Instruction::I32Sub);
-                    function.instruction(&Instruction::LocalSet(s_iter)); // s_iter = tail_len
-
-                    // if tail_len == 0: emit empty chunked header (total_len=0, n_chunks=0)
-                    //   then br out of if_len to continue arm execution.
-                    // else: build chunked tail.
-                    // We handle both cases uniformly by always allocating at least a minimal header.
-
-                    // Allocate tail header: header_alloc_size(1) = 12 bytes (fits ≤ CHUNK_SIZE tail)
-                    // For larger tails (> CHUNK_SIZE elements), we'd need a multi-chunk header.
-                    // Simplified implementation: allocate header for ceil(tail_len / CHUNK_SIZE) slots.
-                    // Since tail_len is a runtime value, we use a generous upper bound:
-                    // max_tail_chunks = ceil(total_len / CHUNK_SIZE) which is bounded by
-                    // ceil(s_list_len / CHUNK_SIZE). We allocate for that.
-                    // alloc_size = 8 + ceil(s_list_len / CHUNK_SIZE) * 4
-
-                    // Compute n_tail_header_slots = (s_list_len + CHUNK_SIZE - 1) / CHUNK_SIZE
-                    function.instruction(&Instruction::LocalGet(s_list_len));
-                    function.instruction(&Instruction::I32Const(CHUNK_SIZE as i32 - 1));
-                    function.instruction(&Instruction::I32Add);
-                    function.instruction(&Instruction::I32Const(CHUNK_SIZE as i32));
-                    function.instruction(&Instruction::I32DivU);
-                    // alloc_size = 8 + n_slots * 4
-                    function.instruction(&Instruction::I32Const(4));
-                    function.instruction(&Instruction::I32Mul);
-                    function.instruction(&Instruction::I32Const(8));
-                    function.instruction(&Instruction::I32Add);
-                    function.instruction(&Instruction::LocalSet(s_alloc_size));
-                    emit_alloc_from_top(function, &hs, s_alloc_size, s_tail_ptr);
-
-                    // Allocate first tail chunk
-                    function.instruction(&Instruction::I32Const(chunk_alloc_size() as i32));
-                    function.instruction(&Instruction::LocalSet(s_alloc_size));
-                    emit_alloc_from_top(function, &hs, s_alloc_size, s_tail_chunk_ptr);
-                    // tail_chunk_len = 0
-                    function.instruction(&Instruction::I32Const(0));
-                    function.instruction(&Instruction::LocalSet(s_tail_chunk_len));
-                    // n_tail_chunks = 0 (we'll increment as we finish chunks)
-                    // Use s_chunk_idx as n_tail_chunks counter
-                    function.instruction(&Instruction::I32Const(0));
-                    function.instruction(&Instruction::LocalSet(s_chunk_idx));
-
-                    // Loop: for copy_i in 0..tail_len:
-                    //   src_logical = n_items + copy_i
-                    //   src_chunk = src_logical / CHUNK_SIZE
-                    //   src_item  = src_logical % CHUNK_SIZE
-                    //   val = source_header[8 + src_chunk*4] then chunk[4 + src_item*8]
-                    //   if tail_chunk_len == CHUNK_SIZE: finalize chunk, alloc new one
-                    //   tail_chunk[4 + tail_chunk_len*8] = val
-                    //   tail_chunk[0] = tail_chunk_len + 1; tail_chunk_len++
-
-                    // s_item_idx = 0 (copy loop counter)
-                    function.instruction(&Instruction::I32Const(0));
-                    function.instruction(&Instruction::LocalSet(s_item_idx));
-
-                    function.instruction(&Instruction::Block(wasm_encoder::BlockType::Empty));
-                    function.instruction(&Instruction::Loop(wasm_encoder::BlockType::Empty));
-
-                    // if copy_i >= tail_len → break
-                    function.instruction(&Instruction::LocalGet(s_item_idx));
-                    function.instruction(&Instruction::LocalGet(s_iter)); // tail_len
-                    function.instruction(&Instruction::I32GeU);
-                    function.instruction(&Instruction::BrIf(1));
-
-                    // src_logical = n_items + copy_i
-                    function.instruction(&Instruction::LocalGet(s_item_idx));
-                    function.instruction(&Instruction::I32Const(n_items));
-                    function.instruction(&Instruction::I32Add);
-                    function.instruction(&Instruction::LocalSet(s_alloc_size)); // src_logical
-                    emit_chunked_load(
+                    emit_case_bind_tail_list(
                         function,
+                        &hs,
+                        tail_local,
                         s_list_ptr,
-                        s_alloc_size,
                         s_list_len,
+                        s_alloc_size,
+                        s_iter,
+                        s_tail_ptr,
+                        s_chunk_idx,
+                        s_item_idx,
                         s_chunk_ptr,
+                        s_tail_chunk_ptr,
+                        s_tail_chunk_len,
                         s_load_chunk_ptr,
-                    ); // val on stack (i64)
-
-                    // Save val temporarily in s_chunk_ptr (reinterpreting i64 as scratch)
-                    // Actually: we need to store i64 but s_chunk_ptr is i32.
-                    // Instead: store val to the tail chunk directly after ensuring space.
-                    // We need s_tail_chunk_len to not be CHUNK_SIZE, so check first.
-                    // Reorder: save val to a second i64 scratch slot.
-                    // HELPER_SCRATCH_I64 = 3, but we only have i64_base (scratch.i64_base) available.
-                    // The HeapEmitState doesn't have a scratch i64 in this scope.
-                    // Solution: use LocalTee into a reinterpreted slot — not possible directly.
-                    // Use the trick: store to tail chunk *first* (we know s_tail_chunk_len < CHUNK_SIZE
-                    // at this point after the grow check), then update len.
-                    //
-                    // Actually: rearrange to (1) check if tail chunk full → rotate, (2) store val.
-                    // But val is already on the stack from the load above. We can't easily defer.
-                    // Solution: use the fact that we have a small i64 scratch via hs.scratch.
-                    // In HeapEmitState context, i64 scratch is available via hs.scratch.i64_base
-                    // but we only have access to the HeapEmitState via `hs` (which is &HeapEmitState).
-                    // The actual i64 scratch base was set up as HELPER_SCRATCH_I64 locals.
-                    // Let's store to a named slot: use the tail_local itself temporarily, then overwrite.
-                    // But that would clobber tail_local before we bind it.
-                    //
-                    // Simplest approach: load into the LAST i64 helper scratch slot.
-                    // hs.scratch.i64_base is the index of the first helper i64 scratch local.
-                    // ListPattern has access to hs (HeapEmitState) but not the full i64 scratch.
-                    // Actually looking at other code: uses hs.scratch.i64_base for i64 scratch.
-                    let val_i64 = hs.scratch.i64_base;
-                    function.instruction(&Instruction::LocalSet(val_i64)); // save val
-
-                    // Check if current tail chunk is full → rotate
-                    function.instruction(&Instruction::LocalGet(s_tail_chunk_len));
-                    function.instruction(&Instruction::I32Const(CHUNK_SIZE as i32));
-                    function.instruction(&Instruction::I32Eq);
-                    function.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
-                    // Finalize current chunk: write chunk.len (already written each iteration)
-                    // Store current tail_chunk_ptr into tail header at slot n_tail_chunks
-                    function.instruction(&Instruction::LocalGet(s_tail_ptr));
-                    function.instruction(&Instruction::LocalGet(s_chunk_idx)); // n_tail_chunks
-                    function.instruction(&Instruction::I32Const(4));
-                    function.instruction(&Instruction::I32Mul);
-                    function.instruction(&Instruction::I32Add);
-                    function.instruction(&Instruction::LocalGet(s_tail_chunk_ptr));
-                    function.instruction(&Instruction::I32Store(MemArg {
-                        offset: header_chunk_ptr_offset(0) as u64,
-                        align: 2,
-                        memory_index: 0,
-                    }));
-                    // n_tail_chunks += 1
-                    function.instruction(&Instruction::LocalGet(s_chunk_idx));
-                    function.instruction(&Instruction::I32Const(1));
-                    function.instruction(&Instruction::I32Add);
-                    function.instruction(&Instruction::LocalSet(s_chunk_idx));
-                    // Allocate new tail chunk
-                    function.instruction(&Instruction::I32Const(chunk_alloc_size() as i32));
-                    function.instruction(&Instruction::LocalSet(s_alloc_size));
-                    emit_alloc_from_top(function, &hs, s_alloc_size, s_tail_chunk_ptr);
-                    // tail_chunk_len = 0
-                    function.instruction(&Instruction::I32Const(0));
-                    function.instruction(&Instruction::LocalSet(s_tail_chunk_len));
-                    function.instruction(&Instruction::End); // end if (chunk full)
-
-                    // Store val into tail chunk at [4 + tail_chunk_len * 8]
-                    function.instruction(&Instruction::LocalGet(s_tail_chunk_ptr));
-                    function.instruction(&Instruction::LocalGet(s_tail_chunk_len));
-                    function.instruction(&Instruction::I32Const(8));
-                    function.instruction(&Instruction::I32Mul);
-                    function.instruction(&Instruction::I32Add);
-                    function.instruction(&Instruction::LocalGet(val_i64));
-                    function.instruction(&Instruction::I64Store(MemArg {
-                        offset: chunk_item_offset(0) as u64,
-                        align: 3,
-                        memory_index: 0,
-                    }));
-                    // tail_chunk_len += 1; update chunk.len
-                    function.instruction(&Instruction::LocalGet(s_tail_chunk_len));
-                    function.instruction(&Instruction::I32Const(1));
-                    function.instruction(&Instruction::I32Add);
-                    function.instruction(&Instruction::LocalSet(s_tail_chunk_len));
-                    function.instruction(&Instruction::LocalGet(s_tail_chunk_ptr));
-                    function.instruction(&Instruction::LocalGet(s_tail_chunk_len));
-                    function.instruction(&Instruction::I32Store(MemArg {
-                        offset: 0,
-                        align: 2,
-                        memory_index: 0,
-                    }));
-
-                    // copy_i++
-                    function.instruction(&Instruction::LocalGet(s_item_idx));
-                    function.instruction(&Instruction::I32Const(1));
-                    function.instruction(&Instruction::I32Add);
-                    function.instruction(&Instruction::LocalSet(s_item_idx));
-                    function.instruction(&Instruction::Br(0));
-                    function.instruction(&Instruction::End); // end loop
-                    function.instruction(&Instruction::End); // end block
-
-                    // Finalize last tail chunk (if tail_len > 0)
-                    function.instruction(&Instruction::LocalGet(s_iter)); // tail_len
-                    function.instruction(&Instruction::I32Eqz);
-                    function.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
-                    function.instruction(&Instruction::Else);
-                    // Store last tail_chunk_ptr into header[8 + n_tail_chunks * 4]
-                    function.instruction(&Instruction::LocalGet(s_tail_ptr));
-                    function.instruction(&Instruction::LocalGet(s_chunk_idx)); // n_tail_chunks
-                    function.instruction(&Instruction::I32Const(4));
-                    function.instruction(&Instruction::I32Mul);
-                    function.instruction(&Instruction::I32Add);
-                    function.instruction(&Instruction::LocalGet(s_tail_chunk_ptr));
-                    function.instruction(&Instruction::I32Store(MemArg {
-                        offset: header_chunk_ptr_offset(0) as u64,
-                        align: 2,
-                        memory_index: 0,
-                    }));
-                    // n_tail_chunks += 1
-                    function.instruction(&Instruction::LocalGet(s_chunk_idx));
-                    function.instruction(&Instruction::I32Const(1));
-                    function.instruction(&Instruction::I32Add);
-                    function.instruction(&Instruction::LocalSet(s_chunk_idx));
-                    function.instruction(&Instruction::End); // end if (tail_len > 0)
-
-                    // Write tail header: total_len = tail_len, n_chunks = n_tail_chunks
-                    function.instruction(&Instruction::LocalGet(s_tail_ptr));
-                    function.instruction(&Instruction::LocalGet(s_iter)); // tail_len
-                    function.instruction(&Instruction::I32Store(MemArg {
-                        offset: header_total_len_offset() as u64,
-                        align: 2,
-                        memory_index: 0,
-                    }));
-                    function.instruction(&Instruction::LocalGet(s_tail_ptr));
-                    function.instruction(&Instruction::LocalGet(s_chunk_idx)); // n_tail_chunks
-                    function.instruction(&Instruction::I32Store(MemArg {
-                        offset: header_n_chunks_offset() as u64,
-                        align: 2,
-                        memory_index: 0,
-                    }));
-
-                    // Bind tail_local to tagged header ptr
-                    emit_push_tagged_ptr(function, s_tail_ptr, TAG_LIST);
-                    function.instruction(&Instruction::LocalSet(tail_local));
+                        n_items,
+                    );
                 }
 
                 // Emit body + br out of: if_len (0) + if_list (1) + outer block (2)

@@ -336,6 +336,33 @@ main =
     )
 }
 
+fn recursive_list_spread_single_item_empty_tail_source() -> String {
+    r#"
+import goby/stdio
+
+build : Int -> List Int can Print
+build n =
+  if n == 0
+    []
+  else
+    rest = build (n - 1)
+    [n, ..rest]
+
+main : Unit -> Unit can Print, Read
+main =
+  _lines = read_lines ()
+  xs = build 1
+  case xs
+    [h, ..t] ->
+      case t
+        [] -> println "${h}"
+        _ -> println "non-empty"
+    _ ->
+      println "mismatch"
+"#
+    .to_string()
+}
+
 fn named_callback_list_spread_chain_source(n: usize) -> String {
     format!(
         r#"
@@ -642,6 +669,14 @@ fn rr4_exact_length_pattern_crosses_chunk_boundary_and_matches() {
     let output = execute_runtime_module_with_stdin(&module, Some("x\n".to_string()))
         .expect("exact-length list pattern should match across the first chunk boundary");
     assert_eq!(output.as_deref(), Some("33\n1\n"));
+}
+
+#[test]
+fn rr4_head_tail_pattern_binds_empty_tail_for_single_item_list() {
+    let module = parse_general_lowered_module(&recursive_list_spread_single_item_empty_tail_source());
+    let output = execute_runtime_module_with_stdin(&module, Some("x\n".to_string()))
+        .expect("single-item [h, ..t] should bind t as empty list");
+    assert_eq!(output.as_deref(), Some("1\n"));
 }
 
 #[test]

@@ -116,6 +116,15 @@ M4 follow-up checkpoint (2026-04-11, shared list-view guards):
 - Verification checkpoint:
   - `cargo test -p goby-wasm` is green (`624 passed, 0 failed`).
 
+M4 follow-up checkpoint (2026-04-11, tail-binding ownership split):
+- Extracted `ListPattern` tail-construction mechanics out of `emit_case_match`
+  into `emit_case_bind_tail_list`, keeping list-view arm orchestration thin and
+  pushing chunked tail allocation/copy/finalization into a dedicated helper.
+- Added regression coverage for empty-tail binding on `[h, ..t]`:
+  - `runtime_rr_tests::rr4_head_tail_pattern_binds_empty_tail_for_single_item_list`
+- Verification checkpoint:
+  - `cargo test -p goby-wasm` is green (`625 passed, 0 failed`).
+
 ## Recently Completed
 
 - **Sequence-backed List M2** (complete, 2026-04-10). Evaluated Candidates A/B/C
