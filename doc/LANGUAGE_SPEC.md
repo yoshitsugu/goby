@@ -1,7 +1,7 @@
 # Goby Language Specification (Current)
 
 Status: active
-Last updated: 2026-04-10
+Last updated: 2026-04-11
 
 This file is the current language-spec source of truth for user-visible Goby
 syntax/semantics.
@@ -54,8 +54,13 @@ syntax/semantics.
   sequence-backed internal form (see `doc/PLAN_SEQUENCE.md`). List-pattern forms
   are treated as sequence views — that is, pattern matching operates on
   positional structure without exposing or assuming a linked-list node layout.
-  No specific complexity bounds for indexing or update are guaranteed until the
-  representation direction is benchmarked (see `doc/PLAN_SEQUENCE.md`).
+  Honest performance framing for current chunked representation:
+  - indexed read remains practical for ordinary scripts;
+  - repeated head-tail extraction (`[x, ..rest]`) is amortized O(1) per step,
+    with chunk-boundary steps costing O(n/CHUNK_SIZE) due to header-copy work
+    under the current bump allocator;
+  - list-pattern forms remain ordinary source-level constructs, but repeated
+    decomposition is not currently promised as strict O(1) worst-case.
 - List literal spread (expression side):
   - `[a, b, ..xs]` (zero or more prefix elements + one trailing spread segment)
   - spread segment is expression-only syntax and must be trailing

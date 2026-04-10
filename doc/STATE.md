@@ -4,20 +4,21 @@ Last updated: 2026-04-11
 
 ## Current Focus
 
-Next slice: **Sequence-backed List M4** (`doc/PLAN_SEQUENCE.md`) — re-found
-list pattern matching as sequence views on top of the M3 chunked runtime boundary.
+Next slice: **Sequence-backed List M5** (`doc/PLAN_SEQUENCE.md`) — rebuild
+stdlib traversal on explicit sequence/iterator boundaries.
 
-M4 context:
-- M0–M3 of the Sequence-backed List redesign are complete (2026-04-10).
+M5 context:
+- M0–M4 of the Sequence-backed List redesign are complete (2026-04-11).
 - Candidate B (Chunked Sequence) remains the locked direction in
   `doc/PLAN_SEQUENCE.md §8`.
-- M3 checkpoints now include:
+- M3/M4 checkpoints now include:
   - CHUNK_SIZE locked as a named compile-time constant (`CHUNK_SIZE = 32`);
   - explicit runtime/lowering boundaries for index read/update, list pattern
     extraction, and traversal forms (`each`/`map`/`fold` paths);
-  - `cargo test -p goby-wasm` green (622 passed) with RR-4 large-shape
-    regressions resolved and a multi-chunk `[h, ..t]` runtime regression test
-    added.
+  - list-pattern boundaries split into shared extraction/guard/tail helpers in
+    `gen_lower/emit.rs`;
+  - `cargo test -p goby-wasm` green (625 passed) with chunk-boundary and
+    empty-tail list-pattern regressions locked.
 
 TCO contract reminder (stable, no action needed):
 - generic TCO is published and locked in `doc/LANGUAGE_SPEC.md`.
@@ -29,14 +30,13 @@ TCO contract reminder (stable, no action needed):
 
 Immediate next steps:
 
-- **Sequence M4**: consolidate list pattern semantics on sequence views.
-  - Route `[]`, `[x, ..rest]`, and exact/prefix-tail variants through one shared
-    sequence-view extraction boundary.
-  - Audit current list-pattern lowering for duplicate shape-specific logic and
-    collapse onto shared helpers where possible.
-  - Add additional pattern-heavy regressions that exercise repeated head/tail
-    decomposition and exact-length matching across chunk boundaries.
-  - Document honest performance language for repeated list-pattern extraction.
+- **Sequence M5**: rebuild stdlib traversal on explicit boundaries.
+  - Rework `length` / `each` / `map` / `fold` execution ownership so optimized
+    paths remain explicit and maintainable.
+  - Decide minimal intrinsic/lowerer surface that keeps stdlib readable while
+    meeting practical scripting targets.
+  - Compare sequence-intrinsic vs iterator/effect-lowering trade-offs and keep
+    the smallest explicit machinery that satisfies current workload gates.
 
 Checkpoint update (2026-04-10, later slice):
 - `goby-wasm` Candidate B migration advanced substantially in
@@ -125,7 +125,23 @@ M4 follow-up checkpoint (2026-04-11, tail-binding ownership split):
 - Verification checkpoint:
   - `cargo test -p goby-wasm` is green (`625 passed, 0 failed`).
 
+M4 completion checkpoint (2026-04-11):
+- List-pattern forms (`[]`, `[x, ..rest]`, exact-length, prefix/tail variants)
+  now run on shared sequence-view boundaries in emitter ownership.
+- Honest performance language for repeated list-pattern extraction was added to
+  `doc/LANGUAGE_SPEC.md` (amortized O(1) with chunk-boundary
+  O(n/CHUNK_SIZE) header-copy cost under bump allocation).
+- `doc/PLAN_SEQUENCE.md` now marks M4 complete; next focus is M5.
+
 ## Recently Completed
+
+- **Sequence-backed List M4** (complete, 2026-04-11). Re-founded list pattern
+  matching on shared sequence-view boundaries in Wasm emission. Added/locked
+  chunk-boundary and empty-tail regressions
+  (`rr4_repeated_head_tail_decomposition_crosses_chunk_boundaries`,
+  `rr4_exact_length_pattern_crosses_chunk_boundary_and_matches`,
+  `rr4_head_tail_pattern_binds_empty_tail_for_single_item_list`) and documented
+  honest repeated-pattern performance language in `doc/LANGUAGE_SPEC.md`.
 
 - **Sequence-backed List M2** (complete, 2026-04-10). Evaluated Candidates A/B/C
   via static complexity + allocator-pressure analysis. Locked direction as
@@ -441,6 +457,6 @@ M4 follow-up checkpoint (2026-04-11, tail-binding ownership split):
 - [`doc/PLAN.md`](PLAN.md) — top-level roadmap
 - [`doc/LANGUAGE_SPEC.md`](LANGUAGE_SPEC.md) — current language specification
 - [`doc/PLAN_IR.md`](PLAN_IR.md) — IR lowering boundary design reference
-- [`doc/PLAN_SEQUENCE.md`](PLAN_SEQUENCE.md) — active List redesign roadmap (M3 next)
+- [`doc/PLAN_SEQUENCE.md`](PLAN_SEQUENCE.md) — active List redesign roadmap (M5 next)
 - [`doc/PLAN_TCO.md`](PLAN_TCO.md) — TCO plan (all milestones complete)
 - [`doc/BUGS.md`](BUGS.md) — known bug tracker

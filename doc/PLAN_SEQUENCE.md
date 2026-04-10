@@ -519,7 +519,7 @@ The following product-direction decisions are already locked for this plan:
     and a multi-chunk `[h, ..t]` runtime regression case.
   - Direction lock for Candidate B remains active after M3 verification.
 
-- [ ] **M4: Re-found list pattern matching on sequence views**
+- [x] **M4: Re-found list pattern matching on sequence views** (complete, 2026-04-11)
   - Route `[]`, `[x, ..rest]`, exact-length patterns, and prefix/tail variants
     through one shared sequence-view boundary.
   - Ensure parser/typechecker semantics remain elegant while runtime extraction
@@ -528,6 +528,12 @@ The following product-direction decisions are already locked for this plan:
     list-pattern use based on benchmark evidence.
   - Add regression coverage for list-pattern-heavy programs on the new runtime
     model.
+  - Verification snapshot:
+    - `cargo test -p goby-wasm` green (`625 passed, 0 failed, 4 ignored`).
+    - chunk-boundary and empty-tail regressions locked:
+      - `rr4_repeated_head_tail_decomposition_crosses_chunk_boundaries`
+      - `rr4_exact_length_pattern_crosses_chunk_boundary_and_matches`
+      - `rr4_head_tail_pattern_binds_empty_tail_for_single_item_list`
 
 - [ ] **M5: Rebuild stdlib traversal on explicit sequence/iterator boundaries**
   - Rework `length`, `each`, `map`, `fold`, and related stdlib helpers so their
@@ -586,9 +592,10 @@ The following product-direction decisions are already locked for this plan:
 
 - **Resolved (M2):** Which family offers the best balance for Goby in practice?
   Candidate B (Chunked Sequence) is locked as the direction. See §6.6 and §8.
-- How cheap can Goby honestly make `[x, ..rest]`-style sequence views under the
-  chosen representation, and what performance language should the docs promise?
-  (M4 scope.)
+- **Resolved (M4):** honest performance language for `[x, ..rest]`-style
+  sequence views is now documented in `doc/LANGUAGE_SPEC.md`:
+  amortized O(1) extraction with chunk-boundary O(n/CHUNK_SIZE) header-copy
+  cost under the current bump allocator.
 - How much should stdlib traversal optimization be expressed in sequence
   intrinsics versus iterator/effect lowering?
 - What is the minimum explicit intrinsic/lowerer surface needed to keep stdlib

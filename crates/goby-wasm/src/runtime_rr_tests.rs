@@ -656,8 +656,9 @@ fn rr4_recursive_list_spread_large_head_tail_pattern_executes_after_chunked_migr
 
 #[test]
 fn rr4_repeated_head_tail_decomposition_crosses_chunk_boundaries() {
-    let module =
-        parse_general_lowered_module(&recursive_list_spread_chunk_boundary_pattern_source(100, 33));
+    let module = parse_general_lowered_module(
+        &recursive_list_spread_chunk_boundary_pattern_source(100, 33),
+    );
     let output = execute_runtime_module_with_stdin(&module, Some("x\n".to_string()))
         .expect("large prefix list pattern should bind across chunk boundaries");
     assert_eq!(output.as_deref(), Some("100\n68\n67\n"));
@@ -673,7 +674,8 @@ fn rr4_exact_length_pattern_crosses_chunk_boundary_and_matches() {
 
 #[test]
 fn rr4_head_tail_pattern_binds_empty_tail_for_single_item_list() {
-    let module = parse_general_lowered_module(&recursive_list_spread_single_item_empty_tail_source());
+    let module =
+        parse_general_lowered_module(&recursive_list_spread_single_item_empty_tail_source());
     let output = execute_runtime_module_with_stdin(&module, Some("x\n".to_string()))
         .expect("single-item [h, ..t] should bind t as empty list");
     assert_eq!(output.as_deref(), Some("1\n"));
