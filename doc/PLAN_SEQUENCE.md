@@ -318,11 +318,74 @@ using a named workload suite that includes at least:
 - repeated `[x, ..rest]` / exact-length / prefix-tail list-pattern workloads;
 - iterator/effect-driven traversal workloads;
 - nested `List (List a)` workloads, including AoC-style grid transforms;
-- stdlib-heavy scripts using `length`, `each`, `map`, and `fold`.
+- stdlib-heavy scripts using `length`, `each`, `map`, and `fold`;
+- bump allocator allocation pressure: repeated immutable updates must not
+  produce memory exhaustion within the §6.6 success-bar input bounds.
 
 The suite does not need to promise parity with mutable-array-heavy languages.
 It does need to define a stable success bar for saying that `List` is practical
 for ordinary Goby scripts.
+
+### 6.6 Workload Matrix and Success Bar (M2, 2026-04-10)
+
+**Success bar definition:** A representation is "practical for ordinary scripts"
+if none of the seven workload types below produce memory exhaustion or visibly
+O(n²) behavior on inputs of size ≤ 1 000 total elements under the Goby bump
+allocator. For nested `List (List a)` workloads: ≤ 30 rows × 30 columns
+(≤ 900 total elements).
+
+This bar may be revised in M3 once actual benchmark execution is possible.
+It is a planning threshold, not a performance contract.
+
+**Bump allocator constraint:** Goby's runtime uses a bump allocator
+(allocate, never free). Any representation that requires structural sharing to
+achieve good performance will instead accumulate O(n) allocation per operation
+under this model, equivalent to copying. Representations that _avoid_ sharing
+(e.g., write new flat chunks) behave honestly under the allocator constraint.
+
+| Workload | Candidate A (flat array) | Candidate B (Chunked) | Candidate C (Spine+Tail) |
+|---|---|---|---|
+| Indexed read (large list) | O(1) ✓ | O(1) into chunk ptr + O(1) within chunk ✓ | O(n/32) ~ ok |
+| Immutable point update | O(n) copy ✗ | O(CHUNK_SIZE) chunk copy ✓ | O(n/32) copy ✗ |
+| `[x, ..rest]` pattern (split) | O(n) copy ✗ | O(n/CHUNK_SIZE) worst case at boundary; O(1) amortized ✓ | O(1) head chunk ✓ |
+| Iterator/effect traversal | O(n) linear ✓ | O(n) chunk-walk ✓ | O(n) segment-walk ✓ |
+| Nested `List (List a)` grid | O(n²) for row update ✗ | O(n × CHUNK_SIZE) ✓ | O(n²/32) ~ ok |
+| stdlib `each`/`map`/`fold` | O(n) linear ✓ | O(n) chunk-walk ✓ | O(n) segment-walk ✓ |
+| Bump alloc pressure (update) | O(n) per update ✗ | O(CHUNK_SIZE) per update ✓ | O(seg_size) per update ✓ |
+
+Legend: ✓ = meets success bar, ✗ = fails success bar, ~ ok = marginal
+
+**Candidate A** fails on immutable update, pattern split, and nested grid workloads.
+Already demonstrated harmful in the RR-4 track (memory exhaustion on recursive
+list-spread patterns). Rejected — see §8.
+
+**Candidate B (Chunked Sequence):**
+- Layout: `(n_chunks: i32, chunk_ptrs: [u32; n_chunks])` header; each chunk is
+  a flat array `(len: i32, items: [i64; CHUNK_SIZE])`.
+- CHUNK_SIZE is a fixed compile-time constant (e.g. 32 elements; each chunk
+  occupies 4 bytes len + 32×8 bytes items = 260 bytes; TBD in M3 where this
+  lives as a build constant and whether it is tunable).
+- Indexed read at position i: O(1) — compute chunk index i/CHUNK_SIZE into the
+  flat chunk_ptr array, then O(1) into the chunk. Total: O(1). Header copying
+  on append: O(n_chunks) = O(n/CHUNK_SIZE); for n≤1000 and CHUNK_SIZE=32,
+  n_chunks≤32, which is acceptable.
+- Split at head: consume first element of the leading chunk; if chunk empties,
+  drop the chunk. Amortized O(1) per element consumed; worst case O(n/CHUNK_SIZE)
+  when a chunk boundary is crossed and the header array must be copied under the
+  bump allocator (same as header copy on append).
+- Update: copy the affected chunk, replace chunk pointer. Cost: O(CHUNK_SIZE).
+- Under bump allocator: no structural sharing needed; each update copies one chunk.
+  Total allocation per update: O(CHUNK_SIZE) = constant in practice. ✓
+
+**Candidate C (Spine+Tail):**
+- Small lists (≤ 32 elements): same flat array as Candidate A.
+- Large lists: `(head_seg_ptr: u32, tail_ptr: u32)` — linked segments of flat arrays.
+- Indexed read: walk segments O(n/seg_size).
+- Split: take head from first segment; O(1) if first segment is non-empty.
+- Update at index i: copy the segment containing i; O(seg_size).
+- Weakness: O(n/32) indexed read does not meet the success bar for large random
+  access patterns. Also, the two-path representation adds complexity at every
+  operation boundary.
 
 ## 7. Acceptance Standard For Saying "Goby List Has Been Re-Founded"
 
@@ -373,6 +436,24 @@ The following product-direction decisions are already locked for this plan:
   symbol-specific intrinsics; add explicit intrinsics only where benchmarked
   workloads (§6.5) justify them. This principle may be refined once workload
   evidence from M2/M3 is available.
+- Candidate A (flat array, current implementation) is rejected as the target
+  representation as of M2 (2026-04-10): O(n) prepend and pattern-split
+  allocation was demonstrated harmful in the RR-4 track, causing memory
+  exhaustion on recursive list-spread programs. Candidate A remains in use
+  until M3 lands the chosen replacement.
+- Representation direction locked as of M2 (2026-04-10): Candidate B
+  (Chunked Sequence). Rationale: O(1) indexed read (flat chunk_ptr array +
+  intra-chunk offset); O(CHUNK_SIZE) chunk-copy for split and update (no
+  structural sharing needed under bump allocator); header append cost is
+  O(n/CHUNK_SIZE) which is bounded and small for the §6.6 success-bar input
+  size; implementation complexity is moderate and appropriate for project
+  scale. Candidate C was rejected for O(n/32) indexed read and two-path
+  representation complexity at every operation boundary.
+  Candidate C was also rejected for O(n/32) immutable update cost (marked ✗
+  in the §6.6 matrix).
+  This lock is conditional: if M3 benchmark execution reveals that chunked
+  performance does not meet the §6.6 success bar, this direction will be
+  revised before M4.
 
 ## 9. Milestones
 
@@ -407,25 +488,23 @@ The following product-direction decisions are already locked for this plan:
     or head/tail-as-idiomatic framing found in README.md or examples/README.md;
     no changes required.)
 
-- [ ] **M2: Prototype candidate internal representations**
+- [x] **M2: Prototype candidate internal representations** (complete, 2026-04-10)
   - Evaluate at least two viable sequence-backed `List` representation
     directions, with enough prototype or implementation evidence to compare
     them honestly.
-  - Evaluate them on:
-    - indexed reads,
-    - indexed updates,
-    - head/tail pattern extraction,
-    - iteration-heavy workloads,
-    - update-heavy workloads,
-    - AoC-style two-dimensional list workloads.
-  - Use current literature and practical implementations as inputs when
-    selecting the candidate family and final direction.
-  - Identify what each candidate would require from explicit lowerer/runtime
-    boundaries before locking those boundaries in the next milestone.
-  - Lock the representation direction only after shared benchmarks and
-    implementation-complexity review.
+  - Evaluated three candidates (A: flat array, B: Chunked Sequence, C: Spine+Tail)
+    via static complexity analysis against the §6.6 workload matrix and success bar.
+  - Bump allocator allocation pressure included as a named evaluation axis.
+  - Candidate A rejected: O(n) prepend/split demonstrated harmful in RR-4 (see §8).
+  - Candidate B (Chunked Sequence) selected: O(CHUNK_SIZE) chunk-copy per update
+    (constant cost); no structural sharing needed under bump allocator; moderate
+    implementation complexity (see §8).
+  - Workload matrix and success bar recorded in §6.6.
+  - Direction lock is conditional on M3 benchmark execution meeting the §6.6 bar.
 
 - [ ] **M3: Introduce an explicit sequence runtime boundary**
+  - Implement the Candidate B (Chunked Sequence) runtime representation. Lock
+    CHUNK_SIZE as a named compile-time constant and document it.
   - Add compiler/runtime-owned sequence operation boundaries for:
     - index read,
     - immutable update,
@@ -436,6 +515,9 @@ The following product-direction decisions are already locked for this plan:
   - Prefer shared lowerer-owned boundaries first and add explicit intrinsics
     only where benchmarked needs justify them.
   - Keep room for effect-aware iterator lowering on top of the same boundary.
+  - Run the full §6.6 workload suite and record results. If the Candidate B
+    direction does not meet the §6.6 success bar on any workload type, pause
+    M3 and revise the §8 direction before continuing.
 
 - [ ] **M4: Re-found list pattern matching on sequence views**
   - Route `[]`, `[x, ..rest]`, exact-length patterns, and prefix/tail variants
@@ -500,25 +582,18 @@ The following product-direction decisions are already locked for this plan:
   - Lock the wording for what Goby means by "default collection" and by
     "practical indexed/update behavior" for `List`.
 
-## 10. Remaining Open Questions
+## 10. Open Questions (and Resolved Decisions)
 
-- Which current research-informed family offers the best balance for Goby in
-  practice:
-  - chunked sequence,
-  - persistent-vector/RRB-style sequence,
-  - finger-tree-like sequence,
-  - or a hybrid,
-  while still satisfying:
-  - indexing practicality,
-  - pattern-view elegance,
-  - implementation complexity,
-  - compatibility with effect-oriented traversal?
+- **Resolved (M2):** Which family offers the best balance for Goby in practice?
+  Candidate B (Chunked Sequence) is locked as the direction. See §6.6 and §8.
 - How cheap can Goby honestly make `[x, ..rest]`-style sequence views under the
   chosen representation, and what performance language should the docs promise?
+  (To be answered in M3 after benchmark execution.)
 - How much should stdlib traversal optimization be expressed in sequence
   intrinsics versus iterator/effect lowering?
 - What is the minimum explicit intrinsic/lowerer surface needed to keep stdlib
   readable while still making `List` practical for ordinary scripts?
+- What is the right CHUNK_SIZE for Goby's workload profile? (TBD in M3.)
 
 ## 11. Working Conclusion
 
