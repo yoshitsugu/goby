@@ -361,7 +361,7 @@ If any of these remain missing, the wording should stay narrower, such as
     - [x] update the milestone notes once the representative proof set is
       complete.
 
-- [ ] **M6: Define and test the failure boundary**
+- [x] **M6: Define and test the failure boundary**
   - Lock diagnostics and tests for unsupported cases such as:
     - indirect/higher-order calls that are not yet guaranteed,
     - unresolved local function values,
@@ -396,25 +396,43 @@ If any of these remain missing, the wording should stay narrower, such as
       and must not imply that ordinary successful execution means the shape is
       covered by constant-stack TCO.
   - Checkpoints:
-    - [ ] enumerate the unsupported tail-looking buckets that remain after M5,
+    - [x] enumerate the unsupported tail-looking buckets that remain after M5,
       with one owner decision per bucket;
-    - [ ] decide which buckets are compile-time rejected and which are allowed
+    - [x] decide which buckets are compile-time rejected and which are allowed
       to execute as ordinary stack-consuming calls;
-    - [ ] add at least one locked test for an indirect/higher-order tail-looking
+    - [x] add at least one locked test for an indirect/higher-order tail-looking
       call proving the chosen contract;
-    - [ ] add at least one locked test for an unresolved local function-value
+    - [x] add at least one locked test for an unresolved local function-value
       tail-looking call proving the chosen contract;
-    - [ ] add at least one locked test for non-tail recursion proving it
+    - [x] add at least one locked test for non-tail recursion proving it
       remains outside the TCO guarantee;
-    - [ ] either add at least one locked test for a backend/path mismatch case
+    - [x] either add at least one locked test for a backend/path mismatch case
       or explicitly remove that bucket from the supported/unsupported matrix
       with matching doc wording;
-    - [ ] audit diagnostics/docs so "outside the guarantee" wording is distinct
+    - [x] audit diagnostics/docs so "outside the guarantee" wording is distinct
       from "unsupported" and from "compiler regression";
-    - [ ] update `doc/LANGUAGE_SPEC.md` / `doc/PLAN_TCO.md` if any unsupported
+    - [x] update `doc/LANGUAGE_SPEC.md` / `doc/PLAN_TCO.md` if any unsupported
       bucket contract changes while closing this milestone;
-    - [ ] record the final unsupported-shape matrix in the plan/state docs once
+    - [x] record the final unsupported-shape matrix in the plan/state docs once
       the boundary is stable.
+  - 2026-04-10 completion slice:
+    - locked compile-path regressions now prove the chosen outside-the-
+      guarantee contract for:
+      - indirect/higher-order tail-looking calls, which remain on
+        `IndirectCall`;
+      - unresolved local function-value tail-looking calls, which also remain
+        on `IndirectCall`;
+      - non-tail recursion, which remains on ordinary `DeclCall` rather than
+        the shared tail-call form;
+    - for these buckets, the chosen M6 contract is “accepted execution may
+      remain ordinary and stack-consuming”; Goby does not promise constant-
+      stack behavior for them;
+    - backend/path mismatch is no longer tracked as a separate unsupported
+      source-shape bucket in the matrix:
+      the TCO guarantee is already scoped only to the compiled Wasm path, so
+      other paths are documented as scope differences instead;
+    - docs now explicitly distinguish “outside the guarantee” from a compiler
+      regression that misses a covered shape.
 
 - [ ] **M7: Publish the user-facing TCO guarantee**
   - Update docs/examples so users can understand what is guaranteed and what is

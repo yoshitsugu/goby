@@ -4,8 +4,8 @@ Last updated: 2026-04-10
 
 ## Current Focus
 
-Next slice: **Track RR, RR-5** (`PLAN.md §4.5`) - move from the completed M5
-covered-shape proof set into M6 failure-boundary honesty.
+Next slice: **Track RR, RR-5** (`PLAN.md §4.5`) - M6 is complete; next work is
+M7 publication wording and any later post-M6 extensions.
 
 Locked TCO contract reminder:
 
@@ -38,12 +38,13 @@ Immediate next steps:
   unified dispatcher-based constant-stack execution model are in place.
   - keep the RR-3/RR-4 shared-boundary discipline: prefer reusable control-flow
     rules over symbol-specific recursion rewrites.
-  - next RR-5 task: close M6 by making the unsupported tail-looking buckets
-    explicit in tests/docs instead of leaving them implicit implementation
-    fallout.
-  - keep the newly documented covered subset stable: let/block tails and
-    statically resolvable local alias chains are now part of the shared direct-
-    call guarantee on the compiled Wasm path.
+  - next RR-5 task: decide whether M7 is now honest enough to publish the
+    current guarantee as “generic TCO” wording, or whether the wording must
+    remain narrower.
+  - keep the documented supported/unsupported split stable:
+    let/block tails and statically resolvable local alias chains are covered;
+    indirect/higher-order tails, unresolved local funcrefs, and non-tail
+    recursion remain outside the guarantee.
   - keep current diagnostics and docs aligned with the locked M0 contract for
     shapes that still fall outside the optimized subset or still execute as
     ordinary calls.
@@ -52,6 +53,24 @@ Immediate next steps:
   later resilience work lands.
 
 ## Recently Completed
+
+- **Track RR, RR-5 failure-boundary contract** (complete for M6, 2026-04-10).
+  - locked compile-path regressions now prove these buckets stay outside the
+    shared direct-call TCO guarantee:
+    - indirect/higher-order tail-looking calls via
+      `compile_module_indirect_tail_call_stays_outside_direct_tco_guarantee`;
+    - unresolved local function-value tail-looking calls via
+      `compile_module_unresolved_local_funcref_tail_call_stays_outside_direct_tco_guarantee`;
+    - non-tail recursion via
+      `compile_module_non_tail_recursion_stays_outside_tco_guarantee`.
+  - the chosen M6 contract for those buckets is explicit:
+    accepted execution may remain on ordinary `IndirectCall` / `DeclCall`
+    paths, may still consume stack, and must be documented as outside the
+    guarantee rather than as covered TCO.
+  - backend/path mismatch is no longer tracked as a separate unsupported-shape
+    matrix row; the TCO contract is simply scoped to the compiled Wasm path.
+  - docs now distinguish “outside the guarantee” from “compiler regression” so
+    a missed covered shape remains a bug to fix, not an allowed fallback.
 
 - **Track RR, RR-5 control-flow completeness proof** (complete for M5,
   2026-04-10).

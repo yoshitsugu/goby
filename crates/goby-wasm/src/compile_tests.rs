@@ -489,6 +489,155 @@ main =
 }
 
 #[test]
+fn compile_module_indirect_tail_call_stays_outside_direct_tco_guarantee() {
+    let source = r#"
+import goby/stdio
+
+apply_tail : (Int -> Unit) -> Int -> Unit can Print
+apply_tail f n =
+  if n == 0
+    ()
+  else
+    f (n - 1)
+
+count_down : Int -> Unit can Print
+count_down n =
+  if n == 0
+    ()
+  else
+    count_down (n - 1)
+
+main : Unit -> Unit can Print, Read
+main =
+  _ = read()
+  apply_tail count_down 8
+  println "done"
+"#;
+    let module = parse_module(source).expect("source should parse");
+    let (_main_instrs, aux_decls) = crate::gen_lower::lower_module_to_instrs(&module)
+        .expect("lowering should not fail")
+        .expect("source should use the general lowering path");
+    let apply_tail = aux_decls
+        .iter()
+        .find(|decl| decl.decl_name == "apply_tail")
+        .expect("apply_tail aux decl should exist");
+    let instrs = crate::gen_lower::emit::collect_all_instrs(&apply_tail.instrs);
+    assert!(
+        instrs.iter().any(|instr| matches!(
+            instr,
+            crate::gen_lower::backend_ir::WasmBackendInstr::IndirectCall { .. }
+        )),
+        "indirect higher-order tail-looking call should stay on IndirectCall, got: {instrs:?}"
+    );
+    assert!(
+        !instrs.iter().any(|instr| matches!(
+            instr,
+            crate::gen_lower::backend_ir::WasmBackendInstr::TailDeclCall { .. }
+        )),
+        "indirect higher-order tail-looking call must stay outside TailDeclCall coverage, got: {instrs:?}"
+    );
+}
+
+#[test]
+fn compile_module_unresolved_local_funcref_tail_call_stays_outside_direct_tco_guarantee() {
+    let source = r#"
+import goby/stdio
+
+apply_local_tail : (Int -> Unit) -> Int -> Unit can Print
+apply_local_tail f n =
+  if n == 0
+    ()
+  else
+    g = f
+    g (n - 1)
+
+count_down : Int -> Unit can Print
+count_down n =
+  if n == 0
+    ()
+  else
+    count_down (n - 1)
+
+main : Unit -> Unit can Print, Read
+main =
+  _ = read()
+  apply_local_tail count_down 8
+  println "done"
+"#;
+    let module = parse_module(source).expect("source should parse");
+    let (_main_instrs, aux_decls) = crate::gen_lower::lower_module_to_instrs(&module)
+        .expect("lowering should not fail")
+        .expect("source should use the general lowering path");
+    let apply_local_tail = aux_decls
+        .iter()
+        .find(|decl| decl.decl_name == "apply_local_tail")
+        .expect("apply_local_tail aux decl should exist");
+    let instrs = crate::gen_lower::emit::collect_all_instrs(&apply_local_tail.instrs);
+    assert!(
+        instrs.iter().any(|instr| matches!(
+            instr,
+            crate::gen_lower::backend_ir::WasmBackendInstr::IndirectCall { .. }
+        )),
+        "unresolved local funcref tail-looking call should stay on IndirectCall, got: {instrs:?}"
+    );
+    assert!(
+        !instrs.iter().any(|instr| matches!(
+            instr,
+            crate::gen_lower::backend_ir::WasmBackendInstr::TailDeclCall { .. }
+        )),
+        "unresolved local funcref tail-looking call must stay outside TailDeclCall coverage, got: {instrs:?}"
+    );
+}
+
+#[test]
+fn compile_module_non_tail_recursion_stays_outside_tco_guarantee() {
+    let source = r#"
+import goby/stdio
+
+fib : Int -> Int can Print
+fib n =
+  if n == 0
+    0
+  else
+    if n == 1
+      1
+    else
+      fib (n - 1) + fib (n - 2)
+
+main : Unit -> Unit can Print, Read
+main =
+  _ = read()
+  total = fib 8
+  println "${total}"
+"#;
+    let module = parse_module(source).expect("source should parse");
+    let (_main_instrs, aux_decls) = crate::gen_lower::lower_module_to_instrs(&module)
+        .expect("lowering should not fail")
+        .expect("source should use the general lowering path");
+    let fib = aux_decls
+        .iter()
+        .find(|decl| decl.decl_name == "fib")
+        .expect("fib aux decl should exist");
+    let instrs = crate::gen_lower::emit::collect_all_instrs(&fib.instrs);
+    assert!(
+        instrs.iter().any(|instr| matches!(
+            instr,
+            crate::gen_lower::backend_ir::WasmBackendInstr::DeclCall { decl_name }
+                if decl_name == "fib"
+        )),
+        "non-tail recursion should stay on ordinary DeclCall, got: {instrs:?}"
+    );
+    assert!(
+        !instrs.iter().any(|instr| matches!(
+            instr,
+            crate::gen_lower::backend_ir::WasmBackendInstr::TailDeclCall { decl_name }
+                if decl_name == "fib"
+        )),
+        "non-tail recursion must stay outside TailDeclCall coverage, got: {instrs:?}"
+    );
+}
+
+#[test]
 fn native_codegen_capability_checker_rejects_hello_effect_boundary_subset() {
     let source = read_example("hello.gb");
     let module = parse_module(&source).expect("hello.gb should parse");

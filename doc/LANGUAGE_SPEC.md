@@ -194,9 +194,9 @@ syntax/semantics.
   buckets and their diagnostics/tests explicitly before the broader claim is
   honest.
 - Unsupported or uncovered shapes currently include:
-  - indirect or higher-order calls;
+  - indirect or higher-order tail-looking calls;
   - local function values that are not statically resolved as direct top-level
-    calls;
+    calls, even when they appear in tail position;
   - recursion that is not in tail position;
   - direct-call shapes outside the currently documented compiled-Wasm subset.
 - For unsupported or uncovered shapes, Goby does not promise constant-stack
@@ -204,9 +204,12 @@ syntax/semantics.
   - the compiler/runtime may still accept and run them as ordinary calls;
   - those executions may still consume stack and fail with ordinary stack-limit
     runtime behavior;
-  - Goby must not document those shapes as covered TCO.
+  - Goby must document them as outside the guarantee rather than as covered
+    TCO, and treat a missed covered shape as a regression instead.
 - Future backends may implement stronger tail-call support, but the current
   language-level guarantee is defined only for the compiled Wasm path above.
+  Execution on other paths/backends is a scope difference, not a second covered
+  or unsupported source-shape bucket in the current contract.
 
 ## 5. Effects and Handlers
 

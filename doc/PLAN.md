@@ -758,6 +758,10 @@ Active milestones:
      - compile/runtime proof now locks that the same covered boundary survives
        tail `if` joins, `case` joins, let/block tails, and statically
        resolvable local alias chains to known top-level declarations.
+     - unsupported tail-looking higher-order calls, unresolved local function
+       values, and non-tail recursion are now explicitly classified as outside
+       the current direct-call TCO guarantee; accepted execution may remain on
+       ordinary `IndirectCall`/`DeclCall` paths.
      - public aux decl wrappers and funcref-visible entrypoints remain stable,
        so the implementation change does not alter observable direct-call or
        function-value behavior for covered declarations.
