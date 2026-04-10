@@ -368,10 +368,15 @@ The following product-direction decisions are already locked for this plan:
   - The preferred design is to preserve a readable Goby-level stdlib surface
     and move only the truly hot or semantically fundamental runtime boundaries
     into explicit compiler/runtime ownership.
+- The optimization-boundary policy (§4.3, §4.8) is adopted as a guiding
+  principle starting at M0: prefer shared lowerer-owned forms over
+  symbol-specific intrinsics; add explicit intrinsics only where benchmarked
+  workloads (§6.5) justify them. This principle may be refined once workload
+  evidence from M2/M3 is available.
 
 ## 9. Milestones
 
-- [ ] **M0: Lock the product contract**
+- [x] **M0: Lock the product contract** (complete, 2026-04-10)
   - Define the long-term user-facing position of `List` as Goby's default
     ordered collection.
   - State explicitly that `List` remains the public surface name while the
@@ -381,10 +386,13 @@ The following product-direction decisions are already locked for this plan:
     representation.
   - Lock the success bar as "practical for ordinary scripts" rather than "less
     bad than today's list internals".
-  - Define the explicit optimization-boundary policy for stdlib operations,
-    with a bias toward minimizing intrinsic surface area.
-  - Define the initial benchmark/workload suite and the plan-revision rule if
-    that suite cannot be met honestly.
+  - Lock the explicit optimization-boundary policy for stdlib operations,
+    with a bias toward minimizing intrinsic surface area (recorded in §8).
+  - Define the initial benchmark/workload suite (see §6.5) and the plan-revision
+    rule if that suite cannot be met honestly.
+  - Note: the spec-wording update is deferred to M1. This milestone locks the
+    product contract and design principles in this plan; `doc/LANGUAGE_SPEC.md`
+    will be updated in M1 to reflect them.
 
 - [ ] **M1: Rewrite the language/spec wording around `List`**
   - Update `doc/LANGUAGE_SPEC.md` so `List` is described in surface-semantic
