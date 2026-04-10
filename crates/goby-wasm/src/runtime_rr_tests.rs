@@ -259,6 +259,45 @@ main =
     )
 }
 
+fn recursive_list_spread_chunk_boundary_pattern_source(n: usize, prefix_len: usize) -> String {
+    let mut items = Vec::with_capacity(prefix_len);
+    for i in 1..=prefix_len {
+        if i == 1 {
+            items.push("a1".to_string());
+        } else if i == prefix_len {
+            items.push("a_boundary".to_string());
+        } else {
+            items.push("_".to_string());
+        }
+    }
+    let pattern = items.join(", ");
+    format!(
+        r#"
+import goby/stdio
+
+build : Int -> List Int can Print
+build n =
+  if n == 0
+    []
+  else
+    rest = build (n - 1)
+    [n, ..rest]
+
+main : Unit -> Unit can Print, Read
+main =
+  _lines = read_lines ()
+  xs = build {n}
+  case xs
+    [{pattern}, ..t] ->
+      println "${{a1}}"
+      println "${{a_boundary}}"
+      println "${{t[0]}}"
+    [] ->
+      println "empty"
+"#
+    )
+}
+
 fn named_callback_list_spread_chain_source(n: usize) -> String {
     format!(
         r#"
@@ -548,6 +587,15 @@ fn rr4_recursive_list_spread_large_head_tail_pattern_executes_after_chunked_migr
     let output = execute_runtime_module_with_stdin(&module, Some("x\n".to_string()))
         .expect("multi-chunk [h, ..t] pattern over builder result should execute successfully");
     assert_eq!(output.as_deref(), Some("10000\n9999\n"));
+}
+
+#[test]
+fn rr4_repeated_head_tail_decomposition_crosses_chunk_boundaries() {
+    let module =
+        parse_general_lowered_module(&recursive_list_spread_chunk_boundary_pattern_source(100, 33));
+    let output = execute_runtime_module_with_stdin(&module, Some("x\n".to_string()))
+        .expect("large prefix list pattern should bind across chunk boundaries");
+    assert_eq!(output.as_deref(), Some("100\n68\n67\n"));
 }
 
 #[test]

@@ -95,6 +95,16 @@ Latest checkpoint (2026-04-10, RR-4 large-shape follow-up):
 - Verification checkpoint:
   - `cargo test -p goby-wasm` is green.
 
+M4 kickoff checkpoint (2026-04-10, pattern-boundary refactor slice):
+- `emit_case_match` list-pattern extraction now reuses shared chunked-sequence
+  load helpers (`emit_chunked_load_const` / `emit_chunked_load`) instead of
+  inlined shape-specific pointer math.
+- Added regression coverage for chunk-boundary pattern extraction:
+  - `runtime_rr_tests::rr4_repeated_head_tail_decomposition_crosses_chunk_boundaries`
+    (33-item prefix + tail binding over a chunked list).
+- Verification checkpoint:
+  - `cargo test -p goby-wasm` is green (`623 passed, 0 failed`).
+
 ## Recently Completed
 
 - **Sequence-backed List M2** (complete, 2026-04-10). Evaluated Candidates A/B/C

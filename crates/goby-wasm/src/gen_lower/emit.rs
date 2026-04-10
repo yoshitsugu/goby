@@ -4313,6 +4313,25 @@ fn emit_chunked_load(
     }));
 }
 
+/// Emit Wasm that loads one tagged i64 item from `header_ptr_local` at a
+/// compile-time constant logical index.
+#[inline]
+fn emit_chunked_load_const(function: &mut Function, header_ptr_local: u32, logical_index: u32) {
+    let chunk_idx = logical_index / CHUNK_SIZE;
+    let item_idx = logical_index % CHUNK_SIZE;
+    function.instruction(&Instruction::LocalGet(header_ptr_local));
+    function.instruction(&Instruction::I32Load(MemArg {
+        offset: header_chunk_ptr_offset(chunk_idx) as u64,
+        align: 2,
+        memory_index: 0,
+    }));
+    function.instruction(&Instruction::I64Load(MemArg {
+        offset: chunk_item_offset(item_idx) as u64,
+        align: 3,
+        memory_index: 0,
+    }));
+}
+
 /// Emit Wasm that stores a tagged i64 value (currently on the Wasm value stack)
 /// to logical index `index_local` in the chunked list at `header_ptr_local`.
 ///
@@ -7063,6 +7082,8 @@ fn emit_case_match(
                 // Extra slot for tail building: current tail chunk ptr
                 let s_tail_chunk_ptr = hs.scratch.i32_base + HS_SEG_START;
                 let s_tail_chunk_len = hs.scratch.i32_base + HS_ITEM_COUNT;
+                // Secondary list scratch slot (free in this branch) for dynamic item loads.
+                let s_load_chunk_ptr = hs.scratch.i32_base + HS_LIST_PTR;
 
                 let n_items = items.len() as i32;
 
@@ -7101,31 +7122,11 @@ fn emit_case_match(
                 // Item matching: for each item at logical index i, load via chunk-aware indexing
                 for (i, item) in items.iter().enumerate() {
                     let logical_i = i as u32;
-                    let ci = logical_i / CHUNK_SIZE; // compile-time chunk index
-                    let ii = logical_i % CHUNK_SIZE; // compile-time item index within chunk
-
-                    // Helper to emit chunk-aware load for compile-time constant index:
-                    // chunk_ptr = header[8 + ci*4]
-                    // item = chunk[4 + ii*8]
-                    let emit_load_item = |function: &mut Function, s_list_ptr: u32| {
-                        function.instruction(&Instruction::LocalGet(s_list_ptr));
-                        function.instruction(&Instruction::I32Load(MemArg {
-                            offset: header_chunk_ptr_offset(ci) as u64,
-                            align: 2,
-                            memory_index: 0,
-                        }));
-                        // chunk_ptr is on stack; load item from it
-                        function.instruction(&Instruction::I64Load(MemArg {
-                            offset: chunk_item_offset(ii) as u64,
-                            align: 3,
-                            memory_index: 0,
-                        }));
-                    };
 
                     match item {
                         BackendListPatternItem::Bind(name) => {
                             let name_local = ctx.get(name)?;
-                            emit_load_item(function, s_list_ptr);
+                            emit_chunked_load_const(function, s_list_ptr, logical_i);
                             function.instruction(&Instruction::LocalSet(name_local));
                         }
                         BackendListPatternItem::IntLit(n) => {
@@ -7136,7 +7137,7 @@ fn emit_case_match(
                                     ),
                                 }
                             })?;
-                            emit_load_item(function, s_list_ptr);
+                            emit_chunked_load_const(function, s_list_ptr, logical_i);
                             function.instruction(&Instruction::I64Const(encoded));
                             function.instruction(&Instruction::I64Ne);
                             function.instruction(&Instruction::BrIf(0)); // exit if_len
@@ -7232,33 +7233,15 @@ fn emit_case_match(
                     function.instruction(&Instruction::LocalGet(s_item_idx));
                     function.instruction(&Instruction::I32Const(n_items));
                     function.instruction(&Instruction::I32Add);
-                    // now src_logical is on stack; split into chunk/item
-                    function.instruction(&Instruction::LocalTee(s_chunk_ptr)); // s_chunk_ptr = src_logical (temp)
-                    function.instruction(&Instruction::I32Const(CHUNK_SIZE as i32));
-                    function.instruction(&Instruction::I32DivU);
-                    // src_chunk_idx on stack — load chunk_ptr from source header
-                    function.instruction(&Instruction::I32Const(4));
-                    function.instruction(&Instruction::I32Mul);
-                    function.instruction(&Instruction::LocalGet(s_list_ptr));
-                    function.instruction(&Instruction::I32Add);
-                    function.instruction(&Instruction::I32Load(MemArg {
-                        offset: header_chunk_ptr_offset(0) as u64,
-                        align: 2,
-                        memory_index: 0,
-                    })); // src chunk_ptr on stack
-                    // src_item_idx = src_logical % CHUNK_SIZE
-                    function.instruction(&Instruction::LocalGet(s_chunk_ptr)); // src_logical
-                    function.instruction(&Instruction::I32Const(CHUNK_SIZE as i32));
-                    function.instruction(&Instruction::I32RemU);
-                    // src item_idx on stack; load item: chunk[4 + item_idx*8]
-                    function.instruction(&Instruction::I32Const(8));
-                    function.instruction(&Instruction::I32Mul);
-                    function.instruction(&Instruction::I32Add);
-                    function.instruction(&Instruction::I64Load(MemArg {
-                        offset: chunk_item_offset(0) as u64,
-                        align: 3,
-                        memory_index: 0,
-                    })); // val on stack (i64)
+                    function.instruction(&Instruction::LocalSet(s_alloc_size)); // src_logical
+                    emit_chunked_load(
+                        function,
+                        s_list_ptr,
+                        s_alloc_size,
+                        s_list_len,
+                        s_chunk_ptr,
+                        s_load_chunk_ptr,
+                    ); // val on stack (i64)
 
                     // Save val temporarily in s_chunk_ptr (reinterpreting i64 as scratch)
                     // Actually: we need to store i64 but s_chunk_ptr is i32.
