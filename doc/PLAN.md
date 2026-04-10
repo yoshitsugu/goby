@@ -762,6 +762,10 @@ Active milestones:
        values, and non-tail recursion are now explicitly classified as outside
        the current direct-call TCO guarantee; accepted execution may remain on
        ordinary `IndirectCall`/`DeclCall` paths.
+     - published wording is now locked:
+       Goby has generic TCO on the documented compiled Wasm path for the
+       current statically resolvable direct-call subset, with the unsupported
+       higher-order/non-tail buckets stated explicitly rather than implied.
      - public aux decl wrappers and funcref-visible entrypoints remain stable,
        so the implementation change does not alter observable direct-call or
        function-value behavior for covered declarations.
@@ -776,12 +780,12 @@ Active milestones:
        any one stdlib/helper function,
      - keep diagnostics honest when a recursive shape still falls outside the
        optimized subset,
-     - do not claim language-level guaranteed TCO until the coverage is broad
-       enough across the supported backends/runtime paths.
+     - keep any future wording stronger than the current compiled-Wasm direct-
+       call guarantee gated on equally explicit proof and documentation.
    - expected user-facing goal:
-     - Goby should eventually support generic direct-call TCO strongly enough
-       that "Goby has generic TCO" is an honest high-level statement, not just
-       a description of a few recognized recursive shapes.
+     - this goal is now met for the documented compiled-Wasm direct-call scope;
+       future work may widen backends or call categories, but the current
+       public claim is no longer merely aspirational.
 2. **RR-6: limit tuning and follow-through**
    - revisit stack/memory defaults only after RR-2 through RR-4 give clearer
      ownership and failure modes.

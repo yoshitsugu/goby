@@ -4,8 +4,8 @@ Last updated: 2026-04-10
 
 ## Current Focus
 
-Next slice: **Track RR, RR-5** (`PLAN.md §4.5`) - M6 is complete; next work is
-M7 publication wording and any later post-M6 extensions.
+Next slice: **Track RR, RR-5** (`PLAN.md §4.5`) - M7 is complete; any next TCO
+work is post-publication extension work rather than contract bootstrapping.
 
 Locked TCO contract reminder:
 
@@ -38,9 +38,12 @@ Immediate next steps:
   unified dispatcher-based constant-stack execution model are in place.
   - keep the RR-3/RR-4 shared-boundary discipline: prefer reusable control-flow
     rules over symbol-specific recursion rewrites.
-  - next RR-5 task: decide whether M7 is now honest enough to publish the
-    current guarantee as “generic TCO” wording, or whether the wording must
-    remain narrower.
+  - the public wording decision is now locked:
+    Goby has generic TCO on the documented compiled Wasm path for statically
+    resolvable direct tail calls among known top-level declarations.
+  - any next RR-5/TCO task is therefore an extension question:
+    whether to widen backend scope, call categories, or diagnostics beyond the
+    published direct-call compiled-Wasm contract.
   - keep the documented supported/unsupported split stable:
     let/block tails and statically resolvable local alias chains are covered;
     indirect/higher-order tails, unresolved local funcrefs, and non-tail
@@ -53,6 +56,21 @@ Immediate next steps:
   later resilience work lands.
 
 ## Recently Completed
+
+- **Track RR, RR-5 published TCO guarantee** (complete for M7, 2026-04-10).
+  - the final public wording decision is now locked:
+    Goby has generic TCO on the documented compiled Wasm path for statically
+    resolvable direct tail calls among known top-level declarations.
+  - `README.md` now carries a short high-level version of that statement, while
+    `doc/LANGUAGE_SPEC.md` keeps the detailed supported/unsupported boundary.
+  - `examples/tco.gb` and `examples/README.md` now publish one representative
+    example that is explicitly allowed to satisfy multiple guarantee buckets:
+    self recursion, sibling/non-self calls, mutual recursion, control-flow
+    preservation, and local alias preservation.
+  - the unsupported buckets from M6 remain explicit in the published wording,
+    so the “generic TCO” statement stays bounded by the documented direct-call
+    compiled-Wasm contract rather than implying universal higher-order or
+    backend-agnostic TCO.
 
 - **Track RR, RR-5 failure-boundary contract** (complete for M6, 2026-04-10).
   - locked compile-path regressions now prove these buckets stay outside the

@@ -51,6 +51,12 @@ If `wasmtime` is not installed, install it first so `goby run` can execute gener
 - All data is immutable by default.
 - Built-in effect system.
 - Statically typed.
+- On the documented compiled Wasm path, Goby now has generic TCO for
+  statically resolvable direct tail calls among known top-level declarations.
+  The current guarantee includes self recursion, sibling/mutual direct calls,
+  supported tail control-flow joins, and statically resolvable local aliases;
+  indirect/higher-order calls and non-tail recursion remain outside the
+  guarantee.
 - Wasm-first implementation direction: the current backend target is Wasm, and
   `goby run` is intended to execute generated Wasm rather than a separate
   language-level interpreter runtime.

@@ -434,7 +434,7 @@ If any of these remain missing, the wording should stay narrower, such as
     - docs now explicitly distinguish “outside the guarantee” from a compiler
       regression that misses a covered shape.
 
-- [ ] **M7: Publish the user-facing TCO guarantee**
+- [x] **M7: Publish the user-facing TCO guarantee**
   - Update docs/examples so users can understand what is guaranteed and what is
     not.
   - Add representative examples that demonstrate the supported generic TCO
@@ -458,28 +458,43 @@ If any of these remain missing, the wording should stay narrower, such as
     - user-facing docs should avoid internal mechanism names unless they are
       necessary to explain a limitation.
   - Checkpoints:
-    - [ ] choose the final public wording for the TCO guarantee on the
+    - [x] choose the final public wording for the TCO guarantee on the
       documented compiled path;
-    - [ ] update `doc/LANGUAGE_SPEC.md` so the published contract matches the
+    - [x] update `doc/LANGUAGE_SPEC.md` so the published contract matches the
       completed M4-M6 reality;
-    - [ ] update `README.md` with a short high-level statement of the TCO
+    - [x] update `README.md` with a short high-level statement of the TCO
       guarantee and its current boundary;
-    - [ ] add or update examples that demonstrate:
-      - [ ] direct self tail recursion in the published subset;
-      - [ ] direct sibling/non-self tail calls in the published subset;
-      - [ ] direct mutually recursive tail-call groups in the published subset;
-      - [ ] at least one supported control-flow-preserving tail-call example
+    - [x] add or update examples that demonstrate:
+      - [x] direct self tail recursion in the published subset;
+      - [x] direct sibling/non-self tail calls in the published subset;
+      - [x] direct mutually recursive tail-call groups in the published subset;
+      - [x] at least one supported control-flow-preserving tail-call example
         (`if`, `case`, let/block, or alias) from the completed M5 set;
-    - [ ] state explicitly in the docs/examples whether one example is allowed
+    - [x] state explicitly in the docs/examples whether one example is allowed
       to satisfy multiple published guarantee buckets;
-    - [ ] add or update documentation that explicitly names the main unsupported
+    - [x] add or update documentation that explicitly names the main unsupported
       buckets from M6;
-    - [ ] verify the published examples correspond to locked compile/runtime
+    - [x] verify the published examples correspond to locked compile/runtime
       proof and are not merely aspirational;
-    - [ ] review `doc/PLAN.md`, `doc/PLAN_TCO.md`, and `doc/STATE.md` so the
+    - [x] review `doc/PLAN.md`, `doc/PLAN_TCO.md`, and `doc/STATE.md` so the
       public wording and internal plan wording do not contradict each other;
-    - [ ] make the final call on whether it is now honest to say "Goby has
+    - [x] make the final call on whether it is now honest to say "Goby has
       generic TCO" or whether the published wording must remain narrower.
+  - 2026-04-10 completion slice:
+    - the final public wording decision is now locked:
+      Goby has generic TCO on the documented compiled Wasm path for statically
+      resolvable direct tail calls among known top-level declarations;
+    - `README.md` now carries a short high-level version of that statement,
+      while `doc/LANGUAGE_SPEC.md` remains the detailed contract source of
+      truth;
+    - `examples/tco.gb` and `examples/README.md` now publish one representative
+      example that is explicitly allowed to satisfy multiple guarantee buckets
+      at once: self, sibling/non-self, mutual recursion, control-flow
+      preservation, and local alias preservation;
+    - the published wording continues to name the M6 unsupported buckets
+      explicitly, so the stronger “generic TCO” phrase remains bounded by the
+      documented direct-call compiled-Wasm contract rather than implying
+      universal higher-order or backend-agnostic TCO.
 
 ## 8. Internal Implementation Target
 

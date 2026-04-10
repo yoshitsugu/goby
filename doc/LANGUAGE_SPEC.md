@@ -189,10 +189,9 @@ syntax/semantics.
     remains statically resolvable as that same direct declaration.
 - This contract is structural. It does not depend on specific declaration
   names, stdlib helpers, or hand-picked source fixtures.
-- This contract is not yet the full "Goby has generic TCO" claim. In
-  particular, M6 failure-boundary work still needs to lock the unsupported
-  buckets and their diagnostics/tests explicitly before the broader claim is
-  honest.
+- With the current M0-M6 implementation and proof set, it is now honest to say:
+  Goby has generic TCO on the documented compiled Wasm path for statically
+  resolvable direct tail calls among known top-level declarations.
 - Unsupported or uncovered shapes currently include:
   - indirect or higher-order tail-looking calls;
   - local function values that are not statically resolved as direct top-level

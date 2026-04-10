@@ -1,0 +1,57 @@
+import goby/stdio
+
+count_down : Int -> Unit can Print
+count_down n =
+  if n == 0
+    ()
+  else
+    count_down (n - 1)
+
+handoff : Bool -> Int -> Unit can Print
+handoff flag n =
+  if n == 0
+    ()
+  else
+    if flag
+      relay False (n - 1)
+    else
+      relay True (n - 1)
+
+relay : Bool -> Int -> Unit can Print
+relay flag n =
+  if n == 0
+    ()
+  else
+    case flag
+      True -> handoff False (n - 1)
+      False -> handoff True (n - 1)
+
+ping : Int -> Unit can Print
+ping n =
+  if n == 0
+    ()
+  else
+    pong (n - 1)
+
+pong : Int -> Unit can Print
+pong n =
+  if n == 0
+    ()
+  else
+    ping (n - 1)
+
+alias_loop : Int -> Unit can Print
+alias_loop n =
+  if n == 0
+    ()
+  else
+    step = alias_loop
+    step (n - 1)
+
+main : Unit -> Unit can Print
+main =
+  count_down 5
+  handoff True 5
+  ping 5
+  alias_loop 5
+  println "tco ok"

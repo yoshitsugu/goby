@@ -8,6 +8,8 @@ This directory contains small Goby programs grouped by purpose.
 - `basic_types.gb`: type and syntax showcase (parse/typecheck target)
 - `function.gb`: canonical function/lambda/list example used as run-parity target
 - `function_reference.gb`: named-function callback sample (`map xs add_ten`)
+- `tco.gb`: direct-call TCO sample covering self, sibling, mutual, `if`/`case`,
+  and local-alias-preserved tail calls on the documented compiled path
 - `closure_capture.gb`: immutable/by-value closure capture sample (direct call plus captured `map` callback)
 - `closure_mut.gb`: mutable capture sample (outer mutation remains visible through a closure)
 - `read.gb`: minimal stdin sample using prelude `Read.read_line` and `Read.read`
@@ -21,6 +23,15 @@ This directory contains small Goby programs grouped by purpose.
 - `effect_generic.gb`: generic effect header sample (`effect Stream a b`)
 
 ## Grouped Samples
+
+- `tco.gb` is allowed to satisfy multiple published TCO guarantee buckets at
+  once.
+  - it demonstrates:
+    - direct self tail recursion,
+    - direct sibling/non-self tail calls,
+    - direct mutually recursive tail-call groups,
+    - control-flow-preserving tail calls through `if` / `case`,
+    - local alias chains to known top-level declarations.
 
 - `print/`: focused print-related examples
   - `local_binding.gb`: println a local string binding
