@@ -659,7 +659,9 @@ The following product-direction decisions are already locked for this plan:
   `SPECIALLY_LOWERED_STDLIB_NAMES` implicit magic. The same explicit-
   intrinsic principle adopted in M5 for list operations should be applied
   to string operations in a future milestone. This is out of M5 scope but
-  noted here so the inconsistency is tracked.
+  M7/M8 must not present the explicit-boundary story as fully complete until
+  the remaining string traversal magic is either aligned or explicitly carved
+  out as temporary debt with a follow-up milestone.
 
   ### M5 Implementation Steps
 
@@ -862,29 +864,248 @@ The following product-direction decisions are already locked for this plan:
     intrinsic principle is deferred to a future milestone.
 
 - [ ] **M6: Make index/update workloads practical**
-  - Ensure `xs[i]` and `xs[i] := v` no longer behave like thin syntax over naïve
-    linear linked-list rebuilding.
-  - Add representative tests for:
-    - large indexed reads,
-    - many immutable point updates,
-    - nested `List (List a)` workloads,
-    - realistic Advent-of-Code-style transforms.
-  - Evaluate nested-update and rebuild-heavy workloads for allocation pressure
-    and intermediate-structure costs, not only for syntax-level correctness.
-  - Check the locked benchmark/workload suite and stop for plan revision if the
-    target cannot be reached honestly.
-  - Keep diagnostics honest if some operations remain intentionally non-ideal.
+
+  ### M6 Design Decisions
+
+  **Goal:** indexed read/update must become honestly practical on the chunked
+  `List` representation without introducing syntax-shaped exceptions or a
+  second hidden collection model.
+
+  **Boundary rule:** M6 extends the same explicit sequence boundary introduced
+  in M3-M5. `xs[i]` and `xs[i] := v` may lower through shared sequence/index
+  operations, but not through:
+  - symbol-name magic on stdlib helpers,
+  - syntax-form-specific backend exceptions for one benchmark fixture,
+  - or a separate hidden "indexed array mode" for some `List` values.
+
+  **Performance intent:**
+  - indexed read should target chunk-aware access rather than head-recursive
+    traversal;
+  - immutable point update should target chunk-local rebuild plus shallow
+    structural copying, not full linear spine rebuild;
+  - nested updates should be evaluated as real workloads, not only as isolated
+    primitive operations.
+
+  **Diagnostic rule:** if some update or nested-update cases remain materially
+  more expensive than the surface syntax suggests, M6 must either:
+  - make that cost visible in docs/examples, or
+  - narrow the optimization claim.
+  M6 must not silently rely on "looks like array update" syntax while keeping
+  effectively linked-list behavior underneath.
+
+  ### M6 Implementation Steps
+
+  - [ ] **M6-0: Capture baseline index/update workload snapshot**
+    - scope: record current numbers for:
+      - repeated `xs[i]` reads on large lists,
+      - repeated immutable `xs[i] := v` updates,
+      - nested `grid[y][x] := v`-style workloads,
+      - one realistic Advent-of-Code-style transform.
+    - done when: baseline numbers are written in PLAN_SEQUENCE.md M6 section.
+    - checks: benchmark command + `cargo test -p goby-wasm`
+    - lock:
+      - indexed-read workload: repeated reads across a 4k-element list with
+        mixed in-chunk and cross-chunk indices.
+      - point-update workload: repeated immutable updates across a 4k-element
+        list.
+      - nested-update workload: repeated updates on a `64 x 64` `List (List Int)`.
+      - AoC-style workload: one concrete transform fixture recorded by name.
+
+  - [ ] **M6-1: Define the explicit index/update boundary**
+    - scope:
+      - choose and document the shared lowering/runtime boundary that owns
+        indexed read and immutable point update on chunked `List`;
+      - ensure both surface syntaxes (`xs[i]`, `xs[i] := v`) lower through
+        that shared boundary rather than syntax-specific backend branches.
+    - done when: the owning boundary is documented in code comments and
+      referenced from PLAN_SEQUENCE.md.
+    - checks: `cargo test -p goby-wasm`
+
+  - [ ] **M6-2: Implement chunk-aware indexed read**
+    - scope:
+      - lower indexed read through the shared M6 boundary;
+      - implement chunk-aware lookup that avoids head-recursive linear walk;
+      - keep out-of-range diagnostics/behavior explicit and regression-tested.
+    - done when: large indexed-read regression tests pass and the locked
+      4k-element indexed-read workload improves on the M6-0 baseline by at
+      least 5x.
+    - checks: `cargo test -p goby-wasm`
+
+  - [ ] **M6-3: Implement chunk-local immutable point update**
+    - scope:
+      - lower immutable point update through the shared M6 boundary;
+      - rebuild only the touched chunk/header path required by the chunked
+        representation, not the whole logical list;
+      - preserve immutable semantics and existing diagnostics.
+    - done when: repeated update regression tests pass and the locked
+      4k-element point-update workload improves on the M6-0 baseline by at
+      least 3x.
+    - checks: `cargo test -p goby-wasm`
+
+  - [ ] **M6-4: Validate nested update workloads**
+    - scope:
+      - add regression/benchmark coverage for nested `List (List a)` update
+        workloads;
+      - record allocation/intermediate-structure observations, not only runtime;
+      - confirm no syntax-shaped special-case lowering was added for nested
+        forms beyond the shared M6 boundary.
+    - done when: nested workload checks are recorded and green.
+    - checks: `cargo test -p goby-wasm`
+
+  - [ ] **M6-5: Lock practical-goal verification**
+    - scope: compare final numbers against M6-0 baseline.
+      - correctness gate: all indexed read/update regressions green.
+      - design gate: no syntax-form-specific backend branches added for
+        `xs[i]` or `xs[i] := v` outside the shared M6 boundary.
+      - performance gate:
+        - indexed reads on the locked 4k-element workload must improve on the
+          M6-0 baseline by at least 5x and must not regress the best M5
+          traversal workloads by more than 5%.
+        - repeated immutable point updates on the locked 4k-element workload
+          must improve on the M6-0 baseline by at least 3x.
+        - nested-update workload must remain within the practical scripting
+          success criteria from §6.6 and within 2x of the single-update
+          workload's per-operation cost; otherwise stop and revise the plan.
+    - done when: verification snapshot is recorded and the M6 checkbox is
+      marked `[x]`.
+    - checks: `cargo test -p goby-wasm` green, benchmark comparison recorded,
+      PLAN_SEQUENCE.md updated.
+
+  ### M6 Design Constraints
+
+  - One shared index/update boundary owns `xs[i]` and `xs[i] := v`.
+  - No syntax-shaped backend exceptions for particular update forms or fixtures.
+  - No hidden alternate collection mode behind `List`.
+  - Performance claims must be backed by recorded workload numbers, not only by
+    microbench intuition.
+  - If practical targets cannot be reached honestly, stop and revise the plan
+    instead of layering compensating exceptions.
 
 - [ ] **M7: Integrate effect-oriented iterator execution**
-  - Define how Iterator/effect-based collection traversal lowers onto the new
-    sequence model.
-  - Decide which explicit runtime/compiler forms own:
-    - stepping,
-    - yielding,
-    - consumption,
-    - specialization of known callbacks.
-  - Prove that Goby can keep an effect-oriented traversal story without giving
-    up practical runtime behavior.
+  
+  ### M7 Design Decisions
+
+  **Goal:** preserve Goby's effect-oriented traversal story while keeping the
+  runtime model centered on the explicit traversal boundary established in M5,
+  not on new name-based magic.
+
+  **Surface goal:** by the end of M7, Goby must have one documented,
+  representative effect-oriented traversal style that is intended as the
+  language-facing answer for practical collection traversal. M7 is not complete
+  if only the internal lowering/runtime path is defined.
+  This style's status must also be explicit:
+  - whether it is the recommended default for effect-oriented traversal,
+  - whether callback-style traversal remains equally first-class,
+  - or whether it is a future-facing style that is implemented but not yet the
+    primary recommendation.
+
+  **Boundary rule:** Iterator/effect execution in M7 must lower onto the same
+  traversal family introduced in M5. M7 may add iterator/effect-specific IR or
+  lowering forms, but those forms must:
+  - compose with the existing explicit traversal boundary,
+  - avoid reintroducing stdlib-name magic,
+  - and avoid callback-symbol-specific special cases unless a shared
+    specialization rule is explicitly documented.
+
+  **Specialization rule:** if M7 introduces specialization of known callbacks
+  or handlers, the specialization must be defined by a general rule
+  ("known effect op with property X lowers via form Y"), not by one-off symbol
+  branches for `Print.println` or other specific stdlib names.
+
+  **Ownership rule:** M7 must explicitly assign ownership for:
+  - stepping,
+  - yielding,
+  - consumption,
+  - handler interaction,
+  - optional specialization.
+  These must be described as stable compiler/runtime boundaries, not as a
+  list of current implementation hooks.
+
+  ### M7 Implementation Steps
+
+  - [ ] **M7-0: Capture traversal baseline after M5**
+    - scope: record baseline numbers and behavior for:
+      - `each` with pure callback,
+      - `each` with effect callback,
+      - one locked iterator/effect-shaped traversal surface example intended to
+        replace callback-style traversal ergonomically.
+    - done when: baseline numbers are written in PLAN_SEQUENCE.md M7 section.
+    - checks: benchmark command + `cargo test -p goby-wasm`
+    - lock:
+      - record the exact language-facing iterator/effect example used as the
+        M7 target surface in PLAN_SEQUENCE.md and examples/.
+
+  - [ ] **M7-1: Define iterator/effect lowering ownership**
+    - scope:
+      - specify which layer owns stepping, yielding, consumption, and handler
+        interaction;
+      - define the IR/lowering/runtime forms used for that ownership split;
+      - document how these forms map onto the M5 traversal boundary;
+      - document the intended user-facing traversal style that these forms
+        implement;
+      - explicitly state whether that style is:
+        - the recommended default for effect-oriented traversal,
+        - an equal alternative to callback-style traversal,
+        - or a future direction not yet recommended as primary.
+    - done when: the ownership split is written in PLAN_SEQUENCE.md and
+      mirrored in code comments for the owning modules.
+    - checks: `cargo test -p goby-wasm`
+
+  - [ ] **M7-2: Implement the base iterator/effect execution path**
+    - scope:
+      - add the general lowering/runtime path for iterator/effect traversal;
+      - ensure it executes through explicit forms rather than symbol-name
+        matching in stdlib/lowerer code;
+      - validate effect handling semantics with focused regression tests.
+    - done when: base iterator/effect regression tests pass.
+    - checks: `cargo test -p goby-wasm`
+
+  - [ ] **M7-3: Evaluate and, if justified, add shared specialization**
+    - scope:
+      - benchmark the general M7 path against the M7-0 baseline;
+      - if practical targets are already met, do not add specialization;
+      - if specialization is needed, add one shared rule with explicit
+        eligibility criteria and regression tests.
+    - done when: either
+      - the generic path meets target with no specialization, or
+      - the chosen shared specialization rule is documented, implemented,
+        and benchmark-validated.
+    - checks: `cargo test -p goby-wasm`
+
+  - [ ] **M7-4: Lock iterator/effect verification**
+    - scope: compare final numbers against M7-0 baseline.
+      - correctness gate: iterator/effect traversal regressions green.
+      - design gate:
+        - no reintroduction of stdlib-name magic;
+        - no callback-symbol-specific one-off branches;
+        - iterator/effect execution still routes through the explicit
+          traversal family established by M5.
+        - one documented user-facing iterator/effect traversal style is
+          published as the intended path in examples/spec/plan docs.
+      - performance gate: effect-oriented traversal must meet the practical
+        scripting success criteria from §6.6, either via the generic path or
+        one documented shared specialization rule.
+    - done when: verification snapshot is recorded and the M7 checkbox is
+      marked `[x]`.
+    - checks: `cargo test -p goby-wasm` green, benchmark comparison recorded,
+      PLAN_SEQUENCE.md updated.
+
+  ### M7 Design Constraints
+
+  - Iterator/effect execution extends the M5 traversal boundary; it does not
+    create a parallel implicit traversal mechanism.
+  - No reintroduction of stdlib-name magic.
+  - No callback-symbol-specific one-off fast paths.
+  - Any specialization must be rule-based, documented, benchmark-justified,
+    and optional relative to the generic path.
+  - M7 is not complete until the intended language-facing iterator/effect
+    traversal style is documented, not merely implemented internally.
+  - M7 may complete the `List` traversal story before the equivalent `string`
+    story is aligned, but in that case docs must explicitly say that the
+    explicit-boundary policy is complete for `List` and still temporary debt
+    for `string`.
+  - If effect-oriented traversal cannot meet the practical target honestly,
+    stop and revise the plan instead of hiding costs behind magical lowering.
 
 - [ ] **M8: Publish the new `List` contract**
   - Update README/examples/spec/plan documents with the final language-facing
@@ -896,6 +1117,9 @@ The following product-direction decisions are already locked for this plan:
     - workloads that previously exposed the linked-list runtime boundary.
   - Lock the wording for what Goby means by "default collection" and by
     "practical indexed/update behavior" for `List`.
+  - Either align remaining string traversal magic (`graphemes`/`split`) to the
+    same explicit-boundary policy, or explicitly record it as temporary debt
+    with a named follow-up milestone and rationale.
 
 ## 10. Open Questions (and Resolved Decisions)
 
