@@ -663,7 +663,10 @@ fn needs_scratch_state(instrs: &[WasmBackendInstr]) -> bool {
         WasmBackendInstr::BinOp { op } => matches!(op, IrBinOp::Eq),
         WasmBackendInstr::ListEachEffect { .. } => true,
         WasmBackendInstr::Intrinsic {
-            intrinsic: BackendIntrinsic::ListGet | BackendIntrinsic::StringLength,
+            intrinsic:
+                BackendIntrinsic::ListGet
+                | BackendIntrinsic::StringLength
+                | BackendIntrinsic::ListLength,
         } => true,
         WasmBackendInstr::CaseMatch { arms, .. } => arms.iter().any(|arm| {
             matches!(
@@ -3079,6 +3082,14 @@ fn emit_helper_call(
                 ),
             })?,
         ),
+        BackendIntrinsic::ListLength => emit_list_length_helper(
+            function,
+            scratch_state.ok_or_else(|| CodegenError {
+                message: format!(
+                    "gen_lower/emit: intrinsic '{intrinsic:?}' requires helper scratch state"
+                ),
+            })?,
+        ),
     }?;
     let _ = (ctx, i32_base);
     Ok(())
@@ -4606,6 +4617,33 @@ fn emit_string_length_helper(
     emit_decode_string_ptr(function, helper_state, string_i64, s_ptr, s_len);
     function.instruction(&Instruction::LocalGet(s_len));
     function.instruction(&Instruction::I64ExtendI32S);
+    function.instruction(&Instruction::I64Const((TAG_INT as i64) << 60));
+    function.instruction(&Instruction::I64Or);
+    Ok(())
+}
+
+/// Read `total_len` from a chunked list header in O(1) and return it as a tagged Int.
+///
+/// Stack input: tagged list i64.
+/// Stack output: tagged Int i64 (the element count).
+fn emit_list_length_helper(
+    function: &mut Function,
+    helper_state: &EmitScratchState,
+) -> Result<(), CodegenError> {
+    let list_i64 = helper_state.i64_base;
+    let s_header_ptr = helper_state.i32_base + HS_TEXT_PTR;
+    let s_total_len = helper_state.i32_base + HS_TEXT_LEN;
+
+    // Pop tagged list into local
+    function.instruction(&Instruction::LocalSet(list_i64));
+
+    // Decode header ptr and load total_len via shared helpers
+    emit_decode_list_header_ptr(function, list_i64, s_header_ptr);
+    emit_load_list_total_len(function, s_header_ptr, s_total_len);
+
+    // Widen to i64 (unsigned — element count is non-negative) and tag as INT
+    function.instruction(&Instruction::LocalGet(s_total_len));
+    function.instruction(&Instruction::I64ExtendI32U);
     function.instruction(&Instruction::I64Const((TAG_INT as i64) << 60));
     function.instruction(&Instruction::I64Or);
     Ok(())

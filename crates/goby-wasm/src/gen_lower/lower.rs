@@ -2705,6 +2705,7 @@ fn backend_intrinsic_for_bare(name: &str, arg_count: usize) -> Option<BackendInt
         },
         "__goby_list_push_string" => Some(BackendIntrinsic::ListPushString),
         "__goby_string_length" => Some(BackendIntrinsic::StringLength),
+        "__goby_list_length" => Some(BackendIntrinsic::ListLength),
         _ => None,
     }
 }

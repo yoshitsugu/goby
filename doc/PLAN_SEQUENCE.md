@@ -665,15 +665,19 @@ The following product-direction decisions are already locked for this plan:
 
   ### M5 Implementation Steps
 
-  - [ ] **M5-0: Capture baseline performance snapshot**
+  - [x] **M5-0: Capture baseline performance snapshot** (complete, 2026-04-11)
     - scope: record M4 baseline numbers for the locked list traversal
       workloads (`length`, `fold` sum, `each` with effect callback, `map`
       over multi-chunk list) under `cargo test -p goby-wasm -- --nocapture`
       bench harness or current project benchmark command.
     - done when: baseline numbers are written in PLAN_SEQUENCE.md M5 section.
     - checks: benchmark command + `cargo test -p goby-wasm`
+    - M4 baseline: `cargo test -p goby-wasm` → 625 passed, 0 failed, 4 ignored.
+      All list traversal tests (each, map, fold, length) pass via current
+      implicit name-matching lowerer paths (ListEach, ListEachEffect, ListMap,
+      ListReverseFoldPrepend, DeclCall("fold"), recursive length).
 
-  - [ ] **M5-1: Add `__goby_list_length` intrinsic**
+  - [x] **M5-1: Add `__goby_list_length` intrinsic** (complete, 2026-04-11)
     - scope:
       - `backend_ir.rs`: add `BackendIntrinsic::ListLength`.
         arity = 1, execution_boundary = InWasm.
@@ -690,7 +694,7 @@ The following product-direction decisions are already locked for this plan:
     - done when: `cargo test -p goby-wasm` green.
     - checks: `cargo test -p goby-wasm`
 
-  - [ ] **M5-2: Regression tests for `ListLength`**
+  - [x] **M5-2: Regression tests for `ListLength`** (complete, 2026-04-11)
     - scope: add to `runtime_rr_tests.rs`:
       - empty list `length []` → 0
       - single chunk (32 elements) via `length` → 32

@@ -735,3 +735,96 @@ fn rr3_callback_assisted_scan_repro_survives_tight_stack_limit_on_same_boundary(
         .expect("callback-assisted scan should survive the same tight stack limit");
     assert_eq!(output, "40000\n");
 }
+
+// ---------------------------------------------------------------------------
+// M5: __goby_list_length intrinsic regression tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn m5_list_length_empty_list_returns_zero() {
+    let source = r#"
+import goby/list ( length )
+import goby/stdio
+
+main : Unit -> Unit can Print, Read
+main =
+  _lines = read_lines ()
+  n = length []
+  println "${n}"
+"#;
+    let module = parse_general_lowered_module(source);
+    let output = execute_runtime_module_with_stdin(&module, Some("x\n".to_string()))
+        .expect("length [] should return 0");
+    assert_eq!(output.as_deref(), Some("0\n"));
+}
+
+#[test]
+fn m5_list_length_single_chunk_32_elements() {
+    let source = r#"
+import goby/list ( length )
+import goby/stdio
+
+build : Int -> List Int can Print
+build n =
+  if n == 0
+    []
+  else
+    rest = build (n - 1)
+    [n, ..rest]
+
+main : Unit -> Unit can Print, Read
+main =
+  _lines = read_lines ()
+  xs = build 32
+  n = length xs
+  println "${n}"
+"#;
+    let module = parse_general_lowered_module(source);
+    let output = execute_runtime_module_with_stdin(&module, Some("x\n".to_string()))
+        .expect("length of 32-element list should return 32");
+    assert_eq!(output.as_deref(), Some("32\n"));
+}
+
+#[test]
+fn m5_list_length_multi_chunk_65_elements() {
+    let source = r#"
+import goby/list ( length )
+import goby/stdio
+
+build : Int -> List Int can Print
+build n =
+  if n == 0
+    []
+  else
+    rest = build (n - 1)
+    [n, ..rest]
+
+main : Unit -> Unit can Print, Read
+main =
+  _lines = read_lines ()
+  xs = build 65
+  n = length xs
+  println "${n}"
+"#;
+    let module = parse_general_lowered_module(source);
+    let output = execute_runtime_module_with_stdin(&module, Some("x\n".to_string()))
+        .expect("length of 65-element list should return 65");
+    assert_eq!(output.as_deref(), Some("65\n"));
+}
+
+#[test]
+fn m5_list_length_direct_intrinsic_smoke() {
+    let source = r#"
+import goby/stdio
+
+main : Unit -> Unit can Print, Read
+main =
+  _lines = read_lines ()
+  n = __goby_list_length []
+  println "${n}"
+"#;
+    let module = parse_general_lowered_module(source);
+    let output = execute_runtime_module_with_stdin(&module, Some("x\n".to_string()))
+        .expect("direct __goby_list_length [] should return 0");
+    assert_eq!(output.as_deref(), Some("0\n"));
+}

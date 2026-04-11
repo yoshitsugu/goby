@@ -22,10 +22,7 @@ map xs f =
     [x, ..xxs] -> [f x, ..map xxs f]
 
 length : List a -> Int
-length xs =
-  case xs
-    [] -> 0
-    [x, ..xxs] -> 1 + length xxs
+length xs = __goby_list_length xs
 
 # Left fold. The callback receives the accumulator first: f acc elem.
 fold : List a -> b -> (b -> a -> b) -> b

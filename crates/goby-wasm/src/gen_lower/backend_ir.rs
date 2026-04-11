@@ -95,6 +95,13 @@ pub(crate) enum BackendIntrinsic {
     /// Implemented as a host import so CRLF/CR/LF normalization stays aligned with the
     /// runtime-bridge `Read.read_lines` behavior.
     StringSplitLines,
+    /// Read the total element count from a chunked list header in O(1).
+    ///
+    /// Signature: `(tagged_list: i64) -> i64` (tagged `Int`).
+    /// Reads the `total_len` i32 field at header offset 0 and returns it as a
+    /// tagged Int. This is unreachable from Goby code because it requires direct
+    /// access to the chunked internal structure.
+    ListLength,
 }
 
 impl BackendIntrinsic {
@@ -112,6 +119,7 @@ impl BackendIntrinsic {
             BackendIntrinsic::StringConcat => 2,
             BackendIntrinsic::StringGraphemesList => 1,
             BackendIntrinsic::StringSplitLines => 1,
+            BackendIntrinsic::ListLength => 1,
         }
     }
 
@@ -128,7 +136,8 @@ impl BackendIntrinsic {
             | BackendIntrinsic::StringLength
             | BackendIntrinsic::ListPushString
             | BackendIntrinsic::ListSet
-            | BackendIntrinsic::ListConcat => IntrinsicExecutionBoundary::InWasm,
+            | BackendIntrinsic::ListConcat
+            | BackendIntrinsic::ListLength => IntrinsicExecutionBoundary::InWasm,
         }
     }
 }
