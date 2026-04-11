@@ -1,151 +1,45 @@
-# Goby Project Instructions
+# Goby Agent Guidance (Global)
 
-This document guides AI assistants working on the Goby programming language.
-For the latest language spec, see [doc/LANGUAGE_SPEC.md](./doc/LANGUAGE_SPEC.md).
-For planning and open decisions, see [doc/PLAN.md](./doc/PLAN.md).
+This is the minimum durable guidance for all agents in this repository.
+Keep this file product-focused. Developer/process preferences should live in each
+developer's `$HOME/.codex` setup, not in this repository.
 
-## Project Overview
+## Summary
 
-Goby is a statically typed, immutable-first functional language with an effect system.
-The first backend target is Wasm.
+- Goby is an early-stage statically typed functional language with effects.
+- Breaking changes are acceptable when they improve clarity and consistency.
+- Readability, explicit boundaries, and practical tooling are top priorities.
 
-Target direction:
+## Always-Global Invariants
 
-- Keep readability and simplicity as a core language value.
-- Add practical expressiveness only where it clearly improves developer ergonomics.
-- Build a strong toolchain from early stages.
+- Treat `doc/LANGUAGE_SPEC.md` as the source of truth for current language behavior.
+- Treat `doc/PLAN.md` as roadmap/decision context.
+- If syntax/semantics/core terminology changes, update in the same change:
+  - `doc/LANGUAGE_SPEC.md`
+  - `doc/PLAN.md`
+  - relevant `examples/*.gb`
+- Keep `README.md` high-level; do not move detailed spec text there.
+- Prefer root-cause fixes at the correct ownership boundary over one-off patches.
+- Preserve behavior/diagnostics unless behavior change is explicitly intended.
 
-**Important**: Goby is in an early design/prototyping stage. Breaking changes are acceptable if they improve language clarity and consistency.
+## Minimal Quality Gate
 
-## Design Principles
+- Required for meaningful code changes:
+  - `cargo fmt`
+  - `cargo check`
+  - `cargo test`
+- Prefer focused tests during iteration, then run the broader gate before handoff.
 
-1. **Readability First**: Syntax should be easy to read and reason about.
-2. **Functional Core**: Prefer pure functions and immutable data by default.
-3. **Typed Safety**: Maintain strong static typing with clear diagnostics.
-4. **Practical Effects**: Effect tracking should be explicit enough to be useful, without overwhelming users.
-5. **Tooling as Product**: Compiler, formatter, diagnostics, and developer workflow are first-class concerns.
-6. **Balanced Language Positioning**: If trade-offs appear, favor designs that preserve clarity and predictability while allowing practical expressiveness where it provides clear user value.
+## Context Expansion Order
 
-## Goby Syntax Quick Reference (Current Draft)
+1. `REPO_MANIFEST.md` (repo map)
+2. Relevant source files for the task
+3. Source files
+4. Broader docs only if still blocked
 
-The current draft is based on files in `examples/` and `doc/LANGUAGE_SPEC.md`.
+For changed-files-first workflows, use your local `$HOME/.codex` tooling.
 
-- Source files use `.gb`.
-- Function definitions use `=`.
-- Type annotations use `:` and `->`.
-- Statements are separated by newline or `;`.
-- Function-local scopes and blocks are indentation-based (spaces or tabs).
-- Block expressions return the last expression value.
-- Effects are declared with `can <Effect>` (example: `can Print`).
-- Anonymous functions: `fn x -> expr` (single-param), `fn a b -> expr` (multi-param), and shorthand `_ * 10`.
+## Restart Safety
 
-## Full Reference Policy
-
-`doc/LANGUAGE_SPEC.md` is the active language-spec reference.
-`doc/PLAN.md` is the active planning/roadmap reference.
-
-**Instruction**: When changing language syntax, semantics, or core terminology:
-
-- update `doc/LANGUAGE_SPEC.md`,
-- update `doc/PLAN.md`,
-- update or add relevant examples in `examples/`,
-- keep `README.md` user-facing (high-level only, not detailed spec text).
-
-## Project Structure
-
-- `crates/goby-core`: core language implementation
-- `crates/goby-cli`: CLI entrypoint and command wiring
-- `crates/goby-wasm`: Wasm backend
-- `examples/`: Goby sample programs (`.gb`)
-- `doc/`: language planning and design notes
-
-## Build and Test Commands
-
-Use Cargo commands from repository root:
-
-- `cargo check`
-- `cargo test`
-- `cargo run -p goby-cli -- run <file.gb>`
-- `cargo run -p goby-cli -- check <file.gb>`
-- `cargo fmt`
-- `cargo clippy -- -D warnings`
-
-When making non-trivial changes, run at least `cargo check` and `cargo test`.
-
-## Coding Standards
-
-### Rust (compiler/tooling code)
-
-- Prefer clear, explicit code over clever abstractions.
-- Keep modules small and responsibilities focused.
-- Avoid panics in normal compiler flows; return structured errors.
-- Use enums for AST/errors where possible.
-
-### Formatting
-
-- Use `cargo fmt` for formatting.
-- Keep naming idiomatic Rust (`snake_case` for functions/modules, `CamelCase` for types).
-
-### Documentation
-
-- Document externally visible behavior and non-obvious internals.
-- If parser/typechecker behavior changes, add or update examples that demonstrate the behavior.
-
-### Testing
-
-- Add unit tests for lexer/parser/typechecker behavior as they are introduced.
-- Add regression tests for previously failing language cases.
-- Prefer small, focused tests tied to a single behavior.
-
-### Module Ownership
-
-- Keep orchestration entrypoints thin; move mechanics and policy into narrower internal modules.
-- Do not use large existing files as the default landing place for unrelated new logic.
-- Prefer splits by rule family, runtime phase, or ownership boundary, not by arbitrary line count.
-- Place subsystem-specific regression tests beside the module that owns the behavior when full-stack integration coverage is not required.
-- Stop splitting when the remaining helpers form one cohesive layer and further extraction would mostly add cross-module coupling.
-
-### Root-Cause Discipline
-
-- Do not default to the narrowest patch that makes one failing example pass.
-- First identify which phase or ownership boundary should have handled the case, then prefer fixing that shared boundary over adding a one-off exception.
-- If a new regression test exposes a failure, keep the test, explain the failure in terms of the current ownership split, and only then choose the implementation point.
-- Treat symbol-specific branches, fixture-specific checks, and syntax-shape-specific exceptions as a last resort; they require a clear justification that a shared rule would be wrong, not merely harder.
-- If an attempted fix breaks unrelated valid behavior, revert to the last correct boundary and narrow the change instead of layering compensating exceptions on top.
-
-## Change Workflow Expectations
-
-For language-facing changes:
-
-1. Update `doc/LANGUAGE_SPEC.md` (latest spec behavior).
-2. Update `doc/PLAN.md` (plan intent, migration notes, status).
-3. Update `examples/` (concrete syntax/behavior).
-4. Update implementation in `crates/`.
-5. Run formatting and tests.
-
-For restart safety:
-
-1. Treat `doc/STATE.md` as a save-point document.
-2. At meaningful milestones (or before stopping work), update `doc/STATE.md`
-   with:
-   - newly locked decisions,
-   - open questions,
-   - immediate next steps.
-3. Keep `doc/STATE.md` concise and execution-oriented so work can resume after
-   context reset without ambiguity.
-
-For maintainability refactors:
-
-1. Preserve behavior and diagnostics unless the task explicitly includes a behavior change.
-2. Prefer one ownership move per commit where practical.
-3. Move module-specific regression tests with the owned implementation in the same refactor when possible.
-4. Run at least `cargo check`, the focused subsystem tests, and `cargo test --workspace` before closing the refactor slice.
-
-For bug fixes and regressions:
-
-1. Reproduce the failure with the smallest representative case.
-2. Identify the earliest compiler/tooling phase that can honestly reject or handle it.
-3. Prefer fixing that phase over allowing the issue to drift into later phases such as lowering, runtime, CLI rendering, or editor integration.
-4. If a broader fix changes unrelated accepted behavior, narrow the implementation to a smaller shared layer before proceeding.
-
-If there is tension between approaches, choose the option that keeps the language easy to read and reason about while still enabling practical, high-value expressiveness.
+- Keep `doc/STATE.md` concise and execution-oriented.
+- At milestones, record locked decisions, open questions, and immediate next steps.
