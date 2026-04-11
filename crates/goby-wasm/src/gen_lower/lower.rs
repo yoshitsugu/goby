@@ -1419,7 +1419,9 @@ fn lower_comp_inner(
                             lambda_decls,
                         )?);
                     }
-                    instrs.push(direct_decl_call_instr(name, tail_position));
+                    instrs.push(WasmBackendInstr::Intrinsic {
+                        intrinsic: BackendIntrinsic::ListFold,
+                    });
                     Ok(instrs)
                 }
             } else if let goby_core::ir::ValueExpr::GlobalRef { module, name } = callee.as_ref()
@@ -1536,7 +1538,9 @@ fn lower_comp_inner(
                                 lambda_decls,
                             )?);
                         }
-                        instrs.push(direct_decl_call_instr(name, tail_position));
+                        instrs.push(WasmBackendInstr::Intrinsic {
+                            intrinsic: BackendIntrinsic::ListFold,
+                        });
                         Ok(instrs)
                     }
                 } else if (name == "graphemes"
@@ -2706,6 +2710,7 @@ fn backend_intrinsic_for_bare(name: &str, arg_count: usize) -> Option<BackendInt
         "__goby_list_push_string" => Some(BackendIntrinsic::ListPushString),
         "__goby_string_length" => Some(BackendIntrinsic::StringLength),
         "__goby_list_length" => Some(BackendIntrinsic::ListLength),
+        "__goby_list_fold" if arg_count == 3 => Some(BackendIntrinsic::ListFold),
         _ => None,
     }
 }

@@ -563,6 +563,7 @@ pub(crate) fn needs_helper_state(instrs: &[WasmBackendInstr]) -> bool {
                         | BackendIntrinsic::ListPushString
                         | BackendIntrinsic::ListSet
                         | BackendIntrinsic::ListConcat
+                        | BackendIntrinsic::ListFold
                 }
                 // DeclCall / IndirectCall may trigger callee heap allocations; the global cursor
                 // must be synchronized before and after the call, which requires alloc_cursor_local.
@@ -1213,13 +1214,22 @@ pub(crate) fn emit_general_module_with_aux_and_options(
                     | WasmBackendInstr::IndirectCall { arity: 1 }
                     | WasmBackendInstr::ListEach { .. }
                     | WasmBackendInstr::ListMap { .. }
+                    | WasmBackendInstr::Intrinsic {
+                        intrinsic: BackendIntrinsic::ListFold
+                    }
             )
         })
     });
     let uses_indirect_call_3 = all_slices_iter().any(|slice| {
-        collect_all_instrs(slice)
-            .iter()
-            .any(|i| matches!(i, WasmBackendInstr::IndirectCall { arity: 2 }))
+        collect_all_instrs(slice).iter().any(|i| {
+            matches!(
+                i,
+                WasmBackendInstr::IndirectCall { arity: 2 }
+                    | WasmBackendInstr::Intrinsic {
+                        intrinsic: BackendIntrinsic::ListFold
+                    }
+            )
+        })
     });
     // `uses_indirect_call` is true when any kind of indirect call requires a funcref table.
     let uses_indirect_call = uses_indirect_call_1 || uses_indirect_call_2 || uses_indirect_call_3;
@@ -3090,6 +3100,16 @@ fn emit_helper_call(
                 ),
             })?,
         ),
+        BackendIntrinsic::ListFold => {
+            let hs = heap_state.ok_or_else(|| CodegenError {
+                message: format!(
+                    "gen_lower/emit: intrinsic '{intrinsic:?}' requires heap helper state"
+                ),
+            })?;
+            let type_idx = ctx.indirect_call_type_idx(2)?;
+            let closure_type_idx = ctx.indirect_call_type_idx(3)?;
+            emit_list_fold_helper(function, hs, type_idx, closure_type_idx)
+        }
     }?;
     let _ = (ctx, i32_base);
     Ok(())
@@ -4646,6 +4666,139 @@ fn emit_list_length_helper(
     function.instruction(&Instruction::I64ExtendI32U);
     function.instruction(&Instruction::I64Const((TAG_INT as i64) << 60));
     function.instruction(&Instruction::I64Or);
+    Ok(())
+}
+
+/// Left fold over a chunked list: chunk-walk loop + accumulator + callback dispatch.
+///
+/// Stack input: `[list_tagged, init_acc, func_tagged]` (func on top).
+/// Stack output: final accumulator value (i64).
+///
+/// The callback `func(acc, elem)` is called via `emit_callable_dispatch` with 2 arguments.
+fn emit_list_fold_helper(
+    function: &mut Function,
+    hs: &HeapEmitState,
+    indirect_call_type_idx: u32,
+    closure_call_type_idx: u32,
+) -> Result<(), CodegenError> {
+    let s_func = hs.scratch.i64_base;     // i64: func handle
+    let s_acc = hs.scratch.i64_base + 1;  // i64: accumulator
+    let s_elem = hs.scratch.i64_base + 2; // i64: current element (reuse slot)
+    let s_header_ptr = hs.scratch.i32_base + HS_LIST_PTR;
+    let s_n_chunks = hs.scratch.i32_base + HS_ITEM_COUNT;
+    let s_chunk_idx = hs.scratch.i32_base + HS_ITER;
+    let s_chunk_ptr = hs.scratch.i32_base + HS_AUX_PTR;
+    let s_chunk_len = hs.scratch.i32_base + HS_ALLOC_SIZE;
+    let s_item_iter = hs.scratch.i32_base + HS_TEXT_PTR;
+
+    // Stack: [list_tagged, init_acc, func_tagged]
+    // Pop in reverse order: func, acc, list
+    function.instruction(&Instruction::LocalSet(s_func));
+    function.instruction(&Instruction::LocalSet(s_acc));
+    // list_tagged is on stack — decode header ptr
+    function.instruction(&Instruction::I64Const(0xFFFF_FFFFi64));
+    function.instruction(&Instruction::I64And);
+    function.instruction(&Instruction::I32WrapI64);
+    function.instruction(&Instruction::LocalSet(s_header_ptr));
+
+    // n_chunks = header[4]
+    function.instruction(&Instruction::LocalGet(s_header_ptr));
+    function.instruction(&Instruction::I32Load(MemArg {
+        offset: header_n_chunks_offset() as u64,
+        align: 2,
+        memory_index: 0,
+    }));
+    function.instruction(&Instruction::LocalSet(s_n_chunks));
+
+    // chunk_idx = 0
+    function.instruction(&Instruction::I32Const(0));
+    function.instruction(&Instruction::LocalSet(s_chunk_idx));
+
+    // Outer loop: for chunk_idx in 0..n_chunks
+    function.instruction(&Instruction::Block(wasm_encoder::BlockType::Empty));
+    function.instruction(&Instruction::Loop(wasm_encoder::BlockType::Empty));
+    function.instruction(&Instruction::LocalGet(s_chunk_idx));
+    function.instruction(&Instruction::LocalGet(s_n_chunks));
+    function.instruction(&Instruction::I32GeU);
+    function.instruction(&Instruction::BrIf(1));
+
+    // chunk_ptr = header[8 + chunk_idx*4]
+    function.instruction(&Instruction::LocalGet(s_header_ptr));
+    function.instruction(&Instruction::LocalGet(s_chunk_idx));
+    function.instruction(&Instruction::I32Const(4));
+    function.instruction(&Instruction::I32Mul);
+    function.instruction(&Instruction::I32Add);
+    function.instruction(&Instruction::I32Load(MemArg {
+        offset: header_chunk_ptr_offset(0) as u64,
+        align: 2,
+        memory_index: 0,
+    }));
+    function.instruction(&Instruction::LocalSet(s_chunk_ptr));
+    // chunk_len = chunk[0]
+    function.instruction(&Instruction::LocalGet(s_chunk_ptr));
+    function.instruction(&Instruction::I32Load(MemArg {
+        offset: 0,
+        align: 2,
+        memory_index: 0,
+    }));
+    function.instruction(&Instruction::LocalSet(s_chunk_len));
+    // item_iter = 0
+    function.instruction(&Instruction::I32Const(0));
+    function.instruction(&Instruction::LocalSet(s_item_iter));
+
+    // Inner loop: for item_iter in 0..chunk_len
+    function.instruction(&Instruction::Block(wasm_encoder::BlockType::Empty));
+    function.instruction(&Instruction::Loop(wasm_encoder::BlockType::Empty));
+    function.instruction(&Instruction::LocalGet(s_item_iter));
+    function.instruction(&Instruction::LocalGet(s_chunk_len));
+    function.instruction(&Instruction::I32GeU);
+    function.instruction(&Instruction::BrIf(1));
+
+    // elem = chunk[4 + item_iter * 8]
+    function.instruction(&Instruction::LocalGet(s_chunk_ptr));
+    function.instruction(&Instruction::LocalGet(s_item_iter));
+    function.instruction(&Instruction::I32Const(8));
+    function.instruction(&Instruction::I32Mul);
+    function.instruction(&Instruction::I32Add);
+    function.instruction(&Instruction::I64Load(MemArg {
+        offset: chunk_item_offset(0) as u64,
+        align: 3,
+        memory_index: 0,
+    }));
+    function.instruction(&Instruction::LocalSet(s_elem));
+
+    // acc = func(acc, elem)
+    emit_callable_dispatch(
+        function,
+        s_func,
+        &[s_acc, s_elem],
+        indirect_call_type_idx,
+        closure_call_type_idx,
+        Some(hs),
+    );
+    function.instruction(&Instruction::LocalSet(s_acc));
+    emit_return_if_runtime_error(function, hs);
+
+    // item_iter += 1
+    function.instruction(&Instruction::LocalGet(s_item_iter));
+    function.instruction(&Instruction::I32Const(1));
+    function.instruction(&Instruction::I32Add);
+    function.instruction(&Instruction::LocalSet(s_item_iter));
+    function.instruction(&Instruction::Br(0));
+    function.instruction(&Instruction::End); // end inner loop
+    function.instruction(&Instruction::End); // end inner block
+
+    // chunk_idx += 1
+    function.instruction(&Instruction::LocalGet(s_chunk_idx));
+    function.instruction(&Instruction::I32Const(1));
+    function.instruction(&Instruction::I32Add);
+    function.instruction(&Instruction::LocalSet(s_chunk_idx));
+    function.instruction(&Instruction::Br(0));
+    function.instruction(&Instruction::End); // end outer loop
+    function.instruction(&Instruction::End); // end outer block
+
+    // Push final accumulator
+    function.instruction(&Instruction::LocalGet(s_acc));
     Ok(())
 }
 

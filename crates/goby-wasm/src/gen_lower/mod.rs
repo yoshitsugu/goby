@@ -444,7 +444,7 @@ fn rewrite_comp_fold_prepend_callbacks(
             let is_fold = matches!(
                 &rewritten_callee,
                 ValueExpr::GlobalRef { module, name } if module == "list" && name == "fold"
-            ) || matches!(&rewritten_callee, ValueExpr::Var(name) if name == "fold");
+            ) || matches!(&rewritten_callee, ValueExpr::Var(name) if name == "fold" || name == "__goby_list_fold");
             if is_fold
                 && rewritten_args.len() == 3
                 && let Some(callback_name) =

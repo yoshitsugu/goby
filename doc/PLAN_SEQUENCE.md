@@ -704,7 +704,7 @@ The following product-direction decisions are already locked for this plan:
     - done when: all 4 cases green.
     - checks: `cargo test -p goby-wasm`
 
-  - [ ] **M5-3: Add `__goby_list_fold` intrinsic and rewrite stdlib `fold`**
+  - [x] **M5-3: Add `__goby_list_fold` intrinsic and rewrite stdlib `fold`**
     - scope: this step adds the intrinsic, rewrites stdlib, AND
       simultaneously updates the lowerer so that `__goby_list_fold` is the
       only fold path. Both changes must land together because the old
@@ -730,7 +730,7 @@ The following product-direction decisions are already locked for this plan:
     - done when: `cargo test -p goby-wasm` green.
     - checks: `cargo test -p goby-wasm`
 
-  - [ ] **M5-4: Re-anchor `ListReverseFoldPrepend` on semantic fold boundary**
+  - [x] **M5-4: Re-anchor `ListReverseFoldPrepend` on semantic fold boundary**
     - scope: the old prepend-pattern optimization fired inside the removed
       `GlobalRef("list","fold")` branch. Replace it with a semantic-fold
       optimization gate that works for both public `fold` and direct

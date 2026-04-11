@@ -2671,6 +2671,73 @@ main =
         );
     }
 
+    /// Multi-chunk fold: 65 elements spans 3 chunks (32+32+1).
+    /// Ensures the fold chunk-walk loop correctly crosses chunk boundaries.
+    #[test]
+    fn fold_m5_multi_chunk_sum() {
+        use goby_core::parse_module;
+        let module = parse_module(
+            r#"
+import goby/list ( fold )
+
+add : Int -> Int -> Int
+add a b = a + b
+
+build : Int -> List Int -> List Int
+build n acc =
+  case n
+    0 -> acc
+    _ -> build (n - 1) [n, ..acc]
+
+main : Unit -> Unit can Print, Read
+main =
+  _ = read()
+  xs = build 65 []
+  total = fold xs 0 add
+  println "${total}"
+"#,
+        )
+        .expect("parse should succeed");
+
+        let output = execute_runtime_module_with_stdin(&module, Some(String::new()))
+            .expect("multi-chunk fold must execute");
+        // sum(1..65) = 65*66/2 = 2145
+        assert_eq!(
+            output.as_deref(),
+            Some("2145\n"),
+            "fold over 65-element list → sum 2145"
+        );
+    }
+
+    /// Fold with string accumulator exercises heap cursor sync in emit_callable_dispatch.
+    #[test]
+    fn fold_m5_string_accumulator() {
+        use goby_core::parse_module;
+        let module = parse_module(
+            r#"
+import goby/list ( fold )
+
+append : String -> Int -> String
+append acc x = "${acc}${x},"
+
+main : Unit -> Unit can Print, Read
+main =
+  _ = read()
+  result = fold [1, 2, 3] "" append
+  println result
+"#,
+        )
+        .expect("parse should succeed");
+
+        let output = execute_runtime_module_with_stdin(&module, Some(String::new()))
+            .expect("string-accumulator fold must execute");
+        assert_eq!(
+            output.as_deref(),
+            Some("1,2,3,\n"),
+            "fold with string accumulator"
+        );
+    }
+
     /// Both arity-1 and arity-2 IndirectCall in the same module.
     /// Ensures `with_module_tables` seeds both indirect_call_type_idx_1 and _2 correctly
     /// and that swapping the two Option<u32> arguments would be caught.

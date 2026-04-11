@@ -102,6 +102,14 @@ pub(crate) enum BackendIntrinsic {
     /// tagged Int. This is unreachable from Goby code because it requires direct
     /// access to the chunked internal structure.
     ListLength,
+    /// Left fold over a chunked list: chunk-walk loop + accumulator + callback dispatch.
+    ///
+    /// Signature: `(tagged_list: i64, init_acc: i64, func: i64) -> i64`.
+    /// The callback `func(acc, elem)` is called for each element via
+    /// `emit_callable_dispatch` with 2 arguments. After the loop, returns the
+    /// final accumulator value. Chunk traversal is internal to the runtime and
+    /// unreachable from Goby code.
+    ListFold,
 }
 
 impl BackendIntrinsic {
@@ -120,6 +128,7 @@ impl BackendIntrinsic {
             BackendIntrinsic::StringGraphemesList => 1,
             BackendIntrinsic::StringSplitLines => 1,
             BackendIntrinsic::ListLength => 1,
+            BackendIntrinsic::ListFold => 3,
         }
     }
 
@@ -137,7 +146,8 @@ impl BackendIntrinsic {
             | BackendIntrinsic::ListPushString
             | BackendIntrinsic::ListSet
             | BackendIntrinsic::ListConcat
-            | BackendIntrinsic::ListLength => IntrinsicExecutionBoundary::InWasm,
+            | BackendIntrinsic::ListLength
+            | BackendIntrinsic::ListFold => IntrinsicExecutionBoundary::InWasm,
         }
     }
 }
@@ -290,12 +300,10 @@ pub(crate) enum WasmBackendInstr {
     /// - `arity = 1`: `(i64) -> i64`  (used for `each`/`map` callbacks)
     /// - `arity = 2`: `(i64, i64) -> i64`  (fold callback `f acc elem`)
     ///
-    /// # Design note: no dedicated ListFold variant
-    /// `list.fold` is implemented as ordinary recursive stdlib code in `stdlib/goby/list.gb`
-    /// and calls its callback through a generic `IndirectCall { arity: 2 }`.  A separate
-    /// `ListFold` backend instruction was deliberately avoided so that the compiler requires
-    /// no symbol-name special casing and any future 2-argument higher-order function can
-    /// reuse the same path.
+    /// # Design note: closure dispatch
+    /// Closure callbacks are handled transparently by `emit_callable_dispatch`.
+    /// `list.fold` now uses `BackendIntrinsic::ListFold` with its own chunk-walk
+    /// loop; this arity-2 indirect call is still used for other 2-argument HOFs.
     IndirectCall { arity: u8 },
     /// Pattern-match the scrutinee against a sequence of arms.
     ///
