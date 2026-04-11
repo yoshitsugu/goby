@@ -536,21 +536,330 @@ The following product-direction decisions are already locked for this plan:
       - `rr4_head_tail_pattern_binds_empty_tail_for_single_item_list`
 
 - [ ] **M5: Rebuild stdlib traversal on explicit sequence/iterator boundaries**
-  - Rework `length`, `each`, `map`, `fold`, and related stdlib helpers so their
-    optimized execution path is explicit and maintainable.
-  - Preserve Goby's effect/iterator story where it improves language clarity.
-  - Prefer designs where the readable stdlib surface remains ordinary Goby code
-    and only the minimum hot-path execution boundary becomes compiler/runtime
-    owned.
-  - Compare:
-    - sequence intrinsics,
-    - iterator intrinsics,
-    - handler specialization,
-    - or a layered combination of those,
-    and choose the smallest explicit machinery that still reaches the practical
-    scripting target.
-  - Reject solutions that meet the benchmark target only by turning most of the
-    stdlib into opaque runtime stubs.
+
+  ### M5 Design Decisions
+
+  **Approach: explicit intrinsics in stdlib, eliminate implicit magic**
+
+  Up to M4 the lowerer silently recognized function names like `each`, `map`
+  as magic words and replaced them with dedicated Wasm loop instructions
+  (`ListEach`, `ListMap`, etc.). Reading the stdlib source gave no indication
+  that special processing was involved. M5 eliminates this implicit pattern
+  and makes stdlib `.gb` files call `__goby_*` intrinsics explicitly.
+
+  The model is `string.gb`. For example `grapheme_count`:
+  ```
+  grapheme_count value =
+    mut n = 0
+    with
+      yield _ _ ->
+        resume (True, ())
+    in
+      n := __goby_string_each_grapheme value
+    n
+  ```
+  - The special boundary (`__goby_string_each_grapheme`) is named explicitly.
+  - Logic (counting) is expressed in ordinary Goby effect handler code
+    (`with`/`yield`/`resume`).
+  - A reader immediately sees where the special boundary is and where
+    ordinary Goby logic is.
+
+  **Semantic relationships:** `fold` is the fundamental traversal operation;
+  `each` is a derived form.
+  - `each xs f` = `fold xs () (fn _ x -> f x; ())`
+  - `map` involves new-list construction, so it cannot be written purely
+    in terms of fold — it requires its own intrinsic.
+
+  **Comparison (§9 M5 requirements)**
+
+  | Option | Intrinsics | stdlib readability | Implicit magic |
+  |---|---|---|---|
+  | A: every function as a 1-line intrinsic wrapper | 4 (length, each, map, fold) | each function is hollow | none (but no logic visible) |
+  | B: lowerer name-matching (M4 approach) | 0 (implicit) | plain Goby code | SPECIALLY_LOWERED list |
+  | **C: minimal intrinsics + Goby logic** | **3 (length, fold, map)** | **boundaries explicit, logic in Goby** | **none** |
+
+  **Decision: C.** Intrinsics handle only operations unreachable from Goby
+  code; all other logic is written in Goby.
+
+  - **`__goby_list_length xs`** — reads the header `total_len` field in O(1).
+    Direct access to the chunked internal structure is impossible from Goby.
+    Clear justification for an intrinsic.
+
+  - **`__goby_list_fold xs init f`** — chunk-walk loop + accumulator +
+    callback dispatch. Chunk traversal is an internal operation unreachable
+    from Goby code. `fold` is the fundamental traversal; other operations
+    (`each`, etc.) are built on top.
+
+  - **`__goby_list_map xs f`** — chunk-walk loop + callback + new list
+    construction. Allocating and populating new chunks is unreachable from
+    Goby code. Writing `map` in terms of `fold` would require prepend-then-
+    reverse, adding an O(n) copy. Justification for a separate intrinsic.
+
+  - **`each` is written in Goby** — it is a derived form of `fold`:
+    ```
+    each : List a -> (a -> Unit) -> Unit
+    each xs f =
+      __goby_list_fold xs () (fn _ x ->
+        f x
+        ()
+      )
+    ```
+    `__goby_list_fold` handles the chunk walk; `each` is a fold that
+    discards its accumulator. Semantically correct and avoids adding
+    another intrinsic.
+
+  **Eliminating implicit magic:**
+  - Remove `"each"` and `"map"` from `SPECIALLY_LOWERED_STDLIB_NAMES`.
+  - Remove the `GlobalRef("list","each")` / `GlobalRef("list","map")` /
+    `GlobalRef("list","fold")` name-match branches in the lowerer.
+  - Register `"__goby_list_length"`, `"__goby_list_fold"`,
+    `"__goby_list_map"` in `backend_intrinsic_for_bare` instead —
+    the same registration mechanism used by `"__goby_string_each_grapheme"`.
+
+  **Preserving the effect story:**
+  - Since `each` is a fold wrapper, effects in callbacks work naturally.
+    `each xs (fn x -> println x)` performs the `println` effect inside
+    the fold callback; effect handler lowering handles it as usual.
+  - M5 does not introduce callback-specific specialization rules
+    (`Print.println`-specific fast paths, etc.). All `each`/`fold` callback
+    forms use the same generic `__goby_list_fold` execution boundary.
+    Callback specialization design is deferred to M7 Iterator/effect work.
+  - M7 can later introduce an Iterator effect using `__goby_list_fold`
+    as its foundation, preserving design room for effect-oriented
+    traversal.
+
+  **`join`:** Currently written as case-based recursion in stdlib and does
+  not call `fold`. After M5, rewriting `join` to use `fold` would let it
+  ride the chunk-walk loop, but that rewrite is out of M5 scope. No
+  dedicated `join` intrinsic is needed.
+
+  **`ListReverseFoldPrepend`:** The existing optimization is preserved, but
+  its trigger moves from symbol-name matching to semantic fold-boundary
+  matching. M5 must keep the optimization active for both:
+  - direct `__goby_list_fold xs init f` calls, and
+  - public `fold xs init f` calls (via stdlib wrapper).
+  The implementation strategy is a traversal-boundary reification pass:
+  reify calls resolved to stdlib `list.fold` into the same internal fold
+  boundary node used by direct `__goby_list_fold` calls before backend
+  optimization matching. The pattern-match logic
+  (`lower_supported_inline_list_fold_prepend_builder`) remains structural
+  (`[prefix..., ..acc]` callback shape), not symbol-name based and not
+  wrapper-shape dependent.
+
+  **Performance note on `each` via `fold`:** `each` implemented as
+  `__goby_list_fold xs () (fn _ x -> ...)` pushes and discards an unused
+  Unit accumulator on every iteration. This is a constant-per-element
+  overhead (a few Wasm instructions) and negligible for the §6.6 success
+  bar. If profiling after M5 reveals that `each` is measurably slower than
+  a hypothetical dedicated `__goby_list_each`, a targeted emit optimization
+  (elide acc push/pop when init is `()` and the callback ignores its first
+  argument) can be added later without changing the stdlib surface.
+
+  **Future alignment: `graphemes`/`split` in `string.gb`** still use
+  `SPECIALLY_LOWERED_STDLIB_NAMES` implicit magic. The same explicit-
+  intrinsic principle adopted in M5 for list operations should be applied
+  to string operations in a future milestone. This is out of M5 scope but
+  noted here so the inconsistency is tracked.
+
+  ### M5 Implementation Steps
+
+  - [ ] **M5-0: Capture baseline performance snapshot**
+    - scope: record M4 baseline numbers for the locked list traversal
+      workloads (`length`, `fold` sum, `each` with effect callback, `map`
+      over multi-chunk list) under `cargo test -p goby-wasm -- --nocapture`
+      bench harness or current project benchmark command.
+    - done when: baseline numbers are written in PLAN_SEQUENCE.md M5 section.
+    - checks: benchmark command + `cargo test -p goby-wasm`
+
+  - [ ] **M5-1: Add `__goby_list_length` intrinsic**
+    - scope:
+      - `backend_ir.rs`: add `BackendIntrinsic::ListLength`.
+        arity = 1, execution_boundary = InWasm.
+      - `lower.rs` `backend_intrinsic_for_bare`: register
+        `"__goby_list_length"` → `BackendIntrinsic::ListLength`.
+      - `emit.rs`: add `emit_list_length_helper`. Extract the header ptr,
+        `I32Load(offset: 0)` for `total_len`, tag as TAG_INT, widen to i64.
+        No chunk walk needed.
+      - `stdlib/goby/list.gb`: rewrite `length`:
+        ```
+        length : List a -> Int
+        length xs = __goby_list_length xs
+        ```
+    - done when: `cargo test -p goby-wasm` green.
+    - checks: `cargo test -p goby-wasm`
+
+  - [ ] **M5-2: Regression tests for `ListLength`**
+    - scope: add to `runtime_rr_tests.rs`:
+      - empty list `length []` → 0
+      - single chunk (32 elements) via `length` → 32
+      - multi-chunk (65 elements) via `length` → 65 (crosses chunk boundary)
+      - one direct intrinsic smoke case: `__goby_list_length []` → 0
+        (keeps intrinsic endpoint coverage without making tests stdlib-blind)
+    - done when: all 4 cases green.
+    - checks: `cargo test -p goby-wasm`
+
+  - [ ] **M5-3: Add `__goby_list_fold` intrinsic and rewrite stdlib `fold`**
+    - scope: this step adds the intrinsic, rewrites stdlib, AND
+      simultaneously updates the lowerer so that `__goby_list_fold` is the
+      only fold path. Both changes must land together because the old
+      `GlobalRef("list","fold")` branch would conflict with the new stdlib.
+      - `backend_ir.rs`: add `BackendIntrinsic::ListFold`.
+        arity = 3, execution_boundary = InWasm.
+      - `lower.rs` `backend_intrinsic_for_bare`: register
+        `"__goby_list_fold"` → `BackendIntrinsic::ListFold`.
+      - `emit.rs`: add `emit_list_fold_helper`. Same double chunk-walk
+        loop structure as `emit_list_each`, with an accumulator local added.
+        Each element calls `func(acc, elem)` via `emit_callable_dispatch`
+        with 2 arguments, stores the return value into acc. After the loop
+        completes, push acc.
+      - `stdlib/goby/list.gb`: rewrite `fold`:
+        ```
+        # Left fold. The callback receives the accumulator first: f acc elem.
+        fold : List a -> b -> (b -> a -> b) -> b
+        fold xs acc f = __goby_list_fold xs acc f
+        ```
+      - Remove `GlobalRef("list","fold")` and `Var("fold")` name-match
+        branches from the lowerer. User code calling `fold` now dispatches
+        through the stdlib `fold` definition, which calls `__goby_list_fold`.
+    - done when: `cargo test -p goby-wasm` green.
+    - checks: `cargo test -p goby-wasm`
+
+  - [ ] **M5-4: Re-anchor `ListReverseFoldPrepend` on semantic fold boundary**
+    - scope: the old prepend-pattern optimization fired inside the removed
+      `GlobalRef("list","fold")` branch. Replace it with a semantic-fold
+      optimization gate that works for both public `fold` and direct
+      `__goby_list_fold` calls:
+      - add traversal-boundary reification in lowering so calls resolved to
+        stdlib `list.fold` and direct `__goby_list_fold` produce the same
+        internal fold boundary representation before optimization matching.
+      - run `lower_supported_inline_list_fold_prepend_builder` on that fold
+        boundary representation (not on wrapper syntax).
+      - when callback shape is `[prefix..., ..acc]`, emit
+        `ListReverseFoldPrepend`; otherwise emit general
+        `BackendIntrinsic::ListFold`.
+    - done when: `cargo test -p goby-wasm` green. Existing
+      `ListReverseFoldPrepend` compile tests assert the dedicated
+      instruction is emitted for both `fold` and `__goby_list_fold` entrypoints.
+    - checks: `cargo test -p goby-wasm`
+
+  - [ ] **M5-5: Add `__goby_list_map` intrinsic and rewrite stdlib `map`**
+    - scope: same atomic-step rationale as M5-3.
+      - `backend_ir.rs`: add `BackendIntrinsic::ListMap`.
+        arity = 2, execution_boundary = InWasm.
+      - `lower.rs` `backend_intrinsic_for_bare`: register
+        `"__goby_list_map"` → `BackendIntrinsic::ListMap`.
+      - `emit.rs`: connect existing `emit_list_map` as the handler for
+        `BackendIntrinsic::ListMap`.
+      - `stdlib/goby/list.gb`: rewrite `map`:
+        ```
+        map : List a -> (a -> b) -> List b
+        map xs f = __goby_list_map xs f
+        ```
+      - Remove `GlobalRef("list","map")` and `Var("map")` name-match
+        branches from the lowerer.
+      - Remove `"map"` from `SPECIALLY_LOWERED_STDLIB_NAMES`.
+    - done when: `cargo test -p goby-wasm` green. All existing map tests pass.
+    - checks: `cargo test -p goby-wasm`
+
+  - [ ] **M5-6: Rewrite `each` as Goby code on top of `__goby_list_fold`**
+    - scope:
+      - `stdlib/goby/list.gb`: rewrite `each`:
+        ```
+        each : List a -> (a -> Unit) -> Unit
+        each xs f =
+          __goby_list_fold xs () (fn _ x ->
+            f x
+            ()
+          )
+        ```
+      - Remove `GlobalRef("list","each")` and `Var("each")` name-match
+        branches from the lowerer.
+      - Remove `"each"` from `SPECIALLY_LOWERED_STDLIB_NAMES`.
+    - done when: `cargo test -p goby-wasm` green.
+      All existing each tests (including effect callbacks) pass.
+    - checks: `cargo test -p goby-wasm`
+
+  - [ ] **M5-7: Remove legacy `WasmBackendInstr` variants**
+    - scope: after M5-3 through M5-6, the old dedicated backend instructions
+      are no longer produced by the lowerer. This step removes the dead code:
+      - Remove `WasmBackendInstr::ListEach` and its emit function.
+      - Remove `WasmBackendInstr::ListMap` and its emit function.
+      - Remove `WasmBackendInstr::ListEachEffect` and its emit function.
+      - Verify that `SPECIALLY_LOWERED_STDLIB_NAMES` no longer contains
+        `"each"` or `"map"` (only `"graphemes"` and `"split"` remain).
+      - Verify `list.each xs Print.println` still executes correctly via the
+        generic fold callback path.
+    - done when: `cargo test -p goby-wasm` green. No references to the
+      removed variants remain in non-test code.
+    - checks: `cargo test -p goby-wasm`
+
+  - [ ] **M5-8: Runtime regression tests**
+    - scope: add to `runtime_rr_tests.rs`:
+      - empty-list fold: `fold [] 0 (fn acc x -> acc + x)` → 0
+      - single-chunk fold sum
+      - multi-chunk fold sum (65 elements)
+      - fold with string concatenation → println (effect path)
+      - `ListReverseFoldPrepend` coexistence:
+        - prepend pattern lowered to dedicated instruction via public `fold`
+        - prepend pattern lowered to dedicated instruction via direct
+          `__goby_list_fold`
+      - each with general callback (non-effect)
+      - each with effect callback (Print.println)
+      - map on multi-chunk list
+    - done when: all cases green.
+    - checks: `cargo test -p goby-wasm`
+
+  - [ ] **M5-9: Audit and documentation**
+    - scope: record the M5 traversal boundaries in `backend_ir.rs`:
+      - `__goby_list_length` → `BackendIntrinsic::ListLength`:
+        header `total_len` direct read, O(1).
+      - `__goby_list_fold` → `BackendIntrinsic::ListFold`:
+        chunk-walk loop + accumulator + callback dispatch.
+        Prepend callback shape → `ListReverseFoldPrepend` optimization
+        at semantic fold boundaries (public `fold` and direct intrinsic call).
+      - `__goby_list_map` → `BackendIntrinsic::ListMap`:
+        chunk-walk loop + callback + new chunked list construction.
+      - `each`: Goby code. Derived from `__goby_list_fold`
+        (fold that discards its accumulator).
+      - `fold`: 1-line wrapper around `__goby_list_fold`.
+    - done when: doc comments added.
+    - checks: `cargo test -p goby-wasm` (no regressions)
+
+  - [ ] **M5-10: Verification snapshot and M5 completion**
+    - scope: record final `cargo test -p goby-wasm` result and compare
+      against M5-0 baseline workloads.
+      - correctness gate: all M5 regression tests green.
+      - design gate: no new callback-symbol-specific specialization branches
+        added in lowerer for list traversal.
+      - performance gate:
+        - `length`/`fold`/`map` workloads must be no worse than M4 by >5%.
+        - `each` effect-callback workload may regress up to 10% in M5
+          (specialization deferred to M7), but must still satisfy §6.6
+          practical scripting success criteria.
+      Mark the M5 checkbox as `[x]` in PLAN_SEQUENCE.md with the
+      verification snapshot (test count).
+    - done when: all M5 sub-steps are `[x]`.
+    - checks: `cargo test -p goby-wasm` green, benchmark comparison recorded,
+      PLAN_SEQUENCE.md updated.
+
+  ### M5 Design Constraints
+
+  - stdlib `.gb` calls `__goby_*` intrinsics explicitly. No implicit name magic.
+  - Intrinsics handle only operations unreachable from Goby code
+    (chunk traversal, header reads, new list construction).
+  - Logic (`each` implementation, etc.) is written in Goby code.
+  - No new host imports (all intrinsics complete within Wasm).
+  - M5 introduces no callback-symbol-specific traversal specialization
+    (`Print.println`-specific path, etc.); those decisions are deferred to M7.
+  - The existing `ListReverseFoldPrepend` optimization path must not break;
+    it must fire at the semantic fold boundary for both public `fold` and
+    direct `__goby_list_fold` calls.
+  - stdlib rewrites and lowerer branch removal must land atomically per
+    function (same step) to avoid intermediate states where old and new
+    paths conflict.
+  - `graphemes`/`split` implicit magic in `SPECIALLY_LOWERED_STDLIB_NAMES`
+    remains for now; aligning string operations to the same explicit-
+    intrinsic principle is deferred to a future milestone.
 
 - [ ] **M6: Make index/update workloads practical**
   - Ensure `xs[i]` and `xs[i] := v` no longer behave like thin syntax over naïve
