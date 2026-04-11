@@ -1386,15 +1386,20 @@ fn lower_comp_inner(
                 && name == "map"
                 && args.len() == 2
             {
-                // stdlib list.map: iterate list with funcref callback, return new list.
-                let list_instrs =
-                    lower_value_as_arg(&args[0], aliases, bindings, known_decls, lambda_decls)?;
-                let func_instrs =
-                    lower_value_as_arg(&args[1], aliases, bindings, known_decls, lambda_decls)?;
-                Ok(vec![WasmBackendInstr::ListMap {
-                    list_instrs,
-                    func_instrs,
-                }])
+                let mut instrs = Vec::new();
+                for arg in args {
+                    instrs.extend(lower_value_as_arg(
+                        arg,
+                        aliases,
+                        bindings,
+                        known_decls,
+                        lambda_decls,
+                    )?);
+                }
+                instrs.push(WasmBackendInstr::Intrinsic {
+                    intrinsic: BackendIntrinsic::ListMap,
+                });
+                Ok(instrs)
             } else if let goby_core::ir::ValueExpr::GlobalRef { module, name } = callee.as_ref()
                 && module == "list"
                 && name == "fold"
@@ -1506,15 +1511,20 @@ fn lower_comp_inner(
                     || resolve_global_ref(name, aliases) == Some(("list", "map")))
                     && args.len() == 2
                 {
-                    // Var resolves to list.map (bare name or alias via `import goby/list (map)`).
-                    let list_instrs =
-                        lower_value_as_arg(&args[0], aliases, bindings, known_decls, lambda_decls)?;
-                    let func_instrs =
-                        lower_value_as_arg(&args[1], aliases, bindings, known_decls, lambda_decls)?;
-                    Ok(vec![WasmBackendInstr::ListMap {
-                        list_instrs,
-                        func_instrs,
-                    }])
+                    let mut instrs = Vec::new();
+                    for arg in args {
+                        instrs.extend(lower_value_as_arg(
+                            arg,
+                            aliases,
+                            bindings,
+                            known_decls,
+                            lambda_decls,
+                        )?);
+                    }
+                    instrs.push(WasmBackendInstr::Intrinsic {
+                        intrinsic: BackendIntrinsic::ListMap,
+                    });
+                    Ok(instrs)
                 } else if (name == "fold"
                     || resolve_global_ref(name, aliases) == Some(("list", "fold")))
                     && args.len() == 3
@@ -2711,6 +2721,7 @@ fn backend_intrinsic_for_bare(name: &str, arg_count: usize) -> Option<BackendInt
         "__goby_string_length" => Some(BackendIntrinsic::StringLength),
         "__goby_list_length" => Some(BackendIntrinsic::ListLength),
         "__goby_list_fold" if arg_count == 3 => Some(BackendIntrinsic::ListFold),
+        "__goby_list_map" if arg_count == 2 => Some(BackendIntrinsic::ListMap),
         _ => None,
     }
 }
@@ -3892,23 +3903,29 @@ build n =
             result
         );
         let instrs = result.unwrap();
+        // After M5-5: map emits flat [ListLit, PushFuncHandle, Intrinsic { ListMap }]
         assert!(
-            matches!(instrs.as_slice(), [WasmBackendInstr::ListMap { .. }]),
-            "expected a single ListMap instr, got: {:?}",
+            matches!(
+                instrs.last(),
+                Some(WasmBackendInstr::Intrinsic {
+                    intrinsic: BackendIntrinsic::ListMap
+                })
+            ),
+            "expected Intrinsic {{ ListMap }} as last instr, got: {:?}",
             instrs
         );
         // Lambda should have been lifted as a LambdaAuxDecl.
         assert_eq!(lambda_decls.len(), 1, "expected exactly one lambda AuxDecl");
         assert_eq!(lambda_decls[0].param_names, vec!["x"]);
-        // The ListMap func_instrs should reference the lifted lambda by PushFuncHandle.
-        if let WasmBackendInstr::ListMap { func_instrs, .. } = &instrs[0] {
-            assert!(
-                matches!(func_instrs.as_slice(), [WasmBackendInstr::PushFuncHandle { decl_name }]
-                    if decl_name.starts_with("__lambda_")),
-                "func_instrs should be PushFuncHandle(__lambda_N), got: {:?}",
-                func_instrs
-            );
-        }
+        // The func arg should be a PushFuncHandle referencing the lifted lambda.
+        assert!(
+            instrs.iter().any(|i| matches!(
+                i,
+                WasmBackendInstr::PushFuncHandle { decl_name } if decl_name.starts_with("__lambda_")
+            )),
+            "expected PushFuncHandle(__lambda_N) in instrs, got: {:?}",
+            instrs
+        );
     }
 
     #[test]

@@ -564,6 +564,7 @@ pub(crate) fn needs_helper_state(instrs: &[WasmBackendInstr]) -> bool {
                         | BackendIntrinsic::ListSet
                         | BackendIntrinsic::ListConcat
                         | BackendIntrinsic::ListFold
+                        | BackendIntrinsic::ListMap
                 }
                 // DeclCall / IndirectCall may trigger callee heap allocations; the global cursor
                 // must be synchronized before and after the call, which requires alloc_cursor_local.
@@ -1203,6 +1204,9 @@ pub(crate) fn emit_general_module_with_aux_and_options(
                 WasmBackendInstr::IndirectCall { arity: 1 }
                     | WasmBackendInstr::ListEach { .. }
                     | WasmBackendInstr::ListMap { .. }
+                    | WasmBackendInstr::Intrinsic {
+                        intrinsic: BackendIntrinsic::ListMap
+                    }
             )
         })
     });
@@ -1216,6 +1220,9 @@ pub(crate) fn emit_general_module_with_aux_and_options(
                     | WasmBackendInstr::ListMap { .. }
                     | WasmBackendInstr::Intrinsic {
                         intrinsic: BackendIntrinsic::ListFold
+                    }
+                    | WasmBackendInstr::Intrinsic {
+                        intrinsic: BackendIntrinsic::ListMap
                     }
             )
         })
@@ -3109,6 +3116,16 @@ fn emit_helper_call(
             let type_idx = ctx.indirect_call_type_idx(2)?;
             let closure_type_idx = ctx.indirect_call_type_idx(3)?;
             emit_list_fold_helper(function, hs, type_idx, closure_type_idx)
+        }
+        BackendIntrinsic::ListMap => {
+            let hs = heap_state.ok_or_else(|| CodegenError {
+                message: format!(
+                    "gen_lower/emit: intrinsic '{intrinsic:?}' requires heap helper state"
+                ),
+            })?;
+            let type_idx = ctx.indirect_call_type_idx(1)?;
+            let closure_type_idx = ctx.indirect_call_type_idx(2)?;
+            emit_list_map(function, &hs, type_idx, closure_type_idx)
         }
     }?;
     let _ = (ctx, i32_base);

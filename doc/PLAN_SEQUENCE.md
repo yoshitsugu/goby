@@ -748,7 +748,7 @@ The following product-direction decisions are already locked for this plan:
       instruction is emitted for both `fold` and `__goby_list_fold` entrypoints.
     - checks: `cargo test -p goby-wasm`
 
-  - [ ] **M5-5: Add `__goby_list_map` intrinsic and rewrite stdlib `map`**
+  - [x] **M5-5: Add `__goby_list_map` intrinsic and rewrite stdlib `map`**
     - scope: same atomic-step rationale as M5-3.
       - `backend_ir.rs`: add `BackendIntrinsic::ListMap`.
         arity = 2, execution_boundary = InWasm.

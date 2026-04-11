@@ -110,6 +110,12 @@ pub(crate) enum BackendIntrinsic {
     /// final accumulator value. Chunk traversal is internal to the runtime and
     /// unreachable from Goby code.
     ListFold,
+    /// Map over a chunked list: chunk-walk loop + callback dispatch, builds new list.
+    ///
+    /// Signature: `(tagged_list: i64, func: i64) -> i64`.
+    /// The callback `func(elem)` is called for each element via
+    /// `emit_callable_dispatch` with 1 argument. Returns a new tagged list.
+    ListMap,
 }
 
 impl BackendIntrinsic {
@@ -129,6 +135,7 @@ impl BackendIntrinsic {
             BackendIntrinsic::StringSplitLines => 1,
             BackendIntrinsic::ListLength => 1,
             BackendIntrinsic::ListFold => 3,
+            BackendIntrinsic::ListMap => 2,
         }
     }
 
@@ -147,7 +154,8 @@ impl BackendIntrinsic {
             | BackendIntrinsic::ListSet
             | BackendIntrinsic::ListConcat
             | BackendIntrinsic::ListLength
-            | BackendIntrinsic::ListFold => IntrinsicExecutionBoundary::InWasm,
+            | BackendIntrinsic::ListFold
+            | BackendIntrinsic::ListMap => IntrinsicExecutionBoundary::InWasm,
         }
     }
 }
