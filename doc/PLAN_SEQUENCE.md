@@ -969,6 +969,57 @@ The following product-direction decisions are already locked for this plan:
       - lower indexed read through the shared M6 boundary;
       - implement chunk-aware lookup that avoids head-recursive linear walk;
       - keep out-of-range diagnostics/behavior explicit and regression-tested.
+    - detailed execution plan:
+      - **M6-2a: Lock a reproducible measurement split**
+        - keep the existing locked workload
+          (`m6_0_baseline_index_update_workloads` / `indexed-read-4k-mixed`) as
+          the only success-bar benchmark;
+        - add one narrow helper benchmark or instrumentation path, if needed,
+          that separates:
+          - list construction cost,
+          - repeated `ListGet` helper cost,
+          - output/render cost.
+        - rule: this extra measurement path is diagnostic only; the official
+          success gate remains the locked M6-0 indexed-read workload.
+      - **M6-2b: Isolate remaining shared-boundary overhead**
+        - inspect the generated Wasm/emit path for per-read overhead that is
+          still paid on every `ListGet`, especially:
+          - repeated tag validation on already-lowered hot paths,
+          - repeated index decode work,
+          - redundant local traffic or helper call scaffolding,
+          - repeated header field loads that can be hoisted within one caller loop.
+        - record explicitly whether the remaining cost is:
+          - inside `BackendIntrinsic::ListGet` itself,
+          - in caller-side lowering around repeated reads,
+          - or dominated by list construction in the locked workload.
+      - **M6-2c: Apply only shared-boundary optimizations**
+        - allowed optimization shapes:
+          - reduce Wasm instruction count inside `ListGet`;
+          - reuse already-decoded header/index state within the same shared
+            boundary or caller-owned lowering form;
+          - introduce a new explicit lowerer-owned boundary only if it remains
+            shared across `xs[i]` and canonical `list.get`.
+        - disallowed optimization shapes:
+          - syntax-specific fast paths for `xs[i]`;
+          - benchmark-specific backend exceptions;
+          - a hidden alternate runtime representation for some `List` values.
+      - **M6-2d: Re-measure after each meaningful change**
+        - after each optimization slice, run:
+          - `cargo test -p goby-wasm m6_2_indexed_read -- --nocapture`
+          - `cargo test -p goby-wasm m6_0_baseline_index_update_workloads -- --ignored --nocapture`
+        - record:
+          - latest `p50` / `p95`,
+          - qualitative source of remaining cost,
+          - whether the change also affected M5 traversal workloads.
+      - **M6-2e: Decision gate before declaring completion**
+        - if the locked workload reaches the 5x target honestly, mark M6-2
+          complete and carry the final numbers into M6-5;
+        - if repeated measurement shows the locked workload is dominated by
+          list construction or another cost outside the indexed-read boundary,
+          do not silently mark M6-2 complete:
+          - either introduce a better boundary-owned measurement that still
+            preserves the product claim, and update the plan explicitly;
+          - or revise the M6-2 success wording before proceeding.
     - done when: large indexed-read regression tests pass and the locked
       4k-element indexed-read workload improves on the M6-0 baseline by at
       least 5x.
@@ -987,6 +1038,12 @@ The following product-direction decisions are already locked for this plan:
           indexed-read sample currently remains near M6-0
           (`p50=36858us`, `p95=37768us`), so the locked 5x performance gate is
           not yet met.
+      - current interpretation:
+        - M6-2 correctness is largely locked, but the performance story is not.
+        - The next M6-2 slice must prove whether the missing 5x lies in:
+          - `ListGet` helper overhead that can still be reduced, or
+          - benchmark cost outside indexed read proper.
+        - Until that is explicit, M6-2 must remain open.
     - checks: `cargo test -p goby-wasm`
 
   - [ ] **M6-3: Implement chunk-local immutable point update**
