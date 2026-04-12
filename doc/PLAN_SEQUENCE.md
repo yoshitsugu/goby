@@ -964,7 +964,7 @@ The following product-direction decisions are already locked for this plan:
         operational boundary shape (prefix descent + outward rebuild).
     - checks: `cargo test -p goby-wasm`
 
-  - [ ] **M6-2: Implement chunk-aware indexed read**
+  - [x] **M6-2: Implement chunk-aware indexed read** (complete, 2026-04-13)
     - scope:
       - lower indexed read through the shared M6 boundary;
       - implement chunk-aware lookup that avoids head-recursive linear walk;
@@ -1020,10 +1020,14 @@ The following product-direction decisions are already locked for this plan:
           - either introduce a better boundary-owned measurement that still
             preserves the product claim, and update the plan explicitly;
           - or revise the M6-2 success wording before proceeding.
-    - done when: large indexed-read regression tests pass and the locked
-      4k-element indexed-read workload improves on the M6-0 baseline by at
-      least 5x.
-    - status (2026-04-12, in progress):
+    - revised done-when (2026-04-13 decision):
+      - large indexed-read regressions pass on the shared boundary; and
+      - M6-2 diagnostic split explicitly demonstrates whether the locked M6-0
+        sample is dominated by non-`ListGet` cost.
+      - The 5x end-to-end indexed-read performance gate remains locked for M6-5
+        (final practical-goal verification), not as a hard blocker for M6-2
+        boundary closure.
+    - status (2026-04-13, complete):
       - `BackendIntrinsic::ListGet` now uses chunk-aware index decomposition
         with CHUNK_SIZE-aware bit operations (`>> 5`, `& 31`) in
         `crates/goby-wasm/src/gen_lower/emit.rs` for both dynamic and shared
@@ -1032,18 +1036,25 @@ The following product-direction decisions are already locked for this plan:
         `crates/goby-wasm/src/runtime_rr_tests.rs`:
         - `m6_2_indexed_read_4k_mixed_indices_executes_without_trap`
         - `m6_2_indexed_read_surface_and_stdlib_get_match_on_multi_chunk_list`
+      - added M6-2 diagnostic split harness in
+        `crates/goby-wasm/src/runtime_rr_tests.rs`:
+        - `m6_2_diagnostic_indexed_read_split_costs` (`#[ignore]`).
       - verification:
         - `cargo test -p goby-wasm m6_2_indexed_read -- --nocapture`: green.
         - `cargo test -p goby-wasm m6_0_baseline_index_update_workloads -- --ignored --nocapture`:
-          indexed-read sample currently remains near M6-0
-          (`p50=36858us`, `p95=37768us`), so the locked 5x performance gate is
-          not yet met.
-      - current interpretation:
-        - M6-2 correctness is largely locked, but the performance story is not.
-        - The next M6-2 slice must prove whether the missing 5x lies in:
-          - `ListGet` helper overhead that can still be reduced, or
-          - benchmark cost outside indexed read proper.
-        - Until that is explicit, M6-2 must remain open.
+          indexed-read sample remains near M6-0 (`p50=38062us`,
+          `p95=38789us`).
+        - `cargo test -p goby-wasm m6_2_diagnostic_indexed_read_split_costs -- --ignored --nocapture`:
+          - `build_only_p50=36268us`, `build_and_read_p50=41196us`,
+            `read_delta_p50=4928us`;
+          - `build_share_p50=88%` in this locked sample.
+      - interpretation:
+        - M6-2 shared-boundary correctness is now locked for both `xs[i]` and
+          `goby/list.get`.
+        - the locked M6-0 indexed-read sample is currently dominated by
+          list-construction cost outside `ListGet` itself.
+        - end-to-end practical-speed closure stays in M6-5 after point/nested
+          update slices and full-workload reconciliation.
     - checks: `cargo test -p goby-wasm`
 
   - [ ] **M6-3: Implement chunk-local immutable point update**

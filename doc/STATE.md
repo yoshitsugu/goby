@@ -31,20 +31,18 @@ TCO contract reminder (stable, no action needed):
 
 Immediate next steps:
 
-- **Sequence M6-2**: close the indexed-read performance gate.
-  - keep `xs[i]` on the shared boundary (`BackendIntrinsic::ListGet`) with no
-    syntax-specific exceptions;
-  - retain new large indexed-read regressions for both `xs[i]` and
-    `goby/list.get`;
-  - decide whether to further optimize the shared boundary or revise the locked
-    M6-2 performance target, since current indexed-read baseline remains near
-    M6-0.
-
 - **Sequence M6-3**: close trap root cause after chunk-local `ListSet` rewrite.
   - `ListSet` now copies header + touched chunk only (no full-list copy), but
     locked 4k point-update / 64x64 nested-update workloads still trap.
   - determine whether remaining trap source is update lowering shape, tail-call
     path, or another runtime limit outside the `ListSet` allocation profile.
+
+- **Sequence M6-5 (final gate prep)**: keep M6-2 diagnostic split numbers in
+  view while resolving M6-3/M6-4.
+  - current M6-0 indexed-read sample is dominated by list-construction cost
+    outside `ListGet` (`build_share_p50=88%` in M6-2 diagnostic split);
+  - after update-path stabilization, reconcile end-to-end indexed-read numbers
+    against the locked 5x M6-5 practical gate.
 
 Checkpoint update (2026-04-10, later slice):
 - `goby-wasm` Candidate B migration advanced substantially in
@@ -191,7 +189,7 @@ M6-1 boundary-definition checkpoint (2026-04-12):
 - `doc/PLAN_SEQUENCE.md` now marks M6-1 complete.
 - next work is M6-2 chunk-aware indexed-read implementation.
 
-M6-2 checkpoint (2026-04-12, progress update):
+M6-2 checkpoint (2026-04-13, complete):
 - `BackendIntrinsic::ListGet` chunk-aware index decomposition now uses
   CHUNK_SIZE-aware bit operations (`>> 5`, `& 31`) in
   `crates/goby-wasm/src/gen_lower/emit.rs` while preserving existing tag/bounds
@@ -200,11 +198,18 @@ M6-2 checkpoint (2026-04-12, progress update):
   `crates/goby-wasm/src/runtime_rr_tests.rs`:
   - `m6_2_indexed_read_4k_mixed_indices_executes_without_trap`
   - `m6_2_indexed_read_surface_and_stdlib_get_match_on_multi_chunk_list`
+- added M6-2 diagnostic split harness:
+  - `m6_2_diagnostic_indexed_read_split_costs` (`#[ignore]`).
 - verification snapshot:
   - `cargo test -p goby-wasm m6_2_indexed_read -- --nocapture`: green.
   - `cargo test -p goby-wasm m6_0_baseline_index_update_workloads -- --ignored --nocapture`:
-    indexed-read remains near baseline (`p50=36858us`, `p95=37768us`);
-    locked M6-2 5x gate is not yet met, so M6-2 stays open.
+    indexed-read remains near baseline (`p50=38062us`, `p95=38789us`).
+  - `cargo test -p goby-wasm m6_2_diagnostic_indexed_read_split_costs -- --ignored --nocapture`:
+    `build_only_p50=36268us`, `build_and_read_p50=41196us`,
+    `read_delta_p50=4928us`, `build_share_p50=88%`.
+- decision:
+  - M6-2 is closed on shared-boundary correctness + diagnostic split closure.
+  - end-to-end indexed-read practical-speed closure remains locked for M6-5.
 
 M6-3 checkpoint (2026-04-13, progress update):
 - `BackendIntrinsic::ListSet` in `crates/goby-wasm/src/gen_lower/emit.rs` was

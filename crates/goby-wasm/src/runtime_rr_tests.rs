@@ -1553,3 +1553,107 @@ main =
         aoc_style_p50, aoc_style_p95, aoc_style_ok, aoc_style_err, aoc_style_last_err
     );
 }
+
+#[test]
+#[ignore = "M6-2 diagnostic split; run explicitly with --ignored --nocapture"]
+fn m6_2_diagnostic_indexed_read_split_costs() {
+    let warmup_runs = 3usize;
+    let measured_runs = 10usize;
+    let stdin_seed = "x\n";
+
+    let build_only_source = r#"
+import goby/stdio
+
+build : Int -> List Int can Print
+build n =
+  if n == 0
+    []
+  else
+    rest = build (n - 1)
+    [n, ..rest]
+
+main : Unit -> Unit can Print, Read
+main =
+  _ = read_lines ()
+  xs = build 4000
+  println "${xs[0]}"
+"#;
+    let build_only_wasm = compile_general_lowered_wasm(build_only_source);
+    let (
+        build_only_p50,
+        build_only_p95,
+        build_only_ok,
+        build_only_err,
+        build_only_last_ok,
+        build_only_last_err,
+    ) = measure_wasm_exec_micros(&build_only_wasm, stdin_seed, warmup_runs, measured_runs);
+    assert_eq!(build_only_err, 0, "build-only diagnostic should not trap");
+    assert_eq!(build_only_last_ok.as_deref(), Some("4000\n"));
+
+    let build_and_read_source = r#"
+import goby/stdio
+
+build : Int -> List Int can Print
+build n =
+  if n == 0
+    []
+  else
+    rest = build (n - 1)
+    [n, ..rest]
+
+scan_reads : List Int -> Int -> Int -> Int can Print
+scan_reads xs i acc =
+  if i >= 4000
+    acc
+  else
+    j = (i * 97) % 4000
+    v = xs[j]
+    scan_reads xs (i + 1) (acc + v)
+
+main : Unit -> Unit can Print, Read
+main =
+  _ = read_lines ()
+  xs = build 4000
+  total = scan_reads xs 0 0
+  println "${total}"
+"#;
+    let build_and_read_wasm = compile_general_lowered_wasm(build_and_read_source);
+    let (
+        build_and_read_p50,
+        build_and_read_p95,
+        build_and_read_ok,
+        build_and_read_err,
+        build_and_read_last_ok,
+        build_and_read_last_err,
+    ) = measure_wasm_exec_micros(&build_and_read_wasm, stdin_seed, warmup_runs, measured_runs);
+    assert_eq!(
+        build_and_read_err, 0,
+        "build+read diagnostic should not trap"
+    );
+    assert_eq!(build_and_read_last_ok.as_deref(), Some("8002000\n"));
+
+    let read_delta_p50 = build_and_read_p50.saturating_sub(build_only_p50);
+    let read_delta_p95 = build_and_read_p95.saturating_sub(build_only_p95);
+    let build_share_percent = if build_and_read_p50 == 0 {
+        0
+    } else {
+        (build_only_p50 * 100) / build_and_read_p50
+    };
+
+    eprintln!(
+        "[M6-2][diagnostic-indexed-read-split] build_only_p50={}us build_only_p95={}us build_and_read_p50={}us build_and_read_p95={}us read_delta_p50={}us read_delta_p95={}us build_share_p50={}percent build_ok_runs={} read_ok_runs={} build_err_runs={} read_err_runs={} build_err={:?} read_err={:?}",
+        build_only_p50,
+        build_only_p95,
+        build_and_read_p50,
+        build_and_read_p95,
+        read_delta_p50,
+        read_delta_p95,
+        build_share_percent,
+        build_only_ok,
+        build_and_read_ok,
+        build_only_err,
+        build_and_read_err,
+        build_only_last_err,
+        build_and_read_last_err
+    );
+}
