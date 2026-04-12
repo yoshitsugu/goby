@@ -1320,6 +1320,17 @@ fn lower_comp_inner(
             } else if let Some(intrinsic) =
                 resolve_intrinsic_call_target(callee, aliases, args.len())
             {
+                if intrinsic == BackendIntrinsic::ListFold
+                    && let Some(instrs) = lower_supported_inline_list_fold_prepend_builder(
+                        args,
+                        aliases,
+                        bindings,
+                        known_decls,
+                        lambda_decls,
+                    )?
+                {
+                    return Ok(instrs);
+                }
                 let mut instrs = Vec::new();
                 for arg in args {
                     instrs.extend(lower_value_as_arg(

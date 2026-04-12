@@ -4,21 +4,21 @@ Last updated: 2026-04-12
 
 ## Current Focus
 
-Next slice: **Sequence-backed List M5** (`doc/PLAN_SEQUENCE.md`) — rebuild
-stdlib traversal on explicit sequence/iterator boundaries.
+Next slice: **Sequence-backed List M6** (`doc/PLAN_SEQUENCE.md`) — make
+index/update workloads practical on the chunked `List` representation.
 
-M5 context:
-- M0–M4 of the Sequence-backed List redesign are complete (2026-04-11).
+M6 context:
+- Sequence-backed List M0–M5 are complete as of 2026-04-12.
 - Candidate B (Chunked Sequence) remains the locked direction in
   `doc/PLAN_SEQUENCE.md §8`.
-- M3/M4 checkpoints now include:
-  - CHUNK_SIZE locked as a named compile-time constant (`CHUNK_SIZE = 32`);
-  - explicit runtime/lowering boundaries for index read/update, list pattern
-    extraction, and traversal forms (`each`/`map`/`fold` paths);
-  - list-pattern boundaries split into shared extraction/guard/tail helpers in
-    `gen_lower/emit.rs`;
-  - `cargo test -p goby-wasm` green (625 passed) with chunk-boundary and
-    empty-tail list-pattern regressions locked.
+- Traversal boundaries are now explicit and M5 is fully closed:
+  - `length` / `fold` / `map` use explicit `__goby_*` boundaries;
+  - `each` is Goby code derived from `__goby_list_fold`;
+  - M5-8 runtime regressions now lock fold/each/map execution plus
+    `ListReverseFoldPrepend` coexistence for both public `fold` and direct
+    `__goby_list_fold` entrypoints;
+  - `cargo test -p goby-wasm` was green at the latest recorded M5 snapshot
+    (`641 passed; 0 failed; 4 ignored`).
 
 TCO contract reminder (stable, no action needed):
 - generic TCO is published and locked in `doc/LANGUAGE_SPEC.md`.
@@ -30,13 +30,16 @@ TCO contract reminder (stable, no action needed):
 
 Immediate next steps:
 
-- **Sequence M5**: rebuild stdlib traversal on explicit boundaries.
-  - Rework `length` / `each` / `map` / `fold` execution ownership so optimized
-    paths remain explicit and maintainable.
-  - Decide minimal intrinsic/lowerer surface that keeps stdlib readable while
-    meeting practical scripting targets.
-  - Compare sequence-intrinsic vs iterator/effect-lowering trade-offs and keep
-    the smallest explicit machinery that satisfies current workload gates.
+- **Sequence M6-0**: capture baseline index/update workload snapshot.
+  - Record repeated `xs[i]` reads on large lists with mixed in-chunk and
+    cross-chunk indices.
+  - Record repeated immutable `xs[i] := v` updates and nested
+    `grid[y][x] := v` workloads.
+  - Lock one concrete AoC-style transform fixture before changing the boundary.
+
+- **Sequence M6-1**: define the shared index/update boundary.
+  - Route both `xs[i]` and `xs[i] := v` through one explicit sequence boundary.
+  - Avoid syntax-shaped backend exceptions or a hidden alternate `List` mode.
 
 Checkpoint update (2026-04-10, later slice):
 - `goby-wasm` Candidate B migration advanced substantially in
@@ -150,6 +153,17 @@ M5 traversal-boundary checkpoint (2026-04-12):
 - Verification snapshot:
   - `cargo test -p goby-wasm`: `641 passed; 0 failed; 4 ignored`
   - `cargo check`: green at repo root
+
+M5 completion checkpoint (2026-04-12, runtime regression lock):
+- M5-8 complete: `crates/goby-wasm/src/runtime_rr_tests.rs` now locks:
+  - empty/single-chunk/multi-chunk fold execution;
+  - string fold accumulation followed by `println`;
+  - `each` general callback and effect callback execution;
+  - multi-chunk `map` execution;
+  - `ListReverseFoldPrepend` coexistence on both public `fold` and direct
+    `__goby_list_fold` lowering/exec paths.
+- Result: all M5 sub-steps in `doc/PLAN_SEQUENCE.md` are now complete; next
+  planned work is M6 baseline capture and boundary definition.
 
 ## Recently Completed
 

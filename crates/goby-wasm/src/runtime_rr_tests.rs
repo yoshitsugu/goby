@@ -828,3 +828,232 @@ main =
         .expect("direct __goby_list_length [] should return 0");
     assert_eq!(output.as_deref(), Some("0\n"));
 }
+
+// ---------------------------------------------------------------------------
+// M5-8: traversal runtime regression tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn m5_fold_empty_list_returns_seed() {
+    let source = r#"
+import goby/list ( fold )
+import goby/stdio
+
+main : Unit -> Unit can Print, Read
+main =
+  _lines = read_lines ()
+  total = fold [] 0 (fn acc x -> acc + x)
+  println "${total}"
+"#;
+    let module = parse_general_lowered_module(source);
+    let output = execute_runtime_module_with_stdin(&module, Some("x\n".to_string()))
+        .expect("fold over empty list should return the seed");
+    assert_eq!(output.as_deref(), Some("0\n"));
+}
+
+#[test]
+fn m5_fold_single_chunk_sum() {
+    let source = r#"
+import goby/list ( fold )
+import goby/stdio
+
+build : Int -> List Int can Print
+build n =
+  if n == 0
+    []
+  else
+    rest = build (n - 1)
+    [n, ..rest]
+
+main : Unit -> Unit can Print, Read
+main =
+  _lines = read_lines ()
+  xs = build 32
+  total = fold xs 0 (fn acc x -> acc + x)
+  println "${total}"
+"#;
+    let module = parse_general_lowered_module(source);
+    let output = execute_runtime_module_with_stdin(&module, Some("x\n".to_string()))
+        .expect("single-chunk fold sum should execute");
+    assert_eq!(output.as_deref(), Some("528\n"));
+}
+
+#[test]
+fn m5_fold_multi_chunk_sum() {
+    let source = r#"
+import goby/list ( fold )
+import goby/stdio
+
+build : Int -> List Int can Print
+build n =
+  if n == 0
+    []
+  else
+    rest = build (n - 1)
+    [n, ..rest]
+
+main : Unit -> Unit can Print, Read
+main =
+  _lines = read_lines ()
+  xs = build 65
+  total = fold xs 0 (fn acc x -> acc + x)
+  println "${total}"
+"#;
+    let module = parse_general_lowered_module(source);
+    let output = execute_runtime_module_with_stdin(&module, Some("x\n".to_string()))
+        .expect("multi-chunk fold sum should execute");
+    assert_eq!(output.as_deref(), Some("2145\n"));
+}
+
+#[test]
+fn m5_fold_string_concat_then_println_executes() {
+    let source = r#"
+import goby/list ( fold )
+import goby/stdio
+
+step : String -> String -> String
+step acc x =
+  if acc == ""
+    x
+  else
+    "${acc}-${x}"
+
+main : Unit -> Unit can Print, Read
+main =
+  _lines = read_lines ()
+  joined = fold ["a", "b", "c"] "" step
+  println joined
+"#;
+    let module = parse_general_lowered_module(source);
+    let output = execute_runtime_module_with_stdin(&module, Some("x\n".to_string()))
+        .expect("string fold followed by println should execute");
+    assert_eq!(output.as_deref(), Some("a-b-c\n"));
+}
+
+#[test]
+fn m5_public_fold_prepend_runtime_reuses_dedicated_reverse_fold_boundary() {
+    let source = inline_callback_list_spread_chain_source(20_000);
+    let module = parse_general_lowered_module(&source);
+    let (main_instrs, aux_decls) = crate::gen_lower::lower_module_to_instrs(&module)
+        .expect("lowering should not hard-fail")
+        .expect("general lowering should accept public fold prepend module");
+    assert!(
+        main_instrs.iter().any(|instr| matches!(
+            instr,
+            crate::gen_lower::backend_ir::WasmBackendInstr::ListReverseFoldPrepend { .. }
+        )),
+        "public fold prepend should lower to dedicated reverse-fold boundary, got main: {main_instrs:?}; aux: {aux_decls:?}"
+    );
+    let output = execute_runtime_module_with_stdin(&module, Some("x\n".to_string()))
+        .expect("public fold prepend runtime path should execute");
+    assert_eq!(output.as_deref(), Some("1\n"));
+}
+
+#[test]
+fn m5_direct_intrinsic_fold_prepend_runtime_reuses_dedicated_reverse_fold_boundary() {
+    let source = r#"
+import goby/stdio
+
+build : Int -> List Int can Print
+build n =
+  if n == 0
+    []
+  else
+    rest = build (n - 1)
+    [n, ..rest]
+
+main : Unit -> Unit can Print, Read
+main =
+  _lines = read_lines ()
+  seed = build 20000
+  xs =
+    __goby_list_fold seed [] (fn acc x ->
+      [x, ..acc]
+    )
+  println "${xs[0]}"
+"#;
+    let module = parse_general_lowered_module(source);
+    let (main_instrs, aux_decls) = crate::gen_lower::lower_module_to_instrs(&module)
+        .expect("lowering should not hard-fail")
+        .expect("general lowering should accept direct intrinsic fold prepend module");
+    assert!(
+        main_instrs.iter().any(|instr| matches!(
+            instr,
+            crate::gen_lower::backend_ir::WasmBackendInstr::ListReverseFoldPrepend { .. }
+        )),
+        "direct intrinsic prepend should lower to dedicated reverse-fold boundary, got main: {main_instrs:?}; aux: {aux_decls:?}"
+    );
+    let output = execute_runtime_module_with_stdin(&module, Some("x\n".to_string()))
+        .expect("direct intrinsic fold prepend runtime path should execute");
+    assert_eq!(output.as_deref(), Some("1\n"));
+}
+
+#[test]
+fn m5_each_general_callback_executes() {
+    let source = r#"
+import goby/list ( each )
+import goby/stdio
+
+main : Unit -> Unit can Print, Read
+main =
+  _lines = read_lines ()
+  mut total = 0
+  each [1, 2, 3, 4] (fn x ->
+    total := total + x
+  )
+  println "${total}"
+"#;
+    let module = parse_general_lowered_module(source);
+    let output = execute_runtime_module_with_stdin(&module, Some("x\n".to_string()))
+        .expect("each with general callback should execute");
+    assert_eq!(output.as_deref(), Some("10\n"));
+}
+
+#[test]
+fn m5_each_effect_callback_executes() {
+    let source = r#"
+import goby/list ( each )
+import goby/stdio
+
+main : Unit -> Unit can Print, Read
+main =
+  _lines = read_lines ()
+  each ["a", "b", "c"] println
+"#;
+    let module = parse_general_lowered_module(source);
+    let output = execute_runtime_module_with_stdin(&module, Some("x\n".to_string()))
+        .expect("each with effect callback should execute");
+    assert_eq!(output.as_deref(), Some("a\nb\nc\n"));
+}
+
+#[test]
+fn m5_map_multi_chunk_list_executes() {
+    let source = r#"
+import goby/list ( map, each )
+import goby/stdio
+
+build : Int -> List Int can Print
+build n =
+  if n == 0
+    []
+  else
+    rest = build (n - 1)
+    [n, ..rest]
+
+main : Unit -> Unit can Print, Read
+main =
+  _lines = read_lines ()
+  xs = build 65
+  mapped = map xs (fn i -> "${i + 1}")
+  each mapped println
+"#;
+    let module = parse_general_lowered_module(source);
+    let output = execute_runtime_module_with_stdin(&module, Some("x\n".to_string()))
+        .expect("multi-chunk map should execute");
+    assert_eq!(
+        output.as_deref(),
+        Some(
+            "66\n65\n64\n63\n62\n61\n60\n59\n58\n57\n56\n55\n54\n53\n52\n51\n50\n49\n48\n47\n46\n45\n44\n43\n42\n41\n40\n39\n38\n37\n36\n35\n34\n33\n32\n31\n30\n29\n28\n27\n26\n25\n24\n23\n22\n21\n20\n19\n18\n17\n16\n15\n14\n13\n12\n11\n10\n9\n8\n7\n6\n5\n4\n3\n2\n"
+        )
+    );
+}

@@ -795,7 +795,7 @@ The following product-direction decisions are already locked for this plan:
       removed variants remain in non-test code.
     - checks: `cargo test -p goby-wasm`
 
-  - [ ] **M5-8: Runtime regression tests**
+  - [x] **M5-8: Runtime regression tests** (complete, 2026-04-12)
     - scope: add to `runtime_rr_tests.rs`:
       - empty-list fold: `fold [] 0 (fn acc x -> acc + x)` → 0
       - single-chunk fold sum
@@ -809,6 +809,13 @@ The following product-direction decisions are already locked for this plan:
       - each with effect callback (Print.println)
       - map on multi-chunk list
     - done when: all cases green.
+    - status:
+      - added M5 runtime regressions for empty/single-chunk/multi-chunk fold,
+        string fold + `println`, `each` general/effect callbacks, and
+        multi-chunk `map`.
+      - runtime coverage now also fixes the semantic-fold coexistence contract
+        by asserting `ListReverseFoldPrepend` lowering remains active for both
+        public `fold` and direct `__goby_list_fold` entrypoints before execution.
     - checks: `cargo test -p goby-wasm`
 
   - [x] **M5-9: Audit and documentation** (complete, 2026-04-12)
