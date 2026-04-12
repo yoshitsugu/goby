@@ -538,6 +538,63 @@ fn parse_general_lowered_module(source: &str) -> goby_core::Module {
     module
 }
 
+fn measure_wasm_exec_micros(
+    wasm: &[u8],
+    stdin_seed: &str,
+    warmup_runs: usize,
+    measured_runs: usize,
+) -> (u128, u128, usize, usize, Option<String>, Option<String>) {
+    let mut ok_runs = 0usize;
+    let mut err_runs = 0usize;
+    let mut last_ok = None;
+    let mut last_err = None;
+    for _ in 0..warmup_runs {
+        match run_wasm_bytes_with_stdin_for_tests(
+            wasm,
+            Some(stdin_seed),
+            DEFAULT_WASM_MEMORY_CONFIG,
+        ) {
+            Ok(text) => {
+                ok_runs += 1;
+                last_ok = Some(text);
+            }
+            Err(err) => {
+                err_runs += 1;
+                last_err = Some(err);
+            }
+        }
+    }
+    let mut samples = Vec::with_capacity(measured_runs);
+    for _ in 0..measured_runs {
+        let start = std::time::Instant::now();
+        match run_wasm_bytes_with_stdin_for_tests(
+            wasm,
+            Some(stdin_seed),
+            DEFAULT_WASM_MEMORY_CONFIG,
+        ) {
+            Ok(text) => {
+                ok_runs += 1;
+                last_ok = Some(text);
+            }
+            Err(err) => {
+                err_runs += 1;
+                last_err = Some(err);
+            }
+        }
+        samples.push(start.elapsed().as_micros());
+    }
+    samples.sort_unstable();
+    let n = samples.len();
+    let p50 = samples[(n - 1) * 50 / 100];
+    let p95 = samples[(n - 1) * 95 / 100];
+    (p50, p95, ok_runs, err_runs, last_ok, last_err)
+}
+
+fn compile_general_lowered_wasm(source: &str) -> Vec<u8> {
+    let module = parse_general_lowered_module(source);
+    compile_module(&module).expect("baseline workload should compile")
+}
+
 #[test]
 fn rr5_self_tail_recursion_repro_survives_tight_stack_limit_after_tail_decl_loop() {
     let module = parse_general_lowered_module(SELF_TAIL_RECURSION_SOURCE);
@@ -1055,5 +1112,279 @@ main =
         Some(
             "66\n65\n64\n63\n62\n61\n60\n59\n58\n57\n56\n55\n54\n53\n52\n51\n50\n49\n48\n47\n46\n45\n44\n43\n42\n41\n40\n39\n38\n37\n36\n35\n34\n33\n32\n31\n30\n29\n28\n27\n26\n25\n24\n23\n22\n21\n20\n19\n18\n17\n16\n15\n14\n13\n12\n11\n10\n9\n8\n7\n6\n5\n4\n3\n2\n"
         )
+    );
+}
+
+#[test]
+#[ignore = "M6-0 baseline snapshot command; run explicitly with --ignored --nocapture"]
+fn m6_0_baseline_index_update_workloads() {
+    let warmup_runs = 3usize;
+    let measured_runs = 10usize;
+    let stdin_seed = "x\n";
+
+    let indexed_read_source = r#"
+import goby/stdio
+
+build : Int -> List Int can Print
+build n =
+  if n == 0
+    []
+  else
+    rest = build (n - 1)
+    [n, ..rest]
+
+scan_reads : List Int -> Int -> Int -> Int can Print
+scan_reads xs i acc =
+  if i >= 4000
+    acc
+  else
+    j = (i * 97) % 4000
+    v = xs[j]
+    scan_reads xs (i + 1) (acc + v)
+
+main : Unit -> Unit can Print, Read
+main =
+  _ = read_lines ()
+  xs = build 4000
+  total = scan_reads xs 0 0
+  println "${total}"
+"#;
+    let indexed_read_wasm = compile_general_lowered_wasm(indexed_read_source);
+    let (
+        indexed_read_p50,
+        indexed_read_p95,
+        indexed_read_ok,
+        indexed_read_err,
+        indexed_read_last_ok,
+        indexed_read_last_err,
+    ) = measure_wasm_exec_micros(&indexed_read_wasm, stdin_seed, warmup_runs, measured_runs);
+    assert_eq!(indexed_read_err, 0, "indexed-read baseline should not trap");
+    assert_eq!(indexed_read_last_ok.as_deref(), Some("8002000\n"));
+    eprintln!(
+        "[M6-0][indexed-read-4k-mixed] p50={}us p95={}us ok_runs={} err_runs={} output={} err={:?}",
+        indexed_read_p50,
+        indexed_read_p95,
+        indexed_read_ok,
+        indexed_read_err,
+        indexed_read_last_ok.unwrap_or_default().trim_end(),
+        indexed_read_last_err
+    );
+
+    let point_update_source = r#"
+import goby/stdio
+
+build : Int -> List Int can Print
+build n =
+  if n == 0
+    []
+  else
+    rest = build (n - 1)
+    [n, ..rest]
+
+scan_updates : List Int -> Int -> List Int can Print
+scan_updates xs i =
+  if i >= 4000
+    xs
+  else
+    j = (i * 97) % 4000
+    updated = xs[j] := i
+    scan_updates updated (i + 1)
+
+main : Unit -> Unit can Print, Read
+main =
+  _ = read_lines ()
+  xs = build 4000
+  updated = scan_updates xs 0
+  println "${updated[0]}"
+  println "${updated[3999]}"
+"#;
+    let point_update_wasm = compile_general_lowered_wasm(point_update_source);
+    let (
+        point_update_p50,
+        point_update_p95,
+        point_update_ok,
+        point_update_err,
+        point_update_last_ok,
+        point_update_last_err,
+    ) = measure_wasm_exec_micros(&point_update_wasm, stdin_seed, warmup_runs, measured_runs);
+    eprintln!(
+        "[M6-0][point-update-4k] p50={}us p95={}us ok_runs={} err_runs={} output={:?} err={:?}",
+        point_update_p50,
+        point_update_p95,
+        point_update_ok,
+        point_update_err,
+        point_update_last_ok,
+        point_update_last_err
+    );
+
+    let nested_update_source = r#"
+import goby/stdio
+
+build_row : Int -> List Int can Print
+build_row n =
+  if n == 0
+    []
+  else
+    rest = build_row (n - 1)
+    [0, ..rest]
+
+build_grid : Int -> List (List Int) can Print
+build_grid n =
+  if n == 0
+    []
+  else
+    rest = build_grid (n - 1)
+    [build_row 64, ..rest]
+
+scan_nested_updates : List (List Int) -> Int -> List (List Int) can Print
+scan_nested_updates grid i =
+  if i >= 4096
+    grid
+  else
+    y = i / 64
+    x = (i * 17) % 64
+    row = grid[y]
+    next_row = row[x] := i
+    next_grid = grid[y] := next_row
+    scan_nested_updates next_grid (i + 1)
+
+main : Unit -> Unit can Print, Read
+main =
+  _ = read_lines ()
+  grid = build_grid 64
+  updated = scan_nested_updates grid 0
+  println "${updated[0][0]}"
+  println "${updated[63][63]}"
+"#;
+    let nested_update_wasm = compile_general_lowered_wasm(nested_update_source);
+    let (
+        nested_update_p50,
+        nested_update_p95,
+        nested_update_ok,
+        nested_update_err,
+        nested_update_last_ok,
+        nested_update_last_err,
+    ) = measure_wasm_exec_micros(&nested_update_wasm, stdin_seed, warmup_runs, measured_runs);
+    eprintln!(
+        "[M6-0][nested-update-64x64] p50={}us p95={}us ok_runs={} err_runs={} output={:?} err={:?}",
+        nested_update_p50,
+        nested_update_p95,
+        nested_update_ok,
+        nested_update_err,
+        nested_update_last_ok,
+        nested_update_last_err
+    );
+
+    let aoc_style_source = r#"
+import goby/list (each, fold, join, length, map)
+import goby/string (graphemes)
+import goby/stdio
+
+neighbor_threshold : Int
+neighbor_threshold = 4
+
+should_prune_cell : List (List String) -> Int -> Int -> Int -> Int -> Bool can Print
+should_prune_cell grid x y width height =
+  if grid[y][x] == "@"
+    neighbor_offsets = [(-1, -1), (0, -1), (1, -1), (-1, 0), (1, 0), (-1, 1), (0, 1), (1, 1)]
+    occupied_neighbors =
+      fold neighbor_offsets 0 (fn total offset ->
+        next_y = y + offset.1
+        next_x = x + offset.0
+        if 0 <= next_y && next_y < height && 0 <= next_x && next_x < width
+          if grid[y + offset.1][x + offset.0] == "@"
+            total + 1
+          else
+            total
+        else
+          total
+      )
+    occupied_neighbors < neighbor_threshold
+  else
+    False
+
+collect_prune_positions : List (List String) -> Int -> Int -> Int -> Int -> List (Int, Int) can Print
+collect_prune_positions grid x y width height =
+  if y >= height
+    []
+  else
+    if x >= width
+      collect_prune_positions grid 0 (y + 1) width height
+    else
+      rest = collect_prune_positions grid (x + 1) y width height
+      if should_prune_cell grid x y width height
+        [(x, y), ..rest]
+      else
+        rest
+
+apply_prune_positions : List (List String) -> List (Int, Int) -> List (List String) can Print
+apply_prune_positions grid positions =
+  mut updated = grid
+  each positions (fn pos ->
+    updated[pos.1][pos.0] := "."
+    ()
+  )
+  updated
+
+render_grid : List (List String) -> Unit can Print
+render_grid grid =
+  each grid (fn row ->
+    line = join row ""
+    println line
+  )
+
+prune_until_stable : List (List String) -> Int -> Int can Print
+prune_until_stable grid total =
+  height = length grid
+  width = length(grid[0])
+  positions = collect_prune_positions grid 0 0 width height
+  count = length positions
+  if count > 0
+    updated = apply_prune_positions grid positions
+    render_grid updated
+    prune_until_stable updated (total + count)
+  else
+    total
+
+main : Unit -> Unit can Print, Read
+main =
+  grid = map (read_lines ()) graphemes
+  total = prune_until_stable grid 0
+  println "${total}"
+"#;
+    let aoc_stdin = "\
+..@@.@@@@.\n\
+@@@.@.@.@@\n\
+@@@@@.@.@@\n\
+@.@@@@..@.\n\
+@@.@@@@.@@\n\
+.@@@@@@@.@\n\
+.@.@.@.@@@\n\
+@.@@@.@@@@\n\
+.@@@@@@@@.\n\
+@.@.@@@.@.\n";
+    let aoc_style_wasm = compile_general_lowered_wasm(aoc_style_source);
+    let aoc_style_output = run_wasm_bytes_with_stdin_for_tests(
+        &aoc_style_wasm,
+        Some(aoc_stdin),
+        DEFAULT_WASM_MEMORY_CONFIG,
+    )
+    .expect("AoC-style baseline should execute");
+    assert!(
+        aoc_style_output.ends_with("43\n"),
+        "AoC-style output should end with stable-pruning total, got: {:?}",
+        aoc_style_output
+    );
+    let (
+        aoc_style_p50,
+        aoc_style_p95,
+        aoc_style_ok,
+        aoc_style_err,
+        _aoc_style_last_ok,
+        aoc_style_last_err,
+    ) = measure_wasm_exec_micros(&aoc_style_wasm, aoc_stdin, warmup_runs, measured_runs);
+    eprintln!(
+        "[M6-0][aoc-style-iterative-grid-pruning-after-render] p50={}us p95={}us ok_runs={} err_runs={} final_total=43 err={:?}",
+        aoc_style_p50, aoc_style_p95, aoc_style_ok, aoc_style_err, aoc_style_last_err
     );
 }

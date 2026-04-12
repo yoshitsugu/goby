@@ -70,6 +70,15 @@ pub(crate) enum SplitIndexOperand {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum BackendIntrinsic {
     StringSplit,
+    /// Read one element from a list by index through the shared sequence index boundary.
+    ///
+    /// Signature: `(list: i64, index: i64) -> i64`.
+    /// Out-of-bounds or non-list/non-int abort.
+    ///
+    /// M6 ownership note:
+    /// - surface syntax `xs[i]` lowers to `ValueExpr::ListGet` in `goby-core`,
+    ///   then to this intrinsic in `goby-wasm` lowering.
+    /// - canonical helper spelling `list.get xs i` also reaches this intrinsic.
     ListGet,
     StringLength,
     ValueToString,
@@ -80,6 +89,13 @@ pub(crate) enum BackendIntrinsic {
     ///
     /// Signature: `(list: i64, index: i64, value: i64) -> i64` (tagged `List`).
     /// Out-of-bounds or non-list/non-int abort.
+    ///
+    /// M6 ownership note:
+    /// - surface syntax `xs[i] := v` lowers to `CompExpr::AssignIndex` in
+    ///   `goby-core`.
+    /// - `goby-wasm` lowers that node through the shared index/update boundary
+    ///   by descending prefixes with `ListGet` and rebuilding outward with
+    ///   `ListSet` (see `lower_assign_index`).
     ListSet,
     ListConcat,
     StringConcat,

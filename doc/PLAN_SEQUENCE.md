@@ -913,7 +913,7 @@ The following product-direction decisions are already locked for this plan:
 
   ### M6 Implementation Steps
 
-  - [ ] **M6-0: Capture baseline index/update workload snapshot**
+  - [x] **M6-0: Capture baseline index/update workload snapshot** (complete, 2026-04-12)
     - scope: record current numbers for:
       - repeated `xs[i]` reads on large lists,
       - repeated immutable `xs[i] := v` updates,
@@ -921,6 +921,21 @@ The following product-direction decisions are already locked for this plan:
       - one realistic Advent-of-Code-style transform.
     - done when: baseline numbers are written in PLAN_SEQUENCE.md M6 section.
     - checks: benchmark command + `cargo test -p goby-wasm`
+    - benchmark command:
+      - `cargo test -p goby-wasm m6_0_baseline_index_update_workloads -- --ignored --nocapture`
+    - baseline snapshot (current implementation, 2026-04-12; warmup=3, measured=10):
+      - indexed-read workload (`indexed-read-4k-mixed`, 4k list, mixed in-chunk/cross-chunk indices):
+        - `p50=38353us`, `p95=38913us`, `ok_runs=13`, `err_runs=0`, output=`8002000`.
+      - point-update workload (`point-update-4k`, repeated immutable updates on 4k list):
+        - `p50=37132us`, `p95=37519us`, `ok_runs=0`, `err_runs=13`.
+        - current behavior: runtime trap (`E-RUNTIME-TRAP` at `goby!main`) across measured runs.
+      - nested-update workload (`nested-update-64x64`, repeated `grid[y][x] := v`):
+        - `p50=60874us`, `p95=62130us`, `ok_runs=0`, `err_runs=13`.
+        - current behavior: runtime trap (`E-RUNTIME-TRAP` at `goby!main`) across measured runs.
+      - AoC-style workload:
+        - fixture name: `iterative_grid_pruning_after_render` (same representative shape as
+          `iterative_grid_pruning_after_render_executes_without_heap_cursor_corruption`).
+        - `p50=199182us`, `p95=209906us`, `ok_runs=13`, `err_runs=0`, final total=`43`.
     - lock:
       - indexed-read workload: repeated reads across a 4k-element list with
         mixed in-chunk and cross-chunk indices.
@@ -929,7 +944,7 @@ The following product-direction decisions are already locked for this plan:
       - nested-update workload: repeated updates on a `64 x 64` `List (List Int)`.
       - AoC-style workload: one concrete transform fixture recorded by name.
 
-  - [ ] **M6-1: Define the explicit index/update boundary**
+  - [x] **M6-1: Define the explicit index/update boundary** (complete, 2026-04-12)
     - scope:
       - choose and document the shared lowering/runtime boundary that owns
         indexed read and immutable point update on chunked `List`;
@@ -937,6 +952,16 @@ The following product-direction decisions are already locked for this plan:
         that shared boundary rather than syntax-specific backend branches.
     - done when: the owning boundary is documented in code comments and
       referenced from PLAN_SEQUENCE.md.
+    - status:
+      - `BackendIntrinsic::ListGet` / `BackendIntrinsic::ListSet` docs now
+        explicitly define M6 shared boundary ownership in
+        `crates/goby-wasm/src/gen_lower/backend_ir.rs`.
+      - ownership mapping is explicit:
+        - `xs[i]` → `goby-core` `ValueExpr::ListGet` → `BackendIntrinsic::ListGet`;
+        - `xs[i] := v` → `goby-core` `CompExpr::AssignIndex` →
+          lowering path-copy boundary (`ListGet` descent + `ListSet` ascent).
+      - existing lowering docs in `lower_assign_index` continue to define the
+        operational boundary shape (prefix descent + outward rebuild).
     - checks: `cargo test -p goby-wasm`
 
   - [ ] **M6-2: Implement chunk-aware indexed read**

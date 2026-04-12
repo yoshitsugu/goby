@@ -4,8 +4,8 @@ Last updated: 2026-04-12
 
 ## Current Focus
 
-Next slice: **Sequence-backed List M6** (`doc/PLAN_SEQUENCE.md`) — make
-index/update workloads practical on the chunked `List` representation.
+Next slice: **Sequence-backed List M6-2** (`doc/PLAN_SEQUENCE.md`) — implement
+chunk-aware indexed read on the shared M6 index/update boundary.
 
 M6 context:
 - Sequence-backed List M0–M5 are complete as of 2026-04-12.
@@ -30,16 +30,15 @@ TCO contract reminder (stable, no action needed):
 
 Immediate next steps:
 
-- **Sequence M6-0**: capture baseline index/update workload snapshot.
-  - Record repeated `xs[i]` reads on large lists with mixed in-chunk and
-    cross-chunk indices.
-  - Record repeated immutable `xs[i] := v` updates and nested
-    `grid[y][x] := v` workloads.
-  - Lock one concrete AoC-style transform fixture before changing the boundary.
+- **Sequence M6-2**: implement chunk-aware indexed read.
+  - Keep `xs[i]` on the shared boundary while replacing head-recursive access
+    with chunk-aware lookup.
+  - Preserve out-of-range behavior and diagnostics.
 
-- **Sequence M6-1**: define the shared index/update boundary.
-  - Route both `xs[i]` and `xs[i] := v` through one explicit sequence boundary.
-  - Avoid syntax-shaped backend exceptions or a hidden alternate `List` mode.
+- **Sequence M6-3 prep**: plan chunk-local immutable update ownership.
+  - Reuse M6 shared boundary (`ListGet` descent + `ListSet` ascent) without
+    syntax-specific exceptions.
+  - Use M6-0 trap-bearing point/nested update workloads as regression targets.
 
 Checkpoint update (2026-04-10, later slice):
 - `goby-wasm` Candidate B migration advanced substantially in
@@ -164,6 +163,27 @@ M5 completion checkpoint (2026-04-12, runtime regression lock):
     `__goby_list_fold` lowering/exec paths.
 - Result: all M5 sub-steps in `doc/PLAN_SEQUENCE.md` are now complete; next
   planned work is M6 baseline capture and boundary definition.
+
+M6-0 baseline checkpoint (2026-04-12):
+- added ignored baseline harness:
+  - `runtime_rr_tests::m6_0_baseline_index_update_workloads`
+  - command: `cargo test -p goby-wasm m6_0_baseline_index_update_workloads -- --ignored --nocapture`
+- locked baseline snapshot in `doc/PLAN_SEQUENCE.md` for:
+  - indexed-read 4k mixed indices (`p50=38353us`, `p95=38913us`, success);
+  - point-update 4k (`p50=37132us`, `p95=37519us`, currently traps);
+  - nested-update 64x64 (`p50=60874us`, `p95=62130us`, currently traps);
+  - AoC-style `iterative_grid_pruning_after_render`
+    (`p50=199182us`, `p95=209906us`, success, total=43).
+- next work is now M6-1 boundary definition, then M6-2 chunk-aware read.
+
+M6-1 boundary-definition checkpoint (2026-04-12):
+- shared index/update ownership is now explicit in
+  `crates/goby-wasm/src/gen_lower/backend_ir.rs`:
+  - `xs[i]` and canonical `list.get` both route to `BackendIntrinsic::ListGet`;
+  - `xs[i] := v` routes via `CompExpr::AssignIndex` and lowers through shared
+    path-copy mechanics (`ListGet` descent + `ListSet` ascent).
+- `doc/PLAN_SEQUENCE.md` now marks M6-1 complete.
+- next work is M6-2 chunk-aware indexed-read implementation.
 
 ## Recently Completed
 
