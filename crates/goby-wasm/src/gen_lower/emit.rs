@@ -4224,15 +4224,17 @@ fn emit_list_get_helper(
     function.instruction(&Instruction::End);
 
     // chunk_idx = index / CHUNK_SIZE
+    // CHUNK_SIZE is a locked power-of-two (32), so use shift instead of div.
     function.instruction(&Instruction::LocalGet(s_index));
-    function.instruction(&Instruction::I32Const(CHUNK_SIZE as i32));
-    function.instruction(&Instruction::I32DivU);
+    function.instruction(&Instruction::I32Const(CHUNK_SIZE.trailing_zeros() as i32));
+    function.instruction(&Instruction::I32ShrU);
     function.instruction(&Instruction::LocalSet(s_chunk_idx));
 
     // item_idx = index % CHUNK_SIZE
+    // CHUNK_SIZE is a locked power-of-two (32), so use mask instead of rem.
     function.instruction(&Instruction::LocalGet(s_index));
-    function.instruction(&Instruction::I32Const(CHUNK_SIZE as i32));
-    function.instruction(&Instruction::I32RemU);
+    function.instruction(&Instruction::I32Const(CHUNK_SIZE as i32 - 1));
+    function.instruction(&Instruction::I32And);
     function.instruction(&Instruction::LocalSet(s_item_idx));
 
     // chunk_ptr = header[8 + chunk_idx * 4]
@@ -4289,15 +4291,17 @@ fn emit_chunked_load(
     s_chunk_ptr: u32,
 ) {
     // chunk_idx = index / CHUNK_SIZE
+    // CHUNK_SIZE is a locked power-of-two (32), so use shift instead of div.
     function.instruction(&Instruction::LocalGet(index_local));
-    function.instruction(&Instruction::I32Const(CHUNK_SIZE as i32));
-    function.instruction(&Instruction::I32DivU);
+    function.instruction(&Instruction::I32Const(CHUNK_SIZE.trailing_zeros() as i32));
+    function.instruction(&Instruction::I32ShrU);
     function.instruction(&Instruction::LocalSet(s_chunk_idx));
 
     // item_idx = index % CHUNK_SIZE
+    // CHUNK_SIZE is a locked power-of-two (32), so use mask instead of rem.
     function.instruction(&Instruction::LocalGet(index_local));
-    function.instruction(&Instruction::I32Const(CHUNK_SIZE as i32));
-    function.instruction(&Instruction::I32RemU);
+    function.instruction(&Instruction::I32Const(CHUNK_SIZE as i32 - 1));
+    function.instruction(&Instruction::I32And);
     function.instruction(&Instruction::LocalSet(s_item_idx));
 
     // chunk_ptr = header[8 + chunk_idx * 4]  (header_chunk_ptr_offset)
@@ -4575,15 +4579,17 @@ fn emit_chunked_store_address(
     s_chunk_ptr: u32,
 ) {
     // chunk_idx = index / CHUNK_SIZE
+    // CHUNK_SIZE is a locked power-of-two (32), so use shift instead of div.
     function.instruction(&Instruction::LocalGet(index_local));
-    function.instruction(&Instruction::I32Const(CHUNK_SIZE as i32));
-    function.instruction(&Instruction::I32DivU);
+    function.instruction(&Instruction::I32Const(CHUNK_SIZE.trailing_zeros() as i32));
+    function.instruction(&Instruction::I32ShrU);
     function.instruction(&Instruction::LocalSet(s_chunk_idx));
 
     // item_idx = index % CHUNK_SIZE
+    // CHUNK_SIZE is a locked power-of-two (32), so use mask instead of rem.
     function.instruction(&Instruction::LocalGet(index_local));
-    function.instruction(&Instruction::I32Const(CHUNK_SIZE as i32));
-    function.instruction(&Instruction::I32RemU);
+    function.instruction(&Instruction::I32Const(CHUNK_SIZE as i32 - 1));
+    function.instruction(&Instruction::I32And);
     function.instruction(&Instruction::LocalSet(s_item_idx));
 
     // chunk_ptr = header[8 + chunk_idx * 4]
@@ -5424,12 +5430,15 @@ fn emit_list_concat_helper(
 /// Emit Wasm instructions for the `list.set(list, index, value)` intrinsic.
 ///
 /// Stack on entry (bottom to top): list_i64, index_i64, value_i64.
-/// Returns a new tagged List (chunked layout) with element `index` replaced by `value`.
-/// Out-of-bounds or wrong-tag inputs abort.
 fn emit_list_set_helper(
     function: &mut Function,
     helper_state: &HeapEmitState,
 ) -> Result<(), CodegenError> {
+    // Chunk-local immutable update:
+    //   1) copy header pointer table;
+    //   2) copy only the touched chunk;
+    //   3) patch one element in the copied chunk.
+    //
     // Scratch:
     //   i64_base+0 = value_i64
     //   i64_base+1 = list_i64
@@ -5437,25 +5446,28 @@ fn emit_list_set_helper(
     //   HS_TEXT_PTR (0)  = s_src_header
     //   HS_TEXT_LEN (1)  = s_total_len
     //   HS_SEP_PTR  (2)  = s_index
-    //   HS_AUX_PTR  (7)  = s_dst_header
-    //   HS_ALLOC_SIZE(9) = s_alloc_size
-    //   HS_ITER     (10) = s_global_iter
-    //   HS_LIST_PTR (8)  = s_src_chunk_ptr
-    //   HS_ITEM_COUNT(6) = s_n_chunks
-    //   HS_SCAN_POS (4)  = (unused)
+    //   HS_SEP_LEN  (3)  = s_item_idx
+    //   HS_SCAN_POS (4)  = s_chunk_idx
     //   HS_SEG_START(5)  = s_dst_chunk_ptr
+    //   HS_ITEM_COUNT(6) = s_n_chunks
+    //   HS_AUX_PTR  (7)  = s_dst_header
+    //   HS_LIST_PTR (8)  = s_src_chunk_ptr
+    //   HS_ALLOC_SIZE(9) = s_alloc_size
+    //   HS_ITER     (10) = s_word_off
     let value_i64 = helper_state.scratch.i64_base;
     let list_i64 = helper_state.scratch.i64_base + 1;
     let index_i64 = helper_state.scratch.i64_base + 2;
     let s_src_header = helper_state.scratch.i32_base + HS_TEXT_PTR;
     let s_total_len = helper_state.scratch.i32_base + HS_TEXT_LEN;
     let s_index = helper_state.scratch.i32_base + HS_SEP_PTR;
-    let s_dst_header = helper_state.scratch.i32_base + HS_AUX_PTR;
-    let s_alloc_size = helper_state.scratch.i32_base + HS_ALLOC_SIZE;
-    let s_global_iter = helper_state.scratch.i32_base + HS_ITER;
-    let s_src_chunk_ptr = helper_state.scratch.i32_base + HS_LIST_PTR;
-    let s_n_chunks = helper_state.scratch.i32_base + HS_ITEM_COUNT;
+    let s_item_idx = helper_state.scratch.i32_base + HS_SEP_LEN;
+    let s_chunk_idx = helper_state.scratch.i32_base + HS_SCAN_POS;
     let s_dst_chunk_ptr = helper_state.scratch.i32_base + HS_SEG_START;
+    let s_n_chunks = helper_state.scratch.i32_base + HS_ITEM_COUNT;
+    let s_dst_header = helper_state.scratch.i32_base + HS_AUX_PTR;
+    let s_src_chunk_ptr = helper_state.scratch.i32_base + HS_LIST_PTR;
+    let s_alloc_size = helper_state.scratch.i32_base + HS_ALLOC_SIZE;
+    let s_word_off = helper_state.scratch.i32_base + HS_ITER;
 
     // Stack: list, index, value (value on top)
     function.instruction(&Instruction::LocalSet(value_i64));
@@ -5509,7 +5521,7 @@ fn emit_list_set_helper(
     // total_len = src_header[0]
     function.instruction(&Instruction::LocalGet(s_src_header));
     function.instruction(&Instruction::I32Load(MemArg {
-        offset: 0,
+        offset: header_total_len_offset() as u64,
         align: 2,
         memory_index: 0,
     }));
@@ -5532,7 +5544,7 @@ fn emit_list_set_helper(
     }));
     function.instruction(&Instruction::LocalSet(s_n_chunks));
 
-    // Allocate dst header (same size as src header)
+    // Allocate dst header (same size as src header).
     function.instruction(&Instruction::LocalGet(s_n_chunks));
     function.instruction(&Instruction::I32Const(4));
     function.instruction(&Instruction::I32Mul);
@@ -5541,71 +5553,60 @@ fn emit_list_set_helper(
     function.instruction(&Instruction::LocalSet(s_alloc_size));
     emit_alloc_from_top(function, helper_state, s_alloc_size, s_dst_header);
 
-    // Allocate all dst chunks
+    // Copy src header -> dst header in 4-byte words.
     function.instruction(&Instruction::I32Const(0));
-    function.instruction(&Instruction::LocalSet(s_global_iter));
+    function.instruction(&Instruction::LocalSet(s_word_off));
     function.instruction(&Instruction::Block(wasm_encoder::BlockType::Empty));
     function.instruction(&Instruction::Loop(wasm_encoder::BlockType::Empty));
-    function.instruction(&Instruction::LocalGet(s_global_iter));
+    function.instruction(&Instruction::LocalGet(s_word_off));
     function.instruction(&Instruction::LocalGet(s_n_chunks));
+    function.instruction(&Instruction::I32Const(2));
+    function.instruction(&Instruction::I32Add); // (8 + n_chunks*4)/4 = n_chunks + 2
     function.instruction(&Instruction::I32GeU);
     function.instruction(&Instruction::BrIf(1));
 
-    function.instruction(&Instruction::I32Const(chunk_alloc_size() as i32));
-    function.instruction(&Instruction::LocalSet(s_alloc_size));
-    emit_alloc_from_top(function, helper_state, s_alloc_size, s_dst_chunk_ptr);
-
     function.instruction(&Instruction::LocalGet(s_dst_header));
-    function.instruction(&Instruction::LocalGet(s_global_iter));
+    function.instruction(&Instruction::LocalGet(s_word_off));
     function.instruction(&Instruction::I32Const(4));
     function.instruction(&Instruction::I32Mul);
     function.instruction(&Instruction::I32Add);
-    function.instruction(&Instruction::LocalGet(s_dst_chunk_ptr));
-    function.instruction(&Instruction::I32Store(MemArg {
-        offset: header_chunk_ptr_offset(0) as u64,
+    function.instruction(&Instruction::LocalGet(s_src_header));
+    function.instruction(&Instruction::LocalGet(s_word_off));
+    function.instruction(&Instruction::I32Const(4));
+    function.instruction(&Instruction::I32Mul);
+    function.instruction(&Instruction::I32Add);
+    function.instruction(&Instruction::I32Load(MemArg {
+        offset: 0,
         align: 2,
         memory_index: 0,
     }));
-    function.instruction(&Instruction::LocalGet(s_dst_chunk_ptr));
-    function.instruction(&Instruction::I32Const(0));
     function.instruction(&Instruction::I32Store(MemArg {
         offset: 0,
         align: 2,
         memory_index: 0,
     }));
 
-    function.instruction(&Instruction::LocalGet(s_global_iter));
+    function.instruction(&Instruction::LocalGet(s_word_off));
     function.instruction(&Instruction::I32Const(1));
     function.instruction(&Instruction::I32Add);
-    function.instruction(&Instruction::LocalSet(s_global_iter));
+    function.instruction(&Instruction::LocalSet(s_word_off));
     function.instruction(&Instruction::Br(0));
     function.instruction(&Instruction::End);
     function.instruction(&Instruction::End);
 
-    // Copy all elements, substituting value at s_index
-    function.instruction(&Instruction::I32Const(0));
-    function.instruction(&Instruction::LocalSet(s_global_iter));
-    function.instruction(&Instruction::Block(wasm_encoder::BlockType::Empty));
-    function.instruction(&Instruction::Loop(wasm_encoder::BlockType::Empty));
-    function.instruction(&Instruction::LocalGet(s_global_iter));
-    function.instruction(&Instruction::LocalGet(s_total_len));
-    function.instruction(&Instruction::I32GeU);
-    function.instruction(&Instruction::BrIf(1));
-
-    // Load element: if global_iter == s_index use value_i64, else load from src
-    function.instruction(&Instruction::LocalGet(s_global_iter));
+    // chunk_idx = index / CHUNK_SIZE ; item_idx = index % CHUNK_SIZE.
     function.instruction(&Instruction::LocalGet(s_index));
-    function.instruction(&Instruction::I32Eq);
-    function.instruction(&Instruction::If(wasm_encoder::BlockType::Result(
-        ValType::I64,
-    )));
-    function.instruction(&Instruction::LocalGet(value_i64));
-    function.instruction(&Instruction::Else);
-    // load from src chunk
+    function.instruction(&Instruction::I32Const(CHUNK_SIZE.trailing_zeros() as i32));
+    function.instruction(&Instruction::I32ShrU);
+    function.instruction(&Instruction::LocalSet(s_chunk_idx));
+    function.instruction(&Instruction::LocalGet(s_index));
+    function.instruction(&Instruction::I32Const(CHUNK_SIZE as i32 - 1));
+    function.instruction(&Instruction::I32And);
+    function.instruction(&Instruction::LocalSet(s_item_idx));
+
+    // src_chunk_ptr = src_header.chunk_ptrs[chunk_idx].
     function.instruction(&Instruction::LocalGet(s_src_header));
-    function.instruction(&Instruction::LocalGet(s_global_iter));
-    function.instruction(&Instruction::I32Const(CHUNK_SIZE as i32));
-    function.instruction(&Instruction::I32DivU);
+    function.instruction(&Instruction::LocalGet(s_chunk_idx));
     function.instruction(&Instruction::I32Const(4));
     function.instruction(&Instruction::I32Mul);
     function.instruction(&Instruction::I32Add);
@@ -5615,76 +5616,78 @@ fn emit_list_set_helper(
         memory_index: 0,
     }));
     function.instruction(&Instruction::LocalSet(s_src_chunk_ptr));
-    function.instruction(&Instruction::LocalGet(s_src_chunk_ptr));
-    function.instruction(&Instruction::LocalGet(s_global_iter));
-    function.instruction(&Instruction::I32Const(CHUNK_SIZE as i32));
-    function.instruction(&Instruction::I32RemU);
-    function.instruction(&Instruction::I32Const(8));
-    function.instruction(&Instruction::I32Mul);
-    function.instruction(&Instruction::I32Add);
-    function.instruction(&Instruction::I64Load(MemArg {
-        offset: chunk_item_offset(0) as u64,
-        align: 3,
-        memory_index: 0,
-    }));
-    function.instruction(&Instruction::End); // if/else: elem on stack
-    // Save elem to index_i64 scratch (reuse; we're done with it after the bounds check)
-    function.instruction(&Instruction::LocalSet(index_i64));
 
-    // Write to dst chunk: compute address then store elem
-    function.instruction(&Instruction::LocalGet(s_dst_header));
-    function.instruction(&Instruction::LocalGet(s_global_iter));
-    function.instruction(&Instruction::I32Const(CHUNK_SIZE as i32));
-    function.instruction(&Instruction::I32DivU);
+    // Allocate replacement chunk.
+    function.instruction(&Instruction::I32Const(chunk_alloc_size() as i32));
+    function.instruction(&Instruction::LocalSet(s_alloc_size));
+    emit_alloc_from_top(function, helper_state, s_alloc_size, s_dst_chunk_ptr);
+
+    // Copy source chunk -> replacement chunk in 4-byte words.
+    function.instruction(&Instruction::I32Const(0));
+    function.instruction(&Instruction::LocalSet(s_word_off));
+    function.instruction(&Instruction::Block(wasm_encoder::BlockType::Empty));
+    function.instruction(&Instruction::Loop(wasm_encoder::BlockType::Empty));
+    function.instruction(&Instruction::LocalGet(s_word_off));
+    function.instruction(&Instruction::I32Const((chunk_alloc_size() / 4) as i32));
+    function.instruction(&Instruction::I32GeU);
+    function.instruction(&Instruction::BrIf(1));
+
+    function.instruction(&Instruction::LocalGet(s_dst_chunk_ptr));
+    function.instruction(&Instruction::LocalGet(s_word_off));
     function.instruction(&Instruction::I32Const(4));
     function.instruction(&Instruction::I32Mul);
     function.instruction(&Instruction::I32Add);
-    function.instruction(&Instruction::I32Load(MemArg {
-        offset: header_chunk_ptr_offset(0) as u64,
-        align: 2,
-        memory_index: 0,
-    }));
-    function.instruction(&Instruction::LocalSet(s_dst_chunk_ptr));
-
-    function.instruction(&Instruction::LocalGet(s_dst_chunk_ptr));
-    function.instruction(&Instruction::LocalGet(s_global_iter));
-    function.instruction(&Instruction::I32Const(CHUNK_SIZE as i32));
-    function.instruction(&Instruction::I32RemU);
-    function.instruction(&Instruction::I32Const(8));
+    function.instruction(&Instruction::LocalGet(s_src_chunk_ptr));
+    function.instruction(&Instruction::LocalGet(s_word_off));
+    function.instruction(&Instruction::I32Const(4));
     function.instruction(&Instruction::I32Mul);
     function.instruction(&Instruction::I32Add);
-    function.instruction(&Instruction::LocalGet(index_i64)); // elem value (i64) on top
-    function.instruction(&Instruction::I64Store(MemArg {
-        offset: chunk_item_offset(0) as u64,
-        align: 3,
-        memory_index: 0,
-    }));
-
-    // dst_chunk[0] += 1
-    function.instruction(&Instruction::LocalGet(s_dst_chunk_ptr));
-    function.instruction(&Instruction::LocalGet(s_dst_chunk_ptr));
     function.instruction(&Instruction::I32Load(MemArg {
         offset: 0,
         align: 2,
         memory_index: 0,
     }));
-    function.instruction(&Instruction::I32Const(1));
-    function.instruction(&Instruction::I32Add);
     function.instruction(&Instruction::I32Store(MemArg {
         offset: 0,
         align: 2,
         memory_index: 0,
     }));
 
-    function.instruction(&Instruction::LocalGet(s_global_iter));
+    function.instruction(&Instruction::LocalGet(s_word_off));
     function.instruction(&Instruction::I32Const(1));
     function.instruction(&Instruction::I32Add);
-    function.instruction(&Instruction::LocalSet(s_global_iter));
+    function.instruction(&Instruction::LocalSet(s_word_off));
     function.instruction(&Instruction::Br(0));
     function.instruction(&Instruction::End);
     function.instruction(&Instruction::End);
 
-    // Write dst header: total_len, n_chunks
+    // Swap replacement chunk pointer into copied header.
+    function.instruction(&Instruction::LocalGet(s_dst_header));
+    function.instruction(&Instruction::LocalGet(s_chunk_idx));
+    function.instruction(&Instruction::I32Const(4));
+    function.instruction(&Instruction::I32Mul);
+    function.instruction(&Instruction::I32Add);
+    function.instruction(&Instruction::LocalGet(s_dst_chunk_ptr));
+    function.instruction(&Instruction::I32Store(MemArg {
+        offset: header_chunk_ptr_offset(0) as u64,
+        align: 2,
+        memory_index: 0,
+    }));
+
+    // Store new value to replacement chunk[item_idx].
+    function.instruction(&Instruction::LocalGet(s_dst_chunk_ptr));
+    function.instruction(&Instruction::LocalGet(s_item_idx));
+    function.instruction(&Instruction::I32Const(8));
+    function.instruction(&Instruction::I32Mul);
+    function.instruction(&Instruction::I32Add);
+    function.instruction(&Instruction::LocalGet(value_i64));
+    function.instruction(&Instruction::I64Store(MemArg {
+        offset: chunk_item_offset(0) as u64,
+        align: 3,
+        memory_index: 0,
+    }));
+
+    // Header metadata is unchanged, but keep it explicit.
     function.instruction(&Instruction::LocalGet(s_dst_header));
     function.instruction(&Instruction::LocalGet(s_total_len));
     function.instruction(&Instruction::I32Store(MemArg {

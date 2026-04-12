@@ -972,6 +972,21 @@ The following product-direction decisions are already locked for this plan:
     - done when: large indexed-read regression tests pass and the locked
       4k-element indexed-read workload improves on the M6-0 baseline by at
       least 5x.
+    - status (2026-04-12, in progress):
+      - `BackendIntrinsic::ListGet` now uses chunk-aware index decomposition
+        with CHUNK_SIZE-aware bit operations (`>> 5`, `& 31`) in
+        `crates/goby-wasm/src/gen_lower/emit.rs` for both dynamic and shared
+        helper paths (same boundary ownership as M6-1).
+      - added large indexed-read regressions in
+        `crates/goby-wasm/src/runtime_rr_tests.rs`:
+        - `m6_2_indexed_read_4k_mixed_indices_executes_without_trap`
+        - `m6_2_indexed_read_surface_and_stdlib_get_match_on_multi_chunk_list`
+      - verification:
+        - `cargo test -p goby-wasm m6_2_indexed_read -- --nocapture`: green.
+        - `cargo test -p goby-wasm m6_0_baseline_index_update_workloads -- --ignored --nocapture`:
+          indexed-read sample currently remains near M6-0
+          (`p50=36858us`, `p95=37768us`), so the locked 5x performance gate is
+          not yet met.
     - checks: `cargo test -p goby-wasm`
 
   - [ ] **M6-3: Implement chunk-local immutable point update**
@@ -983,6 +998,21 @@ The following product-direction decisions are already locked for this plan:
     - done when: repeated update regression tests pass and the locked
       4k-element point-update workload improves on the M6-0 baseline by at
       least 3x.
+    - status (2026-04-13, in progress):
+      - `BackendIntrinsic::ListSet` helper in
+        `crates/goby-wasm/src/gen_lower/emit.rs` was rewritten from
+        full-list copy to chunk-local immutable update:
+        - copy header pointer table once;
+        - copy only the touched chunk;
+        - patch one item in the copied chunk;
+        - keep metadata (`total_len`, `n_chunks`) stable.
+      - added follow-up runtime fixtures for 4k point-update and 64x64 nested
+        update in `crates/goby-wasm/src/runtime_rr_tests.rs`, currently
+        recorded as ignored until trap root cause is closed:
+        - `m6_3_point_update_4k_executes_without_trap`
+        - `m6_3_nested_update_64x64_executes_without_trap`
+      - current measurement snapshot remains trap-bearing on the locked M6-0
+        workloads (`E-RUNTIME-TRAP` at `goby!main`), so M6-3 stays open.
     - checks: `cargo test -p goby-wasm`
 
   - [ ] **M6-4: Validate nested update workloads**

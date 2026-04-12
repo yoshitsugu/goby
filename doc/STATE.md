@@ -1,11 +1,12 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-04-12
+Last updated: 2026-04-13
 
 ## Current Focus
 
-Next slice: **Sequence-backed List M6-2** (`doc/PLAN_SEQUENCE.md`) — implement
-chunk-aware indexed read on the shared M6 index/update boundary.
+Next slice: **Sequence-backed List M6 follow-up** (`doc/PLAN_SEQUENCE.md`) —
+continue shared-boundary optimization while closing the remaining trap root
+cause on point/nested immutable update workloads.
 
 M6 context:
 - Sequence-backed List M0–M5 are complete as of 2026-04-12.
@@ -30,15 +31,20 @@ TCO contract reminder (stable, no action needed):
 
 Immediate next steps:
 
-- **Sequence M6-2**: implement chunk-aware indexed read.
-  - Keep `xs[i]` on the shared boundary while replacing head-recursive access
-    with chunk-aware lookup.
-  - Preserve out-of-range behavior and diagnostics.
+- **Sequence M6-2**: close the indexed-read performance gate.
+  - keep `xs[i]` on the shared boundary (`BackendIntrinsic::ListGet`) with no
+    syntax-specific exceptions;
+  - retain new large indexed-read regressions for both `xs[i]` and
+    `goby/list.get`;
+  - decide whether to further optimize the shared boundary or revise the locked
+    M6-2 performance target, since current indexed-read baseline remains near
+    M6-0.
 
-- **Sequence M6-3 prep**: plan chunk-local immutable update ownership.
-  - Reuse M6 shared boundary (`ListGet` descent + `ListSet` ascent) without
-    syntax-specific exceptions.
-  - Use M6-0 trap-bearing point/nested update workloads as regression targets.
+- **Sequence M6-3**: close trap root cause after chunk-local `ListSet` rewrite.
+  - `ListSet` now copies header + touched chunk only (no full-list copy), but
+    locked 4k point-update / 64x64 nested-update workloads still trap.
+  - determine whether remaining trap source is update lowering shape, tail-call
+    path, or another runtime limit outside the `ListSet` allocation profile.
 
 Checkpoint update (2026-04-10, later slice):
 - `goby-wasm` Candidate B migration advanced substantially in
@@ -184,6 +190,36 @@ M6-1 boundary-definition checkpoint (2026-04-12):
     path-copy mechanics (`ListGet` descent + `ListSet` ascent).
 - `doc/PLAN_SEQUENCE.md` now marks M6-1 complete.
 - next work is M6-2 chunk-aware indexed-read implementation.
+
+M6-2 checkpoint (2026-04-12, progress update):
+- `BackendIntrinsic::ListGet` chunk-aware index decomposition now uses
+  CHUNK_SIZE-aware bit operations (`>> 5`, `& 31`) in
+  `crates/goby-wasm/src/gen_lower/emit.rs` while preserving existing tag/bounds
+  checks and out-of-range trap behavior.
+- added large indexed-read regressions in
+  `crates/goby-wasm/src/runtime_rr_tests.rs`:
+  - `m6_2_indexed_read_4k_mixed_indices_executes_without_trap`
+  - `m6_2_indexed_read_surface_and_stdlib_get_match_on_multi_chunk_list`
+- verification snapshot:
+  - `cargo test -p goby-wasm m6_2_indexed_read -- --nocapture`: green.
+  - `cargo test -p goby-wasm m6_0_baseline_index_update_workloads -- --ignored --nocapture`:
+    indexed-read remains near baseline (`p50=36858us`, `p95=37768us`);
+    locked M6-2 5x gate is not yet met, so M6-2 stays open.
+
+M6-3 checkpoint (2026-04-13, progress update):
+- `BackendIntrinsic::ListSet` in `crates/goby-wasm/src/gen_lower/emit.rs` was
+  rewritten from full-list copy to chunk-local immutable update:
+  - header pointer table copy;
+  - touched-chunk copy;
+  - single-element patch in replacement chunk.
+- added M6 follow-up runtime fixtures in
+  `crates/goby-wasm/src/runtime_rr_tests.rs`:
+  - `m6_3_point_update_4k_executes_without_trap` (currently `#[ignore]`)
+  - `m6_3_nested_update_64x64_executes_without_trap` (currently `#[ignore]`)
+- measurement snapshot:
+  - `cargo test -p goby-wasm m6_0_baseline_index_update_workloads -- --ignored --nocapture`
+    still reports trap-bearing point/nested workloads (`E-RUNTIME-TRAP` at
+    `goby!main`), so M6-3 remains open pending trap root-cause isolation.
 
 ## Recently Completed
 

@@ -1116,6 +1116,171 @@ main =
 }
 
 #[test]
+fn m6_2_indexed_read_4k_mixed_indices_executes_without_trap() {
+    let source = r#"
+import goby/stdio
+
+build : Int -> List Int can Print
+build n =
+  if n == 0
+    []
+  else
+    rest = build (n - 1)
+    [n, ..rest]
+
+scan_reads : List Int -> Int -> Int -> Int can Print
+scan_reads xs i acc =
+  if i >= 4000
+    acc
+  else
+    j = (i * 97) % 4000
+    v = xs[j]
+    scan_reads xs (i + 1) (acc + v)
+
+main : Unit -> Unit can Print, Read
+main =
+  _ = read_lines ()
+  xs = build 4000
+  total = scan_reads xs 0 0
+  println "${total}"
+"#;
+    let module = parse_general_lowered_module(source);
+    let output = execute_runtime_module_with_stdin(&module, Some("x\n".to_string()))
+        .expect("4k mixed indexed-read should execute without trap");
+    assert_eq!(output.as_deref(), Some("8002000\n"));
+}
+
+#[test]
+fn m6_2_indexed_read_surface_and_stdlib_get_match_on_multi_chunk_list() {
+    let source = r#"
+import goby/list ( get )
+import goby/stdio
+
+build : Int -> List Int can Print
+build n =
+  if n == 0
+    []
+  else
+    rest = build (n - 1)
+    [n, ..rest]
+
+scan_bracket : List Int -> Int -> Int -> Int can Print
+scan_bracket xs i acc =
+  if i >= 4096
+    acc
+  else
+    j = (i * 193) % 4096
+    scan_bracket xs (i + 1) (acc + xs[j])
+
+scan_get : List Int -> Int -> Int -> Int can Print
+scan_get xs i acc =
+  if i >= 4096
+    acc
+  else
+    j = (i * 193) % 4096
+    scan_get xs (i + 1) (acc + get xs j)
+
+main : Unit -> Unit can Print, Read
+main =
+  _ = read_lines ()
+  xs = build 4096
+  total_a = scan_bracket xs 0 0
+  total_b = scan_get xs 0 0
+  println "${total_a}"
+  println "${total_b}"
+"#;
+    let module = parse_general_lowered_module(source);
+    let output = execute_runtime_module_with_stdin(&module, Some("x\n".to_string()))
+        .expect("surface and stdlib indexed reads should both execute");
+    assert_eq!(output.as_deref(), Some("8390656\n8390656\n"));
+}
+
+#[test]
+#[ignore = "M6-3 follow-up: currently traps in baseline workload; enable when point-update path is closed"]
+fn m6_3_point_update_4k_executes_without_trap() {
+    let source = r#"
+import goby/stdio
+
+build : Int -> List Int can Print
+build n =
+  if n == 0
+    []
+  else
+    rest = build (n - 1)
+    [n, ..rest]
+
+scan_updates : List Int -> Int -> List Int can Print
+scan_updates xs i =
+  if i >= 4000
+    xs
+  else
+    j = (i * 97) % 4000
+    updated = xs[j] := i
+    scan_updates updated (i + 1)
+
+main : Unit -> Unit can Print, Read
+main =
+  _ = read_lines ()
+  xs = build 4000
+  updated = scan_updates xs 0
+  println "${updated[0]}"
+  println "${updated[3999]}"
+"#;
+    let module = parse_general_lowered_module(source);
+    let output = execute_runtime_module_with_stdin(&module, Some("x\n".to_string()))
+        .expect("point-update workload should execute without trap");
+    assert_eq!(output.as_deref(), Some("0\n1193\n"));
+}
+
+#[test]
+#[ignore = "M6-4 follow-up: currently traps in baseline workload; enable when nested-update path is closed"]
+fn m6_3_nested_update_64x64_executes_without_trap() {
+    let source = r#"
+import goby/stdio
+
+build_row : Int -> List Int can Print
+build_row n =
+  if n == 0
+    []
+  else
+    rest = build_row (n - 1)
+    [0, ..rest]
+
+build_grid : Int -> List (List Int) can Print
+build_grid n =
+  if n == 0
+    []
+  else
+    rest = build_grid (n - 1)
+    [build_row 64, ..rest]
+
+scan_nested_updates : List (List Int) -> Int -> List (List Int) can Print
+scan_nested_updates grid i =
+  if i >= 4096
+    grid
+  else
+    y = i / 64
+    x = (i * 17) % 64
+    row = grid[y]
+    next_row = row[x] := i
+    next_grid = grid[y] := next_row
+    scan_nested_updates next_grid (i + 1)
+
+main : Unit -> Unit can Print, Read
+main =
+  _ = read_lines ()
+  grid = build_grid 64
+  updated = scan_nested_updates grid 0
+  println "${updated[0][0]}"
+  println "${updated[63][63]}"
+"#;
+    let module = parse_general_lowered_module(source);
+    let output = execute_runtime_module_with_stdin(&module, Some("x\n".to_string()))
+        .expect("nested-update workload should execute without trap");
+    assert_eq!(output.as_deref(), Some("4032\n63\n"));
+}
+
+#[test]
 #[ignore = "M6-0 baseline snapshot command; run explicitly with --ignored --nocapture"]
 fn m6_0_baseline_index_update_workloads() {
     let warmup_runs = 3usize;
